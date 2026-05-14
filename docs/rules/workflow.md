@@ -85,9 +85,11 @@ acceptable when ripgrep is unavailable.
 
 `.githooks/pre-commit` (shipped in repo):
 
-- Runs `clang-format` on staged C++ files.
+- Runs `clang-format` on staged C/C++ files and re-stages the formatted result.
+- Refuses to format staged C/C++ files that also have unstaged hunks, so the hook never
+  widens a commit by accident.
 - Runs `shfmt -d` on staged `.sh` files.
-- Runs `scripts/check-secret-logs.sh` on the diff.
+- Runs `scripts/check-secret-logs.sh`.
 
 Install:
 
@@ -95,7 +97,8 @@ Install:
 git config core.hooksPath .githooks
 ```
 
-CI also runs all checks regardless of local hook state.
+The hook is a local fast path; `make ci` remains the required pre-PR gate and may run
+broader repository checks than the hook.
 
 ## Issue Triage
 

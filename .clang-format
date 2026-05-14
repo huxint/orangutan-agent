@@ -1,0 +1,66 @@
+---
+Language: Cpp
+BasedOnStyle: LLVM
+Standard: Latest
+
+ColumnLimit: 120
+IndentWidth: 2
+TabWidth: 2
+UseTab: Never
+ContinuationIndentWidth: 4
+ConstructorInitializerIndentWidth: 4
+
+BreakBeforeBraces: Attach
+NamespaceIndentation: None
+FixNamespaceComments: true
+
+DerivePointerAlignment: false
+PointerAlignment: Left
+ReferenceAlignment: Left
+
+AlwaysBreakTemplateDeclarations: Yes
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: None
+AlignConsecutiveDeclarations: None
+AlignEscapedNewlines: Left
+AlignOperands: Align
+
+AllowAllArgumentsOnNextLine: false
+AllowAllParametersOfDeclarationOnNextLine: false
+AllowShortBlocksOnASingleLine: Empty
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortEnumsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLambdasOnASingleLine: Inline
+AllowShortLoopsOnASingleLine: false
+
+BinPackArguments: false
+BinPackParameters: false
+BreakConstructorInitializers: BeforeColon
+BreakInheritanceList: BeforeColon
+BreakStringLiterals: true
+Cpp11BracedListStyle: true
+
+IncludeBlocks: Preserve
+SortIncludes: CaseSensitive
+SortUsingDeclarations: Lexicographic
+
+MaxEmptyLinesToKeep: 1
+EmptyLineBeforeAccessModifier: LogicalBlock
+SpaceAfterCStyleCast: false
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeCpp11BracedList: false
+SpaceBeforeParens: ControlStatements
+SpacesBeforeTrailingComments: 2
+SpacesInAngles: Never
+SpacesInContainerLiterals: false
+
+IndentCaseBlocks: false
+IndentCaseLabels: true
+IndentPPDirectives: None
+IndentRequiresClause: true
+
+QualifierAlignment: Leave
+ReflowComments: true
+RemoveSemicolon: false

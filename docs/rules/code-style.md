@@ -65,13 +65,15 @@ guards.
 
 - Column limit: **120**.
 - Indent: 2 spaces.
-- Braces on the same line for everything except namespaces (open brace on same line).
+- Braces on the same line, including namespaces.
 - Templates always on their own line; arguments indented.
 - Pointer/reference: type-attached (`int*`, `Foo&`).
 - Sort includes within groups.
 
-Pre-commit hook runs `clang-format` on staged files. Manual override is rare and
-documented in the PR.
+The versioned `.githooks/pre-commit` hook runs `clang-format` on staged C/C++ files and
+re-stages the formatted result. If a staged C/C++ file also has unstaged hunks, the hook
+refuses to format it so those hunks are not accidentally committed. Manual override is rare
+and documented in the PR.
 
 ## C++ Idioms
 

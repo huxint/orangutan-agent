@@ -78,6 +78,8 @@ harness-engineering/
 ├── CONTRIBUTING.md                 collaboration model
 ├── SECURITY.md                     vulnerability reporting
 ├── Makefile                        init / check / new-plan / new-history / bench
+├── .clang-format                   C++ formatter contract used by hook + tooling
+├── .githooks/                      versioned local Git hooks
 ├── docs/
 │   ├── REPO_COLLAB_GUIDE.md        working agreement
 │   ├── ARCHITECTURE.md             target architecture map
@@ -127,7 +129,13 @@ harness-engineering/
    make new-history SLUG=core-react-loop-mvp
    ```
 
-6. Before opening a PR:
+6. Install the versioned pre-commit hook once per clone:
+
+   ```sh
+   git config core.hooksPath .githooks
+   ```
+
+7. Before opening a PR:
 
    ```sh
    make ci
