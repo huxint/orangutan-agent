@@ -60,8 +60,7 @@ set_warnings("all", "extra")
 add_rules("mode.debug", "mode.release", "mode.releasedbg")
 add_rules("plugin.compile_commands.autoupdate", {outputdir = ".", lsp = "clangd"})
 set_policy("package.requires_lock", true)
-set_policy("build.optimization.lto", true)   -- release LTO
-set_policy("build.warning", true)            -- warnings as errors via -Werror
+set_policy("build.warning", true)            -- show compiler warning commands
 
 includes("xmake/options.lua")
 includes("xmake/toolchain.lua")
@@ -139,8 +138,8 @@ policy, the required warning set, and the suppression rules.
 ```lua
 -- xmake/options.lua
 option("modules")
-    set_default(true)
-    set_description("Enable C++23 modules (GCC 16.1 required)")
+    set_default(false)
+    set_description("Enable C++26 modules (off until a module slice lands)")
 option_end()
 
 option("lto")
@@ -149,7 +148,7 @@ option("lto")
 option_end()
 
 option("hardened")
-    set_default(true)
+    set_default(false)
     set_description("Enable hardening flags")
 option_end()
 
@@ -162,47 +161,24 @@ option("analyze")
     set_default(false)
     set_description("Enable GCC 16.1 -fanalyzer (see rules/static-analysis.md)")
 option_end()
-
-option("channel_qq")       set_default(true)  set_showmenu(true)  option_end()
-option("channel_discord")  set_default(false) set_showmenu(true)  option_end()
-option("channel_slack")    set_default(false) set_showmenu(true)  option_end()
-option("channel_telegram") set_default(false) set_showmenu(true)  option_end()
-option("channel_webhook")  set_default(true)  set_showmenu(true)  option_end()
-
-option("hook_lua")         set_default(false) set_showmenu(true)  option_end()
-option("hook_wasm")        set_default(false) set_showmenu(true)  option_end()
-
-option("vector_memory")    set_default(false) set_showmenu(true)  option_end()
 ```
+
+Feature options such as `channel_qq`, `hook_lua`, and `vector_memory` land with the
+library that consumes them.
 
 ## Packages
 
 ```lua
 -- xmake/packages.lua
-add_requires("nlohmann_json   3.12.0", { configs = { header_only = true } })
-add_requires("fmt             12.1.0", { configs = { header_only = true } })
-add_requires("spdlog          1.17.0", { configs = { fmt_external = true } })
-add_requireconfs("spdlog.fmt", { override = true, version = "12.1.0", configs = { header_only = true } })
-
-add_requires("libsodium       1.0.20")        -- crypto_secretbox + Argon2id
-add_requires("libcurl         8.11.0", { configs = { openssl = true } })
-add_requires("sqlite3         3.52.0", { configs = { cflags = "-DSQLITE_ENABLE_FTS5" } })
-add_requires("re2             2024.07.02")    -- runtime regex; replaces ctre
-add_requires("asio            1.31.0", { configs = { ssl = "openssl" } })
-add_requires("cli11           2.6.1")
-add_requires("magic_enum      0.9.7")
-add_requires("rapidhash       1.0")
-add_requires("simdutf         8.0.0")
-add_requires("replxx          2021.11.25")     -- REPL
-add_requires("cpp-httplib     0.37.2")         -- only oran-web; keep encapsulated
-
-add_requires("catch2          3.7.1", { configs = {} })
-add_requires("nanobench       4.3.11")
-
-if has_config("channel_qq")       then add_requires("libcurl") end
-if has_config("hook_lua")         then add_requires("sol2 3.5.0", { configs = { lua = "luajit" } }) end
-if has_config("vector_memory")    then add_requires("sqlite-vec 0.1.7-alpha.2") end
+add_requires("asio 1.36.0")
+add_requires("catch2 3.7.1")
+add_requires("nanobench 4.3.11")
 ```
+
+Packages land with the library that first consumes them. The full approval list
+and planned versions live in [`rules/libraries.md`](rules/libraries.md); for example
+`fmt`, `nlohmann_json`, `spdlog`, `sqlite3`, and `libcurl` are approved but not
+required by the current checked-in targets yet.
 
 **Notable removals vs. legacy:**
 
@@ -213,70 +189,32 @@ if has_config("vector_memory")    then add_requires("sqlite-vec 0.1.7-alpha.2") 
 
 ## Library Targets
 
-Each library follows the same shape:
+Each shipped library follows the same shape. Future libraries from
+`docs/ARCHITECTURE.md` are added here one slice at a time:
 
 ```lua
 -- xmake/targets.lua
 local root = os.projectdir()
 
-local function oran_lib(name, deps, packages)
+local function oran_lib(name, deps, private_packages, public_packages)
     target("oran-" .. name)
         set_kind("static")
         set_group("oran-libs")
         add_includedirs(path.join(root, "include"), { public = true })
         add_files(path.join(root, "src", "oran-" .. name, "**.cpp"))
-        if deps    then add_deps(table.unpack(deps)) end
-        if packages then add_packages(table.unpack(packages), { public = false }) end
-        add_packages("fmt", { public = true })    -- in PCH; cheap
+        if deps then add_deps(table.unpack(deps)) end
+        if private_packages then add_packages(table.unpack(private_packages), { public = false }) end
+        if public_packages then add_packages(table.unpack(public_packages), { public = true }) end
         set_pcxxheader(path.join(root, "include/oran/_pch.hpp"))
 end
 
-oran_lib("core",          {},                    { "magic_enum", "rapidhash", "simdutf", "nlohmann_json" })
-oran_lib("async",         {"oran-core"},         { "asio" })
-oran_lib("log",           {"oran-core"},         { "spdlog", "fmt", "re2" })
-oran_lib("io",            {"oran-core","oran-async"}, {})
-oran_lib("http",          {"oran-core","oran-async"}, { "libcurl", "asio" })
-oran_lib("storage",       {"oran-core"},         { "sqlite3" })
-oran_lib("config",        {"oran-core","oran-storage"}, { "nlohmann_json", "libsodium" })
-oran_lib("permission",    {"oran-core","oran-log"}, { "re2" })
-oran_lib("skill",         {"oran-core","oran-io"}, {})
-oran_lib("hook",          {"oran-core","oran-async","oran-io"}, { "nlohmann_json" })
-oran_lib("tool",          {"oran-core","oran-async","oran-permission","oran-hook","oran-io"}, { "nlohmann_json" })
-oran_lib("memory",        {"oran-core","oran-storage","oran-async"}, { "nlohmann_json" })
-oran_lib("provider",      {"oran-core","oran-async","oran-http"}, { "nlohmann_json" })
-oran_lib("prompt",        {"oran-core","oran-memory","oran-skill"}, { "nlohmann_json" })
-oran_lib("agent",         {"oran-core","oran-async","oran-provider","oran-tool",
-                            "oran-memory","oran-prompt","oran-permission","oran-hook"}, {})
-oran_lib("orchestration", {"oran-agent","oran-async","oran-storage"}, {})
-oran_lib("automation",    {"oran-agent","oran-storage","oran-async"}, {})
-oran_lib("channel",       {"oran-async","oran-http","oran-agent"}, {})
-
-if has_config("channel_qq")       then oran_lib("channel-qq",       {"oran-channel","oran-http"}, {}) end
-if has_config("channel_discord")  then oran_lib("channel-discord",  {"oran-channel","oran-http"}, {}) end
-if has_config("channel_slack")    then oran_lib("channel-slack",    {"oran-channel","oran-http"}, {}) end
-if has_config("channel_telegram") then oran_lib("channel-telegram", {"oran-channel","oran-http"}, {}) end
-if has_config("channel_webhook")  then oran_lib("channel-webhook",  {"oran-channel","oran-http"}, {}) end
-
-oran_lib("web",  {"oran-agent","oran-orchestration","oran-http"}, { "cpp-httplib" })
-oran_lib("cli",  {"oran-agent","oran-orchestration"}, { "replxx" })
-oran_lib("bootstrap",
-    {"oran-cli","oran-web","oran-channel","oran-orchestration","oran-automation","oran-config"},
-    { "cli11" })
+oran_lib("core", {}, {})
+oran_lib("async", { "oran-core" }, {}, { "asio" })
 
 target("orangutan")
     set_kind("binary")
-    add_deps("oran-bootstrap")
+    add_deps("oran-core", "oran-async")
     add_files(path.join(root, "src/main.cpp"))
-
-target("orangutan-server")
-    set_kind("binary")
-    add_deps("oran-web","oran-channel","oran-automation","oran-bootstrap")
-    add_files(path.join(root, "src/server.cpp"))
-
-target("orangutan-bench")
-    set_kind("binary")
-    add_deps("oran-async","oran-core")
-    add_files(path.join(root, "src/bench-main.cpp"))
 ```
 
 **Key compile-time wins from this shape:**
@@ -295,21 +233,27 @@ target("orangutan-bench")
 #pragma once
 
 // Stdlib stable headers
+#include <algorithm>
 #include <array>
+#include <chrono>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <format>
+#include <functional>
 #include <memory>
 #include <optional>
+#include <print>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
-
-// Header-only forward-decls
-#include <fmt/core.h>
-#include <nlohmann/json_fwd.hpp>
 
 // Project-wide foundations (intentionally small)
 #include <oran/core/error.hpp>
@@ -320,9 +264,11 @@ Things deliberately **excluded** from the PCH:
 
 - `<asio.hpp>` — too heavy; `oran-async` adds it locally.
 - `<spdlog/spdlog.h>` — too heavy; `oran-log` adds it locally.
+- `<fmt/core.h>` — lands with `oran-log`.
+- `<nlohmann/json_fwd.hpp>` — lands with the first JSON-owning library.
 - `<httplib.h>` — only `oran-web` needs it.
 - `<sqlite3.h>` — only `oran-storage` needs it.
-- Anything from `<ranges>`, `<format>`, `<regex>` — too heavy or unstable.
+- `<regex>` — use `re2` behind the owning library instead.
 
 Per-target PCH override is allowed only if measurement proves > 1s saving (record in
 `docs/exec-plans/tech-debt-tracker.md`).

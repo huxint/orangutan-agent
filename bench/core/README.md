@@ -21,9 +21,8 @@ xmake run bench-core
 ```
 
 Output is nanobench's `markdown` shape on stdout. The first run on a given machine is
-the baseline; subsequent runs report deltas. Slice 0 does not yet wire CI to track
-this baseline — that wiring lands with `bench/async/` (the first scenario whose
-delta would meaningfully affect operations).
+the baseline; subsequent runs report deltas. CI baseline tracking lands with the
+benchmark-harness baseline slice.
 
 ## See Also
 

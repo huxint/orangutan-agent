@@ -1,7 +1,7 @@
 -- xmake/tests.lua — Catch2 v3 buckets.
 --
 -- One target per tests/<lib>/ directory. The convention is documented in
--- docs/rules/testing-and-bench.md. Slice 0 ships only tests/core.
+-- docs/rules/testing-and-bench.md.
 
 local root = os.projectdir()
 
@@ -23,3 +23,4 @@ local function oran_test(name, deps)
 end
 
 oran_test("core", { "oran-core" })
+oran_test("async", { "oran-async" })

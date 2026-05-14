@@ -10,6 +10,11 @@ single `asio::io_context` wrapped in `oran::async::Runtime`. There are no
 > and channel dispatch, becoming a top-tier compile-time tax. v2 chooses asio
 > deliberately for its compile-time profile and ecosystem maturity.
 
+> **Slice-1 status (2026-05-14):** `oran-async` ships `Runtime`,
+> `Awaitable<T>`, bounded `Channel<T>`, and cancel-aware `sleep_for`. Mailbox
+> policy, bootstrap signal integration, and reusable async test helpers land in
+> later slices.
+
 ## Runtime Topology
 
 ```
@@ -20,8 +25,8 @@ oran::async::Runtime                          │  CPU pool (fixed)        │
  │     ├── thread #2                          │  for: memory distillation,│
  │     ├── …                                  │       large JSON parse,  │
  │     └── thread #N                          │       prompt rendering > │
- │   (size = config.runtime.workers,          │             64 KiB       │
- │    default = min(8, hardware_concurrency)) │                          │
+ │   (size = RuntimeConfig.io_workers;        │             64 KiB       │
+ │    config layer chooses deployment default)│                          │
  │                                            └──────────────────────────┘
  ├── stop_source (one shutdown signal)
  ├── steady_timer factory
@@ -43,9 +48,14 @@ oran::async::Runtime                          │  CPU pool (fixed)        │
 // include/oran/async/runtime.hpp — PUBLIC
 namespace orangutan::async {
 
+struct RuntimeConfig {
+  std::size_t io_workers{1};
+  std::size_t cpu_workers{1};
+};
+
 class Runtime {
  public:
-  explicit Runtime(RuntimeConfig);
+  explicit Runtime(RuntimeConfig = {});
   ~Runtime();
 
   // Underlying executor. Library code accepts this by value (it's a handle).
@@ -68,6 +78,9 @@ class Runtime {
 ```
 
 The Runtime is owned by `oran-bootstrap`. Nothing else creates one.
+Slice 1 normalizes zero worker counts to one. The later config/bootstrap slice decides
+the production default (for example `min(8, hardware_concurrency)`) without making
+`oran-async` include `<thread>`.
 
 ## Awaitable Alias
 
@@ -133,12 +146,13 @@ class Channel {
   // Returns Awaitable<Result<void>>; resolves when the item is enqueued.
   Awaitable<core::Result<void>> send(T value);
 
-  // Non-blocking try_send: returns OverflowError if full.
+  // Non-blocking try_send: returns ErrorKind::mailbox_overflowed if full.
   core::Result<void> try_send(T value);
 
   // Returns Awaitable<Result<T>>; resolves when an item is available.
   Awaitable<core::Result<T>> receive();
 
+  // Drains buffered values; pending/new operations complete with cancelled.
   void close() noexcept;
 };
 
@@ -176,7 +190,8 @@ Conventions:
 
 ## Timer / Sleep
 
-`oran::async::sleep_for(executor, duration)` returns `Awaitable<void>`; cancel-aware.
+`oran::async::sleep_for(executor, duration)` returns
+`Awaitable<core::Result<void>>`; cancellation resolves to `ErrorKind::cancelled`.
 Never use `std::this_thread::sleep_for` — it blocks the executor thread.
 
 ## Detached Tasks
@@ -217,8 +232,9 @@ allocations rare:
 - Pass owned data by value at the suspend boundary so escape analysis can elide.
 - Avoid `std::function` on the coroutine path; prefer typed concept-bounded callbacks.
 
-`bench/async/` ships a comparison between awaitable-based vs. callback-based
-implementations of the same operation to keep us honest.
+`bench/async/` currently compares a direct coroutine post loop against a bounded
+`Channel<T>` handoff. Add callback-vs-awaitable scenarios when a callback-shaped
+adapter exists to compare against.
 
 ## Why Not std::async / std::thread / std::jthread?
 
@@ -238,11 +254,13 @@ rule in `orangutan/` was the right call; we keep it.
 
 ## Testing Async Code
 
-- Use `asio::io_context` directly in unit tests; do not create a `Runtime` per test.
-- `tests/async/` ships helper `run_one(awaitable)` that drives the executor until the
-  coroutine completes and returns the result.
-- Time-dependent code uses `oran::async::MockClock` (lives in `oran-async`'s public
-  surface, behind `_test` namespace).
+- Use `asio::io_context` directly in unit tests for coroutine primitives; create
+  `Runtime` only when the test is specifically about runtime ownership.
+- `tests/async/test_async.cpp` currently uses a local `run_async(...)` helper with a
+  hard timeout. Promote it to `tests/test-helpers/` only when another bucket needs it.
+- Time-dependent production code uses real `steady_timer` in slice 1. A mock clock
+  can land when the first scheduler/automation feature needs deterministic virtual
+  time.
 
 ## Pitfalls Flagged In Review
 

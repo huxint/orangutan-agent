@@ -1,6 +1,6 @@
 -- xmake/options.lua — build-time options.
 --
--- See docs/BUILD_SYSTEM.md for the documented set. Slice 0 ships only the
+-- See docs/BUILD_SYSTEM.md for the documented set. Early slices ship only the
 -- options actually consumed by the toolchain or by xmake/targets.lua. New
 -- options land alongside the rule or library that depends on them so docs and
 -- code stay aligned (docs/rules/docs-in-sync.md).

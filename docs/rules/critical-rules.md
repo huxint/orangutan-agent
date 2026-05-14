@@ -132,8 +132,8 @@ Functions returning `async::Awaitable<T>` must either:
 **Why:** SIGINT / shutdown must terminate promptly; orchestration cancellation must
 work; user "stop" buttons must respond.
 
-**Enforcement:** review checklist + bench: `bench/async/cancellation_latency` flags
-> 250 ms median on a synthetic workload.
+**Enforcement:** review checklist. A dedicated cancellation-latency bench is planned
+for the first scheduler/orchestration workload where latency has operational meaning.
 
 ## C12. Every lib has a tests bucket AND a bench bucket
 

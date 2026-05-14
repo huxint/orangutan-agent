@@ -18,10 +18,10 @@ materially changes an area.
 | ------------------------ | ----- | --- | --------- |
 | Architecture docs        | B     | Top-level map + design docs drafted. Some sections await concrete code. | Land MVP code; back-fill diagrams. |
 | Build system             | B     | xmake skeleton lands in slice 0; GCC 16.1 toolchain detected, C++26 enforced, `compile_commands.json` autoupdates. | Land per-library `check-compile-budget.sh` numbers + Clang secondary toolchain. |
-| Compile-time discipline  | C     | Budgets captured; slice 0 measures 4.37 s clean — under target — but only one TU is exercised so far. | Re-baseline once `oran-async` lands. |
-| Test framework           | C     | Catch2 v3 bucket green for `oran-core` (8 cases / 47 assertions). | First async + storage tests. |
-| Bench harness            | C     | nanobench bucket green for `oran-core` with one A-vs-B scenario. | Add `bench/async/`; wire `scripts/bench-compare.sh` to a real baseline file. |
-| Async model              | C     | Design captured; needs implementation. | Implement `Runtime` + `Channel<T>`. |
+| Compile-time discipline  | C     | Budgets captured; `oran-core` and `oran-async` build under the current target budget, but no per-TU baseline file exists yet. | Land per-library `check-compile-budget.sh` numbers. |
+| Test framework           | C     | Catch2 v3 buckets green for `oran-core` (8 cases / 47 assertions) and `oran-async` (8 cases / 38 assertions). | First storage/config tests. |
+| Bench harness            | C     | nanobench buckets green for `oran-core` and `oran-async`; no baseline JSON or regression gate yet. | Wire `scripts/bench-compare.sh` to a real baseline file. |
+| Async model              | B     | `Runtime`, `Awaitable<T>`, cancel-aware `sleep_for`, and bounded `Channel<T>` are implemented with tests and a bench. Runtime signal integration and mailbox policy are still downstream. | Use `oran-async` from `oran-io` or `oran-storage` and add cancellation-latency bench coverage. |
 | Storage / DBs            | C     | Design captured; expected-only API design done. | Implement `oran-storage` core. |
 | Provider system          | C     | Layered design captured. | First adapter (Anthropic Messages). |
 | Tool registry            | C     | Design captured. | First built-ins (file + shell + memory). |
@@ -37,7 +37,7 @@ materially changes an area.
 | Observability            | D     | Logging shim designed. | Metrics endpoint. |
 | Security defaults        | B     | Captured. | Implement secret rotation. |
 | Supply chain             | B     | Workflows pinned, lockfile present. | Add OSV scan once xmake lock is real. |
-| Static analysis          | C     | `-fanalyzer` wiring shipped (rule + xmake option); not yet running on any TU because slice 0 has no memory/descriptor code. | Enable for `oran-async` and `oran-storage` when they land. |
+| Static analysis          | C     | `-fanalyzer` wiring shipped (rule + xmake option); analyzer CI remains a planned nightly gate. | Run/record analyzer coverage when descriptor-owning `oran-io` or `oran-storage` lands. |
 
 ## Cadence
 

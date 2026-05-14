@@ -69,16 +69,15 @@ own test bucket, its own bench bucket, and its own public header set under
 
 ## Library Inventory
 
-> **Slice-0 status (2026-05-14):** only `oran-core` is implemented. All other
-> rows below are *planned* and will land per `docs/exec-plans/` as future slices
-> are scheduled. The build system, PCH, tests bucket, and bench bucket
-> conventions are live; see the history entry
-> [`2026-05/20260514-2214-mvp-build-skeleton-slice-0.md`](histories/2026-05/20260514-2214-mvp-build-skeleton-slice-0.md).
+> **Slice status (2026-05-14):** `oran-core` and `oran-async` are implemented.
+> All other rows below are *planned* and will land per `docs/exec-plans/` as
+> future slices are scheduled. The build system, PCH, tests bucket, and bench
+> bucket conventions are live; see the history entries under `docs/histories/2026-05/`.
 
 | Library              | Purpose                                         | Depends on (allowed)                          |
 | -------------------- | ----------------------------------------------- | --------------------------------------------- |
 | `oran-core`          | `Result<T>`, `Error`, `Message`, `Content`, `ToolDef`, base enums, `core::str`, `core::time` | stdlib only |
-| `oran-async`         | asio executor wrapper, `Task<T>`, `Channel<T>`, `Mailbox<T>`, `awaitable<T>` aliases | `oran-core`, asio |
+| `oran-async`         | asio `Runtime`, `Awaitable<T>`, bounded `Channel<T>`, cancel-aware `sleep_for`; mailbox policy lands in orchestration | `oran-core`, asio |
 | `oran-log`           | spdlog shim + secret redaction; thread-local context | `oran-core`, spdlog/fmt |
 | `oran-io`            | file IO, glob, pipe, subprocess, signal | `oran-core`, `oran-async` |
 | `oran-http`          | http client (asio) and tiny router for the web UI | `oran-core`, `oran-async` |

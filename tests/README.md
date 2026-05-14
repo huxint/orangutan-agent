@@ -56,5 +56,5 @@ xmake run test-agent "specific test name"
 
 ## Status
 
-`tests/core/` is live for slice 0 and registered with `xmake test`. Additional
-buckets land with their owning libraries.
+`tests/core/` and `tests/async/` are live and registered with `xmake test`.
+Additional buckets land with their owning libraries.

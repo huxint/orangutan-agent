@@ -23,9 +23,10 @@ escalation. `--hardened=y` (already documented in
 [`../BUILD_SYSTEM.md`](../BUILD_SYSTEM.md)) layers on `_FORTIFY_SOURCE=3`,
 `-fstack-protector-strong`, `-fcf-protection`, `-fstack-clash-protection`.
 
-Slice 0 ships the option; CI wiring lands when `oran-async` does (analyzer is most
-valuable on the parts that handle pointers and ownership, and the agent loop is the
-first such target).
+Slice 0 shipped the option; later slices decide which TUs must run it based on the
+rules below. Analyzer CI is most valuable on descriptor-owning or byte-parsing code,
+so the first mandatory coverage is expected with `oran-io`, `oran-storage`, or
+provider/channel parsing code rather than the timer/channel primitives in `oran-async`.
 
 ## Required Warnings (Hard Failures)
 

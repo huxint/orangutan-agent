@@ -166,19 +166,10 @@ Subprocesses are fine (the IO tool spawns them via asio). Threads are not.
 
 ## A13. Timer cancellation is checked
 
-```cpp
-co_await async::sleep_for(executor_, 5s);
-// after this returns, check cancellation:
-if (co_await asio::this_coro::cancellation_state.cancelled()
-        != asio::cancellation_type::none) {
-  co_return std::unexpected(core::Error::cancelled());
-}
-```
-
-The pattern is wrapped in a helper:
+Use the helper directly:
 
 ```cpp
-core::Result<void> r = co_await async::sleep_for_cancelable(executor_, 5s);
+core::Result<void> r = co_await async::sleep_for(executor_, 5s);
 if (!r) co_return std::unexpected(r.error());
 ```
 
@@ -186,11 +177,10 @@ Use the helper.
 
 ## A14. Test asynchronicity with a real `io_context`
 
-`tests/async/` provides:
-
-- `run_one(awaitable)` — drives an io_context until completion; returns the awaited value.
-- `run_with_timeout(awaitable, dur)` — same but with a hard timeout.
-- `MockClock` — for time-dependent code.
+`tests/async/test_async.cpp` uses a local `run_async(...)` helper that drives an
+`asio::io_context` with a hard timeout. Move that helper to `tests/test-helpers/`
+when a second bucket needs it. A `MockClock` lands with the first scheduler feature
+that needs virtual time.
 
 Don't use `std::async` or `std::future` in tests; the test framework should match
 production async style.

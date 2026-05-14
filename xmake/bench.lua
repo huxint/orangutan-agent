@@ -1,7 +1,7 @@
 -- xmake/bench.lua — nanobench buckets.
 --
 -- One target per bench/<lib>/ directory. The "A-vs-B" pattern is required by
--- docs/rules/testing-and-bench.md. Slice 0 ships only bench/core.
+-- docs/rules/testing-and-bench.md.
 
 local root = os.projectdir()
 
@@ -19,3 +19,4 @@ local function oran_bench(name, deps)
 end
 
 oran_bench("core", { "oran-core" })
+oran_bench("async", { "oran-async" })

@@ -1,10 +1,8 @@
 -- xmake.lua — Orangutan v2 build root
 --
--- Source of truth for the build is docs/BUILD_SYSTEM.md. Slice 0 deliberately
--- keeps the dependency surface minimal: only Catch2 (tests) and nanobench
--- (benches). Heavier packages (asio, fmt, nlohmann_json, spdlog, sqlite3, ...)
--- land in the slice that introduces a library which actually consumes them,
--- per docs/exec-plans/completed/2026-05-14-mvp-build-skeleton-slice-0.md.
+-- Source of truth for the build is docs/BUILD_SYSTEM.md. Dependencies land
+-- with the library that first consumes them; slice 1 adds asio for oran-async
+-- while keeping the rest of the planned package set deferred.
 
 set_project("orangutan-v2")
 set_version("2.0.0")

@@ -157,7 +157,7 @@ and prints a comparison summary.
 | Permission eval | permission | rule-tree vs. linear scan |
 | Mailbox throughput | orchestration | bounded channel vs. asio::channel native |
 | Strategy cost | orchestration | leader-worker vs. vote |
-| Coroutine vs callback | async | awaitable<T> vs. callback-based |
+| Coroutine handoff | async | direct coroutine post loop vs. bounded `Channel<T>` |
 | Compile time | compile-time | pimpl vs. inline private members |
 
 ### Bench Output Format
@@ -218,8 +218,8 @@ benchmark suite and updates the file via PR.
 - "We'll add benches later." Add one at submission time, even if minimal.
 - Benches that don't compare anything. The "A-vs-B" pattern keeps benches meaningful.
 - Tests that depend on real network calls without an opt-in env var.
-- Tests that use `std::this_thread::sleep_for` to "wait for async to finish". Use
-  `tests/async/run_one()` or `run_with_timeout()`.
+- Tests that use `std::this_thread::sleep_for` to "wait for async to finish". Drive
+  an `asio::io_context` with a hard timeout, as `tests/async/test_async.cpp` does.
 
 ## See Also
 

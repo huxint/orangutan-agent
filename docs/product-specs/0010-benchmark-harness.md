@@ -47,7 +47,7 @@ one A-vs-B scenario:
 | Library         | A                              | B                          |
 | --------------- | ------------------------------ | -------------------------- |
 | `oran-core`     | variant-based Content          | polymorphic Content (stretch) |
-| `oran-async`    | awaitable-based pipeline       | callback-based pipeline    |
+| `oran-async`    | direct coroutine post loop     | bounded `Channel<T>` handoff |
 | `oran-tool`     | hashmap lookup                 | static dispatch (stretch)  |
 | `oran-memory`   | FTS5                           | sqlite-vec (v2)            |
 | `oran-provider` | nlohmann_json encode/decode    | simdjson (stretch)         |
