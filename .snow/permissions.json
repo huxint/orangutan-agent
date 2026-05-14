@@ -1,0 +1,6 @@
+{
+  "alwaysApprovedTools": [
+    "filesystem-read",
+    "terminal-execute"
+  ]
+}
