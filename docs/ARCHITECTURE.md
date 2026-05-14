@@ -67,7 +67,13 @@ The C++ libraries are listed below. **Each library is its own xmake target**, ha
 own test bucket, its own bench bucket, and its own public header set under
 `include/oran/<lib>/`.
 
-### Library Inventory
+## Library Inventory
+
+> **Slice-0 status (2026-05-14):** only `oran-core` is implemented. All other
+> rows below are *planned* and will land per `docs/exec-plans/` as future slices
+> are scheduled. The build system, PCH, tests bucket, and bench bucket
+> conventions are live; see the history entry
+> [`2026-05/20260514-2214-mvp-build-skeleton-slice-0.md`](histories/2026-05/20260514-2214-mvp-build-skeleton-slice-0.md).
 
 | Library              | Purpose                                         | Depends on (allowed)                          |
 | -------------------- | ----------------------------------------------- | --------------------------------------------- |

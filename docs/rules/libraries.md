@@ -54,7 +54,7 @@ Each entry contains:
 
 | Lib | Version | Used by | Purpose | Cost | License | Boundary |
 | --- | --- | --- | --- | --- | --- | --- |
-| `Catch2` | 3.7.1 | tests/* | testing framework | med | BSL-1.0 | `tests/*` only |
+| `catch2` | 3.7.1 | tests/* | testing framework (Catch2 v3) | med | BSL-1.0 | `tests/*` only |
 | `nanobench` | 4.3.11 | bench/* | microbenchmark runner | low | MIT | `bench/*` only |
 
 ### Optional (Feature-Gated)

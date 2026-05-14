@@ -17,10 +17,10 @@ materially changes an area.
 | Area                     | Score | Why | Next Step |
 | ------------------------ | ----- | --- | --------- |
 | Architecture docs        | B     | Top-level map + design docs drafted. Some sections await concrete code. | Land MVP code; back-fill diagrams. |
-| Build system             | C     | xmake design captured; not yet provisioned. | Implement skeleton + `xmake build` green. |
-| Compile-time discipline  | C     | Budgets and rules captured; not yet enforced (no code). | Land `check-compile-budget.sh`. |
-| Test framework           | D     | Layout defined; no real tests exist yet. | First tests land with MVP loop. |
-| Bench harness            | D     | Layout + product spec defined. | First bench lands with MVP loop. |
+| Build system             | B     | xmake skeleton lands in slice 0; GCC 16.1 toolchain detected, C++26 enforced, `compile_commands.json` autoupdates. | Land per-library `check-compile-budget.sh` numbers + Clang secondary toolchain. |
+| Compile-time discipline  | C     | Budgets captured; slice 0 measures 4.37 s clean — under target — but only one TU is exercised so far. | Re-baseline once `oran-async` lands. |
+| Test framework           | C     | Catch2 v3 bucket green for `oran-core` (8 cases / 47 assertions). | First async + storage tests. |
+| Bench harness            | C     | nanobench bucket green for `oran-core` with one A-vs-B scenario. | Add `bench/async/`; wire `scripts/bench-compare.sh` to a real baseline file. |
 | Async model              | C     | Design captured; needs implementation. | Implement `Runtime` + `Channel<T>`. |
 | Storage / DBs            | C     | Design captured; expected-only API design done. | Implement `oran-storage` core. |
 | Provider system          | C     | Layered design captured. | First adapter (Anthropic Messages). |
@@ -37,6 +37,7 @@ materially changes an area.
 | Observability            | D     | Logging shim designed. | Metrics endpoint. |
 | Security defaults        | B     | Captured. | Implement secret rotation. |
 | Supply chain             | B     | Workflows pinned, lockfile present. | Add OSV scan once xmake lock is real. |
+| Static analysis          | C     | `-fanalyzer` wiring shipped (rule + xmake option); not yet running on any TU because slice 0 has no memory/descriptor code. | Enable for `oran-async` and `oran-storage` when they land. |
 
 ## Cadence
 

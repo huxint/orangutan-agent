@@ -118,6 +118,32 @@ Inheritance with virtual functions remains for true polymorphic *interfaces*
 - UTF-8 by contract. Validation at boundaries via `oran-core::str::validate_utf8`.
 - No `wchar_t` / `wstring` / `char*` in public APIs.
 
+### Console And Formatted Output
+
+We are on C++26 + GCC 16.1. **Use `std::print` / `std::println` / `std::format`**;
+do **not** include `<iostream>` in production code.
+
+```cpp
+// PREFERRED
+#include <print>
+std::println("loaded {} routes in {}", routes.size(), elapsed);
+
+// FORBIDDEN (in src/oran-*/ and src/main.cpp)
+#include <iostream>
+std::cout << "loaded " << routes.size() << " routes\n";
+```
+
+Rationale:
+
+- `std::print` is type-checked at compile time via `std::format_string<...>`.
+- It avoids `std::ios_base::Init` initialization cost in every TU that pulls
+  `<iostream>`.
+- It composes with `std::format_to(std::back_inserter(buf), ...)` when we need to
+  capture rather than write directly.
+
+`<iostream>` is permitted inside `tests/` / `bench/` *runners* (Catch2 / nanobench
+do not yet emit via `std::print`); even there, prefer `std::print` for direct output.
+
 ### Numbers
 
 - `std::uint32_t` / `std::int64_t` / etc. — never bare `unsigned long`.

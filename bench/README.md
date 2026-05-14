@@ -66,4 +66,5 @@ Each table row corresponds to at least one scenario file in the bucket.
 
 ## Status
 
-Empty. First scenarios land with the MVP code.
+`bench/core/` is live for slice 0 with one A-vs-B `Error` construction scenario.
+Additional buckets land with their owning libraries.

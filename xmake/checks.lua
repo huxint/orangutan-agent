@@ -1,0 +1,7 @@
+-- xmake/checks.lua — placeholder for the CI-side budget / dep checks.
+--
+-- The check-* shell scripts under scripts/ are the user-facing entry points.
+-- This file exists so the include in xmake.lua does not fail; concrete xmake
+-- rule-tasks (build-time checks) land in subsequent slices alongside the
+-- subsystem they audit (compile-budget enforcement, deps-direction enforcement,
+-- module/PCH parity, etc.).

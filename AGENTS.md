@@ -85,8 +85,12 @@ Codex, or any future agent can ship features without depending on chat memory.
 
 ## Conventions At A Glance
 
-- **Language:** C++23, ratcheting toward C++26 features that GCC 16.1 ships stable.
+- **Language:** C++26 (`set_languages("c++26")`), GCC 16.1 baseline.
 - **Compiler:** GCC 16.1 primary, Clang ≥ 19 secondary (CI runs both when feasible).
+- **Console output:** `std::print` / `std::println` / `std::format`. No `<iostream>`
+  in `src/oran-*/`. See [`docs/rules/critical-rules.md#C17`](docs/rules/critical-rules.md).
+- **Static analysis:** GCC 16.1 `-fanalyzer` via `xmake f --analyze=y` (opt-in for
+  authors, nightly CI required). See [`docs/rules/static-analysis.md`](docs/rules/static-analysis.md).
 - **Build:** xmake. Lock file pinned. PCH on, modules where supported, unity for cold modules.
 - **Async:** standalone asio + C++20 coroutines. **No NVIDIA stdexec.** **No std::thread, no custom thread pool.**
 - **Error model:** `std::expected<T, Error>` end-to-end. Throwing wrappers exist only for `main`-level shims and are explicitly named.

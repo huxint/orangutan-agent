@@ -179,6 +179,47 @@ rationale, license, compile-cost estimate, and the libraries that depend on it.
 **Enforcement:** `scripts/check-pkgs-documented.sh` parses `xmake/packages.lua` and
 fails if any package isn't in `libraries.md`.
 
+## C17. Language standard is C++26; modern facilities preferred
+
+The project compiles as **C++26** under **GCC 16.1**. `set_languages("c++26")` is
+the contract in `xmake.lua`; lowering it requires an exec plan and a rule edit.
+
+Concretely:
+
+- Use `std::print` / `std::println` / `std::format` instead of `<iostream>`. The
+  `<iostream>` header is not allowed outside `tests/` and `bench/` runners, and even
+  there it should be avoided when `std::print` works.
+- Use `std::expected<T, Error>` (aliased as `core::Result<T>`) for fallible APIs.
+- Use `std::generator<T>` instead of hand-rolled iterator pairs for lazy sequences.
+- Use `std::span<const T>` instead of pointer + length pairs in interfaces.
+- Use deducing-`this` where a non-virtual member benefits from forwarding-reference
+  qualification.
+- Prefer `consteval` / `constinit` over template-metaprogramming workarounds where
+  GCC 16.1 lets you.
+
+**Why:** the rewrite exists specifically because the legacy project's older standard
+left it stuck with hand-rolled equivalents of `std::expected` and friends. We use
+what the toolchain ships.
+
+**Enforcement:** `scripts/check-banned-includes.sh` adds `<iostream>` to its reject
+list for `src/oran-*/`. `xmake.lua` pins `c++26` and warnings include
+`-Wno-c++23-extensions` removed so an accidental downgrade is loud.
+
+## C18. Static analysis is on the menu, not the autopilot
+
+GCC 16.1's `-fanalyzer` is wired into the build via `xmake f --analyze=y`. The
+analyzer is **opt-in** because it triples compile time on heavy TUs (see
+[`compile-budget.md`](compile-budget.md)), but it is **mandatory for nightly CI** on
+every TU once the library that owns memory or descriptors lands. Suppression policy
+and the required warning set live in [`static-analysis.md`](static-analysis.md).
+
+**Why:** legacy `orangutan/` accumulated null-deref / use-after-free shapes the
+analyzer would have caught; we wire it in on day one and put it on the path that
+runs nightly.
+
+**Enforcement:** `xmake f --analyze=y && xmake` in the nightly job. Suppressions
+without an explaining comment fail review.
+
 ## C16. Docs match reality — The Prime Directive
 
 Every change to behavior, build, configuration, dependencies, interfaces, file

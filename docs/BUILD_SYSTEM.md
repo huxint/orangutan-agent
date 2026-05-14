@@ -1,16 +1,17 @@
 # Build System
 
-Orangutan v2 uses **xmake** with **GCC 16.1** as the primary toolchain. This file
-captures the build philosophy; mechanical compile-time discipline lives in
+Orangutan v2 uses **xmake** with **GCC 16.1** as the primary toolchain, compiling
+the project as **C++26**. This file captures the build philosophy; mechanical
+compile-time discipline lives in
 [`FAST_COMPILATION.md`](FAST_COMPILATION.md) and [`rules/compile-budget.md`](rules/compile-budget.md).
 
 > Why xmake (kept): the legacy project already used xmake, the team is fluent in it,
 > the lockfile workflow is good, and per-target packaging is clean.
 >
-> Why GCC 16.1: by the v2 timeframe it ships stable C++23 modules support, mature
-> `std::expected`, `std::generator`, deducing-`this`, P2300 utilities, and the HALO
-> improvements that matter for our coroutine surface. Clang ≥ 19 is supported as a
-> secondary toolchain.
+> Why GCC 16.1 + C++26: by the v2 timeframe GCC 16.1 ships stable `-std=c++26`,
+> `<print>`, mature `std::expected`, `std::generator`, deducing-`this`, `std::span`,
+> the C++26 P2300 utilities, and the HALO improvements that matter for our coroutine
+> surface. Clang ≥ 19 is supported as a secondary toolchain.
 
 ## Toolchain Requirements
 
@@ -54,7 +55,7 @@ xmake/checks.lua         # CI-friendly checks (deps, includes, TU times)
 -- xmake.lua
 set_project("orangutan-v2")
 set_version("2.0.0")
-set_languages("c++23")           -- ratchet to c++26 only behind features
+set_languages("c++26")           -- GCC 16.1 ships -std=c++26 stable
 set_warnings("all", "extra")
 add_rules("mode.debug", "mode.release", "mode.releasedbg")
 add_rules("plugin.compile_commands.autoupdate", {outputdir = ".", lsp = "clangd"})
@@ -78,11 +79,17 @@ includes("xmake/checks.lua")
 toolchain("oran-gcc")
     set_homepage("GCC 16.1 with our flags")
     set_kind("standalone")
-    set_toolset("cc",  "gcc-16")
-    set_toolset("cxx", "g++-16")
-    set_toolset("ld",  "g++-16")
+    -- Probe `gcc-16` / `g++-16` first (Debian-style suffixed names); fall back to
+    -- the unsuffixed `gcc` / `g++` (the case on this dev machine, where GCC 16.1.1
+    -- is the system compiler and there is no `-16` symlink).
+    local cc  = find_program and (find_program("gcc-16") or find_program("gcc")) or "gcc"
+    local cxx = find_program and (find_program("g++-16") or find_program("g++")) or "g++"
+    set_toolset("cc",  cc)
+    set_toolset("cxx", cxx)
+    set_toolset("ld",  cxx)
     on_load(function (toolchain)
         toolchain:add("cxxflags",
+            "-std=c++26",
             "-fdiagnostics-color=always",
             "-pipe",
             "-fdiagnostics-show-template-tree",
@@ -105,9 +112,27 @@ toolchain("oran-gcc")
                 "-fstack-clash-protection"
             )
         end
+        if has_config("analyze") then
+            toolchain:add("cxxflags",
+                "-fanalyzer",
+                "-Werror=analyzer-null-dereference",
+                "-Werror=analyzer-use-after-free",
+                "-Werror=analyzer-double-free",
+                "-Werror=analyzer-malloc-leak",
+                "-Werror=analyzer-tainted-allocation-size",
+                "-Werror=analyzer-tainted-array-index",
+                "-Werror=analyzer-out-of-bounds",
+                "-Werror=analyzer-write-to-string-literal",
+                "-Werror=analyzer-fd-leak",
+                "-Werror=analyzer-fd-use-without-check"
+            )
+        end
     end)
 toolchain_end()
 ```
+
+See [`rules/static-analysis.md`](rules/static-analysis.md) for the `-fanalyzer`
+policy, the required warning set, and the suppression rules.
 
 ## Options
 
@@ -131,6 +156,11 @@ option_end()
 option("sanitizers")
     set_default(false)
     set_description("Enable ASan/UBSan in debug builds")
+option_end()
+
+option("analyze")
+    set_default(false)
+    set_description("Enable GCC 16.1 -fanalyzer (see rules/static-analysis.md)")
 option_end()
 
 option("channel_qq")       set_default(true)  set_showmenu(true)  option_end()
@@ -316,6 +346,7 @@ fallback when modules misbehave.
 xmake f -m release                 # release
 xmake f -m debug --sanitizers=y    # debug + ASan/UBSan
 xmake f -m release --modules=y     # release + modules
+xmake f -m release --analyze=y     # release + GCC -fanalyzer
 
 # Build the whole project
 xmake -j$(nproc)

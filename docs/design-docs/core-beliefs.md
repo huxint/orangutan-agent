@@ -18,10 +18,15 @@ non-negotiable; everything else in the repository follows from them.
   enforcement is a rule that will silently rot.
 - **Unmanaged entropy compounds.** Cleanup is part of the feature, not after the feature.
 
-## C++23 Engineering Principles
+## C++26 Engineering Principles
 
 - **Correctness, then maintainability, then performance, then cleverness.** In that
   order. Always.
+- **C++26 on GCC 16.1, no apologies.** The project pins `set_languages("c++26")`.
+  `std::print` / `std::format` over iostreams. `std::expected` for errors.
+  `std::generator` for lazy sequences. `std::span` over pointer + length.
+  Deducing-`this` where it sharpens an API. See
+  [`../rules/critical-rules.md#C17`](../rules/critical-rules.md).
 - **Compile time is a feature.** Every TU has a budget; every PR is responsible for not
   pushing it past the budget. The legacy `orangutan/` failed here, and we are not going
   to make the same mistake. See `../rules/compile-budget.md`.

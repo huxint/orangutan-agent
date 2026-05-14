@@ -56,5 +56,5 @@ xmake run test-agent "specific test name"
 
 ## Status
 
-Empty. First buckets land with the MVP code per
-[`../docs/product-specs/0001-core-react-loop.md`](../docs/product-specs/0001-core-react-loop.md).
+`tests/core/` is live for slice 0 and registered with `xmake test`. Additional
+buckets land with their owning libraries.

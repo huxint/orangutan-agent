@@ -23,11 +23,14 @@ This file defines:
 // Stdlib stable
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <format>
 #include <memory>
 #include <optional>
+#include <print>
 #include <span>
 #include <string>
 #include <string_view>
@@ -36,14 +39,19 @@ This file defines:
 #include <variant>
 #include <vector>
 
-// Header-only / forward-decl-only
-#include <fmt/core.h>
-#include <nlohmann/json_fwd.hpp>
+// Header-only / forward-decl-only (added per-slice as their owning lib lands)
+//   <fmt/core.h>            — added with oran-log     (header-only fmt 12.x)
+//   <nlohmann/json_fwd.hpp> — added with oran-storage (json_fwd is small + stable)
 
 // Project foundations (deliberately small)
 #include <oran/core/error.hpp>
 #include <oran/core/result.hpp>
 ```
+
+The `<fmt/core.h>` and `<nlohmann/json_fwd.hpp>` entries are *staged*: they enter the
+PCH at the slice that introduces a library which actually consumes them, so the PCH
+of a tree that does not yet require those packages stays buildable without external
+deps. See `docs/exec-plans/completed/2026-05-14-mvp-build-skeleton-slice-0.md`.
 
 ### Rules
 
