@@ -43,6 +43,29 @@ private:
   std::optional<std::string> old_value_;
 };
 
+class ScopedUnsetEnv {
+public:
+  explicit ScopedUnsetEnv(std::string name) : name_(std::move(name)) {
+    if (const auto* old = std::getenv(name_.c_str()); old != nullptr) {
+      old_value_ = old;
+      unsetenv(name_.c_str());
+    }
+  }
+
+  ~ScopedUnsetEnv() {
+    if (old_value_) {
+      setenv(name_.c_str(), old_value_->c_str(), 1);
+    }
+  }
+
+  ScopedUnsetEnv(const ScopedUnsetEnv&) = delete;
+  ScopedUnsetEnv& operator=(const ScopedUnsetEnv&) = delete;
+
+private:
+  std::string name_;
+  std::optional<std::string> old_value_;
+};
+
 constexpr auto kMinimalConfig = R"json(
 {
   "runtime": {
@@ -125,6 +148,7 @@ TEST_CASE("Config::parse returns typed config values", "[unit][config]") {
 
 TEST_CASE("Config::parse recursively substitutes environment variables", "[unit][config]") {
   ScopedEnv model{"ORAN_CONFIG_TEST_MODEL", "model-from-env"};
+  ScopedUnsetEnv base{"ORAN_CONFIG_TEST_BASE"};
 
   auto result = config::Config::parse(R"json(
 {
@@ -156,7 +180,7 @@ TEST_CASE("Config::parse reports config errors without throwing", "[unit][config
   }
 
   SECTION("missing environment variable") {
-    unsetenv("ORAN_CONFIG_TEST_MISSING");
+    ScopedUnsetEnv missing{"ORAN_CONFIG_TEST_MISSING"};
     auto result = config::Config::parse(R"json(
 {
   "profiles": {
@@ -187,10 +211,17 @@ TEST_CASE("Config::parse reports config errors without throwing", "[unit][config
 }
 
 TEST_CASE("Config::parse warns or fails on unknown root fields", "[unit][config]") {
+  ScopedUnsetEnv missing{"ORAN_CONFIG_TEST_MISSING"};
+
   auto loose = config::Config::parse(R"json({"future": true})json");
   REQUIRE(loose.has_value());
   REQUIRE(loose->warnings().size() == 1);
   REQUIRE(loose->warnings()[0].path == "$.future");
+
+  auto loose_with_env = config::Config::parse(R"json({"future": "${ORAN_CONFIG_TEST_MISSING}"})json");
+  REQUIRE(loose_with_env.has_value());
+  REQUIRE(loose_with_env->warnings().size() == 1);
+  REQUIRE(loose_with_env->warnings()[0].path == "$.future");
 
   auto strict_by_option =
       config::Config::parse(R"json({"future": true})json", config::LoadOptions{.strict_unknown_fields = true});
@@ -203,6 +234,7 @@ TEST_CASE("Config::parse warns or fails on unknown root fields", "[unit][config]
 }
 
 TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][config]") {
+  ScopedUnsetEnv default_model{"ORAN_DEFAULT_MODEL"};
   const auto path = example_config_path();
   REQUIRE_FALSE(path.empty());
   auto result = config::Config::load_file(path);

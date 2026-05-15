@@ -145,6 +145,20 @@ constexpr auto kRecognizedRootFields = std::array<std::string_view, 13>{
   return {};
 }
 
+[[nodiscard]] Result<void> substitute_env_recognized_roots(json& root) {
+  for (auto it = root.begin(); it != root.end(); ++it) {
+    if (!is_recognized_root(it.key())) {
+      continue;
+    }
+
+    auto result = substitute_env(it.value(), child_path("$", it.key()));
+    if (!result) {
+      return std::unexpected(std::move(result.error()));
+    }
+  }
+  return {};
+}
+
 [[nodiscard]] Result<void> require_object(const json& value, std::string_view path) {
   if (!value.is_object()) {
     return std::unexpected(config_error("expected object", std::string{path}));
@@ -437,11 +451,6 @@ core::Result<Config> Config::parse(std::string_view contents, LoadOptions option
       return std::unexpected(config_error("expected root object", "$"));
     }
 
-    auto env_result = substitute_env(root, "$");
-    if (!env_result) {
-      return std::unexpected(std::move(env_result.error()));
-    }
-
     auto strict = parse_strict_config(root);
     if (!strict) {
       return std::unexpected(std::move(strict.error()));
@@ -450,6 +459,11 @@ core::Result<Config> Config::parse(std::string_view contents, LoadOptions option
     if (!unknowns) {
       return std::unexpected(std::move(unknowns.error()));
     }
+    auto env_result = substitute_env_recognized_roots(root);
+    if (!env_result) {
+      return std::unexpected(std::move(env_result.error()));
+    }
+
     auto runtime = parse_runtime(root);
     if (!runtime) {
       return std::unexpected(std::move(runtime.error()));

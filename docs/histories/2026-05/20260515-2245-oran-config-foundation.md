@@ -23,9 +23,12 @@
   - Implemented recursive string substitution for `${VAR}` and `${VAR:-default}`.
   - Added warning-by-default and strict-error handling for unknown root fields.
   - Added load-tested `config.example.json`.
-  - Added `test-config` (5 cases / 46 assertions) and `bench-config` parse-vs-file-load
+  - Added `test-config` (5 cases / 49 assertions) and `bench-config` parse-vs-file-load
     coverage.
   - Bumped the early `orangutan` binary checkpoint to `2.0.0-slice5`.
+  - Follow-up review fixes: loose unknown root subtrees no longer trigger env
+    substitution failures, config env tests are hermetic against ambient variables,
+    and `docs/design-docs/api-portability.md` quotes the current flat profile shape.
 
 ### Design Intent
 
@@ -51,6 +54,8 @@ the first loader.
 - `docs/ARCHITECTURE.md` — slice status and `oran-config` boundary updated.
 - `docs/design-docs/secrets-and-state.md` — current config file shape, typed fields,
   env substitution, unknown-root behavior, and schema future state documented.
+- `docs/design-docs/api-portability.md` — provider profile example synced to the
+  current `config.example.json` / parser shape.
 - `docs/BUILD_SYSTEM.md`, `docs/rules/libraries.md` — `nlohmann_json 3.12.0` package
   and target wiring documented.
 - `docs/SECURITY.md`, `docs/rules/critical-rules.md` — current no-secret-crypto status
@@ -85,7 +90,8 @@ the first loader.
   ```
 - Tests added/changed:
   - `tests/config/test_config.cpp`: typed value parsing, env substitution with
-    defaults, config-error returns, unknown-root strict handling, and checked-in
+    defaults, config-error returns, loose unknown-root env skipping, unknown-root
+    strict handling, hermetic example fallback coverage, and checked-in
     `config.example.json` loading.
 - Bench impact:
   - `bench/config`: in-memory parse vs. file load.

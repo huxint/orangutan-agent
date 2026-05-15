@@ -194,37 +194,31 @@ cache key is replaced by a tuple `(section_id, content_hash, version)`.
 {
   "profiles": {
     "anthropic-main": {
+      "provider": "anthropic",
+      "model": "claude-3-5-sonnet-latest",
       "base_url": "https://api.anthropic.com",
-      "api_key":  "${ANTHROPIC_API_KEY}",
-      "headers":  { "anthropic-version": "2023-06-01" },
-      "models": {
-        "claude-opus-4-7": {
-          "protocol": "anthropic_messages",
-          "context_window": 200000,
-          "thinking": "medium",
-          "cost_per_1m_input":  15.0,
-          "cost_per_1m_output": 75.0
-        }
-      }
+      "api_key_env": "ANTHROPIC_API_KEY"
     },
     "openai-main": {
-      "base_url": "https://api.openai.com",
-      "api_key":  "${OPENAI_API_KEY}",
-      "models": {
-        "gpt-5-thinking": {
-          "protocol": "openai_responses",
-          "context_window": 256000
-        }
-      }
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "base_url": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY"
     }
   },
   "routes": {
-    "default":   { "primary": "anthropic-main:claude-opus-4-7", "fallbacks": ["openai-main:gpt-5-thinking"] },
-    "coder":     { "primary": "anthropic-main:claude-opus-4-7" },
-    "research":  { "primary": "openai-main:gpt-5-thinking" }
+    "default":  { "primary": "anthropic-main", "fallbacks": ["openai-main"] },
+    "coder":    { "primary": "anthropic-main" },
+    "research": { "primary": "openai-main" }
   }
 }
 ```
+
+This is the current `oran-config` foundation shape and matches `config.example.json`:
+each profile key names one provider/model tuple, and routes reference those profile
+keys. Provider protocol metadata, custom headers, context windows, thinking policy,
+and cost fields remain planned provider-schema fields until the typed parser accepts
+them.
 
 ## Error Categories
 
