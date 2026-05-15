@@ -27,5 +27,5 @@ In short:
 
 ## Status
 
-Empty. The first library to land here is `oran-core` per
-[`docs/product-specs/0001-core-react-loop.md`](../docs/product-specs/0001-core-react-loop.md).
+`oran-core`, `oran-async`, `oran-io`, and `oran-storage` public headers are live.
+Additional library headers land with their owning slices.

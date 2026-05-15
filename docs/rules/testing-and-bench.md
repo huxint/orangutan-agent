@@ -152,6 +152,8 @@ and prints a comparison summary.
 | Category | Library | Compares |
 | --- | --- | --- |
 | Encoding overhead | provider | nlohmann_json vs. simdjson |
+| File read wrapper | io | direct `std::ifstream` vs. coroutine wrapper |
+| SQLite insert path | storage | literal execute inserts vs. prepared statement binding |
 | Search backend | memory | FTS5 vs. sqlite-vec vs. external HTTP API |
 | Dispatch overhead | tool | static lookup vs. hashmap |
 | Permission eval | permission | rule-tree vs. linear scan |

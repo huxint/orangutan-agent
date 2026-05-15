@@ -30,5 +30,6 @@ One subdirectory per library: `src/oran-<lib>/`. Each library:
 
 ## Status
 
-Empty. See [`../docs/product-specs/index.md`](../docs/product-specs/index.md) for
-the planned libraries.
+`src/oran-core/`, `src/oran-async/`, `src/oran-io/`, and `src/oran-storage/` are
+live. See [`../docs/product-specs/index.md`](../docs/product-specs/index.md) for the
+planned libraries.

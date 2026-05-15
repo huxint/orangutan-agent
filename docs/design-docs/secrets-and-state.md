@@ -145,7 +145,7 @@ Four separate SQLite files (one per concern):
 
 ### Connection Pool
 
-`oran-storage::Pool` (per DB):
+`oran-storage::Pool` (per DB, future slice):
 
 - 1 writer connection on an asio strand.
 - N reader connections (default 4) drawn round-robin from a pool.
@@ -154,9 +154,18 @@ Four separate SQLite files (one per concern):
 
 ### Expected-Only API
 
-All public APIs return `core::Result<T>` (i.e. `std::expected<T, SqliteError>`). The
+`oran-storage` currently ships the synchronous SQLite core:
+
+- `storage::Connection::open(ConnectionOptions)`
+- `Connection::execute(std::string_view)`
+- `Connection::prepare(std::string_view)`
+- `Connection::query(std::string_view)`
+- `storage::Statement` with bind / step / reset / column reader methods
+
+All public APIs return `core::Result<T>` (i.e. `std::expected<T, core::Error>`). The
 legacy throwing wrappers (`must_ok`) **do not exist** in v2. Migration debt is
-zero-from-day-one. See `docs/rules/error-handling.md`.
+zero-from-day-one. See `docs/rules/error-handling.md` and
+[`storage-runtime.md`](storage-runtime.md).
 
 ### Migrations
 

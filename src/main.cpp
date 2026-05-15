@@ -11,18 +11,20 @@
 
 #include <oran/core/error.hpp>
 #include <oran/core/result.hpp>
+#include <oran/io.hpp>
+#include <oran/storage.hpp>
 
 namespace {
 
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice1";
+constexpr std::string_view kVersion = "2.0.0-slice3";
 
 [[nodiscard]] Result<int> bootstrap() {
   std::println("orangutan v{}", kVersion);
-  std::println("core and async runtime foundations are assembled; agent loop is not implemented yet.");
-  std::println("see docs/exec-plans/active/ for what lands next.");
+  std::println("core, async, io, and storage foundations are assembled; agent loop is not implemented yet.");
+  std::println("see docs/QUALITY_SCORE.md for the next implementation gaps.");
   return 0;
 }
 

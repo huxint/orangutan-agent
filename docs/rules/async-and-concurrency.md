@@ -177,10 +177,9 @@ Use the helper.
 
 ## A14. Test asynchronicity with a real `io_context`
 
-`tests/async/test_async.cpp` uses a local `run_async(...)` helper that drives an
-`asio::io_context` with a hard timeout. Move that helper to `tests/test-helpers/`
-when a second bucket needs it. A `MockClock` lands with the first scheduler feature
-that needs virtual time.
+`tests/test-helpers/run_async.hpp` provides a shared `run_async(...)` helper that
+drives an `asio::io_context` with a hard timeout. A `MockClock` lands with the first
+scheduler feature that needs virtual time.
 
 Don't use `std::async` or `std::future` in tests; the test framework should match
 production async style.

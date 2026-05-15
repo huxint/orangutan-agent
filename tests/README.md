@@ -9,6 +9,7 @@ target so iterating on `tests/<lib>/` does not recompile other buckets.
 tests/
 ├── test-helpers/         # shared helpers: unique paths, mocks, fakes
 │   ├── unique-paths.hpp
+│   ├── run_async.hpp
 │   ├── scoped-env.hpp
 │   ├── fake-provider.hpp
 │   └── ...
@@ -56,5 +57,6 @@ xmake run test-agent "specific test name"
 
 ## Status
 
-`tests/core/` and `tests/async/` are live and registered with `xmake test`.
+`tests/core/`, `tests/async/`, `tests/io/`, and `tests/storage/` are live and
+registered with `xmake test`.
 Additional buckets land with their owning libraries.

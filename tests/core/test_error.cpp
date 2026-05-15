@@ -17,6 +17,7 @@ TEST_CASE("Error builders carry the right kind", "[unit][core][error]") {
   REQUIRE(Error::cancelled().kind() == ErrorKind::cancelled);
   REQUIRE(Error::invalid_argument("x").kind() == ErrorKind::invalid_argument);
   REQUIRE(Error::not_found("x").kind() == ErrorKind::not_found);
+  REQUIRE(Error::io("x").kind() == ErrorKind::io);
   REQUIRE(Error::network("x").kind() == ErrorKind::network);
   REQUIRE(Error::rate_limit("x").kind() == ErrorKind::rate_limit);
   REQUIRE(Error::timeout(250ms).kind() == ErrorKind::timeout);
@@ -34,6 +35,7 @@ TEST_CASE("Error::retryable matches the documented category set", "[unit][core][
   REQUIRE_FALSE(Error::cancelled().retryable());
   REQUIRE_FALSE(Error::invalid_argument("x").retryable());
   REQUIRE_FALSE(Error::not_found("x").retryable());
+  REQUIRE_FALSE(Error::io("x").retryable());
   REQUIRE_FALSE(Error::permission_denied("x").retryable());
   REQUIRE_FALSE(Error::config("x").retryable());
   REQUIRE_FALSE(Error::storage("x").retryable());
@@ -104,6 +106,7 @@ TEST_CASE("all_ok short-circuits on the first error", "[unit][core][result]") {
 
 TEST_CASE("to_string_view covers all enumerators", "[unit][core][error]") {
   REQUIRE(to_string_view(ErrorKind::ok) == "ok");
+  REQUIRE(to_string_view(ErrorKind::io) == "io");
   REQUIRE(to_string_view(ErrorKind::network) == "network");
   REQUIRE(to_string_view(ErrorKind::mailbox_overflowed) == "mailbox_overflowed");
   REQUIRE(to_string_view(ErrorKind::internal) == "internal");

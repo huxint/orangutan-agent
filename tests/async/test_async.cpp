@@ -5,7 +5,6 @@
 #include <exception>
 #include <expected>
 #include <optional>
-#include <stdexcept>
 #include <vector>
 
 #include <asio/bind_cancellation_slot.hpp>
@@ -20,46 +19,13 @@
 
 #include <oran/async.hpp>
 
+#include "../test-helpers/run_async.hpp"
+
 using namespace std::chrono_literals;
 
 namespace async = orangutan::async;
 namespace core = orangutan::core;
-
-namespace {
-
-template <typename Fn>
-void run_async(Fn&& fn) {
-  asio::io_context io;
-  std::exception_ptr failure;
-  bool finished = false;
-
-  asio::steady_timer timeout{io};
-  timeout.expires_after(1s);
-  timeout.async_wait([&](const asio::error_code& ec) {
-    if (!ec && !finished) {
-      failure = std::make_exception_ptr(std::runtime_error{"async test timed out"});
-      io.stop();
-    }
-  });
-
-  asio::co_spawn(io, std::forward<Fn>(fn)(io), [&](std::exception_ptr ep) {
-    finished = true;
-    if (ep) {
-      failure = ep;
-    }
-    timeout.cancel();
-    io.stop();
-  });
-
-  io.run();
-
-  if (failure) {
-    std::rethrow_exception(failure);
-  }
-  REQUIRE(finished);
-}
-
-}  // namespace
+namespace test = orangutan::tests;
 
 TEST_CASE("Runtime runs work on its executor until stopped", "[unit][async][runtime]") {
   async::Runtime runtime{async::RuntimeConfig{.io_workers = 1, .cpu_workers = 1}};
@@ -80,7 +46,7 @@ TEST_CASE("Runtime runs work on its executor until stopped", "[unit][async][runt
 }
 
 TEST_CASE("sleep_for completes on timer expiry", "[unit][async][sleep]") {
-  run_async([](asio::io_context& io) -> async::Awaitable<void> {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     auto result = co_await async::sleep_for(io.get_executor(), 1ms);
     REQUIRE(result.has_value());
   });
@@ -113,7 +79,7 @@ TEST_CASE("sleep_for reports cancellation", "[unit][async][sleep]") {
 }
 
 TEST_CASE("Channel sends and receives FIFO values", "[unit][async][channel]") {
-  run_async([](asio::io_context& io) -> async::Awaitable<void> {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     async::Channel<int> channel{io.get_executor(), 2};
 
     auto sent_first = co_await channel.send(1);
@@ -143,7 +109,7 @@ TEST_CASE("Channel try_send reports overflow when full", "[unit][async][channel]
 }
 
 TEST_CASE("Channel pending send completes when receive frees capacity", "[unit][async][channel]") {
-  run_async([](asio::io_context& io) -> async::Awaitable<void> {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     async::Channel<int> channel{io.get_executor(), 1};
     REQUIRE(channel.try_send(1).has_value());
 
@@ -174,7 +140,7 @@ TEST_CASE("Channel pending send completes when receive frees capacity", "[unit][
 }
 
 TEST_CASE("Channel close drains buffered values then reports closed", "[unit][async][channel]") {
-  run_async([](asio::io_context& io) -> async::Awaitable<void> {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     async::Channel<int> channel{io.get_executor(), 2};
 
     REQUIRE(channel.try_send(1).has_value());

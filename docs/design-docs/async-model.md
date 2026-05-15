@@ -256,8 +256,8 @@ rule in `orangutan/` was the right call; we keep it.
 
 - Use `asio::io_context` directly in unit tests for coroutine primitives; create
   `Runtime` only when the test is specifically about runtime ownership.
-- `tests/async/test_async.cpp` currently uses a local `run_async(...)` helper with a
-  hard timeout. Promote it to `tests/test-helpers/` only when another bucket needs it.
+- `tests/test-helpers/run_async.hpp` owns the shared `run_async(...)` helper with a
+  hard timeout. `tests/async` and `tests/io` both use it.
 - Time-dependent production code uses real `steady_timer` in slice 1. A mock clock
   can land when the first scheduler/automation feature needs deterministic virtual
   time.

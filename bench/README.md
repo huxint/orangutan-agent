@@ -56,6 +56,8 @@ xmake run orangutan-bench --json > all.json
 | ------------------ | ------------------------------ | -------------------------- |
 | `core`             | variant-based `Content`        | polymorphic `Content` (stretch) |
 | `async`            | direct coroutine post loop     | bounded `Channel<T>` handoff |
+| `io`               | direct `std::ifstream` read    | coroutine `read_text_file` wrapper |
+| `storage`          | literal `execute` inserts      | prepared statement binding   |
 | `memory`           | FTS5 backend                   | sqlite-vec backend (v2)    |
 | `provider`         | nlohmann_json encode/decode    | simdjson (stretch)         |
 | `orchestration`    | leader-worker strategy         | vote strategy              |
@@ -66,5 +68,5 @@ Each table row corresponds to at least one scenario file in the bucket.
 
 ## Status
 
-`bench/core/` and `bench/async/` are live. Additional buckets land with their
-owning libraries.
+`bench/core/`, `bench/async/`, `bench/io/`, and `bench/storage/` are live.
+Additional buckets land with their owning libraries.

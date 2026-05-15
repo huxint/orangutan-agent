@@ -8,6 +8,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -25,6 +26,7 @@ enum class ErrorKind : std::uint8_t {
   capability_not_granted,
   config,
   auth,
+  io,
   network,
   rate_limit,
   upstream,
@@ -81,6 +83,7 @@ public:
   [[nodiscard]] static Error not_found(std::string message);
   [[nodiscard]] static Error permission_denied(std::string message);
   [[nodiscard]] static Error config(std::string message);
+  [[nodiscard]] static Error io(std::string message);
   [[nodiscard]] static Error network(std::string message);
   [[nodiscard]] static Error rate_limit(std::string message);
   [[nodiscard]] static Error upstream(std::string message);

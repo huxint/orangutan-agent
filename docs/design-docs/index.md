@@ -20,6 +20,10 @@ If you are starting a non-trivial task, the rule is:
   how to keep TUs small; one-way dependency rule.
 - [`async-model.md`](async-model.md) — executor topology, coroutines, cancellation,
   backpressure, why no `stdexec`.
+- [`io-runtime.md`](io-runtime.md) — policy-free file/directory helpers and the future
+  subprocess/signal boundary.
+- [`storage-runtime.md`](storage-runtime.md) — expected-only SQLite connection and
+  statement core, plus future pool/migration boundaries.
 
 ### Agent Runtime
 

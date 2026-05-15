@@ -18,11 +18,12 @@ materially changes an area.
 | ------------------------ | ----- | --- | --------- |
 | Architecture docs        | B     | Top-level map + design docs drafted. Some sections await concrete code. | Land MVP code; back-fill diagrams. |
 | Build system             | B     | xmake skeleton lands in slice 0; GCC 16.1 toolchain detected, C++26 enforced, `compile_commands.json` autoupdates. | Land per-library `check-compile-budget.sh` numbers + Clang secondary toolchain. |
-| Compile-time discipline  | C     | Budgets captured; `oran-core` and `oran-async` build under the current target budget, but no per-TU baseline file exists yet. | Land per-library `check-compile-budget.sh` numbers. |
-| Test framework           | C     | Catch2 v3 buckets green for `oran-core` (8 cases / 47 assertions) and `oran-async` (8 cases / 38 assertions). | First storage/config tests. |
-| Bench harness            | C     | nanobench buckets green for `oran-core` and `oran-async`; no baseline JSON or regression gate yet. | Wire `scripts/bench-compare.sh` to a real baseline file. |
-| Async model              | B     | `Runtime`, `Awaitable<T>`, cancel-aware `sleep_for`, and bounded `Channel<T>` are implemented with tests and a bench. Runtime signal integration and mailbox policy are still downstream. | Use `oran-async` from `oran-io` or `oran-storage` and add cancellation-latency bench coverage. |
-| Storage / DBs            | C     | Design captured; expected-only API design done. | Implement `oran-storage` core. |
+| Compile-time discipline  | C     | Budgets captured; `oran-core`, `oran-async`, `oran-io`, and `oran-storage` build under the current target budget, but no per-TU baseline file exists yet. | Land per-library `check-compile-budget.sh` numbers. |
+| Test framework           | C     | Catch2 v3 buckets green for `oran-core` (8 cases / 47 assertions), `oran-async` (8 cases / 38 assertions), `oran-io` (8 cases / 33 assertions), and `oran-storage` (9 cases / 95 assertions). | First config tests. |
+| Bench harness            | C     | nanobench buckets green for `oran-core`, `oran-async`, `oran-io`, and `oran-storage`; no baseline JSON or regression gate yet. | Wire `scripts/bench-compare.sh` to a real baseline file. |
+| Async model              | B     | `Runtime`, `Awaitable<T>`, cancel-aware `sleep_for`, and bounded `Channel<T>` are implemented with tests and a bench. Runtime signal integration and mailbox policy are still downstream. | Use `oran-async` from `oran-storage` and add cancellation-latency bench coverage. |
+| IO runtime               | C     | `oran-io` file/directory MVP is implemented with tests and a bench; subprocess, glob, pipe, signal, and watcher APIs are still downstream. | Add subprocess/signal helpers after permission and hook surfaces are ready to wrap them. |
+| Storage / DBs            | C     | Expected-only SQLite `Connection` / `Statement` core is implemented with WAL/foreign-key setup, tests, and a bench. Pooling, migrations, statement cache, and domain repositories are still downstream. | Implement migration runner and schema version table. |
 | Provider system          | C     | Layered design captured. | First adapter (Anthropic Messages). |
 | Tool registry            | C     | Design captured. | First built-ins (file + shell + memory). |
 | Memory tiers             | C     | Tier design captured. | Long-term FTS5 v1. |
@@ -37,7 +38,7 @@ materially changes an area.
 | Observability            | D     | Logging shim designed. | Metrics endpoint. |
 | Security defaults        | B     | Captured. | Implement secret rotation. |
 | Supply chain             | B     | Workflows pinned, lockfile present. | Add OSV scan once xmake lock is real. |
-| Static analysis          | C     | `-fanalyzer` wiring shipped (rule + xmake option); analyzer CI remains a planned nightly gate. | Run/record analyzer coverage when descriptor-owning `oran-io` or `oran-storage` lands. |
+| Static analysis          | C     | `-fanalyzer` wiring shipped (rule + xmake option); focused `oran-io` and `oran-storage` analyzer builds pass locally, but analyzer CI remains a planned nightly gate. | Run/record analyzer coverage again for later descriptor-heavy code. |
 
 ## Cadence
 

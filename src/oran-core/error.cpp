@@ -11,9 +11,25 @@ namespace orangutan::core {
 namespace {
 
 constexpr std::string_view kKindNames[] = {
-    "ok",       "cancelled", "invalid_argument", "not_found",    "permission_denied", "capability_not_granted",
-    "config",   "auth",      "network",          "rate_limit",   "upstream",          "parsing",
-    "timeout",  "conflict",  "storage",          "hook_timeout", "hook_failed",       "mailbox_overflowed",
+    "ok",
+    "cancelled",
+    "invalid_argument",
+    "not_found",
+    "permission_denied",
+    "capability_not_granted",
+    "config",
+    "auth",
+    "io",
+    "network",
+    "rate_limit",
+    "upstream",
+    "parsing",
+    "timeout",
+    "conflict",
+    "storage",
+    "hook_timeout",
+    "hook_failed",
+    "mailbox_overflowed",
     "internal",
 };
 
@@ -79,6 +95,10 @@ Error Error::permission_denied(std::string message) {
 
 Error Error::config(std::string message) {
   return Error{ErrorKind::config, std::move(message)};
+}
+
+Error Error::io(std::string message) {
+  return Error{ErrorKind::io, std::move(message)};
 }
 
 Error Error::network(std::string message) {

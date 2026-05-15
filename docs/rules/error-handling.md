@@ -18,6 +18,7 @@ enum class ErrorKind {
   capability_not_granted,
   config,
   auth,
+  io,
   network,
   rate_limit,
   upstream,
@@ -42,6 +43,7 @@ class Error {
   // Builders for common categories.
   static Error cancelled();
   static Error invalid_argument(std::string);
+  static Error io(std::string);
   static Error network(std::string);
   static Error timeout(std::chrono::milliseconds);
   // ... etc.

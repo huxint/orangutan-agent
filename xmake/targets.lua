@@ -27,10 +27,12 @@ end
 
 oran_lib("core", {}, {})
 oran_lib("async", { "oran-core" }, {}, { "asio" })
+oran_lib("io", { "oran-core", "oran-async" }, {}, { "asio" })
+oran_lib("storage", { "oran-core" }, { "sqlite3" })
 
 target("orangutan")
     set_kind("binary")
     set_group("oran-bins")
-    add_deps("oran-core", "oran-async")
+    add_deps("oran-core", "oran-async", "oran-io", "oran-storage")
     add_files(path.join(root, "src/main.cpp"))
 target_end()
