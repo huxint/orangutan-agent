@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include <oran/cli.hpp>
 #include <oran/core/error.hpp>
 
 namespace orangutan::bootstrap {
@@ -17,12 +18,13 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice6";
+constexpr std::string_view kVersion = "2.0.0-slice7";
 
 struct ParsedArgs {
   bool help{false};
   bool has_explicit_config{false};
   std::string explicit_config_path{};
+  std::vector<std::string_view> cli_args{};
 };
 
 [[nodiscard]] Error arg_error(std::string message) {
@@ -65,7 +67,7 @@ struct ParsedArgs {
       continue;
     }
 
-    return std::unexpected(arg_error("unknown bootstrap argument").with("arg", std::string{arg}));
+    parsed.cli_args.push_back(arg);
   }
 
   return parsed;
@@ -90,9 +92,9 @@ struct ParsedArgs {
 
 void print_usage() {
   std::println("orangutan v{}", kVersion);
-  std::println("usage: orangutan [--config <path>] [--help]");
+  std::println("usage: orangutan [--config <path>] [--prompt <text>] [--help]");
   std::println();
-  std::println("The current bootstrap slice loads config and exits before the agent loop.");
+  std::println("The current bootstrap slice loads config, then hands CLI modes to oran-cli.");
 }
 
 }  // namespace
@@ -187,9 +189,12 @@ core::Result<int> run(BootstrapOptions options) {
   if (!loaded->value.warnings().empty()) {
     std::println("config warnings: {}", loaded->value.warnings().size());
   }
-  std::println("agent loop is not implemented yet.");
-  std::println("see docs/QUALITY_SCORE.md for the next implementation gaps.");
-  return 0;
+
+  auto cli_result = cli::run(cli::CliOptions{.args = std::span<const std::string_view>{parsed->cli_args}});
+  if (!cli_result) {
+    return std::unexpected(std::move(cli_result.error()));
+  }
+  return cli_result->exit_code;
 }
 
 }  // namespace orangutan::bootstrap

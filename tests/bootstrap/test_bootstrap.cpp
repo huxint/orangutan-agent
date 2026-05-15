@@ -143,19 +143,22 @@ TEST_CASE("load_config honors explicit config arguments", "[unit][bootstrap]") {
   }
 }
 
+TEST_CASE("load_config ignores CLI arguments while resolving config", "[unit][bootstrap]") {
+  TempDir temp{"oran-bootstrap-cli-args"};
+  auto args = std::vector<std::string_view>{"--prompt", "hello"};
+
+  auto loaded = bootstrap::load_config(options(args, temp.path()));
+
+  REQUIRE(loaded.has_value());
+  REQUIRE(loaded->source == bootstrap::ConfigSource::built_in_defaults);
+  REQUIRE(loaded->value.runtime().workers == 4);
+}
+
 TEST_CASE("load_config rejects invalid bootstrap arguments", "[unit][bootstrap]") {
   TempDir temp{"oran-bootstrap-invalid-args"};
 
   SECTION("missing explicit path") {
     auto args = std::vector<std::string_view>{"--config"};
-    auto loaded = bootstrap::load_config(options(args, temp.path()));
-
-    REQUIRE_FALSE(loaded.has_value());
-    REQUIRE(loaded.error().kind() == core::ErrorKind::invalid_argument);
-  }
-
-  SECTION("unknown argument") {
-    auto args = std::vector<std::string_view>{"--prompt", "hello"};
     auto loaded = bootstrap::load_config(options(args, temp.path()));
 
     REQUIRE_FALSE(loaded.has_value());
@@ -180,4 +183,24 @@ TEST_CASE("run handles help without loading config", "[unit][bootstrap]") {
 
   REQUIRE(result.has_value());
   REQUIRE(*result == 0);
+}
+
+TEST_CASE("run hands CLI arguments to oran-cli after config load", "[unit][bootstrap]") {
+  TempDir temp{"oran-bootstrap-cli-handoff"};
+  auto args = std::vector<std::string_view>{"--prompt", "hello"};
+
+  auto result = bootstrap::run(options(args, temp.path()));
+
+  REQUIRE(result.has_value());
+  REQUIRE(*result == 0);
+}
+
+TEST_CASE("run returns CLI argument errors after config load", "[unit][bootstrap]") {
+  TempDir temp{"oran-bootstrap-cli-error"};
+  auto args = std::vector<std::string_view>{"--unknown"};
+
+  auto result = bootstrap::run(options(args, temp.path()));
+
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
 }

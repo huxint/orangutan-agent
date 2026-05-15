@@ -12,7 +12,11 @@ with persistent session history and a CLI surface. The first deliverable is "I c
   - `--config <path>` / `--config=<path>` loads a config through `oran-bootstrap`.
   - No `--config` loads `<workspace>/.orangutan/config.json` when present, otherwise
     uses built-in config defaults.
+  - `--prompt <text>` / `--prompt=<text>` is handed to `oran-cli` single-shot mode.
+  - No CLI mode args select a minimal REPL shell.
   - `--help` / `-h` prints the current bootstrap usage.
+  - The current CLI shell is deterministic and pre-agent-loop; it accepts prompts but
+    does not call a provider yet.
 - One agent runtime per process (multiplexing comes in spec 0004).
 - Anthropic Messages **and** OpenAI Chat Completions providers (one of the two
   configured + working end-to-end is acceptance; the other is built and bench-only).
@@ -106,6 +110,7 @@ The largest file is src/oran-agent/loop.cpp at 4128 lines. Its top-level structu
 xmake build orangutan
 xmake run orangutan
 xmake run orangutan -- --config config.example.json
+xmake run orangutan -- --config config.example.json --prompt "hello"
 xmake test test-agent
 xmake run orangutan -- --prompt "What is 17 * 23?"
 xmake run orangutan -- --prompt "Read README.md and summarize."

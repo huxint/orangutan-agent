@@ -14,6 +14,7 @@ tests/
 ├── http/
 ├── storage/
 ├── config/
+├── cli/
 ├── bootstrap/
 ├── permission/
 ├── skill/
@@ -28,8 +29,6 @@ tests/
 ├── channel/
 ├── channel-qq/           (optional, gated by channel_qq)
 ├── web/
-├── cli/
-├── bootstrap/
 ├── integration/          end-to-end tests
 └── test-helpers/         shared helpers: unique paths, fake providers, mock channels
 ```
@@ -41,6 +40,8 @@ bench/
 ├── http/
 ├── storage/
 ├── config/
+├── cli/
+├── bootstrap/
 ├── permission/
 ├── tool/
 ├── memory/
@@ -48,6 +49,7 @@ bench/
 ├── prompt/
 ├── agent/
 ├── orchestration/
+├── automation/
 ├── channel/
 ├── compile-time/         per-TU compile-time measurements
 └── bench-helpers/        shared helpers
@@ -158,6 +160,7 @@ and prints a comparison summary.
 | SQLite insert path | storage | literal execute inserts vs. prepared statement binding |
 | SQLite migration path | storage | cold migration apply vs. no-op migration check |
 | Config loading | config | in-memory JSON parse vs. checked-in config file load |
+| CLI dispatch | cli | single-shot prompt dispatch vs. empty REPL shell dispatch |
 | Bootstrap config startup | bootstrap | missing default config fallback vs. explicit config file load |
 | Search backend | memory | FTS5 vs. sqlite-vec vs. external HTTP API |
 | Dispatch overhead | tool | static lookup vs. hashmap |

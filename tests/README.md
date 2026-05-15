@@ -57,6 +57,6 @@ xmake run test-agent "specific test name"
 
 ## Status
 
-`tests/core/`, `tests/async/`, `tests/io/`, `tests/storage/`, `tests/config/`, and
-`tests/bootstrap/` are live and registered with `xmake test`.
+`tests/core/`, `tests/async/`, `tests/io/`, `tests/storage/`, `tests/config/`,
+`tests/cli/`, and `tests/bootstrap/` are live and registered with `xmake test`.
 Additional buckets land with their owning libraries.

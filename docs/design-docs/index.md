@@ -26,6 +26,8 @@ If you are starting a non-trivial task, the rule is:
   statement core, plus future pool/migration boundaries.
 - [`bootstrap-runtime.md`](bootstrap-runtime.md) — process entry, config discovery,
   and future runtime assembly boundary.
+- [`cli-runtime.md`](cli-runtime.md) — CLI mode parsing, pre-agent-loop prompt shell,
+  and future REPL boundary.
 
 ### Agent Runtime
 

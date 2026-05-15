@@ -51,6 +51,7 @@ one A-vs-B scenario:
 | `oran-io`       | direct `std::ifstream` text read | coroutine `read_text_file` wrapper |
 | `oran-storage`  | literal `Connection::execute` inserts / cold migration apply | prepared `Statement` binding / no-op migration check |
 | `oran-config`   | in-memory JSON parse             | checked-in config file load |
+| `oran-cli`      | single-shot prompt dispatch      | empty REPL shell dispatch |
 | `oran-bootstrap` | missing default config fallback | explicit config file load |
 | `oran-tool`     | hashmap lookup                 | static dispatch (stretch)  |
 | `oran-memory`   | FTS5                           | sqlite-vec (v2)            |

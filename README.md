@@ -147,6 +147,7 @@ Current binary smoke checks:
 xmake build orangutan
 xmake run orangutan
 xmake run orangutan -- --config config.example.json
+xmake run orangutan -- --prompt "What is 17 * 23?"
 ```
 
 ## License

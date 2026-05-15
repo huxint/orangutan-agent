@@ -1,8 +1,8 @@
 # Bootstrap Runtime
 
 `oran-bootstrap` is the process entry boundary. It owns command-line bootstrap
-parsing, config discovery, and future runtime assembly. The current slice only loads
-configuration and keeps the binary intentionally pre-agent-loop.
+parsing, config discovery, and future runtime assembly. The current slice loads
+configuration, reports the config source, and hands CLI-facing modes to `oran-cli`.
 
 ## Current Public API
 
@@ -34,10 +34,12 @@ core::Result<int> run(BootstrapOptions);
 
 All public functions return `core::Result<T>`. `src/main.cpp` only builds the argument
 span, calls `bootstrap::run`, and converts an error into process exit code `1`.
+`bootstrap::run` consumes bootstrap-owned flags, loads config, and forwards remaining
+CLI args to `cli::run`.
 
 ## Config Resolution
 
-`run` and `load_config` accept these bootstrap arguments:
+`run` and `load_config` consume these bootstrap arguments:
 
 - `--config <path>`
 - `--config=<path>`
@@ -46,6 +48,10 @@ span, calls `bootstrap::run`, and converts an error into process exit code `1`.
 `xmake run` may pass a standalone `--` separator through to the binary; bootstrap
 accepts and ignores that separator so repo smoke commands can use the usual
 `xmake run orangutan -- --config config.example.json` form.
+
+Arguments not owned by bootstrap are left for `oran-cli`. For example,
+`--prompt <text>` is not used during config resolution; after config loading,
+`bootstrap::run` forwards it to `cli::run`.
 
 When `--config` is supplied, that file is required. Missing, unreadable, or invalid
 explicit config returns a `core::Result` error.
@@ -68,14 +74,13 @@ The current `orangutan` binary prints:
 - version / slice banner,
 - config source and path,
 - profile / route / worker / web summary,
-- the existing "agent loop is not implemented yet" notice.
+- the `oran-cli` mode output.
 
-No provider credentials are read, no storage files are opened, and no runtime loop is
-started in this slice.
+No provider credentials are read, no storage files are opened, and no agent runtime loop
+is started in this slice.
 
 ## Next Steps
 
-- Route `--prompt` and REPL mode to `oran-cli`.
 - Build runtime assembly around loaded config.
 - Initialize storage files and apply domain migrations.
 - Add signal handling and cancellation once the agent loop exists.
