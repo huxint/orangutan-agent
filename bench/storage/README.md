@@ -3,13 +3,14 @@
 ## What this bucket benchmarks
 
 `oran-storage` is the expected-only SQLite core used by sessions, memory, automation,
-and audit repositories. The first scenario measures the cost difference between
-literal `execute` inserts and a reused prepared statement with bound parameters.
+and audit repositories. The scenarios measure insert-path tradeoffs and migration
+startup cost.
 
 ## Scenarios
 
 | File | A vs. B |
 | --- | --- |
+| [`scenarios/migrations.cpp`](scenarios/migrations.cpp) | Cold migration apply *vs.* no-op migration check. |
 | [`scenarios/sqlite_insert.cpp`](scenarios/sqlite_insert.cpp) | Literal `Connection::execute` inserts *vs.* prepared `Statement` binding. |
 
 ## Running

@@ -19,11 +19,12 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice3";
+constexpr std::string_view kVersion = "2.0.0-slice4";
 
 [[nodiscard]] Result<int> bootstrap() {
   std::println("orangutan v{}", kVersion);
-  std::println("core, async, io, and storage foundations are assembled; agent loop is not implemented yet.");
+  std::println("core, async, io, storage, and migration foundations are assembled;");
+  std::println("agent loop is not implemented yet.");
   std::println("see docs/QUALITY_SCORE.md for the next implementation gaps.");
   return 0;
 }

@@ -154,13 +154,15 @@ Four separate SQLite files (one per concern):
 
 ### Expected-Only API
 
-`oran-storage` currently ships the synchronous SQLite core:
+`oran-storage` currently ships the synchronous SQLite core and migration runner:
 
 - `storage::Connection::open(ConnectionOptions)`
 - `Connection::execute(std::string_view)`
 - `Connection::prepare(std::string_view)`
 - `Connection::query(std::string_view)`
 - `storage::Statement` with bind / step / reset / column reader methods
+- `storage::Migration`, `storage::MigrationReport`
+- `storage::run_migrations(Connection&, std::span<const Migration>)`
 
 All public APIs return `core::Result<T>` (i.e. `std::expected<T, core::Error>`). The
 legacy throwing wrappers (`must_ok`) **do not exist** in v2. Migration debt is
@@ -180,10 +182,23 @@ src/oran-storage/migrations/
   ...
 ```
 
-Each file is a transaction. Applied at startup; recorded in
-`schema_versions(version INTEGER PRIMARY KEY, applied_at TEXT)`.
+The current runner accepts a compiled `std::span<const storage::Migration>`; loading
+SQL files from this tree is a future storage slice.
 
-A migration runner verifies monotonic version order; gaps abort startup.
+Each migration is applied in its own transaction. Applied migrations are recorded in:
+
+```sql
+CREATE TABLE IF NOT EXISTS schema_versions(
+  version INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  applied_at TEXT NOT NULL
+);
+```
+
+The migration runner verifies a complete contiguous migration set starting at version
+`1`; gaps, duplicates, empty names, empty SQL, and database versions newer than the
+binary's migration set abort startup. Re-running the same complete set is an idempotent
+no-op.
 
 ### Backups
 

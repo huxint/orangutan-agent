@@ -70,7 +70,8 @@ own test bucket, its own bench bucket, and its own public header set under
 ## Library Inventory
 
 > **Slice status (2026-05-15):** `oran-core`, `oran-async`, the file/directory MVP
-> of `oran-io`, and the expected-only SQLite core of `oran-storage` are implemented.
+> of `oran-io`, and the expected-only SQLite core + migration runner of
+> `oran-storage` are implemented.
 > All other rows below are *planned* and will land per `docs/exec-plans/` as future
 > slices are scheduled. The build system, PCH, tests bucket, and bench bucket
 > conventions are live; see the history entries under `docs/histories/2026-05/`.
@@ -82,7 +83,7 @@ own test bucket, its own bench bucket, and its own public header set under
 | `oran-log`           | spdlog shim + secret redaction; thread-local context | `oran-core`, spdlog/fmt |
 | `oran-io`            | file/directory IO MVP; planned glob, pipe, subprocess, signal | `oran-core`, `oran-async` |
 | `oran-http`          | http client (asio) and tiny router for the web UI | `oran-core`, `oran-async` |
-| `oran-storage`       | SQLite expected-only connection/statement core; planned pool + migrations | `oran-core`, sqlite3 |
+| `oran-storage`       | SQLite expected-only connection/statement core + migration runner; planned pool + statement cache | `oran-core`, sqlite3 |
 | `oran-config`        | JSON config schema, secret-protected fields, env substitution | `oran-core`, `oran-storage` |
 | `oran-permission`    | runtime allow/deny/ask rule engine | `oran-core` |
 | `oran-skill`         | skill loader, skill catalog | `oran-core`, `oran-io` |

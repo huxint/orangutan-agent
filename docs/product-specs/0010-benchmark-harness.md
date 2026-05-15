@@ -49,7 +49,7 @@ one A-vs-B scenario:
 | `oran-core`     | variant-based Content          | polymorphic Content (stretch) |
 | `oran-async`    | direct coroutine post loop     | bounded `Channel<T>` handoff |
 | `oran-io`       | direct `std::ifstream` text read | coroutine `read_text_file` wrapper |
-| `oran-storage`  | literal `Connection::execute` inserts | prepared `Statement` binding |
+| `oran-storage`  | literal `Connection::execute` inserts / cold migration apply | prepared `Statement` binding / no-op migration check |
 | `oran-tool`     | hashmap lookup                 | static dispatch (stretch)  |
 | `oran-memory`   | FTS5                           | sqlite-vec (v2)            |
 | `oran-provider` | nlohmann_json encode/decode    | simdjson (stretch)         |

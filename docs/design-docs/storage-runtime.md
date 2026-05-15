@@ -4,10 +4,10 @@
 automation, audit logs, and configuration metadata. It owns the SQLite dependency and
 does not expose `sqlite3.h` from public headers.
 
-> **SQLite-core status (2026-05-15):** `oran-storage` ships `Connection`,
-> `Statement`, typed binding/stepping/column readers, WAL + foreign-key setup, and a
-> simple `query` helper. Pools, migrations, statement caches, backups, and domain
-> repositories are future slices.
+> **Storage status (2026-05-15):** `oran-storage` ships `Connection`, `Statement`,
+> typed binding/stepping/column readers, WAL + foreign-key setup, a simple `query`
+> helper, and the synchronous `run_migrations` runner. Pools, statement caches,
+> backups, SQL-file loading, and domain repositories are future slices.
 
 ## Public Surface
 
@@ -36,6 +36,18 @@ struct QueryResult {
   std::vector<Row> rows;
 };
 
+struct Migration {
+  std::int64_t version;
+  std::string name;
+  std::string sql;
+};
+
+struct MigrationReport {
+  std::int64_t previous_version;
+  std::int64_t current_version;
+  std::vector<std::int64_t> applied_versions;
+};
+
 class Connection {
  public:
   static core::Result<Connection> open(ConnectionOptions);
@@ -59,6 +71,8 @@ class Statement {
   core::Result<double> column_double(int index) const;
 };
 
+core::Result<MigrationReport> run_migrations(Connection&, std::span<const Migration>);
+
 }  // namespace orangutan::storage
 ```
 
@@ -77,6 +91,9 @@ All public APIs return `core::Result<T>`. SQLite failures map to
 - `sqlite_message`
 - `sql`
 
+Migration failures add `migration_version` and `migration_name` when the failure is
+tied to a specific migration.
+
 There are no throwing wrappers and no `must_ok` escape hatch.
 
 ## Lifetime
@@ -94,10 +111,36 @@ handle to the SQLite connection so a statement can finish/finalize even if the
 Read-only connections do not try to switch journal mode. In-memory databases can opt
 out of WAL with `enable_wal = false`.
 
+## Migrations
+
+`run_migrations(Connection&, std::span<const Migration>)` is synchronous and
+connection-local. The future pool layer will call it through the writer connection.
+
+The runner creates this table in each database:
+
+```sql
+CREATE TABLE IF NOT EXISTS schema_versions(
+  version INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  applied_at TEXT NOT NULL
+);
+```
+
+The provided migration set must be complete and contiguous from version `1`. The runner
+rejects non-positive versions, gaps, duplicates, empty names, and empty SQL before it
+touches the database. Existing recorded versions must also be contiguous and must not be
+newer than the provided set.
+
+Each pending migration runs in its own `BEGIN IMMEDIATE` transaction. On success, the
+runner inserts a `schema_versions` row with an ISO-like UTC timestamp from SQLite. On
+failure, it rolls back that migration and returns `core::ErrorKind::storage` with
+migration context. Re-running the same complete migration set is an idempotent no-op:
+the report returns the existing `current_version` and an empty `applied_versions`.
+
 ## Future Slices
 
 - `Pool` with one writer connection on a strand and reader connections round-robin.
-- Migration runner with monotonic version checks and `schema_versions`.
+- SQL-file loading from `src/oran-storage/migrations/`.
 - Prepared statement cache.
 - Domain repositories for sessions, memory, automation, and audit logs.
 - Backup script integration and generated schema docs.

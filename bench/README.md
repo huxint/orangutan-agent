@@ -57,7 +57,7 @@ xmake run orangutan-bench --json > all.json
 | `core`             | variant-based `Content`        | polymorphic `Content` (stretch) |
 | `async`            | direct coroutine post loop     | bounded `Channel<T>` handoff |
 | `io`               | direct `std::ifstream` read    | coroutine `read_text_file` wrapper |
-| `storage`          | literal `execute` inserts      | prepared statement binding   |
+| `storage`          | literal `execute` inserts / cold migration apply | prepared statement binding / no-op migration check |
 | `memory`           | FTS5 backend                   | sqlite-vec backend (v2)    |
 | `provider`         | nlohmann_json encode/decode    | simdjson (stretch)         |
 | `orchestration`    | leader-worker strategy         | vote strategy              |
