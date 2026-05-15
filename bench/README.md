@@ -12,6 +12,7 @@ bench/
 ├── http/
 ├── storage/
 ├── config/
+├── bootstrap/
 ├── permission/
 ├── tool/
 ├── memory/
@@ -60,6 +61,7 @@ xmake run orangutan-bench --json > all.json
 | `io`               | direct `std::ifstream` read    | coroutine `read_text_file` wrapper |
 | `storage`          | literal `execute` inserts / cold migration apply | prepared statement binding / no-op migration check |
 | `config`           | in-memory JSON parse           | checked-in config file load |
+| `bootstrap`        | missing default config fallback | explicit config file load |
 | `memory`           | FTS5 backend                   | sqlite-vec backend (v2)    |
 | `provider`         | nlohmann_json encode/decode    | simdjson (stretch)         |
 | `orchestration`    | leader-worker strategy         | vote strategy              |
@@ -70,6 +72,6 @@ Each table row corresponds to at least one scenario file in the bucket.
 
 ## Status
 
-`bench/core/`, `bench/async/`, `bench/io/`, `bench/storage/`, and `bench/config/`
-are live.
+`bench/core/`, `bench/async/`, `bench/io/`, `bench/storage/`, `bench/config/`, and
+`bench/bootstrap/` are live.
 Additional buckets land with their owning libraries.

@@ -1,39 +1,36 @@
 // src/main.cpp — `orangutan` binary entry point.
 //
-// The early binary demonstrates the toolchain end-to-end: C++26 build,
-// std::print output, Result<T> threading from `bootstrap()` up to the OS exit
-// code. The real bootstrap (config load, runtime spawn, signal handling, CLI
-// dispatch) lands when oran-bootstrap is implemented.
+// The binary delegates runtime setup to oran-bootstrap and only translates the
+// expected error boundary into a process exit code.
 
 #include <print>
-#include <string>
+#include <span>
 #include <string_view>
+#include <vector>
 
-#include <oran/config.hpp>
+#include <oran/bootstrap.hpp>
 #include <oran/core/error.hpp>
-#include <oran/core/result.hpp>
-#include <oran/io.hpp>
-#include <oran/storage.hpp>
 
 namespace {
 
-using ::orangutan::core::Error;
-using ::orangutan::core::Result;
-
-constexpr std::string_view kVersion = "2.0.0-slice5";
-
-[[nodiscard]] Result<int> bootstrap() {
-  std::println("orangutan v{}", kVersion);
-  std::println("core, async, io, storage, migration, and config foundations are assembled;");
-  std::println("agent loop is not implemented yet.");
-  std::println("see docs/QUALITY_SCORE.md for the next implementation gaps.");
-  return 0;
+std::vector<std::string_view> args_from(int argc, char** argv) {
+  auto args = std::vector<std::string_view>{};
+  if (argc <= 1) {
+    return args;
+  }
+  args.reserve(static_cast<std::size_t>(argc - 1));
+  for (int i = 1; i < argc; ++i) {
+    args.emplace_back(argv[i]);
+  }
+  return args;
 }
 
 }  // namespace
 
-int main() {
-  auto r = bootstrap();
+int main(int argc, char** argv) {
+  const auto args = args_from(argc, argv);
+  auto r = orangutan::bootstrap::run(
+      orangutan::bootstrap::BootstrapOptions{.args = std::span<const std::string_view>{args}});
   if (!r) {
     std::println(stderr, "orangutan: {}", r.error());
     return 1;

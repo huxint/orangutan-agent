@@ -9,7 +9,10 @@ ad-hoc SQLite tables) are revisited for compile-time and crypto-hygiene reasons.
 ### File Layout
 
 The default config path is `<workspace>/.orangutan/config.json` (or `--config <path>`).
-It contains:
+`oran-bootstrap` loads the default file when present; in the current early runtime
+slice, a missing default file falls back to built-in config defaults so a fresh
+checkout remains runnable. An explicit `--config` path is strict and must load
+successfully. The config file contains:
 
 ```jsonc
 {

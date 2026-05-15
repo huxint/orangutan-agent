@@ -24,6 +24,8 @@ If you are starting a non-trivial task, the rule is:
   subprocess/signal boundary.
 - [`storage-runtime.md`](storage-runtime.md) — expected-only SQLite connection and
   statement core, plus future pool/migration boundaries.
+- [`bootstrap-runtime.md`](bootstrap-runtime.md) — process entry, config discovery,
+  and future runtime assembly boundary.
 
 ### Agent Runtime
 

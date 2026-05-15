@@ -141,6 +141,14 @@ harness-engineering/
    make ci
    ```
 
+Current binary smoke checks:
+
+```sh
+xmake build orangutan
+xmake run orangutan
+xmake run orangutan -- --config config.example.json
+```
+
 ## License
 
 Proprietary — same posture as legacy `orangutan/`. Update before publishing.

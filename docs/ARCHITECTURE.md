@@ -71,7 +71,8 @@ own test bucket, its own bench bucket, and its own public header set under
 
 > **Slice status (2026-05-15):** `oran-core`, `oran-async`, the file/directory MVP
 > of `oran-io`, the expected-only SQLite core + migration runner of `oran-storage`,
-> and the first `oran-config` JSON loader are implemented.
+> the first `oran-config` JSON loader, and the config-loading slice of
+> `oran-bootstrap` are implemented.
 > All other rows below are *planned* and will land per `docs/exec-plans/` as future
 > slices are scheduled. The build system, PCH, tests bucket, and bench bucket
 > conventions are live; see the history entries under `docs/histories/2026-05/`.
@@ -103,7 +104,7 @@ own test bucket, its own bench bucket, and its own public header set under
 | `oran-channel-webhook` | generic webhook adapter | `oran-channel`, `oran-http` |
 | `oran-web`           | HTTP web UI (cpp-httplib in skeleton, asio later) | `oran-agent`, `oran-orchestration`, `oran-http` |
 | `oran-cli`           | REPL, single-shot, slash commands | `oran-agent`, `oran-orchestration` |
-| `oran-bootstrap`     | runtime assembly + main entry | every public lib above |
+| `oran-bootstrap`     | process entry + config loading; planned runtime assembly | currently `oran-core`, `oran-config`; planned every public lib above |
 
 **Binaries** built on top:
 
@@ -169,6 +170,10 @@ own test bucket, its own bench bucket, and its own public header set under
 ## Configuration
 
 - `config.example.json` is checked in and load-tested by `oran-config`.
+- `oran-bootstrap` now accepts `--config <path>` / `--config=<path>`. Explicit paths
+  are required to load successfully; without `--config`, bootstrap loads
+  `<workspace>/.orangutan/config.json` when present and uses built-in config defaults
+  when it is absent in this early runtime slice.
 - The current typed surface covers `strict_config`, `runtime`, `profiles`, `routes`,
   `session`, and `web`; planned sections such as channels, teams, hooks, memory, and
   automation are accepted as recognized root fields until their typed models land.

@@ -14,6 +14,7 @@ tests/
 ├── http/
 ├── storage/
 ├── config/
+├── bootstrap/
 ├── permission/
 ├── skill/
 ├── hook/
@@ -157,6 +158,7 @@ and prints a comparison summary.
 | SQLite insert path | storage | literal execute inserts vs. prepared statement binding |
 | SQLite migration path | storage | cold migration apply vs. no-op migration check |
 | Config loading | config | in-memory JSON parse vs. checked-in config file load |
+| Bootstrap config startup | bootstrap | missing default config fallback vs. explicit config file load |
 | Search backend | memory | FTS5 vs. sqlite-vec vs. external HTTP API |
 | Dispatch overhead | tool | static lookup vs. hashmap |
 | Permission eval | permission | rule-tree vs. linear scan |

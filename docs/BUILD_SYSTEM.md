@@ -216,11 +216,13 @@ oran_lib("async", { "oran-core" }, {}, { "asio" })
 oran_lib("io", { "oran-core", "oran-async" }, {}, { "asio" })
 oran_lib("storage", { "oran-core" }, { "sqlite3" })
 oran_lib("config", { "oran-core", "oran-storage" }, { "nlohmann_json" })
+oran_lib("bootstrap", { "oran-core", "oran-config" }, {})
 
 target("orangutan")
     set_kind("binary")
-    add_deps("oran-core", "oran-async", "oran-io", "oran-storage", "oran-config")
+    add_deps("oran-core", "oran-async", "oran-io", "oran-storage", "oran-config", "oran-bootstrap")
     add_files(path.join(root, "src/main.cpp"))
+    set_rundir(root)
 ```
 
 **Key compile-time wins from this shape:**
