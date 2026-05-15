@@ -52,7 +52,9 @@ nothing to misuse.
 
 ## C5. Do not log or echo decrypted secrets
 
-Secrets pass through `oran-config::SecretField` (read accessors). Their values are
+The current config slice stores provider secret references as names such as
+`api_key_env`; it does not expose decrypted secret values. When the secret slice lands,
+secrets pass through `oran-config::SecretField` (read accessors). Their values are
 **never** passed to `oran-log` directly; the redaction filter would also catch known
 keys, but the source rule is: don't do it.
 

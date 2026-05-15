@@ -11,14 +11,23 @@ Use this document to keep secure defaults legible to agents and operators.
 
 ## Secret Handling
 
+Current slice:
+
+- `oran-config` loads provider profile metadata such as `api_key_env`; it does not
+  read or decrypt secret values yet.
+- `${VAR}` substitution exists for string config values. Missing variables are errors
+  unless `${VAR:-default}` provides a fallback.
+- Secret values must not be placed in `config.example.json`.
+
+Planned secret slice:
+
 - Secrets are encrypted at rest via `oran-config` (libsodium `crypto_secretbox`).
   Argon2id KDF; per-field random nonces.
 - Plaintext secrets live in memory only behind a `SecretField` accessor; zeroized
   on `Config::~Config`.
 - Secrets are never logged. The log shim's redaction filter applies known secret
   field names and runtime regex patterns from config.
-- `${VAR}` substitution at config load preserves the "marked secret" flag through
-  the substitution.
+- `${VAR}` substitution preserves the "marked secret" flag through the substitution.
 - Rotation: `orangutan secrets rotate` re-encrypts every marked field under a new
   password.
 

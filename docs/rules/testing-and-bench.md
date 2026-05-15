@@ -39,6 +39,7 @@ bench/
 ├── async/
 ├── http/
 ├── storage/
+├── config/
 ├── permission/
 ├── tool/
 ├── memory/
@@ -155,6 +156,7 @@ and prints a comparison summary.
 | File read wrapper | io | direct `std::ifstream` vs. coroutine wrapper |
 | SQLite insert path | storage | literal execute inserts vs. prepared statement binding |
 | SQLite migration path | storage | cold migration apply vs. no-op migration check |
+| Config loading | config | in-memory JSON parse vs. checked-in config file load |
 | Search backend | memory | FTS5 vs. sqlite-vec vs. external HTTP API |
 | Dispatch overhead | tool | static lookup vs. hashmap |
 | Permission eval | permission | rule-tree vs. linear scan |

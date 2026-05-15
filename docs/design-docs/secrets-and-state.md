@@ -19,7 +19,7 @@ It contains:
   "routes":      { /* primary + fallbacks per logical route */ },
   "agents":      { /* per-agent overrides */ },
   "teams":       { /* team definitions */ },
-  "channels":    { /* per-adapter config */ },
+  "channels":    [ /* per-adapter config */ ],
   "hooks":       { /* sinks + bindings */ },
   "memory":      { /* tier policies */ },
   "automation":  { /* job seeds */ },
@@ -28,14 +28,31 @@ It contains:
 }
 ```
 
-A sample is checked in at `config.example.json` (TBD with first bootstrap PR).
+A sample is checked in at `config.example.json` and is loaded by
+`tests/config/test_config.cpp`.
+
+Current implementation status:
+
+- `orangutan::config::Config::parse(std::string_view, LoadOptions)` parses JSON text.
+- `Config::load_file(std::string_view, LoadOptions)` reads and parses a file.
+- Typed fields currently cover `strict_config`, `runtime`, `profiles`, `routes`,
+  `session`, and `web`.
+- `profiles` and `routes` are objects keyed by profile/route name. Profile entries
+  require `provider`, `model`, `base_url`, and `api_key_env`; route entries require
+  `primary` and may include `fallbacks`.
+- `permissions`, `agents`, `teams`, `channels`, `hooks`, `memory`, and `automation`
+  are recognized root fields but do not have typed models yet.
 
 ### Schema Validation
 
-We use **JSON Schema** in `docs/generated/config.schema.json` (generated from C++ types
-at build time via a small script). At load time, we validate; missing optional fields
-take defaults; unknown fields trigger a warning unless `strict_config=true` is set,
-in which case they're an error.
+The current loader performs local type checks for the typed fields above. Missing
+optional fields take defaults; unknown root fields trigger a warning unless
+`strict_config=true` or `LoadOptions::strict_unknown_fields=true` is set, in which
+case they are an error.
+
+Generated **JSON Schema** in `docs/generated/config.schema.json` remains a future
+slice. It will be generated from C++ types once the broader channel/team/hook/memory
+config models are implemented.
 
 This replaces the legacy "silently ignored unknown fields" behavior, which has been a
 recurring source of subtle misconfiguration.

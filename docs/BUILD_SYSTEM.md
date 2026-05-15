@@ -21,6 +21,7 @@ Primary:
   - xmake 2.9+
   - libsodium development files (system or fetched by xmake)
   - libcurl development files (system) for transport
+  - nlohmann_json source (fetched by xmake)
   - sqlite3 source (fetched by xmake)
 
 Secondary (CI matrix):
@@ -173,13 +174,14 @@ library that consumes them.
 add_requires("asio 1.36.0")
 add_requires("catch2 3.7.1")
 add_requires("nanobench 4.3.11")
+add_requires("nlohmann_json 3.12.0")
 add_requires("sqlite3 3.51.0+0")
 ```
 
 Packages land with the library that first consumes them. The full approval list
 and planned versions live in [`rules/libraries.md`](rules/libraries.md); for example
-`fmt`, `nlohmann_json`, `spdlog`, and `libcurl` are approved but not required by the
-current checked-in targets yet.
+`fmt`, `spdlog`, and `libcurl` are approved but not required by the current
+checked-in targets yet.
 
 **Notable removals vs. legacy:**
 
@@ -213,10 +215,11 @@ oran_lib("core", {}, {})
 oran_lib("async", { "oran-core" }, {}, { "asio" })
 oran_lib("io", { "oran-core", "oran-async" }, {}, { "asio" })
 oran_lib("storage", { "oran-core" }, { "sqlite3" })
+oran_lib("config", { "oran-core", "oran-storage" }, { "nlohmann_json" })
 
 target("orangutan")
     set_kind("binary")
-    add_deps("oran-core", "oran-async", "oran-io", "oran-storage")
+    add_deps("oran-core", "oran-async", "oran-io", "oran-storage", "oran-config")
     add_files(path.join(root, "src/main.cpp"))
 ```
 

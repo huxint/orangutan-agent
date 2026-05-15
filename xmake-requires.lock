@@ -43,6 +43,14 @@
             },
             version = "v1.13.1"
         },
+        ["nlohmann_json 3.12.0#f56260b5"] = {
+            repo = {
+                branch = "master",
+                commit = "1ee8ee1b0588441ffe09503c715e7090b6a1a732",
+                url = "https://gitee.com/tboox/xmake-repo.git"
+            },
+            version = "v3.12.0"
+        },
         ["sqlite3 3.51.0+0#f56260b5"] = {
             repo = {
                 branch = "master",

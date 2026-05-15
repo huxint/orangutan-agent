@@ -27,5 +27,6 @@ In short:
 
 ## Status
 
-`oran-core`, `oran-async`, `oran-io`, and `oran-storage` public headers are live.
+`oran-core`, `oran-async`, `oran-io`, `oran-storage`, and `oran-config` public headers
+are live.
 Additional library headers land with their owning slices.

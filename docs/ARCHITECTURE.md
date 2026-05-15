@@ -70,8 +70,8 @@ own test bucket, its own bench bucket, and its own public header set under
 ## Library Inventory
 
 > **Slice status (2026-05-15):** `oran-core`, `oran-async`, the file/directory MVP
-> of `oran-io`, and the expected-only SQLite core + migration runner of
-> `oran-storage` are implemented.
+> of `oran-io`, the expected-only SQLite core + migration runner of `oran-storage`,
+> and the first `oran-config` JSON loader are implemented.
 > All other rows below are *planned* and will land per `docs/exec-plans/` as future
 > slices are scheduled. The build system, PCH, tests bucket, and bench bucket
 > conventions are live; see the history entries under `docs/histories/2026-05/`.
@@ -84,7 +84,7 @@ own test bucket, its own bench bucket, and its own public header set under
 | `oran-io`            | file/directory IO MVP; planned glob, pipe, subprocess, signal | `oran-core`, `oran-async` |
 | `oran-http`          | http client (asio) and tiny router for the web UI | `oran-core`, `oran-async` |
 | `oran-storage`       | SQLite expected-only connection/statement core + migration runner; planned pool + statement cache | `oran-core`, sqlite3 |
-| `oran-config`        | JSON config schema, secret-protected fields, env substitution | `oran-core`, `oran-storage` |
+| `oran-config`        | JSON config loader with typed runtime/profile/route/session/web fields and env substitution; planned schema + secret-protected fields | `oran-core`, `oran-storage` |
 | `oran-permission`    | runtime allow/deny/ask rule engine | `oran-core` |
 | `oran-skill`         | skill loader, skill catalog | `oran-core`, `oran-io` |
 | `oran-tool`          | tool registry, tool runtime context, dispatch | `oran-core`, `oran-async`, `oran-permission`, `oran-io` |
@@ -150,8 +150,9 @@ own test bucket, its own bench bucket, and its own public header set under
 ## Async Topology
 
 - **One executor** (`asio::io_context` wrapped in `oran::async::Runtime`) drives all I/O.
-- **Worker pool** is asio's thread pool; size = `config.runtime.workers` default
-  `min(8, hardware_concurrency)`.
+- **Worker pool** is asio's thread pool; size comes from `config.runtime.workers`.
+  The current config default is `4`; hardware-aware bootstrap defaulting can replace
+  that when `oran-bootstrap` owns runtime assembly.
 - Long-running CPU work (memory distillation, prompt assembly when very large) runs on
   `oran::async::cpu_pool`, a separate fixed-size pool, surfaced as `asio::any_io_executor`.
 - See `docs/design-docs/async-model.md` for the full topology.
@@ -167,11 +168,13 @@ own test bucket, its own bench bucket, and its own public header set under
 
 ## Configuration
 
-- Shape mirrors legacy `orangutan/config.example.json` but with v2 sections explicit
-  (channels list, teams, hook sinks, memory tiers).
-- Secrets remain AEAD-encrypted at rest. Recommended primitive: libsodium
-  `crypto_secretbox` (smaller TU footprint than mbedtls, no TLS coupling).
-  See `docs/design-docs/secrets-and-state.md`.
+- `config.example.json` is checked in and load-tested by `oran-config`.
+- The current typed surface covers `strict_config`, `runtime`, `profiles`, `routes`,
+  `session`, and `web`; planned sections such as channels, teams, hooks, memory, and
+  automation are accepted as recognized root fields until their typed models land.
+- `${VAR}` and `${VAR:-default}` substitutions run on string values at load time.
+- Secret encryption, generated JSON Schema, and rotation remain planned follow-up
+  slices. See `docs/design-docs/secrets-and-state.md`.
 
 ## To Fill In As The Project Matures
 

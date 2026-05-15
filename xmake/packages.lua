@@ -8,4 +8,5 @@
 add_requires("asio 1.36.0")
 add_requires("catch2 3.7.1")
 add_requires("nanobench 4.3.11")
+add_requires("nlohmann_json 3.12.0")
 add_requires("sqlite3 3.51.0+0")

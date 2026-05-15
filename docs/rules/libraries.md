@@ -20,7 +20,7 @@ Each entry contains:
 
 | Lib | Version | Used by | Purpose | Cost | License | Boundary |
 | --- | --- | --- | --- | --- | --- | --- |
-| `nlohmann_json` | 3.12.0 | many | JSON parsing/serialization | med | MIT | `.cpp` only; public headers use `json_fwd.hpp` |
+| `nlohmann_json` | 3.12.0 | config, future provider/prompt/web | JSON parsing/serialization | med | MIT | `.cpp` only; public headers avoid JSON parser types |
 | `fmt` | 12.1.0 | log, prompt, web | string formatting | low | MIT | PCH set |
 | `spdlog` | 1.17.0 | oran-log only | structured logging | med | MIT | hidden behind `oran-log` shim |
 | `magic_enum` | 0.9.7 | core | enum reflection | low | MIT | core only |
