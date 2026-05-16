@@ -20,6 +20,7 @@ required_files=(
   "docs/PLANS_GUIDE.md"
   "docs/PRODUCT_SENSE.md"
   "docs/QUALITY_SCORE.md"
+  "docs/STATUS.md"
   "docs/RELIABILITY.md"
   "docs/SECURITY.md"
   "docs/SUPPLY_CHAIN_SECURITY.md"

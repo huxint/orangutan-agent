@@ -34,6 +34,7 @@ same change:
 | New CI workflow / job                                    | `docs/CICD.md`, `docs/SUPPLY_CHAIN_SECURITY.md` if applicable |
 | Anything user-visible                                    | `docs/releases/feature-release-notes.md` |
 | Any behavior change at all                               | `docs/histories/YYYY-MM/YYYYMMDD-HHmm-<slug>.md` |
+| Any history entry that completes a slice or moves a `QUALITY_SCORE` row | `docs/STATUS.md` (bump `Slice`, repoint `Last completed history`, refresh test/assertion counts and the open-tech-debt list) |
 
 If the table doesn't list your change, ask "what doc would a new agent want to read
 about this in six months?" — and update *that* doc.
@@ -59,6 +60,9 @@ broken.
 
 - `scripts/check-docs.sh` — required-file existence (already runs in CI).
 - `scripts/check-repo-hygiene.sh` — hygiene files (already runs in CI).
+- `scripts/check-status-fresh.sh` — fails if `docs/STATUS.md`'s
+  `Last completed history` pointer is older than the newest file under
+  `docs/histories/` (already runs in CI).
 - `scripts/check-docs-sync.sh` — additional drift checks (this rule's enforcer):
   - Public-header symbol names referenced in `docs/design-docs/*.md` must exist in
     `include/oran/`.

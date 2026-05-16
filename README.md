@@ -1,6 +1,6 @@
 # harness-engineering
 
-**Harness-engineering** is the agent-first scaffold for **Orangutan v2**, the C++23 rewrite
+**Harness-engineering** is the agent-first scaffold for **Orangutan v2**, the C++26 rewrite
 of the [`orangutan/`](../) project — a single-binary LLM ReAct agent runtime with pluggable
 providers, a tool registry, multi-platform chat channels, persistent memory, an HTTP web UI,
 an orchestration runtime that spawns and coordinates worker agents, and a cron-like
@@ -12,7 +12,7 @@ Codex, etc.) to build the C++ project from zero **without depending on chat memo
 
 The framework draws on [`iFurySt/harness-template`](https://github.com/iFurySt/harness-template)
 (short `AGENTS.md` routing layer, `docs/` system of record, exec-plans + histories +
-product-specs convention) and extends it with C++23-specific compile-time and
+product-specs convention) and extends it with C++26-specific compile-time and
 agent-runtime concerns.
 
 ## Why a rewrite?
@@ -41,7 +41,7 @@ The legacy `orangutan/` codebase reached ~40 kLoC C++23 and the following walls:
 ## What's different in v2
 
 - **Compile budget enforced.** Each TU has a target; CI tracks per-file compile time;
-  PCH + C++23 modules + strict include hygiene are mandatory not optional.
+  PCH + C++26 modules + strict include hygiene are mandatory not optional.
   See `docs/rules/compile-budget.md`.
 - **GCC 16.1 primary toolchain.** Modules (`import oran.core;`), `std::expected`,
   `std::generator`, deducing-`this`. Clang ≥ 19 is the fallback.
@@ -73,7 +73,7 @@ The legacy `orangutan/` codebase reached ~40 kLoC C++23 and the following walls:
 ```
 harness-engineering/
 ├── AGENTS.md                       routing layer (read first)
-├── CLAUDE.md                       one-liner: read AGENTS.md
+├── CLAUDE.md                       symlink → AGENTS.md
 ├── README.md                       this file
 ├── CONTRIBUTING.md                 collaboration model
 ├── SECURITY.md                     vulnerability reporting
@@ -91,6 +91,7 @@ harness-engineering/
 │   ├── RELIABILITY.md              ops, logs, retries
 │   ├── PRODUCT_SENSE.md            product principles
 │   ├── QUALITY_SCORE.md            quality matrix
+│   ├── STATUS.md                   one-screen project state — read first
 │   ├── HISTORY_GUIDE.md            change-history convention
 │   ├── PLANS_GUIDE.md              execution-plan convention
 │   ├── FRONTEND.md                 UI surface conventions
@@ -113,29 +114,30 @@ harness-engineering/
 
 ## Quick Start
 
-1. **Read [`AGENTS.md`](AGENTS.md).**
-2. Open [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the v2 target.
-3. Open [`docs/references/orangutan-legacy-audit.md`](docs/references/orangutan-legacy-audit.md)
+1. **Read [`AGENTS.md`](AGENTS.md)** (or the `CLAUDE.md` symlink — same file).
+2. Open [`docs/STATUS.md`](docs/STATUS.md) for the one-screen project snapshot.
+3. Open [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the v2 target.
+4. Open [`docs/references/orangutan-legacy-audit.md`](docs/references/orangutan-legacy-audit.md)
    to absorb why the rewrite exists.
-4. For implementation work, create an execution plan:
+5. For implementation work, create an execution plan:
 
    ```sh
    make new-plan SLUG=core-react-loop
    ```
 
-5. When the change is finished, record a history entry:
+6. When the change is finished, record a history entry:
 
    ```sh
    make new-history SLUG=core-react-loop-mvp
    ```
 
-6. Install the versioned pre-commit hook once per clone:
+7. Install the versioned pre-commit hook once per clone:
 
    ```sh
    git config core.hooksPath .githooks
    ```
 
-7. Before opening a PR:
+8. Before opening a PR:
 
    ```sh
    make ci

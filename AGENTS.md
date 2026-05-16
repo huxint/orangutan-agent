@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This repository is the **harness-engineering** scaffold for **Orangutan v2** — a C++23
+This repository is the **harness-engineering** scaffold for **Orangutan v2** — a C++26
 agent-runtime rewrite of the original `orangutan/` project. It is *agent-first*: every
 load-bearing decision is recorded in a versioned file under `docs/` so that Claude Code,
 Codex, or any future agent can ship features without depending on chat memory.
@@ -26,6 +26,7 @@ Codex, or any future agent can ship features without depending on chat memory.
 
 | File | Why |
 | --- | --- |
+| `docs/STATUS.md` | One-screen project snapshot: current slice, last completed history, active exec-plan, open tech-debt. **Read this first.** |
 | `docs/REPO_COLLAB_GUIDE.md` | Repository-wide working agreement, commit/PR/test expectations. |
 | `docs/ARCHITECTURE.md` | Target architecture map, library boundaries, binary inventory. |
 | `docs/design-docs/core-beliefs.md` | Non-negotiable operating principles. |
