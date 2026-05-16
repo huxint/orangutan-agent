@@ -3,45 +3,9 @@
 #include <oran/core/error.hpp>
 
 #include <string>
-#include <string_view>
 #include <utility>
 
 namespace orangutan::core {
-
-namespace {
-
-constexpr std::string_view kKindNames[] = {
-    "ok",
-    "cancelled",
-    "invalid_argument",
-    "not_found",
-    "permission_denied",
-    "capability_not_granted",
-    "config",
-    "auth",
-    "io",
-    "network",
-    "rate_limit",
-    "upstream",
-    "parsing",
-    "timeout",
-    "conflict",
-    "storage",
-    "hook_timeout",
-    "hook_failed",
-    "mailbox_overflowed",
-    "internal",
-};
-
-}  // namespace
-
-std::string_view to_string_view(ErrorKind k) noexcept {
-  const auto idx = static_cast<std::size_t>(k);
-  if (idx < std::size(kKindNames)) {
-    return kKindNames[idx];
-  }
-  return "unknown";
-}
 
 Error::Error(ErrorKind kind, std::string message) noexcept : kind_{kind}, message_{std::move(message)} {}
 

@@ -9,6 +9,11 @@ set_version("2.0.0")
 set_languages("c++26")
 set_warnings("all", "extra")
 
+-- C++26 reflection (P2996) is required by the in-repo `oran-core/enum_names.hpp`
+-- helper that backs the repo's `to_string_view` / `parse_<kind>` pattern.
+-- GCC 16.1 gates reflection behind an opt-in flag.
+add_cxxflags("-freflection", { force = true })
+
 add_rules("mode.debug", "mode.release", "mode.releasedbg")
 add_rules("plugin.compile_commands.autoupdate", { outputdir = ".", lsp = "clangd" })
 

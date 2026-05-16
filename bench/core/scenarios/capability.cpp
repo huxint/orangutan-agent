@@ -1,9 +1,9 @@
 // bench/core/scenarios/capability.cpp
 //
-// A-vs-B coverage for `core::parse_capability`:
+// A-vs-B coverage for the reflection-backed `core::parse_enum<Capability>`:
 //
-//   1. `core.capability_parse_linear`        : `core::parse_capability` —
-//                                              a constexpr-table linear
+//   1. `core.capability_parse_linear`        : `core::parse_enum<Capability>` —
+//                                              a reflection-expanded linear
 //                                              scan over the 19-entry
 //                                              capability universe.
 //   2. `core.capability_parse_unordered_map` : the same lookup driven by
@@ -13,7 +13,7 @@
 //                                              same spellings.
 //
 // Both scenarios iterate the same deterministic mix of valid and invalid
-// inputs so the comparison documents the cost of the table-scan path the
+// inputs so the comparison documents the cost of the linear-scan path the
 // library actually ships vs. the cheapest hash-table alternative. The
 // goal is *not* to crown a winner — at 19 entries the linear scan wins on
 // every realistic toolchain — but to give future callers (config-loading
@@ -34,17 +34,17 @@ namespace orangutan::bench {
 namespace {
 
 using core::Capability;
-using core::kAllCapabilities;
-using core::parse_capability;
-using core::to_string_view;
+using core::enum_name;
+using core::enum_values;
+using core::parse_enum;
 
 // A deterministic mix of: every valid spelling once, three high-traffic
 // spellings repeated, two unknown spellings. The map and the linear scan
 // see byte-for-byte identical inputs.
 [[nodiscard]] std::vector<std::string> make_lookup_inputs() {
   std::vector<std::string> inputs;
-  for (const auto cap : kAllCapabilities()) {
-    inputs.emplace_back(to_string_view(cap));
+  for (const auto cap : enum_values<Capability>()) {
+    inputs.emplace_back(enum_name(cap));
   }
   inputs.emplace_back("read_file");
   inputs.emplace_back("spawn_subprocess");
@@ -55,10 +55,11 @@ using core::to_string_view;
 }
 
 [[nodiscard]] std::unordered_map<std::string_view, Capability> make_map() {
+  constexpr auto all = enum_values<Capability>();
   std::unordered_map<std::string_view, Capability> m;
-  m.reserve(kAllCapabilities().size());
-  for (const auto cap : kAllCapabilities()) {
-    m.emplace(to_string_view(cap), cap);
+  m.reserve(all.size());
+  for (const auto cap : all) {
+    m.emplace(enum_name(cap), cap);
   }
   return m;
 }
@@ -72,7 +73,7 @@ void register_capability_scenarios(ankerl::nanobench::Bench& bench) {
   bench.run("core.capability_parse_linear", [&] {
     int hits = 0;
     for (const auto& key : inputs) {
-      if (parse_capability(key).has_value()) {
+      if (parse_enum<Capability>(key).has_value()) {
         ++hits;
       }
     }
@@ -81,7 +82,7 @@ void register_capability_scenarios(ankerl::nanobench::Bench& bench) {
   bench.run("core.capability_parse_unordered_map", [&] {
     int hits = 0;
     for (const auto& key : inputs) {
-      if (map.find(std::string_view{key}) != map.end()) {
+      if (map.contains(std::string_view{key})) {
         ++hits;
       }
     }

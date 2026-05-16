@@ -3,31 +3,19 @@
 #include <oran/permission/rule_set.hpp>
 
 #include <algorithm>
-#include <array>
 #include <cstddef>
 #include <format>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 
 #include <oran/core/capability.hpp>
+#include <oran/core/enum_names.hpp>
 
 namespace orangutan::permission {
 
 namespace {
-
-constexpr std::array<std::string_view, 3> kVerdictNames{
-    "allow",
-    "deny",
-    "ask",
-};
-
-constexpr std::array<std::string_view, 4> kModeNames{
-    "strict",
-    "default",
-    "permissive",
-    "sandboxed",
-};
 
 [[nodiscard]] Verdict mode_default_verdict(Mode mode) noexcept {
   switch (mode) {
@@ -43,38 +31,22 @@ constexpr std::array<std::string_view, 4> kModeNames{
 }
 
 [[nodiscard]] bool capability_in_set(core::Capability needle, std::span<const core::Capability> haystack) noexcept {
-  return std::ranges::find(haystack, needle) != haystack.end();
+  return std::ranges::contains(haystack, needle);
 }
 
 [[nodiscard]] std::string format_reason(std::size_t index, const Rule& rule) {
-  const auto verdict_name = kVerdictNames[static_cast<std::size_t>(rule.verdict)];
+  const auto verdict_name = core::enum_name(rule.verdict);
   if (rule.capability.has_value()) {
     return std::format("rule #{} ({}: {} capability={})",
                        index,
                        verdict_name,
                        rule.tool_pattern,
-                       core::to_string_view(*rule.capability));
+                       core::enum_name(*rule.capability));
   }
   return std::format("rule #{} ({}: {})", index, verdict_name, rule.tool_pattern);
 }
 
 }  // namespace
-
-std::string_view to_string_view(Verdict v) noexcept {
-  const auto idx = static_cast<std::size_t>(v);
-  if (idx < kVerdictNames.size()) {
-    return kVerdictNames[idx];
-  }
-  return "unknown";
-}
-
-std::string_view to_string_view(Mode m) noexcept {
-  const auto idx = static_cast<std::size_t>(m);
-  if (idx < kModeNames.size()) {
-    return kModeNames[idx];
-  }
-  return "unknown";
-}
 
 bool glob_match(std::string_view pattern, std::string_view text) noexcept {
   // Iterative two-pointer glob matcher with backtracking on `*`. Standard
@@ -163,7 +135,7 @@ Decision RuleSet::evaluate(std::string_view tool_name,
   const auto fallback = mode_default_verdict(mode);
   return Decision{
       .verdict = fallback,
-      .reason = std::format("default by mode={}", to_string_view(mode)),
+      .reason = std::format("default by mode={}", core::enum_name(mode)),
   };
 }
 

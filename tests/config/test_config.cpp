@@ -256,15 +256,16 @@ TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][con
 }
 
 TEST_CASE("PermissionVerdict round-trips through its stable spellings", "[unit][config]") {
-  REQUIRE(config::to_string_view(config::PermissionVerdict::allow) == "allow");
-  REQUIRE(config::to_string_view(config::PermissionVerdict::deny) == "deny");
-  REQUIRE(config::to_string_view(config::PermissionVerdict::ask) == "ask");
+  REQUIRE(core::enum_name(config::PermissionVerdict::allow) == "allow");
+  REQUIRE(core::enum_name(config::PermissionVerdict::deny) == "deny");
+  REQUIRE(core::enum_name(config::PermissionVerdict::ask) == "ask");
 
-  REQUIRE(config::parse_permission_verdict("allow") == config::PermissionVerdict::allow);
-  REQUIRE(config::parse_permission_verdict("deny") == config::PermissionVerdict::deny);
-  REQUIRE(config::parse_permission_verdict("ask") == config::PermissionVerdict::ask);
-  REQUIRE_FALSE(config::parse_permission_verdict("approve").has_value());
-  REQUIRE_FALSE(config::parse_permission_verdict("").has_value());
+  using core::parse_enum;
+  REQUIRE(parse_enum<config::PermissionVerdict>("allow") == config::PermissionVerdict::allow);
+  REQUIRE(parse_enum<config::PermissionVerdict>("deny") == config::PermissionVerdict::deny);
+  REQUIRE(parse_enum<config::PermissionVerdict>("ask") == config::PermissionVerdict::ask);
+  REQUIRE_FALSE(parse_enum<config::PermissionVerdict>("approve").has_value());
+  REQUIRE_FALSE(parse_enum<config::PermissionVerdict>("").has_value());
 }
 
 TEST_CASE("Config::parse extracts a populated permissions block", "[unit][config][permissions]") {

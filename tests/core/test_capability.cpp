@@ -11,30 +11,30 @@
 #include <oran/core/capability.hpp>
 
 using orangutan::core::Capability;
-using orangutan::core::kAllCapabilities;
-using orangutan::core::parse_capability;
-using orangutan::core::to_string_view;
+using orangutan::core::enum_name;
+using orangutan::core::enum_values;
+using orangutan::core::parse_enum;
 
-TEST_CASE("to_string_view covers every Capability enumerator", "[unit][core][capability]") {
-  REQUIRE(to_string_view(Capability::read_file) == "read_file");
-  REQUIRE(to_string_view(Capability::write_file) == "write_file");
-  REQUIRE(to_string_view(Capability::edit_file) == "edit_file");
-  REQUIRE(to_string_view(Capability::delete_path) == "delete_path");
-  REQUIRE(to_string_view(Capability::egress_http) == "egress_http");
-  REQUIRE(to_string_view(Capability::egress_websocket) == "egress_websocket");
-  REQUIRE(to_string_view(Capability::spawn_subprocess) == "spawn_subprocess");
-  REQUIRE(to_string_view(Capability::signal_subprocess) == "signal_subprocess");
-  REQUIRE(to_string_view(Capability::read_memory) == "read_memory");
-  REQUIRE(to_string_view(Capability::write_memory) == "write_memory");
-  REQUIRE(to_string_view(Capability::spawn_agent) == "spawn_agent");
-  REQUIRE(to_string_view(Capability::send_message_intra_team) == "send_message_intra_team");
-  REQUIRE(to_string_view(Capability::send_message_inter_team) == "send_message_inter_team");
-  REQUIRE(to_string_view(Capability::schedule_job) == "schedule_job");
-  REQUIRE(to_string_view(Capability::modify_job) == "modify_job");
-  REQUIRE(to_string_view(Capability::run_job_now) == "run_job_now");
-  REQUIRE(to_string_view(Capability::invoke_skill) == "invoke_skill");
-  REQUIRE(to_string_view(Capability::external_mcp) == "external_mcp");
-  REQUIRE(to_string_view(Capability::runtime_loader) == "runtime_loader");
+TEST_CASE("enum_name covers every Capability enumerator", "[unit][core][capability]") {
+  REQUIRE(enum_name(Capability::read_file) == "read_file");
+  REQUIRE(enum_name(Capability::write_file) == "write_file");
+  REQUIRE(enum_name(Capability::edit_file) == "edit_file");
+  REQUIRE(enum_name(Capability::delete_path) == "delete_path");
+  REQUIRE(enum_name(Capability::egress_http) == "egress_http");
+  REQUIRE(enum_name(Capability::egress_websocket) == "egress_websocket");
+  REQUIRE(enum_name(Capability::spawn_subprocess) == "spawn_subprocess");
+  REQUIRE(enum_name(Capability::signal_subprocess) == "signal_subprocess");
+  REQUIRE(enum_name(Capability::read_memory) == "read_memory");
+  REQUIRE(enum_name(Capability::write_memory) == "write_memory");
+  REQUIRE(enum_name(Capability::spawn_agent) == "spawn_agent");
+  REQUIRE(enum_name(Capability::send_message_intra_team) == "send_message_intra_team");
+  REQUIRE(enum_name(Capability::send_message_inter_team) == "send_message_inter_team");
+  REQUIRE(enum_name(Capability::schedule_job) == "schedule_job");
+  REQUIRE(enum_name(Capability::modify_job) == "modify_job");
+  REQUIRE(enum_name(Capability::run_job_now) == "run_job_now");
+  REQUIRE(enum_name(Capability::invoke_skill) == "invoke_skill");
+  REQUIRE(enum_name(Capability::external_mcp) == "external_mcp");
+  REQUIRE(enum_name(Capability::runtime_loader) == "runtime_loader");
 }
 
 TEST_CASE("Capability formats via std::format", "[unit][core][capability]") {
@@ -43,37 +43,36 @@ TEST_CASE("Capability formats via std::format", "[unit][core][capability]") {
   REQUIRE(std::format("{}", Capability::runtime_loader) == "runtime_loader");
 }
 
-TEST_CASE("to_string_view falls back to 'unknown' for out-of-range Capability", "[unit][core][capability]") {
+TEST_CASE("enum_name falls back to 'unknown' for out-of-range Capability", "[unit][core][capability]") {
   const auto out_of_range = static_cast<Capability>(99);
-  REQUIRE(to_string_view(out_of_range) == "unknown");
+  REQUIRE(enum_name(out_of_range) == "unknown");
 }
 
-TEST_CASE("parse_capability round-trips every enumerator", "[unit][core][capability]") {
-  for (const auto cap : kAllCapabilities()) {
-    const auto parsed = parse_capability(to_string_view(cap));
+TEST_CASE("parse_enum<Capability> round-trips every enumerator", "[unit][core][capability]") {
+  for (const auto cap : enum_values<Capability>()) {
+    const auto parsed = parse_enum<Capability>(enum_name(cap));
     REQUIRE(parsed.has_value());
     REQUIRE(*parsed == cap);
   }
 }
 
-TEST_CASE("parse_capability rejects unknown spellings", "[unit][core][capability]") {
-  REQUIRE_FALSE(parse_capability("").has_value());
-  REQUIRE_FALSE(parse_capability("Read_File").has_value());
-  REQUIRE_FALSE(parse_capability("read-file").has_value());
-  REQUIRE_FALSE(parse_capability("readfile").has_value());
-  REQUIRE_FALSE(parse_capability("network").has_value());
-  // The `to_string_view` fallback sentinel must not round-trip.
-  REQUIRE_FALSE(parse_capability(to_string_view(static_cast<Capability>(99))).has_value());
+TEST_CASE("parse_enum<Capability> rejects unknown spellings", "[unit][core][capability]") {
+  REQUIRE_FALSE(parse_enum<Capability>("").has_value());
+  REQUIRE_FALSE(parse_enum<Capability>("Read_File").has_value());
+  REQUIRE_FALSE(parse_enum<Capability>("read-file").has_value());
+  REQUIRE_FALSE(parse_enum<Capability>("readfile").has_value());
+  REQUIRE_FALSE(parse_enum<Capability>("network").has_value());
+  // The `enum_name` fallback sentinel must not round-trip.
+  REQUIRE_FALSE(parse_enum<Capability>(enum_name(static_cast<Capability>(99))).has_value());
 }
 
-TEST_CASE("kAllCapabilities lists every enumerator exactly once", "[unit][core][capability]") {
-  const auto all = kAllCapabilities();
+TEST_CASE("enum_values<Capability> lists every enumerator exactly once", "[unit][core][capability]") {
+  constexpr auto all = enum_values<Capability>();
   // The size matches the enumerator list and every entry round-trips through
-  // the string mapping (so if a future edit forgets to update one of the two
-  // arrays in capability.cpp, this case fails loudly).
-  REQUIRE(all.size() == 19);
+  // the string mapping.
+  STATIC_REQUIRE(all.size() == 19);
   for (const auto cap : all) {
-    REQUIRE(to_string_view(cap) != "unknown");
+    REQUIRE(enum_name(cap) != "unknown");
   }
   // The view is in declaration order; check the endpoints explicitly so a
   // reordering shows up here rather than silently moving the bench fixture.
@@ -83,7 +82,7 @@ TEST_CASE("kAllCapabilities lists every enumerator exactly once", "[unit][core][
   std::vector<std::string_view> spellings;
   spellings.reserve(all.size());
   for (const auto cap : all) {
-    spellings.push_back(to_string_view(cap));
+    spellings.push_back(enum_name(cap));
   }
   std::ranges::sort(spellings);
   const auto duplicate = std::ranges::adjacent_find(spellings);

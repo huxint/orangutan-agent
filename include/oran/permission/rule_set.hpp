@@ -43,6 +43,7 @@
 #include <vector>
 
 #include <oran/core/capability.hpp>
+#include <oran/core/enum_names.hpp>
 
 namespace orangutan::permission {
 
@@ -65,9 +66,6 @@ enum class Mode : std::uint8_t {
   /// Sandbox: deny everything not explicitly allowed, no `ask`.
   sandboxed,
 };
-
-[[nodiscard]] std::string_view to_string_view(Verdict) noexcept;
-[[nodiscard]] std::string_view to_string_view(Mode) noexcept;
 
 struct Rule {
   Verdict verdict{Verdict::deny};
@@ -134,7 +132,7 @@ template <>
 struct std::formatter<orangutan::permission::Verdict> : std::formatter<std::string_view> {
   template <class FormatContext>
   auto format(orangutan::permission::Verdict v, FormatContext& ctx) const {
-    return std::formatter<std::string_view>::format(orangutan::permission::to_string_view(v), ctx);
+    return std::formatter<std::string_view>::format(orangutan::core::enum_name(v), ctx);
   }
 };
 
@@ -142,6 +140,6 @@ template <>
 struct std::formatter<orangutan::permission::Mode> : std::formatter<std::string_view> {
   template <class FormatContext>
   auto format(orangutan::permission::Mode m, FormatContext& ctx) const {
-    return std::formatter<std::string_view>::format(orangutan::permission::to_string_view(m), ctx);
+    return std::formatter<std::string_view>::format(orangutan::core::enum_name(m), ctx);
   }
 };

@@ -104,10 +104,10 @@ TEST_CASE("all_ok short-circuits on the first error", "[unit][core][result]") {
   REQUIRE(r.error().message() == "boom");
 }
 
-TEST_CASE("to_string_view covers all enumerators", "[unit][core][error]") {
-  REQUIRE(to_string_view(ErrorKind::ok) == "ok");
-  REQUIRE(to_string_view(ErrorKind::io) == "io");
-  REQUIRE(to_string_view(ErrorKind::network) == "network");
-  REQUIRE(to_string_view(ErrorKind::mailbox_overflowed) == "mailbox_overflowed");
-  REQUIRE(to_string_view(ErrorKind::internal) == "internal");
+TEST_CASE("enum_name covers all ErrorKind enumerators", "[unit][core][error]") {
+  REQUIRE(enum_name(ErrorKind::ok) == "ok");
+  REQUIRE(enum_name(ErrorKind::io) == "io");
+  REQUIRE(enum_name(ErrorKind::network) == "network");
+  REQUIRE(enum_name(ErrorKind::mailbox_overflowed) == "mailbox_overflowed");
+  REQUIRE(enum_name(ErrorKind::internal) == "internal");
 }

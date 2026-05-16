@@ -203,7 +203,7 @@ LIMIT ?
   if (!role_text) {
     return std::unexpected(role_text.error());
   }
-  auto role = core::parse_role(*role_text);
+  auto role = core::parse_enum<core::Role>(*role_text);
   if (!role) {
     return std::unexpected(
         core::Error::storage("session repository row has unknown role").with("role", std::move(*role_text)));
@@ -325,7 +325,7 @@ SessionRepository::append_message(AppendSessionMessageRequest request) {
   if (auto bound = statement.bind_text(4, request.agent_key); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = statement.bind_text(5, core::to_string_view(request.role)); !bound) {
+  if (auto bound = statement.bind_text(5, core::enum_name(request.role)); !bound) {
     co_return std::unexpected(bound.error());
   }
   if (auto bound = statement.bind_text(6, request.content_json); !bound) {

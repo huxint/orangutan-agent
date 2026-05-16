@@ -21,6 +21,7 @@
 #include <nlohmann/json.hpp>
 
 #include <oran/core/capability.hpp>
+#include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
 
 namespace orangutan::config {
@@ -44,12 +45,6 @@ constexpr auto kRecognizedRootFields = std::array<std::string_view, 13>{
     "automation",
     "web",
     "session",
-};
-
-constexpr auto kPermissionVerdictNames = std::array<std::string_view, 3>{
-    "allow",
-    "deny",
-    "ask",
 };
 
 constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
@@ -481,7 +476,7 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
       return std::unexpected(config_error("expected string", child_path(path, "capability")));
     }
     const auto& text = cap_it->get_ref<const std::string&>();
-    auto parsed = core::parse_capability(text);
+    auto parsed = core::parse_enum<core::Capability>(text);
     if (!parsed) {
       return std::unexpected(
           config_error("unknown capability spelling", child_path(path, "capability")).with("capability", text));
@@ -521,7 +516,7 @@ parse_permissions_block(const json& block, std::string_view path, bool strict, s
   auto out = PermissionsConfig{};
   for (const auto& [key, value] : block.items()) {
     const auto verdict_path = child_path(path, key);
-    const auto known_verdict = parse_permission_verdict(key);
+    const auto known_verdict = core::parse_enum<PermissionVerdict>(key);
     if (!known_verdict) {
       if (strict) {
         return std::unexpected(config_error("unknown verdict key", verdict_path));
@@ -611,23 +606,6 @@ parse_agents(const json& root, bool strict, std::vector<ConfigWarning>& warnings
 }
 
 }  // namespace
-
-std::string_view to_string_view(PermissionVerdict v) noexcept {
-  const auto idx = static_cast<std::size_t>(v);
-  if (idx < kPermissionVerdictNames.size()) {
-    return kPermissionVerdictNames[idx];
-  }
-  return "unknown";
-}
-
-std::optional<PermissionVerdict> parse_permission_verdict(std::string_view text) noexcept {
-  for (std::size_t i = 0; i < kPermissionVerdictNames.size(); ++i) {
-    if (kPermissionVerdictNames[i] == text) {
-      return static_cast<PermissionVerdict>(i);
-    }
-  }
-  return std::nullopt;
-}
 
 core::Result<Config> Config::parse(std::string_view contents, LoadOptions options) {
   try {

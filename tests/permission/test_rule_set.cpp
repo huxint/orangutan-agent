@@ -5,11 +5,13 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <oran/core/enum_names.hpp>
 #include <oran/permission.hpp>
 
 using namespace std::string_view_literals;
 
 namespace perm = orangutan::permission;
+namespace core = orangutan::core;
 using perm::Mode;
 using perm::Rule;
 using perm::RuleSet;
@@ -99,11 +101,11 @@ TEST_CASE("RuleSet::clear empties the set", "[unit][permission][rule_set]") {
 }
 
 TEST_CASE("Verdict and Mode have stable string mappings", "[unit][permission]") {
-  REQUIRE(perm::to_string_view(Verdict::allow) == "allow");
-  REQUIRE(perm::to_string_view(Verdict::deny) == "deny");
-  REQUIRE(perm::to_string_view(Verdict::ask) == "ask");
-  REQUIRE(perm::to_string_view(Mode::strict) == "strict");
-  REQUIRE(perm::to_string_view(Mode::default_) == "default");
-  REQUIRE(perm::to_string_view(Mode::permissive) == "permissive");
-  REQUIRE(perm::to_string_view(Mode::sandboxed) == "sandboxed");
+  REQUIRE(core::enum_name(Verdict::allow) == "allow");
+  REQUIRE(core::enum_name(Verdict::deny) == "deny");
+  REQUIRE(core::enum_name(Verdict::ask) == "ask");
+  REQUIRE(core::enum_name(Mode::strict) == "strict");
+  REQUIRE(core::enum_name(Mode::default_) == "default");
+  REQUIRE(core::enum_name(Mode::permissive) == "permissive");
+  REQUIRE(core::enum_name(Mode::sandboxed) == "sandboxed");
 }

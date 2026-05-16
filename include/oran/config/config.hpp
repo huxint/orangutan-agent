@@ -64,9 +64,6 @@ enum class PermissionVerdict : std::uint8_t {
   ask,
 };
 
-[[nodiscard]] std::string_view to_string_view(PermissionVerdict) noexcept;
-[[nodiscard]] std::optional<PermissionVerdict> parse_permission_verdict(std::string_view) noexcept;
-
 /// One config-side permission rule. `tool_pattern` is the `*`-glob the
 /// `permission::RuleSet` matcher will consume. `capability`, when set, is
 /// already resolved to a `core::Capability` value — unknown spellings fail

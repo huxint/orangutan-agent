@@ -15,6 +15,8 @@
 #include <utility>
 #include <vector>
 
+#include <oran/core/enum_names.hpp>
+
 namespace orangutan::core {
 
 enum class ErrorKind : std::uint8_t {
@@ -39,9 +41,6 @@ enum class ErrorKind : std::uint8_t {
   mailbox_overflowed,
   internal,
 };
-
-/// Stable, identifier-style name for an ErrorKind.
-[[nodiscard]] std::string_view to_string_view(ErrorKind) noexcept;
 
 /// `Error` is the cross-library failure type — always paired with `Result<T>`
 /// from `result.hpp`. Construct via the static builders to keep messages
@@ -102,13 +101,13 @@ private:
 }  // namespace orangutan::core
 
 /// `std::format` support for `ErrorKind` and `Error`. Keeps the type usable
-/// from `std::print(...)` without callers having to reach for `to_string_view`
-/// or hand-roll context formatting.
+/// from `std::print(...)` without callers having to reach for `enum_name` or
+/// hand-roll context formatting.
 template <>
 struct std::formatter<orangutan::core::ErrorKind> : std::formatter<std::string_view> {
   template <class FormatContext>
   auto format(orangutan::core::ErrorKind k, FormatContext& ctx) const {
-    return std::formatter<std::string_view>::format(orangutan::core::to_string_view(k), ctx);
+    return std::formatter<std::string_view>::format(orangutan::core::enum_name(k), ctx);
   }
 };
 
