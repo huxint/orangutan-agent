@@ -11,6 +11,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <oran/config.hpp>
+#include <oran/core/capability.hpp>
 #include <oran/core/error.hpp>
 
 namespace config = orangutan::config;
@@ -245,4 +246,205 @@ TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][con
   REQUIRE(result->profiles()[0].model == "claude-3-5-sonnet-latest");
   REQUIRE(result->routes().size() == 1);
   REQUIRE(result->web().port == 8787);
+
+  // The example config now carries a non-empty permissions block + one
+  // example agent overlay so the file documents the new schema.
+  REQUIRE(result->permissions().rules.size() == 7);
+  REQUIRE(result->agents().size() == 1);
+  REQUIRE(result->agents()[0].name == "researcher");
+  REQUIRE(result->agents()[0].permissions.rules.size() == 1);
+}
+
+TEST_CASE("PermissionVerdict round-trips through its stable spellings", "[unit][config]") {
+  REQUIRE(config::to_string_view(config::PermissionVerdict::allow) == "allow");
+  REQUIRE(config::to_string_view(config::PermissionVerdict::deny) == "deny");
+  REQUIRE(config::to_string_view(config::PermissionVerdict::ask) == "ask");
+
+  REQUIRE(config::parse_permission_verdict("allow") == config::PermissionVerdict::allow);
+  REQUIRE(config::parse_permission_verdict("deny") == config::PermissionVerdict::deny);
+  REQUIRE(config::parse_permission_verdict("ask") == config::PermissionVerdict::ask);
+  REQUIRE_FALSE(config::parse_permission_verdict("approve").has_value());
+  REQUIRE_FALSE(config::parse_permission_verdict("").has_value());
+}
+
+TEST_CASE("Config::parse extracts a populated permissions block", "[unit][config][permissions]") {
+  auto result = config::Config::parse(R"json(
+{
+  "permissions": {
+    "allow": [
+      {"tool_pattern": "file.read"},
+      {"tool_pattern": "*", "capability": "read_memory"}
+    ],
+    "deny": [
+      {"tool_pattern": "*", "capability": "runtime_loader"}
+    ],
+    "ask": [
+      {"tool_pattern": "file.write"},
+      {"tool_pattern": "*", "capability": "spawn_subprocess"}
+    ]
+  }
+}
+)json");
+
+  REQUIRE(result.has_value());
+  const auto& perms = result->permissions();
+  REQUIRE(perms.rules.size() == 5);
+
+  REQUIRE(perms.rules[0].verdict == config::PermissionVerdict::allow);
+  REQUIRE(perms.rules[0].tool_pattern == "file.read");
+  REQUIRE_FALSE(perms.rules[0].capability.has_value());
+
+  REQUIRE(perms.rules[1].verdict == config::PermissionVerdict::allow);
+  REQUIRE(perms.rules[1].capability == core::Capability::read_memory);
+
+  REQUIRE(perms.rules[2].verdict == config::PermissionVerdict::deny);
+  REQUIRE(perms.rules[2].capability == core::Capability::runtime_loader);
+
+  REQUIRE(perms.rules[3].verdict == config::PermissionVerdict::ask);
+  REQUIRE(perms.rules[3].tool_pattern == "file.write");
+
+  REQUIRE(perms.rules[4].verdict == config::PermissionVerdict::ask);
+  REQUIRE(perms.rules[4].capability == core::Capability::spawn_subprocess);
+}
+
+TEST_CASE("Config::parse preserves authoring order across verdict keys", "[unit][config][permissions]") {
+  // The JSON object iterates `ask` before `allow` here. The parser uses
+  // object-iteration order so the operator's authoring intent survives.
+  auto result = config::Config::parse(R"json(
+{
+  "permissions": {
+    "ask": [{"tool_pattern": "first"}],
+    "allow": [{"tool_pattern": "second"}],
+    "deny": [{"tool_pattern": "third"}]
+  }
+}
+)json");
+
+  REQUIRE(result.has_value());
+  const auto& rules = result->permissions().rules;
+  REQUIRE(rules.size() == 3);
+  REQUIRE(rules[0].verdict == config::PermissionVerdict::ask);
+  REQUIRE(rules[0].tool_pattern == "first");
+  REQUIRE(rules[1].verdict == config::PermissionVerdict::allow);
+  REQUIRE(rules[1].tool_pattern == "second");
+  REQUIRE(rules[2].verdict == config::PermissionVerdict::deny);
+  REQUIRE(rules[2].tool_pattern == "third");
+}
+
+TEST_CASE("Config::parse extracts agents.<name>.permissions overlays", "[unit][config][permissions]") {
+  auto result = config::Config::parse(R"json(
+{
+  "agents": {
+    "researcher": {
+      "permissions": {
+        "allow": [{"tool_pattern": "*", "capability": "egress_http"}]
+      }
+    },
+    "auditor": {
+      "permissions": {
+        "deny": [{"tool_pattern": "*", "capability": "write_file"}]
+      }
+    }
+  }
+}
+)json");
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->agents().size() == 2);
+  REQUIRE(result->agents()[0].name == "researcher");
+  REQUIRE(result->agents()[0].permissions.rules.size() == 1);
+  REQUIRE(result->agents()[0].permissions.rules[0].capability == core::Capability::egress_http);
+  REQUIRE(result->agents()[1].name == "auditor");
+  REQUIRE(result->agents()[1].permissions.rules[0].verdict == config::PermissionVerdict::deny);
+  REQUIRE(result->agents()[1].permissions.rules[0].capability == core::Capability::write_file);
+}
+
+TEST_CASE("Config::parse env-substitutes inside permission rules", "[unit][config][permissions]") {
+  ScopedEnv pattern{"ORAN_CONFIG_TEST_PATTERN", "file.*"};
+
+  auto result = config::Config::parse(R"json(
+{
+  "permissions": {
+    "allow": [{"tool_pattern": "${ORAN_CONFIG_TEST_PATTERN}", "capability": "read_file"}]
+  }
+}
+)json");
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->permissions().rules.size() == 1);
+  REQUIRE(result->permissions().rules[0].tool_pattern == "file.*");
+  REQUIRE(result->permissions().rules[0].capability == core::Capability::read_file);
+}
+
+TEST_CASE("Config::parse rejects malformed permission rules", "[unit][config][permissions]") {
+  SECTION("missing tool_pattern") {
+    auto result = config::Config::parse(R"json({"permissions": {"allow": [{"capability": "read_file"}]}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("empty tool_pattern") {
+    auto result = config::Config::parse(R"json({"permissions": {"allow": [{"tool_pattern": ""}]}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("unknown capability spelling") {
+    auto result = config::Config::parse(
+        R"json({"permissions": {"allow": [{"tool_pattern": "*", "capability": "transcend_reality"}]}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-object rule entry") {
+    auto result = config::Config::parse(R"json({"permissions": {"allow": ["file.read"]}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("verdict array is not an array") {
+    auto result = config::Config::parse(R"json({"permissions": {"allow": {"tool_pattern": "*"}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+}
+
+TEST_CASE("Config::parse handles unknown verdict / rule / agent keys per mode", "[unit][config][permissions]") {
+  SECTION("unknown verdict key warns in loose mode") {
+    auto result = config::Config::parse(R"json({"permissions": {"approve": [{"tool_pattern": "*"}]}})json");
+    REQUIRE(result.has_value());
+    REQUIRE(result->permissions().rules.empty());
+    REQUIRE(result->warnings().size() == 1);
+    REQUIRE(result->warnings()[0].path == "$.permissions.approve");
+  }
+
+  SECTION("unknown verdict key fails under strict_config") {
+    auto result = config::Config::parse(
+        R"json({"strict_config": true, "permissions": {"approve": [{"tool_pattern": "*"}]}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("unknown rule field warns in loose mode") {
+    auto result =
+        config::Config::parse(R"json({"permissions": {"allow": [{"tool_pattern": "*", "notes": "todo"}]}})json");
+    REQUIRE(result.has_value());
+    REQUIRE(result->permissions().rules.size() == 1);
+    REQUIRE(result->warnings().size() == 1);
+    REQUIRE(result->warnings()[0].path == "$.permissions.allow[0].notes");
+  }
+
+  SECTION("unknown agent field warns in loose mode") {
+    auto result = config::Config::parse(R"json({"agents": {"a": {"model": "claude"}}})json");
+    REQUIRE(result.has_value());
+    REQUIRE(result->agents().size() == 1);
+    REQUIRE(result->warnings().size() == 1);
+    REQUIRE(result->warnings()[0].path == "$.agents.a.model");
+  }
+
+  SECTION("unknown agent field fails under strict_config") {
+    auto result = config::Config::parse(R"json({"strict_config": true, "agents": {"a": {"model": "claude"}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
 }

@@ -79,8 +79,11 @@ own test bucket, its own bench bucket, and its own public header set under
 > migration runner + SQL-file migration loader + async writer/reader `Pool`
 > with per-slot statement caches + standalone per-connection `StatementCache`
 > + `SessionRepository` (typed `core::Role` boundary) of `oran-storage`,
-> the first `oran-config` JSON
-> loader, the foundation `RuleSet` + `Decision` of `oran-permission`
+> the `oran-config` JSON loader with `runtime`/`profiles`/`routes`/
+> `session`/`web` plus the new `permissions` and
+> `agents.<name>.permissions` typed surfaces (layer-2/3 data of the
+> three-layer rule merge),
+> the foundation `RuleSet` + `Decision` of `oran-permission`
 > with capability-aware gating (`Rule::capability`,
 > `core::Capability`) and the `Defaults::for_mode` baseline factory,
 > the config-loading slice of `oran-bootstrap`, plus the first
@@ -98,7 +101,7 @@ own test bucket, its own bench bucket, and its own public header set under
 | `oran-io`            | file/directory IO MVP; planned glob, pipe, subprocess, signal | `oran-core`, `oran-async` |
 | `oran-http`          | http client (asio) and tiny router for the web UI | `oran-core`, `oran-async` |
 | `oran-storage`       | SQLite expected-only connection/statement core, migration runner with SQL-file loading, async writer/reader `Pool` with per-slot `StatementCache`, standalone per-connection `StatementCache`, and `SessionRepository` (typed `core::Role` at the API boundary); planned memory/automation/audit repositories | `oran-core`, `oran-async`, sqlite3 |
-| `oran-config`        | JSON config loader with typed runtime/profile/route/session/web fields and env substitution; planned schema + secret-protected fields | `oran-core`, `oran-storage` |
+| `oran-config`        | JSON config loader with typed runtime/profile/route/session/web fields, env substitution, and the typed `permissions` + `agents.<name>.permissions` overlay surface (layer-2/3 data of the three-layer rule merge); planned schema + secret-protected fields | `oran-core`, `oran-storage` |
 | `oran-permission`    | foundation rule evaluator: `Verdict`, `Mode`, `Rule`, `RuleSet`, `Decision`, `*`-glob tool matching, capability-aware gating (`Rule::capability` of `core::Capability`), and the `Defaults::for_mode` baseline factory; planned re2 input regex, HMAC approvals, audit | `oran-core` |
 | `oran-skill`         | skill loader, skill catalog | `oran-core`, `oran-io` |
 | `oran-tool`          | tool registry, tool runtime context, dispatch | `oran-core`, `oran-async`, `oran-permission`, `oran-io` |
@@ -189,8 +192,11 @@ own test bucket, its own bench bucket, and its own public header set under
   when it is absent in this early runtime slice. After config loading, bootstrap hands
   CLI mode flags such as `--prompt` to `oran-cli`.
 - The current typed surface covers `strict_config`, `runtime`, `profiles`, `routes`,
-  `session`, and `web`; planned sections such as channels, teams, hooks, memory, and
-  automation are accepted as recognized root fields until their typed models land.
+  `session`, `web`, `permissions`, and `agents.<name>.permissions`; planned
+  sections such as channels, teams, hooks, memory, automation, and the
+  remaining `agents.<name>.*` fields (provider/model override, prompts,
+  hook bindings) are accepted as recognized root fields until their typed
+  models land.
 - `${VAR}` and `${VAR:-default}` substitutions run on string values at load time.
 - Secret encryption, generated JSON Schema, and rotation remain planned follow-up
   slices. See `docs/design-docs/secrets-and-state.md`.

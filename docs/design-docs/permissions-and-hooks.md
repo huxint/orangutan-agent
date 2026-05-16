@@ -20,10 +20,18 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > live: `Defaults::for_mode(Mode)` returns a safe baseline `RuleSet`
 > per the mode (empty for `strict`, capability-scoped allow/ask/deny
 > for `default_`, deny-the-dangerous for `permissive`, read-side
-> allow for `sandboxed`). Layer-2 (`config.permissions`) and
-> layer-3 (per-agent overlay) wiring, runtime input regex
-> (`InputPattern` via re2), HMAC-signed approval prompts, and audit
-> log writes are still future slices listed under "v1" in
+> allow for `sandboxed`). Layer-2 and layer-3 *data* is parsed: the
+> `oran-config` JSON loader now exposes `Config::permissions()`
+> (the global `permissions` root block) and `Config::agents()` (each
+> `agents.<name>.permissions` overlay), both as
+> `PermissionsConfig` collections of `PermissionRuleConfig
+> {PermissionVerdict, std::string tool_pattern,
+> std::optional<core::Capability> capability}` with capability
+> spellings resolved at load time. The *runtime merge* that
+> concatenates layer-1 defaults with layer-2 + layer-3 data into a
+> single `RuleSet` is the next `oran-permission` slice. Runtime input
+> regex (`InputPattern` via re2), HMAC-signed approval prompts, and
+> audit log writes are still future slices listed under "v1" in
 > [`../product-specs/0008-permissions.md`](../product-specs/0008-permissions.md).
 
 ### Sources

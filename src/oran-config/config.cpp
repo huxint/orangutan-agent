@@ -14,17 +14,19 @@
 #include <iterator>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 
 #include <nlohmann/json.hpp>
 
+#include <oran/core/capability.hpp>
 #include <oran/core/error.hpp>
 
 namespace orangutan::config {
 namespace {
 
-using ::nlohmann::json;
+using json = ::nlohmann::ordered_json;
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
@@ -44,6 +46,16 @@ constexpr auto kRecognizedRootFields = std::array<std::string_view, 13>{
     "session",
 };
 
+constexpr auto kPermissionVerdictNames = std::array<std::string_view, 3>{
+    "allow",
+    "deny",
+    "ask",
+};
+
+constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
+    "permissions",
+};
+
 [[nodiscard]] Error config_error(std::string message, std::string path) {
   return Error::config(std::move(message)).with("path", std::move(path));
 }
@@ -61,6 +73,10 @@ constexpr auto kRecognizedRootFields = std::array<std::string_view, 13>{
 
 [[nodiscard]] bool is_recognized_root(std::string_view name) {
   return std::ranges::find(kRecognizedRootFields, name) != kRecognizedRootFields.end();
+}
+
+[[nodiscard]] bool is_recognized_agent_field(std::string_view name) {
+  return std::ranges::find(kRecognizedAgentFields, name) != kRecognizedAgentFields.end();
 }
 
 [[nodiscard]] bool valid_env_name(std::string_view name) {
@@ -441,7 +457,177 @@ constexpr auto kRecognizedRootFields = std::array<std::string_view, 13>{
   return warnings;
 }
 
+[[nodiscard]] Result<PermissionRuleConfig> parse_permission_rule(const json& value,
+                                                                 PermissionVerdict verdict,
+                                                                 std::string_view path,
+                                                                 bool strict,
+                                                                 std::vector<ConfigWarning>& warnings) {
+  auto rule_object = require_object(value, path);
+  if (!rule_object) {
+    return std::unexpected(std::move(rule_object.error()));
+  }
+
+  auto tool_pattern = required_string(value, "tool_pattern", path);
+  if (!tool_pattern) {
+    return std::unexpected(std::move(tool_pattern.error()));
+  }
+  if (tool_pattern->empty()) {
+    return std::unexpected(config_error("tool_pattern must be non-empty", child_path(path, "tool_pattern")));
+  }
+
+  auto capability = std::optional<core::Capability>{};
+  if (const auto cap_it = value.find("capability"); cap_it != value.end()) {
+    if (!cap_it->is_string()) {
+      return std::unexpected(config_error("expected string", child_path(path, "capability")));
+    }
+    const auto& text = cap_it->get_ref<const std::string&>();
+    auto parsed = core::parse_capability(text);
+    if (!parsed) {
+      return std::unexpected(
+          config_error("unknown capability spelling", child_path(path, "capability")).with("capability", text));
+    }
+    capability = *parsed;
+  }
+
+  static constexpr auto kKnownKeys = std::array<std::string_view, 2>{"tool_pattern", "capability"};
+  for (const auto& [key, _] : value.items()) {
+    if (std::ranges::find(kKnownKeys, key) != kKnownKeys.end()) {
+      continue;
+    }
+    const auto field_path = child_path(path, key);
+    if (strict) {
+      return std::unexpected(config_error("unknown permission rule field", field_path));
+    }
+    warnings.push_back(ConfigWarning{
+        .path = field_path,
+        .message = "unknown permission rule field",
+    });
+  }
+
+  return PermissionRuleConfig{
+      .verdict = verdict,
+      .tool_pattern = std::move(*tool_pattern),
+      .capability = capability,
+  };
+}
+
+[[nodiscard]] Result<PermissionsConfig>
+parse_permissions_block(const json& block, std::string_view path, bool strict, std::vector<ConfigWarning>& warnings) {
+  auto block_object = require_object(block, path);
+  if (!block_object) {
+    return std::unexpected(std::move(block_object.error()));
+  }
+
+  auto out = PermissionsConfig{};
+  for (const auto& [key, value] : block.items()) {
+    const auto verdict_path = child_path(path, key);
+    const auto known_verdict = parse_permission_verdict(key);
+    if (!known_verdict) {
+      if (strict) {
+        return std::unexpected(config_error("unknown verdict key", verdict_path));
+      }
+      warnings.push_back(ConfigWarning{
+          .path = verdict_path,
+          .message = "unknown verdict key",
+      });
+      continue;
+    }
+    if (!value.is_array()) {
+      return std::unexpected(config_error("expected array", verdict_path));
+    }
+    out.rules.reserve(out.rules.size() + value.size());
+    auto index = std::size_t{0};
+    for (const auto& item : value) {
+      auto rule = parse_permission_rule(item, *known_verdict, element_path(verdict_path, index), strict, warnings);
+      if (!rule) {
+        return std::unexpected(std::move(rule.error()));
+      }
+      out.rules.push_back(std::move(*rule));
+      ++index;
+    }
+  }
+  return out;
+}
+
+[[nodiscard]] Result<PermissionsConfig>
+parse_root_permissions(const json& root, bool strict, std::vector<ConfigWarning>& warnings) {
+  const auto it = root.find("permissions");
+  if (it == root.end()) {
+    return PermissionsConfig{};
+  }
+  return parse_permissions_block(*it, "$.permissions", strict, warnings);
+}
+
+[[nodiscard]] Result<std::vector<AgentConfig>>
+parse_agents(const json& root, bool strict, std::vector<ConfigWarning>& warnings) {
+  auto agents = std::vector<AgentConfig>{};
+  const auto it = root.find("agents");
+  if (it == root.end()) {
+    return agents;
+  }
+  auto object = require_object(*it, "$.agents");
+  if (!object) {
+    return std::unexpected(std::move(object.error()));
+  }
+
+  agents.reserve(it->size());
+  for (const auto& [name, value] : it->items()) {
+    const auto agent_path = child_path("$.agents", name);
+    auto agent_object = require_object(value, agent_path);
+    if (!agent_object) {
+      return std::unexpected(std::move(agent_object.error()));
+    }
+
+    auto permissions = PermissionsConfig{};
+    if (const auto perm_it = value.find("permissions"); perm_it != value.end()) {
+      auto parsed = parse_permissions_block(*perm_it, child_path(agent_path, "permissions"), strict, warnings);
+      if (!parsed) {
+        return std::unexpected(std::move(parsed.error()));
+      }
+      permissions = std::move(*parsed);
+    }
+
+    for (const auto& [key, _] : value.items()) {
+      if (is_recognized_agent_field(key)) {
+        continue;
+      }
+      const auto field_path = child_path(agent_path, key);
+      if (strict) {
+        return std::unexpected(config_error("unknown agent field", field_path));
+      }
+      warnings.push_back(ConfigWarning{
+          .path = field_path,
+          .message = "unknown agent field",
+      });
+    }
+
+    agents.push_back(AgentConfig{
+        .name = name,
+        .permissions = std::move(permissions),
+    });
+  }
+
+  return agents;
+}
+
 }  // namespace
+
+std::string_view to_string_view(PermissionVerdict v) noexcept {
+  const auto idx = static_cast<std::size_t>(v);
+  if (idx < kPermissionVerdictNames.size()) {
+    return kPermissionVerdictNames[idx];
+  }
+  return "unknown";
+}
+
+std::optional<PermissionVerdict> parse_permission_verdict(std::string_view text) noexcept {
+  for (std::size_t i = 0; i < kPermissionVerdictNames.size(); ++i) {
+    if (kPermissionVerdictNames[i] == text) {
+      return static_cast<PermissionVerdict>(i);
+    }
+  }
+  return std::nullopt;
+}
 
 core::Result<Config> Config::parse(std::string_view contents, LoadOptions options) {
   try {
@@ -464,6 +650,9 @@ core::Result<Config> Config::parse(std::string_view contents, LoadOptions option
       return std::unexpected(std::move(env_result.error()));
     }
 
+    const auto strict_effective = options.strict_unknown_fields || *strict;
+    auto warnings = std::move(*unknowns);
+
     auto runtime = parse_runtime(root);
     if (!runtime) {
       return std::unexpected(std::move(runtime.error()));
@@ -484,6 +673,14 @@ core::Result<Config> Config::parse(std::string_view contents, LoadOptions option
     if (!web) {
       return std::unexpected(std::move(web.error()));
     }
+    auto permissions = parse_root_permissions(root, strict_effective, warnings);
+    if (!permissions) {
+      return std::unexpected(std::move(permissions.error()));
+    }
+    auto agents = parse_agents(root, strict_effective, warnings);
+    if (!agents) {
+      return std::unexpected(std::move(agents.error()));
+    }
 
     auto config = Config{};
     config.strict_config_ = *strict;
@@ -492,7 +689,9 @@ core::Result<Config> Config::parse(std::string_view contents, LoadOptions option
     config.routes_ = std::move(*routes);
     config.session_ = std::move(*session);
     config.web_ = std::move(*web);
-    config.warnings_ = std::move(*unknowns);
+    config.permissions_ = std::move(*permissions);
+    config.agents_ = std::move(*agents);
+    config.warnings_ = std::move(warnings);
     return config;
   } catch (const json::parse_error& e) {
     return std::unexpected(Error::config("failed to parse config JSON").with("detail", e.what()));

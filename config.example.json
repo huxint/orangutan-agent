@@ -22,8 +22,30 @@
       "fallbacks": []
     }
   },
-  "permissions": {},
-  "agents": {},
+  "permissions": {
+    "allow": [
+      {"tool_pattern": "file.read"},
+      {"tool_pattern": "file.search"},
+      {"tool_pattern": "*", "capability": "read_memory"}
+    ],
+    "deny": [
+      {"tool_pattern": "*", "capability": "runtime_loader"},
+      {"tool_pattern": "shell.exec(rm:*)"}
+    ],
+    "ask": [
+      {"tool_pattern": "file.write"},
+      {"tool_pattern": "*", "capability": "spawn_subprocess"}
+    ]
+  },
+  "agents": {
+    "researcher": {
+      "permissions": {
+        "allow": [
+          {"tool_pattern": "*", "capability": "egress_http"}
+        ]
+      }
+    }
+  },
   "teams": {},
   "channels": [],
   "hooks": {},
