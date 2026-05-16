@@ -4,7 +4,7 @@
 
 - Agent: `Claude Code`
 - Base model: `Claude Opus 4.7`
-- Runtime: `Claude Code, /home/huxint/projects/orangutan-refactor`
+- Runtime: `Claude Code, orangutan-refactor`
 - Linked plan: none — review-and-fix task, no exec plan needed.
 
 ### User Query

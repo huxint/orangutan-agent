@@ -52,12 +52,17 @@ enum class Capability {
 ```
 
 > **Status (2026-05-16):** the enum itself now lives in `oran-core`
-> (`include/oran/core/capability.hpp`) along with `to_string_view`,
-> `parse_capability`, and a `kAllCapabilities` view. `core::Capability`
-> is the vocabulary that the upcoming `permission::Rule::capability`
-> field and `ToolDef::requires` list both read. Runtime enforcement
-> (`tool::Runtime`, capability-gated services) and config wiring stay
-> on future slices.
+> (`include/oran/core/capability.hpp`); its wire spelling and inverse
+> parse come from the generic reflection helpers
+> `core::enum_name(c)` / `core::parse_enum<Capability>(text)` /
+> `core::enum_values<Capability>()` in
+> [`include/oran/core/enum_names.hpp`](../../include/oran/core/enum_names.hpp)
+> (no per-enum forwarding shims — see
+> [`docs/rules/code-style.md`](../rules/code-style.md) "Enums").
+> `core::Capability` is the vocabulary that the upcoming
+> `permission::Rule::capability` field and `ToolDef::requires` list
+> both read. Runtime enforcement (`tool::Runtime`, capability-gated
+> services) and config wiring stay on future slices.
 
 A tool's `requires` list is **inspected at registration**. The permission engine knows
 the universe of capabilities a tool might use; the tool cannot smuggle in a capability

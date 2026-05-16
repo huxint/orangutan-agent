@@ -108,9 +108,44 @@ Inheritance with virtual functions remains for true polymorphic *interfaces*
 ### Enums
 
 - `enum class` always; never bare `enum`.
-- Stringify via `oran::core::enum_name(value)` (wraps `magic_enum`).
-- For hot enums, define a manual `enum_name` overload to avoid magic_enum's compile
-  cost on common iteration paths.
+- Stable string spelling and inverse parse come from the reflection-backed
+  helpers in [`include/oran/core/enum_names.hpp`](../../include/oran/core/enum_names.hpp):
+  - `core::enum_name(value)` returns the identifier (or `"unknown"` for an
+    out-of-range cast).
+  - `core::parse_enum<E>(text)` is the inverse, returning
+    `std::optional<E>`.
+  - `core::enum_values<E>()` exposes every enumerator in declaration order.
+- **Call the generic helpers directly.** Do not add a per-enum forwarding
+  shim — no `std::string_view to_string_view(Foo)`, no
+  `std::optional<Foo> parse_foo(std::string_view)`. The shims existed in
+  early slices and have all been deleted; the generic name is short
+  enough at the callsite and one less place to keep in sync.
+- A `std::formatter<E>` specialization that calls `core::enum_name(value)`
+  is fine and encouraged: it hooks a stdlib customization point that
+  callers cannot bypass, so it's not a forwarding shim in the same sense.
+- A trailing underscore on an enumerator name (used to dodge a C++
+  keyword, e.g. `Mode::default_`) is stripped from the wire spelling. If
+  your enum's wire format deviates from the identifier in any other way
+  (dashes, alternate casing) — e.g. `bootstrap::ConfigSource` →
+  `"built-in-defaults"` — the helper cannot produce it; keep a
+  hand-written switch in the matching `.cpp` and document why.
+- `enum_names.hpp` is a heavy include (pulls `<meta>`). Include it from
+  the enum's own public header or a `.cpp` that consumes the helper —
+  not from unrelated public headers.
+
+```cpp
+// PREFERRED — generic helper at the callsite.
+const auto text = core::enum_name(role);
+const auto parsed = core::parse_enum<core::Role>(input);
+
+// FORBIDDEN — per-enum forwarding shim.
+namespace orangutan::core {
+std::string_view to_string_view(Role r) noexcept { return enum_name(r); }
+std::optional<Role> parse_role(std::string_view t) noexcept {
+  return parse_enum<Role>(t);
+}
+}  // namespace orangutan::core
+```
 
 ### Strings
 
@@ -198,6 +233,40 @@ for (auto it = cache.lru.begin(); it != cache.lru.end(); ++it) {
 This rule lives alongside `critical-rules.md#C17` ("Language standard is C++26;
 modern facilities preferred"). C17 covers *which* C++26 facilities to adopt;
 this section covers *which* one to choose when the language offers a choice.
+
+### Membership Tests: contains, not find != end
+
+The standard adds first-class membership tests in C++20/23 — use them.
+The pre-existing `find` form discards the iterator anyway in a
+membership test; spelling it as `contains` says what the code does.
+
+- `std::ranges::contains(rng, value)` for any range.
+- `set.contains(key)`, `map.contains(key)`, `unordered_set.contains(key)`,
+  `unordered_map.contains(key)` — the associative containers all have it.
+- `str.contains(sub)` / `str.contains(ch)` for `std::string` and
+  `std::string_view`.
+
+```cpp
+// PREFERRED
+if (std::ranges::contains(kRecognizedFields, key)) { … }
+if (map.contains(name)) { … }
+REQUIRE(rendered.contains("network: HTTP 503"));
+
+// FORBIDDEN — escape-past-end membership test.
+if (std::ranges::find(kRecognizedFields, key) != kRecognizedFields.end()) { … }
+if (map.find(name) != map.end()) { … }
+REQUIRE(rendered.find("network: HTTP 503") != std::string::npos);
+```
+
+The iterator-form `find` stays appropriate when the callsite *uses* the
+iterator after the check (`if (auto it = map.find(k); it != map.end()) {
+return it->second; }`). `contains` discards the iterator, so a pure
+membership rewrite at that callsite would force a second lookup.
+
+This rule lives alongside the "newer of two equivalents" guidance above
+and `critical-rules.md#C17`. Reviews flag new `find(…) != … .end()` /
+`find(…) != … .npos` in code-change PRs unless they store and use the
+iterator.
 
 ### Lambdas
 

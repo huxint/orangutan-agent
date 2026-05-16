@@ -209,12 +209,30 @@ Concretely:
   `std::ranges::sort(rng)` instead of `std::sort(rng.begin(), rng.end())`. The
   range-based forms are clearer at the callsite, project-aware via projections,
   and avoid begin/end pairs.
+- **Use `contains` for membership tests, not `find != end()` / `find != npos`.**
+  `std::ranges::contains(rng, x)`, `map.contains(key)`,
+  `std::string::contains(sub)` are C++20/23 first-class membership tests. The
+  iterator-form `find` is reserved for callsites that actually use the
+  iterator after the check; spelling a pure membership check with `find` is a
+  review-blocking style violation. See
+  [`code-style.md` "Membership Tests"](code-style.md).
+- **Use reflection for enum<->string mappings.**
+  `core::enum_name(value)` / `core::parse_enum<E>(text)` /
+  `core::enum_values<E>()` from
+  [`include/oran/core/enum_names.hpp`](../../include/oran/core/enum_names.hpp)
+  are the one place every enum's wire spelling lives. New `enum class`
+  declarations *do not* get a hand-maintained string table, and *do not*
+  get a per-enum `to_string_view`/`parse_<kind>` forwarding shim — callers
+  use the generic helpers directly. Only enums whose wire format deviates
+  from the identifier (dashes, alternate casing) keep a hand-written
+  switch. See [`code-style.md` "Enums"](code-style.md).
 - **Prefer the newer facility when two equivalents exist.** If the standard ships
   both an older and a newer version of a function or type covering the same use
   case (e.g., `std::format` vs. `sprintf`, `std::filesystem::path` vs. raw
   strings, `std::span` vs. pointer-and-length, `std::optional` vs. sentinel
   values, `std::variant` vs. tagged unions, `std::ranges::*` vs. iterator-pair
-  `std::*`), use the newer one unless there is a benchmarked reason not to.
+  `std::*`, `std::ranges::contains` vs. `find != end()`), use the newer one
+  unless there is a benchmarked reason not to.
 
 **Why:** the rewrite exists specifically because the legacy project's older standard
 left it stuck with hand-rolled equivalents of `std::expected` and friends. We use

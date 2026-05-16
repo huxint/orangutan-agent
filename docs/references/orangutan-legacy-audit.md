@@ -63,7 +63,7 @@ this into ~22 libraries (see `docs/ARCHITECTURE.md`).
 | simdutf | 8.0.0 | med | kept |
 | uni_algo | 1.2.0 | low-med | **removed**; folded into oran-core::str |
 | ctre | 3.10.0 | med | **removed**; replaced by re2 |
-| magic_enum | 0.9.7 | low | kept |
+| magic_enum | 0.9.7 | low | **removed**; replaced by C++26 reflection (`core::enum_name`) |
 | Catch2 | 3.7.1 | med-high | kept |
 
 ## Top Friction List (Legacy → v2 Response)
@@ -134,7 +134,7 @@ The following pieces from the legacy code earn their place in v2:
 - The **fluent builder pattern** using C++23 deducing-this for configurable types.
 - `utils::all_ok` for `Result` combination.
 - `utils::Overloaded` for variant visitation.
-- `utils::enum_name` wrapping magic_enum.
+- `utils::enum_name` wrapping magic_enum (v2 replaces this with C++26 reflection in `core::enum_name`).
 - The **session-store row-mapper** approach (`sqlite::read_columns<Ts...>`).
 - The **identity / scope_key** derivation for namespacing memory.
 - The **automation engine's executor-callback pattern** (build a fresh runtime per

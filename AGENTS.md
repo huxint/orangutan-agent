@@ -93,6 +93,15 @@ Codex, or any future agent can ship features without depending on chat memory.
   `std::*` algorithms, and reach for stdlib + in-repo helpers before writing a
   hand-rolled loop. See [`docs/rules/code-style.md`](docs/rules/code-style.md)
   ("Algorithms And Ranges") and [`docs/rules/critical-rules.md#C17`](docs/rules/critical-rules.md).
+- **Membership tests:** `std::ranges::contains` / `map.contains(k)` /
+  `string::contains(sub)` — not `find != end()` / `find != npos`. See
+  [`docs/rules/code-style.md`](docs/rules/code-style.md) ("Membership Tests").
+- **Enums:** `enum class` only; wire spelling and parse come from
+  `core::enum_name` / `core::parse_enum` in
+  [`include/oran/core/enum_names.hpp`](include/oran/core/enum_names.hpp) (C++26
+  reflection, P2996, gated by `-freflection`). Do *not* add per-enum
+  `to_string_view` / `parse_<kind>` forwarding shims. See
+  [`docs/rules/code-style.md`](docs/rules/code-style.md) ("Enums").
 - **Static analysis:** GCC 16.1 `-fanalyzer` via `xmake f --analyze=y` (opt-in for
   authors, nightly CI required). See [`docs/rules/static-analysis.md`](docs/rules/static-analysis.md).
 - **Build:** xmake. Lock file pinned. PCH on, modules where supported, unity for cold modules.

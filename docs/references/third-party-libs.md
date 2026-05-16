@@ -87,12 +87,16 @@ rules file is the *approval list*; this file is *guidance + traps*.
 - Only a few unicode-normalization paths used uni_algo; replaced by stdlib + simdutf
   helpers in `oran-core::str`.
 
-## magic_enum
+## magic_enum (legacy) → folded into C++26 reflection (v2)
 
-- Header-only; good for boundary stringification.
-- For hot enums, define a manual `enum_name` overload to avoid magic_enum's per-enum
-  compile cost on common iteration paths.
-- Don't use `magic_enum::enum_values<T>()` at compile time for very large enums.
+- v1 leaned on `magic_enum` for boundary stringification of `enum class` values
+  with a per-enum compile cost.
+- v2 uses C++26 reflection (P2996) via `core::enum_name` / `core::parse_enum` /
+  `core::enum_values` in
+  [`include/oran/core/enum_names.hpp`](../../include/oran/core/enum_names.hpp).
+  GCC 16.1 gates this behind `-freflection`, set at the project root in
+  `xmake.lua`. The dependency on `magic_enum` is dropped; the helper covers
+  every enum whose wire spelling matches the identifier.
 
 ## simdutf
 

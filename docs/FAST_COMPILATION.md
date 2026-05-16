@@ -118,8 +118,13 @@ Project default: RTTI **enabled**, exceptions **enabled** (asio relies on both).
 ### 9. Reduce Constexpr / Consteval Surface
 
 GCC 16.1's compile-time evaluator is fast but not free. Avoid using `consteval`
-helpers in hot headers. If `magic_enum` becomes expensive (it has a per-enum compile
-cost), wrap it behind a `.cpp`-defined `enum_name()` for hot enums.
+helpers in hot headers. The reflection-backed `core::enum_name` /
+`core::parse_enum` helpers in
+[`include/oran/core/enum_names.hpp`](../include/oran/core/enum_names.hpp) pull
+`<meta>` and expand a `template for` over each enumerator — heavy on first
+include. The header is included from each enum's own public header so callers
+pay once; do *not* `#include <oran/core/enum_names.hpp>` from public headers
+that don't own an enum.
 
 ### 10. Measure Before Optimizing
 
