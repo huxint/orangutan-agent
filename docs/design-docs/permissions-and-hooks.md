@@ -7,6 +7,17 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 
 ## Permission Engine
 
+> **Engine status (2026-05-16):** the foundation slice ships under
+> `oran-permission` — `Verdict { allow, deny, ask }`, `Mode { strict,
+> default_, permissive, sandboxed }`, `Rule`, `Decision`, and `RuleSet`
+> with the deny → allow → ask precedence below. Tool-name matching is a
+> simple `*`-glob; runtime input regex (`InputPattern` via re2),
+> capability gating, HMAC-signed approval prompts, and audit log writes
+> are still future slices listed under "v1" in
+> [`../product-specs/0008-permissions.md`](../product-specs/0008-permissions.md).
+> Config wiring (`config.permissions`) is also pending — today the rule
+> set is constructed in-process by tests/bench.
+
 ### Sources
 
 Rules come from three layers, merged at runtime:
