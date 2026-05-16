@@ -85,7 +85,9 @@ own test bucket, its own bench bucket, and its own public header set under
 > three-layer rule merge),
 > the foundation `RuleSet` + `Decision` of `oran-permission`
 > with capability-aware gating (`Rule::capability`,
-> `core::Capability`) and the `Defaults::for_mode` baseline factory,
+> `core::Capability`), the `Defaults::for_mode` baseline factory,
+> and the three-layer `materialize` merge that concatenates
+> defaults + global config + per-agent overlay,
 > the config-loading slice of `oran-bootstrap`, plus the first
 > `oran-cli` handoff shell, are implemented.
 > All other rows below are *planned* and will land per `docs/exec-plans/` as
@@ -102,7 +104,7 @@ own test bucket, its own bench bucket, and its own public header set under
 | `oran-http`          | http client (asio) and tiny router for the web UI | `oran-core`, `oran-async` |
 | `oran-storage`       | SQLite expected-only connection/statement core, migration runner with SQL-file loading, async writer/reader `Pool` with per-slot `StatementCache`, standalone per-connection `StatementCache`, and `SessionRepository` (typed `core::Role` at the API boundary); planned memory/automation/audit repositories | `oran-core`, `oran-async`, sqlite3 |
 | `oran-config`        | JSON config loader with typed runtime/profile/route/session/web fields, env substitution, and the typed `permissions` + `agents.<name>.permissions` overlay surface (layer-2/3 data of the three-layer rule merge); planned schema + secret-protected fields | `oran-core`, `oran-storage` |
-| `oran-permission`    | foundation rule evaluator: `Verdict`, `Mode`, `Rule`, `RuleSet`, `Decision`, `*`-glob tool matching, capability-aware gating (`Rule::capability` of `core::Capability`), and the `Defaults::for_mode` baseline factory; planned re2 input regex, HMAC approvals, audit | `oran-core` |
+| `oran-permission`    | foundation rule evaluator: `Verdict`, `Mode`, `Rule`, `RuleSet`, `Decision`, `*`-glob tool matching, capability-aware gating (`Rule::capability` of `core::Capability`), the `Defaults::for_mode` baseline factory, and the three-layer `materialize(Mode, global, per_agent)` merge that concatenates defaults + global config + per-agent overlay; planned re2 input regex, HMAC approvals, audit | `oran-core`, `oran-config` |
 | `oran-skill`         | skill loader, skill catalog | `oran-core`, `oran-io` |
 | `oran-tool`          | tool registry, tool runtime context, dispatch | `oran-core`, `oran-async`, `oran-permission`, `oran-io` |
 | `oran-hook`          | hook bus + sink kinds (shell / lua / in-proc) | `oran-core`, `oran-async`, `oran-io` |

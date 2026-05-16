@@ -16,22 +16,18 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > capability-aware `RuleSet::evaluate(tool_name,
 > required_capabilities, mode)` overload (the legacy
 > `evaluate(tool_name, mode)` is retained as a wrapper that passes an
-> empty span). Layer-1 of the three-layer "Sources" merge below is
-> live: `Defaults::for_mode(Mode)` returns a safe baseline `RuleSet`
-> per the mode (empty for `strict`, capability-scoped allow/ask/deny
-> for `default_`, deny-the-dangerous for `permissive`, read-side
-> allow for `sandboxed`). Layer-2 and layer-3 *data* is parsed: the
-> `oran-config` JSON loader now exposes `Config::permissions()`
-> (the global `permissions` root block) and `Config::agents()` (each
-> `agents.<name>.permissions` overlay), both as
-> `PermissionsConfig` collections of `PermissionRuleConfig
-> {PermissionVerdict, std::string tool_pattern,
-> std::optional<core::Capability> capability}` with capability
-> spellings resolved at load time. The *runtime merge* that
-> concatenates layer-1 defaults with layer-2 + layer-3 data into a
-> single `RuleSet` is the next `oran-permission` slice. Runtime input
-> regex (`InputPattern` via re2), HMAC-signed approval prompts, and
-> audit log writes are still future slices listed under "v1" in
+> empty span). The three-layer "Sources" merge below is now live
+> end-to-end: layer-1 is `Defaults::for_mode(Mode)`, layer-2 is the
+> parsed `config.permissions` block exposed by `oran-config` as
+> `PermissionsConfig`, layer-3 is each agent's
+> `agents.<name>.permissions` overlay, and
+> `permission::materialize(Mode, global, per_agent) -> RuleSet`
+> concatenates the three into a single `RuleSet` that feeds the
+> existing deny → allow → ask precedence walk (so an explicit
+> `deny` in any layer outranks an `allow` in any other layer).
+> Runtime input regex (`InputPattern` via re2), HMAC-signed approval
+> prompts, and audit log writes are still future slices listed
+> under "v1" in
 > [`../product-specs/0008-permissions.md`](../product-specs/0008-permissions.md).
 
 ### Sources

@@ -49,7 +49,13 @@ human approval for high-risk operations.
    final enum — see `core::Capability::egress_http` /
    `egress_websocket`.)**
 4. `re2` patterns load from config; invalid patterns at load time are reported with
-   line numbers.
+   line numbers. **(Foundation landed 2026-05-16: `oran-config` now
+   parses the `permissions` root block and each
+   `agents.<name>.permissions` overlay into typed
+   `PermissionsConfig`, and `permission::materialize(Mode, global,
+   per_agent) -> RuleSet` concatenates defaults + global + overlay
+   into the runtime evaluator. `re2`-based `InputPattern` matching
+   for `Rule::input_pattern` remains downstream.)**
 5. Approval signing key is rotated when the runtime restarts; prior approvals are
    invalidated.
 6. `tests/permission/` ≥ 90% coverage including table-driven tests over modes ×
