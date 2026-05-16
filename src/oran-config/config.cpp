@@ -719,12 +719,30 @@ core::Result<Config> Config::load_file(std::string_view path, LoadOptions option
       return std::unexpected(Error::not_found("config file not found").with("path", path_text));
     }
 
+    // Cap the file size before reading to bound memory under a malformed or
+    // hostile config file. 16 MiB is far above any plausible hand-authored
+    // config; the loader is single-shot at startup so a tighter bound is
+    // appropriate. See docs/SECURITY.md "Sandbox Posture".
+    const auto file_size = std::filesystem::file_size(fs_path, ec);
+    if (ec) {
+      return std::unexpected(
+          Error::io("failed to stat config file").with("path", path_text).with("detail", ec.message()));
+    }
+    if (file_size > options.max_bytes) {
+      return std::unexpected(Error::invalid_argument("config file exceeds max_bytes")
+                                 .with("path", path_text)
+                                 .with("size", std::to_string(file_size))
+                                 .with("max_bytes", std::to_string(options.max_bytes)));
+    }
+
     auto input = std::ifstream{fs_path, std::ios::binary};
     if (!input) {
       return std::unexpected(Error::io("failed to open config file").with("path", path_text));
     }
 
-    auto contents = std::string{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    auto contents = std::string{};
+    contents.reserve(static_cast<std::size_t>(file_size));
+    contents.assign(std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{});
     if (input.bad()) {
       return std::unexpected(Error::io("failed to read config file").with("path", path_text));
     }

@@ -103,6 +103,11 @@ struct AgentConfig {
 
 struct LoadOptions {
   bool strict_unknown_fields{false};
+
+  /// Hard cap on `load_file` size. The loader rejects files larger than this
+  /// before any allocation, bounding memory cost under a malformed or hostile
+  /// config. 16 MiB sits well above any plausible hand-authored configuration.
+  std::uint64_t max_bytes{16ULL * 1024 * 1024};
 };
 
 class Config {

@@ -3,6 +3,7 @@
 #include <oran/storage/sqlite.hpp>
 
 #include <expected>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -162,6 +163,10 @@ core::Result<void> Statement::bind_double(int index, double value) {
 core::Result<void> Statement::bind_text(int index, std::string_view value) {
   if (!valid()) {
     return std::unexpected(invalid_statement_error());
+  }
+  if (value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    return std::unexpected(core::Error::invalid_argument("sqlite bind text exceeds INT_MAX bytes")
+                               .with("size", std::to_string(value.size())));
   }
   const auto rc = sqlite3_bind_text(impl_->stmt, index, value.data(), static_cast<int>(value.size()), SQLITE_TRANSIENT);
   return check_bind_result(impl_->handle->db, rc, "sqlite bind text failed");

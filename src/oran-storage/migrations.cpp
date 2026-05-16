@@ -40,6 +40,10 @@ VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 
 constexpr std::string_view kMigrationFileExtension = ".sql";
 constexpr std::size_t kMigrationFileVersionWidth = 4;
+// Cap an individual migration file at 8 MiB. Migration SQL is repo-vendored
+// and small by nature; the bound exists to refuse a corrupt or hostile file
+// before allocating gigabytes of string buffer.
+constexpr std::uintmax_t kMaxMigrationFileBytes = 8ULL * 1024 * 1024;
 
 [[nodiscard]] core::Error attach_migration_context(core::Error error, const Migration& migration) {
   error.with("migration_version", std::to_string(migration.version)).with("migration_name", migration.name);
@@ -128,12 +132,27 @@ constexpr std::size_t kMigrationFileVersionWidth = 4;
     return std::unexpected(version.error());
   }
 
+  std::error_code size_ec;
+  const auto file_bytes = std::filesystem::file_size(path, size_ec);
+  if (size_ec) {
+    return std::unexpected(io_error("failed to stat migration file", path, size_ec));
+  }
+  if (file_bytes > kMaxMigrationFileBytes) {
+    auto error = core::Error::invalid_argument("migration file exceeds size limit");
+    error.with("path", path.string())
+        .with("size", std::to_string(file_bytes))
+        .with("max_bytes", std::to_string(kMaxMigrationFileBytes));
+    return std::unexpected(std::move(error));
+  }
+
   std::ifstream input{path, std::ios::binary};
   if (!input.is_open()) {
     return std::unexpected(io_error("failed to open migration file", path));
   }
 
-  std::string sql{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+  std::string sql;
+  sql.reserve(static_cast<std::size_t>(file_bytes));
+  sql.assign(std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{});
   if (input.bad()) {
     return std::unexpected(io_error("failed to read migration file", path));
   }
