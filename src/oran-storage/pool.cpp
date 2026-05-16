@@ -151,8 +151,8 @@ struct Pool::State : std::enable_shared_from_this<Pool::State> {
 
   template <typename Handler>
   void async_acquire_writer(Handler&& handler) {
+    auto cancel_slot = asio::get_associated_cancellation_slot(handler);
     const auto id = allocate_id();
-    install_writer_cancellation(handler, id);
 
     DeferredAction action;
     {
@@ -168,6 +168,21 @@ struct Pool::State : std::enable_shared_from_this<Pool::State> {
             .id = id,
             .complete = WriterCompletion{std::forward<Handler>(handler)},
         });
+        // Install the cancel handler after the waiter is in the queue, under
+        // the same mutex. Installing earlier would leave a window where a
+        // cancellation could fire, scan an empty queue, and be silently
+        // dropped while the waiter is later pushed and never cancelled.
+        if (cancel_slot.is_connected()) {
+          const std::weak_ptr<State> weak = weak_from_this();
+          cancel_slot.assign([weak, id](asio::cancellation_type type) {
+            if (type == asio::cancellation_type::none) {
+              return;
+            }
+            if (auto state = weak.lock()) {
+              state->cancel_writer_waiter(id);
+            }
+          });
+        }
       }
     }
     if (action) {
@@ -177,8 +192,8 @@ struct Pool::State : std::enable_shared_from_this<Pool::State> {
 
   template <typename Handler>
   void async_acquire_reader(Handler&& handler) {
+    auto cancel_slot = asio::get_associated_cancellation_slot(handler);
     const auto id = allocate_id();
-    install_reader_cancellation(handler, id);
 
     DeferredAction action;
     {
@@ -195,46 +210,22 @@ struct Pool::State : std::enable_shared_from_this<Pool::State> {
             .id = id,
             .complete = ReaderCompletion{std::forward<Handler>(handler)},
         });
+        if (cancel_slot.is_connected()) {
+          const std::weak_ptr<State> weak = weak_from_this();
+          cancel_slot.assign([weak, id](asio::cancellation_type type) {
+            if (type == asio::cancellation_type::none) {
+              return;
+            }
+            if (auto state = weak.lock()) {
+              state->cancel_reader_waiter(id);
+            }
+          });
+        }
       }
     }
     if (action) {
       asio::post(executor, std::move(action));
     }
-  }
-
-private:
-  template <typename Handler>
-  void install_writer_cancellation(Handler& handler, std::uint64_t id) {
-    auto slot = asio::get_associated_cancellation_slot(handler);
-    if (!slot.is_connected()) {
-      return;
-    }
-    const std::weak_ptr<State> weak = shared_from_this();
-    slot.assign([weak, id](asio::cancellation_type type) {
-      if (type == asio::cancellation_type::none) {
-        return;
-      }
-      if (auto state = weak.lock()) {
-        state->cancel_writer_waiter(id);
-      }
-    });
-  }
-
-  template <typename Handler>
-  void install_reader_cancellation(Handler& handler, std::uint64_t id) {
-    auto slot = asio::get_associated_cancellation_slot(handler);
-    if (!slot.is_connected()) {
-      return;
-    }
-    const std::weak_ptr<State> weak = shared_from_this();
-    slot.assign([weak, id](asio::cancellation_type type) {
-      if (type == asio::cancellation_type::none) {
-        return;
-      }
-      if (auto state = weak.lock()) {
-        state->cancel_reader_waiter(id);
-      }
-    });
   }
 };
 
