@@ -23,10 +23,20 @@
 // later layers' rules too", not "later layers silently drop
 // earlier layers' rules". A real diff/merge would surprise
 // operators reading audit logs.
+//
+// `materialize` returns `Result<RuleSet>` so per-rule
+// `input_pattern` re-compilation failures can surface as
+// `core::Error::invalid_argument` rather than silently dropping
+// a rule. Config-side validation already rejects malformed
+// patterns at load (see `parse_permission_rule` in
+// `oran-config`), so a compile failure here is theoretical —
+// the `Result` wrapper exists as a defensive seam, not because
+// the path is normally fallible.
 
 #pragma once
 
 #include <oran/config/config.hpp>
+#include <oran/core/result.hpp>
 #include <oran/permission/rule_set.hpp>
 
 namespace orangutan::permission {
@@ -36,12 +46,12 @@ namespace orangutan::permission {
 /// `per_agent` is the parsed `agents.<name>.permissions`
 /// overlay (or an empty `PermissionsConfig{}` if the caller
 /// has not picked an agent).
-[[nodiscard]] RuleSet
+[[nodiscard]] core::Result<RuleSet>
 materialize(Mode mode, const config::PermissionsConfig& global, const config::PermissionsConfig& per_agent);
 
 /// Convenience overload that uses an empty per-agent overlay.
 /// Mostly for call sites that have not selected an agent yet
 /// (e.g. startup smoke tests).
-[[nodiscard]] RuleSet materialize(Mode mode, const config::PermissionsConfig& global);
+[[nodiscard]] core::Result<RuleSet> materialize(Mode mode, const config::PermissionsConfig& global);
 
 }  // namespace orangutan::permission

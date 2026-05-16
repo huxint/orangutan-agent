@@ -33,7 +33,7 @@ Each entry contains:
 | `asio` | 1.36.0 | async, http | executor + coroutines + net | med | BSL-1.0 | public `oran-async` executor handles; heavy use stays in `oran-async` |
 | `libcurl` | 8.11.0 | http, channel-* | HTTP client | med-high | curl license | wrapped behind `oran-http::Client` |
 | `cpp-httplib` | 0.37.2 | web only | HTTP server | med | MIT | `oran-web` only |
-| `re2` | 2025.11.05 | log, permission, tool | runtime regex | med | BSD-3-Clause | hidden type `RuntimeRegex` |
+| `re2` | 2025.11.05 | config, log, permission, tool | runtime regex | med | BSD-3-Clause | hidden type `RuntimeRegex` |
 
 ### Storage / Crypto
 

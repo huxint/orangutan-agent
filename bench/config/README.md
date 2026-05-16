@@ -24,3 +24,8 @@ layer-2/3 wiring slice:
   scope permission rules and one `agents.researcher.permissions`
   overlay. This is the cost the future
   `oran-permission::materialize` consumer pays at startup.
+- `config.parse_permissions_with_input_patterns`: parses a 14-rule
+  block where four `deny` rules carry an `input_pattern` re2 source
+  pattern. Documents the per-pattern re2 compile cost the load-time
+  validator pays (re2 compile + discard per pattern; the runtime
+  matcher in `oran-permission::materialize` recompiles).

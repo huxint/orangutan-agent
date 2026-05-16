@@ -19,6 +19,7 @@
 #include <utility>
 
 #include <nlohmann/json.hpp>
+#include <re2/re2.h>
 
 #include <oran/core/capability.hpp>
 #include <oran/core/enum_names.hpp>
@@ -484,7 +485,31 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
     capability = *parsed;
   }
 
-  static constexpr auto kKnownKeys = std::array<std::string_view, 2>{"tool_pattern", "capability"};
+  auto input_pattern = std::optional<std::string>{};
+  if (const auto pat_it = value.find("input_pattern"); pat_it != value.end()) {
+    if (!pat_it->is_string()) {
+      return std::unexpected(config_error("expected string", child_path(path, "input_pattern")));
+    }
+    auto pattern = pat_it->get_ref<const std::string&>();
+    if (pattern.empty()) {
+      return std::unexpected(config_error("input_pattern must be non-empty", child_path(path, "input_pattern")));
+    }
+    // Validate the pattern by compiling re2 once with logging disabled.
+    // The compiled regex is intentionally discarded; the matching slice in
+    // `oran-permission::materialize` recompiles the source string when
+    // assembling the runtime `Rule` (the re-compile cost is microseconds,
+    // and keeping config copyable matters more than saving one compile).
+    re2::RE2::Options options{re2::RE2::DefaultOptions};
+    options.set_log_errors(false);
+    const auto compiled = re2::RE2{pattern, options};
+    if (!compiled.ok()) {
+      return std::unexpected(config_error("invalid input_pattern regex", child_path(path, "input_pattern"))
+                                 .with("regex_error", compiled.error()));
+    }
+    input_pattern = std::move(pattern);
+  }
+
+  static constexpr auto kKnownKeys = std::array<std::string_view, 3>{"tool_pattern", "capability", "input_pattern"};
   for (const auto& [key, _] : value.items()) {
     if (std::ranges::contains(kKnownKeys, key)) {
       continue;
@@ -503,6 +528,7 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
       .verdict = verdict,
       .tool_pattern = std::move(*tool_pattern),
       .capability = capability,
+      .input_pattern = std::move(input_pattern),
   };
 }
 

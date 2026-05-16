@@ -7,15 +7,14 @@
 
 ## Snapshot
 
-- **Slice:** 8 (`xmake run orangutan` reports slice 8)
+- **Slice:** 9 (`xmake run orangutan` reports slice 9)
 - **Last completed history:**
-  [`histories/2026-05/20260517-0136-oran-permission-input-pattern.md`](histories/2026-05/20260517-0136-oran-permission-input-pattern.md)
+  [`histories/2026-05/20260517-0145-oran-config-input-pattern.md`](histories/2026-05/20260517-0145-oran-config-input-pattern.md)
 - **Active exec-plan:** none (`docs/exec-plans/active/` is empty)
-- **Next intended slice:** wire `Rule::input_pattern` through
-  `oran-config` (parse + validate at load with line-numbered
-  errors per `0008-permissions.md` criterion 4); first
-  tool-registry built-ins (`file.read`, `file.write`,
-  `file.edit`, `file.search`) remain a parallel candidate.
+- **Next intended slice:** TBD — choose from the QUALITY_SCORE "Next Step"
+  column. Most likely candidates: HMAC-signed approval prompts per
+  `0008-permissions.md` criterion 5; first tool-registry built-ins
+  (`file.read`, `file.write`, `file.edit`, `file.search`).
 
 ## Library Health
 
@@ -35,8 +34,8 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-async`: 8 cases / 38 assertions.
 - `oran-io`: 8 cases / 33 assertions.
 - `oran-storage`: 52 cases / 606 assertions.
-- `oran-config`: 12 cases / 120 assertions.
-- `oran-permission`: 39 cases / 149 assertions.
+- `oran-config`: 14 cases / 132 assertions.
+- `oran-permission`: 41 cases / 165 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 8 cases / 34 assertions.
 

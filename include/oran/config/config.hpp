@@ -68,10 +68,18 @@ enum class PermissionVerdict : std::uint8_t {
 /// `permission::RuleSet` matcher will consume. `capability`, when set, is
 /// already resolved to a `core::Capability` value — unknown spellings fail
 /// at load time so the materializer does not have to revalidate.
+/// `input_pattern`, when set, is a re2 source pattern string. The loader
+/// pre-validates the regex (compiles + discards) so syntactically invalid
+/// patterns fail at config load with the offending JSON path, mirroring the
+/// criterion 4 "invalid patterns at load time are reported" guarantee in
+/// `docs/product-specs/0008-permissions.md`. The materializer recompiles
+/// the same pattern via `permission::InputPattern` when it assembles the
+/// runtime `Rule`s.
 struct PermissionRuleConfig {
   PermissionVerdict verdict{PermissionVerdict::deny};
   std::string tool_pattern;
-  std::optional<core::Capability> capability;
+  std::optional<core::Capability> capability{};
+  std::optional<std::string> input_pattern{};
 
   friend bool operator==(const PermissionRuleConfig&, const PermissionRuleConfig&) = default;
 };

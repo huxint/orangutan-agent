@@ -249,7 +249,7 @@ TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][con
 
   // The example config now carries a non-empty permissions block + one
   // example agent overlay so the file documents the new schema.
-  REQUIRE(result->permissions().rules.size() == 7);
+  REQUIRE(result->permissions().rules.size() == 8);
   REQUIRE(result->agents().size() == 1);
   REQUIRE(result->agents()[0].name == "researcher");
   REQUIRE(result->agents()[0].permissions.rules.size() == 1);
@@ -405,6 +405,63 @@ TEST_CASE("Config::parse rejects malformed permission rules", "[unit][config][pe
 
   SECTION("verdict array is not an array") {
     auto result = config::Config::parse(R"json({"permissions": {"allow": {"tool_pattern": "*"}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+}
+
+TEST_CASE("Config::parse extracts input_pattern on permission rules", "[unit][config][permissions][input_pattern]") {
+  auto result = config::Config::parse(R"json({
+  "permissions": {
+    "deny": [
+      {"tool_pattern": "shell.exec", "input_pattern": "^rm "}
+    ]
+  }
+})json");
+  REQUIRE(result.has_value());
+  const auto& rules = result->permissions().rules;
+  REQUIRE(rules.size() == 1);
+  REQUIRE(rules[0].input_pattern.has_value());
+  REQUIRE(*rules[0].input_pattern == "^rm ");
+}
+
+TEST_CASE("Config::parse rejects malformed input_pattern at load time", "[unit][config][permissions][input_pattern]") {
+  SECTION("invalid regex reports path + re2 error") {
+    auto result = config::Config::parse(R"json({
+  "permissions": {
+    "deny": [
+      {"tool_pattern": "shell.exec", "input_pattern": "[unclosed"}
+    ]
+  }
+})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+    bool has_path = false;
+    bool has_regex_error = false;
+    for (const auto& [key, value] : result.error().context()) {
+      if (key == "path" && value == "$.permissions.deny[0].input_pattern") {
+        has_path = true;
+      }
+      if (key == "regex_error" && !value.empty()) {
+        has_regex_error = true;
+      }
+    }
+    REQUIRE(has_path);
+    REQUIRE(has_regex_error);
+  }
+
+  SECTION("empty input_pattern is rejected") {
+    auto result = config::Config::parse(R"json({
+  "permissions": {"deny": [{"tool_pattern": "shell.exec", "input_pattern": ""}]}
+})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-string input_pattern is rejected") {
+    auto result = config::Config::parse(R"json({
+  "permissions": {"deny": [{"tool_pattern": "shell.exec", "input_pattern": 42}]}
+})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }

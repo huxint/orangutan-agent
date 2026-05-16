@@ -49,20 +49,18 @@ human approval for high-risk operations.
    final enum — see `core::Capability::egress_http` /
    `egress_websocket`.)**
 4. `re2` patterns load from config; invalid patterns at load time are reported with
-   line numbers. **(Foundation landed 2026-05-16: `oran-config` now
-   parses the `permissions` root block and each
-   `agents.<name>.permissions` overlay into typed
-   `PermissionsConfig`, and `permission::materialize(Mode, global,
-   per_agent) -> RuleSet` concatenates defaults + global + overlay
-   into the runtime evaluator. Runtime regex landed 2026-05-17:
-   `permission::InputPattern` wraps `re2::RE2` (partial match) and
-   surfaces compile errors with the re2 message attached to
-   `Error::invalid_argument`; `Rule::input_pattern` plumbs the
-   pattern into the evaluator's four-argument
-   `evaluate(tool, input, capabilities, mode)` overload.
-   `oran-config` parsing of `input_pattern` from each rule, with
-   the line-numbered error report, lands in the matching
-   `oran-config` slice.)**
+   line numbers. **(Closed 2026-05-17: `oran-config` parses
+   `input_pattern` on each rule and validates it at load by
+   compiling via re2; invalid patterns surface as
+   `Error::config` with the JSON path attached (e.g.
+   `$.permissions.deny[0].input_pattern`) and the re2 error
+   message recorded under the `regex_error` context key.
+   `permission::materialize` returns
+   `core::Result<RuleSet>` and recompiles the validated source
+   into a runtime `permission::InputPattern` when building each
+   `Rule`. `Rule::input_pattern` then feeds the four-argument
+   `RuleSet::evaluate(tool, input, capabilities, mode)`
+   overload landed earlier the same day.)**
 5. Approval signing key is rotated when the runtime restarts; prior approvals are
    invalidated.
 6. `tests/permission/` ≥ 90% coverage including table-driven tests over modes ×

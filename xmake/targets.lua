@@ -16,10 +16,14 @@ local function oran_lib(name, deps, private_packages, public_packages)
             add_deps(table.unpack(deps))
         end
         if private_packages then
-            add_packages(table.unpack(private_packages), { public = false })
+            for _, pkg in ipairs(private_packages) do
+                add_packages(pkg, { public = false })
+            end
         end
         if public_packages then
-            add_packages(table.unpack(public_packages), { public = true })
+            for _, pkg in ipairs(public_packages) do
+                add_packages(pkg, { public = true })
+            end
         end
         set_pcxxheader(path.join(root, "include/oran/_pch.hpp"))
     target_end()
@@ -29,7 +33,7 @@ oran_lib("core", {}, {})
 oran_lib("async", { "oran-core" }, {}, { "asio" })
 oran_lib("io", { "oran-core", "oran-async" }, {}, { "asio" })
 oran_lib("storage", { "oran-core", "oran-async" }, { "sqlite3" })
-oran_lib("config", { "oran-core", "oran-storage" }, { "nlohmann_json" })
+oran_lib("config", { "oran-core", "oran-storage" }, { "nlohmann_json", "re2" })
 oran_lib("permission", { "oran-core", "oran-config" }, { "re2" })
 oran_lib("cli", { "oran-core" }, {})
 oran_lib("bootstrap", { "oran-core", "oran-config", "oran-cli" }, {})

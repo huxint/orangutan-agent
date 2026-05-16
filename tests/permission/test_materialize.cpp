@@ -45,6 +45,13 @@ namespace {
   };
 }
 
+[[nodiscard]] RuleSet
+require_materialized(Mode mode, const cfg::PermissionsConfig& global, const cfg::PermissionsConfig& per_agent = {}) {
+  auto rs = perm::materialize(mode, global, per_agent);
+  REQUIRE(rs.has_value());
+  return std::move(*rs);
+}
+
 [[nodiscard]] perm::Verdict
 eval(const RuleSet& rs, std::string_view tool, std::span<const Capability> caps, Mode mode = Mode::default_) {
   return rs.evaluate(tool, caps, mode).verdict;
@@ -57,7 +64,7 @@ eval(const RuleSet& rs, std::string_view tool, std::span<const Capability> caps,
 }  // namespace
 
 TEST_CASE("materialize(empty, empty) equals Defaults::for_mode", "[unit][permission][materialize]") {
-  const auto rs = perm::materialize(Mode::default_, cfg::PermissionsConfig{}, cfg::PermissionsConfig{});
+  const auto rs = require_materialized(Mode::default_, cfg::PermissionsConfig{}, cfg::PermissionsConfig{});
   REQUIRE(rs.size() == Defaults::for_mode(Mode::default_).size());
 
   // Spot-check representative classifications.
@@ -73,7 +80,7 @@ TEST_CASE("materialize appends global config rules after defaults", "[unit][perm
   cfg::PermissionsConfig global;
   global.rules.push_back(allow("custom.tool"));
 
-  const auto rs = perm::materialize(Mode::default_, global);
+  const auto rs = require_materialized(Mode::default_, global);
   REQUIRE(rs.size() == Defaults::for_mode(Mode::default_).size() + 1);
 
   // The custom.tool literal is now allowed even without a capability scope.
@@ -91,7 +98,7 @@ TEST_CASE("materialize appends per-agent overlay after global", "[unit][permissi
   cfg::PermissionsConfig overlay;
   overlay.rules.push_back(allow("agent.only"));
 
-  const auto rs = perm::materialize(Mode::default_, global, overlay);
+  const auto rs = require_materialized(Mode::default_, global, overlay);
   REQUIRE(rs.size() == Defaults::for_mode(Mode::default_).size() + 2);
   REQUIRE(eval_no_caps(rs, "global.only") == Verdict::allow);
   REQUIRE(eval_no_caps(rs, "agent.only") == Verdict::allow);
@@ -105,7 +112,7 @@ TEST_CASE("materialize maps config verdicts one-to-one", "[unit][permission][mat
   global.rules.push_back(deny("deny.it"));
   global.rules.push_back(ask("ask.it"));
 
-  const auto rs = perm::materialize(Mode::sandboxed, global);
+  const auto rs = require_materialized(Mode::sandboxed, global);
   REQUIRE(eval_no_caps(rs, "allow.it", Mode::sandboxed) == Verdict::allow);
   REQUIRE(eval_no_caps(rs, "deny.it", Mode::sandboxed) == Verdict::deny);
   REQUIRE(eval_no_caps(rs, "ask.it", Mode::sandboxed) == Verdict::ask);
@@ -117,7 +124,7 @@ TEST_CASE("materialize preserves capability scope on config-side rules", "[unit]
   cfg::PermissionsConfig global;
   global.rules.push_back(allow("*", Capability::egress_websocket));
 
-  const auto rs = perm::materialize(Mode::strict, global);
+  const auto rs = require_materialized(Mode::strict, global);
   const std::array<Capability, 1> net{Capability::egress_websocket};
   const std::array<Capability, 1> file{Capability::read_file};
 
@@ -133,7 +140,7 @@ TEST_CASE("explicit deny in any layer outranks allow in any other layer", "[unit
   cfg::PermissionsConfig global;
   global.rules.push_back(allow("*", Capability::runtime_loader));
 
-  const auto rs = perm::materialize(Mode::permissive, global);
+  const auto rs = require_materialized(Mode::permissive, global);
   const std::array<Capability, 1> loader{Capability::runtime_loader};
   REQUIRE(eval(rs, "any.tool", std::span<const Capability>{loader}, Mode::permissive) == Verdict::deny);
 
@@ -141,7 +148,7 @@ TEST_CASE("explicit deny in any layer outranks allow in any other layer", "[unit
   cfg::PermissionsConfig agent_only_allow;
   agent_only_allow.rules.push_back(allow("*", Capability::runtime_loader));
 
-  const auto rs2 = perm::materialize(Mode::permissive, cfg::PermissionsConfig{}, agent_only_allow);
+  const auto rs2 = require_materialized(Mode::permissive, cfg::PermissionsConfig{}, agent_only_allow);
   REQUIRE(eval(rs2, "any.tool", std::span<const Capability>{loader}, Mode::permissive) == Verdict::deny);
 }
 
@@ -150,7 +157,7 @@ TEST_CASE("materialize preserves intra-layer rule order", "[unit][permission][ma
   global.rules.push_back(allow("first"));
   global.rules.push_back(allow("second"));
 
-  const auto rs = perm::materialize(Mode::strict, global);
+  const auto rs = require_materialized(Mode::strict, global);
 
   // Reason text encodes the rule index; the first matching rule wins at the
   // same verdict, so the index distinguishes order.
@@ -166,7 +173,46 @@ TEST_CASE("materialize two-argument overload uses an empty per-agent overlay", "
   cfg::PermissionsConfig global;
   global.rules.push_back(allow("only.thing"));
 
-  const auto rs = perm::materialize(Mode::strict, global);
-  REQUIRE(rs.size() == 1);
-  REQUIRE(eval_no_caps(rs, "only.thing", Mode::strict) == Verdict::allow);
+  auto rs_result = perm::materialize(Mode::strict, global);
+  REQUIRE(rs_result.has_value());
+  REQUIRE(rs_result->size() == 1);
+  REQUIRE(eval_no_caps(*rs_result, "only.thing", Mode::strict) == Verdict::allow);
+}
+
+TEST_CASE("materialize compiles config-side input_pattern into the runtime Rule",
+          "[unit][permission][materialize][input_pattern]") {
+  cfg::PermissionsConfig global;
+  global.rules.push_back(cfg::PermissionRuleConfig{
+      .verdict = cfg::PermissionVerdict::deny,
+      .tool_pattern = "shell.exec",
+      .input_pattern = std::string{"^rm "},
+  });
+
+  const auto rs = require_materialized(Mode::permissive, global);
+  // Input matches the regex -> rule fires.
+  const auto blocked = rs.evaluate("shell.exec", "rm -rf /tmp", {}, Mode::permissive);
+  REQUIRE(blocked.verdict == Verdict::deny);
+  REQUIRE(blocked.reason.contains("input=~"));
+  REQUIRE(blocked.reason.contains("^rm "));
+
+  // Non-matching input -> falls through.
+  const auto allowed = rs.evaluate("shell.exec", "ls -la", {}, Mode::permissive);
+  REQUIRE(allowed.verdict == Verdict::allow);
+}
+
+TEST_CASE("materialize surfaces re2 compile failures on input_pattern",
+          "[unit][permission][materialize][input_pattern]") {
+  // Bypass the config-side validator by feeding an invalid pattern directly
+  // into `PermissionRuleConfig`. The materialize() compile attempt should
+  // produce `ErrorKind::invalid_argument`.
+  cfg::PermissionsConfig global;
+  global.rules.push_back(cfg::PermissionRuleConfig{
+      .verdict = cfg::PermissionVerdict::deny,
+      .tool_pattern = "shell.exec",
+      .input_pattern = std::string{"[unclosed"},
+  });
+
+  auto rs = perm::materialize(Mode::permissive, global);
+  REQUIRE_FALSE(rs.has_value());
+  REQUIRE(rs.error().kind() == orangutan::core::ErrorKind::invalid_argument);
 }

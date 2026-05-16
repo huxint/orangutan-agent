@@ -30,7 +30,8 @@
     ],
     "deny": [
       {"tool_pattern": "*", "capability": "runtime_loader"},
-      {"tool_pattern": "shell.exec(rm:*)"}
+      {"tool_pattern": "shell.exec", "input_pattern": "^rm -rf"},
+      {"tool_pattern": "shell.exec", "input_pattern": "^git push"}
     ],
     "ask": [
       {"tool_pattern": "file.write"},

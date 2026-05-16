@@ -31,7 +31,18 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > `RuleSet::evaluate(tool_name, input, required_capabilities,
 > mode)` overload pays re2's match cost only when a rule is scoped
 > to it (see the `bench/permission/scenarios/input_pattern.cpp`
-> A-vs-B). HMAC-signed approval prompts and audit log writes are
+> A-vs-B). Config-side parsing followed in the same day:
+> `oran-config` now reads `input_pattern` on each rule, compiles
+> the regex once via re2 at load to surface syntactically invalid
+> patterns with their JSON path attached (closing
+> `0008-permissions.md` criterion 4's "invalid patterns at load
+> time are reported" guarantee), and `permission::materialize`
+> recompiles the validated source into a runtime `InputPattern`
+> when it assembles each `Rule`. `materialize` now returns
+> `core::Result<RuleSet>` so a (theoretical) re2 compile failure
+> on the validated source surfaces as
+> `Error::invalid_argument` rather than silently dropping a
+> rule. HMAC-signed approval prompts and audit log writes are
 > still future slices listed under "v1" in
 > [`../product-specs/0008-permissions.md`](../product-specs/0008-permissions.md).
 

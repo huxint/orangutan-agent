@@ -67,16 +67,16 @@ rule(cfg::PermissionVerdict v, std::string pattern, std::optional<Capability> ca
 }
 
 [[gnu::noinline]] RuleSet materialize_defaults_only() {
-  return permission::materialize(Mode::default_, cfg::PermissionsConfig{}, cfg::PermissionsConfig{});
+  return std::move(*permission::materialize(Mode::default_, cfg::PermissionsConfig{}, cfg::PermissionsConfig{}));
 }
 
 [[gnu::noinline]] RuleSet materialize_with_global(const cfg::PermissionsConfig& global) {
-  return permission::materialize(Mode::default_, global, cfg::PermissionsConfig{});
+  return std::move(*permission::materialize(Mode::default_, global, cfg::PermissionsConfig{}));
 }
 
 [[gnu::noinline]] RuleSet materialize_with_global_and_agent(const cfg::PermissionsConfig& global,
                                                             const cfg::PermissionsConfig& agent) {
-  return permission::materialize(Mode::default_, global, agent);
+  return std::move(*permission::materialize(Mode::default_, global, agent));
 }
 
 }  // namespace
