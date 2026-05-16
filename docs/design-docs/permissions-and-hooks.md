@@ -11,17 +11,20 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > `oran-permission` — `Verdict { allow, deny, ask }`, `Mode { strict,
 > default_, permissive, sandboxed }`, `Rule`, `Decision`, and `RuleSet`
 > with the deny → allow → ask precedence below. Tool-name matching is a
-> simple `*`-glob; capability-aware gating is now wired in via an
+> simple `*`-glob; capability-aware gating is wired in via an
 > optional `Rule::capability` (of `core::Capability`) and the
 > capability-aware `RuleSet::evaluate(tool_name,
 > required_capabilities, mode)` overload (the legacy
 > `evaluate(tool_name, mode)` is retained as a wrapper that passes an
-> empty span). Runtime input regex (`InputPattern` via re2),
-> HMAC-signed approval prompts, and audit log writes are still future
-> slices listed under "v1" in
+> empty span). Layer-1 of the three-layer "Sources" merge below is
+> live: `Defaults::for_mode(Mode)` returns a safe baseline `RuleSet`
+> per the mode (empty for `strict`, capability-scoped allow/ask/deny
+> for `default_`, deny-the-dangerous for `permissive`, read-side
+> allow for `sandboxed`). Layer-2 (`config.permissions`) and
+> layer-3 (per-agent overlay) wiring, runtime input regex
+> (`InputPattern` via re2), HMAC-signed approval prompts, and audit
+> log writes are still future slices listed under "v1" in
 > [`../product-specs/0008-permissions.md`](../product-specs/0008-permissions.md).
-> Config wiring (`config.permissions`) is also pending — today the rule
-> set is constructed in-process by tests/bench.
 
 ### Sources
 

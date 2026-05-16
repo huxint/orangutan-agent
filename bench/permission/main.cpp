@@ -7,6 +7,7 @@
 
 namespace orangutan::bench {
 void register_rule_set_scenarios(ankerl::nanobench::Bench&);
+void register_defaults_scenarios(ankerl::nanobench::Bench&);
 }  // namespace orangutan::bench
 
 int main() {
@@ -18,6 +19,16 @@ int main() {
     b.warmup(2'000);
 
     orangutan::bench::register_rule_set_scenarios(b);
+  }
+
+  {
+    ankerl::nanobench::Bench b;
+    b.title("bench-permission/defaults");
+    b.unit("RuleSet");
+    b.minEpochIterations(50'000);
+    b.warmup(1'000);
+
+    orangutan::bench::register_defaults_scenarios(b);
   }
 
   std::println();

@@ -2,4 +2,5 @@
 
 #pragma once
 
+#include <oran/permission/defaults.hpp>
 #include <oran/permission/rule_set.hpp>
