@@ -1,5 +1,6 @@
 // tests/permission/test_rule_set.cpp — `RuleSet` evaluator + glob matcher.
 
+#include <optional>
 #include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
@@ -43,8 +44,8 @@ TEST_CASE("empty RuleSet falls back to mode default", "[unit][permission][rule_s
 
 TEST_CASE("RuleSet allow rules match by exact name and glob", "[unit][permission][rule_set]") {
   RuleSet rs;
-  rs.add(Rule{.verdict = Verdict::allow, .tool_pattern = "file.read"});
-  rs.add(Rule{.verdict = Verdict::allow, .tool_pattern = "shell.*"});
+  rs.add(Rule{.verdict = Verdict::allow, .tool_pattern = "file.read", .capability = std::nullopt});
+  rs.add(Rule{.verdict = Verdict::allow, .tool_pattern = "shell.*", .capability = std::nullopt});
 
   REQUIRE(rs.evaluate("file.read", Mode::strict).verdict == Verdict::allow);
   REQUIRE(rs.evaluate("shell.exec", Mode::strict).verdict == Verdict::allow);
@@ -55,8 +56,8 @@ TEST_CASE("RuleSet allow rules match by exact name and glob", "[unit][permission
 
 TEST_CASE("RuleSet deny wins over allow regardless of order", "[unit][permission][rule_set]") {
   RuleSet rs;
-  rs.add(Rule{.verdict = Verdict::allow, .tool_pattern = "shell.*"});
-  rs.add(Rule{.verdict = Verdict::deny, .tool_pattern = "shell.rm"});
+  rs.add(Rule{.verdict = Verdict::allow, .tool_pattern = "shell.*", .capability = std::nullopt});
+  rs.add(Rule{.verdict = Verdict::deny, .tool_pattern = "shell.rm", .capability = std::nullopt});
 
   auto blocked = rs.evaluate("shell.rm", Mode::permissive);
   REQUIRE(blocked.verdict == Verdict::deny);
@@ -69,8 +70,8 @@ TEST_CASE("RuleSet deny wins over allow regardless of order", "[unit][permission
 
 TEST_CASE("RuleSet ask fires when no allow/deny matches", "[unit][permission][rule_set]") {
   RuleSet rs;
-  rs.add(Rule{.verdict = Verdict::allow, .tool_pattern = "file.read"});
-  rs.add(Rule{.verdict = Verdict::ask, .tool_pattern = "file.write"});
+  rs.add(Rule{.verdict = Verdict::allow, .tool_pattern = "file.read", .capability = std::nullopt});
+  rs.add(Rule{.verdict = Verdict::ask, .tool_pattern = "file.write", .capability = std::nullopt});
 
   auto write = rs.evaluate("file.write", Mode::strict);
   REQUIRE(write.verdict == Verdict::ask);
@@ -79,9 +80,9 @@ TEST_CASE("RuleSet ask fires when no allow/deny matches", "[unit][permission][ru
 
 TEST_CASE("RuleSet returns the index of the first matching rule in its reason", "[unit][permission][rule_set]") {
   RuleSet rs;
-  rs.add(Rule{.verdict = Verdict::allow, .tool_pattern = "x"});        // 0
-  rs.add(Rule{.verdict = Verdict::deny, .tool_pattern = "shell.rm"});  // 1
-  rs.add(Rule{.verdict = Verdict::deny, .tool_pattern = "shell.*"});   // 2
+  rs.add(Rule{.verdict = Verdict::allow, .tool_pattern = "x", .capability = std::nullopt});        // 0
+  rs.add(Rule{.verdict = Verdict::deny, .tool_pattern = "shell.rm", .capability = std::nullopt});  // 1
+  rs.add(Rule{.verdict = Verdict::deny, .tool_pattern = "shell.*", .capability = std::nullopt});   // 2
 
   auto decision = rs.evaluate("shell.rm", Mode::permissive);
   REQUIRE(decision.verdict == Verdict::deny);
@@ -90,7 +91,7 @@ TEST_CASE("RuleSet returns the index of the first matching rule in its reason", 
 
 TEST_CASE("RuleSet::clear empties the set", "[unit][permission][rule_set]") {
   RuleSet rs;
-  rs.add(Rule{.verdict = Verdict::allow, .tool_pattern = "x"});
+  rs.add(Rule{.verdict = Verdict::allow, .tool_pattern = "x", .capability = std::nullopt});
   REQUIRE(rs.size() == 1);
   rs.clear();
   REQUIRE(rs.size() == 0);

@@ -1,12 +1,16 @@
-// src/oran-permission/rule_set.cpp — first permission engine surface.
+// src/oran-permission/rule_set.cpp — permission engine implementation.
 
 #include <oran/permission/rule_set.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <format>
+#include <span>
 #include <string_view>
 #include <utility>
+
+#include <oran/core/capability.hpp>
 
 namespace orangutan::permission {
 
@@ -36,6 +40,22 @@ constexpr std::array<std::string_view, 4> kModeNames{
       return Verdict::allow;
   }
   return Verdict::deny;
+}
+
+[[nodiscard]] bool capability_in_set(core::Capability needle, std::span<const core::Capability> haystack) noexcept {
+  return std::ranges::find(haystack, needle) != haystack.end();
+}
+
+[[nodiscard]] std::string format_reason(std::size_t index, const Rule& rule) {
+  const auto verdict_name = kVerdictNames[static_cast<std::size_t>(rule.verdict)];
+  if (rule.capability.has_value()) {
+    return std::format("rule #{} ({}: {} capability={})",
+                       index,
+                       verdict_name,
+                       rule.tool_pattern,
+                       core::to_string_view(*rule.capability));
+  }
+  return std::format("rule #{} ({}: {})", index, verdict_name, rule.tool_pattern);
 }
 
 }  // namespace
@@ -99,12 +119,25 @@ std::size_t RuleSet::size() const noexcept {
 }
 
 Decision RuleSet::evaluate(std::string_view tool_name, Mode mode) const {
+  return evaluate(tool_name, std::span<const core::Capability>{}, mode);
+}
+
+Decision RuleSet::evaluate(std::string_view tool_name,
+                           std::span<const core::Capability> required_capabilities,
+                           Mode mode) const {
   const auto first_match = [&](Verdict want) -> std::size_t {
     for (std::size_t i = 0; i < rules_.size(); ++i) {
       const auto& rule = rules_[i];
-      if (rule.verdict == want && glob_match(rule.tool_pattern, tool_name)) {
-        return i;
+      if (rule.verdict != want) {
+        continue;
       }
+      if (!glob_match(rule.tool_pattern, tool_name)) {
+        continue;
+      }
+      if (rule.capability.has_value() && !capability_in_set(*rule.capability, required_capabilities)) {
+        continue;
+      }
+      return i;
     }
     return std::string_view::npos;
   };
@@ -112,19 +145,19 @@ Decision RuleSet::evaluate(std::string_view tool_name, Mode mode) const {
   if (const auto idx = first_match(Verdict::deny); idx != std::string_view::npos) {
     return Decision{
         .verdict = Verdict::deny,
-        .reason = std::format("rule #{} ({}: {})", idx, kVerdictNames[1], rules_[idx].tool_pattern),
+        .reason = format_reason(idx, rules_[idx]),
     };
   }
   if (const auto idx = first_match(Verdict::allow); idx != std::string_view::npos) {
     return Decision{
         .verdict = Verdict::allow,
-        .reason = std::format("rule #{} ({}: {})", idx, kVerdictNames[0], rules_[idx].tool_pattern),
+        .reason = format_reason(idx, rules_[idx]),
     };
   }
   if (const auto idx = first_match(Verdict::ask); idx != std::string_view::npos) {
     return Decision{
         .verdict = Verdict::ask,
-        .reason = std::format("rule #{} ({}: {})", idx, kVerdictNames[2], rules_[idx].tool_pattern),
+        .reason = format_reason(idx, rules_[idx]),
     };
   }
   const auto fallback = mode_default_verdict(mode);

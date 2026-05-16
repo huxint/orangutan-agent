@@ -11,9 +11,14 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > `oran-permission` — `Verdict { allow, deny, ask }`, `Mode { strict,
 > default_, permissive, sandboxed }`, `Rule`, `Decision`, and `RuleSet`
 > with the deny → allow → ask precedence below. Tool-name matching is a
-> simple `*`-glob; runtime input regex (`InputPattern` via re2),
-> capability gating, HMAC-signed approval prompts, and audit log writes
-> are still future slices listed under "v1" in
+> simple `*`-glob; capability-aware gating is now wired in via an
+> optional `Rule::capability` (of `core::Capability`) and the
+> capability-aware `RuleSet::evaluate(tool_name,
+> required_capabilities, mode)` overload (the legacy
+> `evaluate(tool_name, mode)` is retained as a wrapper that passes an
+> empty span). Runtime input regex (`InputPattern` via re2),
+> HMAC-signed approval prompts, and audit log writes are still future
+> slices listed under "v1" in
 > [`../product-specs/0008-permissions.md`](../product-specs/0008-permissions.md).
 > Config wiring (`config.permissions`) is also pending — today the rule
 > set is constructed in-process by tests/bench.

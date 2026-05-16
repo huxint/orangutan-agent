@@ -80,7 +80,9 @@ own test bucket, its own bench bucket, and its own public header set under
 > with per-slot statement caches + standalone per-connection `StatementCache`
 > + `SessionRepository` (typed `core::Role` boundary) of `oran-storage`,
 > the first `oran-config` JSON
-> loader, the foundation `RuleSet` + `Decision` of `oran-permission`,
+> loader, the foundation `RuleSet` + `Decision` of `oran-permission`
+> with capability-aware gating (`Rule::capability`,
+> `core::Capability`),
 > the config-loading slice of `oran-bootstrap`, plus the first
 > `oran-cli` handoff shell, are implemented.
 > All other rows below are *planned* and will land per `docs/exec-plans/` as
@@ -97,7 +99,7 @@ own test bucket, its own bench bucket, and its own public header set under
 | `oran-http`          | http client (asio) and tiny router for the web UI | `oran-core`, `oran-async` |
 | `oran-storage`       | SQLite expected-only connection/statement core, migration runner with SQL-file loading, async writer/reader `Pool` with per-slot `StatementCache`, standalone per-connection `StatementCache`, and `SessionRepository` (typed `core::Role` at the API boundary); planned memory/automation/audit repositories | `oran-core`, `oran-async`, sqlite3 |
 | `oran-config`        | JSON config loader with typed runtime/profile/route/session/web fields and env substitution; planned schema + secret-protected fields | `oran-core`, `oran-storage` |
-| `oran-permission`    | foundation rule evaluator: `Verdict`, `Mode`, `Rule`, `RuleSet`, `Decision`, `*`-glob tool matching; planned re2 input regex, capabilities, HMAC approvals, audit | `oran-core` |
+| `oran-permission`    | foundation rule evaluator: `Verdict`, `Mode`, `Rule`, `RuleSet`, `Decision`, `*`-glob tool matching, and capability-aware gating (`Rule::capability` of `core::Capability`); planned re2 input regex, HMAC approvals, audit | `oran-core` |
 | `oran-skill`         | skill loader, skill catalog | `oran-core`, `oran-io` |
 | `oran-tool`          | tool registry, tool runtime context, dispatch | `oran-core`, `oran-async`, `oran-permission`, `oran-io` |
 | `oran-hook`          | hook bus + sink kinds (shell / lua / in-proc) | `oran-core`, `oran-async`, `oran-io` |

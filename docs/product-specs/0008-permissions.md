@@ -42,7 +42,12 @@ human approval for high-risk operations.
 2. A tool call whose input matches an `ask` rule renders an approval prompt; on
    approval, replay works within TTL for identical input.
 3. Capability mismatch is enforced — a tool that didn't declare `Capability::network`
-   cannot use it even if a rule otherwise allowed.
+   cannot use it even if a rule otherwise allowed. **(Foundation landed
+   2026-05-16: `Rule::capability` + capability-aware
+   `RuleSet::evaluate` shipped in `oran-permission`. Runtime
+   `Capability::network` does not exist yet; the spec text predates the
+   final enum — see `core::Capability::egress_http` /
+   `egress_websocket`.)**
 4. `re2` patterns load from config; invalid patterns at load time are reported with
    line numbers.
 5. Approval signing key is rotated when the runtime restarts; prior approvals are
