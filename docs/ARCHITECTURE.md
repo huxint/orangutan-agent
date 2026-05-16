@@ -70,10 +70,10 @@ own test bucket, its own bench bucket, and its own public header set under
 ## Library Inventory
 
 > **Slice status (2026-05-16):** `oran-core`, `oran-async`, the file/directory MVP
-> of `oran-io`, the expected-only SQLite core + migration runner + async
-> writer/reader `Pool` with per-slot statement caches + standalone
-> per-connection `StatementCache` + `SessionRepository` of `oran-storage`, the
-> first `oran-config` JSON loader, and the config-loading slice of
+> of `oran-io`, the expected-only SQLite core + migration runner + SQL-file
+> migration loader + async writer/reader `Pool` with per-slot statement caches
+> + standalone per-connection `StatementCache` + `SessionRepository` of
+> `oran-storage`, the first `oran-config` JSON loader, and the config-loading slice of
 > `oran-bootstrap`, plus the first `oran-cli` handoff shell, are implemented.
 > All other rows below are *planned* and will land per `docs/exec-plans/` as
 > future slices are scheduled. The build system, PCH, tests bucket, and bench
@@ -87,7 +87,7 @@ own test bucket, its own bench bucket, and its own public header set under
 | `oran-log`           | spdlog shim + secret redaction; thread-local context | `oran-core`, spdlog/fmt |
 | `oran-io`            | file/directory IO MVP; planned glob, pipe, subprocess, signal | `oran-core`, `oran-async` |
 | `oran-http`          | http client (asio) and tiny router for the web UI | `oran-core`, `oran-async` |
-| `oran-storage`       | SQLite expected-only connection/statement core, migration runner, async writer/reader `Pool` with per-slot `StatementCache`, standalone per-connection `StatementCache`, and `SessionRepository`; planned memory/automation/audit repositories | `oran-core`, `oran-async`, sqlite3 |
+| `oran-storage`       | SQLite expected-only connection/statement core, migration runner with SQL-file loading, async writer/reader `Pool` with per-slot `StatementCache`, standalone per-connection `StatementCache`, and `SessionRepository`; planned memory/automation/audit repositories | `oran-core`, `oran-async`, sqlite3 |
 | `oran-config`        | JSON config loader with typed runtime/profile/route/session/web fields and env substitution; planned schema + secret-protected fields | `oran-core`, `oran-storage` |
 | `oran-permission`    | runtime allow/deny/ask rule engine | `oran-core` |
 | `oran-skill`         | skill loader, skill catalog | `oran-core`, `oran-io` |

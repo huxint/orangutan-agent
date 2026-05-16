@@ -3,7 +3,9 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -48,12 +50,50 @@ private:
   std::filesystem::path path_;
 };
 
+class TempDir {
+public:
+  explicit TempDir(std::string name)
+      : path_(std::filesystem::temp_directory_path() /
+              (std::move(name) + "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
+    std::error_code ec;
+    std::filesystem::create_directories(path_, ec);
+    REQUIRE_FALSE(ec);
+  }
+
+  ~TempDir() {
+    std::error_code ec;
+    std::filesystem::remove_all(path_, ec);
+  }
+
+  [[nodiscard]] const std::filesystem::path& path() const noexcept {
+    return path_;
+  }
+
+  [[nodiscard]] std::string string() const {
+    return path_.string();
+  }
+
+private:
+  std::filesystem::path path_;
+};
+
 storage::Pool open_pool(asio::io_context& io, TempDb& db) {
   auto pool =
       storage::Pool::open(io.get_executor(),
                           storage::PoolOptions{.path = db.string(), .reader_count = 2, .statement_cache_capacity = 8});
   REQUIRE(pool.has_value());
   return std::move(*pool);
+}
+
+void write_file(const std::filesystem::path& path, std::string_view contents) {
+  std::error_code ec;
+  std::filesystem::create_directories(path.parent_path(), ec);
+  REQUIRE_FALSE(ec);
+
+  std::ofstream output{path, std::ios::binary};
+  REQUIRE(output.is_open());
+  output << contents;
+  REQUIRE(output.good());
 }
 
 }  // namespace
@@ -75,6 +115,33 @@ TEST_CASE("SessionRepository::migrate applies the sessions schema once", "[unit]
     REQUIRE(second->previous_version == 1);
     REQUIRE(second->current_version == 1);
     REQUIRE(second->applied_versions.empty());
+  });
+}
+
+TEST_CASE("SessionRepository::migrate accepts an explicit migration directory", "[unit][storage][session_repository]") {
+  TempDb db{"oran-session-repo-migrate-dir"};
+  TempDir migrations{"oran-session-repo-migrations"};
+  write_file(migrations.path() / "0001-custom-marker.sql",
+             "CREATE TABLE custom_sessions_marker(id INTEGER PRIMARY KEY)");
+
+  test::run_async([&db, &migrations](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::SessionRepository repo{
+        pool,
+        storage::SessionRepositoryOptions{.migrations_directory = migrations.string()},
+    };
+
+    auto report = co_await repo.migrate();
+    REQUIRE(report.has_value());
+    REQUIRE(report->current_version == 1);
+    REQUIRE(report->applied_versions == std::vector<std::int64_t>{1});
+
+    auto reader = co_await pool.acquire_reader();
+    REQUIRE(reader.has_value());
+    auto marker = reader->connection().query(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'custom_sessions_marker'");
+    REQUIRE(marker.has_value());
+    REQUIRE(marker->rows.size() == 1);
   });
 }
 

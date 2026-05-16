@@ -54,9 +54,13 @@ struct ListSessionsOptions {
   std::size_t limit{50};
 };
 
+struct SessionRepositoryOptions {
+  std::string migrations_directory;
+};
+
 class SessionRepository {
 public:
-  explicit SessionRepository(Pool& pool) noexcept;
+  explicit SessionRepository(Pool& pool, SessionRepositoryOptions options = {}) noexcept;
 
   [[nodiscard]] async::Awaitable<core::Result<MigrationReport>> migrate();
 
@@ -71,6 +75,7 @@ public:
 
 private:
   Pool* pool_{};
+  SessionRepositoryOptions options_;
 };
 
 }  // namespace orangutan::storage

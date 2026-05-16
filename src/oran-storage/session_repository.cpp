@@ -2,13 +2,12 @@
 
 #include <oran/storage/session_repository.hpp>
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <filesystem>
 #include <limits>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -24,39 +23,7 @@ namespace orangutan::storage {
 
 namespace {
 
-constexpr std::string_view kSessionsInitialSql = R"sql(
-CREATE TABLE IF NOT EXISTS sessions(
-  session_id TEXT NOT NULL,
-  agent_key TEXT NOT NULL,
-  title TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  PRIMARY KEY(session_id, agent_key)
-);
-
-CREATE TABLE IF NOT EXISTS session_messages(
-  session_id TEXT NOT NULL,
-  agent_key TEXT NOT NULL,
-  sequence INTEGER NOT NULL,
-  role TEXT NOT NULL,
-  content_json TEXT NOT NULL,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  PRIMARY KEY(session_id, agent_key, sequence)
-);
-
-CREATE INDEX IF NOT EXISTS idx_sessions_agent_updated
-  ON sessions(agent_key, updated_at DESC, session_id ASC);
-
-CREATE TRIGGER IF NOT EXISTS trg_session_messages_touch_session
-AFTER INSERT ON session_messages
-BEGIN
-  INSERT INTO sessions(session_id, agent_key, created_at, updated_at)
-  VALUES (NEW.session_id, NEW.agent_key, NEW.created_at, NEW.created_at)
-  ON CONFLICT(session_id, agent_key) DO UPDATE SET updated_at = NEW.created_at;
-END;
-)sql";
+constexpr std::string_view kDefaultSessionMigrationsDirectory = "src/oran-storage/migrations/sessions";
 
 constexpr std::string_view kAppendMessageSql = R"sql(
 INSERT INTO session_messages(session_id, agent_key, sequence, role, content_json, metadata_json, created_at)
@@ -112,17 +79,6 @@ ORDER BY s.updated_at DESC, s.session_id ASC
 LIMIT ?
 )sql";
 
-[[nodiscard]] std::span<const Migration> session_migrations() {
-  static const std::array<Migration, 1> migrations{
-      Migration{
-          .version = 1,
-          .name = "sessions_initial",
-          .sql = std::string{kSessionsInitialSql},
-      },
-  };
-  return std::span<const Migration>{migrations};
-}
-
 [[nodiscard]] core::Error invalid_field(std::string field) {
   return core::Error::invalid_argument("session repository field must not be empty").with("field", std::move(field));
 }
@@ -151,6 +107,40 @@ LIMIT ?
     return std::unexpected(invalid_field("metadata_json"));
   }
   return {};
+}
+
+[[nodiscard]] core::Result<std::string> resolve_session_migrations_directory(std::string_view configured_directory) {
+  if (!configured_directory.empty()) {
+    return std::string{configured_directory};
+  }
+
+  std::error_code ec;
+  auto current = std::filesystem::current_path(ec);
+  if (ec) {
+    auto error = core::Error::io("failed to inspect current directory");
+    error.with("system_error", ec.message());
+    return std::unexpected(std::move(error));
+  }
+
+  while (true) {
+    auto candidate = current / kDefaultSessionMigrationsDirectory;
+    if (std::filesystem::is_directory(candidate, ec)) {
+      return candidate.string();
+    }
+    if (ec) {
+      ec.clear();
+    }
+
+    auto parent = current.parent_path();
+    if (parent.empty() || parent == current) {
+      break;
+    }
+    current = std::move(parent);
+  }
+
+  auto error = core::Error::not_found("default session migrations directory does not exist");
+  error.with("path", std::string{kDefaultSessionMigrationsDirectory});
+  return std::unexpected(std::move(error));
 }
 
 [[nodiscard]] core::Result<std::int64_t> checked_limit(std::size_t limit) {
@@ -282,7 +272,8 @@ LIMIT ?
 
 }  // namespace
 
-SessionRepository::SessionRepository(Pool& pool) noexcept : pool_{&pool} {}
+SessionRepository::SessionRepository(Pool& pool, SessionRepositoryOptions options) noexcept
+    : pool_{&pool}, options_{std::move(options)} {}
 
 async::Awaitable<core::Result<MigrationReport>> SessionRepository::migrate() {
   auto writer = co_await pool_->acquire_writer();
@@ -290,7 +281,12 @@ async::Awaitable<core::Result<MigrationReport>> SessionRepository::migrate() {
     co_return std::unexpected(writer.error());
   }
 
-  auto report = run_migrations(writer->connection(), session_migrations());
+  auto directory = resolve_session_migrations_directory(options_.migrations_directory);
+  if (!directory) {
+    co_return std::unexpected(directory.error());
+  }
+
+  auto report = run_migrations_from_directory(writer->connection(), *directory);
   if (!report) {
     co_return std::unexpected(report.error());
   }

@@ -184,10 +184,14 @@ Four separate SQLite files (one per concern):
 - `storage::Statement` with bind / step / reset / column reader methods
 - `storage::Migration`, `storage::MigrationReport`
 - `storage::run_migrations(Connection&, std::span<const Migration>)`
+- `storage::load_migrations_from_directory(std::string_view)`
+- `storage::run_migrations_from_directory(Connection&, std::string_view)`
 - `storage::Pool` with async writer/reader leases and per-slot statement caches
 - `storage::StatementCache`
 - `storage::SessionRepository` for the `sessions.db` schema and append/load/list
-  operations over opaque message JSON
+  operations over opaque message JSON. Its default `migrate()` path loads
+  `src/oran-storage/migrations/sessions/0001-sessions-initial.sql` from the
+  source tree, with an explicit directory override for future packaged layouts.
 
 All public APIs return `core::Result<T>` (i.e. `std::expected<T, core::Error>`). The
 legacy throwing wrappers (`must_ok`) **do not exist** in v2. Migration debt is
@@ -207,8 +211,12 @@ src/oran-storage/migrations/
   ...
 ```
 
-The current runner accepts a compiled `std::span<const storage::Migration>`; loading
-SQL files from this tree is a future storage slice.
+The runner accepts a compiled `std::span<const storage::Migration>` or a
+source-tree migration directory through
+`storage::run_migrations_from_directory`. File-backed migrations must use the
+`0001-name.sql` convention, are sorted by version, and are validated for
+contiguous versions before the database is touched. Installed/runtime migration
+asset packaging is still a future bootstrap/release slice.
 
 Each migration is applied in its own transaction. Applied migrations are recorded in:
 

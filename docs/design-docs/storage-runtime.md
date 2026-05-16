@@ -6,12 +6,15 @@ does not expose `sqlite3.h` from public headers.
 
 > **Storage status (2026-05-16):** `oran-storage` ships `Connection`, `Statement`,
 > typed binding/stepping/column readers, WAL + foreign-key setup, a simple `query`
-> helper, the synchronous `run_migrations` runner, an async writer/reader
-> `Pool` driven by `oran-async` executors with one `StatementCache` per writer
-> or reader slot, and the standalone per-connection `StatementCache` with LRU
-> eviction. The first domain repository, `SessionRepository`, persists opaque
-> session-message JSON through the cached pool surface. SQL-file loading,
-> backups, and the remaining domain repositories are future slices.
+> helper, the synchronous `run_migrations` runner plus SQL-file migration
+> loading, an async writer/reader `Pool` driven by `oran-async` executors with
+> one `StatementCache` per writer or reader slot, and the standalone
+> per-connection `StatementCache` with LRU eviction. The first domain
+> repository, `SessionRepository`, persists opaque session-message JSON through
+> the cached pool surface and loads its schema from
+> `src/oran-storage/migrations/sessions/0001-sessions-initial.sql`. Backups,
+> migration asset packaging, and the remaining domain repositories are future
+> slices.
 
 ## Public Surface
 
@@ -76,6 +79,8 @@ class Statement {
 };
 
 core::Result<MigrationReport> run_migrations(Connection&, std::span<const Migration>);
+core::Result<std::vector<Migration>> load_migrations_from_directory(std::string_view directory);
+core::Result<MigrationReport> run_migrations_from_directory(Connection&, std::string_view directory);
 
 }  // namespace orangutan::storage
 ```
@@ -118,7 +123,7 @@ out of WAL with `enable_wal = false`.
 ## Migrations
 
 `run_migrations(Connection&, std::span<const Migration>)` is synchronous and
-connection-local. The future pool layer will call it through the writer connection.
+connection-local. The pool layer calls it through the writer connection.
 
 The runner creates this table in each database:
 
@@ -141,9 +146,37 @@ failure, it rolls back that migration and returns `core::ErrorKind::storage` wit
 migration context. Re-running the same complete migration set is an idempotent no-op:
 the report returns the existing `current_version` and an empty `applied_versions`.
 
+SQL-file loading is a feeder path for the same runner:
+
+```cpp
+auto migrations = storage::load_migrations_from_directory(
+    "src/oran-storage/migrations/sessions");
+auto report = storage::run_migrations_from_directory(
+    connection, "src/oran-storage/migrations/sessions");
+```
+
+Migration directories contain regular files named exactly `0001-name.sql`,
+`0002-next-name.sql`, and so on. The four-digit prefix becomes
+`Migration::version`, and the filename stem after the first dash becomes
+`Migration::name`. The loader reads each file as binary text, sorts by version,
+and reuses the same contiguous-list validation as `run_migrations` before any
+database write occurs.
+
+The loader rejects:
+
+- Empty directory paths.
+- Missing paths (`core::ErrorKind::not_found`).
+- Non-directory paths.
+- Empty migration directories.
+- Regular files that do not match the `0001-name.sql` convention.
+- Gaps, duplicate versions, non-positive versions, empty names, and empty SQL.
+- Filesystem read/iteration failures (`core::ErrorKind::io` with `path`
+  context).
+
 ## Future Slices
 
-- SQL-file loading from `src/oran-storage/migrations/`.
+- Migration asset packaging for installed/runtime layouts outside a source
+  checkout.
 - Domain repositories for memory, automation, and audit logs.
 - Backup script integration and generated schema docs.
 
@@ -214,7 +247,8 @@ class Pool {
   `core::ErrorKind::storage` from SQLite.
 - The writer opens in `OpenMode::read_write_create` with WAL when enabled.
   Migrations run through `acquire_writer()` followed by
-  `run_migrations(lease.connection(), …)`.
+  `run_migrations(lease.connection(), …)` or
+  `run_migrations_from_directory(lease.connection(), …)`.
 - `Pool::open` creates one `StatementCache` for the writer and one cache for
   each reader slot. The caches use `PoolOptions::statement_cache_capacity` and
   persist for the same lifetime as the slot connection, so a hot SQL string can
@@ -391,9 +425,13 @@ struct ListSessionsOptions {
   std::size_t limit{50};
 };
 
+struct SessionRepositoryOptions {
+  std::string migrations_directory;
+};
+
 class SessionRepository {
  public:
-  explicit SessionRepository(Pool&) noexcept;
+  explicit SessionRepository(Pool&, SessionRepositoryOptions = {}) noexcept;
 
   async::Awaitable<core::Result<MigrationReport>> migrate();
   async::Awaitable<core::Result<SessionMessageRecord>>
@@ -411,7 +449,8 @@ class SessionRepository {
 
 ### Schema
 
-Migration `1 / sessions_initial` creates:
+Migration `1 / sessions-initial` lives at
+`src/oran-storage/migrations/sessions/0001-sessions-initial.sql` and creates:
 
 - `sessions(session_id, agent_key, title, metadata_json, created_at,
   updated_at)`, primary-keyed by `(session_id, agent_key)`.
@@ -427,15 +466,25 @@ Migration `1 / sessions_initial` creates:
 sequence + timestamp. `load_messages`, `get_session`, and `list_sessions`
 acquire reader leases and use the reader slot's statement cache.
 
+`migrate()` acquires a writer lease and calls
+`run_migrations_from_directory`. With default options it looks for
+`src/oran-storage/migrations/sessions` from the process current directory and
+then each parent directory, so both repo-root and xmake build-dir runs find the
+checked-in source migration. `SessionRepositoryOptions::migrations_directory`
+overrides that lookup for future bootstrap/install packaging.
+
 ### Error Model
 
 Empty `session_id`, `agent_key`, `role`, `content_json`, and `metadata_json`
 return `core::ErrorKind::invalid_argument` before touching SQLite. SQLite
-failures bubble through the existing storage error context.
+failures bubble through the existing storage error context. Migration file
+lookup failures return the same `load_migrations_from_directory` errors, with
+`not_found`, `invalid_argument`, or `io` kinds depending on the failure.
 
 ### Compile-Time Cost
 
 The public header uses stdlib containers/strings plus existing
 `oran-async`/`oran-core`/`oran-storage` forward surfaces. The implementation
-keeps SQL strings, row mappers, and statement-cache usage in
-`src/oran-storage/session_repository.cpp`.
+keeps hot SQL strings, row mappers, source-tree migration lookup, and
+statement-cache usage in `src/oran-storage/session_repository.cpp`; the schema
+DDL itself lives in the migration file.

@@ -2,9 +2,13 @@
 
 #include <oran/storage/migrations.hpp>
 
+#include <algorithm>
 #include <charconv>
 #include <cstddef>
 #include <expected>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <span>
 #include <string>
 #include <string_view>
@@ -34,8 +38,26 @@ INSERT INTO schema_versions(version, name, applied_at)
 VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 )sql";
 
+constexpr std::string_view kMigrationFileExtension = ".sql";
+constexpr std::size_t kMigrationFileVersionWidth = 4;
+
 [[nodiscard]] core::Error attach_migration_context(core::Error error, const Migration& migration) {
   error.with("migration_version", std::to_string(migration.version)).with("migration_name", migration.name);
+  return error;
+}
+
+[[nodiscard]] core::Error io_error(std::string message, const std::filesystem::path& path, std::error_code ec = {}) {
+  auto error = core::Error::io(std::move(message));
+  error.with("path", path.string());
+  if (ec) {
+    error.with("system_error", ec.message());
+  }
+  return error;
+}
+
+[[nodiscard]] core::Error invalid_migration_file(std::string message, const std::filesystem::path& path) {
+  auto error = core::Error::invalid_argument(std::move(message));
+  error.with("path", path.string());
   return error;
 }
 
@@ -70,6 +92,57 @@ VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     ++expected_version;
   }
   return {};
+}
+
+[[nodiscard]] core::Result<std::int64_t> parse_migration_file_version(std::string_view text,
+                                                                      const std::filesystem::path& path) {
+  if (text.size() != kMigrationFileVersionWidth ||
+      !std::ranges::all_of(text, [](char ch) { return ch >= '0' && ch <= '9'; })) {
+    return std::unexpected(invalid_migration_file("migration filename version must be four digits", path));
+  }
+
+  std::int64_t version{};
+  const auto* first = text.data();
+  const auto* last = text.data() + text.size();
+  const auto [ptr, ec] = std::from_chars(first, last, version);
+  if (ec != std::errc{} || ptr != last || version <= 0) {
+    return std::unexpected(invalid_migration_file("migration filename version must be positive", path));
+  }
+  return version;
+}
+
+[[nodiscard]] core::Result<Migration> load_migration_file(const std::filesystem::path& path) {
+  const auto filename = path.filename().string();
+  if (!filename.ends_with(kMigrationFileExtension)) {
+    return std::unexpected(invalid_migration_file("migration file must use the .sql extension", path));
+  }
+
+  const auto stem = filename.substr(0, filename.size() - kMigrationFileExtension.size());
+  const auto separator = stem.find('-');
+  if (separator != kMigrationFileVersionWidth || separator + 1 == stem.size()) {
+    return std::unexpected(invalid_migration_file("migration filename must match 0001-name.sql", path));
+  }
+
+  auto version = parse_migration_file_version(std::string_view{stem}.substr(0, separator), path);
+  if (!version) {
+    return std::unexpected(version.error());
+  }
+
+  std::ifstream input{path, std::ios::binary};
+  if (!input.is_open()) {
+    return std::unexpected(io_error("failed to open migration file", path));
+  }
+
+  std::string sql{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+  if (input.bad()) {
+    return std::unexpected(io_error("failed to read migration file", path));
+  }
+
+  return Migration{
+      .version = *version,
+      .name = stem.substr(separator + 1),
+      .sql = std::move(sql),
+  };
 }
 
 [[nodiscard]] core::Result<std::int64_t> parse_version(std::string_view text) {
@@ -205,6 +278,79 @@ core::Result<MigrationReport> run_migrations(Connection& connection, std::span<c
   }
 
   return report;
+}
+
+core::Result<std::vector<Migration>> load_migrations_from_directory(std::string_view directory) {
+  if (directory.empty()) {
+    return std::unexpected(core::Error::invalid_argument("migration directory must not be empty"));
+  }
+
+  const std::filesystem::path root{std::string{directory}};
+  std::error_code ec;
+  const auto status = std::filesystem::status(root, ec);
+  if (ec) {
+    if (ec == std::errc::no_such_file_or_directory) {
+      auto error = core::Error::not_found("migration directory does not exist");
+      error.with("path", root.string());
+      return std::unexpected(std::move(error));
+    }
+    return std::unexpected(io_error("failed to inspect migration directory", root, ec));
+  }
+  if (!std::filesystem::exists(status)) {
+    auto error = core::Error::not_found("migration directory does not exist");
+    error.with("path", root.string());
+    return std::unexpected(std::move(error));
+  }
+  if (!std::filesystem::is_directory(status)) {
+    return std::unexpected(invalid_migration_file("migration path must be a directory", root));
+  }
+
+  std::vector<Migration> migrations;
+  std::filesystem::directory_iterator iterator{root, ec};
+  if (ec) {
+    return std::unexpected(io_error("failed to open migration directory", root, ec));
+  }
+  const std::filesystem::directory_iterator end;
+  while (iterator != end) {
+    const auto entry = *iterator;
+    const auto path = entry.path();
+    const auto regular = entry.is_regular_file(ec);
+    if (ec) {
+      return std::unexpected(io_error("failed to inspect migration file", path, ec));
+    }
+    if (regular) {
+      auto migration = load_migration_file(path);
+      if (!migration) {
+        return std::unexpected(migration.error());
+      }
+      migrations.push_back(std::move(*migration));
+    }
+
+    iterator.increment(ec);
+    if (ec) {
+      return std::unexpected(io_error("failed to read migration directory", root, ec));
+    }
+  }
+
+  if (migrations.empty()) {
+    auto error = core::Error::invalid_argument("migration directory contains no migration files");
+    error.with("path", root.string());
+    return std::unexpected(std::move(error));
+  }
+
+  std::ranges::sort(migrations, {}, &Migration::version);
+  if (auto valid = validate_migration_list(migrations); !valid) {
+    return std::unexpected(valid.error());
+  }
+  return migrations;
+}
+
+core::Result<MigrationReport> run_migrations_from_directory(Connection& connection, std::string_view directory) {
+  auto migrations = load_migrations_from_directory(directory);
+  if (!migrations) {
+    return std::unexpected(migrations.error());
+  }
+  return run_migrations(connection, std::span<const Migration>{*migrations});
 }
 
 }  // namespace orangutan::storage

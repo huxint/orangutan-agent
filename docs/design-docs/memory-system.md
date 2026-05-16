@@ -52,10 +52,11 @@ per-agent JSON-serialized message stream in SQLite. v2 changes:
 
 Storage foundation status (2026-05-16): `oran-storage::SessionRepository`
 implements the `sessions.db` schema, append/load/get/list operations, and hot
-SQL through `Pool` slot `StatementCache`s. It stores `content_json` and
-`metadata_json` as opaque strings. The `oran-memory::session::Store` below is
-still the typed memory-layer wrapper that will serialize `core::Message` once
-that core surface exists.
+SQL through `Pool` slot `StatementCache`s. Its schema loads from
+`src/oran-storage/migrations/sessions/0001-sessions-initial.sql`. It stores
+`content_json` and `metadata_json` as opaque strings. The
+`oran-memory::session::Store` below is still the typed memory-layer wrapper that
+will serialize `core::Message` once that core surface exists.
 
 ```cpp
 // include/oran/memory/session.hpp
@@ -258,7 +259,8 @@ Separate files (the audit identified single-DB contention):
 Migrations:
 
 - One `migrations/` dir per DB, numbered `0001-<slug>.sql`, `0002-<slug>.sql`, …
-- Applied at startup, recorded in a `schema_versions` table per DB.
+- Loaded by `oran-storage::load_migrations_from_directory`, applied at startup,
+  and recorded in a `schema_versions` table per DB.
 
 ## Anti-Goals
 

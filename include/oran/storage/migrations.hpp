@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <oran/core/result.hpp>
@@ -27,5 +28,8 @@ struct MigrationReport {
 
 [[nodiscard]] core::Result<MigrationReport> run_migrations(Connection& connection,
                                                            std::span<const Migration> migrations);
+[[nodiscard]] core::Result<std::vector<Migration>> load_migrations_from_directory(std::string_view directory);
+[[nodiscard]] core::Result<MigrationReport> run_migrations_from_directory(Connection& connection,
+                                                                          std::string_view directory);
 
 }  // namespace orangutan::storage

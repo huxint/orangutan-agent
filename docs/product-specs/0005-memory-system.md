@@ -10,7 +10,8 @@ operators can reason about retention, scope, and visibility.
 
 - Storage foundation shipped: `oran-storage::SessionRepository` owns the
   `sessions.db` schema and provides expected-only append/load/get/list operations
-  over the cached writer/reader `Pool`.
+  over the cached writer/reader `Pool`; its schema now loads from the checked-in
+  SQL migration file under `src/oran-storage/migrations/sessions/`.
 - `oran-memory::session::Store` — typed per-session conversation history
   (replaces legacy `SessionStore`) that wraps `SessionRepository` once
   `core::Message` serialization lands.
