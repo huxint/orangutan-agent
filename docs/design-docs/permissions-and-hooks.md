@@ -7,7 +7,7 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 
 ## Permission Engine
 
-> **Engine status (2026-05-16):** the foundation slice ships under
+> **Engine status (2026-05-17):** the foundation slice ships under
 > `oran-permission` — `Verdict { allow, deny, ask }`, `Mode { strict,
 > default_, permissive, sandboxed }`, `Rule`, `Decision`, and `RuleSet`
 > with the deny → allow → ask precedence below. Tool-name matching is a
@@ -25,9 +25,14 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > concatenates the three into a single `RuleSet` that feeds the
 > existing deny → allow → ask precedence walk (so an explicit
 > `deny` in any layer outranks an `allow` in any other layer).
-> Runtime input regex (`InputPattern` via re2), HMAC-signed approval
-> prompts, and audit log writes are still future slices listed
-> under "v1" in
+> Runtime input regex landed on 2026-05-17 as
+> `permission::InputPattern` (re2 partial match) — rules now carry
+> an optional `Rule::input_pattern`, and the four-argument
+> `RuleSet::evaluate(tool_name, input, required_capabilities,
+> mode)` overload pays re2's match cost only when a rule is scoped
+> to it (see the `bench/permission/scenarios/input_pattern.cpp`
+> A-vs-B). HMAC-signed approval prompts and audit log writes are
+> still future slices listed under "v1" in
 > [`../product-specs/0008-permissions.md`](../product-specs/0008-permissions.md).
 
 ### Sources

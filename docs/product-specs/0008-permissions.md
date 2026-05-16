@@ -54,8 +54,15 @@ human approval for high-risk operations.
    `agents.<name>.permissions` overlay into typed
    `PermissionsConfig`, and `permission::materialize(Mode, global,
    per_agent) -> RuleSet` concatenates defaults + global + overlay
-   into the runtime evaluator. `re2`-based `InputPattern` matching
-   for `Rule::input_pattern` remains downstream.)**
+   into the runtime evaluator. Runtime regex landed 2026-05-17:
+   `permission::InputPattern` wraps `re2::RE2` (partial match) and
+   surfaces compile errors with the re2 message attached to
+   `Error::invalid_argument`; `Rule::input_pattern` plumbs the
+   pattern into the evaluator's four-argument
+   `evaluate(tool, input, capabilities, mode)` overload.
+   `oran-config` parsing of `input_pattern` from each rule, with
+   the line-numbered error report, lands in the matching
+   `oran-config` slice.)**
 5. Approval signing key is rotated when the runtime restarts; prior approvals are
    invalidated.
 6. `tests/permission/` ≥ 90% coverage including table-driven tests over modes ×

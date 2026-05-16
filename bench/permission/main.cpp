@@ -9,6 +9,7 @@ namespace orangutan::bench {
 void register_rule_set_scenarios(ankerl::nanobench::Bench&);
 void register_defaults_scenarios(ankerl::nanobench::Bench&);
 void register_materialize_scenarios(ankerl::nanobench::Bench&);
+void register_input_pattern_scenarios(ankerl::nanobench::Bench&);
 }  // namespace orangutan::bench
 
 int main() {
@@ -40,6 +41,16 @@ int main() {
     b.warmup(1'000);
 
     orangutan::bench::register_materialize_scenarios(b);
+  }
+
+  {
+    ankerl::nanobench::Bench b;
+    b.title("bench-permission/input_pattern");
+    b.unit("evaluate");
+    b.minEpochIterations(100'000);
+    b.warmup(1'000);
+
+    orangutan::bench::register_input_pattern_scenarios(b);
   }
 
   std::println();

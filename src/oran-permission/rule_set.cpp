@@ -12,6 +12,7 @@
 
 #include <oran/core/capability.hpp>
 #include <oran/core/enum_names.hpp>
+#include <oran/permission/input_pattern.hpp>
 
 namespace orangutan::permission {
 
@@ -36,14 +37,15 @@ namespace {
 
 [[nodiscard]] std::string format_reason(std::size_t index, const Rule& rule) {
   const auto verdict_name = core::enum_name(rule.verdict);
+  std::string out = std::format("rule #{} ({}: {}", index, verdict_name, rule.tool_pattern);
   if (rule.capability.has_value()) {
-    return std::format("rule #{} ({}: {} capability={})",
-                       index,
-                       verdict_name,
-                       rule.tool_pattern,
-                       core::enum_name(*rule.capability));
+    out += std::format(" capability={}", core::enum_name(*rule.capability));
   }
-  return std::format("rule #{} ({}: {})", index, verdict_name, rule.tool_pattern);
+  if (rule.input_pattern.has_value()) {
+    out += std::format(" input=~\"{}\"", rule.input_pattern->pattern());
+  }
+  out += ')';
+  return out;
 }
 
 }  // namespace
@@ -91,10 +93,17 @@ std::size_t RuleSet::size() const noexcept {
 }
 
 Decision RuleSet::evaluate(std::string_view tool_name, Mode mode) const {
-  return evaluate(tool_name, std::span<const core::Capability>{}, mode);
+  return evaluate(tool_name, std::string_view{}, std::span<const core::Capability>{}, mode);
 }
 
 Decision RuleSet::evaluate(std::string_view tool_name,
+                           std::span<const core::Capability> required_capabilities,
+                           Mode mode) const {
+  return evaluate(tool_name, std::string_view{}, required_capabilities, mode);
+}
+
+Decision RuleSet::evaluate(std::string_view tool_name,
+                           std::string_view input,
                            std::span<const core::Capability> required_capabilities,
                            Mode mode) const {
   const auto first_match = [&](Verdict want) -> std::size_t {
@@ -107,6 +116,9 @@ Decision RuleSet::evaluate(std::string_view tool_name,
         continue;
       }
       if (rule.capability.has_value() && !capability_in_set(*rule.capability, required_capabilities)) {
+        continue;
+      }
+      if (rule.input_pattern.has_value() && !rule.input_pattern->matches(input)) {
         continue;
       }
       return i;

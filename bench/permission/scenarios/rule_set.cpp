@@ -42,6 +42,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <oran/core/capability.hpp>
@@ -160,8 +161,9 @@ void register_rule_set_scenarios(ankerl::nanobench::Bench& bench) {
   static const std::vector<Rule> fixture = make_fixture();
   static const RuleSet rule_set = [] {
     RuleSet rs;
-    for (const auto& rule : fixture) {
-      rs.add(rule);
+    auto rules = make_fixture();
+    for (auto& rule : rules) {
+      rs.add(std::move(rule));
     }
     return rs;
   }();
@@ -184,8 +186,9 @@ void register_rule_set_scenarios(ankerl::nanobench::Bench& bench) {
   // satisfies (match path) or not (miss path).
   static const RuleSet cap_rule_set = [] {
     RuleSet rs;
-    for (const auto& rule : make_capability_fixture()) {
-      rs.add(rule);
+    auto rules = make_capability_fixture();
+    for (auto& rule : rules) {
+      rs.add(std::move(rule));
     }
     return rs;
   }();

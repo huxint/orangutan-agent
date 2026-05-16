@@ -28,6 +28,7 @@ void append_layer(RuleSet& rs, const config::PermissionsConfig& layer) {
         .verdict = to_verdict(rule.verdict),
         .tool_pattern = rule.tool_pattern,
         .capability = rule.capability,
+        .input_pattern = std::nullopt,
     });
   }
 }

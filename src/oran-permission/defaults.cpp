@@ -14,6 +14,7 @@ namespace {
       .verdict = Verdict::allow,
       .tool_pattern = "*",
       .capability = capability,
+      .input_pattern = std::nullopt,
   };
 }
 
@@ -22,6 +23,7 @@ namespace {
       .verdict = Verdict::ask,
       .tool_pattern = "*",
       .capability = capability,
+      .input_pattern = std::nullopt,
   };
 }
 
@@ -30,6 +32,7 @@ namespace {
       .verdict = Verdict::deny,
       .tool_pattern = "*",
       .capability = capability,
+      .input_pattern = std::nullopt,
   };
 }
 

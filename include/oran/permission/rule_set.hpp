@@ -1,12 +1,12 @@
 // include/oran/permission/rule_set.hpp — permission engine surface.
 //
-// Slice 2 of `oran-permission`. The foundation slice owned the verdict
+// Slice 3 of `oran-permission`. The foundation slice owned the verdict
 // vocabulary, the tool-name glob rule, the mode-driven default verdict, and
-// the rule evaluator. This slice adds capability-aware gating: a rule may
-// scope to a `core::Capability`, in which case it matches only when the
-// invocation's required-capability list contains it. HMAC-signed approval
-// prompts, runtime input regex (re2), and audit logging land in later
-// slices per `docs/product-specs/0008-permissions.md`.
+// the rule evaluator. Slice 2 added capability-aware gating. This slice
+// adds runtime input-regex matching via `InputPattern` (re2), closing
+// criterion 4 of `docs/product-specs/0008-permissions.md`. HMAC-signed
+// approval prompts and audit logging land in later slices per the same
+// product spec.
 //
 // The evaluator implements the precedence in
 // `docs/design-docs/permissions-and-hooks.md`:
@@ -20,8 +20,12 @@
 //
 //   `*` — matches any (possibly empty) sequence of characters
 //
-// No character classes, no `?`. Future runtime-regex matching lives on
-// `InputPattern` (a separate slice) and does not change this surface.
+// No character classes, no `?`. Input regex matching is a separate axis:
+// when `Rule::input_pattern` is set, the rule matches only when its
+// pattern (re2, partial match) matches the call's `input` argument. The
+// no-input overload of `evaluate` is equivalent to passing an empty
+// string — rules with an `input_pattern` set therefore never fire on
+// that path unless their pattern accepts the empty string.
 //
 // Capability matching is set membership: a rule whose `capability` field
 // is unset matches every invocation; a rule with `capability == X` matches
@@ -44,6 +48,7 @@
 
 #include <oran/core/capability.hpp>
 #include <oran/core/enum_names.hpp>
+#include <oran/permission/input_pattern.hpp>
 
 namespace orangutan::permission {
 
@@ -79,7 +84,12 @@ struct Rule {
   /// the same `core::Capability` — i.e. the tool declared it needs that
   /// capability via `ToolDef::requires` (future) or the caller injected
   /// the capability through some other path.
-  std::optional<core::Capability> capability;
+  std::optional<core::Capability> capability{};
+  /// Optional runtime regex matched against the call's `input` string
+  /// (re2 partial match). When unset, the rule does not constrain the
+  /// input. When set, the rule matches only when the pattern accepts
+  /// the input — `Rule` is move-only as a result (re2 is non-copyable).
+  std::optional<InputPattern> input_pattern{};
 
   friend bool operator==(const Rule&, const Rule&) = default;
 };
@@ -89,6 +99,8 @@ struct Decision {
   /// Human-readable explanation: which rule fired, or which mode fell back.
   /// When the firing rule had a capability scope, the spelling appears in
   /// the reason (e.g. `rule #2 (allow: file.* capability=read_file)`).
+  /// When the firing rule had an input_pattern, the pattern source string
+  /// appears too (e.g. `rule #3 (deny: shell.exec input=~"^rm ")`).
   std::string reason;
 
   friend bool operator==(const Decision&, const Decision&) = default;
@@ -102,21 +114,33 @@ public:
   void clear() noexcept;
   [[nodiscard]] std::size_t size() const noexcept;
 
-  /// Evaluate `tool_name` against the rule set without supplying any
-  /// capability information. Rules with a capability scope never fire on
-  /// this path; rules without a capability scope fire as usual. Equivalent
-  /// to passing an empty span to the capability-aware overload.
+  /// Evaluate `tool_name` against the rule set without supplying call
+  /// `input` or any capability information. Rules with a capability scope
+  /// never fire on this path; rules with an `input_pattern` fire only if
+  /// their pattern accepts the empty string. Equivalent to passing `""`
+  /// and an empty span to the full overload.
   [[nodiscard]] Decision evaluate(std::string_view tool_name, Mode mode) const;
 
   /// Evaluate `tool_name` with the call's `required_capabilities` (typically
-  /// the invoked tool's `ToolDef::requires` list). The walk is precedence-
-  /// respecting: every `deny` rule is consulted first, then every `allow`
-  /// rule, then every `ask` rule. A rule's optional `capability` scope
-  /// filters its match — set rules require the capability to appear in
-  /// `required_capabilities`; unset rules ignore the span. The fallback
-  /// verdict comes from `mode`.
+  /// the invoked tool's `ToolDef::requires` list). The call's `input` is
+  /// treated as the empty string; rules with an `input_pattern` fire only
+  /// if their pattern accepts the empty string. Use the four-argument
+  /// overload when a real `input` is available.
   [[nodiscard]] Decision
   evaluate(std::string_view tool_name, std::span<const core::Capability> required_capabilities, Mode mode) const;
+
+  /// Evaluate `tool_name` with the call's `input` and `required_capabilities`.
+  /// The walk is precedence-respecting: every `deny` rule is consulted
+  /// first, then every `allow` rule, then every `ask` rule. A rule's
+  /// optional `capability` scope filters its match (set rules require the
+  /// capability to appear in `required_capabilities`; unset rules ignore
+  /// the span). A rule's optional `input_pattern` filters its match (set
+  /// rules require the pattern to accept `input` as a re2 partial match;
+  /// unset rules ignore `input`). The fallback verdict comes from `mode`.
+  [[nodiscard]] Decision evaluate(std::string_view tool_name,
+                                  std::string_view input,
+                                  std::span<const core::Capability> required_capabilities,
+                                  Mode mode) const;
 
 private:
   std::vector<Rule> rules_;
