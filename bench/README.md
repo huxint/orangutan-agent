@@ -60,7 +60,7 @@ xmake run orangutan-bench --json > all.json
 | `core`             | variant-based `Content`        | polymorphic `Content` (stretch) |
 | `async`            | direct coroutine post loop     | bounded `Channel<T>` handoff |
 | `io`               | direct `std::ifstream` read    | coroutine `read_text_file` wrapper |
-| `storage`          | literal `execute` inserts / cold migration apply | prepared statement binding / no-op migration check |
+| `storage`          | literal `execute` inserts / cold migration apply / direct `Connection` read | prepared statement binding / no-op migration check / `Pool::acquire_reader` read |
 | `config`           | in-memory JSON parse           | checked-in config file load |
 | `cli`              | single-shot prompt dispatch    | empty REPL shell dispatch |
 | `bootstrap`        | missing default config fallback | explicit config file load |

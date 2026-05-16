@@ -7,6 +7,7 @@
 
 namespace orangutan::bench {
 void register_migrations(ankerl::nanobench::Bench&);
+void register_pool_acquire(ankerl::nanobench::Bench&);
 void register_sqlite_insert(ankerl::nanobench::Bench&);
 }  // namespace orangutan::bench
 
@@ -19,6 +20,7 @@ int main() {
 
   orangutan::bench::register_migrations(b);
   orangutan::bench::register_sqlite_insert(b);
+  orangutan::bench::register_pool_acquire(b);
 
   std::println();
   return 0;
