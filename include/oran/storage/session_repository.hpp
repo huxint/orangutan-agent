@@ -10,6 +10,7 @@
 
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/core/result.hpp>
+#include <oran/core/role.hpp>
 #include <oran/storage/migrations.hpp>
 
 namespace orangutan::storage {
@@ -24,7 +25,7 @@ struct SessionKey {
 struct AppendSessionMessageRequest {
   std::string session_id;
   std::string agent_key;
-  std::string role;
+  core::Role role{core::Role::user};
   std::string content_json;
   std::string metadata_json{"{}"};
 };
@@ -33,7 +34,7 @@ struct SessionMessageRecord {
   std::string session_id;
   std::string agent_key;
   std::int64_t sequence{};
-  std::string role;
+  core::Role role{core::Role::user};
   std::string content_json;
   std::string metadata_json;
   std::string created_at;

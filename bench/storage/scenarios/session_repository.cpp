@@ -19,6 +19,7 @@
 #include <asio/io_context.hpp>
 
 #include <oran/async.hpp>
+#include <oran/core/role.hpp>
 #include <oran/storage.hpp>
 
 namespace orangutan::bench {
@@ -169,7 +170,7 @@ run_repository_append_load(asio::io_context& io, storage::SessionRepository& rep
           auto appended = co_await repo.append_message(storage::AppendSessionMessageRequest{
               .session_id = session_id,
               .agent_key = std::string{kAgentKey},
-              .role = i % 2 == 0 ? "user" : "assistant",
+              .role = i % 2 == 0 ? core::Role::user : core::Role::assistant,
               .content_json = std::format(R"json({{"text":"repo-{}"}})json", i),
           });
           if (!appended) {

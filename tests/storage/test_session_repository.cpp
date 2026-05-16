@@ -1,6 +1,8 @@
 // tests/storage/test_session_repository.cpp — sessions domain repository coverage.
 
+#include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -157,7 +159,7 @@ TEST_CASE("SessionRepository append_message and load_messages round-trip ordered
     auto first = co_await repo.append_message(storage::AppendSessionMessageRequest{
         .session_id = "s-1",
         .agent_key = "coder",
-        .role = "user",
+        .role = core::Role::user,
         .content_json = R"json({"text":"hello"})json",
     });
     REQUIRE(first.has_value());
@@ -167,7 +169,7 @@ TEST_CASE("SessionRepository append_message and load_messages round-trip ordered
     auto second = co_await repo.append_message(storage::AppendSessionMessageRequest{
         .session_id = "s-1",
         .agent_key = "coder",
-        .role = "assistant",
+        .role = core::Role::assistant,
         .content_json = R"json({"text":"hi"})json",
         .metadata_json = R"json({"source":"test"})json",
     });
@@ -178,10 +180,10 @@ TEST_CASE("SessionRepository append_message and load_messages round-trip ordered
     REQUIRE(loaded.has_value());
     REQUIRE(loaded->size() == 2);
     REQUIRE((*loaded)[0].sequence == 1);
-    REQUIRE((*loaded)[0].role == "user");
+    REQUIRE((*loaded)[0].role == core::Role::user);
     REQUIRE((*loaded)[0].content_json == R"json({"text":"hello"})json");
     REQUIRE((*loaded)[1].sequence == 2);
-    REQUIRE((*loaded)[1].role == "assistant");
+    REQUIRE((*loaded)[1].role == core::Role::assistant);
     REQUIRE((*loaded)[1].metadata_json == R"json({"source":"test"})json");
 
     auto session = co_await repo.get_session(storage::SessionKey{.session_id = "s-1", .agent_key = "coder"});
@@ -206,21 +208,21 @@ TEST_CASE("SessionRepository list_sessions is scoped by agent and honors limits"
     auto coder_a_append = co_await repo.append_message(storage::AppendSessionMessageRequest{
         .session_id = "s-a",
         .agent_key = "coder",
-        .role = "user",
+        .role = core::Role::user,
         .content_json = R"json({"text":"a"})json",
     });
     REQUIRE(coder_a_append.has_value());
     auto coder_b_append = co_await repo.append_message(storage::AppendSessionMessageRequest{
         .session_id = "s-b",
         .agent_key = "coder",
-        .role = "assistant",
+        .role = core::Role::assistant,
         .content_json = R"json({"text":"b"})json",
     });
     REQUIRE(coder_b_append.has_value());
     auto researcher_append = co_await repo.append_message(storage::AppendSessionMessageRequest{
         .session_id = "s-a",
         .agent_key = "researcher",
-        .role = "user",
+        .role = core::Role::user,
         .content_json = R"json({"text":"other"})json",
     });
     REQUIRE(researcher_append.has_value());
@@ -253,6 +255,67 @@ TEST_CASE("SessionRepository list_sessions is scoped by agent and honors limits"
   });
 }
 
+TEST_CASE("SessionRepository round-trips every core::Role enumerator", "[unit][storage][session_repository]") {
+  TempDb db{"oran-session-repo-role-enum"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::SessionRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+
+    const std::array<core::Role, 4> roles{core::Role::user,
+                                          core::Role::assistant,
+                                          core::Role::system,
+                                          core::Role::tool};
+    for (auto role : roles) {
+      auto appended = co_await repo.append_message(storage::AppendSessionMessageRequest{
+          .session_id = "s-roles",
+          .agent_key = "coder",
+          .role = role,
+          .content_json = R"json({"text":"x"})json",
+      });
+      REQUIRE(appended.has_value());
+      REQUIRE(appended->role == role);
+    }
+
+    auto loaded = co_await repo.load_messages(storage::SessionKey{.session_id = "s-roles", .agent_key = "coder"});
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->size() == roles.size());
+    for (std::size_t i = 0; i < roles.size(); ++i) {
+      REQUIRE((*loaded)[i].role == roles[i]);
+    }
+  });
+}
+
+TEST_CASE("SessionRepository surfaces a storage error for rows with unknown role text",
+          "[unit][storage][session_repository]") {
+  TempDb db{"oran-session-repo-bad-role"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::SessionRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+
+    {
+      auto writer = co_await pool.acquire_writer();
+      REQUIRE(writer.has_value());
+      // Bypass the repository to inject a row whose role text is outside
+      // `core::Role`. The repository must reject it on read rather than
+      // silently coerce.
+      auto inserted = writer->connection().execute(
+          R"sql(
+INSERT INTO session_messages(session_id, agent_key, sequence, role, content_json, metadata_json, created_at)
+VALUES ('s-bad', 'coder', 1, 'sidekick', '{}', '{}', '2026-05-16T00:00:00.000Z')
+)sql");
+      REQUIRE(inserted.has_value());
+    }
+
+    auto loaded = co_await repo.load_messages(storage::SessionKey{.session_id = "s-bad", .agent_key = "coder"});
+    REQUIRE_FALSE(loaded.has_value());
+    REQUIRE(loaded.error().kind() == core::ErrorKind::storage);
+  });
+}
+
 TEST_CASE("SessionRepository returns empty results for missing sessions", "[unit][storage][session_repository]") {
   TempDb db{"oran-session-repo-missing"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
@@ -280,7 +343,7 @@ TEST_CASE("SessionRepository validates required fields", "[unit][storage][sessio
     auto append = co_await repo.append_message(storage::AppendSessionMessageRequest{
         .session_id = "",
         .agent_key = "coder",
-        .role = "user",
+        .role = core::Role::user,
         .content_json = "{}",
     });
     REQUIRE_FALSE(append.has_value());

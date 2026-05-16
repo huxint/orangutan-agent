@@ -92,7 +92,7 @@ own test bucket, its own bench bucket, and its own public header set under
 | `oran-log`           | spdlog shim + secret redaction; thread-local context | `oran-core`, spdlog/fmt |
 | `oran-io`            | file/directory IO MVP; planned glob, pipe, subprocess, signal | `oran-core`, `oran-async` |
 | `oran-http`          | http client (asio) and tiny router for the web UI | `oran-core`, `oran-async` |
-| `oran-storage`       | SQLite expected-only connection/statement core, migration runner with SQL-file loading, async writer/reader `Pool` with per-slot `StatementCache`, standalone per-connection `StatementCache`, and `SessionRepository`; planned memory/automation/audit repositories | `oran-core`, `oran-async`, sqlite3 |
+| `oran-storage`       | SQLite expected-only connection/statement core, migration runner with SQL-file loading, async writer/reader `Pool` with per-slot `StatementCache`, standalone per-connection `StatementCache`, and `SessionRepository` (typed `core::Role` at the API boundary); planned memory/automation/audit repositories | `oran-core`, `oran-async`, sqlite3 |
 | `oran-config`        | JSON config loader with typed runtime/profile/route/session/web fields and env substitution; planned schema + secret-protected fields | `oran-core`, `oran-storage` |
 | `oran-permission`    | runtime allow/deny/ask rule engine | `oran-core` |
 | `oran-skill`         | skill loader, skill catalog | `oran-core`, `oran-io` |

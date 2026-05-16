@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <format>
+#include <optional>
 #include <string_view>
 
 namespace orangutan::core {
@@ -20,6 +21,10 @@ enum class Role : std::uint8_t {
 };
 
 [[nodiscard]] std::string_view to_string_view(Role) noexcept;
+
+/// Inverse of `to_string_view`. Returns `std::nullopt` when `text` does not
+/// name a known role. `noexcept` so it can be called from any context.
+[[nodiscard]] std::optional<Role> parse_role(std::string_view text) noexcept;
 
 }  // namespace orangutan::core
 

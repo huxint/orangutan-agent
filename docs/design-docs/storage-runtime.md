@@ -11,7 +11,8 @@ does not expose `sqlite3.h` from public headers.
 > one `StatementCache` per writer or reader slot, and the standalone
 > per-connection `StatementCache` with LRU eviction. The first domain
 > repository, `SessionRepository`, persists opaque session-message JSON through
-> the cached pool surface and loads its schema from
+> the cached pool surface (with `role` typed as `core::Role` at the API
+> boundary) and loads its schema from
 > `src/oran-storage/migrations/sessions/0001-sessions-initial.sql`. Backups,
 > migration asset packaging, and the remaining domain repositories are future
 > slices.
@@ -382,7 +383,10 @@ boundary.
 message rows in `sessions.db` using the cached pool surface. It is deliberately
 payload-oriented: `content_json` and `metadata_json` are opaque strings at this
 layer, and the future `oran-memory::session::Store` will own typed
-`core::Message` serialization.
+`core::Message` serialization. `role` is typed at the API boundary: requests
+take and records expose `core::Role`, and the row's text column is parsed back
+into the enum on read (rows with unknown role text surface a storage error
+rather than being silently coerced).
 
 ```cpp
 namespace orangutan::storage {
@@ -395,7 +399,7 @@ struct SessionKey {
 struct AppendSessionMessageRequest {
   std::string session_id;
   std::string agent_key;
-  std::string role;
+  core::Role  role{core::Role::user};
   std::string content_json;
   std::string metadata_json{"{}"};
 };
@@ -404,7 +408,7 @@ struct SessionMessageRecord {
   std::string  session_id;
   std::string  agent_key;
   std::int64_t sequence{};
-  std::string  role;
+  core::Role   role{core::Role::user};
   std::string  content_json;
   std::string  metadata_json;
   std::string  created_at;

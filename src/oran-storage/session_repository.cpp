@@ -14,6 +14,7 @@
 #include <vector>
 
 #include <oran/core/error.hpp>
+#include <oran/core/role.hpp>
 #include <oran/storage/migrations.hpp>
 #include <oran/storage/pool.hpp>
 #include <oran/storage/sqlite.hpp>
@@ -96,9 +97,6 @@ LIMIT ?
 [[nodiscard]] core::Result<void> validate_append_request(const AppendSessionMessageRequest& request) {
   if (auto valid = validate_key(SessionKey{.session_id = request.session_id, .agent_key = request.agent_key}); !valid) {
     return std::unexpected(valid.error());
-  }
-  if (request.role.empty()) {
-    return std::unexpected(invalid_field("role"));
   }
   if (request.content_json.empty()) {
     return std::unexpected(invalid_field("content_json"));
@@ -201,9 +199,14 @@ LIMIT ?
   if (!sequence) {
     return std::unexpected(sequence.error().with("field", "sequence"));
   }
-  auto role = required_text(statement, 3, "role");
+  auto role_text = required_text(statement, 3, "role");
+  if (!role_text) {
+    return std::unexpected(role_text.error());
+  }
+  auto role = core::parse_role(*role_text);
   if (!role) {
-    return std::unexpected(role.error());
+    return std::unexpected(
+        core::Error::storage("session repository row has unknown role").with("role", std::move(*role_text)));
   }
   auto content_json = required_text(statement, 4, "content_json");
   if (!content_json) {
@@ -222,7 +225,7 @@ LIMIT ?
       .session_id = std::move(*session_id),
       .agent_key = std::move(*agent_key),
       .sequence = *sequence,
-      .role = std::move(*role),
+      .role = *role,
       .content_json = std::move(*content_json),
       .metadata_json = std::move(*metadata_json),
       .created_at = std::move(*created_at),
@@ -322,7 +325,7 @@ SessionRepository::append_message(AppendSessionMessageRequest request) {
   if (auto bound = statement.bind_text(4, request.agent_key); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = statement.bind_text(5, request.role); !bound) {
+  if (auto bound = statement.bind_text(5, core::to_string_view(request.role)); !bound) {
     co_return std::unexpected(bound.error());
   }
   if (auto bound = statement.bind_text(6, request.content_json); !bound) {
@@ -356,7 +359,7 @@ SessionRepository::append_message(AppendSessionMessageRequest request) {
       .session_id = std::move(request.session_id),
       .agent_key = std::move(request.agent_key),
       .sequence = *sequence,
-      .role = std::move(request.role),
+      .role = request.role,
       .content_json = std::move(request.content_json),
       .metadata_json = std::move(request.metadata_json),
       .created_at = std::move(*created_at),

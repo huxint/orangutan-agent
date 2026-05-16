@@ -54,7 +54,8 @@ Storage foundation status (2026-05-16): `oran-storage::SessionRepository`
 implements the `sessions.db` schema, append/load/get/list operations, and hot
 SQL through `Pool` slot `StatementCache`s. Its schema loads from
 `src/oran-storage/migrations/sessions/0001-sessions-initial.sql`. It stores
-`content_json` and `metadata_json` as opaque strings. The
+`content_json` and `metadata_json` as opaque strings but types `role` as
+`core::Role` at the API boundary. The
 `oran-memory::session::Store` below is still the typed memory-layer wrapper that
 will serialize `core::Message` once that core surface exists.
 
