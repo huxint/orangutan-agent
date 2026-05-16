@@ -10,6 +10,7 @@ void register_error_construct(ankerl::nanobench::Bench&);
 void register_time_scenarios(ankerl::nanobench::Bench&);
 void register_message_scenarios(ankerl::nanobench::Bench&);
 void register_tool_def_scenarios(ankerl::nanobench::Bench&);
+void register_str_utf8_scenarios(ankerl::nanobench::Bench&);
 }  // namespace orangutan::bench
 
 int main() {
@@ -51,6 +52,16 @@ int main() {
     b.warmup(2'000);
 
     orangutan::bench::register_tool_def_scenarios(b);
+  }
+
+  {
+    ankerl::nanobench::Bench b;
+    b.title("bench-core/str_utf8");
+    b.unit("walk");
+    b.minEpochIterations(50'000);
+    b.warmup(1'000);
+
+    orangutan::bench::register_str_utf8_scenarios(b);
   }
 
   std::println();
