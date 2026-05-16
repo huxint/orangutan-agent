@@ -8,8 +8,12 @@ operators can reason about retention, scope, and visibility.
 
 ## Scope (v1)
 
-- `oran-memory::session::Store` — per-session conversation history (replaces legacy
-  `SessionStore`), expected-only API, prepared-statement cache, WAL.
+- Storage foundation shipped: `oran-storage::SessionRepository` owns the
+  `sessions.db` schema and provides expected-only append/load/get/list operations
+  over the cached writer/reader `Pool`.
+- `oran-memory::session::Store` — typed per-session conversation history
+  (replaces legacy `SessionStore`) that wraps `SessionRepository` once
+  `core::Message` serialization lands.
 - `oran-memory::longterm::Runtime` with `Fts5Backend` (default).
 - `MemoryRecord` kinds: `user`, `feedback`, `project`, `reference`.
 - Decay policy applied by a periodic job (`oran-automation`).

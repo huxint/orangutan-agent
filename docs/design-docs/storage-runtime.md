@@ -9,8 +9,9 @@ does not expose `sqlite3.h` from public headers.
 > helper, the synchronous `run_migrations` runner, an async writer/reader
 > `Pool` driven by `oran-async` executors with one `StatementCache` per writer
 > or reader slot, and the standalone per-connection `StatementCache` with LRU
-> eviction. SQL-file loading, backups, and domain repositories are future
-> slices.
+> eviction. The first domain repository, `SessionRepository`, persists opaque
+> session-message JSON through the cached pool surface. SQL-file loading,
+> backups, and the remaining domain repositories are future slices.
 
 ## Public Surface
 
@@ -143,7 +144,7 @@ the report returns the existing `current_version` and an empty `applied_versions
 ## Future Slices
 
 - SQL-file loading from `src/oran-storage/migrations/`.
-- Domain repositories for sessions, memory, automation, and audit logs.
+- Domain repositories for memory, automation, and audit logs.
 - Backup script integration and generated schema docs.
 
 ## Pool
@@ -337,5 +338,104 @@ new public dependency edge.
 ### Threading
 
 A cache is single-owner, matching `Connection`'s `SQLITE_OPEN_NOMUTEX` mode.
-Concurrent use from multiple threads is undefined. Future pool integration will
-give each pool slot its own cache so single-owner discipline is preserved.
+Concurrent use from multiple threads is undefined. `Pool` owns one cache per
+writer / reader slot so single-owner discipline is preserved at the lease
+boundary.
+
+## Session Repository
+
+`SessionRepository` is the first storage domain repository. It stores session
+message rows in `sessions.db` using the cached pool surface. It is deliberately
+payload-oriented: `content_json` and `metadata_json` are opaque strings at this
+layer, and the future `oran-memory::session::Store` will own typed
+`core::Message` serialization.
+
+```cpp
+namespace orangutan::storage {
+
+struct SessionKey {
+  std::string session_id;
+  std::string agent_key;
+};
+
+struct AppendSessionMessageRequest {
+  std::string session_id;
+  std::string agent_key;
+  std::string role;
+  std::string content_json;
+  std::string metadata_json{"{}"};
+};
+
+struct SessionMessageRecord {
+  std::string  session_id;
+  std::string  agent_key;
+  std::int64_t sequence{};
+  std::string  role;
+  std::string  content_json;
+  std::string  metadata_json;
+  std::string  created_at;
+};
+
+struct SessionRecord {
+  std::string                session_id;
+  std::string                agent_key;
+  std::optional<std::string> title;
+  std::string                metadata_json;
+  std::string                created_at;
+  std::string                updated_at;
+  std::int64_t               message_count{};
+};
+
+struct ListSessionsOptions {
+  std::string agent_key;
+  std::size_t limit{50};
+};
+
+class SessionRepository {
+ public:
+  explicit SessionRepository(Pool&) noexcept;
+
+  async::Awaitable<core::Result<MigrationReport>> migrate();
+  async::Awaitable<core::Result<SessionMessageRecord>>
+  append_message(AppendSessionMessageRequest);
+  async::Awaitable<core::Result<std::vector<SessionMessageRecord>>>
+  load_messages(SessionKey);
+  async::Awaitable<core::Result<std::optional<SessionRecord>>>
+  get_session(SessionKey);
+  async::Awaitable<core::Result<std::vector<SessionRecord>>>
+  list_sessions(ListSessionsOptions);
+};
+
+}  // namespace orangutan::storage
+```
+
+### Schema
+
+Migration `1 / sessions_initial` creates:
+
+- `sessions(session_id, agent_key, title, metadata_json, created_at,
+  updated_at)`, primary-keyed by `(session_id, agent_key)`.
+- `session_messages(session_id, agent_key, sequence, role, content_json,
+  metadata_json, created_at)`, primary-keyed by `(session_id, agent_key,
+  sequence)`.
+- `trg_session_messages_touch_session`, an insert trigger that creates or
+  touches the owning `sessions` row after every message append.
+
+`append_message` is the hot path. It acquires a writer lease, uses
+`lease.statement_cache()` for the insert SQL, computes `sequence` as
+`MAX(sequence)+1` for the `(session_id, agent_key)` pair, and returns the stored
+sequence + timestamp. `load_messages`, `get_session`, and `list_sessions`
+acquire reader leases and use the reader slot's statement cache.
+
+### Error Model
+
+Empty `session_id`, `agent_key`, `role`, `content_json`, and `metadata_json`
+return `core::ErrorKind::invalid_argument` before touching SQLite. SQLite
+failures bubble through the existing storage error context.
+
+### Compile-Time Cost
+
+The public header uses stdlib containers/strings plus existing
+`oran-async`/`oran-core`/`oran-storage` forward surfaces. The implementation
+keeps SQL strings, row mappers, and statement-cache usage in
+`src/oran-storage/session_repository.cpp`.

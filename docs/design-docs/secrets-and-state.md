@@ -165,10 +165,11 @@ Four separate SQLite files (one per concern):
 
 ### Connection Pool
 
-`oran-storage::Pool` (per DB, future slice):
+`oran-storage::Pool` (per DB):
 
-- 1 writer connection on an asio strand.
-- N reader connections (default 4) drawn round-robin from a pool.
+- 1 writer connection acquired through `Pool::acquire_writer`.
+- N reader connections (default configured by `PoolOptions::reader_count`) drawn
+  from a FIFO pool via `Pool::acquire_reader`.
 - WAL mode; `synchronous=NORMAL`.
 - Prepared-statement cache per connection.
 
@@ -183,6 +184,10 @@ Four separate SQLite files (one per concern):
 - `storage::Statement` with bind / step / reset / column reader methods
 - `storage::Migration`, `storage::MigrationReport`
 - `storage::run_migrations(Connection&, std::span<const Migration>)`
+- `storage::Pool` with async writer/reader leases and per-slot statement caches
+- `storage::StatementCache`
+- `storage::SessionRepository` for the `sessions.db` schema and append/load/list
+  operations over opaque message JSON
 
 All public APIs return `core::Result<T>` (i.e. `std::expected<T, core::Error>`). The
 legacy throwing wrappers (`must_ok`) **do not exist** in v2. Migration debt is

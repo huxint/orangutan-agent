@@ -50,6 +50,13 @@ per-agent JSON-serialized message stream in SQLite. v2 changes:
 - **Schema migrations** versioned and applied at startup.
 - **Append-only fast path**: appending a message is one INSERT; loading is one SELECT.
 
+Storage foundation status (2026-05-16): `oran-storage::SessionRepository`
+implements the `sessions.db` schema, append/load/get/list operations, and hot
+SQL through `Pool` slot `StatementCache`s. It stores `content_json` and
+`metadata_json` as opaque strings. The `oran-memory::session::Store` below is
+still the typed memory-layer wrapper that will serialize `core::Message` once
+that core surface exists.
+
 ```cpp
 // include/oran/memory/session.hpp
 namespace orangutan::memory::session {

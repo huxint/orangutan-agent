@@ -1,0 +1,234 @@
+// tests/storage/test_session_repository.cpp — sessions domain repository coverage.
+
+#include <chrono>
+#include <cstdint>
+#include <filesystem>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include <asio/io_context.hpp>
+
+#include <catch2/catch_test_macros.hpp>
+
+#include <oran/async.hpp>
+#include <oran/storage.hpp>
+
+#include "../test-helpers/run_async.hpp"
+
+namespace async = orangutan::async;
+namespace core = orangutan::core;
+namespace storage = orangutan::storage;
+namespace test = orangutan::tests;
+
+namespace {
+
+class TempDb {
+public:
+  explicit TempDb(std::string name)
+      : path_(std::filesystem::temp_directory_path() /
+              (std::move(name) + "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
+               ".db")) {}
+
+  ~TempDb() {
+    std::error_code ec;
+    std::filesystem::remove(path_, ec);
+    std::filesystem::remove(path_.string() + "-wal", ec);
+    std::filesystem::remove(path_.string() + "-shm", ec);
+  }
+
+  TempDb(const TempDb&) = delete;
+  TempDb& operator=(const TempDb&) = delete;
+
+  [[nodiscard]] std::string string() const {
+    return path_.string();
+  }
+
+private:
+  std::filesystem::path path_;
+};
+
+storage::Pool open_pool(asio::io_context& io, TempDb& db) {
+  auto pool =
+      storage::Pool::open(io.get_executor(),
+                          storage::PoolOptions{.path = db.string(), .reader_count = 2, .statement_cache_capacity = 8});
+  REQUIRE(pool.has_value());
+  return std::move(*pool);
+}
+
+}  // namespace
+
+TEST_CASE("SessionRepository::migrate applies the sessions schema once", "[unit][storage][session_repository]") {
+  TempDb db{"oran-session-repo-migrate"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::SessionRepository repo{pool};
+
+    auto first = co_await repo.migrate();
+    REQUIRE(first.has_value());
+    REQUIRE(first->previous_version == 0);
+    REQUIRE(first->current_version == 1);
+    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1});
+
+    auto second = co_await repo.migrate();
+    REQUIRE(second.has_value());
+    REQUIRE(second->previous_version == 1);
+    REQUIRE(second->current_version == 1);
+    REQUIRE(second->applied_versions.empty());
+  });
+}
+
+TEST_CASE("SessionRepository append_message and load_messages round-trip ordered rows",
+          "[unit][storage][session_repository]") {
+  TempDb db{"oran-session-repo-roundtrip"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::SessionRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+
+    auto first = co_await repo.append_message(storage::AppendSessionMessageRequest{
+        .session_id = "s-1",
+        .agent_key = "coder",
+        .role = "user",
+        .content_json = R"json({"text":"hello"})json",
+    });
+    REQUIRE(first.has_value());
+    REQUIRE(first->sequence == 1);
+    REQUIRE(first->metadata_json == "{}");
+
+    auto second = co_await repo.append_message(storage::AppendSessionMessageRequest{
+        .session_id = "s-1",
+        .agent_key = "coder",
+        .role = "assistant",
+        .content_json = R"json({"text":"hi"})json",
+        .metadata_json = R"json({"source":"test"})json",
+    });
+    REQUIRE(second.has_value());
+    REQUIRE(second->sequence == 2);
+
+    auto loaded = co_await repo.load_messages(storage::SessionKey{.session_id = "s-1", .agent_key = "coder"});
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->size() == 2);
+    REQUIRE((*loaded)[0].sequence == 1);
+    REQUIRE((*loaded)[0].role == "user");
+    REQUIRE((*loaded)[0].content_json == R"json({"text":"hello"})json");
+    REQUIRE((*loaded)[1].sequence == 2);
+    REQUIRE((*loaded)[1].role == "assistant");
+    REQUIRE((*loaded)[1].metadata_json == R"json({"source":"test"})json");
+
+    auto session = co_await repo.get_session(storage::SessionKey{.session_id = "s-1", .agent_key = "coder"});
+    REQUIRE(session.has_value());
+    REQUIRE(session->has_value());
+    REQUIRE((*session)->session_id == "s-1");
+    REQUIRE((*session)->agent_key == "coder");
+    REQUIRE((*session)->message_count == 2);
+    REQUIRE((*session)->metadata_json == "{}");
+  });
+}
+
+TEST_CASE("SessionRepository list_sessions is scoped by agent and honors limits",
+          "[unit][storage][session_repository]") {
+  TempDb db{"oran-session-repo-list"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::SessionRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+
+    auto coder_a_append = co_await repo.append_message(storage::AppendSessionMessageRequest{
+        .session_id = "s-a",
+        .agent_key = "coder",
+        .role = "user",
+        .content_json = R"json({"text":"a"})json",
+    });
+    REQUIRE(coder_a_append.has_value());
+    auto coder_b_append = co_await repo.append_message(storage::AppendSessionMessageRequest{
+        .session_id = "s-b",
+        .agent_key = "coder",
+        .role = "assistant",
+        .content_json = R"json({"text":"b"})json",
+    });
+    REQUIRE(coder_b_append.has_value());
+    auto researcher_append = co_await repo.append_message(storage::AppendSessionMessageRequest{
+        .session_id = "s-a",
+        .agent_key = "researcher",
+        .role = "user",
+        .content_json = R"json({"text":"other"})json",
+    });
+    REQUIRE(researcher_append.has_value());
+
+    auto coder_a = co_await repo.load_messages(storage::SessionKey{.session_id = "s-a", .agent_key = "coder"});
+    REQUIRE(coder_a.has_value());
+    REQUIRE(coder_a->size() == 1);
+    auto researcher_a =
+        co_await repo.load_messages(storage::SessionKey{.session_id = "s-a", .agent_key = "researcher"});
+    REQUIRE(researcher_a.has_value());
+    REQUIRE(researcher_a->size() == 1);
+
+    auto coder = co_await repo.list_sessions(storage::ListSessionsOptions{.agent_key = "coder", .limit = 10});
+    REQUIRE(coder.has_value());
+    REQUIRE(coder->size() == 2);
+    for (const auto& session : *coder) {
+      REQUIRE(session.agent_key == "coder");
+      REQUIRE(session.message_count == 1);
+    }
+
+    auto limited = co_await repo.list_sessions(storage::ListSessionsOptions{.agent_key = "coder", .limit = 1});
+    REQUIRE(limited.has_value());
+    REQUIRE(limited->size() == 1);
+
+    auto researcher = co_await repo.list_sessions(storage::ListSessionsOptions{.agent_key = "researcher", .limit = 10});
+    REQUIRE(researcher.has_value());
+    REQUIRE(researcher->size() == 1);
+    REQUIRE((*researcher)[0].session_id == "s-a");
+    REQUIRE((*researcher)[0].agent_key == "researcher");
+  });
+}
+
+TEST_CASE("SessionRepository returns empty results for missing sessions", "[unit][storage][session_repository]") {
+  TempDb db{"oran-session-repo-missing"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::SessionRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+
+    auto loaded = co_await repo.load_messages(storage::SessionKey{.session_id = "missing", .agent_key = "coder"});
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->empty());
+
+    auto session = co_await repo.get_session(storage::SessionKey{.session_id = "missing", .agent_key = "coder"});
+    REQUIRE(session.has_value());
+    REQUIRE_FALSE(session->has_value());
+  });
+}
+
+TEST_CASE("SessionRepository validates required fields", "[unit][storage][session_repository]") {
+  TempDb db{"oran-session-repo-invalid"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::SessionRepository repo{pool};
+
+    auto append = co_await repo.append_message(storage::AppendSessionMessageRequest{
+        .session_id = "",
+        .agent_key = "coder",
+        .role = "user",
+        .content_json = "{}",
+    });
+    REQUIRE_FALSE(append.has_value());
+    REQUIRE(append.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto load = co_await repo.load_messages(storage::SessionKey{.session_id = "s-1", .agent_key = ""});
+    REQUIRE_FALSE(load.has_value());
+    REQUIRE(load.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto list_agent = co_await repo.list_sessions(storage::ListSessionsOptions{.agent_key = "", .limit = 10});
+    REQUIRE_FALSE(list_agent.has_value());
+    REQUIRE(list_agent.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto list_limit = co_await repo.list_sessions(storage::ListSessionsOptions{.agent_key = "coder", .limit = 0});
+    REQUIRE_FALSE(list_limit.has_value());
+    REQUIRE(list_limit.error().kind() == core::ErrorKind::invalid_argument);
+  });
+}
