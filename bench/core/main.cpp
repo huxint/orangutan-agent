@@ -11,6 +11,7 @@ void register_time_scenarios(ankerl::nanobench::Bench&);
 void register_message_scenarios(ankerl::nanobench::Bench&);
 void register_tool_def_scenarios(ankerl::nanobench::Bench&);
 void register_str_utf8_scenarios(ankerl::nanobench::Bench&);
+void register_capability_scenarios(ankerl::nanobench::Bench&);
 }  // namespace orangutan::bench
 
 int main() {
@@ -62,6 +63,16 @@ int main() {
     b.warmup(1'000);
 
     orangutan::bench::register_str_utf8_scenarios(b);
+  }
+
+  {
+    ankerl::nanobench::Bench b;
+    b.title("bench-core/capability");
+    b.unit("lookup-batch");
+    b.minEpochIterations(50'000);
+    b.warmup(1'000);
+
+    orangutan::bench::register_capability_scenarios(b);
   }
 
   std::println();
