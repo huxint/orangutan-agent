@@ -69,8 +69,9 @@ own test bucket, its own bench bucket, and its own public header set under
 
 ## Library Inventory
 
-> **Slice status (2026-05-16):** `oran-core` (now with `Error`/`Result` plus
-> the `Time` value type and ISO-8601 UTC format/parse helpers), `oran-async`,
+> **Slice status (2026-05-16):** `oran-core` (now with `Error`/`Result`, the
+> `Time` value type and ISO-8601 UTC helpers, and the conversation types
+> `Role`, `StopReason`, `Content` variant, and `Message`), `oran-async`,
 > the file/directory MVP of `oran-io`, the expected-only SQLite core +
 > migration runner + SQL-file migration loader + async writer/reader `Pool`
 > with per-slot statement caches + standalone per-connection `StatementCache`
@@ -84,7 +85,7 @@ own test bucket, its own bench bucket, and its own public header set under
 
 | Library              | Purpose                                         | Depends on (allowed)                          |
 | -------------------- | ----------------------------------------------- | --------------------------------------------- |
-| `oran-core`          | `Result<T>`, `Error`, `Time` + ISO-8601 UTC helpers, planned `Message`, `Content`, `ToolDef`, `core::str` | stdlib only |
+| `oran-core`          | `Result<T>`, `Error`, `Time` + ISO-8601 UTC helpers, `Role`, `StopReason`, `Content` variant, `Message`, planned `ToolDef`, `core::str` | stdlib only |
 | `oran-async`         | asio `Runtime`, `Awaitable<T>`, bounded `Channel<T>`, cancel-aware `sleep_for`; mailbox policy lands in orchestration | `oran-core`, asio |
 | `oran-log`           | spdlog shim + secret redaction; thread-local context | `oran-core`, spdlog/fmt |
 | `oran-io`            | file/directory IO MVP; planned glob, pipe, subprocess, signal | `oran-core`, `oran-async` |

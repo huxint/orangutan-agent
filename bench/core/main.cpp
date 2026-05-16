@@ -8,6 +8,7 @@
 namespace orangutan::bench {
 void register_error_construct(ankerl::nanobench::Bench&);
 void register_time_scenarios(ankerl::nanobench::Bench&);
+void register_message_scenarios(ankerl::nanobench::Bench&);
 }  // namespace orangutan::bench
 
 int main() {
@@ -29,6 +30,16 @@ int main() {
     b.warmup(2'000);
 
     orangutan::bench::register_time_scenarios(b);
+  }
+
+  {
+    ankerl::nanobench::Bench b;
+    b.title("bench-core/message");
+    b.unit("op");
+    b.minEpochIterations(200'000);
+    b.warmup(2'000);
+
+    orangutan::bench::register_message_scenarios(b);
   }
 
   std::println();
