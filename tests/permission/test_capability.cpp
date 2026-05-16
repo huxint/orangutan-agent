@@ -33,8 +33,8 @@ TEST_CASE("capability-bound rule fires when call requires the capability", "[uni
   constexpr std::array<Capability, 1> required{Capability::read_file};
   const auto decision = rs.evaluate("file.read", std::span<const Capability>{required}, Mode::strict);
   REQUIRE(decision.verdict == Verdict::allow);
-  REQUIRE(decision.reason.find("capability=read_file") != std::string::npos);
-  REQUIRE(decision.reason.find("file.*") != std::string::npos);
+  REQUIRE(decision.reason.contains("capability=read_file"));
+  REQUIRE(decision.reason.contains("file.*"));
 }
 
 TEST_CASE("capability-bound rule does not fire when capability is missing", "[unit][permission][capability]") {
@@ -50,7 +50,7 @@ TEST_CASE("capability-bound rule does not fire when capability is missing", "[un
   constexpr std::array<Capability, 1> required{Capability::write_file};
   const auto decision = rs.evaluate("file.read", std::span<const Capability>{required}, Mode::strict);
   REQUIRE(decision.verdict == Verdict::deny);  // strict default
-  REQUIRE(decision.reason.find("default by mode=strict") != std::string::npos);
+  REQUIRE(decision.reason.contains("default by mode=strict"));
 }
 
 TEST_CASE("legacy evaluate(tool_name, mode) skips capability-bound rules", "[unit][permission][capability]") {
@@ -65,7 +65,7 @@ TEST_CASE("legacy evaluate(tool_name, mode) skips capability-bound rules", "[uni
   // capability-bound rule does not fire and we fall back to the mode default.
   const auto decision = rs.evaluate("file.read", Mode::permissive);
   REQUIRE(decision.verdict == Verdict::allow);  // permissive default
-  REQUIRE(decision.reason.find("default by mode=permissive") != std::string::npos);
+  REQUIRE(decision.reason.contains("default by mode=permissive"));
 }
 
 TEST_CASE("capability-bound deny outranks capability-bound allow at the same scope", "[unit][permission][capability]") {
@@ -87,7 +87,7 @@ TEST_CASE("capability-bound deny outranks capability-bound allow at the same sco
   };
   const auto decision = rs.evaluate("shell.exec", std::span<const Capability>{required}, Mode::permissive);
   REQUIRE(decision.verdict == Verdict::deny);
-  REQUIRE(decision.reason.find("capability=runtime_loader") != std::string::npos);
+  REQUIRE(decision.reason.contains("capability=runtime_loader"));
 }
 
 TEST_CASE("capability mismatch falls through to next precedence pass", "[unit][permission][capability]") {
@@ -104,8 +104,8 @@ TEST_CASE("capability mismatch falls through to next precedence pass", "[unit][p
   constexpr std::array<Capability, 1> required{Capability::spawn_subprocess};
   const auto decision = rs.evaluate("shell.exec", std::span<const Capability>{required}, Mode::strict);
   REQUIRE(decision.verdict == Verdict::allow);
-  REQUIRE(decision.reason.find("rule #1") != std::string::npos);
-  REQUIRE(decision.reason.find("capability=") == std::string::npos);
+  REQUIRE(decision.reason.contains("rule #1"));
+  REQUIRE(!decision.reason.contains("capability="));
 }
 
 TEST_CASE("unscoped rule keeps matching when call passes capabilities", "[unit][permission][capability]") {
@@ -119,7 +119,7 @@ TEST_CASE("unscoped rule keeps matching when call passes capabilities", "[unit][
   const auto decision = rs.evaluate("file.read", std::span<const Capability>{required}, Mode::strict);
   REQUIRE(decision.verdict == Verdict::allow);
   // Unscoped rules omit `capability=` from the reason.
-  REQUIRE(decision.reason.find("capability=") == std::string::npos);
+  REQUIRE(!decision.reason.contains("capability="));
 }
 
 TEST_CASE("capability scope round-trips in reason for every verdict", "[unit][permission][capability]") {
@@ -133,7 +133,7 @@ TEST_CASE("capability scope round-trips in reason for every verdict", "[unit][pe
   constexpr std::array<Capability, 1> required{Capability::write_memory};
   const auto decision = rs.evaluate("memory.remember", std::span<const Capability>{required}, Mode::strict);
   REQUIRE(decision.verdict == Verdict::ask);
-  REQUIRE(decision.reason.find("ask") != std::string::npos);
-  REQUIRE(decision.reason.find("memory.*") != std::string::npos);
-  REQUIRE(decision.reason.find("capability=write_memory") != std::string::npos);
+  REQUIRE(decision.reason.contains("ask"));
+  REQUIRE(decision.reason.contains("memory.*"));
+  REQUIRE(decision.reason.contains("capability=write_memory"));
 }

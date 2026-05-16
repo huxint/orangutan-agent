@@ -67,11 +67,11 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
 }
 
 [[nodiscard]] bool is_recognized_root(std::string_view name) {
-  return std::ranges::find(kRecognizedRootFields, name) != kRecognizedRootFields.end();
+  return std::ranges::contains(kRecognizedRootFields, name);
 }
 
 [[nodiscard]] bool is_recognized_agent_field(std::string_view name) {
-  return std::ranges::find(kRecognizedAgentFields, name) != kRecognizedAgentFields.end();
+  return std::ranges::contains(kRecognizedAgentFields, name);
 }
 
 [[nodiscard]] bool valid_env_name(std::string_view name) {
@@ -486,7 +486,7 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
 
   static constexpr auto kKnownKeys = std::array<std::string_view, 2>{"tool_pattern", "capability"};
   for (const auto& [key, _] : value.items()) {
-    if (std::ranges::find(kKnownKeys, key) != kKnownKeys.end()) {
+    if (std::ranges::contains(kKnownKeys, key)) {
       continue;
     }
     const auto field_path = child_path(path, key);

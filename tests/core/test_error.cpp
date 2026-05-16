@@ -64,9 +64,9 @@ TEST_CASE("Error::with appends context entries in order", "[unit][core][error]")
 TEST_CASE("Error formats via std::format", "[unit][core][error]") {
   auto e = Error::network("HTTP 503").with("agent", "primary").with_retry_after(250ms);
   const auto rendered = std::format("{}", e);
-  REQUIRE(rendered.find("network: HTTP 503") != std::string::npos);
-  REQUIRE(rendered.find("[agent=primary]") != std::string::npos);
-  REQUIRE(rendered.find("retry_after=250ms") != std::string::npos);
+  REQUIRE(rendered.contains("network: HTTP 503"));
+  REQUIRE(rendered.contains("[agent=primary]"));
+  REQUIRE(rendered.contains("retry_after=250ms"));
 }
 
 TEST_CASE("Result<int> happy and error paths", "[unit][core][result]") {

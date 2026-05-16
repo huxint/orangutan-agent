@@ -105,7 +105,7 @@ TEST_CASE("Defaults::for_mode(default_) capability-less call falls back to mode 
   const auto rs = Defaults::for_mode(Mode::default_);
   const auto decision = rs.evaluate("any.tool", Mode::default_);
   REQUIRE(decision.verdict == Verdict::ask);
-  REQUIRE(decision.reason.find("default by mode=default") != std::string::npos);
+  REQUIRE(decision.reason.contains("default by mode=default"));
 }
 
 TEST_CASE("Defaults::for_mode(strict) explicit deny is recorded with capability scope",
@@ -115,5 +115,5 @@ TEST_CASE("Defaults::for_mode(strict) explicit deny is recorded with capability 
   const std::array<Capability, 1> required{Capability::runtime_loader};
   const auto decision = rs.evaluate("any.tool", std::span<const Capability>{required}, Mode::default_);
   REQUIRE(decision.verdict == Verdict::deny);
-  REQUIRE(decision.reason.find("capability=runtime_loader") != std::string::npos);
+  REQUIRE(decision.reason.contains("capability=runtime_loader"));
 }

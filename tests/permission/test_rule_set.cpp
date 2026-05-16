@@ -63,11 +63,11 @@ TEST_CASE("RuleSet deny wins over allow regardless of order", "[unit][permission
 
   auto blocked = rs.evaluate("shell.rm", Mode::permissive);
   REQUIRE(blocked.verdict == Verdict::deny);
-  REQUIRE(blocked.reason.find("deny") != std::string::npos);
+  REQUIRE(blocked.reason.contains("deny"));
 
   auto allowed = rs.evaluate("shell.ls", Mode::permissive);
   REQUIRE(allowed.verdict == Verdict::allow);
-  REQUIRE(allowed.reason.find("allow") != std::string::npos);
+  REQUIRE(allowed.reason.contains("allow"));
 }
 
 TEST_CASE("RuleSet ask fires when no allow/deny matches", "[unit][permission][rule_set]") {
@@ -77,7 +77,7 @@ TEST_CASE("RuleSet ask fires when no allow/deny matches", "[unit][permission][ru
 
   auto write = rs.evaluate("file.write", Mode::strict);
   REQUIRE(write.verdict == Verdict::ask);
-  REQUIRE(write.reason.find("ask") != std::string::npos);
+  REQUIRE(write.reason.contains("ask"));
 }
 
 TEST_CASE("RuleSet returns the index of the first matching rule in its reason", "[unit][permission][rule_set]") {
@@ -88,7 +88,7 @@ TEST_CASE("RuleSet returns the index of the first matching rule in its reason", 
 
   auto decision = rs.evaluate("shell.rm", Mode::permissive);
   REQUIRE(decision.verdict == Verdict::deny);
-  REQUIRE(decision.reason.find("rule #1") != std::string::npos);
+  REQUIRE(decision.reason.contains("rule #1"));
 }
 
 TEST_CASE("RuleSet::clear empties the set", "[unit][permission][rule_set]") {

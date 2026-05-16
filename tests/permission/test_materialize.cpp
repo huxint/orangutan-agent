@@ -158,8 +158,8 @@ TEST_CASE("materialize preserves intra-layer rule order", "[unit][permission][ma
   const auto second = rs.evaluate("second", Mode::strict);
   REQUIRE(first.verdict == Verdict::allow);
   REQUIRE(second.verdict == Verdict::allow);
-  REQUIRE(first.reason.find("first") != std::string::npos);
-  REQUIRE(second.reason.find("second") != std::string::npos);
+  REQUIRE(first.reason.contains("first"));
+  REQUIRE(second.reason.contains("second"));
 }
 
 TEST_CASE("materialize two-argument overload uses an empty per-agent overlay", "[unit][permission][materialize]") {

@@ -16,16 +16,16 @@ TEST_CASE("ToolDef aggregate-init exposes name/description/schema", "[unit][core
   };
   REQUIRE(td.name == "file.read");
   REQUIRE(td.description == "Read a UTF-8 text file.");
-  REQUIRE(td.input_schema_json.find("\"path\"") != std::string::npos);
+  REQUIRE(td.input_schema_json.contains("\"path\""));
 }
 
 TEST_CASE("ToolDef::with_no_input fills a minimal object schema", "[unit][core][tool_def]") {
   const auto td = ToolDef::with_no_input("clock.now", "Return current UTC time.");
   REQUIRE(td.name == "clock.now");
   REQUIRE(td.description == "Return current UTC time.");
-  REQUIRE(td.input_schema_json.find("\"type\":\"object\"") != std::string::npos);
-  REQUIRE(td.input_schema_json.find("\"properties\":{}") != std::string::npos);
-  REQUIRE(td.input_schema_json.find("\"additionalProperties\":false") != std::string::npos);
+  REQUIRE(td.input_schema_json.contains("\"type\":\"object\""));
+  REQUIRE(td.input_schema_json.contains("\"properties\":{}"));
+  REQUIRE(td.input_schema_json.contains("\"additionalProperties\":false"));
 }
 
 TEST_CASE("ToolDef equality is member-wise", "[unit][core][tool_def]") {
@@ -53,6 +53,6 @@ TEST_CASE("ToolDef is move-constructed cheaply", "[unit][core][tool_def]") {
   REQUIRE(dst.name == "agent.handoff");
   // The moved-from string's data pointer should have transferred (libstdc++
   // moves the buffer for non-SSO sizes; either way `dst` owns the data).
-  REQUIRE(dst.input_schema_json.find("\"type\":\"object\"") != std::string::npos);
+  REQUIRE(dst.input_schema_json.contains("\"type\":\"object\""));
   (void)schema_addr;
 }
