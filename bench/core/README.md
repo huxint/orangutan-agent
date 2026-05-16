@@ -4,7 +4,7 @@
 
 `oran-core` is the project's foundation: `Error`, `Result<T>`, `all_ok`, `Time`,
 the ISO-8601 UTC format/parse helpers, the `Role`/`StopReason` enums, the
-`Content` variant, and `Message`. The bench bucket exists for parity
+`Content` variant, `Message`, and `ToolDef`. The bench bucket exists for parity
 ([`docs/rules/critical-rules.md#C12`](../../docs/rules/critical-rules.md))
 and to anchor the A-vs-B convention even on a library where performance is not the
 primary axis.
@@ -16,6 +16,7 @@ primary axis.
 | [`scenarios/error_construct.cpp`](scenarios/error_construct.cpp) | Fluent builder + `.with` chain *vs.* move-only constructor + sequential `.with` calls. Both produce the identical `Error` value; we measure whether the builder-return-value path costs more or less than the explicit local-object path. |
 | [`scenarios/time.cpp`](scenarios/time.cpp) | `core::time::format_iso8601_utc` (explicit `{:04}-...` template) *vs.* `std::format("{:%FT%T}Z", floor<ms>(tp))` (chrono format specifiers). Both render the canonical wire format; the comparison documents the cost of the project's deterministic-wire-format guarantee. The same file also benches `core::time::parse_iso8601_utc` so downstream callers can see the parse-vs-format budget when they round-trip timestamps. |
 | [`scenarios/message.cpp`](scenarios/message.cpp) | `std::visit(Overloaded{...}, content)` *vs.* `std::get_if<TextContent>(&content)` over a 32-block mixed-alternative `Message`. Both walks add up text length and ignore non-text blocks; the comparison documents the cost of the project-preferred visitor style against a single-alternative shortcut. A `core.message_walk_blocks` scenario reports the same visit-based walk as the "render this turn" baseline. |
+| [`scenarios/tool_def.cpp`](scenarios/tool_def.cpp) | Aggregate-init `ToolDef{...}` with an inline empty schema *vs.* `ToolDef::with_no_input(name, desc)` helper. Both produce the same value; the comparison documents the cost of the helper path (one extra `std::string` move and a function-call frame) so fixture callers can pick with eyes open. |
 
 ## Running
 
