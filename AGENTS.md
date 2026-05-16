@@ -54,6 +54,7 @@ task touches an area, read its row.
 | Error handling | — | `docs/rules/error-handling.md` |
 | Tools / hooks / permissions | `docs/design-docs/tool-runtime.md`, `docs/design-docs/permissions-and-hooks.md` | — |
 | Permissions surface | `docs/product-specs/0008-permissions.md` | — |
+| Prompts / system prompt / tool catalog / skill body / cache discipline | `docs/design-docs/api-portability.md`, `docs/design-docs/tool-runtime.md`, `docs/product-specs/0009-skills.md` | `docs/rules/prompt-design.md` |
 | Channels (QQ / Discord / Slack / Webhook / …) | `docs/design-docs/channel-abstraction.md`, `docs/product-specs/0003-multi-platform-channels.md` | — |
 | LLM provider portability | `docs/design-docs/api-portability.md` | — |
 | Memory (working / session / long-term / shared) | `docs/design-docs/memory-system.md`, `docs/product-specs/0005-memory-system.md` | — |
@@ -95,6 +96,7 @@ One-line summaries; the linked rule is canonical.
 | Tests | Catch2 v3, one bucket per library, `tests/<lib>/...` | [`testing-and-bench.md`](docs/rules/testing-and-bench.md), [`critical-rules.md#C12`](docs/rules/critical-rules.md) |
 | Benches | nanobench + Catch2 runners, one bucket per library, `bench/<lib>/...`; each bucket owns ≥ 1 A-vs-B comparison | [`testing-and-bench.md`](docs/rules/testing-and-bench.md), [`critical-rules.md#C12`](docs/rules/critical-rules.md) |
 | Histories | required for every code-change task that modifies behavior | [`critical-rules.md#C13`](docs/rules/critical-rules.md), [`HISTORY_GUIDE.md`](docs/HISTORY_GUIDE.md) |
+| Prompt design | system preamble / tool catalog / skill body live in stable `CacheSection`s ordered stable → dynamic; no clocks, IDs, or per-call state in the cached prefix; consult <https://github.com/Piebald-AI/claude-code-system-prompts> for prior art before designing a new prompt surface | [`prompt-design.md`](docs/rules/prompt-design.md) |
 
 ## Working Posture
 

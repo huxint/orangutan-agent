@@ -12,6 +12,10 @@ activate them on demand without bloating the system prompt.
 - Skill metadata in YAML frontmatter:
   - `name`, `description`, `triggers` (semantic intents), `inputs` (schema), `model_hint`.
 - Skill catalog rendered into the system prompt (compact listing).
+  Catalog rendering and skill-body placement follow the cache-section
+  ordering in [`docs/rules/prompt-design.md`](../rules/prompt-design.md) —
+  activated skill bodies shift the skills section, never the system
+  preamble.
 - `skill.invoke(name, inputs)` tool runs a skill; its body is appended to the
   prompt for the next iteration.
 - Hot-reload via filesystem watcher (`asio` + inotify on Linux).

@@ -181,6 +181,12 @@ Prompt caching is **first-class**. The agent's prompt builder produces a list of
 - OpenAI Responses: prompt prefix hashing where available.
 - Others: silently ignored.
 
+The cache discipline that governs which content may appear in which section,
+and the byte-identical-preamble invariant the prompt builder must honor, live
+in [`docs/rules/prompt-design.md`](../rules/prompt-design.md). That rule is
+the canonical home for what goes where; this doc owns the adapter-side
+mapping only.
+
 ### Cache Key Versioning
 
 Each section carries a `cache_version` integer. When upstream caching is

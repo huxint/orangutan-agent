@@ -22,6 +22,7 @@ same change:
 | Module / PCH change                                    | `docs/rules/module-and-pch.md`, `docs/generated/pch-spec.json` |
 | New / changed hook lifecycle event                     | `docs/design-docs/permissions-and-hooks.md` (canonical event list) |
 | New / changed permission capability                    | `docs/design-docs/tool-runtime.md`, `docs/design-docs/permissions-and-hooks.md`, `docs/product-specs/0008-permissions.md` |
+| New / changed prompt surface (system preamble, tool-catalog rendering, skill body template, memory framing, deferred-tool index, approval-prompt template) | `docs/rules/prompt-design.md` (if a new invariant is introduced), `docs/design-docs/api-portability.md` (if cache layout shifts), and the design / spec doc owning the surface (`agent-platform.md`, `tool-runtime.md`, `0009-skills.md`, …) |
 | New / changed memory tier, backend, or kind            | `docs/design-docs/memory-system.md`, `docs/product-specs/0005-memory-system.md` |
 | New / changed channel adapter or capability            | `docs/design-docs/channel-abstraction.md` (capability matrix), `docs/product-specs/0003-multi-platform-channels.md`, optionally `docs/design-docs/channel-<name>.md` |
 | New / changed provider protocol adapter                | `docs/design-docs/api-portability.md`, `docs/product-specs/0001-core-react-loop.md` if scope-affecting |

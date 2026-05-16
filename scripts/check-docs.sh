@@ -45,6 +45,7 @@ required_files=(
   "docs/rules/error-handling.md"
   "docs/rules/async-and-concurrency.md"
   "docs/rules/libraries.md"
+  "docs/rules/prompt-design.md"
   "docs/rules/workflow.md"
   "docs/rules/testing-and-bench.md"
   "docs/product-specs/index.md"
