@@ -7,9 +7,10 @@ does not expose `sqlite3.h` from public headers.
 > **Storage status (2026-05-16):** `oran-storage` ships `Connection`, `Statement`,
 > typed binding/stepping/column readers, WAL + foreign-key setup, a simple `query`
 > helper, the synchronous `run_migrations` runner, an async writer/reader
-> `Pool` driven by `oran-async` executors, and a per-connection
-> `StatementCache` with LRU eviction. SQL-file loading, backups, and domain
-> repositories are future slices.
+> `Pool` driven by `oran-async` executors with one `StatementCache` per writer
+> or reader slot, and the standalone per-connection `StatementCache` with LRU
+> eviction. SQL-file loading, backups, and domain repositories are future
+> slices.
 
 ## Public Surface
 
@@ -143,7 +144,6 @@ the report returns the existing `current_version` and an empty `applied_versions
 
 - SQL-file loading from `src/oran-storage/migrations/`.
 - Domain repositories for sessions, memory, automation, and audit logs.
-- Pool-integrated statement cache (one cache per pool slot).
 - Backup script integration and generated schema docs.
 
 ## Pool
@@ -160,6 +160,7 @@ namespace orangutan::storage {
 struct PoolOptions {
   std::string path;
   std::size_t reader_count{2};
+  std::size_t statement_cache_capacity{32};
   int busy_timeout_ms{5000};
   bool enable_wal{true};
   bool enforce_foreign_keys{true};
@@ -170,6 +171,7 @@ class WriterLease {
   ~WriterLease();
   bool valid() const noexcept;
   Connection& connection() noexcept;
+  StatementCache& statement_cache() noexcept;
   void release() noexcept;
 };
 
@@ -179,6 +181,7 @@ class ReaderLease {
   bool valid() const noexcept;
   std::size_t slot() const noexcept;
   Connection& connection() noexcept;
+  StatementCache& statement_cache() noexcept;
   void release() noexcept;
 };
 
@@ -211,6 +214,14 @@ class Pool {
 - The writer opens in `OpenMode::read_write_create` with WAL when enabled.
   Migrations run through `acquire_writer()` followed by
   `run_migrations(lease.connection(), …)`.
+- `Pool::open` creates one `StatementCache` for the writer and one cache for
+  each reader slot. The caches use `PoolOptions::statement_cache_capacity` and
+  persist for the same lifetime as the slot connection, so a hot SQL string can
+  hit after a lease releases and the same slot is acquired again.
+- `WriterLease::statement_cache()` and `ReaderLease::statement_cache()` expose
+  the slot cache next to `connection()`. Cached statement leases are
+  lease-scoped work: callers should acquire/use/release `CachedStatement`
+  objects while still holding the pool lease that owns the connection slot.
 - Both lease types are move-only RAII. Destruction releases the slot back to
   the pool. `release()` is idempotent; once a lease has been released, `valid()`
   returns false and further `release()` calls are no-ops.
@@ -223,10 +234,10 @@ class Pool {
 
 ### Error Model
 
-- `Pool::open` returns `core::ErrorKind::invalid_argument` for an empty path or
-  `reader_count = 0`. Per-connection open failures bubble up the SQLite error
-  with `pool_role` (`writer` or `reader`) and `pool_slot` (reader index) context
-  fields attached.
+- `Pool::open` returns `core::ErrorKind::invalid_argument` for an empty path,
+  `reader_count = 0`, or `statement_cache_capacity = 0`. Per-connection open
+  failures bubble up the SQLite error with `pool_role` (`writer` or `reader`)
+  and `pool_slot` (reader index) context fields attached.
 - Acquiring from a default-constructed (not-open) `Pool` returns
   `core::ErrorKind::conflict` with message `pool is not open`.
 
@@ -234,9 +245,11 @@ class Pool {
 
 The pool's public header pulls in `<asio/any_io_executor.hpp>` and
 `<oran/async/awaitable_fwd.hpp>`, mirroring `oran-async`'s public surface.
-Storage TUs that consume the pool inherit the asio include set; storage TUs
-that only touch `Connection` / `Statement` remain unchanged. The xmake target
-graph now lists `oran-storage` as depending on `oran-async`.
+It forward-declares `StatementCache`; callers that include the umbrella
+`<oran/storage.hpp>` get the full cache definition. Storage TUs that consume
+the pool inherit the asio include set; storage TUs that only touch
+`Connection` / `Statement` remain unchanged. The xmake target graph lists
+`oran-storage` as depending on `oran-async`.
 
 ## Statement Cache
 
@@ -244,7 +257,8 @@ graph now lists `oran-storage` as depending on `oran-async`.
 hot-path queries pay the `sqlite3_prepare_v2` cost once per cache lifetime
 instead of once per call. Each cache is bound to a single `Connection` by
 convention; SQLite statements are handle-specific, so sharing one cache across
-multiple connections is undefined.
+multiple connections is undefined. `Pool` follows this rule by owning one cache
+per writer / reader slot.
 
 ```cpp
 namespace orangutan::storage {

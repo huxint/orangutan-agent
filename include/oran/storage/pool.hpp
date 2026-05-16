@@ -14,9 +14,12 @@
 
 namespace orangutan::storage {
 
+class StatementCache;
+
 struct PoolOptions {
   std::string path;
   std::size_t reader_count{2};
+  std::size_t statement_cache_capacity{32};
   int busy_timeout_ms{5000};
   bool enable_wal{true};
   bool enforce_foreign_keys{true};
@@ -37,6 +40,8 @@ public:
   [[nodiscard]] bool valid() const noexcept;
   [[nodiscard]] Connection& connection() noexcept;
   [[nodiscard]] const Connection& connection() const noexcept;
+  [[nodiscard]] StatementCache& statement_cache() noexcept;
+  [[nodiscard]] const StatementCache& statement_cache() const noexcept;
 
   void release() noexcept;
 
@@ -62,6 +67,8 @@ public:
   [[nodiscard]] std::size_t slot() const noexcept;
   [[nodiscard]] Connection& connection() noexcept;
   [[nodiscard]] const Connection& connection() const noexcept;
+  [[nodiscard]] StatementCache& statement_cache() noexcept;
+  [[nodiscard]] const StatementCache& statement_cache() const noexcept;
 
   void release() noexcept;
 

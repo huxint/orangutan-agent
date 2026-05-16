@@ -24,6 +24,7 @@
 
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/core/error.hpp>
+#include <oran/storage/statement_cache.hpp>
 
 namespace orangutan::storage {
 
@@ -56,6 +57,8 @@ struct Pool::State : std::enable_shared_from_this<Pool::State> {
 
   Connection writer;
   std::vector<Connection> readers;
+  StatementCache writer_cache;
+  std::vector<StatementCache> reader_caches;
 
   bool writer_busy{false};
   std::deque<std::size_t> free_readers;
@@ -281,6 +284,14 @@ const Connection& WriterLease::connection() const noexcept {
   return state_->pool->writer;
 }
 
+StatementCache& WriterLease::statement_cache() noexcept {
+  return state_->pool->writer_cache;
+}
+
+const StatementCache& WriterLease::statement_cache() const noexcept {
+  return state_->pool->writer_cache;
+}
+
 void WriterLease::release() noexcept {
   if (!state_ || state_->released || state_->pool == nullptr) {
     state_.reset();
@@ -329,6 +340,14 @@ const Connection& ReaderLease::connection() const noexcept {
   return state_->pool->readers[state_->slot];
 }
 
+StatementCache& ReaderLease::statement_cache() noexcept {
+  return state_->pool->reader_caches[state_->slot];
+}
+
+const StatementCache& ReaderLease::statement_cache() const noexcept {
+  return state_->pool->reader_caches[state_->slot];
+}
+
 void ReaderLease::release() noexcept {
   if (!state_ || state_->released || state_->pool == nullptr) {
     state_.reset();
@@ -356,6 +375,9 @@ core::Result<Pool> Pool::open(asio::any_io_executor executor, PoolOptions option
   if (options.reader_count == 0) {
     return std::unexpected(core::Error::invalid_argument("pool reader_count must be greater than zero"));
   }
+  if (options.statement_cache_capacity == 0) {
+    return std::unexpected(core::Error::invalid_argument("pool statement_cache_capacity must be greater than zero"));
+  }
 
   auto state = std::make_shared<State>(std::move(executor));
 
@@ -371,7 +393,14 @@ core::Result<Pool> Pool::open(asio::any_io_executor executor, PoolOptions option
   }
   state->writer = std::move(*writer);
 
+  auto writer_cache = StatementCache::open(StatementCacheOptions{.capacity = options.statement_cache_capacity});
+  if (!writer_cache) {
+    return std::unexpected(std::move(writer_cache.error()).with("pool_role", "writer_cache"));
+  }
+  state->writer_cache = std::move(*writer_cache);
+
   state->readers.reserve(options.reader_count);
+  state->reader_caches.reserve(options.reader_count);
   for (std::size_t i = 0; i < options.reader_count; ++i) {
     auto reader = Connection::open(ConnectionOptions{
         .path = options.path,
@@ -385,6 +414,13 @@ core::Result<Pool> Pool::open(asio::any_io_executor executor, PoolOptions option
           std::move(reader.error()).with("pool_role", "reader").with("pool_slot", std::to_string(i)));
     }
     state->readers.push_back(std::move(*reader));
+
+    auto reader_cache = StatementCache::open(StatementCacheOptions{.capacity = options.statement_cache_capacity});
+    if (!reader_cache) {
+      return std::unexpected(
+          std::move(reader_cache.error()).with("pool_role", "reader_cache").with("pool_slot", std::to_string(i)));
+    }
+    state->reader_caches.push_back(std::move(*reader_cache));
     state->free_readers.push_back(i);
   }
 

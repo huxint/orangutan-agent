@@ -71,6 +71,11 @@ TEST_CASE("Pool::open rejects invalid options", "[unit][storage][pool]") {
       storage::Pool::open(io.get_executor(), storage::PoolOptions{.path = db.string(), .reader_count = 0});
   REQUIRE_FALSE(zero_readers.has_value());
   REQUIRE(zero_readers.error().kind() == core::ErrorKind::invalid_argument);
+
+  auto zero_cache =
+      storage::Pool::open(io.get_executor(), storage::PoolOptions{.path = db.string(), .statement_cache_capacity = 0});
+  REQUIRE_FALSE(zero_cache.has_value());
+  REQUIRE(zero_cache.error().kind() == core::ErrorKind::invalid_argument);
 }
 
 TEST_CASE("Pool::open creates writer and N readers", "[unit][storage][pool]") {
@@ -271,6 +276,155 @@ TEST_CASE("Pool writes by writer are visible to readers", "[unit][storage][pool]
     REQUIRE(rows->rows.size() == 2);
     REQUIRE(rows->rows[0].values[0] == "alpha");
     REQUIRE(rows->rows[1].values[0] == "beta");
+  });
+}
+
+TEST_CASE("Pool writer lease exposes a cache that persists across leases", "[unit][storage][pool]") {
+  TempDb db{"oran-pool-writer-cache"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = storage::Pool::open(
+        io.get_executor(),
+        storage::PoolOptions{.path = db.string(), .reader_count = 1, .statement_cache_capacity = 2});
+    REQUIRE(pool.has_value());
+
+    {
+      auto writer = co_await pool->acquire_writer();
+      REQUIRE(writer.has_value());
+      REQUIRE(writer->statement_cache().valid());
+      REQUIRE(writer->connection().execute("CREATE TABLE events(id INTEGER PRIMARY KEY, body TEXT)").has_value());
+
+      {
+        auto insert = writer->statement_cache().acquire(writer->connection(), "INSERT INTO events(body) VALUES (?)");
+        REQUIRE(insert.has_value());
+        REQUIRE(insert->statement().bind_text(1, "alpha").has_value());
+        auto step = insert->statement().step();
+        REQUIRE(step.has_value());
+        REQUIRE(*step == storage::StepResult::done);
+      }
+
+      REQUIRE(writer->statement_cache().misses() == 1);
+      REQUIRE(writer->statement_cache().hits() == 0);
+    }
+
+    {
+      auto writer = co_await pool->acquire_writer();
+      REQUIRE(writer.has_value());
+
+      {
+        auto insert = writer->statement_cache().acquire(writer->connection(), "INSERT INTO events(body) VALUES (?)");
+        REQUIRE(insert.has_value());
+        REQUIRE(insert->statement().bind_text(1, "beta").has_value());
+        auto step = insert->statement().step();
+        REQUIRE(step.has_value());
+        REQUIRE(*step == storage::StepResult::done);
+      }
+
+      REQUIRE(writer->statement_cache().misses() == 1);
+      REQUIRE(writer->statement_cache().hits() == 1);
+
+      auto rows = writer->connection().query("SELECT body FROM events ORDER BY id");
+      REQUIRE(rows.has_value());
+      REQUIRE(rows->rows.size() == 2);
+      REQUIRE(rows->rows[0].values[0] == "alpha");
+      REQUIRE(rows->rows[1].values[0] == "beta");
+    }
+  });
+}
+
+TEST_CASE("Pool reader lease exposes a slot cache that persists across releases", "[unit][storage][pool]") {
+  TempDb db{"oran-pool-reader-cache"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = storage::Pool::open(
+        io.get_executor(),
+        storage::PoolOptions{.path = db.string(), .reader_count = 1, .statement_cache_capacity = 2});
+    REQUIRE(pool.has_value());
+
+    {
+      auto writer = co_await pool->acquire_writer();
+      REQUIRE(writer.has_value());
+      REQUIRE(writer->connection().execute("CREATE TABLE events(id INTEGER PRIMARY KEY, body TEXT)").has_value());
+      REQUIRE(writer->connection().execute("INSERT INTO events(body) VALUES ('alpha'), ('beta')").has_value());
+    }
+
+    {
+      auto reader = co_await pool->acquire_reader();
+      REQUIRE(reader.has_value());
+      REQUIRE(reader->statement_cache().valid());
+
+      auto count = reader->statement_cache().acquire(reader->connection(), "SELECT COUNT(*) FROM events");
+      REQUIRE(count.has_value());
+      auto step = count->statement().step();
+      REQUIRE(step.has_value());
+      REQUIRE(*step == storage::StepResult::row);
+      auto value = count->statement().column_int64(0);
+      REQUIRE(value.has_value());
+      REQUIRE(*value == 2);
+      REQUIRE(reader->statement_cache().misses() == 1);
+      REQUIRE(reader->statement_cache().hits() == 0);
+    }
+
+    {
+      auto reader = co_await pool->acquire_reader();
+      REQUIRE(reader.has_value());
+      auto count = reader->statement_cache().acquire(reader->connection(), "SELECT COUNT(*) FROM events");
+      REQUIRE(count.has_value());
+      auto step = count->statement().step();
+      REQUIRE(step.has_value());
+      REQUIRE(*step == storage::StepResult::row);
+      auto value = count->statement().column_int64(0);
+      REQUIRE(value.has_value());
+      REQUIRE(*value == 2);
+      REQUIRE(reader->statement_cache().misses() == 1);
+      REQUIRE(reader->statement_cache().hits() == 1);
+    }
+  });
+}
+
+TEST_CASE("Pool reader statement caches are isolated per slot", "[unit][storage][pool]") {
+  TempDb db{"oran-pool-reader-cache-slots"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = storage::Pool::open(
+        io.get_executor(),
+        storage::PoolOptions{.path = db.string(), .reader_count = 2, .statement_cache_capacity = 2});
+    REQUIRE(pool.has_value());
+
+    {
+      auto writer = co_await pool->acquire_writer();
+      REQUIRE(writer.has_value());
+      REQUIRE(writer->connection().execute("CREATE TABLE events(id INTEGER PRIMARY KEY, body TEXT)").has_value());
+      REQUIRE(writer->connection().execute("INSERT INTO events(body) VALUES ('alpha')").has_value());
+    }
+
+    auto first = co_await pool->acquire_reader();
+    auto second = co_await pool->acquire_reader();
+    REQUIRE(first.has_value());
+    REQUIRE(second.has_value());
+    REQUIRE(first->slot() != second->slot());
+
+    {
+      auto first_count = first->statement_cache().acquire(first->connection(), "SELECT COUNT(*) FROM events");
+      REQUIRE(first_count.has_value());
+      REQUIRE(first_count->statement().step().has_value());
+      auto second_count = second->statement_cache().acquire(second->connection(), "SELECT COUNT(*) FROM events");
+      REQUIRE(second_count.has_value());
+      REQUIRE(second_count->statement().step().has_value());
+    }
+
+    REQUIRE(first->statement_cache().misses() == 1);
+    REQUIRE(first->statement_cache().hits() == 0);
+    REQUIRE(second->statement_cache().misses() == 1);
+    REQUIRE(second->statement_cache().hits() == 0);
+
+    {
+      auto first_again = first->statement_cache().acquire(first->connection(), "SELECT COUNT(*) FROM events");
+      REQUIRE(first_again.has_value());
+      REQUIRE(first_again->statement().step().has_value());
+    }
+
+    REQUIRE(first->statement_cache().misses() == 1);
+    REQUIRE(first->statement_cache().hits() == 1);
+    REQUIRE(second->statement_cache().misses() == 1);
+    REQUIRE(second->statement_cache().hits() == 0);
   });
 }
 
