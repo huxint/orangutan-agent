@@ -9,7 +9,7 @@
 
 - **Slice:** 7 (`xmake run orangutan` reports slice 7)
 - **Last completed history:**
-  [`histories/2026-05/20260517-0035-status-snapshot-and-claude-md-symlink.md`](histories/2026-05/20260517-0035-status-snapshot-and-claude-md-symlink.md)
+  [`histories/2026-05/20260517-0055-prompt-framework-ssot-sweep.md`](histories/2026-05/20260517-0055-prompt-framework-ssot-sweep.md)
 - **Active exec-plan:** none (`docs/exec-plans/active/` is empty)
 - **Next intended slice:** TBD — choose from the QUALITY_SCORE "Next Step"
   column. Most likely candidates: re2 input-pattern matching for

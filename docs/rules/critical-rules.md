@@ -261,20 +261,14 @@ without an explaining comment fail review.
 
 Every change to behavior, build, configuration, dependencies, interfaces, file
 layout, commands, or conventions **must update the corresponding documentation in
-the same PR**. A PR that ships code without updating the docs it invalidates is
-*incomplete*. There is no "I'll update the doc later".
+the same PR**. There is no "I'll update the doc later".
 
-**Why:** the entire harness-engineering scaffold rests on the premise that
-`docs/` is the system of record. The moment a doc lies, the next agent acts on a
-lie. The legacy `orangutan/` had a `CLAUDE.md` referencing `.claude/rules/` files
-that did not exist, code referencing tools that had been removed, and a half-done
-migration whose status diverged between code and docs. We refuse to repeat that
-pattern.
+Canonical mechanics — including the change-type → docs-to-update mapping table,
+the `STATUS.md` freshness gate, and the rationale (the legacy `orangutan/`
+project shipped with `CLAUDE.md` referencing files that did not exist) — live
+in [`docs-in-sync.md`](docs-in-sync.md). This entry is the rule line; the
+mechanics are not duplicated here.
 
-See [`docs-in-sync.md`](docs-in-sync.md) for the full mechanics, including the
-change-type → docs-to-update mapping table.
-
-**Enforcement:** `scripts/check-docs-sync.sh` (the rule's mechanical
-enforcement — currently a stub; activates as the code base lands) plus review
-checklist on every PR. The PR template's "Validation" section has a mandatory
-"docs updated" checkbox.
+**Enforcement:** `scripts/check-docs-sync.sh`, `scripts/check-status-fresh.sh`,
+and `scripts/check-history-touched.sh` plus the PR-template "docs updated"
+checkbox.

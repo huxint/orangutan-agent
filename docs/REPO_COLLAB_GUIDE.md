@@ -22,22 +22,20 @@ repository. Stack-specific rules live in `docs/rules/`; this file is the meta la
 
 ## Documentation Discipline
 
-**Docs are part of every change. This is the Prime Directive — see
-[`rules/docs-in-sync.md`](rules/docs-in-sync.md) and
-[`rules/critical-rules.md#C16`](rules/critical-rules.md).**
+Docs are part of every change. The Prime Directive — canonical text and the
+change-type → docs-to-update table — lives in
+[`rules/docs-in-sync.md`](rules/docs-in-sync.md); the rule line is
+[`rules/critical-rules.md#C16`](rules/critical-rules.md). Read those once; this
+section does not restate them.
 
-- A PR that changes behavior, build, config, dependencies, interfaces, file layout,
-  commands, or conventions **must update the matching docs in the same PR**. Doc
-  updates are not a follow-up.
+Operating notes specific to this guide:
+
 - `AGENTS.md` is a routing layer — keep it short.
 - `docs/` is the source of truth. Prefer adding a new focused doc to bloating a catch-all.
 - Cross-link liberally; agents navigate via links.
 - Code samples in docs are short, copy-pastable, and labeled with a target file path.
-- When behavior changes, update the corresponding doc(s) in the same change.
 - Stale docs are bugs. If you read a doc that no longer matches reality, fix it or open a
   history entry noting the gap.
-- Reviewers reject PRs that ship code drift. A "looks good, please open a doc PR after"
-  is **not** an accepted review outcome.
 
 ## Git And Review
 
@@ -45,22 +43,16 @@ repository. Stack-specific rules live in `docs/rules/`; this file is the meta la
 - Commit subject ≤ 70 chars; body explains *why*, not *what*.
 - Branch from `main`; rebase before merge; squash if commits are noisy.
 - Before a commit or PR, verify that docs, examples, scripts, and histories reflect the
-  final behavior. `make ci` catches the basics.
+  final behavior. `make ci` catches the basics (including `STATUS.md` freshness).
 - Large or risky work lands behind an execution plan checked into `docs/exec-plans/`.
 - Review comments cite repository files, not private context: "see
   `docs/design-docs/async-model.md#scheduler-ownership`".
 
-## Coding Standards (Pointers)
+## Coding Standards
 
-- `docs/rules/critical-rules.md` — non-negotiables.
-- `docs/rules/code-style.md` — idioms, naming, formatting.
-- `docs/rules/compile-budget.md` — per-TU and per-target compile-time budget.
-- `docs/rules/module-and-pch.md` — modules / PCH / include hygiene.
-- `docs/rules/async-and-concurrency.md` — asio + coroutines, no `std::thread`.
-- `docs/rules/error-handling.md` — `std::expected` end-to-end.
-- `docs/rules/libraries.md` — approved third-party libraries and their boundaries.
-- `docs/rules/testing-and-bench.md` — what counts as a passing change.
-- `docs/rules/workflow.md` — git, tooling, branch rules.
+The full module-by-module routing index — including the rule file for each area —
+lives in [`AGENTS.md`](../AGENTS.md) under "Module Routing" and "Conventions At A
+Glance". This guide does not duplicate it.
 
 ## Testing And Validation
 
