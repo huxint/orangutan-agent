@@ -69,12 +69,14 @@ own test bucket, its own bench bucket, and its own public header set under
 
 ## Library Inventory
 
-> **Slice status (2026-05-16):** `oran-core`, `oran-async`, the file/directory MVP
-> of `oran-io`, the expected-only SQLite core + migration runner + SQL-file
-> migration loader + async writer/reader `Pool` with per-slot statement caches
-> + standalone per-connection `StatementCache` + `SessionRepository` of
-> `oran-storage`, the first `oran-config` JSON loader, and the config-loading slice of
-> `oran-bootstrap`, plus the first `oran-cli` handoff shell, are implemented.
+> **Slice status (2026-05-16):** `oran-core` (now with `Error`/`Result` plus
+> the `Time` value type and ISO-8601 UTC format/parse helpers), `oran-async`,
+> the file/directory MVP of `oran-io`, the expected-only SQLite core +
+> migration runner + SQL-file migration loader + async writer/reader `Pool`
+> with per-slot statement caches + standalone per-connection `StatementCache`
+> + `SessionRepository` of `oran-storage`, the first `oran-config` JSON
+> loader, and the config-loading slice of `oran-bootstrap`, plus the first
+> `oran-cli` handoff shell, are implemented.
 > All other rows below are *planned* and will land per `docs/exec-plans/` as
 > future slices are scheduled. The build system, PCH, tests bucket, and bench
 > bucket conventions are live; see the history entries under
@@ -82,7 +84,7 @@ own test bucket, its own bench bucket, and its own public header set under
 
 | Library              | Purpose                                         | Depends on (allowed)                          |
 | -------------------- | ----------------------------------------------- | --------------------------------------------- |
-| `oran-core`          | `Result<T>`, `Error`, `Message`, `Content`, `ToolDef`, base enums, `core::str`, `core::time` | stdlib only |
+| `oran-core`          | `Result<T>`, `Error`, `Time` + ISO-8601 UTC helpers, planned `Message`, `Content`, `ToolDef`, `core::str` | stdlib only |
 | `oran-async`         | asio `Runtime`, `Awaitable<T>`, bounded `Channel<T>`, cancel-aware `sleep_for`; mailbox policy lands in orchestration | `oran-core`, asio |
 | `oran-log`           | spdlog shim + secret redaction; thread-local context | `oran-core`, spdlog/fmt |
 | `oran-io`            | file/directory IO MVP; planned glob, pipe, subprocess, signal | `oran-core`, `oran-async` |
