@@ -6,9 +6,10 @@ does not expose `sqlite3.h` from public headers.
 
 > **Storage status (2026-05-16):** `oran-storage` ships `Connection`, `Statement`,
 > typed binding/stepping/column readers, WAL + foreign-key setup, a simple `query`
-> helper, the synchronous `run_migrations` runner, and an async writer/reader
-> `Pool` driven by `oran-async` executors. Statement caches, SQL-file loading,
-> backups, and domain repositories are future slices.
+> helper, the synchronous `run_migrations` runner, an async writer/reader
+> `Pool` driven by `oran-async` executors, and a per-connection
+> `StatementCache` with LRU eviction. SQL-file loading, backups, and domain
+> repositories are future slices.
 
 ## Public Surface
 
@@ -141,8 +142,8 @@ the report returns the existing `current_version` and an empty `applied_versions
 ## Future Slices
 
 - SQL-file loading from `src/oran-storage/migrations/`.
-- Prepared statement cache.
 - Domain repositories for sessions, memory, automation, and audit logs.
+- Pool-integrated statement cache (one cache per pool slot).
 - Backup script integration and generated schema docs.
 
 ## Pool
@@ -236,3 +237,91 @@ The pool's public header pulls in `<asio/any_io_executor.hpp>` and
 Storage TUs that consume the pool inherit the asio include set; storage TUs
 that only touch `Connection` / `Statement` remain unchanged. The xmake target
 graph now lists `oran-storage` as depending on `oran-async`.
+
+## Statement Cache
+
+`StatementCache` reuses prepared `Statement` objects keyed by SQL text so that
+hot-path queries pay the `sqlite3_prepare_v2` cost once per cache lifetime
+instead of once per call. Each cache is bound to a single `Connection` by
+convention; SQLite statements are handle-specific, so sharing one cache across
+multiple connections is undefined.
+
+```cpp
+namespace orangutan::storage {
+
+struct StatementCacheOptions {
+  std::size_t capacity{32};
+};
+
+class CachedStatement {
+ public:
+  ~CachedStatement();
+  bool      valid() const noexcept;
+  Statement& statement() noexcept;
+  void      release() noexcept;
+};
+
+class StatementCache {
+ public:
+  static core::Result<StatementCache> open(StatementCacheOptions);
+
+  bool         valid() const noexcept;
+  std::size_t  capacity() const noexcept;
+  std::size_t  size() const noexcept;
+  std::size_t  hits() const noexcept;
+  std::size_t  misses() const noexcept;
+  std::size_t  evictions() const noexcept;
+
+  core::Result<CachedStatement> acquire(Connection&, std::string_view sql);
+  void                          clear() noexcept;
+};
+
+}  // namespace orangutan::storage
+```
+
+### Semantics
+
+- `acquire` returns a move-only RAII `CachedStatement` lease.
+  - Cache hit: the existing entry is promoted to most-recently-used, the
+    statement is `sqlite3_reset`/`sqlite3_clear_bindings`-ed before hand-out,
+    and `hits` increments.
+  - Cache miss: the SQL is prepared via `Connection::prepare`, the new entry is
+    inserted at the front of the LRU, and `misses` increments. If the cache is
+    at capacity, the least-recently-used unleased entry is evicted and
+    `evictions` increments.
+- If every entry is currently leased on a miss, the new statement is **transient**
+  — it is not inserted into the cache, has no eviction effect on existing
+  entries, and is finalized when the lease releases. This keeps the cache size
+  bounded without forcing callers to handle a "cache is busy" error.
+- `acquire`-ing the same SQL while a prior lease is still outstanding returns
+  `core::ErrorKind::conflict` (the underlying statement is single-handed).
+- `CachedStatement::~CachedStatement` resets + clears bindings on the statement
+  and returns it to the cache (or finalizes it, if the entry was orphaned by
+  `clear` / eviction). `release()` is idempotent.
+- `clear()` purges every unleased entry, marks leased entries orphaned (so they
+  finalize on release rather than re-enter the cache), and resets the counters.
+
+### Error Model
+
+- `StatementCache::open` returns `core::ErrorKind::invalid_argument` when
+  `capacity == 0`.
+- Calling `acquire` on a default-constructed (not-open) cache returns
+  `core::ErrorKind::conflict` with message `statement cache is not open`.
+- An empty SQL string returns `core::ErrorKind::invalid_argument`.
+- Per-statement failures bubble the SQLite error from `Connection::prepare`,
+  `Statement::reset`, or `Statement::clear_bindings`, with an `sql` context
+  field attached on the reset/clear path.
+
+### Compile-Time Cost
+
+The cache's public header pulls in stdlib (`<cstddef>`, `<memory>`,
+`<string_view>`) plus `<oran/core/result.hpp>` and `<oran/storage/sqlite.hpp>` —
+all already on the storage public surface. The implementation adds `<list>` and
+`<unordered_map>`, both confined to `src/oran-storage/statement_cache.cpp`. No
+new public dependency edge.
+
+### Threading
+
+A cache is single-owner, matching `Connection`'s `SQLITE_OPEN_NOMUTEX` mode.
+Concurrent use from multiple threads is undefined. Future pool integration will
+give each pool slot its own cache so single-owner discipline is preserved.

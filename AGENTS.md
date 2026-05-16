@@ -89,6 +89,10 @@ Codex, or any future agent can ship features without depending on chat memory.
 - **Compiler:** GCC 16.1 primary, Clang ≥ 19 secondary (CI runs both when feasible).
 - **Console output:** `std::print` / `std::println` / `std::format`. No `<iostream>`
   in `src/oran-*/`. See [`docs/rules/critical-rules.md#C17`](docs/rules/critical-rules.md).
+- **Algorithms / ranges:** Prefer `std::ranges::*` over the iterator-pair
+  `std::*` algorithms, and reach for stdlib + in-repo helpers before writing a
+  hand-rolled loop. See [`docs/rules/code-style.md`](docs/rules/code-style.md)
+  ("Algorithms And Ranges") and [`docs/rules/critical-rules.md#C17`](docs/rules/critical-rules.md).
 - **Static analysis:** GCC 16.1 `-fanalyzer` via `xmake f --analyze=y` (opt-in for
   authors, nightly CI required). See [`docs/rules/static-analysis.md`](docs/rules/static-analysis.md).
 - **Build:** xmake. Lock file pinned. PCH on, modules where supported, unity for cold modules.

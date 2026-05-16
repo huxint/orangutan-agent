@@ -198,6 +198,23 @@ Concretely:
   qualification.
 - Prefer `consteval` / `constinit` over template-metaprogramming workarounds where
   GCC 16.1 lets you.
+- **Prefer existing library functions over hand-rolled equivalents.** Before writing a
+  raw `for` loop, a manual search, a hand-coded transform, or your own min/max/sort
+  helper, check the standard library (`<algorithm>`, `<ranges>`, `<numeric>`,
+  `<bit>`, `<charconv>`, `<chrono>`) and the in-repo libraries (`oran-core`,
+  `oran-async`, `oran-io`, …) for a function that already does it. Reach for an
+  in-repo helper before adding a new one.
+- **Prefer `std::ranges` over the unprojected `std::` algorithms.** Use
+  `std::ranges::find_last_if(rng, pred)` instead of a reverse-iterator loop, and
+  `std::ranges::sort(rng)` instead of `std::sort(rng.begin(), rng.end())`. The
+  range-based forms are clearer at the callsite, project-aware via projections,
+  and avoid begin/end pairs.
+- **Prefer the newer facility when two equivalents exist.** If the standard ships
+  both an older and a newer version of a function or type covering the same use
+  case (e.g., `std::format` vs. `sprintf`, `std::filesystem::path` vs. raw
+  strings, `std::span` vs. pointer-and-length, `std::optional` vs. sentinel
+  values, `std::variant` vs. tagged unions, `std::ranges::*` vs. iterator-pair
+  `std::*`), use the newer one unless there is a benchmarked reason not to.
 
 **Why:** the rewrite exists specifically because the legacy project's older standard
 left it stuck with hand-rolled equivalents of `std::expected` and friends. We use

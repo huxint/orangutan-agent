@@ -157,6 +157,48 @@ do not yet emit via `std::print`); even there, prefer `std::print` for direct ou
 - Don't return `std::optional<core::Result<T>>` — collapse the nesting; use a richer
   `Error::not_found`.
 
+### Algorithms And Ranges
+
+Before writing a hand-rolled loop, search the standard library and the in-repo
+helpers for a function that already does it. The win is twofold: the callsite
+becomes a single named operation, and the reader does not have to verify the
+loop's correctness.
+
+- **Prefer `std::ranges::*` over the iterator-pair `std::*` algorithms.**
+  `std::ranges::find_last_if(rng, pred)` is clearer than a hand-written
+  reverse-iterator loop, and `std::ranges::sort(rng)` is clearer than
+  `std::sort(rng.begin(), rng.end())`. Range projections (`std::ranges::sort(rng,
+  {}, &Item::priority)`) eliminate temporary lambdas.
+- **Reach for the stdlib first.** Check `<algorithm>`, `<ranges>`, `<numeric>`,
+  `<bit>`, `<charconv>`, `<chrono>`, `<format>` before adding a private helper.
+- **Reach for an in-repo lib next.** `oran-core`, `oran-async`, `oran-io`,
+  `oran-storage`, … each own a slice of behavior; if your helper would fit one
+  of them, add it there instead of duplicating it in the consumer.
+- **Pick the newer of two equivalents.** When the standard ships both an older
+  and newer facility for the same job (`std::format` vs. `sprintf`,
+  `std::filesystem::path` vs. raw strings, `std::span` vs. pointer + length,
+  `std::optional` vs. sentinel values, `std::variant` vs. tagged unions,
+  `std::ranges::*` vs. iterator-pair `std::*`), use the newer one unless there is
+  a benchmarked reason not to.
+
+```cpp
+// PREFERRED — range form, named projection, clear intent.
+auto victim = std::ranges::find_last_if(cache.lru,
+                                        [](const auto& e) { return !e->leased; });
+
+// FORBIDDEN — hand-rolled loop where a one-liner exists.
+auto victim = cache.lru.end();
+for (auto it = cache.lru.begin(); it != cache.lru.end(); ++it) {
+  if (!(*it)->leased) {
+    victim = it;
+  }
+}
+```
+
+This rule lives alongside `critical-rules.md#C17` ("Language standard is C++26;
+modern facilities preferred"). C17 covers *which* C++26 facilities to adopt;
+this section covers *which* one to choose when the language offers a choice.
+
 ### Lambdas
 
 - Trailing return type only when needed.
