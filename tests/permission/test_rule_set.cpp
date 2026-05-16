@@ -100,6 +100,23 @@ TEST_CASE("RuleSet::clear empties the set", "[unit][permission][rule_set]") {
   REQUIRE(rs.evaluate("x", Mode::strict).verdict == Verdict::deny);
 }
 
+TEST_CASE("RuleSet::rules exposes insertion-order rules for diagnostics", "[unit][permission][rule_set]") {
+  RuleSet rs;
+  rs.add(Rule{.verdict = Verdict::allow, .tool_pattern = "file.read", .capability = std::nullopt});
+  rs.add(
+      Rule{.verdict = Verdict::deny, .tool_pattern = "*", .capability = orangutan::core::Capability::runtime_loader});
+  rs.add(Rule{.verdict = Verdict::ask, .tool_pattern = "file.write", .capability = std::nullopt});
+
+  const auto view = rs.rules();
+  REQUIRE(view.size() == 3);
+  REQUIRE(view[0].verdict == Verdict::allow);
+  REQUIRE(view[0].tool_pattern == "file.read");
+  REQUIRE(view[1].verdict == Verdict::deny);
+  REQUIRE(view[1].capability == orangutan::core::Capability::runtime_loader);
+  REQUIRE(view[2].verdict == Verdict::ask);
+  REQUIRE(view[2].tool_pattern == "file.write");
+}
+
 TEST_CASE("Verdict and Mode have stable string mappings", "[unit][permission]") {
   REQUIRE(core::enum_name(Verdict::allow) == "allow");
   REQUIRE(core::enum_name(Verdict::deny) == "deny");

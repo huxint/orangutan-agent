@@ -10,7 +10,9 @@
 #include <vector>
 
 #include <oran/cli.hpp>
+#include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
+#include <oran/permission.hpp>
 
 namespace orangutan::bootstrap {
 namespace {
@@ -18,10 +20,11 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice9";
+constexpr std::string_view kVersion = "2.0.0-slice10";
 
 struct ParsedArgs {
   bool help{false};
+  bool explain_rules{false};
   bool has_explicit_config{false};
   std::string explicit_config_path{};
   std::vector<std::string_view> cli_args{};
@@ -42,6 +45,11 @@ struct ParsedArgs {
 
     if (arg == "--help" || arg == "-h") {
       parsed.help = true;
+      continue;
+    }
+
+    if (arg == "--explain-rules") {
+      parsed.explain_rules = true;
       continue;
     }
 
@@ -92,9 +100,35 @@ struct ParsedArgs {
 
 void print_usage() {
   std::println("orangutan v{}", kVersion);
-  std::println("usage: orangutan [--config <path>] [--prompt <text>] [--help]");
+  std::println("usage: orangutan [--config <path>] [--explain-rules] [--prompt <text>] [--help]");
   std::println();
   std::println("The current bootstrap slice loads config, then hands CLI modes to oran-cli.");
+  std::println("--explain-rules prints the materialized permission rule set and exits.");
+}
+
+[[nodiscard]] Result<int> print_materialized_rules(const config::Config& cfg) {
+  // Use the design-doc "default" mode for diagnostics — operators can pick
+  // their actual runtime mode once bootstrap owns it. The empty per-agent
+  // overlay matches the "no agent selected yet" call shape.
+  auto rs = permission::materialize(permission::Mode::default_, cfg.permissions(), config::PermissionsConfig{});
+  if (!rs) {
+    return std::unexpected(std::move(rs.error()));
+  }
+
+  std::println("materialized rules (mode={}): {} total", core::enum_name(permission::Mode::default_), rs->size());
+  std::size_t index = 0;
+  for (const auto& rule : rs->rules()) {
+    std::print("  #{:<3} {:<5} tool={}", index, core::enum_name(rule.verdict), rule.tool_pattern);
+    if (rule.capability.has_value()) {
+      std::print(" capability={}", core::enum_name(*rule.capability));
+    }
+    if (rule.input_pattern.has_value()) {
+      std::print(" input=~\"{}\"", rule.input_pattern->pattern());
+    }
+    std::println();
+    ++index;
+  }
+  return 0;
 }
 
 }  // namespace
@@ -176,6 +210,10 @@ core::Result<int> run(BootstrapOptions options) {
   auto loaded = load_config(options);
   if (!loaded) {
     return std::unexpected(std::move(loaded.error()));
+  }
+
+  if (parsed->explain_rules) {
+    return print_materialized_rules(loaded->value);
   }
 
   std::println("orangutan v{}", kVersion);

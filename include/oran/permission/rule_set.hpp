@@ -114,6 +114,15 @@ public:
   void clear() noexcept;
   [[nodiscard]] std::size_t size() const noexcept;
 
+  /// Read-only view over the underlying rule vector in insertion order.
+  /// Exposed so diagnostics (e.g. a `--explain-rules` CLI mode) can render
+  /// the materialized rule set without re-running `evaluate`. The walk
+  /// inside `evaluate` does not use this accessor; it iterates `rules_`
+  /// directly so the precedence walk's pointer-following stays inlined.
+  [[nodiscard]] std::span<const Rule> rules() const noexcept {
+    return std::span<const Rule>{rules_};
+  }
+
   /// Evaluate `tool_name` against the rule set without supplying call
   /// `input` or any capability information. Rules with a capability scope
   /// never fire on this path; rules with an `input_pattern` fire only if

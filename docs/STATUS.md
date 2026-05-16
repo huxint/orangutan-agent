@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 9 (`xmake run orangutan` reports slice 9)
+- **Slice:** 10 (`xmake run orangutan` reports slice 10)
 - **Last completed history:**
-  [`histories/2026-05/20260517-0145-oran-config-input-pattern.md`](histories/2026-05/20260517-0145-oran-config-input-pattern.md)
+  [`histories/2026-05/20260517-0155-bootstrap-explain-rules.md`](histories/2026-05/20260517-0155-bootstrap-explain-rules.md)
 - **Active exec-plan:** none (`docs/exec-plans/active/` is empty)
 - **Next intended slice:** TBD — choose from the QUALITY_SCORE "Next Step"
   column. Most likely candidates: HMAC-signed approval prompts per
@@ -35,7 +35,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-io`: 8 cases / 33 assertions.
 - `oran-storage`: 52 cases / 606 assertions.
 - `oran-config`: 14 cases / 132 assertions.
-- `oran-permission`: 41 cases / 165 assertions.
+- `oran-permission`: 42 cases / 172 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 8 cases / 34 assertions.
 
