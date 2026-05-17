@@ -192,6 +192,14 @@ Four separate SQLite files (one per concern):
   operations over opaque message JSON. Its default `migrate()` path loads
   `src/oran-storage/migrations/sessions/0001-sessions-initial.sql` from the
   source tree, with an explicit directory override for future packaged layouts.
+- `storage::AuditRepository` for the `audit.db` schema and append/list/count
+  over `audit_events`. Each row carries scope/agent/tool/identity, the raw
+  rule-engine `verdict` (`allow`/`deny`/`ask`), the rendered `outcome`
+  (`allow`/`deny`/`ask`/`approved`/`rejected`), a free-form `reason`,
+  an optional `input_hash_hex` (set on approval-flow callsites), and a
+  `metadata_json` extension column. Indexes cover the scope-by-time hot path
+  plus secondary `agent_key`/`outcome` query shapes. Its default `migrate()`
+  loads `src/oran-storage/migrations/audit/0001-audit-initial.sql`.
 
 All public APIs return `core::Result<T>` (i.e. `std::expected<T, core::Error>`). The
 legacy throwing wrappers (`must_ok`) **do not exist** in v2. Migration debt is

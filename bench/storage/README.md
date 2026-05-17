@@ -17,6 +17,7 @@ writer/reader pool, and the first session repository wrapper.
 | [`scenarios/statement_cache.cpp`](scenarios/statement_cache.cpp) | Fresh prepare *vs.* standalone `StatementCache` prepare reuse. |
 | [`scenarios/pool_statement_cache.cpp`](scenarios/pool_statement_cache.cpp) | Pool writer fresh prepare *vs.* pool writer slot `StatementCache` reuse. |
 | [`scenarios/session_repository.cpp`](scenarios/session_repository.cpp) | Raw pool + cache SQL append/load *vs.* `SessionRepository` append/load. |
+| [`scenarios/audit_repository.cpp`](scenarios/audit_repository.cpp) | Raw pool + cache SQL append/count *vs.* `AuditRepository` append/list for a 64-event batch. |
 
 ## Running
 

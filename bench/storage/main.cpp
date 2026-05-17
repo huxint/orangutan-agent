@@ -6,6 +6,7 @@
 #include <print>
 
 namespace orangutan::bench {
+void register_audit_repository(ankerl::nanobench::Bench&);
 void register_migrations(ankerl::nanobench::Bench&);
 void register_pool_acquire(ankerl::nanobench::Bench&);
 void register_pool_statement_cache(ankerl::nanobench::Bench&);
@@ -27,6 +28,7 @@ int main() {
   orangutan::bench::register_statement_cache(b);
   orangutan::bench::register_pool_statement_cache(b);
   orangutan::bench::register_session_repository(b);
+  orangutan::bench::register_audit_repository(b);
 
   std::println();
   return 0;
