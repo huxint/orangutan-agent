@@ -42,8 +42,33 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > `core::Result<RuleSet>` so a (theoretical) re2 compile failure
 > on the validated source surfaces as
 > `Error::invalid_argument` rather than silently dropping a
-> rule. HMAC-signed approval prompts and audit log writes are
-> still future slices listed under "v1" in
+> rule. **HMAC-signed approvals landed on 2026-05-17 too**:
+> `permission::ApprovalSecret` wraps libsodium's
+> `crypto_auth_hmacsha256` over a 32-byte per-process key
+> (`randombytes_buf` source, `sodium_memcmp` constant-time
+> compare, `sodium_memzero` on move/destruction); the public
+> header is sodium-free (rule C6). On top of it,
+> `permission::ApprovalToken` + `permission::ApprovalAuthority`
+> own the issue/verify flow described under "Approval Signing"
+> in `secrets-and-state.md` — SHA-256 input hash + 16-byte
+> random nonce + `core::Time` expiry MACed over a
+> domain-separated length-prefixed canonical bytes layout
+> (`"oran-approval-v1"` prefix + 1-byte version sentinel +
+> length-prefixed tool/identity + input_hash + nonce + LE int64
+> millis expiry). `verify` checks expiry → tool → identity →
+> input hash → MAC in that order and attaches a `reason`
+> context entry (`expired`/`tool_mismatch`/`identity_mismatch`/
+> `input_mismatch`/`mac_mismatch`) on the first failure so the
+> upcoming audit slice can record *why* a token was rejected.
+> `0008-permissions.md` criterion 5 ("Approval signing key is
+> rotated when the runtime restarts; prior approvals are
+> invalidated") is closed: every process generates a fresh
+> 32-byte secret, so a token signed by the previous process
+> fails MAC verification under the new authority — the bench
+> bucket pins this at ~9.3 µs verify_ok vs. ~36 ns early-reject
+> expired (~250× faster). Replay tracking (criterion 2's
+> `replay_max` / `approval_ttl` per-rule plumbing) and audit
+> log writes are still future slices listed under "v1" in
 > [`../product-specs/0008-permissions.md`](../product-specs/0008-permissions.md).
 
 ### Sources

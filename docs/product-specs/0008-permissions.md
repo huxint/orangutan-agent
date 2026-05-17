@@ -62,7 +62,25 @@ human approval for high-risk operations.
    `RuleSet::evaluate(tool, input, capabilities, mode)`
    overload landed earlier the same day.)**
 5. Approval signing key is rotated when the runtime restarts; prior approvals are
-   invalidated.
+   invalidated. **(Closed 2026-05-17: `permission::ApprovalSecret`
+   wraps libsodium's `crypto_auth_hmacsha256` over a 32-byte
+   per-process key generated from `randombytes_buf` (constant-time
+   `sodium_memcmp` compare, `sodium_memzero` on move/destruction).
+   On top of it, `permission::ApprovalAuthority` /
+   `permission::ApprovalToken` own the issue/verify flow:
+   SHA-256 input hash + 16-byte random nonce + `core::Time` expiry
+   MACed over a domain-separated length-prefixed canonical bytes
+   layout (`"oran-approval-v1"` + version sentinel +
+   length-prefixed tool/identity + input_hash + nonce + LE int64
+   millis expiry). `verify(token, tool, input, identity, now)`
+   checks expiry → tool → identity → input hash → MAC and
+   attaches a `reason` context entry on first failure
+   (`expired`/`tool_mismatch`/`identity_mismatch`/`input_mismatch`/
+   `mac_mismatch`). Because the per-process key is fresh on every
+   startup, tokens signed under a prior process fail MAC
+   verification — pinned in tests as the criterion-5 invariant.
+   Bench: issue ~9.9 µs, verify_ok ~9.3 µs, verify_expired
+   early-reject ~36 ns.)**
 6. `tests/permission/` ≥ 90% coverage including table-driven tests over modes ×
    rule kinds × capability flags.
 
