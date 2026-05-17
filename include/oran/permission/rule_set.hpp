@@ -38,6 +38,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <format>
 #include <optional>
@@ -90,6 +91,20 @@ struct Rule {
   /// input. When set, the rule matches only when the pattern accepts
   /// the input — `Rule` is move-only as a result (re2 is non-copyable).
   std::optional<InputPattern> input_pattern{};
+  /// Per-rule replay budget consumed by the `ApprovalBroker` when this
+  /// rule fires with `Verdict::ask`. The broker honors up to
+  /// `replay_max` successful `check`s against the same
+  /// `(tool, identity, input_hash)` triple before requiring a fresh
+  /// approval. Default mirrors the design-doc value
+  /// (`docs/design-docs/permissions-and-hooks.md` "Approval Signing":
+  /// `replay_max`, default 8). Carried inside `Rule` rather than only
+  /// in `Decision` so a `--explain-rules` audit walker can recover the
+  /// authored intent without re-running `evaluate`.
+  std::uint32_t replay_max{8};
+  /// Per-rule TTL applied to the `ApprovalToken` issued by the broker.
+  /// Default matches the design-doc `approval_ttl=1h`. Same audit
+  /// rationale as `replay_max`.
+  std::chrono::seconds approval_ttl{3600};
 
   friend bool operator==(const Rule&, const Rule&) = default;
 };
@@ -102,6 +117,14 @@ struct Decision {
   /// When the firing rule had an input_pattern, the pattern source string
   /// appears too (e.g. `rule #3 (deny: shell.exec input=~"^rm ")`).
   std::string reason;
+  /// Replay budget the `ApprovalBroker` should apply when this decision
+  /// is acted on. Copied from the matched rule when a rule fires; falls
+  /// back to the `Rule` struct defaults (8 / 1h) when the decision came
+  /// from the mode-default branch. Meaningful only when
+  /// `verdict == Verdict::ask`; callers that act on `allow` / `deny`
+  /// should ignore these.
+  std::uint32_t replay_max{8};
+  std::chrono::seconds approval_ttl{3600};
 
   friend bool operator==(const Decision&, const Decision&) = default;
 };

@@ -1,5 +1,6 @@
 // tests/permission/test_rule_set.cpp — `RuleSet` evaluator + glob matcher.
 
+#include <chrono>
 #include <optional>
 #include <string_view>
 
@@ -125,4 +126,35 @@ TEST_CASE("Verdict and Mode have stable string mappings", "[unit][permission]") 
   REQUIRE(core::enum_name(Mode::default_) == "default");
   REQUIRE(core::enum_name(Mode::permissive) == "permissive");
   REQUIRE(core::enum_name(Mode::sandboxed) == "sandboxed");
+}
+
+TEST_CASE("Rule defaults match the design-doc approval-policy baseline",
+          "[unit][permission][rule_set][approval_policy]") {
+  const Rule rule{.tool_pattern = "*"};
+  REQUIRE(rule.replay_max == 8);
+  REQUIRE(rule.approval_ttl == std::chrono::seconds{3600});
+}
+
+TEST_CASE("RuleSet::evaluate forwards rule replay_max / approval_ttl onto the Decision",
+          "[unit][permission][rule_set][approval_policy]") {
+  RuleSet rs;
+  rs.add(Rule{
+      .verdict = Verdict::ask,
+      .tool_pattern = "file.write",
+      .replay_max = 2,
+      .approval_ttl = std::chrono::seconds{60},
+  });
+  const auto decision = rs.evaluate("file.write", Mode::strict);
+  REQUIRE(decision.verdict == Verdict::ask);
+  REQUIRE(decision.replay_max == 2);
+  REQUIRE(decision.approval_ttl == std::chrono::seconds{60});
+}
+
+TEST_CASE("RuleSet::evaluate falls back to Decision defaults on the mode-default branch",
+          "[unit][permission][rule_set][approval_policy]") {
+  RuleSet rs;
+  const auto decision = rs.evaluate("file.write", Mode::default_);
+  // No rule fired — Decision keeps the design-doc baseline (8 / 1h).
+  REQUIRE(decision.replay_max == 8);
+  REQUIRE(decision.approval_ttl == std::chrono::seconds{3600});
 }

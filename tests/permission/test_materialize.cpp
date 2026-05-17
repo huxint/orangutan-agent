@@ -2,6 +2,7 @@
 // three-layer rule merge coverage.
 
 #include <array>
+#include <chrono>
 #include <span>
 #include <string>
 
@@ -215,4 +216,37 @@ TEST_CASE("materialize surfaces re2 compile failures on input_pattern",
   auto rs = perm::materialize(Mode::permissive, global);
   REQUIRE_FALSE(rs.has_value());
   REQUIRE(rs.error().kind() == orangutan::core::ErrorKind::invalid_argument);
+}
+
+TEST_CASE("materialize forwards replay_max + approval_ttl_seconds from config into the Rule",
+          "[unit][permission][materialize][approval_policy]") {
+  cfg::PermissionsConfig global;
+  global.rules.push_back(cfg::PermissionRuleConfig{
+      .verdict = cfg::PermissionVerdict::ask,
+      .tool_pattern = "file.write",
+      .replay_max = std::uint32_t{4},
+      .approval_ttl_seconds = std::int64_t{120},
+  });
+
+  const auto rs = require_materialized(Mode::strict, global);
+  const auto decision = rs.evaluate("file.write", Mode::strict);
+  REQUIRE(decision.verdict == Verdict::ask);
+  REQUIRE(decision.replay_max == 4);
+  REQUIRE(decision.approval_ttl == std::chrono::seconds{120});
+}
+
+TEST_CASE("materialize keeps Rule defaults when config omits replay_max / approval_ttl_seconds",
+          "[unit][permission][materialize][approval_policy]") {
+  cfg::PermissionsConfig global;
+  // Both optional fields unset — operator omitted them.
+  global.rules.push_back(cfg::PermissionRuleConfig{
+      .verdict = cfg::PermissionVerdict::ask,
+      .tool_pattern = "shell.exec",
+  });
+
+  const auto rs = require_materialized(Mode::strict, global);
+  const auto decision = rs.evaluate("shell.exec", Mode::strict);
+  REQUIRE(decision.verdict == Verdict::ask);
+  REQUIRE(decision.replay_max == 8);
+  REQUIRE(decision.approval_ttl == std::chrono::seconds{3600});
 }

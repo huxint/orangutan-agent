@@ -74,12 +74,19 @@ enum class PermissionVerdict : std::uint8_t {
 /// criterion 4 "invalid patterns at load time are reported" guarantee in
 /// `docs/product-specs/0008-permissions.md`. The materializer recompiles
 /// the same pattern via `permission::InputPattern` when it assembles the
-/// runtime `Rule`s.
+/// runtime `Rule`s. `replay_max` and `approval_ttl_seconds` carry the
+/// per-rule approval-window policy (`docs/design-docs/permissions-and-hooks.md`
+/// "Approval Signing": `replay_max=8`, `approval_ttl=3600s`). They are
+/// optional at the config layer — when unset, the materializer keeps the
+/// `permission::Rule` struct defaults, so an operator who omits the
+/// fields gets the design-doc baseline.
 struct PermissionRuleConfig {
   PermissionVerdict verdict{PermissionVerdict::deny};
   std::string tool_pattern;
   std::optional<core::Capability> capability{};
   std::optional<std::string> input_pattern{};
+  std::optional<std::uint32_t> replay_max{};
+  std::optional<std::int64_t> approval_ttl_seconds{};
 
   friend bool operator==(const PermissionRuleConfig&, const PermissionRuleConfig&) = default;
 };

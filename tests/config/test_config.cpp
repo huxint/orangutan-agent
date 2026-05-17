@@ -1,6 +1,7 @@
 // tests/config/test_config.cpp — typed config loader coverage.
 
 #include <array>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <optional>
@@ -505,4 +506,86 @@ TEST_CASE("Config::parse handles unknown verdict / rule / agent keys per mode", 
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }
+}
+
+TEST_CASE("Config::parse extracts replay_max + approval_ttl_seconds on permission rules",
+          "[unit][config][permissions][approval_policy]") {
+  auto result = config::Config::parse(R"json({
+  "permissions": {
+    "ask": [
+      {"tool_pattern": "file.write", "replay_max": 2, "approval_ttl_seconds": 300}
+    ]
+  }
+})json");
+  REQUIRE(result.has_value());
+  const auto& rules = result->permissions().rules;
+  REQUIRE(rules.size() == 1);
+  REQUIRE(rules[0].replay_max == std::optional<std::uint32_t>{2});
+  REQUIRE(rules[0].approval_ttl_seconds == std::optional<std::int64_t>{300});
+}
+
+TEST_CASE("Config::parse leaves replay_max + approval_ttl_seconds unset by default",
+          "[unit][config][permissions][approval_policy]") {
+  auto result = config::Config::parse(R"json({
+  "permissions": {
+    "ask": [
+      {"tool_pattern": "file.write"}
+    ]
+  }
+})json");
+  REQUIRE(result.has_value());
+  const auto& rules = result->permissions().rules;
+  REQUIRE(rules.size() == 1);
+  REQUIRE_FALSE(rules[0].replay_max.has_value());
+  REQUIRE_FALSE(rules[0].approval_ttl_seconds.has_value());
+}
+
+TEST_CASE("Config::parse rejects negative replay_max", "[unit][config][permissions][approval_policy]") {
+  auto result = config::Config::parse(R"json({
+  "permissions": {
+    "ask": [
+      {"tool_pattern": "file.write", "replay_max": -1}
+    ]
+  }
+})json");
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(result.error().kind() == core::ErrorKind::config);
+  bool has_path = false;
+  for (const auto& [key, value] : result.error().context()) {
+    if (key == "path" && value == "$.permissions.ask[0].replay_max") {
+      has_path = true;
+    }
+  }
+  REQUIRE(has_path);
+}
+
+TEST_CASE("Config::parse rejects negative approval_ttl_seconds", "[unit][config][permissions][approval_policy]") {
+  auto result = config::Config::parse(R"json({
+  "permissions": {
+    "ask": [
+      {"tool_pattern": "file.write", "approval_ttl_seconds": -60}
+    ]
+  }
+})json");
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(result.error().kind() == core::ErrorKind::config);
+  bool has_path = false;
+  for (const auto& [key, value] : result.error().context()) {
+    if (key == "path" && value == "$.permissions.ask[0].approval_ttl_seconds") {
+      has_path = true;
+    }
+  }
+  REQUIRE(has_path);
+}
+
+TEST_CASE("Config::parse rejects non-integer replay_max", "[unit][config][permissions][approval_policy]") {
+  auto result = config::Config::parse(R"json({
+  "permissions": {
+    "ask": [
+      {"tool_pattern": "file.write", "replay_max": "many"}
+    ]
+  }
+})json");
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(result.error().kind() == core::ErrorKind::config);
 }

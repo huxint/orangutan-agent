@@ -509,7 +509,42 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
     input_pattern = std::move(pattern);
   }
 
-  static constexpr auto kKnownKeys = std::array<std::string_view, 3>{"tool_pattern", "capability", "input_pattern"};
+  auto replay_max = std::optional<std::uint32_t>{};
+  if (const auto it = value.find("replay_max"); it != value.end()) {
+    auto parsed = integer_value(*it, child_path(path, "replay_max"));
+    if (!parsed) {
+      return std::unexpected(std::move(parsed.error()));
+    }
+    if (*parsed < 0) {
+      return std::unexpected(config_error("replay_max must be non-negative", child_path(path, "replay_max"))
+                                 .with("value", std::to_string(*parsed)));
+    }
+    if (*parsed > static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max())) {
+      return std::unexpected(config_error("replay_max exceeds uint32 range", child_path(path, "replay_max"))
+                                 .with("value", std::to_string(*parsed)));
+    }
+    replay_max = static_cast<std::uint32_t>(*parsed);
+  }
+
+  auto approval_ttl_seconds = std::optional<std::int64_t>{};
+  if (const auto it = value.find("approval_ttl_seconds"); it != value.end()) {
+    auto parsed = integer_value(*it, child_path(path, "approval_ttl_seconds"));
+    if (!parsed) {
+      return std::unexpected(std::move(parsed.error()));
+    }
+    if (*parsed < 0) {
+      return std::unexpected(
+          config_error("approval_ttl_seconds must be non-negative", child_path(path, "approval_ttl_seconds"))
+              .with("value", std::to_string(*parsed)));
+    }
+    approval_ttl_seconds = *parsed;
+  }
+
+  static constexpr auto kKnownKeys = std::array<std::string_view, 5>{"tool_pattern",
+                                                                     "capability",
+                                                                     "input_pattern",
+                                                                     "replay_max",
+                                                                     "approval_ttl_seconds"};
   for (const auto& [key, _] : value.items()) {
     if (std::ranges::contains(kKnownKeys, key)) {
       continue;
@@ -529,6 +564,8 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
       .tool_pattern = std::move(*tool_pattern),
       .capability = capability,
       .input_pattern = std::move(input_pattern),
+      .replay_max = replay_max,
+      .approval_ttl_seconds = approval_ttl_seconds,
   };
 }
 

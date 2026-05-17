@@ -2,6 +2,7 @@
 
 #include <oran/permission/materialize.hpp>
 
+#include <chrono>
 #include <expected>
 #include <utility>
 
@@ -42,12 +43,19 @@ namespace {
       }
       input_pattern = std::move(*compiled);
     }
-    rs.add(Rule{
+    Rule runtime_rule{
         .verdict = to_verdict(rule.verdict),
         .tool_pattern = rule.tool_pattern,
         .capability = rule.capability,
         .input_pattern = std::move(input_pattern),
-    });
+    };
+    if (rule.replay_max.has_value()) {
+      runtime_rule.replay_max = *rule.replay_max;
+    }
+    if (rule.approval_ttl_seconds.has_value()) {
+      runtime_rule.approval_ttl = std::chrono::seconds{*rule.approval_ttl_seconds};
+    }
+    rs.add(std::move(runtime_rule));
   }
   return {};
 }

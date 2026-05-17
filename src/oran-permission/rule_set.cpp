@@ -127,21 +127,30 @@ Decision RuleSet::evaluate(std::string_view tool_name,
   };
 
   if (const auto idx = first_match(Verdict::deny); idx != std::string_view::npos) {
+    const auto& rule = rules_[idx];
     return Decision{
         .verdict = Verdict::deny,
-        .reason = format_reason(idx, rules_[idx]),
+        .reason = format_reason(idx, rule),
+        .replay_max = rule.replay_max,
+        .approval_ttl = rule.approval_ttl,
     };
   }
   if (const auto idx = first_match(Verdict::allow); idx != std::string_view::npos) {
+    const auto& rule = rules_[idx];
     return Decision{
         .verdict = Verdict::allow,
-        .reason = format_reason(idx, rules_[idx]),
+        .reason = format_reason(idx, rule),
+        .replay_max = rule.replay_max,
+        .approval_ttl = rule.approval_ttl,
     };
   }
   if (const auto idx = first_match(Verdict::ask); idx != std::string_view::npos) {
+    const auto& rule = rules_[idx];
     return Decision{
         .verdict = Verdict::ask,
-        .reason = format_reason(idx, rules_[idx]),
+        .reason = format_reason(idx, rule),
+        .replay_max = rule.replay_max,
+        .approval_ttl = rule.approval_ttl,
     };
   }
   const auto fallback = mode_default_verdict(mode);
