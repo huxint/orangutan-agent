@@ -66,9 +66,33 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > 32-byte secret, so a token signed by the previous process
 > fails MAC verification under the new authority — the bench
 > bucket pins this at ~9.3 µs verify_ok vs. ~36 ns early-reject
-> expired (~250× faster). Replay tracking (criterion 2's
-> `replay_max` / `approval_ttl` per-rule plumbing) and audit
-> log writes are still future slices listed under "v1" in
+> expired (~250× faster). **Replay tracking landed on
+> 2026-05-17 too**: `permission::ApprovalBroker` wraps the
+> authority with a `(tool, identity, input_hash)`-keyed map of
+> `{expires_at, remaining_uses}`; `approve(grant, now)` issues
+> a token and registers the entry with
+> `remaining_uses = replay_max`; `check(...)` calls
+> `authority.verify` first (forwarding its `reason` context
+> entries verbatim — `expired`/`tool_mismatch`/
+> `identity_mismatch`/`input_mismatch`/`mac_mismatch`), then
+> looks up the entry and either decrements or returns
+> `reason=no_grant` (entry missing) / `reason=replay_exhausted`
+> (counter at zero). Re-approving the same triple overwrites
+> the entry; `reap_expired(now)` provides explicit periodic
+> eviction. The per-rule `replay_max` / `approval_ttl_seconds`
+> config fields flow through `oran-config` (negative or
+> non-integer values reject at load), through `permission::Rule`
+> (defaults `replay_max=8`, `approval_ttl=3600s` matching the
+> design-doc baseline below), and into `permission::Decision`
+> so the agent loop can pass them straight to
+> `ApprovalBroker::approve` via an `ApprovalGrant`.
+> `0008-permissions.md` criterion 2's replay half is now
+> closed. Bench: `broker_approve` ~9.9 µs, `broker_check_ok`
+> ~10.7 µs (authority verify + map find + decrement),
+> `broker_check_no_grant` / `broker_check_exhausted` ~10.9 µs /
+> ~11.0 µs — the broker's overhead over the raw authority
+> verify is ~875 ns. Audit log writes and bootstrap wiring
+> are still future slices listed under "v1" in
 > [`../product-specs/0008-permissions.md`](../product-specs/0008-permissions.md).
 
 ### Sources

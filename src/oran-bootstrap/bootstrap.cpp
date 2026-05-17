@@ -20,7 +20,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice11";
+constexpr std::string_view kVersion = "2.0.0-slice12";
 
 struct ParsedArgs {
   bool help{false};

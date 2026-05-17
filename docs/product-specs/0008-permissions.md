@@ -40,7 +40,30 @@ human approval for high-risk operations.
 1. A tool call whose input matches a `deny` rule returns
    `Error::permission_denied` and is recorded in audit.
 2. A tool call whose input matches an `ask` rule renders an approval prompt; on
-   approval, replay works within TTL for identical input.
+   approval, replay works within TTL for identical input. **(Closed 2026-05-17:
+   `permission::ApprovalBroker` wraps `permission::ApprovalAuthority`
+   with a `(tool, identity, input_hash)`-keyed replay map. `approve(grant, now)`
+   issues a token and registers `expires_at = now + ttl`, `remaining_uses =
+   replay_max`; `check(token, …, now)` calls the authority's MAC + expiry +
+   tool / identity / input verify (which already attaches the documented
+   `reason` context entries on failure) and then decrements the counter on
+   success. Two broker-only rejection paths attach their own reasons:
+   `reason=no_grant` (token verified but no entry — broker restarted, entry
+   reaped, or `approve` was never called) and `reason=replay_exhausted`
+   (counter at zero). Re-approving the same triple overwrites the entry, so
+   operators get the intuitive "approve again resets the counter" behavior;
+   `reap_expired(now)` provides explicit periodic eviction. The
+   `replay_max` / `approval_ttl_seconds` per-rule fields land in
+   `config::PermissionRuleConfig` as optionals; `oran-config` validates them
+   (negative values reject with the JSON path attached); `permission::Rule`
+   carries them through with the design-doc defaults (`replay_max=8`,
+   `approval_ttl=3600s`); and `permission::Decision` copies the matched
+   rule's policy fields so the agent loop can pass them straight to
+   `ApprovalBroker::approve` via an `ApprovalGrant`. Bench: broker_approve
+   ~9.9 µs (matches authority issue), broker_check_ok ~10.7 µs
+   (authority verify + map find + decrement), broker_check_no_grant /
+   broker_check_exhausted ~10.9 µs / ~11.0 µs (the two broker-only
+   rejection paths).)**
 3. Capability mismatch is enforced — a tool that didn't declare `Capability::network`
    cannot use it even if a rule otherwise allowed. **(Foundation landed
    2026-05-16: `Rule::capability` + capability-aware

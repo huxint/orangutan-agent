@@ -7,18 +7,18 @@
 
 ## Snapshot
 
-- **Slice:** 11 (`xmake run orangutan` reports slice 11)
+- **Slice:** 12 (`xmake run orangutan` reports slice 12)
 - **Last completed history:**
-  [`histories/2026-05/20260517-0235-permission-approval-signing.md`](histories/2026-05/20260517-0235-permission-approval-signing.md)
+  [`histories/2026-05/20260517-0420-permission-approval-broker.md`](histories/2026-05/20260517-0420-permission-approval-broker.md)
 - **Active exec-plan:** none (`docs/exec-plans/active/` is empty)
 - **Next intended slice:** TBD — choose from the QUALITY_SCORE "Next Step"
-  column. Most likely candidates: `ApprovalBroker` that wraps
-  `ApprovalAuthority` with `(tool, input_hash, identity)`-keyed replay
-  tracking + per-rule `replay_max` / `approval_ttl` (closes
-  `0008-permissions.md` criterion 2 fully); `audit.db` schema +
-  `permission::AuditSink` (criterion 1 + criterion 5's audit half);
-  first tool-registry built-ins (`file.read`, `file.write`, `file.edit`,
-  `file.search`).
+  column. Most likely candidates: `audit.db` schema +
+  `permission::AuditSink` that records allow / deny / ask /
+  approved / rejected decisions (closes `0008-permissions.md`
+  criterion 1); first tool-registry built-ins (`file.read`,
+  `file.write`, `file.edit`, `file.search`); wire the
+  `ApprovalBroker` into bootstrap so the upcoming agent loop
+  inherits a per-process broker handle.
 
 ## Library Health
 
@@ -38,8 +38,8 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-async`: 8 cases / 38 assertions.
 - `oran-io`: 8 cases / 33 assertions.
 - `oran-storage`: 52 cases / 606 assertions.
-- `oran-config`: 14 cases / 132 assertions.
-- `oran-permission`: 59 cases / 233 assertions.
+- `oran-config`: 19 cases / 148 assertions.
+- `oran-permission`: 73 cases / 296 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 8 cases / 34 assertions.
 
