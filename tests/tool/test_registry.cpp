@@ -307,9 +307,10 @@ TEST_CASE("register_builtins seeds the slice-17 catalog", "[unit][tool][builtins
   tool::Registry registry;
   REQUIRE(tool::register_builtins(registry).has_value());
   const auto catalog = registry.catalog();
-  REQUIRE(catalog.size() == 2);
+  REQUIRE(catalog.size() == 3);
   REQUIRE(catalog[0].name == tool::kFileReadName);
   REQUIRE(catalog[1].name == tool::kFileWriteName);
+  REQUIRE(catalog[2].name == tool::kFileEditName);
 }
 
 TEST_CASE("file.read happy path returns the file contents verbatim", "[unit][tool][file_read]") {
@@ -569,6 +570,192 @@ TEST_CASE("file.write rejects malformed input as invalid_argument", "[unit][tool
                                                            ctx);
     REQUIRE_FALSE(wrong_create_parents.has_value());
     REQUIRE(wrong_create_parents.error().kind() == core::ErrorKind::invalid_argument);
+
+    // Every rejected call passed the permission gate, so audit recorded one
+    // `allow` row per attempt (8 calls).
+    REQUIRE(sink.events().size() == 8);
+    for (const auto& event : sink.events()) {
+      REQUIRE(event.outcome == permission::AuditOutcome::allow);
+    }
+  });
+}
+
+TEST_CASE("register_file_edit advertises an `edit_file` capability and a path/old/new schema",
+          "[unit][tool][file_edit]") {
+  tool::Registry registry;
+  REQUIRE(tool::register_file_edit(registry).has_value());
+  REQUIRE(registry.size() == 1);
+  const auto* def = registry.find(tool::kFileEditName);
+  REQUIRE(def != nullptr);
+  REQUIRE(def->required_capabilities.size() == 1);
+  REQUIRE(def->required_capabilities[0] == core::Capability::edit_file);
+  REQUIRE(def->input_schema_json.contains("\"path\""));
+  REQUIRE(def->input_schema_json.contains("\"old_string\""));
+  REQUIRE(def->input_schema_json.contains("\"new_string\""));
+  REQUIRE(def->input_schema_json.contains("\"replace_all\""));
+}
+
+namespace {
+
+permission::RuleSet edit_rule_set() {
+  return single_rule(permission::Rule{
+      .verdict = permission::Verdict::allow,
+      .tool_pattern = std::string{tool::kFileEditName},
+      .capability = core::Capability::edit_file,
+  });
+}
+
+}  // namespace
+
+TEST_CASE("file.edit happy path replaces a unique occurrence and reports a count", "[unit][tool][file_edit]") {
+  TempFile file{"edit-unique"};
+  file.write("alpha beta gamma");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_edit(registry).has_value());
+    auto rules = edit_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    nlohmann::json input{{"path", file.string()}, {"old_string", "beta"}, {"new_string", "BETA"}};
+    auto result = co_await registry.dispatch(tool::kFileEditName, input.dump(), ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.contains("1 replacement"));
+    REQUIRE_FALSE(result->text.contains("replacements"));
+    REQUIRE(result->text.contains(file.string()));
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
+  });
+
+  REQUIRE(slurp(file.string()) == "alpha BETA gamma");
+}
+
+TEST_CASE("file.edit replace_all=true rewrites every occurrence", "[unit][tool][file_edit]") {
+  TempFile file{"edit-replace-all"};
+  file.write("foo bar foo baz foo");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_edit(registry).has_value());
+    auto rules = edit_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    nlohmann::json input{{"path", file.string()}, {"old_string", "foo"}, {"new_string", "qux"}, {"replace_all", true}};
+    auto result = co_await registry.dispatch(tool::kFileEditName, input.dump(), ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.contains("3 replacements"));
+  });
+
+  REQUIRE(slurp(file.string()) == "qux bar qux baz qux");
+}
+
+TEST_CASE("file.edit returns conflict when old_string is not unique and replace_all is false",
+          "[unit][tool][file_edit]") {
+  TempFile file{"edit-ambiguous"};
+  file.write("dup dup dup");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_edit(registry).has_value());
+    auto rules = edit_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    nlohmann::json input{{"path", file.string()}, {"old_string", "dup"}, {"new_string", "x"}};
+    auto result = co_await registry.dispatch(tool::kFileEditName, input.dump(), ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::conflict);
+    REQUIRE(context_has(result.error(), "match_count", "3"));
+  });
+
+  // File must be untouched when the call refuses.
+  REQUIRE(slurp(file.string()) == "dup dup dup");
+}
+
+TEST_CASE("file.edit returns not_found when old_string does not appear", "[unit][tool][file_edit]") {
+  TempFile file{"edit-missing-substring"};
+  file.write("hello world");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_edit(registry).has_value());
+    auto rules = edit_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    nlohmann::json input{{"path", file.string()}, {"old_string", "absent"}, {"new_string", "present"}};
+    auto result = co_await registry.dispatch(tool::kFileEditName, input.dump(), ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::not_found);
+  });
+
+  REQUIRE(slurp(file.string()) == "hello world");
+}
+
+TEST_CASE("file.edit propagates not_found when the file is missing", "[unit][tool][file_edit]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_edit(registry).has_value());
+    auto rules = edit_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto path = std::string{"/tmp/oran-tool-edit-missing-"} +
+                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    nlohmann::json input{{"path", path}, {"old_string", "x"}, {"new_string", "y"}};
+    auto result = co_await registry.dispatch(tool::kFileEditName, input.dump(), ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::not_found);
+  });
+}
+
+TEST_CASE("file.edit rejects malformed input as invalid_argument", "[unit][tool][file_edit]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_edit(registry).has_value());
+    auto rules = edit_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    auto bad_json = co_await registry.dispatch(tool::kFileEditName, "{not-json}", ctx);
+    REQUIRE_FALSE(bad_json.has_value());
+    REQUIRE(bad_json.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto missing_path = co_await registry.dispatch(tool::kFileEditName, R"({"old_string":"a","new_string":"b"})", ctx);
+    REQUIRE_FALSE(missing_path.has_value());
+    REQUIRE(missing_path.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto missing_old = co_await registry.dispatch(tool::kFileEditName, R"({"path":"/tmp/x","new_string":"b"})", ctx);
+    REQUIRE_FALSE(missing_old.has_value());
+    REQUIRE(missing_old.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto missing_new = co_await registry.dispatch(tool::kFileEditName, R"({"path":"/tmp/x","old_string":"a"})", ctx);
+    REQUIRE_FALSE(missing_new.has_value());
+    REQUIRE(missing_new.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto wrong_path =
+        co_await registry.dispatch(tool::kFileEditName, R"({"path":1,"old_string":"a","new_string":"b"})", ctx);
+    REQUIRE_FALSE(wrong_path.has_value());
+    REQUIRE(wrong_path.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto wrong_replace_all =
+        co_await registry.dispatch(tool::kFileEditName,
+                                   R"({"path":"/tmp/x","old_string":"a","new_string":"b","replace_all":"yes"})",
+                                   ctx);
+    REQUIRE_FALSE(wrong_replace_all.has_value());
+    REQUIRE(wrong_replace_all.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto empty_old =
+        co_await registry.dispatch(tool::kFileEditName, R"({"path":"/tmp/x","old_string":"","new_string":"b"})", ctx);
+    REQUIRE_FALSE(empty_old.has_value());
+    REQUIRE(empty_old.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto identical =
+        co_await registry.dispatch(tool::kFileEditName, R"({"path":"/tmp/x","old_string":"a","new_string":"a"})", ctx);
+    REQUIRE_FALSE(identical.has_value());
+    REQUIRE(identical.error().kind() == core::ErrorKind::invalid_argument);
 
     // Every rejected call passed the permission gate, so audit recorded one
     // `allow` row per attempt (8 calls).

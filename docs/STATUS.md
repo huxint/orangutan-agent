@@ -7,16 +7,16 @@
 
 ## Snapshot
 
-- **Slice:** 18 (`xmake run orangutan` reports slice 18)
+- **Slice:** 19 (`xmake run orangutan` reports slice 19)
 - **Last completed history:**
-  [`histories/2026-05/20260517-2100-oran-tool-file-write.md`](histories/2026-05/20260517-2100-oran-tool-file-write.md)
+  [`histories/2026-05/20260517-2300-oran-tool-file-edit.md`](histories/2026-05/20260517-2300-oran-tool-file-edit.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** TBD — choose from the QUALITY_SCORE "Next Step"
-  column. Most likely candidates: the remaining two file built-ins
-  (`file.edit`, `file.search`) on top of the slice-17 `tool::Registry`;
+  column. Most likely candidates: the remaining file built-in
+  (`file.search`) on top of the slice-17/18/19 `tool::Registry`;
   the approval-broker flow that replaces the `Verdict::ask` short-circuit
   in `Registry::dispatch`; the first provider adapter
   (Anthropic Messages); signal-aware shutdown for `bootstrap::run`.
@@ -41,7 +41,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-storage`: 60 cases / 702 assertions.
 - `oran-config`: 19 cases / 148 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
-- `oran-tool`: 24 cases / 161 assertions.
+- `oran-tool`: 31 cases / 227 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 34 cases / 123 assertions.
 

@@ -18,3 +18,12 @@ A-vs-B comparisons:
   any measurable effect at small payload sizes. This is the baseline a
   future "buffered vs. unbuffered" or "direct vs. cached" write
   optimization would need to beat.
+- `file_edit.dispatch_unique_replace` vs.
+  `file_edit.dispatch_replace_all_many`: full `file.edit` dispatch on a
+  1 KiB seed file. The unique-replace case finds and rewrites one
+  occurrence; the replace-all case rewrites 64 occurrences spaced every
+  16 bytes. Both scenarios pay the same per-call overhead (permission
+  eval + SHA-256 + audit + JSON parse + read + write); the contrast
+  measures whether the per-match substitution cost is material against
+  the bulk read/write at typical edit sizes. The baseline a future
+  rope or in-place rewrite would need to beat.

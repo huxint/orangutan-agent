@@ -1,0 +1,176 @@
+// src/oran-tool/file_edit.cpp — `file.edit` built-in.
+//
+// Slice 19 of the v2 stack. Composes `io::read_text_file` and
+// `io::write_text_file` with an in-process substring replacement so a small
+// MVP can ship without pulling a patch parser into the build. The
+// design doc's "patch-style edits with conflict detection" still holds as the
+// long-term shape — see `Design Intent` in the slice history for why this
+// slice ships the simpler `old_string` / `new_string` surface that Claude
+// Code's own Edit tool exposes.
+
+#include <oran/tool/builtins.hpp>
+
+#include <cstddef>
+#include <exception>
+#include <expected>
+#include <format>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#include <nlohmann/json.hpp>
+
+#include <oran/async/awaitable_fwd.hpp>
+#include <oran/core/capability.hpp>
+#include <oran/core/error.hpp>
+#include <oran/core/tool_def.hpp>
+#include <oran/io/file.hpp>
+#include <oran/tool/registry.hpp>
+
+namespace orangutan::tool {
+
+namespace {
+
+constexpr std::string_view kFileEditSchema =
+    R"({"type":"object","properties":{"path":{"type":"string"},"old_string":{"type":"string"},)"
+    R"("new_string":{"type":"string"},"replace_all":{"type":"boolean"}},)"
+    R"("required":["path","old_string","new_string"],"additionalProperties":false})";
+
+/// Indexes of every non-overlapping occurrence of `needle` in `haystack`, in
+/// order. Non-overlapping is the natural fit for "replace": chained matches in
+/// the input string get rewritten consistently with what a left-to-right scan
+/// produces.
+[[nodiscard]] std::vector<std::size_t> find_occurrences(std::string_view haystack, std::string_view needle) {
+  std::vector<std::size_t> positions;
+  for (std::size_t pos = haystack.find(needle); pos != std::string_view::npos;
+       pos = haystack.find(needle, pos + needle.size())) {
+    positions.push_back(pos);
+  }
+  return positions;
+}
+
+/// Rebuilds the contents by stitching the unchanged slices around each match
+/// with `new_string`. Returning a fresh `std::string` rather than mutating in
+/// place keeps the substitution constant-time per match and avoids the
+/// degenerate behaviour of repeated `string::replace` on overlapping
+/// positions.
+[[nodiscard]] std::string apply_replacements(std::string_view source,
+                                             std::string_view old_string,
+                                             std::string_view new_string,
+                                             const std::vector<std::size_t>& positions) {
+  std::string out;
+  out.reserve(source.size() +
+              (new_string.size() > old_string.size() ? (new_string.size() - old_string.size()) * positions.size() : 0));
+  std::size_t cursor = 0;
+  for (const auto pos : positions) {
+    out.append(source.data() + cursor, pos - cursor);
+    out.append(new_string);
+    cursor = pos + old_string.size();
+  }
+  out.append(source.data() + cursor, source.size() - cursor);
+  return out;
+}
+
+[[nodiscard]] async::Awaitable<core::Result<Output>> file_edit_handler(std::string_view input_json,
+                                                                       DispatchContext& ctx) {
+  nlohmann::json parsed;
+  try {
+    parsed = nlohmann::json::parse(input_json);
+  } catch (const nlohmann::json::parse_error& e) {
+    co_return std::unexpected(
+        core::Error::invalid_argument("file.edit: input is not valid JSON").with("detail", e.what()));
+  } catch (const std::exception& e) {
+    co_return std::unexpected(
+        core::Error::invalid_argument("file.edit: input is not valid JSON").with("detail", e.what()));
+  }
+
+  if (!parsed.is_object()) {
+    co_return std::unexpected(core::Error::invalid_argument("file.edit: input must be a JSON object"));
+  }
+  if (!parsed.contains("path") || !parsed["path"].is_string()) {
+    co_return std::unexpected(core::Error::invalid_argument("file.edit: input must include a string `path` field"));
+  }
+  if (!parsed.contains("old_string") || !parsed["old_string"].is_string()) {
+    co_return std::unexpected(
+        core::Error::invalid_argument("file.edit: input must include a string `old_string` field"));
+  }
+  if (!parsed.contains("new_string") || !parsed["new_string"].is_string()) {
+    co_return std::unexpected(
+        core::Error::invalid_argument("file.edit: input must include a string `new_string` field"));
+  }
+
+  bool replace_all = false;
+  if (parsed.contains("replace_all")) {
+    if (!parsed["replace_all"].is_boolean()) {
+      co_return std::unexpected(core::Error::invalid_argument("file.edit: `replace_all` must be a boolean"));
+    }
+    replace_all = parsed["replace_all"].get<bool>();
+  }
+
+  auto path = parsed["path"].get<std::string>();
+  auto old_string = parsed["old_string"].get<std::string>();
+  auto new_string = parsed["new_string"].get<std::string>();
+
+  if (old_string.empty()) {
+    co_return std::unexpected(core::Error::invalid_argument("file.edit: `old_string` must be non-empty"));
+  }
+  if (old_string == new_string) {
+    co_return std::unexpected(core::Error::invalid_argument("file.edit: `old_string` and `new_string` are identical"));
+  }
+
+  auto contents = co_await io::read_text_file(ctx.executor, path);
+  if (!contents) {
+    co_return std::unexpected(std::move(contents).error());
+  }
+
+  const auto positions = find_occurrences(*contents, old_string);
+  if (positions.empty()) {
+    co_return std::unexpected(
+        core::Error::not_found("file.edit: `old_string` does not occur in the file").with("path", path));
+  }
+  if (positions.size() > 1 && !replace_all) {
+    co_return std::unexpected(
+        core::Error{core::ErrorKind::conflict,
+                    "file.edit: `old_string` is not unique; pass `replace_all` to apply to every match"}
+            .with("path", path)
+            .with("match_count", std::to_string(positions.size())));
+  }
+
+  const std::size_t applied = replace_all ? positions.size() : 1U;
+  std::vector<std::size_t> target_positions;
+  if (replace_all) {
+    target_positions = positions;
+  } else {
+    target_positions = {positions.front()};
+  }
+  auto replaced = apply_replacements(*contents, old_string, new_string, target_positions);
+  auto written = co_await io::write_text_file(ctx.executor, std::move(path), std::move(replaced));
+  if (!written) {
+    co_return std::unexpected(std::move(written).error());
+  }
+
+  co_return Output{.text = std::format("edited {}: {} replacement{}",
+                                       parsed["path"].get<std::string>(),
+                                       applied,
+                                       applied == 1U ? "" : "s")};
+}
+
+}  // namespace
+
+core::Result<void> register_file_edit(Registry& registry) {
+  core::ToolDef def{
+      .name = std::string{kFileEditName},
+      .description = "Edit a UTF-8 text file by replacing `old_string` with `new_string`. Input: "
+                     "{\"path\": <string>, \"old_string\": <string>, \"new_string\": <string>, "
+                     "\"replace_all\"?: bool (default false)}. By default the call fails with "
+                     "`conflict` if `old_string` is not unique; pass `replace_all=true` to rewrite "
+                     "every occurrence. Returns a brief confirmation listing the number of "
+                     "replacements applied.",
+      .input_schema_json = std::string{kFileEditSchema},
+      .required_capabilities = {core::Capability::edit_file},
+  };
+  return registry.add(std::move(def), &file_edit_handler);
+}
+
+}  // namespace orangutan::tool

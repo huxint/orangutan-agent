@@ -51,7 +51,7 @@ enum class Capability {
 };
 ```
 
-> **Status (2026-05-18):** the enum itself now lives in `oran-core`
+> **Status (2026-05-19):** the enum itself now lives in `oran-core`
 > (`include/oran/core/capability.hpp`); its wire spelling and inverse
 > parse come from the generic reflection helpers
 > `core::enum_name(c)` / `core::parse_enum<Capability>(text)` /
@@ -64,11 +64,16 @@ enum class Capability {
 > via `core::ToolDef::required_capabilities` — that field is the
 > in-code realisation of the `requires` field below (renamed because
 > `requires` is a reserved C++20 keyword). Built-ins shipped so far:
-> `file.read` (slice 17, `Capability::read_file`) and `file.write`
+> `file.read` (slice 17, `Capability::read_file`), `file.write`
 > (slice 18, `Capability::write_file`, input
 > `{path, content, mode?, create_parents?}` with `mode ∈
-> {truncate, append, fail_if_exists}`). Capability-gated runtime
-> services (`tool::Runtime` accessor surface) and config wiring stay
+> {truncate, append, fail_if_exists}`), and `file.edit` (slice 19,
+> `Capability::edit_file`, input
+> `{path, old_string, new_string, replace_all?}` — `not_found` if
+> `old_string` is absent, `conflict` (`match_count` carried) if it is
+> ambiguous and `replace_all` was not set; truncating rewrite via
+> `io::write_text_file`). Capability-gated runtime services
+> (`tool::Runtime` accessor surface) and config wiring stay
 > on future slices.
 
 A tool's `required_capabilities` list is **inspected at registration**. The permission

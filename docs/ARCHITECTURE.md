@@ -69,7 +69,7 @@ own test bucket, its own bench bucket, and its own public header set under
 
 ## Library Inventory
 
-> **Slice status (2026-05-18):** `oran-core` (now with `Error`/`Result`, the
+> **Slice status (2026-05-19):** `oran-core` (now with `Error`/`Result`, the
 > `Time` value type and ISO-8601 UTC helpers, the conversation types
 > `Role`, `StopReason`, `Content` variant, and `Message`, the
 > `ToolDef` declaration type (with `required_capabilities`), the
@@ -98,7 +98,7 @@ own test bucket, its own bench bucket, and its own public header set under
 > `#embed`; slice 16 adds `--mode` / `--agent` selectors to
 > `--explain-rules` via the public `parse_explain_rules_selector`
 > and `materialize_rules` helpers), the first `oran-cli` handoff
-> shell, and the slice-17/18 `oran-tool` foundation (`tool::Registry`
+> shell, and the slice-17/18/19 `oran-tool` foundation (`tool::Registry`
 > with `add` / `remove` / `find` / `catalog` / `dispatch`; the
 > dispatch path runs `RuleSet::evaluate` against the call's
 > `ToolDef::required_capabilities`, records one
@@ -107,10 +107,14 @@ own test bucket, its own bench bucket, and its own public header set under
 > then branches `allow` → handler, `deny` → `permission_denied`,
 > `ask` → `permission_denied` with `reason=approval_required`
 > until the approval-broker wiring lands; built-ins `file.read`
-> (slice 17, `tool::register_file_read`) and `file.write` (slice 18,
+> (slice 17, `tool::register_file_read`), `file.write` (slice 18,
 > `tool::register_file_write`, capability `write_file`, input
 > `{path, content, mode?, create_parents?}` with `mode ∈
-> {truncate (default), append, fail_if_exists}`)), are
+> {truncate (default), append, fail_if_exists}`), and `file.edit`
+> (slice 19, `tool::register_file_edit`, capability `edit_file`,
+> input `{path, old_string, new_string, replace_all?}` —
+> `conflict` if `old_string` is not unique unless `replace_all` is
+> set, `not_found` if `old_string` is absent)), are
 > implemented.
 > All other rows below are *planned* and will land per `docs/exec-plans/` as
 > future slices are scheduled. The build system, PCH, tests bucket, and bench
@@ -128,7 +132,7 @@ own test bucket, its own bench bucket, and its own public header set under
 | `oran-config`        | JSON config loader with typed runtime/profile/route/session/web fields, env substitution, and the typed `permissions` + `agents.<name>.permissions` overlay surface (layer-2/3 data of the three-layer rule merge); planned schema + secret-protected fields | `oran-core`, `oran-storage` |
 | `oran-permission`    | foundation rule evaluator: `Verdict`, `Mode`, `Rule`, `RuleSet`, `Decision`, `*`-glob tool matching, capability-aware gating (`Rule::capability` of `core::Capability`), the `Defaults::for_mode` baseline factory, the three-layer `materialize(Mode, global, per_agent)` merge that concatenates defaults + global config + per-agent overlay, the `ApprovalSecret` / `ApprovalAuthority` / `ApprovalToken` / `ApprovalBroker` ask-flow surface, and the `AuditEvent` / `AuditSink` / `StorageAuditSink` audit pipeline; planned re2 input regex extensions and bootstrap wiring | `oran-core`, `oran-config`, `oran-storage`, `oran-async` |
 | `oran-skill`         | skill loader, skill catalog | `oran-core`, `oran-io` |
-| `oran-tool`          | tool registry, dispatch through `permission::RuleSet` + `permission::AuditSink`, built-ins `file.read` (`tool::register_file_read`, capability `read_file`) and `file.write` (`tool::register_file_write`, capability `write_file`, input `{path, content, mode?, create_parents?}` with `mode ∈ {truncate, append, fail_if_exists}`); planned `file.edit`/`file.search`, hook bus, approval-broker mediation, and the rest of the built-in catalog | `oran-core`, `oran-async`, `oran-permission`, `oran-io` |
+| `oran-tool`          | tool registry, dispatch through `permission::RuleSet` + `permission::AuditSink`, built-ins `file.read` (`tool::register_file_read`, capability `read_file`), `file.write` (`tool::register_file_write`, capability `write_file`, input `{path, content, mode?, create_parents?}` with `mode ∈ {truncate, append, fail_if_exists}`), and `file.edit` (`tool::register_file_edit`, capability `edit_file`, input `{path, old_string, new_string, replace_all?}`); planned `file.search`, hook bus, approval-broker mediation, and the rest of the built-in catalog | `oran-core`, `oran-async`, `oran-permission`, `oran-io` |
 | `oran-hook`          | hook bus + sink kinds (shell / lua / in-proc) | `oran-core`, `oran-async`, `oran-io` |
 | `oran-memory`        | working / session / long-term / shared memory | `oran-core`, `oran-storage` |
 | `oran-provider`      | provider system (transport / protocol / execution) | `oran-core`, `oran-async`, `oran-http` |
