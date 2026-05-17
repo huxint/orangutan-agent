@@ -5,8 +5,8 @@
 // can early-return on the first failure. The aggregate `register_builtins`
 // wires every tool this slice ships in catalog order.
 //
-// Slice 19 grows the catalog to `file.read` + `file.write` + `file.edit`;
-// future slices will fold in `file.search`, the shell tools, and so on. This
+// Slice 20 grows the catalog to `file.read` + `file.write` + `file.edit` +
+// `file.search`; future slices will fold in the shell tools and so on. This
 // header is the one place callers learn what shipped.
 
 #pragma once
@@ -27,6 +27,9 @@ inline constexpr std::string_view kFileWriteName{"file.write"};
 /// Stable wire name for the file-edit built-in.
 inline constexpr std::string_view kFileEditName{"file.edit"};
 
+/// Stable wire name for the file-search built-in.
+inline constexpr std::string_view kFileSearchName{"file.search"};
+
 /// Register the `file.read` tool. Reads UTF-8 content from a workspace path
 /// using `oran-io`'s coroutine helper; capability `read_file` is required.
 [[nodiscard]] core::Result<void> register_file_read(Registry& registry);
@@ -44,9 +47,21 @@ inline constexpr std::string_view kFileEditName{"file.edit"};
 /// unless `replace_all` is set; `not_found` if `old_string` does not occur.
 [[nodiscard]] core::Result<void> register_file_edit(Registry& registry);
 
+/// Register the `file.search` tool. Scans a UTF-8 text file or (recursively)
+/// a directory for literal substring matches; capability `read_file` is
+/// required. Input shape: `{"path": <string>, "pattern": <string>,
+/// "max_matches"?: uint (default 100), "include_hidden"?: bool (default
+/// false)}`. Returns one `path:line:text` line per match, with a trailing
+/// `(truncated; matches capped at <N>)` summary when the cap is hit;
+/// returns the literal text `no matches` (non-error) when no match was
+/// found. Files containing NUL bytes in their first 8 KiB are treated as
+/// binary and skipped during a directory walk.
+[[nodiscard]] core::Result<void> register_file_search(Registry& registry);
+
 /// Register every built-in this slice ships. Currently wires `file.read`,
-/// `file.write`, then `file.edit`; future slices append additional tools so
-/// production callers can stay on this single entry point.
+/// `file.write`, `file.edit`, then `file.search`; future slices append
+/// additional tools so production callers can stay on this single entry
+/// point.
 [[nodiscard]] core::Result<void> register_builtins(Registry& registry);
 
 }  // namespace orangutan::tool

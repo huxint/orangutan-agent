@@ -7,18 +7,17 @@
 
 ## Snapshot
 
-- **Slice:** 19 (`xmake run orangutan` reports slice 19)
+- **Slice:** 20 (`xmake run orangutan` reports slice 20)
 - **Last completed history:**
-  [`histories/2026-05/20260517-2300-oran-tool-file-edit.md`](histories/2026-05/20260517-2300-oran-tool-file-edit.md)
+  [`histories/2026-05/20260517-2330-oran-tool-file-search.md`](histories/2026-05/20260517-2330-oran-tool-file-search.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** TBD — choose from the QUALITY_SCORE "Next Step"
-  column. Most likely candidates: the remaining file built-in
-  (`file.search`) on top of the slice-17/18/19 `tool::Registry`;
-  the approval-broker flow that replaces the `Verdict::ask` short-circuit
-  in `Registry::dispatch`; the first provider adapter
+  column. Most likely candidates: the approval-broker flow that replaces
+  the `Verdict::ask` short-circuit in `Registry::dispatch` (now uniform
+  across all four file built-ins); the first provider adapter
   (Anthropic Messages); signal-aware shutdown for `bootstrap::run`.
 
 ## Library Health
@@ -41,7 +40,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-storage`: 60 cases / 702 assertions.
 - `oran-config`: 19 cases / 148 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
-- `oran-tool`: 31 cases / 227 assertions.
+- `oran-tool`: 40 cases / 309 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 34 cases / 123 assertions.
 
@@ -50,6 +49,14 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 Lifted from [`exec-plans/tech-debt-tracker.md`](exec-plans/tech-debt-tracker.md).
 Closed entries do *not* live here — the tracker is canonical.
 
+- 2026-05-17 — `file.search` does not support regex; pattern is matched as a
+  literal substring. Follow-up: add `"regex"?: bool (default false)` route
+  through `re2::RE2::PartialMatch`.
+- 2026-05-17 — `file.search` does not yet ship ripgrep-class optimisations
+  (mmap, extension-based binary skip, `.gitignore`, multi-threaded walk).
+  Adequate at slice 20 (~27 µs / 4-file tree) but 3-10× slower than a tuned
+  scanner on repo-scale inputs. Re-bench once `oran-agent` produces a real
+  workload measurement.
 - 2026-05-17 — `scripts/check-prompt-preamble` static grep promised in
   `rules/prompt-design.md` not yet implemented (waits on first stable
   preamble template in `oran-agent`).

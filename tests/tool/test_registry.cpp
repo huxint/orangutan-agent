@@ -303,14 +303,15 @@ TEST_CASE("register_file_read advertises a `read_file` capability and a path sch
   REQUIRE(def->input_schema_json.contains("\"path\""));
 }
 
-TEST_CASE("register_builtins seeds the slice-17 catalog", "[unit][tool][builtins]") {
+TEST_CASE("register_builtins seeds the file tool catalog", "[unit][tool][builtins]") {
   tool::Registry registry;
   REQUIRE(tool::register_builtins(registry).has_value());
   const auto catalog = registry.catalog();
-  REQUIRE(catalog.size() == 3);
+  REQUIRE(catalog.size() == 4);
   REQUIRE(catalog[0].name == tool::kFileReadName);
   REQUIRE(catalog[1].name == tool::kFileWriteName);
   REQUIRE(catalog[2].name == tool::kFileEditName);
+  REQUIRE(catalog[3].name == tool::kFileSearchName);
 }
 
 TEST_CASE("file.read happy path returns the file contents verbatim", "[unit][tool][file_read]") {
@@ -760,6 +761,279 @@ TEST_CASE("file.edit rejects malformed input as invalid_argument", "[unit][tool]
     // Every rejected call passed the permission gate, so audit recorded one
     // `allow` row per attempt (8 calls).
     REQUIRE(sink.events().size() == 8);
+    for (const auto& event : sink.events()) {
+      REQUIRE(event.outcome == permission::AuditOutcome::allow);
+    }
+  });
+}
+
+namespace {
+
+class TempDir {
+public:
+  explicit TempDir(std::string suffix)
+      : path_(std::filesystem::temp_directory_path() /
+              ("oran-tool-search-" + std::move(suffix) + "-" +
+               std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
+    std::filesystem::create_directories(path_);
+  }
+
+  ~TempDir() {
+    std::error_code ec;
+    std::filesystem::remove_all(path_, ec);
+  }
+
+  TempDir(const TempDir&) = delete;
+  TempDir& operator=(const TempDir&) = delete;
+
+  void write_file(const std::filesystem::path& relative, std::string_view contents) const {
+    const auto target = path_ / relative;
+    std::filesystem::create_directories(target.parent_path());
+    std::ofstream out{target, std::ios::binary};
+    out.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+  }
+
+  [[nodiscard]] std::string string() const {
+    return path_.string();
+  }
+
+  [[nodiscard]] std::filesystem::path child(const std::filesystem::path& relative) const {
+    return path_ / relative;
+  }
+
+private:
+  std::filesystem::path path_;
+};
+
+permission::RuleSet search_rule_set() {
+  return single_rule(permission::Rule{
+      .verdict = permission::Verdict::allow,
+      .tool_pattern = std::string{tool::kFileSearchName},
+      .capability = core::Capability::read_file,
+  });
+}
+
+}  // namespace
+
+TEST_CASE("register_file_search advertises a `read_file` capability and a path/pattern schema",
+          "[unit][tool][file_search]") {
+  tool::Registry registry;
+  REQUIRE(tool::register_file_search(registry).has_value());
+  REQUIRE(registry.size() == 1);
+  const auto* def = registry.find(tool::kFileSearchName);
+  REQUIRE(def != nullptr);
+  REQUIRE(def->required_capabilities.size() == 1);
+  REQUIRE(def->required_capabilities[0] == core::Capability::read_file);
+  REQUIRE(def->input_schema_json.contains("\"path\""));
+  REQUIRE(def->input_schema_json.contains("\"pattern\""));
+  REQUIRE(def->input_schema_json.contains("\"max_matches\""));
+  REQUIRE(def->input_schema_json.contains("\"include_hidden\""));
+}
+
+TEST_CASE("file.search happy path on a single file reports path:line:text", "[unit][tool][file_search]") {
+  TempFile file{"search-single"};
+  file.write("alpha\nNEEDLE here\ngamma\n");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + file.string() + R"(","pattern":"NEEDLE"})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.contains(file.string() + ":2:NEEDLE here"));
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
+  });
+}
+
+TEST_CASE("file.search walks a directory recursively and reports each match", "[unit][tool][file_search]") {
+  TempDir dir{"recursive"};
+  dir.write_file("a.txt", "TARGET on line one\n");
+  dir.write_file("sub/b.txt", "filler\nTARGET on line two\n");
+  dir.write_file("sub/deep/c.txt", "TARGET\nfiller\nTARGET again\n");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"(","pattern":"TARGET"})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.contains(dir.child("a.txt").string() + ":1:TARGET on line one"));
+    REQUIRE(result->text.contains(dir.child("sub/b.txt").string() + ":2:TARGET on line two"));
+    REQUIRE(result->text.contains(dir.child("sub/deep/c.txt").string() + ":1:TARGET"));
+    REQUIRE(result->text.contains(dir.child("sub/deep/c.txt").string() + ":3:TARGET again"));
+  });
+}
+
+TEST_CASE("file.search caps results at max_matches and reports truncation", "[unit][tool][file_search]") {
+  TempDir dir{"truncate"};
+  dir.write_file("a.txt", "X\nX\nX\nX\nX\n");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"(","pattern":"X","max_matches":3})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.contains("(truncated; matches capped at 3)"));
+    // Three match lines plus one truncation line, joined by '\n' — three internal separators.
+    const auto newline_count = std::ranges::count(std::string_view{result->text}, '\n');
+    REQUIRE(newline_count == 3);
+  });
+}
+
+TEST_CASE("file.search skips binary files (NUL bytes in the first 8 KiB)", "[unit][tool][file_search]") {
+  TempDir dir{"binary"};
+  std::string binary_content;
+  binary_content.append("\0\0\0NEEDLE", 9U);
+  binary_content.append(std::string(100, 'x'));
+  dir.write_file("a.bin", std::string_view{binary_content});
+  dir.write_file("b.txt", "NEEDLE here\n");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"(","pattern":"NEEDLE"})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.contains(dir.child("b.txt").string()));
+    REQUIRE_FALSE(result->text.contains(dir.child("a.bin").string()));
+  });
+}
+
+TEST_CASE("file.search default include_hidden=false skips dot-prefixed files and directories",
+          "[unit][tool][file_search]") {
+  TempDir dir{"hidden"};
+  dir.write_file("visible.txt", "needle here\n");
+  dir.write_file(".hidden.txt", "needle here\n");
+  dir.write_file(".cache/c.txt", "needle here\n");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto default_input = std::string{R"({"path":")"} + dir.string() + R"(","pattern":"needle"})";
+    auto default_result = co_await registry.dispatch(tool::kFileSearchName, default_input, ctx);
+    REQUIRE(default_result.has_value());
+    REQUIRE(default_result->text.contains(dir.child("visible.txt").string()));
+    REQUIRE_FALSE(default_result->text.contains(".hidden.txt"));
+    REQUIRE_FALSE(default_result->text.contains(".cache"));
+
+    const auto opt_in_input =
+        std::string{R"({"path":")"} + dir.string() + R"(","pattern":"needle","include_hidden":true})";
+    auto opt_in_result = co_await registry.dispatch(tool::kFileSearchName, opt_in_input, ctx);
+    REQUIRE(opt_in_result.has_value());
+    REQUIRE(opt_in_result->text.contains(".hidden.txt"));
+    REQUIRE(opt_in_result->text.contains(".cache"));
+  });
+}
+
+TEST_CASE("file.search reports 'no matches' (non-error) when nothing matches", "[unit][tool][file_search]") {
+  TempFile file{"search-nomatch"};
+  file.write("alpha\nbeta\n");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + file.string() + R"(","pattern":"absent"})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "no matches");
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
+  });
+}
+
+TEST_CASE("file.search returns not_found when the path does not exist", "[unit][tool][file_search]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto path = std::string{"/tmp/oran-tool-search-no-such-"} +
+                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto input = std::string{R"({"path":")"} + path + R"(","pattern":"x"})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::not_found);
+  });
+}
+
+TEST_CASE("file.search rejects malformed input as invalid_argument", "[unit][tool][file_search]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    auto bad_json = co_await registry.dispatch(tool::kFileSearchName, "{not-json}", ctx);
+    REQUIRE_FALSE(bad_json.has_value());
+    REQUIRE(bad_json.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto missing_path = co_await registry.dispatch(tool::kFileSearchName, R"({"pattern":"x"})", ctx);
+    REQUIRE_FALSE(missing_path.has_value());
+    REQUIRE(missing_path.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto missing_pattern = co_await registry.dispatch(tool::kFileSearchName, R"({"path":"/tmp/x"})", ctx);
+    REQUIRE_FALSE(missing_pattern.has_value());
+    REQUIRE(missing_pattern.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto wrong_path = co_await registry.dispatch(tool::kFileSearchName, R"({"path":42,"pattern":"x"})", ctx);
+    REQUIRE_FALSE(wrong_path.has_value());
+    REQUIRE(wrong_path.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto wrong_pattern = co_await registry.dispatch(tool::kFileSearchName, R"({"path":"/tmp/x","pattern":3})", ctx);
+    REQUIRE_FALSE(wrong_pattern.has_value());
+    REQUIRE(wrong_pattern.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto wrong_max_matches =
+        co_await registry.dispatch(tool::kFileSearchName, R"({"path":"/tmp/x","pattern":"x","max_matches":"3"})", ctx);
+    REQUIRE_FALSE(wrong_max_matches.has_value());
+    REQUIRE(wrong_max_matches.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto wrong_include_hidden = co_await registry.dispatch(tool::kFileSearchName,
+                                                           R"({"path":"/tmp/x","pattern":"x","include_hidden":"yes"})",
+                                                           ctx);
+    REQUIRE_FALSE(wrong_include_hidden.has_value());
+    REQUIRE(wrong_include_hidden.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto empty_pattern = co_await registry.dispatch(tool::kFileSearchName, R"({"path":"/tmp/x","pattern":""})", ctx);
+    REQUIRE_FALSE(empty_pattern.has_value());
+    REQUIRE(empty_pattern.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto zero_max_matches =
+        co_await registry.dispatch(tool::kFileSearchName, R"({"path":"/tmp/x","pattern":"x","max_matches":0})", ctx);
+    REQUIRE_FALSE(zero_max_matches.has_value());
+    REQUIRE(zero_max_matches.error().kind() == core::ErrorKind::invalid_argument);
+
+    // Every rejected call passed the permission gate; audit recorded one allow row per attempt (9 calls).
+    REQUIRE(sink.events().size() == 9);
     for (const auto& event : sink.events()) {
       REQUIRE(event.outcome == permission::AuditOutcome::allow);
     }

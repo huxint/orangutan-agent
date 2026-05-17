@@ -27,3 +27,13 @@ A-vs-B comparisons:
   measures whether the per-match substitution cost is material against
   the bulk read/write at typical edit sizes. The baseline a future
   rope or in-place rewrite would need to beat.
+- `file_search.single_file_one_match` vs.
+  `file_search.recursive_dir_many_matches`: full `file.search` dispatch
+  rooted at a single file (one match across ~14 lines) vs. rooted at a
+  4-file / 14-line directory tree (5 matches scattered across subfolders).
+  Both scenarios share the fixed dispatch costs (permission eval +
+  SHA-256 + audit + JSON parse + executor hop + read of the matched
+  bytes); the contrast measures the `recursive_directory_iterator` walk
+  + per-file open/read overhead the agent loop pays when a tool call
+  reaches for a tree rather than a single file. The baseline a future
+  memory-mapped scan or parallel walker would need to beat.
