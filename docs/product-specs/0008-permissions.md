@@ -51,10 +51,17 @@ human approval for high-risk operations.
    schema migration so operators can provision `audit.db` ahead
    of the future agent loop (one-shot `asio::io_context` driving
    the same `Pool` + `AuditRepository` path the agent loop will
-   use). The agent loop itself will pump `Decision` → `AuditEvent`
-   through `permission::AuditSink::record(...)` on every call;
-   that wiring lands with the first tool built-ins or the agent
-   loop scaffolding, whichever comes first.)**
+   use). The slice-14 follow-up
+   `bootstrap::RuntimeAssembly::build(workspace, executor, options)`
+   then bundles a fresh `permission::ApprovalBroker` and the
+   active `permission::AuditSink` (`StorageAuditSink` over an
+   internal `Pool` + `AuditRepository` when audit is enabled,
+   `NullAuditSink` otherwise) into a single value type the agent
+   loop will inherit — the in-process half of criterion 1 is now
+   wired end-to-end. The agent loop itself will pump `Decision`
+   → `AuditEvent` through `permission::AuditSink::record(...)`
+   on every call; that wiring lands with the first tool built-ins
+   or the agent loop scaffolding.)**
 2. A tool call whose input matches an `ask` rule renders an approval prompt; on
    approval, replay works within TTL for identical input. **(Closed 2026-05-17:
    `permission::ApprovalBroker` wraps `permission::ApprovalAuthority`

@@ -3,3 +3,4 @@
 #pragma once
 
 #include <oran/bootstrap/bootstrap.hpp>
+#include <oran/bootstrap/runtime_assembly.hpp>

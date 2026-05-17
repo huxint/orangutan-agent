@@ -115,9 +115,27 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > pipeline end-to-end (one-shot `asio::io_context` opens a
 > `storage::Pool` for the audit DB and runs
 > `storage::AuditRepository::migrate()`; idempotent on re-run).
-> `0008-permissions.md` criterion 1 is now closed; the per-call
-> "record on decision" plumbing lands with the first tool
-> built-ins or the agent loop scaffolding.
+> **Bootstrap assembly landed on 2026-05-17 too**:
+> `bootstrap::RuntimeAssembly::build(workspace, executor, options)`
+> returns a move-only value type bundling a fresh
+> `permission::ApprovalBroker` (per-process key per criterion 5)
+> and the active `permission::AuditSink`. When
+> `options.audit_enabled=true`, the assembly internally opens a
+> `storage::Pool` against the supplied `runtime_executor`, drives
+> `AuditRepository::migrate()` on a one-shot `asio::io_context` so
+> the build stays synchronous, and installs a `StorageAuditSink`
+> referencing the long-lived repository. When `false`, the
+> assembly installs a `NullAuditSink` and never touches the audit
+> DB. The agent-loop slice owns the assembly for the lifetime of
+> the process; `bootstrap::run` today builds it with
+> `audit_enabled=false` so `orangutan` stays runnable from any
+> CWD until the audit migration assets are packaged. Bench:
+> assembly_build_with_audit ~212 µs vs. assembly_build_without_audit
+> ~400 ns (the audit pipeline costs ~211 µs per process startup,
+> dominated by SQLite open + migration + `Pool::open`).
+> `0008-permissions.md` criterion 1 is now closed in-process; the
+> per-call "record on decision" plumbing lands with the first
+> tool built-ins or the agent loop scaffolding.
 
 ### Sources
 

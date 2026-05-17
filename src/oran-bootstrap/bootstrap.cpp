@@ -2,6 +2,9 @@
 
 #include <oran/bootstrap/bootstrap.hpp>
 
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <optional>
@@ -16,6 +19,7 @@
 #include <asio/io_context.hpp>
 
 #include <oran/async.hpp>
+#include <oran/bootstrap/runtime_assembly.hpp>
 #include <oran/cli.hpp>
 #include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
@@ -28,7 +32,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice13";
+constexpr std::string_view kVersion = "2.0.0-slice14";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 
 struct ParsedArgs {
@@ -334,6 +338,29 @@ core::Result<int> run(BootstrapOptions options) {
   if (!loaded->value.warnings().empty()) {
     std::println("config warnings: {}", loaded->value.warnings().size());
   }
+
+  // The runtime assembly composes the per-process permission infrastructure
+  // (`ApprovalBroker`, audit `Pool`, `AuditRepository`, `StorageAuditSink`)
+  // the upcoming agent loop will inherit. Slice 14 builds and drops it
+  // inline so the wiring is exercised on every startup. Audit defaults to
+  // disabled here because the agent-loop slice does not run yet — opening
+  // `audit.db` from an arbitrary CWD requires the migrations directory,
+  // which is still tracked as the "packaged migration asset lookup" debt
+  // row. Operators who want audit today still get it through
+  // `orangutan --audit-init`, which uses the same migration code path
+  // from inside the repository.
+  auto runtime = async::Runtime{async::RuntimeConfig{
+      .io_workers = static_cast<std::size_t>(std::max<std::int64_t>(1, loaded->value.runtime().workers)),
+      .cpu_workers = 1,
+  }};
+  auto assembly =
+      RuntimeAssembly::build(options.workspace, runtime.executor(), RuntimeAssemblyOptions{.audit_enabled = false});
+  if (!assembly) {
+    return std::unexpected(std::move(assembly).error());
+  }
+  std::println("runtime assembly ready: audit={} ({}), approval-broker=fresh",
+               assembly->audit_enabled() ? "enabled" : "disabled",
+               assembly->audit_enabled() ? assembly->audit_path() : std::string_view{"<null sink>"});
 
   auto cli_result = cli::run(cli::CliOptions{.args = std::span<const std::string_view>{parsed->cli_args}});
   if (!cli_result) {
