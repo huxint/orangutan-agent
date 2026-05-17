@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 15 (`xmake run orangutan` reports slice 15)
+- **Slice:** 16 (`xmake run orangutan` reports slice 16)
 - **Last completed history:**
-  [`histories/2026-05/20260517-1610-bootstrap-audit-migration-packaging.md`](histories/2026-05/20260517-1610-bootstrap-audit-migration-packaging.md)
+  [`histories/2026-05/20260517-1720-bootstrap-explain-rules-mode-agent.md`](histories/2026-05/20260517-1720-bootstrap-explain-rules-mode-agent.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
@@ -18,8 +18,8 @@
   column. Most likely candidates: first tool-registry built-ins
   (`file.read`, `file.write`, `file.edit`, `file.search`) plumbed
   through the assembly's `permission::AuditSink` so each call
-  records a row; first provider adapter (Anthropic Messages); pass
-  mode + per-agent selection to `--explain-rules`.
+  records a row; first provider adapter (Anthropic Messages);
+  signal-aware shutdown for `bootstrap::run`.
 
 ## Library Health
 
@@ -42,7 +42,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 19 cases / 148 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
-- `oran-bootstrap`: 21 cases / 78 assertions.
+- `oran-bootstrap`: 34 cases / 123 assertions.
 
 ## Open Tech-Debt Rows
 

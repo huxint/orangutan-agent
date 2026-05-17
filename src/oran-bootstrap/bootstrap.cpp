@@ -32,7 +32,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice15";
+constexpr std::string_view kVersion = "2.0.0-slice16";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 
 struct ParsedArgs {
@@ -43,11 +43,44 @@ struct ParsedArgs {
   std::string audit_init_path{};
   bool has_explicit_config{false};
   std::string explicit_config_path{};
+  ExplainRulesSelector explain_selector{};
   std::vector<std::string_view> cli_args{};
 };
 
 [[nodiscard]] Error arg_error(std::string message) {
   return Error::invalid_argument(std::move(message));
+}
+
+/// Pull the value following a long flag — supports both `--flag value` and
+/// `--flag=value`. `index` advances past the consumed value token when the
+/// space-separated form fired. Returns `invalid_argument` when the value is
+/// missing or empty.
+[[nodiscard]] Result<std::string>
+consume_value(std::span<const std::string_view> args, std::size_t& index, std::string_view flag) {
+  const auto arg = args[index];
+  const auto eq_prefix = std::string{flag} + "=";
+  if (arg.starts_with(eq_prefix)) {
+    auto value = std::string{arg.substr(eq_prefix.size())};
+    if (value.empty()) {
+      return std::unexpected(arg_error(std::string{flag} + " requires a non-empty value"));
+    }
+    return value;
+  }
+  if (arg == flag) {
+    if (index + 1 >= args.size()) {
+      return std::unexpected(arg_error(std::string{flag} + " requires a value"));
+    }
+    auto value = std::string{args[++index]};
+    if (value.empty()) {
+      return std::unexpected(arg_error(std::string{flag} + " requires a non-empty value"));
+    }
+    return value;
+  }
+  return std::unexpected(arg_error("internal: consume_value invoked on non-matching flag"));
+}
+
+[[nodiscard]] bool matches_flag(std::string_view arg, std::string_view flag) noexcept {
+  return arg == flag || arg.starts_with(std::string{flag} + "=");
 }
 
 [[nodiscard]] Result<ParsedArgs> parse_args(std::span<const std::string_view> args) {
@@ -66,6 +99,28 @@ struct ParsedArgs {
 
     if (arg == "--explain-rules") {
       parsed.explain_rules = true;
+      continue;
+    }
+
+    if (matches_flag(arg, "--mode")) {
+      auto value = consume_value(args, index, "--mode");
+      if (!value) {
+        return std::unexpected(std::move(value.error()));
+      }
+      auto mode = core::parse_enum<permission::Mode>(*value);
+      if (!mode) {
+        return std::unexpected(arg_error("--mode does not match a known permission mode").with("value", *value));
+      }
+      parsed.explain_selector.mode = *mode;
+      continue;
+    }
+
+    if (matches_flag(arg, "--agent")) {
+      auto value = consume_value(args, index, "--agent");
+      if (!value) {
+        return std::unexpected(std::move(value.error()));
+      }
+      parsed.explain_selector.agent_name = std::move(*value);
       continue;
     }
 
@@ -148,24 +203,27 @@ struct ParsedArgs {
 
 void print_usage() {
   std::println("orangutan v{}", kVersion);
-  std::println(
-      "usage: orangutan [--config <path>] [--explain-rules] [--audit-init [<path>]] [--prompt <text>] [--help]");
+  std::println("usage: orangutan [--config <path>] [--explain-rules [--mode <m>] [--agent <name>]]");
+  std::println("                  [--audit-init [<path>]] [--prompt <text>] [--help]");
   std::println();
   std::println("The current bootstrap slice loads config, then hands CLI modes to oran-cli.");
-  std::println("--explain-rules prints the materialized permission rule set and exits.");
+  std::println("--explain-rules prints the materialized permission rule set and exits;");
+  std::println("                --mode picks the baseline (strict|default|permissive|sandboxed),");
+  std::println("                --agent picks an `agents.<name>.permissions` overlay.");
   std::println("--audit-init applies the audit.db schema (defaults to <workspace>/.orangutan/audit.db) and exits.");
 }
 
-[[nodiscard]] Result<int> print_materialized_rules(const config::Config& cfg) {
-  // Use the design-doc "default" mode for diagnostics — operators can pick
-  // their actual runtime mode once bootstrap owns it. The empty per-agent
-  // overlay matches the "no agent selected yet" call shape.
-  auto rs = permission::materialize(permission::Mode::default_, cfg.permissions(), config::PermissionsConfig{});
+[[nodiscard]] Result<int> print_materialized_rules(const config::Config& cfg, const ExplainRulesSelector& selector) {
+  auto rs = materialize_rules(cfg, selector);
   if (!rs) {
     return std::unexpected(std::move(rs.error()));
   }
 
-  std::println("materialized rules (mode={}): {} total", core::enum_name(permission::Mode::default_), rs->size());
+  std::print("materialized rules (mode={}", core::enum_name(selector.mode));
+  if (!selector.agent_name.empty()) {
+    std::print(", agent={}", selector.agent_name);
+  }
+  std::println("): {} total", rs->size());
   std::size_t index = 0;
   for (const auto& rule : rs->rules()) {
     std::print("  #{:<3} {:<5} tool={}", index, core::enum_name(rule.verdict), rule.tool_pattern);
@@ -250,6 +308,29 @@ std::string_view to_string_view(ConfigSource source) noexcept {
   return "unknown";
 }
 
+core::Result<ExplainRulesSelector> parse_explain_rules_selector(std::span<const std::string_view> args) {
+  auto parsed = parse_args(args);
+  if (!parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+  return parsed->explain_selector;
+}
+
+core::Result<permission::RuleSet> materialize_rules(const config::Config& cfg, const ExplainRulesSelector& selector) {
+  if (selector.agent_name.empty()) {
+    return permission::materialize(selector.mode, cfg.permissions(), config::PermissionsConfig{});
+  }
+
+  const auto agents = cfg.agents();
+  const auto match =
+      std::ranges::find_if(agents, [&](const config::AgentConfig& agent) { return agent.name == selector.agent_name; });
+  if (match == agents.end()) {
+    return std::unexpected(
+        Error::not_found("--agent does not match a configured agent").with("agent", selector.agent_name));
+  }
+  return permission::materialize(selector.mode, cfg.permissions(), match->permissions);
+}
+
 core::Result<LoadedConfig> load_config(BootstrapOptions options) {
   auto parsed = parse_args(options.args);
   if (!parsed) {
@@ -324,7 +405,7 @@ core::Result<int> run(BootstrapOptions options) {
   }
 
   if (parsed->explain_rules) {
-    return print_materialized_rules(loaded->value);
+    return print_materialized_rules(loaded->value, parsed->explain_selector);
   }
 
   std::println("orangutan v{}", kVersion);

@@ -147,4 +147,12 @@ human approval for high-risk operations.
 xmake build oran-permission
 xmake test test-permission
 xmake run orangutan -- --explain-rules
+xmake run orangutan -- --explain-rules --mode strict
+xmake run orangutan -- --config config.example.json --explain-rules --agent researcher
 ```
+
+The `--mode <strict|default|permissive|sandboxed>` flag selects the baseline
+layer the rule materializer starts from; `--agent <name>` overlays the
+matching `agents.<name>.permissions` block from the loaded config. Unknown
+spellings surface as `Error::invalid_argument` and `Error::not_found`
+respectively, both with the offending value attached.

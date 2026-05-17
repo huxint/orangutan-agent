@@ -154,6 +154,16 @@ Rules come from three layers, merged at runtime:
 
 Later layers override earlier ones; explicit `deny` always wins over `allow`.
 
+Operators can preview every layer combination without running the agent
+loop via `orangutan --explain-rules`. The CLI accepts `--mode
+<strict|default|permissive|sandboxed>` (baseline selection) and
+`--agent <name>` (per-agent overlay selection); both are optional and
+the unflagged invocation prints the design-doc default mode with no
+overlay applied. The bootstrap layer exposes the same selectors as
+`bootstrap::parse_explain_rules_selector` and
+`bootstrap::materialize_rules` so tests and future tooling can build a
+merged `RuleSet` programmatically.
+
 ### Rule Shape
 
 ```cpp
