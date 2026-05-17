@@ -151,6 +151,89 @@ TEST_CASE("memory.search: FTS5 baseline vs vector", "[bench]") {
 Each scenario emits one line of nanobench output; `compare.cpp` runs all scenarios
 and prints a comparison summary.
 
+### When To Benchmark — And When Not To
+
+The bucket-level "≥ 1 A-vs-B" floor (see "A-vs-B Pattern" above and
+[`critical-rules.md#C12`](critical-rules.md)) is a *baseline* rule: every
+library ships at least one comparison so reviewers have a yardstick. This
+subsection covers the *developer-side* decision — when, mid-implementation,
+you reach for a bench rather than just writing the code.
+
+**Bench when** you genuinely cannot rank the alternatives by reading:
+
+- Two plausibly correct implementations exist and you do not know which is
+  faster (e.g. linear scan over a 16-entry vec vs. `std::unordered_map`;
+  prepared-statement cache vs. recompiling per call).
+- A refactor changes a data layout or a dispatch shape, and the intuition
+  that "this should be faster" needs evidence before merging.
+- A perf bug report names a specific hotspot; confirm before optimizing
+  blindly.
+
+**Do not bench when**:
+
+- The choice is obvious by reading (O(1) lookup vs. O(n) scan at known
+  large n).
+- The code is not on a hot path (config load, one-shot CLI startup, doc
+  generation).
+- The open question is correctness, not speed. Benches measure speed,
+  not correctness.
+- Every new function. Don't bench-saturate — benches cost compile time
+  too (see [`compile-budget.md`](compile-budget.md)) and dilute the
+  signal of the benches that matter.
+
+### Reading Bench Results — Speed Is Not The Only Signal
+
+Bench numbers carry jitter. A small delta across two runs on the same
+binary is noise; treat the **median across enough iterations** as the
+signal, not a single number. Beyond that:
+
+- **Small delta → prefer the simpler / more elegant code.** When the
+  candidates are within roughly 10% of each other (and the jitter band
+  overlaps), pick the one with less code, fewer concepts, and shallower
+  abstractions. The reader who later debugs this pays the complexity
+  cost forever; the runtime saves only the delta.
+- **Bigger delta with bigger code → name the trade-off.** A 2× speedup
+  that triples the line count and adds a cache-invalidation surface may
+  still be the right call, but the history's *Design Intent* section
+  must say so. The reader needs to know what the speed cost.
+- **Speed is one axis.** Memory footprint, allocation count, cache-line
+  behavior, branch predictability, and binary size are also load-bearing.
+  nanobench reports timing; supplement with `perf stat` or
+  `valgrind --tool=callgrind` when the trade-off needs more axes than
+  time.
+- **Disclose jitter sources.** The bench output JSON already names the
+  machine; do not compare numbers across machines without normalizing.
+
+### Optimization Avenues Before "Just Write A Faster Loop"
+
+When a bench shows a real, reproducible gap and the simpler alternative
+isn't fast enough, the *order* of optimization to reach for:
+
+1. **Algorithmic / logical optimization.** Reduce big-O. A different data
+   structure (sorted vec + binary search vs. linear scan; B-tree vs. hash
+   when ordered iteration matters), a different algorithm, or eliminating
+   redundant work in a loop. Almost always the biggest single win and
+   the cheapest to maintain.
+2. **Cache-friendly data layout.** Array-of-structs → struct-of-arrays
+   for hot loops; sort by access pattern; pack flags into a bitset;
+   keep hot fields together in a cache line; avoid pointer-chasing in
+   inner loops.
+3. **Precomputation / memoization.** Hoist invariants out of loops;
+   cache derived values when source data changes infrequently. The
+   tool-catalog renderer in [`prompt-design.md`](prompt-design.md)
+   memoizes per-`ToolDef` blocks for exactly this reason.
+4. **Parallelism — last resort, not first.** Multi-core via
+   `asio::thread_pool`, or spreading work across strands. This is the
+   most expensive option (synchronization cost, cache-line bouncing,
+   debugging difficulty); it pays off only when the single-threaded
+   baseline is already cache-friendly and the work is genuinely
+   independent. **Never** as a first-line fix.
+
+Each tier is cheaper to maintain than the one below it. Walk down the
+list, stop when the bench is satisfied. Going straight to tier 4
+("throw threads at it") is the most common perf mistake in legacy
+`orangutan/`; v2 reverses the order.
+
 ### Bench Categories
 
 | Category | Library | Compares |

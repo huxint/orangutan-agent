@@ -9,7 +9,7 @@
 
 - **Slice:** 13 (`xmake run orangutan` reports slice 13)
 - **Last completed history:**
-  [`histories/2026-05/20260517-1217-plan-discipline-and-prompt-followups.md`](histories/2026-05/20260517-1217-plan-discipline-and-prompt-followups.md)
+  [`histories/2026-05/20260517-1241-investigation-no-c-idioms-bench-discipline.md`](histories/2026-05/20260517-1241-investigation-no-c-idioms-bench-discipline.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".

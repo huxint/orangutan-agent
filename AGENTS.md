@@ -95,8 +95,11 @@ One-line summaries; the linked rule is canonical.
 | Strings | UTF-8 by contract; conversion handled at boundaries via `oran::core::str::*` | [`code-style.md` "Strings"](docs/rules/code-style.md) |
 | Tests | Catch2 v3, one bucket per library, `tests/<lib>/...` | [`testing-and-bench.md`](docs/rules/testing-and-bench.md), [`critical-rules.md#C12`](docs/rules/critical-rules.md) |
 | Benches | nanobench + Catch2 runners, one bucket per library, `bench/<lib>/...`; each bucket owns ≥ 1 A-vs-B comparison | [`testing-and-bench.md`](docs/rules/testing-and-bench.md), [`critical-rules.md#C12`](docs/rules/critical-rules.md) |
+| Bench discipline | bench when you genuinely cannot rank impls by reading — not every TU. Speed alone is not the optimal-pick criterion: small deltas (~10% inside jitter) defer to code clarity / brevity. Optimization order: algorithmic → cache-friendly layout → precomputation/memoization → parallelism (last resort) | [`testing-and-bench.md` "When To Benchmark"](docs/rules/testing-and-bench.md) |
 | Histories | required for every code-change task that modifies behavior | [`critical-rules.md#C13`](docs/rules/critical-rules.md), [`HISTORY_GUIDE.md`](docs/HISTORY_GUIDE.md) |
 | Prompt design | system preamble / tool catalog / skill body live in stable `CacheSection`s ordered stable → dynamic; no clocks, IDs, or per-call state in the cached prefix; consult <https://github.com/Piebald-AI/claude-code-system-prompts> for prior art before designing a new prompt surface | [`prompt-design.md`](docs/rules/prompt-design.md) |
+| C vs C++ idioms | C++26 spellings only — `static_cast` over `(T)x`, `nullptr` over `NULL`, `using` over `typedef`, `std::array`/`std::span` over `T[N]`, `std::print`/`std::format` over `printf`, RAII over `malloc`/`free`; C only at typed boundaries (FFI, syscalls) wrapped immediately | [`critical-rules.md#C17`](docs/rules/critical-rules.md), [`code-style.md` "C++ Over C Idioms"](docs/rules/code-style.md) |
+| Investigation | When uncertain how to implement, spawn ≤ 2 subagents / teammates for contrasting probes and pick the optimal; use web / `Context7` / GitHub for prior art (never blind-copy — extract the points that fit the project); on a failing approach, check whether knowledge is stale and refresh **before** retrying | [`investigation.md`](docs/rules/investigation.md) |
 
 ## Working Posture
 

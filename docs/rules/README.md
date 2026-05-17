@@ -25,6 +25,7 @@ Do not silently break it.
 | [`async-and-concurrency.md`](async-and-concurrency.md) | asio + coroutines; no `std::thread`. |
 | [`libraries.md`](libraries.md) | Approved 3rd-party libraries. |
 | [`prompt-design.md`](prompt-design.md) | Cache-section discipline for prompts; study reference for new prompt surfaces. |
+| [`investigation.md`](investigation.md) | When to spawn subagents (≤ 2) / web-search / refresh stale knowledge before retrying. |
 | [`static-analysis.md`](static-analysis.md) | GCC 16.1 `-fanalyzer` wiring, suppression rules. |
 | [`testing-and-bench.md`](testing-and-bench.md) | Tests + benches expected per change. |
 | [`workflow.md`](workflow.md) | Git, CLI tools, branch naming. |

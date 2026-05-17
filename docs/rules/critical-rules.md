@@ -233,6 +233,16 @@ Concretely:
   values, `std::variant` vs. tagged unions, `std::ranges::*` vs. iterator-pair
   `std::*`, `std::ranges::contains` vs. `find != end()`), use the newer one
   unless there is a benchmarked reason not to.
+- **No C-style constructs when a C++ equivalent exists.** Concretely: use
+  `static_cast` / `reinterpret_cast` / `std::bit_cast` not `(T)x`;
+  `static_cast<void>(expr)` not `(void)expr`; `nullptr` not `NULL` or `0`;
+  `using` aliases not `typedef`; `enum class` not bare `enum`; `std::array` /
+  `std::span` not raw `T[N]` in interfaces; RAII / smart pointers not
+  `malloc` / `free`; `std::string` / `std::string_view` not `char*` / `strlen`
+  in public APIs; `std::print` / `std::format` not `printf` / `sprintf`;
+  `<cstring>` byte ops only behind a typed helper, never as the surface.
+  Code should read as **simple, efficient, elegant, modern C++** — see
+  [`code-style.md` "C++ Over C Idioms"](code-style.md).
 
 **Why:** the rewrite exists specifically because the legacy project's older standard
 left it stuck with hand-rolled equivalents of `std::expected` and friends. We use

@@ -274,6 +274,44 @@ iterator.
 - Capture lists explicit (`[this]`, `[&counter]`); avoid `[=]` and `[&]`.
 - Coroutine lambdas are allowed but must not capture references that outlive them.
 
+### C++ Over C Idioms
+
+Code should read as **simple, efficient, elegant, modern C++**. When the
+language ships both a C-era and a C++-era spelling for the same job, the
+C++ spelling is the one that lands in `src/oran-*/`. This subsection
+extends [`critical-rules.md#C17`](critical-rules.md) with concrete pairs.
+
+| C-era spelling                       | C++ replacement                                 | Notes |
+| ------------------------------------ | ----------------------------------------------- | ----- |
+| `(Foo)x` (C-style cast)              | `static_cast<Foo>(x)` / `reinterpret_cast<Foo*>(p)` / `std::bit_cast<Foo>(bits)` | C-style casts silently combine `static`, `const`, and `reinterpret` semantics; the named cast says which one is meant. |
+| `(void)expr` (discard)               | `static_cast<void>(expr)`                       | Documented preference; clang-tidy's `cppcoreguidelines-pro-type-cstyle-cast` reports the C form. |
+| `NULL` / bare `0` for pointers       | `nullptr`                                       | Type-safe; participates in overload resolution. |
+| `typedef T U;`                       | `using U = T;`                                  | Template-friendly; reads left-to-right. |
+| bare `enum Foo { ... };`             | `enum class Foo { ... };` + `core::enum_name`   | See "Enums" above. |
+| raw `T arr[N]` in interfaces         | `std::array<T, N>` (owning) / `std::span<const T>` (view) | The raw-array form decays to a pointer at the boundary; the C++ forms keep the size in the type. |
+| `malloc` / `free`                    | RAII container (`std::vector`, `std::unique_ptr`) | Manual `new` / `delete` is also discouraged outside RAII helpers. |
+| `char*` / `strlen` in interfaces     | `std::string` (owning) / `std::string_view` (view) | Public APIs never expose raw `char*` — see "Strings" above. |
+| `printf` / `sprintf` / `fprintf`     | `std::print` / `std::println` / `std::format`   | See "Console And Formatted Output" above. |
+| `<cstring>` `memcpy` / `memcmp` / `memset` on objects | `std::copy_n` / `std::ranges::equal` / `std::ranges::fill` | The byte-level functions are fine *inside* a typed helper (e.g. a serializer); they must not be the surface a caller sees. |
+| `errno` / negative-int error codes   | `core::Result<T>` = `std::expected<T, Error>`    | See [`error-handling.md`](error-handling.md). |
+| `assert(cond)`                       | `[[assume(cond)]]` (intent) / `core::Error` (recoverable) | Naked `assert` evaporates in release builds; if the condition is load-bearing, return an error. |
+
+```cpp
+// PREFERRED — simple, efficient, elegant, modern.
+auto buffer = std::array<std::byte, 64>{};
+const auto written = std::format_to(buffer.data(), "value={}", value);
+static_cast<void>(written);  // intentional discard
+
+// FORBIDDEN — C-era spelling carried in.
+char buffer[64];
+int written = sprintf(buffer, "value=%d", (int)value);
+(void)written;
+```
+
+The pairs above are the most common offenders. The general principle:
+*reach for the C++ vocabulary first; drop to C only at typed boundaries
+(serialization, FFI, OS syscalls) and wrap it immediately.*
+
 ## Logging
 
 - Use the `oran::log::*` shim, never `spdlog::*` directly.
