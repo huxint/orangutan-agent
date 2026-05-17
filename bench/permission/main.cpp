@@ -11,6 +11,7 @@ void register_defaults_scenarios(ankerl::nanobench::Bench&);
 void register_materialize_scenarios(ankerl::nanobench::Bench&);
 void register_input_pattern_scenarios(ankerl::nanobench::Bench&);
 void register_approval_secret_scenarios(ankerl::nanobench::Bench&);
+void register_approval_scenarios(ankerl::nanobench::Bench&);
 }  // namespace orangutan::bench
 
 int main() {
@@ -62,6 +63,16 @@ int main() {
     b.warmup(1'000);
 
     orangutan::bench::register_approval_secret_scenarios(b);
+  }
+
+  {
+    ankerl::nanobench::Bench b;
+    b.title("bench-permission/approval");
+    b.unit("op");
+    b.minEpochIterations(20'000);
+    b.warmup(1'000);
+
+    orangutan::bench::register_approval_scenarios(b);
   }
 
   std::println();
