@@ -34,7 +34,7 @@ oran_lib("async", { "oran-core" }, {}, { "asio" })
 oran_lib("io", { "oran-core", "oran-async" }, {}, { "asio" })
 oran_lib("storage", { "oran-core", "oran-async" }, { "sqlite3" })
 oran_lib("config", { "oran-core", "oran-storage" }, { "nlohmann_json", "re2" })
-oran_lib("permission", { "oran-core", "oran-config" }, { "re2" })
+oran_lib("permission", { "oran-core", "oran-config" }, { "re2", "libsodium" })
 oran_lib("cli", { "oran-core" }, {})
 oran_lib("bootstrap", { "oran-core", "oran-config", "oran-permission", "oran-cli" }, {})
 

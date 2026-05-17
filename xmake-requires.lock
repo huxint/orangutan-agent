@@ -16,6 +16,22 @@
             },
             version = "1.36.0"
         },
+        ["autoconf#f56260b5"] = {
+            repo = {
+                branch = "master",
+                commit = "1ee8ee1b0588441ffe09503c715e7090b6a1a732",
+                url = "https://gitee.com/tboox/xmake-repo.git"
+            },
+            version = "2.72"
+        },
+        ["automake#f56260b5"] = {
+            repo = {
+                branch = "master",
+                commit = "1ee8ee1b0588441ffe09503c715e7090b6a1a732",
+                url = "https://gitee.com/tboox/xmake-repo.git"
+            },
+            version = "1.17"
+        },
         ["catch2 3.7.1#f56260b5"] = {
             repo = {
                 branch = "master",
@@ -31,6 +47,30 @@
                 url = "https://gitee.com/tboox/xmake-repo.git"
             },
             version = "4.2.3"
+        },
+        ["libsodium 1.0.21#f56260b5"] = {
+            repo = {
+                branch = "master",
+                commit = "1ee8ee1b0588441ffe09503c715e7090b6a1a732",
+                url = "https://gitee.com/tboox/xmake-repo.git"
+            },
+            version = "1.0.21"
+        },
+        ["libtool#f56260b5"] = {
+            repo = {
+                branch = "master",
+                commit = "1ee8ee1b0588441ffe09503c715e7090b6a1a732",
+                url = "https://gitee.com/tboox/xmake-repo.git"
+            },
+            version = "2.6.0"
+        },
+        ["m4#f56260b5"] = {
+            repo = {
+                branch = "master",
+                commit = "1ee8ee1b0588441ffe09503c715e7090b6a1a732",
+                url = "https://gitee.com/tboox/xmake-repo.git"
+            },
+            version = "1.4.19"
         },
         ["nanobench 4.3.11#f56260b5"] = {
             repo = {
@@ -55,6 +95,14 @@
                 url = "https://gitee.com/tboox/xmake-repo.git"
             },
             version = "v3.12.0"
+        },
+        ["pkg-config#f56260b5"] = {
+            repo = {
+                branch = "master",
+                commit = "1ee8ee1b0588441ffe09503c715e7090b6a1a732",
+                url = "https://gitee.com/tboox/xmake-repo.git"
+            },
+            version = "0.29.2"
         },
         ["re2 2025.11.05#f56260b5"] = {
             repo = {

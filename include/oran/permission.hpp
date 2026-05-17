@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <oran/permission/approval_secret.hpp>
 #include <oran/permission/defaults.hpp>
 #include <oran/permission/input_pattern.hpp>
 #include <oran/permission/materialize.hpp>
