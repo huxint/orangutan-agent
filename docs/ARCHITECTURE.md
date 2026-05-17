@@ -92,7 +92,9 @@ own test bucket, its own bench bucket, and its own public header set under
 > (a value-type bundle holding a fresh `permission::ApprovalBroker`
 > and the active `permission::AuditSink` — `StorageAuditSink`
 > over an internal `Pool` + `AuditRepository` when audit is on,
-> `NullAuditSink` otherwise), plus the first `oran-cli` handoff
+> `NullAuditSink` otherwise; audit defaults to enabled now that
+> `oran-storage` ships its migrations compile-time-embedded via
+> `#embed`), plus the first `oran-cli` handoff
 > shell, are implemented.
 > All other rows below are *planned* and will land per `docs/exec-plans/` as
 > future slices are scheduled. The build system, PCH, tests bucket, and bench
@@ -106,7 +108,7 @@ own test bucket, its own bench bucket, and its own public header set under
 | `oran-log`           | spdlog shim + secret redaction; thread-local context | `oran-core`, spdlog/fmt |
 | `oran-io`            | file/directory IO MVP; planned glob, pipe, subprocess, signal | `oran-core`, `oran-async` |
 | `oran-http`          | http client (asio) and tiny router for the web UI | `oran-core`, `oran-async` |
-| `oran-storage`       | SQLite expected-only connection/statement core, migration runner with SQL-file loading, async writer/reader `Pool` with per-slot `StatementCache`, standalone per-connection `StatementCache`, `SessionRepository` (typed `core::Role` at the API boundary), and `AuditRepository` (typed audit-event append/list/count over `audit_events`); planned memory/automation repositories | `oran-core`, `oran-async`, sqlite3 |
+| `oran-storage`       | SQLite expected-only connection/statement core, migration runner with SQL-file loading **and compile-time-embedded built-in migrations** (`built_in_audit_migrations()` / `built_in_session_migrations()` reach the SQL via C++26 `#embed`), async writer/reader `Pool` with per-slot `StatementCache`, standalone per-connection `StatementCache`, `SessionRepository` (typed `core::Role` at the API boundary), and `AuditRepository` (typed audit-event append/list/count over `audit_events`); planned memory/automation repositories | `oran-core`, `oran-async`, sqlite3 |
 | `oran-config`        | JSON config loader with typed runtime/profile/route/session/web fields, env substitution, and the typed `permissions` + `agents.<name>.permissions` overlay surface (layer-2/3 data of the three-layer rule merge); planned schema + secret-protected fields | `oran-core`, `oran-storage` |
 | `oran-permission`    | foundation rule evaluator: `Verdict`, `Mode`, `Rule`, `RuleSet`, `Decision`, `*`-glob tool matching, capability-aware gating (`Rule::capability` of `core::Capability`), the `Defaults::for_mode` baseline factory, the three-layer `materialize(Mode, global, per_agent)` merge that concatenates defaults + global config + per-agent overlay, the `ApprovalSecret` / `ApprovalAuthority` / `ApprovalToken` / `ApprovalBroker` ask-flow surface, and the `AuditEvent` / `AuditSink` / `StorageAuditSink` audit pipeline; planned re2 input regex extensions and bootstrap wiring | `oran-core`, `oran-config`, `oran-storage`, `oran-async` |
 | `oran-skill`         | skill loader, skill catalog | `oran-core`, `oran-io` |
@@ -126,7 +128,7 @@ own test bucket, its own bench bucket, and its own public header set under
 | `oran-channel-webhook` | generic webhook adapter | `oran-channel`, `oran-http` |
 | `oran-web`           | HTTP web UI (cpp-httplib in skeleton, asio later) | `oran-agent`, `oran-orchestration`, `oran-http` |
 | `oran-cli`           | early REPL / single-shot shell; planned slash commands and agent handoff | currently `oran-core`; planned `oran-agent`, `oran-orchestration` |
-| `oran-bootstrap`     | process entry + config loading + CLI handoff + `--explain-rules` + `--audit-init` + per-process `RuntimeAssembly` (bundles a fresh `permission::ApprovalBroker` and the active `permission::AuditSink`); planned runtime assembly with `audit_enabled=true` by default once the migration assets are packaged | currently `oran-core`, `oran-async`, `oran-storage`, `oran-config`, `oran-permission`, `oran-cli`; planned every public lib above |
+| `oran-bootstrap`     | process entry + config loading + CLI handoff + `--explain-rules` + `--audit-init` + per-process `RuntimeAssembly` (bundles a fresh `permission::ApprovalBroker` and the active `permission::AuditSink`; defaults to `audit_enabled=true` now that the migrations ship inside the binary) | currently `oran-core`, `oran-async`, `oran-storage`, `oran-config`, `oran-permission`, `oran-cli`; planned every public lib above |
 
 **Binaries** built on top:
 

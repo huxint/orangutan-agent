@@ -7,20 +7,19 @@
 
 ## Snapshot
 
-- **Slice:** 14 (`xmake run orangutan` reports slice 14)
+- **Slice:** 15 (`xmake run orangutan` reports slice 15)
 - **Last completed history:**
-  [`histories/2026-05/20260517-1430-bootstrap-runtime-assembly.md`](histories/2026-05/20260517-1430-bootstrap-runtime-assembly.md)
+  [`histories/2026-05/20260517-1610-bootstrap-audit-migration-packaging.md`](histories/2026-05/20260517-1610-bootstrap-audit-migration-packaging.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** TBD — choose from the QUALITY_SCORE "Next Step"
-  column. Most likely candidates: package the audit migration assets so
-  `bootstrap::run` can default to `audit_enabled=true` without a CWD
-  walk; first tool-registry built-ins (`file.read`, `file.write`,
-  `file.edit`, `file.search`) plumbed through the assembly's
-  `permission::AuditSink` so each call records a row; first provider
-  adapter (Anthropic Messages).
+  column. Most likely candidates: first tool-registry built-ins
+  (`file.read`, `file.write`, `file.edit`, `file.search`) plumbed
+  through the assembly's `permission::AuditSink` so each call
+  records a row; first provider adapter (Anthropic Messages); pass
+  mode + per-agent selection to `--explain-rules`.
 
 ## Library Health
 
@@ -43,19 +42,13 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 19 cases / 148 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
-- `oran-bootstrap`: 20 cases / 75 assertions.
+- `oran-bootstrap`: 21 cases / 78 assertions.
 
 ## Open Tech-Debt Rows
 
 Lifted from [`exec-plans/tech-debt-tracker.md`](exec-plans/tech-debt-tracker.md).
 Closed entries do *not* live here — the tracker is canonical.
 
-- 2026-05-17 — Audit migrations directory is found by walking up from
-  `CWD` until `src/oran-storage/migrations/audit` appears; running
-  `orangutan` (or `RuntimeAssembly::build` with `audit_enabled=true`)
-  from outside the repo fails to migrate the audit DB. `bootstrap::run`
-  therefore defaults the assembly to `audit_enabled=false` until the
-  migration assets are packaged into the binary.
 - 2026-05-17 — `scripts/check-prompt-preamble` static grep promised in
   `rules/prompt-design.md` not yet implemented (waits on first stable
   preamble template in `oran-agent`).

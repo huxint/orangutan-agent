@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
-#include <filesystem>
 #include <limits>
 #include <optional>
 #include <string>
@@ -22,8 +21,6 @@
 namespace orangutan::storage {
 
 namespace {
-
-constexpr std::string_view kDefaultAuditMigrationsDirectory = "src/oran-storage/migrations/audit";
 
 constexpr std::string_view kAppendEventSql = R"sql(
 INSERT INTO audit_events(
@@ -81,40 +78,6 @@ SELECT COUNT(*) FROM audit_events WHERE scope_key = ?
     return std::unexpected(core::Error::invalid_argument("audit list limit is too large"));
   }
   return {};
-}
-
-[[nodiscard]] core::Result<std::string> resolve_audit_migrations_directory(std::string_view configured_directory) {
-  if (!configured_directory.empty()) {
-    return std::string{configured_directory};
-  }
-
-  std::error_code ec;
-  auto current = std::filesystem::current_path(ec);
-  if (ec) {
-    auto error = core::Error::io("failed to inspect current directory");
-    error.with("system_error", ec.message());
-    return std::unexpected(std::move(error));
-  }
-
-  while (true) {
-    auto candidate = current / kDefaultAuditMigrationsDirectory;
-    if (std::filesystem::is_directory(candidate, ec)) {
-      return candidate.string();
-    }
-    if (ec) {
-      ec.clear();
-    }
-
-    auto parent = current.parent_path();
-    if (parent.empty() || parent == current) {
-      break;
-    }
-    current = std::move(parent);
-  }
-
-  auto error = core::Error::not_found("default audit migrations directory does not exist");
-  error.with("path", std::string{kDefaultAuditMigrationsDirectory});
-  return std::unexpected(std::move(error));
 }
 
 [[nodiscard]] core::Result<std::string> required_text(Statement& statement, int index, std::string_view field) {
@@ -244,12 +207,15 @@ async::Awaitable<core::Result<MigrationReport>> AuditRepository::migrate() {
     co_return std::unexpected(writer.error());
   }
 
-  auto directory = resolve_audit_migrations_directory(options_.migrations_directory);
-  if (!directory) {
-    co_return std::unexpected(directory.error());
+  if (options_.migrations_directory.empty()) {
+    auto report = run_migrations(writer->connection(), built_in_audit_migrations());
+    if (!report) {
+      co_return std::unexpected(report.error());
+    }
+    co_return std::move(*report);
   }
 
-  auto report = run_migrations_from_directory(writer->connection(), *directory);
+  auto report = run_migrations_from_directory(writer->connection(), options_.migrations_directory);
   if (!report) {
     co_return std::unexpected(report.error());
   }

@@ -49,6 +49,29 @@ private:
   std::filesystem::path path_;
 };
 
+/// RAII chdir guard. The built-in-migration path must not depend on CWD —
+/// the slice-15 packaging swap pulled the SQL into the binary precisely
+/// so a process launched from anywhere can provision audit.db. This guard
+/// gives the test below a way to assert that property without leaking the
+/// CWD change into sibling cases.
+class CwdGuard {
+public:
+  explicit CwdGuard(const std::filesystem::path& destination) : original_(std::filesystem::current_path()) {
+    std::filesystem::current_path(destination);
+  }
+
+  ~CwdGuard() {
+    std::error_code ec;
+    std::filesystem::current_path(original_, ec);
+  }
+
+  CwdGuard(const CwdGuard&) = delete;
+  CwdGuard& operator=(const CwdGuard&) = delete;
+
+private:
+  std::filesystem::path original_;
+};
+
 permission::AuditEvent make_event(std::string scope, std::string tool, permission::AuditOutcome outcome) {
   permission::AuditEvent event;
   event.scope_key = std::move(scope);
@@ -202,4 +225,16 @@ TEST_CASE("RuntimeAssembly approval broker rejects a cross-tool token", "[unit][
   auto cross_tool = assembly.approval_broker().check(token, "file.delete", "/tmp/note.txt", "operator-1", now);
   REQUIRE_FALSE(cross_tool.has_value());
   REQUIRE(cross_tool.error().kind() == core::ErrorKind::permission_denied);
+}
+
+TEST_CASE("RuntimeAssembly::build provisions audit.db from a non-source CWD", "[unit][bootstrap][runtime_assembly]") {
+  TempDir workspace{"oran-assembly-cwd-workspace"};
+  TempDir cwd{"oran-assembly-cwd-elsewhere"};
+  CwdGuard guard{cwd.path()};
+  asio::io_context io;
+
+  auto built = bootstrap::RuntimeAssembly::build(workspace.path().string(), io.get_executor());
+  REQUIRE(built.has_value());
+  REQUIRE(built->audit_enabled());
+  REQUIRE(std::filesystem::exists(workspace.path() / ".orangutan" / "audit.db"));
 }

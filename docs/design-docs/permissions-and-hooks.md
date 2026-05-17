@@ -127,12 +127,19 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > referencing the long-lived repository. When `false`, the
 > assembly installs a `NullAuditSink` and never touches the audit
 > DB. The agent-loop slice owns the assembly for the lifetime of
-> the process; `bootstrap::run` today builds it with
-> `audit_enabled=false` so `orangutan` stays runnable from any
-> CWD until the audit migration assets are packaged. Bench:
-> assembly_build_with_audit ~212 µs vs. assembly_build_without_audit
-> ~400 ns (the audit pipeline costs ~211 µs per process startup,
-> dominated by SQLite open + migration + `Pool::open`).
+> the process. Slice 15 packages the audit/sessions migration SQL
+> into `oran-storage` itself via C++26 `#embed`
+> (`storage::built_in_audit_migrations()` /
+> `storage::built_in_session_migrations()`), so `bootstrap::run`
+> defaults the assembly to `audit_enabled=true` regardless of
+> CWD; the disk override
+> (`AuditRepositoryOptions::migrations_directory`) still wins for
+> tests that author one-off schemas under a tempdir. Bench:
+> assembly_build_with_audit ~202 µs vs. assembly_build_without_audit
+> ~400 ns (the audit pipeline costs ~201 µs per process startup,
+> dominated by SQLite open + migration + `Pool::open`; the
+> `#embed`-backed migration is slightly faster than the previous
+> CWD-scan path because no directory iteration is needed).
 > `0008-permissions.md` criterion 1 is now closed in-process; the
 > per-call "record on decision" plumbing lands with the first
 > tool built-ins or the agent loop scaffolding.

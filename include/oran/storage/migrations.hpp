@@ -32,4 +32,12 @@ struct MigrationReport {
 [[nodiscard]] core::Result<MigrationReport> run_migrations_from_directory(Connection& connection,
                                                                           std::string_view directory);
 
+// Compile-time-embedded migration assets — keep the canonical SQL files
+// the binary ships with reachable without consulting the filesystem. The
+// repositories below fall back to these when their `migrations_directory`
+// option is empty; supplying an explicit directory still wins so tests
+// can author one-off schemas under a tempdir.
+[[nodiscard]] std::span<const Migration> built_in_audit_migrations();
+[[nodiscard]] std::span<const Migration> built_in_session_migrations();
+
 }  // namespace orangutan::storage

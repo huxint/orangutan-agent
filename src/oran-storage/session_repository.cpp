@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
-#include <filesystem>
 #include <limits>
 #include <optional>
 #include <string>
@@ -23,8 +22,6 @@
 namespace orangutan::storage {
 
 namespace {
-
-constexpr std::string_view kDefaultSessionMigrationsDirectory = "src/oran-storage/migrations/sessions";
 
 constexpr std::string_view kAppendMessageSql = R"sql(
 INSERT INTO session_messages(session_id, agent_key, sequence, role, content_json, metadata_json, created_at)
@@ -105,40 +102,6 @@ LIMIT ?
     return std::unexpected(invalid_field("metadata_json"));
   }
   return {};
-}
-
-[[nodiscard]] core::Result<std::string> resolve_session_migrations_directory(std::string_view configured_directory) {
-  if (!configured_directory.empty()) {
-    return std::string{configured_directory};
-  }
-
-  std::error_code ec;
-  auto current = std::filesystem::current_path(ec);
-  if (ec) {
-    auto error = core::Error::io("failed to inspect current directory");
-    error.with("system_error", ec.message());
-    return std::unexpected(std::move(error));
-  }
-
-  while (true) {
-    auto candidate = current / kDefaultSessionMigrationsDirectory;
-    if (std::filesystem::is_directory(candidate, ec)) {
-      return candidate.string();
-    }
-    if (ec) {
-      ec.clear();
-    }
-
-    auto parent = current.parent_path();
-    if (parent.empty() || parent == current) {
-      break;
-    }
-    current = std::move(parent);
-  }
-
-  auto error = core::Error::not_found("default session migrations directory does not exist");
-  error.with("path", std::string{kDefaultSessionMigrationsDirectory});
-  return std::unexpected(std::move(error));
 }
 
 [[nodiscard]] core::Result<std::int64_t> checked_limit(std::size_t limit) {
@@ -284,12 +247,15 @@ async::Awaitable<core::Result<MigrationReport>> SessionRepository::migrate() {
     co_return std::unexpected(writer.error());
   }
 
-  auto directory = resolve_session_migrations_directory(options_.migrations_directory);
-  if (!directory) {
-    co_return std::unexpected(directory.error());
+  if (options_.migrations_directory.empty()) {
+    auto report = run_migrations(writer->connection(), built_in_session_migrations());
+    if (!report) {
+      co_return std::unexpected(report.error());
+    }
+    co_return std::move(*report);
   }
 
-  auto report = run_migrations_from_directory(writer->connection(), *directory);
+  auto report = run_migrations_from_directory(writer->connection(), options_.migrations_directory);
   if (!report) {
     co_return std::unexpected(report.error());
   }
