@@ -110,8 +110,14 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > will share. Bench: null sink ~260 ns, recording sink ~360 ns,
 > storage sink ~18.1 µs end-to-end through SQLite, hex-encode
 > ~62 ns. Bootstrap wiring is the final piece of
-> `0008-permissions.md` criterion 1; it lands in the same
-> slice's last commit.
+> `0008-permissions.md` criterion 1; the
+> `orangutan --audit-init [<path>]` flag exercises the audit
+> pipeline end-to-end (one-shot `asio::io_context` opens a
+> `storage::Pool` for the audit DB and runs
+> `storage::AuditRepository::migrate()`; idempotent on re-run).
+> `0008-permissions.md` criterion 1 is now closed; the per-call
+> "record on decision" plumbing lands with the first tool
+> built-ins or the agent loop scaffolding.
 
 ### Sources
 

@@ -4,15 +4,23 @@
 
 #include <expected>
 #include <filesystem>
+#include <optional>
 #include <print>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
+#include <asio/io_context.hpp>
+
+#include <oran/async.hpp>
 #include <oran/cli.hpp>
 #include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
 #include <oran/permission.hpp>
+#include <oran/storage.hpp>
 
 namespace orangutan::bootstrap {
 namespace {
@@ -20,11 +28,15 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice12";
+constexpr std::string_view kVersion = "2.0.0-slice13";
+constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 
 struct ParsedArgs {
   bool help{false};
   bool explain_rules{false};
+  bool audit_init{false};
+  bool has_audit_init_path{false};
+  std::string audit_init_path{};
   bool has_explicit_config{false};
   std::string explicit_config_path{};
   std::vector<std::string_view> cli_args{};
@@ -50,6 +62,32 @@ struct ParsedArgs {
 
     if (arg == "--explain-rules") {
       parsed.explain_rules = true;
+      continue;
+    }
+
+    constexpr auto kAuditInitPrefix = std::string_view{"--audit-init="};
+    if (arg.starts_with(kAuditInitPrefix)) {
+      parsed.audit_init = true;
+      parsed.has_audit_init_path = true;
+      parsed.audit_init_path = std::string{arg.substr(kAuditInitPrefix.size())};
+      if (parsed.audit_init_path.empty()) {
+        return std::unexpected(arg_error("--audit-init requires a non-empty path"));
+      }
+      continue;
+    }
+
+    if (arg == "--audit-init") {
+      parsed.audit_init = true;
+      // The path argument is optional: when omitted, audit-init uses the
+      // workspace default `<workspace>/.orangutan/audit.db`. Sniff the
+      // next token only if it does not look like another flag.
+      if (index + 1 < args.size() && !args[index + 1].starts_with("--")) {
+        parsed.has_audit_init_path = true;
+        parsed.audit_init_path = std::string{args[++index]};
+        if (parsed.audit_init_path.empty()) {
+          return std::unexpected(arg_error("--audit-init requires a non-empty path"));
+        }
+      }
       continue;
     }
 
@@ -88,6 +126,12 @@ struct ParsedArgs {
   return path.string();
 }
 
+[[nodiscard]] std::string default_audit_path(std::string_view workspace) {
+  auto path = std::filesystem::path{std::string{workspace}};
+  path /= kAuditDatabaseRelative;
+  return path.string();
+}
+
 [[nodiscard]] Result<bool> path_exists(std::string_view path) {
   auto ec = std::error_code{};
   const auto exists = std::filesystem::exists(std::filesystem::path{std::string{path}}, ec);
@@ -100,10 +144,12 @@ struct ParsedArgs {
 
 void print_usage() {
   std::println("orangutan v{}", kVersion);
-  std::println("usage: orangutan [--config <path>] [--explain-rules] [--prompt <text>] [--help]");
+  std::println(
+      "usage: orangutan [--config <path>] [--explain-rules] [--audit-init [<path>]] [--prompt <text>] [--help]");
   std::println();
   std::println("The current bootstrap slice loads config, then hands CLI modes to oran-cli.");
   std::println("--explain-rules prints the materialized permission rule set and exits.");
+  std::println("--audit-init applies the audit.db schema (defaults to <workspace>/.orangutan/audit.db) and exits.");
 }
 
 [[nodiscard]] Result<int> print_materialized_rules(const config::Config& cfg) {
@@ -128,6 +174,61 @@ void print_usage() {
     std::println();
     ++index;
   }
+  return 0;
+}
+
+[[nodiscard]] Result<int> run_audit_init(std::string audit_path) {
+  if (audit_path.empty()) {
+    return std::unexpected(arg_error("audit init path must not be empty"));
+  }
+
+  auto path = std::filesystem::path{audit_path};
+  if (auto parent = path.parent_path(); !parent.empty()) {
+    auto ec = std::error_code{};
+    std::filesystem::create_directories(parent, ec);
+    if (ec) {
+      return std::unexpected(
+          Error::io("failed to create audit directory").with("path", parent.string()).with("detail", ec.message()));
+    }
+  }
+
+  // Drive the migration on a one-shot io_context. The full
+  // `async::Runtime` thread pool exists for the agent loop; a single
+  // io_context is the right shape for a one-shot operator command.
+  asio::io_context io;
+  auto pool_result =
+      storage::Pool::open(io.get_executor(),
+                          storage::PoolOptions{.path = audit_path, .reader_count = 1, .statement_cache_capacity = 4});
+  if (!pool_result) {
+    return std::unexpected(std::move(pool_result).error());
+  }
+  auto pool = std::move(*pool_result);
+  storage::AuditRepository repo{pool};
+
+  auto report = storage::MigrationReport{};
+  auto migrate_error = std::optional<core::Error>{};
+  asio::co_spawn(
+      io,
+      [&]() -> async::Awaitable<void> {
+        auto migrated = co_await repo.migrate();
+        if (!migrated) {
+          migrate_error = std::move(migrated).error();
+          co_return;
+        }
+        report = std::move(*migrated);
+        co_return;
+      },
+      asio::detached);
+  io.run();
+
+  if (migrate_error) {
+    return std::unexpected(std::move(*migrate_error));
+  }
+
+  std::println("audit schema ready: version {} at {} ({} migrations applied)",
+               report.current_version,
+               audit_path,
+               report.applied_versions.size());
   return 0;
 }
 
@@ -205,6 +306,12 @@ core::Result<int> run(BootstrapOptions options) {
   if (parsed->help) {
     print_usage();
     return 0;
+  }
+
+  if (parsed->audit_init) {
+    auto audit_path =
+        parsed->has_audit_init_path ? std::move(parsed->audit_init_path) : default_audit_path(options.workspace);
+    return run_audit_init(std::move(audit_path));
   }
 
   auto loaded = load_config(options);

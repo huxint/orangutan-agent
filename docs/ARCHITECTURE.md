@@ -122,7 +122,7 @@ own test bucket, its own bench bucket, and its own public header set under
 | `oran-channel-webhook` | generic webhook adapter | `oran-channel`, `oran-http` |
 | `oran-web`           | HTTP web UI (cpp-httplib in skeleton, asio later) | `oran-agent`, `oran-orchestration`, `oran-http` |
 | `oran-cli`           | early REPL / single-shot shell; planned slash commands and agent handoff | currently `oran-core`; planned `oran-agent`, `oran-orchestration` |
-| `oran-bootstrap`     | process entry + config loading + CLI handoff; planned runtime assembly | currently `oran-core`, `oran-config`, `oran-cli`; planned every public lib above |
+| `oran-bootstrap`     | process entry + config loading + CLI handoff + `--explain-rules` + `--audit-init`; planned runtime assembly with broker + audit sink ownership | currently `oran-core`, `oran-async`, `oran-storage`, `oran-config`, `oran-permission`, `oran-cli`; planned every public lib above |
 
 **Binaries** built on top:
 

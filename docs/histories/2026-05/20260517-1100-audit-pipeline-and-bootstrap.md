@@ -71,6 +71,26 @@ deps), then the permission interface on top, then the bootstrap wiring
   depends on `oran-storage` + `oran-async` directly (previously
   transitive through `oran-config`).
 
+- **Commit 3** — bootstrap `--audit-init [<path>]` + slice tag
+  bump 12 → 13. The new flag runs the full audit-DB
+  provisioning path the future agent loop will use: a one-shot
+  `asio::io_context`, a `storage::Pool::open` for the audit
+  path, a `storage::AuditRepository` driven through
+  `migrate()`. With no path argument, audit-init writes to
+  `<workspace>/.orangutan/audit.db`; with a path, it honors the
+  operator's choice. Parent directories are created on demand;
+  re-running the same command is idempotent (the migration
+  runner reports `0 migrations applied`). The flag is wired
+  in front of the existing config-load path so operators can
+  provision audit storage without a config file. `oran-bootstrap`
+  now depends on `oran-async` + `oran-storage` directly (was
+  transitive via `oran-config`/`oran-permission`). 3 new
+  bootstrap tests (default-path, explicit-path in the two
+  flag shapes, rejected empty path). `0008-permissions.md`
+  criterion 1 is now closed at the infrastructure layer; the
+  per-call record-on-decision wiring lands with the first
+  tool built-ins or the agent loop scaffolding.
+
 ### Design Intent
 
 **Why a domain repository before the permission sink.** The audit
@@ -199,6 +219,22 @@ just its internal slicing.
 - `bench/permission/main.cpp` — registers the new bucket.
 - `bench/permission/README.md` — documents the bucket.
 
+### Files Modified (Commit 3)
+
+- `src/oran-bootstrap/bootstrap.cpp` — slice tag 12 → 13;
+  new `--audit-init` / `--audit-init=<path>` / `--audit-init
+  <path>` parse paths; new `run_audit_init(path)` helper that
+  drives an `asio::io_context` through `storage::Pool::open`
+  + `storage::AuditRepository::migrate()`; usage text grew.
+- `xmake/targets.lua` — `oran-bootstrap` direct deps grew
+  with `oran-async` + `oran-storage` (was transitive via
+  `oran-config`/`oran-permission`).
+- `tests/bootstrap/test_bootstrap.cpp` — 3 new cases:
+  default workspace-path audit-init applies the schema and
+  is idempotent, explicit path in the two flag shapes
+  (`--audit-init path` and `--audit-init=path`), rejected
+  empty explicit path.
+
 ### Docs Updated In This PR (Prime Directive — see `docs/rules/docs-in-sync.md`)
 
 Commit 1:
@@ -240,6 +276,31 @@ Commit 2:
 - `docs/histories/.../20260517-1100-audit-pipeline-and-bootstrap.md`
   — this file, appended.
 
+Commit 3:
+
+- `docs/STATUS.md` — slice tag 12 → 13;
+  refreshed `oran-bootstrap` test counts (8 → 11 cases,
+  34 → 47 assertions); pivoted the next-intended-slice
+  bullet to the next downstream candidates.
+- `docs/QUALITY_SCORE.md` — `Test framework` count
+  refresh; `Bootstrap` row "Why" / "Next Step" pivoted to
+  the audit-init landing + remaining "wire broker + sink
+  into runtime assembly".
+- `docs/ARCHITECTURE.md` — `oran-bootstrap` library
+  inventory row extended (description includes
+  `--audit-init`; dep list now `oran-core, oran-async,
+  oran-storage, oran-config, oran-permission, oran-cli`).
+- `docs/product-specs/0008-permissions.md` — criterion 1
+  marked closed with the pointer back here.
+- `docs/design-docs/permissions-and-hooks.md` —
+  engine-status block extended with the
+  bootstrap-audit-init landing and the criterion-1
+  closure note.
+- `docs/releases/feature-release-notes.md` — new
+  `bootstrap-audit-init` row.
+- `docs/histories/.../20260517-1100-audit-pipeline-and-bootstrap.md`
+  — this file, appended.
+
 ### Validation
 
 Commit 1:
@@ -266,29 +327,49 @@ Commit 2:
     through SQLite, hex-encode ~62 ns.
   - `xmake test` (all 8 buckets) — green.
 
+Commit 3:
+
+- Commands run:
+  - `xmake build orangutan` — clean.
+  - `./build/.../orangutan --audit-init /tmp/test-audit-init.db`
+    — prints `audit schema ready: version 1 at
+    /tmp/test-audit-init.db (1 migrations applied)`; second
+    invocation reports `0 migrations applied` (idempotent).
+  - `./build/.../orangutan --help` — usage line includes the
+    new flag; version reports `2.0.0-slice13`.
+  - `xmake build test-bootstrap && ./build/.../test-bootstrap`
+    — 11 cases / 47 assertions, all green.
+  - `xmake test` (all 8 buckets) — green.
+
 ### Cumulative
 
-- Tests added/changed (slice total so far): 18 new
-  cases / +179 assertions (storage 52 → 60 / 606 → 702;
-  permission 73 → 83 / 296 → 379).
+- Tests added/changed (slice total): 21 new cases / +192
+  assertions across storage / permission / bootstrap (storage
+  52 → 60 / 606 → 702; permission 73 → 83 / 296 → 379;
+  bootstrap 8 → 11 / 34 → 47).
 - Bench impact: new `bench-storage/audit_repository` (2 A/B
   scenarios) and `bench-permission/audit` (4 scenarios);
   existing scenarios unchanged.
-- Compile-budget delta: 2 new TUs in `oran-storage` and 2
-  new TUs in `oran-permission`; headers pull stdlib + the
-  in-repo `migrations`/`pool` forward decls and
-  `awaitable_fwd` (already in PCH transitively). No PCH
-  change.
+- Compile-budget delta: 2 new TUs in `oran-storage`, 2 new
+  TUs in `oran-permission`, and ~150 LOC added to
+  `bootstrap.cpp`. Headers pull stdlib + the in-repo
+  `migrations`/`pool`/`awaitable_fwd` forward decls (already
+  in PCH transitively). No PCH change.
 
 ### Follow-ups
 
 - Issues to file: none.
 - Tech-debt entry: none.
-- Linked release notes: `audit-db-storage` and
-  `audit-permission-sink` rows added to
-  `feature-release-notes.md`.
-- Final commit in this slice:
-  - Commit 3 — wire the broker + audit sink into
-    `oran-bootstrap`, bump slice tag 12 → 13, close
-    `0008-permissions.md` criterion 1 with a pointer back
-    here.
+- Linked release notes: `audit-db-storage`,
+  `audit-permission-sink`, and `bootstrap-audit-init` rows
+  added to `feature-release-notes.md`.
+- Next slices, in rough priority order:
+  - First tool-registry built-ins (`file.read`, `file.write`,
+    `file.edit`, `file.search`) plumbed through
+    `permission::AuditSink::record(...)` on each call so
+    `0008-permissions.md` criterion 1's "record on
+    decision" wiring closes end-to-end.
+  - Agent loop scaffolding that owns the `ApprovalBroker` +
+    `StorageAuditSink` per process and drives the ReAct
+    loop.
+  - First provider adapter (Anthropic Messages).

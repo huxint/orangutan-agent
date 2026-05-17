@@ -204,3 +204,54 @@ TEST_CASE("run returns CLI argument errors after config load", "[unit][bootstrap
   REQUIRE_FALSE(result.has_value());
   REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
 }
+
+TEST_CASE("run --audit-init applies the audit schema at the default workspace path", "[unit][bootstrap]") {
+  TempDir temp{"oran-bootstrap-audit-init-default"};
+  auto args = std::vector<std::string_view>{"--audit-init"};
+
+  auto result = bootstrap::run(options(args, temp.path()));
+
+  REQUIRE(result.has_value());
+  REQUIRE(*result == 0);
+  const auto expected_db = temp.path() / ".orangutan" / "audit.db";
+  REQUIRE(std::filesystem::exists(expected_db));
+
+  // Idempotent on a second run.
+  auto repeat = bootstrap::run(options(args, temp.path()));
+  REQUIRE(repeat.has_value());
+  REQUIRE(*repeat == 0);
+}
+
+TEST_CASE("run --audit-init honors an explicit audit-db path", "[unit][bootstrap]") {
+  TempDir temp{"oran-bootstrap-audit-init-explicit"};
+  const auto target = temp.path() / "nested" / "audit.db";
+  auto target_str = target.string();
+
+  SECTION("--audit-init <path>") {
+    auto args = std::vector<std::string_view>{"--audit-init", target_str};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE(result.has_value());
+    REQUIRE(*result == 0);
+    REQUIRE(std::filesystem::exists(target));
+  }
+
+  SECTION("--audit-init=<path>") {
+    auto arg = std::string{"--audit-init="}.append(target_str);
+    auto args = std::vector<std::string_view>{arg};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE(result.has_value());
+    REQUIRE(*result == 0);
+    REQUIRE(std::filesystem::exists(target));
+  }
+}
+
+TEST_CASE("run --audit-init rejects empty explicit paths", "[unit][bootstrap]") {
+  TempDir temp{"oran-bootstrap-audit-init-empty"};
+
+  SECTION("--audit-init=") {
+    auto args = std::vector<std::string_view>{"--audit-init="};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+}

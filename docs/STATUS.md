@@ -7,18 +7,17 @@
 
 ## Snapshot
 
-- **Slice:** 12 (`xmake run orangutan` reports slice 12)
+- **Slice:** 13 (`xmake run orangutan` reports slice 13)
 - **Last completed history:**
   [`histories/2026-05/20260517-1100-audit-pipeline-and-bootstrap.md`](histories/2026-05/20260517-1100-audit-pipeline-and-bootstrap.md)
 - **Active exec-plan:** none (`docs/exec-plans/active/` is empty)
 - **Next intended slice:** TBD — choose from the QUALITY_SCORE "Next Step"
-  column. Most likely candidates: `permission::AuditSink`
-  interface that records allow / deny / ask / approved /
-  rejected decisions through `storage::AuditRepository`
-  (closes `0008-permissions.md` criterion 1); first tool-registry
-  built-ins (`file.read`, `file.write`, `file.edit`,
-  `file.search`); wire the `ApprovalBroker` into bootstrap so
-  the upcoming agent loop inherits a per-process broker handle.
+  column. Most likely candidates: first tool-registry built-ins
+  (`file.read`, `file.write`, `file.edit`, `file.search`) plumbed
+  through `permission::AuditSink` so each call records a row;
+  agent loop scaffolding with `ApprovalBroker` + `AuditSink`
+  ownership through `oran-bootstrap`; first provider adapter
+  (Anthropic Messages).
 
 ## Library Health
 
@@ -41,7 +40,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 19 cases / 148 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
-- `oran-bootstrap`: 8 cases / 34 assertions.
+- `oran-bootstrap`: 11 cases / 47 assertions.
 
 ## Open Tech-Debt Rows
 

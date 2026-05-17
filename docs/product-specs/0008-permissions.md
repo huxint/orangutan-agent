@@ -38,7 +38,23 @@ human approval for high-risk operations.
 ## Acceptance Criteria
 
 1. A tool call whose input matches a `deny` rule returns
-   `Error::permission_denied` and is recorded in audit.
+   `Error::permission_denied` and is recorded in audit. **(Closed
+   2026-05-17: the audit pipeline lands in three commits.
+   `storage::AuditRepository` owns the `audit.db` schema +
+   `migrate`/`append_event`/`list_events`/`count_events` surface;
+   `permission::AuditEvent` + `permission::AuditOutcome` +
+   `permission::AuditSink` define the in-process vocabulary;
+   `permission::NullAuditSink`, `permission::RecordingAuditSink`,
+   and `permission::StorageAuditSink` cover the three documented
+   sink kinds (no-op default, in-memory capture for tests, SQLite
+   persistence). `orangutan --audit-init [<path>]` runs the audit
+   schema migration so operators can provision `audit.db` ahead
+   of the future agent loop (one-shot `asio::io_context` driving
+   the same `Pool` + `AuditRepository` path the agent loop will
+   use). The agent loop itself will pump `Decision` → `AuditEvent`
+   through `permission::AuditSink::record(...)` on every call;
+   that wiring lands with the first tool built-ins or the agent
+   loop scaffolding, whichever comes first.)**
 2. A tool call whose input matches an `ask` rule renders an approval prompt; on
    approval, replay works within TTL for identical input. **(Closed 2026-05-17:
    `permission::ApprovalBroker` wraps `permission::ApprovalAuthority`
