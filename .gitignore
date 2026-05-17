@@ -58,3 +58,8 @@ coverage/
 .cache/
 *.swp
 *.swo
+
+# Per-developer agent tool scaffolds (Claude Code teammates, Codex CLI, snow, etc.)
+.agents/
+.codex/
+.snow/
