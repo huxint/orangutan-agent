@@ -5,15 +5,43 @@ through short chat context.
 
 ## When To Create A Plan
 
-Create one when **any** of these apply:
+The default is **no plan**. A single-session slice whose intent fits inside the
+[`STATUS.md`](STATUS.md) `Next intended slice` bullet *and* lands as one history
+entry does not need an exec-plan — the bullet + the history together carry the
+same information a one-shot plan would, with less ceremony.
 
-- The task spans multiple commits or working sessions.
-- The work touches more than ~6 files or ~600 lines.
-- There is real architectural impact (new library, new public API, dependency change).
-- Multiple contributors or agents may touch the area over time.
-- Migrating from a legacy shape (e.g., porting QQ adapter to v2 trait).
-- Success depends on staged rollout or measurement checkpoints (compile-time
-  improvements, perf changes).
+Create a plan when **any** of these apply:
+
+- The work spans **multiple sessions** (i.e., another agent must pick it up from
+  a cold start without the current chat).
+- The work spans **multiple slices** — i.e., more than one history file is
+  expected before the goal is reached. A 3-commit slice that lands one history
+  is not "multiple slices"; a refactor that needs 3 separate slices is.
+- The intent does not fit on the `Next intended slice` line — alternatives have
+  to be compared, milestones staged, or measurement checkpoints scheduled
+  (compile-time improvements, perf changes, staged rollouts).
+- The work migrates from a legacy shape and there is real risk of half-migration
+  (e.g., porting QQ adapter to v2 trait).
+- The blast radius is wide enough that reviewers / future agents need a
+  named place to leave decisions (typically: new library, new public API
+  with > 1 caller landing later, dependency change that ripples through
+  multiple libraries).
+
+A rough proxy: if the slice closes in *this* session with *one* history file,
+and the `Next intended slice` bullet correctly described it before you started,
+the plan would just duplicate the bullet — skip it.
+
+## When NOT To Create A Plan
+
+- Single-slice work pre-described by `STATUS.md` `Next intended slice`.
+- Targeted bug fix, even multi-commit, when the fix is mechanical.
+- Doc-only sweeps (those are recorded in a history entry, not a plan).
+- Anything where you would write the plan and the history in the same minute —
+  the history is the canonical record; the plan would be empty ceremony.
+
+If you skipped a plan, the matching history's `Linked plan: none` line must say
+**why** — typically a one-liner pointing at the `Next intended slice` bullet
+it executed against.
 
 ## Storage
 

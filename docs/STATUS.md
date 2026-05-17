@@ -9,8 +9,11 @@
 
 - **Slice:** 13 (`xmake run orangutan` reports slice 13)
 - **Last completed history:**
-  [`histories/2026-05/20260517-1100-audit-pipeline-and-bootstrap.md`](histories/2026-05/20260517-1100-audit-pipeline-and-bootstrap.md)
-- **Active exec-plan:** none (`docs/exec-plans/active/` is empty)
+  [`histories/2026-05/20260517-1217-plan-discipline-and-prompt-followups.md`](histories/2026-05/20260517-1217-plan-discipline-and-prompt-followups.md)
+- **Active exec-plan:** none — current slice intent fits inside the
+  `Next intended slice` bullet below; see
+  [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
+  When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** TBD — choose from the QUALITY_SCORE "Next Step"
   column. Most likely candidates: first tool-registry built-ins
   (`file.read`, `file.write`, `file.edit`, `file.search`) plumbed
@@ -47,6 +50,12 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 Lifted from [`exec-plans/tech-debt-tracker.md`](exec-plans/tech-debt-tracker.md).
 Closed entries do *not* live here — the tracker is canonical.
 
+- 2026-05-17 — `scripts/check-prompt-preamble` static grep promised in
+  `rules/prompt-design.md` not yet implemented (waits on first stable
+  preamble template in `oran-agent`).
+- 2026-05-17 — `bench/oran-agent/prompt_cache_hit_rate.cpp` regression
+  scenario promised in `rules/prompt-design.md` not yet implemented
+  (waits on `oran-agent` slice 1).
 - 2026-05-14 — Build-skeleton scripts referenced from rules but not yet
   implemented (`check-deps.sh`, `check-includes.sh`, `measure-tu.sh`,
   `check-compile-budget.sh`).
@@ -61,9 +70,12 @@ Closed entries do *not* live here — the tracker is canonical.
 
 1. The slice that lands a behavior change writes its history file.
 2. The **same commit** updates this file: bump `Slice`, point
-   `Last completed history` at the new file, refresh the test/assertion
-   counts in "Latest Library Surfaces", and re-sync the tech-debt list
-   from `exec-plans/tech-debt-tracker.md`.
+   `Last completed history` at the new file, refresh
+   `Active exec-plan` (path or `none` + reason — see
+   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan"),
+   refresh the test/assertion counts in "Latest Library Surfaces",
+   and re-sync the tech-debt list from
+   `exec-plans/tech-debt-tracker.md`.
 3. `scripts/check-status-fresh.sh` fails the build if `STATUS.md`'s
    `Last completed history` pointer is older than the newest file under
    `docs/histories/`.

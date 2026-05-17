@@ -106,9 +106,10 @@ One-line summaries; the linked rule is canonical.
 - **Hooks are pluggable, not magical** — every lifecycle point that *could* dispatch
   a hook is enumerated in [`permissions-and-hooks.md`](docs/design-docs/permissions-and-hooks.md).
 - **No code is special** — every library has both `tests/` and `bench/` neighbours.
-- For non-trivial work (multiple commits, migration risk, architectural impact) create
-  an execution plan under `docs/exec-plans/active/` before writing code — see
-  [`PLANS_GUIDE.md`](docs/PLANS_GUIDE.md).
+- Execution plans are not the default — consult
+  [`PLANS_GUIDE.md`](docs/PLANS_GUIDE.md) for when a slice warrants one. The
+  matching `STATUS.md` `Active exec-plan` line states either the active plan
+  path or `none` plus the reason.
 
 ## Quick Commands
 

@@ -66,6 +66,44 @@ The lesson from `orangutan/` is that the *interesting* features live in the plat
 The v2 design promotes each of these from "feature" to "first-class subsystem with its
 own library, its own tests, its own bench, its own design doc."
 
+## Prompt Assembly (deferred)
+
+> **Status:** placeholder. The `oran-agent` library does not exist yet; this
+> section is the agreed home for prompt-builder decisions when it lands. The
+> invariants — section order, byte-identical cached prefix, no clocks / per-call
+> state in sections (1)–(6) — are already canonical in
+> [`../rules/prompt-design.md`](../rules/prompt-design.md); this section will
+> record *which patterns from*
+> <https://github.com/Piebald-AI/claude-code-system-prompts> *we adopted or
+> rejected*, with a one-line reason each.
+
+The agent loop owns:
+
+- **System preamble builder** — sections (1) and (6) of the
+  [`prompt-design.md` CacheSection order](../rules/prompt-design.md). Produces
+  a `CacheSection` whose bytes depend only on agent identity, model target,
+  capability set, and the active mode — never on the wall clock or the current
+  iteration.
+- **Tool catalog renderer** — section (2). Walks `tool::Registry::catalog()`
+  and renders each `core::ToolDef` to a deterministic block (name +
+  one-line description + JSON Schema). Memoized per `ToolDef`; see
+  [`tool-runtime.md`](tool-runtime.md).
+- **Deferred-tool index renderer** — section (3). Compact name + one-line
+  description listing; full schema arrives via `tool-search`. See
+  [`tool-runtime.md`](tool-runtime.md) "Deferred Tools".
+- **Skills catalog renderer** — section (4). Compact listing only;
+  activated skill bodies shift this section, never section (1). See
+  [`../product-specs/0009-skills.md`](../product-specs/0009-skills.md).
+- **Memory framing renderer** — section (5). Pure function of memory state;
+  no per-iteration mutation. See [`memory-system.md`](memory-system.md).
+- **Conversation tail assembler** — section (7), the only intentionally
+  dynamic block. Cache breakpoint sits between (6) and (7).
+
+When the first prompt builder lands, append: which Piebald-AI shape was
+adopted for each section, which `CacheSection` IDs were chosen, what
+`cache_version` numbers were minted, and a pointer to the
+`bench/oran-agent/prompt_cache_hit_rate.cpp` fixture this builder must pass.
+
 ## Cross-Cutting Concerns
 
 These six concerns appear in every subsystem and must be designed *uniformly*:
