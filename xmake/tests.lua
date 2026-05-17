@@ -5,7 +5,7 @@
 
 local root = os.projectdir()
 
-local function oran_test(name, deps)
+local function oran_test(name, deps, extra_packages)
     target("test-" .. name)
         set_kind("binary")
         set_group("oran-tests")
@@ -14,6 +14,11 @@ local function oran_test(name, deps)
         add_files(path.join(root, "tests", name, "**.cpp"))
         add_deps(table.unpack(deps))
         add_packages("catch2")
+        if extra_packages then
+            for _, pkg in ipairs(extra_packages) do
+                add_packages(pkg)
+            end
+        end
         set_pcxxheader(path.join(root, "include/oran/_pch.hpp"))
         add_tests("default", { runargs = { "--reporter=console", "--verbosity=normal" } })
         on_run(function (target)
@@ -28,5 +33,6 @@ oran_test("io", { "oran-io" })
 oran_test("storage", { "oran-storage" })
 oran_test("config", { "oran-config" })
 oran_test("permission", { "oran-permission" })
+oran_test("tool", { "oran-tool" }, { "nlohmann_json" })
 oran_test("cli", { "oran-cli" })
 oran_test("bootstrap", { "oran-bootstrap" })

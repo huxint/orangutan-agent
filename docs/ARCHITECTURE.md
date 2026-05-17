@@ -69,10 +69,11 @@ own test bucket, its own bench bucket, and its own public header set under
 
 ## Library Inventory
 
-> **Slice status (2026-05-17):** `oran-core` (now with `Error`/`Result`, the
+> **Slice status (2026-05-18):** `oran-core` (now with `Error`/`Result`, the
 > `Time` value type and ISO-8601 UTC helpers, the conversation types
 > `Role`, `StopReason`, `Content` variant, and `Message`, the
-> `ToolDef` declaration type, the `core::str` RFC-3629 UTF-8
+> `ToolDef` declaration type (with `required_capabilities`), the
+> `core::str` RFC-3629 UTF-8
 > helpers, and the `Capability` vocabulary that ties tools to
 > permission rules), `oran-async`,
 > the file/directory MVP of `oran-io`, the expected-only SQLite core +
@@ -96,8 +97,21 @@ own test bucket, its own bench bucket, and its own public header set under
 > `oran-storage` ships its migrations compile-time-embedded via
 > `#embed`; slice 16 adds `--mode` / `--agent` selectors to
 > `--explain-rules` via the public `parse_explain_rules_selector`
-> and `materialize_rules` helpers), plus the first `oran-cli` handoff
-> shell, are implemented.
+> and `materialize_rules` helpers), the first `oran-cli` handoff
+> shell, and the slice-17/18 `oran-tool` foundation (`tool::Registry`
+> with `add` / `remove` / `find` / `catalog` / `dispatch`; the
+> dispatch path runs `RuleSet::evaluate` against the call's
+> `ToolDef::required_capabilities`, records one
+> `permission::AuditEvent` per call with
+> `input_hash = SHA-256(input_json)` onto the supplied `AuditSink`,
+> then branches `allow` → handler, `deny` → `permission_denied`,
+> `ask` → `permission_denied` with `reason=approval_required`
+> until the approval-broker wiring lands; built-ins `file.read`
+> (slice 17, `tool::register_file_read`) and `file.write` (slice 18,
+> `tool::register_file_write`, capability `write_file`, input
+> `{path, content, mode?, create_parents?}` with `mode ∈
+> {truncate (default), append, fail_if_exists}`)), are
+> implemented.
 > All other rows below are *planned* and will land per `docs/exec-plans/` as
 > future slices are scheduled. The build system, PCH, tests bucket, and bench
 > bucket conventions are live; see the history entries under
@@ -105,7 +119,7 @@ own test bucket, its own bench bucket, and its own public header set under
 
 | Library              | Purpose                                         | Depends on (allowed)                          |
 | -------------------- | ----------------------------------------------- | --------------------------------------------- |
-| `oran-core`          | `Result<T>`, `Error`, `Time` + ISO-8601 UTC helpers, `Role`, `StopReason`, `Content` variant, `Message`, `ToolDef`, `core::str` UTF-8 helpers, `Capability` vocabulary | stdlib only |
+| `oran-core`          | `Result<T>`, `Error`, `Time` + ISO-8601 UTC helpers, `Role`, `StopReason`, `Content` variant, `Message`, `ToolDef` (with `required_capabilities`), `core::str` UTF-8 helpers, `Capability` vocabulary | stdlib only |
 | `oran-async`         | asio `Runtime`, `Awaitable<T>`, bounded `Channel<T>`, cancel-aware `sleep_for`; mailbox policy lands in orchestration | `oran-core`, asio |
 | `oran-log`           | spdlog shim + secret redaction; thread-local context | `oran-core`, spdlog/fmt |
 | `oran-io`            | file/directory IO MVP; planned glob, pipe, subprocess, signal | `oran-core`, `oran-async` |
@@ -114,7 +128,7 @@ own test bucket, its own bench bucket, and its own public header set under
 | `oran-config`        | JSON config loader with typed runtime/profile/route/session/web fields, env substitution, and the typed `permissions` + `agents.<name>.permissions` overlay surface (layer-2/3 data of the three-layer rule merge); planned schema + secret-protected fields | `oran-core`, `oran-storage` |
 | `oran-permission`    | foundation rule evaluator: `Verdict`, `Mode`, `Rule`, `RuleSet`, `Decision`, `*`-glob tool matching, capability-aware gating (`Rule::capability` of `core::Capability`), the `Defaults::for_mode` baseline factory, the three-layer `materialize(Mode, global, per_agent)` merge that concatenates defaults + global config + per-agent overlay, the `ApprovalSecret` / `ApprovalAuthority` / `ApprovalToken` / `ApprovalBroker` ask-flow surface, and the `AuditEvent` / `AuditSink` / `StorageAuditSink` audit pipeline; planned re2 input regex extensions and bootstrap wiring | `oran-core`, `oran-config`, `oran-storage`, `oran-async` |
 | `oran-skill`         | skill loader, skill catalog | `oran-core`, `oran-io` |
-| `oran-tool`          | tool registry, tool runtime context, dispatch | `oran-core`, `oran-async`, `oran-permission`, `oran-io` |
+| `oran-tool`          | tool registry, dispatch through `permission::RuleSet` + `permission::AuditSink`, built-ins `file.read` (`tool::register_file_read`, capability `read_file`) and `file.write` (`tool::register_file_write`, capability `write_file`, input `{path, content, mode?, create_parents?}` with `mode ∈ {truncate, append, fail_if_exists}`); planned `file.edit`/`file.search`, hook bus, approval-broker mediation, and the rest of the built-in catalog | `oran-core`, `oran-async`, `oran-permission`, `oran-io` |
 | `oran-hook`          | hook bus + sink kinds (shell / lua / in-proc) | `oran-core`, `oran-async`, `oran-io` |
 | `oran-memory`        | working / session / long-term / shared memory | `oran-core`, `oran-storage` |
 | `oran-provider`      | provider system (transport / protocol / execution) | `oran-core`, `oran-async`, `oran-http` |

@@ -14,6 +14,9 @@
 #pragma once
 
 #include <string>
+#include <vector>
+
+#include <oran/core/capability.hpp>
 
 namespace orangutan::core {
 
@@ -25,6 +28,13 @@ struct ToolDef {
   /// JSON Schema describing accepted inputs. Opaque at this layer; consumers
   /// in `oran-provider` / `oran-tool` parse and validate when they need to.
   std::string input_schema_json;
+  /// Capabilities the tool needs to run. The dispatcher passes this list to
+  /// `permission::RuleSet::evaluate` so capability-scoped rules (`Rule::capability`)
+  /// fire only when the invoked tool actually declared the capability. Spelled
+  /// `required_capabilities` because `requires` is a reserved C++20 keyword;
+  /// the design doc's verbatim `requires` field is realized here under this
+  /// name (see `docs/design-docs/tool-runtime.md`).
+  std::vector<Capability> required_capabilities;
 
   friend bool operator==(const ToolDef&, const ToolDef&) = default;
 

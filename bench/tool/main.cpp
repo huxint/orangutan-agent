@@ -1,0 +1,25 @@
+// bench/tool/main.cpp — registers and runs the oran-tool nanobench scenarios.
+
+#define ANKERL_NANOBENCH_IMPLEMENT
+#include <nanobench.h>
+
+#include <print>
+
+namespace orangutan::bench {
+void register_tool_dispatch(ankerl::nanobench::Bench&);
+void register_tool_file_write(ankerl::nanobench::Bench&);
+}  // namespace orangutan::bench
+
+int main() {
+  ankerl::nanobench::Bench b;
+  b.title("bench-tool");
+  b.unit("dispatch");
+  b.minEpochIterations(2000);
+  b.warmup(10);
+
+  orangutan::bench::register_tool_dispatch(b);
+  orangutan::bench::register_tool_file_write(b);
+
+  std::println();
+  return 0;
+}

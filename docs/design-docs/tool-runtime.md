@@ -20,7 +20,7 @@ struct ToolDef {
   std::string                 name;        // dotted: "file.read", "shell.exec"
   std::string                 description; // for the LLM
   nlohmann::json_fwd          input_schema; // JSON Schema for tool args
-  std::vector<Capability>     requires;     // what permissions it needs
+  std::vector<Capability>     required_capabilities; // spelled `required_capabilities` in code — `requires` is a reserved C++20 keyword
   bool                        deferred = false; // surfaces via ToolSearch only
   std::optional<std::string>  category;     // for grouping in UIs
 };
@@ -51,7 +51,7 @@ enum class Capability {
 };
 ```
 
-> **Status (2026-05-16):** the enum itself now lives in `oran-core`
+> **Status (2026-05-18):** the enum itself now lives in `oran-core`
 > (`include/oran/core/capability.hpp`); its wire spelling and inverse
 > parse come from the generic reflection helpers
 > `core::enum_name(c)` / `core::parse_enum<Capability>(text)` /
@@ -59,14 +59,21 @@ enum class Capability {
 > [`include/oran/core/enum_names.hpp`](../../include/oran/core/enum_names.hpp)
 > (no per-enum forwarding shims — see
 > [`docs/rules/code-style.md`](../rules/code-style.md) "Enums").
-> `core::Capability` is the vocabulary that the upcoming
-> `permission::Rule::capability` field and `ToolDef::requires` list
-> both read. Runtime enforcement (`tool::Runtime`, capability-gated
-> services) and config wiring stay on future slices.
+> `core::Capability` is the vocabulary the `permission::Rule::capability`
+> field already reads and the slice-17 `oran-tool` registry consumes
+> via `core::ToolDef::required_capabilities` — that field is the
+> in-code realisation of the `requires` field below (renamed because
+> `requires` is a reserved C++20 keyword). Built-ins shipped so far:
+> `file.read` (slice 17, `Capability::read_file`) and `file.write`
+> (slice 18, `Capability::write_file`, input
+> `{path, content, mode?, create_parents?}` with `mode ∈
+> {truncate, append, fail_if_exists}`). Capability-gated runtime
+> services (`tool::Runtime` accessor surface) and config wiring stay
+> on future slices.
 
-A tool's `requires` list is **inspected at registration**. The permission engine knows
-the universe of capabilities a tool might use; the tool cannot smuggle in a capability
-it didn't declare (enforced in `ToolRuntime`'s tool dispatch — see below).
+A tool's `required_capabilities` list is **inspected at registration**. The permission
+engine knows the universe of capabilities a tool might use; the tool cannot smuggle in
+a capability it didn't declare (enforced in `ToolRuntime`'s tool dispatch — see below).
 
 ## ToolRuntime — Per-Invocation Context
 
@@ -101,7 +108,7 @@ class Runtime {
 }  // namespace orangutan::tool
 ```
 
-If a tool calls `runtime.workspace()` but its `requires` did not include
+If a tool calls `runtime.workspace()` but its `required_capabilities` did not include
 `Capability::read_file`, the call returns an `Error::capability_not_granted`. This is
 defensive against tools that *try* to escalate after registration.
 
