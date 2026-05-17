@@ -47,6 +47,30 @@ deps), then the permission interface on top, then the bootstrap wiring
   `bench-storage/audit_repository` (raw pool A/B vs. typed
   repository over a 64-event batch).
 
+- **Commit 2** — `permission::AuditSink` interface, value types,
+  and concrete sinks. `AuditOutcome { allow, deny, ask,
+  approved, rejected }` wire-spells through the generic
+  `core::enum_name` / `parse_enum` helpers; `AuditEvent`
+  carries the 1:1 column shape of
+  `storage::AppendAuditEventRequest` so the storage adapter is
+  a near-zero-translation hop. The abstract `AuditSink::record`
+  is async (returns `Awaitable<Result<void>>`) — the storage
+  adapter co_awaits the repository, the in-memory sinks
+  immediately co_return success. Three concrete sinks:
+  `NullAuditSink` (no-op default), `RecordingAuditSink`
+  (captures into a `vector` for tests and runtime modes that
+  disable persistence), `StorageAuditSink` (column-by-column
+  translation into `storage::AuditRepository::append_event`,
+  with `permission::to_hex(span<const std::byte, 32>)` for the
+  optional `input_hash` field). Free helpers
+  `verdict_to_outcome` and `make_audit_event_from_decision`
+  keep callsites short. 10 new permission tests +
+  `bench-permission/audit` bucket (null sink ~260 ns,
+  recording sink ~360 ns, storage sink ~18.1 µs end-to-end
+  through SQLite, hex-encode ~62 ns). `oran-permission` now
+  depends on `oran-storage` + `oran-async` directly (previously
+  transitive through `oran-config`).
+
 ### Design Intent
 
 **Why a domain repository before the permission sink.** The audit
@@ -140,7 +164,44 @@ just its internal slicing.
 - `bench/storage/main.cpp` — registers the new bucket.
 - `bench/storage/README.md` — documents the bucket.
 
+### Files Modified (Commit 2)
+
+- `include/oran/permission/audit.hpp` — new public surface:
+  `AuditOutcome`, `AuditEvent`, `AuditSink`, `NullAuditSink`,
+  `RecordingAuditSink`, plus the free helpers
+  `verdict_to_outcome`, `make_audit_event_from_decision`,
+  `to_hex(span<const std::byte, 32>)`, and a
+  `std::formatter<AuditOutcome>` specialization.
+- `include/oran/permission/storage_audit_sink.hpp` — new
+  public surface: `StorageAuditSink` that adapts the
+  permission sink onto `storage::AuditRepository`.
+- `src/oran-permission/audit.cpp` — impl for the in-memory
+  sinks and the free helpers (the hex encoder is the only
+  piece of real logic; everything else is move/copy).
+- `src/oran-permission/storage_audit_sink.cpp` — impl that
+  builds an `AppendAuditEventRequest` from `AuditEvent` and
+  co_awaits the repository.
+- `include/oran/permission.hpp` — re-export the two new
+  headers.
+- `xmake/targets.lua` — `oran-permission` now depends on
+  `oran-storage` + `oran-async` directly. They were already
+  transitively reachable through `oran-config`; making the
+  dep explicit keeps the graph honest and matches the
+  ARCHITECTURE.md table.
+- `tests/permission/test_audit.cpp` — 10 cases covering
+  AuditOutcome wire-spelling round-trip, `verdict_to_outcome`
+  mapping, decision-to-event helper, RFC-6234 SHA-256 hex
+  vector pinning, Null/Recording/Storage sink behavior,
+  storage adapter NULL-hash handling, per-outcome storage
+  round-trip, repository-error propagation.
+- `bench/permission/scenarios/audit.cpp` — new A/B/C
+  scenarios + `to_hex` baseline.
+- `bench/permission/main.cpp` — registers the new bucket.
+- `bench/permission/README.md` — documents the bucket.
+
 ### Docs Updated In This PR (Prime Directive — see `docs/rules/docs-in-sync.md`)
+
+Commit 1:
 
 - `docs/STATUS.md` — `oran-storage` test counts (52 → 60
   cases, 606 → 702 assertions) + tech-debt list note.
@@ -158,7 +219,30 @@ just its internal slicing.
 - `docs/histories/2026-05/20260517-1100-audit-pipeline-and-bootstrap.md`
   — this file.
 
+Commit 2:
+
+- `docs/STATUS.md` — `oran-permission` test counts (73 → 83
+  cases, 296 → 379 assertions).
+- `docs/QUALITY_SCORE.md` — `Test framework` count refresh;
+  `Permissions` row "Why" extended with axis 8 (audit
+  pipeline) and "Next Step" pivoted to bootstrap wiring +
+  criterion 1 closure + first tool built-ins;
+  `Bench harness` row extended with the new
+  `bench-permission/audit` A/B/C bucket numbers.
+- `docs/ARCHITECTURE.md` — `oran-permission` library inventory
+  row extended (description + dep list updated to
+  `oran-core, oran-config, oran-storage, oran-async`).
+- `docs/design-docs/permissions-and-hooks.md` — engine-status
+  block extended with the audit pipeline landing and the
+  pointer to the upcoming bootstrap wiring commit.
+- `docs/releases/feature-release-notes.md` — new
+  `audit-permission-sink` row.
+- `docs/histories/.../20260517-1100-audit-pipeline-and-bootstrap.md`
+  — this file, appended.
+
 ### Validation
+
+Commit 1:
 
 - Commands run:
   - `xmake build oran-storage test-storage` — clean.
@@ -169,24 +253,41 @@ just its internal slicing.
     `storage.audit_repository_append_list` ~1219 µs (~23%
     typed-repository overhead, ~3.5 µs per event).
   - `xmake test` (all 8 buckets) — green.
-- Tests added/changed: 8 new storage cases (52 → 60 cases,
-  606 → 702 assertions in storage).
-- Bench impact: new `bench-storage/audit_repository` scenarios;
+
+Commit 2:
+
+- Commands run:
+  - `xmake build oran-permission test-permission` — clean.
+  - `./build/linux/x86_64/release/test-permission` — 83 cases
+    / 379 assertions, all green.
+  - `xmake build bench-permission && xmake run bench-permission`
+    — new `bench-permission/audit` bucket: null sink ~260 ns,
+    recording sink ~360 ns, storage sink ~18.1 µs end-to-end
+    through SQLite, hex-encode ~62 ns.
+  - `xmake test` (all 8 buckets) — green.
+
+### Cumulative
+
+- Tests added/changed (slice total so far): 18 new
+  cases / +179 assertions (storage 52 → 60 / 606 → 702;
+  permission 73 → 83 / 296 → 379).
+- Bench impact: new `bench-storage/audit_repository` (2 A/B
+  scenarios) and `bench-permission/audit` (4 scenarios);
   existing scenarios unchanged.
-- Compile-budget delta: `audit_repository.cpp` is a new TU; the
-  header pulls only stdlib + the in-repo `migrations`/`pool`
-  forward decls (already in PCH transitively). No PCH change.
+- Compile-budget delta: 2 new TUs in `oran-storage` and 2
+  new TUs in `oran-permission`; headers pull stdlib + the
+  in-repo `migrations`/`pool` forward decls and
+  `awaitable_fwd` (already in PCH transitively). No PCH
+  change.
 
 ### Follow-ups
 
 - Issues to file: none.
 - Tech-debt entry: none.
-- Linked release note: `audit-db-storage` row added to
-  `feature-release-notes.md` for commit 1.
-- Next commits in this slice (still in this history entry):
-  - Commit 2 — `permission::AuditSink` interface +
-    `AuditEvent` value type + `NullAuditSink` /
-    `RecordingAuditSink` + storage-backed adapter.
+- Linked release notes: `audit-db-storage` and
+  `audit-permission-sink` rows added to
+  `feature-release-notes.md`.
+- Final commit in this slice:
   - Commit 3 — wire the broker + audit sink into
     `oran-bootstrap`, bump slice tag 12 → 13, close
     `0008-permissions.md` criterion 1 with a pointer back

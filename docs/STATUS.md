@@ -39,7 +39,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-io`: 8 cases / 33 assertions.
 - `oran-storage`: 60 cases / 702 assertions.
 - `oran-config`: 19 cases / 148 assertions.
-- `oran-permission`: 73 cases / 296 assertions.
+- `oran-permission`: 83 cases / 379 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 8 cases / 34 assertions.
 

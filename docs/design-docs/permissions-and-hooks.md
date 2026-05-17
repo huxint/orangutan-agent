@@ -91,9 +91,27 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > ~10.7 µs (authority verify + map find + decrement),
 > `broker_check_no_grant` / `broker_check_exhausted` ~10.9 µs /
 > ~11.0 µs — the broker's overhead over the raw authority
-> verify is ~875 ns. Audit log writes and bootstrap wiring
-> are still future slices listed under "v1" in
-> [`../product-specs/0008-permissions.md`](../product-specs/0008-permissions.md).
+> verify is ~875 ns. **Audit pipeline landed on 2026-05-17 too**:
+> the `audit.db` schema + `storage::AuditRepository` ship on the
+> storage side, and the permission side now owns
+> `permission::AuditEvent`, `permission::AuditOutcome`
+> (`allow`/`deny`/`ask`/`approved`/`rejected`), the abstract
+> `permission::AuditSink` interface
+> (`Awaitable<Result<void>> record(AuditEvent)`), plus three
+> concrete sinks: `NullAuditSink` (no-op default),
+> `RecordingAuditSink` (in-memory capture for tests), and
+> `StorageAuditSink` (column-by-column translation into
+> `storage::AuditRepository::append_event`). Free helpers
+> `permission::verdict_to_outcome` and
+> `permission::make_audit_event_from_decision` keep callsites
+> from duplicating `Decision` field copies, and
+> `permission::to_hex(span<const std::byte, 32>)` is the single
+> hex encoder the storage adapter and any future webhook sink
+> will share. Bench: null sink ~260 ns, recording sink ~360 ns,
+> storage sink ~18.1 µs end-to-end through SQLite, hex-encode
+> ~62 ns. Bootstrap wiring is the final piece of
+> `0008-permissions.md` criterion 1; it lands in the same
+> slice's last commit.
 
 ### Sources
 
