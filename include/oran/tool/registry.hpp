@@ -1,8 +1,8 @@
 // include/oran/tool/registry.hpp — tool registry surface.
 //
-// Slice 17 introduced the registry. The current shape composes four things
-// the upstream layers (`oran-permission`, `oran-async`, `oran-io`) already
-// shipped:
+// Slice 17 introduced the registry. The current shape composes five things
+// the upstream layers (`oran-permission`, `oran-async`, `oran-io`,
+// `oran-hook`) already shipped:
 //
 //   1. A `core::ToolDef`-keyed catalog the agent loop (future slice) can
 //      advertise to a provider.
@@ -25,19 +25,28 @@
 //      `decision_reason` context entries so the agent loop can hand
 //      them straight to `ApprovalBroker::approve` without re-evaluating
 //      the rule set.
+//   5. The slice-22 hook-bus tap: when the caller supplies a
+//      `hook::Bus*` on the context, dispatch publishes
+//      `hook::Event::tool_before` after the registry resolves the
+//      tool def and `hook::Event::tool_after` at every exit (handler
+//      success, permission denied, broker rejection, audit error).
+//      Hooks are advisory in this slice — sinks observe but cannot
+//      veto. Sinks subscribed to other events (provider, memory, …)
+//      are unaffected.
 //
-// What this slice does NOT cover. The hook bus, output scrubbing through
+// What this slice does NOT cover. Blocking hook semantics with veto,
+// `tool_dispatched` / `tool_error` events, output scrubbing through
 // `oran-log::redact`, and deferred-tool promotion all live in later
 // slices.
 //
 // Why a single `DispatchContext` rather than the design-doc's parameter
 // fan-out. Passing `permission::RuleSet&`, `permission::AuditSink&`,
 // `permission::Mode`, scope/agent/identity, the executor, an optional
-// broker + token, and a wall-clock as separate arguments to `dispatch`
-// and to every handler quickly turns the `Handler` signature into a
-// maintenance hazard. A typed struct makes it cheap to add the hook
-// bus later — handlers keep the same signature; new context fields are
-// additive.
+// broker + token, a wall-clock, and now an optional `hook::Bus*` as
+// separate arguments to `dispatch` and to every handler quickly turns the
+// `Handler` signature into a maintenance hazard. A typed struct makes it
+// cheap to add the rest of the hook lifecycle later — handlers keep the
+// same signature; new context fields are additive.
 //
 // Concurrency. Like `permission::AuditSink`, the registry is not
 // thread-safe. The agent loop owns one registry per strand; a future
@@ -60,6 +69,7 @@
 #include <oran/core/result.hpp>
 #include <oran/core/time.hpp>
 #include <oran/core/tool_def.hpp>
+#include <oran/hook/bus.hpp>
 #include <oran/permission/approval.hpp>
 #include <oran/permission/approval_broker.hpp>
 #include <oran/permission/audit.hpp>
@@ -115,6 +125,17 @@ struct DispatchContext {
   /// uninitialised value cannot accidentally satisfy a real TTL
   /// — every realistic call site supplies a fresh value.
   core::Time now{};
+  /// Optional hook bus. When non-null, `dispatch` publishes
+  /// `hook::Event::tool_before` after the registry resolves the tool
+  /// def (i.e., for every known tool name) and
+  /// `hook::Event::tool_after` at every exit (handler success,
+  /// permission denied, broker rejection, audit error). Hooks are
+  /// advisory in this slice — sinks observe but cannot veto. The
+  /// pointer is non-owning; the caller (typically the agent loop)
+  /// keeps the bus alive across dispatch invocations. Failures
+  /// reported by sinks are logged into the publish outcome but do
+  /// not change the dispatch result.
+  hook::Bus* bus{nullptr};
   /// Per-process scope key the audit row gets stamped with. See
   /// `docs/design-docs/secrets-and-state.md` "Identity And Scope".
   std::string scope_key;
@@ -169,20 +190,27 @@ public:
 
   /// Run one tool. The flow is:
   ///
-  ///   1. lookup `name`; `Error::not_found` on miss.
-  ///   2. evaluate `(name, input_json, def.required_capabilities, ctx.mode)`
+  ///   1. lookup `name`; `Error::not_found` on miss. No hook event
+  ///      is published for an unknown tool name — the dispatch
+  ///      never started.
+  ///   2. if `ctx.bus` is non-null, publish
+  ///      `hook::Event::tool_before` with `ToolBeforePayload{name,
+  ///      input_json, identity, scope_key, agent_key, started_at}`.
+  ///      Sink failures are recorded in the outcome but do not
+  ///      change the dispatch path.
+  ///   3. evaluate `(name, input_json, def.required_capabilities, ctx.mode)`
   ///      against `ctx.rules`.
-  ///   3. if the verdict is `ask` and both `ctx.approval_broker` and
+  ///   4. if the verdict is `ask` and both `ctx.approval_broker` and
   ///      `ctx.approval_token` are set, consult
   ///      `broker.check(*token, name, input, identity, now)` and
   ///      remap the audit outcome to `approved` (broker accepted) or
   ///      `rejected` (broker rejected — the broker's `reason`
   ///      context entry replaces the rule reason in the audit row).
-  ///   4. record one `permission::AuditEvent` carrying the final
+  ///   5. record one `permission::AuditEvent` carrying the final
   ///      verdict, the (possibly remapped) outcome,
   ///      `input_hash = SHA-256(input_json)`, and the identity
   ///      columns from `ctx`.
-  ///   5. branch:
+  ///   6. branch:
   ///        - `allow`           -> co_await `handler`, return its `Result`.
   ///        - `deny`            -> return `Error::permission_denied`
   ///                               with `reason=<rule_reason>`.
@@ -200,9 +228,15 @@ public:
   ///                               the agent loop can hand them
   ///                               straight to
   ///                               `ApprovalBroker::approve`.
+  ///   7. if `ctx.bus` is non-null, publish
+  ///      `hook::Event::tool_after` with `ToolAfterPayload{name,
+  ///      input_json, identity, succeeded, output_text, error_kind,
+  ///      error_message, started_at, finished_at, duration}` —
+  ///      always, regardless of which branch in step 6 fired.
   ///
   /// Audit-sink errors are propagated verbatim so a flaky storage backend
-  /// does not silently lose decisions.
+  /// does not silently lose decisions. Hook publish errors are *not*
+  /// propagated to the caller (advisory contract).
   [[nodiscard]] async::Awaitable<core::Result<Output>>
   dispatch(std::string_view name, std::string_view input_json, DispatchContext& ctx) const;
 

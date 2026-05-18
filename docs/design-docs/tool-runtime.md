@@ -95,8 +95,22 @@ enum class Capability {
 > error now also carries `decision_reason` / `replay_max` /
 > `approval_ttl_seconds` so the agent loop can hand them straight
 > to `ApprovalBroker::approve` without re-running rule evaluation.
-> Capability-gated runtime services (`tool::Runtime` accessor
-> surface) and config wiring stay on future slices.
+> Slice 22 (2026-05-18) added the hook-bus tap: `DispatchContext`
+> now also carries an optional `hook::Bus*`; when non-null, dispatch
+> publishes `hook::Event::tool_before` after the registry resolves
+> the tool def (so a sink can see every known call attempt
+> regardless of how the call is subsequently gated) and
+> `hook::Event::tool_after` at every exit (handler success,
+> permission deny, broker rejection, audit error) with a
+> `ToolAfterPayload { succeeded, output_text, error_kind,
+> error_message, started_at, finished_at, duration }` that
+> flattens the dispatch outcome for forensic queries. Both events
+> are advisory in slice 22 — sinks observe but cannot veto the
+> dispatch; blocking semantics for `tool_before` rewrite/short-
+> circuit are deferred to a follow-up slice. Unknown tool names
+> are silently rejected without a hook publish (the dispatch never
+> started). Capability-gated runtime services (`tool::Runtime`
+> accessor surface) and config wiring stay on future slices.
 
 A tool's `required_capabilities` list is **inspected at registration**. The permission
 engine knows the universe of capabilities a tool might use; the tool cannot smuggle in

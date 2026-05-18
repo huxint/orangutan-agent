@@ -7,21 +7,24 @@
 
 ## Snapshot
 
-- **Slice:** 21 (`xmake run orangutan` reports slice 21)
+- **Slice:** 22 (`xmake run orangutan` reports slice 22)
 - **Last completed history:**
-  [`histories/2026-05/20260517-2359-oran-tool-approval-broker.md`](histories/2026-05/20260517-2359-oran-tool-approval-broker.md)
+  [`histories/2026-05/20260518-1100-oran-hook-foundation-and-dispatch-wiring.md`](histories/2026-05/20260518-1100-oran-hook-foundation-and-dispatch-wiring.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** TBD — choose from the QUALITY_SCORE "Next Step"
-  column. Most likely candidates now that the approval-broker wiring is
-  in: the first provider adapter (Anthropic Messages) — likely needs an
-  exec plan since transport + protocol + execution + first integration
-  test span multiple slices; signal-aware shutdown for `bootstrap::run`
-  so SIGINT terminates the io_context drain promptly; the hook bus
-  scaffolding that `Registry::dispatch` will publish `tool_before` /
-  `tool_after` events to once `oran-hook` exists.
+  column. Most likely candidates now that the hook-bus foundation +
+  tool-dispatch wiring is in: the first provider adapter (Anthropic
+  Messages) — likely needs an exec plan since transport + protocol +
+  execution + first integration test span multiple slices; signal-aware
+  shutdown for `bootstrap::run` so SIGINT terminates the io_context drain
+  promptly; blocking hook semantics with veto (currently dispatch is
+  advisory-only — adding the `tool_before` rewrite/short-circuit branch
+  + the matching `permission_ask_rendered` blocking flow is one slice);
+  the remaining tool lifecycle events (`tool_dispatched`,
+  `tool_error`) wired alongside the bookend pair.
 
 ## Library Health
 
@@ -43,7 +46,8 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-storage`: 60 cases / 702 assertions.
 - `oran-config`: 19 cases / 148 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
-- `oran-tool`: 50 cases / 414 assertions.
+- `oran-hook`: 14 cases / 79 assertions.
+- `oran-tool`: 58 cases / 477 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 34 cases / 123 assertions.
 
@@ -52,6 +56,12 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 Lifted from [`exec-plans/tech-debt-tracker.md`](exec-plans/tech-debt-tracker.md).
 Closed entries do *not* live here — the tracker is canonical.
 
+- 2026-05-18 — Hook bus dispatch is advisory-only (slice 22); blocking
+  semantics with veto for `tool_before` / `memory_*_before` /
+  `permission_ask_rendered` are deferred to a follow-up slice.
+- 2026-05-18 — `tool_dispatched` and `tool_error` events are enumerated
+  but not yet published by `Registry::dispatch` (only the
+  `tool_before` / `tool_after` bookend pair is wired).
 - 2026-05-17 — `file.search` does not support regex; pattern is matched as a
   literal substring. Follow-up: add `"regex"?: bool (default false)` route
   through `re2::RE2::PartialMatch`.

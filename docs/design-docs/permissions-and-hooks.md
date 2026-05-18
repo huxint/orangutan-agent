@@ -280,6 +280,60 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 
 ## Hook Bus
 
+> **Bus status (2026-05-18, slice 22):** the foundation
+> ships as `oran-hook`. `hook::Event` enumerates the 38
+> lifecycle events listed below; `hook::Mode { advisory,
+> blocking }` plus `default_mode(Event)` annotates each
+> with the design-doc semantics ("before" events +
+> `permission_ask_rendered` default to `blocking`,
+> everything else is `advisory`). `hook::Sink` is the
+> abstract base; `hook::InProcessSink` is the first
+> concrete implementation (a `std::function<async::
+> Awaitable<Result<void>>(Event, Payload)>` callback).
+> `hook::Bus` exposes `bind(Sink&, events)` /
+> `unbind(Sink&)` and one publish method —
+> `publish_advisory(Event, Payload) -> Awaitable<
+> PublishOutcome>` — that iterates subscribed sinks in
+> subscription order, captures each sink's `Result<void>`
+> in a `PublishOutcome::SinkResult` row, and never aborts
+> the publish on a sink error (advisory contract). The
+> `PublishOutcome` lets the caller surface sink failures
+> into logs or audit without coupling the publish to a
+> single error policy. `hook::Payload` is a `std::variant`
+> that today covers `std::monostate` (placeholder for
+> events whose typed shape lands with the producing
+> subsystem) plus `ToolBeforePayload` and
+> `ToolAfterPayload` — typed shapes for the remaining
+> events ship with their producers (provider request /
+> response payloads when the Anthropic adapter lands,
+> memory payloads when `oran-memory` lands, and so on).
+> `Registry::dispatch` consumes the bus through the
+> optional `DispatchContext::bus` field: when non-null,
+> dispatch publishes `tool_before` after the registry
+> resolves the tool def and `tool_after` at every exit
+> (handler success, permission deny, broker rejection,
+> audit error). Hooks are advisory in this slice — sinks
+> observe but cannot veto; the blocking-veto path
+> (`publish_blocking`, `EventTraits<E>::Decision`) is
+> tracked in `exec-plans/tech-debt-tracker.md` and lands
+> when the first blocking consumer needs it (the
+> operator-prompt sink for `permission_ask_rendered` is
+> the most likely first caller). The render-side flow
+> that asks the operator (`permission_ask_rendered`) and
+> captures the response (`permission_ask_resolved`)
+> therefore still lives in the `oran-agent` slice — slice
+> 22 ships the bus that those events will publish
+> through, not the events themselves. Bench (`bench-hook`
+> + `bench-tool`): `publish_no_sinks` ~242 ns vs.
+> `publish_one_sink` ~446 ns vs. `publish_three_sinks`
+> ~698 ns (~204 ns first-sink dispatch, ~126 ns per
+> additional sink); `dispatch_allow_no_hooks` ~2.1 µs
+> vs. `dispatch_allow_with_empty_bus` ~2.4 µs vs.
+> `dispatch_allow_with_two_sinks` ~3.0 µs (~346 ns "bus
+> attached, nothing listens" tax, ~914 ns "bus attached
+> with two observers" tax — small relative to the
+> ~18 µs StorageAuditSink record).
+
 ### Surface
 
 ```cpp

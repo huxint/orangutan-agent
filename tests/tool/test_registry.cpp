@@ -10,7 +10,9 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 #include <utility>
+#include <variant>
 
 #include <asio/io_context.hpp>
 
@@ -22,6 +24,7 @@
 #include <oran/core/capability.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/tool_def.hpp>
+#include <oran/hook.hpp>
 #include <oran/permission.hpp>
 #include <oran/tool.hpp>
 
@@ -1394,5 +1397,338 @@ TEST_CASE("Registry::dispatch end-to-end: ask short-circuits, agent approves, re
     REQUIRE(sink.events()[2].outcome == permission::AuditOutcome::approved);
     REQUIRE(sink.events()[3].outcome == permission::AuditOutcome::approved);
     REQUIRE(sink.events()[4].outcome == permission::AuditOutcome::rejected);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// slice 22 — hook bus wiring into `Registry::dispatch`.
+//
+// The bus is optional on `DispatchContext`. When null, the existing behavior
+// (slices 17..21) is preserved verbatim. When non-null, dispatch publishes
+// `tool_before` once the tool def is resolved and `tool_after` at every
+// exit (handler success, permission deny, broker rejection, audit error).
+// Sinks are advisory in slice 22 — their errors are recorded by the bus
+// but do not change the dispatch result.
+
+namespace {
+
+struct CapturedEvent {
+  orangutan::hook::Event event;
+  std::string tool_name;
+  std::string identity;
+  bool succeeded{false};
+  std::string output_text;
+  std::string error_kind;
+};
+
+class CaptureSink final : public orangutan::hook::Sink {
+public:
+  explicit CaptureSink(std::string id) : id_(std::move(id)) {}
+
+  [[nodiscard]] std::string_view id() const noexcept override {
+    return id_;
+  }
+
+  [[nodiscard]] async::Awaitable<core::Result<void>> receive(orangutan::hook::Event event,
+                                                             orangutan::hook::Payload payload) override {
+    CapturedEvent row{.event = event};
+    std::visit(
+        [&](auto& alt) {
+          using T = std::decay_t<decltype(alt)>;
+          if constexpr (std::is_same_v<T, orangutan::hook::ToolBeforePayload>) {
+            row.tool_name = alt.tool_name;
+            row.identity = alt.who.identity;
+          } else if constexpr (std::is_same_v<T, orangutan::hook::ToolAfterPayload>) {
+            row.tool_name = alt.tool_name;
+            row.identity = alt.who.identity;
+            row.succeeded = alt.succeeded;
+            row.output_text = alt.output_text;
+            row.error_kind = alt.error_kind;
+          }
+        },
+        payload);
+    captures_.push_back(std::move(row));
+    co_return core::Result<void>{};
+  }
+
+  [[nodiscard]] std::span<const CapturedEvent> captures() const noexcept {
+    return captures_;
+  }
+
+private:
+  std::string id_;
+  std::vector<CapturedEvent> captures_;
+};
+
+class FailingHookSink final : public orangutan::hook::Sink {
+public:
+  explicit FailingHookSink(std::string id) : id_(std::move(id)) {}
+
+  [[nodiscard]] std::string_view id() const noexcept override {
+    return id_;
+  }
+
+  [[nodiscard]] async::Awaitable<core::Result<void>> receive(orangutan::hook::Event,
+                                                             orangutan::hook::Payload) override {
+    co_return std::unexpected(core::Error::internal("sink rejected").with("sink", id_));
+  }
+
+private:
+  std::string id_;
+};
+
+permission::RuleSet allow_rule_set(std::string tool_pattern = "noop") {
+  return single_rule(permission::Rule{
+      .verdict = permission::Verdict::allow,
+      .tool_pattern = std::move(tool_pattern),
+  });
+}
+
+permission::RuleSet deny_rule_set(std::string tool_pattern = "noop") {
+  return single_rule(permission::Rule{
+      .verdict = permission::Verdict::deny,
+      .tool_pattern = std::move(tool_pattern),
+  });
+}
+
+async::Awaitable<core::Result<tool::Output>> noop_ok_handler(std::string_view, tool::DispatchContext& /*ctx*/) {
+  co_return tool::Output{.text = "noop-ok"};
+}
+
+async::Awaitable<core::Result<tool::Output>> noop_error_handler(std::string_view, tool::DispatchContext& /*ctx*/) {
+  co_return std::unexpected(core::Error::internal("handler exploded").with("tool", "noop"));
+}
+
+tool::DispatchContext make_hooked_ctx(asio::io_context& io,
+                                      permission::RuleSet& rules,
+                                      permission::AuditSink& sink,
+                                      orangutan::hook::Bus* bus,
+                                      permission::Mode mode = permission::Mode::default_) {
+  return tool::DispatchContext{
+      .executor = io.get_executor(),
+      .mode = mode,
+      .rules = rules,
+      .audit = sink,
+      .bus = bus,
+      .scope_key = "scope-A",
+      .agent_key = "coder",
+      .identity = "operator-1",
+  };
+}
+
+}  // namespace
+
+TEST_CASE("dispatch publishes tool_before + tool_after on the allow path", "[unit][tool][hook]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(
+        registry.add(core::ToolDef{.name = "noop", .description = "noop", .input_schema_json = "{}"}, &noop_ok_handler)
+            .has_value());
+
+    auto rules = allow_rule_set();
+    permission::RecordingAuditSink audit;
+
+    orangutan::hook::Bus bus;
+    CaptureSink sink{"capture-1"};
+    bus.bind(sink, {orangutan::hook::Event::tool_before, orangutan::hook::Event::tool_after});
+
+    auto ctx = make_hooked_ctx(io, rules, audit, &bus);
+    auto result = co_await registry.dispatch("noop", R"({"k":1})", ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "noop-ok");
+
+    REQUIRE(sink.captures().size() == 2);
+    REQUIRE(sink.captures()[0].event == orangutan::hook::Event::tool_before);
+    REQUIRE(sink.captures()[0].tool_name == "noop");
+    REQUIRE(sink.captures()[0].identity == "operator-1");
+    REQUIRE(sink.captures()[1].event == orangutan::hook::Event::tool_after);
+    REQUIRE(sink.captures()[1].tool_name == "noop");
+    REQUIRE(sink.captures()[1].succeeded);
+    REQUIRE(sink.captures()[1].output_text == "noop-ok");
+    REQUIRE(sink.captures()[1].error_kind.empty());
+  });
+}
+
+TEST_CASE("dispatch publishes tool_after with permission_denied kind on the deny path", "[unit][tool][hook]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(
+        registry.add(core::ToolDef{.name = "noop", .description = "noop", .input_schema_json = "{}"}, &noop_ok_handler)
+            .has_value());
+
+    auto rules = deny_rule_set();
+    permission::RecordingAuditSink audit;
+
+    orangutan::hook::Bus bus;
+    CaptureSink sink{"capture-deny"};
+    bus.bind(sink, {orangutan::hook::Event::tool_before, orangutan::hook::Event::tool_after});
+
+    auto ctx = make_hooked_ctx(io, rules, audit, &bus);
+    auto result = co_await registry.dispatch("noop", R"({})", ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::permission_denied);
+
+    REQUIRE(sink.captures().size() == 2);
+    REQUIRE(sink.captures()[0].event == orangutan::hook::Event::tool_before);
+    REQUIRE(sink.captures()[1].event == orangutan::hook::Event::tool_after);
+    REQUIRE_FALSE(sink.captures()[1].succeeded);
+    REQUIRE(sink.captures()[1].error_kind == "permission_denied");
+    REQUIRE(sink.captures()[1].output_text.empty());
+  });
+}
+
+TEST_CASE("dispatch publishes tool_after with the handler's error kind on handler failure", "[unit][tool][hook]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(
+        registry
+            .add(core::ToolDef{.name = "noop", .description = "noop", .input_schema_json = "{}"}, &noop_error_handler)
+            .has_value());
+
+    auto rules = allow_rule_set();
+    permission::RecordingAuditSink audit;
+
+    orangutan::hook::Bus bus;
+    CaptureSink sink{"capture-handler-err"};
+    bus.bind(sink, {orangutan::hook::Event::tool_after});
+
+    auto ctx = make_hooked_ctx(io, rules, audit, &bus);
+    auto result = co_await registry.dispatch("noop", R"({})", ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::internal);
+
+    REQUIRE(sink.captures().size() == 1);
+    REQUIRE(sink.captures()[0].event == orangutan::hook::Event::tool_after);
+    REQUIRE_FALSE(sink.captures()[0].succeeded);
+    REQUIRE(sink.captures()[0].error_kind == "internal");
+  });
+}
+
+TEST_CASE("dispatch does not publish any hook event for an unknown tool name", "[unit][tool][hook]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    auto rules = allow_rule_set("noop");
+    permission::RecordingAuditSink audit;
+
+    orangutan::hook::Bus bus;
+    CaptureSink sink{"capture-unknown"};
+    bus.bind(sink, {orangutan::hook::Event::tool_before, orangutan::hook::Event::tool_after});
+
+    auto ctx = make_hooked_ctx(io, rules, audit, &bus);
+    auto result = co_await registry.dispatch("missing", R"({})", ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::not_found);
+
+    REQUIRE(sink.captures().empty());
+  });
+}
+
+TEST_CASE("dispatch swallows sink errors — hook publish is advisory", "[unit][tool][hook]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(
+        registry.add(core::ToolDef{.name = "noop", .description = "noop", .input_schema_json = "{}"}, &noop_ok_handler)
+            .has_value());
+
+    auto rules = allow_rule_set();
+    permission::RecordingAuditSink audit;
+
+    orangutan::hook::Bus bus;
+    FailingHookSink failing{"failing-1"};
+    CaptureSink alive{"capture-1"};
+    bus.bind(failing, {orangutan::hook::Event::tool_before, orangutan::hook::Event::tool_after});
+    bus.bind(alive, {orangutan::hook::Event::tool_before, orangutan::hook::Event::tool_after});
+
+    auto ctx = make_hooked_ctx(io, rules, audit, &bus);
+    auto result = co_await registry.dispatch("noop", R"({})", ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "noop-ok");
+
+    // The failing sink errored on both events but the alive sink still saw them.
+    REQUIRE(alive.captures().size() == 2);
+  });
+}
+
+TEST_CASE("null bus reproduces slice-21 behavior — no hook publish", "[unit][tool][hook]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(
+        registry.add(core::ToolDef{.name = "noop", .description = "noop", .input_schema_json = "{}"}, &noop_ok_handler)
+            .has_value());
+
+    auto rules = allow_rule_set();
+    permission::RecordingAuditSink audit;
+
+    auto ctx = make_hooked_ctx(io, rules, audit, /*bus=*/nullptr);
+    auto result = co_await registry.dispatch("noop", R"({})", ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "noop-ok");
+    // Audit row is still recorded — that side of the contract is unchanged.
+    REQUIRE(audit.events().size() == 1);
+    REQUIRE(audit.events()[0].outcome == permission::AuditOutcome::allow);
+  });
+}
+
+TEST_CASE("ask short-circuit publishes tool_after with permission_denied + approval_required", "[unit][tool][hook]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(
+        registry.add(core::ToolDef{.name = "noop", .description = "noop", .input_schema_json = "{}"}, &noop_ok_handler)
+            .has_value());
+
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::ask,
+        .tool_pattern = "noop",
+    });
+    permission::RecordingAuditSink audit;
+
+    orangutan::hook::Bus bus;
+    CaptureSink sink{"capture-ask"};
+    bus.bind(sink, {orangutan::hook::Event::tool_before, orangutan::hook::Event::tool_after});
+
+    auto ctx = make_hooked_ctx(io, rules, audit, &bus);
+    auto result = co_await registry.dispatch("noop", R"({})", ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(context_has(result.error(), "reason", "approval_required"));
+
+    REQUIRE(sink.captures().size() == 2);
+    REQUIRE(sink.captures()[0].event == orangutan::hook::Event::tool_before);
+    REQUIRE(sink.captures()[1].event == orangutan::hook::Event::tool_after);
+    REQUIRE_FALSE(sink.captures()[1].succeeded);
+    REQUIRE(sink.captures()[1].error_kind == "permission_denied");
+  });
+}
+
+TEST_CASE("ask + broker rejection publishes tool_after with broker reason in the error kind", "[unit][tool][hook]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(
+        registry.add(core::ToolDef{.name = "noop", .description = "noop", .input_schema_json = "{}"}, &noop_ok_handler)
+            .has_value());
+
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::ask,
+        .tool_pattern = "noop",
+    });
+    permission::RecordingAuditSink audit;
+
+    auto broker = make_broker();
+    const auto now = fixed_now();
+    const auto exhausted = grant(broker, "noop", R"({})", "operator-1", now, /*replay_max=*/0);
+
+    orangutan::hook::Bus bus;
+    CaptureSink sink{"capture-broker-reject"};
+    bus.bind(sink, {orangutan::hook::Event::tool_after});
+
+    auto ctx = make_approval_ctx(io, rules, audit, &broker, &exhausted, now);
+    ctx.bus = &bus;
+
+    auto result = co_await registry.dispatch("noop", R"({})", ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(context_has(result.error(), "reason", "replay_exhausted"));
+
+    REQUIRE(sink.captures().size() == 1);
+    REQUIRE_FALSE(sink.captures()[0].succeeded);
+    REQUIRE(sink.captures()[0].error_kind == "permission_denied");
   });
 }

@@ -3,6 +3,7 @@
 #include <oran/tool/registry.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <expected>
 #include <optional>
 #include <string>
@@ -11,7 +12,12 @@
 #include <vector>
 
 #include <oran/async/awaitable_fwd.hpp>
+#include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
+#include <oran/core/time.hpp>
+#include <oran/hook/bus.hpp>
+#include <oran/hook/event.hpp>
+#include <oran/hook/payload.hpp>
 #include <oran/permission/approval.hpp>
 #include <oran/permission/approval_broker.hpp>
 #include <oran/permission/audit.hpp>
@@ -45,6 +51,48 @@ namespace {
   const auto entries = error.context();
   const auto it = std::ranges::find_if(entries, [](const auto& kv) { return kv.first == "reason"; });
   return it != entries.end() ? std::string_view{it->second} : std::string_view{};
+}
+
+[[nodiscard]] hook::Identity make_hook_identity(const DispatchContext& ctx) {
+  return hook::Identity{
+      .scope_key = ctx.scope_key,
+      .agent_key = ctx.agent_key,
+      .identity = ctx.identity,
+  };
+}
+
+[[nodiscard]] hook::ToolBeforePayload build_before_payload(std::string_view name,
+                                                           std::string_view input_json,
+                                                           const DispatchContext& ctx,
+                                                           core::Time started_at) {
+  return hook::ToolBeforePayload{
+      .tool_name = std::string{name},
+      .input_json = std::string{input_json},
+      .who = make_hook_identity(ctx),
+      .started_at = started_at,
+  };
+}
+
+[[nodiscard]] hook::ToolAfterPayload build_after_payload(std::string_view name,
+                                                         std::string_view input_json,
+                                                         const DispatchContext& ctx,
+                                                         core::Time started_at,
+                                                         core::Time finished_at,
+                                                         const core::Result<Output>& result) {
+  hook::ToolAfterPayload payload{
+      .tool_name = std::string{name},
+      .input_json = std::string{input_json},
+      .who = make_hook_identity(ctx),
+      .succeeded = result.has_value(),
+      .output_text = result.has_value() ? result->text : std::string{},
+      .error_kind = result.has_value() ? std::string{} : std::string{core::enum_name(result.error().kind())},
+      .error_message = result.has_value() ? std::string{} : std::string{result.error().message()},
+      .started_at = started_at,
+      .finished_at = finished_at,
+      .duration = std::chrono::duration_cast<std::chrono::nanoseconds>(finished_at.to_system_time_point() -
+                                                                       started_at.to_system_time_point()),
+  };
+  return payload;
 }
 
 }  // namespace
@@ -106,64 +154,97 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
   }
   const auto& entry = it->second;
 
-  const auto decision = ctx.rules.evaluate(name, input_json, entry.def.required_capabilities, ctx.mode);
+  const auto started_at = core::time::now_utc();
 
-  auto event = build_event(name, input_json, decision, ctx);
+  // Slice 22: publish `tool_before` now that the registry knows the tool
+  // exists. Sinks see every call attempt regardless of how the call is
+  // subsequently gated; the publish is advisory so its outcome cannot
+  // change the dispatch path.
+  if (ctx.bus != nullptr) {
+    [[maybe_unused]] auto before_outcome =
+        co_await ctx.bus->publish_advisory(hook::Event::tool_before,
+                                           build_before_payload(name, input_json, ctx, started_at));
+  }
 
-  // Slice 21: when the verdict is `ask` AND the caller supplied both an
-  // approval broker and a candidate token, consult the broker BEFORE
-  // recording so the audit row carries the final outcome (approved or
-  // rejected) rather than the pre-broker `ask`. Allow/deny paths are
-  // unaffected — the broker is meaningless without an `ask`-fired rule.
-  std::optional<core::Error> broker_rejection;
-  const bool broker_consulted =
-      decision.verdict == permission::Verdict::ask && ctx.approval_broker != nullptr && ctx.approval_token != nullptr;
-  if (broker_consulted) {
-    auto checked = ctx.approval_broker->check(*ctx.approval_token, name, input_json, ctx.identity, ctx.now);
-    if (checked) {
-      event.outcome = permission::AuditOutcome::approved;
-    } else {
-      event.outcome = permission::AuditOutcome::rejected;
-      // The audit row's `reason` swaps from the rule reason to the broker
-      // reason so a forensic query can tell apart "rule said ask" from
-      // "broker said this specific failure". The pre-broker rule reason
-      // is still recoverable from `verdict` plus the rule set.
-      if (const auto reason = broker_reason(checked.error()); !reason.empty()) {
-        event.reason = std::string{reason};
+  // Compute the dispatch result inside an inner scope so the
+  // `tool_after` publish below sees the final result regardless of which
+  // branch in the verdict switch fired. `result` is rebound in every
+  // branch — the initial placeholder catches the unreachable "fell off
+  // the bottom" case so static analysis sees no uninitialised path.
+  core::Result<Output> result = std::unexpected(core::Error::internal("dispatch did not produce a result"));
+  {
+    const auto decision = ctx.rules.evaluate(name, input_json, entry.def.required_capabilities, ctx.mode);
+
+    auto event = build_event(name, input_json, decision, ctx);
+
+    // Slice 21: when the verdict is `ask` AND the caller supplied both an
+    // approval broker and a candidate token, consult the broker BEFORE
+    // recording so the audit row carries the final outcome (approved or
+    // rejected) rather than the pre-broker `ask`. Allow/deny paths are
+    // unaffected — the broker is meaningless without an `ask`-fired rule.
+    std::optional<core::Error> broker_rejection;
+    const bool broker_consulted =
+        decision.verdict == permission::Verdict::ask && ctx.approval_broker != nullptr && ctx.approval_token != nullptr;
+    if (broker_consulted) {
+      auto checked = ctx.approval_broker->check(*ctx.approval_token, name, input_json, ctx.identity, ctx.now);
+      if (checked) {
+        event.outcome = permission::AuditOutcome::approved;
+      } else {
+        event.outcome = permission::AuditOutcome::rejected;
+        // The audit row's `reason` swaps from the rule reason to the broker
+        // reason so a forensic query can tell apart "rule said ask" from
+        // "broker said this specific failure". The pre-broker rule reason
+        // is still recoverable from `verdict` plus the rule set.
+        if (const auto reason = broker_reason(checked.error()); !reason.empty()) {
+          event.reason = std::string{reason};
+        }
+        broker_rejection = std::move(checked).error();
       }
-      broker_rejection = std::move(checked).error();
+    }
+
+    if (auto recorded = co_await ctx.audit.record(std::move(event)); !recorded) {
+      result = std::unexpected(std::move(recorded).error());
+    } else {
+      switch (decision.verdict) {
+        case permission::Verdict::deny:
+          result = std::unexpected(core::Error::permission_denied("tool denied by permission rules")
+                                       .with("tool", std::string{name})
+                                       .with("reason", decision.reason));
+          break;
+        case permission::Verdict::ask:
+          if (broker_rejection.has_value()) {
+            result = std::unexpected(std::move(*broker_rejection).with("tool", std::string{name}));
+          } else if (broker_consulted) {
+            // Broker accepted — run handler. The audit row already records
+            // `approved`.
+            result = co_await entry.handler(input_json, ctx);
+          } else {
+            result = std::unexpected(core::Error::permission_denied("tool requires approval")
+                                         .with("tool", std::string{name})
+                                         .with("reason", "approval_required")
+                                         .with("decision_reason", decision.reason)
+                                         .with("replay_max", std::to_string(decision.replay_max))
+                                         .with("approval_ttl_seconds", std::to_string(decision.approval_ttl.count())));
+          }
+          break;
+        case permission::Verdict::allow:
+          result = co_await entry.handler(input_json, ctx);
+          break;
+      }
     }
   }
 
-  if (auto recorded = co_await ctx.audit.record(std::move(event)); !recorded) {
-    co_return std::unexpected(std::move(recorded).error());
+  // Slice 22: publish `tool_after` with the dispatch outcome. Sinks see
+  // success and failure paths uniformly; the publish is advisory so its
+  // outcome cannot change the returned result.
+  if (ctx.bus != nullptr) {
+    const auto finished_at = core::time::now_utc();
+    [[maybe_unused]] auto after_outcome =
+        co_await ctx.bus->publish_advisory(hook::Event::tool_after,
+                                           build_after_payload(name, input_json, ctx, started_at, finished_at, result));
   }
 
-  switch (decision.verdict) {
-    case permission::Verdict::deny:
-      co_return std::unexpected(core::Error::permission_denied("tool denied by permission rules")
-                                    .with("tool", std::string{name})
-                                    .with("reason", decision.reason));
-    case permission::Verdict::ask:
-      if (broker_rejection.has_value()) {
-        co_return std::unexpected(std::move(*broker_rejection).with("tool", std::string{name}));
-      }
-      if (broker_consulted) {
-        // Broker accepted — fall through to the handler. The audit row
-        // already records `approved`.
-        break;
-      }
-      co_return std::unexpected(core::Error::permission_denied("tool requires approval")
-                                    .with("tool", std::string{name})
-                                    .with("reason", "approval_required")
-                                    .with("decision_reason", decision.reason)
-                                    .with("replay_max", std::to_string(decision.replay_max))
-                                    .with("approval_ttl_seconds", std::to_string(decision.approval_ttl.count())));
-    case permission::Verdict::allow:
-      break;
-  }
-
-  co_return co_await entry.handler(input_json, ctx);
+  co_return result;
 }
 
 }  // namespace orangutan::tool

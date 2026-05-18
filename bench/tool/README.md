@@ -55,3 +55,18 @@ A-vs-B comparisons:
   (rejected − short_circuit) is the per-call cost of a stale or
   exhausted token (similar shape — the broker does the same MAC work
   before deciding the entry is missing or out of budget).
+- `dispatch_allow_no_hooks` vs. `dispatch_allow_with_empty_bus` vs.
+  `dispatch_allow_with_two_sinks`: three-way contrast of the slice-22
+  hook-bus wiring on the allow path. The no-hooks case sets
+  `DispatchContext::bus = nullptr` — the slice-17 baseline. The
+  empty-bus case sets `bus` to a real `hook::Bus` with no sinks
+  subscribed; dispatch still pays the two `publish_advisory` map
+  lookups but each returns an empty outcome. The two-sinks case binds
+  one `InProcessSink` each to `tool_before` and `tool_after`, so
+  dispatch awaits the two sink coroutines. The
+  (with_empty_bus − no_hooks) delta is the "bus attached but nothing
+  listens" cost the agent loop pays to keep the bus wired; the
+  (with_two_sinks − no_hooks) delta is the per-call cost of a single
+  observer subscribed to both bookend events. Both should be sub-µs
+  — the cost of an expensive sink (shell, webhook) is the sink's own
+  bill, not the bus's.
