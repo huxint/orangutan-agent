@@ -37,3 +37,21 @@ A-vs-B comparisons:
   + per-file open/read overhead the agent loop pays when a tool call
   reaches for a tree rather than a single file. The baseline a future
   memory-mapped scan or parallel walker would need to beat.
+- `dispatch_ask_short_circuit` vs. `dispatch_ask_approved` vs.
+  `dispatch_ask_rejected`: three-way contrast of the `Verdict::ask`
+  dispatch paths added in slice 21. The short-circuit case carries
+  neither `approval_broker` nor `approval_token` on the context — same
+  cost as the slice-17/.../slice-20 ask path plus the new
+  `replay_max` / `approval_ttl_seconds` / `decision_reason` error-
+  context build. The approved case attaches a broker + token (with
+  effectively-infinite `replay_max`) so `broker.check` succeeds, the
+  audit row records `outcome=approved`, and the trivial in-process
+  handler runs. The rejected case attaches a broker + an exhausted
+  token (`replay_max=0`) so `broker.check` returns
+  `reason=replay_exhausted`, the audit row records `outcome=rejected`,
+  and the handler is skipped. The (approved − short_circuit) delta is
+  the per-call broker-attached overhead the agent loop pays once it
+  has an approval in hand (~11 µs, dominated by the HMAC verify);
+  (rejected − short_circuit) is the per-call cost of a stale or
+  exhausted token (similar shape — the broker does the same MAC work
+  before deciding the entry is missing or out of budget).

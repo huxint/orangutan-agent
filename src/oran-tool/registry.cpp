@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <expected>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -12,6 +13,7 @@
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/core/error.hpp>
 #include <oran/permission/approval.hpp>
+#include <oran/permission/approval_broker.hpp>
 #include <oran/permission/audit.hpp>
 #include <oran/permission/rule_set.hpp>
 
@@ -34,6 +36,15 @@ namespace {
   event.identity = ctx.identity;
   event.input_hash = permission::ApprovalAuthority::input_hash(input_json);
   return event;
+}
+
+/// Extract the `reason` context entry the approval broker stamps onto every
+/// rejection. Returns an empty view when no such entry exists — callers
+/// fall back to the rule's decision reason on that path.
+[[nodiscard]] std::string_view broker_reason(const core::Error& error) noexcept {
+  const auto entries = error.context();
+  const auto it = std::ranges::find_if(entries, [](const auto& kv) { return kv.first == "reason"; });
+  return it != entries.end() ? std::string_view{it->second} : std::string_view{};
 }
 
 }  // namespace
@@ -99,6 +110,31 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
 
   auto event = build_event(name, input_json, decision, ctx);
 
+  // Slice 21: when the verdict is `ask` AND the caller supplied both an
+  // approval broker and a candidate token, consult the broker BEFORE
+  // recording so the audit row carries the final outcome (approved or
+  // rejected) rather than the pre-broker `ask`. Allow/deny paths are
+  // unaffected — the broker is meaningless without an `ask`-fired rule.
+  std::optional<core::Error> broker_rejection;
+  const bool broker_consulted =
+      decision.verdict == permission::Verdict::ask && ctx.approval_broker != nullptr && ctx.approval_token != nullptr;
+  if (broker_consulted) {
+    auto checked = ctx.approval_broker->check(*ctx.approval_token, name, input_json, ctx.identity, ctx.now);
+    if (checked) {
+      event.outcome = permission::AuditOutcome::approved;
+    } else {
+      event.outcome = permission::AuditOutcome::rejected;
+      // The audit row's `reason` swaps from the rule reason to the broker
+      // reason so a forensic query can tell apart "rule said ask" from
+      // "broker said this specific failure". The pre-broker rule reason
+      // is still recoverable from `verdict` plus the rule set.
+      if (const auto reason = broker_reason(checked.error()); !reason.empty()) {
+        event.reason = std::string{reason};
+      }
+      broker_rejection = std::move(checked).error();
+    }
+  }
+
   if (auto recorded = co_await ctx.audit.record(std::move(event)); !recorded) {
     co_return std::unexpected(std::move(recorded).error());
   }
@@ -109,10 +145,20 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
                                     .with("tool", std::string{name})
                                     .with("reason", decision.reason));
     case permission::Verdict::ask:
+      if (broker_rejection.has_value()) {
+        co_return std::unexpected(std::move(*broker_rejection).with("tool", std::string{name}));
+      }
+      if (broker_consulted) {
+        // Broker accepted — fall through to the handler. The audit row
+        // already records `approved`.
+        break;
+      }
       co_return std::unexpected(core::Error::permission_denied("tool requires approval")
                                     .with("tool", std::string{name})
                                     .with("reason", "approval_required")
-                                    .with("decision_reason", decision.reason));
+                                    .with("decision_reason", decision.reason)
+                                    .with("replay_max", std::to_string(decision.replay_max))
+                                    .with("approval_ttl_seconds", std::to_string(decision.approval_ttl.count())));
     case permission::Verdict::allow:
       break;
   }

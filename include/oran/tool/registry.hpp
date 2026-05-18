@@ -1,7 +1,8 @@
-// include/oran/tool/registry.hpp — first-pass tool registry surface.
+// include/oran/tool/registry.hpp — tool registry surface.
 //
-// Slice 17 of the v2 stack. The registry composes three things the upstream
-// layers (`oran-permission`, `oran-async`, `oran-io`) already shipped:
+// Slice 17 introduced the registry. The current shape composes four things
+// the upstream layers (`oran-permission`, `oran-async`, `oran-io`) already
+// shipped:
 //
 //   1. A `core::ToolDef`-keyed catalog the agent loop (future slice) can
 //      advertise to a provider.
@@ -12,21 +13,31 @@
 //   3. A capability-aware glue between `core::ToolDef::required_capabilities`
 //      and `Rule::capability`, so a `Capability::read_file`-scoped rule
 //      only fires for tools that declared the capability.
+//   4. The slice-21 approval-broker bridge: when a rule fires
+//      `Verdict::ask` and the caller supplies a
+//      `permission::ApprovalBroker` plus a `permission::ApprovalToken`
+//      in the context, dispatch consults the broker, promotes the
+//      audit outcome to `approved`/`rejected`, and either runs the
+//      handler or forwards the broker's rejection verbatim. When no
+//      broker or no token is supplied, the short-circuit
+//      `approval_required` path is preserved — but the resulting
+//      `Error` now carries `replay_max` / `approval_ttl_seconds` /
+//      `decision_reason` context entries so the agent loop can hand
+//      them straight to `ApprovalBroker::approve` without re-evaluating
+//      the rule set.
 //
-// What this slice does NOT cover. The hook bus, the `Verdict::ask` approval
-// flow via `permission::ApprovalBroker`, output scrubbing through
-// `oran-log::redact`, and deferred-tool promotion all live in later slices.
-// `Verdict::ask` is recorded faithfully in audit (`AuditOutcome::ask`) and
-// short-circuits with `permission_denied`/`reason=approval_required` until
-// the broker is wired through here.
+// What this slice does NOT cover. The hook bus, output scrubbing through
+// `oran-log::redact`, and deferred-tool promotion all live in later
+// slices.
 //
 // Why a single `DispatchContext` rather than the design-doc's parameter
 // fan-out. Passing `permission::RuleSet&`, `permission::AuditSink&`,
-// `permission::Mode`, scope/agent/identity, and the executor as separate
-// arguments to `dispatch` and to every handler quickly turns the
-// `Handler` signature into a maintenance hazard. A typed struct makes
-// it cheap to add the hook bus or the approval broker later — handlers
-// keep the same signature; new context fields are additive.
+// `permission::Mode`, scope/agent/identity, the executor, an optional
+// broker + token, and a wall-clock as separate arguments to `dispatch`
+// and to every handler quickly turns the `Handler` signature into a
+// maintenance hazard. A typed struct makes it cheap to add the hook
+// bus later — handlers keep the same signature; new context fields are
+// additive.
 //
 // Concurrency. Like `permission::AuditSink`, the registry is not
 // thread-safe. The agent loop owns one registry per strand; a future
@@ -47,7 +58,10 @@
 
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/core/result.hpp>
+#include <oran/core/time.hpp>
 #include <oran/core/tool_def.hpp>
+#include <oran/permission/approval.hpp>
+#include <oran/permission/approval_broker.hpp>
 #include <oran/permission/audit.hpp>
 #include <oran/permission/rule_set.hpp>
 
@@ -74,6 +88,33 @@ struct DispatchContext {
   permission::Mode mode{permission::Mode::default_};
   permission::RuleSet& rules;
   permission::AuditSink& audit;
+  /// Optional approval broker that gates the `Verdict::ask` flow. When
+  /// non-null *and* `approval_token` is non-null, `dispatch` consults
+  /// `broker.check(token, name, input, identity, now)` after rule
+  /// evaluation: success promotes the audit outcome to `approved` and
+  /// the handler runs; failure demotes the outcome to `rejected` and
+  /// the broker's error (with its `reason` context entry —
+  /// `expired` / `tool_mismatch` / `identity_mismatch` /
+  /// `input_mismatch` / `mac_mismatch` / `no_grant` /
+  /// `replay_exhausted`) is forwarded to the caller. When either
+  /// field is null, the legacy short-circuit applies — the audit
+  /// outcome stays `ask` and the call returns
+  /// `permission_denied` with `reason=approval_required`. The pointer
+  /// is non-owning; the caller (typically the agent loop) keeps the
+  /// broker alive across dispatch invocations.
+  permission::ApprovalBroker* approval_broker{nullptr};
+  /// Optional approval token. See `approval_broker` above for how
+  /// `dispatch` consumes the pair. The pointer is non-owning; the
+  /// caller keeps the token alive across the dispatch invocation.
+  const permission::ApprovalToken* approval_token{nullptr};
+  /// Wall-clock instant the broker uses to evaluate `expires_at`.
+  /// The agent loop sets this from `core::time::now_utc()` per
+  /// dispatch; tests pin it to a fixed time so the broker's TTL
+  /// branches are deterministic. Default-constructed value (the
+  /// UNIX epoch) is intentionally far in the past so that an
+  /// uninitialised value cannot accidentally satisfy a real TTL
+  /// — every realistic call site supplies a fresh value.
+  core::Time now{};
   /// Per-process scope key the audit row gets stamped with. See
   /// `docs/design-docs/secrets-and-state.md` "Identity And Scope".
   std::string scope_key;
@@ -131,15 +172,34 @@ public:
   ///   1. lookup `name`; `Error::not_found` on miss.
   ///   2. evaluate `(name, input_json, def.required_capabilities, ctx.mode)`
   ///      against `ctx.rules`.
-  ///   3. record one `permission::AuditEvent` carrying the decision,
-  ///      `input_hash = SHA-256(input_json)`, and the identity columns
-  ///      from `ctx`.
-  ///   4. branch:
-  ///        - `allow`  -> co_await `handler`, return its `Result`.
-  ///        - `deny`   -> return `Error::permission_denied`.
-  ///        - `ask`    -> return `Error::permission_denied` with
-  ///                       `reason=approval_required` (approval flow
-  ///                       lands in a later slice).
+  ///   3. if the verdict is `ask` and both `ctx.approval_broker` and
+  ///      `ctx.approval_token` are set, consult
+  ///      `broker.check(*token, name, input, identity, now)` and
+  ///      remap the audit outcome to `approved` (broker accepted) or
+  ///      `rejected` (broker rejected — the broker's `reason`
+  ///      context entry replaces the rule reason in the audit row).
+  ///   4. record one `permission::AuditEvent` carrying the final
+  ///      verdict, the (possibly remapped) outcome,
+  ///      `input_hash = SHA-256(input_json)`, and the identity
+  ///      columns from `ctx`.
+  ///   5. branch:
+  ///        - `allow`           -> co_await `handler`, return its `Result`.
+  ///        - `deny`            -> return `Error::permission_denied`
+  ///                               with `reason=<rule_reason>`.
+  ///        - `ask` (approved)  -> co_await `handler`, return its `Result`.
+  ///        - `ask` (rejected)  -> return the broker's error verbatim
+  ///                               (its `reason` context entry already
+  ///                               classifies the failure).
+  ///        - `ask` (no broker
+  ///           or no token)     -> return `Error::permission_denied`
+  ///                               with `reason=approval_required`,
+  ///                               `decision_reason=<rule_reason>`,
+  ///                               `replay_max=<decimal>`, and
+  ///                               `approval_ttl_seconds=<decimal>`
+  ///                               copied from the matched rule so
+  ///                               the agent loop can hand them
+  ///                               straight to
+  ///                               `ApprovalBroker::approve`.
   ///
   /// Audit-sink errors are propagated verbatim so a flaky storage backend
   /// does not silently lose decisions.

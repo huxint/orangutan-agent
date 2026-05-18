@@ -143,6 +143,35 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > `0008-permissions.md` criterion 1 is now closed in-process; the
 > per-call "record on decision" plumbing lands with the first
 > tool built-ins or the agent loop scaffolding.
+> **Approval-broker dispatch wiring landed 2026-05-17 (slice 21)**:
+> `tool::Registry::dispatch` now consults the broker when a
+> `Verdict::ask` rule fires and the caller supplies
+> `(ApprovalBroker*, ApprovalToken*)` on its `DispatchContext`.
+> On `broker.check` success the audit row's outcome flips to
+> `approved` and the handler runs; on rejection the outcome
+> flips to `rejected`, the audit row's `reason` swaps from the
+> rule reason to the broker reason
+> (`expired`/`tool_mismatch`/`identity_mismatch`/`input_mismatch`/
+> `mac_mismatch`/`no_grant`/`replay_exhausted`), and the broker's
+> error is forwarded to the caller verbatim. When no broker or
+> no token is supplied, the legacy short-circuit applies
+> (`outcome=ask`, `permission_denied` with
+> `reason=approval_required`) but the error now also carries
+> `decision_reason` + `replay_max` + `approval_ttl_seconds`
+> copied from the matched rule so the agent loop can hand them
+> straight to `ApprovalBroker::approve` without re-running
+> `RuleSet::evaluate`. Allow/deny verdicts ignore the broker
+> entirely. Bench (`bench-tool/approval.cpp`):
+> `dispatch_ask_short_circuit` ~2.4 µs (baseline — same shape as
+> `registry.dispatch_allow` plus the new error-context build),
+> `dispatch_ask_approved` ~13.4 µs, `dispatch_ask_rejected`
+> ~13.6 µs — the broker-attached path costs ~11 µs over the
+> short-circuit, ~10 µs of which is the HMAC verify
+> (`bench-permission/approval` shows ~9.3 µs for verify_ok), so
+> the registry-side overhead on top of the broker work is
+> ~875 ns. The remaining `0008-permissions.md` criterion 2
+> render-side flow (operator prompt + token capture) lives in
+> the upcoming `oran-agent` slice.
 
 ### Sources
 

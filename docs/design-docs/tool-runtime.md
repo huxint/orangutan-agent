@@ -51,7 +51,7 @@ enum class Capability {
 };
 ```
 
-> **Status (2026-05-20):** the enum itself now lives in `oran-core`
+> **Status (2026-05-17):** the enum itself now lives in `oran-core`
 > (`include/oran/core/capability.hpp`); its wire spelling and inverse
 > parse come from the generic reflection helpers
 > `core::enum_name(c)` / `core::parse_enum<Capability>(text)` /
@@ -81,9 +81,22 @@ enum class Capability {
 > default; regex support and ripgrep-class optimisations are deferred
 > to follow-up slices tracked in
 > [`exec-plans/tech-debt-tracker.md`](../exec-plans/tech-debt-tracker.md)).
-> Capability-gated runtime services
-> (`tool::Runtime` accessor surface) and config wiring stay
-> on future slices.
+> Slice 21 (2026-05-17) wired `permission::ApprovalBroker` through
+> `Registry::dispatch` so a `Verdict::ask` decision can be mediated
+> rather than short-circuited: `DispatchContext` grew optional
+> `approval_broker` + `approval_token` + `now` fields; when both
+> are supplied, `broker.check(token, name, input, identity, now)`
+> drives the audit outcome (`approved` / `rejected`) and either
+> runs the handler or forwards the broker's `reason` context entry
+> (`expired` / `tool_mismatch` / `identity_mismatch` /
+> `input_mismatch` / `mac_mismatch` / `no_grant` /
+> `replay_exhausted`). When the agent supplies neither, the slice-17
+> short-circuit is preserved but the `permission_denied`
+> error now also carries `decision_reason` / `replay_max` /
+> `approval_ttl_seconds` so the agent loop can hand them straight
+> to `ApprovalBroker::approve` without re-running rule evaluation.
+> Capability-gated runtime services (`tool::Runtime` accessor
+> surface) and config wiring stay on future slices.
 
 A tool's `required_capabilities` list is **inspected at registration**. The permission
 engine knows the universe of capabilities a tool might use; the tool cannot smuggle in

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -227,10 +228,41 @@ TEST_CASE("Registry::dispatch reports ask as approval_required and records outco
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::permission_denied);
     REQUIRE(context_has(result.error(), "reason", "approval_required"));
+    // Slice 21: the error now carries replay_max + approval_ttl_seconds +
+    // decision_reason copied from the matched rule so the agent loop can
+    // hand them straight to `ApprovalBroker::approve` without re-running
+    // rule evaluation. Rule defaults are 8 / 3600s; we assert both
+    // verbatim to pin the wire spelling.
+    REQUIRE(context_has(result.error(), "replay_max", "8"));
+    REQUIRE(context_has(result.error(), "approval_ttl_seconds", "3600"));
+    REQUIRE(context_has(result.error(), "decision_reason", "rule #0 (ask: noop)"));
 
     REQUIRE(sink.events().size() == 1);
     REQUIRE(sink.events()[0].verdict == permission::Verdict::ask);
     REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::ask);
+  });
+}
+
+TEST_CASE("Registry::dispatch propagates custom replay_max / approval_ttl_seconds on the approval_required error",
+          "[unit][tool][registry][approval]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(core::ToolDef::with_no_input("noop", "noop"), make_echo_handler()).has_value());
+
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::ask,
+        .tool_pattern = "noop",
+        .replay_max = 2U,
+        .approval_ttl = std::chrono::seconds{120},
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink);
+
+    auto result = co_await registry.dispatch("noop", "{}", ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(context_has(result.error(), "reason", "approval_required"));
+    REQUIRE(context_has(result.error(), "replay_max", "2"));
+    REQUIRE(context_has(result.error(), "approval_ttl_seconds", "120"));
   });
 }
 
@@ -1037,5 +1069,330 @@ TEST_CASE("file.search rejects malformed input as invalid_argument", "[unit][too
     for (const auto& event : sink.events()) {
       REQUIRE(event.outcome == permission::AuditOutcome::allow);
     }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Slice 21 — approval-broker dispatch wiring.
+//
+// The cases below exercise the new `ctx.approval_broker` + `ctx.approval_token`
+// plumbing: when both are present and the rule fires `Verdict::ask`,
+// `Registry::dispatch` consults the broker and promotes/demotes the audit
+// outcome to `approved`/`rejected` instead of short-circuiting with
+// `approval_required`. The legacy short-circuit path is still covered by
+// the cases above so the partial-wiring (broker but no token, or no broker)
+// transitions stay legible from this file alone.
+
+namespace {
+
+[[nodiscard]] permission::ApprovalBroker make_broker() {
+  auto broker = permission::ApprovalBroker::with_random_secret();
+  REQUIRE(broker.has_value());
+  return std::move(*broker);
+}
+
+[[nodiscard]] core::Time fixed_now() noexcept {
+  using namespace std::chrono;
+  return core::Time{sys_days{year{2026} / January / day{1}}};
+}
+
+[[nodiscard]] permission::ApprovalToken grant(permission::ApprovalBroker& broker,
+                                              std::string_view tool_name,
+                                              std::string_view input,
+                                              std::string_view identity,
+                                              core::Time now,
+                                              std::uint32_t replay_max = 4) {
+  return broker.approve(
+      permission::ApprovalGrant{
+          .tool_name = tool_name,
+          .input = input,
+          .identity = identity,
+          .ttl = std::chrono::seconds{60},
+          .replay_max = replay_max,
+      },
+      now);
+}
+
+[[nodiscard]] tool::DispatchContext make_approval_ctx(asio::io_context& io,
+                                                      permission::RuleSet& rules,
+                                                      permission::AuditSink& sink,
+                                                      permission::ApprovalBroker* broker,
+                                                      const permission::ApprovalToken* token,
+                                                      core::Time now,
+                                                      permission::Mode mode = permission::Mode::default_) {
+  return tool::DispatchContext{
+      .executor = io.get_executor(),
+      .mode = mode,
+      .rules = rules,
+      .audit = sink,
+      .approval_broker = broker,
+      .approval_token = token,
+      .now = now,
+      .scope_key = "scope-A",
+      .agent_key = "coder",
+      .identity = "operator-1",
+  };
+}
+
+}  // namespace
+
+TEST_CASE("Registry::dispatch routes ask through the broker on a valid token (audit outcome=approved)",
+          "[unit][tool][registry][approval]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(core::ToolDef::with_no_input("noop", "noop"), make_echo_handler()).has_value());
+    auto rules = single_rule(permission::Rule{.verdict = permission::Verdict::ask, .tool_pattern = "noop"});
+    permission::RecordingAuditSink sink;
+    auto broker = make_broker();
+    const auto now = fixed_now();
+    const std::string_view input = R"({"hello":"world"})";
+    const auto token = grant(broker, "noop", input, "operator-1", now);
+
+    auto ctx = make_approval_ctx(io, rules, sink, &broker, &token, now);
+    auto result = co_await registry.dispatch("noop", input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == input);
+
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].verdict == permission::Verdict::ask);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::approved);
+    // The rule reason survives on the approved path: the broker only swaps
+    // the reason on a rejection.
+    REQUIRE(sink.events()[0].reason == "rule #0 (ask: noop)");
+  });
+}
+
+TEST_CASE("Registry::dispatch records rejected and forwards reason=replay_exhausted when the broker rejects",
+          "[unit][tool][registry][approval]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(core::ToolDef::with_no_input("noop", "noop"), make_echo_handler()).has_value());
+    auto rules = single_rule(permission::Rule{.verdict = permission::Verdict::ask, .tool_pattern = "noop"});
+    permission::RecordingAuditSink sink;
+    auto broker = make_broker();
+    const auto now = fixed_now();
+    const std::string_view input = R"({"x":1})";
+    const auto token = grant(broker, "noop", input, "operator-1", now, /*replay_max=*/0);
+
+    auto ctx = make_approval_ctx(io, rules, sink, &broker, &token, now);
+    auto result = co_await registry.dispatch("noop", input, ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::permission_denied);
+    REQUIRE(context_has(result.error(), "reason", "replay_exhausted"));
+    REQUIRE(context_has(result.error(), "tool", "noop"));
+
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].verdict == permission::Verdict::ask);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::rejected);
+    REQUIRE(sink.events()[0].reason == "replay_exhausted");
+  });
+}
+
+TEST_CASE("Registry::dispatch records rejected with reason=no_grant when the broker has no entry",
+          "[unit][tool][registry][approval]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(core::ToolDef::with_no_input("noop", "noop"), make_echo_handler()).has_value());
+    auto rules = single_rule(permission::Rule{.verdict = permission::Verdict::ask, .tool_pattern = "noop"});
+    permission::RecordingAuditSink sink;
+    auto broker = make_broker();
+    const auto now = fixed_now();
+    const std::string_view input = R"({"x":1})";
+    const auto token = grant(broker, "noop", input, "operator-1", now);
+    // Reap the broker's map so the token verifies but no entry exists.
+    broker.reap_expired(core::Time{now.to_system_time_point() + std::chrono::hours{2}});
+    REQUIRE(broker.outstanding_grants() == 0);
+
+    auto ctx = make_approval_ctx(io, rules, sink, &broker, &token, now);
+    auto result = co_await registry.dispatch("noop", input, ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(context_has(result.error(), "reason", "no_grant"));
+
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::rejected);
+    REQUIRE(sink.events()[0].reason == "no_grant");
+  });
+}
+
+TEST_CASE("Registry::dispatch records rejected with reason=expired when the token TTL has elapsed",
+          "[unit][tool][registry][approval]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(core::ToolDef::with_no_input("noop", "noop"), make_echo_handler()).has_value());
+    auto rules = single_rule(permission::Rule{.verdict = permission::Verdict::ask, .tool_pattern = "noop"});
+    permission::RecordingAuditSink sink;
+    auto broker = make_broker();
+    const auto now = fixed_now();
+    const std::string_view input = R"({"x":1})";
+    // Issue at `now` with the default 60s TTL the helper uses, then dispatch
+    // at `now + 2h` so the authority-level expiry kicks in.
+    const auto token = grant(broker, "noop", input, "operator-1", now);
+    const auto future = core::Time{now.to_system_time_point() + std::chrono::hours{2}};
+
+    auto ctx = make_approval_ctx(io, rules, sink, &broker, &token, future);
+    auto result = co_await registry.dispatch("noop", input, ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(context_has(result.error(), "reason", "expired"));
+
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::rejected);
+    REQUIRE(sink.events()[0].reason == "expired");
+  });
+}
+
+TEST_CASE("Registry::dispatch records rejected with reason=tool_mismatch on cross-tool replay",
+          "[unit][tool][registry][approval]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(core::ToolDef::with_no_input("alpha", "alpha"), make_echo_handler()).has_value());
+    REQUIRE(registry.add(core::ToolDef::with_no_input("beta", "beta"), make_echo_handler()).has_value());
+
+    auto rules = single_rule(permission::Rule{.verdict = permission::Verdict::ask, .tool_pattern = "*"});
+    permission::RecordingAuditSink sink;
+    auto broker = make_broker();
+    const auto now = fixed_now();
+    const std::string_view input = R"({"x":1})";
+    // Token is issued for `alpha`; we present it during a `beta` dispatch.
+    const auto token = grant(broker, "alpha", input, "operator-1", now);
+
+    auto ctx = make_approval_ctx(io, rules, sink, &broker, &token, now);
+    auto result = co_await registry.dispatch("beta", input, ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(context_has(result.error(), "reason", "tool_mismatch"));
+    REQUIRE(context_has(result.error(), "tool", "beta"));
+
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].tool_name == "beta");
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::rejected);
+    REQUIRE(sink.events()[0].reason == "tool_mismatch");
+  });
+}
+
+TEST_CASE("Registry::dispatch with broker but no token keeps the short-circuit approval_required path",
+          "[unit][tool][registry][approval]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(core::ToolDef::with_no_input("noop", "noop"), make_echo_handler()).has_value());
+    auto rules = single_rule(permission::Rule{.verdict = permission::Verdict::ask, .tool_pattern = "noop"});
+    permission::RecordingAuditSink sink;
+    auto broker = make_broker();
+    auto ctx = make_approval_ctx(io, rules, sink, &broker, /*token=*/nullptr, fixed_now());
+
+    auto result = co_await registry.dispatch("noop", "{}", ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(context_has(result.error(), "reason", "approval_required"));
+    REQUIRE(context_has(result.error(), "replay_max", "8"));
+    REQUIRE(context_has(result.error(), "approval_ttl_seconds", "3600"));
+
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::ask);
+    // The broker was not consulted; outstanding grants should still be zero.
+    REQUIRE(broker.outstanding_grants() == 0);
+  });
+}
+
+TEST_CASE("Registry::dispatch does not consult the broker on allow verdicts (token ignored)",
+          "[unit][tool][registry][approval]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(core::ToolDef::with_no_input("noop", "noop"), make_echo_handler()).has_value());
+    auto rules = single_rule(permission::Rule{.verdict = permission::Verdict::allow, .tool_pattern = "noop"});
+    permission::RecordingAuditSink sink;
+    auto broker = make_broker();
+    const auto now = fixed_now();
+    // A token that is invalid for THIS call (`replay_max=0` means
+    // `broker.check` would reject) — but verdict=allow short-circuits
+    // before the broker is consulted, so the handler still runs.
+    const std::string_view input = R"({"x":1})";
+    const auto token = grant(broker, "noop", input, "operator-1", now, /*replay_max=*/0);
+
+    auto ctx = make_approval_ctx(io, rules, sink, &broker, &token, now);
+    auto result = co_await registry.dispatch("noop", input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == input);
+
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].verdict == permission::Verdict::allow);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
+  });
+}
+
+TEST_CASE("Registry::dispatch does not consult the broker on deny verdicts (token ignored)",
+          "[unit][tool][registry][approval]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(core::ToolDef::with_no_input("noop", "noop"), make_echo_handler()).has_value());
+    auto rules = single_rule(permission::Rule{.verdict = permission::Verdict::deny, .tool_pattern = "noop"});
+    permission::RecordingAuditSink sink;
+    auto broker = make_broker();
+    const auto now = fixed_now();
+    // A valid token presented against a deny verdict — the deny path
+    // ignores the token, returns permission_denied with the rule reason,
+    // and records outcome=deny.
+    const std::string_view input = R"({"x":1})";
+    const auto token = grant(broker, "noop", input, "operator-1", now);
+
+    auto ctx = make_approval_ctx(io, rules, sink, &broker, &token, now);
+    auto result = co_await registry.dispatch("noop", input, ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::permission_denied);
+    REQUIRE_FALSE(context_has(result.error(), "reason", "approval_required"));
+
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].verdict == permission::Verdict::deny);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::deny);
+  });
+}
+
+TEST_CASE("Registry::dispatch end-to-end: ask short-circuits, agent approves, re-dispatch with token succeeds",
+          "[unit][tool][registry][approval]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(core::ToolDef::with_no_input("noop", "noop"), make_echo_handler()).has_value());
+    auto rules = single_rule(permission::Rule{.verdict = permission::Verdict::ask,
+                                              .tool_pattern = "noop",
+                                              .replay_max = 3,
+                                              .approval_ttl = std::chrono::seconds{120}});
+    permission::RecordingAuditSink sink;
+    auto broker = make_broker();
+    const auto now = fixed_now();
+    const std::string_view input = R"({"work":"unit"})";
+
+    // First call mirrors the agent loop's "ask" turn: broker is supplied
+    // (so the agent will be able to honor an upcoming approval), but no
+    // token has been issued yet.
+    auto first_ctx = make_approval_ctx(io, rules, sink, &broker, /*token=*/nullptr, now);
+    auto first = co_await registry.dispatch("noop", input, first_ctx);
+    REQUIRE_FALSE(first.has_value());
+    REQUIRE(context_has(first.error(), "reason", "approval_required"));
+    REQUIRE(context_has(first.error(), "replay_max", "3"));
+    REQUIRE(context_has(first.error(), "approval_ttl_seconds", "120"));
+    REQUIRE(sink.events().back().outcome == permission::AuditOutcome::ask);
+
+    // The agent loop now hands the replay_max + ttl to broker.approve(),
+    // capturing the resulting token and re-dispatching.
+    const auto token = grant(broker, "noop", input, "operator-1", now, /*replay_max=*/3);
+    auto second_ctx = make_approval_ctx(io, rules, sink, &broker, &token, now);
+    auto second = co_await registry.dispatch("noop", input, second_ctx);
+    REQUIRE(second.has_value());
+    REQUIRE(second->text == input);
+    REQUIRE(sink.events().back().outcome == permission::AuditOutcome::approved);
+
+    // And the replay budget still allows one more re-use before exhausting.
+    auto third = co_await registry.dispatch("noop", input, second_ctx);
+    REQUIRE(third.has_value());
+    auto fourth = co_await registry.dispatch("noop", input, second_ctx);
+    REQUIRE(fourth.has_value());
+    auto fifth = co_await registry.dispatch("noop", input, second_ctx);
+    REQUIRE_FALSE(fifth.has_value());
+    REQUIRE(context_has(fifth.error(), "reason", "replay_exhausted"));
+
+    // Total audit rows: 1 ask + 3 approved + 1 rejected.
+    REQUIRE(sink.events().size() == 5);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::ask);
+    REQUIRE(sink.events()[1].outcome == permission::AuditOutcome::approved);
+    REQUIRE(sink.events()[2].outcome == permission::AuditOutcome::approved);
+    REQUIRE(sink.events()[3].outcome == permission::AuditOutcome::approved);
+    REQUIRE(sink.events()[4].outcome == permission::AuditOutcome::rejected);
   });
 }

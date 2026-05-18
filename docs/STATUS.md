@@ -7,18 +7,21 @@
 
 ## Snapshot
 
-- **Slice:** 20 (`xmake run orangutan` reports slice 20)
+- **Slice:** 21 (`xmake run orangutan` reports slice 21)
 - **Last completed history:**
-  [`histories/2026-05/20260517-2330-oran-tool-file-search.md`](histories/2026-05/20260517-2330-oran-tool-file-search.md)
+  [`histories/2026-05/20260517-2359-oran-tool-approval-broker.md`](histories/2026-05/20260517-2359-oran-tool-approval-broker.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** TBD — choose from the QUALITY_SCORE "Next Step"
-  column. Most likely candidates: the approval-broker flow that replaces
-  the `Verdict::ask` short-circuit in `Registry::dispatch` (now uniform
-  across all four file built-ins); the first provider adapter
-  (Anthropic Messages); signal-aware shutdown for `bootstrap::run`.
+  column. Most likely candidates now that the approval-broker wiring is
+  in: the first provider adapter (Anthropic Messages) — likely needs an
+  exec plan since transport + protocol + execution + first integration
+  test span multiple slices; signal-aware shutdown for `bootstrap::run`
+  so SIGINT terminates the io_context drain promptly; the hook bus
+  scaffolding that `Registry::dispatch` will publish `tool_before` /
+  `tool_after` events to once `oran-hook` exists.
 
 ## Library Health
 
@@ -40,7 +43,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-storage`: 60 cases / 702 assertions.
 - `oran-config`: 19 cases / 148 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
-- `oran-tool`: 40 cases / 309 assertions.
+- `oran-tool`: 50 cases / 414 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 34 cases / 123 assertions.
 
