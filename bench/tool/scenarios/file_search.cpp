@@ -1,15 +1,25 @@
 // bench/tool/scenarios/file_search.cpp
 //
-// A-vs-B comparison for `file.search`: full dispatch on a single-file path
-// with one literal match vs. full dispatch on a directory-rooted path that
-// walks a 4-file / 14-line tree and accumulates 5 matches. Both scenarios
-// share the fixed dispatch costs (permission eval + libsodium SHA-256 of
-// the input + audit record + JSON parse + executor hop + read of the
-// matched file's contents); the contrast surfaces the `recursive_directory_iterator`
-// walk + per-file open/read overhead the agent loop pays when a tool call
-// reaches for a tree rather than a single file. The baseline a future
-// "memory-mapped scan" or "parallel walker" optimization would have to
-// beat.
+// A-vs-B comparisons for `file.search`:
+//
+//   1. `single_file_one_match` vs. `recursive_dir_many_matches` — full dispatch
+//      on a single-file path vs. a directory-rooted walk over a 4-file / 14-line
+//      tree. Both share the fixed dispatch costs (permission eval + libsodium
+//      SHA-256 of the input + audit record + JSON parse + executor hop + read
+//      of the matched file's contents); the contrast surfaces the
+//      `recursive_directory_iterator` walk + per-file open/read overhead the
+//      agent loop pays when a tool call reaches for a tree rather than a single
+//      file. The baseline a future memory-mapped scan or parallel walker
+//      optimization would have to beat.
+//
+//   2. `literal_match_1kib` vs. `regex_match_1kib` — full dispatch over the
+//      same ~1 KiB seed file (32 lines × 32 bytes, one match in the middle).
+//      The literal path uses `std::string_view::contains`; the regex path
+//      compiles the same pattern via `permission::InputPattern` and routes
+//      each line through `re2::RE2::PartialMatch`. The (regex − literal)
+//      delta pins the per-call re2 compile + per-line PartialMatch cost the
+//      agent loop pays when it opts into `"regex": true`. Adds the slice-24
+//      data point tech-debt #13 promised.
 
 #include <nanobench.h>
 
@@ -97,6 +107,23 @@ run_dispatch(asio::io_context& io, tool::Registry& registry, tool::DispatchConte
   return bytes;
 }
 
+[[nodiscard]] std::string make_seed_1kib() {
+  // 32 lines × 32 bytes = 1024 bytes. Line 16 carries the unique marker so the
+  // search returns exactly one match; the surrounding lines are uniform filler
+  // so the regex path's per-line cost dominates over any cache-locality
+  // artefacts from short or jagged inputs.
+  std::string contents;
+  contents.reserve(1024U);
+  for (std::size_t i = 0; i < 32U; ++i) {
+    if (i == 16U) {
+      contents.append("error code 42 marker line       \n");
+    } else {
+      contents.append("plain filler line of padding ok\n");
+    }
+  }
+  return contents;
+}
+
 }  // namespace
 
 void register_tool_file_search(ankerl::nanobench::Bench& bench) {
@@ -132,10 +159,17 @@ void register_tool_file_search(ankerl::nanobench::Bench& bench) {
   tree.write("sub/b.txt", "filler\nNEEDLE on line two\n");
   tree.write("sub/deep/c.txt", "NEEDLE\nfiller\nNEEDLE again\n");
   tree.write("notes.md", "NEEDLE in markdown\n");
+  // Regex A/B fixture: 1 KiB seed with one match. The same physical file
+  // serves both literal and regex scenarios so the disk-read cost is
+  // identical between the two.
+  tree.write("seed_1kib.txt", make_seed_1kib());
 
   const auto solo_path = tree.child_string("solo.txt");
+  const auto seed_path = tree.child_string("seed_1kib.txt");
   const std::string solo_input = R"({"path":")" + solo_path + R"(","pattern":"NEEDLE"})";
   const std::string tree_input = R"({"path":")" + tree.root_string() + R"(","pattern":"NEEDLE"})";
+  const std::string literal_input = R"({"path":")" + seed_path + R"(","pattern":"error code 42 marker"})";
+  const std::string regex_input = R"({"path":")" + seed_path + R"(","pattern":"error code \\d+ marker","regex":true})";
 
   bench.run("file_search.single_file_one_match", [&] {
     sink.clear();
@@ -145,6 +179,16 @@ void register_tool_file_search(ankerl::nanobench::Bench& bench) {
   bench.run("file_search.recursive_dir_many_matches", [&] {
     sink.clear();
     const auto bytes = run_dispatch(io, registry, ctx, tree_input);
+    ankerl::nanobench::doNotOptimizeAway(bytes);
+  });
+  bench.run("file_search.literal_match_1kib", [&] {
+    sink.clear();
+    const auto bytes = run_dispatch(io, registry, ctx, literal_input);
+    ankerl::nanobench::doNotOptimizeAway(bytes);
+  });
+  bench.run("file_search.regex_match_1kib", [&] {
+    sink.clear();
+    const auto bytes = run_dispatch(io, registry, ctx, regex_input);
     ankerl::nanobench::doNotOptimizeAway(bytes);
   });
 }

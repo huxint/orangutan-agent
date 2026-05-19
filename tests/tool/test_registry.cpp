@@ -1058,6 +1058,11 @@ TEST_CASE("file.search rejects malformed input as invalid_argument", "[unit][too
     REQUIRE_FALSE(wrong_include_hidden.has_value());
     REQUIRE(wrong_include_hidden.error().kind() == core::ErrorKind::invalid_argument);
 
+    auto wrong_regex =
+        co_await registry.dispatch(tool::kFileSearchName, R"({"path":"/tmp/x","pattern":"x","regex":"yes"})", ctx);
+    REQUIRE_FALSE(wrong_regex.has_value());
+    REQUIRE(wrong_regex.error().kind() == core::ErrorKind::invalid_argument);
+
     auto empty_pattern = co_await registry.dispatch(tool::kFileSearchName, R"({"path":"/tmp/x","pattern":""})", ctx);
     REQUIRE_FALSE(empty_pattern.has_value());
     REQUIRE(empty_pattern.error().kind() == core::ErrorKind::invalid_argument);
@@ -1067,11 +1072,147 @@ TEST_CASE("file.search rejects malformed input as invalid_argument", "[unit][too
     REQUIRE_FALSE(zero_max_matches.has_value());
     REQUIRE(zero_max_matches.error().kind() == core::ErrorKind::invalid_argument);
 
-    // Every rejected call passed the permission gate; audit recorded one allow row per attempt (9 calls).
-    REQUIRE(sink.events().size() == 9);
+    // Every rejected call passed the permission gate; audit recorded one allow row per attempt (10 calls).
+    REQUIRE(sink.events().size() == 10);
     for (const auto& event : sink.events()) {
       REQUIRE(event.outcome == permission::AuditOutcome::allow);
     }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Slice 24 — `file.search` regex opt-in. Closes tech-debt #13. The default
+// path stays literal substring; `"regex": true` routes the pattern through
+// `permission::InputPattern` (re2 PartialMatch). Tests assert: happy regex
+// on a single file, happy regex on a recursive walk, invalid regex
+// surfaces as `invalid_argument` carrying the `regex_error` context entry,
+// regex respects max_matches truncation, and `regex=false` matches the
+// slice-20 literal-substring path verbatim (so legacy callers see no
+// behavior change).
+
+TEST_CASE("file.search regex=true matches a re2 pattern on a single file", "[unit][tool][file_search][regex]") {
+  TempFile file{"search-regex-single"};
+  file.write("error: 42\ninfo: ready\nerror: 7\ndebug: noop\n");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    // `\d+` matches one-or-more digits — would fail as literal substring since
+    // the file contains "42" and "7" but not the literal text `\d+`.
+    const auto input = std::string{R"({"path":")"} + file.string() + R"(","pattern":"error: \\d+","regex":true})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.contains(file.string() + ":1:error: 42"));
+    REQUIRE(result->text.contains(file.string() + ":3:error: 7"));
+    REQUIRE_FALSE(result->text.contains("info: ready"));
+    REQUIRE_FALSE(result->text.contains("debug: noop"));
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
+  });
+}
+
+TEST_CASE("file.search regex=true walks a directory and matches each line", "[unit][tool][file_search][regex]") {
+  TempDir dir{"regex-recursive"};
+  dir.write_file("a.txt", "TODO(alice): fix it\nfiller\n");
+  dir.write_file("sub/b.txt", "filler\nTODO(bob): later\n");
+  dir.write_file("sub/deep/c.txt", "TODO(carol): now\n");
+  dir.write_file("noise.txt", "no marker here\n");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    // Anchored at line start (`^TODO`) plus a capture-style group — proves the
+    // matcher feeds whole lines into re2 (PartialMatch with `^` collapses to
+    // line-anchored under partial-match semantics). Custom raw-string
+    // delimiter `X` since the JSON pattern itself contains `)"`.
+    const auto input =
+        std::string{R"({"path":")"} + dir.string() + R"X(","pattern":"^TODO\\([a-z]+\\)","regex":true})X";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.contains(dir.child("a.txt").string() + ":1:TODO(alice): fix it"));
+    REQUIRE(result->text.contains(dir.child("sub/b.txt").string() + ":2:TODO(bob): later"));
+    REQUIRE(result->text.contains(dir.child("sub/deep/c.txt").string() + ":1:TODO(carol): now"));
+    REQUIRE_FALSE(result->text.contains("noise.txt"));
+  });
+}
+
+TEST_CASE("file.search regex=true with invalid pattern returns invalid_argument with regex_error context",
+          "[unit][tool][file_search][regex]") {
+  TempFile file{"regex-bad"};
+  file.write("alpha\n");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    // Unbalanced parenthesis — re2 rejects at compile time.
+    const auto input = std::string{R"({"path":")"} + file.string() + R"(","pattern":"(unclosed","regex":true})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(result.error().message().contains("invalid regex"));
+    REQUIRE(context_has(result.error(), "pattern", "(unclosed"));
+    const auto has_regex_error_key =
+        std::ranges::any_of(result.error().context(), [](const auto& entry) { return entry.first == "regex_error"; });
+    REQUIRE(has_regex_error_key);
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
+  });
+}
+
+TEST_CASE("file.search regex=true honors max_matches and reports truncation", "[unit][tool][file_search][regex]") {
+  TempFile file{"regex-truncate"};
+  file.write("LOG 1\nLOG 2\nLOG 3\nLOG 4\nLOG 5\n");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input =
+        std::string{R"({"path":")"} + file.string() + R"(","pattern":"^LOG ","regex":true,"max_matches":2})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.contains("(truncated; matches capped at 2)"));
+    // Two match lines plus one truncation line, joined by '\n' — two internal separators.
+    const auto newline_count = std::ranges::count(std::string_view{result->text}, '\n');
+    REQUIRE(newline_count == 2);
+  });
+}
+
+TEST_CASE("file.search regex=false explicit still treats the pattern as a literal substring",
+          "[unit][tool][file_search][regex]") {
+  TempFile file{"regex-false"};
+  // The literal text `\d+` only appears once; if regex=false silently fell
+  // through to re2 the test would also match "42" + "7".
+  file.write("regex source: \\d+\n42 should not match as a digit pattern\n7 either\n");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + file.string() + R"(","pattern":"\\d+","regex":false})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.contains(file.string() + ":1:regex source: \\d+"));
+    REQUIRE_FALSE(result->text.contains(":2:"));
+    REQUIRE_FALSE(result->text.contains(":3:"));
   });
 }
 

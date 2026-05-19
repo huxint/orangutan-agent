@@ -37,6 +37,14 @@ A-vs-B comparisons:
   + per-file open/read overhead the agent loop pays when a tool call
   reaches for a tree rather than a single file. The baseline a future
   memory-mapped scan or parallel walker would need to beat.
+- `file_search.literal_match_1kib` vs. `file_search.regex_match_1kib`:
+  full `file.search` dispatch over the same ~1 KiB seed file (32 lines
+  × 32 bytes, one match in the middle). The literal path uses
+  `std::string_view::contains`; the regex path compiles the same
+  pattern via `permission::InputPattern` and routes each line through
+  `re2::RE2::PartialMatch`. The (regex − literal) delta pins the
+  per-call re2 compile + per-line PartialMatch cost the agent loop pays
+  when it opts into `"regex": true` (slice 24).
 - `dispatch_ask_short_circuit` vs. `dispatch_ask_approved` vs.
   `dispatch_ask_rejected`: three-way contrast of the `Verdict::ask`
   dispatch paths added in slice 21. The short-circuit case carries

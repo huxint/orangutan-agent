@@ -1,15 +1,21 @@
 // src/oran-tool/file_search.cpp — `file.search` built-in.
 //
-// Slice 20. Scans a UTF-8 text file or (recursively) a directory for literal
-// substring matches and renders one `path:line:text` line per match. The
-// recursive walk skips files containing NUL bytes in their first 8 KiB (a
-// ripgrep-style binary heuristic) so the agent loop never gets a wall of
-// non-text noise after asking the tool to grep a tree. Dotfiles and dot-
-// directories are skipped by default; `include_hidden=true` opts in. Literal
-// substring (not regex) is the MVP surface — staying off re2 keeps this TU
-// cheap to compile and the JSON `pattern` field a no-escape direct match.
-// A `"regex": true` opt-in is the obvious follow-up shape when an LLM needs
-// it.
+// Slice 20 shipped literal-substring matching; slice 24 adds the
+// `"regex": true` opt-in tracked in `docs/exec-plans/tech-debt-tracker.md`.
+// Scans a UTF-8 text file or (recursively) a directory for matches and
+// renders one `path:line:text` line per match. The recursive walk skips
+// files containing NUL bytes in their first 8 KiB (a ripgrep-style binary
+// heuristic) so the agent loop never gets a wall of non-text noise after
+// asking the tool to grep a tree. Dotfiles and dot-directories are skipped
+// by default; `include_hidden=true` opts in.
+//
+// Default match mode is literal substring (`pattern` is a no-escape direct
+// match). When `regex=true`, the pattern is compiled once per call via
+// `permission::InputPattern` (which forward-declares `re2::RE2` so this TU
+// stays off `<re2/re2.h>` per rule C6) and each line is tested with
+// `RE2::PartialMatch`. Invalid patterns surface as `invalid_argument` with
+// the re2 error message attached as `regex_error`, matching the
+// rule-side input-pattern compile-error shape.
 
 #include <oran/tool/builtins.hpp>
 
@@ -24,6 +30,7 @@
 #include <fstream>
 #include <ios>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -41,6 +48,7 @@
 #include <oran/core/capability.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/tool_def.hpp>
+#include <oran/permission/input_pattern.hpp>
 #include <oran/tool/registry.hpp>
 
 namespace orangutan::tool {
@@ -49,7 +57,8 @@ namespace {
 
 constexpr std::string_view kFileSearchSchema =
     R"({"type":"object","properties":{"path":{"type":"string"},"pattern":{"type":"string"},)"
-    R"("max_matches":{"type":"integer","minimum":1},"include_hidden":{"type":"boolean"}},)"
+    R"("max_matches":{"type":"integer","minimum":1},"include_hidden":{"type":"boolean"},)"
+    R"("regex":{"type":"boolean"}},)"
     R"("required":["path","pattern"],"additionalProperties":false})";
 
 /// Default cap on how many matches a single call returns. Keeps responses
@@ -70,6 +79,7 @@ struct SearchOptions {
   std::string pattern;
   std::size_t max_matches{kDefaultMaxMatches};
   bool include_hidden{false};
+  bool regex{false};
 };
 
 struct Match {
@@ -81,6 +91,19 @@ struct Match {
 struct SearchOutcome {
   std::vector<Match> matches;
   bool truncated{false};
+};
+
+/// Per-call line matcher. Owns the compiled regex when the caller opted in
+/// (`regex=true`); otherwise it falls back to the literal `pattern` substring.
+/// Holding the engaged `InputPattern` here lets `scan_text` stay regex-shape-
+/// blind and keeps the cost of "literal mode" identical to the slice-20 path.
+struct LineMatcher {
+  std::string_view literal;
+  std::optional<permission::InputPattern> regex;
+
+  [[nodiscard]] bool matches(std::string_view line) const noexcept {
+    return regex ? regex->matches(line) : line.contains(literal);
+  }
 };
 
 [[nodiscard]] core::Result<SearchOptions> parse_input(std::string_view input_json) {
@@ -132,6 +155,13 @@ struct SearchOutcome {
     options.include_hidden = parsed["include_hidden"].get<bool>();
   }
 
+  if (parsed.contains("regex")) {
+    if (!parsed["regex"].is_boolean()) {
+      return std::unexpected(core::Error::invalid_argument("file.search: `regex` must be a boolean"));
+    }
+    options.regex = parsed["regex"].get<bool>();
+  }
+
   return options;
 }
 
@@ -177,13 +207,13 @@ struct SearchOutcome {
   return contents;
 }
 
-/// Scans `contents` line-by-line for `pattern` and appends each match to
+/// Scans `contents` line-by-line via `matcher` and appends each match to
 /// `out`. Stops the moment `out.size()` reaches `budget` (matches are
 /// already in the bag). The caller passes `budget = max_matches + 1` so that
 /// hitting the budget is a reliable truncation signal: if the final tally
 /// exceeds `max_matches`, at least one further match existed.
 void scan_text(std::string_view contents,
-               std::string_view pattern,
+               const LineMatcher& matcher,
                std::string_view file_path,
                std::vector<Match>& out,
                std::size_t budget) {
@@ -193,7 +223,7 @@ void scan_text(std::string_view contents,
     const auto next_newline = contents.find('\n', cursor);
     const auto line_end = (next_newline == std::string_view::npos) ? contents.size() : next_newline;
     const auto line = contents.substr(cursor, line_end - cursor);
-    if (line.contains(pattern)) {
+    if (matcher.matches(line)) {
       out.push_back(Match{
           .path = std::string{file_path},
           .line_number = line_number,
@@ -208,7 +238,27 @@ void scan_text(std::string_view contents,
   }
 }
 
+[[nodiscard]] core::Result<LineMatcher> build_matcher(const SearchOptions& opts) {
+  if (!opts.regex) {
+    return LineMatcher{.literal = opts.pattern, .regex = std::nullopt};
+  }
+  auto compiled = permission::InputPattern::compile(opts.pattern);
+  if (!compiled) {
+    auto err = core::Error::invalid_argument("file.search: invalid regex").with("pattern", opts.pattern);
+    for (const auto& [key, value] : compiled.error().context()) {
+      err.with(key, value);
+    }
+    return std::unexpected(std::move(err));
+  }
+  return LineMatcher{.literal = {}, .regex = std::move(*compiled)};
+}
+
 [[nodiscard]] core::Result<SearchOutcome> walk_and_scan(const SearchOptions& opts) {
+  auto matcher = build_matcher(opts);
+  if (!matcher) {
+    return std::unexpected(std::move(matcher).error());
+  }
+
   SearchOutcome outcome;
   const std::size_t budget = opts.max_matches + 1U;
 
@@ -231,7 +281,7 @@ void scan_text(std::string_view contents,
     // Single-file mode does NOT apply the binary heuristic — the caller named
     // this file explicitly, so we trust their intent. The heuristic only
     // filters during recursive directory walks.
-    scan_text(*contents, opts.pattern, root.string(), outcome.matches, budget);
+    scan_text(*contents, *matcher, root.string(), outcome.matches, budget);
   } else if (std::filesystem::is_directory(root, stat_ec)) {
     try {
       const auto walk_opts = std::filesystem::directory_options::skip_permission_denied;
@@ -260,7 +310,7 @@ void scan_text(std::string_view contents,
 
         if (auto file_contents = read_text_capped(entry_path); file_contents) {
           if (!looks_binary(*file_contents)) {
-            scan_text(*file_contents, opts.pattern, entry_path.string(), outcome.matches, budget);
+            scan_text(*file_contents, *matcher, entry_path.string(), outcome.matches, budget);
           }
         }  // unreadable / oversized files are silently skipped during a walk
         ++it;
@@ -334,12 +384,16 @@ void scan_text(std::string_view contents,
 core::Result<void> register_file_search(Registry& registry) {
   core::ToolDef def{
       .name = std::string{kFileSearchName},
-      .description = "Search a UTF-8 text file or (recursively) a directory for literal substring matches. "
+      .description = "Search a UTF-8 text file or (recursively) a directory for matches. "
                      "Input: {\"path\": <string>, \"pattern\": <string>, \"max_matches\"?: uint (default 100), "
-                     "\"include_hidden\"?: bool (default false)}. Returns one `path:line:text` line per match; "
-                     "when the cap is hit a trailing `(truncated; matches capped at <N>)` line is appended. "
-                     "Files containing NUL bytes in their first 8 KiB are treated as binary and skipped during "
-                     "a directory walk. Returns the literal text `no matches` (non-error) when nothing matched.",
+                     "\"include_hidden\"?: bool (default false), \"regex\"?: bool (default false)}. "
+                     "Default mode treats `pattern` as a literal substring (no-escape). When `regex=true`, "
+                     "`pattern` is compiled as a re2 expression and matched against each line via partial match; "
+                     "an invalid pattern returns `invalid_argument` with the re2 error attached. "
+                     "Returns one `path:line:text` line per match; when the cap is hit a trailing "
+                     "`(truncated; matches capped at <N>)` line is appended. Files containing NUL bytes in their "
+                     "first 8 KiB are treated as binary and skipped during a directory walk. Returns the literal "
+                     "text `no matches` (non-error) when nothing matched.",
       .input_schema_json = std::string{kFileSearchSchema},
       .required_capabilities = {core::Capability::read_file},
   };
