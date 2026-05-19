@@ -20,6 +20,7 @@
 
 #include <oran/async.hpp>
 #include <oran/bootstrap/runtime_assembly.hpp>
+#include <oran/bootstrap/signal_drain.hpp>
 #include <oran/cli.hpp>
 #include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
@@ -32,7 +33,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice22";
+constexpr std::string_view kVersion = "2.0.0-slice23";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 
 struct ParsedArgs {
@@ -258,6 +259,8 @@ void print_usage() {
   // `async::Runtime` thread pool exists for the agent loop; a single
   // io_context is the right shape for a one-shot operator command.
   asio::io_context io;
+  SignalScope signals{io};
+
   auto pool_result =
       storage::Pool::open(io.get_executor(),
                           storage::PoolOptions{.path = audit_path, .reader_count = 1, .statement_cache_capacity = 4});
@@ -275,13 +278,19 @@ void print_usage() {
         auto migrated = co_await repo.migrate();
         if (!migrated) {
           migrate_error = std::move(migrated).error();
-          co_return;
+        } else {
+          report = std::move(*migrated);
         }
-        report = std::move(*migrated);
+        signals.release();
         co_return;
       },
       asio::detached);
   io.run();
+
+  if (const auto sig = signals.signum(); sig != 0) {
+    return std::unexpected(
+        core::Error::cancelled().with("signal", std::string{signal_name(sig)}).with("signum", std::to_string(sig)));
+  }
 
   if (migrate_error) {
     return std::unexpected(std::move(*migrate_error));
@@ -396,7 +405,14 @@ core::Result<int> run(BootstrapOptions options) {
   if (parsed->audit_init) {
     auto audit_path =
         parsed->has_audit_init_path ? std::move(parsed->audit_init_path) : default_audit_path(options.workspace);
-    return run_audit_init(std::move(audit_path));
+    auto audit_result = run_audit_init(std::move(audit_path));
+    if (!audit_result && audit_result.error().kind() == core::ErrorKind::cancelled) {
+      if (auto signum = signum_from_error(audit_result.error()); signum) {
+        std::println(stderr, "orangutan: interrupted by {} ({})", signal_name(*signum), *signum);
+        return 128 + *signum;
+      }
+    }
+    return audit_result;
   }
 
   auto loaded = load_config(options);

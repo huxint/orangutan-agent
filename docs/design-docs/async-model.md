@@ -12,8 +12,9 @@ single `asio::io_context` wrapped in `oran::async::Runtime`. There are no
 
 > **Slice-1 status (2026-05-14):** `oran-async` ships `Runtime`,
 > `Awaitable<T>`, bounded `Channel<T>`, and cancel-aware `sleep_for`. Mailbox
-> policy, bootstrap signal integration, and reusable async test helpers land in
-> later slices.
+> policy and reusable async test helpers land in later slices. Bootstrap
+> signal integration shipped in slice 23 as `bootstrap::SignalScope`
+> (see [`Cancellation`](#cancellation) below).
 
 ## Runtime Topology
 
@@ -120,7 +121,15 @@ Awaitable<core::Result<provider::Response>> send(provider::Request req) {
 
 Subsystems that initiate cancellation:
 
-- `oran-bootstrap` on SIGINT/SIGTERM: signals the runtime's root cancellation_signal.
+- `oran-bootstrap` on SIGINT/SIGTERM: the slice-23 `bootstrap::SignalScope`
+  RAII trap installs an `asio::signal_set` on a target `io_context` and
+  calls `io.stop()` on first delivery. `--audit-init` adopts it for the
+  one-shot drain; `bootstrap::run` translates the resulting
+  `Error::cancelled` into shell-conventional `128 + signum` exit codes.
+  The agent-loop slice will replace the blunt `io.stop()` with a
+  fine-grained `asio::cancellation_signal` once the loop's
+  cancel-state plumbing lands; the scope's header docstring tracks
+  the deferred refinement.
 - `oran-agent::Loop` on user `/cancel` or web "stop" button: cancels the in-flight
   iteration.
 - `oran-orchestration` when a worker is stopped by a leader.

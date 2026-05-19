@@ -7,24 +7,25 @@
 
 ## Snapshot
 
-- **Slice:** 22 (`xmake run orangutan` reports slice 22)
+- **Slice:** 23 (`xmake run orangutan` reports slice 23)
 - **Last completed history:**
-  [`histories/2026-05/20260518-1100-oran-hook-foundation-and-dispatch-wiring.md`](histories/2026-05/20260518-1100-oran-hook-foundation-and-dispatch-wiring.md)
+  [`histories/2026-05/20260519-2350-bootstrap-signal-aware-shutdown.md`](histories/2026-05/20260519-2350-bootstrap-signal-aware-shutdown.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** TBD — choose from the QUALITY_SCORE "Next Step"
-  column. Most likely candidates now that the hook-bus foundation +
-  tool-dispatch wiring is in: the first provider adapter (Anthropic
-  Messages) — likely needs an exec plan since transport + protocol +
-  execution + first integration test span multiple slices; signal-aware
-  shutdown for `bootstrap::run` so SIGINT terminates the io_context drain
-  promptly; blocking hook semantics with veto (currently dispatch is
-  advisory-only — adding the `tool_before` rewrite/short-circuit branch
-  + the matching `permission_ask_rendered` blocking flow is one slice);
-  the remaining tool lifecycle events (`tool_dispatched`,
-  `tool_error`) wired alongside the bookend pair.
+  column. Most likely candidates now that signal-aware shutdown is in:
+  the first provider adapter (Anthropic Messages) — likely needs an
+  exec plan since transport + protocol + execution + first integration
+  test span multiple slices (and `oran-http` + libcurl wiring must
+  land first); blocking hook semantics with veto (currently dispatch
+  is advisory-only — adding the `tool_before` rewrite/short-circuit
+  branch + the matching `permission_ask_rendered` blocking flow is
+  one slice, but its first consumer lives in the not-yet-existing
+  `oran-agent` library); the remaining tool lifecycle events
+  (`tool_dispatched`, `tool_error`) wired alongside the bookend pair
+  once the agent loop has a use for them.
 
 ## Library Health
 
@@ -49,7 +50,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-hook`: 14 cases / 79 assertions.
 - `oran-tool`: 58 cases / 477 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
-- `oran-bootstrap`: 34 cases / 123 assertions.
+- `oran-bootstrap`: 44 cases / 140 assertions.
 
 ## Open Tech-Debt Rows
 
