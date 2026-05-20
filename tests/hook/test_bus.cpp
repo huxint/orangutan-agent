@@ -31,7 +31,7 @@ namespace {
 /// `payload_kind` is a stable string the test can match against.
 struct Capture {
   hook::Event event;
-  std::string payload_kind;  // "before", "after", "monostate"
+  std::string payload_kind;  // "before", "dispatched", "after", "error", "monostate"
 };
 
 [[nodiscard]] std::string payload_kind(const hook::Payload& payload) {
@@ -42,8 +42,12 @@ struct Capture {
           return "monostate";
         } else if constexpr (std::is_same_v<T, hook::ToolBeforePayload>) {
           return "before";
+        } else if constexpr (std::is_same_v<T, hook::ToolDispatchedPayload>) {
+          return "dispatched";
         } else if constexpr (std::is_same_v<T, hook::ToolAfterPayload>) {
           return "after";
+        } else if constexpr (std::is_same_v<T, hook::ToolErrorPayload>) {
+          return "error";
         }
       },
       payload);

@@ -95,6 +95,39 @@ namespace {
   return payload;
 }
 
+[[nodiscard]] hook::ToolDispatchedPayload build_dispatched_payload(std::string_view name,
+                                                                   std::string_view input_json,
+                                                                   const DispatchContext& ctx,
+                                                                   core::Time started_at,
+                                                                   permission::Verdict verdict) {
+  return hook::ToolDispatchedPayload{
+      .tool_name = std::string{name},
+      .input_json = std::string{input_json},
+      .who = make_hook_identity(ctx),
+      .started_at = started_at,
+      .verdict = std::string{core::enum_name(verdict)},
+  };
+}
+
+[[nodiscard]] hook::ToolErrorPayload build_error_payload(std::string_view name,
+                                                         std::string_view input_json,
+                                                         const DispatchContext& ctx,
+                                                         core::Time started_at,
+                                                         core::Time finished_at,
+                                                         const core::Error& error) {
+  return hook::ToolErrorPayload{
+      .tool_name = std::string{name},
+      .input_json = std::string{input_json},
+      .who = make_hook_identity(ctx),
+      .error_kind = std::string{core::enum_name(error.kind())},
+      .error_message = std::string{error.message()},
+      .started_at = started_at,
+      .finished_at = finished_at,
+      .duration = std::chrono::duration_cast<std::chrono::nanoseconds>(finished_at.to_system_time_point() -
+                                                                       started_at.to_system_time_point()),
+  };
+}
+
 }  // namespace
 
 core::Result<void> Registry::add(core::ToolDef def, Handler handler) {
@@ -205,6 +238,19 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
     if (auto recorded = co_await ctx.audit.record(std::move(event)); !recorded) {
       result = std::unexpected(std::move(recorded).error());
     } else {
+      // Slice 25: publish `tool_dispatched` only when the handler is
+      // about to run — i.e. on `allow`, or on `ask` that the broker
+      // promoted to `approved`. Sinks subscribed to this event see
+      // only the calls whose handlers will actually execute.
+      const bool handler_about_to_run =
+          decision.verdict == permission::Verdict::allow ||
+          (decision.verdict == permission::Verdict::ask && broker_consulted && !broker_rejection.has_value());
+      if (handler_about_to_run && ctx.bus != nullptr) {
+        [[maybe_unused]] auto dispatched_outcome = co_await ctx.bus->publish_advisory(
+            hook::Event::tool_dispatched,
+            build_dispatched_payload(name, input_json, ctx, started_at, decision.verdict));
+      }
+
       switch (decision.verdict) {
         case permission::Verdict::deny:
           result = std::unexpected(core::Error::permission_denied("tool denied by permission rules")
@@ -234,11 +280,18 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
     }
   }
 
-  // Slice 22: publish `tool_after` with the dispatch outcome. Sinks see
-  // success and failure paths uniformly; the publish is advisory so its
-  // outcome cannot change the returned result.
+  // Slice 22 + 25: publish `tool_error` (failure-only narrow channel) when
+  // the dispatch produced an error, then `tool_after` with the dispatch
+  // outcome (always). Both share the same `finished_at` so sinks can
+  // correlate. Publishes are advisory so their outcome cannot change the
+  // returned result.
   if (ctx.bus != nullptr) {
     const auto finished_at = core::time::now_utc();
+    if (!result) {
+      [[maybe_unused]] auto error_outcome = co_await ctx.bus->publish_advisory(
+          hook::Event::tool_error,
+          build_error_payload(name, input_json, ctx, started_at, finished_at, result.error()));
+    }
     [[maybe_unused]] auto after_outcome =
         co_await ctx.bus->publish_advisory(hook::Event::tool_after,
                                            build_after_payload(name, input_json, ctx, started_at, finished_at, result));

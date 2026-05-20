@@ -7,26 +7,27 @@
 
 ## Snapshot
 
-- **Slice:** 24 (`xmake run orangutan` reports slice 24)
+- **Slice:** 25 (`xmake run orangutan` reports slice 25)
 - **Last completed history:**
-  [`histories/2026-05/20260520-1830-file-search-regex.md`](histories/2026-05/20260520-1830-file-search-regex.md)
+  [`histories/2026-05/20260520-1900-tool-lifecycle-events.md`](histories/2026-05/20260520-1900-tool-lifecycle-events.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** TBD — choose from the QUALITY_SCORE "Next Step"
-  column. Most likely candidates now that `file.search` regex shipped
-  (closing the last tool-side tech-debt that did not depend on
-  `oran-agent`): the first provider adapter (Anthropic Messages) —
+  column. Slice 25 closed the remaining tool-lifecycle event row, so the
+  only tool-side tech-debt left depends on `oran-agent`. Most likely
+  candidates now: the first provider adapter (Anthropic Messages) —
   likely needs an exec plan since transport + protocol + execution +
   first integration test span multiple slices (and `oran-http` +
   libcurl wiring must land first); blocking hook semantics with veto
-  (currently dispatch is advisory-only — adding the `tool_before`
-  rewrite/short-circuit branch + the matching `permission_ask_rendered`
-  blocking flow is one slice, but its first consumer lives in the
-  not-yet-existing `oran-agent` library); the remaining tool
-  lifecycle events (`tool_dispatched`, `tool_error`) wired alongside
-  the bookend pair once the agent loop has a use for them.
+  (`tool_before` rewrite/short-circuit + the matching
+  `permission_ask_rendered` blocking flow is one slice, but its first
+  consumer lives in the not-yet-existing `oran-agent` library); or the
+  first build-skeleton scripts (`check-deps.sh`, `check-includes.sh`,
+  `measure-tu.sh`, `check-compile-budget.sh`) — currently stubs that no
+  longer have a code-side blocker now that the library set has
+  stabilised.
 
 ## Library Health
 
@@ -49,7 +50,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 19 cases / 148 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
 - `oran-hook`: 14 cases / 79 assertions.
-- `oran-tool`: 63 cases / 516 assertions.
+- `oran-tool`: 74 cases / 599 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 44 cases / 140 assertions.
 
@@ -61,9 +62,6 @@ Closed entries do *not* live here — the tracker is canonical.
 - 2026-05-18 — Hook bus dispatch is advisory-only (slice 22); blocking
   semantics with veto for `tool_before` / `memory_*_before` /
   `permission_ask_rendered` are deferred to a follow-up slice.
-- 2026-05-18 — `tool_dispatched` and `tool_error` events are enumerated
-  but not yet published by `Registry::dispatch` (only the
-  `tool_before` / `tool_after` bookend pair is wired).
 - 2026-05-17 — `file.search` does not yet ship ripgrep-class optimisations
   (mmap, extension-based binary skip, `.gitignore`, multi-threaded walk).
   Adequate at slice 20 (~27 µs / 4-file tree) but 3-10× slower than a tuned
