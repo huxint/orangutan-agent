@@ -7,22 +7,23 @@
 
 ## Snapshot
 
-- **Slice:** 26 (`xmake run orangutan` reports slice 26)
+- **Slice:** 27 (`xmake run orangutan` reports slice 27)
 - **Last completed history:**
-  [`histories/2026-05/20260520-2030-check-deps-script.md`](histories/2026-05/20260520-2030-check-deps-script.md)
+  [`histories/2026-05/20260520-2204-measure-tu-script.md`](histories/2026-05/20260520-2204-measure-tu-script.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
-- **Next intended slice:** TBD — choose from the QUALITY_SCORE "Next Step"
-  column. Most likely candidates now that the dependency-direction CI
-  gate ships: the first provider adapter (Anthropic Messages) — likely
-  needs an exec plan since transport + protocol + execution + first
-  integration test span multiple slices (and `oran-http` + libcurl
-  wiring must land first); blocking hook semantics with veto (gated on
-  `oran-agent`); or the next build-skeleton script — `measure-tu.sh`
-  (per-TU compile-time JSON) is the most useful next one because it
-  unblocks `check-compile-budget.sh` and `compile_budget.json`.
+- **Next intended slice:** TBD — most likely candidate now that
+  `scripts/measure-tu.sh` is real: the paired
+  `compile_budget.json` baseline + the real
+  `scripts/check-compile-budget.sh` regression gate that consumes
+  this script's JSON output. After that the remaining candidates
+  from slice 26's STATUS.md still stand: the first provider adapter
+  (Anthropic Messages — likely needs an exec plan since transport +
+  protocol + execution + first integration test span multiple slices
+  and `oran-http` + libcurl wiring must land first); or blocking
+  hook semantics with veto (gated on `oran-agent`).
 
 ## Library Health
 
