@@ -7,27 +7,22 @@
 
 ## Snapshot
 
-- **Slice:** 25 (`xmake run orangutan` reports slice 25)
+- **Slice:** 26 (`xmake run orangutan` reports slice 26)
 - **Last completed history:**
-  [`histories/2026-05/20260520-1900-tool-lifecycle-events.md`](histories/2026-05/20260520-1900-tool-lifecycle-events.md)
+  [`histories/2026-05/20260520-2030-check-deps-script.md`](histories/2026-05/20260520-2030-check-deps-script.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** TBD — choose from the QUALITY_SCORE "Next Step"
-  column. Slice 25 closed the remaining tool-lifecycle event row, so the
-  only tool-side tech-debt left depends on `oran-agent`. Most likely
-  candidates now: the first provider adapter (Anthropic Messages) —
-  likely needs an exec plan since transport + protocol + execution +
-  first integration test span multiple slices (and `oran-http` +
-  libcurl wiring must land first); blocking hook semantics with veto
-  (`tool_before` rewrite/short-circuit + the matching
-  `permission_ask_rendered` blocking flow is one slice, but its first
-  consumer lives in the not-yet-existing `oran-agent` library); or the
-  first build-skeleton scripts (`check-deps.sh`, `check-includes.sh`,
-  `measure-tu.sh`, `check-compile-budget.sh`) — currently stubs that no
-  longer have a code-side blocker now that the library set has
-  stabilised.
+  column. Most likely candidates now that the dependency-direction CI
+  gate ships: the first provider adapter (Anthropic Messages) — likely
+  needs an exec plan since transport + protocol + execution + first
+  integration test span multiple slices (and `oran-http` + libcurl
+  wiring must land first); blocking hook semantics with veto (gated on
+  `oran-agent`); or the next build-skeleton script — `measure-tu.sh`
+  (per-TU compile-time JSON) is the most useful next one because it
+  unblocks `check-compile-budget.sh` and `compile_budget.json`.
 
 ## Library Health
 
@@ -74,8 +69,8 @@ Closed entries do *not* live here — the tracker is canonical.
   scenario promised in `rules/prompt-design.md` not yet implemented
   (waits on `oran-agent` slice 1).
 - 2026-05-14 — Build-skeleton scripts referenced from rules but not yet
-  implemented (`check-deps.sh`, `check-includes.sh`, `measure-tu.sh`,
-  `check-compile-budget.sh`).
+  implemented: `measure-tu.sh`, `check-compile-budget.sh` (the slice-26
+  `check-deps.sh` and the earlier `check-includes.sh` are now real).
 - 2026-05-14 — Generated `docs/generated/config.schema.json` not yet
   implemented.
 - 2026-05-14 — bench A-vs-B scenarios listed in
