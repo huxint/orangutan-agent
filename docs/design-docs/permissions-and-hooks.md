@@ -280,8 +280,8 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 
 ## Hook Bus
 
-> **Bus status (2026-05-18, slice 22):** the foundation
-> ships as `oran-hook`. `hook::Event` enumerates the 38
+> **Bus status (2026-05-21, slice 31):** the foundation
+> ships as `oran-hook`. `hook::Event` enumerates the 41
 > lifecycle events listed below; `hook::Mode { advisory,
 > blocking }` plus `default_mode(Event)` annotates each
 > with the design-doc semantics ("before" events +

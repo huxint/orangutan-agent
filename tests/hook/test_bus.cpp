@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -86,6 +87,29 @@ public:
   [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/,
                                                              hook::Payload /*payload*/) override {
     co_return std::unexpected(core::Error::internal(reason_).with("sink", id_));
+  }
+
+private:
+  std::string id_;
+  std::string reason_;
+};
+
+/// Sink that throws from its awaitable. Required to verify the advisory
+/// contract that one badly-behaved sink (one that propagates an exception
+/// rather than returning std::unexpected) does not abort the publish for
+/// later sinks and does not propagate the exception out of publish_advisory.
+class ThrowingSink final : public hook::Sink {
+public:
+  explicit ThrowingSink(std::string id, std::string reason) : id_(std::move(id)), reason_(std::move(reason)) {}
+
+  [[nodiscard]] std::string_view id() const noexcept override {
+    return id_;
+  }
+
+  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/,
+                                                             hook::Payload /*payload*/) override {
+    throw std::runtime_error{reason_};
+    co_return core::Result<void>{};
   }
 
 private:
@@ -259,6 +283,47 @@ TEST_CASE("sink errors are captured in outcome but do not abort the publish", "[
   });
 
   // The middle sink ran despite both neighbours erroring.
+  REQUIRE(second.captures().size() == 1);
+}
+
+TEST_CASE("throwing sink does not abort publish — exception captured as Error::internal", "[hook][bus]") {
+  hook::Bus bus;
+  ThrowingSink first{"first", "stdexcept-boom"};
+  RecordingSink second{"second"};
+  ThrowingSink third{"third", "another-boom"};
+  bus.bind(first, {hook::Event::tool_before});
+  bus.bind(second, {hook::Event::tool_before});
+  bus.bind(third, {hook::Event::tool_before});
+
+  test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
+    auto outcome = co_await bus.publish_advisory(hook::Event::tool_before, sample_before());
+    REQUIRE(outcome.sinks.size() == 3);
+    REQUIRE_FALSE(outcome.all_succeeded());
+    REQUIRE(outcome.failure_count() == 2);
+
+    REQUIRE(outcome.sinks[0].sink_id == "first");
+    REQUIRE(outcome.sinks[0].error.has_value());
+    REQUIRE(outcome.sinks[0].error->kind() == core::ErrorKind::internal);
+    REQUIRE(outcome.sinks[0].error->message() == "stdexcept-boom");
+    // The catch handler attaches the sink id as structured context so the
+    // operator can tell which extension threw without re-parsing message.
+    REQUIRE(outcome.sinks[0].error->context().size() == 1);
+    REQUIRE(outcome.sinks[0].error->context()[0].first == "sink");
+    REQUIRE(outcome.sinks[0].error->context()[0].second == "first");
+
+    REQUIRE(outcome.sinks[1].sink_id == "second");
+    REQUIRE_FALSE(outcome.sinks[1].error.has_value());
+
+    REQUIRE(outcome.sinks[2].sink_id == "third");
+    REQUIRE(outcome.sinks[2].error.has_value());
+    REQUIRE(outcome.sinks[2].error->kind() == core::ErrorKind::internal);
+    REQUIRE(outcome.sinks[2].error->message() == "another-boom");
+    co_return;
+  });
+
+  // The middle sink ran even though both neighbours threw — the advisory
+  // contract demands it. Before slice 31, the first throw would have
+  // escaped publish_advisory entirely and crashed tool dispatch.
   REQUIRE(second.captures().size() == 1);
 }
 

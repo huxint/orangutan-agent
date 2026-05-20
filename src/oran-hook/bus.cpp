@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <exception>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -58,10 +59,22 @@ async::Awaitable<PublishOutcome> Bus::publish_advisory(Event event, Payload payl
   }
   outcome.sinks.reserve(it->second.size());
   for (auto* sink : it->second) {
-    auto result = co_await sink->receive(event, payload);
     PublishOutcome::SinkResult row{.sink_id = std::string{sink->id()}, .error = std::nullopt};
-    if (!result) {
-      row.error = std::move(result).error();
+    // Advisory contract: a misbehaving sink must not abort the publish for
+    // subsequent sinks. A sink that throws (either directly or via its
+    // awaitable) gets its exception captured as Error::internal and the
+    // loop continues. Without this guard, tool dispatch — whose
+    // tool_after publish is `[[maybe_unused]]` — would crash on any
+    // throwing extension.
+    try {
+      auto result = co_await sink->receive(event, payload);
+      if (!result) {
+        row.error = std::move(result).error();
+      }
+    } catch (const std::exception& ex) {
+      row.error = core::Error::internal(ex.what()).with("sink", std::string{sink->id()});
+    } catch (...) {
+      row.error = core::Error::internal("sink threw non-std exception").with("sink", std::string{sink->id()});
     }
     outcome.sinks.push_back(std::move(row));
   }

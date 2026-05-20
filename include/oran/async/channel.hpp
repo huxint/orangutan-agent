@@ -15,6 +15,7 @@
 
 #include <asio/any_io_executor.hpp>
 #include <asio/associated_cancellation_slot.hpp>
+#include <asio/associated_executor.hpp>
 #include <asio/async_result.hpp>
 #include <asio/cancellation_type.hpp>
 #include <asio/post.hpp>
@@ -105,18 +106,7 @@ private:
     void async_send(T value, Handler&& handler) {
       std::vector<Deferred> completions;
       const auto id = next_id();
-      auto slot = asio::get_associated_cancellation_slot(handler);
-      if (slot.is_connected()) {
-        const std::weak_ptr<State> weak = this->shared_from_this();
-        slot.assign([weak, id](asio::cancellation_type type) {
-          if (type == asio::cancellation_type::none) {
-            return;
-          }
-          if (auto state = weak.lock()) {
-            state->cancel_send(id);
-          }
-        });
-      }
+      auto cancel_slot = asio::get_associated_cancellation_slot(handler);
 
       {
         const std::scoped_lock lock{mutex_};
@@ -125,6 +115,22 @@ private:
             .value = std::move(value),
             .complete = make_send_complete(std::forward<Handler>(handler)),
         });
+        // Install the cancel handler after the waiter is in the queue, under
+        // the same mutex. Installing earlier would leave a window where a
+        // cancellation could fire, scan an empty queue, and be silently
+        // dropped while the waiter is later pushed and never cancelled.
+        // Mirrors the discipline in storage::Pool::async_acquire_writer.
+        if (cancel_slot.is_connected()) {
+          const std::weak_ptr<State> weak = this->shared_from_this();
+          cancel_slot.assign([weak, id](asio::cancellation_type type) {
+            if (type == asio::cancellation_type::none) {
+              return;
+            }
+            if (auto state = weak.lock()) {
+              state->cancel_send(id);
+            }
+          });
+        }
         pump_locked(completions);
       }
 
@@ -135,18 +141,7 @@ private:
     void async_receive(Handler&& handler) {
       std::vector<Deferred> completions;
       const auto id = next_id();
-      auto slot = asio::get_associated_cancellation_slot(handler);
-      if (slot.is_connected()) {
-        const std::weak_ptr<State> weak = this->shared_from_this();
-        slot.assign([weak, id](asio::cancellation_type type) {
-          if (type == asio::cancellation_type::none) {
-            return;
-          }
-          if (auto state = weak.lock()) {
-            state->cancel_receive(id);
-          }
-        });
-      }
+      auto cancel_slot = asio::get_associated_cancellation_slot(handler);
 
       {
         const std::scoped_lock lock{mutex_};
@@ -154,6 +149,17 @@ private:
             .id = id,
             .complete = make_receive_complete(std::forward<Handler>(handler)),
         });
+        if (cancel_slot.is_connected()) {
+          const std::weak_ptr<State> weak = this->shared_from_this();
+          cancel_slot.assign([weak, id](asio::cancellation_type type) {
+            if (type == asio::cancellation_type::none) {
+              return;
+            }
+            if (auto state = weak.lock()) {
+              state->cancel_receive(id);
+            }
+          });
+        }
         pump_locked(completions);
       }
 
@@ -199,9 +205,14 @@ private:
       return next_id_.fetch_add(1, std::memory_order_relaxed);
     }
 
+    // Capture the handler's associated executor before type-erasing it into
+    // SendComplete / ReceiveComplete. Resuming on the channel's executor
+    // instead would break asio's contract that a handler runs on
+    // get_associated_executor(handler, default) — strand-bound coroutines
+    // would resume off-strand and race against other work on the strand.
     template <typename Handler>
     [[nodiscard]] SendComplete make_send_complete(Handler&& handler) {
-      auto completion_executor = executor_;
+      auto completion_executor = asio::get_associated_executor(handler, executor_);
       return [completion_executor, handler = std::forward<Handler>(handler)](core::Result<void> result) mutable {
         asio::post(completion_executor, [handler = std::move(handler), result = std::move(result)]() mutable {
           std::move(handler)(std::move(result));
@@ -211,7 +222,7 @@ private:
 
     template <typename Handler>
     [[nodiscard]] ReceiveComplete make_receive_complete(Handler&& handler) {
-      auto completion_executor = executor_;
+      auto completion_executor = asio::get_associated_executor(handler, executor_);
       return [completion_executor, handler = std::forward<Handler>(handler)](core::Result<T> result) mutable {
         asio::post(completion_executor, [handler = std::move(handler), result = std::move(result)]() mutable {
           std::move(handler)(std::move(result));

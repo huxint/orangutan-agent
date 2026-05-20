@@ -7,26 +7,31 @@
 
 ## Snapshot
 
-- **Slice:** 30 (`xmake run orangutan` reports slice 30)
+- **Slice:** 31 (`xmake run orangutan` reports slice 31)
 - **Last completed history:**
-  [`histories/2026-05/20260520-2345-oran-tool-file-delete.md`](histories/2026-05/20260520-2345-oran-tool-file-delete.md)
+  [`histories/2026-05/20260521-0045-channel-bus-rank0-fixes.md`](histories/2026-05/20260521-0045-channel-bus-rank0-fixes.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
-- **Next intended slice:** TBD — the file-tool catalog now covers
-  read / write / edit / search / list / delete. Likely next
-  candidates: the first provider adapter (Anthropic Messages —
-  multi-slice, needs an exec plan and `oran-http` + libcurl wiring
-  first), blocking hook semantics with veto (still gated on
-  `oran-agent`), or wiring `check-compile-budget.sh` into
-  `scripts/ci.sh` (the slice-28 tech-debt entry covers the
-  preconditions). The current `file.delete` and `directory.list`
-  shapes are expected to be re-shaped in a later refactor: one
-  unified delete tool covering both files and folders, and a
-  recursive whole-project list (not just single-level children).
-  Future built-in slices should not double down on per-kind
-  splits like `directory.remove` or single-level enumeration.
+- **Next intended slice:** TBD — slice 31 landed the deep-review
+  rank-0 correctness fixes (async/Channel + hook/Bus + 38→41 event
+  count). The remaining deep-review surface is tracked in
+  `exec-plans/tech-debt-tracker.md` under the `deep-review-2026-05-21`
+  group, prioritized P0 → P1 → P2 → P3 with file-line references back
+  into [`orangutan-deep-review.md`](../orangutan-deep-review.md). The
+  next-likely tool-side slices remain unchanged: the first provider
+  adapter (Anthropic Messages — multi-slice, needs an exec plan and
+  `oran-http` + libcurl wiring first), blocking hook semantics with
+  veto (still gated on `oran-agent`), or wiring
+  `check-compile-budget.sh` into `scripts/ci.sh` (the slice-28
+  tech-debt entry covers the preconditions). The current
+  `file.delete` and `directory.list` shapes are expected to be
+  re-shaped in a later refactor: one unified delete tool covering
+  both files and folders, and a recursive whole-project list (not
+  just single-level children). Future built-in slices should not
+  double down on per-kind splits like `directory.remove` or
+  single-level enumeration.
 
 ## Library Health
 
@@ -43,12 +48,12 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 ## Latest Library Surfaces
 
 - `oran-core`: 54 cases / 370 assertions.
-- `oran-async`: 8 cases / 38 assertions.
+- `oran-async`: 9 cases / 43 assertions.
 - `oran-io`: 13 cases / 51 assertions.
 - `oran-storage`: 60 cases / 706 assertions.
 - `oran-config`: 19 cases / 148 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
-- `oran-hook`: 14 cases / 79 assertions.
+- `oran-hook`: 15 cases / 97 assertions.
 - `oran-tool`: 89 cases / 712 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 44 cases / 140 assertions.
@@ -58,6 +63,9 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 Lifted from [`exec-plans/tech-debt-tracker.md`](exec-plans/tech-debt-tracker.md).
 Closed entries do *not* live here — the tracker is canonical.
 
+- 2026-05-21 — Deep-review backlog (`orangutan-deep-review.md`): slice 31
+  closed the four rank-0 items; ~20 follow-ups remain, grouped P0/P1/P2/P3
+  in the tracker with file:line references back to the review.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on
   the documented reference hardware (8-core / NVMe / native Linux);

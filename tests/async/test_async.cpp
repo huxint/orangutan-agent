@@ -14,6 +14,8 @@
 #include <asio/io_context.hpp>
 #include <asio/post.hpp>
 #include <asio/steady_timer.hpp>
+#include <asio/strand.hpp>
+#include <asio/thread_pool.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -185,4 +187,48 @@ TEST_CASE("Channel receive observes coroutine cancellation", "[unit][async][chan
   REQUIRE(result.has_value());
   REQUIRE_FALSE(result->has_value());
   REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
+}
+
+// Slice 31 regression: a Channel created on executor A but driven by a
+// coroutine spawned on strand B must resume the coroutine on strand B.
+// Before the fix, completions were posted to the channel's executor (A),
+// which would race against any other work on B and quietly violate the
+// strand's serialization guarantee.
+TEST_CASE("Channel resumes coroutine on its associated executor (not the channel's)",
+          "[unit][async][channel][regression]") {
+  asio::thread_pool pool{2};
+  auto strand_a = asio::make_strand(pool);
+  auto strand_b = asio::make_strand(pool);
+
+  async::Channel<int> channel{strand_a, 1};
+
+  std::atomic_bool ran_on_strand_b = false;
+  std::atomic_bool finished = false;
+
+  asio::co_spawn(
+      strand_b,
+      [&]() -> async::Awaitable<void> {
+        // Ask asio for the executor the continuation will resume on. With
+        // the slice-31 fix, this is strand_b; before the fix, the channel
+        // ignored the handler's associated executor and posted to strand_a.
+        auto received = co_await channel.receive();
+        REQUIRE(received.has_value());
+        REQUIRE(*received == 7);
+        // running_in_this_thread() is the cheapest cross-executor check —
+        // when on strand_b's thread, only strand_b's posted work runs.
+        ran_on_strand_b = strand_b.running_in_this_thread();
+        finished = true;
+        co_return;
+      },
+      asio::detached);
+
+  // Send via the channel's executor; this enqueues the value and triggers
+  // pump_locked, which would have posted the receiver's completion to
+  // strand_a under the old code.
+  asio::post(strand_a, [&] { REQUIRE(channel.try_send(7).has_value()); });
+
+  pool.join();
+
+  REQUIRE(finished.load());
+  REQUIRE(ran_on_strand_b.load());
 }
