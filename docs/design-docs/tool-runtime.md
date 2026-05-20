@@ -111,6 +111,22 @@ enum class Capability {
 > are silently rejected without a hook publish (the dispatch never
 > started). Capability-gated runtime services (`tool::Runtime`
 > accessor surface) and config wiring stay on future slices.
+> Slice 29 (2026-05-20) extends the built-in catalog with
+> `directory.list` (`tool::register_directory_list`, capability
+> `list_directory` — a new `core::Capability` enumerator so a
+> permission rule can distinguish "list a directory" from "read a
+> file"; useful in sandbox modes where the agent should see the
+> shape of a tree without reading content). Input
+> `{path, include_hidden?, max_entries?}`; output is one
+> `<path>:<kind>:<size_bytes or '-'>` line per entry sorted by
+> path (the order `oran-io::list_directory` already enforces),
+> the literal text `no entries` for an empty directory after the
+> hidden filter, and the `io: directory entry limit exceeded`
+> error propagated verbatim when the directory exceeds
+> `max_entries` (raise the cap and retry — the tool does not
+> truncate on overflow because that would require either calling
+> `oran-io` twice or extending the helper's contract for every
+> other caller).
 
 A tool's `required_capabilities` list is **inspected at registration**. The permission
 engine knows the universe of capabilities a tool might use; the tool cannot smuggle in

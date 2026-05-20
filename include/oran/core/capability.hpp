@@ -28,6 +28,7 @@ enum class Capability : std::uint8_t {
   write_file,
   edit_file,
   delete_path,
+  list_directory,
   // network
   egress_http,
   egress_websocket,

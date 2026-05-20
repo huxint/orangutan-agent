@@ -5,9 +5,9 @@
 // can early-return on the first failure. The aggregate `register_builtins`
 // wires every tool this slice ships in catalog order.
 //
-// Slice 20 grows the catalog to `file.read` + `file.write` + `file.edit` +
-// `file.search`; future slices will fold in the shell tools and so on. This
-// header is the one place callers learn what shipped.
+// Slice 29 grows the catalog to `file.read` + `file.write` + `file.edit` +
+// `file.search` + `directory.list`; future slices will fold in the shell
+// tools and so on. This header is the one place callers learn what shipped.
 
 #pragma once
 
@@ -29,6 +29,9 @@ inline constexpr std::string_view kFileEditName{"file.edit"};
 
 /// Stable wire name for the file-search built-in.
 inline constexpr std::string_view kFileSearchName{"file.search"};
+
+/// Stable wire name for the directory-list built-in.
+inline constexpr std::string_view kDirectoryListName{"directory.list"};
 
 /// Register the `file.read` tool. Reads UTF-8 content from a workspace path
 /// using `oran-io`'s coroutine helper; capability `read_file` is required.
@@ -58,10 +61,25 @@ inline constexpr std::string_view kFileSearchName{"file.search"};
 /// binary and skipped during a directory walk.
 [[nodiscard]] core::Result<void> register_file_search(Registry& registry);
 
+/// Register the `directory.list` tool. Enumerates the immediate children of
+/// a directory through `oran-io::list_directory`; capability
+/// `list_directory` is required. Input shape:
+/// `{"path": <string>, "include_hidden"?: bool (default false),
+/// "max_entries"?: uint (default 256)}`. Returns one
+/// `<path>:<kind>:<size_bytes or '-'>` line per entry, sorted by path
+/// (the order `oran-io::list_directory` already enforces); the literal
+/// text `no entries` (non-error) when the directory is empty after the
+/// hidden filter. `kind` is the `io::DirectoryEntryKind` wire spelling
+/// (`regular_file` | `directory` | `symlink` | `other`); `size_bytes`
+/// is a decimal integer for regular files and the literal `-` for every
+/// other kind. The call returns an `io` error when the directory has
+/// strictly more than `max_entries` entries — raise the cap and retry.
+[[nodiscard]] core::Result<void> register_directory_list(Registry& registry);
+
 /// Register every built-in this slice ships. Currently wires `file.read`,
-/// `file.write`, `file.edit`, then `file.search`; future slices append
-/// additional tools so production callers can stay on this single entry
-/// point.
+/// `file.write`, `file.edit`, `file.search`, then `directory.list`; future
+/// slices append additional tools so production callers can stay on this
+/// single entry point.
 [[nodiscard]] core::Result<void> register_builtins(Registry& registry);
 
 }  // namespace orangutan::tool

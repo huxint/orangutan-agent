@@ -342,11 +342,12 @@ TEST_CASE("register_builtins seeds the file tool catalog", "[unit][tool][builtin
   tool::Registry registry;
   REQUIRE(tool::register_builtins(registry).has_value());
   const auto catalog = registry.catalog();
-  REQUIRE(catalog.size() == 4);
+  REQUIRE(catalog.size() == 5);
   REQUIRE(catalog[0].name == tool::kFileReadName);
   REQUIRE(catalog[1].name == tool::kFileWriteName);
   REQUIRE(catalog[2].name == tool::kFileEditName);
   REQUIRE(catalog[3].name == tool::kFileSearchName);
+  REQUIRE(catalog[4].name == tool::kDirectoryListName);
 }
 
 TEST_CASE("file.read happy path returns the file contents verbatim", "[unit][tool][file_read]") {
@@ -2216,5 +2217,221 @@ TEST_CASE("dispatch publishes tool_dispatched + tool_error + tool_after in the r
     REQUIRE(sink.captures()[2].error_kind == "internal");
     REQUIRE(sink.captures()[3].event == orangutan::hook::Event::tool_after);
     REQUIRE_FALSE(sink.captures()[3].succeeded);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Slice 29 — `directory.list` built-in. Wraps `oran-io::list_directory` and
+// renders each entry as `<path>:<kind>:<size_bytes or '-'>`, sorted by path,
+// with the literal text `no entries` for empty directories. Capability is
+// the new `core::Capability::list_directory`. Tests cover: registration
+// surface, happy path on a non-empty directory, empty directory rendering,
+// hidden-file filtering (default vs. opt-in), max_entries error path, and
+// the input-validation cases the parser must reject.
+
+namespace {
+
+permission::RuleSet directory_list_rule_set() {
+  return single_rule(permission::Rule{
+      .verdict = permission::Verdict::allow,
+      .tool_pattern = std::string{tool::kDirectoryListName},
+      .capability = core::Capability::list_directory,
+  });
+}
+
+}  // namespace
+
+TEST_CASE("register_directory_list advertises a `list_directory` capability and a path schema",
+          "[unit][tool][directory_list]") {
+  tool::Registry registry;
+  REQUIRE(tool::register_directory_list(registry).has_value());
+  REQUIRE(registry.size() == 1);
+  const auto* def = registry.find(tool::kDirectoryListName);
+  REQUIRE(def != nullptr);
+  REQUIRE(def->required_capabilities.size() == 1);
+  REQUIRE(def->required_capabilities[0] == core::Capability::list_directory);
+  REQUIRE(def->input_schema_json.contains("\"path\""));
+  REQUIRE(def->input_schema_json.contains("\"include_hidden\""));
+  REQUIRE(def->input_schema_json.contains("\"max_entries\""));
+}
+
+TEST_CASE("directory.list happy path renders one entry per line, sorted by path", "[unit][tool][directory_list]") {
+  TempDir dir{"list-happy"};
+  dir.write_file("a.txt", "alpha");
+  dir.write_file("b.txt", "be");
+  // Create a subdirectory by writing a file inside it.
+  dir.write_file("nested/inner.txt", "ignored at top level");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_directory_list(registry).has_value());
+    auto rules = directory_list_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"("})";
+    auto result = co_await registry.dispatch(tool::kDirectoryListName, input, ctx);
+    REQUIRE(result.has_value());
+
+    // Each top-level entry on its own line; `nested/inner.txt` is NOT
+    // included because the listing is single-level.
+    REQUIRE(result->text.contains(dir.child("a.txt").string() + ":regular_file:5"));
+    REQUIRE(result->text.contains(dir.child("b.txt").string() + ":regular_file:2"));
+    REQUIRE(result->text.contains(dir.child("nested").string() + ":directory:-"));
+    REQUIRE_FALSE(result->text.contains("inner.txt"));
+
+    // Two newlines join the three lines.
+    const auto newline_count = std::ranges::count(std::string_view{result->text}, '\n');
+    REQUIRE(newline_count == 2);
+
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
+  });
+}
+
+TEST_CASE("directory.list returns the literal 'no entries' for an empty directory", "[unit][tool][directory_list]") {
+  TempDir dir{"list-empty"};
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_directory_list(registry).has_value());
+    auto rules = directory_list_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"("})";
+    auto result = co_await registry.dispatch(tool::kDirectoryListName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "no entries");
+  });
+}
+
+TEST_CASE("directory.list skips dotfiles by default and includes them with include_hidden=true",
+          "[unit][tool][directory_list]") {
+  TempDir dir{"list-hidden"};
+  dir.write_file("visible.txt", "v");
+  dir.write_file(".hidden", "h");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_directory_list(registry).has_value());
+    auto rules = directory_list_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    auto default_call =
+        co_await registry.dispatch(tool::kDirectoryListName, std::string{R"({"path":")"} + dir.string() + R"("})", ctx);
+    REQUIRE(default_call.has_value());
+    REQUIRE(default_call->text.contains("visible.txt"));
+    REQUIRE_FALSE(default_call->text.contains(".hidden"));
+
+    auto opt_in = co_await registry.dispatch(tool::kDirectoryListName,
+                                             std::string{R"({"path":")"} + dir.string() + R"(","include_hidden":true})",
+                                             ctx);
+    REQUIRE(opt_in.has_value());
+    REQUIRE(opt_in->text.contains("visible.txt"));
+    REQUIRE(opt_in->text.contains(".hidden"));
+  });
+}
+
+TEST_CASE("directory.list returns io when the directory exceeds max_entries", "[unit][tool][directory_list]") {
+  TempDir dir{"list-overflow"};
+  // Three files; ask for a cap of 2 so io::list_directory aborts at the
+  // third entry with `io: directory entry limit exceeded`.
+  dir.write_file("a", "1");
+  dir.write_file("b", "2");
+  dir.write_file("c", "3");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_directory_list(registry).has_value());
+    auto rules = directory_list_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"(","max_entries":2})";
+    auto result = co_await registry.dispatch(tool::kDirectoryListName, input, ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::io);
+  });
+}
+
+TEST_CASE("directory.list returns not_found when the directory does not exist", "[unit][tool][directory_list]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_directory_list(registry).has_value());
+    auto rules = directory_list_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto path = std::string{"/tmp/oran-tool-list-no-such-"} +
+                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto input = std::string{R"({"path":")"} + path + R"("})";
+    auto result = co_await registry.dispatch(tool::kDirectoryListName, input, ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::not_found);
+  });
+}
+
+TEST_CASE("directory.list returns invalid_argument when the path is a regular file, not a directory",
+          "[unit][tool][directory_list]") {
+  TempFile file{"list-not-a-dir"};
+  file.write("not a directory");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_directory_list(registry).has_value());
+    auto rules = directory_list_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + file.string() + R"("})";
+    auto result = co_await registry.dispatch(tool::kDirectoryListName, input, ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  });
+}
+
+TEST_CASE("directory.list rejects malformed input as invalid_argument", "[unit][tool][directory_list]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_directory_list(registry).has_value());
+    auto rules = directory_list_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    auto bad_json = co_await registry.dispatch(tool::kDirectoryListName, "{not-json}", ctx);
+    REQUIRE_FALSE(bad_json.has_value());
+    REQUIRE(bad_json.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto missing_path = co_await registry.dispatch(tool::kDirectoryListName, R"({})", ctx);
+    REQUIRE_FALSE(missing_path.has_value());
+    REQUIRE(missing_path.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto wrong_path = co_await registry.dispatch(tool::kDirectoryListName, R"({"path":7})", ctx);
+    REQUIRE_FALSE(wrong_path.has_value());
+    REQUIRE(wrong_path.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto wrong_hidden =
+        co_await registry.dispatch(tool::kDirectoryListName, R"({"path":"/tmp/x","include_hidden":"y"})", ctx);
+    REQUIRE_FALSE(wrong_hidden.has_value());
+    REQUIRE(wrong_hidden.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto wrong_max =
+        co_await registry.dispatch(tool::kDirectoryListName, R"({"path":"/tmp/x","max_entries":"3"})", ctx);
+    REQUIRE_FALSE(wrong_max.has_value());
+    REQUIRE(wrong_max.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto zero_max = co_await registry.dispatch(tool::kDirectoryListName, R"({"path":"/tmp/x","max_entries":0})", ctx);
+    REQUIRE_FALSE(zero_max.has_value());
+    REQUIRE(zero_max.error().kind() == core::ErrorKind::invalid_argument);
+
+    // All six malformed calls passed the permission gate (the parser runs
+    // after the rule evaluation in the registry), so audit recorded one
+    // allow row per attempt.
+    REQUIRE(sink.events().size() == 6);
+    for (const auto& event : sink.events()) {
+      REQUIRE(event.outcome == permission::AuditOutcome::allow);
+    }
   });
 }

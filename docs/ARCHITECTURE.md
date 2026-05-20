@@ -121,7 +121,7 @@ own test bucket, its own bench bucket, and its own public header set under
 > (slice 19, `tool::register_file_edit`, capability `edit_file`,
 > input `{path, old_string, new_string, replace_all?}` —
 > `conflict` if `old_string` is not unique unless `replace_all` is
-> set, `not_found` if `old_string` is absent), and `file.search`
+> set, `not_found` if `old_string` is absent), `file.search`
 > (slice 20, `tool::register_file_search`, capability `read_file`,
 > input `{path, pattern, max_matches?, include_hidden?, regex?}` —
 > literal substring by default, or re2 partial-match when
@@ -130,7 +130,16 @@ own test bucket, its own bench bucket, and its own public header set under
 > `std::filesystem::recursive_directory_iterator`; binary
 > heuristic skips NUL-bearing files during walks; dotfile-skip by
 > default; ripgrep-class optimisations deferred to follow-up
-> slices tracked in `exec-plans/tech-debt-tracker.md`)),
+> slices tracked in `exec-plans/tech-debt-tracker.md`), and
+> `directory.list` (slice 29, `tool::register_directory_list`,
+> capability `list_directory` (new in `core::Capability`), input
+> `{path, include_hidden?, max_entries?}` — single-level
+> enumeration through `oran-io::list_directory`; renders one
+> `<path>:<kind>:<size_bytes or '-'>` line per entry sorted by
+> path, the literal text `no entries` when the directory is empty
+> after the hidden filter, and propagates the `io: directory
+> entry limit exceeded` error verbatim when `max_entries` is
+> exceeded — raise the cap and retry)),
 > and the slice-22 `oran-hook` foundation (`hook::Event` enum
 > covering the 38 lifecycle events the design contemplates,
 > `hook::Mode { advisory, blocking }` + `default_mode(Event)`
@@ -159,7 +168,7 @@ own test bucket, its own bench bucket, and its own public header set under
 
 | Library              | Purpose                                         | Depends on (allowed)                          |
 | -------------------- | ----------------------------------------------- | --------------------------------------------- |
-| `oran-core`          | `Result<T>`, `Error`, `Time` + ISO-8601 UTC helpers, `Role`, `StopReason`, `Content` variant, `Message`, `ToolDef` (with `required_capabilities`), `core::str` UTF-8 helpers, `Capability` vocabulary | stdlib only |
+| `oran-core`          | `Result<T>`, `Error`, `Time` + ISO-8601 UTC helpers, `Role`, `StopReason`, `Content` variant, `Message`, `ToolDef` (with `required_capabilities`), `core::str` UTF-8 helpers, `Capability` vocabulary (20 enumerators, slice 29 adds `list_directory`) | stdlib only |
 | `oran-async`         | asio `Runtime`, `Awaitable<T>`, bounded `Channel<T>`, cancel-aware `sleep_for`; mailbox policy lands in orchestration | `oran-core`, asio |
 | `oran-log`           | spdlog shim + secret redaction; thread-local context | `oran-core`, spdlog/fmt |
 | `oran-io`            | file/directory IO MVP; planned glob, pipe, subprocess, signal | `oran-core`, `oran-async` |
@@ -168,7 +177,7 @@ own test bucket, its own bench bucket, and its own public header set under
 | `oran-config`        | JSON config loader with typed runtime/profile/route/session/web fields, env substitution, and the typed `permissions` + `agents.<name>.permissions` overlay surface (layer-2/3 data of the three-layer rule merge); planned schema + secret-protected fields | `oran-core`, `oran-storage` |
 | `oran-permission`    | foundation rule evaluator: `Verdict`, `Mode`, `Rule`, `RuleSet`, `Decision`, `*`-glob tool matching, capability-aware gating (`Rule::capability` of `core::Capability`), the `Defaults::for_mode` baseline factory, the three-layer `materialize(Mode, global, per_agent)` merge that concatenates defaults + global config + per-agent overlay, the `ApprovalSecret` / `ApprovalAuthority` / `ApprovalToken` / `ApprovalBroker` ask-flow surface, and the `AuditEvent` / `AuditSink` / `StorageAuditSink` audit pipeline; planned re2 input regex extensions and bootstrap wiring | `oran-core`, `oran-config`, `oran-storage`, `oran-async` |
 | `oran-skill`         | skill loader, skill catalog | `oran-core`, `oran-io` |
-| `oran-tool`          | tool registry, dispatch through `permission::RuleSet` + `permission::AuditSink` with the slice-21 `(ApprovalBroker*, ApprovalToken*)` mediation of `Verdict::ask` (audit outcome promoted to `approved` on broker.check OK, `rejected` on broker rejection — `expired` / `tool_mismatch` / `identity_mismatch` / `input_mismatch` / `mac_mismatch` / `no_grant` / `replay_exhausted` reason forwarded; the short-circuit `approval_required` path is preserved when no broker/token is supplied but now carries `decision_reason` / `replay_max` / `approval_ttl_seconds` in the error context) and the slice-22+25 `hook::Bus*` tap (publishes `tool_before` after the registry resolves the tool def, `tool_dispatched` between audit success and the handler co_await on the paths where the handler runs — `allow` or ask-approved, carrying the verdict wire spelling, `tool_error` on every error exit as a failure-only narrow channel, and `tool_after` at every exit — all four advisory), built-ins `file.read` (`tool::register_file_read`, capability `read_file`), `file.write` (`tool::register_file_write`, capability `write_file`, input `{path, content, mode?, create_parents?}` with `mode ∈ {truncate, append, fail_if_exists}`), `file.edit` (`tool::register_file_edit`, capability `edit_file`, input `{path, old_string, new_string, replace_all?}`), and `file.search` (`tool::register_file_search`, capability `read_file`, input `{path, pattern, max_matches?, include_hidden?, regex?}` — literal substring by default; `regex=true` (slice 24) compiles via `permission::InputPattern` and matches per line via re2 `PartialMatch` with `regex_error` on compile failure; single-file or recursive directory walk; binary NUL-skip; dotfile-skip by default); planned blocking-veto semantics on `tool_before`, and the rest of the built-in catalog | `oran-core`, `oran-async`, `oran-permission`, `oran-hook`, `oran-io` |
+| `oran-tool`          | tool registry, dispatch through `permission::RuleSet` + `permission::AuditSink` with the slice-21 `(ApprovalBroker*, ApprovalToken*)` mediation of `Verdict::ask` (audit outcome promoted to `approved` on broker.check OK, `rejected` on broker rejection — `expired` / `tool_mismatch` / `identity_mismatch` / `input_mismatch` / `mac_mismatch` / `no_grant` / `replay_exhausted` reason forwarded; the short-circuit `approval_required` path is preserved when no broker/token is supplied but now carries `decision_reason` / `replay_max` / `approval_ttl_seconds` in the error context) and the slice-22+25 `hook::Bus*` tap (publishes `tool_before` after the registry resolves the tool def, `tool_dispatched` between audit success and the handler co_await on the paths where the handler runs — `allow` or ask-approved, carrying the verdict wire spelling, `tool_error` on every error exit as a failure-only narrow channel, and `tool_after` at every exit — all four advisory), built-ins `file.read` (`tool::register_file_read`, capability `read_file`), `file.write` (`tool::register_file_write`, capability `write_file`, input `{path, content, mode?, create_parents?}` with `mode ∈ {truncate, append, fail_if_exists}`), `file.edit` (`tool::register_file_edit`, capability `edit_file`, input `{path, old_string, new_string, replace_all?}`), `file.search` (`tool::register_file_search`, capability `read_file`, input `{path, pattern, max_matches?, include_hidden?, regex?}` — literal substring by default; `regex=true` (slice 24) compiles via `permission::InputPattern` and matches per line via re2 `PartialMatch` with `regex_error` on compile failure; single-file or recursive directory walk; binary NUL-skip; dotfile-skip by default), and `directory.list` (slice 29, `tool::register_directory_list`, capability `list_directory`, input `{path, include_hidden?, max_entries?}` — single-level enumeration through `oran-io::list_directory`; one `<path>:<kind>:<size_bytes or '-'>` line per entry sorted by path, `no entries` when empty, `io: directory entry limit exceeded` propagated verbatim on overflow); planned blocking-veto semantics on `tool_before`, and the rest of the built-in catalog | `oran-core`, `oran-async`, `oran-permission`, `oran-hook`, `oran-io` |
 | `oran-hook`          | hook bus + sink kinds: `Event` enum (38 lifecycle events), `Sink` abstract interface, `Bus` with `bind` / `unbind` / `publish_advisory` (advisory contract — sinks observe, never veto), `InProcessSink` (std::function-backed); planned `ShellSink` / `WebhookSink` / `LuaSink` (`sol2` feature-gated) and blocking-veto `publish_blocking` overload | `oran-core`, `oran-async` |
 | `oran-memory`        | working / session / long-term / shared memory | `oran-core`, `oran-storage` |
 | `oran-provider`      | provider system (transport / protocol / execution) | `oran-core`, `oran-async`, `oran-http` |

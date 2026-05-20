@@ -20,6 +20,9 @@ core::Result<void> register_builtins(Registry& registry) {
   if (auto r = register_file_search(registry); !r) {
     return r;
   }
+  if (auto r = register_directory_list(registry); !r) {
+    return r;
+  }
   return {};
 }
 

@@ -4,7 +4,7 @@
 //
 //   1. `core.capability_parse_linear`        : `core::parse_enum<Capability>` —
 //                                              a reflection-expanded linear
-//                                              scan over the 19-entry
+//                                              scan over the 20-entry
 //                                              capability universe.
 //   2. `core.capability_parse_unordered_map` : the same lookup driven by
 //                                              an `std::unordered_map<
@@ -15,7 +15,7 @@
 // Both scenarios iterate the same deterministic mix of valid and invalid
 // inputs so the comparison documents the cost of the linear-scan path the
 // library actually ships vs. the cheapest hash-table alternative. The
-// goal is *not* to crown a winner — at 19 entries the linear scan wins on
+// goal is *not* to crown a winner — at 20 entries the linear scan wins on
 // every realistic toolchain — but to give future callers (config-loading
 // large rule lists, schema generation) a recorded baseline so they reach
 // for a different data structure with eyes open.

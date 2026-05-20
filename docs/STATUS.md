@@ -7,22 +7,23 @@
 
 ## Snapshot
 
-- **Slice:** 28 (`xmake run orangutan` reports slice 28)
+- **Slice:** 29 (`xmake run orangutan` reports slice 29)
 - **Last completed history:**
-  [`histories/2026-05/20260520-2220-check-compile-budget-gate.md`](histories/2026-05/20260520-2220-check-compile-budget-gate.md)
+  [`histories/2026-05/20260520-2307-oran-tool-directory-list.md`](histories/2026-05/20260520-2307-oran-tool-directory-list.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
-- **Next intended slice:** TBD — the build-skeleton-scripts row is
-  fully closed (`check-deps.sh`, `measure-tu.sh`, and
-  `check-compile-budget.sh` are all real). Likely candidates: the
-  first provider adapter (Anthropic Messages) — multi-slice, needs
-  an exec plan and `oran-http` + libcurl wiring first; blocking
-  hook semantics with veto (gated on `oran-agent`); or wiring
-  `check-compile-budget.sh` into `scripts/ci.sh` once CI provisions
-  xmake on the documented reference hardware (the new tech-debt
-  entry covers this).
+- **Next intended slice:** `file.delete` built-in (this work session's
+  second commit) — adds a new `oran-io::delete_file` coroutine helper
+  and registers `file.delete` against the existing
+  `core::Capability::delete_path`. The remaining likely candidates
+  after that are the first provider adapter (Anthropic Messages —
+  multi-slice, needs an exec plan and `oran-http` + libcurl wiring
+  first), blocking hook semantics with veto (still gated on
+  `oran-agent`), or wiring `check-compile-budget.sh` into
+  `scripts/ci.sh` once CI provisions xmake on the documented
+  reference hardware (the slice-28 tech-debt entry covers this).
 
 ## Library Health
 
@@ -38,14 +39,14 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 ## Latest Library Surfaces
 
-- `oran-core`: 54 cases / 366 assertions.
+- `oran-core`: 54 cases / 370 assertions.
 - `oran-async`: 8 cases / 38 assertions.
 - `oran-io`: 8 cases / 33 assertions.
-- `oran-storage`: 60 cases / 702 assertions.
+- `oran-storage`: 60 cases / 706 assertions.
 - `oran-config`: 19 cases / 148 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
 - `oran-hook`: 14 cases / 79 assertions.
-- `oran-tool`: 74 cases / 599 assertions.
+- `oran-tool`: 82 cases / 663 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 44 cases / 140 assertions.
 
@@ -54,6 +55,10 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 Lifted from [`exec-plans/tech-debt-tracker.md`](exec-plans/tech-debt-tracker.md).
 Closed entries do *not* live here — the tracker is canonical.
 
+- 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
+  but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on
+  the documented reference hardware (8-core / NVMe / native Linux);
+  otherwise the gate fires on environmental drift, not real regressions.
 - 2026-05-18 — Hook bus dispatch is advisory-only (slice 22); blocking
   semantics with veto for `tool_before` / `memory_*_before` /
   `permission_ask_rendered` are deferred to a follow-up slice.
@@ -68,9 +73,6 @@ Closed entries do *not* live here — the tracker is canonical.
 - 2026-05-17 — `bench/oran-agent/prompt_cache_hit_rate.cpp` regression
   scenario promised in `rules/prompt-design.md` not yet implemented
   (waits on `oran-agent` slice 1).
-- 2026-05-14 — Build-skeleton scripts referenced from rules but not yet
-  implemented: `measure-tu.sh`, `check-compile-budget.sh` (the slice-26
-  `check-deps.sh` and the earlier `check-includes.sh` are now real).
 - 2026-05-14 — Generated `docs/generated/config.schema.json` not yet
   implemented.
 - 2026-05-14 — bench A-vs-B scenarios listed in

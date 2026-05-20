@@ -20,6 +20,7 @@ TEST_CASE("enum_name covers every Capability enumerator", "[unit][core][capabili
   REQUIRE(enum_name(Capability::write_file) == "write_file");
   REQUIRE(enum_name(Capability::edit_file) == "edit_file");
   REQUIRE(enum_name(Capability::delete_path) == "delete_path");
+  REQUIRE(enum_name(Capability::list_directory) == "list_directory");
   REQUIRE(enum_name(Capability::egress_http) == "egress_http");
   REQUIRE(enum_name(Capability::egress_websocket) == "egress_websocket");
   REQUIRE(enum_name(Capability::spawn_subprocess) == "spawn_subprocess");
@@ -70,7 +71,7 @@ TEST_CASE("enum_values<Capability> lists every enumerator exactly once", "[unit]
   constexpr auto all = enum_values<Capability>();
   // The size matches the enumerator list and every entry round-trips through
   // the string mapping.
-  STATIC_REQUIRE(all.size() == 19);
+  STATIC_REQUIRE(all.size() == 20);
   for (const auto cap : all) {
     REQUIRE(enum_name(cap) != "unknown");
   }
