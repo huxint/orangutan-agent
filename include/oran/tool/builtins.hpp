@@ -5,9 +5,10 @@
 // can early-return on the first failure. The aggregate `register_builtins`
 // wires every tool this slice ships in catalog order.
 //
-// Slice 29 grows the catalog to `file.read` + `file.write` + `file.edit` +
-// `file.search` + `directory.list`; future slices will fold in the shell
-// tools and so on. This header is the one place callers learn what shipped.
+// Slice 30 grows the catalog to `file.read` + `file.write` + `file.edit` +
+// `file.search` + `directory.list` + `file.delete`; future slices will fold
+// in the shell tools and so on. This header is the one place callers learn
+// what shipped.
 
 #pragma once
 
@@ -32,6 +33,9 @@ inline constexpr std::string_view kFileSearchName{"file.search"};
 
 /// Stable wire name for the directory-list built-in.
 inline constexpr std::string_view kDirectoryListName{"directory.list"};
+
+/// Stable wire name for the file-delete built-in.
+inline constexpr std::string_view kFileDeleteName{"file.delete"};
 
 /// Register the `file.read` tool. Reads UTF-8 content from a workspace path
 /// using `oran-io`'s coroutine helper; capability `read_file` is required.
@@ -76,10 +80,20 @@ inline constexpr std::string_view kDirectoryListName{"directory.list"};
 /// strictly more than `max_entries` entries — raise the cap and retry.
 [[nodiscard]] core::Result<void> register_directory_list(Registry& registry);
 
+/// Register the `file.delete` tool. Deletes the regular file at `path`
+/// through `oran-io::delete_file`; capability `delete_path` is required.
+/// Input shape: `{"path": <string>}`. Returns `invalid_argument` when the
+/// path is a directory or a symlink (the v1 surface refuses anything but
+/// a regular file so an LLM-driven delete cannot recursively destroy a
+/// tree or unlink a symlink to a directory outside the workspace);
+/// `not_found` when no file exists at `path`. Successful deletes return
+/// the literal text `deleted <path>`.
+[[nodiscard]] core::Result<void> register_file_delete(Registry& registry);
+
 /// Register every built-in this slice ships. Currently wires `file.read`,
-/// `file.write`, `file.edit`, `file.search`, then `directory.list`; future
-/// slices append additional tools so production callers can stay on this
-/// single entry point.
+/// `file.write`, `file.edit`, `file.search`, `directory.list`, then
+/// `file.delete`; future slices append additional tools so production
+/// callers can stay on this single entry point.
 [[nodiscard]] core::Result<void> register_builtins(Registry& registry);
 
 }  // namespace orangutan::tool

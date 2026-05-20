@@ -8,6 +8,14 @@ performs the requested operation and returns `core::Result<T>`.
 > **Slice-2 status (2026-05-15):** `oran-io` ships text-file read/write helpers and
 > deterministic directory listing. Subprocesses, pipes, signals, glob expansion,
 > watchers, and permission/hook integration are planned future slices.
+>
+> **Slice-30 status (2026-05-20):** `oran-io` adds `delete_file(executor, path)`
+> for regular-file removal. Directories and symlinks reject as
+> `invalid_argument` so the v1 surface cannot be used to recursively
+> destroy a tree or unlink a symlink that points outside the workspace.
+> The future direction for filesystem mutation is consolidation into a
+> single delete helper that handles files AND folders (with recursion
+> intent expressed by the caller), not separate per-kind helpers.
 
 ## Public Surface
 
@@ -51,6 +59,9 @@ write_text_file(asio::any_io_executor executor,
 async::Awaitable<core::Result<std::vector<DirectoryEntry>>>
 list_directory(asio::any_io_executor executor, std::string path, ListDirectoryOptions = {});
 
+async::Awaitable<core::Result<void>>
+delete_file(asio::any_io_executor executor, std::string path);
+
 }  // namespace orangutan::io
 ```
 
@@ -75,7 +86,7 @@ starts threading that service through the system.
 
 | Condition | Error kind |
 | --- | --- |
-| Empty path, invalid limit, non-file read target, non-directory list target | `invalid_argument` |
+| Empty path, invalid limit, non-file read target, non-directory list target, `delete_file` on a non-regular file | `invalid_argument` |
 | Missing file or directory | `not_found` |
 | Existing destination with `WriteMode::fail_if_exists` | `conflict` |
 | Permission denied | `permission_denied` |

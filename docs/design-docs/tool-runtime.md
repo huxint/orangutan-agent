@@ -127,6 +127,24 @@ enum class Capability {
 > truncate on overflow because that would require either calling
 > `oran-io` twice or extending the helper's contract for every
 > other caller).
+> Slice 30 (2026-05-20) adds `file.delete`
+> (`tool::register_file_delete`, capability `delete_path` — the
+> first built-in that exercises this slice-7 capability), built on
+> a new `oran-io::delete_file` coroutine helper. Input
+> `{path}`; the io helper refuses every path that is not a
+> regular file with `invalid_argument` (covers both directories
+> AND symlinks even when the symlink points at a regular file —
+> the v1 surface is deliberately narrow so a recursive delete or
+> a symlink-follow cannot escape the workspace), returns
+> `not_found` when no entry exists at `path` (and on the rare
+> "vanished between stat and unlink" race so the caller sees a
+> single end-state error kind), and on success returns the
+> literal text `deleted <path>`. The future direction for
+> filesystem mutation built-ins is *consolidation*, not more
+> per-kind splits: a single delete tool covering files AND
+> folders, and a recursive whole-project list (not a separate
+> `directory.remove` / single-level enumeration). The v1
+> narrowings here are the entry point, not the dead end.
 
 A tool's `required_capabilities` list is **inspected at registration**. The permission
 engine knows the universe of capabilities a tool might use; the tool cannot smuggle in

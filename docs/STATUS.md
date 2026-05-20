@@ -7,23 +7,26 @@
 
 ## Snapshot
 
-- **Slice:** 29 (`xmake run orangutan` reports slice 29)
+- **Slice:** 30 (`xmake run orangutan` reports slice 30)
 - **Last completed history:**
-  [`histories/2026-05/20260520-2307-oran-tool-directory-list.md`](histories/2026-05/20260520-2307-oran-tool-directory-list.md)
+  [`histories/2026-05/20260520-2345-oran-tool-file-delete.md`](histories/2026-05/20260520-2345-oran-tool-file-delete.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
-- **Next intended slice:** `file.delete` built-in (this work session's
-  second commit) — adds a new `oran-io::delete_file` coroutine helper
-  and registers `file.delete` against the existing
-  `core::Capability::delete_path`. The remaining likely candidates
-  after that are the first provider adapter (Anthropic Messages —
+- **Next intended slice:** TBD — the file-tool catalog now covers
+  read / write / edit / search / list / delete. Likely next
+  candidates: the first provider adapter (Anthropic Messages —
   multi-slice, needs an exec plan and `oran-http` + libcurl wiring
   first), blocking hook semantics with veto (still gated on
   `oran-agent`), or wiring `check-compile-budget.sh` into
-  `scripts/ci.sh` once CI provisions xmake on the documented
-  reference hardware (the slice-28 tech-debt entry covers this).
+  `scripts/ci.sh` (the slice-28 tech-debt entry covers the
+  preconditions). The current `file.delete` and `directory.list`
+  shapes are expected to be re-shaped in a later refactor: one
+  unified delete tool covering both files and folders, and a
+  recursive whole-project list (not just single-level children).
+  Future built-in slices should not double down on per-kind
+  splits like `directory.remove` or single-level enumeration.
 
 ## Library Health
 
@@ -41,12 +44,12 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 - `oran-core`: 54 cases / 370 assertions.
 - `oran-async`: 8 cases / 38 assertions.
-- `oran-io`: 8 cases / 33 assertions.
+- `oran-io`: 13 cases / 51 assertions.
 - `oran-storage`: 60 cases / 706 assertions.
 - `oran-config`: 19 cases / 148 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
 - `oran-hook`: 14 cases / 79 assertions.
-- `oran-tool`: 82 cases / 663 assertions.
+- `oran-tool`: 89 cases / 712 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 44 cases / 140 assertions.
 

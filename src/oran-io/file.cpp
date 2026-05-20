@@ -300,6 +300,42 @@ write_text_file_blocking(const std::string& path, const std::string& contents, W
   }
 }
 
+[[nodiscard]] core::Result<void> delete_file_blocking(const std::string& path) {
+  if (auto valid = validate_path(path); !valid) {
+    return std::unexpected(valid.error());
+  }
+
+  try {
+    const auto fs_path = to_path(path);
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(fs_path, ec);
+    if (ec) {
+      return std::unexpected(system_io_error("failed to stat file", path, ec));
+    }
+    if (!std::filesystem::status_known(status) || status.type() == std::filesystem::file_type::not_found) {
+      return std::unexpected(core::Error::not_found("file does not exist").with("path", path));
+    }
+    if (!std::filesystem::is_regular_file(status)) {
+      return std::unexpected(core::Error::invalid_argument("path is not a regular file").with("path", path));
+    }
+
+    if (!std::filesystem::remove(fs_path, ec)) {
+      if (ec) {
+        return std::unexpected(system_io_error("failed to delete file", path, ec));
+      }
+      // remove() returned false without an error_code: the file vanished
+      // between the stat and the unlink — surface it as a race-condition
+      // not_found so the caller sees a consistent end state.
+      return std::unexpected(core::Error::not_found("file disappeared before delete").with("path", path));
+    }
+    return {};
+  } catch (const std::filesystem::filesystem_error& e) {
+    return std::unexpected(system_io_error("filesystem delete failed", path, e.code()));
+  } catch (const std::exception& e) {
+    return std::unexpected(io_error("file delete failed", path).with("exception", e.what()));
+  }
+}
+
 template <typename ResultT, typename Fn>
 [[nodiscard]] async::Awaitable<ResultT> run_blocking(asio::any_io_executor executor, Fn fn) {
   auto cancellation = co_await asio::this_coro::cancellation_state;
@@ -338,6 +374,11 @@ list_directory(asio::any_io_executor executor, std::string path, ListDirectoryOp
   co_return co_await run_blocking<core::Result<std::vector<DirectoryEntry>>>(
       std::move(executor),
       [path = std::move(path), options] { return list_directory_blocking(path, options); });
+}
+
+async::Awaitable<core::Result<void>> delete_file(asio::any_io_executor executor, std::string path) {
+  co_return co_await run_blocking<core::Result<void>>(std::move(executor),
+                                                      [path = std::move(path)] { return delete_file_blocking(path); });
 }
 
 }  // namespace orangutan::io

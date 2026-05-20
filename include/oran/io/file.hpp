@@ -58,4 +58,12 @@ write_text_file(asio::any_io_executor executor, std::string path, std::string co
 [[nodiscard]] async::Awaitable<core::Result<std::vector<DirectoryEntry>>>
 list_directory(asio::any_io_executor executor, std::string path, ListDirectoryOptions options = {});
 
+/// Delete the regular file at `path`. Refuses directories and symlinks with
+/// `invalid_argument` — the v1 surface is deliberately narrow so an LLM-driven
+/// delete cannot recursively destroy a tree or unlink a symlink to a directory
+/// outside the workspace. Returns `not_found` when no file exists at `path`.
+/// Future slices may add a separate `delete_directory` helper with explicit
+/// recursion semantics.
+[[nodiscard]] async::Awaitable<core::Result<void>> delete_file(asio::any_io_executor executor, std::string path);
+
 }  // namespace orangutan::io

@@ -201,3 +201,71 @@ TEST_CASE("read_text_file observes cancellation before blocking work", "[unit][i
   REQUIRE_FALSE(result->has_value());
   REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
 }
+
+TEST_CASE("delete_file removes the file at path", "[unit][io][file]") {
+  TempDir temp{"oran-io-delete"};
+  const auto file = temp.path() / "removable.txt";
+  write_direct(file, "bye");
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto result = co_await io::delete_file(context.get_executor(), file.string());
+    REQUIRE(result.has_value());
+    REQUIRE_FALSE(std::filesystem::exists(file));
+  });
+}
+
+TEST_CASE("delete_file rejects empty path", "[unit][io][file]") {
+  test::run_async([](asio::io_context& context) -> async::Awaitable<void> {
+    auto result = co_await io::delete_file(context.get_executor(), "");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  });
+}
+
+TEST_CASE("delete_file returns not_found when the file does not exist", "[unit][io][file]") {
+  TempDir temp{"oran-io-delete-missing"};
+  const auto file = temp.path() / "absent.txt";
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto result = co_await io::delete_file(context.get_executor(), file.string());
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::not_found);
+  });
+}
+
+TEST_CASE("delete_file refuses directories with invalid_argument", "[unit][io][file]") {
+  TempDir temp{"oran-io-delete-dir"};
+  const auto subdir = temp.path() / "subdir";
+  std::filesystem::create_directory(subdir);
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto result = co_await io::delete_file(context.get_executor(), subdir.string());
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+    // The directory must still be present after the refused delete.
+    REQUIRE(std::filesystem::exists(subdir));
+  });
+}
+
+TEST_CASE("delete_file refuses symlinks with invalid_argument and leaves them intact", "[unit][io][file]") {
+  TempDir temp{"oran-io-delete-symlink"};
+  const auto target = temp.path() / "target.txt";
+  write_direct(target, "still here");
+  const auto link = temp.path() / "link.txt";
+  std::error_code link_ec;
+  std::filesystem::create_symlink(target, link, link_ec);
+  if (link_ec) {
+    // Some filesystems (e.g. WSL on a Windows mount without dev-mode) cannot
+    // create symlinks; treat as an environment skip rather than a failure.
+    SUCCEED("symlink creation not supported on this filesystem: " << link_ec.message());
+    return;
+  }
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto result = co_await io::delete_file(context.get_executor(), link.string());
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(std::filesystem::is_symlink(link));
+    REQUIRE(std::filesystem::exists(target));
+  });
+}

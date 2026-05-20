@@ -342,12 +342,13 @@ TEST_CASE("register_builtins seeds the file tool catalog", "[unit][tool][builtin
   tool::Registry registry;
   REQUIRE(tool::register_builtins(registry).has_value());
   const auto catalog = registry.catalog();
-  REQUIRE(catalog.size() == 5);
+  REQUIRE(catalog.size() == 6);
   REQUIRE(catalog[0].name == tool::kFileReadName);
   REQUIRE(catalog[1].name == tool::kFileWriteName);
   REQUIRE(catalog[2].name == tool::kFileEditName);
   REQUIRE(catalog[3].name == tool::kFileSearchName);
   REQUIRE(catalog[4].name == tool::kDirectoryListName);
+  REQUIRE(catalog[5].name == tool::kFileDeleteName);
 }
 
 TEST_CASE("file.read happy path returns the file contents verbatim", "[unit][tool][file_read]") {
@@ -2433,5 +2434,179 @@ TEST_CASE("directory.list rejects malformed input as invalid_argument", "[unit][
     for (const auto& event : sink.events()) {
       REQUIRE(event.outcome == permission::AuditOutcome::allow);
     }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Slice 30 — `file.delete` built-in. Thin wrapper over `oran-io::delete_file`.
+// Capability is the existing `core::Capability::delete_path` (first built-in
+// that actually requires it). Tests cover: registration surface, happy
+// delete with the `deleted <path>` success message, missing path,
+// directory refusal, symlink refusal, and the input-validation matrix.
+
+namespace {
+
+permission::RuleSet file_delete_rule_set() {
+  return single_rule(permission::Rule{
+      .verdict = permission::Verdict::allow,
+      .tool_pattern = std::string{tool::kFileDeleteName},
+      .capability = core::Capability::delete_path,
+  });
+}
+
+}  // namespace
+
+TEST_CASE("register_file_delete advertises a `delete_path` capability and a path schema", "[unit][tool][file_delete]") {
+  tool::Registry registry;
+  REQUIRE(tool::register_file_delete(registry).has_value());
+  REQUIRE(registry.size() == 1);
+  const auto* def = registry.find(tool::kFileDeleteName);
+  REQUIRE(def != nullptr);
+  REQUIRE(def->required_capabilities.size() == 1);
+  REQUIRE(def->required_capabilities[0] == core::Capability::delete_path);
+  REQUIRE(def->input_schema_json.contains("\"path\""));
+}
+
+TEST_CASE("file.delete happy path removes the file and reports the deletion", "[unit][tool][file_delete]") {
+  TempFile file{"delete-happy"};
+  file.write("doomed");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_delete(registry).has_value());
+    auto rules = file_delete_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto path = file.string();
+    const auto input = std::string{R"({"path":")"} + path + R"("})";
+    auto result = co_await registry.dispatch(tool::kFileDeleteName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "deleted " + path);
+    REQUIRE_FALSE(std::filesystem::exists(path));
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
+  });
+}
+
+TEST_CASE("file.delete returns not_found when the file does not exist", "[unit][tool][file_delete]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_delete(registry).has_value());
+    auto rules = file_delete_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto path = std::string{"/tmp/oran-tool-delete-no-such-"} +
+                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto input = std::string{R"({"path":")"} + path + R"("})";
+    auto result = co_await registry.dispatch(tool::kFileDeleteName, input, ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::not_found);
+  });
+}
+
+TEST_CASE("file.delete refuses directories with invalid_argument and leaves them intact", "[unit][tool][file_delete]") {
+  TempDir dir{"delete-dir-refused"};
+  dir.write_file("guardian.txt", "still here");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_delete(registry).has_value());
+    auto rules = file_delete_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"("})";
+    auto result = co_await registry.dispatch(tool::kFileDeleteName, input, ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(std::filesystem::exists(dir.string()));
+    REQUIRE(std::filesystem::exists(dir.child("guardian.txt")));
+  });
+}
+
+TEST_CASE("file.delete refuses symlinks with invalid_argument and leaves the target intact",
+          "[unit][tool][file_delete]") {
+  TempDir dir{"delete-symlink-refused"};
+  dir.write_file("target.txt", "untouched");
+  const auto target = dir.child("target.txt");
+  const auto link = dir.child("alias.txt");
+  std::error_code link_ec;
+  std::filesystem::create_symlink(target, link, link_ec);
+  if (link_ec) {
+    SUCCEED("symlink creation not supported on this filesystem: " << link_ec.message());
+    return;
+  }
+
+  test::run_async([&dir, &link, &target](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_delete(registry).has_value());
+    auto rules = file_delete_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + link.string() + R"("})";
+    auto result = co_await registry.dispatch(tool::kFileDeleteName, input, ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(std::filesystem::is_symlink(link));
+    REQUIRE(std::filesystem::exists(target));
+    (void)dir;
+  });
+}
+
+TEST_CASE("file.delete rejects malformed input as invalid_argument", "[unit][tool][file_delete]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_delete(registry).has_value());
+    auto rules = file_delete_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    auto bad_json = co_await registry.dispatch(tool::kFileDeleteName, "{not-json}", ctx);
+    REQUIRE_FALSE(bad_json.has_value());
+    REQUIRE(bad_json.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto missing_path = co_await registry.dispatch(tool::kFileDeleteName, R"({})", ctx);
+    REQUIRE_FALSE(missing_path.has_value());
+    REQUIRE(missing_path.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto wrong_path = co_await registry.dispatch(tool::kFileDeleteName, R"({"path":7})", ctx);
+    REQUIRE_FALSE(wrong_path.has_value());
+    REQUIRE(wrong_path.error().kind() == core::ErrorKind::invalid_argument);
+
+    // All three malformed calls passed the permission gate; audit recorded
+    // one allow row per attempt.
+    REQUIRE(sink.events().size() == 3);
+    for (const auto& event : sink.events()) {
+      REQUIRE(event.outcome == permission::AuditOutcome::allow);
+    }
+  });
+}
+
+TEST_CASE("file.delete deny verdict short-circuits and does not unlink the file", "[unit][tool][file_delete]") {
+  TempFile file{"delete-denied"};
+  file.write("survives");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_delete(registry).has_value());
+    permission::RuleSet rules;
+    rules.add(permission::Rule{
+        .verdict = permission::Verdict::deny,
+        .tool_pattern = std::string{tool::kFileDeleteName},
+        .capability = core::Capability::delete_path,
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + file.string() + R"("})";
+    auto result = co_await registry.dispatch(tool::kFileDeleteName, input, ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::permission_denied);
+    REQUIRE(std::filesystem::exists(file.string()));
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::deny);
   });
 }
