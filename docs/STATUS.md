@@ -7,22 +7,22 @@
 
 ## Snapshot
 
-- **Slice:** 32 (`xmake run orangutan` reports slice 32)
+- **Slice:** 33 (`xmake run orangutan` reports slice 33)
 - **Last completed history:**
-  [`histories/2026-05/20260521-2139-tool-io-atomic-write.md`](histories/2026-05/20260521-2139-tool-io-atomic-write.md)
+  [`histories/2026-05/20260521-2231-tool-file-search-cancellation.md`](histories/2026-05/20260521-2231-tool-file-search-cancellation.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
-- **Next intended slice:** TBD — slice 32 landed the deep-review
-  atomic-write fix for `file.edit` / `file.write` (BUG-4.1.1).
+- **Next intended slice:** TBD — slice 33 closed the deep-review
+  cancellation-polling P0 item by threading `cancellation_state`
+  into `file.search`'s `walk_and_scan` + `read_text_capped`.
   Remaining deep-review P0 surface in
   `exec-plans/tech-debt-tracker.md` under the
   `deep-review-2026-05-21` group: content-size caps on
   `file.write`/`file.edit`, transparent hashing on
-  `Registry::entries_`, JSON-schema validation at
-  `Registry::add`, cancellation polling inside `file.search`'s
-  `walk_and_scan`. The next-likely tool-side slices remain
+  `Registry::entries_`, and JSON-schema validation at
+  `Registry::add`. The next-likely tool-side slices remain
   unchanged: the first provider adapter (Anthropic Messages —
   multi-slice, needs an exec plan and `oran-http` + libcurl
   wiring first), blocking hook semantics with veto (still gated
@@ -56,7 +56,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 19 cases / 148 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
 - `oran-hook`: 15 cases / 97 assertions.
-- `oran-tool`: 89 cases / 712 assertions.
+- `oran-tool`: 90 cases / 716 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 44 cases / 140 assertions.
 

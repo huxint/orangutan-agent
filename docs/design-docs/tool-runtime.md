@@ -158,6 +158,17 @@ enum class Capability {
 > with both and rejects them with `invalid_argument`. See
 > `docs/design-docs/io-runtime.md` "Atomic Writes" for the
 > contract.
+> Slice 33 (2026-05-21) closes the deep-review SMELL-4.1.3
+> cancellation footgun: `file.search`'s `walk_and_scan` and
+> `read_text_capped` now poll `asio::cancellation_state` once per
+> directory entry and once per 8 KiB read chunk. The handler
+> previously checked cancellation only before and after the
+> executor hop, so a long-running walk or a multi-MiB file read
+> was uncancellable in flight; the polling closes that gap with
+> two relaxed atomic loads per iteration (single-digit
+> nanoseconds against per-entry stat / per-chunk read cost). A
+> regression test arms the chunk-read polling on an 8 MiB file
+> read driven from a worker `std::jthread`.
 
 A tool's `required_capabilities` list is **inspected at registration**. The permission
 engine knows the universe of capabilities a tool might use; the tool cannot smuggle in

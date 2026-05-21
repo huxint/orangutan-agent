@@ -175,12 +175,18 @@ struct LineMatcher {
   return std::ranges::any_of(probe, [](char c) { return c == '\0'; });
 }
 
+[[nodiscard]] bool is_cancelled(const asio::cancellation_state& cancellation) noexcept {
+  return cancellation.cancelled() != asio::cancellation_type::none;
+}
+
 /// Reads a regular file's contents into a string, capped at `kMaxFileBytes`.
 /// Returns an io error on open or read failure; an invalid_argument error
 /// when the file overshoots the cap (so the agent loop sees a clear "you
 /// asked to search something pathologically large" signal in the single-file
-/// case).
-[[nodiscard]] core::Result<std::string> read_text_capped(const std::filesystem::path& path) {
+/// case). Polls `cancellation` once per 8 KiB read chunk so a pathological
+/// multi-GB file aborts promptly when the agent loop is torn down.
+[[nodiscard]] core::Result<std::string> read_text_capped(const std::filesystem::path& path,
+                                                         const asio::cancellation_state& cancellation) {
   errno = 0;
   std::ifstream input{path, std::ios::binary};
   if (!input) {
@@ -189,6 +195,9 @@ struct LineMatcher {
   std::string contents;
   std::array<char, 8192> buffer{};
   while (input) {
+    if (is_cancelled(cancellation)) {
+      return std::unexpected(core::Error::cancelled());
+    }
     input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
     const auto count = input.gcount();
     if (count > 0) {
@@ -253,7 +262,8 @@ void scan_text(std::string_view contents,
   return LineMatcher{.literal = {}, .regex = std::move(*compiled)};
 }
 
-[[nodiscard]] core::Result<SearchOutcome> walk_and_scan(const SearchOptions& opts) {
+[[nodiscard]] core::Result<SearchOutcome> walk_and_scan(const SearchOptions& opts,
+                                                        const asio::cancellation_state& cancellation) {
   auto matcher = build_matcher(opts);
   if (!matcher) {
     return std::unexpected(std::move(matcher).error());
@@ -274,7 +284,7 @@ void scan_text(std::string_view contents,
   }
 
   if (std::filesystem::is_regular_file(root, stat_ec)) {
-    auto contents = read_text_capped(root);
+    auto contents = read_text_capped(root, cancellation);
     if (!contents) {
       return std::unexpected(std::move(contents).error());
     }
@@ -288,6 +298,13 @@ void scan_text(std::string_view contents,
       const std::filesystem::recursive_directory_iterator end{};
       auto it = std::filesystem::recursive_directory_iterator{root, walk_opts};
       while (it != end && outcome.matches.size() < budget) {
+        // Poll cancellation once per directory entry so a SIGINT mid-walk
+        // unwinds the recursion before the next stat / open syscall. The
+        // load is a relaxed atomic read — single-digit nanoseconds, lost in
+        // the directory-iterator cost.
+        if (is_cancelled(cancellation)) {
+          return std::unexpected(core::Error::cancelled());
+        }
         const auto& entry = *it;
         const auto& entry_path = entry.path();
 
@@ -308,11 +325,13 @@ void scan_text(std::string_view contents,
           continue;
         }
 
-        if (auto file_contents = read_text_capped(entry_path); file_contents) {
+        if (auto file_contents = read_text_capped(entry_path, cancellation); file_contents) {
           if (!looks_binary(*file_contents)) {
             scan_text(*file_contents, *matcher, entry_path.string(), outcome.matches, budget);
           }
-        }  // unreadable / oversized files are silently skipped during a walk
+        } else if (file_contents.error().kind() == core::ErrorKind::cancelled) {
+          return std::unexpected(std::move(file_contents).error());
+        }  // other unreadable / oversized files are silently skipped during a walk
         ++it;
       }
     } catch (const std::filesystem::filesystem_error& e) {
@@ -364,15 +383,15 @@ void scan_text(std::string_view contents,
   // thread pool rather than the calling strand — matches `io::read_text_file`'s
   // discipline.
   auto cancellation = co_await asio::this_coro::cancellation_state;
-  if (cancellation.cancelled() != asio::cancellation_type::none) {
+  if (is_cancelled(cancellation)) {
     co_return std::unexpected(core::Error::cancelled());
   }
   co_await asio::post(ctx.executor, asio::use_awaitable);
-  if (cancellation.cancelled() != asio::cancellation_type::none) {
+  if (is_cancelled(cancellation)) {
     co_return std::unexpected(core::Error::cancelled());
   }
 
-  auto outcome = walk_and_scan(*opts);
+  auto outcome = walk_and_scan(*opts, cancellation);
   if (!outcome) {
     co_return std::unexpected(std::move(outcome).error());
   }

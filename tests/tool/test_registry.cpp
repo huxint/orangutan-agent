@@ -10,10 +10,16 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <variant>
 
+#include <asio/bind_cancellation_slot.hpp>
+#include <asio/cancellation_signal.hpp>
+#include <asio/cancellation_type.hpp>
+#include <asio/co_spawn.hpp>
+#include <asio/executor_work_guard.hpp>
 #include <asio/io_context.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -1216,6 +1222,86 @@ TEST_CASE("file.search regex=false explicit still treats the pattern as a litera
     REQUIRE_FALSE(result->text.contains(":2:"));
     REQUIRE_FALSE(result->text.contains(":3:"));
   });
+}
+
+// ---------------------------------------------------------------------------
+// Slice 33 — file.search cancellation polling inside the synchronous walk.
+//
+// Before slice 33 the handler only checked cancellation_state before the
+// executor hop and immediately after it; once `walk_and_scan` started it ran
+// to completion regardless of a cancellation signal. The fix threads
+// `cancellation_state` into `walk_and_scan` and `read_text_capped`, polling
+// once per directory entry and once per 8 KiB read chunk. This regression
+// test arms the polling by reading a multi-MiB file (forcing many chunk
+// iterations inside `read_text_capped`) on a worker thread while the test
+// thread emits the cancellation after a small head start. The signal lands
+// during the read; the next chunk-iteration poll surfaces it as
+// `core::ErrorKind::cancelled`. Driven by `orangutan-deep-review.md` §4.1.3.
+
+TEST_CASE("file.search aborts a large-file read when cancellation fires mid-walk",
+          "[unit][tool][file_search][cancellation]") {
+  const auto root =
+      std::filesystem::temp_directory_path() /
+      ("oran-tool-search-cancel-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::filesystem::create_directories(root);
+  // Just under the 16 MiB read cap so `read_text_capped` runs ~1024 8 KiB
+  // chunks per file — plenty of polling opportunities for the cancellation
+  // signal to land mid-read.
+  constexpr std::size_t kPayloadBytes = 8U * 1024U * 1024U;
+  const auto file_path = root / "noise.txt";
+  {
+    std::ofstream out{file_path, std::ios::binary};
+    const std::string chunk(64U * 1024U, 'x');
+    for (std::size_t written = 0; written < kPayloadBytes; written += chunk.size()) {
+      out.write(chunk.data(), static_cast<std::streamsize>(chunk.size()));
+    }
+  }
+  struct Cleanup {
+    std::filesystem::path path;
+    ~Cleanup() {
+      std::error_code ec;
+      std::filesystem::remove_all(path, ec);
+    }
+  } cleanup{root};
+
+  asio::io_context io;
+  auto work_guard = asio::make_work_guard(io);
+  asio::cancellation_signal signal;
+  std::optional<core::Result<tool::Output>> result;
+  std::exception_ptr failure;
+
+  tool::Registry registry;
+  REQUIRE(tool::register_file_search(registry).has_value());
+  auto rules = search_rule_set();
+  permission::RecordingAuditSink sink;
+  auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+  const auto input =
+      std::string{R"({"path":")"} + file_path.string() + R"(","pattern":"this-substring-never-appears"})";
+  asio::co_spawn(
+      io,
+      [&]() -> async::Awaitable<core::Result<tool::Output>> {
+        co_return co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+      },
+      asio::bind_cancellation_slot(signal.slot(), [&](std::exception_ptr ep, core::Result<tool::Output> r) {
+        failure = ep;
+        result = std::move(r);
+        work_guard.reset();
+      }));
+
+  std::jthread worker{[&] { io.run(); }};
+  // Give the worker a head start so the coroutine is suspended deep inside
+  // `read_text_capped` when the signal lands.
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  signal.emit(asio::cancellation_type::terminal);
+  worker.join();
+
+  if (failure) {
+    std::rethrow_exception(failure);
+  }
+  REQUIRE(result.has_value());
+  REQUIRE_FALSE(result->has_value());
+  REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
 }
 
 // ---------------------------------------------------------------------------
