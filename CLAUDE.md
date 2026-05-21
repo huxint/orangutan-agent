@@ -30,7 +30,7 @@ This file is a **routing index**. Rules → `docs/rules/`. Architecture → `doc
 | Area | Design / spec | Rule |
 | --- | --- | --- |
 | Agent platform / vision (read before new top-level features) | `docs/design-docs/agent-platform.md` | — |
-| ReAct loop / agent loop | `docs/product-specs/0001-core-react-loop.md`, `docs/design-docs/agent-platform.md` | — |
+| ReAct loop / agent loop | `docs/product-specs/0001-core-react-loop.md`, `docs/product-specs/0017-fake-provider-first-agent-loop.md`, `docs/design-docs/agent-platform.md` | — |
 | Bootstrap / config discovery / runtime assembly | `docs/design-docs/bootstrap-runtime.md` | — |
 | CLI / terminal mode / prompt shell | `docs/design-docs/cli-runtime.md` | — |
 | File I/O / directory listing / subprocess | `docs/design-docs/io-runtime.md` | — |
@@ -39,12 +39,12 @@ This file is a **routing index**. Rules → `docs/rules/`. Architecture → `doc
 | Compile-time pressure | `docs/FAST_COMPILATION.md` | `docs/rules/compile-budget.md` |
 | Async, executors, coroutines | `docs/design-docs/async-model.md` | `docs/rules/async-and-concurrency.md` |
 | Error handling | — | `docs/rules/error-handling.md` |
-| Tools / hooks / permissions | `docs/design-docs/tool-runtime.md`, `docs/design-docs/permissions-and-hooks.md`, `docs/product-specs/0002-tool-registry.md` | — |
+| Tools / hooks / permissions | `docs/design-docs/tool-runtime.md`, `docs/design-docs/permissions-and-hooks.md`, `docs/product-specs/0002-tool-registry.md`, `docs/product-specs/0014-structured-tool-output.md`, `docs/product-specs/0015-blocking-hook-decisions.md` | — |
 | Tool scheduler / parallel tool calls / bounded runtime state | `docs/product-specs/0012-tool-scheduler-and-state.md`, `docs/design-docs/tool-runtime.md` (Scheduler Boundary) | `docs/rules/async-and-concurrency.md` |
 | File-view system / range reads / fingerprints / caches | `docs/product-specs/0011-file-view-and-caching.md`, `docs/design-docs/io-runtime.md` (Future Slices) | — |
 | Workspace + path policy (file-tool confinement) | `docs/product-specs/0013-workspace-and-path-policy.md`, `docs/design-docs/tool-runtime.md` (Workspace Handle) | — |
 | Permissions surface | `docs/product-specs/0008-permissions.md` | — |
-| Prompts / tool catalog / skill body / cache | `docs/design-docs/api-portability.md`, `docs/design-docs/tool-runtime.md`, `docs/product-specs/0009-skills.md` | `docs/rules/prompt-design.md` |
+| Prompts / tool catalog / skill body / cache | `docs/design-docs/api-portability.md`, `docs/design-docs/tool-runtime.md`, `docs/product-specs/0009-skills.md`, `docs/product-specs/0016-prompt-and-tool-catalog-cache.md` | `docs/rules/prompt-design.md` |
 | Channels (QQ / Discord / Slack / Webhook / …) | `docs/design-docs/channel-abstraction.md`, `docs/product-specs/0003-multi-platform-channels.md` | — |
 | LLM provider portability | `docs/design-docs/api-portability.md` | — |
 | Memory (working / session / long-term / shared) | `docs/design-docs/memory-system.md`, `docs/product-specs/0005-memory-system.md` | — |
@@ -55,7 +55,7 @@ This file is a **routing index**. Rules → `docs/rules/`. Architecture → `doc
 | Automation (cron / periodic / triggered) | `docs/product-specs/0006-automation.md` | — |
 | Web UI surface | `docs/product-specs/0007-web-ui.md`, `docs/FRONTEND.md` | — |
 | Benchmark harness | `docs/product-specs/0010-benchmark-harness.md` | `docs/rules/testing-and-bench.md` |
-| Reliability / observability | `docs/RELIABILITY.md` | — |
+| Reliability / observability | `docs/RELIABILITY.md`, `docs/product-specs/0018-first-loop-observability.md` | — |
 | Security / supply chain | `docs/SECURITY.md`, `docs/SUPPLY_CHAIN_SECURITY.md` | — |
 | CI/CD | `docs/CICD.md` | — |
 | Third-party libraries | — | `docs/rules/libraries.md` |

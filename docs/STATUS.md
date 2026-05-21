@@ -9,7 +9,7 @@
 
 - **Slice:** 33 (`xmake run orangutan` reports slice 33)
 - **Last completed history:**
-  [`histories/2026-05/20260521-2356-docs-deep-review-future-features.md`](histories/2026-05/20260521-2356-docs-deep-review-future-features.md)
+  [`histories/2026-05/20260522-0041-docs-agent-loop-foundation-specs.md`](histories/2026-05/20260522-0041-docs-agent-loop-foundation-specs.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
@@ -35,17 +35,37 @@
   Future built-in slices should not double down on per-kind splits
   like `directory.remove` or single-level enumeration. The
   *future-feature* roadmap surfaced by the second deep review
-  (`/tmp/orangutan-refactor-agent-tool-review-2026-05-21.md`) now
-  lives in three new product specs:
+  (`/tmp/orangutan-refactor-agent-tool-review-2026-05-21.md`) and the
+  companion agent-loop foundation note
+  (`/tmp/orangutan-agent-loop-foundation-2026-05-21.md`) now lives
+  in eight new product specs:
   [`0011-file-view-and-caching.md`](product-specs/0011-file-view-and-caching.md)
   (range reads, fingerprints, `if_version`, bounded caches),
   [`0012-tool-scheduler-and-state.md`](product-specs/0012-tool-scheduler-and-state.md)
   (parallel tool dispatch, per-path locks, `BoundedCache`, index
-  caches), and
+  caches),
   [`0013-workspace-and-path-policy.md`](product-specs/0013-workspace-and-path-policy.md)
-  (workspace confinement, symlink policy, override roots). Pick a
-  v1 acceptance criterion from one of these as the next slice's
-  charter.
+  (workspace confinement, symlink policy, override roots),
+  [`0014-structured-tool-output.md`](product-specs/0014-structured-tool-output.md)
+  (`ToolOutput { text, data, attachments, usage, is_error }`,
+  byte caps, hook redaction),
+  [`0015-blocking-hook-decisions.md`](product-specs/0015-blocking-hook-decisions.md)
+  (`publish_blocking`, `HookDecisionKind`, seven-step canonical
+  dispatch order; closes the 2026-05-18 hook tech-debt row when v1
+  ships),
+  [`0016-prompt-and-tool-catalog-cache.md`](product-specs/0016-prompt-and-tool-catalog-cache.md)
+  (`oran-prompt`, deterministic tool-block renderer, deferred-tool
+  index, `tool.search`, prompt-cache stability bench),
+  [`0017-fake-provider-first-agent-loop.md`](product-specs/0017-fake-provider-first-agent-loop.md)
+  (`provider::FakeProvider`, ten scripted scenarios, agent loop
+  ships against the fake **before** the first real adapter), and
+  [`0018-first-loop-observability.md`](product-specs/0018-first-loop-observability.md)
+  (`oran-storage::TraceRepository`, per-turn `trace_turns` row,
+  cause-chain join via `parent_turn_id`). The recommended build
+  order matches the spec dependency graph: 0013 → 0011 + 0012 → 0014
+  → 0016 → 0017 → 0015 → 0018 (0018 can land any time after 0017
+  since the schema is additive). Pick a v1 acceptance criterion from
+  any of these as the next slice's charter.
 
 ## Library Health
 

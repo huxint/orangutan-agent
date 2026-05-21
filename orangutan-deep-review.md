@@ -1,8 +1,44 @@
 # Orangutan v2 — Deep Architecture & Implementation Review
 
+> **⚠️ STALE — historical artifact (slice 30 snapshot).**
+>
+> This review was generated against slice 30. Slices 31–33 have since
+> closed the four rank-0 items it identified (channel race + executor,
+> bus exception, doc drift, atomic write footgun, file.search
+> cancellation polling). Several other findings have moved into
+> follow-up specs.
+>
+> **For the *current* roadmap, do not act on §6 here — use the live
+> sources of truth instead:**
+>
+> - **Project state today:** [`docs/STATUS.md`](docs/STATUS.md).
+> - **Remaining cleanup from this review:**
+>   [`docs/exec-plans/tech-debt-tracker.md`](docs/exec-plans/tech-debt-tracker.md)
+>   `deep-review-2026-05-21` row (file:line targets preserved).
+> - **Future-feature roadmap (workspace policy, file-view system,
+>   parallel tool scheduler, bounded state, structured tool output,
+>   prompt cache, blocking hooks, fake-provider-first loop,
+>   observability):**
+>   [`docs/product-specs/0011`](docs/product-specs/0011-file-view-and-caching.md)–
+>   [`0018`](docs/product-specs/0018-first-loop-observability.md).
+>
+> A second deep review on 2026-05-21 produced
+> `/tmp/orangutan-refactor-agent-tool-review-2026-05-21.md` and a
+> companion agent-loop-foundation note
+> `/tmp/orangutan-agent-loop-foundation-2026-05-21.md`. Their
+> recommendations have been *fully absorbed* into specs 0011–0018 + the
+> tracker row above; the temp files themselves are not authoritative
+> and may be removed.
+>
+> The body below is preserved for historical context and because the
+> tracker row cross-references its `§4.x.y` anchors. Reading it cold to
+> plan new work risks repeating closed slices.
+
+---
+
 **Generated:** 2026-05-21 · **Reviewer:** Claude Opus 4.7
 **Scope:** Full project goals → current state → defects → forward-looking agent / tool design
-**Read-time:** ~25 minutes · **Action items:** §6 (prioritized)
+**Read-time:** ~25 minutes · **Action items:** §6 (prioritized — see banner above; many already closed)
 
 ---
 

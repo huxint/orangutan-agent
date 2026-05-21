@@ -157,7 +157,20 @@ In rough priority order:
 
 1. **MVP runtime** — single agent, CLI REPL, Anthropic + OpenAI providers, file/shell
    tools, session persistence, memory long-term tier, hook bus skeleton.
-   See [`../product-specs/0001-core-react-loop.md`](../product-specs/0001-core-react-loop.md).
+   See [`../product-specs/0001-core-react-loop.md`](../product-specs/0001-core-react-loop.md);
+   **the v1 sequencing is fake-provider-first** per
+   [`../product-specs/0017-fake-provider-first-agent-loop.md`](../product-specs/0017-fake-provider-first-agent-loop.md)
+   — the loop ships against `provider::FakeProvider` and the ten
+   scripted scenarios before the first vendor adapter is wired.
+   Structured tool output
+   ([`../product-specs/0014-structured-tool-output.md`](../product-specs/0014-structured-tool-output.md)),
+   prompt + tool-catalog cache
+   ([`../product-specs/0016-prompt-and-tool-catalog-cache.md`](../product-specs/0016-prompt-and-tool-catalog-cache.md)),
+   blocking hook decisions
+   ([`../product-specs/0015-blocking-hook-decisions.md`](../product-specs/0015-blocking-hook-decisions.md)),
+   and per-turn observability
+   ([`../product-specs/0018-first-loop-observability.md`](../product-specs/0018-first-loop-observability.md))
+   ship as siblings of the loop, not as bolt-ons.
 2. **Channel abstraction + 2 adapters** — QQ (carried over) and Discord (new). Slack
    and Telegram are stretch.
 3. **Team collaboration v1** — leader/worker strategy with mailbox, shared scratchpad

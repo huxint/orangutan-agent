@@ -19,6 +19,11 @@ ship*).
 | 0011 | [File-view: range reads, change detection, caching](0011-file-view-and-caching.md) | drafted |
 | 0012 | [Tool scheduler + bounded runtime state](0012-tool-scheduler-and-state.md) | drafted |
 | 0013 | [Workspace + path policy](0013-workspace-and-path-policy.md) | drafted |
+| 0014 | [Structured tool output (`ToolOutput` v2)](0014-structured-tool-output.md) | drafted |
+| 0015 | [Blocking hook decisions](0015-blocking-hook-decisions.md) | drafted |
+| 0016 | [Prompt + tool-catalog cache](0016-prompt-and-tool-catalog-cache.md) | drafted |
+| 0017 | [Fake-provider-first agent loop](0017-fake-provider-first-agent-loop.md) | drafted |
+| 0018 | [First-loop observability & trace](0018-first-loop-observability.md) | drafted |
 
 ## Conventions
 

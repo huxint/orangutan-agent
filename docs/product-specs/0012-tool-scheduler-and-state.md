@@ -63,13 +63,25 @@ observe — so the future agent loop can call them safely on day one.
   - Lock rows are bounded with an idle TTL (default 5 min) and reaped on
     a background tick. A cancelled mutation never leaves a dead row.
 - **Bounded parallelism**:
-  - Read-only tools (`file.read`, `file.search`, `directory.list`, future
-    `code.symbols` / `code.references`) may run concurrently up to
-    `max_parallel_tools`.
-  - Mutating tools serialise per canonical path; different paths still
-    run in parallel.
-  - Tools whose `required_capabilities` include `spawn_subprocess` always
-    serialise globally until the future `shell.exec` ships its own pool.
+- **Read-only tools** (may run concurrently up to
+  `max_parallel_tools`): `file.read`, `file.search`,
+  `directory.list`, `directory.scan` (future), `code.outline`
+  (future), `code.symbols` (future), `code.references` (future),
+  `memory.recall` (future).
+- **Mutating tools** (serialise per canonical resource):
+  `file.write`, `file.edit`, `file.modify` (future), `file.delete`,
+  `memory.remember` (future), `memory.forget` (future).
+- **Globally serialised tools** (compete for a process-wide slot
+  until they ship a per-resource lock):
+  `shell.exec` (future — workspace lock until it gains per-cwd
+  scoping), `agent.spawn` (future), `tool.runtime_loader` (future).
+  Their `ToolDef::required_capabilities` already implies the slot
+  via `spawn_subprocess` / `runtime_loader`.
+
+The classification is derived from `ToolDef::required_capabilities`
+(no per-call override; the operator cannot accidentally promote a
+mutating tool to read-only). New built-ins declare their lock class
+implicitly via the capability list.
 - **Approval-gated calls resolve before execution.** A `Verdict::ask`
   short-circuits the batch slot until the broker call returns; a denied or
   pending high-risk call must not be hidden behind unrelated successful
@@ -244,6 +256,21 @@ observe — so the future agent loop can call them safely on day one.
   `BoundedCache` for the line-offset index and regex cache.
 - [`0013-workspace-and-path-policy.md`](0013-workspace-and-path-policy.md)
   — lock keys are *resolved* canonical paths, not input strings.
+- [`0014-structured-tool-output.md`](0014-structured-tool-output.md) —
+  the scheduler enforces output byte caps and aggregates
+  `ToolUsage` across parallel calls.
+- [`0015-blocking-hook-decisions.md`](0015-blocking-hook-decisions.md)
+  — the scheduler is the first consumer of `publish_blocking`;
+  per-call timeout enforcement covers the blocking-hook timeout too.
+- [`0017-fake-provider-first-agent-loop.md`](0017-fake-provider-first-agent-loop.md)
+  — scheduler tests piggyback on the fake-provider harness: a
+  fake provider emits a multi-`tool_use` response, the scheduler
+  fans out, ordering and lock-table invariants are pinned without
+  network.
+- [`0018-first-loop-observability.md`](0018-first-loop-observability.md)
+  — scheduler stats (per-batch parallelism, per-path lock waits,
+  cache hit/miss) ride in the per-turn trace row's `context_json`
+  until they graduate to typed columns.
 - [`0008-permissions.md`](0008-permissions.md) — approval grants gain a
   per-identity ceiling that lives in the broker.
 
