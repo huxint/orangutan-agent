@@ -372,6 +372,91 @@ See `permissions-and-hooks.md` for sink kinds.
 - Tools that call `provider::System::send` themselves to "ask another model". That's
   agent territory; use `agent.spawn` or the orchestration tools.
 
+## Workspace Handle (Forward-Looking)
+
+Today's `DispatchContext` accepts raw `path` strings; built-ins call `oran-io`
+directly. That is acceptable pre-`oran-agent` because the surface is small,
+but it is *not* the boundary the security docs promise.
+
+The forward shape:
+
+- `tool::Workspace` (or `tool::PathPolicy`) is owned by
+  `bootstrap::RuntimeAssembly` and exposed via `DispatchContext::workspace`
+  in the interim, then promoted into `Runtime::workspace()` (capability-gated)
+  when the `tool::Runtime` handle lands.
+- Every filesystem built-in resolves its input *before* permission evaluation
+  via `Workspace::resolve_read` / `resolve_write` / `resolve_delete` /
+  `resolve_list`. The intent is encoded in the method name; callers cannot
+  mix them up at the type level.
+- Symlink policy is uniform across `file.read`, `file.search`,
+  `directory.list`, `file.delete`, `file.write`, and `file.edit` —
+  the current divergence between `file.search`'s root-vs-nested handling and
+  `file.delete`'s symlink rejection closes in the slice that lands
+  `tool::Workspace`.
+
+Full contract, override roots, audit fields, and acceptance criteria live in
+[`../product-specs/0013-workspace-and-path-policy.md`](../product-specs/0013-workspace-and-path-policy.md).
+
+## Scheduler Boundary (Forward-Looking)
+
+The registry is — and stays — **single-threaded**. Concurrency is owned by an
+`agent::ToolScheduler` that sits *between* the provider response parser and
+`Registry::dispatch`. The scheduler:
+
+- batches the provider's parallel `tool_use` blocks,
+- classifies each call as read-only or mutating (via
+  `ToolDef::required_capabilities`),
+- takes a shared lock for reads and an exclusive lock for writes on the
+  canonical workspace-resolved path,
+- runs up to `config.agent.max_parallel_tools` calls in flight,
+- returns results in the original `tool_use` order regardless of execution
+  order (the prompt-cache contract in
+  [`../rules/prompt-design.md`](../rules/prompt-design.md) depends on
+  byte-stable ordering),
+- enforces the per-call timeout and propagates the parent cancellation
+  signal,
+- consumes `hook::Bus::publish_blocking` for `permission_ask_rendered`
+  rendering (the first blocking-hook consumer).
+
+Do **not** add internal locks to `tool::Registry` as a first move. The
+registry runs on the agent strand; the scheduler hops to worker executors at
+dispatch time.
+
+Full contract, ordering guarantees, bounded-state primitives, and acceptance
+criteria live in
+[`../product-specs/0012-tool-scheduler-and-state.md`](../product-specs/0012-tool-scheduler-and-state.md).
+
+## Output Shape v2 (Forward-Looking)
+
+The current `tool::Output { text, is_error }` is too small for the target
+platform. The richer shape is already documented above in "Tool Handler
+Shape":
+
+```cpp
+struct Output {
+  std::string                    text;
+  std::optional<nlohmann::json>  structured;     // data_json in older drafts
+  std::vector<Attachment>        attachments;
+  std::optional<double>          cost_estimate;
+  bool                           is_error = false;
+};
+```
+
+Migration policy:
+
+- Keep the JSON forward-declared in the public header so the
+  compile-budget rule in [`../rules/compile-budget.md`](../rules/compile-budget.md)
+  stays honoured. Heavy JSON lives in `src/oran-tool/`.
+- Built-ins migrate one at a time. Until the migration completes, range-read
+  metadata for `file.read` (spec 0011) rides as a stable text header line:
+  `<path>:<start_line>-<end_line> fingerprint=<token> bytes=<n>[ truncated]`.
+- Provider adapters consume `structured` only when the target protocol
+  supports it (Anthropic Messages tool result blocks accept JSON, OpenAI
+  Responses accepts JSON, both via the adapter layer).
+- The `tool::parse_input<T>` helper tracked under the deep-review backlog
+  (`exec-plans/tech-debt-tracker.md`) lands in the same arc so handlers
+  stop hand-rolling their JSON parsers.
+
 ## Bench
 
 `bench/oran-tool/` ships:

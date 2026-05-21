@@ -16,6 +16,9 @@ ship*).
 | 0008 | [Permissions engine](0008-permissions.md) | drafted |
 | 0009 | [Skills](0009-skills.md) | drafted |
 | 0010 | [Benchmark harness](0010-benchmark-harness.md) | drafted |
+| 0011 | [File-view: range reads, change detection, caching](0011-file-view-and-caching.md) | drafted |
+| 0012 | [Tool scheduler + bounded runtime state](0012-tool-scheduler-and-state.md) | drafted |
+| 0013 | [Workspace + path policy](0013-workspace-and-path-policy.md) | drafted |
 
 ## Conventions
 

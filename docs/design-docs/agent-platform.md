@@ -120,12 +120,19 @@ These six concerns appear in every subsystem and must be designed *uniformly*:
 - Every coroutine takes an `asio::cancellation_slot` or is spawned on one.
 - Each subsystem documents what "cancel" means for it (drop in-flight HTTP? finish the
   iteration then exit? abort hard?).
+- Tool-call cancellation propagation is the `agent::ToolScheduler`'s
+  responsibility, not each tool's. See
+  [`../product-specs/0012-tool-scheduler-and-state.md`](../product-specs/0012-tool-scheduler-and-state.md).
 
 ### 3. Backpressure
 
 - Bounded queues are the default; unbounded queues require justification.
 - The orchestration mailbox is bounded and `try_send` returns a typed
   `MailboxOverflowed` error.
+- **Every cache-like structure has an explicit TTL/LRU + byte budget + stats
+  accessor.** No silent unbounded growth. See
+  [`../product-specs/0012-tool-scheduler-and-state.md`](../product-specs/0012-tool-scheduler-and-state.md)
+  "BoundedCache" and the first bounded-state inventory.
 
 ### 4. Identity
 

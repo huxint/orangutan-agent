@@ -128,6 +128,24 @@ surface for effectful agent actions.
 - Signal helpers for bootstrap shutdown.
 - Watcher APIs if a concrete product flow needs them.
 - Permission/hook wrappers in the owning higher-level libraries.
+- **Range-aware reads + fingerprints (v2)** — see
+  [`../product-specs/0011-file-view-and-caching.md`](../product-specs/0011-file-view-and-caching.md).
+  `read_text_file` returns `ReadTextResult { text, fingerprint, start_line,
+  end_line, returned_bytes, truncated }`; `ReadTextOptions` gains
+  `range: FileRange { line | byte }` and `compute_hash`. Mid-read change
+  detection captures fingerprints before and after the blocking read and
+  returns `conflict` on size/mtime/inode change. Text-only callers keep a
+  thin wrapper that drops the metadata.
+- **Atomic-write durability mode** — `WriteTextOptions::durability`
+  enum {`rename_only` (default), `fsync_file`, `fsync_file_and_parent`}.
+  `rename_only` keeps current behaviour (atomic replacement, no fsync);
+  the fsync modes pay the durability cost for high-value writes only.
+  Cross-process-unique temp leaf names (PID + random suffix) replace the
+  process-local atomic counter so two `orangutan` processes writing to the
+  same final path cannot collide on the temp.
+- **`io::run_blocking` / "already on blocking executor" helper** —
+  exported as a public utility so `oran-tool` (and any future caller)
+  stops duplicating `<fstream>` logic for capped scans.
 
 ## Atomic Writes
 

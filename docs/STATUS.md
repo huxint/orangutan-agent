@@ -9,7 +9,7 @@
 
 - **Slice:** 33 (`xmake run orangutan` reports slice 33)
 - **Last completed history:**
-  [`histories/2026-05/20260521-2231-tool-file-search-cancellation.md`](histories/2026-05/20260521-2231-tool-file-search-cancellation.md)
+  [`histories/2026-05/20260521-2356-docs-deep-review-future-features.md`](histories/2026-05/20260521-2356-docs-deep-review-future-features.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
@@ -33,7 +33,19 @@
   unified delete tool covering both files and folders, and a
   recursive whole-project list (not just single-level children).
   Future built-in slices should not double down on per-kind splits
-  like `directory.remove` or single-level enumeration.
+  like `directory.remove` or single-level enumeration. The
+  *future-feature* roadmap surfaced by the second deep review
+  (`/tmp/orangutan-refactor-agent-tool-review-2026-05-21.md`) now
+  lives in three new product specs:
+  [`0011-file-view-and-caching.md`](product-specs/0011-file-view-and-caching.md)
+  (range reads, fingerprints, `if_version`, bounded caches),
+  [`0012-tool-scheduler-and-state.md`](product-specs/0012-tool-scheduler-and-state.md)
+  (parallel tool dispatch, per-path locks, `BoundedCache`, index
+  caches), and
+  [`0013-workspace-and-path-policy.md`](product-specs/0013-workspace-and-path-policy.md)
+  (workspace confinement, symlink policy, override roots). Pick a
+  v1 acceptance criterion from one of these as the next slice's
+  charter.
 
 ## Library Health
 

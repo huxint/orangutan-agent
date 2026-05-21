@@ -40,6 +40,9 @@ This file is a **routing index**. Rules → `docs/rules/`. Architecture → `doc
 | Async, executors, coroutines | `docs/design-docs/async-model.md` | `docs/rules/async-and-concurrency.md` |
 | Error handling | — | `docs/rules/error-handling.md` |
 | Tools / hooks / permissions | `docs/design-docs/tool-runtime.md`, `docs/design-docs/permissions-and-hooks.md`, `docs/product-specs/0002-tool-registry.md` | — |
+| Tool scheduler / parallel tool calls / bounded runtime state | `docs/product-specs/0012-tool-scheduler-and-state.md`, `docs/design-docs/tool-runtime.md` (Scheduler Boundary) | `docs/rules/async-and-concurrency.md` |
+| File-view system / range reads / fingerprints / caches | `docs/product-specs/0011-file-view-and-caching.md`, `docs/design-docs/io-runtime.md` (Future Slices) | — |
+| Workspace + path policy (file-tool confinement) | `docs/product-specs/0013-workspace-and-path-policy.md`, `docs/design-docs/tool-runtime.md` (Workspace Handle) | — |
 | Permissions surface | `docs/product-specs/0008-permissions.md` | — |
 | Prompts / tool catalog / skill body / cache | `docs/design-docs/api-portability.md`, `docs/design-docs/tool-runtime.md`, `docs/product-specs/0009-skills.md` | `docs/rules/prompt-design.md` |
 | Channels (QQ / Discord / Slack / Webhook / …) | `docs/design-docs/channel-abstraction.md`, `docs/product-specs/0003-multi-platform-channels.md` | — |
