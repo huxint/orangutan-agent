@@ -145,7 +145,8 @@ constexpr std::string_view kFileEditSchema =
     target_positions = {positions.front()};
   }
   auto replaced = apply_replacements(*contents, old_string, new_string, target_positions);
-  auto written = co_await io::write_text_file(ctx.executor, std::move(path), std::move(replaced));
+  io::WriteTextOptions write_opts{.mode = io::WriteMode::truncate, .atomic = true};
+  auto written = co_await io::write_text_file(ctx.executor, std::move(path), std::move(replaced), write_opts);
   if (!written) {
     co_return std::unexpected(std::move(written).error());
   }

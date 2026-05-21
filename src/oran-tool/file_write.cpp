@@ -86,6 +86,11 @@ constexpr std::string_view kFileWriteSchema =
   auto path = parsed["path"].get<std::string>();
   auto content = parsed["content"].get<std::string>();
   const auto byte_count = content.size();
+  // Truncate mode is the dominant "rewrite this file" call shape and the one
+  // an LLM expects to be safe under partial-write failures; route it through
+  // the temp-then-rename atomic path. Append and fail_if_exists keep their
+  // existing semantics because the atomic path is incompatible with both.
+  options.atomic = options.mode == io::WriteMode::truncate;
   auto written = co_await io::write_text_file(ctx.executor, path, std::move(content), options);
   if (!written) {
     co_return std::unexpected(std::move(written).error());

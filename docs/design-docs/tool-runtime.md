@@ -145,6 +145,19 @@ enum class Capability {
 > folders, and a recursive whole-project list (not a separate
 > `directory.remove` / single-level enumeration). The v1
 > narrowings here are the entry point, not the dead end.
+> Slice 32 (2026-05-21) routes `file.edit` and the dominant
+> `file.write` mode (`truncate`) through the new
+> `oran-io::WriteTextOptions::atomic` opt-in: the rewrite is
+> staged to a sibling `.<name>.orangutan.tmp.<seq>` and committed
+> via `std::filesystem::rename`, so a crash or partial write
+> leaves the original target intact instead of truncated. The
+> deep-review BUG-4.1.1 footgun (`file.edit` composing
+> `read_text_file` + `write_text_file` with no rollback) is
+> closed; `file.write` keeps its current semantics for `append`
+> and `fail_if_exists` because the atomic helper is incompatible
+> with both and rejects them with `invalid_argument`. See
+> `docs/design-docs/io-runtime.md` "Atomic Writes" for the
+> contract.
 
 A tool's `required_capabilities` list is **inspected at registration**. The permission
 engine knows the universe of capabilities a tool might use; the tool cannot smuggle in

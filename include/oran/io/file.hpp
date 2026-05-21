@@ -28,6 +28,14 @@ struct ReadTextOptions {
 struct WriteTextOptions {
   WriteMode mode{WriteMode::truncate};
   bool create_parent_directories{false};
+  /// When set, write `contents` to a sibling temp file in the target's parent
+  /// directory and `std::filesystem::rename` it into place — the POSIX
+  /// rename(2) on the same filesystem is atomic, so a crash or partial write
+  /// leaves the original target intact instead of truncated. Requires
+  /// `mode == WriteMode::truncate`; the append / fail_if_exists modes are
+  /// incompatible with the temp-then-rename pattern and return
+  /// `invalid_argument`.
+  bool atomic{false};
 };
 
 enum class DirectoryEntryKind : std::uint8_t {

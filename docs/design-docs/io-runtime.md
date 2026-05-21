@@ -16,6 +16,18 @@ performs the requested operation and returns `core::Result<T>`.
 > The future direction for filesystem mutation is consolidation into a
 > single delete helper that handles files AND folders (with recursion
 > intent expressed by the caller), not separate per-kind helpers.
+>
+> **Slice-32 status (2026-05-21):** `WriteTextOptions` grows an opt-in
+> `atomic` flag. When set on a `WriteMode::truncate` write, the helper
+> stages the contents in a sibling `.<name>.orangutan.tmp.<seq>` and
+> commits via `std::filesystem::rename` — atomic on POSIX same-filesystem
+> rename(2), so a crash or partial write leaves the original target
+> intact instead of truncated. The flag rejects `append` and
+> `fail_if_exists` with `invalid_argument` (temp-then-rename has no
+> coherent semantics for either). The tool layer wires `file.edit`
+> through the atomic path on every rewrite, and `file.write` through
+> the atomic path whenever `mode == truncate`; the deep-review BUG-4.1.1
+> data-loss footgun is closed.
 
 ## Public Surface
 
@@ -31,6 +43,9 @@ struct ReadTextOptions {
 struct WriteTextOptions {
   WriteMode mode{WriteMode::truncate};
   bool create_parent_directories{false};
+  // Commit via a sibling temp file + rename — atomic on POSIX same-filesystem.
+  // Only valid when `mode == WriteMode::truncate`.
+  bool atomic{false};
 };
 
 enum class DirectoryEntryKind { regular_file, directory, symlink, other };
@@ -113,3 +128,25 @@ surface for effectful agent actions.
 - Signal helpers for bootstrap shutdown.
 - Watcher APIs if a concrete product flow needs them.
 - Permission/hook wrappers in the owning higher-level libraries.
+
+## Atomic Writes
+
+`WriteTextOptions::atomic` selects a temp-then-rename commit path:
+
+1. Compute a sibling temp leaf `.<basename>.orangutan.tmp.<seq>` under the
+   target's parent directory. The leading `.` keeps the temp out of LLM-facing
+   directory listings (which hide dotfiles by default); the sequence number is
+   drawn from a process-local `std::atomic<uint64_t>` so concurrent writers to
+   the same final path never share a temp leaf.
+2. Open the temp with `truncate | binary`, write `contents`, explicit flush +
+   close.
+3. `std::filesystem::rename(temp, target)` — atomic on POSIX when temp and
+   target sit on the same filesystem, which is always true because the temp
+   lives in the target's parent.
+4. Any error on (2) or (3) is followed by a best-effort
+   `std::filesystem::remove(temp)` so a failed commit never leaves the
+   `.orangutan.tmp` leftover behind.
+
+`mode = append` and `mode = fail_if_exists` are incompatible with this pattern
+and reject as `invalid_argument` before any I/O — surfacing the contract
+mismatch up-front beats silently overwriting whichever side wins the race.

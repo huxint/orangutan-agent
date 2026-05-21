@@ -4,10 +4,12 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <exception>
 #include <expected>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <limits>
 #include <string>
@@ -157,6 +159,64 @@ constexpr std::size_t kReadChunkSize = 8192;
   return {};
 }
 
+/// Sibling temp path used by the atomic-write fast path. Lives in the target's
+/// parent directory so `std::filesystem::rename` stays on a single filesystem
+/// (and therefore atomic under POSIX rename(2)). Uniqueness comes from a
+/// process-local atomic counter — concurrent callers each pull a fresh
+/// sequence number, so two threads racing for the same final path never share
+/// a temp leaf. The leading `.` keeps the temp out of LLM-facing directory
+/// listings that default to hiding dotfiles.
+[[nodiscard]] std::filesystem::path atomic_temp_path(const std::filesystem::path& target) {
+  static std::atomic<std::uint64_t> counter{0U};
+  const auto seq = counter.fetch_add(1U, std::memory_order_relaxed);
+  auto leaf = std::format(".{}.orangutan.tmp.{}", target.filename().string(), seq);
+  const auto parent = target.parent_path();
+  return parent.empty() ? std::filesystem::path{leaf} : parent / leaf;
+}
+
+[[nodiscard]] core::Result<void> stream_write(const std::filesystem::path& fs_path,
+                                              const std::string& original_path,
+                                              const std::string& contents,
+                                              std::ios::openmode mode) {
+  errno = 0;
+  std::ofstream output{fs_path, mode};
+  if (!output) {
+    return std::unexpected(stream_open_error("failed to open file for writing", original_path));
+  }
+  output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+  if (!output) {
+    return std::unexpected(io_error("failed while writing file", original_path));
+  }
+  // Explicit flush + close so a failure is observed before we rename the
+  // temp into place; the destructor swallows errors on close otherwise.
+  output.close();
+  if (!output) {
+    return std::unexpected(io_error("failed while closing file", original_path));
+  }
+  return {};
+}
+
+[[nodiscard]] core::Result<void> atomic_write_blocking(const std::filesystem::path& target,
+                                                       const std::string& original_path,
+                                                       const std::string& contents) {
+  const auto temp = atomic_temp_path(target);
+  if (auto written = stream_write(temp, original_path, contents, std::ios::binary | std::ios::out | std::ios::trunc);
+      !written) {
+    std::error_code cleanup_ec;
+    std::filesystem::remove(temp, cleanup_ec);
+    return std::unexpected(std::move(written).error());
+  }
+
+  std::error_code rename_ec;
+  std::filesystem::rename(temp, target, rename_ec);
+  if (rename_ec) {
+    std::error_code cleanup_ec;
+    std::filesystem::remove(temp, cleanup_ec);
+    return std::unexpected(system_io_error("failed to commit atomic write", original_path, rename_ec));
+  }
+  return {};
+}
+
 [[nodiscard]] core::Result<void>
 write_text_file_blocking(const std::string& path, const std::string& contents, WriteTextOptions options) {
   if (auto valid = validate_path(path); !valid) {
@@ -165,6 +225,10 @@ write_text_file_blocking(const std::string& path, const std::string& contents, W
   if (static_cast<std::uintmax_t>(contents.size()) >
       static_cast<std::uintmax_t>(std::numeric_limits<std::streamsize>::max())) {
     return std::unexpected(core::Error::invalid_argument("contents too large to write").with("path", path));
+  }
+  if (options.atomic && options.mode != WriteMode::truncate) {
+    return std::unexpected(
+        core::Error::invalid_argument("atomic write requires WriteMode::truncate").with("path", path));
   }
 
   try {
@@ -183,6 +247,10 @@ write_text_file_blocking(const std::string& path, const std::string& contents, W
       return std::unexpected(core::Error{core::ErrorKind::conflict, "file already exists"}.with("path", path));
     }
 
+    if (options.atomic) {
+      return atomic_write_blocking(fs_path, path, contents);
+    }
+
     auto mode = std::ios::binary | std::ios::out;
     if (options.mode == WriteMode::append) {
       mode |= std::ios::app;
@@ -192,16 +260,7 @@ write_text_file_blocking(const std::string& path, const std::string& contents, W
       mode |= std::ios::trunc;
     }
 
-    errno = 0;
-    std::ofstream output{fs_path, mode};
-    if (!output) {
-      return std::unexpected(stream_open_error("failed to open file for writing", path));
-    }
-    output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
-    if (!output) {
-      return std::unexpected(io_error("failed while writing file", path));
-    }
-    return {};
+    return stream_write(fs_path, path, contents, mode);
   } catch (const std::filesystem::filesystem_error& e) {
     return std::unexpected(system_io_error("filesystem write failed", path, e.code()));
   } catch (const std::exception& e) {

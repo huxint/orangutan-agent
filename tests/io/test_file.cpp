@@ -269,3 +269,87 @@ TEST_CASE("delete_file refuses symlinks with invalid_argument and leaves them in
     REQUIRE(std::filesystem::exists(target));
   });
 }
+
+TEST_CASE("write_text_file atomic mode commits via rename and leaves no temp behind", "[unit][io][file][atomic]") {
+  TempDir temp{"oran-io-atomic-ok"};
+  const auto file = temp.path() / "data.txt";
+  write_direct(file, "old contents");
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto result = co_await io::write_text_file(context.get_executor(),
+                                               file.string(),
+                                               "new contents",
+                                               io::WriteTextOptions{.atomic = true});
+    REQUIRE(result.has_value());
+
+    auto read_back = co_await io::read_text_file(context.get_executor(), file.string());
+    REQUIRE(read_back.has_value());
+    REQUIRE(*read_back == "new contents");
+
+    // No stray sibling `.<name>.orangutan.tmp.<seq>` file should survive a
+    // successful atomic commit.
+    auto listing = co_await io::list_directory(context.get_executor(),
+                                               temp.path().string(),
+                                               io::ListDirectoryOptions{.include_hidden = true});
+    REQUIRE(listing.has_value());
+    REQUIRE(listing->size() == 1);
+    REQUIRE((*listing)[0].name == "data.txt");
+  });
+}
+
+TEST_CASE("write_text_file atomic mode rejects append and fail_if_exists", "[unit][io][file][atomic]") {
+  TempDir temp{"oran-io-atomic-bad-mode"};
+  const auto file = temp.path() / "data.txt";
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto appended = co_await io::write_text_file(context.get_executor(),
+                                                 file.string(),
+                                                 "x",
+                                                 io::WriteTextOptions{.mode = io::WriteMode::append, .atomic = true});
+    REQUIRE_FALSE(appended.has_value());
+    REQUIRE(appended.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto fail_if_exists =
+        co_await io::write_text_file(context.get_executor(),
+                                     file.string(),
+                                     "x",
+                                     io::WriteTextOptions{.mode = io::WriteMode::fail_if_exists, .atomic = true});
+    REQUIRE_FALSE(fail_if_exists.has_value());
+    REQUIRE(fail_if_exists.error().kind() == core::ErrorKind::invalid_argument);
+
+    // The rejection must happen before any I/O — the destination file stays
+    // unborn.
+    REQUIRE_FALSE(std::filesystem::exists(file));
+  });
+}
+
+TEST_CASE("write_text_file atomic mode preserves original when commit fails", "[unit][io][file][atomic]") {
+  TempDir temp{"oran-io-atomic-fail"};
+  const auto file = temp.path() / "data.txt";
+  write_direct(file, "original");
+
+  // Replace the target with a directory of the same name. The atomic write
+  // will produce a valid sibling temp file, but `std::filesystem::rename` will
+  // refuse to overwrite a directory with a regular file — exercising the
+  // commit-failure cleanup path.
+  std::filesystem::remove(file);
+  std::filesystem::create_directory(file);
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto result = co_await io::write_text_file(context.get_executor(),
+                                               file.string(),
+                                               "new",
+                                               io::WriteTextOptions{.atomic = true});
+    REQUIRE_FALSE(result.has_value());
+
+    // The pre-existing directory is still in place, and no `.<name>.orangutan.tmp.*`
+    // leftover survives the failed commit.
+    REQUIRE(std::filesystem::is_directory(file));
+    auto listing = co_await io::list_directory(context.get_executor(),
+                                               temp.path().string(),
+                                               io::ListDirectoryOptions{.include_hidden = true});
+    REQUIRE(listing.has_value());
+    REQUIRE(listing->size() == 1);
+    REQUIRE((*listing)[0].name == "data.txt");
+  });
+}
