@@ -7,12 +7,13 @@ explicitly overridden. Before slice 37 every built-in file tool read `path`
 straight from the JSON input and called `oran-io` without canonicalisation,
 traversal checks, or symlink policy. Slice 37 adds the resolver foundation and
 migrates `file.read` when `DispatchContext::workspace` is supplied; slice 38
-migrates `file.write`, `file.edit`, and `file.delete` through the same seam.
-`file.search` and `directory.list` still need the same migration, and full
-runtime confinement still needs bootstrap-owned `Workspace` values plus the
-pre-permission resolver boundary. Permission rules can gate a *capability* or a
-*name*, but a broad read/list allow can still inspect outside the workspace
-until this spec's remaining built-in migration is complete.
+migrates `file.write`, `file.edit`, and `file.delete` through the same seam;
+slice 39 migrates `file.search` through `resolve_list`. `directory.list` still
+needs the same migration, and full runtime confinement still needs
+bootstrap-owned `Workspace` values plus the pre-permission resolver boundary.
+Permission rules can gate a *capability* or a *name*, but a broad read/list
+allow can still inspect outside the workspace until this spec's remaining
+built-in migration is complete.
 
 For a coding agent, "ask before write" is not a substitute for a workspace
 boundary. The cost of an escape — overwriting `~/.ssh/authorized_keys`,
@@ -22,10 +23,11 @@ the same resolver.
 
 Today's seams that motivate this spec:
 
-- `file.search` and `directory.list` accept raw path strings and call
-  `io::*` / `std::filesystem` directly; `DispatchContext::workspace` exists as
-  of slice 37 and the mutating tools adopted it in slice 38, but these
-  read/list tools have not adopted it yet.
+- `directory.list` accepts a raw path string and calls `io::list_directory`
+  directly; `DispatchContext::workspace` exists as of slice 37 and the
+  mutating tools adopted it in slice 38 (read/list-side migration started
+  with `file.search` in slice 39), but `directory.list` has not adopted it
+  yet.
 - `file.search` and `file.delete` disagree on symlink behaviour. The root path
   in `file.search` follows symlinks (`is_regular_file` / `is_directory`,
   `src/oran-tool/file_search.cpp:275-295`), nested entries skip them
@@ -59,7 +61,17 @@ Relative in-workspace paths work, traversal outside the workspace rejects with
 `reason=outside_workspace`, and mutating symlink targets reject with
 `reason=symlink_target`.
 
-Still pending: `file.search` and `directory.list` adoption; config parsing for
+**Slice 39 (2026-05-22):** `file.search` now resolves its input through
+`Workspace::resolve_list` when `DispatchContext::workspace` is supplied, before
+the executor hop that drives the blocking walk. Single-file and recursive-walk
+shapes still work; relative in-workspace searches succeed, traversal rejects
+with `reason=outside_workspace`, root-side symlink escapes reject with
+`reason=symlink_escape`, and `permissions.workspace.extra_read_roots` widens
+the resolver in the read direction the same way it does for `file.read`.
+Nested entries during the walk continue to skip symlinks wholesale — a
+stricter form of the same workspace policy.
+
+Still pending: `directory.list` adoption; config parsing for
 `permissions.workspace.extra_read_roots` / `extra_write_roots`; bootstrap
 ownership; audit metadata; and moving resolution to the pre-permission
 dispatch boundary.

@@ -2,6 +2,12 @@
 //
 // Slice 20 shipped literal-substring matching; slice 24 adds the
 // `"regex": true` opt-in tracked in `docs/exec-plans/tech-debt-tracker.md`.
+// Slice 39 resolves the input path through `tool::Workspace::resolve_list`
+// when `DispatchContext::workspace` is supplied so a directory search cannot
+// escape the workspace via traversal or a root-side symlink. Nested entries
+// continue to skip symlinks wholesale during the recursive walk — a stricter
+// form of the same "symlinks may only follow when they stay inside the
+// workspace" rule.
 // Scans a UTF-8 text file or (recursively) a directory for matches and
 // renders one `path:line:text` line per match. The recursive walk skips
 // files containing NUL bytes in their first 8 KiB (a ripgrep-style binary
@@ -50,6 +56,7 @@
 #include <oran/core/tool_def.hpp>
 #include <oran/permission/input_pattern.hpp>
 #include <oran/tool/registry.hpp>
+#include <oran/tool/workspace.hpp>
 
 namespace orangutan::tool {
 
@@ -377,6 +384,14 @@ void scan_text(std::string_view contents,
   auto opts = parse_input(input_json);
   if (!opts) {
     co_return std::unexpected(std::move(opts).error());
+  }
+
+  if (ctx.workspace != nullptr) {
+    auto resolved = ctx.workspace->resolve_list(opts->path);
+    if (!resolved) {
+      co_return std::unexpected(std::move(resolved).error());
+    }
+    opts->path = std::move(resolved->absolute_path);
   }
 
   // One executor hop so the blocking filesystem walk runs on the runtime's

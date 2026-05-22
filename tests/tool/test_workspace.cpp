@@ -428,3 +428,83 @@ TEST_CASE("file.delete rejects workspace symlink mutation targets", "[unit][tool
     REQUIRE(std::filesystem::exists(root.path() / "target.txt"));
   });
 }
+
+TEST_CASE("file.search uses DispatchContext workspace for relative searches and traversal refusal",
+          "[unit][tool][workspace][file_search]") {
+  TempDir root{"oran-workspace-file-search"};
+  TempDir outside{"oran-workspace-file-search-outside"};
+  write_text(root.path() / "nested" / "note.txt", "alpha\nneedle here\nbeta");
+  write_text(outside.path() / "secret.txt", "needle outside");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+
+    auto workspace = make_workspace(root.path());
+    auto rules = allow_tool_rules(std::string{tool::kFileSearchName}, core::Capability::read_file);
+    permission::RecordingAuditSink sink;
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+
+    auto found =
+        co_await registry.dispatch(tool::kFileSearchName, R"({"path":"nested/note.txt","pattern":"needle"})", ctx);
+    REQUIRE(found.has_value());
+    REQUIRE(found->text.find("needle here") != std::string::npos);
+
+    std::error_code ec;
+    const auto outside_relative_path = std::filesystem::relative(outside.path() / "secret.txt", root.path(), ec);
+    REQUIRE(ec.value() == 0);
+    const auto escaped_input = std::format(R"({{"path":"{}","pattern":"needle"}})", outside_relative_path.string());
+    auto escaped = co_await registry.dispatch(tool::kFileSearchName, escaped_input, ctx);
+    REQUIRE_FALSE(escaped.has_value());
+    REQUIRE(escaped.error().kind() == core::ErrorKind::permission_denied);
+    REQUIRE(context_has(escaped.error(), "reason", "outside_workspace"));
+  });
+}
+
+TEST_CASE("file.search rejects symlink roots that escape the workspace", "[unit][tool][workspace][file_search]") {
+  TempDir root{"oran-workspace-file-search-symlink"};
+  TempDir outside{"oran-workspace-file-search-symlink-outside"};
+  write_text(outside.path() / "secret.txt", "needle outside");
+  create_symlink_or_skip(outside.path() / "secret.txt", root.path() / "outside-link.txt");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+
+    auto workspace = make_workspace(root.path());
+    auto rules = allow_tool_rules(std::string{tool::kFileSearchName}, core::Capability::read_file);
+    permission::RecordingAuditSink sink;
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+
+    auto escaped =
+        co_await registry.dispatch(tool::kFileSearchName, R"({"path":"outside-link.txt","pattern":"needle"})", ctx);
+    REQUIRE_FALSE(escaped.has_value());
+    REQUIRE(escaped.error().kind() == core::ErrorKind::permission_denied);
+    REQUIRE(context_has(escaped.error(), "reason", "symlink_escape"));
+  });
+}
+
+TEST_CASE("file.search honors extra_read_roots through the workspace seam", "[unit][tool][workspace][file_search]") {
+  TempDir root{"oran-workspace-file-search-primary"};
+  TempDir readable{"oran-workspace-file-search-readable"};
+  write_text(readable.path() / "audit.log", "needle in the override root");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+
+    auto workspace = make_workspace(root.path(),
+                                    tool::WorkspaceOptions{
+                                        .extra_read_roots = {readable.path().string()},
+                                    });
+    auto rules = allow_tool_rules(std::string{tool::kFileSearchName}, core::Capability::read_file);
+    permission::RecordingAuditSink sink;
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+
+    const auto override_input =
+        std::format(R"({{"path":"{}","pattern":"needle"}})", (readable.path() / "audit.log").string());
+    auto found = co_await registry.dispatch(tool::kFileSearchName, override_input, ctx);
+    REQUIRE(found.has_value());
+    REQUIRE(found->text.find("needle in the override root") != std::string::npos);
+  });
+}

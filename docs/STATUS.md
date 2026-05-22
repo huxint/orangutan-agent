@@ -7,22 +7,21 @@
 
 ## Snapshot
 
-- **Slice:** 38 (`xmake run orangutan` reports slice 38)
+- **Slice:** 39 (`xmake run orangutan` reports slice 39)
 - **Last completed history:**
-  [`histories/2026-05/20260522-1559-tool-workspace-mutations.md`](histories/2026-05/20260522-1559-tool-workspace-mutations.md)
+  [`histories/2026-05/20260522-1700-tool-workspace-file-search.md`](histories/2026-05/20260522-1700-tool-workspace-file-search.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
-- **Next intended slice:** Continue spec 0013 — slices 37-38 shipped
-  `tool::Workspace` plus the interim `DispatchContext::workspace`
-  seam, migrated `file.read`, and migrated the mutating built-ins
-  `file.write`, `file.edit`, and `file.delete` when that workspace
-  pointer is supplied. The remaining workspace work is to thread the
-  resolver through `file.search` and `directory.list`, then move
-  resolution/audit metadata to the
-  pre-permission dispatch boundary and wire config/bootstrap ownership
-  for `permissions.workspace.extra_{read,write}_roots`. The first
+- **Next intended slice:** Continue spec 0013 — slices 37-39 shipped
+  `tool::Workspace`, the interim `DispatchContext::workspace`
+  seam, and migrated `file.read`, `file.write`, `file.edit`,
+  `file.delete`, and `file.search` through that seam. The remaining
+  workspace work is to thread the resolver through `directory.list`,
+  then move resolution/audit metadata to the pre-permission dispatch
+  boundary and wire config/bootstrap ownership for
+  `permissions.workspace.extra_{read,write}_roots`. The first
   provider adapter (Anthropic Messages) remains a multi-slice effort
   that needs an exec plan plus `oran-http` + libcurl wiring first;
   blocking hook semantics with veto are still gated on `oran-agent`;
@@ -86,7 +85,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 19 cases / 148 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
 - `oran-hook`: 15 cases / 97 assertions.
-- `oran-tool`: 106 cases / 887 assertions.
+- `oran-tool`: 109 cases / 911 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 44 cases / 140 assertions.
 
