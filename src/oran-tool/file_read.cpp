@@ -251,6 +251,8 @@ core::Result<void> register_file_read(Registry& registry) {
                      "followed by the requested file slice on the next line.",
       .input_schema_json = std::string{kFileReadSchema},
       .required_capabilities = {core::Capability::read_file},
+      .deferred = false,
+      .category = "file",
   };
   return registry.add(std::move(def), &file_read_handler);
 }

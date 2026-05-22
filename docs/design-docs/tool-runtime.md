@@ -425,9 +425,19 @@ Some tools are **deferred** — present in the catalog but not surfaced to the L
 explicitly looked up via `tool-search`. This pattern compresses the prompt without
 losing capability.
 
+> **Status (slice 59, 2026-05-24):** `core::ToolDef` now carries
+> `deferred` and `category`, and `tool::CatalogRenderer` can split a
+> `Registry::catalog()` snapshot into sorted active full-schema blocks and
+> sorted deferred name/description rows. `Registry::catalog()` still returns
+> all registered tools; there is no `deferred_catalog()` API yet, and
+> `tool.search` / per-session promotion state remain future `oran-agent` /
+> `oran-prompt` work.
+
 Implementation:
 
-- `ToolDef::deferred = true` registers the tool in `deferred_catalog()` only.
+- `ToolDef::deferred = true` marks the tool for deferred rendering.
+  Today this is consumed by `tool::CatalogRenderer`; a future
+  `deferred_catalog()` convenience may expose the filtered snapshot.
 - The default system prompt builder lists the deferred tool *names + one-line descriptions*
   in a compact "Deferred Tools" section.
 - `tool-search` is a non-deferred tool that returns the full schema on demand.
@@ -549,6 +559,35 @@ Full contract, ordering guarantees, bounded-state primitives, and acceptance
 criteria live in
 [`../product-specs/0012-tool-scheduler-and-state.md`](../product-specs/0012-tool-scheduler-and-state.md).
 
+## Catalog Renderer
+
+`tool::CatalogRenderer` is the pre-`oran-prompt` renderer for prompt-facing
+tool-catalog bytes. It accepts a `core::ToolDef` snapshot, sorts by tool
+name, renders non-deferred tools as full-schema blocks, and renders
+deferred tools as compact name/description rows. Rendering a block depends
+only on stable `ToolDef` fields: `name`, `description`,
+`input_schema_json`, `required_capabilities`, and `category`; `deferred`
+only decides whether that block is emitted as active full schema or as a
+deferred index row.
+JSON Schema canonicalisation lives in `src/oran-tool/catalog.cpp`; the
+public header stays nlohmann-free through a small pimpl.
+
+Full-schema blocks are memoised in a bounded rendered-block cache keyed by
+the fields that affect the block bytes plus `renderer_version`. The default cap is 256
+entries, matching spec 0012's bounded-state inventory; setting
+`max_cached_blocks = 0` disables memoisation rather than creating an
+unbounded cache. The public
+`ToolCatalogCacheStats` shape exposes only aggregate counters and the
+renderer version, never tool schemas or cache keys. `oran-prompt` will
+consume this renderer when the prompt builder lands; active-tool config,
+`tool.search`, and promotion state remain future work.
+
+Prompt-shape reference: this slice adopts the Piebald Claude Code prompt
+corpus' stable tool-description pattern — one deterministic block per tool
+with name, description, and schema, plus compact discovery rows for deferred
+tools — and rejects per-invocation status or timing text in catalog bytes
+because that would violate `prompt-design.md`'s cache-prefix invariants.
+
 ## Output Shape v2 (Forward-Looking)
 
 The current `tool::Output { text, is_error }` is too small for the target
@@ -587,6 +626,9 @@ Migration policy:
 - `bench/oran-tool/registry_lookup` — N-tool catalog, repeated `find()` calls.
 - `bench/oran-tool/dispatch_overhead` — dispatch path latency without doing real work.
 - `bench/oran-tool/permission_eval` — cost of permission engine on realistic rule sets.
+- `bench/oran-tool/catalog.render_cold_32_tools` vs.
+  `catalog.render_hot_32_tools` — cold JSON Schema canonicalisation and
+  block rendering vs. the bounded rendered-block cache hot path.
 
 `compare.cpp` reports the dispatch overhead as a percentage of typical tool latency
 (file.read of 4 KB; shell.exec of `/bin/true`).

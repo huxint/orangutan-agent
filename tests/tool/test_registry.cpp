@@ -14,6 +14,7 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include <asio/bind_cancellation_slot.hpp>
 #include <asio/cancellation_signal.hpp>
@@ -178,6 +179,112 @@ TEST_CASE("Registry::catalog reports tools in insertion order", "[unit][tool][re
   REQUIRE(catalog[2].name == "gamma");
 }
 
+TEST_CASE("CatalogRenderer renders a deterministic full-schema tool block", "[unit][tool][catalog]") {
+  core::ToolDef def{
+      .name = "file.read",
+      .description = "Read a UTF-8 text file.",
+      .input_schema_json =
+          R"({"required":["path"],"properties":{"path":{"type":"string"}},"type":"object","additionalProperties":false})",
+      .required_capabilities = {core::Capability::read_file},
+      .deferred = false,
+      .category = "file",
+  };
+
+  tool::CatalogRenderer renderer;
+  auto first = renderer.render_tool_block(def);
+  REQUIRE(first.has_value());
+  auto second = renderer.render_tool_block(def);
+  REQUIRE(second.has_value());
+
+  REQUIRE(*first == *second);
+  REQUIRE(first->contains("Tool: file.read\n"));
+  REQUIRE(first->contains("Description: Read a UTF-8 text file.\n"));
+  REQUIRE(first->contains("Category: file\n"));
+  REQUIRE(first->contains("Capabilities: read_file\n"));
+  REQUIRE(first->contains("Input Schema:\n"));
+  REQUIRE(first->contains(R"("additionalProperties": false)"));
+  REQUIRE(first->contains(R"("path")"));
+
+  const auto stats = renderer.cache_stats();
+  REQUIRE(stats.renderer_version == 1);
+  REQUIRE(stats.blocks.misses == 1);
+  REQUIRE(stats.blocks.hits == 1);
+  REQUIRE(stats.blocks.current_entries == 1);
+}
+
+TEST_CASE("CatalogRenderer sorts active tools and separates deferred entries", "[unit][tool][catalog]") {
+  auto active_b = core::ToolDef::with_no_input("file.write", "Write a file.");
+  active_b.required_capabilities = {core::Capability::write_file};
+  active_b.category = "file";
+
+  auto deferred = core::ToolDef::with_no_input("memory.recall", "Recall memory.");
+  deferred.required_capabilities = {core::Capability::read_memory};
+  deferred.deferred = true;
+  deferred.category = "memory";
+
+  auto active_a = core::ToolDef::with_no_input("file.read", "Read a file.");
+  active_a.required_capabilities = {core::Capability::read_file};
+  active_a.category = "file";
+
+  const std::vector<core::ToolDef> defs{active_b, deferred, active_a};
+  tool::CatalogRenderer renderer;
+  auto rendered = renderer.render_catalog(defs);
+  REQUIRE(rendered.has_value());
+
+  REQUIRE(rendered->active_blocks.size() == 2);
+  REQUIRE(rendered->active_blocks[0].starts_with("Tool: file.read\n"));
+  REQUIRE(rendered->active_blocks[1].starts_with("Tool: file.write\n"));
+  REQUIRE(rendered->active_text.find("Tool: file.read") < rendered->active_text.find("Tool: file.write"));
+  REQUIRE_FALSE(rendered->active_text.contains("memory.recall"));
+  REQUIRE(rendered->deferred_entries == std::vector<std::string>{"memory.recall - Recall memory."});
+  REQUIRE(rendered->deferred_text == "memory.recall - Recall memory.");
+}
+
+TEST_CASE("CatalogRenderer cache key includes renderer version and rendered ToolDef fields", "[unit][tool][catalog]") {
+  auto def = core::ToolDef::with_no_input("alpha.tool", "Alpha.");
+  def.required_capabilities = {core::Capability::read_file};
+  def.category = "alpha";
+
+  tool::CatalogRenderer v1{tool::ToolCatalogRenderOptions{.renderer_version = 1, .max_cached_blocks = 256}};
+  tool::CatalogRenderer v2{tool::ToolCatalogRenderOptions{.renderer_version = 2, .max_cached_blocks = 256}};
+
+  const auto hash_v1 = tool::tool_def_render_hash(def, 1);
+  const auto hash_v2 = tool::tool_def_render_hash(def, 2);
+  REQUIRE(hash_v1 != hash_v2);
+
+  auto deferred_only = def;
+  deferred_only.deferred = true;
+  REQUIRE(tool::tool_def_render_hash(def, 1) == tool::tool_def_render_hash(deferred_only, 1));
+
+  auto category_changed = def;
+  category_changed.category = "beta";
+  REQUIRE(tool::tool_def_render_hash(def, 1) != tool::tool_def_render_hash(category_changed, 1));
+
+  REQUIRE(v1.render_tool_block(def).has_value());
+  REQUIRE(v1.render_tool_block(def).has_value());
+  REQUIRE(v1.cache_stats().blocks.misses == 1);
+  REQUIRE(v1.cache_stats().blocks.hits == 1);
+
+  REQUIRE(v2.render_tool_block(def).has_value());
+  REQUIRE(v2.cache_stats().renderer_version == 2);
+  REQUIRE(v2.cache_stats().blocks.misses == 1);
+  REQUIRE(v2.cache_stats().blocks.hits == 0);
+}
+
+TEST_CASE("CatalogRenderer can disable memoisation without unbounded state", "[unit][tool][catalog]") {
+  auto def = core::ToolDef::with_no_input("alpha.tool", "Alpha.");
+  tool::CatalogRenderer renderer{tool::ToolCatalogRenderOptions{.renderer_version = 1, .max_cached_blocks = 0}};
+
+  REQUIRE(renderer.render_tool_block(def).has_value());
+  REQUIRE(renderer.render_tool_block(def).has_value());
+
+  const auto stats = renderer.cache_stats();
+  REQUIRE(stats.blocks.hits == 0);
+  REQUIRE(stats.blocks.misses == 2);
+  REQUIRE(stats.blocks.current_entries == 0);
+  REQUIRE(stats.blocks.current_bytes == 0);
+}
+
 TEST_CASE("Registry::remove unregisters tools and reports not_found on a second call", "[unit][tool][registry]") {
   tool::Registry registry;
   REQUIRE(registry.add(core::ToolDef::with_no_input("alpha", "alpha"), make_echo_handler()).has_value());
@@ -310,6 +417,8 @@ TEST_CASE("Registry::dispatch honors a capability scope on the firing rule", "[u
         .description = "tool needing read_file",
         .input_schema_json = "{}",
         .required_capabilities = {core::Capability::read_file},
+        .deferred = false,
+        .category = {},
     };
     REQUIRE(registry.add(std::move(def), make_echo_handler()).has_value());
 
@@ -2519,6 +2628,8 @@ async::Awaitable<core::Result<tool::Output>> noop_error_handler(std::string_view
       .description = "noop",
       .input_schema_json = "{}",
       .required_capabilities = {},
+      .deferred = false,
+      .category = {},
   };
 }
 

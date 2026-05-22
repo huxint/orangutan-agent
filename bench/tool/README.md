@@ -80,3 +80,11 @@ A-vs-B comparisons:
   observer subscribed to both bookend events. Both should be sub-µs
   — the cost of an expensive sink (shell, webhook) is the sink's own
   bill, not the bus's.
+- `catalog.render_cold_32_tools` vs. `catalog.render_hot_32_tools`:
+  deterministic prompt-facing rendering of a 32-tool catalog with every
+  fifth tool deferred. The cold path parses and canonicalises each
+  active tool's JSON Schema before writing the block. The hot path
+  reuses the bounded rendered-block cache keyed by the stable `ToolDef`
+  fields plus renderer version, then still sorts and joins the catalog
+  snapshot. The delta is the cache value future `oran-prompt` should
+  see when repeated turns keep the same tool declarations.

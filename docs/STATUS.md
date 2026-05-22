@@ -7,15 +7,26 @@
 
 ## Snapshot
 
-- **Slice:** 58 (`xmake run orangutan` reports slice 58)
+- **Slice:** 59 (`xmake run orangutan` reports slice 59)
 - **Last completed history:**
-  [`histories/2026-05/20260524-0145-io-read-cache-watcher.md`](histories/2026-05/20260524-0145-io-read-cache-watcher.md)
+  [`histories/2026-05/20260524-0200-tool-catalog-renderer.md`](histories/2026-05/20260524-0200-tool-catalog-renderer.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 58
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 59
+  starts the prompt-catalog cache prework shared by specs 0012 and
+  0016: `core::ToolDef` now carries the documented `deferred` and
+  `category` metadata, and `oran-tool` exposes `tool::CatalogRenderer`,
+  a single-strand deterministic renderer that sorts catalog snapshots by
+  tool name, renders non-deferred tools as canonical schema blocks,
+  renders deferred tools as name/description index rows, and memoises
+  full-schema blocks in a bounded 256-entry cache keyed by stable
+  rendered-block fields plus renderer version. The public stats report
+  aggregate cache counters only. This is not yet the `oran-prompt`
+  builder, active-tool config, `tool.search`, or promotion-set slice.
+  Slice 58
   closes spec 0011 v1.1's IO-layer watcher item: `oran-io` now exposes
   `watch_read_text_file_ranged_cache(executor, root, options)`, a
   cancel-aware Linux/inotify watcher that registers one directory or a
@@ -88,14 +99,14 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 ## Latest Library Surfaces
 
-- `oran-core`: 69 cases / 446 assertions.
+- `oran-core`: 69 cases / 450 assertions.
 - `oran-async`: 9 cases / 43 assertions.
 - `oran-io`: 49 cases / 286 assertions.
 - `oran-storage`: 60 cases / 706 assertions.
 - `oran-config`: 24 cases / 171 assertions.
 - `oran-permission`: 86 cases / 390 assertions.
 - `oran-hook`: 15 cases / 97 assertions.
-- `oran-tool`: 136 cases / 1170 assertions.
+- `oran-tool`: 140 cases / 1209 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 153 assertions.
 

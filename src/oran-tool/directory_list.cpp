@@ -156,6 +156,8 @@ core::Result<void> register_directory_list(Registry& registry) {
                      "directory has more entries than `max_entries`; raise the cap and retry.",
       .input_schema_json = std::string{kDirectoryListSchema},
       .required_capabilities = {core::Capability::list_directory},
+      .deferred = false,
+      .category = "directory",
   };
   return registry.add(std::move(def), &directory_list_handler);
 }

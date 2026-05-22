@@ -13,10 +13,15 @@ TEST_CASE("ToolDef aggregate-init exposes name/description/schema", "[unit][core
       .name = "file.read",
       .description = "Read a UTF-8 text file.",
       .input_schema_json = R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})",
+      .required_capabilities = {},
+      .deferred = false,
+      .category = {},
   };
   REQUIRE(td.name == "file.read");
   REQUIRE(td.description == "Read a UTF-8 text file.");
   REQUIRE(td.input_schema_json.contains("\"path\""));
+  REQUIRE_FALSE(td.deferred);
+  REQUIRE_FALSE(td.category.has_value());
 }
 
 TEST_CASE("ToolDef::with_no_input fills a minimal object schema", "[unit][core][tool_def]") {
@@ -44,6 +49,14 @@ TEST_CASE("ToolDef equality is member-wise", "[unit][core][tool_def]") {
   ToolDef differ_schema = lhs;
   differ_schema.input_schema_json = R"({"type":"object"})";
   REQUIRE_FALSE(differ_schema == lhs);
+
+  ToolDef differ_deferred = lhs;
+  differ_deferred.deferred = true;
+  REQUIRE_FALSE(differ_deferred == lhs);
+
+  ToolDef differ_category = lhs;
+  differ_category.category = "time";
+  REQUIRE_FALSE(differ_category == lhs);
 }
 
 TEST_CASE("ToolDef is move-constructed cheaply", "[unit][core][tool_def]") {

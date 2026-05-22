@@ -873,6 +873,8 @@ core::Result<void> register_file_search(Registry& registry) {
                      "matches` (non-error) when nothing matched.",
       .input_schema_json = std::string{kFileSearchSchema},
       .required_capabilities = {core::Capability::read_file},
+      .deferred = false,
+      .category = "file",
   };
   return registry.add(std::move(def), &file_search_handler);
 }

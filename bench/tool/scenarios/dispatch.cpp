@@ -64,7 +64,9 @@ void register_tool_dispatch(ankerl::nanobench::Bench& bench) {
   auto add_result = registry.add(core::ToolDef{.name = "noop",
                                                .description = "noop bench tool",
                                                .input_schema_json = "{}",
-                                               .required_capabilities = {core::Capability::read_file}},
+                                               .required_capabilities = {core::Capability::read_file},
+                                               .deferred = false,
+                                               .category = {}},
                                  &noop_handler);
   if (!add_result) {
     std::abort();

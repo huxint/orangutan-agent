@@ -76,6 +76,8 @@ core::Result<void> register_file_delete(Registry& registry) {
                      "path. On success returns the literal text `deleted <path>`.",
       .input_schema_json = std::string{kFileDeleteSchema},
       .required_capabilities = {core::Capability::delete_path},
+      .deferred = false,
+      .category = "file",
   };
   return registry.add(std::move(def), &file_delete_handler);
 }

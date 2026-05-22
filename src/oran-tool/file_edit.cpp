@@ -288,6 +288,8 @@ core::Result<void> register_file_edit(Registry& registry) {
                      "listing the number of replacements applied.",
       .input_schema_json = std::string{kFileEditSchema},
       .required_capabilities = {core::Capability::edit_file},
+      .deferred = false,
+      .category = "file",
   };
   return registry.add(std::move(def), &file_edit_handler);
 }

@@ -160,7 +160,7 @@ implicitly via the capability list.
   | `read_text_file_ranged` line-offset index | LRU + TTL + byte cap + stats | 32 entries / 8 MiB / 10 min |
   | `read_text_file_ranged` file-view cache | LRU + TTL + byte cap + stats | 64 entries / 16 MiB / 10 min |
   | `read_text_file_ranged` singleflight table | max in-flight rows + stats | 64 entries |
-  | Tool catalog rendered-block cache | LRU by `(ToolDef hash, cache_version)` | 256 entries |
+  | Tool catalog rendered-block cache | LRU by `(rendered ToolDef hash, cache_version)` (`tool::CatalogRenderer`, slice 59) | 256 entries |
 - **Observable.** Every cache and lock table exposes a `Stats` accessor;
   once `oran-log` lands, a periodic tick publishes them as structured log
   events. **Status (slice 54, 2026-05-24):** `oran-io` already exposes
@@ -174,7 +174,11 @@ implicitly via the capability list.
   event source now exists as
   `watch_read_text_file_ranged_cache(executor, root, options)`, returning
   aggregate-only `ReadTextFileWatchStats` while using the same path-scoped
-  invalidation seam internally.
+  invalidation seam internally. **Status (slice 59,
+  2026-05-24):** `oran-tool` now exposes
+  `tool::CatalogRenderer`, whose bounded rendered-block cache is capped at
+  256 entries by default and reports aggregate hit/miss/eviction counters
+  via `ToolCatalogCacheStats` without exposing tool schemas or cache keys.
   Pre-`oran-log`, `--explain-rules`-style debug surfaces in `oran-bootstrap`
   can reuse the same numbers.
 

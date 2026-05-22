@@ -82,10 +82,20 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
   `RenderedPrompt` and maps to vendor cache shape per
   `api-portability.md`.
 - **Deterministic tool-catalog renderer**:
+  - **Status (slice 59, 2026-05-24):** the renderer now exists in
+    `oran-tool` as `tool::CatalogRenderer`, alongside the new
+    `ToolDef::deferred` and `ToolDef::category` metadata. It renders
+    active full-schema blocks and deferred name/description rows from a
+    `Registry::catalog()` snapshot, sorts both by tool name, canonicalises
+    JSON Schema bytes in `src/oran-tool/catalog.cpp`, and keeps a bounded
+    256-entry rendered-block cache keyed by the fields that affect the
+    block bytes plus renderer version, with aggregate stats. The remaining
+    bullets below that mention `oran-prompt`, active-tool config,
+    `tool.search`, and promotion state are still unimplemented.
   - Pure function of `ToolDef`:
     `(name, description, input_schema, required_capabilities,
     category)`.
-  - Memoised by `(ToolDef hash, renderer_version)`; the memo lives in a
+  - Memoised by `(rendered ToolDef hash, renderer_version)`; the memo lives in a
     `BoundedCache<(hash, version), std::string>` (spec 0012) sized
     `runtime.prompt.tool_block_cache.max_entries` (default 256).
   - Output sorted by tool name to make the rendered bytes independent

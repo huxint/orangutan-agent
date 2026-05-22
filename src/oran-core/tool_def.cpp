@@ -13,6 +13,8 @@ ToolDef ToolDef::with_no_input(std::string name, std::string description) {
       .description = std::move(description),
       .input_schema_json = R"({"type":"object","properties":{},"additionalProperties":false})",
       .required_capabilities = {},
+      .deferred = false,
+      .category = {},
   };
 }
 

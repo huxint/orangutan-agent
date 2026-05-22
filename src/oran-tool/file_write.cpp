@@ -227,6 +227,8 @@ core::Result<void> register_file_write(Registry& registry) {
                      "confirmation listing the number of bytes written.",
       .input_schema_json = std::string{kFileWriteSchema},
       .required_capabilities = {core::Capability::write_file},
+      .deferred = false,
+      .category = "file",
   };
   return registry.add(std::move(def), &file_write_handler);
 }

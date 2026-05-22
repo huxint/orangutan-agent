@@ -98,7 +98,9 @@ void register_tool_approval(ankerl::nanobench::Bench& bench) {
   if (!registry.add(core::ToolDef{.name = "noop",
                                   .description = "noop approval bench tool",
                                   .input_schema_json = "{}",
-                                  .required_capabilities = {core::Capability::read_file}},
+                                  .required_capabilities = {core::Capability::read_file},
+                                  .deferred = false,
+                                  .category = {}},
                     &noop_handler)) {
     std::abort();
   }
