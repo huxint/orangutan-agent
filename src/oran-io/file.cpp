@@ -41,6 +41,14 @@ constexpr std::uintmax_t kMidReadRetryThresholdBytes = 64U * 1024U;
 constexpr std::uintmax_t kLineOffsetIndexThresholdBytes = 256U * 1024U;
 constexpr std::size_t kLineOffsetIndexMaxEntries = 32U;
 constexpr std::size_t kLineOffsetIndexMaxBytes = 8U * 1024U * 1024U;
+constexpr std::size_t kFileViewCacheMaxEntries = 64U;
+constexpr std::size_t kFileViewCacheMaxBytes = 16U * 1024U * 1024U;
+
+template <typename T>
+[[nodiscard]] std::size_t hash_combine(std::size_t seed, const T& value) noexcept {
+  const auto h = std::hash<T>{}(value);
+  return seed ^ (h + 0x9e3779b97f4a7c15ULL + (seed << 6U) + (seed >> 2U));
+}
 
 struct LineOffsetIndexKey {
   std::string canonical_path;
@@ -52,11 +60,9 @@ struct LineOffsetIndexKey {
 
 struct LineOffsetIndexKeyHash {
   [[nodiscard]] std::size_t operator()(const LineOffsetIndexKey& key) const noexcept {
-    const auto h1 = std::hash<std::string>{}(key.canonical_path);
-    const auto h2 = std::hash<std::uintmax_t>{}(key.size_bytes);
-    const auto h3 = std::hash<std::uint64_t>{}(key.mtime_ns);
-    return h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1 << 6U) + (h1 >> 2U)) ^
-           (h3 + 0x9e3779b97f4a7c15ULL + (h2 << 6U) + (h2 >> 2U));
+    auto seed = std::hash<std::string>{}(key.canonical_path);
+    seed = hash_combine(seed, key.size_bytes);
+    return hash_combine(seed, key.mtime_ns);
   }
 };
 
@@ -76,6 +82,45 @@ using LineOffsetIndexCache = core::BoundedCache<LineOffsetIndexKey,
                                                 LineOffsetIndexByteCost,
                                                 LineOffsetIndexKeyHash>;
 
+enum class FileViewRangeKind : std::uint8_t {
+  whole,
+  lines,
+  bytes,
+};
+
+struct FileViewCacheKey {
+  std::string canonical_path;
+  std::uintmax_t size_bytes{0};
+  std::uint64_t mtime_ns{0};
+  std::uintmax_t max_bytes{0};
+  FileViewRangeKind range_kind{FileViewRangeKind::whole};
+  std::uintmax_t range_start{0};
+  std::uintmax_t range_length{0};
+
+  friend bool operator==(const FileViewCacheKey&, const FileViewCacheKey&) = default;
+};
+
+struct FileViewCacheKeyHash {
+  [[nodiscard]] std::size_t operator()(const FileViewCacheKey& key) const noexcept {
+    auto seed = std::hash<std::string>{}(key.canonical_path);
+    seed = hash_combine(seed, key.size_bytes);
+    seed = hash_combine(seed, key.mtime_ns);
+    seed = hash_combine(seed, key.max_bytes);
+    seed = hash_combine(seed, static_cast<std::uint8_t>(key.range_kind));
+    seed = hash_combine(seed, key.range_start);
+    return hash_combine(seed, key.range_length);
+  }
+};
+
+struct ReadTextResultByteCost {
+  [[nodiscard]] std::size_t operator()(const ReadTextResult& result) const noexcept {
+    return result.text.size();
+  }
+};
+
+using FileViewCache =
+    core::BoundedCache<FileViewCacheKey, ReadTextResult, ReadTextResultByteCost, FileViewCacheKeyHash>;
+
 [[nodiscard]] LineOffsetIndexCache& line_offset_index_cache() {
   static auto cache = LineOffsetIndexCache{
       LineOffsetIndexCache::Options{
@@ -88,7 +133,24 @@ using LineOffsetIndexCache = core::BoundedCache<LineOffsetIndexKey,
   return cache;
 }
 
+[[nodiscard]] FileViewCache& file_view_cache() {
+  static auto cache = FileViewCache{
+      FileViewCache::Options{
+          .max_entries = kFileViewCacheMaxEntries,
+          .max_bytes = kFileViewCacheMaxBytes,
+          .ttl = std::chrono::minutes{10},
+      },
+      ReadTextResultByteCost{},
+  };
+  return cache;
+}
+
 [[nodiscard]] std::mutex& line_offset_index_mutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
+[[nodiscard]] std::mutex& file_view_cache_mutex() {
   static std::mutex mutex;
   return mutex;
 }
@@ -126,9 +188,54 @@ using LineOffsetIndexCache = core::BoundedCache<LineOffsetIndexKey,
   };
 }
 
+[[nodiscard]] FileViewCacheKey
+file_view_cache_key(const std::string& path, const FileFingerprint& fingerprint, const ReadTextOptions& options) {
+  FileViewCacheKey key{
+      .canonical_path = cache_key_path(path),
+      .size_bytes = fingerprint.size_bytes,
+      .mtime_ns = fingerprint.mtime_ns,
+      .max_bytes = options.max_bytes,
+  };
+  if (options.range && options.range->lines) {
+    key.range_kind = FileViewRangeKind::lines;
+    key.range_start = static_cast<std::uintmax_t>(options.range->lines->start_line);
+    key.range_length = static_cast<std::uintmax_t>(options.range->lines->line_count);
+  } else if (options.range && options.range->bytes) {
+    key.range_kind = FileViewRangeKind::bytes;
+    key.range_start = options.range->bytes->offset_bytes;
+    key.range_length = options.range->bytes->length_bytes;
+  }
+  return key;
+}
+
 void clear_line_offset_index_cache() {
   const std::scoped_lock lock{line_offset_index_mutex()};
   line_offset_index_cache().clear();
+}
+
+void clear_file_view_cache() {
+  const std::scoped_lock lock{file_view_cache_mutex()};
+  file_view_cache().clear();
+}
+
+void clear_file_caches() {
+  clear_line_offset_index_cache();
+  clear_file_view_cache();
+}
+
+[[nodiscard]] std::optional<ReadTextResult> get_cached_file_view(const FileViewCacheKey& key) {
+  const auto now = core::time::now_utc();
+  const std::scoped_lock lock{file_view_cache_mutex()};
+  if (auto* cached = file_view_cache().get(key, now); cached != nullptr) {
+    return *cached;
+  }
+  return std::nullopt;
+}
+
+void put_cached_file_view(FileViewCacheKey key, const ReadTextResult& result) {
+  const auto now = core::time::now_utc();
+  const std::scoped_lock lock{file_view_cache_mutex()};
+  file_view_cache().put(std::move(key), result, now);
 }
 
 [[nodiscard]] core::Error io_error(std::string message, const std::string& path) {
@@ -620,6 +727,19 @@ dispatch_read(const std::string& path, const ReadTextOptions& options, const Fil
     return std::unexpected(std::move(pre).error());
   }
 
+  auto cache_key = file_view_cache_key(path, *pre, options);
+  if (auto cached = get_cached_file_view(cache_key)) {
+    auto post = compute_file_fingerprint(path);
+    if (!post) {
+      return std::unexpected(std::move(post).error());
+    }
+    if (*pre == *post) {
+      cached->fingerprint = *post;
+      return *cached;
+    }
+    pre = post;
+  }
+
   auto first = dispatch_read(path, options, *pre);
   if (!first) {
     return std::unexpected(std::move(first).error());
@@ -656,6 +776,7 @@ dispatch_read(const std::string& path, const ReadTextOptions& options, const Fil
   }
 
   first->fingerprint = *post;
+  put_cached_file_view(file_view_cache_key(path, *post, options), *first);
   return first;
 }
 
@@ -779,7 +900,7 @@ write_text_file_blocking(const std::string& path, const std::string& contents, W
     if (options.atomic) {
       auto written = atomic_write_blocking(fs_path, path, contents);
       if (written) {
-        clear_line_offset_index_cache();
+        clear_file_caches();
       }
       return written;
     }
@@ -795,7 +916,7 @@ write_text_file_blocking(const std::string& path, const std::string& contents, W
 
     auto written = stream_write(fs_path, path, contents, mode);
     if (written) {
-      clear_line_offset_index_cache();
+      clear_file_caches();
     }
     return written;
   } catch (const std::filesystem::filesystem_error& e) {
@@ -924,7 +1045,7 @@ write_text_file_blocking(const std::string& path, const std::string& contents, W
       // not_found so the caller sees a consistent end state.
       return std::unexpected(core::Error::not_found("file disappeared before delete").with("path", path));
     }
-    clear_line_offset_index_cache();
+    clear_file_caches();
     return {};
   } catch (const std::filesystem::filesystem_error& e) {
     return std::unexpected(system_io_error("filesystem delete failed", path, e.code()));

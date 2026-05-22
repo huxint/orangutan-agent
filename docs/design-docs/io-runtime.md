@@ -54,6 +54,14 @@ performs the requested operation and returns `core::Result<T>`.
 > fingerprint. `write_text_file` and `delete_file` clear the index
 > cache after successful mutations so an agent cannot reuse stale
 > offsets after an in-process write/delete.
+>
+> **Slice-52 status (2026-05-24):** `read_text_file_ranged` now keeps a
+> bounded in-memory file-view cache for successful reads. Entries are keyed
+> by canonical path, range, `max_bytes`, and the cheap
+> `(size_bytes, mtime_ns)` fingerprint, capped at 64 entries / 16 MiB /
+> 10 minutes, and revalidated with `stat` before every hit. Successful
+> `write_text_file` and `delete_file` calls clear both the file-view cache
+> and the line-offset index synchronously.
 
 ## Public Surface
 
@@ -194,12 +202,14 @@ surface for effectful agent actions.
   Slice 50 (2026-05-23) adds the first bounded cache consumer in this
   library: large-file line ranges use a `core::BoundedCache`-backed
   line-offset index keyed by canonical path + cheap fingerprint and
-  invalidated after successful in-process writes/deletes. Future
-  slices wire `compute_hash=true` (SHA-256 in
-  `FileFingerprint::sha256`) for high-trust paths and the
-  `expected_version` contract on `file.edit` / `file.write`. Text-only
-  callers keep the legacy `read_text_file` wrapper that drops the
-  metadata.
+  invalidated after successful in-process writes/deletes. Slice 52
+  (2026-05-24) adds the bounded file-view cache for
+  `read_text_file_ranged`, with metadata validation before hits and
+  synchronous invalidation after successful in-process writes/deletes.
+  Future slices wire singleflight reads, watcher-backed external-edit
+  awareness, and `compute_hash=true` (SHA-256 in
+  `FileFingerprint::sha256`) for high-trust paths. Text-only callers keep
+  the legacy `read_text_file` wrapper that drops the metadata.
 - **Atomic-write durability mode** — `WriteTextOptions::durability`
   enum {`rename_only` (default), `fsync_file`, `fsync_file_and_parent`}.
   `rename_only` keeps current behaviour (atomic replacement, no fsync);

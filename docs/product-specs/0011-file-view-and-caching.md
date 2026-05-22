@@ -171,6 +171,23 @@ strand. The literal search path is unchanged. v1.1's remaining items
 are the file-view cache, singleflight reads, and external-edit
 awareness.
 
+**Status (slice 52, 2026-05-24):** the v1.1 file-view cache ships
+inside `oran-io`. `read_text_file_ranged` now caches successful
+`ReadTextResult` payloads in a bounded process-local
+`core::BoundedCache` keyed by canonical path, requested range,
+`max_bytes`, and the cheap `(size_bytes, mtime_ns)` fingerprint. The
+cache is capped at 64 entries / 16 MiB / 10 minutes and protected by an
+explicit mutex because callers can hop onto arbitrary executors. A hit
+still revalidates metadata with `stat` before returning; if the
+metadata changed or cannot be trusted, the call misses and falls back to
+the existing mid-read pre/post fingerprint path. Successful
+`io::write_text_file` and `io::delete_file` calls synchronously clear
+both the file-view cache and the line-offset index. Tests cover
+external rewrites refreshing the cache plus an in-process write
+invalidation regression where size and mtime are restored to the old
+fingerprint but the body changes. v1.1's remaining items are
+singleflight reads and watcher-backed external-edit awareness.
+
 **v1.1 prerequisite (slice 44, 2026-05-22):** the `BoundedCache<Key,
 Value>` generic primitive that v1.1's line-offset index, file-view
 cache, and regex cache build on is now shipped in `oran-core` as
@@ -301,6 +318,13 @@ correctness is anchored:
   `node_modules`, `.orangutan`) when `respect_ignore=true`. The future
   structural move is to lift the same predicate onto `tool::Workspace`
   per spec 0013 so `directory.scan` shares it.
+- **File-view cache**: shipped in slice 52 inside `oran-io`. Successful
+  `read_text_file_ranged` results are held in a process-local
+  `BoundedCache` keyed by `(canonical_path, range, max_bytes,
+  size_bytes, mtime_ns)` and capped at 64 entries / 16 MiB / 10
+  minutes. Hits re-stat before returning; successful in-process
+  writes/deletes synchronously clear the cache so stale bodies cannot
+  survive a mutation made through `oran-io`.
 - **Singleflight reads**: ten concurrent `file.read` calls for the same
   `(canonical_path, range)` share one filesystem read instead of stampeding
   the executor.

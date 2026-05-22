@@ -406,6 +406,56 @@ TEST_CASE("read_text_file_ranged counts a trailing partial line", "[unit][io][ra
   });
 }
 
+TEST_CASE("read_text_file_ranged refreshes the file-view cache after an external rewrite", "[unit][io][range][cache]") {
+  TempDir temp{"oran-io-range-cache-external"};
+  const auto file = temp.path() / "cached.txt";
+  write_direct(file, "first");
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto first = co_await io::read_text_file_ranged(context.get_executor(), file.string());
+    REQUIRE(first.has_value());
+    REQUIRE(first->text == "first");
+
+    std::this_thread::sleep_for(std::chrono::milliseconds{15});
+    write_direct(file, "second-body");
+
+    auto second = co_await io::read_text_file_ranged(context.get_executor(), file.string());
+    REQUIRE(second.has_value());
+    REQUIRE(second->text == "second-body");
+    REQUIRE(second->fingerprint != first->fingerprint);
+  });
+}
+
+TEST_CASE("write_text_file invalidates the file-view cache even when the fingerprint is restored",
+          "[unit][io][range][cache]") {
+  TempDir temp{"oran-io-range-cache-write"};
+  const auto file = temp.path() / "cached.txt";
+  write_direct(file, "alpha");
+
+  const auto original_mtime = std::filesystem::last_write_time(file);
+  const auto original_fingerprint = io::compute_file_fingerprint(file.string());
+  REQUIRE(original_fingerprint.has_value());
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto first = co_await io::read_text_file_ranged(context.get_executor(), file.string());
+    REQUIRE(first.has_value());
+    REQUIRE(first->text == "alpha");
+
+    auto written = co_await io::write_text_file(context.get_executor(), file.string(), "bravo");
+    REQUIRE(written.has_value());
+    std::filesystem::last_write_time(file, original_mtime);
+
+    const auto restored_fingerprint = io::compute_file_fingerprint(file.string());
+    REQUIRE(restored_fingerprint.has_value());
+    REQUIRE(restored_fingerprint->size_bytes == original_fingerprint->size_bytes);
+    REQUIRE(restored_fingerprint->mtime_ns == original_fingerprint->mtime_ns);
+
+    auto second = co_await io::read_text_file_ranged(context.get_executor(), file.string());
+    REQUIRE(second.has_value());
+    REQUIRE(second->text == "bravo");
+  });
+}
+
 TEST_CASE("read_text_file_ranged truncates oversize whole-file reads", "[unit][io][range]") {
   TempDir temp{"oran-io-range-truncate"};
   const auto file = temp.path() / "big.txt";

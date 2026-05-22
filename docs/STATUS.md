@@ -7,21 +7,23 @@
 
 ## Snapshot
 
-- **Slice:** 51 (`xmake run orangutan` reports slice 51)
+- **Slice:** 52 (`xmake run orangutan` reports slice 52)
 - **Last completed history:**
-  [`histories/2026-05/20260524-0005-tool-search-regex-cache.md`](histories/2026-05/20260524-0005-tool-search-regex-cache.md)
+  [`histories/2026-05/20260524-0015-io-file-view-cache.md`](histories/2026-05/20260524-0015-io-file-view-cache.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 51
-  ships spec 0011 v1.1's regex compile cache inside `oran-tool`:
-  `file.search` with `regex=true` now reuses compiled
-  `permission::InputPattern` instances from a bounded process-local
-  `core::BoundedCache` (64 entries / 64 KiB / 10-minute TTL) keyed by
-  pattern plus line-match mode. The remaining v1.1 items are the
-  file-view cache, singleflight reads, and external-edit awareness.
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 52
+  ships spec 0011 v1.1's file-view cache inside `oran-io`:
+  `read_text_file_ranged` now reuses `ReadTextResult` payloads from a
+  bounded process-local `core::BoundedCache` (64 entries / 16 MiB /
+  10-minute TTL) keyed by canonical path, range, max-bytes budget, and
+  cheap `(size_bytes, mtime_ns)` fingerprint. Cache hits still re-stat
+  before returning, and successful in-process writes/deletes synchronously
+  clear both the file-view and line-offset caches. The remaining v1.1
+  items are singleflight reads and watcher-backed external-edit awareness.
   Spec 0013's
   remaining workspace work narrows to audit metadata and moving
   resolution to the pre-permission dispatch boundary. The first
@@ -53,7 +55,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 - `oran-core`: 68 cases / 437 assertions.
 - `oran-async`: 9 cases / 43 assertions.
-- `oran-io`: 39 cases / 182 assertions.
+- `oran-io`: 41 cases / 198 assertions.
 - `oran-storage`: 60 cases / 706 assertions.
 - `oran-config`: 24 cases / 171 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
