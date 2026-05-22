@@ -168,7 +168,8 @@ public:
 
   /// Register `def` + `handler`. Returns `Error::conflict` if a tool with
   /// the same name is already registered, `Error::invalid_argument` if
-  /// either piece is malformed (empty name or null handler).
+  /// either piece is malformed (empty name, invalid `input_schema_json`, or
+  /// null handler).
   [[nodiscard]] core::Result<void> add(core::ToolDef def, Handler handler);
 
   /// Remove the tool named `name`. Returns `Error::not_found` if no such

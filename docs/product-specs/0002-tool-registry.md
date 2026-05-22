@@ -36,7 +36,8 @@ the surface where these capabilities are presented, gated, observed, and extende
 
 ## Acceptance Criteria
 
-1. `Registry::add` rejects duplicate tool names.
+1. `Registry::add` rejects duplicate tool names and malformed declarations,
+   including invalid `input_schema_json` before the registry mutates.
 2. `Registry::dispatch` follows the canonical ordering: hook before → permission →
    ask flow if applicable → hook dispatched → handler → hook after.
 3. A tool with `Capability::read_file` declared cannot call `runtime.workspace()` if

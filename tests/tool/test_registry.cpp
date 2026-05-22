@@ -122,6 +122,33 @@ TEST_CASE("Registry::add rejects empty handler", "[unit][tool][registry]") {
   REQUIRE(added.error().kind() == core::ErrorKind::invalid_argument);
 }
 
+TEST_CASE("Registry::add rejects invalid input_schema_json", "[unit][tool][registry]") {
+  tool::Registry registry;
+  auto def = core::ToolDef::with_no_input("bad.schema", "bad schema");
+  def.input_schema_json = R"({"type":"object","properties":)";
+
+  auto added = registry.add(std::move(def), make_echo_handler());
+  REQUIRE_FALSE(added.has_value());
+  REQUIRE(added.error().kind() == core::ErrorKind::invalid_argument);
+  REQUIRE(context_has(added.error(), "tool", "bad.schema"));
+  REQUIRE(context_has(added.error(), "schema_path", "$"));
+  REQUIRE(registry.size() == 0);
+}
+
+TEST_CASE("Registry::add rejects malformed JSON Schema keywords", "[unit][tool][registry]") {
+  tool::Registry registry;
+  auto def = core::ToolDef::with_no_input("bad.required", "bad required");
+  def.input_schema_json =
+      R"({"type":"object","properties":{"path":{"type":"string"}},"required":"path","additionalProperties":false})";
+
+  auto added = registry.add(std::move(def), make_echo_handler());
+  REQUIRE_FALSE(added.has_value());
+  REQUIRE(added.error().kind() == core::ErrorKind::invalid_argument);
+  REQUIRE(context_has(added.error(), "tool", "bad.required"));
+  REQUIRE(context_has(added.error(), "schema_path", "$.required"));
+  REQUIRE(registry.size() == 0);
+}
+
 TEST_CASE("Registry::add rejects duplicates", "[unit][tool][registry]") {
   tool::Registry registry;
   REQUIRE(registry.add(core::ToolDef::with_no_input("noop", "noop"), make_echo_handler()).has_value());

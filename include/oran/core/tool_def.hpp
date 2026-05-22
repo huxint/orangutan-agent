@@ -8,8 +8,8 @@
 // it by name today.
 //
 // The JSON Schema payload stays an opaque `std::string` so `oran-core` stays
-// nlohmann-free (rule C6); validation belongs to `oran-tool` and
-// `oran-provider` adapters.
+// nlohmann-free (rule C6); `oran-tool::Registry::add` performs registration
+// sanity checks and provider adapters own vendor-specific projection.
 
 #pragma once
 

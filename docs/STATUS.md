@@ -7,30 +7,25 @@
 
 ## Snapshot
 
-- **Slice:** 34 (`xmake run orangutan` reports slice 34)
+- **Slice:** 35 (`xmake run orangutan` reports slice 35)
 - **Last completed history:**
-  [`histories/2026-05/20260522-1104-tool-write-edit-max-bytes.md`](histories/2026-05/20260522-1104-tool-write-edit-max-bytes.md)
+  [`histories/2026-05/20260522-1408-tool-registry-schema-validation.md`](histories/2026-05/20260522-1408-tool-registry-schema-validation.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
-- **Next intended slice:** TBD — slice 34 closed the deep-review
-  content-size cap P0 item by adding optional `max_bytes` to
-  `file.write` and `file.edit` (default and hard ceiling 16 MiB),
-  cleaned the tracked `tests/tool/test_registry.cpp`
-  missing-field-initializer warnings, deleted the stale root
-  deep-review artifact after its actionable findings were absorbed,
-  clarified that `rules/prompt-design.md` governs runtime
-  prompts emitted by Orangutan, not the development-agent routing
-  prompt in `CLAUDE.md` / `AGENTS.md`, and codified the deep-review
-  artifact lifecycle in [`rules/deep-review.md`](rules/deep-review.md)
-  (versioned name + first-line stamp on creation, delete-in-same-slice
-  on absorption, no `/tmp/...` paths in live current-state docs).
-  Remaining deep-review P0 surface in
-  `exec-plans/tech-debt-tracker.md` under the
-  `deep-review-2026-05-21` group: transparent hashing on
-  `Registry::entries_` and JSON-schema validation at
-  `Registry::add`. The next-likely tool-side slices remain
+- **Next intended slice:** TBD — slice 35 closed the deep-review
+  `Registry::add` schema-validation P0 item: tool registration now
+  rejects empty `input_schema_json`, unparseable JSON, non-object
+  top-level schemas, and malformed common JSON Schema keywords
+  (`type`, `properties`, `required`, `additionalProperties`, `enum`,
+  `minimum`, `maximum`) before mutating the registry. Heavy JSON
+  parsing lives in a separate `src/oran-tool/schema_validation.cpp`
+  TU so `registry.cpp` stays focused on dispatch. Remaining
+  deep-review P0 surface in `exec-plans/tech-debt-tracker.md`
+  under the `deep-review-2026-05-21` group: transparent hashing on
+  `Registry::entries_` to remove the per-dispatch lookup allocation.
+  The next-likely tool-side slices remain
   unchanged: the first provider adapter (Anthropic Messages —
   multi-slice, needs an exec plan and `oran-http` + libcurl
   wiring first), blocking hook semantics with veto (still gated
@@ -94,7 +89,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 19 cases / 148 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
 - `oran-hook`: 15 cases / 97 assertions.
-- `oran-tool`: 92 cases / 750 assertions.
+- `oran-tool`: 94 cases / 760 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 44 cases / 140 assertions.
 
@@ -105,7 +100,7 @@ Closed entries do *not* live here — the tracker is canonical.
 
 - 2026-05-21 — Deep-review backlog: the stale root review artifact was
   deleted after its actionable findings were absorbed into the tracker and
-  specs 0011-0018. Slices 31-34 closed the rank-0 items plus the first P0
+  specs 0011-0018. Slices 31-35 closed the rank-0 items plus the first P0
   follow-ups; remaining follow-ups are grouped P0/P1/P2/P3 in the tracker.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on

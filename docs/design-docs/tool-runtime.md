@@ -184,10 +184,23 @@ enum class Capability {
 > review follow-up row by using full default construction for
 > captured hook rows and explicit empty `required_capabilities` on
 > test-only `ToolDef`s.
+> Slice 35 (2026-05-22) closes the deep-review
+> `Registry::add` schema-validation P0 item: registration now
+> rejects empty `input_schema_json`, unparseable JSON, non-object
+> top-level schemas, and malformed common JSON Schema keywords
+> (`type`, `properties`, `required`, `additionalProperties`, `enum`,
+> `minimum`, `maximum`) with `Error::invalid_argument` carrying
+> `tool` and `schema_path` context before mutating `entries_`. This
+> is a lightweight declaration sanity check, not a full JSON Schema
+> validator; it catches broken tool definitions early while keeping
+> heavy `nlohmann/json.hpp` isolated in
+> `src/oran-tool/schema_validation.cpp` instead of the dispatch TU.
 
 A tool's `required_capabilities` list is **inspected at registration**. The permission
 engine knows the universe of capabilities a tool might use; the tool cannot smuggle in
 a capability it didn't declare (enforced in `ToolRuntime`'s tool dispatch — see below).
+Its `input_schema_json` is also sanity-checked at registration so broken schemas fail
+before the catalog can be advertised to a provider.
 
 ## ToolRuntime — Per-Invocation Context
 

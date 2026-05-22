@@ -23,6 +23,8 @@
 #include <oran/permission/audit.hpp>
 #include <oran/permission/rule_set.hpp>
 
+#include "_impl/schema_validation.hpp"
+
 namespace orangutan::tool {
 
 namespace {
@@ -136,6 +138,9 @@ core::Result<void> Registry::add(core::ToolDef def, Handler handler) {
   }
   if (!handler) {
     return std::unexpected(core::Error::invalid_argument("tool handler must not be empty").with("tool", def.name));
+  }
+  if (auto valid_schema = detail::validate_input_schema(def.name, def.input_schema_json); !valid_schema) {
+    return std::unexpected(std::move(valid_schema).error());
   }
   auto [it, inserted] = entries_.try_emplace(def.name);
   if (!inserted) {
