@@ -150,6 +150,7 @@ implicitly via the capability list.
   | Approval broker grants | TTL + max-per-identity | existing TTL + 64 per identity |
   | Provider route health / retry backoff | TTL per route | 30 s |
   | Regex compile cache (`file.search`) | LRU | 64 entries |
+  | `read_text_file_ranged` singleflight table | max in-flight rows + stats | 64 entries |
   | Tool catalog rendered-block cache | LRU by `(ToolDef hash, cache_version)` | 256 entries |
 - **Observable.** Every cache and lock table exposes a `Stats` accessor;
   once `oran-log` lands, a periodic tick publishes them as structured log
@@ -174,7 +175,14 @@ implicitly via the capability list.
 - **Singleflight on dispatch**: N concurrent `run_batch` calls that
   request the *same* `(tool_name, input_hash)` collapse into one
   in-flight execution; the rest await its result. Useful for memory
-  recall and `file.read` of hot paths.
+  recall and `file.read` of hot paths. **Status (slice 53,
+  2026-05-24):** the lower-level `oran-io` consumer now ships first:
+  concurrent cold `read_text_file_ranged` calls collapse by
+  `(canonical_path, range, max_bytes, size_bytes, mtime_ns)` behind a
+  bounded 64-entry in-flight table, with
+  `ReadTextSingleflightStats` exposing leader/follower/completion/error
+  counters and current table size. Scheduler-level `(tool_name,
+  input_hash)` singleflight still lands with the future scheduler.
 - **`publish_blocking` consumption.** The scheduler is the first consumer
   of `hook::Bus::publish_blocking` (tracked in the tracker's 2026-05-18
   row) for `permission_ask_rendered` rendering. The advisory hook bus

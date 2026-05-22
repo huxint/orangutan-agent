@@ -188,6 +188,19 @@ invalidation regression where size and mtime are restored to the old
 fingerprint but the body changes. v1.1's remaining items are
 singleflight reads and watcher-backed external-edit awareness.
 
+**Status (slice 53, 2026-05-24):** the v1.1 singleflight read path
+ships inside `oran-io`. Concurrent cold `read_text_file_ranged` calls
+for the same canonical path, requested range, `max_bytes`, and cheap
+`(size_bytes, mtime_ns)` fingerprint now share one in-flight read. The
+first caller becomes the leader; followers await the same
+`ReadTextResult` / error result. Hot file-view cache hits return before
+touching the table. The in-flight table is bounded to 64 entries, and
+`io::read_text_file_ranged_singleflight_stats()` exposes lifetime
+leader/follower/completion/error counters plus current in-flight and
+waiter counts without exposing paths or keys. Tests cover two
+concurrent cold reads collapsing to one leader plus one follower. v1.1's
+remaining item is watcher-backed external-edit awareness.
+
 **v1.1 prerequisite (slice 44, 2026-05-22):** the `BoundedCache<Key,
 Value>` generic primitive that v1.1's line-offset index, file-view
 cache, and regex cache build on is now shipped in `oran-core` as
@@ -326,8 +339,11 @@ correctness is anchored:
   writes/deletes synchronously clear the cache so stale bodies cannot
   survive a mutation made through `oran-io`.
 - **Singleflight reads**: ten concurrent `file.read` calls for the same
-  `(canonical_path, range)` share one filesystem read instead of stampeding
-  the executor.
+  `(canonical_path, range, max_bytes, size_bytes, mtime_ns)` share one
+  filesystem read instead of stampeding the executor. Shipped in slice
+  53 inside `oran-io` for cold `read_text_file_ranged` calls, with a
+  64-entry in-flight table and a public `ReadTextSingleflightStats`
+  snapshot for bounded-state observability.
 - **External-edit awareness**: when an `asio` filesystem watcher is
   available, register against `<workspace>/**`; on a watcher event, mark the
   affected canonical path stale. Without a watcher, validate metadata

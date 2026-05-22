@@ -62,6 +62,14 @@ performs the requested operation and returns `core::Result<T>`.
 > 10 minutes, and revalidated with `stat` before every hit. Successful
 > `write_text_file` and `delete_file` calls clear both the file-view cache
 > and the line-offset index synchronously.
+>
+> **Slice-53 status (2026-05-24):** concurrent cold
+> `read_text_file_ranged` calls now share a bounded process-local
+> singleflight table. Calls with the same canonical path, requested range,
+> max-bytes budget, and cheap fingerprint collapse behind one leader read;
+> followers await the same result. Hot file-view cache hits return before
+> touching the table. `read_text_file_ranged_singleflight_stats()` exposes
+> lifetime counters and current table size without leaking keys or paths.
 
 ## Public Surface
 
@@ -92,6 +100,16 @@ struct ReadTextResult {
   bool truncated{false};
 };
 
+struct ReadTextSingleflightStats {
+  std::uint64_t leaders_started{0};
+  std::uint64_t followers_joined{0};
+  std::uint64_t bypassed_capacity{0};
+  std::uint64_t completions{0};
+  std::uint64_t errors{0};
+  std::size_t current_in_flight{0};
+  std::size_t current_waiters{0};
+};
+
 struct WriteTextOptions {
   WriteMode mode{WriteMode::truncate};
   bool create_parent_directories{false};
@@ -119,6 +137,8 @@ read_text_file(asio::any_io_executor executor, std::string path, ReadTextOptions
 
 async::Awaitable<core::Result<ReadTextResult>>
 read_text_file_ranged(asio::any_io_executor executor, std::string path, ReadTextOptions = {});
+
+ReadTextSingleflightStats read_text_file_ranged_singleflight_stats();
 
 async::Awaitable<core::Result<void>>
 write_text_file(asio::any_io_executor executor,
@@ -206,8 +226,10 @@ surface for effectful agent actions.
   (2026-05-24) adds the bounded file-view cache for
   `read_text_file_ranged`, with metadata validation before hits and
   synchronous invalidation after successful in-process writes/deletes.
-  Future slices wire singleflight reads, watcher-backed external-edit
-  awareness, and `compute_hash=true` (SHA-256 in
+  Slice 53 (2026-05-24) adds the bounded singleflight table for cold
+  `read_text_file_ranged` calls and the
+  `ReadTextSingleflightStats` observability snapshot. Future slices wire
+  watcher-backed external-edit awareness, and `compute_hash=true` (SHA-256 in
   `FileFingerprint::sha256`) for high-trust paths. Text-only callers keep
   the legacy `read_text_file` wrapper that drops the metadata.
 - **Atomic-write durability mode** — `WriteTextOptions::durability`

@@ -17,6 +17,7 @@
 #include <asio/co_spawn.hpp>
 #include <asio/io_context.hpp>
 #include <asio/post.hpp>
+#include <asio/use_awaitable.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -453,6 +454,60 @@ TEST_CASE("write_text_file invalidates the file-view cache even when the fingerp
     auto second = co_await io::read_text_file_ranged(context.get_executor(), file.string());
     REQUIRE(second.has_value());
     REQUIRE(second->text == "bravo");
+  });
+}
+
+TEST_CASE("read_text_file_ranged collapses concurrent cold reads with singleflight",
+          "[unit][io][range][singleflight]") {
+  TempDir temp{"oran-io-range-singleflight"};
+  const auto file = temp.path() / "shared.txt";
+  write_direct(file, "alpha\nbeta\n");
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    const auto before = io::read_text_file_ranged_singleflight_stats();
+    std::optional<core::Result<io::ReadTextResult>> first;
+    std::optional<core::Result<io::ReadTextResult>> second;
+    std::exception_ptr failure;
+
+    auto spawn_read = [&](std::optional<core::Result<io::ReadTextResult>>* slot) {
+      asio::co_spawn(
+          context,
+          [&]() -> async::Awaitable<core::Result<io::ReadTextResult>> {
+            co_return co_await io::read_text_file_ranged(context.get_executor(), file.string());
+          },
+          [&, slot](std::exception_ptr ep, core::Result<io::ReadTextResult> result) {
+            if (ep) {
+              failure = ep;
+              return;
+            }
+            *slot = std::move(result);
+          });
+    };
+
+    spawn_read(&first);
+    spawn_read(&second);
+    while ((!first || !second) && !failure) {
+      co_await asio::post(context, asio::use_awaitable);
+    }
+    if (failure) {
+      std::rethrow_exception(failure);
+    }
+
+    REQUIRE(first.has_value());
+    REQUIRE(second.has_value());
+    REQUIRE(first->has_value());
+    REQUIRE(second->has_value());
+    REQUIRE((*first)->text == "alpha\nbeta\n");
+    REQUIRE((*second)->text == "alpha\nbeta\n");
+    REQUIRE((*first)->fingerprint == (*second)->fingerprint);
+
+    const auto after = io::read_text_file_ranged_singleflight_stats();
+    REQUIRE(after.leaders_started == before.leaders_started + 1);
+    REQUIRE(after.followers_joined == before.followers_joined + 1);
+    REQUIRE(after.completions == before.completions + 1);
+    REQUIRE(after.errors == before.errors);
+    REQUIRE(after.current_in_flight == 0);
+    REQUIRE(after.current_waiters == 0);
   });
 }
 

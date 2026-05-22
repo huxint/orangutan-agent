@@ -16,14 +16,19 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <numeric>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include <asio/cancellation_type.hpp>
 #include <asio/post.hpp>
+#include <asio/redirect_error.hpp>
+#include <asio/steady_timer.hpp>
 #include <asio/this_coro.hpp>
 #include <asio/use_awaitable.hpp>
 
@@ -43,6 +48,7 @@ constexpr std::size_t kLineOffsetIndexMaxEntries = 32U;
 constexpr std::size_t kLineOffsetIndexMaxBytes = 8U * 1024U * 1024U;
 constexpr std::size_t kFileViewCacheMaxEntries = 64U;
 constexpr std::size_t kFileViewCacheMaxBytes = 16U * 1024U * 1024U;
+constexpr std::size_t kReadTextSingleflightMaxEntries = 64U;
 
 template <typename T>
 [[nodiscard]] std::size_t hash_combine(std::size_t seed, const T& value) noexcept {
@@ -121,6 +127,27 @@ struct ReadTextResultByteCost {
 using FileViewCache =
     core::BoundedCache<FileViewCacheKey, ReadTextResult, ReadTextResultByteCost, FileViewCacheKeyHash>;
 
+struct PreparedReadTextFile {
+  std::optional<ReadTextResult> ready;
+  FileFingerprint fingerprint;
+  FileViewCacheKey cache_key;
+};
+
+struct ReadTextSingleflightEntry {
+  std::optional<core::Result<ReadTextResult>> result;
+  std::vector<std::shared_ptr<asio::steady_timer>> waiters;
+};
+
+struct ReadTextSingleflightJoin {
+  std::shared_ptr<ReadTextSingleflightEntry> entry;
+  std::shared_ptr<asio::steady_timer> waiter;
+  bool leader{false};
+  bool bypass{false};
+};
+
+using ReadTextSingleflightTable =
+    std::unordered_map<FileViewCacheKey, std::shared_ptr<ReadTextSingleflightEntry>, FileViewCacheKeyHash>;
+
 [[nodiscard]] LineOffsetIndexCache& line_offset_index_cache() {
   static auto cache = LineOffsetIndexCache{
       LineOffsetIndexCache::Options{
@@ -145,12 +172,27 @@ using FileViewCache =
   return cache;
 }
 
+[[nodiscard]] ReadTextSingleflightTable& read_text_singleflight_table() {
+  static auto table = ReadTextSingleflightTable{};
+  return table;
+}
+
+[[nodiscard]] ReadTextSingleflightStats& read_text_singleflight_stats_mutable() {
+  static auto stats = ReadTextSingleflightStats{};
+  return stats;
+}
+
 [[nodiscard]] std::mutex& line_offset_index_mutex() {
   static std::mutex mutex;
   return mutex;
 }
 
 [[nodiscard]] std::mutex& file_view_cache_mutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
+[[nodiscard]] std::mutex& read_text_singleflight_mutex() {
   static std::mutex mutex;
   return mutex;
 }
@@ -236,6 +278,86 @@ void put_cached_file_view(FileViewCacheKey key, const ReadTextResult& result) {
   const auto now = core::time::now_utc();
   const std::scoped_lock lock{file_view_cache_mutex()};
   file_view_cache().put(std::move(key), result, now);
+}
+
+[[nodiscard]] ReadTextSingleflightJoin join_read_text_singleflight(const FileViewCacheKey& key,
+                                                                   asio::any_io_executor executor) {
+  const std::scoped_lock lock{read_text_singleflight_mutex()};
+  auto& table = read_text_singleflight_table();
+  auto& stats = read_text_singleflight_stats_mutable();
+
+  if (auto existing = table.find(key); existing != table.end()) {
+    auto waiter = std::make_shared<asio::steady_timer>(std::move(executor));
+    waiter->expires_at(std::chrono::steady_clock::time_point::max());
+    existing->second->waiters.push_back(waiter);
+    ++stats.followers_joined;
+    return ReadTextSingleflightJoin{
+        .entry = existing->second,
+        .waiter = std::move(waiter),
+        .leader = false,
+        .bypass = false,
+    };
+  }
+
+  if (table.size() >= kReadTextSingleflightMaxEntries) {
+    ++stats.bypassed_capacity;
+    return ReadTextSingleflightJoin{
+        .entry = {},
+        .waiter = {},
+        .leader = false,
+        .bypass = true,
+    };
+  }
+
+  auto entry = std::make_shared<ReadTextSingleflightEntry>();
+  table.emplace(key, entry);
+  ++stats.leaders_started;
+  return ReadTextSingleflightJoin{
+      .entry = std::move(entry),
+      .waiter = {},
+      .leader = true,
+      .bypass = false,
+  };
+}
+
+void detach_read_text_singleflight_waiter(const std::shared_ptr<ReadTextSingleflightEntry>& entry,
+                                          const std::shared_ptr<asio::steady_timer>& waiter) {
+  const std::scoped_lock lock{read_text_singleflight_mutex()};
+  if (!entry->result) {
+    const auto removed = std::ranges::remove(entry->waiters, waiter);
+    entry->waiters.erase(removed.begin(), removed.end());
+  }
+}
+
+void complete_read_text_singleflight(const FileViewCacheKey& key,
+                                     const std::shared_ptr<ReadTextSingleflightEntry>& entry,
+                                     const core::Result<ReadTextResult>& result) {
+  std::vector<std::shared_ptr<asio::steady_timer>> waiters;
+  {
+    const std::scoped_lock lock{read_text_singleflight_mutex()};
+    entry->result = result;
+    auto& table = read_text_singleflight_table();
+    if (auto existing = table.find(key); existing != table.end() && existing->second == entry) {
+      table.erase(existing);
+    }
+
+    auto& stats = read_text_singleflight_stats_mutable();
+    ++stats.completions;
+    if (!result) {
+      ++stats.errors;
+    }
+    waiters.swap(entry->waiters);
+  }
+
+  for (const auto& waiter : waiters) {
+    waiter->expires_at(std::chrono::steady_clock::time_point::min());
+  }
+}
+
+[[nodiscard]] std::optional<core::Result<ReadTextResult>>
+read_text_singleflight_result(const std::shared_ptr<ReadTextSingleflightEntry>& entry) {
+  const std::scoped_lock lock{read_text_singleflight_mutex()};
+  return entry->result;
 }
 
 [[nodiscard]] core::Error io_error(std::string message, const std::string& path) {
@@ -703,7 +825,8 @@ dispatch_read(const std::string& path, const ReadTextOptions& options, const Fil
   }
 }
 
-[[nodiscard]] core::Result<ReadTextResult> read_text_file_blocking(const std::string& path, ReadTextOptions options) {
+[[nodiscard]] core::Result<PreparedReadTextFile> prepare_read_text_file_blocking(const std::string& path,
+                                                                                 const ReadTextOptions& options) {
   if (auto valid = validate_path(path); !valid) {
     return std::unexpected(valid.error());
   }
@@ -719,9 +842,6 @@ dispatch_read(const std::string& path, const ReadTextOptions& options, const Fil
     return std::unexpected(regular.error());
   }
 
-  // Mid-read race detection: capture the fingerprint before and after the
-  // blocking read. Size or mtime drift either retries (small whole-file
-  // reads) or surfaces as `Error::conflict` (large or ranged reads).
   auto pre = compute_file_fingerprint(path);
   if (!pre) {
     return std::unexpected(std::move(pre).error());
@@ -735,12 +855,32 @@ dispatch_read(const std::string& path, const ReadTextOptions& options, const Fil
     }
     if (*pre == *post) {
       cached->fingerprint = *post;
-      return *cached;
+      return PreparedReadTextFile{
+          .ready = *cached,
+          .fingerprint = *post,
+          .cache_key = std::move(cache_key),
+      };
     }
     pre = post;
+    cache_key = file_view_cache_key(path, *pre, options);
   }
 
-  auto first = dispatch_read(path, options, *pre);
+  return PreparedReadTextFile{
+      .ready = std::nullopt,
+      .fingerprint = *pre,
+      .cache_key = std::move(cache_key),
+  };
+}
+
+[[nodiscard]] core::Result<ReadTextResult> read_text_file_cold_blocking(const std::string& path,
+                                                                        const ReadTextOptions& options,
+                                                                        const FileFingerprint& fingerprint,
+                                                                        const FileViewCacheKey& cache_key) {
+  // Mid-read race detection: capture the fingerprint before and after the
+  // blocking read. Size or mtime drift either retries (small whole-file
+  // reads) or surfaces as `Error::conflict` (large or ranged reads).
+  auto pre = fingerprint;
+  auto first = dispatch_read(path, options, pre);
   if (!first) {
     return std::unexpected(std::move(first).error());
   }
@@ -750,18 +890,18 @@ dispatch_read(const std::string& path, const ReadTextOptions& options, const Fil
     return std::unexpected(std::move(post).error());
   }
 
-  if (*pre != *post) {
+  if (pre != *post) {
     const bool ranged = options.range.has_value();
-    const bool large = pre->size_bytes >= kMidReadRetryThresholdBytes;
+    const bool large = pre.size_bytes >= kMidReadRetryThresholdBytes;
     if (ranged || large) {
       return std::unexpected(core::Error{core::ErrorKind::conflict, "file changed during read"}
                                  .with("path", path)
-                                 .with("size_before", std::to_string(pre->size_bytes))
+                                 .with("size_before", std::to_string(pre.size_bytes))
                                  .with("size_after", std::to_string(post->size_bytes)));
     }
     // Small whole-file read: retry once.
-    pre = post;
-    first = dispatch_read(path, options, *pre);
+    pre = *post;
+    first = dispatch_read(path, options, pre);
     if (!first) {
       return std::unexpected(std::move(first).error());
     }
@@ -769,29 +909,16 @@ dispatch_read(const std::string& path, const ReadTextOptions& options, const Fil
     if (!post) {
       return std::unexpected(std::move(post).error());
     }
-    if (*pre != *post) {
+    if (pre != *post) {
       return std::unexpected(
           core::Error{core::ErrorKind::conflict, "file changed during read (after retry)"}.with("path", path));
     }
   }
 
   first->fingerprint = *post;
-  put_cached_file_view(file_view_cache_key(path, *post, options), *first);
+  const auto result_key = (*post == fingerprint) ? cache_key : file_view_cache_key(path, *post, options);
+  put_cached_file_view(result_key, *first);
   return first;
-}
-
-[[nodiscard]] core::Result<std::string> read_text_file_blocking_text_only(const std::string& path,
-                                                                          ReadTextOptions options) {
-  auto rich = read_text_file_blocking(path, options);
-  if (!rich) {
-    return std::unexpected(std::move(rich).error());
-  }
-  if (rich->truncated) {
-    return std::unexpected(core::Error::invalid_argument("file exceeds max_bytes")
-                               .with("path", path)
-                               .with("max_bytes", std::to_string(options.max_bytes)));
-  }
-  return std::move(rich->text);
 }
 
 [[nodiscard]] core::Result<void> create_parent_directories(const std::filesystem::path& fs_path,
@@ -1069,20 +1196,96 @@ template <typename ResultT, typename Fn>
   co_return fn();
 }
 
+[[nodiscard]] async::Awaitable<core::Result<PreparedReadTextFile>>
+prepare_read_text_file_async(asio::any_io_executor executor, std::string path, ReadTextOptions options) {
+  co_return co_await run_blocking<core::Result<PreparedReadTextFile>>(
+      std::move(executor),
+      [path = std::move(path), options] { return prepare_read_text_file_blocking(path, options); });
+}
+
+[[nodiscard]] async::Awaitable<core::Result<ReadTextResult>> read_text_file_cold_async(asio::any_io_executor executor,
+                                                                                       std::string path,
+                                                                                       ReadTextOptions options,
+                                                                                       FileFingerprint fingerprint,
+                                                                                       FileViewCacheKey cache_key) {
+  co_return co_await run_blocking<core::Result<ReadTextResult>>(
+      std::move(executor),
+      [path = std::move(path), options, fingerprint = std::move(fingerprint), cache_key = std::move(cache_key)] {
+        return read_text_file_cold_blocking(path, options, fingerprint, cache_key);
+      });
+}
+
+[[nodiscard]] async::Awaitable<core::Result<ReadTextResult>>
+wait_for_read_text_singleflight(ReadTextSingleflightJoin join) {
+  asio::error_code ec;
+  co_await join.waiter->async_wait(asio::redirect_error(asio::use_awaitable, ec));
+
+  auto result = read_text_singleflight_result(join.entry);
+  if (!result) {
+    detach_read_text_singleflight_waiter(join.entry, join.waiter);
+    co_return std::unexpected(core::Error::cancelled());
+  }
+  co_return *std::move(result);
+}
+
 }  // namespace
 
 async::Awaitable<core::Result<std::string>>
 read_text_file(asio::any_io_executor executor, std::string path, ReadTextOptions options) {
-  co_return co_await run_blocking<core::Result<std::string>>(std::move(executor), [path = std::move(path), options] {
-    return read_text_file_blocking_text_only(path, options);
-  });
+  const auto original_path = path;
+  auto rich = co_await read_text_file_ranged(std::move(executor), std::move(path), options);
+  if (!rich) {
+    co_return std::unexpected(std::move(rich).error());
+  }
+  if (rich->truncated) {
+    co_return std::unexpected(core::Error::invalid_argument("file exceeds max_bytes")
+                                  .with("path", original_path)
+                                  .with("max_bytes", std::to_string(options.max_bytes)));
+  }
+  co_return std::move(rich->text);
 }
 
 async::Awaitable<core::Result<ReadTextResult>>
 read_text_file_ranged(asio::any_io_executor executor, std::string path, ReadTextOptions options) {
-  co_return co_await run_blocking<core::Result<ReadTextResult>>(std::move(executor), [path = std::move(path), options] {
-    return read_text_file_blocking(path, options);
-  });
+  auto prepared = co_await prepare_read_text_file_async(executor, path, options);
+  if (!prepared) {
+    co_return std::unexpected(std::move(prepared).error());
+  }
+  if (prepared->ready) {
+    co_return std::move(*prepared->ready);
+  }
+
+  auto cache_key = prepared->cache_key;
+  auto fingerprint = prepared->fingerprint;
+  auto join = join_read_text_singleflight(cache_key, executor);
+  if (!join.leader && !join.bypass) {
+    co_return co_await wait_for_read_text_singleflight(std::move(join));
+  }
+
+  if (join.leader) {
+    co_await asio::post(executor, asio::use_awaitable);
+  }
+  auto result = co_await read_text_file_cold_async(std::move(executor),
+                                                   std::move(path),
+                                                   options,
+                                                   std::move(fingerprint),
+                                                   cache_key);
+  if (join.leader) {
+    complete_read_text_singleflight(cache_key, join.entry, result);
+  }
+  co_return result;
+}
+
+ReadTextSingleflightStats read_text_file_ranged_singleflight_stats() {
+  const std::scoped_lock lock{read_text_singleflight_mutex()};
+  auto stats = read_text_singleflight_stats_mutable();
+  const auto& table = read_text_singleflight_table();
+  stats.current_in_flight = table.size();
+  stats.current_waiters =
+      std::transform_reduce(table.begin(), table.end(), std::size_t{0}, std::plus<>{}, [](const auto& item) {
+        return item.second->waiters.size();
+      });
+  return stats;
 }
 
 async::Awaitable<core::Result<void>>

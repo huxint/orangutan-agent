@@ -31,6 +31,20 @@ struct ReadTextOptions {
   std::optional<FileRange> range{};
 };
 
+/// Process-local singleflight stats for `read_text_file_ranged`. The
+/// numbers expose bounded-state health without leaking cache keys or file
+/// paths. Lifetime counters are monotonic; `current_*` fields describe the
+/// in-flight table at the instant this snapshot was taken.
+struct ReadTextSingleflightStats {
+  std::uint64_t leaders_started{0};
+  std::uint64_t followers_joined{0};
+  std::uint64_t bypassed_capacity{0};
+  std::uint64_t completions{0};
+  std::uint64_t errors{0};
+  std::size_t current_in_flight{0};
+  std::size_t current_waiters{0};
+};
+
 struct WriteTextOptions {
   WriteMode mode{WriteMode::truncate};
   bool create_parent_directories{false};
@@ -74,6 +88,11 @@ read_text_file(asio::any_io_executor executor, std::string path, ReadTextOptions
 /// ranged reads). Spec 0011 v1 (file-view system) is the contract.
 [[nodiscard]] async::Awaitable<core::Result<ReadTextResult>>
 read_text_file_ranged(asio::any_io_executor executor, std::string path, ReadTextOptions options = {});
+
+/// Snapshot the process-local singleflight table used by
+/// `read_text_file_ranged`. This is an observability hook only; callers
+/// cannot mutate or inspect the private in-flight keys.
+[[nodiscard]] ReadTextSingleflightStats read_text_file_ranged_singleflight_stats();
 
 [[nodiscard]] async::Awaitable<core::Result<void>>
 write_text_file(asio::any_io_executor executor, std::string path, std::string contents, WriteTextOptions options = {});
