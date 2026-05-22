@@ -7,23 +7,28 @@
 
 ## Snapshot
 
-- **Slice:** 42 (`xmake run orangutan` reports slice 42)
+- **Slice:** 43 (`xmake run orangutan` reports slice 43)
 - **Last completed history:**
-  [`histories/2026-05/20260522-2113-io-file-fingerprint.md`](histories/2026-05/20260522-2113-io-file-fingerprint.md)
+  [`histories/2026-05/20260522-2300-io-file-range.md`](histories/2026-05/20260522-2300-io-file-range.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 42
-  added `io::FileFingerprint` + `compute_file_fingerprint`, the lowest
-  rung of spec 0011 v1; the next 0011 step is `io::FileRange` +
-  `ReadTextResult` and the range-aware `read_text_file` overload (cap
-  via `ReadTextOptions::max_bytes`, mid-read change detection capturing
-  the fingerprint before and after the blocking read). Spec 0012's
-  `BoundedCache<Key,Value>` generic primitive can land in parallel.
-  Spec 0013's remaining workspace work narrows to audit metadata and
-  moving resolution to the pre-permission dispatch boundary. The first
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 43
+  added `io::FileRange` + `io::ReadTextResult` plus the range-aware
+  `io::read_text_file_ranged` overload with mid-read fingerprint
+  capture (size/mtime drift -> retry once for small whole-file reads,
+  surface as `Error::conflict` for large or ranged reads). The next
+  0011 step is to wire the new shape through `oran-tool`'s
+  `file.read` schema (`start_line`/`line_count`/`offset_bytes`/
+  `length_bytes` inputs, header-line response rendering until
+  `tool::Output` v2 lands) and to introduce the opaque version token
+  shape so `if_version` short-circuits become possible. Spec 0012's
+  `BoundedCache<Key,Value>` generic primitive can land in parallel
+  (it is also v1.1's first cache prerequisite). Spec 0013's
+  remaining workspace work narrows to audit metadata and moving
+  resolution to the pre-permission dispatch boundary. The first
   provider adapter (Anthropic Messages) remains a multi-slice effort
   that needs an exec plan plus `oran-http` + libcurl wiring first;
   blocking hook semantics with veto are still gated on `oran-agent`;
@@ -51,7 +56,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 - `oran-core`: 54 cases / 370 assertions.
 - `oran-async`: 9 cases / 43 assertions.
-- `oran-io`: 23 cases / 90 assertions.
+- `oran-io`: 36 cases / 152 assertions.
 - `oran-storage`: 60 cases / 706 assertions.
 - `oran-config`: 24 cases / 171 assertions.
 - `oran-permission`: 83 cases / 379 assertions.

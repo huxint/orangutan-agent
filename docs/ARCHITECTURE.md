@@ -76,7 +76,16 @@ own test bucket, its own bench bucket, and its own public header set under
 > `core::str` RFC-3629 UTF-8
 > helpers, and the `Capability` vocabulary that ties tools to
 > permission rules), `oran-async`,
-> the file/directory MVP of `oran-io`, the expected-only SQLite core +
+> the file/directory MVP of `oran-io` plus slice 42's
+> `io::FileFingerprint` + `compute_file_fingerprint` and slice 43's
+> range-aware `io::read_text_file_ranged` returning
+> `io::ReadTextResult { text, fingerprint, start_line, end_line,
+> returned_bytes, truncated }` with `io::FileRange { LineSpan |
+> ByteSpan }` mutual-exclusion validation, mid-read fingerprint
+> capture (size/mtime drift -> retry once for whole-file reads
+> under 64 KiB, `Error::conflict` for larger or ranged reads), and
+> dual-end UTF-8 code-point boundary alignment for byte ranges,
+> the expected-only SQLite core +
 > migration runner + SQL-file migration loader + async writer/reader `Pool`
 > with per-slot statement caches + standalone per-connection `StatementCache`
 > + `SessionRepository` (typed `core::Role` boundary) of `oran-storage`,
@@ -211,7 +220,7 @@ own test bucket, its own bench bucket, and its own public header set under
 | `oran-core`          | `Result<T>`, `Error`, `Time` + ISO-8601 UTC helpers, `Role`, `StopReason`, `Content` variant, `Message`, `ToolDef` (with `required_capabilities`), `core::str` UTF-8 helpers, `Capability` vocabulary (20 enumerators, slice 29 adds `list_directory`) | stdlib only |
 | `oran-async`         | asio `Runtime`, `Awaitable<T>`, bounded `Channel<T>`, cancel-aware `sleep_for`; mailbox policy lands in orchestration | `oran-core`, asio |
 | `oran-log`           | spdlog shim + secret redaction; thread-local context | `oran-core`, spdlog/fmt |
-| `oran-io`            | file/directory IO MVP — `read_text_file`, `write_text_file`, `list_directory`, `delete_file` (slice 30, regular-file only), and (slice 42) `io::FileFingerprint` + `io::compute_file_fingerprint`; planned glob, pipe, subprocess, signal, range reads, content hashing | `oran-core`, `oran-async` |
+| `oran-io`            | file/directory IO MVP — `read_text_file`, `write_text_file`, `list_directory`, `delete_file` (slice 30, regular-file only), (slice 42) `io::FileFingerprint` + `io::compute_file_fingerprint`, and (slice 43) the range-aware `io::read_text_file_ranged` returning `ReadTextResult { text, fingerprint, start_line, end_line, returned_bytes, truncated }` with `FileRange { LineSpan | ByteSpan }` input validation, mid-read fingerprint capture (size/mtime drift -> retry once for whole-file reads under 64 KiB, surface `Error::conflict` for larger or ranged reads), and dual-end UTF-8 code-point boundary alignment for byte ranges; planned glob, pipe, subprocess, signal, content hashing, and `if_version` short-circuit | `oran-core`, `oran-async` |
 | `oran-http`          | http client (asio) and tiny router for the web UI | `oran-core`, `oran-async` |
 | `oran-storage`       | SQLite expected-only connection/statement core, migration runner with SQL-file loading **and compile-time-embedded built-in migrations** (`built_in_audit_migrations()` / `built_in_session_migrations()` reach the SQL via C++26 `#embed`), async writer/reader `Pool` with per-slot `StatementCache`, standalone per-connection `StatementCache`, `SessionRepository` (typed `core::Role` at the API boundary), and `AuditRepository` (typed audit-event append/list/count over `audit_events`); planned memory/automation repositories | `oran-core`, `oran-async`, sqlite3 |
 | `oran-config`        | JSON config loader with typed runtime/profile/route/session/web fields, env substitution, the typed `permissions` + `agents.<name>.permissions` overlay surface (layer-2/3 data of the three-layer rule merge), and (slice 41) `permissions.workspace.extra_{read,write}_roots` parsed onto `WorkspacePermissionsConfig` for the bootstrap-owned `tool::Workspace`; planned schema + secret-protected fields | `oran-core`, `oran-storage` |

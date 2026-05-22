@@ -23,12 +23,14 @@
 #include <asio/use_awaitable.hpp>
 
 #include <oran/core/error.hpp>
+#include <oran/io/fingerprint.hpp>
 
 namespace orangutan::io {
 
 namespace {
 
 constexpr std::size_t kReadChunkSize = 8192;
+constexpr std::uintmax_t kMidReadRetryThresholdBytes = 64U * 1024U;
 
 [[nodiscard]] bool is_cancelled(const asio::cancellation_state& cancellation) noexcept {
   return cancellation.cancelled() != asio::cancellation_type::none;
@@ -99,49 +101,350 @@ constexpr std::size_t kReadChunkSize = 8192;
   return {};
 }
 
-[[nodiscard]] core::Result<std::string> read_text_file_blocking(const std::string& path, ReadTextOptions options) {
+/// Adjust a buffer to UTF-8 code-point boundaries at both ends. The function
+/// drops leading bytes that are continuation bytes (0x80..0xBF) without a
+/// matching lead, and trims any trailing partial multi-byte sequence whose
+/// declared length runs past the buffer end. Invalid lead bytes inside the
+/// buffer stop the scan — the prefix up to the last good boundary is kept.
+/// Returns `[head, end)` of the aligned slice; the caller resizes its
+/// owning string when this differs from the current size.
+[[nodiscard]] std::pair<std::size_t, std::size_t> align_to_utf8_boundaries(std::string_view buffer) noexcept {
+  std::size_t head = 0;
+  while (head < buffer.size()) {
+    const auto b = static_cast<std::uint8_t>(buffer[head]);
+    if ((b & 0xC0) != 0x80) {
+      break;
+    }
+    ++head;
+  }
+  std::size_t end = head;
+  std::size_t i = head;
+  while (i < buffer.size()) {
+    const auto b = static_cast<std::uint8_t>(buffer[i]);
+    int length = 0;
+    if (b < 0x80) {
+      length = 1;
+    } else if (b < 0xC2) {
+      break;
+    } else if (b < 0xE0) {
+      length = 2;
+    } else if (b < 0xF0) {
+      length = 3;
+    } else if (b < 0xF5) {
+      length = 4;
+    } else {
+      break;
+    }
+    if (i + static_cast<std::size_t>(length) > buffer.size()) {
+      break;
+    }
+    i += static_cast<std::size_t>(length);
+    end = i;
+  }
+  return {head, end};
+}
+
+[[nodiscard]] core::Result<void> validate_range(const FileRange& range) {
+  const bool has_lines = range.lines.has_value();
+  const bool has_bytes = range.bytes.has_value();
+  if (has_lines == has_bytes) {
+    return std::unexpected(core::Error::invalid_argument("FileRange must specify exactly one of lines or bytes"));
+  }
+  if (has_lines) {
+    if (range.lines->start_line == 0 || range.lines->line_count == 0) {
+      return std::unexpected(core::Error::invalid_argument("line range fields must be non-zero"));
+    }
+    return {};
+  }
+  if (range.bytes->offset_bytes == 0 || range.bytes->length_bytes == 0) {
+    return std::unexpected(core::Error::invalid_argument("byte range fields must be non-zero"));
+  }
+  return {};
+}
+
+/// Stream the entire file into `out`, stopping at `max_bytes` and setting
+/// `truncated`. `out` is cleared on entry; the count of trailing newlines
+/// determines `end_line` so a whole-file read can populate the 1-based
+/// line span without a second pass after the read returns.
+[[nodiscard]] core::Result<void>
+read_whole_file_into(const std::string& path, std::uintmax_t max_bytes, std::string& out, bool& truncated) {
+  out.clear();
+  truncated = false;
+  errno = 0;
+  std::ifstream input{to_path(path), std::ios::binary};
+  if (!input) {
+    return std::unexpected(stream_open_error("failed to open file for reading", path));
+  }
+
+  std::array<char, kReadChunkSize> buffer{};
+  while (input) {
+    input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+    const auto count = input.gcount();
+    if (count <= 0) {
+      break;
+    }
+    const auto available = max_bytes - static_cast<std::uintmax_t>(out.size());
+    const auto take = std::min<std::uintmax_t>(static_cast<std::uintmax_t>(count), available);
+    if (take > 0) {
+      out.append(buffer.data(), static_cast<std::size_t>(take));
+    }
+    if (static_cast<std::uintmax_t>(count) > take) {
+      truncated = true;
+      break;
+    }
+  }
+  if (!truncated && input.bad()) {
+    return std::unexpected(io_error("failed while reading file", path));
+  }
+  // Trim a UTF-8 multi-byte tail that the byte cap may have split. Whole-file
+  // reads that fit inside `max_bytes` are unaffected because the truncation
+  // never fired.
+  if (truncated && !out.empty()) {
+    const auto [head, end] = align_to_utf8_boundaries(out);
+    if (head > 0 || end < out.size()) {
+      out = out.substr(head, end - head);
+    }
+  }
+  return {};
+}
+
+[[nodiscard]] std::uint64_t count_line_span(std::string_view text) noexcept {
+  if (text.empty()) {
+    return 0;
+  }
+  const auto newlines = static_cast<std::uint64_t>(std::ranges::count(text, '\n'));
+  return newlines + (text.back() == '\n' ? 0 : 1);
+}
+
+[[nodiscard]] core::Result<ReadTextResult> read_whole_file_blocking(const std::string& path, std::uintmax_t max_bytes) {
+  ReadTextResult result;
+  if (auto ok = read_whole_file_into(path, max_bytes, result.text, result.truncated); !ok) {
+    return std::unexpected(std::move(ok).error());
+  }
+  result.returned_bytes = static_cast<std::uintmax_t>(result.text.size());
+  result.start_line = 1;
+  const auto lines = count_line_span(result.text);
+  result.end_line = lines;
+  return result;
+}
+
+[[nodiscard]] core::Result<ReadTextResult>
+read_line_range_blocking(const std::string& path, FileRange::LineSpan lines, std::uintmax_t max_bytes) {
+  errno = 0;
+  std::ifstream input{to_path(path), std::ios::binary};
+  if (!input) {
+    return std::unexpected(stream_open_error("failed to open file for reading", path));
+  }
+
+  ReadTextResult result;
+  result.start_line = lines.start_line;
+  result.end_line = lines.start_line - 1;  // empty span by default
+  std::uint64_t current_line = 1;
+  std::uint64_t emitted_lines = 0;
+  std::array<char, kReadChunkSize> buffer{};
+
+  while (input && emitted_lines < lines.line_count) {
+    input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+    const auto count = input.gcount();
+    if (count <= 0) {
+      break;
+    }
+    for (std::streamsize i = 0; i < count; ++i) {
+      const char c = buffer[static_cast<std::size_t>(i)];
+      const bool in_range = current_line >= lines.start_line && emitted_lines < lines.line_count;
+      if (in_range) {
+        if (static_cast<std::uintmax_t>(result.text.size()) >= max_bytes) {
+          result.truncated = true;
+          input.setstate(std::ios::eofbit);
+          break;
+        }
+        result.text.push_back(c);
+      }
+      if (c == '\n') {
+        if (in_range) {
+          ++emitted_lines;
+          result.end_line = lines.start_line + emitted_lines - 1;
+        }
+        ++current_line;
+      }
+    }
+    if (result.truncated) {
+      break;
+    }
+  }
+  if (!result.truncated && input.bad()) {
+    return std::unexpected(io_error("failed while reading file", path));
+  }
+
+  // The final line of a range that ends at EOF may lack a trailing newline.
+  // Bump `end_line` so the reported span covers the partial last line.
+  if (!result.text.empty() && result.text.back() != '\n' && emitted_lines < lines.line_count) {
+    ++emitted_lines;
+    result.end_line = lines.start_line + emitted_lines - 1;
+  }
+
+  if (result.truncated && !result.text.empty()) {
+    const auto [head, end] = align_to_utf8_boundaries(result.text);
+    if (head > 0 || end < result.text.size()) {
+      result.text = result.text.substr(head, end - head);
+    }
+  }
+
+  result.returned_bytes = static_cast<std::uintmax_t>(result.text.size());
+  return result;
+}
+
+[[nodiscard]] core::Result<ReadTextResult>
+read_byte_range_blocking(const std::string& path, FileRange::ByteSpan bytes, std::uintmax_t max_bytes) {
+  errno = 0;
+  std::ifstream input{to_path(path), std::ios::binary};
+  if (!input) {
+    return std::unexpected(stream_open_error("failed to open file for reading", path));
+  }
+
+  ReadTextResult result;
+  result.start_line = 1;
+  result.end_line = 0;
+
+  const auto seek_to = static_cast<std::streamoff>(bytes.offset_bytes);
+  input.seekg(seek_to);
+  if (!input) {
+    // Seek past EOF is not an error; return an empty range and let the caller
+    // observe `returned_bytes == 0`. Clear eof/fail bits so the bad-bit check
+    // below stays honest.
+    input.clear();
+    result.returned_bytes = 0;
+    return result;
+  }
+
+  const auto cap = std::min<std::uintmax_t>(bytes.length_bytes, max_bytes);
+  std::array<char, kReadChunkSize> buffer{};
+  while (input && static_cast<std::uintmax_t>(result.text.size()) < cap) {
+    const auto remaining = cap - static_cast<std::uintmax_t>(result.text.size());
+    const auto chunk = std::min<std::uintmax_t>(static_cast<std::uintmax_t>(buffer.size()), remaining);
+    input.read(buffer.data(), static_cast<std::streamsize>(chunk));
+    const auto count = input.gcount();
+    if (count <= 0) {
+      break;
+    }
+    result.text.append(buffer.data(), static_cast<std::size_t>(count));
+  }
+  if (input.bad()) {
+    return std::unexpected(io_error("failed while reading file", path));
+  }
+
+  // `truncated` fires when the output cap (`max_bytes`) cut the requested
+  // length short — not when the caller-supplied `length_bytes` exceeds EOF.
+  if (max_bytes < bytes.length_bytes && static_cast<std::uintmax_t>(result.text.size()) >= max_bytes) {
+    result.truncated = true;
+  }
+
+  // Adjust both ends of the buffer to UTF-8 code-point boundaries: byte
+  // ranges can land mid-codepoint at the start (the user's `offset_bytes`
+  // chops a multi-byte sequence) AND at the end (`length_bytes` truncates
+  // a trailing sequence). `align_to_utf8_boundaries` drops both ranges so
+  // the returned text is always valid UTF-8 when the underlying file is.
+  if (!result.text.empty()) {
+    const auto [head, end] = align_to_utf8_boundaries(result.text);
+    if (head > 0 || end < result.text.size()) {
+      result.text = result.text.substr(head, end - head);
+    }
+  }
+  result.returned_bytes = static_cast<std::uintmax_t>(result.text.size());
+  return result;
+}
+
+[[nodiscard]] core::Result<ReadTextResult> dispatch_read(const std::string& path, const ReadTextOptions& options) {
+  try {
+    if (!options.range) {
+      return read_whole_file_blocking(path, options.max_bytes);
+    }
+    if (options.range->lines) {
+      return read_line_range_blocking(path, *options.range->lines, options.max_bytes);
+    }
+    return read_byte_range_blocking(path, *options.range->bytes, options.max_bytes);
+  } catch (const std::filesystem::filesystem_error& e) {
+    return std::unexpected(system_io_error("filesystem read failed", path, e.code()));
+  } catch (const std::exception& e) {
+    return std::unexpected(io_error("file read failed", path).with("exception", e.what()));
+  }
+}
+
+[[nodiscard]] core::Result<ReadTextResult> read_text_file_blocking(const std::string& path, ReadTextOptions options) {
   if (auto valid = validate_path(path); !valid) {
     return std::unexpected(valid.error());
   }
   if (options.max_bytes == 0) {
     return std::unexpected(core::Error::invalid_argument("max_bytes must be greater than zero").with("path", path));
   }
+  if (options.range) {
+    if (auto ok = validate_range(*options.range); !ok) {
+      return std::unexpected(std::move(ok).error().with("path", path));
+    }
+  }
   if (auto regular = ensure_readable_regular_file(path); !regular) {
     return std::unexpected(regular.error());
   }
 
-  try {
-    errno = 0;
-    std::ifstream input{to_path(path), std::ios::binary};
-    if (!input) {
-      return std::unexpected(stream_open_error("failed to open file for reading", path));
-    }
-
-    std::string contents;
-    std::array<char, kReadChunkSize> buffer{};
-    while (input) {
-      input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-      const auto count = input.gcount();
-      if (count > 0) {
-        const auto next_size = static_cast<std::uintmax_t>(contents.size()) + static_cast<std::uintmax_t>(count);
-        if (next_size > options.max_bytes) {
-          return std::unexpected(core::Error::invalid_argument("file exceeds max_bytes")
-                                     .with("path", path)
-                                     .with("max_bytes", std::to_string(options.max_bytes)));
-        }
-        contents.append(buffer.data(), static_cast<std::size_t>(count));
-      }
-    }
-
-    if (input.bad()) {
-      return std::unexpected(io_error("failed while reading file", path));
-    }
-    return contents;
-  } catch (const std::filesystem::filesystem_error& e) {
-    return std::unexpected(system_io_error("filesystem read failed", path, e.code()));
-  } catch (const std::exception& e) {
-    return std::unexpected(io_error("file read failed", path).with("exception", e.what()));
+  // Mid-read race detection: capture the fingerprint before and after the
+  // blocking read. Size or mtime drift either retries (small whole-file
+  // reads) or surfaces as `Error::conflict` (large or ranged reads).
+  auto pre = compute_file_fingerprint(path);
+  if (!pre) {
+    return std::unexpected(std::move(pre).error());
   }
+
+  auto first = dispatch_read(path, options);
+  if (!first) {
+    return std::unexpected(std::move(first).error());
+  }
+
+  auto post = compute_file_fingerprint(path);
+  if (!post) {
+    return std::unexpected(std::move(post).error());
+  }
+
+  if (*pre != *post) {
+    const bool ranged = options.range.has_value();
+    const bool large = pre->size_bytes >= kMidReadRetryThresholdBytes;
+    if (ranged || large) {
+      return std::unexpected(core::Error{core::ErrorKind::conflict, "file changed during read"}
+                                 .with("path", path)
+                                 .with("size_before", std::to_string(pre->size_bytes))
+                                 .with("size_after", std::to_string(post->size_bytes)));
+    }
+    // Small whole-file read: retry once.
+    pre = post;
+    first = dispatch_read(path, options);
+    if (!first) {
+      return std::unexpected(std::move(first).error());
+    }
+    post = compute_file_fingerprint(path);
+    if (!post) {
+      return std::unexpected(std::move(post).error());
+    }
+    if (*pre != *post) {
+      return std::unexpected(
+          core::Error{core::ErrorKind::conflict, "file changed during read (after retry)"}.with("path", path));
+    }
+  }
+
+  first->fingerprint = *post;
+  return first;
+}
+
+[[nodiscard]] core::Result<std::string> read_text_file_blocking_text_only(const std::string& path,
+                                                                          ReadTextOptions options) {
+  auto rich = read_text_file_blocking(path, options);
+  if (!rich) {
+    return std::unexpected(std::move(rich).error());
+  }
+  if (rich->truncated) {
+    return std::unexpected(core::Error::invalid_argument("file exceeds max_bytes")
+                               .with("path", path)
+                               .with("max_bytes", std::to_string(options.max_bytes)));
+  }
+  return std::move(rich->text);
 }
 
 [[nodiscard]] core::Result<void> create_parent_directories(const std::filesystem::path& fs_path,
@@ -415,6 +718,13 @@ template <typename ResultT, typename Fn>
 async::Awaitable<core::Result<std::string>>
 read_text_file(asio::any_io_executor executor, std::string path, ReadTextOptions options) {
   co_return co_await run_blocking<core::Result<std::string>>(std::move(executor), [path = std::move(path), options] {
+    return read_text_file_blocking_text_only(path, options);
+  });
+}
+
+async::Awaitable<core::Result<ReadTextResult>>
+read_text_file_ranged(asio::any_io_executor executor, std::string path, ReadTextOptions options) {
+  co_return co_await run_blocking<core::Result<ReadTextResult>>(std::move(executor), [path = std::move(path), options] {
     return read_text_file_blocking(path, options);
   });
 }

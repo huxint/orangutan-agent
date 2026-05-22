@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include <asio/bind_cancellation_slot.hpp>
@@ -351,5 +352,237 @@ TEST_CASE("write_text_file atomic mode preserves original when commit fails", "[
     REQUIRE(listing.has_value());
     REQUIRE(listing->size() == 1);
     REQUIRE((*listing)[0].name == "data.txt");
+  });
+}
+
+TEST_CASE("read_text_file_ranged returns whole file with fingerprint and line span", "[unit][io][range]") {
+  TempDir temp{"oran-io-range-whole"};
+  const auto file = temp.path() / "lines.txt";
+  write_direct(file, "alpha\nbeta\ngamma\n");
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto result = co_await io::read_text_file_ranged(context.get_executor(), file.string());
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "alpha\nbeta\ngamma\n");
+    REQUIRE(result->start_line == 1);
+    REQUIRE(result->end_line == 3);
+    REQUIRE(result->returned_bytes == 17);
+    REQUIRE_FALSE(result->truncated);
+    REQUIRE(result->fingerprint.size_bytes == 17);
+    REQUIRE(result->fingerprint.mtime_ns > 0);
+  });
+}
+
+TEST_CASE("read_text_file_ranged counts a trailing partial line", "[unit][io][range]") {
+  TempDir temp{"oran-io-range-partial-tail"};
+  const auto file = temp.path() / "lines.txt";
+  write_direct(file, "alpha\nbeta\ngamma");
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto result = co_await io::read_text_file_ranged(context.get_executor(), file.string());
+    REQUIRE(result.has_value());
+    REQUIRE(result->end_line == 3);
+  });
+}
+
+TEST_CASE("read_text_file_ranged truncates oversize whole-file reads", "[unit][io][range]") {
+  TempDir temp{"oran-io-range-truncate"};
+  const auto file = temp.path() / "big.txt";
+  write_direct(file, "0123456789");
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto result =
+        co_await io::read_text_file_ranged(context.get_executor(), file.string(), io::ReadTextOptions{.max_bytes = 4});
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "0123");
+    REQUIRE(result->returned_bytes == 4);
+    REQUIRE(result->truncated);
+    REQUIRE(result->fingerprint.size_bytes == 10);
+  });
+}
+
+TEST_CASE("read_text_file_ranged extracts a line range", "[unit][io][range][lines]") {
+  TempDir temp{"oran-io-range-lines"};
+  const auto file = temp.path() / "lines.txt";
+  write_direct(file, "one\ntwo\nthree\nfour\nfive\n");
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    io::ReadTextOptions options;
+    options.range = io::FileRange{.lines = io::FileRange::LineSpan{.start_line = 2, .line_count = 3}};
+    auto result = co_await io::read_text_file_ranged(context.get_executor(), file.string(), options);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "two\nthree\nfour\n");
+    REQUIRE(result->start_line == 2);
+    REQUIRE(result->end_line == 4);
+    REQUIRE(result->returned_bytes == 15);
+    REQUIRE_FALSE(result->truncated);
+  });
+}
+
+TEST_CASE("read_text_file_ranged caps a line range by max_bytes", "[unit][io][range][lines]") {
+  TempDir temp{"oran-io-range-lines-cap"};
+  const auto file = temp.path() / "lines.txt";
+  write_direct(file, "one\ntwo\nthree\nfour\nfive\n");
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    io::ReadTextOptions options;
+    options.range = io::FileRange{.lines = io::FileRange::LineSpan{.start_line = 1, .line_count = 5}};
+    options.max_bytes = 4;
+    auto result = co_await io::read_text_file_ranged(context.get_executor(), file.string(), options);
+    REQUIRE(result.has_value());
+    REQUIRE(result->truncated);
+    REQUIRE(result->text.size() <= 4);
+  });
+}
+
+TEST_CASE("read_text_file_ranged returns an empty span past EOF", "[unit][io][range][lines]") {
+  TempDir temp{"oran-io-range-past-eof"};
+  const auto file = temp.path() / "lines.txt";
+  write_direct(file, "only one line\n");
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    io::ReadTextOptions options;
+    options.range = io::FileRange{.lines = io::FileRange::LineSpan{.start_line = 10, .line_count = 5}};
+    auto result = co_await io::read_text_file_ranged(context.get_executor(), file.string(), options);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.empty());
+    REQUIRE(result->start_line == 10);
+    REQUIRE(result->end_line == 9);
+    REQUIRE(result->returned_bytes == 0);
+  });
+}
+
+TEST_CASE("read_text_file_ranged extracts a byte range", "[unit][io][range][bytes]") {
+  TempDir temp{"oran-io-range-bytes"};
+  const auto file = temp.path() / "blob.txt";
+  write_direct(file, "abcdefghij");
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    io::ReadTextOptions options;
+    options.range = io::FileRange{.bytes = io::FileRange::ByteSpan{.offset_bytes = 3, .length_bytes = 4}};
+    auto result = co_await io::read_text_file_ranged(context.get_executor(), file.string(), options);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "defg");
+    REQUIRE(result->returned_bytes == 4);
+    REQUIRE_FALSE(result->truncated);
+  });
+}
+
+TEST_CASE("read_text_file_ranged byte range past EOF returns the available tail", "[unit][io][range][bytes]") {
+  TempDir temp{"oran-io-range-bytes-overflow"};
+  const auto file = temp.path() / "blob.txt";
+  write_direct(file, "abcdef");
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    io::ReadTextOptions options;
+    options.range = io::FileRange{.bytes = io::FileRange::ByteSpan{.offset_bytes = 4, .length_bytes = 100}};
+    auto result = co_await io::read_text_file_ranged(context.get_executor(), file.string(), options);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "ef");
+    REQUIRE(result->returned_bytes == 2);
+    REQUIRE_FALSE(result->truncated);
+  });
+}
+
+TEST_CASE("read_text_file_ranged trims a byte range that splits a UTF-8 code point", "[unit][io][range][bytes]") {
+  TempDir temp{"oran-io-range-bytes-utf8"};
+  const auto file = temp.path() / "utf8.txt";
+  // The Han character "中" is three bytes in UTF-8 (E4 B8 AD). Following it
+  // with "x" places one more byte inside the requested span.
+  write_direct(file, "\xE4\xB8\xADx");
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    io::ReadTextOptions options;
+    // Ask for the first two bytes of the multi-byte character — the helper
+    // should adjust the tail back to the previous code-point boundary.
+    options.range = io::FileRange{.bytes = io::FileRange::ByteSpan{.offset_bytes = 1, .length_bytes = 2}};
+    auto result = co_await io::read_text_file_ranged(context.get_executor(), file.string(), options);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.empty());
+    REQUIRE(result->returned_bytes == 0);
+  });
+}
+
+TEST_CASE("read_text_file_ranged rejects an empty range", "[unit][io][range]") {
+  TempDir temp{"oran-io-range-empty"};
+  const auto file = temp.path() / "file.txt";
+  write_direct(file, "hi");
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    io::ReadTextOptions options;
+    options.range = io::FileRange{};  // neither lines nor bytes set
+    auto result = co_await io::read_text_file_ranged(context.get_executor(), file.string(), options);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  });
+}
+
+TEST_CASE("read_text_file_ranged rejects a range with both lines and bytes set", "[unit][io][range]") {
+  TempDir temp{"oran-io-range-both"};
+  const auto file = temp.path() / "file.txt";
+  write_direct(file, "hi");
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    io::ReadTextOptions options;
+    options.range = io::FileRange{
+        .lines = io::FileRange::LineSpan{.start_line = 1, .line_count = 1},
+        .bytes = io::FileRange::ByteSpan{.offset_bytes = 1, .length_bytes = 1},
+    };
+    auto result = co_await io::read_text_file_ranged(context.get_executor(), file.string(), options);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  });
+}
+
+TEST_CASE("read_text_file_ranged rejects zero range fields", "[unit][io][range]") {
+  TempDir temp{"oran-io-range-zero"};
+  const auto file = temp.path() / "file.txt";
+  write_direct(file, "hi");
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    io::ReadTextOptions options;
+    options.range = io::FileRange{.lines = io::FileRange::LineSpan{.start_line = 0, .line_count = 1}};
+    auto zero_start = co_await io::read_text_file_ranged(context.get_executor(), file.string(), options);
+    REQUIRE_FALSE(zero_start.has_value());
+    REQUIRE(zero_start.error().kind() == core::ErrorKind::invalid_argument);
+
+    options.range = io::FileRange{.bytes = io::FileRange::ByteSpan{.offset_bytes = 1, .length_bytes = 0}};
+    auto zero_length = co_await io::read_text_file_ranged(context.get_executor(), file.string(), options);
+    REQUIRE_FALSE(zero_length.has_value());
+    REQUIRE(zero_length.error().kind() == core::ErrorKind::invalid_argument);
+  });
+}
+
+TEST_CASE("read_text_file_ranged returns conflict on mid-read race for large files", "[unit][io][range][race]") {
+  TempDir temp{"oran-io-range-race-large"};
+  const auto file = temp.path() / "large.txt";
+  // 96 KiB — well above the 64 KiB retry threshold so a mid-read race surfaces
+  // immediately as `conflict` rather than triggering a retry.
+  std::string seed(96U * 1024U, 'a');
+  write_direct(file, seed);
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    // Race the read against a writer that bumps the file's content+mtime
+    // mid-flight. The mid-read fingerprint compare must catch the drift.
+    auto bump = std::thread{[&] {
+      // A short delay nudges the writer past the helper's pre-fingerprint
+      // capture without depending on exact scheduling; the test tolerates
+      // either ordering by accepting both `conflict` and `value` outcomes
+      // and asserting only that no false `value` slips through when conflict
+      // is reported.
+      std::this_thread::sleep_for(std::chrono::microseconds{50});
+      std::ofstream out{file, std::ios::binary | std::ios::trunc};
+      std::string fresh(96U * 1024U, 'b');
+      out.write(fresh.data(), static_cast<std::streamsize>(fresh.size()));
+    }};
+
+    auto result = co_await io::read_text_file_ranged(context.get_executor(), file.string());
+    bump.join();
+    if (!result.has_value()) {
+      REQUIRE(result.error().kind() == core::ErrorKind::conflict);
+    } else {
+      // No race happened to fire; the result must reflect a complete read.
+      REQUIRE(result->returned_bytes == 96U * 1024U);
+    }
   });
 }

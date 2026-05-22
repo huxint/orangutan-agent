@@ -28,6 +28,23 @@ performs the requested operation and returns `core::Result<T>`.
 > through the atomic path on every rewrite, and `file.write` through
 > the atomic path whenever `mode == truncate`; the deep-review BUG-4.1.1
 > data-loss footgun is closed.
+>
+> **Slice-43 status (2026-05-22):** `oran-io` adds the range-aware
+> `read_text_file_ranged(executor, path, options)` returning
+> `ReadTextResult { text, fingerprint, start_line, end_line,
+> returned_bytes, truncated }`. `ReadTextOptions` grows an optional
+> `range: FileRange` (mutually exclusive `LineSpan { start_line,
+> line_count }` or `ByteSpan { offset_bytes, length_bytes }`; both
+> populated branches reject as `invalid_argument`). The blocking impl
+> captures an `io::FileFingerprint` before AND after the read; size or
+> mtime drift either retries once (whole-file reads of files < 64 KiB)
+> or surfaces as `Error::conflict` with `path` / `size_before` /
+> `size_after` context. Byte ranges align both ends to UTF-8 code-point
+> boundaries so a `length_bytes` cap that lands mid-codepoint shrinks
+> the returned text rather than smuggling invalid bytes downstream;
+> the legacy `read_text_file` becomes a thin wrapper that calls the
+> ranged path and returns `Error::invalid_argument` when the rich
+> result reports `truncated=true`.
 
 ## Public Surface
 
@@ -38,6 +55,24 @@ enum class WriteMode { truncate, append, fail_if_exists };
 
 struct ReadTextOptions {
   std::uintmax_t max_bytes{16U * 1024U * 1024U};
+  // Slice 43: optional mutually-exclusive line- or byte-range request.
+  std::optional<FileRange> range{};
+};
+
+struct FileRange {
+  struct LineSpan { std::uint64_t start_line; std::uint64_t line_count; };
+  struct ByteSpan { std::uintmax_t offset_bytes; std::uintmax_t length_bytes; };
+  std::optional<LineSpan> lines;
+  std::optional<ByteSpan> bytes;
+};
+
+struct ReadTextResult {
+  std::string text;
+  FileFingerprint fingerprint;
+  std::uint64_t start_line{1};
+  std::uint64_t end_line{0};
+  std::uintmax_t returned_bytes{0};
+  bool truncated{false};
 };
 
 struct WriteTextOptions {
@@ -64,6 +99,9 @@ struct ListDirectoryOptions {
 
 async::Awaitable<core::Result<std::string>>
 read_text_file(asio::any_io_executor executor, std::string path, ReadTextOptions = {});
+
+async::Awaitable<core::Result<ReadTextResult>>
+read_text_file_ranged(asio::any_io_executor executor, std::string path, ReadTextOptions = {});
 
 async::Awaitable<core::Result<void>>
 write_text_file(asio::any_io_executor executor,
@@ -130,16 +168,20 @@ surface for effectful agent actions.
 - Permission/hook wrappers in the owning higher-level libraries.
 - **Range-aware reads + fingerprints (v2)** — see
   [`../product-specs/0011-file-view-and-caching.md`](../product-specs/0011-file-view-and-caching.md).
-  Slice 42 (2026-05-22) ships the first piece: `io::FileFingerprint`
+  Slice 42 (2026-05-22) shipped the first piece: `io::FileFingerprint`
   (`size_bytes`, `mtime_ns`, reserved `optional<string> sha256`) plus a
-  synchronous `io::compute_file_fingerprint(path)` helper. Future slices
-  add range-aware `read_text_file` returning
-  `ReadTextResult { text, fingerprint, start_line, end_line, returned_bytes,
-  truncated }`; `ReadTextOptions` gains
-  `range: FileRange { line | byte }` and `compute_hash`. Mid-read change
-  detection captures fingerprints before and after the blocking read and
-  returns `conflict` on size/mtime/inode change. Text-only callers keep a
-  thin wrapper that drops the metadata.
+  synchronous `io::compute_file_fingerprint(path)` helper. Slice 43
+  (2026-05-22) layered the second piece: `io::read_text_file_ranged`
+  returning `ReadTextResult { text, fingerprint, start_line, end_line,
+  returned_bytes, truncated }`, plus `io::FileRange { LineSpan |
+  ByteSpan }` mutual-exclusion validation, dual-end UTF-8 code-point
+  boundary alignment for byte ranges, and mid-read change detection
+  that retries small whole-file reads once and surfaces `Error::conflict`
+  for larger or ranged reads. Future slices wire `compute_hash=true`
+  (SHA-256 in `FileFingerprint::sha256`) and the `if_version`
+  short-circuit (returning `Error::not_modified` when the supplied
+  token matches the current fingerprint). Text-only callers keep the
+  legacy `read_text_file` wrapper that drops the metadata.
 - **Atomic-write durability mode** — `WriteTextOptions::durability`
   enum {`rename_only` (default), `fsync_file`, `fsync_file_and_parent`}.
   `rename_only` keeps current behaviour (atomic replacement, no fsync);
