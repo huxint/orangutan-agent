@@ -77,6 +77,24 @@ pair. `core::ErrorKind::not_modified` (and `Error::not_modified()`)
 join the cross-boundary error vocabulary. The remaining v1 bullets
 narrow to the `expected_version` contract on `file.edit` / `file.write`.
 
+**Status (slice 46, 2026-05-23):** the `expected_version` contract on
+`file.write` and `file.edit` ships in `oran-tool` — v1 of the
+file-view system is complete. Both mutation tools accept the optional
+`expected_version` field; a stale supplied token (or a path that
+vanished between the read and the mutation) fails the call with
+`Error::conflict` (`reason=stale_fingerprint`, `expected=<supplied>`,
+`fingerprint=<current>` carried in context). The pre-mutation check
+runs *before* the temp-then-rename or read, so a conflict never
+leaves a partially-written file behind. The opaque-token helper that
+`file.read` introduced in slice 45 is lifted into the private
+`src/oran-tool/version_token.hpp` header so all three file built-ins
+speak the same wire spelling. v1 acceptance criterion 4 (stale-edit
+detection) is now pinned by `tests/tool` (`file.write` + `file.edit`
+each cover happy-path, stale-token, and missing-path conflict paths).
+v1.1 (line-offset index, file-view cache, regex compile cache,
+singleflight, external-edit awareness) is next on top of the
+slice-44 `BoundedCache` primitive.
+
 **v1.1 prerequisite (slice 44, 2026-05-22):** the `BoundedCache<Key,
 Value>` generic primitive that v1.1's line-offset index, file-view
 cache, and regex cache build on is now shipped in `oran-core` as

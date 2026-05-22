@@ -869,6 +869,120 @@ TEST_CASE("file.write rejects malformed input as invalid_argument", "[unit][tool
   });
 }
 
+namespace {
+
+permission::RuleSet read_and_write_rule_set() {
+  permission::RuleSet rs;
+  rs.add(permission::Rule{
+      .verdict = permission::Verdict::allow,
+      .tool_pattern = std::string{tool::kFileReadName},
+      .capability = core::Capability::read_file,
+  });
+  rs.add(permission::Rule{
+      .verdict = permission::Verdict::allow,
+      .tool_pattern = std::string{tool::kFileWriteName},
+      .capability = core::Capability::write_file,
+  });
+  return rs;
+}
+
+permission::RuleSet read_and_edit_rule_set() {
+  permission::RuleSet rs;
+  rs.add(permission::Rule{
+      .verdict = permission::Verdict::allow,
+      .tool_pattern = std::string{tool::kFileReadName},
+      .capability = core::Capability::read_file,
+  });
+  rs.add(permission::Rule{
+      .verdict = permission::Verdict::allow,
+      .tool_pattern = std::string{tool::kFileEditName},
+      .capability = core::Capability::edit_file,
+  });
+  return rs;
+}
+
+[[nodiscard]] async::Awaitable<std::string>
+dispatch_read_and_extract_token(tool::Registry& registry, tool::DispatchContext& ctx, std::string_view path) {
+  auto read = co_await registry.dispatch(tool::kFileReadName, std::format(R"({{"path":"{}"}})", path), ctx);
+  REQUIRE(read.has_value());
+  const auto newline = read->text.find('\n');
+  REQUIRE(newline != std::string::npos);
+  const auto header = std::string_view{read->text}.substr(0, newline);
+  co_return std::string{extract_token(header)};
+}
+
+}  // namespace
+
+TEST_CASE("file.write expected_version succeeds when the token matches", "[unit][tool][file_write][if_version]") {
+  TempFile file{"write-expected-ok"};
+  file.write("seed");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_read(registry).has_value());
+    REQUIRE(tool::register_file_write(registry).has_value());
+    auto rules = read_and_write_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto token = co_await dispatch_read_and_extract_token(registry, ctx, file.string());
+    const auto input =
+        std::format(R"({{"path":"{}","content":"replaced","expected_version":"{}"}})", file.string(), token);
+    auto written = co_await registry.dispatch(tool::kFileWriteName, input, ctx);
+    REQUIRE(written.has_value());
+    REQUIRE(slurp(file.string()) == "replaced");
+  });
+}
+
+TEST_CASE("file.write expected_version returns conflict when the token is stale",
+          "[unit][tool][file_write][if_version]") {
+  TempFile file{"write-expected-stale"};
+  file.write("seed");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_read(registry).has_value());
+    REQUIRE(tool::register_file_write(registry).has_value());
+    auto rules = read_and_write_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto stale = std::string{"v1:0000000000000000000000000000000000000000000000000000000000000000:4:0"};
+    const auto input =
+        std::format(R"({{"path":"{}","content":"clobber","expected_version":"{}"}})", file.string(), stale);
+    auto attempt = co_await registry.dispatch(tool::kFileWriteName, input, ctx);
+    REQUIRE_FALSE(attempt.has_value());
+    REQUIRE(attempt.error().kind() == core::ErrorKind::conflict);
+    REQUIRE(context_has(attempt.error(), "reason", "stale_fingerprint"));
+    REQUIRE(context_has(attempt.error(), "expected", stale));
+    // The current fingerprint travels in the error so the agent can re-read
+    // with the fresh token in the next turn.
+    const auto& ctx_entries = attempt.error().context();
+    const auto fp = std::ranges::find_if(ctx_entries, [](const auto& e) { return e.first == "fingerprint"; });
+    REQUIRE(fp != ctx_entries.end());
+    REQUIRE(std::string_view{fp->second}.starts_with("v1:"));
+    REQUIRE(slurp(file.string()) == "seed");
+  });
+}
+
+TEST_CASE("file.write expected_version on a missing file surfaces conflict", "[unit][tool][file_write][if_version]") {
+  TempFile file{"write-expected-missing"};  // deliberately not created
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_write(registry).has_value());
+    auto rules = write_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto stale = std::string{"v1:0000000000000000000000000000000000000000000000000000000000000000:0:0"};
+    const auto input = std::format(R"({{"path":"{}","content":"new","expected_version":"{}"}})", file.string(), stale);
+    auto attempt = co_await registry.dispatch(tool::kFileWriteName, input, ctx);
+    REQUIRE_FALSE(attempt.has_value());
+    REQUIRE(attempt.error().kind() == core::ErrorKind::conflict);
+    REQUIRE(context_has(attempt.error(), "reason", "stale_fingerprint"));
+  });
+}
+
 TEST_CASE("register_file_edit advertises an `edit_file` capability and a path/old/new schema",
           "[unit][tool][file_edit]") {
   tool::Registry registry;
@@ -1028,6 +1142,58 @@ TEST_CASE("file.edit propagates not_found when the file is missing", "[unit][too
     auto result = co_await registry.dispatch(tool::kFileEditName, input.dump(), ctx);
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::not_found);
+  });
+}
+
+TEST_CASE("file.edit expected_version succeeds when the token matches", "[unit][tool][file_edit][if_version]") {
+  TempFile file{"edit-expected-ok"};
+  file.write("alpha-beta-gamma");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_read(registry).has_value());
+    REQUIRE(tool::register_file_edit(registry).has_value());
+    auto rules = read_and_edit_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto token = co_await dispatch_read_and_extract_token(registry, ctx, file.string());
+    const auto input = std::format(R"({{"path":"{}","old_string":"beta","new_string":"BETA","expected_version":"{}"}})",
+                                   file.string(),
+                                   token);
+    auto edited = co_await registry.dispatch(tool::kFileEditName, input, ctx);
+    REQUIRE(edited.has_value());
+    REQUIRE(slurp(file.string()) == "alpha-BETA-gamma");
+  });
+}
+
+TEST_CASE("file.edit expected_version returns conflict when the token is stale",
+          "[unit][tool][file_edit][if_version]") {
+  TempFile file{"edit-expected-stale"};
+  file.write("alpha-beta-gamma");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_edit(registry).has_value());
+    auto rules = edit_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto stale = std::string{"v1:0000000000000000000000000000000000000000000000000000000000000000:16:0"};
+    const auto input = std::format(R"({{"path":"{}","old_string":"beta","new_string":"BETA","expected_version":"{}"}})",
+                                   file.string(),
+                                   stale);
+    auto attempt = co_await registry.dispatch(tool::kFileEditName, input, ctx);
+    REQUIRE_FALSE(attempt.has_value());
+    REQUIRE(attempt.error().kind() == core::ErrorKind::conflict);
+    REQUIRE(context_has(attempt.error(), "reason", "stale_fingerprint"));
+    REQUIRE(context_has(attempt.error(), "expected", stale));
+    const auto& ctx_entries = attempt.error().context();
+    const auto fp = std::ranges::find_if(ctx_entries, [](const auto& e) { return e.first == "fingerprint"; });
+    REQUIRE(fp != ctx_entries.end());
+    REQUIRE(std::string_view{fp->second}.starts_with("v1:"));
+    // File untouched.
+    REQUIRE(slurp(file.string()) == "alpha-beta-gamma");
   });
 }
 

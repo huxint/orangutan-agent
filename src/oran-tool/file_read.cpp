@@ -14,13 +14,11 @@
 
 #include <oran/tool/builtins.hpp>
 
-#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <expected>
 #include <format>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -34,9 +32,10 @@
 #include <oran/io/file.hpp>
 #include <oran/io/fingerprint.hpp>
 #include <oran/io/range.hpp>
-#include <oran/permission/approval.hpp>
 #include <oran/tool/registry.hpp>
 #include <oran/tool/workspace.hpp>
+
+#include "version_token.hpp"
 
 namespace orangutan::tool {
 
@@ -51,30 +50,6 @@ constexpr std::string_view kFileReadSchema =
     R"("required":["path"],"additionalProperties":false})";
 
 constexpr std::uintmax_t kMaxReadBytes = 16U * 1024U * 1024U;
-
-/// Lowercase hex-string of an SHA-256 digest. The version token embeds it
-/// so two distinct paths that happen to share a (size, mtime) pair still
-/// produce different tokens — the agent cannot accidentally feed a token
-/// from file A into an `if_version` check on file B.
-[[nodiscard]] std::string hex_lower(std::span<const std::byte> bytes) {
-  constexpr std::string_view kHex = "0123456789abcdef";
-  std::string out;
-  out.resize(bytes.size() * 2U);
-  for (std::size_t i = 0; i < bytes.size(); ++i) {
-    const auto v = static_cast<std::uint8_t>(bytes[i]);
-    out[(i * 2U) + 0U] = kHex[(v >> 4U) & 0x0FU];
-    out[(i * 2U) + 1U] = kHex[v & 0x0FU];
-  }
-  return out;
-}
-
-/// Opaque version token shape — `v1:<sha256(canonical_path)>:<size>:<mtime_ns>`.
-/// Stable across two reads of an unchanged file. Touching the file (mtime
-/// bump, content rewrite, or size change) produces a different token.
-[[nodiscard]] std::string version_token(std::string_view canonical_path, const io::FileFingerprint& fp) {
-  const auto path_hash = permission::ApprovalAuthority::input_hash(canonical_path);
-  return std::format("v1:{}:{}:{}", hex_lower(path_hash), fp.size_bytes, fp.mtime_ns);
-}
 
 [[nodiscard]] core::Result<std::uintmax_t> parse_positive_unsigned(const nlohmann::json& raw, std::string_view field) {
   if (!raw.is_number_integer() || raw.is_number_float()) {
@@ -237,7 +212,7 @@ format_header(std::string_view path, const io::ReadTextResult& result, const std
     if (!pre) {
       co_return std::unexpected(std::move(pre).error());
     }
-    const auto current_token = version_token(path, *pre);
+    const auto current_token = detail::version_token(path, *pre);
     if (*if_version == current_token) {
       co_return std::unexpected(core::Error::not_modified("file.read: file is unchanged since the supplied version")
                                     .with("path", path)
@@ -250,7 +225,7 @@ format_header(std::string_view path, const io::ReadTextResult& result, const std
     co_return std::unexpected(std::move(result).error());
   }
 
-  const auto token = version_token(path, result->fingerprint);
+  const auto token = detail::version_token(path, result->fingerprint);
   const auto header = format_header(path, *result, token);
   std::string text = std::move(result->text);
   text.insert(0, "\n");

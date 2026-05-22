@@ -7,39 +7,39 @@
 
 ## Snapshot
 
-- **Slice:** 45 (`xmake run orangutan` reports slice 45)
+- **Slice:** 46 (`xmake run orangutan` reports slice 46)
 - **Last completed history:**
-  [`histories/2026-05/20260522-2350-tool-file-read-v2.md`](histories/2026-05/20260522-2350-tool-file-read-v2.md)
+  [`histories/2026-05/20260523-0010-tool-edit-write-expected-version.md`](histories/2026-05/20260523-0010-tool-edit-write-expected-version.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 45
-  wired the second public surface of spec 0011 v1: `file.read` v2 now
-  accepts `start_line` / `line_count` / `offset_bytes` /
-  `length_bytes` / `max_bytes` / `if_version`, returns a
-  `<path>:<start>-<end> fingerprint=<token> bytes=<n>[ truncated]`
-  header line above the requested file slice, and short-circuits an
-  unchanged file to `Error::not_modified` (new `ErrorKind` enumerator
-  + `Error::not_modified()` builder) via the opaque version token
-  `v1:<sha256(canonical_path)>:<size>:<mtime_ns>`. The next 0011 step
-  is the matching `file.edit` / `file.write` `expected_version`
-  contract that fails with `Error::conflict reason=stale_fingerprint`
-  when the supplied token does not match the current fingerprint,
-  closing v1 acceptance criterion 4. Spec 0013's remaining workspace
-  work narrows to audit metadata and moving resolution to the
-  pre-permission dispatch boundary. The first provider adapter
-  (Anthropic Messages) remains a multi-slice effort that needs an
-  exec plan plus `oran-http` + libcurl wiring first; blocking hook
-  semantics with veto are still gated on `oran-agent`; and wiring
-  `check-compile-budget.sh` into `scripts/ci.sh` remains gated by
-  the slice-28 reference-hardware precondition. The current
-  `file.delete` and `directory.list` shapes are expected to be re-shaped
-  in a later refactor: one unified delete tool covering both files and
-  folders, and a recursive whole-project list (not just single-level
-  children). Future built-in slices should not double down on per-kind
-  splits like `directory.remove` or single-level enumeration.
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 46
+  closes the spec 0011 v1 mutation contract: `file.write` and
+  `file.edit` now accept an optional `expected_version` field and
+  fail with `Error::conflict` (`reason=stale_fingerprint`, current
+  `fingerprint` carried in context) when the supplied token does
+  not match the on-disk file — closing v1 acceptance criterion 4.
+  The shared opaque-token helper lives in
+  `src/oran-tool/version_token.hpp` so the three file built-ins all
+  use the same wire spelling. The next 0011 step is the `BoundedCache`
+  consumers (line-offset index, file-view cache, regex compile cache
+  for `file.search`) on top of the slice-44 primitive, leaving v2's
+  `file.modify` and the persisted index store as the larger follow-ups.
+  Spec 0013's remaining workspace work narrows to audit metadata and
+  moving resolution to the pre-permission dispatch boundary. The
+  first provider adapter (Anthropic Messages) remains a multi-slice
+  effort that needs an exec plan plus `oran-http` + libcurl wiring
+  first; blocking hook semantics with veto are still gated on
+  `oran-agent`; and wiring `check-compile-budget.sh` into
+  `scripts/ci.sh` remains gated by the slice-28 reference-hardware
+  precondition. The current `file.delete` and `directory.list` shapes
+  are expected to be re-shaped in a later refactor: one unified
+  delete tool covering both files and folders, and a recursive
+  whole-project list (not just single-level children). Future built-in
+  slices should not double down on per-kind splits like
+  `directory.remove` or single-level enumeration.
 
 ## Library Health
 
@@ -62,7 +62,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 24 cases / 171 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
 - `oran-hook`: 15 cases / 97 assertions.
-- `oran-tool`: 116 cases / 980 assertions.
+- `oran-tool`: 121 cases / 1022 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 153 assertions.
 

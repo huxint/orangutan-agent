@@ -16,6 +16,7 @@
 #include <expected>
 #include <format>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -28,8 +29,11 @@
 #include <oran/core/error.hpp>
 #include <oran/core/tool_def.hpp>
 #include <oran/io/file.hpp>
+#include <oran/io/fingerprint.hpp>
 #include <oran/tool/registry.hpp>
 #include <oran/tool/workspace.hpp>
+
+#include "version_token.hpp"
 
 namespace orangutan::tool {
 
@@ -38,7 +42,8 @@ namespace {
 constexpr std::string_view kFileEditSchema =
     R"({"type":"object","properties":{"path":{"type":"string"},"old_string":{"type":"string"},)"
     R"("new_string":{"type":"string"},"replace_all":{"type":"boolean"},)"
-    R"("max_bytes":{"type":"integer","minimum":1,"maximum":16777216}},)"
+    R"("max_bytes":{"type":"integer","minimum":1,"maximum":16777216},)"
+    R"("expected_version":{"type":"string"}},)"
     R"("required":["path","old_string","new_string"],"additionalProperties":false})";
 
 /// Hard ceiling for text mutation payloads. Mirrors the current
@@ -161,6 +166,14 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
     replace_all = parsed["replace_all"].get<bool>();
   }
 
+  std::optional<std::string> expected_version;
+  if (parsed.contains("expected_version")) {
+    if (!parsed["expected_version"].is_string()) {
+      co_return std::unexpected(core::Error::invalid_argument("file.edit: `expected_version` must be a string"));
+    }
+    expected_version = parsed["expected_version"].get<std::string>();
+  }
+
   auto max_bytes = parse_max_bytes(parsed);
   if (!max_bytes) {
     co_return std::unexpected(std::move(max_bytes).error());
@@ -183,6 +196,29 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
       co_return std::unexpected(std::move(resolved).error());
     }
     path = std::move(resolved->absolute_path);
+  }
+
+  // Pre-edit fingerprint check: a stale `expected_version` aborts before
+  // the read so the caller never observes a partial edit. The downstream
+  // read still re-fingerprints internally for mid-read race detection;
+  // this guard is the *intentional* freshness contract the agent asked for.
+  if (expected_version) {
+    auto pre = io::compute_file_fingerprint(path);
+    if (!pre) {
+      co_return std::unexpected(core::Error{core::ErrorKind::conflict, "file.edit: expected_version cannot be verified"}
+                                    .with("path", path)
+                                    .with("reason", "stale_fingerprint")
+                                    .with("detail", std::string{pre.error().message()}));
+    }
+    const auto current_token = detail::version_token(path, *pre);
+    if (*expected_version != current_token) {
+      co_return std::unexpected(
+          core::Error{core::ErrorKind::conflict, "file.edit: file has changed since the expected version"}
+              .with("path", path)
+              .with("reason", "stale_fingerprint")
+              .with("expected", *expected_version)
+              .with("fingerprint", current_token));
+    }
   }
 
   auto contents = co_await io::read_text_file(ctx.executor, path, io::ReadTextOptions{.max_bytes = *max_bytes});
@@ -243,10 +279,13 @@ core::Result<void> register_file_edit(Registry& registry) {
       .description = "Edit a UTF-8 text file by replacing `old_string` with `new_string`. Input: "
                      "{\"path\": <string>, \"old_string\": <string>, \"new_string\": <string>, "
                      "\"replace_all\"?: bool (default false), \"max_bytes\"?: positive integer "
-                     "<= 16777216 (default 16777216)}. By default the call fails with `conflict` "
+                     "<= 16777216 (default 16777216), \"expected_version\"?: <version token "
+                     "from a prior `file.read`>}. By default the call fails with `conflict` "
                      "if `old_string` is not unique; pass `replace_all=true` to rewrite every "
-                     "occurrence. Returns a brief confirmation listing the number of replacements "
-                     "applied.",
+                     "occurrence. When `expected_version` is supplied the call fails with "
+                     "`conflict` (reason=stale_fingerprint, current `fingerprint` in context) "
+                     "if the file's current version differs. Returns a brief confirmation "
+                     "listing the number of replacements applied.",
       .input_schema_json = std::string{kFileEditSchema},
       .required_capabilities = {core::Capability::edit_file},
   };

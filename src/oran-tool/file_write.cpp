@@ -6,6 +6,7 @@
 #include <exception>
 #include <expected>
 #include <format>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -17,8 +18,11 @@
 #include <oran/core/error.hpp>
 #include <oran/core/tool_def.hpp>
 #include <oran/io/file.hpp>
+#include <oran/io/fingerprint.hpp>
 #include <oran/tool/registry.hpp>
 #include <oran/tool/workspace.hpp>
+
+#include "version_token.hpp"
 
 namespace orangutan::tool {
 
@@ -27,7 +31,8 @@ namespace {
 constexpr std::string_view kFileWriteSchema =
     R"({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},)"
     R"("mode":{"type":"string","enum":["truncate","append","fail_if_exists"]},)"
-    R"("create_parents":{"type":"boolean"},"max_bytes":{"type":"integer","minimum":1,"maximum":16777216}},)"
+    R"("create_parents":{"type":"boolean"},"max_bytes":{"type":"integer","minimum":1,"maximum":16777216},)"
+    R"("expected_version":{"type":"string"}},)"
     R"("required":["path","content"],"additionalProperties":false})";
 
 /// Hard ceiling for text mutation payloads. Mirrors the current
@@ -138,6 +143,14 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
     options.create_parent_directories = parsed["create_parents"].get<bool>();
   }
 
+  std::optional<std::string> expected_version;
+  if (parsed.contains("expected_version")) {
+    if (!parsed["expected_version"].is_string()) {
+      co_return std::unexpected(core::Error::invalid_argument("file.write: `expected_version` must be a string"));
+    }
+    expected_version = parsed["expected_version"].get<std::string>();
+  }
+
   auto path = parsed["path"].get<std::string>();
   auto content = parsed["content"].get<std::string>();
   const auto byte_count = content.size();
@@ -158,6 +171,33 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
     }
     path = std::move(resolved->absolute_path);
   }
+
+  // Pre-write fingerprint check: a stale `expected_version` aborts the
+  // mutation before the temp-then-rename so the caller observes a
+  // consistent `conflict / stale_fingerprint` response instead of a
+  // half-written file. A missing target is itself a mismatch — `file.write`
+  // is meant to be paired with a recent `file.read`, so vanishing-from-disk
+  // is the same "your token is stale, re-read" outcome.
+  if (expected_version) {
+    auto pre = io::compute_file_fingerprint(path);
+    if (!pre) {
+      co_return std::unexpected(
+          core::Error{core::ErrorKind::conflict, "file.write: expected_version cannot be verified"}
+              .with("path", path)
+              .with("reason", "stale_fingerprint")
+              .with("detail", std::string{pre.error().message()}));
+    }
+    const auto current_token = detail::version_token(path, *pre);
+    if (*expected_version != current_token) {
+      co_return std::unexpected(
+          core::Error{core::ErrorKind::conflict, "file.write: file has changed since the expected version"}
+              .with("path", path)
+              .with("reason", "stale_fingerprint")
+              .with("expected", *expected_version)
+              .with("fingerprint", current_token));
+    }
+  }
+
   // Truncate mode is the dominant "rewrite this file" call shape and the one
   // an LLM expects to be safe under partial-write failures; route it through
   // the temp-then-rename atomic path. Append and fail_if_exists keep their
@@ -179,7 +219,11 @@ core::Result<void> register_file_write(Registry& registry) {
                      "{\"path\": <string>, \"content\": <string>, \"mode\"?: "
                      "\"truncate\"|\"append\"|\"fail_if_exists\" (default truncate), "
                      "\"create_parents\"?: bool (default false), \"max_bytes\"?: "
-                     "positive integer <= 16777216 (default 16777216)}. Returns a brief "
+                     "positive integer <= 16777216 (default 16777216), "
+                     "\"expected_version\"?: <version token from a prior `file.read`>}. "
+                     "When `expected_version` is supplied the call fails with "
+                     "`conflict` (reason=stale_fingerprint, current `fingerprint` in "
+                     "context) if the file's current version differs. Returns a brief "
                      "confirmation listing the number of bytes written.",
       .input_schema_json = std::string{kFileWriteSchema},
       .required_capabilities = {core::Capability::write_file},
