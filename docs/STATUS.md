@@ -7,26 +7,22 @@
 
 ## Snapshot
 
-- **Slice:** 49 (`xmake run orangutan` reports slice 49)
+- **Slice:** 50 (`xmake run orangutan` reports slice 50)
 - **Last completed history:**
-  [`histories/2026-05/20260523-2315-tool-search-ignore-files.md`](histories/2026-05/20260523-2315-tool-search-ignore-files.md)
+  [`histories/2026-05/20260523-2325-io-line-offset-index.md`](histories/2026-05/20260523-2325-io-line-offset-index.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 49
-  completes spec 0011 v1.1's current `file.search` ignore-predicate
-  work: the recursive walk now honours `.gitignore` / `.ignore`
-  files from the search root downward for the common Git-style subset
-  (`#` comments, blanks, escaped leading `#` / `!` literals, `!`
-  negation, trailing `/` directory rules, slash-relative patterns,
-  basename patterns, and fnmatch-style globs) on top of slice 48's
-  built-in skip list. The remaining v1.1
-  items are the `BoundedCache` consumers on top of the slice-44
-  primitive: the line-offset index for files larger than 256 KiB, the
-  file-view cache, the regex compile cache, singleflight reads, and
-  external-edit awareness. Spec 0013's
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 50
+  ships spec 0011 v1.1's line-offset index inside `oran-io`: line-range
+  reads of files larger than 256 KiB now lazily build a bounded
+  `core::BoundedCache` entry keyed by canonical path plus
+  `(size_bytes, mtime_ns)`, seek directly to the requested span, and
+  clear the cache after successful in-process writes/deletes. The
+  remaining v1.1 items are the file-view cache, the regex compile cache,
+  singleflight reads, and external-edit awareness. Spec 0013's
   remaining workspace work narrows to audit metadata and moving
   resolution to the pre-permission dispatch boundary. The first
   provider adapter (Anthropic Messages) remains a multi-slice
@@ -57,7 +53,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 - `oran-core`: 68 cases / 437 assertions.
 - `oran-async`: 9 cases / 43 assertions.
-- `oran-io`: 36 cases / 152 assertions.
+- `oran-io`: 39 cases / 182 assertions.
 - `oran-storage`: 60 cases / 706 assertions.
 - `oran-config`: 24 cases / 171 assertions.
 - `oran-permission`: 83 cases / 379 assertions.

@@ -45,6 +45,15 @@ performs the requested operation and returns `core::Result<T>`.
 > the legacy `read_text_file` becomes a thin wrapper that calls the
 > ranged path and returns `Error::invalid_argument` when the rich
 > result reports `truncated=true`.
+>
+> **Slice-50 status (2026-05-23):** line-range reads of files larger
+> than 256 KiB now use a lazy in-memory line-offset index. The index
+> maps 1-based line numbers to byte offsets, lives in a bounded
+> `core::BoundedCache` (32 entries / 8 MiB / 10-minute TTL), and is
+> keyed by canonical path plus the cheap `(size_bytes, mtime_ns)`
+> fingerprint. `write_text_file` and `delete_file` clear the index
+> cache after successful mutations so an agent cannot reuse stale
+> offsets after an in-process write/delete.
 
 ## Public Surface
 
@@ -182,7 +191,11 @@ surface for effectful agent actions.
   `Error::not_modified` enum kind that powers the `if_version`
   short-circuit (the opaque token `v1:<sha256(canonical_path)>:<size>:<mtime_ns>`
   is computed at the tool layer; the io layer stays content-only).
-  Future slices wire `compute_hash=true` (SHA-256 in
+  Slice 50 (2026-05-23) adds the first bounded cache consumer in this
+  library: large-file line ranges use a `core::BoundedCache`-backed
+  line-offset index keyed by canonical path + cheap fingerprint and
+  invalidated after successful in-process writes/deletes. Future
+  slices wire `compute_hash=true` (SHA-256 in
   `FileFingerprint::sha256`) for high-trust paths and the
   `expected_version` contract on `file.edit` / `file.write`. Text-only
   callers keep the legacy `read_text_file` wrapper that drops the

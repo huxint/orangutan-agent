@@ -6,23 +6,30 @@
 #include <array>
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <exception>
 #include <expected>
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <functional>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #include <asio/cancellation_type.hpp>
 #include <asio/post.hpp>
 #include <asio/this_coro.hpp>
 #include <asio/use_awaitable.hpp>
 
+#include <oran/core/bounded_cache.hpp>
 #include <oran/core/error.hpp>
+#include <oran/core/time.hpp>
 #include <oran/io/fingerprint.hpp>
 
 namespace orangutan::io {
@@ -31,6 +38,60 @@ namespace {
 
 constexpr std::size_t kReadChunkSize = 8192;
 constexpr std::uintmax_t kMidReadRetryThresholdBytes = 64U * 1024U;
+constexpr std::uintmax_t kLineOffsetIndexThresholdBytes = 256U * 1024U;
+constexpr std::size_t kLineOffsetIndexMaxEntries = 32U;
+constexpr std::size_t kLineOffsetIndexMaxBytes = 8U * 1024U * 1024U;
+
+struct LineOffsetIndexKey {
+  std::string canonical_path;
+  std::uintmax_t size_bytes{0};
+  std::uint64_t mtime_ns{0};
+
+  friend bool operator==(const LineOffsetIndexKey&, const LineOffsetIndexKey&) = default;
+};
+
+struct LineOffsetIndexKeyHash {
+  [[nodiscard]] std::size_t operator()(const LineOffsetIndexKey& key) const noexcept {
+    const auto h1 = std::hash<std::string>{}(key.canonical_path);
+    const auto h2 = std::hash<std::uintmax_t>{}(key.size_bytes);
+    const auto h3 = std::hash<std::uint64_t>{}(key.mtime_ns);
+    return h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1 << 6U) + (h1 >> 2U)) ^
+           (h3 + 0x9e3779b97f4a7c15ULL + (h2 << 6U) + (h2 >> 2U));
+  }
+};
+
+struct LineOffsetIndex {
+  std::uintmax_t file_size{0};
+  std::vector<std::uintmax_t> line_starts;
+};
+
+struct LineOffsetIndexByteCost {
+  [[nodiscard]] std::size_t operator()(const std::shared_ptr<const LineOffsetIndex>& index) const noexcept {
+    return index == nullptr ? 0 : sizeof(LineOffsetIndex) + index->line_starts.size() * sizeof(std::uintmax_t);
+  }
+};
+
+using LineOffsetIndexCache = core::BoundedCache<LineOffsetIndexKey,
+                                                std::shared_ptr<const LineOffsetIndex>,
+                                                LineOffsetIndexByteCost,
+                                                LineOffsetIndexKeyHash>;
+
+[[nodiscard]] LineOffsetIndexCache& line_offset_index_cache() {
+  static auto cache = LineOffsetIndexCache{
+      LineOffsetIndexCache::Options{
+          .max_entries = kLineOffsetIndexMaxEntries,
+          .max_bytes = kLineOffsetIndexMaxBytes,
+          .ttl = std::chrono::minutes{10},
+      },
+      LineOffsetIndexByteCost{},
+  };
+  return cache;
+}
+
+[[nodiscard]] std::mutex& line_offset_index_mutex() {
+  static std::mutex mutex;
+  return mutex;
+}
 
 [[nodiscard]] bool is_cancelled(const asio::cancellation_state& cancellation) noexcept {
   return cancellation.cancelled() != asio::cancellation_type::none;
@@ -42,6 +103,32 @@ constexpr std::uintmax_t kMidReadRetryThresholdBytes = 64U * 1024U;
 
 [[nodiscard]] std::filesystem::path to_path(const std::string& path) {
   return std::filesystem::path{path};
+}
+
+[[nodiscard]] std::string cache_key_path(const std::string& path) {
+  std::error_code ec;
+  auto canonical = std::filesystem::weakly_canonical(to_path(path), ec);
+  if (!ec) {
+    return canonical.generic_string();
+  }
+  canonical = std::filesystem::absolute(to_path(path), ec);
+  if (!ec) {
+    return canonical.lexically_normal().generic_string();
+  }
+  return to_path(path).lexically_normal().generic_string();
+}
+
+[[nodiscard]] LineOffsetIndexKey line_offset_index_key(const std::string& path, const FileFingerprint& fingerprint) {
+  return LineOffsetIndexKey{
+      .canonical_path = cache_key_path(path),
+      .size_bytes = fingerprint.size_bytes,
+      .mtime_ns = fingerprint.mtime_ns,
+  };
+}
+
+void clear_line_offset_index_cache() {
+  const std::scoped_lock lock{line_offset_index_mutex()};
+  line_offset_index_cache().clear();
 }
 
 [[nodiscard]] core::Error io_error(std::string message, const std::string& path) {
@@ -216,6 +303,65 @@ read_whole_file_into(const std::string& path, std::uintmax_t max_bytes, std::str
   return newlines + (text.back() == '\n' ? 0 : 1);
 }
 
+[[nodiscard]] core::Result<std::shared_ptr<const LineOffsetIndex>>
+build_line_offset_index(const std::string& path, const FileFingerprint& fingerprint) {
+  errno = 0;
+  std::ifstream input{to_path(path), std::ios::binary};
+  if (!input) {
+    return std::unexpected(stream_open_error("failed to open file for line-offset indexing", path));
+  }
+
+  auto index = std::make_shared<LineOffsetIndex>();
+  index->file_size = fingerprint.size_bytes;
+  if (fingerprint.size_bytes > 0) {
+    index->line_starts.push_back(0);
+  }
+
+  std::uintmax_t absolute_offset = 0;
+  std::array<char, kReadChunkSize> buffer{};
+  while (input) {
+    input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+    const auto count = input.gcount();
+    if (count <= 0) {
+      break;
+    }
+    for (std::streamsize i = 0; i < count; ++i) {
+      const auto next_offset = absolute_offset + 1U;
+      if (buffer[static_cast<std::size_t>(i)] == '\n' && next_offset < fingerprint.size_bytes) {
+        index->line_starts.push_back(next_offset);
+      }
+      absolute_offset = next_offset;
+    }
+  }
+  if (input.bad()) {
+    return std::unexpected(io_error("failed while building line-offset index", path));
+  }
+  return std::shared_ptr<const LineOffsetIndex>{std::move(index)};
+}
+
+[[nodiscard]] core::Result<std::shared_ptr<const LineOffsetIndex>>
+get_line_offset_index(const std::string& path, const FileFingerprint& fingerprint) {
+  const auto key = line_offset_index_key(path, fingerprint);
+  const auto now = core::time::now_utc();
+  {
+    const std::scoped_lock lock{line_offset_index_mutex()};
+    if (auto* cached = line_offset_index_cache().get(key, now); cached != nullptr && *cached != nullptr) {
+      return *cached;
+    }
+  }
+
+  auto built = build_line_offset_index(path, fingerprint);
+  if (!built) {
+    return std::unexpected(std::move(built).error());
+  }
+
+  {
+    const std::scoped_lock lock{line_offset_index_mutex()};
+    line_offset_index_cache().put(key, *built, now);
+  }
+  return *built;
+}
+
 [[nodiscard]] core::Result<ReadTextResult> read_whole_file_blocking(const std::string& path, std::uintmax_t max_bytes) {
   ReadTextResult result;
   if (auto ok = read_whole_file_into(path, max_bytes, result.text, result.truncated); !ok) {
@@ -294,6 +440,85 @@ read_line_range_blocking(const std::string& path, FileRange::LineSpan lines, std
   return result;
 }
 
+[[nodiscard]] core::Result<ReadTextResult> read_line_range_with_index(const std::string& path,
+                                                                      FileRange::LineSpan lines,
+                                                                      std::uintmax_t max_bytes,
+                                                                      const LineOffsetIndex& index) {
+  ReadTextResult result;
+  result.start_line = lines.start_line;
+  result.end_line = lines.start_line - 1;
+
+  const auto start_index = lines.start_line - 1U;
+  if (start_index >= index.line_starts.size()) {
+    return result;
+  }
+
+  const auto remaining_lines = static_cast<std::uint64_t>(index.line_starts.size()) - start_index;
+  const auto line_count = std::min(lines.line_count, remaining_lines);
+  const auto end_index = start_index + line_count;
+  const auto start_offset = index.line_starts[static_cast<std::size_t>(start_index)];
+  const auto end_offset =
+      end_index < index.line_starts.size() ? index.line_starts[static_cast<std::size_t>(end_index)] : index.file_size;
+  const auto requested_bytes = end_offset > start_offset ? end_offset - start_offset : std::uintmax_t{0};
+  const auto capped_bytes = std::min<std::uintmax_t>(requested_bytes, max_bytes);
+
+  errno = 0;
+  std::ifstream input{to_path(path), std::ios::binary};
+  if (!input) {
+    return std::unexpected(stream_open_error("failed to open file for indexed line-range read", path));
+  }
+  input.seekg(static_cast<std::streamoff>(start_offset));
+  if (!input) {
+    return std::unexpected(io_error("failed to seek indexed line range", path));
+  }
+
+  std::array<char, kReadChunkSize> buffer{};
+  while (input && static_cast<std::uintmax_t>(result.text.size()) < capped_bytes) {
+    const auto remaining = capped_bytes - static_cast<std::uintmax_t>(result.text.size());
+    const auto chunk = std::min<std::uintmax_t>(static_cast<std::uintmax_t>(buffer.size()), remaining);
+    input.read(buffer.data(), static_cast<std::streamsize>(chunk));
+    const auto count = input.gcount();
+    if (count <= 0) {
+      break;
+    }
+    result.text.append(buffer.data(), static_cast<std::size_t>(count));
+  }
+  if (input.bad()) {
+    return std::unexpected(io_error("failed while reading indexed line range", path));
+  }
+
+  if (max_bytes < requested_bytes && static_cast<std::uintmax_t>(result.text.size()) >= max_bytes) {
+    result.truncated = true;
+  }
+  if (result.truncated && !result.text.empty()) {
+    const auto [head, end] = align_to_utf8_boundaries(result.text);
+    if (head > 0 || end < result.text.size()) {
+      result.text = result.text.substr(head, end - head);
+    }
+  }
+
+  result.returned_bytes = static_cast<std::uintmax_t>(result.text.size());
+  const auto returned_lines = count_line_span(result.text);
+  if (returned_lines > 0) {
+    result.end_line = lines.start_line + returned_lines - 1U;
+  }
+  return result;
+}
+
+[[nodiscard]] core::Result<ReadTextResult> read_line_range_dispatch(const std::string& path,
+                                                                    FileRange::LineSpan lines,
+                                                                    std::uintmax_t max_bytes,
+                                                                    const FileFingerprint& fingerprint) {
+  if (fingerprint.size_bytes <= kLineOffsetIndexThresholdBytes) {
+    return read_line_range_blocking(path, lines, max_bytes);
+  }
+  auto index = get_line_offset_index(path, fingerprint);
+  if (!index) {
+    return std::unexpected(std::move(index).error());
+  }
+  return read_line_range_with_index(path, lines, max_bytes, **index);
+}
+
 [[nodiscard]] core::Result<ReadTextResult>
 read_byte_range_blocking(const std::string& path, FileRange::ByteSpan bytes, std::uintmax_t max_bytes) {
   errno = 0;
@@ -354,13 +579,14 @@ read_byte_range_blocking(const std::string& path, FileRange::ByteSpan bytes, std
   return result;
 }
 
-[[nodiscard]] core::Result<ReadTextResult> dispatch_read(const std::string& path, const ReadTextOptions& options) {
+[[nodiscard]] core::Result<ReadTextResult>
+dispatch_read(const std::string& path, const ReadTextOptions& options, const FileFingerprint& fingerprint) {
   try {
     if (!options.range) {
       return read_whole_file_blocking(path, options.max_bytes);
     }
     if (options.range->lines) {
-      return read_line_range_blocking(path, *options.range->lines, options.max_bytes);
+      return read_line_range_dispatch(path, *options.range->lines, options.max_bytes, fingerprint);
     }
     return read_byte_range_blocking(path, *options.range->bytes, options.max_bytes);
   } catch (const std::filesystem::filesystem_error& e) {
@@ -394,7 +620,7 @@ read_byte_range_blocking(const std::string& path, FileRange::ByteSpan bytes, std
     return std::unexpected(std::move(pre).error());
   }
 
-  auto first = dispatch_read(path, options);
+  auto first = dispatch_read(path, options, *pre);
   if (!first) {
     return std::unexpected(std::move(first).error());
   }
@@ -415,7 +641,7 @@ read_byte_range_blocking(const std::string& path, FileRange::ByteSpan bytes, std
     }
     // Small whole-file read: retry once.
     pre = post;
-    first = dispatch_read(path, options);
+    first = dispatch_read(path, options, *pre);
     if (!first) {
       return std::unexpected(std::move(first).error());
     }
@@ -551,7 +777,11 @@ write_text_file_blocking(const std::string& path, const std::string& contents, W
     }
 
     if (options.atomic) {
-      return atomic_write_blocking(fs_path, path, contents);
+      auto written = atomic_write_blocking(fs_path, path, contents);
+      if (written) {
+        clear_line_offset_index_cache();
+      }
+      return written;
     }
 
     auto mode = std::ios::binary | std::ios::out;
@@ -563,7 +793,11 @@ write_text_file_blocking(const std::string& path, const std::string& contents, W
       mode |= std::ios::trunc;
     }
 
-    return stream_write(fs_path, path, contents, mode);
+    auto written = stream_write(fs_path, path, contents, mode);
+    if (written) {
+      clear_line_offset_index_cache();
+    }
+    return written;
   } catch (const std::filesystem::filesystem_error& e) {
     return std::unexpected(system_io_error("filesystem write failed", path, e.code()));
   } catch (const std::exception& e) {
@@ -690,6 +924,7 @@ write_text_file_blocking(const std::string& path, const std::string& contents, W
       // not_found so the caller sees a consistent end state.
       return std::unexpected(core::Error::not_found("file disappeared before delete").with("path", path));
     }
+    clear_line_offset_index_cache();
     return {};
   } catch (const std::filesystem::filesystem_error& e) {
     return std::unexpected(system_io_error("filesystem delete failed", path, e.code()));

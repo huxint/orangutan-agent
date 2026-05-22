@@ -1,6 +1,7 @@
 // tests/io/test_file.cpp — file and directory helper coverage.
 
 #include <chrono>
+#include <cstdint>
 #include <exception>
 #include <expected>
 #include <filesystem>
@@ -54,6 +55,26 @@ private:
 void write_direct(const std::filesystem::path& path, std::string_view contents) {
   std::ofstream output{path, std::ios::binary};
   output << contents;
+}
+
+std::string numbered_line(std::uint64_t line_number, char marker, std::size_t filler_width = 80U) {
+  auto line = std::string{"line-"};
+  line += std::to_string(line_number);
+  line += '-';
+  line.push_back(marker);
+  line += ':';
+  line.append(filler_width, marker);
+  line.push_back('\n');
+  return line;
+}
+
+std::string large_numbered_file(char marker) {
+  std::string contents;
+  contents.reserve(4096U * 96U);
+  for (std::uint64_t line = 1; line <= 4096U; ++line) {
+    contents += numbered_line(line, marker);
+  }
+  return contents;
 }
 
 }  // namespace
@@ -449,6 +470,102 @@ TEST_CASE("read_text_file_ranged returns an empty span past EOF", "[unit][io][ra
     REQUIRE(result->start_line == 10);
     REQUIRE(result->end_line == 9);
     REQUIRE(result->returned_bytes == 0);
+  });
+}
+
+TEST_CASE("read_text_file_ranged uses a line-offset index for large line ranges", "[unit][io][range][lines]") {
+  TempDir temp{"oran-io-range-lines-indexed"};
+  const auto file = temp.path() / "large-lines.txt";
+  write_direct(file, large_numbered_file('a'));
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    io::ReadTextOptions options;
+    options.range = io::FileRange{.lines = io::FileRange::LineSpan{.start_line = 3000, .line_count = 4}};
+    auto result = co_await io::read_text_file_ranged(context.get_executor(), file.string(), options);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->fingerprint.size_bytes > 256U * 1024U);
+    REQUIRE(result->text ==
+            numbered_line(3000, 'a') + numbered_line(3001, 'a') + numbered_line(3002, 'a') + numbered_line(3003, 'a'));
+    REQUIRE(result->start_line == 3000);
+    REQUIRE(result->end_line == 3003);
+    REQUIRE(result->returned_bytes == result->text.size());
+    REQUIRE_FALSE(result->truncated);
+  });
+}
+
+TEST_CASE("write_text_file invalidates the large-file line-offset index", "[unit][io][range][lines]") {
+  TempDir temp{"oran-io-range-lines-index-write"};
+  const auto file = temp.path() / "large-lines.txt";
+  const auto original = large_numbered_file('a');
+  auto replacement = large_numbered_file('b');
+  replacement.replace(0, numbered_line(1, 'b').size(), numbered_line(1, 'b', 160U));
+  const auto final_line = numbered_line(4096, 'b');
+  replacement.replace(replacement.size() - final_line.size(), final_line.size(), numbered_line(4096, 'b', 0U));
+  REQUIRE(replacement.size() == original.size());
+  write_direct(file, original);
+
+  const auto original_mtime = std::filesystem::last_write_time(file);
+  const auto original_fingerprint = io::compute_file_fingerprint(file.string());
+  REQUIRE(original_fingerprint.has_value());
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    io::ReadTextOptions options;
+    options.range = io::FileRange{.lines = io::FileRange::LineSpan{.start_line = 3000, .line_count = 1}};
+    auto first = co_await io::read_text_file_ranged(context.get_executor(), file.string(), options);
+    REQUIRE(first.has_value());
+    REQUIRE(first->text == numbered_line(3000, 'a'));
+
+    auto written = co_await io::write_text_file(context.get_executor(), file.string(), replacement);
+    REQUIRE(written.has_value());
+    std::filesystem::last_write_time(file, original_mtime);
+
+    const auto restored_fingerprint = io::compute_file_fingerprint(file.string());
+    REQUIRE(restored_fingerprint.has_value());
+    REQUIRE(restored_fingerprint->size_bytes == original_fingerprint->size_bytes);
+    REQUIRE(restored_fingerprint->mtime_ns == original_fingerprint->mtime_ns);
+
+    auto second = co_await io::read_text_file_ranged(context.get_executor(), file.string(), options);
+    REQUIRE(second.has_value());
+    REQUIRE(second->text == numbered_line(3000, 'b'));
+  });
+}
+
+TEST_CASE("delete_file invalidates the large-file line-offset index", "[unit][io][range][lines]") {
+  TempDir temp{"oran-io-range-lines-index-delete"};
+  const auto file = temp.path() / "large-lines.txt";
+  const auto original = large_numbered_file('c');
+  auto replacement = large_numbered_file('d');
+  replacement.replace(0, numbered_line(1, 'd').size(), numbered_line(1, 'd', 160U));
+  const auto final_line = numbered_line(4096, 'd');
+  replacement.replace(replacement.size() - final_line.size(), final_line.size(), numbered_line(4096, 'd', 0U));
+  REQUIRE(replacement.size() == original.size());
+  write_direct(file, original);
+
+  const auto original_mtime = std::filesystem::last_write_time(file);
+  const auto original_fingerprint = io::compute_file_fingerprint(file.string());
+  REQUIRE(original_fingerprint.has_value());
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    io::ReadTextOptions options;
+    options.range = io::FileRange{.lines = io::FileRange::LineSpan{.start_line = 3000, .line_count = 1}};
+    auto first = co_await io::read_text_file_ranged(context.get_executor(), file.string(), options);
+    REQUIRE(first.has_value());
+    REQUIRE(first->text == numbered_line(3000, 'c'));
+
+    auto deleted = co_await io::delete_file(context.get_executor(), file.string());
+    REQUIRE(deleted.has_value());
+    write_direct(file, replacement);
+    std::filesystem::last_write_time(file, original_mtime);
+
+    const auto restored_fingerprint = io::compute_file_fingerprint(file.string());
+    REQUIRE(restored_fingerprint.has_value());
+    REQUIRE(restored_fingerprint->size_bytes == original_fingerprint->size_bytes);
+    REQUIRE(restored_fingerprint->mtime_ns == original_fingerprint->mtime_ns);
+
+    auto second = co_await io::read_text_file_ranged(context.get_executor(), file.string(), options);
+    REQUIRE(second.has_value());
+    REQUIRE(second->text == numbered_line(3000, 'd'));
   });
 }
 

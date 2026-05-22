@@ -145,6 +145,21 @@ this spec is complete. v1.1's remaining items are the line-offset
 index, file-view cache, regex compile cache, singleflight reads, and
 external-edit awareness.
 
+**Status (slice 50, 2026-05-23):** the v1.1 line-offset index ships
+inside `oran-io`. Line-range reads of files larger than 256 KiB now
+lazily build a bounded `core::BoundedCache` entry keyed by canonical
+path plus the cheap `(size_bytes, mtime_ns)` fingerprint, then seek
+straight to the requested line span instead of streaming from line 1.
+The in-memory index stores only line-start byte offsets (`O(lines * 8
+bytes)` plus vector overhead), is capped at 32 entries / 8 MiB / 10
+minutes, and is globally cleared after successful `io::write_text_file`
+or `io::delete_file` calls so mutations cannot keep stale offsets
+alive. Tests cover indexed reads of large files plus write/delete
+invalidation regressions where size and mtime are restored to the old
+fingerprint but the content changes. v1.1's remaining items are the
+file-view cache, regex compile cache, singleflight reads, and
+external-edit awareness.
+
 **v1.1 prerequisite (slice 44, 2026-05-22):** the `BoundedCache<Key,
 Value>` generic primitive that v1.1's line-offset index, file-view
 cache, and regex cache build on is now shipped in `oran-core` as
