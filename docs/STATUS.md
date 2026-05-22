@@ -7,41 +7,38 @@
 
 ## Snapshot
 
-- **Slice:** 47 (`xmake run orangutan` reports slice 47)
+- **Slice:** 48 (`xmake run orangutan` reports slice 48)
 - **Last completed history:**
-  [`histories/2026-05/20260523-2100-tool-search-max-output-bytes.md`](histories/2026-05/20260523-2100-tool-search-max-output-bytes.md)
+  [`histories/2026-05/20260523-2200-tool-search-ignore-predicate.md`](histories/2026-05/20260523-2200-tool-search-ignore-predicate.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 47
-  closes spec 0011 v1.1's "Output cap on `file.search`" item: the
-  built-in now accepts an optional `max_output_bytes` field
-  (default 1 MiB) that caps the rendered `path:line:text` payload
-  independent of `max_matches`. Truncation now carries a reason
-  (`TruncReason { none, matches, bytes }`); the render layer emits
-  the matching `(truncated; ...)` summary, with the match-cap
-  message still winning when both caps could have fired (pinned
-  by a deterministic tie test). The remaining v1.1 items are the
-  `BoundedCache` consumers on top of the slice-44 primitive: a
-  built-in ignore predicate / `.gitignore` honor for `file.search`
-  directory walks, the line-offset index for files larger than 256
-  KiB, the file-view cache, the regex compile cache, singleflight
-  reads, and external-edit awareness. Spec 0013's remaining workspace
-  work narrows to audit metadata and moving resolution to the
-  pre-permission dispatch boundary. The first provider adapter
-  (Anthropic Messages) remains a multi-slice effort that needs an
-  exec plan plus `oran-http` + libcurl wiring first; blocking hook
-  semantics with veto are still gated on `oran-agent`; and wiring
-  `check-compile-budget.sh` into `scripts/ci.sh` remains gated by
-  the slice-28 reference-hardware precondition. The current
-  `file.delete` and `directory.list` shapes are expected to be
-  re-shaped in a later refactor: one unified delete tool covering
-  both files and folders, and a recursive whole-project list (not
-  just single-level children). Future built-in slices should not
-  double down on per-kind splits like `directory.remove` or
-  single-level enumeration.
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 48
+  ships the first piece of spec 0011 v1.1's "`file.search` ignore
+  predicate" item: a built-in skip list (`.git`, `.xmake`,
+  `.orangutan`, `build`, `node_modules`) that the recursive walk
+  honours regardless of `include_hidden`, with an optional
+  `respect_ignore=false` field for forensic searches. Honouring
+  `.gitignore` / `.ignore` files is the larger follow-up. The
+  remaining v1.1 items are the `BoundedCache` consumers on top of
+  the slice-44 primitive: the line-offset index for files larger
+  than 256 KiB, the file-view cache, the regex compile cache,
+  singleflight reads, and external-edit awareness. Spec 0013's
+  remaining workspace work narrows to audit metadata and moving
+  resolution to the pre-permission dispatch boundary. The first
+  provider adapter (Anthropic Messages) remains a multi-slice
+  effort that needs an exec plan plus `oran-http` + libcurl wiring
+  first; blocking hook semantics with veto are still gated on
+  `oran-agent`; and wiring `check-compile-budget.sh` into
+  `scripts/ci.sh` remains gated by the slice-28 reference-hardware
+  precondition. The current `file.delete` and `directory.list`
+  shapes are expected to be re-shaped in a later refactor: one
+  unified delete tool covering both files and folders, and a
+  recursive whole-project list (not just single-level children).
+  Future built-in slices should not double down on per-kind splits
+  like `directory.remove` or single-level enumeration.
 
 ## Library Health
 
@@ -64,7 +61,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 24 cases / 171 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
 - `oran-hook`: 15 cases / 97 assertions.
-- `oran-tool`: 124 cases / 1047 assertions.
+- `oran-tool`: 127 cases / 1067 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 153 assertions.
 

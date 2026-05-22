@@ -76,12 +76,15 @@ inline constexpr std::string_view kFileDeleteName{"file.delete"};
 /// required. Input shape: `{"path": <string>, "pattern": <string>,
 /// "max_matches"?: uint (default 100), "include_hidden"?: bool (default
 /// false), "regex"?: bool (default false), "max_output_bytes"?: uint
-/// (default 1048576)}`. Returns one `path:line:text` line per match, with a
-/// trailing `(truncated; matches capped at <N>)` or `(truncated; output
-/// capped at <N> bytes)` summary when a cap is hit; returns the literal text
-/// `no matches` (non-error) when no match was found. Files containing NUL
-/// bytes in their first 8 KiB are treated as binary and skipped during a
-/// directory walk.
+/// (default 1048576), "respect_ignore"?: bool (default true)}`. Returns one
+/// `path:line:text` line per match, with a trailing `(truncated; matches
+/// capped at <N>)` or `(truncated; output capped at <N> bytes)` summary
+/// when a cap is hit; returns the literal text `no matches` (non-error)
+/// when no match was found. Files containing NUL bytes in their first 8
+/// KiB are treated as binary and skipped during a directory walk. When
+/// `respect_ignore=true` (the default), the recursive walk skips `.git`,
+/// `.xmake`, `.orangutan`, `build`, and `node_modules` directories
+/// regardless of `include_hidden`.
 [[nodiscard]] core::Result<void> register_file_search(Registry& registry);
 
 /// Register the `directory.list` tool. Enumerates the immediate children of

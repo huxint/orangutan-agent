@@ -1474,6 +1474,83 @@ TEST_CASE("file.search match-cap wins when both caps could fire", "[unit][tool][
   });
 }
 
+// Slice 48 — `file.search` built-in ignore predicate. Hard-coded skip list
+// (`.git`, `.xmake`, `.orangutan`, `build`, `node_modules`) fires regardless
+// of `include_hidden` so an opt-in to scan hidden files still doesn't unleash
+// a full descent through `.git/`. Disabled by `respect_ignore=false` for
+// forensic searches.
+
+TEST_CASE("file.search built-in ignore predicate skips build and node_modules by default",
+          "[unit][tool][file_search][respect_ignore]") {
+  TempDir dir{"respect-ignore-default"};
+  dir.write_file("src/a.txt", "NEEDLE in src\n");
+  dir.write_file("build/b.txt", "NEEDLE in build\n");
+  dir.write_file("node_modules/pkg/c.txt", "NEEDLE in node_modules\n");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"(","pattern":"NEEDLE"})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.contains(dir.child("src/a.txt").string()));
+    REQUIRE_FALSE(result->text.contains(dir.child("build/b.txt").string()));
+    REQUIRE_FALSE(result->text.contains(dir.child("node_modules/pkg/c.txt").string()));
+  });
+}
+
+TEST_CASE("file.search respect_ignore=false re-enables build and node_modules walks",
+          "[unit][tool][file_search][respect_ignore]") {
+  TempDir dir{"respect-ignore-off"};
+  dir.write_file("src/a.txt", "NEEDLE in src\n");
+  dir.write_file("build/b.txt", "NEEDLE in build\n");
+  dir.write_file("node_modules/pkg/c.txt", "NEEDLE in node_modules\n");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"(","pattern":"NEEDLE","respect_ignore":false})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.contains(dir.child("src/a.txt").string()));
+    REQUIRE(result->text.contains(dir.child("build/b.txt").string()));
+    REQUIRE(result->text.contains(dir.child("node_modules/pkg/c.txt").string()));
+  });
+}
+
+TEST_CASE("file.search ignore predicate still skips .git even with include_hidden=true",
+          "[unit][tool][file_search][respect_ignore]") {
+  TempDir dir{"respect-ignore-vs-hidden"};
+  dir.write_file("src/a.txt", "NEEDLE in src\n");
+  // `.git` is both hidden (dot prefix) AND on the built-in skip list. With
+  // `include_hidden=true` the hidden filter no longer skips it, but the
+  // built-in predicate still does — that's the documented invariant agents
+  // rely on when opting into hidden-file scans.
+  dir.write_file(".git/HEAD", "NEEDLE in git\n");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"(","pattern":"NEEDLE","include_hidden":true})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.contains(dir.child("src/a.txt").string()));
+    REQUIRE_FALSE(result->text.contains(".git/HEAD"));
+  });
+}
+
 TEST_CASE("file.search skips binary files (NUL bytes in the first 8 KiB)", "[unit][tool][file_search]") {
   TempDir dir{"binary"};
   std::string binary_content;
@@ -1630,8 +1707,14 @@ TEST_CASE("file.search rejects malformed input as invalid_argument", "[unit][too
     REQUIRE_FALSE(zero_max_output_bytes.has_value());
     REQUIRE(zero_max_output_bytes.error().kind() == core::ErrorKind::invalid_argument);
 
-    // Every rejected call passed the permission gate; audit recorded one allow row per attempt (12 calls).
-    REQUIRE(sink.events().size() == 12);
+    auto wrong_respect_ignore = co_await registry.dispatch(tool::kFileSearchName,
+                                                           R"({"path":"/tmp/x","pattern":"x","respect_ignore":"yes"})",
+                                                           ctx);
+    REQUIRE_FALSE(wrong_respect_ignore.has_value());
+    REQUIRE(wrong_respect_ignore.error().kind() == core::ErrorKind::invalid_argument);
+
+    // Every rejected call passed the permission gate; audit recorded one allow row per attempt (13 calls).
+    REQUIRE(sink.events().size() == 13);
     for (const auto& event : sink.events()) {
       REQUIRE(event.outcome == permission::AuditOutcome::allow);
     }

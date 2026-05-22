@@ -178,7 +178,7 @@ own test bucket, its own bench bucket, and its own public header set under
 > contract as `file.write`), `file.search`
 > (slice 20, `tool::register_file_search`, capability `read_file`,
 > input `{path, pattern, max_matches?, include_hidden?, regex?,
-> max_output_bytes?}` —
+> max_output_bytes?, respect_ignore?}` —
 > literal substring by default, or re2 partial-match when
 > `regex=true` (slice 24, via `permission::InputPattern`);
 > single-file or recursive directory walk via
@@ -189,7 +189,14 @@ own test bucket, its own bench bucket, and its own public header set under
 > when the byte cap fires first the trailing summary spells
 > `(truncated; output capped at <N> bytes)`, otherwise the legacy
 > `(truncated; matches capped at <N>)` message wins so the
-> match-count cap always dominates a tie; ripgrep-class
+> match-count cap always dominates a tie; slice 48 adds a built-in
+> ignore predicate that skips `.git`, `.xmake`, `.orangutan`,
+> `build`, and `node_modules` directories regardless of
+> `include_hidden` (so an opt-in to scan hidden files still does
+> not unleash a full descent through `.git/`), with an optional
+> `respect_ignore=false` field for forensic searches; honouring
+> `.gitignore` / `.ignore` files is the larger follow-up tracked
+> in spec 0011 v1.1; ripgrep-class
 > optimisations deferred to follow-up
 > slices tracked in `exec-plans/tech-debt-tracker.md`;
 > slice 39 resolves the root path through `tool::Workspace::resolve_list`

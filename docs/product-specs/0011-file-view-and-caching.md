@@ -111,6 +111,21 @@ remaining items (line-offset index, file-view cache, regex compile
 cache, singleflight, external-edit awareness) are next on top of the
 slice-44 `BoundedCache` primitive.
 
+**Status (slice 48, 2026-05-23):** the first piece of v1.1's
+"`file.search` ignore predicate" item ships in `oran-tool` — the
+built-in skip list. The recursive walk now skips `.git`, `.xmake`,
+`.orangutan`, `build`, and `node_modules` directories regardless of
+`include_hidden`, so an opt-in to scan hidden files (e.g., `.env`)
+still doesn't unleash a full descent through `.git/`. A new optional
+`respect_ignore` field (default `true`) lets a caller opt out for
+forensic searches. Honouring `.gitignore` / `.ignore` files —
+per-directory file parsing, glob matching, ancestor walking — is the
+larger follow-up; the built-in skip list is the high-signal subset
+the spec calls out explicitly and that an agent never wants to walk
+even with `include_hidden=true`. v1.1's remaining items (line-offset
+index, file-view cache, regex compile cache, singleflight,
+external-edit awareness, `.gitignore` / `.ignore` honor) stay next.
+
 **v1.1 prerequisite (slice 44, 2026-05-22):** the `BoundedCache<Key,
 Value>` generic primitive that v1.1's line-offset index, file-view
 cache, and regex cache build on is now shipped in `oran-core` as

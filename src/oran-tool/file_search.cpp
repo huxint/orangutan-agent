@@ -28,6 +28,16 @@
 // `RE2::PartialMatch`. Invalid patterns surface as `invalid_argument` with
 // the re2 error message attached as `regex_error`, matching the
 // rule-side input-pattern compile-error shape.
+//
+// Slice 48 takes the first step on spec 0011 v1.1's "`file.search` ignore
+// predicate" item by adding a *built-in* skip list: the recursive directory
+// walk no longer descends into `build`, `node_modules`, `.git`, `.xmake`, or
+// `.orangutan` regardless of the `include_hidden` flag. Honouring
+// `.gitignore` and `.ignore` is the larger follow-up; the built-in list is
+// the high-signal subset (well-known vendor / build / VCS directories) that
+// the spec calls out explicitly and that an agent never wants to scan even
+// when `include_hidden=true`. An optional `respect_ignore` field (default
+// true) lets a caller opt out for forensic searches.
 
 #include <oran/tool/builtins.hpp>
 
@@ -71,7 +81,8 @@ namespace {
 constexpr std::string_view kFileSearchSchema =
     R"({"type":"object","properties":{"path":{"type":"string"},"pattern":{"type":"string"},)"
     R"("max_matches":{"type":"integer","minimum":1},"include_hidden":{"type":"boolean"},)"
-    R"("regex":{"type":"boolean"},"max_output_bytes":{"type":"integer","minimum":1}},)"
+    R"("regex":{"type":"boolean"},"max_output_bytes":{"type":"integer","minimum":1},)"
+    R"("respect_ignore":{"type":"boolean"}},)"
     R"("required":["path","pattern"],"additionalProperties":false})";
 
 /// Default cap on how many matches a single call returns. Keeps responses
@@ -96,6 +107,22 @@ constexpr std::uintmax_t kMaxFileBytes = 16U * 1024U * 1024U;
 /// Bytes of file head inspected for the binary-content heuristic.
 constexpr std::size_t kBinaryProbeBytes = 8U * 1024U;
 
+/// Directories the recursive walk never descends into when
+/// `respect_ignore` is true (the default). The list is deliberately tiny:
+/// well-known VCS / vendor / build directories whose contents have very low
+/// signal density per byte for an agent and whose presence in a tree is near
+/// universal. The list applies *regardless* of `include_hidden` — agents
+/// opting into hidden files (e.g., `.env`) still don't want a full descent
+/// through `.git/`. Honouring `.gitignore` / `.ignore` is the larger
+/// follow-up tracked in spec 0011 v1.1.
+constexpr std::array<std::string_view, 5> kIgnoredDirectoryNames{
+    ".git",
+    ".xmake",
+    ".orangutan",
+    "build",
+    "node_modules",
+};
+
 struct SearchOptions {
   std::string path;
   std::string pattern;
@@ -103,6 +130,7 @@ struct SearchOptions {
   std::size_t max_output_bytes{kDefaultMaxOutputBytes};
   bool include_hidden{false};
   bool regex{false};
+  bool respect_ignore{true};
 };
 
 struct Match {
@@ -206,12 +234,29 @@ struct LineMatcher {
     options.max_output_bytes = static_cast<std::size_t>(raw);
   }
 
+  if (parsed.contains("respect_ignore")) {
+    if (!parsed["respect_ignore"].is_boolean()) {
+      return std::unexpected(core::Error::invalid_argument("file.search: `respect_ignore` must be a boolean"));
+    }
+    options.respect_ignore = parsed["respect_ignore"].get<bool>();
+  }
+
   return options;
 }
 
 [[nodiscard]] bool is_hidden(const std::filesystem::path& p) {
   const auto name = p.filename().string();
   return !name.empty() && name.front() == '.';
+}
+
+/// Whether `p` names one of the always-skip directories listed in
+/// `kIgnoredDirectoryNames`. Filename comparison is exact — the `build`
+/// in this repo's `build/` is skipped but a hypothetical `build.lua` file
+/// under the same name in a flat layout is not, because the walk only
+/// consults this predicate on directories.
+[[nodiscard]] bool is_ignored_directory_name(const std::filesystem::path& p) {
+  const auto name = p.filename().string();
+  return std::ranges::find(kIgnoredDirectoryNames, std::string_view{name}) != kIgnoredDirectoryNames.end();
 }
 
 [[nodiscard]] bool looks_binary(std::string_view contents) {
@@ -404,6 +449,15 @@ struct LineMatcher {
           ++it;
           continue;
         }
+        // Built-in skip list — fires regardless of `include_hidden` so an
+        // opt-in to scan hidden files (e.g., `.env`) still doesn't unleash
+        // a full descent through `.git/` or `node_modules/`. Disabled by
+        // `respect_ignore=false` for forensic searches.
+        if (opts.respect_ignore && entry.is_directory(probe_ec) && is_ignored_directory_name(entry_path)) {
+          it.disable_recursion_pending();
+          ++it;
+          continue;
+        }
         if (entry.is_symlink(probe_ec)) {
           ++it;
           continue;
@@ -524,15 +578,17 @@ core::Result<void> register_file_search(Registry& registry) {
       .description = "Search a UTF-8 text file or (recursively) a directory for matches. "
                      "Input: {\"path\": <string>, \"pattern\": <string>, \"max_matches\"?: uint (default 100), "
                      "\"include_hidden\"?: bool (default false), \"regex\"?: bool (default false), "
-                     "\"max_output_bytes\"?: uint (default 1048576)}. "
+                     "\"max_output_bytes\"?: uint (default 1048576), \"respect_ignore\"?: bool (default true)}. "
                      "Default mode treats `pattern` as a literal substring (no-escape). When `regex=true`, "
                      "`pattern` is compiled as a re2 expression and matched against each line via partial match; "
                      "an invalid pattern returns `invalid_argument` with the re2 error attached. "
                      "Returns one `path:line:text` line per match; when a cap is hit a trailing "
                      "`(truncated; matches capped at <N>)` or `(truncated; output capped at <N> bytes)` line is "
                      "appended depending on which limit fired. Files containing NUL bytes in their first 8 KiB are "
-                     "treated as binary and skipped during a directory walk. Returns the literal text `no matches` "
-                     "(non-error) when nothing matched.",
+                     "treated as binary and skipped during a directory walk. When `respect_ignore=true` (the "
+                     "default), the recursive walk skips `.git`, `.xmake`, `.orangutan`, `build`, and "
+                     "`node_modules` directories regardless of `include_hidden`. Returns the literal text `no "
+                     "matches` (non-error) when nothing matched.",
       .input_schema_json = std::string{kFileSearchSchema},
       .required_capabilities = {core::Capability::read_file},
   };
