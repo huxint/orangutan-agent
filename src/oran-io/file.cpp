@@ -127,6 +127,20 @@ struct ReadTextResultByteCost {
 using FileViewCache =
     core::BoundedCache<FileViewCacheKey, ReadTextResult, ReadTextResultByteCost, FileViewCacheKeyHash>;
 
+template <typename Stats>
+[[nodiscard]] ReadTextBoundedCacheStats read_text_cache_stats_from(const Stats& stats) noexcept {
+  return ReadTextBoundedCacheStats{
+      .hits = stats.hits,
+      .misses = stats.misses,
+      .evictions_lru = stats.evictions_lru,
+      .evictions_ttl = stats.evictions_ttl,
+      .evictions_bytes = stats.evictions_bytes,
+      .rejected_oversize = stats.rejected_oversize,
+      .current_entries = stats.current_entries,
+      .current_bytes = stats.current_bytes,
+  };
+}
+
 struct PreparedReadTextFile {
   std::optional<ReadTextResult> ready;
   FileFingerprint fingerprint;
@@ -1274,6 +1288,19 @@ read_text_file_ranged(asio::any_io_executor executor, std::string path, ReadText
     complete_read_text_singleflight(cache_key, join.entry, result);
   }
   co_return result;
+}
+
+ReadTextFileCacheStats read_text_file_ranged_cache_stats() {
+  auto stats = ReadTextFileCacheStats{};
+  {
+    const std::scoped_lock lock{line_offset_index_mutex()};
+    stats.line_offset_index = read_text_cache_stats_from(line_offset_index_cache().stats());
+  }
+  {
+    const std::scoped_lock lock{file_view_cache_mutex()};
+    stats.file_view = read_text_cache_stats_from(file_view_cache().stats());
+  }
+  return stats;
 }
 
 ReadTextSingleflightStats read_text_file_ranged_singleflight_stats() {

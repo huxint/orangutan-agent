@@ -457,6 +457,50 @@ TEST_CASE("write_text_file invalidates the file-view cache even when the fingerp
   });
 }
 
+TEST_CASE("read_text_file_ranged_cache_stats exposes file-view and line-offset cache health",
+          "[unit][io][range][cache][stats]") {
+  TempDir temp{"oran-io-range-cache-stats"};
+  const auto file_view_file = temp.path() / "file-view.txt";
+  const auto indexed_file = temp.path() / "indexed.txt";
+  write_direct(file_view_file, "alpha\nbeta\n");
+  write_direct(indexed_file, large_numbered_file('s'));
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    const auto file_view_before = io::read_text_file_ranged_cache_stats();
+
+    auto cold = co_await io::read_text_file_ranged(context.get_executor(), file_view_file.string());
+    auto hot = co_await io::read_text_file_ranged(context.get_executor(), file_view_file.string());
+    REQUIRE(cold.has_value());
+    REQUIRE(hot.has_value());
+    REQUIRE(cold->text == hot->text);
+
+    const auto file_view_after = io::read_text_file_ranged_cache_stats();
+    REQUIRE(file_view_after.file_view.misses == file_view_before.file_view.misses + 1);
+    REQUIRE(file_view_after.file_view.hits == file_view_before.file_view.hits + 1);
+    REQUIRE(file_view_after.file_view.current_entries > 0);
+    REQUIRE(file_view_after.file_view.current_bytes >= hot->text.size());
+
+    io::ReadTextOptions first_range;
+    first_range.range = io::FileRange{.lines = io::FileRange::LineSpan{.start_line = 100, .line_count = 8}};
+    io::ReadTextOptions second_range;
+    second_range.range = io::FileRange{.lines = io::FileRange::LineSpan{.start_line = 200, .line_count = 8}};
+
+    const auto line_before = io::read_text_file_ranged_cache_stats();
+    auto first = co_await io::read_text_file_ranged(context.get_executor(), indexed_file.string(), first_range);
+    auto second = co_await io::read_text_file_ranged(context.get_executor(), indexed_file.string(), second_range);
+    REQUIRE(first.has_value());
+    REQUIRE(second.has_value());
+    REQUIRE(first->start_line == 100);
+    REQUIRE(second->start_line == 200);
+
+    const auto line_after = io::read_text_file_ranged_cache_stats();
+    REQUIRE(line_after.line_offset_index.misses == line_before.line_offset_index.misses + 1);
+    REQUIRE(line_after.line_offset_index.hits == line_before.line_offset_index.hits + 1);
+    REQUIRE(line_after.line_offset_index.current_entries > 0);
+    REQUIRE(line_after.line_offset_index.current_bytes > 0);
+  });
+}
+
 TEST_CASE("read_text_file_ranged collapses concurrent cold reads with singleflight",
           "[unit][io][range][singleflight]") {
   TempDir temp{"oran-io-range-singleflight"};

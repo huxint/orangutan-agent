@@ -70,6 +70,12 @@ performs the requested operation and returns `core::Result<T>`.
 > followers await the same result. Hot file-view cache hits return before
 > touching the table. `read_text_file_ranged_singleflight_stats()` exposes
 > lifetime counters and current table size without leaking keys or paths.
+>
+> **Slice-54 status (2026-05-24):** the range-read cache observability
+> surface now covers the two bounded caches as well as singleflight:
+> `read_text_file_ranged_cache_stats()` snapshots the private line-offset
+> index and file-view cache hit/miss/eviction/current-size counters without
+> exposing keys or paths.
 
 ## Public Surface
 
@@ -98,6 +104,22 @@ struct ReadTextResult {
   std::uint64_t end_line{0};
   std::uintmax_t returned_bytes{0};
   bool truncated{false};
+};
+
+struct ReadTextBoundedCacheStats {
+  std::uint64_t hits{0};
+  std::uint64_t misses{0};
+  std::uint64_t evictions_lru{0};
+  std::uint64_t evictions_ttl{0};
+  std::uint64_t evictions_bytes{0};
+  std::uint64_t rejected_oversize{0};
+  std::size_t current_entries{0};
+  std::size_t current_bytes{0};
+};
+
+struct ReadTextFileCacheStats {
+  ReadTextBoundedCacheStats line_offset_index;
+  ReadTextBoundedCacheStats file_view;
 };
 
 struct ReadTextSingleflightStats {
@@ -137,6 +159,8 @@ read_text_file(asio::any_io_executor executor, std::string path, ReadTextOptions
 
 async::Awaitable<core::Result<ReadTextResult>>
 read_text_file_ranged(asio::any_io_executor executor, std::string path, ReadTextOptions = {});
+
+ReadTextFileCacheStats read_text_file_ranged_cache_stats();
 
 ReadTextSingleflightStats read_text_file_ranged_singleflight_stats();
 
@@ -228,8 +252,10 @@ surface for effectful agent actions.
   synchronous invalidation after successful in-process writes/deletes.
   Slice 53 (2026-05-24) adds the bounded singleflight table for cold
   `read_text_file_ranged` calls and the
-  `ReadTextSingleflightStats` observability snapshot. Future slices wire
-  watcher-backed external-edit awareness, and `compute_hash=true` (SHA-256 in
+  `ReadTextSingleflightStats` observability snapshot. Slice 54
+  (2026-05-24) adds the paired `ReadTextFileCacheStats` snapshot for the
+  line-offset index and file-view cache. Future slices wire watcher-backed
+  external-edit awareness, and `compute_hash=true` (SHA-256 in
   `FileFingerprint::sha256`) for high-trust paths. Text-only callers keep
   the legacy `read_text_file` wrapper that drops the metadata.
 - **Atomic-write durability mode** — `WriteTextOptions::durability`

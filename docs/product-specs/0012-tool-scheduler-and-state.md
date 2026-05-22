@@ -150,12 +150,18 @@ implicitly via the capability list.
   | Approval broker grants | TTL + max-per-identity | existing TTL + 64 per identity |
   | Provider route health / retry backoff | TTL per route | 30 s |
   | Regex compile cache (`file.search`) | LRU | 64 entries |
+  | `read_text_file_ranged` line-offset index | LRU + TTL + byte cap + stats | 32 entries / 8 MiB / 10 min |
+  | `read_text_file_ranged` file-view cache | LRU + TTL + byte cap + stats | 64 entries / 16 MiB / 10 min |
   | `read_text_file_ranged` singleflight table | max in-flight rows + stats | 64 entries |
   | Tool catalog rendered-block cache | LRU by `(ToolDef hash, cache_version)` | 256 entries |
 - **Observable.** Every cache and lock table exposes a `Stats` accessor;
   once `oran-log` lands, a periodic tick publishes them as structured log
-  events. Pre-`oran-log`, `--explain-rules`-style debug surfaces in
-  `oran-bootstrap` expose the same numbers.
+  events. **Status (slice 54, 2026-05-24):** `oran-io` already exposes
+  `read_text_file_ranged_cache_stats()` for its line-offset index and
+  file-view cache, plus the slice-53
+  `read_text_file_ranged_singleflight_stats()` in-flight-table snapshot.
+  Pre-`oran-log`, `--explain-rules`-style debug surfaces in `oran-bootstrap`
+  can reuse the same numbers.
 
 ## Scope (v1.1)
 

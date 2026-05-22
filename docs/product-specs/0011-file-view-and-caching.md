@@ -201,6 +201,17 @@ waiter counts without exposing paths or keys. Tests cover two
 concurrent cold reads collapsing to one leader plus one follower. v1.1's
 remaining item is watcher-backed external-edit awareness.
 
+**Status (slice 54, 2026-05-24):** the v1.1 cache observability surface
+now exposes both bounded `oran-io` range-read caches. The public
+`io::read_text_file_ranged_cache_stats()` accessor returns
+`ReadTextFileCacheStats { line_offset_index, file_view }`, each carrying
+the underlying `core::BoundedCache` lifetime counters and current
+occupancy/byte totals. The snapshot does not expose canonical paths,
+range keys, or file contents. Tests cover both cache families by forcing
+a cold+hot file-view read and two large-file line ranges that reuse one
+line-offset index. v1.1's remaining item is watcher-backed external-edit
+awareness.
+
 **v1.1 prerequisite (slice 44, 2026-05-22):** the `BoundedCache<Key,
 Value>` generic primitive that v1.1's line-offset index, file-view
 cache, and regex cache build on is now shipped in `oran-core` as
@@ -337,7 +348,9 @@ correctness is anchored:
   size_bytes, mtime_ns)` and capped at 64 entries / 16 MiB / 10
   minutes. Hits re-stat before returning; successful in-process
   writes/deletes synchronously clear the cache so stale bodies cannot
-  survive a mutation made through `oran-io`.
+  survive a mutation made through `oran-io`. Slice 54 adds the public
+  `ReadTextFileCacheStats` snapshot covering both this cache and the
+  line-offset index without exposing private keys.
 - **Singleflight reads**: ten concurrent `file.read` calls for the same
   `(canonical_path, range, max_bytes, size_bytes, mtime_ns)` share one
   filesystem read instead of stampeding the executor. Shipped in slice

@@ -7,26 +7,24 @@
 
 ## Snapshot
 
-- **Slice:** 53 (`xmake run orangutan` reports slice 53)
+- **Slice:** 54 (`xmake run orangutan` reports slice 54)
 - **Last completed history:**
-  [`histories/2026-05/20260524-0030-io-read-singleflight.md`](histories/2026-05/20260524-0030-io-read-singleflight.md)
+  [`histories/2026-05/20260524-0045-io-read-cache-stats.md`](histories/2026-05/20260524-0045-io-read-cache-stats.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 53
-  ships spec 0011 v1.1's singleflight reads inside `oran-io`:
-  concurrent cold `read_text_file_ranged` calls for the same canonical
-  path, requested range, max-bytes budget, and cheap
-  `(size_bytes, mtime_ns)` fingerprint now collapse behind one leader
-  read while followers await the same `ReadTextResult`. Hot file-view
-  cache hits return before touching the in-flight table. The private
-  table is bounded to 64 entries, and the public
-  `read_text_file_ranged_singleflight_stats()` accessor exposes lifetime
-  leader/follower/completion/error counters plus current in-flight and
-  waiter counts without exposing keys or paths. The remaining v1.1 item
-  is watcher-backed external-edit awareness.
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 54
+  completes the public bounded-state observability surface for
+  `oran-io`'s range-read caches: `read_text_file_ranged_cache_stats()`
+  snapshots the private line-offset index and file-view cache
+  `core::BoundedCache` counters (hits, misses, LRU/TTL/byte evictions,
+  oversize rejections, current entries, current bytes) without exposing
+  cache keys or paths. Slice 53's
+  `read_text_file_ranged_singleflight_stats()` remains the paired
+  in-flight-table snapshot. The remaining spec 0011 v1.1 item is
+  watcher-backed external-edit awareness.
   Spec 0013's
   remaining workspace work narrows to audit metadata and moving
   resolution to the pre-permission dispatch boundary. The first
@@ -58,7 +56,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 - `oran-core`: 68 cases / 437 assertions.
 - `oran-async`: 9 cases / 43 assertions.
-- `oran-io`: 42 cases / 212 assertions.
+- `oran-io`: 43 cases / 228 assertions.
 - `oran-storage`: 60 cases / 706 assertions.
 - `oran-config`: 24 cases / 171 assertions.
 - `oran-permission`: 83 cases / 379 assertions.

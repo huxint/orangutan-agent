@@ -31,6 +31,28 @@ struct ReadTextOptions {
   std::optional<FileRange> range{};
 };
 
+/// Snapshot of one bounded cache used by `read_text_file_ranged`.
+/// Lifetime counters are monotonic and survive cache clears; `current_*`
+/// fields describe the cache at snapshot time. Keys and paths are not
+/// exposed.
+struct ReadTextBoundedCacheStats {
+  std::uint64_t hits{0};
+  std::uint64_t misses{0};
+  std::uint64_t evictions_lru{0};
+  std::uint64_t evictions_ttl{0};
+  std::uint64_t evictions_bytes{0};
+  std::uint64_t rejected_oversize{0};
+  std::size_t current_entries{0};
+  std::size_t current_bytes{0};
+};
+
+/// Process-local cache stats for the line-offset index and file-view cache
+/// behind `read_text_file_ranged`.
+struct ReadTextFileCacheStats {
+  ReadTextBoundedCacheStats line_offset_index;
+  ReadTextBoundedCacheStats file_view;
+};
+
 /// Process-local singleflight stats for `read_text_file_ranged`. The
 /// numbers expose bounded-state health without leaking cache keys or file
 /// paths. Lifetime counters are monotonic; `current_*` fields describe the
@@ -88,6 +110,11 @@ read_text_file(asio::any_io_executor executor, std::string path, ReadTextOptions
 /// ranged reads). Spec 0011 v1 (file-view system) is the contract.
 [[nodiscard]] async::Awaitable<core::Result<ReadTextResult>>
 read_text_file_ranged(asio::any_io_executor executor, std::string path, ReadTextOptions options = {});
+
+/// Snapshot the process-local bounded caches used by
+/// `read_text_file_ranged`. This is an observability hook only; callers
+/// cannot mutate or inspect private cache keys.
+[[nodiscard]] ReadTextFileCacheStats read_text_file_ranged_cache_stats();
 
 /// Snapshot the process-local singleflight table used by
 /// `read_text_file_ranged`. This is an observability hook only; callers
