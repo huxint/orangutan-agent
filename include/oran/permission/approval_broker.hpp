@@ -37,6 +37,12 @@
 //      `reap_expired(now)` from a periodic job to free the entry early,
 //      or (c) re-approving — which overwrites the entry with a fresh
 //      `remaining_uses = replay_max` and a fresh expiry.
+//   4. To keep this process-local state bounded before `oran-agent` lands,
+//      the broker tracks at most `max_grants_per_identity` non-expired
+//      entries per identity. `approve` lazily reaps expired entries, then
+//      evicts the oldest remaining grant for that identity when a new
+//      distinct triple would exceed the ceiling. An evicted token still
+//      verifies cryptographically, but `check` returns `reason=no_grant`.
 //
 // Why the state lives outside the token. Keeping the token portable means
 // it can travel through audit logs and (eventually) external approval
@@ -63,8 +69,8 @@
 //                            authority).
 //   * `no_grant`           — token verified but no broker entry exists
 //                            (typical when the runtime restarted, the
-//                            entry was reaped, or `approve` was never
-//                            called).
+//                            entry was reaped, the per-identity ceiling
+//                            evicted it, or `approve` was never called).
 //   * `replay_exhausted`   — entry exists but `remaining_uses == 0`.
 
 #pragma once
@@ -109,6 +115,12 @@ struct ApprovalGrant {
 /// fresh authority (which by criterion 5 invalidates every prior token).
 class ApprovalBroker {
 public:
+  /// Maximum number of live grant entries retained per identity. This is
+  /// the spec-0012 bounded-state ceiling for approval grants; TTL remains
+  /// the primary lifecycle policy, and this cap prevents a single long-lived
+  /// identity from growing the broker map without bound between reap ticks.
+  static constexpr std::size_t max_grants_per_identity = 64;
+
   /// Build a broker that owns a freshly-generated `ApprovalAuthority`.
   /// Same fallibility envelope as `ApprovalAuthority::with_random_secret`.
   [[nodiscard]] static core::Result<ApprovalBroker> with_random_secret();
@@ -175,10 +187,14 @@ private:
   struct Entry {
     core::Time expires_at{};
     std::uint32_t remaining_uses{0};
+    std::uint64_t sequence{0};
   };
+
+  void enforce_identity_ceiling(std::string_view identity, const Key& new_key);
 
   ApprovalAuthority authority_;
   std::unordered_map<Key, Entry, KeyHash> grants_;
+  std::uint64_t next_sequence_{0};
 };
 
 }  // namespace orangutan::permission

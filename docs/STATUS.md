@@ -7,15 +7,23 @@
 
 ## Snapshot
 
-- **Slice:** 55 (`xmake run orangutan` reports slice 55)
+- **Slice:** 56 (`xmake run orangutan` reports slice 56)
 - **Last completed history:**
-  [`histories/2026-05/20260524-0100-tool-workspace-pre-resolve-audit.md`](histories/2026-05/20260524-0100-tool-workspace-pre-resolve-audit.md)
+  [`histories/2026-05/20260524-0115-permission-approval-grant-cap.md`](histories/2026-05/20260524-0115-permission-approval-grant-cap.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 55
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 56
+  closes spec 0012's approval-grant bounded-state item inside
+  `oran-permission`: `ApprovalBroker::approve` now lazily reaps expired
+  grants and keeps at most
+  `ApprovalBroker::max_grants_per_identity` (64) live grant entries per
+  identity, evicting the oldest same-identity grant when a new distinct
+  `(tool, identity, input_hash)` triple would exceed the ceiling. Evicted
+  tokens still verify cryptographically, but `ApprovalBroker::check`
+  returns `reason=no_grant`. Slice 55
   closes spec 0013's v1 structural path-policy work inside `oran-tool`:
   `Registry::dispatch` now pre-resolves known filesystem built-in `path`
   inputs through `tool::Workspace` before permission evaluation, carries
@@ -71,7 +79,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-io`: 43 cases / 228 assertions.
 - `oran-storage`: 60 cases / 706 assertions.
 - `oran-config`: 24 cases / 171 assertions.
-- `oran-permission`: 83 cases / 379 assertions.
+- `oran-permission`: 86 cases / 390 assertions.
 - `oran-hook`: 15 cases / 97 assertions.
 - `oran-tool`: 136 cases / 1170 assertions.
 - `oran-cli`: 5 cases / 30 assertions.

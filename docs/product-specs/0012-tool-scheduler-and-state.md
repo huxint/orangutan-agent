@@ -29,8 +29,9 @@ Today's seams that motivate this spec:
 - `oran-agent` does not exist yet (`docs/STATUS.md`), so the scheduler can
   land *before* the loop and dictate the loop's tool-call contract rather
   than retrofit one.
-- `permission::ApprovalBroker` already reaps expired grants
-  (`reap_expired(now)`) but never had a "max grants per identity" ceiling.
+- `permission::ApprovalBroker` now reaps expired grants
+  (`reap_expired(now)`) and, as of slice 56, enforces the v1
+  "max grants per identity" ceiling on `approve`.
 - Hook bus dispatch is advisory-only with sequential fan-out
   (`src/oran-hook/bus.cpp:54-81`); multi-sink provider/token-stream events
   will surface this once parallel tools land.
@@ -147,7 +148,7 @@ implicitly via the capability list.
   | --- | --- | --- |
   | Path-lock table | reap idle rows on TTL | 5 min |
   | Deferred-tool promotion set (per session) | LRU on session size | 16 entries |
-  | Approval broker grants | TTL + max-per-identity | existing TTL + 64 per identity |
+  | Approval broker grants | TTL + max-per-identity (slice 56 shipped the cap; `approve` lazily reaps expired rows then evicts the oldest same-identity grant before inserting a new distinct triple) | existing TTL + 64 per identity |
   | Provider route health / retry backoff | TTL per route | 30 s |
   | Regex compile cache (`file.search`) | LRU | 64 entries |
   | `read_text_file_ranged` line-offset index | LRU + TTL + byte cap + stats | 32 entries / 8 MiB / 10 min |

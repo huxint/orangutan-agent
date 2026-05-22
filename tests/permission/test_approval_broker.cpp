@@ -34,10 +34,15 @@
 //                                          `reason` verbatim and does
 //                                          *not* decrement the
 //                                          honest triple's counter.
+//  10. bounded grants — each identity retains at most
+//                       ApprovalBroker::max_grants_per_identity live
+//                       entries; a new distinct grant evicts the oldest
+//                       grant for that identity only.
 
 #include <chrono>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -256,4 +261,91 @@ TEST_CASE("ApprovalBroker rejects tokens after their TTL even if grant entry sur
   REQUIRE_FALSE(outside.has_value());
   REQUIRE(reason_of(outside.error()) == "expired");
   REQUIRE(broker.outstanding_grants() == 1);
+}
+
+TEST_CASE("ApprovalBroker caps live grants per identity and evicts the oldest grant",
+          "[unit][permission][approval_broker][bounded]") {
+  auto broker = make_broker();
+  const auto now = fixed_base();
+  std::vector<perm::ApprovalToken> tokens;
+  tokens.reserve(ApprovalBroker::max_grants_per_identity + 1U);
+
+  for (std::size_t i = 0; i <= ApprovalBroker::max_grants_per_identity; ++i) {
+    tokens.push_back(broker.approve(
+        ApprovalGrant{
+            .tool_name = "file.write",
+            .input = "path-" + std::to_string(i),
+            .identity = "alice",
+            .replay_max = 1,
+        },
+        now));
+  }
+
+  REQUIRE(broker.outstanding_grants() == ApprovalBroker::max_grants_per_identity);
+
+  const auto evicted = broker.check(tokens.front(), "file.write", "path-0", "alice", now);
+  REQUIRE_FALSE(evicted.has_value());
+  REQUIRE(reason_of(evicted.error()) == "no_grant");
+
+  const auto newest = broker.check(tokens.back(),
+                                   "file.write",
+                                   "path-" + std::to_string(ApprovalBroker::max_grants_per_identity),
+                                   "alice",
+                                   now);
+  REQUIRE(newest.has_value());
+}
+
+TEST_CASE("ApprovalBroker grant ceiling is scoped per identity", "[unit][permission][approval_broker][bounded]") {
+  auto broker = make_broker();
+  const auto now = fixed_base();
+  const auto bob_token =
+      broker.approve(ApprovalGrant{.tool_name = "file.write", .input = "bob-path", .identity = "bob", .replay_max = 1},
+                     now);
+
+  for (std::size_t i = 0; i <= ApprovalBroker::max_grants_per_identity; ++i) {
+    static_cast<void>(broker.approve(
+        ApprovalGrant{
+            .tool_name = "file.write",
+            .input = "alice-path-" + std::to_string(i),
+            .identity = "alice",
+            .replay_max = 1,
+        },
+        now));
+  }
+
+  REQUIRE(broker.outstanding_grants() == ApprovalBroker::max_grants_per_identity + 1U);
+  REQUIRE(broker.check(bob_token, "file.write", "bob-path", "bob", now).has_value());
+}
+
+TEST_CASE("ApprovalBroker reaps expired grants before enforcing the identity ceiling",
+          "[unit][permission][approval_broker][bounded]") {
+  auto broker = make_broker();
+  const auto now = fixed_base();
+  static_cast<void>(broker.approve(
+      ApprovalGrant{
+          .tool_name = "file.write",
+          .input = "expired",
+          .identity = "alice",
+          .ttl = std::chrono::seconds{1},
+          .replay_max = 1,
+      },
+      now));
+
+  const auto later = core::Time{now.to_system_time_point() + std::chrono::seconds{2}};
+  std::vector<perm::ApprovalToken> tokens;
+  tokens.reserve(ApprovalBroker::max_grants_per_identity);
+  for (std::size_t i = 0; i < ApprovalBroker::max_grants_per_identity; ++i) {
+    tokens.push_back(broker.approve(
+        ApprovalGrant{
+            .tool_name = "file.write",
+            .input = "fresh-" + std::to_string(i),
+            .identity = "alice",
+            .replay_max = 1,
+        },
+        later));
+  }
+
+  REQUIRE(broker.outstanding_grants() == ApprovalBroker::max_grants_per_identity);
+  const auto first_fresh = broker.check(tokens.front(), "file.write", "fresh-0", "alice", later);
+  REQUIRE(first_fresh.has_value());
 }

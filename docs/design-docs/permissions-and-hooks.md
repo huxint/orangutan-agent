@@ -79,7 +79,13 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > `reason=no_grant` (entry missing) / `reason=replay_exhausted`
 > (counter at zero). Re-approving the same triple overwrites
 > the entry; `reap_expired(now)` provides explicit periodic
-> eviction. The per-rule `replay_max` / `approval_ttl_seconds`
+> eviction. Slice 56 adds the spec-0012 bounded-state ceiling:
+> `approve` lazily reaps expired entries, then retains at most
+> `ApprovalBroker::max_grants_per_identity` (64) live entries per
+> identity. Inserting a new distinct triple beyond the ceiling evicts
+> that identity's oldest grant; an evicted token still passes the
+> authority's cryptographic checks but broker lookup fails with
+> `reason=no_grant`. The per-rule `replay_max` / `approval_ttl_seconds`
 > config fields flow through `oran-config` (negative or
 > non-integer values reject at load), through `permission::Rule`
 > (defaults `replay_max=8`, `approval_ttl=3600s` matching the

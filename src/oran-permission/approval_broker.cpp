@@ -53,6 +53,37 @@ core::Result<ApprovalBroker> ApprovalBroker::with_random_secret() {
 
 ApprovalBroker::ApprovalBroker(ApprovalAuthority authority) noexcept : authority_(std::move(authority)) {}
 
+std::size_t ApprovalBroker::reap_expired(core::Time now) {
+  std::size_t removed = 0;
+  for (auto it = grants_.begin(); it != grants_.end();) {
+    if (it->second.expires_at <= now) {
+      it = grants_.erase(it);
+      ++removed;
+    } else {
+      ++it;
+    }
+  }
+  return removed;
+}
+
+void ApprovalBroker::enforce_identity_ceiling(std::string_view identity, const Key& new_key) {
+  std::size_t live_for_identity = 0;
+  auto oldest = grants_.end();
+  for (auto it = grants_.begin(); it != grants_.end(); ++it) {
+    if (it->first.identity != identity || it->first == new_key) {
+      continue;
+    }
+    ++live_for_identity;
+    if (oldest == grants_.end() || it->second.sequence < oldest->second.sequence) {
+      oldest = it;
+    }
+  }
+
+  if (live_for_identity >= max_grants_per_identity && oldest != grants_.end()) {
+    grants_.erase(oldest);
+  }
+}
+
 ApprovalToken ApprovalBroker::approve(const ApprovalGrant& grant, core::Time now) {
   const ApprovalRequest request{
       .tool_name = grant.tool_name,
@@ -67,10 +98,16 @@ ApprovalToken ApprovalBroker::approve(const ApprovalGrant& grant, core::Time now
       .identity = token.identity,
       .input_hash = token.input_hash,
   };
+  reap_expired(now);
+  enforce_identity_ceiling(token.identity, key);
   // `operator[]` overwrites: re-approving the same triple resets the
   // counter and bumps the expiry to match the new policy. The behavior is
   // documented on the header.
-  grants_[std::move(key)] = Entry{.expires_at = token.expires_at, .remaining_uses = grant.replay_max};
+  grants_[std::move(key)] = Entry{
+      .expires_at = token.expires_at,
+      .remaining_uses = grant.replay_max,
+      .sequence = next_sequence_++,
+  };
   return token;
 }
 
@@ -101,19 +138,6 @@ core::Result<void> ApprovalBroker::check(const ApprovalToken& token,
   }
   --it->second.remaining_uses;
   return {};
-}
-
-std::size_t ApprovalBroker::reap_expired(core::Time now) {
-  std::size_t removed = 0;
-  for (auto it = grants_.begin(); it != grants_.end();) {
-    if (it->second.expires_at <= now) {
-      it = grants_.erase(it);
-      ++removed;
-    } else {
-      ++it;
-    }
-  }
-  return removed;
 }
 
 std::size_t ApprovalBroker::outstanding_grants() const noexcept {

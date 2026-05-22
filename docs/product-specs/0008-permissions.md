@@ -72,10 +72,15 @@ human approval for high-risk operations.
    `reason` context entries on failure) and then decrements the counter on
    success. Two broker-only rejection paths attach their own reasons:
    `reason=no_grant` (token verified but no entry — broker restarted, entry
-   reaped, or `approve` was never called) and `reason=replay_exhausted`
+   reaped, the per-identity grant ceiling evicted it, or `approve` was
+   never called) and `reason=replay_exhausted`
    (counter at zero). Re-approving the same triple overwrites the entry, so
    operators get the intuitive "approve again resets the counter" behavior;
-   `reap_expired(now)` provides explicit periodic eviction. The
+   `reap_expired(now)` provides explicit periodic eviction. Slice 56 adds
+   the spec-0012 state ceiling: `approve` lazily reaps expired grants before
+   enforcing at most 64 live grants per identity, evicting the oldest
+   same-identity grant only when a new distinct triple would exceed that
+   cap. The
    `replay_max` / `approval_ttl_seconds` per-rule fields land in
    `config::PermissionRuleConfig` as optionals; `oran-config` validates them
    (negative values reject with the JSON path attached); `permission::Rule`
