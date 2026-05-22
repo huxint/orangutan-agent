@@ -22,6 +22,7 @@ TEST_CASE("Error builders carry the right kind", "[unit][core][error]") {
   REQUIRE(Error::rate_limit("x").kind() == ErrorKind::rate_limit);
   REQUIRE(Error::timeout(250ms).kind() == ErrorKind::timeout);
   REQUIRE(Error::parsing("x").kind() == ErrorKind::parsing);
+  REQUIRE(Error::not_modified("x").kind() == ErrorKind::not_modified);
   REQUIRE(Error::storage("x").kind() == ErrorKind::storage);
   REQUIRE(Error::internal("x").kind() == ErrorKind::internal);
 }
@@ -38,6 +39,7 @@ TEST_CASE("Error::retryable matches the documented category set", "[unit][core][
   REQUIRE_FALSE(Error::io("x").retryable());
   REQUIRE_FALSE(Error::permission_denied("x").retryable());
   REQUIRE_FALSE(Error::config("x").retryable());
+  REQUIRE_FALSE(Error::not_modified("x").retryable());
   REQUIRE_FALSE(Error::storage("x").retryable());
   REQUIRE_FALSE(Error::internal("x").retryable());
 }

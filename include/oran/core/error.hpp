@@ -35,6 +35,7 @@ enum class ErrorKind : std::uint8_t {
   parsing,
   timeout,
   conflict,
+  not_modified,
   storage,
   hook_timeout,
   hook_failed,
@@ -88,6 +89,7 @@ public:
   [[nodiscard]] static Error upstream(std::string message);
   [[nodiscard]] static Error timeout(std::chrono::milliseconds elapsed);
   [[nodiscard]] static Error parsing(std::string message);
+  [[nodiscard]] static Error not_modified(std::string message);
   [[nodiscard]] static Error storage(std::string message);
   [[nodiscard]] static Error internal(std::string message);
 

@@ -177,11 +177,16 @@ surface for effectful agent actions.
   ByteSpan }` mutual-exclusion validation, dual-end UTF-8 code-point
   boundary alignment for byte ranges, and mid-read change detection
   that retries small whole-file reads once and surfaces `Error::conflict`
-  for larger or ranged reads. Future slices wire `compute_hash=true`
-  (SHA-256 in `FileFingerprint::sha256`) and the `if_version`
-  short-circuit (returning `Error::not_modified` when the supplied
-  token matches the current fingerprint). Text-only callers keep the
-  legacy `read_text_file` wrapper that drops the metadata.
+  for larger or ranged reads. Slice 45 (2026-05-22) consumes the range
+  surface from `oran-tool`'s `file.read` v2 schema and adds the new
+  `Error::not_modified` enum kind that powers the `if_version`
+  short-circuit (the opaque token `v1:<sha256(canonical_path)>:<size>:<mtime_ns>`
+  is computed at the tool layer; the io layer stays content-only).
+  Future slices wire `compute_hash=true` (SHA-256 in
+  `FileFingerprint::sha256`) for high-trust paths and the
+  `expected_version` contract on `file.edit` / `file.write`. Text-only
+  callers keep the legacy `read_text_file` wrapper that drops the
+  metadata.
 - **Atomic-write durability mode** — `WriteTextOptions::durability`
   enum {`rename_only` (default), `fsync_file`, `fsync_file_and_parent`}.
   `rename_only` keeps current behaviour (atomic replacement, no fsync);

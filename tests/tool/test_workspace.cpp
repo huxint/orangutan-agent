@@ -259,7 +259,8 @@ TEST_CASE("file.read uses DispatchContext workspace when supplied", "[unit][tool
 
     auto read = co_await registry.dispatch("file.read", R"({"path":"note.txt"})", ctx);
     REQUIRE(read.has_value());
-    REQUIRE(read->text == "inside");
+    REQUIRE(read->text.contains("\ninside"));
+    REQUIRE(read->text.contains("fingerprint=v1:"));
 
     std::error_code ec;
     const auto outside_relative_path = std::filesystem::relative(outside.path() / "secret.txt", root.path(), ec);

@@ -402,7 +402,18 @@ TEST_CASE("file.read happy path returns the file contents verbatim", "[unit][too
     const auto input = std::string{R"({"path":")"} + file.string() + R"("})";
     auto result = co_await registry.dispatch(tool::kFileReadName, input, ctx);
     REQUIRE(result.has_value());
-    REQUIRE(result->text == "hello, slice 17");
+    // v2 surface wraps the body in a `<path>:<start>-<end> fingerprint=<token>
+    // bytes=<n>[ truncated]\n<body>` envelope; the legacy verbatim payload
+    // is still available after the header line so callers can split on the
+    // first newline and recover the original contents.
+    const auto newline = result->text.find('\n');
+    REQUIRE(newline != std::string::npos);
+    const auto header = std::string_view{result->text}.substr(0, newline);
+    const auto body = std::string_view{result->text}.substr(newline + 1);
+    REQUIRE(body == "hello, slice 17");
+    REQUIRE(header.starts_with(file.string() + ":1-1 fingerprint=v1:"));
+    REQUIRE(header.find("bytes=15") != std::string_view::npos);
+    REQUIRE(header.find(" truncated") == std::string_view::npos);
     REQUIRE(sink.events().size() == 1);
     REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
   });
@@ -458,6 +469,171 @@ TEST_CASE("file.read returns not_found when the path does not exist", "[unit][to
     auto result = co_await registry.dispatch(tool::kFileReadName, input, ctx);
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::not_found);
+  });
+}
+
+namespace {
+
+[[nodiscard]] std::pair<std::string_view, std::string_view> split_file_read_envelope(std::string_view text) {
+  const auto newline = text.find('\n');
+  REQUIRE(newline != std::string_view::npos);
+  return {text.substr(0, newline), text.substr(newline + 1)};
+}
+
+[[nodiscard]] std::string extract_token(std::string_view header) {
+  const auto fp = header.find("fingerprint=");
+  REQUIRE(fp != std::string_view::npos);
+  const auto rest = header.substr(fp + std::string_view{"fingerprint="}.size());
+  const auto end = rest.find(' ');
+  REQUIRE(end != std::string_view::npos);
+  return std::string{rest.substr(0, end)};
+}
+
+}  // namespace
+
+TEST_CASE("file.read line range returns only the requested span", "[unit][tool][file_read][range]") {
+  TempFile file{"line-range"};
+  file.write("alpha\nbeta\ngamma\ndelta\nepsilon\n");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_read(registry).has_value());
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kFileReadName},
+        .capability = core::Capability::read_file,
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::format(R"({{"path":"{}","start_line":2,"line_count":2}})", file.string());
+    auto result = co_await registry.dispatch(tool::kFileReadName, input, ctx);
+    REQUIRE(result.has_value());
+    auto [header, body] = split_file_read_envelope(result->text);
+    REQUIRE(header.find(":2-3 ") != std::string_view::npos);
+    REQUIRE(body == "beta\ngamma\n");
+  });
+}
+
+TEST_CASE("file.read byte range returns the requested byte span", "[unit][tool][file_read][range]") {
+  TempFile file{"byte-range"};
+  file.write("0123456789ABCDEF");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_read(registry).has_value());
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kFileReadName},
+        .capability = core::Capability::read_file,
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::format(R"({{"path":"{}","offset_bytes":3,"length_bytes":5}})", file.string());
+    auto result = co_await registry.dispatch(tool::kFileReadName, input, ctx);
+    REQUIRE(result.has_value());
+    auto [header, body] = split_file_read_envelope(result->text);
+    REQUIRE(header.find("bytes=5") != std::string_view::npos);
+    // `offset_bytes` is the byte skip count from the start of the file — the
+    // first read byte sits at zero-based index `offset_bytes`.
+    REQUIRE(body == "34567");
+  });
+}
+
+TEST_CASE("file.read rejects mixing line and byte range", "[unit][tool][file_read][range]") {
+  TempFile file{"mixed-range"};
+  file.write("contents");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_read(registry).has_value());
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kFileReadName},
+        .capability = core::Capability::read_file,
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::format(R"({{"path":"{}","start_line":1,"line_count":1,"offset_bytes":1,"length_bytes":1}})",
+                                   file.string());
+    auto result = co_await registry.dispatch(tool::kFileReadName, input, ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  });
+}
+
+TEST_CASE("file.read if_version short-circuits unchanged files as not_modified",
+          "[unit][tool][file_read][if_version]") {
+  TempFile file{"if-version"};
+  file.write("payload");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_read(registry).has_value());
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kFileReadName},
+        .capability = core::Capability::read_file,
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto base_input = std::format(R"({{"path":"{}"}})", file.string());
+    auto first = co_await registry.dispatch(tool::kFileReadName, base_input, ctx);
+    REQUIRE(first.has_value());
+    auto [header, body] = split_file_read_envelope(first->text);
+    REQUIRE(body == "payload");
+    const auto token = extract_token(header);
+    REQUIRE(token.starts_with("v1:"));
+
+    // Same fingerprint on the follow-up read → `not_modified`.
+    const auto cached_input = std::format(R"({{"path":"{}","if_version":"{}"}})", file.string(), token);
+    auto cached = co_await registry.dispatch(tool::kFileReadName, cached_input, ctx);
+    REQUIRE_FALSE(cached.has_value());
+    REQUIRE(cached.error().kind() == core::ErrorKind::not_modified);
+    REQUIRE(context_has(cached.error(), "fingerprint", token));
+
+    // Stale token (one off) re-sends the body.
+    const auto stale_token = std::string{"v1:0000000000000000000000000000000000000000000000000000000000000000:7:0"};
+    const auto fresh_input = std::format(R"({{"path":"{}","if_version":"{}"}})", file.string(), stale_token);
+    auto fresh = co_await registry.dispatch(tool::kFileReadName, fresh_input, ctx);
+    REQUIRE(fresh.has_value());
+    auto [hdr2, body2] = split_file_read_envelope(fresh->text);
+    REQUIRE(body2 == "payload");
+    REQUIRE(extract_token(hdr2) == token);
+  });
+}
+
+TEST_CASE("file.read version token changes when the file is rewritten", "[unit][tool][file_read][if_version]") {
+  TempFile file{"if-version-changes"};
+  file.write("first");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_read(registry).has_value());
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kFileReadName},
+        .capability = core::Capability::read_file,
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    auto first = co_await registry.dispatch(tool::kFileReadName, std::format(R"({{"path":"{}"}})", file.string()), ctx);
+    REQUIRE(first.has_value());
+    const auto first_token = extract_token(split_file_read_envelope(first->text).first);
+
+    // Rewrite the file with a different body so size + mtime both shift.
+    std::this_thread::sleep_for(std::chrono::milliseconds{15});
+    file.write("rewritten-body");
+
+    auto second =
+        co_await registry.dispatch(tool::kFileReadName, std::format(R"({{"path":"{}"}})", file.string()), ctx);
+    REQUIRE(second.has_value());
+    const auto second_token = extract_token(split_file_read_envelope(second->text).first);
+    REQUIRE(first_token != second_token);
   });
 }
 
@@ -678,8 +854,9 @@ TEST_CASE("file.write rejects malformed input as invalid_argument", "[unit][tool
     REQUIRE_FALSE(wrong_max_bytes.has_value());
     REQUIRE(wrong_max_bytes.error().kind() == core::ErrorKind::invalid_argument);
 
-    auto over_hard_cap = co_await registry.dispatch(
-        tool::kFileWriteName, R"({"path":"/tmp/x","content":"y","max_bytes":16777217})", ctx);
+    auto over_hard_cap = co_await registry.dispatch(tool::kFileWriteName,
+                                                    R"({"path":"/tmp/x","content":"y","max_bytes":16777217})",
+                                                    ctx);
     REQUIRE_FALSE(over_hard_cap.has_value());
     REQUIRE(over_hard_cap.error().kind() == core::ErrorKind::invalid_argument);
 
@@ -900,13 +1077,17 @@ TEST_CASE("file.edit rejects malformed input as invalid_argument", "[unit][tool]
     REQUIRE_FALSE(identical.has_value());
     REQUIRE(identical.error().kind() == core::ErrorKind::invalid_argument);
 
-    auto wrong_max_bytes = co_await registry.dispatch(
-        tool::kFileEditName, R"({"path":"/tmp/x","old_string":"a","new_string":"b","max_bytes":"4"})", ctx);
+    auto wrong_max_bytes =
+        co_await registry.dispatch(tool::kFileEditName,
+                                   R"({"path":"/tmp/x","old_string":"a","new_string":"b","max_bytes":"4"})",
+                                   ctx);
     REQUIRE_FALSE(wrong_max_bytes.has_value());
     REQUIRE(wrong_max_bytes.error().kind() == core::ErrorKind::invalid_argument);
 
-    auto zero_max_bytes = co_await registry.dispatch(
-        tool::kFileEditName, R"({"path":"/tmp/x","old_string":"a","new_string":"b","max_bytes":0})", ctx);
+    auto zero_max_bytes =
+        co_await registry.dispatch(tool::kFileEditName,
+                                   R"({"path":"/tmp/x","old_string":"a","new_string":"b","max_bytes":0})",
+                                   ctx);
     REQUIRE_FALSE(zero_max_bytes.has_value());
     REQUIRE(zero_max_bytes.error().kind() == core::ErrorKind::invalid_argument);
 
@@ -1881,9 +2062,7 @@ tool::DispatchContext make_hooked_ctx(asio::io_context& io,
 TEST_CASE("dispatch publishes tool_before + tool_after on the allow path", "[unit][tool][hook]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
-    REQUIRE(
-        registry.add(noop_tool_def(), &noop_ok_handler)
-            .has_value());
+    REQUIRE(registry.add(noop_tool_def(), &noop_ok_handler).has_value());
 
     auto rules = allow_rule_set();
     permission::RecordingAuditSink audit;
@@ -1912,9 +2091,7 @@ TEST_CASE("dispatch publishes tool_before + tool_after on the allow path", "[uni
 TEST_CASE("dispatch publishes tool_after with permission_denied kind on the deny path", "[unit][tool][hook]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
-    REQUIRE(
-        registry.add(noop_tool_def(), &noop_ok_handler)
-            .has_value());
+    REQUIRE(registry.add(noop_tool_def(), &noop_ok_handler).has_value());
 
     auto rules = deny_rule_set();
     permission::RecordingAuditSink audit;
@@ -1940,10 +2117,7 @@ TEST_CASE("dispatch publishes tool_after with permission_denied kind on the deny
 TEST_CASE("dispatch publishes tool_after with the handler's error kind on handler failure", "[unit][tool][hook]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
-    REQUIRE(
-        registry
-            .add(noop_tool_def(), &noop_error_handler)
-            .has_value());
+    REQUIRE(registry.add(noop_tool_def(), &noop_error_handler).has_value());
 
     auto rules = allow_rule_set();
     permission::RecordingAuditSink audit;
@@ -1986,9 +2160,7 @@ TEST_CASE("dispatch does not publish any hook event for an unknown tool name", "
 TEST_CASE("dispatch swallows sink errors — hook publish is advisory", "[unit][tool][hook]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
-    REQUIRE(
-        registry.add(noop_tool_def(), &noop_ok_handler)
-            .has_value());
+    REQUIRE(registry.add(noop_tool_def(), &noop_ok_handler).has_value());
 
     auto rules = allow_rule_set();
     permission::RecordingAuditSink audit;
@@ -2012,9 +2184,7 @@ TEST_CASE("dispatch swallows sink errors — hook publish is advisory", "[unit][
 TEST_CASE("null bus reproduces slice-21 behavior — no hook publish", "[unit][tool][hook]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
-    REQUIRE(
-        registry.add(noop_tool_def(), &noop_ok_handler)
-            .has_value());
+    REQUIRE(registry.add(noop_tool_def(), &noop_ok_handler).has_value());
 
     auto rules = allow_rule_set();
     permission::RecordingAuditSink audit;
@@ -2032,9 +2202,7 @@ TEST_CASE("null bus reproduces slice-21 behavior — no hook publish", "[unit][t
 TEST_CASE("ask short-circuit publishes tool_after with permission_denied + approval_required", "[unit][tool][hook]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
-    REQUIRE(
-        registry.add(noop_tool_def(), &noop_ok_handler)
-            .has_value());
+    REQUIRE(registry.add(noop_tool_def(), &noop_ok_handler).has_value());
 
     auto rules = single_rule(permission::Rule{
         .verdict = permission::Verdict::ask,
@@ -2062,9 +2230,7 @@ TEST_CASE("ask short-circuit publishes tool_after with permission_denied + appro
 TEST_CASE("ask + broker rejection publishes tool_after with broker reason in the error kind", "[unit][tool][hook]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
-    REQUIRE(
-        registry.add(noop_tool_def(), &noop_ok_handler)
-            .has_value());
+    REQUIRE(registry.add(noop_tool_def(), &noop_ok_handler).has_value());
 
     auto rules = single_rule(permission::Rule{
         .verdict = permission::Verdict::ask,
@@ -2113,9 +2279,7 @@ TEST_CASE("ask + broker rejection publishes tool_after with broker reason in the
 TEST_CASE("dispatch publishes tool_dispatched on the allow path with verdict=allow", "[unit][tool][hook]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
-    REQUIRE(
-        registry.add(noop_tool_def(), &noop_ok_handler)
-            .has_value());
+    REQUIRE(registry.add(noop_tool_def(), &noop_ok_handler).has_value());
 
     auto rules = allow_rule_set();
     permission::RecordingAuditSink audit;
@@ -2145,9 +2309,7 @@ TEST_CASE("dispatch publishes tool_dispatched on the allow path with verdict=all
 TEST_CASE("dispatch does NOT publish tool_dispatched on the deny path", "[unit][tool][hook]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
-    REQUIRE(
-        registry.add(noop_tool_def(), &noop_ok_handler)
-            .has_value());
+    REQUIRE(registry.add(noop_tool_def(), &noop_ok_handler).has_value());
 
     auto rules = deny_rule_set();
     permission::RecordingAuditSink audit;
@@ -2169,9 +2331,7 @@ TEST_CASE("dispatch does NOT publish tool_dispatched on the deny path", "[unit][
 TEST_CASE("dispatch does NOT publish tool_dispatched on the ask short-circuit path", "[unit][tool][hook]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
-    REQUIRE(
-        registry.add(noop_tool_def(), &noop_ok_handler)
-            .has_value());
+    REQUIRE(registry.add(noop_tool_def(), &noop_ok_handler).has_value());
 
     auto rules = single_rule(permission::Rule{
         .verdict = permission::Verdict::ask,
@@ -2228,9 +2388,7 @@ TEST_CASE("dispatch publishes tool_dispatched with verdict=ask on the ask-approv
 TEST_CASE("dispatch does NOT publish tool_dispatched on broker rejection", "[unit][tool][hook]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
-    REQUIRE(
-        registry.add(noop_tool_def(), &noop_ok_handler)
-            .has_value());
+    REQUIRE(registry.add(noop_tool_def(), &noop_ok_handler).has_value());
 
     auto rules = single_rule(permission::Rule{.verdict = permission::Verdict::ask, .tool_pattern = "noop"});
     permission::RecordingAuditSink audit;
@@ -2257,10 +2415,7 @@ TEST_CASE("dispatch does NOT publish tool_dispatched on broker rejection", "[uni
 TEST_CASE("dispatch publishes tool_error on handler failure", "[unit][tool][hook]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
-    REQUIRE(
-        registry
-            .add(noop_tool_def(), &noop_error_handler)
-            .has_value());
+    REQUIRE(registry.add(noop_tool_def(), &noop_error_handler).has_value());
 
     auto rules = allow_rule_set();
     permission::RecordingAuditSink audit;
@@ -2287,9 +2442,7 @@ TEST_CASE("dispatch publishes tool_error on handler failure", "[unit][tool][hook
 TEST_CASE("dispatch publishes tool_error on permission deny", "[unit][tool][hook]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
-    REQUIRE(
-        registry.add(noop_tool_def(), &noop_ok_handler)
-            .has_value());
+    REQUIRE(registry.add(noop_tool_def(), &noop_ok_handler).has_value());
 
     auto rules = deny_rule_set();
     permission::RecordingAuditSink audit;
@@ -2311,9 +2464,7 @@ TEST_CASE("dispatch publishes tool_error on permission deny", "[unit][tool][hook
 TEST_CASE("dispatch publishes tool_error on ask short-circuit", "[unit][tool][hook]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
-    REQUIRE(
-        registry.add(noop_tool_def(), &noop_ok_handler)
-            .has_value());
+    REQUIRE(registry.add(noop_tool_def(), &noop_ok_handler).has_value());
 
     auto rules = single_rule(permission::Rule{
         .verdict = permission::Verdict::ask,
@@ -2338,9 +2489,7 @@ TEST_CASE("dispatch publishes tool_error on ask short-circuit", "[unit][tool][ho
 TEST_CASE("dispatch publishes tool_error on broker rejection with broker reason in message", "[unit][tool][hook]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
-    REQUIRE(
-        registry.add(noop_tool_def(), &noop_ok_handler)
-            .has_value());
+    REQUIRE(registry.add(noop_tool_def(), &noop_ok_handler).has_value());
 
     auto rules = single_rule(permission::Rule{.verdict = permission::Verdict::ask, .tool_pattern = "noop"});
     permission::RecordingAuditSink audit;
@@ -2368,9 +2517,7 @@ TEST_CASE("dispatch publishes tool_error on broker rejection with broker reason 
 TEST_CASE("dispatch does NOT publish tool_error on the allow happy path", "[unit][tool][hook]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
-    REQUIRE(
-        registry.add(noop_tool_def(), &noop_ok_handler)
-            .has_value());
+    REQUIRE(registry.add(noop_tool_def(), &noop_ok_handler).has_value());
 
     auto rules = allow_rule_set();
     permission::RecordingAuditSink audit;
@@ -2393,10 +2540,7 @@ TEST_CASE("dispatch publishes tool_dispatched + tool_error + tool_after in the r
           "[unit][tool][hook]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
-    REQUIRE(
-        registry
-            .add(noop_tool_def(), &noop_error_handler)
-            .has_value());
+    REQUIRE(registry.add(noop_tool_def(), &noop_error_handler).has_value());
 
     auto rules = allow_rule_set();
     permission::RecordingAuditSink audit;

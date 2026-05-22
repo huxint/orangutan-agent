@@ -40,7 +40,12 @@ inline constexpr std::string_view kFileDeleteName{"file.delete"};
 /// Register the `file.read` tool. Reads UTF-8 content using `oran-io`'s
 /// coroutine helper; when `DispatchContext::workspace` is set, the input path
 /// is first resolved through `tool::Workspace`. Capability `read_file` is
-/// required.
+/// required. Input shape: `{"path": <string>, "start_line"?, "line_count"?,
+/// "offset_bytes"?, "length_bytes"?, "max_bytes"? (<= 16 MiB), "if_version"?}`.
+/// Line and byte ranges are mutually exclusive. Output is a header line
+/// `<path>:<start>-<end> fingerprint=<token> bytes=<n>[ truncated]` followed
+/// by the requested file slice on the next line. `if_version` matching the
+/// current fingerprint short-circuits to `Error::not_modified`.
 [[nodiscard]] core::Result<void> register_file_read(Registry& registry);
 
 /// Register the `file.write` tool. Writes UTF-8 content to a path using

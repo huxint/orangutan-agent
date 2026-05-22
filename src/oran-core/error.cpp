@@ -87,6 +87,10 @@ Error Error::parsing(std::string message) {
   return Error{ErrorKind::parsing, std::move(message)};
 }
 
+Error Error::not_modified(std::string message) {
+  return Error{ErrorKind::not_modified, std::move(message)};
+}
+
 Error Error::storage(std::string message) {
   return Error{ErrorKind::storage, std::move(message)};
 }

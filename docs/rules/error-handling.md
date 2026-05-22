@@ -25,6 +25,7 @@ enum class ErrorKind {
   parsing,
   timeout,
   conflict,
+  not_modified,
   storage,
   hook_timeout,
   hook_failed,

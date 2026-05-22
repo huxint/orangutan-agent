@@ -1,9 +1,26 @@
-// src/oran-tool/file_read.cpp — `file.read` built-in.
+// src/oran-tool/file_read.cpp — `file.read` built-in (spec 0011 v1).
+//
+// v2 input shape: `{"path": <string>, "start_line"?, "line_count"?,
+// "offset_bytes"?, "length_bytes"?, "max_bytes"?, "if_version"?}`. The
+// line/byte range pair is mutually exclusive (caught both at schema
+// validation in `Registry::add` and at handler time by
+// `io::FileRange` itself). The response wraps the returned text in a
+// single header line carrying the version token, the covered span, the
+// returned byte count, and the truncated flag so today's text-only
+// `tool::Output` can still surface the metadata until `Output v2` lands.
+// `if_version` short-circuits to `Error::not_modified` (carrying the
+// current token in context) when the supplied token matches the current
+// fingerprint, so a cached caller does not re-pay the body bytes.
 
 #include <oran/tool/builtins.hpp>
 
+#include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <expected>
+#include <format>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -15,6 +32,9 @@
 #include <oran/core/error.hpp>
 #include <oran/core/tool_def.hpp>
 #include <oran/io/file.hpp>
+#include <oran/io/fingerprint.hpp>
+#include <oran/io/range.hpp>
+#include <oran/permission/approval.hpp>
 #include <oran/tool/registry.hpp>
 #include <oran/tool/workspace.hpp>
 
@@ -23,7 +43,150 @@ namespace orangutan::tool {
 namespace {
 
 constexpr std::string_view kFileReadSchema =
-    R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false})";
+    R"({"type":"object","properties":{"path":{"type":"string"},)"
+    R"("start_line":{"type":"integer","minimum":1},"line_count":{"type":"integer","minimum":1},)"
+    R"("offset_bytes":{"type":"integer","minimum":1},"length_bytes":{"type":"integer","minimum":1},)"
+    R"("max_bytes":{"type":"integer","minimum":1,"maximum":16777216},)"
+    R"("if_version":{"type":"string"}},)"
+    R"("required":["path"],"additionalProperties":false})";
+
+constexpr std::uintmax_t kMaxReadBytes = 16U * 1024U * 1024U;
+
+/// Lowercase hex-string of an SHA-256 digest. The version token embeds it
+/// so two distinct paths that happen to share a (size, mtime) pair still
+/// produce different tokens — the agent cannot accidentally feed a token
+/// from file A into an `if_version` check on file B.
+[[nodiscard]] std::string hex_lower(std::span<const std::byte> bytes) {
+  constexpr std::string_view kHex = "0123456789abcdef";
+  std::string out;
+  out.resize(bytes.size() * 2U);
+  for (std::size_t i = 0; i < bytes.size(); ++i) {
+    const auto v = static_cast<std::uint8_t>(bytes[i]);
+    out[(i * 2U) + 0U] = kHex[(v >> 4U) & 0x0FU];
+    out[(i * 2U) + 1U] = kHex[v & 0x0FU];
+  }
+  return out;
+}
+
+/// Opaque version token shape — `v1:<sha256(canonical_path)>:<size>:<mtime_ns>`.
+/// Stable across two reads of an unchanged file. Touching the file (mtime
+/// bump, content rewrite, or size change) produces a different token.
+[[nodiscard]] std::string version_token(std::string_view canonical_path, const io::FileFingerprint& fp) {
+  const auto path_hash = permission::ApprovalAuthority::input_hash(canonical_path);
+  return std::format("v1:{}:{}:{}", hex_lower(path_hash), fp.size_bytes, fp.mtime_ns);
+}
+
+[[nodiscard]] core::Result<std::uintmax_t> parse_positive_unsigned(const nlohmann::json& raw, std::string_view field) {
+  if (!raw.is_number_integer() || raw.is_number_float()) {
+    return std::unexpected(
+        core::Error::invalid_argument(std::format("file.read: `{}` must be a positive integer", field)));
+  }
+  std::uint64_t value = 0U;
+  if (raw.is_number_unsigned()) {
+    value = raw.get<std::uint64_t>();
+  } else {
+    const auto signed_value = raw.get<std::int64_t>();
+    if (signed_value <= 0) {
+      return std::unexpected(core::Error::invalid_argument(std::format("file.read: `{}` must be positive", field))
+                                 .with("value", std::to_string(signed_value)));
+    }
+    value = static_cast<std::uint64_t>(signed_value);
+  }
+  if (value == 0U) {
+    return std::unexpected(core::Error::invalid_argument(std::format("file.read: `{}` must be positive", field)));
+  }
+  return static_cast<std::uintmax_t>(value);
+}
+
+[[nodiscard]] core::Result<io::ReadTextOptions> parse_options(const nlohmann::json& parsed) {
+  io::ReadTextOptions options{};
+
+  if (parsed.contains("max_bytes")) {
+    auto mb = parse_positive_unsigned(parsed["max_bytes"], "max_bytes");
+    if (!mb) {
+      return std::unexpected(std::move(mb).error());
+    }
+    if (*mb > kMaxReadBytes) {
+      return std::unexpected(core::Error::invalid_argument("file.read: `max_bytes` must be <= 16777216")
+                                 .with("value", std::to_string(*mb))
+                                 .with("max_bytes", std::to_string(kMaxReadBytes)));
+    }
+    options.max_bytes = *mb;
+  }
+
+  const bool has_line = parsed.contains("start_line") || parsed.contains("line_count");
+  const bool has_byte = parsed.contains("offset_bytes") || parsed.contains("length_bytes");
+  if (has_line && has_byte) {
+    return std::unexpected(core::Error::invalid_argument("file.read: line range (start_line/line_count) and byte range "
+                                                         "(offset_bytes/length_bytes) are mutually exclusive"));
+  }
+
+  if (has_line) {
+    io::FileRange::LineSpan span{};
+    if (parsed.contains("start_line")) {
+      auto v = parse_positive_unsigned(parsed["start_line"], "start_line");
+      if (!v) {
+        return std::unexpected(std::move(v).error());
+      }
+      span.start_line = static_cast<std::uint64_t>(*v);
+    } else {
+      span.start_line = 1U;
+    }
+    if (parsed.contains("line_count")) {
+      auto v = parse_positive_unsigned(parsed["line_count"], "line_count");
+      if (!v) {
+        return std::unexpected(std::move(v).error());
+      }
+      span.line_count = static_cast<std::uint64_t>(*v);
+    } else {
+      return std::unexpected(
+          core::Error::invalid_argument("file.read: `line_count` is required when `start_line` is supplied"));
+    }
+    options.range = io::FileRange{.lines = span};
+  } else if (has_byte) {
+    io::FileRange::ByteSpan span{};
+    if (parsed.contains("offset_bytes")) {
+      auto v = parse_positive_unsigned(parsed["offset_bytes"], "offset_bytes");
+      if (!v) {
+        return std::unexpected(std::move(v).error());
+      }
+      span.offset_bytes = *v;
+    } else {
+      return std::unexpected(
+          core::Error::invalid_argument("file.read: `offset_bytes` is required when `length_bytes` is supplied"));
+    }
+    if (parsed.contains("length_bytes")) {
+      auto v = parse_positive_unsigned(parsed["length_bytes"], "length_bytes");
+      if (!v) {
+        return std::unexpected(std::move(v).error());
+      }
+      span.length_bytes = *v;
+    } else {
+      return std::unexpected(
+          core::Error::invalid_argument("file.read: `length_bytes` is required when `offset_bytes` is supplied"));
+    }
+    options.range = io::FileRange{.bytes = span};
+  }
+
+  return options;
+}
+
+/// Header line embedded above the file body so the text-only `tool::Output`
+/// can still surface the metadata callers need. Shape:
+/// `<path>:<start_line>-<end_line> fingerprint=<token> bytes=<n>[ truncated]`.
+[[nodiscard]] std::string
+format_header(std::string_view path, const io::ReadTextResult& result, const std::string& token) {
+  std::string header = std::format("{}:{}-{} fingerprint={} bytes={}",
+                                   path,
+                                   result.start_line,
+                                   result.end_line,
+                                   token,
+                                   result.returned_bytes);
+  if (result.truncated) {
+    header.append(" truncated");
+  }
+  return header;
+}
 
 [[nodiscard]] async::Awaitable<core::Result<Output>> file_read_handler(std::string_view input_json,
                                                                        DispatchContext& ctx) {
@@ -43,6 +206,19 @@ constexpr std::string_view kFileReadSchema =
         core::Error::invalid_argument("file.read: input must be an object with a string `path` field"));
   }
 
+  auto options = parse_options(parsed);
+  if (!options) {
+    co_return std::unexpected(std::move(options).error());
+  }
+
+  std::optional<std::string> if_version;
+  if (parsed.contains("if_version")) {
+    if (!parsed["if_version"].is_string()) {
+      co_return std::unexpected(core::Error::invalid_argument("file.read: `if_version` must be a string"));
+    }
+    if_version = parsed["if_version"].get<std::string>();
+  }
+
   auto path = parsed["path"].get<std::string>();
   if (ctx.workspace != nullptr) {
     auto resolved = ctx.workspace->resolve_read(path);
@@ -51,11 +227,35 @@ constexpr std::string_view kFileReadSchema =
     }
     path = std::move(resolved->absolute_path);
   }
-  auto contents = co_await io::read_text_file(ctx.executor, std::move(path));
-  if (!contents) {
-    co_return std::unexpected(std::move(contents).error());
+
+  // Short-circuit on `if_version` before the body read so cached callers
+  // do not re-pay the IO. The pre-read fingerprint is the cheap stat-only
+  // call; the full read still re-fingerprints internally for mid-read
+  // race detection.
+  if (if_version) {
+    auto pre = io::compute_file_fingerprint(path);
+    if (!pre) {
+      co_return std::unexpected(std::move(pre).error());
+    }
+    const auto current_token = version_token(path, *pre);
+    if (*if_version == current_token) {
+      co_return std::unexpected(core::Error::not_modified("file.read: file is unchanged since the supplied version")
+                                    .with("path", path)
+                                    .with("fingerprint", current_token));
+    }
   }
-  co_return Output{.text = std::move(*contents)};
+
+  auto result = co_await io::read_text_file_ranged(ctx.executor, path, *options);
+  if (!result) {
+    co_return std::unexpected(std::move(result).error());
+  }
+
+  const auto token = version_token(path, result->fingerprint);
+  const auto header = format_header(path, *result, token);
+  std::string text = std::move(result->text);
+  text.insert(0, "\n");
+  text.insert(0, header);
+  co_return Output{.text = std::move(text)};
 }
 
 }  // namespace
@@ -63,8 +263,17 @@ constexpr std::string_view kFileReadSchema =
 core::Result<void> register_file_read(Registry& registry) {
   core::ToolDef def{
       .name = std::string{kFileReadName},
-      .description = "Read a UTF-8 text file from the host filesystem. Input: {\"path\": <string>}. "
-                     "Returns the file contents verbatim.",
+      .description = "Read a UTF-8 text file from the host filesystem. Input: "
+                     "{\"path\": <string>, \"start_line\"?: positive integer, \"line_count\"?: positive integer, "
+                     "\"offset_bytes\"?: positive integer, \"length_bytes\"?: positive integer, "
+                     "\"max_bytes\"?: positive integer <= 16777216 (default 16777216), "
+                     "\"if_version\"?: <version token from a prior read>}. The line range "
+                     "(start_line/line_count) and byte range (offset_bytes/length_bytes) "
+                     "are mutually exclusive. When `if_version` matches the current file "
+                     "fingerprint the call short-circuits with `not_modified`; otherwise "
+                     "the output is a single header line "
+                     "`<path>:<start_line>-<end_line> fingerprint=<token> bytes=<n>[ truncated]` "
+                     "followed by the requested file slice on the next line.",
       .input_schema_json = std::string{kFileReadSchema},
       .required_capabilities = {core::Capability::read_file},
   };

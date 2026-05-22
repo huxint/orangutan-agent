@@ -7,33 +7,34 @@
 
 ## Snapshot
 
-- **Slice:** 44 (`xmake run orangutan` reports slice 44)
+- **Slice:** 45 (`xmake run orangutan` reports slice 45)
 - **Last completed history:**
-  [`histories/2026-05/20260522-2330-core-bounded-cache.md`](histories/2026-05/20260522-2330-core-bounded-cache.md)
+  [`histories/2026-05/20260522-2350-tool-file-read-v2.md`](histories/2026-05/20260522-2350-tool-file-read-v2.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 43
-  added the second piece of spec 0011 v1 (range-aware
-  `io::read_text_file_ranged` with mid-read fingerprint capture);
-  slice 44 added `core::BoundedCache<Key,Value>` as the generic
-  primitive both spec 0011 v1.1 (line-offset index, file-view cache,
-  regex cache) and spec 0012 (tool scheduler bounded state) reach
-  for. The next 0011 step is to wire the new range shape through
-  `oran-tool`'s `file.read` schema (`start_line` / `line_count` /
-  `offset_bytes` / `length_bytes` inputs, header-line response
-  rendering until `tool::Output` v2 lands) and to introduce the
-  opaque version-token shape so `if_version` short-circuits become
-  possible (needs a new `Error::not_modified` kind). Spec 0013's
-  remaining workspace work narrows to audit metadata and moving
-  resolution to the pre-permission dispatch boundary. The first
-  provider adapter (Anthropic Messages) remains a multi-slice effort
-  that needs an exec plan plus `oran-http` + libcurl wiring first;
-  blocking hook semantics with veto are still gated on `oran-agent`;
-  and wiring `check-compile-budget.sh` into `scripts/ci.sh` remains
-  gated by the slice-28 reference-hardware precondition. The current
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 45
+  wired the second public surface of spec 0011 v1: `file.read` v2 now
+  accepts `start_line` / `line_count` / `offset_bytes` /
+  `length_bytes` / `max_bytes` / `if_version`, returns a
+  `<path>:<start>-<end> fingerprint=<token> bytes=<n>[ truncated]`
+  header line above the requested file slice, and short-circuits an
+  unchanged file to `Error::not_modified` (new `ErrorKind` enumerator
+  + `Error::not_modified()` builder) via the opaque version token
+  `v1:<sha256(canonical_path)>:<size>:<mtime_ns>`. The next 0011 step
+  is the matching `file.edit` / `file.write` `expected_version`
+  contract that fails with `Error::conflict reason=stale_fingerprint`
+  when the supplied token does not match the current fingerprint,
+  closing v1 acceptance criterion 4. Spec 0013's remaining workspace
+  work narrows to audit metadata and moving resolution to the
+  pre-permission dispatch boundary. The first provider adapter
+  (Anthropic Messages) remains a multi-slice effort that needs an
+  exec plan plus `oran-http` + libcurl wiring first; blocking hook
+  semantics with veto are still gated on `oran-agent`; and wiring
+  `check-compile-budget.sh` into `scripts/ci.sh` remains gated by
+  the slice-28 reference-hardware precondition. The current
   `file.delete` and `directory.list` shapes are expected to be re-shaped
   in a later refactor: one unified delete tool covering both files and
   folders, and a recursive whole-project list (not just single-level
@@ -54,14 +55,14 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 ## Latest Library Surfaces
 
-- `oran-core`: 68 cases / 435 assertions.
+- `oran-core`: 68 cases / 437 assertions.
 - `oran-async`: 9 cases / 43 assertions.
 - `oran-io`: 36 cases / 152 assertions.
 - `oran-storage`: 60 cases / 706 assertions.
 - `oran-config`: 24 cases / 171 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
 - `oran-hook`: 15 cases / 97 assertions.
-- `oran-tool`: 111 cases / 931 assertions.
+- `oran-tool`: 116 cases / 980 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 153 assertions.
 

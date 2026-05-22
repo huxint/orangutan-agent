@@ -60,6 +60,23 @@ short-circuit (gated on adding `Error::not_modified`), and the
 `expected_version` contract on `file.edit` / `file.write` — remain
 unimplemented; those land per slice on top of the io-layer surface.
 
+**Status (slice 45, 2026-05-22):** the `file.read` v2 schema, the
+opaque `v1:<sha256(canonical_path)>:<size>:<mtime_ns>` version token,
+and the `if_version` short-circuit ship in `oran-tool`. `file.read`
+accepts `{path, start_line?, line_count?, offset_bytes?, length_bytes?,
+max_bytes?, if_version?}` (line and byte ranges remain mutually
+exclusive at both schema and handler level), dispatches through
+`io::read_text_file_ranged`, and wraps the result in a single header
+line `<path>:<start_line>-<end_line> fingerprint=<token> bytes=<n>[ truncated]`
+above the requested file slice — the text-only `tool::Output` carries
+the metadata until `Output v2` lands. Path-hash discrimination uses
+the existing libsodium SHA-256 via
+`permission::ApprovalAuthority::input_hash` so the new token cannot
+accidentally be aliased to a file with the same `(size, mtime_ns)`
+pair. `core::ErrorKind::not_modified` (and `Error::not_modified()`)
+join the cross-boundary error vocabulary. The remaining v1 bullets
+narrow to the `expected_version` contract on `file.edit` / `file.write`.
+
 **v1.1 prerequisite (slice 44, 2026-05-22):** the `BoundedCache<Key,
 Value>` generic primitive that v1.1's line-offset index, file-view
 cache, and regex cache build on is now shipped in `oran-core` as
