@@ -264,19 +264,25 @@ file_view_cache_key(const std::string& path, const FileFingerprint& fingerprint,
   return key;
 }
 
-void clear_line_offset_index_cache() {
+void invalidate_line_offset_index_cache_path(std::string_view canonical_path) {
   const std::scoped_lock lock{line_offset_index_mutex()};
-  line_offset_index_cache().clear();
+  line_offset_index_cache().erase_if(
+      [canonical_path](const LineOffsetIndexKey& key, const std::shared_ptr<const LineOffsetIndex>&) {
+        return key.canonical_path == canonical_path;
+      });
 }
 
-void clear_file_view_cache() {
+void invalidate_file_view_cache_path(std::string_view canonical_path) {
   const std::scoped_lock lock{file_view_cache_mutex()};
-  file_view_cache().clear();
+  file_view_cache().erase_if([canonical_path](const FileViewCacheKey& key, const ReadTextResult&) {
+    return key.canonical_path == canonical_path;
+  });
 }
 
-void clear_file_caches() {
-  clear_line_offset_index_cache();
-  clear_file_view_cache();
+void invalidate_read_text_file_ranged_cache_blocking(std::string_view path) {
+  const auto canonical_path = cache_key_path(std::string{path});
+  invalidate_line_offset_index_cache_path(canonical_path);
+  invalidate_file_view_cache_path(canonical_path);
 }
 
 [[nodiscard]] std::optional<ReadTextResult> get_cached_file_view(const FileViewCacheKey& key) {
@@ -1041,7 +1047,7 @@ write_text_file_blocking(const std::string& path, const std::string& contents, W
     if (options.atomic) {
       auto written = atomic_write_blocking(fs_path, path, contents);
       if (written) {
-        clear_file_caches();
+        invalidate_read_text_file_ranged_cache_blocking(path);
       }
       return written;
     }
@@ -1057,7 +1063,7 @@ write_text_file_blocking(const std::string& path, const std::string& contents, W
 
     auto written = stream_write(fs_path, path, contents, mode);
     if (written) {
-      clear_file_caches();
+      invalidate_read_text_file_ranged_cache_blocking(path);
     }
     return written;
   } catch (const std::filesystem::filesystem_error& e) {
@@ -1186,7 +1192,7 @@ write_text_file_blocking(const std::string& path, const std::string& contents, W
       // not_found so the caller sees a consistent end state.
       return std::unexpected(core::Error::not_found("file disappeared before delete").with("path", path));
     }
-    clear_file_caches();
+    invalidate_read_text_file_ranged_cache_blocking(path);
     return {};
   } catch (const std::filesystem::filesystem_error& e) {
     return std::unexpected(system_io_error("filesystem delete failed", path, e.code()));
@@ -1288,6 +1294,10 @@ read_text_file_ranged(asio::any_io_executor executor, std::string path, ReadText
     complete_read_text_singleflight(cache_key, join.entry, result);
   }
   co_return result;
+}
+
+void invalidate_read_text_file_ranged_cache(std::string_view path) {
+  invalidate_read_text_file_ranged_cache_blocking(path);
 }
 
 ReadTextFileCacheStats read_text_file_ranged_cache_stats() {

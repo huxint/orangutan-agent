@@ -152,9 +152,10 @@ path plus the cheap `(size_bytes, mtime_ns)` fingerprint, then seek
 straight to the requested line span instead of streaming from line 1.
 The in-memory index stores only line-start byte offsets (`O(lines * 8
 bytes)` plus vector overhead), is capped at 32 entries / 8 MiB / 10
-minutes, and is globally cleared after successful `io::write_text_file`
-or `io::delete_file` calls so mutations cannot keep stale offsets
-alive. Tests cover indexed reads of large files plus write/delete
+minutes, and is invalidated after successful `io::write_text_file` or
+`io::delete_file` calls so mutations cannot keep stale offsets alive;
+slice 57 narrows that invalidation to the affected canonical path.
+Tests cover indexed reads of large files plus write/delete
 invalidation regressions where size and mtime are restored to the old
 fingerprint but the content changes. v1.1's remaining items are the
 file-view cache, regex compile cache, singleflight reads, and
@@ -182,7 +183,8 @@ still revalidates metadata with `stat` before returning; if the
 metadata changed or cannot be trusted, the call misses and falls back to
 the existing mid-read pre/post fingerprint path. Successful
 `io::write_text_file` and `io::delete_file` calls synchronously clear
-both the file-view cache and the line-offset index. Tests cover
+both the file-view cache and the line-offset index. Slice 57 narrows
+that invalidation to the affected canonical path. Tests cover
 external rewrites refreshing the cache plus an in-process write
 invalidation regression where size and mtime are restored to the old
 fingerprint but the body changes. v1.1's remaining items are
@@ -212,13 +214,30 @@ a cold+hot file-view read and two large-file line ranges that reuse one
 line-offset index. v1.1's remaining item is watcher-backed external-edit
 awareness.
 
+**Status (slice 57, 2026-05-24):** the path-stale invalidation seam
+for watcher-backed external-edit awareness now ships in `oran-io`.
+`io::invalidate_read_text_file_ranged_cache(path)` canonicalises the
+supplied path through the same private key helper used by reads and
+erases matching entries from both the line-offset index and the
+file-view cache without exposing keys or file contents. Successful
+`io::write_text_file` and `io::delete_file` calls now reuse that seam,
+so in-process mutations invalidate only the affected canonical path
+instead of clearing unrelated file views. The underlying
+`core::BoundedCache` adds `erase_if` for this exact-key invalidation
+without counting the removal as LRU / TTL / byte-budget eviction.
+Tests cover direct invalidation of one file-view path, direct
+invalidation of one line-offset-index path, and write invalidation
+preserving hot cache entries for other files. The remaining v1.1 item is
+the concrete watcher registration / event source that calls this seam.
+
 **v1.1 prerequisite (slice 44, 2026-05-22):** the `BoundedCache<Key,
 Value>` generic primitive that v1.1's line-offset index, file-view
 cache, and regex cache build on is now shipped in `oran-core` as
 `core::BoundedCache` (`<oran/core/bounded_cache.hpp>`). See
 [`0012-tool-scheduler-and-state.md`](0012-tool-scheduler-and-state.md)
 "`BoundedCache<Key, Value>`" for the API contract and the shipped/spec
-deltas (single-strand, `Value*` from `get`, `rejected_oversize` stat).
+deltas (single-strand, `Value*` from `get`, `erase_if`,
+`rejected_oversize` stat).
 
 - **`io::ReadTextResult`** as the new return type of `io::read_text_file`:
   ```cpp
@@ -347,10 +366,12 @@ correctness is anchored:
   `BoundedCache` keyed by `(canonical_path, range, max_bytes,
   size_bytes, mtime_ns)` and capped at 64 entries / 16 MiB / 10
   minutes. Hits re-stat before returning; successful in-process
-  writes/deletes synchronously clear the cache so stale bodies cannot
-  survive a mutation made through `oran-io`. Slice 54 adds the public
+  writes/deletes call `invalidate_read_text_file_ranged_cache(path)` so
+  stale bodies cannot survive a mutation made through `oran-io` while
+  unrelated file views stay hot. Slice 54 adds the public
   `ReadTextFileCacheStats` snapshot covering both this cache and the
-  line-offset index without exposing private keys.
+  line-offset index without exposing private keys; slice 57 adds the
+  public path-invalidation seam future watchers will call.
 - **Singleflight reads**: ten concurrent `file.read` calls for the same
   `(canonical_path, range, max_bytes, size_bytes, mtime_ns)` share one
   filesystem read instead of stampeding the executor. Shipped in slice
@@ -359,8 +380,10 @@ correctness is anchored:
   snapshot for bounded-state observability.
 - **External-edit awareness**: when an `asio` filesystem watcher is
   available, register against `<workspace>/**`; on a watcher event, mark the
-  affected canonical path stale. Without a watcher, validate metadata
-  (`stat` only) before every cache hit; on uncertainty, miss.
+  affected canonical path stale through
+  `io::invalidate_read_text_file_ranged_cache(path)`. Without a watcher,
+  validate metadata (`stat` only) before every cache hit; on uncertainty,
+  miss.
 - **Output cap on `file.search`**: in addition to `max_matches`, an output
   byte cap so a small match count of very long lines does not flood the
   prompt.

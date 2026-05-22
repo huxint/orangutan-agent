@@ -51,17 +51,18 @@ performs the requested operation and returns `core::Result<T>`.
 > maps 1-based line numbers to byte offsets, lives in a bounded
 > `core::BoundedCache` (32 entries / 8 MiB / 10-minute TTL), and is
 > keyed by canonical path plus the cheap `(size_bytes, mtime_ns)`
-> fingerprint. `write_text_file` and `delete_file` clear the index
-> cache after successful mutations so an agent cannot reuse stale
-> offsets after an in-process write/delete.
+> fingerprint. `write_text_file` and `delete_file` invalidate the
+> matching canonical path after successful mutations so an agent cannot
+> reuse stale offsets after an in-process write/delete.
 >
 > **Slice-52 status (2026-05-24):** `read_text_file_ranged` now keeps a
 > bounded in-memory file-view cache for successful reads. Entries are keyed
 > by canonical path, range, `max_bytes`, and the cheap
 > `(size_bytes, mtime_ns)` fingerprint, capped at 64 entries / 16 MiB /
 > 10 minutes, and revalidated with `stat` before every hit. Successful
-> `write_text_file` and `delete_file` calls clear both the file-view cache
-> and the line-offset index synchronously.
+> `write_text_file` and `delete_file` calls invalidate the matching
+> canonical path in both the file-view cache and the line-offset index
+> synchronously.
 >
 > **Slice-53 status (2026-05-24):** concurrent cold
 > `read_text_file_ranged` calls now share a bounded process-local
@@ -76,6 +77,13 @@ performs the requested operation and returns `core::Result<T>`.
 > `read_text_file_ranged_cache_stats()` snapshots the private line-offset
 > index and file-view cache hit/miss/eviction/current-size counters without
 > exposing keys or paths.
+>
+> **Slice-57 status (2026-05-24):** `oran-io` exposes
+> `invalidate_read_text_file_ranged_cache(path)` as the public path-stale
+> seam for future watcher callbacks. Successful `write_text_file` and
+> `delete_file` calls reuse the same seam, so in-process mutations evict
+> only entries for the affected canonical path instead of clearing unrelated
+> range-read cache entries.
 
 ## Public Surface
 
@@ -159,6 +167,8 @@ read_text_file(asio::any_io_executor executor, std::string path, ReadTextOptions
 
 async::Awaitable<core::Result<ReadTextResult>>
 read_text_file_ranged(asio::any_io_executor executor, std::string path, ReadTextOptions = {});
+
+void invalidate_read_text_file_ranged_cache(std::string_view path);
 
 ReadTextFileCacheStats read_text_file_ranged_cache_stats();
 
@@ -246,16 +256,23 @@ surface for effectful agent actions.
   Slice 50 (2026-05-23) adds the first bounded cache consumer in this
   library: large-file line ranges use a `core::BoundedCache`-backed
   line-offset index keyed by canonical path + cheap fingerprint and
-  invalidated after successful in-process writes/deletes. Slice 52
-  (2026-05-24) adds the bounded file-view cache for
-  `read_text_file_ranged`, with metadata validation before hits and
-  synchronous invalidation after successful in-process writes/deletes.
+  invalidated for the affected canonical path after successful in-process
+  writes/deletes. Slice 52 (2026-05-24) adds the bounded file-view cache
+  for `read_text_file_ranged`, with metadata validation before hits and
+  synchronous invalidation for the affected canonical path after successful
+  in-process writes/deletes.
+  Slice 57 (2026-05-24) narrows that invalidation to the affected
+  canonical path and exposes
+  `invalidate_read_text_file_ranged_cache(path)` for future watcher
+  callbacks.
   Slice 53 (2026-05-24) adds the bounded singleflight table for cold
   `read_text_file_ranged` calls and the
   `ReadTextSingleflightStats` observability snapshot. Slice 54
   (2026-05-24) adds the paired `ReadTextFileCacheStats` snapshot for the
   line-offset index and file-view cache. Future slices wire watcher-backed
-  external-edit awareness, and `compute_hash=true` (SHA-256 in
+  external-edit awareness on top of slice 57's
+  `invalidate_read_text_file_ranged_cache(path)` seam, and
+  `compute_hash=true` (SHA-256 in
   `FileFingerprint::sha256`) for high-trust paths. Text-only callers keep
   the legacy `read_text_file` wrapper that drops the metadata.
 - **Atomic-write durability mode** — `WriteTextOptions::durability`

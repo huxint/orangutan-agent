@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <asio/any_io_executor.hpp>
@@ -110,6 +111,12 @@ read_text_file(asio::any_io_executor executor, std::string path, ReadTextOptions
 /// ranged reads). Spec 0011 v1 (file-view system) is the contract.
 [[nodiscard]] async::Awaitable<core::Result<ReadTextResult>>
 read_text_file_ranged(asio::any_io_executor executor, std::string path, ReadTextOptions options = {});
+
+/// Invalidate every process-local `read_text_file_ranged` cache entry for
+/// `path`. The path is canonicalised through the same private key helper as
+/// reads; no cache keys or file contents are exposed. This is the public seam
+/// for in-process mutations and future watcher callbacks.
+void invalidate_read_text_file_ranged_cache(std::string_view path);
 
 /// Snapshot the process-local bounded caches used by
 /// `read_text_file_ranged`. This is an observability hook only; callers

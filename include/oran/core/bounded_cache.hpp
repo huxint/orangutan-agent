@@ -94,7 +94,7 @@ public:
   /// Look up `key`. Returns a non-owning pointer to the stored value on
   /// hit (and refreshes the LRU position), or `nullptr` on miss / TTL
   /// expiry. The pointer is invalidated by the next call to `put`,
-  /// `reap`, or `clear`.
+  /// `reap`, `erase_if`, or `clear`.
   [[nodiscard]] Value* get(const Key& key, Time now) {
     auto it = index_.find(key);
     if (it == index_.end()) {
@@ -157,6 +157,27 @@ public:
       }
     }
     return evicted;
+  }
+
+  /// Drop entries whose `(key, value)` pair matches `predicate`. Returns
+  /// the number of entries removed. Policy eviction counters are preserved:
+  /// this is explicit invalidation, not LRU / TTL / byte-budget eviction.
+  template <class Predicate>
+  std::size_t erase_if(Predicate&& predicate) {
+    std::size_t erased = 0;
+    for (auto it = entries_.begin(); it != entries_.end();) {
+      if (!std::invoke(predicate, std::as_const(it->key), std::as_const(it->value))) {
+        ++it;
+        continue;
+      }
+      const auto bytes = it->byte_size;
+      index_.erase(it->key);
+      it = entries_.erase(it);
+      stats_.current_entries = entries_.size();
+      stats_.current_bytes = (stats_.current_bytes >= bytes) ? stats_.current_bytes - bytes : 0;
+      ++erased;
+    }
+    return erased;
   }
 
   /// Drop all entries; stats counters are preserved (they describe the

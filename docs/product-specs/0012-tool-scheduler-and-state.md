@@ -105,7 +105,8 @@ implicitly via the capability list.
   call-graph boundary; the registry runs on the agent strand and the
   scheduler hops to worker executors at dispatch time.
 - **`BoundedCache<Key, Value>`** generic primitive (also referenced by
-  spec 0011). **Status (slice 44, 2026-05-22):** shipped in `oran-core`
+  spec 0011). **Status (slice 44, 2026-05-22; path-invalidation API
+  extended in slice 57):** shipped in `oran-core`
   as `core::BoundedCache<Key, Value, ByteSizeOf = BoundedCacheNoByteBudget>`
   (`<oran/core/bounded_cache.hpp>`). The single-strand contract, the LRU
   + insert-based TTL + byte-budget eviction order, and the `Stats`
@@ -116,7 +117,10 @@ implicitly via the capability list.
   intended consumers include move-only types. Existing call sites
   pass an explicit `core::Time` `now` everywhere so the cache stays
   clock-agnostic (testable without a real clock; cooperates with
-  `core::time::now_utc` in production code).
+  `core::time::now_utc` in production code). Slice 57 adds
+  `erase_if(predicate)` for explicit caller-driven invalidation; it updates
+  current occupancy / byte totals but does not increment LRU, TTL, or
+  byte-budget eviction counters.
   ```cpp
   template <class Key, class Value>
   class BoundedCache {
@@ -140,6 +144,8 @@ implicitly via the capability list.
     Value*               get(const Key&, core::Time now);   // shipped
     void                 put(Key, Value, core::Time now);
     std::size_t          reap(core::Time now);
+    template <class Predicate>
+    std::size_t          erase_if(Predicate&& predicate);
     const Stats&         stats() const noexcept;
   };
   ```
@@ -161,6 +167,10 @@ implicitly via the capability list.
   `read_text_file_ranged_cache_stats()` for its line-offset index and
   file-view cache, plus the slice-53
   `read_text_file_ranged_singleflight_stats()` in-flight-table snapshot.
+  **Status (slice 57, 2026-05-24):** `oran-io` also exposes
+  `invalidate_read_text_file_ranged_cache(path)`, a path-scoped
+  invalidation seam future watcher events can call without seeing private
+  cache keys.
   Pre-`oran-log`, `--explain-rules`-style debug surfaces in `oran-bootstrap`
   can reuse the same numbers.
 

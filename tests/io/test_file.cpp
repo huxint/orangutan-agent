@@ -501,6 +501,114 @@ TEST_CASE("read_text_file_ranged_cache_stats exposes file-view and line-offset c
   });
 }
 
+TEST_CASE("invalidate_read_text_file_ranged_cache removes one file-view path only", "[unit][io][range][cache]") {
+  TempDir temp{"oran-io-range-cache-invalidate-path"};
+  const auto invalidated_file = temp.path() / "invalidated.txt";
+  const auto retained_file = temp.path() / "retained.txt";
+  write_direct(invalidated_file, "alpha\n");
+  write_direct(retained_file, "bravo\n");
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto invalidated_cold = co_await io::read_text_file_ranged(context.get_executor(), invalidated_file.string());
+    auto retained_cold = co_await io::read_text_file_ranged(context.get_executor(), retained_file.string());
+    REQUIRE(invalidated_cold.has_value());
+    REQUIRE(retained_cold.has_value());
+
+    const auto before = io::read_text_file_ranged_cache_stats();
+    io::invalidate_read_text_file_ranged_cache(invalidated_file.string());
+
+    auto invalidated_hot = co_await io::read_text_file_ranged(context.get_executor(), invalidated_file.string());
+    auto retained_hot = co_await io::read_text_file_ranged(context.get_executor(), retained_file.string());
+    REQUIRE(invalidated_hot.has_value());
+    REQUIRE(retained_hot.has_value());
+    REQUIRE(invalidated_hot->text == "alpha\n");
+    REQUIRE(retained_hot->text == "bravo\n");
+
+    const auto after = io::read_text_file_ranged_cache_stats();
+    REQUIRE(after.file_view.misses == before.file_view.misses + 1);
+    REQUIRE(after.file_view.hits == before.file_view.hits + 1);
+  });
+}
+
+TEST_CASE("invalidate_read_text_file_ranged_cache removes one line-offset path only",
+          "[unit][io][range][cache][lines]") {
+  TempDir temp{"oran-io-range-line-cache-invalidate-path"};
+  const auto invalidated_file = temp.path() / "invalidated-large.txt";
+  const auto retained_file = temp.path() / "retained-large.txt";
+  write_direct(invalidated_file, large_numbered_file('i'));
+  write_direct(retained_file, large_numbered_file('r'));
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    io::ReadTextOptions first_range;
+    first_range.range = io::FileRange{.lines = io::FileRange::LineSpan{.start_line = 100, .line_count = 1}};
+    io::ReadTextOptions second_range;
+    second_range.range = io::FileRange{.lines = io::FileRange::LineSpan{.start_line = 200, .line_count = 1}};
+
+    auto invalidated_cold =
+        co_await io::read_text_file_ranged(context.get_executor(), invalidated_file.string(), first_range);
+    auto retained_cold =
+        co_await io::read_text_file_ranged(context.get_executor(), retained_file.string(), first_range);
+    REQUIRE(invalidated_cold.has_value());
+    REQUIRE(retained_cold.has_value());
+
+    const auto before = io::read_text_file_ranged_cache_stats();
+    io::invalidate_read_text_file_ranged_cache(invalidated_file.string());
+
+    auto invalidated_next =
+        co_await io::read_text_file_ranged(context.get_executor(), invalidated_file.string(), second_range);
+    auto retained_next =
+        co_await io::read_text_file_ranged(context.get_executor(), retained_file.string(), second_range);
+    REQUIRE(invalidated_next.has_value());
+    REQUIRE(retained_next.has_value());
+    REQUIRE(invalidated_next->text == numbered_line(200, 'i'));
+    REQUIRE(retained_next->text == numbered_line(200, 'r'));
+
+    const auto after = io::read_text_file_ranged_cache_stats();
+    REQUIRE(after.line_offset_index.misses == before.line_offset_index.misses + 1);
+    REQUIRE(after.line_offset_index.hits == before.line_offset_index.hits + 1);
+  });
+}
+
+TEST_CASE("write_text_file invalidates only the changed read-cache path", "[unit][io][range][cache]") {
+  TempDir temp{"oran-io-range-cache-write-one-path"};
+  const auto changed_file = temp.path() / "changed.txt";
+  const auto retained_file = temp.path() / "retained.txt";
+  write_direct(changed_file, "alpha");
+  write_direct(retained_file, "bravo");
+
+  const auto original_mtime = std::filesystem::last_write_time(changed_file);
+  const auto original_fingerprint = io::compute_file_fingerprint(changed_file.string());
+  REQUIRE(original_fingerprint.has_value());
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto changed_cold = co_await io::read_text_file_ranged(context.get_executor(), changed_file.string());
+    auto retained_cold = co_await io::read_text_file_ranged(context.get_executor(), retained_file.string());
+    REQUIRE(changed_cold.has_value());
+    REQUIRE(retained_cold.has_value());
+
+    auto written = co_await io::write_text_file(context.get_executor(), changed_file.string(), "omega");
+    REQUIRE(written.has_value());
+    std::filesystem::last_write_time(changed_file, original_mtime);
+
+    const auto restored_fingerprint = io::compute_file_fingerprint(changed_file.string());
+    REQUIRE(restored_fingerprint.has_value());
+    REQUIRE(restored_fingerprint->size_bytes == original_fingerprint->size_bytes);
+    REQUIRE(restored_fingerprint->mtime_ns == original_fingerprint->mtime_ns);
+
+    const auto before = io::read_text_file_ranged_cache_stats();
+    auto changed_hot = co_await io::read_text_file_ranged(context.get_executor(), changed_file.string());
+    auto retained_hot = co_await io::read_text_file_ranged(context.get_executor(), retained_file.string());
+    REQUIRE(changed_hot.has_value());
+    REQUIRE(retained_hot.has_value());
+    REQUIRE(changed_hot->text == "omega");
+    REQUIRE(retained_hot->text == "bravo");
+
+    const auto after = io::read_text_file_ranged_cache_stats();
+    REQUIRE(after.file_view.misses == before.file_view.misses + 1);
+    REQUIRE(after.file_view.hits == before.file_view.hits + 1);
+  });
+}
+
 TEST_CASE("read_text_file_ranged collapses concurrent cold reads with singleflight",
           "[unit][io][range][singleflight]") {
   TempDir temp{"oran-io-range-singleflight"};

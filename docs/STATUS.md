@@ -7,16 +7,25 @@
 
 ## Snapshot
 
-- **Slice:** 56 (`xmake run orangutan` reports slice 56)
+- **Slice:** 57 (`xmake run orangutan` reports slice 57)
 - **Last completed history:**
-  [`histories/2026-05/20260524-0115-permission-approval-grant-cap.md`](histories/2026-05/20260524-0115-permission-approval-grant-cap.md)
+  [`histories/2026-05/20260524-0130-io-read-cache-path-invalidation.md`](histories/2026-05/20260524-0130-io-read-cache-path-invalidation.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 56
-  closes spec 0012's approval-grant bounded-state item inside
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 57
+  lands the path-stale invalidation seam for spec 0011's remaining
+  watcher-backed external-edit awareness: `core::BoundedCache` now has
+  `erase_if(predicate)` for explicit non-policy invalidation, and
+  `oran-io` exposes `invalidate_read_text_file_ranged_cache(path)` so
+  future watcher events can evict line-offset-index and file-view cache
+  entries for one canonical path without exposing private keys. Successful
+  `io::write_text_file` and `io::delete_file` now reuse that seam instead
+  of clearing unrelated read-cache entries. The concrete watcher
+  registration / event source remains the final spec 0011 v1.1 item.
+  Slice 56 closes spec 0012's approval-grant bounded-state item inside
   `oran-permission`: `ApprovalBroker::approve` now lazily reaps expired
   grants and keeps at most
   `ApprovalBroker::max_grants_per_identity` (64) live grant entries per
@@ -41,8 +50,7 @@
   oversize rejections, current entries, current bytes) without exposing
   cache keys or paths. Slice 53's
   `read_text_file_ranged_singleflight_stats()` remains the paired
-  in-flight-table snapshot. The remaining spec 0011 v1.1 item is
-  watcher-backed external-edit awareness.
+  in-flight-table snapshot.
   Spec 0013's remaining work is no longer v1 confinement plumbing; it is
   the v1.1 shared ignore predicate / display-helper work that waits for
   a second recursive consumer such as `directory.scan`, plus the future
@@ -74,9 +82,9 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 ## Latest Library Surfaces
 
-- `oran-core`: 68 cases / 437 assertions.
+- `oran-core`: 69 cases / 446 assertions.
 - `oran-async`: 9 cases / 43 assertions.
-- `oran-io`: 43 cases / 228 assertions.
+- `oran-io`: 46 cases / 260 assertions.
 - `oran-storage`: 60 cases / 706 assertions.
 - `oran-config`: 24 cases / 171 assertions.
 - `oran-permission`: 86 cases / 390 assertions.

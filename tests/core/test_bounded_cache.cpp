@@ -183,6 +183,28 @@ TEST_CASE("BoundedCache clear empties the cache but preserves stat counters", "[
   REQUIRE(cache.stats().misses == 2);  // one missing from before + one missing after clear
 }
 
+TEST_CASE("BoundedCache erase_if drops matching entries without policy eviction counters",
+          "[unit][core][bounded_cache]") {
+  using Cache = core::BoundedCache<std::string, std::string, StringByteCost>;
+  Cache cache{Cache::Options{.max_entries = 4, .max_bytes = 32}, StringByteCost{}};
+  cache.put("keep-a", std::string{"aa"}, at_seconds(0));
+  cache.put("drop-a", std::string{"bbbb"}, at_seconds(0));
+  cache.put("drop-b", std::string{"ccc"}, at_seconds(0));
+
+  const auto erased = cache.erase_if(
+      [](const std::string& key, const std::string& value) { return key.starts_with("drop-") && !value.empty(); });
+
+  REQUIRE(erased == 2);
+  REQUIRE(cache.size() == 1);
+  REQUIRE(cache.byte_size() == 2);
+  REQUIRE(cache.get("keep-a", at_seconds(1)) != nullptr);
+  REQUIRE(cache.get("drop-a", at_seconds(1)) == nullptr);
+  REQUIRE(cache.get("drop-b", at_seconds(1)) == nullptr);
+  REQUIRE(cache.stats().evictions_lru == 0);
+  REQUIRE(cache.stats().evictions_ttl == 0);
+  REQUIRE(cache.stats().evictions_bytes == 0);
+}
+
 TEST_CASE("BoundedCache stats track every observable transition", "[unit][core][bounded_cache][stats]") {
   using Cache = core::BoundedCache<std::string, std::string, StringByteCost>;
   Cache cache{Cache::Options{.max_entries = 2, .max_bytes = 16, .ttl = 5s}, StringByteCost{}};
