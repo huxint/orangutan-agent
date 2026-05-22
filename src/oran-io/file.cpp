@@ -32,6 +32,12 @@
 #include <asio/this_coro.hpp>
 #include <asio/use_awaitable.hpp>
 
+#if defined(__linux__)
+#include <asio/posix/stream_descriptor.hpp>
+#include <sys/inotify.h>
+#include <unistd.h>
+#endif
+
 #include <oran/core/bounded_cache.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/time.hpp>
@@ -49,6 +55,12 @@ constexpr std::size_t kLineOffsetIndexMaxBytes = 8U * 1024U * 1024U;
 constexpr std::size_t kFileViewCacheMaxEntries = 64U;
 constexpr std::size_t kFileViewCacheMaxBytes = 16U * 1024U * 1024U;
 constexpr std::size_t kReadTextSingleflightMaxEntries = 64U;
+
+#if defined(__linux__)
+constexpr std::uint32_t kInotifyWatchMask = IN_CLOSE_WRITE | IN_MODIFY | IN_ATTRIB | IN_DELETE | IN_MOVED_FROM |
+                                            IN_MOVED_TO | IN_CREATE | IN_DELETE_SELF | IN_MOVE_SELF;
+constexpr std::size_t kInotifyBufferBytes = 16U * 1024U;
+#endif
 
 template <typename T>
 [[nodiscard]] std::size_t hash_combine(std::size_t seed, const T& value) noexcept {
@@ -219,6 +231,58 @@ using ReadTextSingleflightTable =
   return !name.empty() && name.front() == '.';
 }
 
+#if defined(__linux__)
+class UniqueFd {
+public:
+  explicit UniqueFd(int fd = -1) noexcept : fd_{fd} {}
+
+  UniqueFd(const UniqueFd&) = delete;
+  UniqueFd& operator=(const UniqueFd&) = delete;
+
+  UniqueFd(UniqueFd&& other) noexcept : fd_{other.release()} {}
+
+  UniqueFd& operator=(UniqueFd&& other) noexcept {
+    if (this != &other) {
+      reset(other.release());
+    }
+    return *this;
+  }
+
+  ~UniqueFd() {
+    reset();
+  }
+
+  [[nodiscard]] int get() const noexcept {
+    return fd_;
+  }
+
+  [[nodiscard]] int release() noexcept {
+    const auto fd = fd_;
+    fd_ = -1;
+    return fd;
+  }
+
+  void reset(int next = -1) noexcept {
+    if (fd_ >= 0) {
+      static_cast<void>(::close(fd_));
+    }
+    fd_ = next;
+  }
+
+private:
+  int fd_{-1};
+};
+
+struct InotifyWatchRegistry {
+  std::unordered_map<int, std::filesystem::path> directories;
+  ReadTextFileWatchStats stats;
+};
+
+struct InotifyDrainResult {
+  bool complete{false};
+};
+#endif
+
 [[nodiscard]] std::filesystem::path to_path(const std::string& path) {
   return std::filesystem::path{path};
 }
@@ -283,6 +347,18 @@ void invalidate_read_text_file_ranged_cache_blocking(std::string_view path) {
   const auto canonical_path = cache_key_path(std::string{path});
   invalidate_line_offset_index_cache_path(canonical_path);
   invalidate_file_view_cache_path(canonical_path);
+}
+
+void invalidate_all_read_text_file_ranged_caches() {
+  {
+    const std::scoped_lock lock{line_offset_index_mutex()};
+    line_offset_index_cache().erase_if(
+        [](const LineOffsetIndexKey&, const std::shared_ptr<const LineOffsetIndex>&) { return true; });
+  }
+  {
+    const std::scoped_lock lock{file_view_cache_mutex()};
+    file_view_cache().erase_if([](const FileViewCacheKey&, const ReadTextResult&) { return true; });
+  }
 }
 
 [[nodiscard]] std::optional<ReadTextResult> get_cached_file_view(const FileViewCacheKey& key) {
@@ -418,6 +494,33 @@ read_text_singleflight_result(const std::shared_ptr<ReadTextSingleflightEntry>& 
   return {};
 }
 
+[[nodiscard]] core::Result<std::filesystem::path> validate_directory_path(const std::string& path) {
+  if (auto valid = validate_path(path); !valid) {
+    return std::unexpected(valid.error());
+  }
+
+  const auto fs_path = to_path(path);
+  std::error_code ec;
+  if (!std::filesystem::exists(fs_path, ec)) {
+    if (ec) {
+      return std::unexpected(system_io_error("failed to stat directory", path, ec));
+    }
+    return std::unexpected(core::Error::not_found("directory does not exist").with("path", path));
+  }
+  if (!std::filesystem::is_directory(fs_path, ec)) {
+    if (ec) {
+      return std::unexpected(system_io_error("failed to inspect directory type", path, ec));
+    }
+    return std::unexpected(core::Error::invalid_argument("path is not a directory").with("path", path));
+  }
+
+  auto canonical = std::filesystem::weakly_canonical(fs_path, ec);
+  if (ec) {
+    return std::unexpected(system_io_error("failed to canonicalise directory", path, ec));
+  }
+  return canonical;
+}
+
 [[nodiscard]] core::Result<void> ensure_readable_regular_file(const std::string& path) {
   auto fs_path = to_path(path);
   std::error_code ec;
@@ -436,6 +539,144 @@ read_text_singleflight_result(const std::shared_ptr<ReadTextSingleflightEntry>& 
   }
   return {};
 }
+
+#if defined(__linux__)
+[[nodiscard]] core::Result<void> add_inotify_directory_watch(int fd,
+                                                             const std::filesystem::path& directory,
+                                                             InotifyWatchRegistry& registry,
+                                                             bool required) {
+  errno = 0;
+  const auto wd = ::inotify_add_watch(fd, directory.c_str(), kInotifyWatchMask);
+  if (wd < 0) {
+    if (!required && (errno == EACCES || errno == ENOENT || errno == ENOTDIR)) {
+      return {};
+    }
+    return std::unexpected(errno_io_error("failed to add file watcher", directory.string()));
+  }
+
+  if (!registry.directories.contains(wd)) {
+    ++registry.stats.directories_watched;
+  }
+  registry.directories[wd] = directory;
+  return {};
+}
+
+[[nodiscard]] core::Result<void>
+register_inotify_watch_tree(int fd, const std::filesystem::path& root, bool recursive, InotifyWatchRegistry& registry) {
+  if (auto watched = add_inotify_directory_watch(fd, root, registry, true); !watched) {
+    return std::unexpected(std::move(watched).error());
+  }
+  if (!recursive) {
+    return {};
+  }
+
+  std::error_code ec;
+  auto entries =
+      std::filesystem::recursive_directory_iterator{root,
+                                                    std::filesystem::directory_options::skip_permission_denied,
+                                                    ec};
+  if (ec) {
+    return std::unexpected(system_io_error("failed to scan watch root", root.string(), ec));
+  }
+
+  const auto end = std::filesystem::recursive_directory_iterator{};
+  for (; entries != end; entries.increment(ec)) {
+    if (ec) {
+      ec.clear();
+      continue;
+    }
+
+    std::error_code status_ec;
+    const auto status = entries->symlink_status(status_ec);
+    if (status_ec || !std::filesystem::is_directory(status)) {
+      continue;
+    }
+    if (auto watched = add_inotify_directory_watch(fd, entries->path(), registry, false); !watched) {
+      return std::unexpected(std::move(watched).error());
+    }
+  }
+  return {};
+}
+
+[[nodiscard]] std::optional<std::filesystem::path> inotify_event_path(const InotifyWatchRegistry& registry,
+                                                                      const inotify_event& event) {
+  const auto found = registry.directories.find(event.wd);
+  if (found == registry.directories.end()) {
+    return std::nullopt;
+  }
+  if (event.len == 0 || event.name[0] == '\0') {
+    return found->second;
+  }
+  return found->second / std::string{event.name};
+}
+
+[[nodiscard]] core::Result<void> maybe_add_inotify_child_watch(int fd,
+                                                               const std::filesystem::path& path,
+                                                               const inotify_event& event,
+                                                               const ReadTextFileWatchOptions& options,
+                                                               InotifyWatchRegistry& registry) {
+  const auto created_directory = (event.mask & IN_ISDIR) != 0U && (event.mask & (IN_CREATE | IN_MOVED_TO)) != 0U;
+  if (!options.recursive || !created_directory) {
+    return {};
+  }
+  return add_inotify_directory_watch(fd, path, registry, false);
+}
+
+[[nodiscard]] core::Result<InotifyDrainResult>
+drain_inotify_events(int fd, const ReadTextFileWatchOptions& options, InotifyWatchRegistry& registry) {
+  alignas(inotify_event) std::array<char, kInotifyBufferBytes> buffer{};
+
+  for (;;) {
+    errno = 0;
+    const auto bytes_read = ::read(fd, buffer.data(), buffer.size());
+    if (bytes_read < 0) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        return InotifyDrainResult{};
+      }
+      if (errno == EINTR) {
+        continue;
+      }
+      return std::unexpected(errno_io_error("failed to read file watcher events", {}));
+    }
+    if (bytes_read == 0) {
+      return InotifyDrainResult{};
+    }
+
+    std::size_t offset = 0;
+    const auto size = static_cast<std::size_t>(bytes_read);
+    while (offset + sizeof(inotify_event) <= size) {
+      const auto* event = reinterpret_cast<const inotify_event*>(buffer.data() + offset);
+      offset += sizeof(inotify_event) + event->len;
+
+      ++registry.stats.events_seen;
+      if ((event->mask & IN_Q_OVERFLOW) != 0U) {
+        invalidate_all_read_text_file_ranged_caches();
+        ++registry.stats.invalidations;
+        if (options.max_events > 0 && registry.stats.events_seen >= options.max_events) {
+          return InotifyDrainResult{.complete = true};
+        }
+        continue;
+      }
+
+      const auto event_path = inotify_event_path(registry, *event);
+      if (event_path) {
+        invalidate_read_text_file_ranged_cache_blocking(event_path->string());
+        ++registry.stats.invalidations;
+        if (auto watched = maybe_add_inotify_child_watch(fd, *event_path, *event, options, registry); !watched) {
+          return std::unexpected(std::move(watched).error());
+        }
+      }
+      if ((event->mask & IN_IGNORED) != 0U) {
+        registry.directories.erase(event->wd);
+      }
+
+      if (options.max_events > 0 && registry.stats.events_seen >= options.max_events) {
+        return InotifyDrainResult{.complete = true};
+      }
+    }
+  }
+}
+#endif
 
 /// Adjust a buffer to UTF-8 code-point boundaries at both ends. The function
 /// drops leading bytes that are continuation bytes (0x80..0xBF) without a
@@ -1298,6 +1539,70 @@ read_text_file_ranged(asio::any_io_executor executor, std::string path, ReadText
 
 void invalidate_read_text_file_ranged_cache(std::string_view path) {
   invalidate_read_text_file_ranged_cache_blocking(path);
+}
+
+async::Awaitable<core::Result<ReadTextFileWatchStats>>
+watch_read_text_file_ranged_cache(asio::any_io_executor executor, std::string root, ReadTextFileWatchOptions options) {
+#if defined(__linux__)
+  auto cancellation = co_await asio::this_coro::cancellation_state;
+  if (is_cancelled(cancellation)) {
+    co_return std::unexpected(core::Error::cancelled());
+  }
+
+  auto root_path = validate_directory_path(root);
+  if (!root_path) {
+    co_return std::unexpected(std::move(root_path).error());
+  }
+
+  auto fd = UniqueFd{::inotify_init1(IN_NONBLOCK | IN_CLOEXEC)};
+  if (fd.get() < 0) {
+    co_return std::unexpected(errno_io_error("failed to create file watcher", root));
+  }
+
+  auto registry = InotifyWatchRegistry{};
+  if (auto registered = register_inotify_watch_tree(fd.get(), *root_path, options.recursive, registry); !registered) {
+    co_return std::unexpected(std::move(registered).error());
+  }
+
+  auto descriptor = asio::posix::stream_descriptor{executor};
+  asio::error_code assign_ec;
+  descriptor.assign(fd.get(), assign_ec);
+  if (assign_ec) {
+    co_return std::unexpected(system_io_error("failed to attach file watcher", root, assign_ec));
+  }
+  static_cast<void>(fd.release());
+
+  while (options.max_events == 0 || registry.stats.events_seen < options.max_events) {
+    if (is_cancelled(cancellation)) {
+      co_return std::unexpected(core::Error::cancelled());
+    }
+
+    asio::error_code wait_ec;
+    co_await descriptor.async_wait(asio::posix::descriptor_base::wait_read,
+                                   asio::redirect_error(asio::use_awaitable, wait_ec));
+    if (wait_ec) {
+      if (wait_ec == asio::error::operation_aborted || is_cancelled(cancellation)) {
+        co_return std::unexpected(core::Error::cancelled());
+      }
+      co_return std::unexpected(system_io_error("file watcher wait failed", root, wait_ec));
+    }
+
+    auto drained = drain_inotify_events(descriptor.native_handle(), options, registry);
+    if (!drained) {
+      co_return std::unexpected(std::move(drained).error());
+    }
+    if (drained->complete) {
+      break;
+    }
+  }
+
+  co_return registry.stats;
+#else
+  static_cast<void>(executor);
+  static_cast<void>(options);
+  co_return std::unexpected(
+      core::Error::io("file watcher unsupported on this platform").with("path", root).with("backend", "inotify"));
+#endif
 }
 
 ReadTextFileCacheStats read_text_file_ranged_cache_stats() {

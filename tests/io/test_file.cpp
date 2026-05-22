@@ -609,6 +609,143 @@ TEST_CASE("write_text_file invalidates only the changed read-cache path", "[unit
   });
 }
 
+#if defined(__linux__)
+TEST_CASE("watch_read_text_file_ranged_cache invalidates an external file rewrite", "[unit][io][range][cache][watch]") {
+  TempDir temp{"oran-io-range-cache-watch"};
+  const auto file = temp.path() / "watched.txt";
+  write_direct(file, "alpha");
+
+  const auto original_mtime = std::filesystem::last_write_time(file);
+  const auto original_fingerprint = io::compute_file_fingerprint(file.string());
+  REQUIRE(original_fingerprint.has_value());
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto cold = co_await io::read_text_file_ranged(context.get_executor(), file.string());
+    REQUIRE(cold.has_value());
+    REQUIRE(cold->text == "alpha");
+
+    asio::steady_timer writer{context};
+    writer.expires_after(std::chrono::milliseconds{10});
+    writer.async_wait([&](const asio::error_code& ec) {
+      if (ec) {
+        return;
+      }
+      write_direct(file, "bravo");
+      std::filesystem::last_write_time(file, original_mtime);
+    });
+
+    auto watched = co_await io::watch_read_text_file_ranged_cache(
+        context.get_executor(),
+        temp.path().string(),
+        io::ReadTextFileWatchOptions{.recursive = false, .max_events = 1});
+    REQUIRE(watched.has_value());
+    REQUIRE(watched->directories_watched == 1);
+    REQUIRE(watched->events_seen >= 1);
+    REQUIRE(watched->invalidations >= 1);
+
+    const auto restored_fingerprint = io::compute_file_fingerprint(file.string());
+    REQUIRE(restored_fingerprint.has_value());
+    REQUIRE(restored_fingerprint->size_bytes == original_fingerprint->size_bytes);
+    REQUIRE(restored_fingerprint->mtime_ns == original_fingerprint->mtime_ns);
+
+    const auto before = io::read_text_file_ranged_cache_stats();
+    auto fresh = co_await io::read_text_file_ranged(context.get_executor(), file.string());
+    REQUIRE(fresh.has_value());
+    REQUIRE(fresh->text == "bravo");
+
+    const auto after = io::read_text_file_ranged_cache_stats();
+    REQUIRE(after.file_view.misses == before.file_view.misses + 1);
+  });
+}
+
+TEST_CASE("watch_read_text_file_ranged_cache recursively watches existing child directories",
+          "[unit][io][range][cache][watch]") {
+  TempDir temp{"oran-io-range-cache-watch-recursive"};
+  const auto child = temp.path() / "child";
+  std::filesystem::create_directory(child);
+  const auto file = child / "watched.txt";
+  write_direct(file, "first");
+
+  const auto original_mtime = std::filesystem::last_write_time(file);
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto cold = co_await io::read_text_file_ranged(context.get_executor(), file.string());
+    REQUIRE(cold.has_value());
+    REQUIRE(cold->text == "first");
+
+    asio::steady_timer writer{context};
+    writer.expires_after(std::chrono::milliseconds{10});
+    writer.async_wait([&](const asio::error_code& ec) {
+      if (ec) {
+        return;
+      }
+      write_direct(file, "fresh");
+      std::filesystem::last_write_time(file, original_mtime);
+    });
+
+    auto watched = co_await io::watch_read_text_file_ranged_cache(
+        context.get_executor(),
+        temp.path().string(),
+        io::ReadTextFileWatchOptions{.recursive = true, .max_events = 1});
+    REQUIRE(watched.has_value());
+    REQUIRE(watched->directories_watched >= 2);
+    REQUIRE(watched->events_seen >= 1);
+    REQUIRE(watched->invalidations >= 1);
+
+    auto fresh = co_await io::read_text_file_ranged(context.get_executor(), file.string());
+    REQUIRE(fresh.has_value());
+    REQUIRE(fresh->text == "fresh");
+  });
+}
+
+TEST_CASE("watch_read_text_file_ranged_cache observes cancellation while waiting", "[unit][io][range][cache][watch]") {
+  TempDir temp{"oran-io-range-cache-watch-cancel"};
+
+  asio::io_context context;
+  asio::cancellation_signal signal;
+  std::optional<core::Result<io::ReadTextFileWatchStats>> result;
+  std::exception_ptr failure;
+
+  asio::steady_timer cancel{context};
+  cancel.expires_after(std::chrono::milliseconds{10});
+  cancel.async_wait([&](const asio::error_code& ec) {
+    if (!ec) {
+      signal.emit(asio::cancellation_type::terminal);
+    }
+  });
+
+  asio::steady_timer timeout{context};
+  timeout.expires_after(std::chrono::seconds{1});
+  timeout.async_wait([&](const asio::error_code& ec) {
+    if (!ec) {
+      context.stop();
+    }
+  });
+
+  asio::co_spawn(
+      context,
+      [&]() -> async::Awaitable<core::Result<io::ReadTextFileWatchStats>> {
+        co_return co_await io::watch_read_text_file_ranged_cache(context.get_executor(), temp.path().string());
+      },
+      asio::bind_cancellation_slot(signal.slot(),
+                                   [&](std::exception_ptr ep, core::Result<io::ReadTextFileWatchStats> r) {
+                                     failure = ep;
+                                     result = std::move(r);
+                                     timeout.cancel();
+                                     context.stop();
+                                   }));
+
+  context.run();
+
+  if (failure) {
+    std::rethrow_exception(failure);
+  }
+  REQUIRE(result.has_value());
+  REQUIRE_FALSE(result->has_value());
+  REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
+}
+#endif
+
 TEST_CASE("read_text_file_ranged collapses concurrent cold reads with singleflight",
           "[unit][io][range][singleflight]") {
   TempDir temp{"oran-io-range-singleflight"};

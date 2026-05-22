@@ -54,6 +54,24 @@ struct ReadTextFileCacheStats {
   ReadTextBoundedCacheStats file_view;
 };
 
+/// Options for the path-stale watcher that invalidates
+/// `read_text_file_ranged` caches when filesystem events arrive.
+struct ReadTextFileWatchOptions {
+  bool recursive{true};
+  /// Maximum number of inotify events to process before returning. `0`
+  /// means "run until cancelled" and is the production shape; tests can set
+  /// a small value to drain a deterministic batch.
+  std::size_t max_events{0};
+};
+
+/// Aggregate watcher result. Paths and cache keys are intentionally not
+/// exposed; this is operational health only.
+struct ReadTextFileWatchStats {
+  std::size_t directories_watched{0};
+  std::uint64_t events_seen{0};
+  std::uint64_t invalidations{0};
+};
+
 /// Process-local singleflight stats for `read_text_file_ranged`. The
 /// numbers expose bounded-state health without leaking cache keys or file
 /// paths. Lifetime counters are monotonic; `current_*` fields describe the
@@ -115,8 +133,18 @@ read_text_file_ranged(asio::any_io_executor executor, std::string path, ReadText
 /// Invalidate every process-local `read_text_file_ranged` cache entry for
 /// `path`. The path is canonicalised through the same private key helper as
 /// reads; no cache keys or file contents are exposed. This is the public seam
-/// for in-process mutations and future watcher callbacks.
+/// for in-process mutations and watcher callbacks.
 void invalidate_read_text_file_ranged_cache(std::string_view path);
+
+/// Watch `root` for local filesystem changes and invalidate
+/// `read_text_file_ranged` cache entries for changed paths. On Linux this is
+/// backed by inotify via asio descriptors. The default shape runs until the
+/// caller cancels the coroutine; `max_events` is available for bounded test
+/// and one-shot drains.
+[[nodiscard]] async::Awaitable<core::Result<ReadTextFileWatchStats>>
+watch_read_text_file_ranged_cache(asio::any_io_executor executor,
+                                  std::string root,
+                                  ReadTextFileWatchOptions options = {});
 
 /// Snapshot the process-local bounded caches used by
 /// `read_text_file_ranged`. This is an observability hook only; callers

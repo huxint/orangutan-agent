@@ -7,7 +7,8 @@ performs the requested operation and returns `core::Result<T>`.
 
 > **Slice-2 status (2026-05-15):** `oran-io` ships text-file read/write helpers and
 > deterministic directory listing. Subprocesses, pipes, signals, glob expansion,
-> watchers, and permission/hook integration are planned future slices.
+> and permission/hook integration are planned future slices; watcher-backed
+> range-read cache invalidation lands later in slices 57-58.
 >
 > **Slice-30 status (2026-05-20):** `oran-io` adds `delete_file(executor, path)`
 > for regular-file removal. Directories and symlinks reject as
@@ -84,6 +85,17 @@ performs the requested operation and returns `core::Result<T>`.
 > `delete_file` calls reuse the same seam, so in-process mutations evict
 > only entries for the affected canonical path instead of clearing unrelated
 > range-read cache entries.
+>
+> **Slice-58 status (2026-05-24):** `oran-io` now ships the concrete
+> Linux/inotify watcher event source for those caches:
+> `watch_read_text_file_ranged_cache(executor, root, options)` registers one
+> directory or a recursive tree, waits through an asio POSIX descriptor, and
+> invalidates the changed event path through
+> `invalidate_read_text_file_ranged_cache(path)`. The public result is
+> aggregate health only (`ReadTextFileWatchStats`). If inotify reports a
+> queue overflow, the watcher conservatively invalidates all private
+> range-read caches. Bootstrap/config wiring for a long-lived process
+> watcher remains downstream.
 
 ## Public Surface
 
@@ -130,6 +142,17 @@ struct ReadTextFileCacheStats {
   ReadTextBoundedCacheStats file_view;
 };
 
+struct ReadTextFileWatchOptions {
+  bool recursive{true};
+  std::size_t max_events{0};  // 0 means run until cancelled.
+};
+
+struct ReadTextFileWatchStats {
+  std::size_t directories_watched{0};
+  std::uint64_t events_seen{0};
+  std::uint64_t invalidations{0};
+};
+
 struct ReadTextSingleflightStats {
   std::uint64_t leaders_started{0};
   std::uint64_t followers_joined{0};
@@ -169,6 +192,11 @@ async::Awaitable<core::Result<ReadTextResult>>
 read_text_file_ranged(asio::any_io_executor executor, std::string path, ReadTextOptions = {});
 
 void invalidate_read_text_file_ranged_cache(std::string_view path);
+
+async::Awaitable<core::Result<ReadTextFileWatchStats>>
+watch_read_text_file_ranged_cache(asio::any_io_executor executor,
+                                  std::string root,
+                                  ReadTextFileWatchOptions = {});
 
 ReadTextFileCacheStats read_text_file_ranged_cache_stats();
 
@@ -263,15 +291,19 @@ surface for effectful agent actions.
   in-process writes/deletes.
   Slice 57 (2026-05-24) narrows that invalidation to the affected
   canonical path and exposes
-  `invalidate_read_text_file_ranged_cache(path)` for future watcher
-  callbacks.
+  `invalidate_read_text_file_ranged_cache(path)` for watcher
+  callbacks. Slice 58 (2026-05-24) adds the Linux/inotify-backed
+  watcher callback source in `oran-io` itself:
+  `watch_read_text_file_ranged_cache(executor, root, options)` can watch
+  one directory or a recursive tree, returns aggregate
+  `ReadTextFileWatchStats`, and is cancel-aware for the production
+  run-until-cancelled shape. Bootstrap/config wiring that starts it as a
+  runtime service is still a later slice.
   Slice 53 (2026-05-24) adds the bounded singleflight table for cold
   `read_text_file_ranged` calls and the
   `ReadTextSingleflightStats` observability snapshot. Slice 54
   (2026-05-24) adds the paired `ReadTextFileCacheStats` snapshot for the
-  line-offset index and file-view cache. Future slices wire watcher-backed
-  external-edit awareness on top of slice 57's
-  `invalidate_read_text_file_ranged_cache(path)` seam, and
+  line-offset index and file-view cache. Future slices wire
   `compute_hash=true` (SHA-256 in
   `FileFingerprint::sha256`) for high-trust paths. Text-only callers keep
   the legacy `read_text_file` wrapper that drops the metadata.

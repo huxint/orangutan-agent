@@ -7,24 +7,30 @@
 
 ## Snapshot
 
-- **Slice:** 57 (`xmake run orangutan` reports slice 57)
+- **Slice:** 58 (`xmake run orangutan` reports slice 58)
 - **Last completed history:**
-  [`histories/2026-05/20260524-0130-io-read-cache-path-invalidation.md`](histories/2026-05/20260524-0130-io-read-cache-path-invalidation.md)
+  [`histories/2026-05/20260524-0145-io-read-cache-watcher.md`](histories/2026-05/20260524-0145-io-read-cache-watcher.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 57
-  lands the path-stale invalidation seam for spec 0011's remaining
-  watcher-backed external-edit awareness: `core::BoundedCache` now has
-  `erase_if(predicate)` for explicit non-policy invalidation, and
-  `oran-io` exposes `invalidate_read_text_file_ranged_cache(path)` so
-  future watcher events can evict line-offset-index and file-view cache
-  entries for one canonical path without exposing private keys. Successful
-  `io::write_text_file` and `io::delete_file` now reuse that seam instead
-  of clearing unrelated read-cache entries. The concrete watcher
-  registration / event source remains the final spec 0011 v1.1 item.
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 58
+  closes spec 0011 v1.1's IO-layer watcher item: `oran-io` now exposes
+  `watch_read_text_file_ranged_cache(executor, root, options)`, a
+  cancel-aware Linux/inotify watcher that registers one directory or a
+  recursive tree, drains filesystem events through an asio descriptor,
+  and calls `invalidate_read_text_file_ranged_cache(path)` so external
+  edits evict the affected file-view and line-offset-index entries
+  without exposing cache keys. The returned `ReadTextFileWatchStats`
+  reports only aggregate directories/events/invalidations. The watcher
+  is not yet automatically started by bootstrap/config; that wiring waits
+  for the runtime service that will own long-lived background tasks.
+  Slice 57 landed the path-stale invalidation seam this watcher consumes:
+  `core::BoundedCache` now has `erase_if(predicate)` for explicit
+  non-policy invalidation, and successful `io::write_text_file` and
+  `io::delete_file` reuse the same seam instead of clearing unrelated
+  read-cache entries.
   Slice 56 closes spec 0012's approval-grant bounded-state item inside
   `oran-permission`: `ApprovalBroker::approve` now lazily reaps expired
   grants and keeps at most
@@ -84,7 +90,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 - `oran-core`: 69 cases / 446 assertions.
 - `oran-async`: 9 cases / 43 assertions.
-- `oran-io`: 46 cases / 260 assertions.
+- `oran-io`: 49 cases / 286 assertions.
 - `oran-storage`: 60 cases / 706 assertions.
 - `oran-config`: 24 cases / 171 assertions.
 - `oran-permission`: 86 cases / 390 assertions.

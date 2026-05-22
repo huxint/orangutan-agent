@@ -230,6 +230,24 @@ invalidation of one line-offset-index path, and write invalidation
 preserving hot cache entries for other files. The remaining v1.1 item is
 the concrete watcher registration / event source that calls this seam.
 
+**Status (slice 58, 2026-05-24):** the concrete watcher registration /
+event source for v1.1 external-edit awareness now ships in `oran-io`.
+`io::watch_read_text_file_ranged_cache(executor, root, options)` validates
+and canonicalises a directory root, registers that directory or an existing
+recursive tree with Linux inotify, drains events through an asio POSIX
+descriptor, and invalidates each changed event path through
+`io::invalidate_read_text_file_ranged_cache(path)`. The production shape
+runs until coroutine cancellation; tests can set
+`ReadTextFileWatchOptions::max_events` to drain a bounded batch. The
+returned `ReadTextFileWatchStats` exposes only aggregate
+`directories_watched`, `events_seen`, and `invalidations`, not paths or
+cache keys. Inotify queue overflow conservatively invalidates all private
+range-read caches because the exact changed paths were lost. Tests cover
+external rewrites whose size/mtime are restored, recursive child-directory
+registration, and cancellation while waiting. Spec 0011 v1.1's IO-layer
+cache/watch work is complete; bootstrap/config startup wiring for
+long-lived watchers remains a later runtime slice.
+
 **v1.1 prerequisite (slice 44, 2026-05-22):** the `BoundedCache<Key,
 Value>` generic primitive that v1.1's line-offset index, file-view
 cache, and regex cache build on is now shipped in `oran-core` as
@@ -371,7 +389,8 @@ correctness is anchored:
   unrelated file views stay hot. Slice 54 adds the public
   `ReadTextFileCacheStats` snapshot covering both this cache and the
   line-offset index without exposing private keys; slice 57 adds the
-  public path-invalidation seam future watchers will call.
+  public path-invalidation seam and slice 58 adds the Linux watcher event
+  source that calls it.
 - **Singleflight reads**: ten concurrent `file.read` calls for the same
   `(canonical_path, range, max_bytes, size_bytes, mtime_ns)` share one
   filesystem read instead of stampeding the executor. Shipped in slice
@@ -381,9 +400,12 @@ correctness is anchored:
 - **External-edit awareness**: when an `asio` filesystem watcher is
   available, register against `<workspace>/**`; on a watcher event, mark the
   affected canonical path stale through
-  `io::invalidate_read_text_file_ranged_cache(path)`. Without a watcher,
-  validate metadata (`stat` only) before every cache hit; on uncertainty,
-  miss.
+  `io::invalidate_read_text_file_ranged_cache(path)`. The IO-layer Linux
+  implementation ships in slice 58 as
+  `io::watch_read_text_file_ranged_cache(executor, root, options)`, with
+  aggregate-only stats and cancellation-aware run-until-cancelled semantics.
+  Without a started watcher, validate metadata (`stat` only) before every
+  cache hit; on uncertainty, miss.
 - **Output cap on `file.search`**: in addition to `max_matches`, an output
   byte cap so a small match count of very long lines does not flood the
   prompt.

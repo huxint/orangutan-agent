@@ -170,7 +170,11 @@ implicitly via the capability list.
   **Status (slice 57, 2026-05-24):** `oran-io` also exposes
   `invalidate_read_text_file_ranged_cache(path)`, a path-scoped
   invalidation seam future watcher events can call without seeing private
-  cache keys.
+  cache keys. **Status (slice 58, 2026-05-24):** the concrete IO watcher
+  event source now exists as
+  `watch_read_text_file_ranged_cache(executor, root, options)`, returning
+  aggregate-only `ReadTextFileWatchStats` while using the same path-scoped
+  invalidation seam internally.
   Pre-`oran-log`, `--explain-rules`-style debug surfaces in `oran-bootstrap`
   can reuse the same numbers.
 
