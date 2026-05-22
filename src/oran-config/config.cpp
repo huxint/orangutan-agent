@@ -569,6 +569,47 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
   };
 }
 
+[[nodiscard]] Result<WorkspacePermissionsConfig>
+parse_workspace_block(const json& block, std::string_view path, bool strict, std::vector<ConfigWarning>& warnings) {
+  auto block_object = require_object(block, path);
+  if (!block_object) {
+    return std::unexpected(std::move(block_object.error()));
+  }
+
+  auto out = WorkspacePermissionsConfig{};
+  if (const auto it = block.find("extra_read_roots"); it != block.end()) {
+    auto parsed = string_array(*it, child_path(path, "extra_read_roots"));
+    if (!parsed) {
+      return std::unexpected(std::move(parsed.error()));
+    }
+    out.extra_read_roots = std::move(*parsed);
+  }
+  if (const auto it = block.find("extra_write_roots"); it != block.end()) {
+    auto parsed = string_array(*it, child_path(path, "extra_write_roots"));
+    if (!parsed) {
+      return std::unexpected(std::move(parsed.error()));
+    }
+    out.extra_write_roots = std::move(*parsed);
+  }
+
+  static constexpr auto kKnownKeys = std::array<std::string_view, 2>{"extra_read_roots", "extra_write_roots"};
+  for (const auto& [key, _] : block.items()) {
+    if (std::ranges::contains(kKnownKeys, key)) {
+      continue;
+    }
+    const auto field_path = child_path(path, key);
+    if (strict) {
+      return std::unexpected(config_error("unknown workspace field", field_path));
+    }
+    warnings.push_back(ConfigWarning{
+        .path = field_path,
+        .message = "unknown workspace field",
+    });
+  }
+
+  return out;
+}
+
 [[nodiscard]] Result<PermissionsConfig>
 parse_permissions_block(const json& block, std::string_view path, bool strict, std::vector<ConfigWarning>& warnings) {
   auto block_object = require_object(block, path);
@@ -578,25 +619,33 @@ parse_permissions_block(const json& block, std::string_view path, bool strict, s
 
   auto out = PermissionsConfig{};
   for (const auto& [key, value] : block.items()) {
-    const auto verdict_path = child_path(path, key);
+    const auto key_path = child_path(path, key);
+    if (key == "workspace") {
+      auto parsed = parse_workspace_block(value, key_path, strict, warnings);
+      if (!parsed) {
+        return std::unexpected(std::move(parsed.error()));
+      }
+      out.workspace = std::move(*parsed);
+      continue;
+    }
     const auto known_verdict = core::parse_enum<PermissionVerdict>(key);
     if (!known_verdict) {
       if (strict) {
-        return std::unexpected(config_error("unknown verdict key", verdict_path));
+        return std::unexpected(config_error("unknown verdict key", key_path));
       }
       warnings.push_back(ConfigWarning{
-          .path = verdict_path,
+          .path = key_path,
           .message = "unknown verdict key",
       });
       continue;
     }
     if (!value.is_array()) {
-      return std::unexpected(config_error("expected array", verdict_path));
+      return std::unexpected(config_error("expected array", key_path));
     }
     out.rules.reserve(out.rules.size() + value.size());
     auto index = std::size_t{0};
     for (const auto& item : value) {
-      auto rule = parse_permission_rule(item, *known_verdict, element_path(verdict_path, index), strict, warnings);
+      auto rule = parse_permission_rule(item, *known_verdict, element_path(key_path, index), strict, warnings);
       if (!rule) {
         return std::unexpected(std::move(rule.error()));
       }

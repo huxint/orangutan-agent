@@ -21,6 +21,7 @@
 #include <oran/core/error.hpp>
 #include <oran/permission.hpp>
 #include <oran/storage.hpp>
+#include <oran/tool/workspace.hpp>
 
 namespace orangutan::bootstrap {
 namespace {
@@ -107,6 +108,7 @@ struct RuntimeAssembly::Impl {
   std::unique_ptr<storage::AuditRepository> audit_repository;
   std::unique_ptr<permission::AuditSink> audit_sink;
   std::unique_ptr<permission::ApprovalBroker> approval_broker;
+  std::unique_ptr<tool::Workspace> workspace;
 };
 
 RuntimeAssembly::RuntimeAssembly(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
@@ -133,6 +135,14 @@ std::string_view RuntimeAssembly::audit_path() const noexcept {
   return impl_->audit_path;
 }
 
+tool::Workspace& RuntimeAssembly::workspace() noexcept {
+  return *impl_->workspace;
+}
+
+const tool::Workspace& RuntimeAssembly::workspace() const noexcept {
+  return *impl_->workspace;
+}
+
 Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
                                                asio::any_io_executor runtime_executor,
                                                RuntimeAssemblyOptions options) {
@@ -142,6 +152,16 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
 
   auto impl = std::make_unique<Impl>();
   impl->audit_enabled = options.audit_enabled;
+
+  // Build the workspace resolver before audit/broker. `tool::Workspace::create`
+  // validates the workspace root (must exist + be a directory) and
+  // canonicalises every `extra_{read,write}_roots` entry, so a misconfigured
+  // override fails the boot rather than the first dispatched tool call.
+  auto workspace_result = tool::Workspace::create(workspace, std::move(options.workspace_options));
+  if (!workspace_result) {
+    return std::unexpected(std::move(workspace_result).error());
+  }
+  impl->workspace = std::make_unique<tool::Workspace>(std::move(*workspace_result));
 
   // ApprovalBroker is the same shape regardless of audit mode — the
   // per-process secret rotation guarantee (criterion 5) applies to every

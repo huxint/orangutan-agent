@@ -52,7 +52,10 @@ filesystem_error(std::string message, const std::filesystem::path& path, const s
   canonical = canonical.lexically_normal();
 
   const auto status = std::filesystem::status(canonical, ec);
-  if (ec) {
+  // libstdc++ sets `ec = ENOENT` even though `status.type()` already
+  // reports `file_not_found`; pass ENOENT through to the existence check
+  // below so the caller gets `Error::not_found`, not `Error::io`.
+  if (ec && ec != std::errc::no_such_file_or_directory) {
     return std::unexpected(
         filesystem_error("failed to inspect workspace root", canonical, ec).with("field", std::string{context_key}));
   }

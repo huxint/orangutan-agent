@@ -239,6 +239,14 @@ enum class Capability {
 > at the handler entry. Bootstrap/config ownership for the override roots,
 > audit metadata, and moving resolution to the pre-permission dispatch
 > boundary remain follow-up structural work.
+> Slice 41 (2026-05-22) lands the bootstrap-owned half: `bootstrap::RuntimeAssembly`
+> now constructs and owns a `tool::Workspace`, and `oran-config` recognises
+> `permissions.workspace.extra_{read,write}_roots` so the override list is
+> canonicalised once at boot. Bootstrap converts the typed
+> `config::WorkspacePermissionsConfig` into `tool::WorkspaceOptions` before
+> calling `RuntimeAssembly::build`; the resulting `Workspace&` lives on the
+> assembly for the future agent loop to thread into `DispatchContext::workspace`.
+> Audit metadata and pre-permission resolution remain follow-up work.
 
 A tool's `required_capabilities` list is **inspected at registration**. The permission
 engine knows the universe of capabilities a tool might use; the tool cannot smuggle in
@@ -449,11 +457,13 @@ See `permissions-and-hooks.md` for sink kinds.
 Slices 37-40 closed the per-tool half of the workspace migration: every
 filesystem built-in (`file.read`, `file.write`, `file.edit`, `file.delete`,
 `file.search`, `directory.list`) resolves its input through the workspace
-seam when `DispatchContext::workspace` is supplied. The remaining work is
-structural — bootstrap-owned `Workspace` values, config wiring for
-override roots, moving resolution to the pre-permission dispatch boundary,
-and adding the resolved path / override-root metadata to the audit
-pipeline.
+seam when `DispatchContext::workspace` is supplied. Slice 41 lands the
+bootstrap-owned half: `bootstrap::RuntimeAssembly` constructs and owns the
+`tool::Workspace`, and `oran-config` recognises
+`permissions.workspace.extra_{read,write}_roots` so overrides canonicalise
+once at boot rather than per-tool. The remaining work is moving resolution
+to the pre-permission dispatch boundary and threading the resolved path /
+override-root metadata into the audit pipeline.
 
 Current surface and forward shape:
 
@@ -464,10 +474,13 @@ Current surface and forward shape:
   to the matching root, and resolution flags (`symlink_followed`,
   `created_parents`, `outside_workspace_explicit_override`,
   `override_root_index`).
-- Bootstrap ownership is still pending: the next workspace slice wires
-  `RuntimeAssembly` / config into the `DispatchContext::workspace` seam; the
-  later `tool::Runtime` handle promotes this into
-  `Runtime::workspace()` (capability-gated).
+- Bootstrap ownership ships in slice 41 — `RuntimeAssembly::build` now
+  constructs the workspace from `RuntimeAssemblyOptions::workspace_options`
+  (which bootstrap fills from `config::PermissionsConfig::workspace`) and
+  exposes it via `RuntimeAssembly::workspace()`. The agent loop will thread
+  this `Workspace&` into `DispatchContext::workspace`; the later
+  `tool::Runtime` handle promotes this into `Runtime::workspace()`
+  (capability-gated).
 - Every filesystem built-in resolves its input *before* permission evaluation
   via `Workspace::resolve_read` / `resolve_write` / `resolve_delete` /
   `resolve_list`. The intent is encoded in the method name; callers cannot

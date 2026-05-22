@@ -91,6 +91,18 @@ struct PermissionRuleConfig {
   friend bool operator==(const PermissionRuleConfig&, const PermissionRuleConfig&) = default;
 };
 
+/// Workspace policy carried inside a permissions block. Extra read/write
+/// roots widen the canonical workspace root after `tool::Workspace` builds
+/// the resolver; the loader keeps the raw strings, leaving canonicalisation
+/// and existence checks to `tool::Workspace::create` so config can be
+/// parsed without touching the filesystem.
+struct WorkspacePermissionsConfig {
+  std::vector<std::string> extra_read_roots;
+  std::vector<std::string> extra_write_roots;
+
+  friend bool operator==(const WorkspacePermissionsConfig&, const WorkspacePermissionsConfig&) = default;
+};
+
 /// Rules collected from one permissions block (the global `permissions`
 /// root or a single agent's overlay). Rules appear in the JSON object's
 /// iteration order so the operator's authoring intent survives the
@@ -98,6 +110,7 @@ struct PermissionRuleConfig {
 /// deny → allow → ask walk).
 struct PermissionsConfig {
   std::vector<PermissionRuleConfig> rules;
+  WorkspacePermissionsConfig workspace;
 
   friend bool operator==(const PermissionsConfig&, const PermissionsConfig&) = default;
 };

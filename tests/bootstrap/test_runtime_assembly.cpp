@@ -14,6 +14,7 @@
 #include <oran/core/error.hpp>
 #include <oran/core/time.hpp>
 #include <oran/permission.hpp>
+#include <oran/tool/workspace.hpp>
 
 #include "../test-helpers/run_async.hpp"
 
@@ -22,6 +23,7 @@ namespace bootstrap = orangutan::bootstrap;
 namespace core = orangutan::core;
 namespace permission = orangutan::permission;
 namespace test = orangutan::tests;
+namespace tool = orangutan::tool;
 
 namespace {
 
@@ -237,4 +239,67 @@ TEST_CASE("RuntimeAssembly::build provisions audit.db from a non-source CWD", "[
   REQUIRE(built.has_value());
   REQUIRE(built->audit_enabled());
   REQUIRE(std::filesystem::exists(workspace.path() / ".orangutan" / "audit.db"));
+}
+
+TEST_CASE("RuntimeAssembly::build canonicalises the workspace root", "[unit][bootstrap][runtime_assembly][workspace]") {
+  TempDir temp{"oran-assembly-workspace-root"};
+  asio::io_context io;
+
+  auto built = bootstrap::RuntimeAssembly::build(temp.path().string(),
+                                                 io.get_executor(),
+                                                 bootstrap::RuntimeAssemblyOptions{.audit_enabled = false});
+  REQUIRE(built.has_value());
+  auto canonical = std::filesystem::weakly_canonical(temp.path()).string();
+  REQUIRE(built->workspace().root() == canonical);
+  REQUIRE(built->workspace().extra_read_roots().empty());
+  REQUIRE(built->workspace().extra_write_roots().empty());
+}
+
+TEST_CASE("RuntimeAssembly::build widens workspace roots from options",
+          "[unit][bootstrap][runtime_assembly][workspace]") {
+  TempDir workspace{"oran-assembly-workspace-overrides"};
+  TempDir extra_read{"oran-assembly-extra-read"};
+  TempDir extra_write{"oran-assembly-extra-write"};
+  asio::io_context io;
+
+  auto options = bootstrap::RuntimeAssemblyOptions{};
+  options.audit_enabled = false;
+  options.workspace_options = tool::WorkspaceOptions{
+      .extra_read_roots = {extra_read.path().string()},
+      .extra_write_roots = {extra_write.path().string()},
+  };
+
+  auto built = bootstrap::RuntimeAssembly::build(workspace.path().string(), io.get_executor(), std::move(options));
+  REQUIRE(built.has_value());
+  REQUIRE(built->workspace().extra_read_roots().size() == 1);
+  REQUIRE(built->workspace().extra_read_roots()[0] == std::filesystem::weakly_canonical(extra_read.path()).string());
+  REQUIRE(built->workspace().extra_write_roots().size() == 1);
+  REQUIRE(built->workspace().extra_write_roots()[0] == std::filesystem::weakly_canonical(extra_write.path()).string());
+}
+
+TEST_CASE("RuntimeAssembly::build rejects a non-existent workspace root",
+          "[unit][bootstrap][runtime_assembly][workspace]") {
+  asio::io_context io;
+  auto bogus = (std::filesystem::temp_directory_path() / "oran-assembly-does-not-exist-7263").string();
+  auto built = bootstrap::RuntimeAssembly::build(bogus,
+                                                 io.get_executor(),
+                                                 bootstrap::RuntimeAssemblyOptions{.audit_enabled = false});
+  REQUIRE_FALSE(built.has_value());
+  REQUIRE(built.error().kind() == core::ErrorKind::not_found);
+}
+
+TEST_CASE("RuntimeAssembly::build rejects an extra root that does not exist",
+          "[unit][bootstrap][runtime_assembly][workspace]") {
+  TempDir workspace{"oran-assembly-bad-extra-root"};
+  asio::io_context io;
+
+  auto options = bootstrap::RuntimeAssemblyOptions{};
+  options.audit_enabled = false;
+  options.workspace_options = tool::WorkspaceOptions{
+      .extra_read_roots = {(std::filesystem::temp_directory_path() / "oran-assembly-no-such-extra").string()},
+  };
+
+  auto built = bootstrap::RuntimeAssembly::build(workspace.path().string(), io.get_executor(), std::move(options));
+  REQUIRE_FALSE(built.has_value());
+  REQUIRE(built.error().kind() == core::ErrorKind::not_found);
 }

@@ -23,6 +23,10 @@
     }
   },
   "permissions": {
+    "workspace": {
+      "extra_read_roots": [],
+      "extra_write_roots": []
+    },
     "allow": [
       {"tool_pattern": "file.read"},
       {"tool_pattern": "file.search"},

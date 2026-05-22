@@ -7,26 +7,24 @@
 
 ## Snapshot
 
-- **Slice:** 40 (`xmake run orangutan` reports slice 40)
+- **Slice:** 41 (`xmake run orangutan` reports slice 41)
 - **Last completed history:**
-  [`histories/2026-05/20260522-1730-tool-workspace-directory-list.md`](histories/2026-05/20260522-1730-tool-workspace-directory-list.md)
+  [`histories/2026-05/20260522-2042-bootstrap-workspace-config-wiring.md`](histories/2026-05/20260522-2042-bootstrap-workspace-config-wiring.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
-- **Next intended slice:** Continue spec 0013 — slices 37-40 shipped
-  `tool::Workspace`, the interim `DispatchContext::workspace`
-  seam, and migrated every filesystem built-in (`file.read`,
-  `file.write`, `file.edit`, `file.delete`, `file.search`, and
-  `directory.list`) through that seam. The remaining workspace work
-  is purely structural: wire config/bootstrap ownership for
-  `permissions.workspace.extra_{read,write}_roots`, move resolution
-  and audit metadata to the pre-permission dispatch boundary, and
-  promote the seam into the future `tool::Runtime::workspace()`
-  accessor. The first provider adapter (Anthropic Messages) remains
-  a multi-slice effort that needs an exec plan plus `oran-http` +
-  libcurl wiring first; blocking hook semantics with veto are still
-  gated on `oran-agent`; and wiring `check-compile-budget.sh` into
+- **Next intended slice:** Continue spec 0013 — slices 37-40 closed the
+  per-tool migration; slice 41 lands bootstrap ownership of `tool::Workspace`
+  and config parsing for `permissions.workspace.extra_{read,write}_roots`.
+  The remaining workspace work is purely structural: thread
+  `RuntimeAssembly::workspace()` into the agent loop's
+  `DispatchContext::workspace`, move resolution + audit metadata to the
+  pre-permission dispatch boundary, and promote the seam into the future
+  `tool::Runtime::workspace()` accessor. The first provider adapter
+  (Anthropic Messages) remains a multi-slice effort that needs an exec plan
+  plus `oran-http` + libcurl wiring first; blocking hook semantics with veto
+  are still gated on `oran-agent`; and wiring `check-compile-budget.sh` into
   `scripts/ci.sh` remains gated by the slice-28 reference-hardware
   precondition. The current `file.delete` and `directory.list`
   shapes are expected to be re-shaped in a later refactor: one
@@ -83,12 +81,12 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-async`: 9 cases / 43 assertions.
 - `oran-io`: 16 cases / 70 assertions.
 - `oran-storage`: 60 cases / 706 assertions.
-- `oran-config`: 19 cases / 148 assertions.
+- `oran-config`: 24 cases / 171 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
 - `oran-hook`: 15 cases / 97 assertions.
 - `oran-tool`: 111 cases / 931 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
-- `oran-bootstrap`: 44 cases / 140 assertions.
+- `oran-bootstrap`: 48 cases / 153 assertions.
 
 ## Open Tech-Debt Rows
 

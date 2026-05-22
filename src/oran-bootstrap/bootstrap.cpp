@@ -26,6 +26,7 @@
 #include <oran/core/error.hpp>
 #include <oran/permission.hpp>
 #include <oran/storage.hpp>
+#include <oran/tool/workspace.hpp>
 
 namespace orangutan::bootstrap {
 namespace {
@@ -33,7 +34,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice40";
+constexpr std::string_view kVersion = "2.0.0-slice41";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 
 struct ParsedArgs {
@@ -438,20 +439,28 @@ core::Result<int> run(BootstrapOptions options) {
 
   // The runtime assembly composes the per-process permission infrastructure
   // (`ApprovalBroker`, audit `Pool`, `AuditRepository`, `StorageAuditSink`)
-  // the upcoming agent loop will inherit. Slice 14 wired it in; slice 15
-  // packages the audit migrations into the binary via `#embed`, so the
-  // assembly can default to `audit_enabled=true` regardless of CWD.
+  // plus the file-tool `tool::Workspace` the upcoming agent loop will
+  // inherit. Slice 41 routes
+  // `permissions.workspace.extra_{read,write}_roots` from `oran-config` into
+  // `tool::WorkspaceOptions` here so the workspace canonicalises overrides
+  // once at boot instead of per-tool.
   auto runtime = async::Runtime{async::RuntimeConfig{
       .io_workers = static_cast<std::size_t>(std::max<std::int64_t>(1, loaded->value.runtime().workers)),
       .cpu_workers = 1,
   }};
-  auto assembly = RuntimeAssembly::build(options.workspace, runtime.executor(), RuntimeAssemblyOptions{});
+  auto assembly_options = RuntimeAssemblyOptions{};
+  assembly_options.workspace_options = tool::WorkspaceOptions{
+      .extra_read_roots = loaded->value.permissions().workspace.extra_read_roots,
+      .extra_write_roots = loaded->value.permissions().workspace.extra_write_roots,
+  };
+  auto assembly = RuntimeAssembly::build(options.workspace, runtime.executor(), std::move(assembly_options));
   if (!assembly) {
     return std::unexpected(std::move(assembly).error());
   }
-  std::println("runtime assembly ready: audit={} ({}), approval-broker=fresh",
+  std::println("runtime assembly ready: audit={} ({}), approval-broker=fresh, workspace={}",
                assembly->audit_enabled() ? "enabled" : "disabled",
-               assembly->audit_enabled() ? assembly->audit_path() : std::string_view{"<null sink>"});
+               assembly->audit_enabled() ? assembly->audit_path() : std::string_view{"<null sink>"},
+               assembly->workspace().root());
 
   auto cli_result = cli::run(cli::CliOptions{.args = std::span<const std::string_view>{parsed->cli_args}});
   if (!cli_result) {

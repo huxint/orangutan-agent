@@ -84,10 +84,25 @@ filesystem built-in (`file.read`, `file.write`, `file.edit`, `file.delete`,
 `file.search`, `directory.list`) consumes the workspace seam at the handler
 entry, closing the per-tool half of this spec.
 
-Still pending: config parsing for
-`permissions.workspace.extra_read_roots` / `extra_write_roots`; bootstrap
-ownership; audit metadata; and moving resolution to the pre-permission
-dispatch boundary.
+**Slice 41 (2026-05-22):** Bootstrap-owned workspace lands.
+`bootstrap::RuntimeAssembly` now constructs and owns a `tool::Workspace`
+during `build()` and exposes it via `RuntimeAssembly::workspace()`. The
+typed surface in `oran-config` grew `PermissionsConfig::workspace` of type
+`WorkspacePermissionsConfig`, parsing
+`permissions.workspace.extra_read_roots` and
+`permissions.workspace.extra_write_roots` as string arrays (per-agent
+overlays carry the same block). `bootstrap::run` converts the config-side
+roots into `tool::WorkspaceOptions` before calling `RuntimeAssembly::build`,
+so the override list canonicalises once at boot and a misconfigured root
+fails the boot rather than the first dispatched tool call. A latent bug in
+`tool::Workspace::create` that surfaced ENOENT as `Error::io` instead of
+`Error::not_found` was fixed in the same slice. The agent-loop still needs
+to thread `RuntimeAssembly::workspace()` into `DispatchContext::workspace`;
+moving resolution to the pre-permission dispatch boundary and adding audit
+metadata for the resolved path remain follow-up work.
+
+Still pending: audit metadata for resolved paths / override-root index, and
+moving resolution to the pre-permission dispatch boundary.
 
 ## Scope (v1)
 

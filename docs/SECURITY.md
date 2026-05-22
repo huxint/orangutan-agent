@@ -46,10 +46,12 @@ Planned secret slice:
 - Workspace-scoped file operations: slice 37 introduces `tool::Workspace`;
   slices 37-40 make every filesystem built-in (`file.read`, `file.write`,
   `file.edit`, `file.delete`, `file.search`, `directory.list`) use it when
-  the runtime supplies `DispatchContext::workspace`.
-  Bootstrap ownership, audit metadata, pre-permission resolution, and
-  `permissions.workspace.extra_{read,write}_roots` config wiring are still
-  tracked by [`product-specs/0013-workspace-and-path-policy.md`](product-specs/0013-workspace-and-path-policy.md);
+  the runtime supplies `DispatchContext::workspace`. Slice 41 moves
+  workspace ownership into `bootstrap::RuntimeAssembly` and routes
+  `permissions.workspace.extra_{read,write}_roots` from `oran-config`
+  into `tool::WorkspaceOptions`, so overrides canonicalise once at boot.
+  Audit metadata and pre-permission resolution remain tracked by
+  [`product-specs/0013-workspace-and-path-policy.md`](product-specs/0013-workspace-and-path-policy.md);
   do not treat workspace confinement as complete until that migration closes.
 - Hardening flags compiled in by default:
   - `_FORTIFY_SOURCE=3`

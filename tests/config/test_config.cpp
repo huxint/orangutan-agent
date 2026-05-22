@@ -589,3 +589,95 @@ TEST_CASE("Config::parse rejects non-integer replay_max", "[unit][config][permis
   REQUIRE_FALSE(result.has_value());
   REQUIRE(result.error().kind() == core::ErrorKind::config);
 }
+
+TEST_CASE("Config::parse extracts permissions.workspace extra roots", "[unit][config][permissions][workspace]") {
+  auto result = config::Config::parse(R"json({
+  "permissions": {
+    "workspace": {
+      "extra_read_roots": ["/var/log/oran", "/srv/data"],
+      "extra_write_roots": ["/var/lib/oran-out"]
+    },
+    "allow": [{"tool_pattern": "file.read"}]
+  }
+})json");
+
+  REQUIRE(result.has_value());
+  const auto& workspace = result->permissions().workspace;
+  REQUIRE(workspace.extra_read_roots == std::vector<std::string>{"/var/log/oran", "/srv/data"});
+  REQUIRE(workspace.extra_write_roots == std::vector<std::string>{"/var/lib/oran-out"});
+  // Rule parsing still works alongside the workspace block.
+  REQUIRE(result->permissions().rules.size() == 1);
+  REQUIRE(result->permissions().rules[0].tool_pattern == "file.read");
+}
+
+TEST_CASE("Config::parse env-substitutes workspace roots", "[unit][config][permissions][workspace]") {
+  ScopedEnv extra{"ORAN_CONFIG_TEST_EXTRA", "/srv/canonical"};
+
+  auto result = config::Config::parse(R"json({
+  "permissions": {
+    "workspace": {
+      "extra_read_roots": ["${ORAN_CONFIG_TEST_EXTRA}"]
+    }
+  }
+})json");
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->permissions().workspace.extra_read_roots == std::vector<std::string>{"/srv/canonical"});
+  REQUIRE(result->permissions().workspace.extra_write_roots.empty());
+}
+
+TEST_CASE("Config::parse rejects malformed workspace entries", "[unit][config][permissions][workspace]") {
+  SECTION("non-array extra_read_roots") {
+    auto result = config::Config::parse(R"json({"permissions": {"workspace": {"extra_read_roots": "/srv/data"}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-string entry") {
+    auto result = config::Config::parse(R"json({"permissions": {"workspace": {"extra_write_roots": [42]}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-object workspace block") {
+    auto result = config::Config::parse(R"json({"permissions": {"workspace": "/srv/data"}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+}
+
+TEST_CASE("Config::parse warns or fails on unknown workspace fields", "[unit][config][permissions][workspace]") {
+  auto loose = config::Config::parse(R"json({"permissions": {"workspace": {"sandbox_root": "/tmp/sandbox"}}})json");
+  REQUIRE(loose.has_value());
+  REQUIRE(loose->warnings().size() == 1);
+  REQUIRE(loose->warnings()[0].path == "$.permissions.workspace.sandbox_root");
+
+  auto strict = config::Config::parse(
+      R"json({"strict_config": true, "permissions": {"workspace": {"sandbox_root": "/tmp/sandbox"}}})json");
+  REQUIRE_FALSE(strict.has_value());
+  REQUIRE(strict.error().kind() == core::ErrorKind::config);
+}
+
+TEST_CASE("Config::parse threads workspace blocks through agent overlays", "[unit][config][permissions][workspace]") {
+  auto result = config::Config::parse(R"json({
+  "permissions": {
+    "workspace": {
+      "extra_read_roots": ["/srv/global"]
+    }
+  },
+  "agents": {
+    "auditor": {
+      "permissions": {
+        "workspace": {
+          "extra_read_roots": ["/var/log/auditor"]
+        }
+      }
+    }
+  }
+})json");
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->permissions().workspace.extra_read_roots == std::vector<std::string>{"/srv/global"});
+  REQUIRE(result->agents().size() == 1);
+  REQUIRE(result->agents()[0].permissions.workspace.extra_read_roots == std::vector<std::string>{"/var/log/auditor"});
+}

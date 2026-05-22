@@ -38,7 +38,7 @@ oran_lib("permission", { "oran-core", "oran-config", "oran-storage", "oran-async
 oran_lib("hook", { "oran-core", "oran-async" }, {})
 oran_lib("tool", { "oran-core", "oran-async", "oran-io", "oran-permission", "oran-hook" }, { "nlohmann_json" })
 oran_lib("cli", { "oran-core" }, {})
-oran_lib("bootstrap", { "oran-core", "oran-async", "oran-storage", "oran-config", "oran-permission", "oran-cli" }, {})
+oran_lib("bootstrap", { "oran-core", "oran-async", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-tool", "oran-cli" }, {})
 
 target("orangutan")
     set_kind("binary")

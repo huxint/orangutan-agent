@@ -36,6 +36,7 @@
 #include <oran/core/result.hpp>
 #include <oran/permission/approval_broker.hpp>
 #include <oran/permission/audit.hpp>
+#include <oran/tool/workspace.hpp>
 
 namespace orangutan::bootstrap {
 
@@ -57,6 +58,13 @@ struct RuntimeAssemblyOptions {
   /// runner + `append_event` reuse the same handful of prepared
   /// statements, so the default mirrors `--audit-init`.
   std::size_t audit_statement_cache_capacity{4};
+  /// Workspace policy options threaded into the assembly-owned
+  /// `tool::Workspace`. Extra read/write roots widen which canonical
+  /// roots count as "inside the workspace" for `file.read` / `file.search`
+  /// / `directory.list` and `file.write` / `file.edit` / `file.delete`
+  /// respectively. The strings are passed through verbatim;
+  /// `tool::Workspace::create` canonicalises and validates each root.
+  tool::WorkspaceOptions workspace_options{};
 };
 
 /// Per-process permission + audit infrastructure. Move-only; only
@@ -106,6 +114,15 @@ public:
   /// disabled; the resolved absolute path otherwise (relative to the
   /// workspace).
   [[nodiscard]] std::string_view audit_path() const noexcept;
+
+  /// Reference to the assembly-owned `tool::Workspace`. The workspace
+  /// is constructed from the bootstrap-supplied workspace root plus the
+  /// config-derived `RuntimeAssemblyOptions::workspace_options`; future
+  /// tool-dispatch sites thread this reference through
+  /// `tool::DispatchContext::workspace`. The reference is stable for the
+  /// lifetime of the assembly; the assembly outlives every borrower.
+  [[nodiscard]] tool::Workspace& workspace() noexcept;
+  [[nodiscard]] const tool::Workspace& workspace() const noexcept;
 
 private:
   struct Impl;
