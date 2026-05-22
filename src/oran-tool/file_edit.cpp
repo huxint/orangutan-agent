@@ -11,9 +11,11 @@
 #include <oran/tool/builtins.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <expected>
 #include <format>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -34,8 +36,14 @@ namespace {
 
 constexpr std::string_view kFileEditSchema =
     R"({"type":"object","properties":{"path":{"type":"string"},"old_string":{"type":"string"},)"
-    R"("new_string":{"type":"string"},"replace_all":{"type":"boolean"}},)"
+    R"("new_string":{"type":"string"},"replace_all":{"type":"boolean"},)"
+    R"("max_bytes":{"type":"integer","minimum":1,"maximum":16777216}},)"
     R"("required":["path","old_string","new_string"],"additionalProperties":false})";
+
+/// Hard ceiling for text mutation payloads. Mirrors the current
+/// `io::ReadTextOptions::max_bytes` default so `file.edit` cannot write a file
+/// larger than a follow-up `file.read` can ingest.
+constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
 
 /// Indexes of every non-overlapping occurrence of `needle` in `haystack`, in
 /// order. Non-overlapping is the natural fit for "replace": chained matches in
@@ -48,6 +56,52 @@ constexpr std::string_view kFileEditSchema =
     positions.push_back(pos);
   }
   return positions;
+}
+
+[[nodiscard]] core::Result<std::uintmax_t> parse_max_bytes(const nlohmann::json& parsed) {
+  if (!parsed.contains("max_bytes")) {
+    return kMaxWriteBytes;
+  }
+
+  const auto& raw = parsed["max_bytes"];
+  if (!raw.is_number_integer() || raw.is_number_float()) {
+    return std::unexpected(core::Error::invalid_argument("file.edit: `max_bytes` must be a positive integer"));
+  }
+
+  std::uint64_t value = 0U;
+  if (raw.is_number_unsigned()) {
+    value = raw.get<std::uint64_t>();
+  } else {
+    const auto signed_value = raw.get<std::int64_t>();
+    if (signed_value <= 0) {
+      return std::unexpected(core::Error::invalid_argument("file.edit: `max_bytes` must be between 1 and 16777216")
+                                 .with("value", std::to_string(signed_value)));
+    }
+    value = static_cast<std::uint64_t>(signed_value);
+  }
+
+  if (value == 0U || value > kMaxWriteBytes) {
+    return std::unexpected(core::Error::invalid_argument("file.edit: `max_bytes` must be between 1 and 16777216")
+                               .with("value", std::to_string(value))
+                               .with("max_bytes", std::to_string(kMaxWriteBytes)));
+  }
+  return static_cast<std::uintmax_t>(value);
+}
+
+[[nodiscard]] core::Result<std::size_t> replacement_size(std::size_t source_size,
+                                                         std::size_t old_size,
+                                                         std::size_t new_size,
+                                                         std::size_t replacement_count) {
+  if (new_size <= old_size) {
+    return source_size - ((old_size - new_size) * replacement_count);
+  }
+
+  const auto delta = new_size - old_size;
+  const auto available = std::numeric_limits<std::size_t>::max() - source_size;
+  if (replacement_count > available / delta) {
+    return std::unexpected(core::Error::invalid_argument("file.edit: replacement output is too large"));
+  }
+  return source_size + (delta * replacement_count);
 }
 
 /// Rebuilds the contents by stitching the unchanged slices around each match
@@ -108,6 +162,11 @@ constexpr std::string_view kFileEditSchema =
     replace_all = parsed["replace_all"].get<bool>();
   }
 
+  auto max_bytes = parse_max_bytes(parsed);
+  if (!max_bytes) {
+    co_return std::unexpected(std::move(max_bytes).error());
+  }
+
   auto path = parsed["path"].get<std::string>();
   auto old_string = parsed["old_string"].get<std::string>();
   auto new_string = parsed["new_string"].get<std::string>();
@@ -119,7 +178,7 @@ constexpr std::string_view kFileEditSchema =
     co_return std::unexpected(core::Error::invalid_argument("file.edit: `old_string` and `new_string` are identical"));
   }
 
-  auto contents = co_await io::read_text_file(ctx.executor, path);
+  auto contents = co_await io::read_text_file(ctx.executor, path, io::ReadTextOptions{.max_bytes = *max_bytes});
   if (!contents) {
     co_return std::unexpected(std::move(contents).error());
   }
@@ -144,6 +203,18 @@ constexpr std::string_view kFileEditSchema =
   } else {
     target_positions = {positions.front()};
   }
+
+  auto output_size = replacement_size(contents->size(), old_string.size(), new_string.size(), target_positions.size());
+  if (!output_size) {
+    co_return std::unexpected(std::move(output_size).error().with("path", path));
+  }
+  if (static_cast<std::uintmax_t>(*output_size) > *max_bytes) {
+    co_return std::unexpected(core::Error::invalid_argument("file.edit: output exceeds max_bytes")
+                                  .with("path", path)
+                                  .with("output_bytes", std::to_string(*output_size))
+                                  .with("max_bytes", std::to_string(*max_bytes)));
+  }
+
   auto replaced = apply_replacements(*contents, old_string, new_string, target_positions);
   io::WriteTextOptions write_opts{.mode = io::WriteMode::truncate, .atomic = true};
   auto written = co_await io::write_text_file(ctx.executor, std::move(path), std::move(replaced), write_opts);
@@ -164,10 +235,11 @@ core::Result<void> register_file_edit(Registry& registry) {
       .name = std::string{kFileEditName},
       .description = "Edit a UTF-8 text file by replacing `old_string` with `new_string`. Input: "
                      "{\"path\": <string>, \"old_string\": <string>, \"new_string\": <string>, "
-                     "\"replace_all\"?: bool (default false)}. By default the call fails with "
-                     "`conflict` if `old_string` is not unique; pass `replace_all=true` to rewrite "
-                     "every occurrence. Returns a brief confirmation listing the number of "
-                     "replacements applied.",
+                     "\"replace_all\"?: bool (default false), \"max_bytes\"?: positive integer "
+                     "<= 16777216 (default 16777216)}. By default the call fails with `conflict` "
+                     "if `old_string` is not unique; pass `replace_all=true` to rewrite every "
+                     "occurrence. Returns a brief confirmation listing the number of replacements "
+                     "applied.",
       .input_schema_json = std::string{kFileEditSchema},
       .required_capabilities = {core::Capability::edit_file},
   };

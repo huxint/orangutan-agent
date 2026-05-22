@@ -44,7 +44,7 @@ This file is a **routing index**. Rules → `docs/rules/`. Architecture → `doc
 | File-view system / range reads / fingerprints / caches | `docs/product-specs/0011-file-view-and-caching.md`, `docs/design-docs/io-runtime.md` (Future Slices) | — |
 | Workspace + path policy (file-tool confinement) | `docs/product-specs/0013-workspace-and-path-policy.md`, `docs/design-docs/tool-runtime.md` (Workspace Handle) | — |
 | Permissions surface | `docs/product-specs/0008-permissions.md` | — |
-| Prompts / tool catalog / skill body / cache | `docs/design-docs/api-portability.md`, `docs/design-docs/tool-runtime.md`, `docs/product-specs/0009-skills.md`, `docs/product-specs/0016-prompt-and-tool-catalog-cache.md` | `docs/rules/prompt-design.md` |
+| Prompts / tool catalog / skill body / cache / approval text | `docs/design-docs/api-portability.md`, `docs/design-docs/tool-runtime.md`, `docs/design-docs/agent-platform.md`, `docs/product-specs/0009-skills.md`, `docs/product-specs/0014-structured-tool-output.md`, `docs/product-specs/0015-blocking-hook-decisions.md`, `docs/product-specs/0016-prompt-and-tool-catalog-cache.md`, `docs/product-specs/0017-fake-provider-first-agent-loop.md`, `docs/product-specs/0018-first-loop-observability.md` | `docs/rules/prompt-design.md` |
 | Channels (QQ / Discord / Slack / Webhook / …) | `docs/design-docs/channel-abstraction.md`, `docs/product-specs/0003-multi-platform-channels.md` | — |
 | LLM provider portability | `docs/design-docs/api-portability.md` | — |
 | Memory (working / session / long-term / shared) | `docs/design-docs/memory-system.md`, `docs/product-specs/0005-memory-system.md` | — |
@@ -63,6 +63,7 @@ This file is a **routing index**. Rules → `docs/rules/`. Architecture → `doc
 | Static analysis | — | `docs/rules/static-analysis.md` |
 | Git / branch / PR workflow | — | `docs/rules/workflow.md` |
 | External references | `docs/references/` | — |
+| Deep-review artifacts (naming, version stamp, delete-on-close) | — | `docs/rules/deep-review.md` |
 | Legacy `orangutan/` lessons | `docs/references/orangutan-legacy-audit.md` | — |
 
 ## Working Posture
@@ -72,6 +73,7 @@ This file is a **routing index**. Rules → `docs/rules/`. Architecture → `doc
 - Hooks are pluggable, not magical — all lifecycle points enumerated in [`permissions-and-hooks.md`](docs/design-docs/permissions-and-hooks.md).
 - Every library has `tests/` and `bench/` neighbours.
 - Exec plans are not the default — see [`PLANS_GUIDE.md`](docs/PLANS_GUIDE.md); `STATUS.md` always names the active plan or says `none` + why.
+- Do not conflate prompt concepts: this file / `AGENTS.md` routes the development agent, while [`prompt-design.md`](docs/rules/prompt-design.md) governs prompt bytes Orangutan will emit at runtime. Deleted review artifacts and `/tmp/...` notes are provenance only after their findings are copied into specs or the tracker; see [`deep-review.md`](docs/rules/deep-review.md) for the lifecycle (version stamp on creation, delete-on-close).
 
 ## Quick Commands
 

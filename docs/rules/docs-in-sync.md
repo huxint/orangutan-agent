@@ -31,6 +31,7 @@ same change:
 | New / changed file layout convention                   | `docs/ARCHITECTURE.md` "Intended Repository Shape", relevant README under `include/`, `src/`, `tests/`, `bench/`, `skeleton/` |
 | New / changed test or bench bucket                      | `tests/README.md` or `bench/README.md`, plus `docs/rules/testing-and-bench.md` if conventions shift |
 | New rule, removed rule, or relaxed enforcement         | the affected `docs/rules/*.md`, `docs/rules/README.md` table |
+| New / closed deep-review absorption                    | `docs/rules/deep-review.md` (lifecycle), `docs/exec-plans/tech-debt-tracker.md` (the `review/deep-<YYYY-MM-DD>` row), and the deletion of the review artifact in the same slice that closes the last absorbed finding |
 | New script under `scripts/`                              | The README that references it, plus `Makefile` if it's a make target |
 | New CI workflow / job                                    | `docs/CICD.md`, `docs/SUPPLY_CHAIN_SECURITY.md` if applicable |
 | Anything user-visible                                    | `docs/releases/feature-release-notes.md` |

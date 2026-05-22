@@ -9,9 +9,28 @@
 > **Why this rule is short.** Prompt engineering evolves with the
 > features it serves. This rule captures the invariants that hold today
 > (cache discipline) and points at a study reference for the patterns we
-> have not yet had to design. Rows are added as prompt-bearing libraries
-> land (agent loop → tool registry render → skill loader → memory
-> framing → channel framing).
+> have not yet had to design. Rows are added as Orangutan-owned
+> prompt-bearing libraries land (agent loop → tool registry render →
+> skill loader → memory framing → channel framing).
+
+## Runtime Prompt Surfaces
+
+This table routes prompt surfaces that the Orangutan runtime will emit
+to an upstream model. It is not the tutorial for the development-agent
+prompt framework (`CLAUDE.md` / `AGENTS.md`); it only governs prompt
+bytes produced by this project.
+
+| Surface | Canonical file(s) | Owns |
+| --- | --- | --- |
+| Invariants / cache section membership | This rule | Section order, cacheability rules, "no clocks / request IDs in the cached prefix", stable-input renderer discipline. |
+| Prompt builder + rendered prompt contract | [`../product-specs/0016-prompt-and-tool-catalog-cache.md`](../product-specs/0016-prompt-and-tool-catalog-cache.md) | `oran-prompt`, `prompt::Builder`, `CacheSection`, prefix hash, active/deferred catalog, `tool.search`, prompt-cache stability bench. |
+| Provider cache mapping | [`../design-docs/api-portability.md`](../design-docs/api-portability.md) | Adapter mapping from `RenderedPrompt` to vendor cache APIs and cache-key versioning. |
+| Tool catalog / deferred tools | [`../design-docs/tool-runtime.md`](../design-docs/tool-runtime.md), [`../product-specs/0012-tool-scheduler-and-state.md`](../product-specs/0012-tool-scheduler-and-state.md) | Tool catalog shape, deferred-tool promotion state, bounded caches used by renderers and schedulers. |
+| Structured tool results in prompts | [`../product-specs/0014-structured-tool-output.md`](../product-specs/0014-structured-tool-output.md) | `ToolOutput { text, data, attachments, usage, is_error }`, byte caps, hook-safe redaction fields. |
+| Approval / blocking prompt text | [`../product-specs/0015-blocking-hook-decisions.md`](../product-specs/0015-blocking-hook-decisions.md), [`../design-docs/permissions-and-hooks.md`](../design-docs/permissions-and-hooks.md) | `permission_ask_rendered`, blocking decisions, canonical dispatch order before tool mutation. |
+| Skill catalog / skill bodies | [`../product-specs/0009-skills.md`](../product-specs/0009-skills.md) | Section-4 skill catalog and per-skill body constraints. |
+| Agent-loop consumer | [`../product-specs/0017-fake-provider-first-agent-loop.md`](../product-specs/0017-fake-provider-first-agent-loop.md), [`../design-docs/agent-platform.md`](../design-docs/agent-platform.md) | The first loop calls `prompt::Builder` against a fake provider before any real adapter. |
+| Prompt observability | [`../product-specs/0018-first-loop-observability.md`](../product-specs/0018-first-loop-observability.md) | Per-turn prompt prefix hash, prefix byte count, active/deferred catalog hashes, cache usage counters. |
 
 ## The Study Reference
 
@@ -172,6 +191,12 @@ When a slice introduces a new prompt-bearing artifact:
   — `CacheSection`, cache-key versioning, adapter mapping.
 - [`../design-docs/tool-runtime.md`](../design-docs/tool-runtime.md)
   — tool catalog and deferred-tool surface.
+- [`../product-specs/0016-prompt-and-tool-catalog-cache.md`](../product-specs/0016-prompt-and-tool-catalog-cache.md)
+  — builder contract, active/deferred catalog policy, cache stability bench.
+- [`../product-specs/0017-fake-provider-first-agent-loop.md`](../product-specs/0017-fake-provider-first-agent-loop.md)
+  — first consumer of `prompt::Builder`.
+- [`../product-specs/0018-first-loop-observability.md`](../product-specs/0018-first-loop-observability.md)
+  — trace fields that prove which prompt prefix and catalog were used.
 - [`../product-specs/0009-skills.md`](../product-specs/0009-skills.md)
   — skill body shape and per-skill body size cap.
 - [`../product-specs/0010-benchmark-harness.md`](../product-specs/0010-benchmark-harness.md)

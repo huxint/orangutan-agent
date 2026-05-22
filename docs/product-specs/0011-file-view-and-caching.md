@@ -124,6 +124,12 @@ Optimisations and caches come later — and only on top of this contract.
   below). When supplied, mismatch fails as `Error::conflict` with
   `reason=stale_fingerprint` and the current token in context, forcing the
   agent to re-read.
+- **`file.edit` / `file.write` size caps**: both mutation tools accept an
+  optional `max_bytes` field (default and hard ceiling 16 MiB, matching
+  `io::ReadTextOptions::max_bytes`). `file.write` refuses an oversized
+  `content` payload before touching the target path. `file.edit` applies the
+  same cap to the read and to the final replacement output, so an edit cannot
+  create text that a follow-up `file.read` would reject.
 
 ## Scope (v1.1)
 

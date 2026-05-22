@@ -26,6 +26,7 @@ Do not silently break it.
 | [`libraries.md`](libraries.md) | Approved 3rd-party libraries. |
 | [`prompt-design.md`](prompt-design.md) | Cache-section discipline for prompts; study reference for new prompt surfaces. |
 | [`investigation.md`](investigation.md) | When to spawn subagents (≤ 2) / web-search / refresh stale knowledge before retrying. |
+| [`deep-review.md`](deep-review.md) | Naming, version stamp, absorption pipeline, and delete-on-close for deep-review artifacts. |
 | [`static-analysis.md`](static-analysis.md) | GCC 16.1 `-fanalyzer` wiring, suppression rules. |
 | [`testing-and-bench.md`](testing-and-bench.md) | Tests + benches expected per change. |
 | [`workflow.md`](workflow.md) | Git, CLI tools, branch naming. |

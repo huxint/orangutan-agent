@@ -248,6 +248,13 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
   decisions. The first builder slice updates it with the adopted
   Piebald-AI shapes per the rule's "Adding A New Prompt Surface"
   checklist.
+- [`0017-fake-provider-first-agent-loop.md`](0017-fake-provider-first-agent-loop.md)
+  — `prompt::Builder` is the loop's prompt source from v1 onward;
+  the fake provider pins prompt/response behaviour before real
+  adapters exist.
+- [`0018-first-loop-observability.md`](0018-first-loop-observability.md)
+  — records `RenderedPrompt::prefix_hash`, prefix bytes,
+  active/deferred catalog hashes, and cache-token usage per turn.
 - [`0014-structured-tool-output.md`](0014-structured-tool-output.md)
   — `tool.search`'s output uses `Output::data` once that lands;
   v1 ships text-only.

@@ -44,14 +44,16 @@ inline constexpr std::string_view kFileDeleteName{"file.delete"};
 /// Register the `file.write` tool. Writes UTF-8 content to a path using
 /// `oran-io`'s coroutine helper; capability `write_file` is required.
 /// Input shape: `{"path": <string>, "content": <string>, "mode"?:
-/// "truncate"|"append"|"fail_if_exists", "create_parents"?: bool}`.
+/// "truncate"|"append"|"fail_if_exists", "create_parents"?: bool,
+/// "max_bytes"?: positive integer <= 16777216}`.
 [[nodiscard]] core::Result<void> register_file_write(Registry& registry);
 
 /// Register the `file.edit` tool. Replaces `old_string` with `new_string` in
 /// a UTF-8 text file; capability `edit_file` is required. Input shape:
 /// `{"path": <string>, "old_string": <string>, "new_string": <string>,
-/// "replace_all"?: bool}`. Returns `conflict` if `old_string` is not unique
-/// unless `replace_all` is set; `not_found` if `old_string` does not occur.
+/// "replace_all"?: bool, "max_bytes"?: positive integer <= 16777216}`.
+/// Returns `conflict` if `old_string` is not unique unless `replace_all` is
+/// set; `not_found` if `old_string` does not occur.
 [[nodiscard]] core::Result<void> register_file_edit(Registry& registry);
 
 /// Register the `file.search` tool. Scans a UTF-8 text file or (recursively)

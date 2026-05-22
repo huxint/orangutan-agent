@@ -7,21 +7,29 @@
 
 ## Snapshot
 
-- **Slice:** 33 (`xmake run orangutan` reports slice 33)
+- **Slice:** 34 (`xmake run orangutan` reports slice 34)
 - **Last completed history:**
-  [`histories/2026-05/20260522-0041-docs-agent-loop-foundation-specs.md`](histories/2026-05/20260522-0041-docs-agent-loop-foundation-specs.md)
+  [`histories/2026-05/20260522-1104-tool-write-edit-max-bytes.md`](histories/2026-05/20260522-1104-tool-write-edit-max-bytes.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
-- **Next intended slice:** TBD — slice 33 closed the deep-review
-  cancellation-polling P0 item by threading `cancellation_state`
-  into `file.search`'s `walk_and_scan` + `read_text_capped`.
+- **Next intended slice:** TBD — slice 34 closed the deep-review
+  content-size cap P0 item by adding optional `max_bytes` to
+  `file.write` and `file.edit` (default and hard ceiling 16 MiB),
+  cleaned the tracked `tests/tool/test_registry.cpp`
+  missing-field-initializer warnings, deleted the stale root
+  deep-review artifact after its actionable findings were absorbed,
+  clarified that `rules/prompt-design.md` governs runtime
+  prompts emitted by Orangutan, not the development-agent routing
+  prompt in `CLAUDE.md` / `AGENTS.md`, and codified the deep-review
+  artifact lifecycle in [`rules/deep-review.md`](rules/deep-review.md)
+  (versioned name + first-line stamp on creation, delete-in-same-slice
+  on absorption, no `/tmp/...` paths in live current-state docs).
   Remaining deep-review P0 surface in
   `exec-plans/tech-debt-tracker.md` under the
-  `deep-review-2026-05-21` group: content-size caps on
-  `file.write`/`file.edit`, transparent hashing on
-  `Registry::entries_`, and JSON-schema validation at
+  `deep-review-2026-05-21` group: transparent hashing on
+  `Registry::entries_` and JSON-schema validation at
   `Registry::add`. The next-likely tool-side slices remain
   unchanged: the first provider adapter (Anthropic Messages —
   multi-slice, needs an exec plan and `oran-http` + libcurl
@@ -34,11 +42,9 @@
   recursive whole-project list (not just single-level children).
   Future built-in slices should not double down on per-kind splits
   like `directory.remove` or single-level enumeration. The
-  *future-feature* roadmap surfaced by the second deep review
-  (`/tmp/orangutan-refactor-agent-tool-review-2026-05-21.md`) and the
-  companion agent-loop foundation note
-  (`/tmp/orangutan-agent-loop-foundation-2026-05-21.md`) now lives
-  in eight new product specs:
+  *future-feature* roadmap surfaced by the second 2026-05-21 deep
+  review (Refactor-Agent Tool Review) and the companion
+  agent-loop foundation note now lives in eight new product specs:
   [`0011-file-view-and-caching.md`](product-specs/0011-file-view-and-caching.md)
   (range reads, fingerprints, `if_version`, bounded caches),
   [`0012-tool-scheduler-and-state.md`](product-specs/0012-tool-scheduler-and-state.md)
@@ -88,7 +94,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 19 cases / 148 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
 - `oran-hook`: 15 cases / 97 assertions.
-- `oran-tool`: 90 cases / 716 assertions.
+- `oran-tool`: 92 cases / 750 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 44 cases / 140 assertions.
 
@@ -97,9 +103,10 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 Lifted from [`exec-plans/tech-debt-tracker.md`](exec-plans/tech-debt-tracker.md).
 Closed entries do *not* live here — the tracker is canonical.
 
-- 2026-05-21 — Deep-review backlog (`orangutan-deep-review.md`): slice 31
-  closed the four rank-0 items; ~20 follow-ups remain, grouped P0/P1/P2/P3
-  in the tracker with file:line references back to the review.
+- 2026-05-21 — Deep-review backlog: the stale root review artifact was
+  deleted after its actionable findings were absorbed into the tracker and
+  specs 0011-0018. Slices 31-34 closed the rank-0 items plus the first P0
+  follow-ups; remaining follow-ups are grouped P0/P1/P2/P3 in the tracker.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on
   the documented reference hardware (8-core / NVMe / native Linux);

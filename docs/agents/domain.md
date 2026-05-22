@@ -18,6 +18,17 @@ Read in this order, stopping when you have enough to act:
 6. **`docs/rules/critical-rules.md`** — non-negotiable C++/build constraints. Read before any code edit.
 7. **`docs/rules/<area>.md`** — area-specific rules (compile-budget, error-handling, async-and-concurrency, code-style, etc.) per the `AGENTS.md` routing table.
 
+Deleted root review artifacts and `/tmp/...` review notes are not live domain
+docs. Treat old history links to them as provenance only; current implementation
+guidance lives in `docs/STATUS.md`, `docs/exec-plans/tech-debt-tracker.md`, and
+the design/spec/rule files linked from `AGENTS.md`. The lifecycle for any
+future deep-review artifact (version stamp on creation, deletion the same slice
+that closes the last absorbed finding) is `docs/rules/deep-review.md`.
+
+Keep prompt terminology separate: `AGENTS.md` / `CLAUDE.md` are the
+development-agent routing framework, while `docs/rules/prompt-design.md` is the
+rule for prompt text that Orangutan itself will emit at runtime.
+
 ## Skill-vocabulary → repo-equivalent
 
 | Skill says…                       | In this repo, read…                                                                  |
@@ -26,7 +37,7 @@ Read in this order, stopping when you have enough to act:
 | Glossary / domain language        | The `AGENTS.md` "Conventions At A Glance" table and the relevant `docs/rules/*.md`   |
 | `docs/adr/`                       | `docs/design-docs/` (architectural decisions) + `docs/rules/` (binding constraints)  |
 | ADR-0007 (or any numbered ADR)    | The matching design-doc filename, e.g. `docs/design-docs/async-model.md`             |
-| Past decisions / "why we do X"    | `docs/design-docs/core-beliefs.md`, `docs/histories/`, `docs/references/`            |
+| Past decisions / "why we do X"    | `docs/design-docs/core-beliefs.md`, `docs/histories/`, `docs/references/`; deleted review artifacts are provenance only |
 
 ## Layout
 
