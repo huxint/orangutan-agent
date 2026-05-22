@@ -3,11 +3,14 @@
 ## User Problem
 
 `docs/SECURITY.md` promises file tools are confined to the workspace root unless
-explicitly overridden. Today they are not: every built-in file tool reads `path`
-straight from the JSON input and calls `oran-io` without canonicalisation,
-traversal checks, or symlink policy. Permission rules can gate a *capability*
-or a *name*, but once a write is allowed it can land anywhere the host process
-can write to.
+explicitly overridden. Before slice 37 every built-in file tool read `path`
+straight from the JSON input and called `oran-io` without canonicalisation,
+traversal checks, or symlink policy. Slice 37 adds the resolver foundation and
+migrates `file.read` when `DispatchContext::workspace` is supplied; the
+remaining built-ins still need the same migration. Permission rules can gate a
+*capability* or a *name*, but once a write is allowed it can land anywhere the
+host process can write to until this spec's write/edit/delete migration is
+complete.
 
 For a coding agent, "ask before write" is not a substitute for a workspace
 boundary. The cost of an escape — overwriting `~/.ssh/authorized_keys`,
@@ -18,7 +21,8 @@ the same resolver.
 Today's seams that motivate this spec:
 
 - `file.write` / `file.edit` / `file.delete` accept raw path strings and call
-  `io::*` directly; the dispatch context has no workspace handle. Evidence:
+  `io::*` directly; `DispatchContext::workspace` exists as of slice 37 but
+  those mutating tools have not adopted it yet. Evidence:
   `src/oran-tool/file_write.cpp:86-94`, `src/oran-tool/file_edit.cpp:122-149`,
   `src/oran-tool/file_delete.cpp` (slice 30).
 - `file.search` and `file.delete` disagree on symlink behaviour. The root path
@@ -35,6 +39,22 @@ Today's seams that motivate this spec:
 
 This spec turns the workspace into a first-class platform service so that
 every filesystem tool — current and future — resolves paths the same way.
+
+## Status
+
+**Slice 37 (2026-05-22):** `tool::Workspace` is now shipped in
+`oran-tool`. It canonicalises the primary root and optional extra read/write
+roots, exposes `resolve_read`, `resolve_write`, `resolve_delete`, and
+`resolve_list`, returns `ResolvedPath` strings/flags without exposing
+`<filesystem>` in the public header, and rejects traversal or symlink escapes
+with the context reasons this spec names. `DispatchContext` carries an
+optional non-owning `Workspace*`; `file.read` uses it when supplied.
+
+Still pending: `file.write`, `file.edit`, `file.delete`, `file.search`, and
+`directory.list` adoption; config parsing for
+`permissions.workspace.extra_read_roots` / `extra_write_roots`; bootstrap
+ownership; audit metadata; and moving resolution to the pre-permission
+dispatch boundary.
 
 ## Scope (v1)
 
@@ -126,6 +146,12 @@ creation is allowed for this resolve call.
   "Atomic Writes" already calls this out separately.
 
 ## Acceptance Criteria
+
+Slice 37 satisfies the resolver-level portions of criteria 1-3 and 8 inside
+`tests/tool/test_workspace.cpp`, verifies independent `Workspace` values toward
+criterion 6, and verifies `file.read` consumes the workspace seam when
+provided. Criteria 4-6 plus bootstrap-owned config wiring remain open until
+every filesystem built-in resolves before permission/audit.
 
 1. **Traversal rejection.** A `file.write` whose `path` resolves via `..` to a
    point outside the workspace root returns `Error::permission_denied` with

@@ -7,29 +7,32 @@
 
 ## Snapshot
 
-- **Slice:** 36 (`xmake run orangutan` reports slice 36)
+- **Slice:** 37 (`xmake run orangutan` reports slice 37)
 - **Last completed history:**
-  [`histories/2026-05/20260522-1456-tool-registry-transparent-lookup.md`](histories/2026-05/20260522-1456-tool-registry-transparent-lookup.md)
+  [`histories/2026-05/20260522-1529-tool-workspace-foundation.md`](histories/2026-05/20260522-1529-tool-workspace-foundation.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
-- **Next intended slice:** TBD — slice 36 closed the remaining
-  deep-review P0 on `Registry::entries_`: the registry map now uses
-  transparent string hashing, so `remove`, `find`, and
-  `dispatch` can look up `std::string_view` names without allocating
-  a temporary `std::string` key. The next-likely tool-side slices are
-  the first provider adapter (Anthropic Messages —
-  multi-slice, needs an exec plan and `oran-http` + libcurl
-  wiring first), blocking hook semantics with veto (still gated
-  on `oran-agent`), or wiring `check-compile-budget.sh` into
-  `scripts/ci.sh` (the slice-28 tech-debt entry covers the
-  preconditions). The current `file.delete` and `directory.list`
-  shapes are expected to be re-shaped in a later refactor: one
-  unified delete tool covering both files and folders, and a
-  recursive whole-project list (not just single-level children).
-  Future built-in slices should not double down on per-kind splits
-  like `directory.remove` or single-level enumeration. The
+- **Next intended slice:** Continue spec 0013 — slice 37 shipped
+  `tool::Workspace` plus the interim `DispatchContext::workspace`
+  seam and migrated `file.read` when that workspace pointer is
+  supplied. The remaining workspace work is to thread the resolver
+  through `file.write`, `file.edit`, `file.delete`, `file.search`, and
+  `directory.list`, then move resolution/audit metadata to the
+  pre-permission dispatch boundary and wire config/bootstrap ownership
+  for `permissions.workspace.extra_{read,write}_roots`. The first
+  provider adapter (Anthropic Messages) remains a multi-slice effort
+  that needs an exec plan plus `oran-http` + libcurl wiring first;
+  blocking hook semantics with veto are still gated on `oran-agent`;
+  and wiring `check-compile-budget.sh` into `scripts/ci.sh` remains
+  gated by the slice-28 reference-hardware precondition. The current
+  `file.delete` and `directory.list` shapes are expected to be
+  re-shaped in a later refactor: one unified delete tool covering both
+  files and folders, and a recursive whole-project list (not just
+  single-level children). Future built-in slices should not double
+  down on per-kind splits like `directory.remove` or single-level
+  enumeration. The
   *future-feature* roadmap surfaced by the second 2026-05-21 deep
   review (Refactor-Agent Tool Review) and the companion
   agent-loop foundation note now lives in eight new product specs:
@@ -82,7 +85,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 19 cases / 148 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
 - `oran-hook`: 15 cases / 97 assertions.
-- `oran-tool`: 94 cases / 760 assertions.
+- `oran-tool`: 101 cases / 834 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 44 cases / 140 assertions.
 

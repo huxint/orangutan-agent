@@ -43,8 +43,12 @@ Planned secret slice:
 
 - `shell.exec` runs subprocesses with the runtime's UID. We do not run as root and
   refuse to start if running as root unless `--allow-root` is set.
-- Workspace-scoped file operations: `oran-tool-file` constrains writes to the
-  workspace root unless explicitly overridden.
+- Workspace-scoped file operations: slice 37 introduces `tool::Workspace` and
+  `file.read` uses it when the runtime supplies `DispatchContext::workspace`.
+  Full write/edit/delete/search/list confinement, bootstrap ownership, and
+  `permissions.workspace.extra_{read,write}_roots` config wiring are still
+  tracked by [`product-specs/0013-workspace-and-path-policy.md`](product-specs/0013-workspace-and-path-policy.md);
+  do not treat workspace confinement as complete until that migration closes.
 - Hardening flags compiled in by default:
   - `_FORTIFY_SOURCE=3`
   - `-fstack-protector-strong`

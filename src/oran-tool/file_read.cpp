@@ -16,6 +16,7 @@
 #include <oran/core/tool_def.hpp>
 #include <oran/io/file.hpp>
 #include <oran/tool/registry.hpp>
+#include <oran/tool/workspace.hpp>
 
 namespace orangutan::tool {
 
@@ -43,6 +44,13 @@ constexpr std::string_view kFileReadSchema =
   }
 
   auto path = parsed["path"].get<std::string>();
+  if (ctx.workspace != nullptr) {
+    auto resolved = ctx.workspace->resolve_read(path);
+    if (!resolved) {
+      co_return std::unexpected(std::move(resolved).error());
+    }
+    path = std::move(resolved->absolute_path);
+  }
   auto contents = co_await io::read_text_file(ctx.executor, std::move(path));
   if (!contents) {
     co_return std::unexpected(std::move(contents).error());

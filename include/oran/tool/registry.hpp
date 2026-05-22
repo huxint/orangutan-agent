@@ -78,6 +78,8 @@
 
 namespace orangutan::tool {
 
+class Workspace;
+
 /// One tool's response. The structured JSON / attachment / cost surface from
 /// the design doc lands when a tool genuinely needs them; the first built-in
 /// (`file.read`) is text-only so this slice keeps the shape minimal.
@@ -137,6 +139,11 @@ struct DispatchContext {
   /// reported by sinks are logged into the publish outcome but do
   /// not change the dispatch result.
   hook::Bus* bus{nullptr};
+  /// Optional workspace resolver for file built-ins. The pointer is
+  /// non-owning; bootstrap/agent runtime owns the workspace value and keeps it
+  /// alive for the dispatch. Slice 37 migrates `file.read` to this seam; the
+  /// remaining filesystem built-ins follow in the next workspace slice.
+  Workspace* workspace{nullptr};
   /// Per-process scope key the audit row gets stamped with. See
   /// `docs/design-docs/secrets-and-state.md` "Identity And Scope".
   std::string scope_key;

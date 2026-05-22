@@ -200,6 +200,19 @@ enum class Capability {
 > hashing, and `remove`, `find`, and `dispatch` call `entries_.find`
 > with the incoming `std::string_view` directly instead of allocating
 > a temporary `std::string` key for each lookup.
+> Slice 37 (2026-05-22) starts spec 0013's workspace-path policy:
+> `<oran/tool/workspace.hpp>` exposes `tool::Workspace`,
+> `WorkspaceOptions`, `WriteIntent`, and `ResolvedPath` without pulling
+> `<filesystem>` into the public header; `Workspace::create`
+> canonicalises the primary root plus extra read/write roots, and the
+> four intent-specific entry points reject traversal with
+> `reason=outside_workspace`, read/list symlink escapes with
+> `reason=symlink_escape`, and mutating symlink paths with
+> `reason=symlink_target`. `DispatchContext` now carries an optional
+> non-owning `Workspace*`; `file.read` resolves its input through
+> `resolve_read` when that pointer is supplied. The remaining five
+> filesystem built-ins, bootstrap config ownership, audit metadata, and
+> pre-permission resolution move in follow-up workspace slices.
 
 A tool's `required_capabilities` list is **inspected at registration**. The permission
 engine knows the universe of capabilities a tool might use; the tool cannot smuggle in
@@ -405,22 +418,33 @@ See `permissions-and-hooks.md` for sink kinds.
 - Tools that call `provider::System::send` themselves to "ask another model". That's
   agent territory; use `agent.spawn` or the orchestration tools.
 
-## Workspace Handle (Forward-Looking)
+## Workspace Handle
 
-Today's `DispatchContext` accepts raw `path` strings; built-ins call `oran-io`
-directly. That is acceptable pre-`oran-agent` because the surface is small,
-but it is *not* the boundary the security docs promise.
+Slice 37 introduces the first workspace-policy surface, but the migration is
+not complete yet. `DispatchContext` carries an optional non-owning
+`tool::Workspace*`, and `file.read` resolves through it when supplied. The
+other filesystem built-ins still call `oran-io` with their raw input path until
+the follow-up 0013 migration slices land.
 
-The forward shape:
+Current surface and forward shape:
 
-- `tool::Workspace` (or `tool::PathPolicy`) is owned by
-  `bootstrap::RuntimeAssembly` and exposed via `DispatchContext::workspace`
-  in the interim, then promoted into `Runtime::workspace()` (capability-gated)
-  when the `tool::Runtime` handle lands.
+- `tool::Workspace` is a value type with a canonical root, extra read roots,
+  extra write roots, and four intent-specific methods:
+  `resolve_read`, `resolve_write`, `resolve_delete`, and `resolve_list`.
+- `ResolvedPath` carries the canonical absolute path string, a path relative
+  to the matching root, and resolution flags (`symlink_followed`,
+  `created_parents`, `outside_workspace_explicit_override`,
+  `override_root_index`).
+- Bootstrap ownership is still pending: the next workspace slice wires
+  `RuntimeAssembly` / config into the `DispatchContext::workspace` seam; the
+  later `tool::Runtime` handle promotes this into
+  `Runtime::workspace()` (capability-gated).
 - Every filesystem built-in resolves its input *before* permission evaluation
   via `Workspace::resolve_read` / `resolve_write` / `resolve_delete` /
   `resolve_list`. The intent is encoded in the method name; callers cannot
-  mix them up at the type level.
+  mix them up at the type level. Slice 37's `file.read` migration resolves in
+  the handler because the registry has no preflight resolver hook yet; the
+  pre-permission boundary moves in the same follow-up that adds audit metadata.
 - Symlink policy is uniform across `file.read`, `file.search`,
   `directory.list`, `file.delete`, `file.write`, and `file.edit` —
   the current divergence between `file.search`'s root-vs-nested handling and

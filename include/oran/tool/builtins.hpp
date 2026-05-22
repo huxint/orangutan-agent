@@ -37,8 +37,10 @@ inline constexpr std::string_view kDirectoryListName{"directory.list"};
 /// Stable wire name for the file-delete built-in.
 inline constexpr std::string_view kFileDeleteName{"file.delete"};
 
-/// Register the `file.read` tool. Reads UTF-8 content from a workspace path
-/// using `oran-io`'s coroutine helper; capability `read_file` is required.
+/// Register the `file.read` tool. Reads UTF-8 content using `oran-io`'s
+/// coroutine helper; when `DispatchContext::workspace` is set, the input path
+/// is first resolved through `tool::Workspace`. Capability `read_file` is
+/// required.
 [[nodiscard]] core::Result<void> register_file_read(Registry& registry);
 
 /// Register the `file.write` tool. Writes UTF-8 content to a path using

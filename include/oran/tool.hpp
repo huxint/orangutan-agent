@@ -4,3 +4,4 @@
 
 #include <oran/tool/builtins.hpp>
 #include <oran/tool/registry.hpp>
+#include <oran/tool/workspace.hpp>
