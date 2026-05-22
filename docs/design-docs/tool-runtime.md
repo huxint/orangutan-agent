@@ -232,6 +232,13 @@ enum class Capability {
 > symlinks wholesale during the walk, a stricter form of the same rule.
 > `directory.list`, bootstrap ownership, audit metadata, and the
 > pre-permission resolver boundary remain follow-up work.
+> Slice 40 (2026-05-22) migrates `directory.list` through the same interim
+> seam via `Workspace::resolve_list`, closing the per-tool half of the
+> workspace migration: every filesystem built-in (`file.read`, `file.write`,
+> `file.edit`, `file.delete`, `file.search`, `directory.list`) now resolves
+> at the handler entry. Bootstrap/config ownership for the override roots,
+> audit metadata, and moving resolution to the pre-permission dispatch
+> boundary remain follow-up structural work.
 
 A tool's `required_capabilities` list is **inspected at registration**. The permission
 engine knows the universe of capabilities a tool might use; the tool cannot smuggle in
@@ -439,12 +446,14 @@ See `permissions-and-hooks.md` for sink kinds.
 
 ## Workspace Handle
 
-Slices 37-39 introduce the first workspace-policy surface, but the migration is
-not complete yet. `DispatchContext` carries an optional non-owning
-`tool::Workspace*`; `file.read`, `file.write`, `file.edit`, `file.delete`, and
-`file.search` resolve through it when supplied. `directory.list` still calls
-its underlying filesystem helper with the raw input path until the follow-up
-0013 migration slice lands.
+Slices 37-40 closed the per-tool half of the workspace migration: every
+filesystem built-in (`file.read`, `file.write`, `file.edit`, `file.delete`,
+`file.search`, `directory.list`) resolves its input through the workspace
+seam when `DispatchContext::workspace` is supplied. The remaining work is
+structural — bootstrap-owned `Workspace` values, config wiring for
+override roots, moving resolution to the pre-permission dispatch boundary,
+and adding the resolved path / override-root metadata to the audit
+pipeline.
 
 Current surface and forward shape:
 
@@ -462,15 +471,17 @@ Current surface and forward shape:
 - Every filesystem built-in resolves its input *before* permission evaluation
   via `Workspace::resolve_read` / `resolve_write` / `resolve_delete` /
   `resolve_list`. The intent is encoded in the method name; callers cannot
-  mix them up at the type level. Slices 37-39 resolve in the handler because
+  mix them up at the type level. Slices 37-40 resolve in the handler because
   the registry has no preflight resolver hook yet; the pre-permission
   boundary moves in the same follow-up that adds audit metadata.
-- Symlink policy is now uniform for workspace-aware `file.read`, `file.write`,
-  `file.edit`, `file.delete`, and `file.search` calls (root-side, follow
-  inside-workspace, reject `symlink_escape`; nested entries during a
-  `file.search` walk continue to skip symlinks wholesale, a stricter form of
-  the same rule). `directory.list` still needs migration before workspace
-  listing semantics are governed by the same resolver.
+- Symlink policy is now uniform across the whole filesystem built-in set:
+  follow inside-workspace symlinks for `resolve_read` / `resolve_list`
+  (rejecting `symlink_escape` when the target leaves the root), and refuse
+  symlinks for `resolve_write` / `resolve_delete` (`symlink_target`).
+  Nested entries during a `file.search` walk continue to skip symlinks
+  wholesale, a stricter form of the same rule that defers the
+  workspace-aware "follow if it stays inside" enhancement to a future
+  walker.
 
 Full contract, override roots, audit fields, and acceptance criteria live in
 [`../product-specs/0013-workspace-and-path-policy.md`](../product-specs/0013-workspace-and-path-policy.md).

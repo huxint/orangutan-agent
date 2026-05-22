@@ -508,3 +508,58 @@ TEST_CASE("file.search honors extra_read_roots through the workspace seam", "[un
     REQUIRE(found->text.find("needle in the override root") != std::string::npos);
   });
 }
+
+TEST_CASE("directory.list uses DispatchContext workspace for relative listings and traversal refusal",
+          "[unit][tool][workspace][directory_list]") {
+  TempDir root{"oran-workspace-directory-list"};
+  TempDir outside{"oran-workspace-directory-list-outside"};
+  write_text(root.path() / "nested" / "a.txt", "a");
+  write_text(root.path() / "nested" / "b.txt", "bb");
+  write_text(outside.path() / "secret.txt", "outside");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_directory_list(registry).has_value());
+
+    auto workspace = make_workspace(root.path());
+    auto rules = allow_tool_rules(std::string{tool::kDirectoryListName}, core::Capability::list_directory);
+    permission::RecordingAuditSink sink;
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+
+    auto listed = co_await registry.dispatch(tool::kDirectoryListName, R"({"path":"nested"})", ctx);
+    REQUIRE(listed.has_value());
+    REQUIRE(listed->text.find("a.txt") != std::string::npos);
+    REQUIRE(listed->text.find("b.txt") != std::string::npos);
+
+    std::error_code ec;
+    const auto outside_relative_path = std::filesystem::relative(outside.path(), root.path(), ec);
+    REQUIRE(ec.value() == 0);
+    const auto escaped_input = std::format(R"({{"path":"{}"}})", outside_relative_path.string());
+    auto escaped = co_await registry.dispatch(tool::kDirectoryListName, escaped_input, ctx);
+    REQUIRE_FALSE(escaped.has_value());
+    REQUIRE(escaped.error().kind() == core::ErrorKind::permission_denied);
+    REQUIRE(context_has(escaped.error(), "reason", "outside_workspace"));
+  });
+}
+
+TEST_CASE("directory.list rejects symlink roots that escape the workspace", "[unit][tool][workspace][directory_list]") {
+  TempDir root{"oran-workspace-directory-list-symlink"};
+  TempDir outside{"oran-workspace-directory-list-symlink-outside"};
+  write_text(outside.path() / "secret.txt", "outside");
+  create_symlink_or_skip(outside.path(), root.path() / "outside-link");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_directory_list(registry).has_value());
+
+    auto workspace = make_workspace(root.path());
+    auto rules = allow_tool_rules(std::string{tool::kDirectoryListName}, core::Capability::list_directory);
+    permission::RecordingAuditSink sink;
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+
+    auto escaped = co_await registry.dispatch(tool::kDirectoryListName, R"({"path":"outside-link"})", ctx);
+    REQUIRE_FALSE(escaped.has_value());
+    REQUIRE(escaped.error().kind() == core::ErrorKind::permission_denied);
+    REQUIRE(context_has(escaped.error(), "reason", "symlink_escape"));
+  });
+}

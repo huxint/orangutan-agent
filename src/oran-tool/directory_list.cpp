@@ -6,7 +6,11 @@
 // sorts by path and applies the hidden / max-entries filters, so the tool
 // adds no scanning logic of its own — the perf surface is identical to the
 // `bench/io` coverage of `list_directory`. Slice 29 ships the registrar
-// alongside the slice-17 / 18 / 19 / 20 file-tool catalog.
+// alongside the slice-17 / 18 / 19 / 20 file-tool catalog. Slice 40 routes
+// the input path through `tool::Workspace::resolve_list` when
+// `DispatchContext::workspace` is supplied so the listing cannot escape the
+// workspace via traversal or a root-side symlink; the underlying
+// `oran-io::list_directory` semantics are unchanged.
 
 #include <oran/tool/builtins.hpp>
 
@@ -28,6 +32,7 @@
 #include <oran/core/tool_def.hpp>
 #include <oran/io/file.hpp>
 #include <oran/tool/registry.hpp>
+#include <oran/tool/workspace.hpp>
 
 namespace orangutan::tool {
 
@@ -114,6 +119,14 @@ struct ParsedInput {
   auto parsed = parse_input(input_json);
   if (!parsed) {
     co_return std::unexpected(std::move(parsed).error());
+  }
+
+  if (ctx.workspace != nullptr) {
+    auto resolved = ctx.workspace->resolve_list(parsed->path);
+    if (!resolved) {
+      co_return std::unexpected(std::move(resolved).error());
+    }
+    parsed->path = std::move(resolved->absolute_path);
   }
 
   io::ListDirectoryOptions options{
