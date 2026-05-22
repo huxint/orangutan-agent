@@ -15,8 +15,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <nlohmann/json.hpp>
+
 #include <oran/async.hpp>
 #include <oran/core/error.hpp>
+#include <oran/core/time.hpp>
 #include <oran/permission.hpp>
 #include <oran/tool.hpp>
 
@@ -66,6 +69,20 @@ void write_text(const std::filesystem::path& path, std::string_view contents) {
                              [&](const auto& entry) { return entry.first == key && entry.second == value; });
 }
 
+[[nodiscard]] bool is_hex_digest(std::string_view value) {
+  return value.size() == 64U &&
+         std::ranges::all_of(value, [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
+}
+
+[[nodiscard]] nlohmann::json path_resolution_metadata(const permission::AuditEvent& event) {
+  auto metadata = nlohmann::json::parse(event.metadata_json);
+  REQUIRE(metadata.is_object());
+  REQUIRE(metadata.contains("path_resolution"));
+  auto path_resolution = metadata["path_resolution"];
+  REQUIRE(path_resolution.is_object());
+  return path_resolution;
+}
+
 void create_symlink_or_skip(const std::filesystem::path& target, const std::filesystem::path& link) {
   std::error_code ec;
   std::filesystem::create_symlink(target, link, ec);
@@ -96,6 +113,18 @@ void create_symlink_or_skip(const std::filesystem::path& target, const std::file
   return rules;
 }
 
+[[nodiscard]] permission::RuleSet ask_tool_rules(std::string tool_name, core::Capability capability) {
+  permission::RuleSet rules;
+  rules.add(permission::Rule{
+      .verdict = permission::Verdict::ask,
+      .tool_pattern = std::move(tool_name),
+      .capability = capability,
+      .replay_max = 1,
+      .approval_ttl = std::chrono::seconds{60},
+  });
+  return rules;
+}
+
 [[nodiscard]] tool::DispatchContext make_workspace_ctx(asio::io_context& io,
                                                        permission::RuleSet& rules,
                                                        permission::AuditSink& sink,
@@ -110,6 +139,33 @@ void create_symlink_or_skip(const std::filesystem::path& target, const std::file
       .agent_key = "coder",
       .identity = "operator-1",
   };
+}
+
+[[nodiscard]] permission::ApprovalBroker make_broker() {
+  auto broker = permission::ApprovalBroker::with_random_secret();
+  REQUIRE(broker.has_value());
+  return std::move(*broker);
+}
+
+[[nodiscard]] core::Time fixed_now() noexcept {
+  using namespace std::chrono;
+  return core::Time{sys_days{year{2026} / January / day{1}}};
+}
+
+[[nodiscard]] permission::ApprovalToken grant(permission::ApprovalBroker& broker,
+                                              std::string_view tool_name,
+                                              std::string_view input,
+                                              std::string_view identity,
+                                              core::Time now) {
+  return broker.approve(
+      permission::ApprovalGrant{
+          .tool_name = tool_name,
+          .input = input,
+          .identity = identity,
+          .ttl = std::chrono::seconds{60},
+          .replay_max = 1,
+      },
+      now);
 }
 
 }  // namespace
@@ -240,6 +296,156 @@ TEST_CASE("Workspace instances keep independent roots", "[unit][tool][workspace]
   REQUIRE(left_resolved->absolute_path == (left.path() / "foo.txt").string());
   REQUIRE(right_resolved->absolute_path == (right.path() / "foo.txt").string());
   REQUIRE(left_resolved->absolute_path != right_resolved->absolute_path);
+}
+
+TEST_CASE("Registry pre-resolves workspace paths before permission evaluation and records audit metadata",
+          "[unit][tool][workspace][audit]") {
+  TempDir root{"oran-workspace-audit-deny"};
+  write_text(root.path() / "note.txt", "inside");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_read(registry).has_value());
+
+    permission::RuleSet rules;
+    rules.add(permission::Rule{
+        .verdict = permission::Verdict::deny,
+        .tool_pattern = std::string{tool::kFileReadName},
+        .capability = core::Capability::read_file,
+    });
+    permission::RecordingAuditSink sink;
+    auto workspace = make_workspace(root.path());
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+
+    auto denied = co_await registry.dispatch(tool::kFileReadName, R"({"path":"note.txt"})", ctx);
+    REQUIRE_FALSE(denied.has_value());
+    REQUIRE(denied.error().kind() == core::ErrorKind::permission_denied);
+
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::deny);
+    const auto metadata = path_resolution_metadata(sink.events()[0]);
+    REQUIRE(metadata["resolved_relative_path"] == "note.txt");
+    REQUIRE(metadata["input_path_hash"] == permission::to_hex(permission::ApprovalAuthority::input_hash("note.txt")));
+    REQUIRE(metadata["workspace_root_hash"] ==
+            permission::to_hex(permission::ApprovalAuthority::input_hash(workspace.root())));
+    REQUIRE(metadata["symlink_followed"] == false);
+    REQUIRE(metadata["created_parents"] == false);
+    REQUIRE(metadata["outside_workspace_explicit_override"] == false);
+    REQUIRE(metadata["override_root_index"].is_null());
+  });
+}
+
+TEST_CASE("Registry audit metadata records workspace override root matches", "[unit][tool][workspace][audit]") {
+  TempDir root{"oran-workspace-audit-primary"};
+  TempDir readable{"oran-workspace-audit-readable"};
+  write_text(readable.path() / "audit.log", "needle in readable root");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_read(registry).has_value());
+
+    auto workspace = make_workspace(root.path(),
+                                    tool::WorkspaceOptions{
+                                        .extra_read_roots = {readable.path().string()},
+                                    });
+    auto rules = allow_file_read_rules();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+
+    const auto input = std::format(R"({{"path":"{}"}})", (readable.path() / "audit.log").string());
+    auto read = co_await registry.dispatch(tool::kFileReadName, input, ctx);
+    REQUIRE(read.has_value());
+    REQUIRE(read->text.contains("needle in readable root"));
+
+    REQUIRE(sink.events().size() == 1);
+    const auto metadata = path_resolution_metadata(sink.events()[0]);
+    REQUIRE(metadata["resolved_relative_path"] == "audit.log");
+    REQUIRE(metadata["outside_workspace_explicit_override"] == true);
+    REQUIRE(metadata["override_root_index"] == 0);
+    REQUIRE(is_hex_digest(metadata["input_path_hash"].get<std::string>()));
+    REQUIRE(is_hex_digest(metadata["workspace_root_hash"].get<std::string>()));
+  });
+}
+
+TEST_CASE("Registry audits path policy failures before ask approval and does not spend replay",
+          "[unit][tool][workspace][audit][approval]") {
+  TempDir root{"oran-workspace-audit-fail"};
+  TempDir outside{"oran-workspace-audit-fail-outside"};
+  write_text(outside.path() / "secret.txt", "outside");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_read(registry).has_value());
+
+    auto workspace = make_workspace(root.path());
+    auto rules = ask_tool_rules(std::string{tool::kFileReadName}, core::Capability::read_file);
+    permission::RecordingAuditSink sink;
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+
+    std::error_code ec;
+    const auto outside_relative_path = std::filesystem::relative(outside.path() / "secret.txt", root.path(), ec);
+    REQUIRE(ec.value() == 0);
+    const auto input = std::format(R"({{"path":"{}"}})", outside_relative_path.string());
+
+    auto broker = make_broker();
+    const auto now = fixed_now();
+    const auto token = grant(broker, tool::kFileReadName, input, "operator-1", now);
+    ctx.approval_broker = &broker;
+    ctx.approval_token = &token;
+    ctx.now = now;
+
+    auto denied = co_await registry.dispatch(tool::kFileReadName, input, ctx);
+    REQUIRE_FALSE(denied.has_value());
+    REQUIRE(denied.error().kind() == core::ErrorKind::permission_denied);
+    REQUIRE(context_has(denied.error(), "reason", "outside_workspace"));
+
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].verdict == permission::Verdict::ask);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::ask);
+    const auto metadata = path_resolution_metadata(sink.events()[0]);
+    REQUIRE(metadata["resolved_relative_path"].is_null());
+    REQUIRE(metadata["error_kind"] == "permission_denied");
+    REQUIRE(metadata["error_reason"] == "outside_workspace");
+    REQUIRE(is_hex_digest(metadata["input_path_hash"].get<std::string>()));
+    REQUIRE(is_hex_digest(metadata["workspace_root_hash"].get<std::string>()));
+
+    auto still_unspent = broker.check(token, tool::kFileReadName, input, "operator-1", now);
+    REQUIRE(still_unspent.has_value());
+    auto now_spent = broker.check(token, tool::kFileReadName, input, "operator-1", now);
+    REQUIRE_FALSE(now_spent.has_value());
+    REQUIRE(context_has(now_spent.error(), "reason", "replay_exhausted"));
+  });
+}
+
+TEST_CASE("Registry leaves malformed write options to the handler instead of pre-resolving the path",
+          "[unit][tool][workspace][audit]") {
+  TempDir root{"oran-workspace-malformed-write"};
+  TempDir outside{"oran-workspace-malformed-write-outside"};
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_write(registry).has_value());
+
+    auto workspace = make_workspace(root.path());
+    auto rules = allow_tool_rules(std::string{tool::kFileWriteName}, core::Capability::write_file);
+    permission::RecordingAuditSink sink;
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+
+    std::error_code ec;
+    const auto outside_relative_path = std::filesystem::relative(outside.path() / "blocked.txt", root.path(), ec);
+    REQUIRE(ec.value() == 0);
+    const auto input =
+        std::format(R"({{"path":"{}","content":"escape","create_parents":"yes"}})", outside_relative_path.string());
+
+    auto rejected = co_await registry.dispatch(tool::kFileWriteName, input, ctx);
+    REQUIRE_FALSE(rejected.has_value());
+    REQUIRE(rejected.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE_FALSE(context_has(rejected.error(), "reason", "outside_workspace"));
+    REQUIRE_FALSE(std::filesystem::exists(outside.path() / "blocked.txt"));
+
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].metadata_json == "{}");
+  });
 }
 
 TEST_CASE("file.read uses DispatchContext workspace when supplied", "[unit][tool][workspace][file_read]") {

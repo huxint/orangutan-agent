@@ -819,7 +819,9 @@ private:
     co_return std::unexpected(std::move(opts).error());
   }
 
-  if (ctx.workspace != nullptr) {
+  if (ctx.resolved_path.has_value()) {
+    opts->path = ctx.resolved_path->absolute_path;
+  } else if (ctx.workspace != nullptr) {
     auto resolved = ctx.workspace->resolve_list(opts->path);
     if (!resolved) {
       co_return std::unexpected(std::move(resolved).error());

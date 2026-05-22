@@ -151,7 +151,7 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
     expected_version = parsed["expected_version"].get<std::string>();
   }
 
-  auto path = parsed["path"].get<std::string>();
+  auto path = ctx.resolved_path.has_value() ? ctx.resolved_path->absolute_path : parsed["path"].get<std::string>();
   auto content = parsed["content"].get<std::string>();
   const auto byte_count = content.size();
   if (static_cast<std::uintmax_t>(byte_count) > *max_bytes) {
@@ -160,7 +160,7 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
                                   .with("content_bytes", std::to_string(byte_count))
                                   .with("max_bytes", std::to_string(*max_bytes)));
   }
-  if (ctx.workspace != nullptr) {
+  if (!ctx.resolved_path.has_value() && ctx.workspace != nullptr) {
     auto resolved = ctx.workspace->resolve_write(path,
                                                  WriteIntent{
                                                      .disposition = to_write_disposition(options.mode),

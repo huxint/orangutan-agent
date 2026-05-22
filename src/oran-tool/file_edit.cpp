@@ -179,7 +179,7 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
     co_return std::unexpected(std::move(max_bytes).error());
   }
 
-  auto path = parsed["path"].get<std::string>();
+  auto path = ctx.resolved_path.has_value() ? ctx.resolved_path->absolute_path : parsed["path"].get<std::string>();
   auto old_string = parsed["old_string"].get<std::string>();
   auto new_string = parsed["new_string"].get<std::string>();
 
@@ -190,7 +190,7 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
     co_return std::unexpected(core::Error::invalid_argument("file.edit: `old_string` and `new_string` are identical"));
   }
 
-  if (ctx.workspace != nullptr) {
+  if (!ctx.resolved_path.has_value() && ctx.workspace != nullptr) {
     auto resolved = ctx.workspace->resolve_write(path, WriteIntent{.disposition = WriteDisposition::truncate});
     if (!resolved) {
       co_return std::unexpected(std::move(resolved).error());

@@ -23,6 +23,7 @@
 #include <oran/permission/audit.hpp>
 #include <oran/permission/rule_set.hpp>
 
+#include "_impl/path_resolution.hpp"
 #include "_impl/schema_validation.hpp"
 
 namespace orangutan::tool {
@@ -36,13 +37,15 @@ namespace {
 [[nodiscard]] permission::AuditEvent build_event(std::string_view name,
                                                  std::string_view input_json,
                                                  const permission::Decision& decision,
-                                                 const DispatchContext& ctx) {
+                                                 const DispatchContext& ctx,
+                                                 std::string metadata_json) {
   auto event = permission::make_audit_event_from_decision(decision);
   event.scope_key = ctx.scope_key;
   event.agent_key = ctx.agent_key;
   event.tool_name = std::string{name};
   event.identity = ctx.identity;
   event.input_hash = permission::ApprovalAuthority::input_hash(input_json);
+  event.metadata_json = std::move(metadata_json);
   return event;
 }
 
@@ -186,6 +189,7 @@ std::vector<core::ToolDef> Registry::catalog() const {
 
 async::Awaitable<core::Result<Output>>
 Registry::dispatch(std::string_view name, std::string_view input_json, DispatchContext& ctx) const {
+  ctx.resolved_path.reset();
   const auto it = entries_.find(name);
   if (it == entries_.end()) {
     co_return std::unexpected(make_lookup_error(name));
@@ -211,9 +215,10 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
   // the bottom" case so static analysis sees no uninitialised path.
   core::Result<Output> result = std::unexpected(core::Error::internal("dispatch did not produce a result"));
   {
+    auto path_resolution = detail::pre_resolve_tool_path(name, input_json, ctx);
     const auto decision = ctx.rules.evaluate(name, input_json, entry.def.required_capabilities, ctx.mode);
 
-    auto event = build_event(name, input_json, decision, ctx);
+    auto event = build_event(name, input_json, decision, ctx, std::move(path_resolution.metadata_json));
 
     // Slice 21: when the verdict is `ask` AND the caller supplied both an
     // approval broker and a candidate token, consult the broker BEFORE
@@ -221,8 +226,8 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
     // rejected) rather than the pre-broker `ask`. Allow/deny paths are
     // unaffected — the broker is meaningless without an `ask`-fired rule.
     std::optional<core::Error> broker_rejection;
-    const bool broker_consulted =
-        decision.verdict == permission::Verdict::ask && ctx.approval_broker != nullptr && ctx.approval_token != nullptr;
+    const bool broker_consulted = !path_resolution.error.has_value() && decision.verdict == permission::Verdict::ask &&
+                                  ctx.approval_broker != nullptr && ctx.approval_token != nullptr;
     if (broker_consulted) {
       auto checked = ctx.approval_broker->check(*ctx.approval_token, name, input_json, ctx.identity, ctx.now);
       if (checked) {
@@ -242,6 +247,8 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
 
     if (auto recorded = co_await ctx.audit.record(std::move(event)); !recorded) {
       result = std::unexpected(std::move(recorded).error());
+    } else if (path_resolution.error.has_value()) {
+      result = std::unexpected(std::move(*path_resolution.error).with("tool", std::string{name}));
     } else {
       // Slice 25: publish `tool_dispatched` only when the handler is
       // about to run — i.e. on `allow`, or on `ask` that the broker

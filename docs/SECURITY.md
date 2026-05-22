@@ -49,10 +49,13 @@ Planned secret slice:
   the runtime supplies `DispatchContext::workspace`. Slice 41 moves
   workspace ownership into `bootstrap::RuntimeAssembly` and routes
   `permissions.workspace.extra_{read,write}_roots` from `oran-config`
-  into `tool::WorkspaceOptions`, so overrides canonicalise once at boot.
-  Audit metadata and pre-permission resolution remain tracked by
-  [`product-specs/0013-workspace-and-path-policy.md`](product-specs/0013-workspace-and-path-policy.md);
-  do not treat workspace confinement as complete until that migration closes.
+  into `tool::WorkspaceOptions`, so overrides canonicalise once at boot. Slice
+  55 moves known filesystem built-ins to registry-boundary pre-resolution:
+  path policy runs before permission evaluation, resolver failures are audited
+  under `permission::AuditEvent::metadata_json`, and handlers do not run on
+  path-policy failures. The remaining workspace work is v1.1 structure
+  (`Workspace::is_ignored` / display helper) and the future capability-gated
+  `tool::Runtime::workspace()` accessor.
 - Hardening flags compiled in by default:
   - `_FORTIFY_SOURCE=3`
   - `-fstack-protector-strong`

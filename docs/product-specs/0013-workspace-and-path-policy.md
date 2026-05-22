@@ -10,12 +10,12 @@ migrates `file.read` when `DispatchContext::workspace` is supplied; slice 38
 migrates `file.write`, `file.edit`, and `file.delete` through the same seam;
 slice 39 migrates `file.search` through `resolve_list`; slice 40 migrates
 `directory.list` through `resolve_list`. Every filesystem built-in now
-consumes the workspace seam at handler entry, so full runtime confinement
-only awaits the bootstrap-owned `Workspace` values plus the pre-permission
-resolver boundary. Permission rules can gate a *capability* or a *name*, but
-moving resolution to *before* permission evaluation still lands in a
-follow-up slice — until then, the in-handler resolve covers all current
-built-ins.
+consumes the workspace seam at handler entry, slice 41 moves workspace
+ownership into bootstrap, and slice 55 moves known filesystem built-ins to a
+pre-permission registry resolver with audit metadata. Permission rules can
+gate a *capability* or a *name*, but path confinement now sits below them:
+path-policy failures are audited with the rule verdict, then returned before
+handlers run or ask-approval replay is spent.
 
 For a coding agent, "ask before write" is not a substitute for a workspace
 boundary. The cost of an escape — overwriting `~/.ssh/authorized_keys`,
@@ -23,23 +23,22 @@ deleting a parent project file — is permanent. Path policy must live below
 permission/audit/hooks so that *every* effectful filesystem call goes through
 the same resolver.
 
-Today's seams that motivate this spec:
+Current seams and future work:
 
 - Every filesystem built-in (`file.read`, `file.write`, `file.edit`,
-  `file.delete`, `file.search`, `directory.list`) now consumes
-  `DispatchContext::workspace` at handler entry via slices 37-40. The
-  remaining structural moves — bootstrap ownership of the workspace value,
-  config wiring for the override roots, and resolution at the
-  pre-permission dispatch boundary with audit metadata — are tracked in
-  the Status block below.
-- `file.search` and `file.delete` disagree on symlink behaviour. The root path
-  in `file.search` follows symlinks (`is_regular_file` / `is_directory`,
-  `src/oran-tool/file_search.cpp:275-295`), nested entries skip them
-  (`:319-323`), and `file.delete` rejects symlinks outright via
-  `io::delete_file`'s `symlink_status` check.
-- `directory.list` and `file.search`'s "hidden" filter (dotfile-skip) is
-  enforced inside each tool — there is no shared place to put repository-wide
-  ignore policy (`.gitignore`, build directories) once it lands.
+  `file.delete`, `file.search`, `directory.list`) consumes
+  `DispatchContext::workspace` through `Registry::dispatch` when supplied;
+  handlers retain an in-handler fallback for tests and legacy callers that
+  dispatch without a workspace.
+- Root paths for `file.search` and `directory.list` use
+  `Workspace::resolve_list` and therefore follow symlinks only when the
+  canonical target remains in an allowed root. Nested entries during a
+  recursive `file.search` walk still skip symlinks wholesale, a stricter
+  policy that avoids recursive escape complexity until a shared directory
+  scanner exists.
+- `file.search`'s hidden / ignored-entry predicate is still private to that
+  tool. The shared `Workspace::is_ignored(...)` predicate waits for a second
+  recursive consumer such as `directory.scan`.
 - The future `tool::Runtime::workspace()` capability-gated accessor is
   described in [`../design-docs/tool-runtime.md`](../design-docs/tool-runtime.md)
   "ToolRuntime" but unbuilt.
@@ -96,10 +95,7 @@ roots into `tool::WorkspaceOptions` before calling `RuntimeAssembly::build`,
 so the override list canonicalises once at boot and a misconfigured root
 fails the boot rather than the first dispatched tool call. A latent bug in
 `tool::Workspace::create` that surfaced ENOENT as `Error::io` instead of
-`Error::not_found` was fixed in the same slice. The agent-loop still needs
-to thread `RuntimeAssembly::workspace()` into `DispatchContext::workspace`;
-moving resolution to the pre-permission dispatch boundary and adding audit
-metadata for the resolved path remain follow-up work.
+`Error::not_found` was fixed in the same slice.
 
 **Slice 49 (2026-05-23):** `file.search` now owns the first
 source-controlled ignore-file implementation. Recursive walks with
@@ -112,10 +108,28 @@ closes the immediate `file.search` product need in spec 0011, but the
 workspace-owned sharing point described below is still pending for the
 future `directory.scan`.
 
-Still pending: audit metadata for resolved paths / override-root index, and
-moving resolution to the pre-permission dispatch boundary. The shared
+**Slice 55 (2026-05-24):** The registry pre-permission boundary lands for
+current filesystem built-ins. `Registry::dispatch` now clears
+`DispatchContext::resolved_path` on entry, publishes `tool_before`, then
+pre-resolves known filesystem `path` inputs through `Workspace` before
+`RuleSet::evaluate`. Successful resolution stores a `ResolvedToolPath`
+(`absolute_path` for handlers plus hashed/display metadata) on the context,
+so handlers pass the already-resolved absolute path to `oran-io`. Resolver
+failures are not sent to handlers and do not spend ask-approval replay; the
+audit row still records the permission verdict/outcome plus
+`metadata_json.path_resolution` with `input_path_hash`,
+`workspace_root_hash`, `error_kind`, and `error_reason`. Successful
+resolves record `resolved_relative_path`, `symlink_followed`,
+`created_parents`, `outside_workspace_explicit_override`, and
+`override_root_index` under the same `metadata_json` object. Malformed JSON,
+missing `path`, and malformed `file.write` `mode` / `create_parents` fields
+skip pre-resolution so each handler keeps its existing schema-error contract.
+
+Still pending: The shared
 `Workspace::is_ignored(...)` predicate remains a v1.1 structure task once a
-second consumer (`directory.scan`) exists.
+second consumer (`directory.scan`) exists. The future capability-gated
+`tool::Runtime::workspace()` accessor still lands with `tool::Runtime`; the
+current dispatch context remains the interim service seam.
 
 ## Scope (v1)
 
@@ -158,12 +172,15 @@ all six current built-ins (`file.read`, `file.write`, `file.edit`,
   load time; runtime resolution checks all configured roots in declaration
   order. An override never bypasses the symlink check — it only widens which
   canonical root counts as "inside".
-- Audit visibility: every resolve emits a hook payload field (already part of
-  the file tool's existing `ToolBeforePayload` after slice 22's wiring) that
-  records `(input_path, resolved_path, workspace_root, symlink_followed,
-  override_root_index)`. The raw `input_path` is hashed, never logged in full,
-  to mirror today's `input_hash` discipline (`SHA-256(input_json)` per
-  `Registry::dispatch`).
+- Audit visibility: every registry pre-resolve writes
+  `metadata_json.path_resolution` on the existing
+  `permission::AuditEvent`. Successful resolves record
+  `(input_path_hash, resolved_relative_path, workspace_root_hash,
+  symlink_followed, created_parents, outside_workspace_explicit_override,
+  override_root_index)`. Resolver failures record the hashed input/root plus
+  `(error_kind, error_reason)` with the path-specific fields set to null.
+  The raw `input_path` is hashed, never logged in full, to mirror today's
+  `input_hash` discipline (`SHA-256(input_json)` per `Registry::dispatch`).
 
 `WriteIntent` enumerates the three modes the existing `file.write` already
 supports (`truncate`, `append`, `fail_if_exists`) plus
@@ -209,13 +226,14 @@ creation is allowed for this resolve call.
 
 ## Acceptance Criteria
 
-Slice 37 satisfies the resolver-level portions of criteria 1-3 and 8 inside
-`tests/tool/test_workspace.cpp`, verifies independent `Workspace` values toward
-criterion 6, and verifies `file.read` consumes the workspace seam when
-provided. Slice 38 adds dispatch-level regressions for `file.write`,
-`file.edit`, and `file.delete` through the workspace seam. Criteria 4-6 plus
-search/list adoption and bootstrap-owned config wiring remain open until every
-filesystem built-in resolves before permission/audit.
+Slice 55 closes the v1 acceptance criteria that can land before
+`tool::Runtime`: all current filesystem built-ins resolve through the
+registry boundary before permission evaluation when `DispatchContext::workspace`
+is supplied, audit rows carry path-resolution metadata in the existing
+`metadata_json` column, bootstrap owns the workspace value, and
+`tests/tool/test_workspace.cpp` covers the resolver matrix plus dispatch-level
+audit / approval-replay edge cases. Criterion 7 remains tied to the future
+`tool::Runtime::workspace()` accessor.
 
 1. **Traversal rejection.** A `file.write` whose `path` resolves via `..` to a
    point outside the workspace root returns `Error::permission_denied` with
@@ -235,16 +253,18 @@ filesystem built-in resolves before permission/audit.
    `permissions.workspace.extra_write_roots` override that overlaps a symlink
    chain pointing outside both roots still rejects via the symlink-escape
    path.
-4. **Audit fields.** Every dispatch on a file built-in records
-   `(input_hash, resolved_relative_path, workspace_root_hash,
-   symlink_followed, override_root_index)` in the existing
-   `permission::AuditEvent` context map. `audit.db` table stays schema-compatible
-   — fields land under the existing `context` JSON column.
-5. **Single resolver.** `file.search`'s root-path symlink behaviour matches
-   nested-entry behaviour after the migration: both go through
-   `Workspace::resolve_list` and apply the same symlink-escape rule. The
-   pre-migration divergence (`src/oran-tool/file_search.cpp:275-295` vs.
-   `:319-323`) closes in the same slice that lands `tool::Workspace`.
+4. **Audit fields.** Every dispatch on a filesystem built-in with a supplied
+   workspace records `(input_hash, resolved_relative_path,
+   workspace_root_hash, symlink_followed, created_parents,
+   outside_workspace_explicit_override, override_root_index)` in the existing
+   `permission::AuditEvent::metadata_json` extension column. Resolver failures
+   record hashed input/root plus `error_kind` and `error_reason` instead of a
+   resolved path. The `audit.db` schema stays compatible.
+5. **Single resolver.** `file.search`'s root path goes through
+   `Workspace::resolve_list` before permission evaluation. It follows
+   in-workspace symlink roots and rejects root-side symlink escapes with
+   `reason=symlink_escape`; nested entries during the recursive walk continue
+   to skip symlinks wholesale, which is stricter than following them.
 6. **Bootstrap ownership.** Constructing two `RuntimeAssembly` instances with
    different `workspace_root` arguments yields two `Workspace` values whose
    `resolve_read("foo")` returns paths under their respective roots, with no
@@ -256,7 +276,10 @@ filesystem built-in resolves before permission/audit.
    `Workspace&` on `DispatchContext`; the capability check moves to the
    accessor in the same PR that lands the runtime handle.
 8. **`tests/tool/test_workspace.cpp` ≥ 90% coverage** of the resolve-method
-   matrix (intent × symlink-or-not × inside-or-outside × override-list).
+   matrix (intent × symlink-or-not × inside-or-outside × override-list), plus
+   dispatch regressions for pre-permission audit metadata, override-root
+   metadata, path-policy failures before ask approval, and malformed write
+   options staying on the handler validation path.
 
 ## Design Doc Cross-References
 

@@ -194,8 +194,8 @@ format_header(std::string_view path, const io::ReadTextResult& result, const std
     if_version = parsed["if_version"].get<std::string>();
   }
 
-  auto path = parsed["path"].get<std::string>();
-  if (ctx.workspace != nullptr) {
+  auto path = ctx.resolved_path.has_value() ? ctx.resolved_path->absolute_path : parsed["path"].get<std::string>();
+  if (!ctx.resolved_path.has_value() && ctx.workspace != nullptr) {
     auto resolved = ctx.workspace->resolve_read(path);
     if (!resolved) {
       co_return std::unexpected(std::move(resolved).error());

@@ -218,7 +218,7 @@ enum class Capability {
 > non-owning `Workspace*`; `file.read` resolves its input through
 > `resolve_read` when that pointer is supplied. The remaining filesystem
 > built-ins, bootstrap config ownership, audit metadata, and pre-permission
-> resolution move in follow-up workspace slices.
+> resolution moved in later workspace slices.
 > Slice 38 (2026-05-22) migrates the mutating built-ins through the same
 > interim seam: `file.write` calls `resolve_write` with the current write
 > mode and parent-creation intent before the `oran-io` write, `file.edit`
@@ -228,7 +228,7 @@ enum class Capability {
 > traversal rejects with `reason=outside_workspace` and mutating symlink
 > targets reject with `reason=symlink_target`. `file.search`,
 > `directory.list`, bootstrap ownership, audit metadata, and the
-> pre-permission resolver boundary remain follow-up work.
+> pre-permission resolver boundary moved in later workspace slices.
 > Slice 39 (2026-05-22) migrates `file.search` through the same interim
 > seam: the handler resolves its input through `tool::Workspace::resolve_list`
 > when `DispatchContext::workspace` is supplied, before the executor hop
@@ -237,22 +237,31 @@ enum class Capability {
 > workspace, reject `symlink_escape`); nested entries continue to skip
 > symlinks wholesale during the walk, a stricter form of the same rule.
 > `directory.list`, bootstrap ownership, audit metadata, and the
-> pre-permission resolver boundary remain follow-up work.
+> pre-permission resolver boundary moved in later workspace slices.
 > Slice 40 (2026-05-22) migrates `directory.list` through the same interim
 > seam via `Workspace::resolve_list`, closing the per-tool half of the
 > workspace migration: every filesystem built-in (`file.read`, `file.write`,
 > `file.edit`, `file.delete`, `file.search`, `directory.list`) now resolves
 > at the handler entry. Bootstrap/config ownership for the override roots,
 > audit metadata, and moving resolution to the pre-permission dispatch
-> boundary remain follow-up structural work.
+> boundary moved in later workspace slices.
 > Slice 41 (2026-05-22) lands the bootstrap-owned half: `bootstrap::RuntimeAssembly`
 > now constructs and owns a `tool::Workspace`, and `oran-config` recognises
 > `permissions.workspace.extra_{read,write}_roots` so the override list is
 > canonicalised once at boot. Bootstrap converts the typed
 > `config::WorkspacePermissionsConfig` into `tool::WorkspaceOptions` before
 > calling `RuntimeAssembly::build`; the resulting `Workspace&` lives on the
-> assembly for the future agent loop to thread into `DispatchContext::workspace`.
-> Audit metadata and pre-permission resolution remain follow-up work.
+> assembly for callers to thread into `DispatchContext::workspace`.
+> Audit metadata and pre-permission resolution moved in slice 55.
+> Slice 55 (2026-05-24) closes that follow-up at the registry boundary:
+> `Registry::dispatch` pre-resolves known filesystem built-in `path` inputs
+> through the intent-specific `Workspace` method after `tool_before` and
+> before permission evaluation. Successful resolution stores
+> `DispatchContext::resolved_path` for handlers and writes redacted
+> `metadata_json.path_resolution` audit fields; resolver failures are audited
+> with the permission verdict but return before handlers run or ask-approval
+> replay is spent. Handlers keep their in-handler fallback for callers that
+> dispatch without a workspace.
 
 A tool's `required_capabilities` list is **inspected at registration**. The permission
 engine knows the universe of capabilities a tool might use; the tool cannot smuggle in
@@ -467,9 +476,9 @@ seam when `DispatchContext::workspace` is supplied. Slice 41 lands the
 bootstrap-owned half: `bootstrap::RuntimeAssembly` constructs and owns the
 `tool::Workspace`, and `oran-config` recognises
 `permissions.workspace.extra_{read,write}_roots` so overrides canonicalise
-once at boot rather than per-tool. The remaining work is moving resolution
-to the pre-permission dispatch boundary and threading the resolved path /
-override-root metadata into the audit pipeline.
+once at boot rather than per-tool. Slice 55 moves resolution to the registry
+pre-permission boundary and threads redacted path-resolution metadata into the
+existing audit pipeline.
 
 Current surface and forward shape:
 
@@ -483,16 +492,22 @@ Current surface and forward shape:
 - Bootstrap ownership ships in slice 41 — `RuntimeAssembly::build` now
   constructs the workspace from `RuntimeAssemblyOptions::workspace_options`
   (which bootstrap fills from `config::PermissionsConfig::workspace`) and
-  exposes it via `RuntimeAssembly::workspace()`. The agent loop will thread
-  this `Workspace&` into `DispatchContext::workspace`; the later
-  `tool::Runtime` handle promotes this into `Runtime::workspace()`
-  (capability-gated).
+  exposes it via `RuntimeAssembly::workspace()`. Callers thread this
+  `Workspace&` into `DispatchContext::workspace`; the later `tool::Runtime`
+  handle promotes this into `Runtime::workspace()` (capability-gated).
 - Every filesystem built-in resolves its input *before* permission evaluation
   via `Workspace::resolve_read` / `resolve_write` / `resolve_delete` /
   `resolve_list`. The intent is encoded in the method name; callers cannot
-  mix them up at the type level. Slices 37-40 resolve in the handler because
-  the registry has no preflight resolver hook yet; the pre-permission
-  boundary moves in the same follow-up that adds audit metadata.
+  mix them up at the type level. `Registry::dispatch` stores the successful
+  result in `DispatchContext::resolved_path`; built-in handlers consume that
+  absolute path and fall back to in-handler resolution only when a caller did
+  not supply a workspace.
+- Audit rows carry path-resolution metadata under
+  `permission::AuditEvent::metadata_json`. Successful resolves include hashed
+  input/root values, `resolved_relative_path`, symlink / parent-creation /
+  override flags, and `override_root_index`; resolver failures include the
+  hashed input/root plus `error_kind` and `error_reason`. Raw input paths are
+  not persisted.
 - Symlink policy is now uniform across the whole filesystem built-in set:
   follow inside-workspace symlinks for `resolve_read` / `resolve_list`
   (rejecting `symlink_escape` when the target leaves the root), and refuse

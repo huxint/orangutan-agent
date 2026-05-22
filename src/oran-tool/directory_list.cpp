@@ -121,7 +121,9 @@ struct ParsedInput {
     co_return std::unexpected(std::move(parsed).error());
   }
 
-  if (ctx.workspace != nullptr) {
+  if (ctx.resolved_path.has_value()) {
+    parsed->path = ctx.resolved_path->absolute_path;
+  } else if (ctx.workspace != nullptr) {
     auto resolved = ctx.workspace->resolve_list(parsed->path);
     if (!resolved) {
       co_return std::unexpected(std::move(resolved).error());

@@ -25,19 +25,24 @@
 //      `decision_reason` context entries so the agent loop can hand
 //      them straight to `ApprovalBroker::approve` without re-evaluating
 //      the rule set.
-//   5. The slice-22 hook-bus tap: when the caller supplies a
+//   5. The slice-22+25 hook-bus tap: when the caller supplies a
 //      `hook::Bus*` on the context, dispatch publishes
 //      `hook::Event::tool_before` after the registry resolves the
-//      tool def and `hook::Event::tool_after` at every exit (handler
-//      success, permission denied, broker rejection, audit error).
-//      Hooks are advisory in this slice — sinks observe but cannot
-//      veto. Sinks subscribed to other events (provider, memory, …)
-//      are unaffected.
+//      tool def, `tool_dispatched` on paths where the handler will run,
+//      `tool_error` on error exits, and `tool_after` at every exit.
+//      Hooks are advisory in this slice — sinks observe but cannot veto.
+//      Sinks subscribed to other events (provider, memory, …) are
+//      unaffected.
+//   6. The slice-55 workspace pre-resolution boundary: when a caller
+//      supplies `DispatchContext::workspace`, dispatch resolves known
+//      filesystem built-in `path` inputs before permission evaluation,
+//      carries the absolute path to handlers via `ctx.resolved_path`, and
+//      records redacted resolver metadata in the audit row.
 //
-// What this slice does NOT cover. Blocking hook semantics with veto,
-// `tool_dispatched` / `tool_error` events, output scrubbing through
-// `oran-log::redact`, and deferred-tool promotion all live in later
-// slices.
+// What this slice does NOT cover. Blocking hook semantics with veto, output
+// scrubbing through `oran-log::redact`, deferred-tool promotion, and the
+// future capability-gated `tool::Runtime::workspace()` accessor all live in
+// later slices.
 //
 // Why a single `DispatchContext` rather than the design-doc's parameter
 // fan-out. Passing `permission::RuleSet&`, `permission::AuditSink&`,
@@ -59,6 +64,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -88,6 +94,20 @@ struct Output {
   bool is_error{false};
 
   friend bool operator==(const Output&, const Output&) = default;
+};
+
+/// Registry-pre-resolved filesystem target for a built-in tool call.
+/// `absolute_path` is the path handlers pass to `oran-io`; the rest is
+/// audit/display metadata. Raw input paths are not stored here.
+struct ResolvedToolPath {
+  std::string absolute_path;
+  std::string relative_path;
+  std::string input_path_hash;
+  std::string workspace_root_hash;
+  bool symlink_followed{false};
+  bool created_parents{false};
+  bool outside_workspace_explicit_override{false};
+  std::optional<std::size_t> override_root_index{};
 };
 
 /// Per-call context the registry threads into every handler. Holds references
@@ -141,9 +161,17 @@ struct DispatchContext {
   hook::Bus* bus{nullptr};
   /// Optional workspace resolver for file built-ins. The pointer is
   /// non-owning; bootstrap/agent runtime owns the workspace value and keeps it
-  /// alive for the dispatch. Slice 37 migrates `file.read` to this seam; the
-  /// remaining filesystem built-ins follow in the next workspace slice.
+  /// alive for the dispatch. Dispatch pre-resolves current filesystem
+  /// built-ins through this seam before permission evaluation and stores the
+  /// result in `resolved_path`; handlers keep an in-handler fallback for
+  /// callers that do not supply a workspace.
   Workspace* workspace{nullptr};
+  /// Resolved path for the currently executing filesystem built-in. Set by
+  /// `Registry::dispatch` after `tool_before` and before permission
+  /// evaluation when `workspace` is supplied and the target tool is a known
+  /// filesystem built-in. Cleared on every dispatch entry so callers can
+  /// reuse a context object safely.
+  std::optional<ResolvedToolPath> resolved_path{};
   /// Per-process scope key the audit row gets stamped with. See
   /// `docs/design-docs/secrets-and-state.md` "Identity And Scope".
   std::string scope_key;
@@ -207,19 +235,28 @@ public:
   ///      input_json, identity, scope_key, agent_key, started_at}`.
   ///      Sink failures are recorded in the outcome but do not
   ///      change the dispatch path.
-  ///   3. evaluate `(name, input_json, def.required_capabilities, ctx.mode)`
-  ///      against `ctx.rules`.
-  ///   4. if the verdict is `ask` and both `ctx.approval_broker` and
-  ///      `ctx.approval_token` are set, consult
+  ///   3. if `ctx.workspace` is supplied and `name` is one of the built-in
+  ///      filesystem tools, pre-resolve its `path` field through the
+  ///      intent-specific `Workspace` method, stash the absolute path in
+  ///      `ctx.resolved_path`, and carry redacted resolver metadata for audit.
+  ///      A resolver failure is kept as the pending dispatch result.
+  ///   4. evaluate `(name, input_json, def.required_capabilities, ctx.mode)`
+  ///      against `ctx.rules` so audit still records the permission context
+  ///      for known filesystem attempts that fail path policy.
+  ///   5. if the verdict is `ask` and both `ctx.approval_broker` and
+  ///      `ctx.approval_token` are set, and no path-resolution failure is
+  ///      pending, consult
   ///      `broker.check(*token, name, input, identity, now)` and
   ///      remap the audit outcome to `approved` (broker accepted) or
   ///      `rejected` (broker rejected — the broker's `reason`
   ///      context entry replaces the rule reason in the audit row).
-  ///   5. record one `permission::AuditEvent` carrying the final
+  ///   6. record one `permission::AuditEvent` carrying the final
   ///      verdict, the (possibly remapped) outcome,
-  ///      `input_hash = SHA-256(input_json)`, and the identity
-  ///      columns from `ctx`.
-  ///   6. branch:
+  ///      `input_hash = SHA-256(input_json)`, the identity columns from
+  ///      `ctx`, and any resolver metadata under `metadata_json`.
+  ///   7. branch:
+  ///        - resolver failure -> return the resolver error; the handler is
+  ///                              not run and approval replay is not spent.
   ///        - `allow`           -> co_await `handler`, return its `Result`.
   ///        - `deny`            -> return `Error::permission_denied`
   ///                               with `reason=<rule_reason>`.
@@ -237,7 +274,7 @@ public:
   ///                               the agent loop can hand them
   ///                               straight to
   ///                               `ApprovalBroker::approve`.
-  ///   7. if `ctx.bus` is non-null, publish
+  ///   8. if `ctx.bus` is non-null, publish
   ///      `hook::Event::tool_after` with `ToolAfterPayload{name,
   ///      input_json, identity, succeeded, output_text, error_kind,
   ///      error_message, started_at, finished_at, duration}` —

@@ -7,16 +7,26 @@
 
 ## Snapshot
 
-- **Slice:** 54 (`xmake run orangutan` reports slice 54)
+- **Slice:** 55 (`xmake run orangutan` reports slice 55)
 - **Last completed history:**
-  [`histories/2026-05/20260524-0045-io-read-cache-stats.md`](histories/2026-05/20260524-0045-io-read-cache-stats.md)
+  [`histories/2026-05/20260524-0100-tool-workspace-pre-resolve-audit.md`](histories/2026-05/20260524-0100-tool-workspace-pre-resolve-audit.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 54
-  completes the public bounded-state observability surface for
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 55
+  closes spec 0013's v1 structural path-policy work inside `oran-tool`:
+  `Registry::dispatch` now pre-resolves known filesystem built-in `path`
+  inputs through `tool::Workspace` before permission evaluation, carries
+  the absolute path to handlers via `DispatchContext::resolved_path`, and
+  writes redacted resolver metadata (`input_path_hash`,
+  `resolved_relative_path`, `workspace_root_hash`, symlink / parent /
+  override flags, and resolver error kind/reason) under the existing
+  `permission::AuditEvent::metadata_json` column. Path-policy failures are
+  audited with the permission verdict but return before handlers run and
+  before ask-approval replay is spent. Slice 54
+  completed the public bounded-state observability surface for
   `oran-io`'s range-read caches: `read_text_file_ranged_cache_stats()`
   snapshots the private line-offset index and file-view cache
   `core::BoundedCache` counters (hits, misses, LRU/TTL/byte evictions,
@@ -25,9 +35,11 @@
   `read_text_file_ranged_singleflight_stats()` remains the paired
   in-flight-table snapshot. The remaining spec 0011 v1.1 item is
   watcher-backed external-edit awareness.
-  Spec 0013's
-  remaining workspace work narrows to audit metadata and moving
-  resolution to the pre-permission dispatch boundary. The first
+  Spec 0013's remaining work is no longer v1 confinement plumbing; it is
+  the v1.1 shared ignore predicate / display-helper work that waits for
+  a second recursive consumer such as `directory.scan`, plus the future
+  capability-gated `tool::Runtime::workspace()` accessor when
+  `tool::Runtime` lands. The first
   provider adapter (Anthropic Messages) remains a multi-slice
   effort that needs an exec plan plus `oran-http` + libcurl wiring
   first; blocking hook semantics with veto are still gated on
@@ -61,7 +73,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 24 cases / 171 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
 - `oran-hook`: 15 cases / 97 assertions.
-- `oran-tool`: 132 cases / 1104 assertions.
+- `oran-tool`: 136 cases / 1170 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 153 assertions.
 
