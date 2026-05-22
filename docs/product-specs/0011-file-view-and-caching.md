@@ -160,6 +160,17 @@ fingerprint but the content changes. v1.1's remaining items are the
 file-view cache, regex compile cache, singleflight reads, and
 external-edit awareness.
 
+**Status (slice 51, 2026-05-24):** the v1.1 regex compile cache ships
+inside `oran-tool`. `file.search` with `regex=true` now looks up a
+compiled `permission::InputPattern` in a bounded process-local
+`core::BoundedCache` before compiling. The cache is keyed by
+`(pattern, partial_line_match=true)`, capped at 64 entries / 64 KiB /
+10 minutes, and protected by an explicit mutex because the file-search
+handler runs after an executor hop rather than on a guaranteed single
+strand. The literal search path is unchanged. v1.1's remaining items
+are the file-view cache, singleflight reads, and external-edit
+awareness.
+
 **v1.1 prerequisite (slice 44, 2026-05-22):** the `BoundedCache<Key,
 Value>` generic primitive that v1.1's line-offset index, file-view
 cache, and regex cache build on is now shipped in `oran-core` as
@@ -279,9 +290,11 @@ correctness is anchored:
   Memory cost is `O(lines * 8 bytes)`, far cheaper than caching the body.
 - **`file.search` re-uses the line-offset index** so that a follow-up
   range-read of a match doesn't rescan the file from the top.
-- **`file.search` literal-pattern cache**: compiled re2 patterns held in a
-  small `BoundedCache<(pattern, options), unique_ptr<re2::RE2>>` keyed per
-  agent turn. Bounded — never an unbounded `unordered_map`.
+- **`file.search` regex compile cache**: shipped in slice 51 inside
+  `oran-tool`. Compiled `permission::InputPattern` values are held in a
+  process-local `BoundedCache<(pattern, options), shared_ptr<const InputPattern>>`
+  capped at 64 entries / 64 KiB / 10 minutes. The cache is bounded, not
+  an unbounded `unordered_map`, and literal searches never touch it.
 - **`file.search` ignore predicate**: shipped inside the current
   `file.search` walk across slices 48-49. It honours `.gitignore`,
   `.ignore`, and a built-in skip list (`.git`, `build`, `.xmake`,

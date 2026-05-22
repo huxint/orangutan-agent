@@ -15,11 +15,11 @@
 //   2. `literal_match_1kib` vs. `regex_match_1kib` — full dispatch over the
 //      same ~1 KiB seed file (32 lines × 32 bytes, one match in the middle).
 //      The literal path uses `std::string_view::contains`; the regex path
-//      compiles the same pattern via `permission::InputPattern` and routes
-//      each line through `re2::RE2::PartialMatch`. The (regex − literal)
-//      delta pins the per-call re2 compile + per-line PartialMatch cost the
-//      agent loop pays when it opts into `"regex": true`. Adds the slice-24
-//      data point tech-debt #13 promised.
+//      routes the same pattern through `permission::InputPattern` and each
+//      line through `re2::RE2::PartialMatch`. Slice 51 adds a bounded
+//      compiled-regex cache, so repeated iterations with the same pattern
+//      mostly measure the steady-state cached regex path. Use a unique-pattern
+//      scenario if cold compile cost needs a fresh number.
 
 #include <nanobench.h>
 

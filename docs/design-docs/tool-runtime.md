@@ -80,7 +80,10 @@ enum class Capability {
 > `{path, pattern, max_matches?, include_hidden?, regex?,
 > max_output_bytes?, respect_ignore?}` — literal substring match by
 > default; `regex=true` (slice 24) routes through
-> `permission::InputPattern`; recursive walks skip NUL-bearing binary
+> `permission::InputPattern`; slice 51 keeps compiled patterns in a
+> bounded process-local `core::BoundedCache` (64 entries / 64 KiB /
+> 10-minute TTL) keyed by pattern plus line-match mode; recursive walks
+> skip NUL-bearing binary
 > files, dot-prefixed entries when `include_hidden=false`, slice-48's
 > built-in low-signal directories, and slice-49's `.gitignore` /
 > `.ignore` common rule subset when `respect_ignore=true`; ripgrep-class

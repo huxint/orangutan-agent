@@ -76,7 +76,10 @@ inline constexpr std::string_view kFileDeleteName{"file.delete"};
 /// required. Input shape: `{"path": <string>, "pattern": <string>,
 /// "max_matches"?: uint (default 100), "include_hidden"?: bool (default
 /// false), "regex"?: bool (default false), "max_output_bytes"?: uint
-/// (default 1048576), "respect_ignore"?: bool (default true)}`. Returns one
+/// (default 1048576), "respect_ignore"?: bool (default true)}`.
+/// `regex=true` compiles through `permission::InputPattern` and reuses a
+/// bounded process-local compiled-pattern cache across dispatches.
+/// Returns one
 /// `path:line:text` line per match, with a trailing `(truncated; matches
 /// capped at <N>)` or `(truncated; output capped at <N> bytes)` summary
 /// when a cap is hit; returns the literal text `no matches` (non-error)

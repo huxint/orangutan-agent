@@ -40,11 +40,13 @@ A-vs-B comparisons:
 - `file_search.literal_match_1kib` vs. `file_search.regex_match_1kib`:
   full `file.search` dispatch over the same ~1 KiB seed file (32 lines
   × 32 bytes, one match in the middle). The literal path uses
-  `std::string_view::contains`; the regex path compiles the same
-  pattern via `permission::InputPattern` and routes each line through
-  `re2::RE2::PartialMatch`. The (regex − literal) delta pins the
-  per-call re2 compile + per-line PartialMatch cost the agent loop pays
-  when it opts into `"regex": true` (slice 24).
+  `std::string_view::contains`; the regex path routes the same pattern
+  through `permission::InputPattern` and each line through
+  `re2::RE2::PartialMatch`. Slice 51 adds a bounded compiled-regex
+  cache, so repeated benchmark iterations with the same pattern mostly
+  measure the steady-state cached regex path. The original slice-24
+  cold-compile delta remains useful historical context; a fresh
+  unique-pattern scenario is the right way to re-measure cold compile cost.
 - `dispatch_ask_short_circuit` vs. `dispatch_ask_approved` vs.
   `dispatch_ask_rejected`: three-way contrast of the `Verdict::ask`
   dispatch paths added in slice 21. The short-circuit case carries

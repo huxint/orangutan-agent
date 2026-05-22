@@ -7,22 +7,22 @@
 
 ## Snapshot
 
-- **Slice:** 50 (`xmake run orangutan` reports slice 50)
+- **Slice:** 51 (`xmake run orangutan` reports slice 51)
 - **Last completed history:**
-  [`histories/2026-05/20260523-2325-io-line-offset-index.md`](histories/2026-05/20260523-2325-io-line-offset-index.md)
+  [`histories/2026-05/20260524-0005-tool-search-regex-cache.md`](histories/2026-05/20260524-0005-tool-search-regex-cache.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 50
-  ships spec 0011 v1.1's line-offset index inside `oran-io`: line-range
-  reads of files larger than 256 KiB now lazily build a bounded
-  `core::BoundedCache` entry keyed by canonical path plus
-  `(size_bytes, mtime_ns)`, seek directly to the requested span, and
-  clear the cache after successful in-process writes/deletes. The
-  remaining v1.1 items are the file-view cache, the regex compile cache,
-  singleflight reads, and external-edit awareness. Spec 0013's
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 51
+  ships spec 0011 v1.1's regex compile cache inside `oran-tool`:
+  `file.search` with `regex=true` now reuses compiled
+  `permission::InputPattern` instances from a bounded process-local
+  `core::BoundedCache` (64 entries / 64 KiB / 10-minute TTL) keyed by
+  pattern plus line-match mode. The remaining v1.1 items are the
+  file-view cache, singleflight reads, and external-edit awareness.
+  Spec 0013's
   remaining workspace work narrows to audit metadata and moving
   resolution to the pre-permission dispatch boundary. The first
   provider adapter (Anthropic Messages) remains a multi-slice
@@ -58,7 +58,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 24 cases / 171 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
 - `oran-hook`: 15 cases / 97 assertions.
-- `oran-tool`: 131 cases / 1093 assertions.
+- `oran-tool`: 132 cases / 1104 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 153 assertions.
 

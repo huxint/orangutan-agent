@@ -1863,6 +1863,38 @@ TEST_CASE("file.search regex=true matches a re2 pattern on a single file", "[uni
   });
 }
 
+TEST_CASE("file.search regex=true reuses a cached compiled pattern across dispatches",
+          "[unit][tool][file_search][regex]") {
+  TempFile first_file{"regex-cache-first"};
+  TempFile second_file{"regex-cache-second"};
+  first_file.write("WARN first\nINFO ignore\n");
+  second_file.write("DEBUG ignore\nWARN second\n");
+
+  test::run_async([&first_file, &second_file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto first = std::string{R"({"path":")"} + first_file.string() + R"(","pattern":"^WARN ","regex":true})";
+    auto first_result = co_await registry.dispatch(tool::kFileSearchName, first, ctx);
+    REQUIRE(first_result.has_value());
+    REQUIRE(first_result->text.contains(first_file.string() + ":1:WARN first"));
+    REQUIRE_FALSE(first_result->text.contains("INFO ignore"));
+
+    const auto second = std::string{R"({"path":")"} + second_file.string() + R"(","pattern":"^WARN ","regex":true})";
+    auto second_result = co_await registry.dispatch(tool::kFileSearchName, second, ctx);
+    REQUIRE(second_result.has_value());
+    REQUIRE(second_result->text.contains(second_file.string() + ":2:WARN second"));
+    REQUIRE_FALSE(second_result->text.contains("DEBUG ignore"));
+
+    REQUIRE(sink.events().size() == 2);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
+    REQUIRE(sink.events()[1].outcome == permission::AuditOutcome::allow);
+  });
+}
+
 TEST_CASE("file.search regex=true walks a directory and matches each line", "[unit][tool][file_search][regex]") {
   TempDir dir{"regex-recursive"};
   dir.write_file("a.txt", "TODO(alice): fix it\nfiller\n");

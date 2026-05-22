@@ -22,12 +22,15 @@
 // by default; `include_hidden=true` opts in.
 //
 // Default match mode is literal substring (`pattern` is a no-escape direct
-// match). When `regex=true`, the pattern is compiled once per call via
+// match). When `regex=true`, the pattern is compiled through
 // `permission::InputPattern` (which forward-declares `re2::RE2` so this TU
 // stays off `<re2/re2.h>` per rule C6) and each line is tested with
-// `RE2::PartialMatch`. Invalid patterns surface as `invalid_argument` with
-// the re2 error message attached as `regex_error`, matching the
-// rule-side input-pattern compile-error shape.
+// `RE2::PartialMatch`. Slice 51 keeps compiled patterns in a bounded
+// process-local `core::BoundedCache` (64 entries / 64 KiB / 10-minute TTL)
+// keyed by pattern + line-match mode, so repeated searches with the same
+// regex avoid paying the compile cost again. Invalid patterns surface as
+// `invalid_argument` with the re2 error message attached as `regex_error`,
+// matching the rule-side input-pattern compile-error shape.
 //
 // Slice 48 takes the first step on spec 0011 v1.1's "`file.search` ignore
 // predicate" item by adding a *built-in* skip list: the recursive directory
@@ -48,6 +51,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -55,8 +59,11 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <functional>
 #include <ios>
 #include <iterator>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -72,8 +79,10 @@
 #include <nlohmann/json.hpp>
 
 #include <oran/async/awaitable_fwd.hpp>
+#include <oran/core/bounded_cache.hpp>
 #include <oran/core/capability.hpp>
 #include <oran/core/error.hpp>
+#include <oran/core/time.hpp>
 #include <oran/core/tool_def.hpp>
 #include <oran/permission/input_pattern.hpp>
 #include <oran/tool/registry.hpp>
@@ -127,6 +136,51 @@ constexpr std::array<std::string_view, 5> kIgnoredDirectoryNames{
     "build",
     "node_modules",
 };
+constexpr std::size_t kRegexCacheMaxEntries = 64U;
+constexpr std::size_t kRegexCacheMaxBytes = 64U * 1024U;
+
+struct RegexCacheKey {
+  std::string pattern;
+  bool partial_line_match{true};
+
+  friend bool operator==(const RegexCacheKey&, const RegexCacheKey&) = default;
+};
+
+struct RegexCacheKeyHash {
+  [[nodiscard]] std::size_t operator()(const RegexCacheKey& key) const noexcept {
+    const auto h1 = std::hash<std::string>{}(key.pattern);
+    const auto h2 = std::hash<bool>{}(key.partial_line_match);
+    return h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1 << 6U) + (h1 >> 2U));
+  }
+};
+
+struct RegexPatternByteCost {
+  [[nodiscard]] std::size_t operator()(const std::shared_ptr<const permission::InputPattern>& pattern) const noexcept {
+    return pattern == nullptr ? 0 : sizeof(permission::InputPattern) + pattern->pattern().size();
+  }
+};
+
+using RegexPatternCache = core::BoundedCache<RegexCacheKey,
+                                             std::shared_ptr<const permission::InputPattern>,
+                                             RegexPatternByteCost,
+                                             RegexCacheKeyHash>;
+
+[[nodiscard]] RegexPatternCache& regex_pattern_cache() {
+  static auto cache = RegexPatternCache{
+      RegexPatternCache::Options{
+          .max_entries = kRegexCacheMaxEntries,
+          .max_bytes = kRegexCacheMaxBytes,
+          .ttl = std::chrono::minutes{10},
+      },
+      RegexPatternByteCost{},
+  };
+  return cache;
+}
+
+[[nodiscard]] std::mutex& regex_pattern_cache_mutex() {
+  static std::mutex mutex;
+  return mutex;
+}
 
 struct SearchOptions {
   std::string path;
@@ -159,11 +213,12 @@ struct SearchOutcome {
 
 /// Per-call line matcher. Owns the compiled regex when the caller opted in
 /// (`regex=true`); otherwise it falls back to the literal `pattern` substring.
-/// Holding the engaged `InputPattern` here lets `scan_text` stay regex-shape-
-/// blind and keeps the cost of "literal mode" identical to the slice-20 path.
+/// Holding a shared pointer into the bounded regex cache lets `scan_text` stay
+/// regex-shape-blind and keeps the cost of "literal mode" identical to the
+/// slice-20 path.
 struct LineMatcher {
   std::string_view literal;
-  std::optional<permission::InputPattern> regex;
+  std::shared_ptr<const permission::InputPattern> regex;
 
   [[nodiscard]] bool matches(std::string_view line) const noexcept {
     return regex ? regex->matches(line) : line.contains(literal);
@@ -561,8 +616,18 @@ private:
 
 [[nodiscard]] core::Result<LineMatcher> build_matcher(const SearchOptions& opts) {
   if (!opts.regex) {
-    return LineMatcher{.literal = opts.pattern, .regex = std::nullopt};
+    return LineMatcher{.literal = opts.pattern, .regex = nullptr};
   }
+
+  const auto key = RegexCacheKey{.pattern = opts.pattern, .partial_line_match = true};
+  const auto now = core::time::now_utc();
+  {
+    const std::scoped_lock lock{regex_pattern_cache_mutex()};
+    if (auto* cached = regex_pattern_cache().get(key, now); cached != nullptr && *cached != nullptr) {
+      return LineMatcher{.literal = {}, .regex = *cached};
+    }
+  }
+
   auto compiled = permission::InputPattern::compile(opts.pattern);
   if (!compiled) {
     auto err = core::Error::invalid_argument("file.search: invalid regex").with("pattern", opts.pattern);
@@ -571,7 +636,14 @@ private:
     }
     return std::unexpected(std::move(err));
   }
-  return LineMatcher{.literal = {}, .regex = std::move(*compiled)};
+
+  auto pattern =
+      std::shared_ptr<const permission::InputPattern>{std::make_shared<permission::InputPattern>(std::move(*compiled))};
+  {
+    const std::scoped_lock lock{regex_pattern_cache_mutex()};
+    regex_pattern_cache().put(key, pattern, now);
+  }
+  return LineMatcher{.literal = {}, .regex = std::move(pattern)};
 }
 
 [[nodiscard]] core::Result<SearchOutcome> walk_and_scan(const SearchOptions& opts,
