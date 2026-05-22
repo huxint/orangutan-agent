@@ -7,26 +7,26 @@
 
 ## Snapshot
 
-- **Slice:** 43 (`xmake run orangutan` reports slice 43)
+- **Slice:** 44 (`xmake run orangutan` reports slice 44)
 - **Last completed history:**
-  [`histories/2026-05/20260522-2300-io-file-range.md`](histories/2026-05/20260522-2300-io-file-range.md)
+  [`histories/2026-05/20260522-2330-core-bounded-cache.md`](histories/2026-05/20260522-2330-core-bounded-cache.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
   (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 43
-  added `io::FileRange` + `io::ReadTextResult` plus the range-aware
-  `io::read_text_file_ranged` overload with mid-read fingerprint
-  capture (size/mtime drift -> retry once for small whole-file reads,
-  surface as `Error::conflict` for large or ranged reads). The next
-  0011 step is to wire the new shape through `oran-tool`'s
-  `file.read` schema (`start_line`/`line_count`/`offset_bytes`/
-  `length_bytes` inputs, header-line response rendering until
-  `tool::Output` v2 lands) and to introduce the opaque version token
-  shape so `if_version` short-circuits become possible. Spec 0012's
-  `BoundedCache<Key,Value>` generic primitive can land in parallel
-  (it is also v1.1's first cache prerequisite). Spec 0013's
+  added the second piece of spec 0011 v1 (range-aware
+  `io::read_text_file_ranged` with mid-read fingerprint capture);
+  slice 44 added `core::BoundedCache<Key,Value>` as the generic
+  primitive both spec 0011 v1.1 (line-offset index, file-view cache,
+  regex cache) and spec 0012 (tool scheduler bounded state) reach
+  for. The next 0011 step is to wire the new range shape through
+  `oran-tool`'s `file.read` schema (`start_line` / `line_count` /
+  `offset_bytes` / `length_bytes` inputs, header-line response
+  rendering until `tool::Output` v2 lands) and to introduce the
+  opaque version-token shape so `if_version` short-circuits become
+  possible (needs a new `Error::not_modified` kind). Spec 0013's
   remaining workspace work narrows to audit metadata and moving
   resolution to the pre-permission dispatch boundary. The first
   provider adapter (Anthropic Messages) remains a multi-slice effort
@@ -54,7 +54,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 ## Latest Library Surfaces
 
-- `oran-core`: 54 cases / 370 assertions.
+- `oran-core`: 68 cases / 435 assertions.
 - `oran-async`: 9 cases / 43 assertions.
 - `oran-io`: 36 cases / 152 assertions.
 - `oran-storage`: 60 cases / 706 assertions.

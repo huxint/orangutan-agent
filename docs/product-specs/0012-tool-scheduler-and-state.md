@@ -104,8 +104,18 @@ implicitly via the capability list.
   call-graph boundary; the registry runs on the agent strand and the
   scheduler hops to worker executors at dispatch time.
 - **`BoundedCache<Key, Value>`** generic primitive (also referenced by
-  spec 0011), lifted into `oran-core` once a *second* call site appears —
-  initially lives in whichever lib needs it first:
+  spec 0011). **Status (slice 44, 2026-05-22):** shipped in `oran-core`
+  as `core::BoundedCache<Key, Value, ByteSizeOf = BoundedCacheNoByteBudget>`
+  (`<oran/core/bounded_cache.hpp>`). The single-strand contract, the LRU
+  + insert-based TTL + byte-budget eviction order, and the `Stats`
+  accessor are all live. The shipped API returns a non-owning
+  `Value*` from `get` rather than the `std::optional<Value>` the spec
+  sketches below — `std::optional<unique_ptr<re2::RE2>>` cannot be
+  populated from a moved-in source on a re-hit, and the spec's
+  intended consumers include move-only types. Existing call sites
+  pass an explicit `core::Time` `now` everywhere so the cache stays
+  clock-agnostic (testable without a real clock; cooperates with
+  `core::time::now_utc` in production code).
   ```cpp
   template <class Key, class Value>
   class BoundedCache {
@@ -121,14 +131,15 @@ implicitly via the capability list.
       std::uint64_t evictions_lru;
       std::uint64_t evictions_ttl;
       std::uint64_t evictions_bytes;
+      std::uint64_t rejected_oversize;     // slice 44 addition
       std::size_t   current_entries;
       std::size_t   current_bytes;
     };
 
-    std::optional<Value> get(const Key&, core::Time now);
+    Value*               get(const Key&, core::Time now);   // shipped
     void                 put(Key, Value, core::Time now);
     std::size_t          reap(core::Time now);
-    Stats                stats() const;
+    const Stats&         stats() const noexcept;
   };
   ```
 - **First bounded-state inventory** (each gets an explicit policy in v1):

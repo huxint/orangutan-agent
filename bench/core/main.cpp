@@ -12,6 +12,7 @@ void register_message_scenarios(ankerl::nanobench::Bench&);
 void register_tool_def_scenarios(ankerl::nanobench::Bench&);
 void register_str_utf8_scenarios(ankerl::nanobench::Bench&);
 void register_capability_scenarios(ankerl::nanobench::Bench&);
+void register_bounded_cache_scenarios(ankerl::nanobench::Bench&);
 }  // namespace orangutan::bench
 
 int main() {
@@ -73,6 +74,16 @@ int main() {
     b.warmup(1'000);
 
     orangutan::bench::register_capability_scenarios(b);
+  }
+
+  {
+    ankerl::nanobench::Bench b;
+    b.title("bench-core/bounded_cache");
+    b.unit("op-batch");
+    b.minEpochIterations(2'000);
+    b.warmup(50);
+
+    orangutan::bench::register_bounded_cache_scenarios(b);
   }
 
   std::println();

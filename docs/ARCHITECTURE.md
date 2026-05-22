@@ -74,8 +74,10 @@ own test bucket, its own bench bucket, and its own public header set under
 > `Role`, `StopReason`, `Content` variant, and `Message`, the
 > `ToolDef` declaration type (with `required_capabilities`), the
 > `core::str` RFC-3629 UTF-8
-> helpers, and the `Capability` vocabulary that ties tools to
-> permission rules), `oran-async`,
+> helpers, the `Capability` vocabulary that ties tools to
+> permission rules, and (slice 44) the generic
+> `core::BoundedCache<Key, Value>` LRU + TTL + byte-budget primitive),
+> `oran-async`,
 > the file/directory MVP of `oran-io` plus slice 42's
 > `io::FileFingerprint` + `compute_file_fingerprint` and slice 43's
 > range-aware `io::read_text_file_ranged` returning
@@ -217,7 +219,7 @@ own test bucket, its own bench bucket, and its own public header set under
 
 | Library              | Purpose                                         | Depends on (allowed)                          |
 | -------------------- | ----------------------------------------------- | --------------------------------------------- |
-| `oran-core`          | `Result<T>`, `Error`, `Time` + ISO-8601 UTC helpers, `Role`, `StopReason`, `Content` variant, `Message`, `ToolDef` (with `required_capabilities`), `core::str` UTF-8 helpers, `Capability` vocabulary (20 enumerators, slice 29 adds `list_directory`) | stdlib only |
+| `oran-core`          | `Result<T>`, `Error`, `Time` + ISO-8601 UTC helpers, `Role`, `StopReason`, `Content` variant, `Message`, `ToolDef` (with `required_capabilities`), `core::str` UTF-8 helpers, `Capability` vocabulary (20 enumerators, slice 29 adds `list_directory`), and (slice 44) the generic `core::BoundedCache<Key, Value>` primitive (LRU on access, insert-based TTL, byte-budget eviction, customizable byte-size functor via template parameter, `Stats` accessor exposed for the future `oran-log`) | stdlib only |
 | `oran-async`         | asio `Runtime`, `Awaitable<T>`, bounded `Channel<T>`, cancel-aware `sleep_for`; mailbox policy lands in orchestration | `oran-core`, asio |
 | `oran-log`           | spdlog shim + secret redaction; thread-local context | `oran-core`, spdlog/fmt |
 | `oran-io`            | file/directory IO MVP — `read_text_file`, `write_text_file`, `list_directory`, `delete_file` (slice 30, regular-file only), (slice 42) `io::FileFingerprint` + `io::compute_file_fingerprint`, and (slice 43) the range-aware `io::read_text_file_ranged` returning `ReadTextResult { text, fingerprint, start_line, end_line, returned_bytes, truncated }` with `FileRange { LineSpan | ByteSpan }` input validation, mid-read fingerprint capture (size/mtime drift -> retry once for whole-file reads under 64 KiB, surface `Error::conflict` for larger or ranged reads), and dual-end UTF-8 code-point boundary alignment for byte ranges; planned glob, pipe, subprocess, signal, content hashing, and `if_version` short-circuit | `oran-core`, `oran-async` |

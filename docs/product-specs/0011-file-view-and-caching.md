@@ -60,6 +60,14 @@ short-circuit (gated on adding `Error::not_modified`), and the
 `expected_version` contract on `file.edit` / `file.write` — remain
 unimplemented; those land per slice on top of the io-layer surface.
 
+**v1.1 prerequisite (slice 44, 2026-05-22):** the `BoundedCache<Key,
+Value>` generic primitive that v1.1's line-offset index, file-view
+cache, and regex cache build on is now shipped in `oran-core` as
+`core::BoundedCache` (`<oran/core/bounded_cache.hpp>`). See
+[`0012-tool-scheduler-and-state.md`](0012-tool-scheduler-and-state.md)
+"`BoundedCache<Key, Value>`" for the API contract and the shipped/spec
+deltas (single-strand, `Value*` from `get`, `rejected_oversize` stat).
+
 - **`io::ReadTextResult`** as the new return type of `io::read_text_file`:
   ```cpp
   struct ReadTextResult {
