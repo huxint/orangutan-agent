@@ -43,6 +43,15 @@ Today's seams that motivate this spec:
 The first slice delivers the *correctness* layer of the file-view system.
 Optimisations and caches come later — and only on top of this contract.
 
+**Status (slice 42, 2026-05-22):** the `FileFingerprint` data type and a
+synchronous `io::compute_file_fingerprint(path)` helper now ship in
+`oran-io`. `size_bytes` and `mtime_ns` populate unconditionally;
+`sha256` stays `nullopt` until the future slice that wires a content-hash
+path in. The other v1 bullets below — `ReadTextResult`, ranges, `if_version`,
+`expected_version`, `file.edit`/`file.modify` token contract — remain
+unimplemented; this slice scopes deliberately to the identity primitive so
+future slices can layer on top.
+
 - **`io::ReadTextResult`** as the new return type of `io::read_text_file`:
   ```cpp
   struct ReadTextResult {

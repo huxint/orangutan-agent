@@ -3,3 +3,4 @@
 #pragma once
 
 #include <oran/io/file.hpp>
+#include <oran/io/fingerprint.hpp>

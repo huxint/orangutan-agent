@@ -7,61 +7,33 @@
 
 ## Snapshot
 
-- **Slice:** 41 (`xmake run orangutan` reports slice 41)
+- **Slice:** 42 (`xmake run orangutan` reports slice 42)
 - **Last completed history:**
-  [`histories/2026-05/20260522-2042-bootstrap-workspace-config-wiring.md`](histories/2026-05/20260522-2042-bootstrap-workspace-config-wiring.md)
+  [`histories/2026-05/20260522-2113-io-file-fingerprint.md`](histories/2026-05/20260522-2113-io-file-fingerprint.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
-- **Next intended slice:** Continue spec 0013 — slices 37-40 closed the
-  per-tool migration; slice 41 lands bootstrap ownership of `tool::Workspace`
-  and config parsing for `permissions.workspace.extra_{read,write}_roots`.
-  The remaining workspace work is purely structural: thread
-  `RuntimeAssembly::workspace()` into the agent loop's
-  `DispatchContext::workspace`, move resolution + audit metadata to the
-  pre-permission dispatch boundary, and promote the seam into the future
-  `tool::Runtime::workspace()` accessor. The first provider adapter
-  (Anthropic Messages) remains a multi-slice effort that needs an exec plan
-  plus `oran-http` + libcurl wiring first; blocking hook semantics with veto
-  are still gated on `oran-agent`; and wiring `check-compile-budget.sh` into
-  `scripts/ci.sh` remains gated by the slice-28 reference-hardware
-  precondition. The current `file.delete` and `directory.list`
-  shapes are expected to be re-shaped in a later refactor: one
-  unified delete tool covering both files and folders, and a
-  recursive whole-project list (not just single-level children).
-  Future built-in slices should not double down on per-kind splits
-  like `directory.remove` or single-level enumeration. The
-  *future-feature* roadmap surfaced by the second 2026-05-21 deep
-  review (Refactor-Agent Tool Review) and the companion
-  agent-loop foundation note now lives in eight new product specs:
-  [`0011-file-view-and-caching.md`](product-specs/0011-file-view-and-caching.md)
-  (range reads, fingerprints, `if_version`, bounded caches),
-  [`0012-tool-scheduler-and-state.md`](product-specs/0012-tool-scheduler-and-state.md)
-  (parallel tool dispatch, per-path locks, `BoundedCache`, index
-  caches),
-  [`0013-workspace-and-path-policy.md`](product-specs/0013-workspace-and-path-policy.md)
-  (workspace confinement, symlink policy, override roots),
-  [`0014-structured-tool-output.md`](product-specs/0014-structured-tool-output.md)
-  (`ToolOutput { text, data, attachments, usage, is_error }`,
-  byte caps, hook redaction),
-  [`0015-blocking-hook-decisions.md`](product-specs/0015-blocking-hook-decisions.md)
-  (`publish_blocking`, `HookDecisionKind`, seven-step canonical
-  dispatch order; closes the 2026-05-18 hook tech-debt row when v1
-  ships),
-  [`0016-prompt-and-tool-catalog-cache.md`](product-specs/0016-prompt-and-tool-catalog-cache.md)
-  (`oran-prompt`, deterministic tool-block renderer, deferred-tool
-  index, `tool.search`, prompt-cache stability bench),
-  [`0017-fake-provider-first-agent-loop.md`](product-specs/0017-fake-provider-first-agent-loop.md)
-  (`provider::FakeProvider`, ten scripted scenarios, agent loop
-  ships against the fake **before** the first real adapter), and
-  [`0018-first-loop-observability.md`](product-specs/0018-first-loop-observability.md)
-  (`oran-storage::TraceRepository`, per-turn `trace_turns` row,
-  cause-chain join via `parent_turn_id`). The recommended build
-  order matches the spec dependency graph: 0013 → 0011 + 0012 → 0014
-  → 0016 → 0017 → 0015 → 0018 (0018 can land any time after 0017
-  since the schema is additive). Pick a v1 acceptance criterion from
-  any of these as the next slice's charter.
+- **Next intended slice:** Continue along the spec dependency graph
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 42
+  added `io::FileFingerprint` + `compute_file_fingerprint`, the lowest
+  rung of spec 0011 v1; the next 0011 step is `io::FileRange` +
+  `ReadTextResult` and the range-aware `read_text_file` overload (cap
+  via `ReadTextOptions::max_bytes`, mid-read change detection capturing
+  the fingerprint before and after the blocking read). Spec 0012's
+  `BoundedCache<Key,Value>` generic primitive can land in parallel.
+  Spec 0013's remaining workspace work narrows to audit metadata and
+  moving resolution to the pre-permission dispatch boundary. The first
+  provider adapter (Anthropic Messages) remains a multi-slice effort
+  that needs an exec plan plus `oran-http` + libcurl wiring first;
+  blocking hook semantics with veto are still gated on `oran-agent`;
+  and wiring `check-compile-budget.sh` into `scripts/ci.sh` remains
+  gated by the slice-28 reference-hardware precondition. The current
+  `file.delete` and `directory.list` shapes are expected to be re-shaped
+  in a later refactor: one unified delete tool covering both files and
+  folders, and a recursive whole-project list (not just single-level
+  children). Future built-in slices should not double down on per-kind
+  splits like `directory.remove` or single-level enumeration.
 
 ## Library Health
 
@@ -79,7 +51,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 - `oran-core`: 54 cases / 370 assertions.
 - `oran-async`: 9 cases / 43 assertions.
-- `oran-io`: 16 cases / 70 assertions.
+- `oran-io`: 23 cases / 90 assertions.
 - `oran-storage`: 60 cases / 706 assertions.
 - `oran-config`: 24 cases / 171 assertions.
 - `oran-permission`: 83 cases / 379 assertions.

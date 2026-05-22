@@ -117,6 +117,10 @@ own test bucket, its own bench bucket, and its own public header set under
 > `tool::Workspace` ownership into `bootstrap::RuntimeAssembly` and routes
 > `permissions.workspace.extra_{read,write}_roots` from `oran-config`
 > into `tool::WorkspaceOptions` so overrides canonicalise once at boot.
+> Slice 42 starts spec 0011 with `io::FileFingerprint` (`size_bytes`,
+> `mtime_ns`, reserved `optional<string> sha256`) plus a synchronous
+> `io::compute_file_fingerprint(path)` helper — the lowest-cost identity
+> primitive future range-read and `if_version` slices consume.
 > The
 > dispatch path runs `RuleSet::evaluate` against the call's
 > `ToolDef::required_capabilities`, records one
@@ -207,7 +211,7 @@ own test bucket, its own bench bucket, and its own public header set under
 | `oran-core`          | `Result<T>`, `Error`, `Time` + ISO-8601 UTC helpers, `Role`, `StopReason`, `Content` variant, `Message`, `ToolDef` (with `required_capabilities`), `core::str` UTF-8 helpers, `Capability` vocabulary (20 enumerators, slice 29 adds `list_directory`) | stdlib only |
 | `oran-async`         | asio `Runtime`, `Awaitable<T>`, bounded `Channel<T>`, cancel-aware `sleep_for`; mailbox policy lands in orchestration | `oran-core`, asio |
 | `oran-log`           | spdlog shim + secret redaction; thread-local context | `oran-core`, spdlog/fmt |
-| `oran-io`            | file/directory IO MVP — `read_text_file`, `write_text_file`, `list_directory`, and `delete_file` (slice 30, regular-file only); planned glob, pipe, subprocess, signal | `oran-core`, `oran-async` |
+| `oran-io`            | file/directory IO MVP — `read_text_file`, `write_text_file`, `list_directory`, `delete_file` (slice 30, regular-file only), and (slice 42) `io::FileFingerprint` + `io::compute_file_fingerprint`; planned glob, pipe, subprocess, signal, range reads, content hashing | `oran-core`, `oran-async` |
 | `oran-http`          | http client (asio) and tiny router for the web UI | `oran-core`, `oran-async` |
 | `oran-storage`       | SQLite expected-only connection/statement core, migration runner with SQL-file loading **and compile-time-embedded built-in migrations** (`built_in_audit_migrations()` / `built_in_session_migrations()` reach the SQL via C++26 `#embed`), async writer/reader `Pool` with per-slot `StatementCache`, standalone per-connection `StatementCache`, `SessionRepository` (typed `core::Role` at the API boundary), and `AuditRepository` (typed audit-event append/list/count over `audit_events`); planned memory/automation repositories | `oran-core`, `oran-async`, sqlite3 |
 | `oran-config`        | JSON config loader with typed runtime/profile/route/session/web fields, env substitution, the typed `permissions` + `agents.<name>.permissions` overlay surface (layer-2/3 data of the three-layer rule merge), and (slice 41) `permissions.workspace.extra_{read,write}_roots` parsed onto `WorkspacePermissionsConfig` for the bootstrap-owned `tool::Workspace`; planned schema + secret-protected fields | `oran-core`, `oran-storage` |

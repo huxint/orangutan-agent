@@ -7,7 +7,8 @@
 
 namespace orangutan::bench {
 void register_file_read(ankerl::nanobench::Bench&);
-}
+void register_fingerprint(ankerl::nanobench::Bench&);
+}  // namespace orangutan::bench
 
 int main() {
   ankerl::nanobench::Bench b;
@@ -17,6 +18,7 @@ int main() {
   b.warmup(100);
 
   orangutan::bench::register_file_read(b);
+  orangutan::bench::register_fingerprint(b);
 
   std::println();
   return 0;

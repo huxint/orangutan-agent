@@ -130,8 +130,12 @@ surface for effectful agent actions.
 - Permission/hook wrappers in the owning higher-level libraries.
 - **Range-aware reads + fingerprints (v2)** — see
   [`../product-specs/0011-file-view-and-caching.md`](../product-specs/0011-file-view-and-caching.md).
-  `read_text_file` returns `ReadTextResult { text, fingerprint, start_line,
-  end_line, returned_bytes, truncated }`; `ReadTextOptions` gains
+  Slice 42 (2026-05-22) ships the first piece: `io::FileFingerprint`
+  (`size_bytes`, `mtime_ns`, reserved `optional<string> sha256`) plus a
+  synchronous `io::compute_file_fingerprint(path)` helper. Future slices
+  add range-aware `read_text_file` returning
+  `ReadTextResult { text, fingerprint, start_line, end_line, returned_bytes,
+  truncated }`; `ReadTextOptions` gains
   `range: FileRange { line | byte }` and `compute_hash`. Mid-read change
   detection captures fingerprints before and after the blocking read and
   returns `conflict` on size/mtime/inode change. Text-only callers keep a

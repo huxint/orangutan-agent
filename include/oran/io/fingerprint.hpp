@@ -1,0 +1,39 @@
+// include/oran/io/fingerprint.hpp — cheap, byte-stable file identity.
+//
+// `FileFingerprint` is the lowest-cost identity primitive in `oran-io`:
+// size + ns-resolution mtime, plus a hook for an optional SHA-256 content
+// hash that a future slice will populate when callers opt in. Spec 0011
+// (file-view system) names this shape; the agent-loop ranges, change
+// detection, and `if_version` paths all consume it.
+
+#pragma once
+
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <string_view>
+
+#include <oran/core/result.hpp>
+
+namespace orangutan::io {
+
+/// Stable, byte-cheap file identity. `size_bytes` and `mtime_ns` are
+/// populated unconditionally; `sha256` is reserved for a future slice
+/// (`compute_file_fingerprint(path, ComputeFingerprintOptions{.compute_hash=true})`)
+/// and stays `nullopt` for now.
+struct FileFingerprint {
+  std::uintmax_t size_bytes{0};
+  std::uint64_t mtime_ns{0};
+  std::optional<std::string> sha256{};
+
+  friend bool operator==(const FileFingerprint&, const FileFingerprint&) = default;
+};
+
+/// Read a file's metadata fingerprint. Returns:
+///
+///   * `Error::invalid_argument` — `path` is empty.
+///   * `Error::not_found` — `path` does not exist.
+///   * `Error::io` — `path` is not a regular file, or `stat` failed.
+[[nodiscard]] core::Result<FileFingerprint> compute_file_fingerprint(std::string_view path);
+
+}  // namespace orangutan::io
