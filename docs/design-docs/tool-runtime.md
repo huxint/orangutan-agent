@@ -210,9 +210,19 @@ enum class Capability {
 > `reason=symlink_escape`, and mutating symlink paths with
 > `reason=symlink_target`. `DispatchContext` now carries an optional
 > non-owning `Workspace*`; `file.read` resolves its input through
-> `resolve_read` when that pointer is supplied. The remaining five
-> filesystem built-ins, bootstrap config ownership, audit metadata, and
-> pre-permission resolution move in follow-up workspace slices.
+> `resolve_read` when that pointer is supplied. The remaining filesystem
+> built-ins, bootstrap config ownership, audit metadata, and pre-permission
+> resolution move in follow-up workspace slices.
+> Slice 38 (2026-05-22) migrates the mutating built-ins through the same
+> interim seam: `file.write` calls `resolve_write` with the current write
+> mode and parent-creation intent before the `oran-io` write, `file.edit`
+> resolves through `resolve_write` before its read+atomic rewrite, and
+> `file.delete` resolves through `resolve_delete` before unlinking. When
+> a workspace is supplied, relative in-workspace mutations work while
+> traversal rejects with `reason=outside_workspace` and mutating symlink
+> targets reject with `reason=symlink_target`. `file.search`,
+> `directory.list`, bootstrap ownership, audit metadata, and the
+> pre-permission resolver boundary remain follow-up work.
 
 A tool's `required_capabilities` list is **inspected at registration**. The permission
 engine knows the universe of capabilities a tool might use; the tool cannot smuggle in
@@ -420,11 +430,12 @@ See `permissions-and-hooks.md` for sink kinds.
 
 ## Workspace Handle
 
-Slice 37 introduces the first workspace-policy surface, but the migration is
+Slices 37-38 introduce the first workspace-policy surface, but the migration is
 not complete yet. `DispatchContext` carries an optional non-owning
-`tool::Workspace*`, and `file.read` resolves through it when supplied. The
-other filesystem built-ins still call `oran-io` with their raw input path until
-the follow-up 0013 migration slices land.
+`tool::Workspace*`; `file.read`, `file.write`, `file.edit`, and `file.delete`
+resolve through it when supplied. `file.search` and `directory.list` still call
+their underlying filesystem helpers with the raw input path until the follow-up
+0013 migration slices land.
 
 Current surface and forward shape:
 
@@ -445,11 +456,10 @@ Current surface and forward shape:
   mix them up at the type level. Slice 37's `file.read` migration resolves in
   the handler because the registry has no preflight resolver hook yet; the
   pre-permission boundary moves in the same follow-up that adds audit metadata.
-- Symlink policy is uniform across `file.read`, `file.search`,
-  `directory.list`, `file.delete`, `file.write`, and `file.edit` —
-  the current divergence between `file.search`'s root-vs-nested handling and
-  `file.delete`'s symlink rejection closes in the slice that lands
-  `tool::Workspace`.
+- Symlink policy is now uniform for workspace-aware `file.read`, `file.write`,
+  `file.edit`, and `file.delete` calls. `file.search` and `directory.list`
+  still need migration before the root-vs-nested search behaviour and
+  directory listing semantics are governed by the same resolver.
 
 Full contract, override roots, audit fields, and acceptance criteria live in
 [`../product-specs/0013-workspace-and-path-policy.md`](../product-specs/0013-workspace-and-path-policy.md).

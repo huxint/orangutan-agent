@@ -18,6 +18,7 @@
 #include <oran/core/tool_def.hpp>
 #include <oran/io/file.hpp>
 #include <oran/tool/registry.hpp>
+#include <oran/tool/workspace.hpp>
 
 namespace orangutan::tool {
 
@@ -47,6 +48,18 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
   return std::unexpected(
       core::Error::invalid_argument("file.write: `mode` must be one of truncate|append|fail_if_exists")
           .with("value", std::string{text}));
+}
+
+[[nodiscard]] WriteDisposition to_write_disposition(io::WriteMode mode) noexcept {
+  switch (mode) {
+    case io::WriteMode::truncate:
+      return WriteDisposition::truncate;
+    case io::WriteMode::append:
+      return WriteDisposition::append;
+    case io::WriteMode::fail_if_exists:
+      return WriteDisposition::fail_if_exists;
+  }
+  return WriteDisposition::truncate;
 }
 
 [[nodiscard]] core::Result<std::uintmax_t> parse_max_bytes(const nlohmann::json& parsed) {
@@ -133,6 +146,17 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
                                   .with("path", path)
                                   .with("content_bytes", std::to_string(byte_count))
                                   .with("max_bytes", std::to_string(*max_bytes)));
+  }
+  if (ctx.workspace != nullptr) {
+    auto resolved = ctx.workspace->resolve_write(path,
+                                                 WriteIntent{
+                                                     .disposition = to_write_disposition(options.mode),
+                                                     .create_parent_directories = options.create_parent_directories,
+                                                 });
+    if (!resolved) {
+      co_return std::unexpected(std::move(resolved).error());
+    }
+    path = std::move(resolved->absolute_path);
   }
   // Truncate mode is the dominant "rewrite this file" call shape and the one
   // an LLM expects to be safe under partial-write failures; route it through

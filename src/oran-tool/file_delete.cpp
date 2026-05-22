@@ -23,6 +23,7 @@
 #include <oran/core/tool_def.hpp>
 #include <oran/io/file.hpp>
 #include <oran/tool/registry.hpp>
+#include <oran/tool/workspace.hpp>
 
 namespace orangutan::tool {
 
@@ -50,6 +51,13 @@ constexpr std::string_view kFileDeleteSchema =
   }
 
   auto path = parsed["path"].get<std::string>();
+  if (ctx.workspace != nullptr) {
+    auto resolved = ctx.workspace->resolve_delete(path);
+    if (!resolved) {
+      co_return std::unexpected(std::move(resolved).error());
+    }
+    path = std::move(resolved->absolute_path);
+  }
   auto deleted = co_await io::delete_file(ctx.executor, path);
   if (!deleted) {
     co_return std::unexpected(std::move(deleted).error());

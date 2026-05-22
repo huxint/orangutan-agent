@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -83,6 +84,32 @@ void create_symlink_or_skip(const std::filesystem::path& target, const std::file
   permission::RuleSet rules;
   rules.add(permission::Rule{.verdict = permission::Verdict::allow, .tool_pattern = "file.read"});
   return rules;
+}
+
+[[nodiscard]] permission::RuleSet allow_tool_rules(std::string tool_name, core::Capability capability) {
+  permission::RuleSet rules;
+  rules.add(permission::Rule{
+      .verdict = permission::Verdict::allow,
+      .tool_pattern = std::move(tool_name),
+      .capability = capability,
+  });
+  return rules;
+}
+
+[[nodiscard]] tool::DispatchContext make_workspace_ctx(asio::io_context& io,
+                                                       permission::RuleSet& rules,
+                                                       permission::AuditSink& sink,
+                                                       tool::Workspace& workspace) {
+  return tool::DispatchContext{
+      .executor = io.get_executor(),
+      .mode = permission::Mode::default_,
+      .rules = rules,
+      .audit = sink,
+      .workspace = &workspace,
+      .scope_key = "scope-A",
+      .agent_key = "coder",
+      .identity = "operator-1",
+  };
 }
 
 }  // namespace
@@ -228,16 +255,7 @@ TEST_CASE("file.read uses DispatchContext workspace when supplied", "[unit][tool
     auto workspace = make_workspace(root.path());
     auto rules = allow_file_read_rules();
     permission::RecordingAuditSink sink;
-    auto ctx = tool::DispatchContext{
-        .executor = io.get_executor(),
-        .mode = permission::Mode::default_,
-        .rules = rules,
-        .audit = sink,
-        .workspace = &workspace,
-        .scope_key = "scope-A",
-        .agent_key = "coder",
-        .identity = "operator-1",
-    };
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
 
     auto read = co_await registry.dispatch("file.read", R"({"path":"note.txt"})", ctx);
     REQUIRE(read.has_value());
@@ -252,5 +270,161 @@ TEST_CASE("file.read uses DispatchContext workspace when supplied", "[unit][tool
     REQUIRE_FALSE(escaped.has_value());
     REQUIRE(escaped.error().kind() == core::ErrorKind::permission_denied);
     REQUIRE(context_has(escaped.error(), "reason", "outside_workspace"));
+  });
+}
+
+TEST_CASE("file.write uses DispatchContext workspace for relative writes and traversal refusal",
+          "[unit][tool][workspace][file_write]") {
+  TempDir root{"oran-workspace-file-write"};
+  TempDir outside{"oran-workspace-file-write-outside"};
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_write(registry).has_value());
+
+    auto workspace = make_workspace(root.path());
+    auto rules = allow_tool_rules(std::string{tool::kFileWriteName}, core::Capability::write_file);
+    permission::RecordingAuditSink sink;
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+
+    auto written = co_await registry.dispatch(tool::kFileWriteName,
+                                              R"({"path":"nested/out.txt","content":"inside","create_parents":true})",
+                                              ctx);
+    REQUIRE(written.has_value());
+    REQUIRE(std::filesystem::exists(root.path() / "nested" / "out.txt"));
+
+    std::error_code ec;
+    const auto outside_relative_path = std::filesystem::relative(outside.path() / "blocked.txt", root.path(), ec);
+    REQUIRE(ec.value() == 0);
+    const auto escaped_input =
+        std::format(R"({{"path":"{}","content":"escape","create_parents":true}})", outside_relative_path.string());
+    auto escaped = co_await registry.dispatch(tool::kFileWriteName, escaped_input, ctx);
+    REQUIRE_FALSE(escaped.has_value());
+    REQUIRE(escaped.error().kind() == core::ErrorKind::permission_denied);
+    REQUIRE(context_has(escaped.error(), "reason", "outside_workspace"));
+    REQUIRE_FALSE(std::filesystem::exists(outside.path() / "blocked.txt"));
+  });
+
+  std::ifstream written{root.path() / "nested" / "out.txt", std::ios::binary};
+  REQUIRE(std::string{std::istreambuf_iterator<char>{written}, std::istreambuf_iterator<char>{}} == "inside");
+}
+
+TEST_CASE("file.edit uses DispatchContext workspace for relative edits and traversal refusal",
+          "[unit][tool][workspace][file_edit]") {
+  TempDir root{"oran-workspace-file-edit"};
+  TempDir outside{"oran-workspace-file-edit-outside"};
+  write_text(root.path() / "note.txt", "alpha beta");
+  write_text(outside.path() / "secret.txt", "do not edit");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_edit(registry).has_value());
+
+    auto workspace = make_workspace(root.path());
+    auto rules = allow_tool_rules(std::string{tool::kFileEditName}, core::Capability::edit_file);
+    permission::RecordingAuditSink sink;
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+
+    auto edited = co_await registry.dispatch(tool::kFileEditName,
+                                             R"({"path":"note.txt","old_string":"beta","new_string":"BETA"})",
+                                             ctx);
+    REQUIRE(edited.has_value());
+
+    std::error_code ec;
+    const auto outside_relative_path = std::filesystem::relative(outside.path() / "secret.txt", root.path(), ec);
+    REQUIRE(ec.value() == 0);
+    const auto escaped_input =
+        std::format(R"({{"path":"{}","old_string":"do","new_string":"DO"}})", outside_relative_path.string());
+    auto escaped = co_await registry.dispatch(tool::kFileEditName, escaped_input, ctx);
+    REQUIRE_FALSE(escaped.has_value());
+    REQUIRE(escaped.error().kind() == core::ErrorKind::permission_denied);
+    REQUIRE(context_has(escaped.error(), "reason", "outside_workspace"));
+  });
+
+  std::ifstream inside{root.path() / "note.txt", std::ios::binary};
+  REQUIRE(std::string{std::istreambuf_iterator<char>{inside}, std::istreambuf_iterator<char>{}} == "alpha BETA");
+  std::ifstream outside_file{outside.path() / "secret.txt", std::ios::binary};
+  REQUIRE(std::string{std::istreambuf_iterator<char>{outside_file}, std::istreambuf_iterator<char>{}} == "do not edit");
+}
+
+TEST_CASE("file.edit rejects workspace symlink mutation targets", "[unit][tool][workspace][file_edit]") {
+  TempDir root{"oran-workspace-file-edit-link"};
+  write_text(root.path() / "target.txt", "alpha");
+  create_symlink_or_skip(root.path() / "target.txt", root.path() / "link.txt");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_edit(registry).has_value());
+
+    auto workspace = make_workspace(root.path());
+    auto rules = allow_tool_rules(std::string{tool::kFileEditName}, core::Capability::edit_file);
+    permission::RecordingAuditSink sink;
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+
+    auto edited = co_await registry.dispatch(tool::kFileEditName,
+                                             R"({"path":"link.txt","old_string":"alpha","new_string":"ALPHA"})",
+                                             ctx);
+    REQUIRE_FALSE(edited.has_value());
+    REQUIRE(edited.error().kind() == core::ErrorKind::permission_denied);
+    REQUIRE(context_has(edited.error(), "reason", "symlink_target"));
+    REQUIRE(std::filesystem::is_symlink(root.path() / "link.txt"));
+  });
+
+  std::ifstream target{root.path() / "target.txt", std::ios::binary};
+  REQUIRE(std::string{std::istreambuf_iterator<char>{target}, std::istreambuf_iterator<char>{}} == "alpha");
+}
+
+TEST_CASE("file.delete uses DispatchContext workspace for relative deletes and traversal refusal",
+          "[unit][tool][workspace][file_delete]") {
+  TempDir root{"oran-workspace-file-delete"};
+  TempDir outside{"oran-workspace-file-delete-outside"};
+  write_text(root.path() / "doomed.txt", "remove");
+  write_text(outside.path() / "secret.txt", "keep");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_delete(registry).has_value());
+
+    auto workspace = make_workspace(root.path());
+    auto rules = allow_tool_rules(std::string{tool::kFileDeleteName}, core::Capability::delete_path);
+    permission::RecordingAuditSink sink;
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+
+    auto deleted = co_await registry.dispatch(tool::kFileDeleteName, R"({"path":"doomed.txt"})", ctx);
+    REQUIRE(deleted.has_value());
+    REQUIRE_FALSE(std::filesystem::exists(root.path() / "doomed.txt"));
+
+    std::error_code ec;
+    const auto outside_relative_path = std::filesystem::relative(outside.path() / "secret.txt", root.path(), ec);
+    REQUIRE(ec.value() == 0);
+    const auto escaped_input = std::format(R"({{"path":"{}"}})", outside_relative_path.string());
+    auto escaped = co_await registry.dispatch(tool::kFileDeleteName, escaped_input, ctx);
+    REQUIRE_FALSE(escaped.has_value());
+    REQUIRE(escaped.error().kind() == core::ErrorKind::permission_denied);
+    REQUIRE(context_has(escaped.error(), "reason", "outside_workspace"));
+    REQUIRE(std::filesystem::exists(outside.path() / "secret.txt"));
+  });
+}
+
+TEST_CASE("file.delete rejects workspace symlink mutation targets", "[unit][tool][workspace][file_delete]") {
+  TempDir root{"oran-workspace-file-delete-link"};
+  write_text(root.path() / "target.txt", "survives");
+  create_symlink_or_skip(root.path() / "target.txt", root.path() / "link.txt");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_delete(registry).has_value());
+
+    auto workspace = make_workspace(root.path());
+    auto rules = allow_tool_rules(std::string{tool::kFileDeleteName}, core::Capability::delete_path);
+    permission::RecordingAuditSink sink;
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+
+    auto deleted = co_await registry.dispatch(tool::kFileDeleteName, R"({"path":"link.txt"})", ctx);
+    REQUIRE_FALSE(deleted.has_value());
+    REQUIRE(deleted.error().kind() == core::ErrorKind::permission_denied);
+    REQUIRE(context_has(deleted.error(), "reason", "symlink_target"));
+    REQUIRE(std::filesystem::is_symlink(root.path() / "link.txt"));
+    REQUIRE(std::filesystem::exists(root.path() / "target.txt"));
   });
 }

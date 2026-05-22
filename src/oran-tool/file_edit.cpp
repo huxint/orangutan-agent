@@ -29,6 +29,7 @@
 #include <oran/core/tool_def.hpp>
 #include <oran/io/file.hpp>
 #include <oran/tool/registry.hpp>
+#include <oran/tool/workspace.hpp>
 
 namespace orangutan::tool {
 
@@ -88,10 +89,8 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
   return static_cast<std::uintmax_t>(value);
 }
 
-[[nodiscard]] core::Result<std::size_t> replacement_size(std::size_t source_size,
-                                                         std::size_t old_size,
-                                                         std::size_t new_size,
-                                                         std::size_t replacement_count) {
+[[nodiscard]] core::Result<std::size_t>
+replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_size, std::size_t replacement_count) {
   if (new_size <= old_size) {
     return source_size - ((old_size - new_size) * replacement_count);
   }
@@ -176,6 +175,14 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
   }
   if (old_string == new_string) {
     co_return std::unexpected(core::Error::invalid_argument("file.edit: `old_string` and `new_string` are identical"));
+  }
+
+  if (ctx.workspace != nullptr) {
+    auto resolved = ctx.workspace->resolve_write(path, WriteIntent{.disposition = WriteDisposition::truncate});
+    if (!resolved) {
+      co_return std::unexpected(std::move(resolved).error());
+    }
+    path = std::move(resolved->absolute_path);
   }
 
   auto contents = co_await io::read_text_file(ctx.executor, path, io::ReadTextOptions{.max_bytes = *max_bytes});

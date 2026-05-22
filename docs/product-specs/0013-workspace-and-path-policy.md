@@ -6,11 +6,13 @@
 explicitly overridden. Before slice 37 every built-in file tool read `path`
 straight from the JSON input and called `oran-io` without canonicalisation,
 traversal checks, or symlink policy. Slice 37 adds the resolver foundation and
-migrates `file.read` when `DispatchContext::workspace` is supplied; the
-remaining built-ins still need the same migration. Permission rules can gate a
-*capability* or a *name*, but once a write is allowed it can land anywhere the
-host process can write to until this spec's write/edit/delete migration is
-complete.
+migrates `file.read` when `DispatchContext::workspace` is supplied; slice 38
+migrates `file.write`, `file.edit`, and `file.delete` through the same seam.
+`file.search` and `directory.list` still need the same migration, and full
+runtime confinement still needs bootstrap-owned `Workspace` values plus the
+pre-permission resolver boundary. Permission rules can gate a *capability* or a
+*name*, but a broad read/list allow can still inspect outside the workspace
+until this spec's remaining built-in migration is complete.
 
 For a coding agent, "ask before write" is not a substitute for a workspace
 boundary. The cost of an escape — overwriting `~/.ssh/authorized_keys`,
@@ -20,11 +22,10 @@ the same resolver.
 
 Today's seams that motivate this spec:
 
-- `file.write` / `file.edit` / `file.delete` accept raw path strings and call
-  `io::*` directly; `DispatchContext::workspace` exists as of slice 37 but
-  those mutating tools have not adopted it yet. Evidence:
-  `src/oran-tool/file_write.cpp:86-94`, `src/oran-tool/file_edit.cpp:122-149`,
-  `src/oran-tool/file_delete.cpp` (slice 30).
+- `file.search` and `directory.list` accept raw path strings and call
+  `io::*` / `std::filesystem` directly; `DispatchContext::workspace` exists as
+  of slice 37 and the mutating tools adopted it in slice 38, but these
+  read/list tools have not adopted it yet.
 - `file.search` and `file.delete` disagree on symlink behaviour. The root path
   in `file.search` follows symlinks (`is_regular_file` / `is_directory`,
   `src/oran-tool/file_search.cpp:275-295`), nested entries skip them
@@ -50,8 +51,15 @@ roots, exposes `resolve_read`, `resolve_write`, `resolve_delete`, and
 with the context reasons this spec names. `DispatchContext` carries an
 optional non-owning `Workspace*`; `file.read` uses it when supplied.
 
-Still pending: `file.write`, `file.edit`, `file.delete`, `file.search`, and
-`directory.list` adoption; config parsing for
+**Slice 38 (2026-05-22):** `file.write`, `file.edit`, and `file.delete` now
+resolve through `DispatchContext::workspace` when it is supplied. Writes pass
+their current `mode` and `create_parents` intent to `resolve_write`; edits use
+`resolve_write` before the read+atomic rewrite; deletes use `resolve_delete`.
+Relative in-workspace paths work, traversal outside the workspace rejects with
+`reason=outside_workspace`, and mutating symlink targets reject with
+`reason=symlink_target`.
+
+Still pending: `file.search` and `directory.list` adoption; config parsing for
 `permissions.workspace.extra_read_roots` / `extra_write_roots`; bootstrap
 ownership; audit metadata; and moving resolution to the pre-permission
 dispatch boundary.
@@ -150,8 +158,10 @@ creation is allowed for this resolve call.
 Slice 37 satisfies the resolver-level portions of criteria 1-3 and 8 inside
 `tests/tool/test_workspace.cpp`, verifies independent `Workspace` values toward
 criterion 6, and verifies `file.read` consumes the workspace seam when
-provided. Criteria 4-6 plus bootstrap-owned config wiring remain open until
-every filesystem built-in resolves before permission/audit.
+provided. Slice 38 adds dispatch-level regressions for `file.write`,
+`file.edit`, and `file.delete` through the workspace seam. Criteria 4-6 plus
+search/list adoption and bootstrap-owned config wiring remain open until every
+filesystem built-in resolves before permission/audit.
 
 1. **Traversal rejection.** A `file.write` whose `path` resolves via `..` to a
    point outside the workspace root returns `Error::permission_denied` with
@@ -214,8 +224,9 @@ every filesystem built-in resolves before permission/audit.
 - **Slice scope blowup.** Touching all six built-ins plus dispatch context in
   one PR could break the ~600 LoC / ~6 files guideline. Mitigation: land
   `tool::Workspace` + the v1 resolver matrix + one built-in migration
-  (`file.read`) in slice N; migrate the remaining five built-ins in slice
-  N+1. STATUS.md names the active migration target.
+  (`file.read`) in slice N; migrate mutating tools in slice N+1; then migrate
+  the remaining read/list tools in a later slice. STATUS.md names the active
+  migration target.
 - **`weakly_canonical` cost.** Every dispatch now stat-walks the path. For
   hot directories this is negligible against permission/audit/hook costs;
   bench `tool/dispatch_overhead` re-runs against a workspace-resolved
