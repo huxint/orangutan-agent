@@ -1551,6 +1551,113 @@ TEST_CASE("file.search ignore predicate still skips .git even with include_hidde
   });
 }
 
+// Slice 49 — source-controlled ignore files. The recursive walk loads
+// `.gitignore` and `.ignore` from the search root downward when
+// `respect_ignore=true` (default). The supported subset covers the shapes
+// agents hit in normal repos: blanks/comments, basename patterns, slash
+// relative patterns, trailing-slash directory rules, escaped leading
+// markers, and `!` negation.
+
+TEST_CASE("file.search honors .gitignore basename, directory, relative path, and negation rules",
+          "[unit][tool][file_search][respect_ignore]") {
+  TempDir dir{"gitignore-root"};
+  dir.write_file(".gitignore", "*.log\nignored/\ndocs/secret.txt\n!keep.log\n");
+  dir.write_file("src/a.txt", "NEEDLE in src\n");
+  dir.write_file("a.log", "NEEDLE in ignored log\n");
+  dir.write_file("keep.log", "NEEDLE in re-included log\n");
+  dir.write_file("ignored/b.txt", "NEEDLE in ignored dir\n");
+  dir.write_file("docs/secret.txt", "NEEDLE in ignored relative file\n");
+  dir.write_file("docs/public.txt", "NEEDLE in public docs\n");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"(","pattern":"NEEDLE"})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.contains(dir.child("src/a.txt").string()));
+    REQUIRE(result->text.contains(dir.child("keep.log").string()));
+    REQUIRE(result->text.contains(dir.child("docs/public.txt").string()));
+    REQUIRE_FALSE(result->text.contains(dir.child("a.log").string()));
+    REQUIRE_FALSE(result->text.contains(dir.child("ignored/b.txt").string()));
+    REQUIRE_FALSE(result->text.contains(dir.child("docs/secret.txt").string()));
+  });
+}
+
+TEST_CASE("file.search treats escaped ignore markers as literal leading characters",
+          "[unit][tool][file_search][respect_ignore]") {
+  TempDir dir{"ignore-escaped-markers"};
+  dir.write_file(".gitignore", "\\!literal.txt\n\\#literal.txt\n");
+  dir.write_file("!literal.txt", "NEEDLE in literal bang file\n");
+  dir.write_file("#literal.txt", "NEEDLE in literal hash file\n");
+  dir.write_file("plain.txt", "NEEDLE in visible file\n");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"(","pattern":"NEEDLE"})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.contains(dir.child("plain.txt").string()));
+    REQUIRE_FALSE(result->text.contains(dir.child("!literal.txt").string()));
+    REQUIRE_FALSE(result->text.contains(dir.child("#literal.txt").string()));
+  });
+}
+
+TEST_CASE("file.search loads nested .ignore rules for descendants only", "[unit][tool][file_search][respect_ignore]") {
+  TempDir dir{"nested-ignore"};
+  dir.write_file("local.txt", "NEEDLE at root\n");
+  dir.write_file("src/.ignore", "local.txt\n");
+  dir.write_file("src/local.txt", "NEEDLE under ignored nested rule\n");
+  dir.write_file("src/keep.txt", "NEEDLE under src\n");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"(","pattern":"NEEDLE"})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.contains(dir.child("local.txt").string()));
+    REQUIRE(result->text.contains(dir.child("src/keep.txt").string()));
+    REQUIRE_FALSE(result->text.contains(dir.child("src/local.txt").string()));
+  });
+}
+
+TEST_CASE("file.search respect_ignore=false ignores .gitignore and .ignore rules",
+          "[unit][tool][file_search][respect_ignore]") {
+  TempDir dir{"ignore-file-off"};
+  dir.write_file(".gitignore", "*.log\n");
+  dir.write_file("src/.ignore", "local.txt\n");
+  dir.write_file("a.log", "NEEDLE in log\n");
+  dir.write_file("src/local.txt", "NEEDLE in nested ignored file\n");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"(","pattern":"NEEDLE","respect_ignore":false})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.contains(dir.child("a.log").string()));
+    REQUIRE(result->text.contains(dir.child("src/local.txt").string()));
+  });
+}
+
 TEST_CASE("file.search skips binary files (NUL bytes in the first 8 KiB)", "[unit][tool][file_search]") {
   TempDir dir{"binary"};
   std::string binary_content;

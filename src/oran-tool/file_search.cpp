@@ -32,14 +32,19 @@
 // Slice 48 takes the first step on spec 0011 v1.1's "`file.search` ignore
 // predicate" item by adding a *built-in* skip list: the recursive directory
 // walk no longer descends into `build`, `node_modules`, `.git`, `.xmake`, or
-// `.orangutan` regardless of the `include_hidden` flag. Honouring
-// `.gitignore` and `.ignore` is the larger follow-up; the built-in list is
-// the high-signal subset (well-known vendor / build / VCS directories) that
-// the spec calls out explicitly and that an agent never wants to scan even
-// when `include_hidden=true`. An optional `respect_ignore` field (default
-// true) lets a caller opt out for forensic searches.
+// `.orangutan` regardless of the `include_hidden` flag. Slice 49 completes
+// the source-controlled ignore-file half for recursive walks: when
+// `respect_ignore=true` (default), `.gitignore` and `.ignore` files from the
+// search root downward are parsed into a per-directory rule stack. The
+// implementation intentionally covers the common Git-style subset agents need
+// most: comments/blanks, escaped leading `#` / `!` literals, `!` negation,
+// trailing `/` directory-only rules, anchored or relative slash patterns,
+// basename patterns, and fnmatch-style `*` / `?` / `[]` globs. Explicit
+// single-file searches still honour the named file directly.
 
 #include <oran/tool/builtins.hpp>
+
+#include <fnmatch.h>
 
 #include <algorithm>
 #include <array>
@@ -113,8 +118,8 @@ constexpr std::size_t kBinaryProbeBytes = 8U * 1024U;
 /// signal density per byte for an agent and whose presence in a tree is near
 /// universal. The list applies *regardless* of `include_hidden` — agents
 /// opting into hidden files (e.g., `.env`) still don't want a full descent
-/// through `.git/`. Honouring `.gitignore` / `.ignore` is the larger
-/// follow-up tracked in spec 0011 v1.1.
+/// through `.git/`. Source-controlled ignore files layer on top of this
+/// built-in list.
 constexpr std::array<std::string_view, 5> kIgnoredDirectoryNames{
     ".git",
     ".xmake",
@@ -256,8 +261,192 @@ struct LineMatcher {
 /// consults this predicate on directories.
 [[nodiscard]] bool is_ignored_directory_name(const std::filesystem::path& p) {
   const auto name = p.filename().string();
-  return std::ranges::find(kIgnoredDirectoryNames, std::string_view{name}) != kIgnoredDirectoryNames.end();
+  return std::ranges::contains(kIgnoredDirectoryNames, std::string_view{name});
 }
+
+[[nodiscard]] bool is_ascii_space(char ch) noexcept {
+  return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' || ch == '\f' || ch == '\v';
+}
+
+[[nodiscard]] std::string trim_ascii(std::string_view text) {
+  while (!text.empty() && is_ascii_space(text.front())) {
+    text.remove_prefix(1);
+  }
+  while (!text.empty() && is_ascii_space(text.back())) {
+    text.remove_suffix(1);
+  }
+  return std::string{text};
+}
+
+struct IgnoreRule {
+  std::filesystem::path base_directory;
+  std::string pattern;
+  bool negated{false};
+  bool directory_only{false};
+  bool anchored{false};
+  bool contains_slash{false};
+};
+
+struct IgnoreScope {
+  std::filesystem::path directory;
+  std::vector<IgnoreRule> rules;
+};
+
+[[nodiscard]] std::optional<IgnoreRule> parse_ignore_line(std::string_view raw_line,
+                                                          const std::filesystem::path& base_directory) {
+  auto text = trim_ascii(raw_line);
+  if (text.empty()) {
+    return std::nullopt;
+  }
+  bool escaped_leading_marker = false;
+  if (text.starts_with("\\#") || text.starts_with("\\!")) {
+    text.erase(text.begin());
+    escaped_leading_marker = true;
+  } else if (text.front() == '#') {
+    return std::nullopt;
+  }
+
+  bool negated = false;
+  if (!escaped_leading_marker && !text.empty() && text.front() == '!') {
+    negated = true;
+    text.erase(text.begin());
+  }
+
+  bool anchored = false;
+  while (!text.empty() && text.front() == '/') {
+    anchored = true;
+    text.erase(text.begin());
+  }
+
+  bool directory_only = false;
+  while (!text.empty() && text.back() == '/') {
+    directory_only = true;
+    text.pop_back();
+  }
+  if (text.empty()) {
+    return std::nullopt;
+  }
+
+  const bool contains_slash = text.contains('/');
+
+  return IgnoreRule{
+      .base_directory = base_directory.lexically_normal(),
+      .pattern = std::move(text),
+      .negated = negated,
+      .directory_only = directory_only,
+      .anchored = anchored,
+      .contains_slash = contains_slash,
+  };
+}
+
+[[nodiscard]] std::vector<IgnoreRule> load_ignore_rules(const std::filesystem::path& directory) {
+  constexpr std::array<std::string_view, 2> kIgnoreFiles{".gitignore", ".ignore"};
+
+  std::vector<IgnoreRule> rules;
+  for (const auto name : kIgnoreFiles) {
+    std::ifstream input{directory / name, std::ios::binary};
+    if (!input) {
+      continue;
+    }
+    std::string line;
+    while (std::getline(input, line)) {
+      if (auto rule = parse_ignore_line(line, directory); rule.has_value()) {
+        rules.push_back(std::move(*rule));
+      }
+    }
+  }
+  return rules;
+}
+
+[[nodiscard]] std::optional<std::string> relative_generic_string(const std::filesystem::path& path,
+                                                                 const std::filesystem::path& base) {
+  const auto relative = path.lexically_normal().lexically_relative(base.lexically_normal());
+  if (relative.empty()) {
+    return std::string{"."};
+  }
+  for (const auto& part : relative) {
+    if (part == "..") {
+      return std::nullopt;
+    }
+  }
+  return relative.generic_string();
+}
+
+[[nodiscard]] bool path_pattern_matches(std::string_view pattern, std::string_view candidate, bool path_mode) {
+  const int flags = path_mode ? FNM_PATHNAME : 0;
+  return fnmatch(std::string{pattern}.c_str(), std::string{candidate}.c_str(), flags) == 0;
+}
+
+[[nodiscard]] bool ignore_rule_matches(const IgnoreRule& rule, const std::filesystem::path& path, bool is_directory) {
+  if (rule.directory_only && !is_directory) {
+    return false;
+  }
+
+  if (rule.anchored || rule.contains_slash) {
+    const auto relative = relative_generic_string(path, rule.base_directory);
+    return relative.has_value() && path_pattern_matches(rule.pattern, *relative, true);
+  }
+
+  return path_pattern_matches(rule.pattern, path.filename().generic_string(), false);
+}
+
+class IgnoreStack {
+public:
+  explicit IgnoreStack(std::filesystem::path root) : root_{std::move(root)} {
+    root_ = root_.lexically_normal();
+  }
+
+  void sync_for_parent(const std::filesystem::path& parent) {
+    const auto directories = directories_to(parent);
+    std::size_t common = 0;
+    while (common < scopes_.size() && common < directories.size() && scopes_[common].directory == directories[common]) {
+      ++common;
+    }
+    scopes_.resize(common);
+    for (std::size_t index = common; index < directories.size(); ++index) {
+      scopes_.push_back(IgnoreScope{
+          .directory = directories[index],
+          .rules = load_ignore_rules(directories[index]),
+      });
+    }
+  }
+
+  [[nodiscard]] bool is_ignored(const std::filesystem::path& path, bool is_directory) const {
+    bool ignored = false;
+    for (const auto& scope : scopes_) {
+      for (const auto& rule : scope.rules) {
+        if (ignore_rule_matches(rule, path, is_directory)) {
+          ignored = !rule.negated;
+        }
+      }
+    }
+    return ignored;
+  }
+
+private:
+  std::filesystem::path root_;
+  std::vector<IgnoreScope> scopes_;
+
+  [[nodiscard]] std::vector<std::filesystem::path> directories_to(const std::filesystem::path& parent) const {
+    std::vector<std::filesystem::path> directories;
+    directories.push_back(root_);
+
+    auto relative = parent.lexically_normal().lexically_relative(root_);
+    if (relative.empty()) {
+      return directories;
+    }
+
+    auto current = root_;
+    for (const auto& part : relative) {
+      if (part == "." || part == "..") {
+        continue;
+      }
+      current /= part;
+      directories.push_back(current.lexically_normal());
+    }
+    return directories;
+  }
+};
 
 [[nodiscard]] bool looks_binary(std::string_view contents) {
   const auto probe = contents.substr(0, std::min<std::size_t>(contents.size(), kBinaryProbeBytes));
@@ -430,6 +619,10 @@ struct LineMatcher {
       const auto walk_opts = std::filesystem::directory_options::skip_permission_denied;
       const std::filesystem::recursive_directory_iterator end{};
       auto it = std::filesystem::recursive_directory_iterator{root, walk_opts};
+      auto ignore_stack = std::optional<IgnoreStack>{};
+      if (opts.respect_ignore) {
+        ignore_stack.emplace(root);
+      }
       while (it != end && outcome.matches.size() < match_budget && outcome.truncated != TruncReason::bytes) {
         // Poll cancellation once per directory entry so a SIGINT mid-walk
         // unwinds the recursion before the next stat / open syscall. The
@@ -442,8 +635,9 @@ struct LineMatcher {
         const auto& entry_path = entry.path();
 
         std::error_code probe_ec;
+        const bool entry_is_directory = entry.is_directory(probe_ec);
         if (!opts.include_hidden && is_hidden(entry_path)) {
-          if (entry.is_directory(probe_ec)) {
+          if (entry_is_directory) {
             it.disable_recursion_pending();
           }
           ++it;
@@ -453,10 +647,20 @@ struct LineMatcher {
         // opt-in to scan hidden files (e.g., `.env`) still doesn't unleash
         // a full descent through `.git/` or `node_modules/`. Disabled by
         // `respect_ignore=false` for forensic searches.
-        if (opts.respect_ignore && entry.is_directory(probe_ec) && is_ignored_directory_name(entry_path)) {
+        if (opts.respect_ignore && entry_is_directory && is_ignored_directory_name(entry_path)) {
           it.disable_recursion_pending();
           ++it;
           continue;
+        }
+        if (ignore_stack.has_value()) {
+          ignore_stack->sync_for_parent(entry_path.parent_path());
+          if (ignore_stack->is_ignored(entry_path, entry_is_directory)) {
+            if (entry_is_directory) {
+              it.disable_recursion_pending();
+            }
+            ++it;
+            continue;
+          }
         }
         if (entry.is_symlink(probe_ec)) {
           ++it;
@@ -587,7 +791,11 @@ core::Result<void> register_file_search(Registry& registry) {
                      "appended depending on which limit fired. Files containing NUL bytes in their first 8 KiB are "
                      "treated as binary and skipped during a directory walk. When `respect_ignore=true` (the "
                      "default), the recursive walk skips `.git`, `.xmake`, `.orangutan`, `build`, and "
-                     "`node_modules` directories regardless of `include_hidden`. Returns the literal text `no "
+                     "`node_modules` directories regardless of `include_hidden`, and honours `.gitignore` / "
+                     "`.ignore` files from the search root downward for comments, blanks, escaped leading `#` / "
+                     "`!` literals, `!` negation, trailing `/` directory rules, slash-relative patterns, basename "
+                     "patterns, and fnmatch-style globs. "
+                     "Returns the literal text `no "
                      "matches` (non-error) when nothing matched.",
       .input_schema_json = std::string{kFileSearchSchema},
       .required_capabilities = {core::Capability::read_file},

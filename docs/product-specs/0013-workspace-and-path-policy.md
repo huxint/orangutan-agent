@@ -101,8 +101,21 @@ to thread `RuntimeAssembly::workspace()` into `DispatchContext::workspace`;
 moving resolution to the pre-permission dispatch boundary and adding audit
 metadata for the resolved path remain follow-up work.
 
+**Slice 49 (2026-05-23):** `file.search` now owns the first
+source-controlled ignore-file implementation. Recursive walks with
+`respect_ignore=true` load `.gitignore` and `.ignore` files from the search
+root downward and apply the common repo-rule subset (comments, blanks,
+escaped leading marker literals, negation, directory-only rules,
+slash-relative patterns, basename patterns, and fnmatch-style globs) on
+top of the slice-48 built-in skip list. This
+closes the immediate `file.search` product need in spec 0011, but the
+workspace-owned sharing point described below is still pending for the
+future `directory.scan`.
+
 Still pending: audit metadata for resolved paths / override-root index, and
-moving resolution to the pre-permission dispatch boundary.
+moving resolution to the pre-permission dispatch boundary. The shared
+`Workspace::is_ignored(...)` predicate remains a v1.1 structure task once a
+second consumer (`directory.scan`) exists.
 
 ## Scope (v1)
 
@@ -159,10 +172,11 @@ creation is allowed for this resolve call.
 
 ## Scope (v1.1)
 
-- `.gitignore` / `.ignore` honouring as a workspace-owned predicate
-  (`Workspace::is_ignored(ResolvedPath)`), shared by `file.search` and the
-  future `directory.scan`. Built-in skip list (`.git`, `build`, `.xmake`,
-  `node_modules`, `.orangutan/cache`) lives here, not in each tool.
+- Lift the shipped `file.search` ignore predicate into a workspace-owned
+  predicate (`Workspace::is_ignored(ResolvedPath)`) once `directory.scan`
+  exists. The current implementation lives in `file.search` only; the shared
+  predicate will carry the built-in skip list plus `.gitignore` / `.ignore`
+  rule stack so both recursive tools make the same decision.
 - Per-call override field for `file.read` / `file.search` /
   `directory.list`: `allow_outside_workspace=true` requires an `ask`
   permission verdict at runtime and records the resolved path in audit

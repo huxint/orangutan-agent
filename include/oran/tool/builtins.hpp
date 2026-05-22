@@ -84,7 +84,10 @@ inline constexpr std::string_view kFileDeleteName{"file.delete"};
 /// KiB are treated as binary and skipped during a directory walk. When
 /// `respect_ignore=true` (the default), the recursive walk skips `.git`,
 /// `.xmake`, `.orangutan`, `build`, and `node_modules` directories
-/// regardless of `include_hidden`.
+/// regardless of `include_hidden`, and honours `.gitignore` / `.ignore`
+/// files from the search root downward for comments, blanks, escaped
+/// leading `#` / `!` literals, `!` negation, trailing `/` directory rules,
+/// slash-relative patterns, basename patterns, and fnmatch-style globs.
 [[nodiscard]] core::Result<void> register_file_search(Registry& registry);
 
 /// Register the `directory.list` tool. Enumerates the immediate children of

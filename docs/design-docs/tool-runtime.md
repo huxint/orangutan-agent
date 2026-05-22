@@ -77,11 +77,14 @@ enum class Capability {
 > (default / hard ceiling 16 MiB); truncating rewrite via
 > `io::write_text_file`), and `file.search` (slice 20,
 > `Capability::read_file`, input
-> `{path, pattern, max_matches?, include_hidden?}` — literal substring
-> match; single-file or recursive directory walk via
-> `std::filesystem::recursive_directory_iterator`; NUL-byte binary
-> heuristic skips suspect files during walks; dotfile-skip is the
-> default; regex support and ripgrep-class optimisations are deferred
+> `{path, pattern, max_matches?, include_hidden?, regex?,
+> max_output_bytes?, respect_ignore?}` — literal substring match by
+> default; `regex=true` (slice 24) routes through
+> `permission::InputPattern`; recursive walks skip NUL-bearing binary
+> files, dot-prefixed entries when `include_hidden=false`, slice-48's
+> built-in low-signal directories, and slice-49's `.gitignore` /
+> `.ignore` common rule subset when `respect_ignore=true`; ripgrep-class
+> mmap / extension-binary-skip / parallel-walk optimisations are deferred
 > to follow-up slices tracked in
 > [`exec-plans/tech-debt-tracker.md`](../exec-plans/tech-debt-tracker.md)).
 > Slice 21 (2026-05-17) wired `permission::ApprovalBroker` through

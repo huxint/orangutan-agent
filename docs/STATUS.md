@@ -7,25 +7,26 @@
 
 ## Snapshot
 
-- **Slice:** 48 (`xmake run orangutan` reports slice 48)
+- **Slice:** 49 (`xmake run orangutan` reports slice 49)
 - **Last completed history:**
-  [`histories/2026-05/20260523-2200-tool-search-ignore-predicate.md`](histories/2026-05/20260523-2200-tool-search-ignore-predicate.md)
+  [`histories/2026-05/20260523-2315-tool-search-ignore-files.md`](histories/2026-05/20260523-2315-tool-search-ignore-files.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 48
-  ships the first piece of spec 0011 v1.1's "`file.search` ignore
-  predicate" item: a built-in skip list (`.git`, `.xmake`,
-  `.orangutan`, `build`, `node_modules`) that the recursive walk
-  honours regardless of `include_hidden`, with an optional
-  `respect_ignore=false` field for forensic searches. Honouring
-  `.gitignore` / `.ignore` files is the larger follow-up. The
-  remaining v1.1 items are the `BoundedCache` consumers on top of
-  the slice-44 primitive: the line-offset index for files larger
-  than 256 KiB, the file-view cache, the regex compile cache,
-  singleflight reads, and external-edit awareness. Spec 0013's
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 49
+  completes spec 0011 v1.1's current `file.search` ignore-predicate
+  work: the recursive walk now honours `.gitignore` / `.ignore`
+  files from the search root downward for the common Git-style subset
+  (`#` comments, blanks, escaped leading `#` / `!` literals, `!`
+  negation, trailing `/` directory rules, slash-relative patterns,
+  basename patterns, and fnmatch-style globs) on top of slice 48's
+  built-in skip list. The remaining v1.1
+  items are the `BoundedCache` consumers on top of the slice-44
+  primitive: the line-offset index for files larger than 256 KiB, the
+  file-view cache, the regex compile cache, singleflight reads, and
+  external-edit awareness. Spec 0013's
   remaining workspace work narrows to audit metadata and moving
   resolution to the pre-permission dispatch boundary. The first
   provider adapter (Anthropic Messages) remains a multi-slice
@@ -61,7 +62,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 24 cases / 171 assertions.
 - `oran-permission`: 83 cases / 379 assertions.
 - `oran-hook`: 15 cases / 97 assertions.
-- `oran-tool`: 127 cases / 1067 assertions.
+- `oran-tool`: 131 cases / 1093 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 153 assertions.
 
@@ -82,7 +83,7 @@ Closed entries do *not* live here — the tracker is canonical.
   semantics with veto for `tool_before` / `memory_*_before` /
   `permission_ask_rendered` are deferred to a follow-up slice.
 - 2026-05-17 — `file.search` does not yet ship ripgrep-class optimisations
-  (mmap, extension-based binary skip, `.gitignore`, multi-threaded walk).
+  (mmap, extension-based binary skip, multi-threaded walk).
   Adequate at slice 20 (~27 µs / 4-file tree) but 3-10× slower than a tuned
   scanner on repo-scale inputs. Re-bench once `oran-agent` produces a real
   workload measurement.

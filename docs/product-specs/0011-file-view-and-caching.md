@@ -126,6 +126,25 @@ even with `include_hidden=true`. v1.1's remaining items (line-offset
 index, file-view cache, regex compile cache, singleflight,
 external-edit awareness, `.gitignore` / `.ignore` honor) stay next.
 
+**Status (slice 49, 2026-05-23):** the source-controlled half of
+v1.1's "`file.search` ignore predicate" item ships in `oran-tool`.
+When `respect_ignore=true` (default), recursive `file.search` loads
+`.gitignore` and `.ignore` files from the search root downward and
+applies them as a per-directory rule stack. The shipped subset covers
+the repo rules agents rely on most: blank lines, `#` comments, escaped
+leading `#` / `!` literals, `!` negation, trailing `/` directory-only
+rules, slash-relative patterns, basename patterns, and fnmatch-style
+`*` / `?` / `[]` globs. Explicit
+single-file searches still honour the named file directly, and
+`respect_ignore=false` disables both the ignore-file rules and the
+slice-48 built-in skip list for forensic walks. Full Git parity for
+edge-case escapes / double-star semantics and the final shared
+`Workspace::is_ignored(...)` home remain future structure work under
+spec 0013; the current `file.search` predicate work called out by
+this spec is complete. v1.1's remaining items are the line-offset
+index, file-view cache, regex compile cache, singleflight reads, and
+external-edit awareness.
+
 **v1.1 prerequisite (slice 44, 2026-05-22):** the `BoundedCache<Key,
 Value>` generic primitive that v1.1's line-offset index, file-view
 cache, and regex cache build on is now shipped in `oran-core` as
@@ -248,10 +267,12 @@ correctness is anchored:
 - **`file.search` literal-pattern cache**: compiled re2 patterns held in a
   small `BoundedCache<(pattern, options), unique_ptr<re2::RE2>>` keyed per
   agent turn. Bounded — never an unbounded `unordered_map`.
-- **`file.search` ignore predicate**: honour `.gitignore`, `.ignore`, and a
-  built-in skip list (`.git`, `build`, `.xmake`, `node_modules`,
-  `.orangutan/cache`). Predicate lives on `tool::Workspace` per spec 0013
-  so `directory.scan` shares it.
+- **`file.search` ignore predicate**: shipped inside the current
+  `file.search` walk across slices 48-49. It honours `.gitignore`,
+  `.ignore`, and a built-in skip list (`.git`, `build`, `.xmake`,
+  `node_modules`, `.orangutan`) when `respect_ignore=true`. The future
+  structural move is to lift the same predicate onto `tool::Workspace`
+  per spec 0013 so `directory.scan` shares it.
 - **Singleflight reads**: ten concurrent `file.read` calls for the same
   `(canonical_path, range)` share one filesystem read instead of stampeding
   the executor.
