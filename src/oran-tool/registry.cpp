@@ -153,7 +153,7 @@ core::Result<void> Registry::add(core::ToolDef def, Handler handler) {
 }
 
 core::Result<void> Registry::remove(std::string_view name) {
-  const auto it = entries_.find(std::string{name});
+  const auto it = entries_.find(name);
   if (it == entries_.end()) {
     return std::unexpected(make_lookup_error(name));
   }
@@ -162,7 +162,7 @@ core::Result<void> Registry::remove(std::string_view name) {
 }
 
 const core::ToolDef* Registry::find(std::string_view name) const {
-  const auto it = entries_.find(std::string{name});
+  const auto it = entries_.find(name);
   if (it == entries_.end()) {
     return nullptr;
   }
@@ -186,7 +186,7 @@ std::vector<core::ToolDef> Registry::catalog() const {
 
 async::Awaitable<core::Result<Output>>
 Registry::dispatch(std::string_view name, std::string_view input_json, DispatchContext& ctx) const {
-  const auto it = entries_.find(std::string{name});
+  const auto it = entries_.find(name);
   if (it == entries_.end()) {
     co_return std::unexpected(make_lookup_error(name));
   }

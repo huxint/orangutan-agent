@@ -57,6 +57,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -242,13 +243,25 @@ public:
   dispatch(std::string_view name, std::string_view input_json, DispatchContext& ctx) const;
 
 private:
+  struct TransparentStringHash {
+    using is_transparent = void;
+
+    [[nodiscard]] std::size_t operator()(std::string_view value) const noexcept {
+      return std::hash<std::string_view>{}(value);
+    }
+
+    [[nodiscard]] std::size_t operator()(const std::string& value) const noexcept {
+      return (*this)(std::string_view{value});
+    }
+  };
+
   struct Entry {
     core::ToolDef def;
     Handler handler;
     std::size_t insertion_index{0};
   };
 
-  std::unordered_map<std::string, Entry> entries_;
+  std::unordered_map<std::string, Entry, TransparentStringHash, std::equal_to<>> entries_;
   std::size_t next_index_{0};
 };
 

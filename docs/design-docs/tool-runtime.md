@@ -195,6 +195,11 @@ enum class Capability {
 > validator; it catches broken tool definitions early while keeping
 > heavy `nlohmann/json.hpp` isolated in
 > `src/oran-tool/schema_validation.cpp` instead of the dispatch TU.
+> Slice 36 (2026-05-22) closes the remaining deep-review P0 on the
+> registry hot path: `Registry::entries_` now uses transparent string
+> hashing, and `remove`, `find`, and `dispatch` call `entries_.find`
+> with the incoming `std::string_view` directly instead of allocating
+> a temporary `std::string` key for each lookup.
 
 A tool's `required_capabilities` list is **inspected at registration**. The permission
 engine knows the universe of capabilities a tool might use; the tool cannot smuggle in

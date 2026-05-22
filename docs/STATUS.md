@@ -7,26 +7,19 @@
 
 ## Snapshot
 
-- **Slice:** 35 (`xmake run orangutan` reports slice 35)
+- **Slice:** 36 (`xmake run orangutan` reports slice 36)
 - **Last completed history:**
-  [`histories/2026-05/20260522-1408-tool-registry-schema-validation.md`](histories/2026-05/20260522-1408-tool-registry-schema-validation.md)
+  [`histories/2026-05/20260522-1456-tool-registry-transparent-lookup.md`](histories/2026-05/20260522-1456-tool-registry-transparent-lookup.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
-- **Next intended slice:** TBD — slice 35 closed the deep-review
-  `Registry::add` schema-validation P0 item: tool registration now
-  rejects empty `input_schema_json`, unparseable JSON, non-object
-  top-level schemas, and malformed common JSON Schema keywords
-  (`type`, `properties`, `required`, `additionalProperties`, `enum`,
-  `minimum`, `maximum`) before mutating the registry. Heavy JSON
-  parsing lives in a separate `src/oran-tool/schema_validation.cpp`
-  TU so `registry.cpp` stays focused on dispatch. Remaining
-  deep-review P0 surface in `exec-plans/tech-debt-tracker.md`
-  under the `deep-review-2026-05-21` group: transparent hashing on
-  `Registry::entries_` to remove the per-dispatch lookup allocation.
-  The next-likely tool-side slices remain
-  unchanged: the first provider adapter (Anthropic Messages —
+- **Next intended slice:** TBD — slice 36 closed the remaining
+  deep-review P0 on `Registry::entries_`: the registry map now uses
+  transparent string hashing, so `remove`, `find`, and
+  `dispatch` can look up `std::string_view` names without allocating
+  a temporary `std::string` key. The next-likely tool-side slices are
+  the first provider adapter (Anthropic Messages —
   multi-slice, needs an exec plan and `oran-http` + libcurl
   wiring first), blocking hook semantics with veto (still gated
   on `oran-agent`), or wiring `check-compile-budget.sh` into
@@ -100,8 +93,8 @@ Closed entries do *not* live here — the tracker is canonical.
 
 - 2026-05-21 — Deep-review backlog: the stale root review artifact was
   deleted after its actionable findings were absorbed into the tracker and
-  specs 0011-0018. Slices 31-35 closed the rank-0 items plus the first P0
-  follow-ups; remaining follow-ups are grouped P0/P1/P2/P3 in the tracker.
+  specs 0011-0018. Slices 31-36 closed the rank-0 items plus the P0
+  follow-ups; remaining follow-ups are grouped P1/P2/P3 in the tracker.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on
   the documented reference hardware (8-core / NVMe / native Linux);
