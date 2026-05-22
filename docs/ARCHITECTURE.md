@@ -177,13 +177,20 @@ own test bucket, its own bench bucket, and its own public header set under
 > guards the edit behind the same optional `expected_version`
 > contract as `file.write`), `file.search`
 > (slice 20, `tool::register_file_search`, capability `read_file`,
-> input `{path, pattern, max_matches?, include_hidden?, regex?}` —
+> input `{path, pattern, max_matches?, include_hidden?, regex?,
+> max_output_bytes?}` —
 > literal substring by default, or re2 partial-match when
 > `regex=true` (slice 24, via `permission::InputPattern`);
 > single-file or recursive directory walk via
 > `std::filesystem::recursive_directory_iterator`; binary
 > heuristic skips NUL-bearing files during walks; dotfile-skip by
-> default; ripgrep-class optimisations deferred to follow-up
+> default; slice 47 adds an optional `max_output_bytes` field
+> (default 1 MiB) that caps the rendered `path:line:text` payload —
+> when the byte cap fires first the trailing summary spells
+> `(truncated; output capped at <N> bytes)`, otherwise the legacy
+> `(truncated; matches capped at <N>)` message wins so the
+> match-count cap always dominates a tie; ripgrep-class
+> optimisations deferred to follow-up
 > slices tracked in `exec-plans/tech-debt-tracker.md`;
 > slice 39 resolves the root path through `tool::Workspace::resolve_list`
 > when `DispatchContext::workspace` is supplied),

@@ -95,6 +95,22 @@ v1.1 (line-offset index, file-view cache, regex compile cache,
 singleflight, external-edit awareness) is next on top of the
 slice-44 `BoundedCache` primitive.
 
+**Status (slice 47, 2026-05-23):** the first v1.1 item — "Output cap
+on `file.search`" — ships in `oran-tool`. `file.search` accepts an
+optional `max_output_bytes` field (default 1 MiB) that caps the
+rendered `path:line:text` payload. The scan stops the moment the next
+match's exact rendered cost (`path + ":" + line_number + ":" + text`
+plus the inter-match `\n`) would push the running total past the
+budget; the trailing summary line then reads `(truncated; output
+capped at <N> bytes)`. The legacy `(truncated; matches capped at
+<N>)` message still wins when both caps could have fired — pinned by
+a deterministic tie test so agents can rely on a single dominant
+message per call. Cost is exact rather than estimated so the prompt
+cache hit rate stays stable across calls with the same budget. v1.1's
+remaining items (line-offset index, file-view cache, regex compile
+cache, singleflight, external-edit awareness) are next on top of the
+slice-44 `BoundedCache` primitive.
+
 **v1.1 prerequisite (slice 44, 2026-05-22):** the `BoundedCache<Key,
 Value>` generic primitive that v1.1's line-offset index, file-view
 cache, and regex cache build on is now shipped in `oran-core` as

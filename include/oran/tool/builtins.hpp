@@ -75,11 +75,13 @@ inline constexpr std::string_view kFileDeleteName{"file.delete"};
 /// a directory for literal substring matches; capability `read_file` is
 /// required. Input shape: `{"path": <string>, "pattern": <string>,
 /// "max_matches"?: uint (default 100), "include_hidden"?: bool (default
-/// false)}`. Returns one `path:line:text` line per match, with a trailing
-/// `(truncated; matches capped at <N>)` summary when the cap is hit;
-/// returns the literal text `no matches` (non-error) when no match was
-/// found. Files containing NUL bytes in their first 8 KiB are treated as
-/// binary and skipped during a directory walk.
+/// false), "regex"?: bool (default false), "max_output_bytes"?: uint
+/// (default 1048576)}`. Returns one `path:line:text` line per match, with a
+/// trailing `(truncated; matches capped at <N>)` or `(truncated; output
+/// capped at <N> bytes)` summary when a cap is hit; returns the literal text
+/// `no matches` (non-error) when no match was found. Files containing NUL
+/// bytes in their first 8 KiB are treated as binary and skipped during a
+/// directory walk.
 [[nodiscard]] core::Result<void> register_file_search(Registry& registry);
 
 /// Register the `directory.list` tool. Enumerates the immediate children of

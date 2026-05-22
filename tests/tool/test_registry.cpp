@@ -1393,6 +1393,87 @@ TEST_CASE("file.search caps results at max_matches and reports truncation", "[un
   });
 }
 
+// Slice 47 — `file.search` output byte cap closes spec 0011 v1.1's "Output cap
+// on `file.search`" item. A tight `max_output_bytes` cap fires *before* the
+// match cap and rendering surfaces a distinct trailing line. A generous cap
+// is invisible — proves the default-shape callsite is unchanged. The
+// match-cap-vs-byte-cap tie test pins the documented precedence: when both
+// caps could have fired, the match-cap message wins.
+
+TEST_CASE("file.search caps rendered output at max_output_bytes", "[unit][tool][file_search][max_output_bytes]") {
+  TempFile file{"search-bytecap"};
+  // Five matching lines, each rendered as `<path>:<line>:NEEDLE`. With a tight
+  // byte cap below the second match's cumulative cost, only the first is kept
+  // and the trailing summary is the byte-cap variant.
+  file.write("NEEDLE\nNEEDLE\nNEEDLE\nNEEDLE\nNEEDLE\n");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    // First-match cost = path.size() + ":1:NEEDLE".size(). Pick a budget that
+    // fits exactly the first match but rejects any second match outright (the
+    // second match adds a newline separator plus its own row).
+    const auto first_cost = file.string().size() + std::string_view{":1:NEEDLE"}.size();
+    const auto input = std::string{R"({"path":")"} + file.string() + R"(","pattern":"NEEDLE","max_output_bytes":)" +
+                       std::to_string(first_cost) + "}";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.contains(file.string() + ":1:NEEDLE"));
+    REQUIRE_FALSE(result->text.contains(":2:NEEDLE"));
+    REQUIRE(result->text.contains("(truncated; output capped at "));
+    REQUIRE(result->text.contains("bytes)"));
+  });
+}
+
+TEST_CASE("file.search default max_output_bytes leaves small responses untouched",
+          "[unit][tool][file_search][max_output_bytes]") {
+  TempFile file{"search-bytecap-default"};
+  file.write("alpha NEEDLE\nbeta NEEDLE\ngamma NEEDLE\n");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + file.string() + R"(","pattern":"NEEDLE"})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE_FALSE(result->text.contains("(truncated"));
+    REQUIRE(result->text.contains(":1:alpha NEEDLE"));
+    REQUIRE(result->text.contains(":2:beta NEEDLE"));
+    REQUIRE(result->text.contains(":3:gamma NEEDLE"));
+  });
+}
+
+TEST_CASE("file.search match-cap wins when both caps could fire", "[unit][tool][file_search][max_output_bytes]") {
+  TempFile file{"search-bytecap-tie"};
+  file.write("X\nX\nX\nX\nX\n");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    // A generous byte budget that fits every match comfortably, but
+    // `max_matches=2` is small enough to dominate. The trailing summary is
+    // the match-cap message, not the byte-cap one.
+    const auto input =
+        std::string{R"({"path":")"} + file.string() + R"(","pattern":"X","max_matches":2,"max_output_bytes":1048576})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.contains("(truncated; matches capped at 2)"));
+    REQUIRE_FALSE(result->text.contains("output capped at"));
+  });
+}
+
 TEST_CASE("file.search skips binary files (NUL bytes in the first 8 KiB)", "[unit][tool][file_search]") {
   TempDir dir{"binary"};
   std::string binary_content;
@@ -1536,8 +1617,21 @@ TEST_CASE("file.search rejects malformed input as invalid_argument", "[unit][too
     REQUIRE_FALSE(zero_max_matches.has_value());
     REQUIRE(zero_max_matches.error().kind() == core::ErrorKind::invalid_argument);
 
-    // Every rejected call passed the permission gate; audit recorded one allow row per attempt (10 calls).
-    REQUIRE(sink.events().size() == 10);
+    auto wrong_max_output_bytes =
+        co_await registry.dispatch(tool::kFileSearchName,
+                                   R"({"path":"/tmp/x","pattern":"x","max_output_bytes":"big"})",
+                                   ctx);
+    REQUIRE_FALSE(wrong_max_output_bytes.has_value());
+    REQUIRE(wrong_max_output_bytes.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto zero_max_output_bytes = co_await registry.dispatch(tool::kFileSearchName,
+                                                            R"({"path":"/tmp/x","pattern":"x","max_output_bytes":0})",
+                                                            ctx);
+    REQUIRE_FALSE(zero_max_output_bytes.has_value());
+    REQUIRE(zero_max_output_bytes.error().kind() == core::ErrorKind::invalid_argument);
+
+    // Every rejected call passed the permission gate; audit recorded one allow row per attempt (12 calls).
+    REQUIRE(sink.events().size() == 12);
     for (const auto& event : sink.events()) {
       REQUIRE(event.outcome == permission::AuditOutcome::allow);
     }
