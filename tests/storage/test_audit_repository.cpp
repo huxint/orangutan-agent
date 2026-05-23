@@ -14,6 +14,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <oran/async.hpp>
+#include <oran/core/turn_id.hpp>
 #include <oran/storage.hpp>
 
 #include "../test-helpers/run_async.hpp"
@@ -114,6 +115,14 @@ storage::AppendAuditEventRequest make_request(std::string scope_key, std::string
   };
 }
 
+core::TurnId turn_id_with(unsigned char seed) {
+  core::TurnId id{};
+  for (std::size_t i = 0; i < id.size(); ++i) {
+    id[i] = static_cast<std::byte>(seed + i);
+  }
+  return id;
+}
+
 }  // namespace
 
 TEST_CASE("AuditRepository::migrate applies the audit schema once", "[unit][storage][audit_repository]") {
@@ -125,13 +134,13 @@ TEST_CASE("AuditRepository::migrate applies the audit schema once", "[unit][stor
     auto first = co_await repo.migrate();
     REQUIRE(first.has_value());
     REQUIRE(first->previous_version == 0);
-    REQUIRE(first->current_version == 2);
-    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2});
+    REQUIRE(first->current_version == 3);
+    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3});
 
     auto second = co_await repo.migrate();
     REQUIRE(second.has_value());
-    REQUIRE(second->previous_version == 2);
-    REQUIRE(second->current_version == 2);
+    REQUIRE(second->previous_version == 3);
+    REQUIRE(second->current_version == 3);
     REQUIRE(second->applied_versions.empty());
   });
 }
@@ -182,6 +191,7 @@ TEST_CASE("AuditRepository append_event round-trips a typical decision row", "[u
     REQUIRE(appended->reason == "rule #1 (allow: file.*)");
     REQUIRE(appended->input_hash_hex.has_value());
     REQUIRE(*appended->input_hash_hex == std::string(64, 'a'));
+    REQUIRE_FALSE(appended->parent_turn_id.has_value());
     REQUIRE(appended->metadata_json == R"json({"source":"test"})json");
     REQUIRE_FALSE(appended->created_at.empty());
 
@@ -190,10 +200,35 @@ TEST_CASE("AuditRepository append_event round-trips a typical decision row", "[u
     REQUIRE(listed->size() == 1);
     REQUIRE((*listed)[0].id == appended->id);
     REQUIRE((*listed)[0].tool_name == "file.read");
+    REQUIRE_FALSE((*listed)[0].parent_turn_id.has_value());
 
     auto count = co_await repo.count_events("scope-A");
     REQUIRE(count.has_value());
     REQUIRE(*count == 1);
+  });
+}
+
+TEST_CASE("AuditRepository round-trips parent_turn_id blobs", "[unit][storage][audit_repository]") {
+  TempDb db{"oran-audit-repo-parent-turn"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::AuditRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+
+    auto request = make_request("scope-A", "file.read", "allow");
+    request.input_hash_hex = std::string(64, 'c');
+    request.parent_turn_id = turn_id_with(0x10);
+    auto appended = co_await repo.append_event(request);
+    REQUIRE(appended.has_value());
+    REQUIRE(appended->parent_turn_id.has_value());
+    REQUIRE(*appended->parent_turn_id == turn_id_with(0x10));
+
+    auto listed = co_await repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-A"});
+    REQUIRE(listed.has_value());
+    REQUIRE(listed->size() == 1);
+    REQUIRE((*listed)[0].parent_turn_id.has_value());
+    REQUIRE(*(*listed)[0].parent_turn_id == turn_id_with(0x10));
   });
 }
 
@@ -213,6 +248,49 @@ TEST_CASE("AuditRepository stores a null input_hash when the caller omits it", "
     REQUIRE(listed.has_value());
     REQUIRE(listed->size() == 1);
     REQUIRE_FALSE((*listed)[0].input_hash_hex.has_value());
+  });
+}
+
+TEST_CASE("AuditRepository metadata update is scoped by parent_turn_id", "[unit][storage][audit_repository]") {
+  TempDb db{"oran-audit-repo-update-parent-turn"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::AuditRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+
+    auto first = make_request("scope-A", "file.read", "allow");
+    first.input_hash_hex = std::string(64, 'd');
+    first.parent_turn_id = turn_id_with(0x10);
+    first.metadata_json = R"json({"dispatch":{"sequence":1}})json";
+    auto appended_first = co_await repo.append_event(first);
+    REQUIRE(appended_first.has_value());
+
+    auto second = first;
+    second.parent_turn_id = turn_id_with(0x40);
+    auto appended_second = co_await repo.append_event(second);
+    REQUIRE(appended_second.has_value());
+
+    auto updated = co_await repo.update_event_metadata(storage::UpdateAuditEventMetadataRequest{
+        .scope_key = "scope-A",
+        .agent_key = "coder",
+        .tool_name = "file.read",
+        .identity = "operator-1",
+        .input_hash_hex = std::string(64, 'd'),
+        .parent_turn_id = turn_id_with(0x10),
+        .previous_metadata_json = R"json({"dispatch":{"sequence":1}})json",
+        .metadata_json = R"json({"dispatch":{"sequence":1},"usage":{"files_touched":1}})json",
+    });
+    REQUIRE(updated.has_value());
+    REQUIRE(updated->id == appended_first->id);
+
+    auto listed = co_await repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-A", .limit = 10});
+    REQUIRE(listed.has_value());
+    REQUIRE(listed->size() == 2);
+    REQUIRE((*listed)[0].id == appended_second->id);
+    REQUIRE((*listed)[0].metadata_json == R"json({"dispatch":{"sequence":1}})json");
+    REQUIRE((*listed)[1].id == appended_first->id);
+    REQUIRE((*listed)[1].metadata_json == R"json({"dispatch":{"sequence":1},"usage":{"files_touched":1}})json");
   });
 }
 
@@ -352,6 +430,22 @@ TEST_CASE("AuditRepository validates required fields", "[unit][storage][audit_re
     });
     REQUIRE_FALSE(update_missing_metadata.has_value());
     REQUIRE(update_missing_metadata.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto zero_parent = make_request("scope-A", "file.read", "allow");
+    zero_parent.parent_turn_id = core::TurnId{};
+    auto zero_parent_result = co_await repo.append_event(std::move(zero_parent));
+    REQUIRE_FALSE(zero_parent_result.has_value());
+    REQUIRE(zero_parent_result.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto update_zero_parent = co_await repo.update_event_metadata(storage::UpdateAuditEventMetadataRequest{
+        .scope_key = "scope-A",
+        .agent_key = "coder",
+        .tool_name = "file.read",
+        .identity = "op",
+        .parent_turn_id = core::TurnId{},
+    });
+    REQUIRE_FALSE(update_zero_parent.has_value());
+    REQUIRE(update_zero_parent.error().kind() == core::ErrorKind::invalid_argument);
   });
 }
 
@@ -384,6 +478,7 @@ CREATE TABLE audit_events(
   outcome TEXT NOT NULL,
   reason TEXT,
   input_hash_hex TEXT,
+  parent_turn_id BLOB,
   metadata_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL
 );

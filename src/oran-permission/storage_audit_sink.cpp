@@ -26,6 +26,7 @@ async::Awaitable<core::Result<void>> StorageAuditSink::record(AuditEvent event) 
       .verdict = std::string{core::enum_name(event.verdict)},
       .outcome = std::string{core::enum_name(event.outcome)},
       .reason = std::move(event.reason),
+      .parent_turn_id = event.parent_turn_id,
       .metadata_json = std::move(event.metadata_json),
   };
   if (event.input_hash.has_value()) {
@@ -45,6 +46,7 @@ async::Awaitable<core::Result<void>> StorageAuditSink::update_metadata(AuditMeta
       .agent_key = std::move(update.agent_key),
       .tool_name = std::move(update.tool_name),
       .identity = std::move(update.identity),
+      .parent_turn_id = update.parent_turn_id,
       .previous_metadata_json = std::move(update.previous_metadata_json),
       .metadata_json = std::move(update.metadata_json),
   };

@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -17,13 +16,14 @@
 
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/core/result.hpp>
+#include <oran/core/turn_id.hpp>
 #include <oran/storage/migrations.hpp>
 
 namespace orangutan::storage {
 
 class Pool;
 
-using TraceId = std::array<std::byte, 16>;
+using TraceId = core::TurnId;
 
 struct AppendTraceTurnRequest {
   TraceId turn_id{};

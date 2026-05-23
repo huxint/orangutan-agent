@@ -56,7 +56,8 @@ makes the existing audit rows joinable. Nothing else.
 
 - **`oran-storage::TraceRepository`** — new repository neighbour of
   the existing `SessionRepository` and `AuditRepository`. Schema:
-  **Status (slice 78, 2026-05-24):** the storage foundation is shipped.
+  **Status (slice 79, 2026-05-24):** the storage foundation plus the first
+  direct-dispatch audit join key are shipped.
   `<oran/storage.hpp>` exports `TraceRepository`, `TraceId`,
   `AppendTraceTurnRequest`, `TraceTurnRecord`, and
   `ListTraceTurnsOptions`; `src/oran-storage/migrations/audit/0002-trace-turns-initial.sql`
@@ -64,10 +65,12 @@ makes the existing audit rows joinable. Nothing else.
   `storage::built_in_trace_migrations()` exposes the same complete audit DB
   migration set as `storage::built_in_audit_migrations()`. The SQLite wrapper
   now supports BLOB bind/read so turn/session ids stay 16-byte BLOB values at
-  the storage boundary. The repository covers append/get/list/count,
-  audit-v1-to-trace-v2 upgrade, and validation; loop writes,
-  `AuditEvent::parent_turn_id`, hook publish rows, trace config, and the CLI
-  inspector remain downstream.
+  the storage boundary. Slice 79 adds `core::TurnId`,
+  `audit_events.parent_turn_id` as audit DB migration version 3, and typed
+  `parent_turn_id` fields on storage/permission audit requests and records.
+  The repository covers append/get/list/count, audit-v1-to-trace-v2/v3
+  upgrade, and validation; loop-owned `trace_turns` writes, hook publish rows,
+  trace config, and the CLI inspector remain downstream.
   ```sql
   CREATE TABLE trace_turns (
     turn_id           BLOB PRIMARY KEY,             -- 16-byte UUID
@@ -98,17 +101,22 @@ makes the existing audit rows joinable. Nothing else.
   CREATE INDEX idx_trace_agent   ON trace_turns(agent_key, started_at_ns);
   ```
   SQL ships as audit DB migration version 2 under `migrations/audit/` via the
-  existing `#embed` pattern. **Status (slice 78):** shipped as
+  existing `#embed` pattern. **Status (slice 79):** shipped as
   `storage::built_in_trace_migrations()`, intentionally equivalent to the
-  complete `storage::built_in_audit_migrations()` set.
+  complete `storage::built_in_audit_migrations()` set, now including version 3
+  for `audit_events.parent_turn_id`.
 - **`oran-core::TurnId`** — 16-byte UUID type (existing pattern; new
   alias if no equivalent exists). Generated at turn start; passed
   through every dispatch context, every audit event, every hook
-  payload.
+  payload. **Status (slice 79):** `core::TurnId` is the shared 16-byte
+  `std::array<std::byte, 16>` value shape; generation remains owned by the
+  future trace writer.
 - **`permission::AuditEvent::parent_turn_id`** field promoted from a
   `context` map entry to a typed column on `audit_events`. The
   migration is additive (new column with a default of
-  `BLOB NULL`); old rows survive intact.
+  `BLOB NULL`); old rows survive intact. **Status (slice 79):** shipped for
+  direct tool-dispatch audit rows, including same-row usage metadata update
+  scoping by parent turn id.
 - **`hook::PublishOutcome::trace_record`** — when the dispatch
   context carries a `TurnId`, the bus produces a per-publish record
   appended to the existing `audit_events` table with a
@@ -119,7 +127,10 @@ makes the existing audit rows joinable. Nothing else.
   threads `TurnId`, `parent_turn_id`, identity, route, cancellation
   slot, and stable service refs through every callsite. The
   agent-loop-foundation note's "phase 1" (Build `TurnContext`) is
-  exactly this.
+  exactly this. **Status (slice 79):** the public interim surface is
+  `RunTurnInputs::turn_id`; when set, direct tool dispatches receive it as
+  `DispatchContext::parent_turn_id`, and when unset the loop forces
+  `parent_turn_id = NULL` for the dispatch duration.
 - **Turn-finished publisher**. `agent::Loop::run_turn` writes one
   `trace_turns` row at terminal stop reason. The write is
   *synchronous* w.r.t. the user-visible response (the loop awaits
@@ -202,12 +213,17 @@ makes the existing audit rows joinable. Nothing else.
 2. **Cause-chain join.** A single-tool turn (spec 0017 scenario #2)
    produces one trace row + one audit row whose `parent_turn_id`
    matches the trace row's `turn_id`. The join query in the CLI
-   inspector returns both.
+   inspector returns both. **Status (slice 79):** the audit row side is
+   shipped for direct dispatch when `RunTurnInputs::turn_id` is supplied; the
+   trace row writer and CLI join query remain downstream.
 3. **Multi-tool fan-out.** A multi-tool turn (spec 0017 scenario
    #3, sequential dispatch in v1) produces one trace row + N audit
    rows, all sharing the same `parent_turn_id`. Sorted by
    `started_at_ns`, the audit rows preserve the original
-   `tool_use` order.
+   `tool_use` order. **Status (slice 79):** direct sequential dispatch stamps
+   every tool audit row with the same loop turn id and preserves the existing
+   tool-use order at the loop boundary; the trace row writer remains
+   downstream.
 4. **Cancellation phase recorded.** Cancellation during provider
    await (spec 0017 scenario #9) produces a trace row with
    `cancellation_phase='provider'`, `stop_reason='cancelled'`.

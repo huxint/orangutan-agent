@@ -109,6 +109,12 @@ enum class Capability {
 > error now also carries `decision_reason` / `replay_max` /
 > `approval_ttl_seconds` so the agent loop can hand them straight
 > to `ApprovalBroker::approve` without re-running rule evaluation.
+> Slice 79 adds the trace/audit correlation seam:
+> `DispatchContext::parent_turn_id` is an optional `core::TurnId` copied into
+> every permission audit event and metadata update produced by `dispatch`.
+> Direct agent-loop callers set it from `RunTurnInputs::turn_id`; when tracing
+> is disabled the loop clears it for the duration of the dispatch so audit rows
+> keep `parent_turn_id = NULL`.
 > Slice 22 (2026-05-18) added the hook-bus tap: `DispatchContext`
 > now also carries an optional `hook::Bus*`; when non-null, dispatch
 > publishes `hook::Event::tool_before` after the registry resolves
@@ -359,6 +365,10 @@ Tools are coroutines. Today's registry passes raw JSON bytes so the public
 handler type stays free of `nlohmann::json`; handlers parse in their own
 implementation TUs. The later `tool::Runtime` handle will replace the
 interim `DispatchContext` service bundle once the agent runtime exists.
+The current `DispatchContext` bundle carries the audit identity
+(`scope_key`, `agent_key`, `identity`), permission services, optional hook
+bus, transient registry/workspace state, output caps, and the optional
+`parent_turn_id` used by spec 0018 cause-chain joins.
 Tools run on the agent's strand by default; CPU-heavy tools hop through the
 runtime's CPU executor.
 
@@ -716,7 +726,9 @@ Current and future policy:
   has set any `truncated` / `data_dropped` flags, dispatch best-effort calls
   `permission::AuditSink::update_metadata(...)` so the same row's
   `metadata_json.usage` carries bytes read/written, touched files, match count,
-  cost, wall time in milliseconds, and cap flags when present.
+  cost, wall time in milliseconds, and cap flags when present. Slice 79 scopes
+  that update by `parent_turn_id` as well as the existing identity/hash fields
+  so two concurrent turns cannot enrich each other's same-tool audit row.
 - Built-ins migrate one at a time. `file.read` still keeps the stable
   spec-0011 text fallback
   `<path>:<start_line>-<end_line> fingerprint=<token> bytes=<n>[ truncated]`
@@ -762,6 +774,8 @@ Current and future policy:
   output or publishes `tool_after`. The future scheduler owns those options
   for batched calls and will call the same helper before returning ordered
   results. Slice 67 adds direct-dispatch audit usage metadata enrichment; the
+  slice-79 `DispatchContext::parent_turn_id` field gives direct-dispatch audit
+  rows the trace join key when `agent::Loop` supplies a turn id. The
   scheduler still owns batched-call correlation and option threading once
   parallel tool calls land.
 - The `tool::parse_input<T>` helper tracked under the deep-review backlog

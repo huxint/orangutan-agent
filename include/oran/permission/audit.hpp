@@ -42,6 +42,7 @@
 #include <oran/core/enum_names.hpp>
 #include <oran/core/result.hpp>
 #include <oran/core/time.hpp>
+#include <oran/core/turn_id.hpp>
 #include <oran/permission/rule_set.hpp>
 
 namespace orangutan::permission {
@@ -95,6 +96,10 @@ struct AuditEvent {
   /// compute it (raw allow/deny path). The storage adapter encodes
   /// it as 64-char lowercase hex.
   std::optional<std::array<std::byte, 32>> input_hash{};
+  /// Optional parent agent-turn id. When the loop is running with trace
+  /// correlation enabled, every tool decision row carries this id so it can
+  /// join to `storage::trace_turns.turn_id`.
+  std::optional<core::TurnId> parent_turn_id{};
   /// Free-form structured metadata. Defaults to `"{}"`.
   std::string metadata_json{"{}"};
 };
@@ -109,6 +114,7 @@ struct AuditMetadataUpdate {
   std::string tool_name;
   std::string identity;
   std::optional<std::array<std::byte, 32>> input_hash{};
+  std::optional<core::TurnId> parent_turn_id{};
   std::string previous_metadata_json{"{}"};
   std::string metadata_json{"{}"};
 };

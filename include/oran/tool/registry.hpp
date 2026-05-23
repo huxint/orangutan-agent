@@ -76,6 +76,7 @@
 #include <oran/core/result.hpp>
 #include <oran/core/time.hpp>
 #include <oran/core/tool_def.hpp>
+#include <oran/core/turn_id.hpp>
 #include <oran/hook/bus.hpp>
 #include <oran/permission/approval.hpp>
 #include <oran/permission/approval_broker.hpp>
@@ -175,6 +176,10 @@ struct DispatchContext {
   /// scheduler owns these options for batched calls; direct registry callers
   /// get the spec-0014 defaults.
   OutputCapOptions output_caps{};
+  /// Optional parent turn id supplied by `agent::Loop` when trace correlation
+  /// is enabled. `Registry::dispatch` copies it into `permission::AuditEvent`
+  /// so tool audit rows can join to `trace_turns.turn_id`.
+  std::optional<core::TurnId> parent_turn_id{};
   /// Per-process scope key the audit row gets stamped with. See
   /// `docs/design-docs/secrets-and-state.md` "Identity And Scope".
   std::string scope_key;

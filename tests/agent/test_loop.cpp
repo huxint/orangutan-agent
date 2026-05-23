@@ -145,6 +145,14 @@ permission::RuleSet allow_all_rules() {
   return rules;
 }
 
+core::TurnId turn_id_with(unsigned char seed) {
+  core::TurnId id{};
+  for (std::size_t i = 0; i < id.size(); ++i) {
+    id[i] = static_cast<std::byte>(seed + i);
+  }
+  return id;
+}
+
 tool::DispatchContext dispatch_context(asio::io_context& io,
                                        permission::RuleSet& rules,
                                        permission::AuditSink& audit,
@@ -468,10 +476,12 @@ TEST_CASE("Loop dispatches one tool_use and re-enters the provider with a tool r
     auto rules = allow_all_rules();
     permission::RecordingAuditSink audit;
     auto ctx = dispatch_context(io, rules, audit);
+    ctx.parent_turn_id = turn_id_with(0x70);
 
     const auto catalog = registry.catalog();
     const std::vector<core::Message> tail{core::Message::user_text("read")};
     auto inputs = base_inputs(catalog, tail);
+    inputs.turn_id = turn_id_with(0x20);
     inputs.tools = &registry;
     inputs.dispatch_context = &ctx;
     auto result = co_await loop.run_turn(inputs);
@@ -502,6 +512,10 @@ TEST_CASE("Loop dispatches one tool_use and re-enters the provider with a tool r
     REQUIRE(std::get<core::TextContent>(result->transcript[3].blocks[0]).text == "final");
     REQUIRE(audit.events().size() == 1);
     REQUIRE(audit.events()[0].tool_name == "file.read");
+    REQUIRE(audit.events()[0].parent_turn_id.has_value());
+    REQUIRE(*audit.events()[0].parent_turn_id == turn_id_with(0x20));
+    REQUIRE(ctx.parent_turn_id.has_value());
+    REQUIRE(*ctx.parent_turn_id == turn_id_with(0x70));
   });
 }
 
@@ -532,6 +546,7 @@ TEST_CASE("Loop preserves multiple tool_results in tool_use order", "[unit][agen
     auto rules = allow_all_rules();
     permission::RecordingAuditSink audit;
     auto ctx = dispatch_context(io, rules, audit);
+    ctx.parent_turn_id = turn_id_with(0x70);
 
     const auto catalog = registry.catalog();
     const std::vector<core::Message> tail{core::Message::user_text("run both")};
@@ -557,6 +572,10 @@ TEST_CASE("Loop preserves multiple tool_results in tool_use order", "[unit][agen
     REQUIRE(audit.events().size() == 2);
     REQUIRE(audit.events()[0].tool_name == "second.tool");
     REQUIRE(audit.events()[1].tool_name == "first.tool");
+    REQUIRE_FALSE(audit.events()[0].parent_turn_id.has_value());
+    REQUIRE_FALSE(audit.events()[1].parent_turn_id.has_value());
+    REQUIRE(ctx.parent_turn_id.has_value());
+    REQUIRE(*ctx.parent_turn_id == turn_id_with(0x70));
   });
 }
 

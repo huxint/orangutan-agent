@@ -46,6 +46,7 @@ namespace {
   event.tool_name = std::string{name};
   event.identity = ctx.identity;
   event.input_hash = permission::ApprovalAuthority::input_hash(input_json);
+  event.parent_turn_id = ctx.parent_turn_id;
   event.metadata_json = std::move(metadata_json);
   return event;
 }
@@ -57,6 +58,7 @@ namespace {
       .tool_name = event.tool_name,
       .identity = event.identity,
       .input_hash = event.input_hash,
+      .parent_turn_id = event.parent_turn_id,
       .previous_metadata_json = event.metadata_json,
   };
 }

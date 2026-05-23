@@ -39,6 +39,7 @@
 
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/core/result.hpp>
+#include <oran/core/turn_id.hpp>
 #include <oran/storage/migrations.hpp>
 
 namespace orangutan::storage {
@@ -75,6 +76,10 @@ struct AppendAuditEventRequest {
   /// callsites that did not compute the hash; the column ends up
   /// SQL `NULL`.
   std::string input_hash_hex{};
+  /// Optional parent agent-turn id. When trace is enabled, tool audit rows
+  /// carry the trace turn's id here so `audit_events.parent_turn_id =
+  /// trace_turns.turn_id` joins the decision row back to the turn.
+  std::optional<core::TurnId> parent_turn_id{};
   /// Free-form structured metadata. Defaults to `"{}"`. The
   /// repository validates non-empty but does not check JSON shape;
   /// callers (or a future schema-version bump) own that.
@@ -88,6 +93,10 @@ struct UpdateAuditEventMetadataRequest {
   std::string identity;
   /// Empty means the target row must have SQL NULL in `input_hash_hex`.
   std::string input_hash_hex{};
+  /// Optional parent turn id. Participates in the row match so post-result
+  /// metadata enrichment updates the audited dispatch under the same turn
+  /// rather than a same-tool call from another concurrent turn.
+  std::optional<core::TurnId> parent_turn_id{};
   /// Match the previously stored metadata so callers replace exactly the row
   /// they enriched instead of clobbering unrelated audit metadata.
   std::string previous_metadata_json{"{}"};
@@ -104,6 +113,7 @@ struct AuditEventRecord {
   std::string outcome;
   std::string reason;
   std::optional<std::string> input_hash_hex;
+  std::optional<core::TurnId> parent_turn_id;
   std::string metadata_json;
   std::string created_at;
 };

@@ -143,13 +143,13 @@ TEST_CASE("TraceRepository::migrate applies the trace schema once", "[unit][stor
     auto first = co_await repo.migrate();
     REQUIRE(first.has_value());
     REQUIRE(first->previous_version == 0);
-    REQUIRE(first->current_version == 2);
-    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2});
+    REQUIRE(first->current_version == 3);
+    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3});
 
     auto second = co_await repo.migrate();
     REQUIRE(second.has_value());
-    REQUIRE(second->previous_version == 2);
-    REQUIRE(second->current_version == 2);
+    REQUIRE(second->previous_version == 3);
+    REQUIRE(second->current_version == 3);
     REQUIRE(second->applied_versions.empty());
   });
 }
@@ -171,8 +171,8 @@ TEST_CASE("TraceRepository::migrate upgrades an existing audit schema", "[unit][
     auto upgraded = co_await repo.migrate();
     REQUIRE(upgraded.has_value());
     REQUIRE(upgraded->previous_version == 1);
-    REQUIRE(upgraded->current_version == 2);
-    REQUIRE(upgraded->applied_versions == std::vector<std::int64_t>{2});
+    REQUIRE(upgraded->current_version == 3);
+    REQUIRE(upgraded->applied_versions == std::vector<std::int64_t>{2, 3});
 
     auto request = make_request(id_with(0x10), id_with(0x80), 1'000);
     auto appended = co_await repo.append_turn(std::move(request));

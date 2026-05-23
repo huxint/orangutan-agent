@@ -2,17 +2,20 @@
 
 #include <oran/storage/audit_repository.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include <oran/core/error.hpp>
+#include <oran/core/turn_id.hpp>
 #include <oran/storage/migrations.hpp>
 #include <oran/storage/pool.hpp>
 #include <oran/storage/sqlite.hpp>
@@ -25,9 +28,9 @@ namespace {
 constexpr std::string_view kAppendEventSql = R"sql(
 INSERT INTO audit_events(
   scope_key, agent_key, tool_name, identity, verdict, outcome, reason,
-  input_hash_hex, metadata_json, created_at
+  input_hash_hex, parent_turn_id, metadata_json, created_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 RETURNING id, created_at
 )sql";
 
@@ -46,11 +49,12 @@ WHERE id = (
     AND identity = ?
     AND metadata_json = ?
     AND ((? = '' AND input_hash_hex IS NULL) OR input_hash_hex = ?)
+    AND ((? = 1 AND parent_turn_id IS NULL) OR parent_turn_id = ?)
   ORDER BY id DESC
   LIMIT 1
 )
 RETURNING id, scope_key, agent_key, tool_name, identity, verdict, outcome,
-  reason, input_hash_hex, metadata_json, created_at
+  reason, input_hash_hex, parent_turn_id, metadata_json, created_at
 )sql";
 
 [[nodiscard]] core::Error invalid_field(std::string field) {
@@ -82,6 +86,9 @@ RETURNING id, scope_key, agent_key, tool_name, identity, verdict, outcome,
   if (request.metadata_json.empty()) {
     return std::unexpected(invalid_field("metadata_json"));
   }
+  if (request.parent_turn_id.has_value() && core::is_zero_turn_id(*request.parent_turn_id)) {
+    return std::unexpected(invalid_field("parent_turn_id"));
+  }
   return {};
 }
 
@@ -103,6 +110,9 @@ RETURNING id, scope_key, agent_key, tool_name, identity, verdict, outcome,
   }
   if (request.metadata_json.empty()) {
     return std::unexpected(invalid_field("metadata_json"));
+  }
+  if (request.parent_turn_id.has_value() && core::is_zero_turn_id(*request.parent_turn_id)) {
+    return std::unexpected(invalid_field("parent_turn_id"));
   }
   return {};
 }
@@ -141,6 +151,51 @@ RETURNING id, scope_key, agent_key, tool_name, identity, verdict, outcome,
     return std::optional<std::string>{};
   }
   return std::optional<std::string>{**std::move(value)};
+}
+
+[[nodiscard]] std::span<const std::byte, 16> turn_id_span(const core::TurnId& id) noexcept {
+  return std::span<const std::byte, 16>{id};
+}
+
+[[nodiscard]] core::Result<void>
+bind_optional_turn_id(Statement& statement, int index, const std::optional<core::TurnId>& id) {
+  if (!id.has_value()) {
+    return statement.bind_null(index);
+  }
+  return statement.bind_blob(index, turn_id_span(*id));
+}
+
+[[nodiscard]] core::Result<void>
+bind_turn_id_match(Statement& statement, int null_flag_index, int id_index, const std::optional<core::TurnId>& id) {
+  if (!id.has_value()) {
+    if (auto bound = statement.bind_int64(null_flag_index, 1); !bound) {
+      return std::unexpected(bound.error());
+    }
+    return statement.bind_null(id_index);
+  }
+  if (auto bound = statement.bind_int64(null_flag_index, 0); !bound) {
+    return std::unexpected(bound.error());
+  }
+  return statement.bind_blob(id_index, turn_id_span(*id));
+}
+
+[[nodiscard]] core::Result<std::optional<core::TurnId>>
+optional_turn_id(Statement& statement, int index, std::string_view field) {
+  auto value = statement.column_blob(index);
+  if (!value) {
+    return std::unexpected(value.error().with("field", std::string{field}));
+  }
+  if (!*value) {
+    return std::optional<core::TurnId>{};
+  }
+  if ((*value)->size() != core::TurnId{}.size()) {
+    return std::unexpected(core::Error::storage("audit repository row has invalid turn id length")
+                               .with("field", std::string{field})
+                               .with("size", std::to_string((*value)->size())));
+  }
+  core::TurnId id{};
+  std::ranges::copy(**std::move(value), id.begin());
+  return std::optional<core::TurnId>{id};
 }
 
 [[nodiscard]] core::Result<void> expect_done(Statement& statement, std::string_view operation) {
@@ -192,11 +247,15 @@ RETURNING id, scope_key, agent_key, tool_name, identity, verdict, outcome,
   if (!input_hash) {
     return std::unexpected(input_hash.error());
   }
-  auto metadata_json = required_text(statement, 9, "metadata_json");
+  auto parent_turn_id = optional_turn_id(statement, 9, "parent_turn_id");
+  if (!parent_turn_id) {
+    return std::unexpected(parent_turn_id.error());
+  }
+  auto metadata_json = required_text(statement, 10, "metadata_json");
   if (!metadata_json) {
     return std::unexpected(metadata_json.error());
   }
-  auto created_at = required_text(statement, 10, "created_at");
+  auto created_at = required_text(statement, 11, "created_at");
   if (!created_at) {
     return std::unexpected(created_at.error());
   }
@@ -211,6 +270,7 @@ RETURNING id, scope_key, agent_key, tool_name, identity, verdict, outcome,
       .outcome = std::move(*outcome),
       .reason = std::move(*reason),
       .input_hash_hex = std::move(*input_hash),
+      .parent_turn_id = std::move(*parent_turn_id),
       .metadata_json = std::move(*metadata_json),
       .created_at = std::move(*created_at),
   };
@@ -221,7 +281,7 @@ RETURNING id, scope_key, agent_key, tool_name, identity, verdict, outcome,
 /// for repeat callers with the same shape.
 [[nodiscard]] std::string build_list_sql(const ListAuditEventsOptions& options) {
   std::string sql{"SELECT id, scope_key, agent_key, tool_name, identity, verdict, outcome, reason, "
-                  "input_hash_hex, metadata_json, created_at "
+                  "input_hash_hex, parent_turn_id, metadata_json, created_at "
                   "FROM audit_events WHERE scope_key = ?"};
   if (!options.agent_key.empty()) {
     sql += " AND agent_key = ?";
@@ -308,7 +368,10 @@ async::Awaitable<core::Result<AuditEventRecord>> AuditRepository::append_event(A
       co_return std::unexpected(bound.error());
     }
   }
-  if (auto bound = statement.bind_text(9, request.metadata_json); !bound) {
+  if (auto bound = bind_optional_turn_id(statement, 9, request.parent_turn_id); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(10, request.metadata_json); !bound) {
     co_return std::unexpected(bound.error());
   }
 
@@ -342,6 +405,7 @@ async::Awaitable<core::Result<AuditEventRecord>> AuditRepository::append_event(A
       .outcome = std::move(request.outcome),
       .reason = std::move(request.reason),
       .input_hash_hex = {},
+      .parent_turn_id = std::move(request.parent_turn_id),
       .metadata_json = std::move(request.metadata_json),
       .created_at = std::move(*created_at),
   };
@@ -390,6 +454,9 @@ AuditRepository::update_event_metadata(UpdateAuditEventMetadataRequest request) 
     co_return std::unexpected(bound.error());
   }
   if (auto bound = statement.bind_text(8, request.input_hash_hex); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = bind_turn_id_match(statement, 9, 10, request.parent_turn_id); !bound) {
     co_return std::unexpected(bound.error());
   }
 

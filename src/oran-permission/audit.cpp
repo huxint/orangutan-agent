@@ -25,7 +25,8 @@ constexpr char nibble_to_hex(std::uint8_t nibble) noexcept {
 [[nodiscard]] bool matches_update(const AuditEvent& event, const AuditMetadataUpdate& update) {
   return event.scope_key == update.scope_key && event.agent_key == update.agent_key &&
          event.tool_name == update.tool_name && event.identity == update.identity &&
-         event.input_hash == update.input_hash && event.metadata_json == update.previous_metadata_json;
+         event.input_hash == update.input_hash && event.parent_turn_id == update.parent_turn_id &&
+         event.metadata_json == update.previous_metadata_json;
 }
 
 }  // namespace

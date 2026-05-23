@@ -139,6 +139,25 @@ void add_usage(provider::Usage& total, const provider::Usage& next) {
   }
 }
 
+class ScopedParentTurnId {
+public:
+  ScopedParentTurnId(tool::DispatchContext& context, std::optional<core::TurnId> parent_turn_id) noexcept
+      : context_{&context}, previous_{context.parent_turn_id} {
+    context.parent_turn_id = std::move(parent_turn_id);
+  }
+
+  ~ScopedParentTurnId() {
+    context_->parent_turn_id = std::move(previous_);
+  }
+
+  ScopedParentTurnId(const ScopedParentTurnId&) = delete;
+  ScopedParentTurnId& operator=(const ScopedParentTurnId&) = delete;
+
+private:
+  tool::DispatchContext* context_;
+  std::optional<core::TurnId> previous_;
+};
+
 [[nodiscard]] std::string render_tool_error(const core::Error& error) {
   std::string output;
   output.reserve(error.message().size() + 64);
@@ -257,7 +276,11 @@ public:
         std::vector<core::Content> tool_results;
         tool_results.reserve(tool_uses.size());
         for (const auto& use : tool_uses) {
-          auto output = co_await inputs.tools->dispatch(use.name, use.input_json, *inputs.dispatch_context);
+          core::Result<tool::Output> output;
+          {
+            ScopedParentTurnId parent_turn_id{*inputs.dispatch_context, inputs.turn_id};
+            output = co_await inputs.tools->dispatch(use.name, use.input_json, *inputs.dispatch_context);
+          }
           auto tool_result = tool_result_from(use.id, std::move(output));
           if (!tool_result) {
             co_return std::unexpected(with_cancellation_phase(std::move(tool_result).error(), "tools"));

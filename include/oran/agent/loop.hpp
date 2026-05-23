@@ -27,6 +27,7 @@
 #include <oran/core/result.hpp>
 #include <oran/core/stop_reason.hpp>
 #include <oran/core/tool_def.hpp>
+#include <oran/core/turn_id.hpp>
 #include <oran/prompt/builder.hpp>
 #include <oran/provider/cache.hpp>
 #include <oran/provider/system.hpp>
@@ -74,6 +75,11 @@ struct RunTurnInputs {
   std::optional<std::uint32_t> thinking_budget{};
   provider::RetryPolicy retry{};
   bool stream{true};
+  /// Optional trace/audit correlation id for this turn. When set, the loop
+  /// threads it into every direct tool dispatch as
+  /// `DispatchContext::parent_turn_id`; when unset, dispatch audit rows keep
+  /// `parent_turn_id = NULL` for trace-disabled and pre-trace callers.
+  std::optional<core::TurnId> turn_id{};
   /// Optional direct-dispatch bridge for spec 0017 scenarios #2/#3. Both
   /// pointers must be non-null to execute tool_use blocks; otherwise the loop
   /// still fails loudly on tool_use so callers do not accidentally run a

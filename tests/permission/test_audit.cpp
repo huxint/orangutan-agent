@@ -14,6 +14,7 @@
 
 #include <oran/async.hpp>
 #include <oran/core/enum_names.hpp>
+#include <oran/core/turn_id.hpp>
 #include <oran/permission.hpp>
 #include <oran/storage.hpp>
 
@@ -62,6 +63,14 @@ permission::AuditEvent make_audit_event(std::string scope, std::string tool, per
   event.outcome = outcome;
   event.reason = "rule #1 (allow: file.*)";
   return event;
+}
+
+core::TurnId turn_id_with(unsigned char seed) {
+  core::TurnId id{};
+  for (std::size_t i = 0; i < id.size(); ++i) {
+    id[i] = static_cast<std::byte>(seed + i);
+  }
+  return id;
 }
 
 }  // namespace
@@ -167,6 +176,37 @@ TEST_CASE("RecordingAuditSink updates matching event metadata", "[unit][permissi
   });
 }
 
+TEST_CASE("RecordingAuditSink scopes metadata updates by parent_turn_id", "[unit][permission][audit]") {
+  test::run_async([](asio::io_context& /*io*/) -> async::Awaitable<void> {
+    permission::RecordingAuditSink sink;
+    auto first = make_audit_event("scope-A", "file.read", permission::AuditOutcome::allow);
+    first.parent_turn_id = turn_id_with(0x10);
+    first.metadata_json = R"json({"dispatch":{"sequence":1}})json";
+    auto recorded_first = co_await sink.record(std::move(first));
+    REQUIRE(recorded_first.has_value());
+
+    auto second = make_audit_event("scope-A", "file.read", permission::AuditOutcome::allow);
+    second.parent_turn_id = turn_id_with(0x40);
+    second.metadata_json = R"json({"dispatch":{"sequence":1}})json";
+    auto recorded_second = co_await sink.record(std::move(second));
+    REQUIRE(recorded_second.has_value());
+
+    auto updated = co_await sink.update_metadata(permission::AuditMetadataUpdate{
+        .scope_key = "scope-A",
+        .agent_key = "coder",
+        .tool_name = "file.read",
+        .identity = "operator-1",
+        .parent_turn_id = turn_id_with(0x10),
+        .previous_metadata_json = R"json({"dispatch":{"sequence":1}})json",
+        .metadata_json = R"json({"dispatch":{"sequence":1},"usage":{"files_touched":1}})json",
+    });
+    REQUIRE(updated.has_value());
+    REQUIRE(sink.events().size() == 2);
+    REQUIRE(sink.events()[0].metadata_json == R"json({"dispatch":{"sequence":1},"usage":{"files_touched":1}})json");
+    REQUIRE(sink.events()[1].metadata_json == R"json({"dispatch":{"sequence":1}})json");
+  });
+}
+
 TEST_CASE("StorageAuditSink persists events into the audit repository with correct columns",
           "[unit][permission][audit]") {
   TempDb db{"oran-permission-audit-sink"};
@@ -187,6 +227,7 @@ TEST_CASE("StorageAuditSink persists events into the audit repository with corre
     for (std::size_t i = 0; i < 32; ++i) {
       (*event.input_hash)[i] = std::byte{0xAB};
     }
+    event.parent_turn_id = turn_id_with(0x22);
     event.metadata_json = R"json({"trace_id":"abc"})json";
 
     auto recorded = co_await sink.record(std::move(event));
@@ -206,6 +247,8 @@ TEST_CASE("StorageAuditSink persists events into the audit repository with corre
     REQUIRE(row.input_hash_hex.has_value());
     // 32 bytes of 0xAB hex-encode to "ab" repeated 32 times.
     REQUIRE(*row.input_hash_hex == "abababababababababababababababababababababababababababababababab");
+    REQUIRE(row.parent_turn_id.has_value());
+    REQUIRE(*row.parent_turn_id == turn_id_with(0x22));
     REQUIRE(row.metadata_json == R"json({"trace_id":"abc"})json");
   });
 }
@@ -224,6 +267,7 @@ TEST_CASE("StorageAuditSink updates persisted metadata", "[unit][permission][aud
 
     permission::StorageAuditSink sink{repo};
     auto event = make_audit_event("scope-A", "file.read", permission::AuditOutcome::allow);
+    event.parent_turn_id = turn_id_with(0x30);
     event.metadata_json = R"json({"dispatch":{"sequence":4}})json";
     auto recorded = co_await sink.record(std::move(event));
     REQUIRE(recorded.has_value());
@@ -233,6 +277,7 @@ TEST_CASE("StorageAuditSink updates persisted metadata", "[unit][permission][aud
         .agent_key = "coder",
         .tool_name = "file.read",
         .identity = "operator-1",
+        .parent_turn_id = turn_id_with(0x30),
         .previous_metadata_json = R"json({"dispatch":{"sequence":4}})json",
         .metadata_json = R"json({"dispatch":{"sequence":4},"usage":{"match_count":2}})json",
     });
@@ -241,6 +286,8 @@ TEST_CASE("StorageAuditSink updates persisted metadata", "[unit][permission][aud
     auto listed = co_await repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-A"});
     REQUIRE(listed.has_value());
     REQUIRE(listed->size() == 1);
+    REQUIRE((*listed)[0].parent_turn_id.has_value());
+    REQUIRE(*(*listed)[0].parent_turn_id == turn_id_with(0x30));
     REQUIRE((*listed)[0].metadata_json == R"json({"dispatch":{"sequence":4},"usage":{"match_count":2}})json");
   });
 }

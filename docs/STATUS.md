@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 78 (`xmake run orangutan` reports slice 78)
+- **Slice:** 79 (`xmake run orangutan` reports slice 79)
 - **Last completed history:**
-  [`histories/2026-05/20260524-1125-storage-trace-repository.md`](histories/2026-05/20260524-1125-storage-trace-repository.md)
+  [`histories/2026-05/20260524-1145-trace-audit-parent-turn-id.md`](histories/2026-05/20260524-1145-trace-audit-parent-turn-id.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
@@ -17,28 +17,35 @@
   and did not need a new plan because they stayed under the existing spec-0017
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 78 opens
-  the storage foundation for spec 0018: `oran-storage` now exports
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 79 threads
+  the first spec-0018 cause-chain id through the direct tool-dispatch path
+  without writing trace rows yet. `oran-core` now owns `core::TurnId`, the
+  shared 16-byte value shape used by storage trace ids and audit correlation.
+  `storage::TraceId` aliases it; audit DB migration
+  `src/oran-storage/migrations/audit/0003-audit-parent-turn-id.sql` adds the
+  nullable `audit_events.parent_turn_id` BLOB plus an index, so the embedded
+  audit/trace migration stream now reaches version 3. `AppendAuditEventRequest`,
+  `UpdateAuditEventMetadataRequest`, `AuditEventRecord`,
+  `permission::AuditEvent`, and `AuditMetadataUpdate` all expose optional typed
+  `parent_turn_id`; `StorageAuditSink` persists it; and same-row metadata
+  enrichment matches it so concurrent same-tool calls from different turns do
+  not clobber each other. `tool::DispatchContext` carries the optional parent
+  turn id into `Registry::dispatch`, and `agent::RunTurnInputs::turn_id` is the
+  loop-owned source for direct tool calls: traced turns stamp every dispatch
+  with that id, while trace-disabled turns force `parent_turn_id = NULL` during
+  dispatch and restore any reusable context value afterward. `test-core` now
+  covers the value type (70 cases / 453 assertions), `test-storage` covers
+  audit version-3 migration, BLOB round-trip, metadata update scoping, and
+  zero-id validation (70 cases / 856 assertions), `test-permission` covers
+  recording/storage sink propagation (89 cases / 414 assertions), `test-tool`
+  covers registry audit stamping (166 cases / 1590 assertions), and
+  `test-agent` covers loop stamping plus stale-context clearing/restoration
+  (14 cases / 162 assertions). Loop-owned `trace_turns` writes, CLI `--trace`,
+  hook publish rows, and trace config remain downstream. Slice 78 opened the
+  storage foundation for spec 0018: `oran-storage` exports
   `TraceRepository`, `TraceId` (16-byte BLOB at the database boundary),
-  `AppendTraceTurnRequest`, `TraceTurnRecord`, `ListTraceTurnsOptions`,
-  and `built_in_trace_migrations()`. Migration
-  `src/oran-storage/migrations/audit/0002-trace-turns-initial.sql`
-  extends the existing audit DB migration stream with the redacted
-  `trace_turns` row shape: prompt/cache hashes, token/cost rollups,
-  optional `cancellation_phase`, and opaque `context_json` bytes.
-  `built_in_audit_migrations()` and `built_in_trace_migrations()` both expose
-  the complete audit DB migration set so an existing version-1 audit database
-  upgrades to version 2 instead of treating trace as a separate database. The
-  SQLite core also gained `Statement::bind_blob`
-  / `column_blob` so trace IDs match the spec's BLOB contract instead of
-  becoming text. `test-storage` now covers trace migration, explicit
-  migration directories, audit-v1-to-trace-v2 upgrade, insert/get/list/count,
-  validation, and BLOB round-trips (68 cases / 827 assertions). The next
-  implementation step is
-  threading a turn id through `agent::Loop` / `tool::DispatchContext` /
-  permission audit so tool audit rows can join back to the trace row;
-  CLI `--trace`, hook publish rows, trace config, and loop-owned trace writes
-  remain downstream. Slice 77 extends
+  `AppendTraceTurnRequest`, `TraceTurnRecord`, `ListTraceTurnsOptions`, and
+  `built_in_trace_migrations()`. Slice 77 extends
   the real `agent::Loop` driver from the slice-76 sequential tool loop into
   the first cancellation-phase classification needed by specs 0017/0018.
   Provider-await cancellations and tool-dispatch cancellations still return

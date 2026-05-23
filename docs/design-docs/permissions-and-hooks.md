@@ -109,7 +109,12 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > `RecordingAuditSink` (in-memory capture for tests), and
 > `StorageAuditSink` (column-by-column translation into
 > `storage::AuditRepository::append_event` plus same-row metadata
-> replacement through `update_event_metadata`). Free helpers
+> replacement through `update_event_metadata`). Slice 79 adds
+> `AuditEvent::parent_turn_id` and `AuditMetadataUpdate::parent_turn_id`
+> as typed `core::TurnId` optionals; `StorageAuditSink` persists the id into
+> `audit_events.parent_turn_id`, and metadata updates match it so same-tool
+> calls from different turns cannot overwrite each other's usage metadata.
+> Free helpers
 > `permission::verdict_to_outcome` and
 > `permission::make_audit_event_from_decision` keep callsites
 > from duplicating `Decision` field copies, and
@@ -136,8 +141,9 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > assembly installs a `NullAuditSink` and never touches the audit
 > DB. The agent-loop slice owns the assembly for the lifetime of
 > the process. Slice 15 packages the audit/sessions migration SQL
-> into `oran-storage` itself via C++26 `#embed`, and slice 78 extends
-> the audit DB stream to version 2 with the trace table
+> into `oran-storage` itself via C++26 `#embed`, slice 78 extends
+> the audit DB stream to version 2 with the trace table, and slice 79 extends
+> it to version 3 with the nullable `audit_events.parent_turn_id` join key
 > (`storage::built_in_audit_migrations()` /
 > `storage::built_in_session_migrations()` /
 > `storage::built_in_trace_migrations()`), so `bootstrap::run`

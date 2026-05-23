@@ -32,6 +32,7 @@
 #include <oran/core/capability.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/tool_def.hpp>
+#include <oran/core/turn_id.hpp>
 #include <oran/hook.hpp>
 #include <oran/permission.hpp>
 #include <oran/tool.hpp>
@@ -101,6 +102,14 @@ tool::DispatchContext make_ctx(asio::io_context& io,
       .agent_key = "coder",
       .identity = "operator-1",
   };
+}
+
+core::TurnId turn_id_with(unsigned char seed) {
+  core::TurnId id{};
+  for (std::size_t i = 0; i < id.size(); ++i) {
+    id[i] = static_cast<std::byte>(seed + i);
+  }
+  return id;
 }
 
 [[nodiscard]] bool context_has(const core::Error& error, std::string_view key, std::string_view value) {
@@ -318,6 +327,7 @@ TEST_CASE("Registry::dispatch records one allow event and returns the handler ou
     auto rules = single_rule(permission::Rule{.verdict = permission::Verdict::allow, .tool_pattern = "noop"});
     permission::RecordingAuditSink sink;
     auto ctx = make_ctx(io, rules, sink);
+    ctx.parent_turn_id = turn_id_with(0x50);
 
     const std::string_view input = R"({"hello":"world"})";
     auto result = co_await registry.dispatch("noop", input, ctx);
@@ -333,6 +343,8 @@ TEST_CASE("Registry::dispatch records one allow event and returns the handler ou
     REQUIRE(event.verdict == permission::Verdict::allow);
     REQUIRE(event.outcome == permission::AuditOutcome::allow);
     REQUIRE(event.input_hash.has_value());
+    REQUIRE(event.parent_turn_id.has_value());
+    REQUIRE(*event.parent_turn_id == turn_id_with(0x50));
 
     const auto expected_hash = permission::ApprovalAuthority::input_hash(input);
     REQUIRE(*event.input_hash == expected_hash);

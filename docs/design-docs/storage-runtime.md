@@ -20,9 +20,10 @@ does not expose `sqlite3.h` from public headers.
 > audit row without appending a second decision. Slice 78 adds
 > `TraceRepository`, the spec-0018 `trace_turns` schema, and
 > `built_in_trace_migrations()` for redacted per-turn rows keyed by 16-byte BLOB
-> ids. The trace migration is version 2 of the audit database so existing
-> audit DBs upgrade in place. Backups and the memory / automation repositories
-> are future slices.
+> ids. Slice 79 adds the audit DB version-3 `audit_events.parent_turn_id`
+> column and the shared `core::TurnId` / `TraceId` value shape so tool audit
+> rows can join back to future trace rows. Backups and the memory / automation
+> repositories are future slices.
 
 ## Public Surface
 
@@ -523,6 +524,7 @@ struct AppendAuditEventRequest {
   std::string outcome;
   std::string reason;
   std::string input_hash_hex{};
+  std::optional<core::TurnId> parent_turn_id{};
   std::string metadata_json{"{}"};
 };
 
@@ -532,6 +534,7 @@ struct UpdateAuditEventMetadataRequest {
   std::string tool_name;
   std::string identity;
   std::string input_hash_hex{};
+  std::optional<core::TurnId> parent_turn_id{};
   std::string previous_metadata_json{"{}"};
   std::string metadata_json{"{}"};
 };
@@ -554,13 +557,15 @@ class AuditRepository {
 }  // namespace orangutan::storage
 ```
 
-Slice 67 adds `update_event_metadata` for post-result audit enrichment. The
-update matches by the same event identity fields as the append path
-(`scope_key`, `agent_key`, `tool_name`, `identity`, optional input hash) plus
-the previously stored metadata JSON, then updates the newest matching row. This
-lets `tool::Registry::dispatch` record the permission decision before the
-handler runs and later add `metadata_json.usage` after a successful, capped tool
-result without weakening the durable decision audit.
+Slice 67 adds `update_event_metadata` for post-result audit enrichment. Slice
+79 adds optional `parent_turn_id` to append records, listed records, and
+metadata updates. The update matches by the same event identity fields as the
+append path (`scope_key`, `agent_key`, `tool_name`, `identity`, optional input
+hash, optional parent turn id) plus the previously stored metadata JSON, then
+updates the newest matching row. This lets `tool::Registry::dispatch` record
+the permission decision before the handler runs and later add
+`metadata_json.usage` after a successful, capped tool result without weakening
+the durable decision audit or clobbering a same-tool call from another turn.
 
 ### Schema
 
@@ -574,15 +579,20 @@ non-empty.
 
 The default `AuditRepository::migrate()` path now applies the complete audit DB
 migration stream: version 1 creates `audit_events`, and version 2 adds
-`trace_turns` for spec 0018. Explicit `AuditRepositoryOptions::migrations_directory`
-still supplies a caller-owned migration set for tests and packaged layouts.
+`trace_turns` for spec 0018. Version 3 adds nullable
+`audit_events.parent_turn_id` as a 16-byte BLOB plus
+`idx_audit_events_parent_turn` so trace inspectors can join a turn row to its
+tool audit rows without scanning the whole audit table. Explicit
+`AuditRepositoryOptions::migrations_directory` still supplies a caller-owned
+migration set for tests and packaged layouts.
 
 ### Error Model
 
-Empty required append/update fields return `core::ErrorKind::invalid_argument`
-before touching SQLite. An update whose key + previous metadata do not match an
-existing row returns `core::ErrorKind::not_found`, which callers may treat as
-best-effort enrichment failure while preserving the original decision row.
+Empty required append/update fields and zero-valued parent turn ids return
+`core::ErrorKind::invalid_argument` before touching SQLite. An update whose key
+and previous metadata do not match an existing row returns
+`core::ErrorKind::not_found`, which callers may treat as best-effort enrichment
+failure while preserving the original decision row.
 
 ## Trace Repository
 
@@ -596,7 +606,7 @@ bytes are persisted.
 ```cpp
 namespace orangutan::storage {
 
-using TraceId = std::array<std::byte, 16>;
+using TraceId = core::TurnId;
 
 struct AppendTraceTurnRequest {
   TraceId turn_id;
@@ -657,6 +667,7 @@ positive `iteration_count` / `schema_version`, non-negative counters, and
 `finished_at_ns >= started_at_ns` before touching SQLite. It does not parse
 `context_json`; the agent/trace writer owns redaction and JSON shape.
 
-Slice 78 deliberately stops at the storage primitive. The next spec-0018 slice
-threads a typed turn id through `agent::Loop`, `tool::DispatchContext`, and the
-permission audit sink so tool audit rows can join against `trace_turns`.
+Slice 78 deliberately stops at the storage primitive. Slice 79 threads a typed
+turn id through `agent::Loop`, `tool::DispatchContext`, and the permission audit
+sink so tool audit rows can join against future `trace_turns` rows. The loop
+writer that appends one `trace_turns` row per turn remains downstream.
