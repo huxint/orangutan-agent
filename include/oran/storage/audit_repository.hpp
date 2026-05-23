@@ -10,8 +10,7 @@
 // (`permission::AuditSink`) can live in the permission layer and be
 // implemented by callers that may not be backed by SQLite (e.g. a
 // fire-and-forget shell hook). The storage-backed adapter lives in
-// `permission/audit.hpp` and dispatches to this repository through a
-// thin function pointer indirection.
+// `permission/storage_audit_sink.hpp` and dispatches to this repository.
 //
 // The repository follows the same pool + statement-cache + async lease
 // pattern as `SessionRepository` (see `session_repository.hpp`):
@@ -82,6 +81,19 @@ struct AppendAuditEventRequest {
   std::string metadata_json{"{}"};
 };
 
+struct UpdateAuditEventMetadataRequest {
+  std::string scope_key;
+  std::string agent_key;
+  std::string tool_name;
+  std::string identity;
+  /// Empty means the target row must have SQL NULL in `input_hash_hex`.
+  std::string input_hash_hex{};
+  /// Match the previously stored metadata so callers replace exactly the row
+  /// they enriched instead of clobbering unrelated audit metadata.
+  std::string previous_metadata_json{"{}"};
+  std::string metadata_json{"{}"};
+};
+
 struct AuditEventRecord {
   std::int64_t id{};
   std::string scope_key;
@@ -122,6 +134,9 @@ public:
   [[nodiscard]] async::Awaitable<core::Result<MigrationReport>> migrate();
 
   [[nodiscard]] async::Awaitable<core::Result<AuditEventRecord>> append_event(AppendAuditEventRequest request);
+
+  [[nodiscard]] async::Awaitable<core::Result<AuditEventRecord>>
+  update_event_metadata(UpdateAuditEventMetadataRequest request);
 
   [[nodiscard]] async::Awaitable<core::Result<std::vector<AuditEventRecord>>>
   list_events(ListAuditEventsOptions options);

@@ -3065,7 +3065,15 @@ TEST_CASE("dispatch copies output usage into tool_after payload", "[unit][tool][
     REQUIRE_FALSE(sink.captures()[0].usage.data_dropped);
 
     REQUIRE(audit.events().size() == 1);
-    REQUIRE(audit.events()[0].metadata_json == "{}");
+    auto metadata = nlohmann::json::parse(audit.events()[0].metadata_json);
+    REQUIRE(metadata.contains("usage"));
+    REQUIRE(metadata["usage"]["bytes_read"] == 4096);
+    REQUIRE(metadata["usage"]["files_touched"] == 1);
+    REQUIRE(metadata["usage"]["match_count"] == 3);
+    REQUIRE(metadata["usage"]["truncated"] == true);
+    const auto wall_time_ms = metadata["usage"]["wall_time_ms"].get<double>();
+    REQUIRE(wall_time_ms > 0.0);
+    REQUIRE(wall_time_ms < 0.001);
   });
 }
 
@@ -3132,6 +3140,11 @@ TEST_CASE("dispatch applies output caps before returning and publishing tool_aft
     REQUIRE_FALSE(trusted_sink.captures()[0].data_json.has_value());
     REQUIRE(trusted_sink.captures()[0].usage.truncated);
     REQUIRE(trusted_sink.captures()[0].usage.data_dropped);
+
+    REQUIRE(audit.events().size() == 1);
+    auto metadata = nlohmann::json::parse(audit.events()[0].metadata_json);
+    REQUIRE(metadata["usage"]["truncated"] == true);
+    REQUIRE(metadata["usage"]["data_dropped"] == true);
   });
 }
 

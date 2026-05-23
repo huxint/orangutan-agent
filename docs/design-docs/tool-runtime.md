@@ -687,6 +687,13 @@ Current and future policy:
   copies successful `Output::data_json` into
   `ToolAfterPayload::data_json`. Dispatch failures keep usage and `data_json`
   empty.
+- `Registry::dispatch` also fans non-empty successful `Output::usage` into
+  audit metadata in slice 67. The permission decision row is still recorded
+  before the handler runs; after the handler succeeds and `apply_output_caps`
+  has set any `truncated` / `data_dropped` flags, dispatch best-effort calls
+  `permission::AuditSink::update_metadata(...)` so the same row's
+  `metadata_json.usage` carries bytes read/written, touched files, match count,
+  cost, wall time in milliseconds, and cap flags when present.
 - Built-ins migrate one at a time. `file.read` still keeps the stable
   spec-0011 text fallback
   `<path>:<start_line>-<end_line> fingerprint=<token> bytes=<n>[ truncated]`
@@ -729,7 +736,9 @@ Current and future policy:
   `DispatchContext::output_caps` before `Registry::dispatch` returns the
   output or publishes `tool_after`. The future scheduler owns those options
   for batched calls and will call the same helper before returning ordered
-  results. Audit usage fan-out remains downstream spec-0014 work.
+  results. Slice 67 adds direct-dispatch audit usage metadata enrichment; the
+  scheduler still owns batched-call correlation and option threading once
+  parallel tool calls land.
 - The `tool::parse_input<T>` helper tracked under the deep-review backlog
   (`exec-plans/tech-debt-tracker.md`) lands in the same arc so handlers
   stop hand-rolling their JSON parsers.

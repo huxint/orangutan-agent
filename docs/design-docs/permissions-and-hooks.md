@@ -103,11 +103,13 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > `permission::AuditEvent`, `permission::AuditOutcome`
 > (`allow`/`deny`/`ask`/`approved`/`rejected`), the abstract
 > `permission::AuditSink` interface
-> (`Awaitable<Result<void>> record(AuditEvent)`), plus three
+> (`Awaitable<Result<void>> record(AuditEvent)` plus slice-67
+> `update_metadata(AuditMetadataUpdate)` enrichment), plus three
 > concrete sinks: `NullAuditSink` (no-op default),
 > `RecordingAuditSink` (in-memory capture for tests), and
 > `StorageAuditSink` (column-by-column translation into
-> `storage::AuditRepository::append_event`). Free helpers
+> `storage::AuditRepository::append_event` plus same-row metadata
+> replacement through `update_event_metadata`). Free helpers
 > `permission::verdict_to_outcome` and
 > `permission::make_audit_event_from_decision` keep callsites
 > from duplicating `Decision` field copies, and
@@ -149,6 +151,13 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > `0008-permissions.md` criterion 1 is now closed in-process; the
 > per-call "record on decision" plumbing lands with the first
 > tool built-ins or the agent loop scaffolding.
+> **Tool audit usage enrichment landed in slice 67**:
+> `tool::Registry::dispatch` keeps the record-before-handler invariant, then
+> after a successful handler result and output-cap application it writes
+> non-empty `tool::Output::usage` under the same row's `metadata_json.usage`
+> via `AuditSink::update_metadata`. This update is best-effort metadata
+> enrichment; the permission decision row remains the authoritative durable
+> record even if enrichment is ignored by a custom sink.
 > **Approval-broker dispatch wiring landed 2026-05-17 (slice 21)**:
 > `tool::Registry::dispatch` now consults the broker when a
 > `Verdict::ask` rule fires and the caller supplies

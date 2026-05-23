@@ -39,4 +39,24 @@ async::Awaitable<core::Result<void>> StorageAuditSink::record(AuditEvent event) 
   co_return core::Result<void>{};
 }
 
+async::Awaitable<core::Result<void>> StorageAuditSink::update_metadata(AuditMetadataUpdate update) {
+  storage::UpdateAuditEventMetadataRequest request{
+      .scope_key = std::move(update.scope_key),
+      .agent_key = std::move(update.agent_key),
+      .tool_name = std::move(update.tool_name),
+      .identity = std::move(update.identity),
+      .previous_metadata_json = std::move(update.previous_metadata_json),
+      .metadata_json = std::move(update.metadata_json),
+  };
+  if (update.input_hash.has_value()) {
+    request.input_hash_hex = to_hex(*update.input_hash);
+  }
+
+  auto updated = co_await repository_->update_event_metadata(std::move(request));
+  if (!updated) {
+    co_return std::unexpected(std::move(updated).error());
+  }
+  co_return core::Result<void>{};
+}
+
 }  // namespace orangutan::permission

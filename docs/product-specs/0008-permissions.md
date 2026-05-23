@@ -41,9 +41,11 @@ human approval for high-risk operations.
    `Error::permission_denied` and is recorded in audit. **(Closed
    2026-05-17: the audit pipeline lands in three commits.
    `storage::AuditRepository` owns the `audit.db` schema +
-   `migrate`/`append_event`/`list_events`/`count_events` surface;
+   `migrate`/`append_event`/`update_event_metadata`/`list_events`/
+   `count_events` surface;
    `permission::AuditEvent` + `permission::AuditOutcome` +
-   `permission::AuditSink` define the in-process vocabulary;
+   `permission::AuditSink` define the in-process vocabulary, including
+   slice-67 `AuditMetadataUpdate` for same-row metadata enrichment;
    `permission::NullAuditSink`, `permission::RecordingAuditSink`,
    and `permission::StorageAuditSink` cover the three documented
    sink kinds (no-op default, in-memory capture for tests, SQLite
@@ -58,10 +60,12 @@ human approval for high-risk operations.
    internal `Pool` + `AuditRepository` when audit is enabled,
    `NullAuditSink` otherwise) into a single value type the agent
    loop will inherit — the in-process half of criterion 1 is now
-   wired end-to-end. The agent loop itself will pump `Decision`
-   → `AuditEvent` through `permission::AuditSink::record(...)`
-   on every call; that wiring lands with the first tool built-ins
-   or the agent loop scaffolding.)**
+   wired end-to-end. `tool::Registry::dispatch` already pumps
+   direct tool calls through `AuditSink::record(...)` before any handler
+   side effects; slice 67 then best-effort enriches the same row with
+   successful `Output::usage` metadata via `AuditSink::update_metadata(...)`.
+   The full agent loop will reuse the same sink/broker assembly once
+   `oran-agent` lands.)**
 2. A tool call whose input matches an `ask` rule renders an approval prompt; on
    approval, replay works within TTL for identical input. **(Closed 2026-05-17:
    `permission::ApprovalBroker` wraps `permission::ApprovalAuthority`

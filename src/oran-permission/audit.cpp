@@ -2,12 +2,16 @@
 
 #include <oran/permission/audit.hpp>
 
+#include <algorithm>
 #include <cstdint>
+#include <expected>
+#include <ranges>
 #include <span>
 #include <string>
 #include <utility>
 
 #include <oran/async/awaitable_fwd.hpp>
+#include <oran/core/error.hpp>
 #include <oran/permission/rule_set.hpp>
 
 namespace orangutan::permission {
@@ -18,7 +22,17 @@ constexpr char nibble_to_hex(std::uint8_t nibble) noexcept {
   return static_cast<char>(nibble < 10 ? '0' + nibble : 'a' + (nibble - 10));
 }
 
+[[nodiscard]] bool matches_update(const AuditEvent& event, const AuditMetadataUpdate& update) {
+  return event.scope_key == update.scope_key && event.agent_key == update.agent_key &&
+         event.tool_name == update.tool_name && event.identity == update.identity &&
+         event.input_hash == update.input_hash && event.metadata_json == update.previous_metadata_json;
+}
+
 }  // namespace
+
+async::Awaitable<core::Result<void>> AuditSink::update_metadata(AuditMetadataUpdate /*update*/) {
+  co_return core::Result<void>{};
+}
 
 async::Awaitable<core::Result<void>> NullAuditSink::record(AuditEvent /*event*/) {
   co_return core::Result<void>{};
@@ -26,6 +40,17 @@ async::Awaitable<core::Result<void>> NullAuditSink::record(AuditEvent /*event*/)
 
 async::Awaitable<core::Result<void>> RecordingAuditSink::record(AuditEvent event) {
   events_.push_back(std::move(event));
+  co_return core::Result<void>{};
+}
+
+async::Awaitable<core::Result<void>> RecordingAuditSink::update_metadata(AuditMetadataUpdate update) {
+  auto reversed = events_ | std::views::reverse;
+  auto it = std::ranges::find_if(reversed, [&](const AuditEvent& event) { return matches_update(event, update); });
+  if (it == reversed.end()) {
+    co_return std::unexpected(
+        core::Error::not_found("audit event metadata row was not found").with("tool", std::move(update.tool_name)));
+  }
+  it->metadata_json = std::move(update.metadata_json);
   co_return core::Result<void>{};
 }
 

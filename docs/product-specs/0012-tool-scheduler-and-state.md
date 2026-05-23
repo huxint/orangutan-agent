@@ -94,12 +94,19 @@ implicitly via the capability list.
   depends on stable byte order.
 - **Per-call invariants preserved.** Every call still gets:
   - one permission decision,
-  - one `permission::AuditEvent`,
+  - one `permission::AuditEvent`, with direct-dispatch usage metadata already
+    enriched in slice 67 after successful capped results,
   - the full `tool_before` / `tool_dispatched` / `tool_after` /
     `tool_error` hook lifecycle,
   - a cancellation slot derived from the batch's parent slot,
   - the configured `per_call_timeout` enforced by the scheduler, not the
     tool handler.
+  The scheduler must preserve the slice-67 invariant when it fans out a batch:
+  a decision row is recorded before handler side effects, and any post-result
+  `Output::usage` update targets that same call's row rather than appending a
+  second audit decision. If batched execution can run identical tool/input pairs
+  concurrently, the scheduler owns the stronger per-call correlation needed to
+  keep metadata updates attached to the correct row.
 - **`tool::Registry` stays single-threaded.** Do not add internal locks to
   the registry as a first move. The scheduler owns concurrency at the
   call-graph boundary; the registry runs on the agent strand and the
@@ -304,7 +311,9 @@ implicitly via the capability list.
   slice 66 ships the shared `tool::apply_output_caps` primitive and direct
   `Registry::dispatch` applies it for pre-scheduler callers; the scheduler
   owns those output-cap options for batched calls and aggregates
-  `ToolUsage` across parallel results.
+  `ToolUsage` across parallel results. Slice 67 adds direct-dispatch audit
+  usage metadata enrichment; the scheduler must preserve that same-row update
+  invariant for parallel calls.
 - [`0015-blocking-hook-decisions.md`](0015-blocking-hook-decisions.md)
   — the scheduler is the first consumer of `publish_blocking`;
   per-call timeout enforcement covers the blocking-hook timeout too.

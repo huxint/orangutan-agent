@@ -4,18 +4,19 @@
 automation, audit logs, and configuration metadata. It owns the SQLite dependency and
 does not expose `sqlite3.h` from public headers.
 
-> **Storage status (2026-05-16):** `oran-storage` ships `Connection`, `Statement`,
+> **Storage status (2026-05-24):** `oran-storage` ships `Connection`, `Statement`,
 > typed binding/stepping/column readers, WAL + foreign-key setup, a simple `query`
 > helper, the synchronous `run_migrations` runner plus SQL-file migration
-> loading, an async writer/reader `Pool` driven by `oran-async` executors with
-> one `StatementCache` per writer or reader slot, and the standalone
-> per-connection `StatementCache` with LRU eviction. The first domain
-> repository, `SessionRepository`, persists opaque session-message JSON through
-> the cached pool surface (with `role` typed as `core::Role` at the API
-> boundary) and loads its schema from
-> `src/oran-storage/migrations/sessions/0001-sessions-initial.sql`. Backups,
-> migration asset packaging, and the remaining domain repositories are future
-> slices.
+> loading, compile-time embedded audit/session migrations via C++26 `#embed`,
+> an async writer/reader `Pool` driven by `oran-async` executors with one
+> `StatementCache` per writer or reader slot, and the standalone per-connection
+> `StatementCache` with LRU eviction. `SessionRepository` persists opaque
+> session-message JSON through the cached pool surface (with `role` typed as
+> `core::Role` at the API boundary). `AuditRepository` persists permission
+> decision rows in `audit_events` with append/list/count plus slice-67
+> `update_event_metadata` so post-result usage metadata can enrich the same
+> audit row without appending a second decision. Backups and the memory /
+> automation repositories are future slices.
 
 ## Public Surface
 
@@ -492,3 +493,79 @@ The public header uses stdlib containers/strings plus existing
 keeps hot SQL strings, row mappers, source-tree migration lookup, and
 statement-cache usage in `src/oran-storage/session_repository.cpp`; the schema
 DDL itself lives in the migration file.
+
+## Audit Repository
+
+`AuditRepository` is the storage-backed half of the permission audit pipeline.
+It stores one row per permission decision in `audit.db`, partitioned by
+`scope_key` and searchable by `agent_key`, `tool_name`, and `outcome`. The
+permission layer owns the enum vocabulary and sink abstraction; storage owns the
+SQLite schema and typed repository operations.
+
+```cpp
+namespace orangutan::storage {
+
+struct AppendAuditEventRequest {
+  std::string scope_key;
+  std::string agent_key;
+  std::string tool_name;
+  std::string identity;
+  std::string verdict;
+  std::string outcome;
+  std::string reason;
+  std::string input_hash_hex{};
+  std::string metadata_json{"{}"};
+};
+
+struct UpdateAuditEventMetadataRequest {
+  std::string scope_key;
+  std::string agent_key;
+  std::string tool_name;
+  std::string identity;
+  std::string input_hash_hex{};
+  std::string previous_metadata_json{"{}"};
+  std::string metadata_json{"{}"};
+};
+
+class AuditRepository {
+ public:
+  explicit AuditRepository(Pool&, AuditRepositoryOptions = {}) noexcept;
+
+  async::Awaitable<core::Result<MigrationReport>> migrate();
+  async::Awaitable<core::Result<AuditEventRecord>>
+  append_event(AppendAuditEventRequest);
+  async::Awaitable<core::Result<AuditEventRecord>>
+  update_event_metadata(UpdateAuditEventMetadataRequest);
+  async::Awaitable<core::Result<std::vector<AuditEventRecord>>>
+  list_events(ListAuditEventsOptions);
+  async::Awaitable<core::Result<std::int64_t>>
+  count_events(std::string scope_key);
+};
+
+}  // namespace orangutan::storage
+```
+
+Slice 67 adds `update_event_metadata` for post-result audit enrichment. The
+update matches by the same event identity fields as the append path
+(`scope_key`, `agent_key`, `tool_name`, `identity`, optional input hash) plus
+the previously stored metadata JSON, then updates the newest matching row. This
+lets `tool::Registry::dispatch` record the permission decision before the
+handler runs and later add `metadata_json.usage` after a successful, capped tool
+result without weakening the durable decision audit.
+
+### Schema
+
+Migration `1 / audit-initial` lives at
+`src/oran-storage/migrations/audit/0001-audit-initial.sql` and creates
+`audit_events(id, scope_key, agent_key, tool_name, identity, verdict, outcome,
+reason, input_hash_hex, metadata_json, created_at)` plus scope/time,
+agent/time, and outcome/time indexes. `metadata_json` is intentionally opaque to
+SQLite v1; callers own the JSON shape and storage validates only that it is
+non-empty.
+
+### Error Model
+
+Empty required append/update fields return `core::ErrorKind::invalid_argument`
+before touching SQLite. An update whose key + previous metadata do not match an
+existing row returns `core::ErrorKind::not_found`, which callers may treat as
+best-effort enrichment failure while preserving the original decision row.

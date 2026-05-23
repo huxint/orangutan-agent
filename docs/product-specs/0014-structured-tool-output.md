@@ -46,7 +46,7 @@ caches all consume one shape.
 The MVP delivers a forward-compatible envelope that today's text-only
 handlers can adopt without churning every callsite at once.
 
-> **Status (slice 66, 2026-05-24):** the base envelope ships in
+> **Status (slice 67, 2026-05-24):** the base envelope ships in
 > `oran-tool`. `Output::text_only(...)` preserves the existing text path,
 > `Output::error(...)` marks structured-capable errors, `ToolAfterPayload`
 > copies `Output::usage` on successful dispatch, and slice 65 copies
@@ -60,6 +60,14 @@ handlers can adopt without churning every callsite at once.
 > documented `runtime.tool_output.max_text_bytes` /
 > `runtime.tool_output.max_data_bytes` defaults for the future scheduler /
 > agent owner to thread into that context.
+> Slice 67 adds audit usage fan-out for the same direct-dispatch boundary:
+> `Registry::dispatch` records the permission decision row before the handler
+> runs, then after a successful handler return and cap application it serializes
+> non-empty `Output::usage` under `metadata_json.usage` and best-effort updates
+> that same row through `AuditSink::update_metadata(...)` /
+> `AuditRepository::update_event_metadata(...)`. This preserves the one-row
+> permission-decision invariant while making bytes, touched-file counts,
+> match counts, wall time, and cap flags queryable from the audit log.
 > `file.read` carries its
 > requested text plus range/fingerprint tuple in serialized `data_json`
 > while keeping the spec-0011 text fallback, the current mutation built-ins
@@ -75,8 +83,8 @@ handlers can adopt without churning every callsite at once.
 > is complete — every shipped filesystem built-in fills usage counters and
 > every read-side built-in also fills `data_json`. `bench-tool`
 > has `output.text_only` vs. `output.with_data_16kib` plus
-> `output.apply_caps` coverage. Provider adapter mapping and audit usage
-> fan-out remain downstream.
+> `output.apply_caps` coverage. Provider adapter mapping remains downstream
+> because `oran-provider` does not exist yet.
 
 - **`tool::Output v2`**:
   ```cpp
@@ -139,11 +147,15 @@ handlers can adopt without churning every callsite at once.
     `data_json.has_value()`, plain text otherwise.
   - Adapters never *invent* structure: the agent loop, not the adapter,
     decides what to send.
-- **Audit fan-out.** `permission::AuditEvent` already carries a
-  `context` JSON map; the dispatch pipeline records `usage` keys
+- **Audit fan-out.** `permission::AuditEvent` already carries
+  `metadata_json`; slice 67 records the permission decision row before any
+  handler side effects, then updates that same row after a successful handler
+  result and cap application when `Output::usage` is non-empty. The dispatch
+  pipeline writes a `usage` object containing the measured keys
   (`bytes_read`, `bytes_written`, `files_touched`, `match_count`,
-  `cost_estimate`, `wall_time_ms`) when the tool returns them. The
-  existing `input_hash` discipline is unchanged.
+  `cost_estimate`, `wall_time_ms`) and the cap flags (`truncated`,
+  `data_dropped`) when present. The existing `input_hash` discipline is
+  unchanged, and enrichment never appends a second audit decision row.
 - **Hook fan-out.** `ToolAfterPayload` (already defined in slice 22 +
   slice 25) now has a `usage` field carrying the same metrics and, as of
   slice 65, optional `data_json` carrying the raw serialized structured output
@@ -245,12 +257,14 @@ handlers can adopt without churning every callsite at once.
    (spec 0017) test sink as the parsed `data_json`. The agent transcript's
    *bytes* sent to the provider differ when `data_json` is present and
    match v1 when absent.
-3. **Usage propagation.** A handler that fills
+3. **Usage propagation.** Shipped for direct dispatch in slice 67. A handler that fills
    `usage = { .bytes_read = 4096, .files_touched = 1 }` produces an
-   `AuditEvent` with those keys in `context`, a `ToolAfterPayload` with
-   the same fields, and (once audit/log fan-out lands) a trace row
-   carrying them. Slice 60 pins the hook half; audit/log fan-out remains
-   downstream.
+   audit row whose `metadata_json.usage` carries those keys, a
+   `ToolAfterPayload` with the same fields, and the same cap flags after
+   `apply_output_caps` runs. Slice 60 pinned the hook half; slice 67 pins
+   the audit half without changing the pre-handler decision-recording
+   invariant. A later trace/log sink can read the same `ToolUsage` fields
+   when the observability layer lands.
 4. **Byte cap enforcement (text).** Shipped in slice 66. A handler that returns 257 KiB of
    `text` with the default cap produces an output whose `text.size() ≤
    256 KiB`, `usage.truncated = true`, and a single `tool_after` hook

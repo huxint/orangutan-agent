@@ -99,6 +99,20 @@ struct AuditEvent {
   std::string metadata_json{"{}"};
 };
 
+/// In-place metadata replacement for a previously recorded audit row. The
+/// original decision row stays durable before any handler effects; callers use
+/// this to add post-result metadata such as structured tool usage without
+/// appending a second permission-decision row.
+struct AuditMetadataUpdate {
+  std::string scope_key;
+  std::string agent_key;
+  std::string tool_name;
+  std::string identity;
+  std::optional<std::array<std::byte, 32>> input_hash{};
+  std::string previous_metadata_json{"{}"};
+  std::string metadata_json{"{}"};
+};
+
 /// Abstract audit sink. Implementations: `NullAuditSink` (no-op),
 /// `RecordingAuditSink` (in-memory capture, for tests), and (in a
 /// separate header) `StorageAuditSink` (writes to
@@ -119,6 +133,10 @@ public:
   /// means the SQLite WAL commit completed; for the recording sink
   /// it means the in-memory vector has been appended.
   [[nodiscard]] virtual async::Awaitable<core::Result<void>> record(AuditEvent event) = 0;
+
+  /// Replace a previously recorded row's metadata. The default is a no-op so
+  /// sinks that only care about permission decisions can ignore enrichment.
+  [[nodiscard]] virtual async::Awaitable<core::Result<void>> update_metadata(AuditMetadataUpdate update);
 };
 
 /// No-op sink. Returns success immediately and discards every event.
@@ -134,6 +152,7 @@ public:
 class RecordingAuditSink final : public AuditSink {
 public:
   [[nodiscard]] async::Awaitable<core::Result<void>> record(AuditEvent event) override;
+  [[nodiscard]] async::Awaitable<core::Result<void>> update_metadata(AuditMetadataUpdate update) override;
 
   [[nodiscard]] std::span<const AuditEvent> events() const noexcept {
     return events_;

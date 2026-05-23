@@ -7,15 +7,30 @@
 
 ## Snapshot
 
-- **Slice:** 66 (`xmake run orangutan` reports slice 66)
+- **Slice:** 67 (`xmake run orangutan` reports slice 67)
 - **Last completed history:**
-  [`histories/2026-05/20260524-0617-tool-output-byte-caps.md`](histories/2026-05/20260524-0617-tool-output-byte-caps.md)
+  [`histories/2026-05/20260524-0635-tool-audit-usage-metadata.md`](histories/2026-05/20260524-0635-tool-audit-usage-metadata.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 66
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 67
+  closes spec 0014's audit usage fan-out for the pre-scheduler direct
+  dispatch path: `permission::AuditSink` now exposes
+  `update_metadata(AuditMetadataUpdate)`, `RecordingAuditSink` and
+  `StorageAuditSink` implement it, and `storage::AuditRepository` can
+  replace the newest matching `audit_events.metadata_json` value without
+  appending a second permission-decision row. `Registry::dispatch` still
+  records the permission decision before any handler side effects; when an
+  allow or ask-approved handler returns a successful `tool::Output`,
+  dispatch applies output caps, serializes non-empty `Output::usage` under
+  `metadata_json.usage`, and best-effort enriches the same audit row. The
+  direct-dispatch enrichment covers the shipped filesystem built-ins and
+  the cap flags from slice 66. Provider adapter mapping remains the
+  remaining spec-0014 item; scheduler ownership of cap options and any
+  stronger per-batch audit correlation belong to the upcoming spec-0012 /
+  agent-loop work. Slice 66
   closes spec 0014's byte-cap item for the pre-scheduler dispatch
   boundary: `<oran/tool/output.hpp>` now exposes
   `OutputCapOptions`, `OutputCapReport`, and `apply_output_caps`, and
@@ -28,8 +43,8 @@
   `runtime.tool_output.max_text_bytes` / `max_data_bytes` block
   (defaults 256 KiB / 1 MiB) so the future scheduler/agent owner can
   thread operator caps into `DispatchContext` instead of hard-coding
-  them. Provider adapter mapping and audit usage fan-out remain
-  downstream spec-0014 items. Slice 65
+  them. Provider adapter mapping remained downstream, and slice 67 adds
+  audit usage metadata enrichment. Slice 65
   closes spec 0014's hook raw-data redaction item: `hook::Sink` now
   exposes `kind()` with `SinkKind::default_` and
   `SinkKind::trusted_local`, `hook::InProcessSink` stores the chosen
@@ -43,8 +58,9 @@
   `directory.list` (slice 64) migrated and the mutation tools holding
   measured usage counters from slice 61, the built-in side of spec 0014's
   structured-output migration is done. Provider adapter mapping,
-  byte-cap enforcement, and audit usage fan-out remained downstream
-  spec-0014 items.
+  byte-cap enforcement, and audit usage fan-out were downstream at that
+  point; later slices shipped byte caps and same-row audit usage metadata
+  enrichment.
   Slice 64
   continues spec 0014's built-in structured-output migration for
   `directory.list`: the handler keeps the existing
@@ -85,11 +101,11 @@
   header stays `nlohmann`-free by storing structured payload bytes as a
   string for provider adapters to parse/serialize later. `Registry::dispatch`
   now copies `Output::usage` into `hook::ToolAfterPayload::usage` on
-  successful handler returns. Provider-adapter mapping, byte-cap
-  enforcement, and audit usage fan-out remained downstream; later slices
-  migrated `file.search` / `directory.list` structured `data_json`,
-  shipped trusted-local hook raw-data redaction, and added the slice-66
-  dispatch-boundary output-cap helper. Slice 59
+  successful handler returns. Provider-adapter mapping remains downstream;
+  later slices migrated `file.search` / `directory.list` structured
+  `data_json`, shipped trusted-local hook raw-data redaction, added the
+  slice-66 dispatch-boundary output-cap helper, and added slice-67
+  same-row audit usage metadata enrichment. Slice 59
   starts the prompt-catalog cache prework shared by specs 0012 and
   0016: `core::ToolDef` now carries the documented `deferred` and
   `category` metadata, and `oran-tool` exposes `tool::CatalogRenderer`,
@@ -176,11 +192,11 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-core`: 69 cases / 450 assertions.
 - `oran-async`: 9 cases / 43 assertions.
 - `oran-io`: 49 cases / 286 assertions.
-- `oran-storage`: 60 cases / 706 assertions.
+- `oran-storage`: 61 cases / 718 assertions.
 - `oran-config`: 26 cases / 184 assertions.
-- `oran-permission`: 86 cases / 390 assertions.
+- `oran-permission`: 88 cases / 403 assertions.
 - `oran-hook`: 17 cases / 109 assertions.
-- `oran-tool`: 161 cases / 1515 assertions.
+- `oran-tool`: 161 cases / 1524 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 153 assertions.
 

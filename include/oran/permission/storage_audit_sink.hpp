@@ -50,6 +50,7 @@ public:
   explicit StorageAuditSink(storage::AuditRepository& repository) noexcept;
 
   [[nodiscard]] async::Awaitable<core::Result<void>> record(AuditEvent event) override;
+  [[nodiscard]] async::Awaitable<core::Result<void>> update_metadata(AuditMetadataUpdate update) override;
 
 private:
   storage::AuditRepository* repository_{};

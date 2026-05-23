@@ -23,6 +23,7 @@
 #include <oran/permission/audit.hpp>
 #include <oran/permission/rule_set.hpp>
 
+#include "_impl/audit_metadata.hpp"
 #include "_impl/path_resolution.hpp"
 #include "_impl/schema_validation.hpp"
 
@@ -47,6 +48,17 @@ namespace {
   event.input_hash = permission::ApprovalAuthority::input_hash(input_json);
   event.metadata_json = std::move(metadata_json);
   return event;
+}
+
+[[nodiscard]] permission::AuditMetadataUpdate build_metadata_update(const permission::AuditEvent& event) {
+  return permission::AuditMetadataUpdate{
+      .scope_key = event.scope_key,
+      .agent_key = event.agent_key,
+      .tool_name = event.tool_name,
+      .identity = event.identity,
+      .input_hash = event.input_hash,
+      .previous_metadata_json = event.metadata_json,
+  };
 }
 
 /// Extract the `reason` context entry the approval broker stamps onto every
@@ -229,6 +241,7 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
   // branch — the initial placeholder catches the unreachable "fell off
   // the bottom" case so static analysis sees no uninitialised path.
   core::Result<Output> result = std::unexpected(core::Error::internal("dispatch did not produce a result"));
+  std::optional<permission::AuditMetadataUpdate> audit_metadata_update;
   {
     auto path_resolution = detail::pre_resolve_tool_path(name, input_json, ctx);
     const auto decision = ctx.rules.evaluate(name, input_json, entry.def.required_capabilities, ctx.mode);
@@ -260,6 +273,17 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
       }
     }
 
+    // Keep the decision row durable before the handler runs. If the handler
+    // later returns measured usage, the post-result enrichment updates the
+    // newest matching row's metadata instead of appending a second audit row.
+    const bool handler_about_to_run =
+        !path_resolution.error.has_value() &&
+        (decision.verdict == permission::Verdict::allow ||
+         (decision.verdict == permission::Verdict::ask && broker_consulted && !broker_rejection.has_value()));
+    if (handler_about_to_run) {
+      audit_metadata_update = build_metadata_update(event);
+    }
+
     if (auto recorded = co_await ctx.audit.record(std::move(event)); !recorded) {
       result = std::unexpected(std::move(recorded).error());
     } else if (path_resolution.error.has_value()) {
@@ -269,9 +293,6 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
       // about to run — i.e. on `allow`, or on `ask` that the broker
       // promoted to `approved`. Sinks subscribed to this event see
       // only the calls whose handlers will actually execute.
-      const bool handler_about_to_run =
-          decision.verdict == permission::Verdict::allow ||
-          (decision.verdict == permission::Verdict::ask && broker_consulted && !broker_rejection.has_value());
       if (handler_about_to_run && ctx.bus != nullptr) {
         [[maybe_unused]] auto dispatched_outcome = co_await ctx.bus->publish_advisory(
             hook::Event::tool_dispatched,
@@ -309,6 +330,13 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
 
   if (result.has_value()) {
     [[maybe_unused]] const auto cap_report = apply_output_caps(*result, ctx.output_caps);
+    if (audit_metadata_update.has_value()) {
+      auto metadata_json = detail::with_usage_metadata(audit_metadata_update->previous_metadata_json, result->usage);
+      if (metadata_json.has_value()) {
+        audit_metadata_update->metadata_json = std::move(*metadata_json);
+        [[maybe_unused]] auto updated = co_await ctx.audit.update_metadata(std::move(*audit_metadata_update));
+      }
+    }
   }
 
   // Slice 22 + 25: publish `tool_error` (failure-only narrow channel) when

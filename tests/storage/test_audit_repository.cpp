@@ -216,6 +216,40 @@ TEST_CASE("AuditRepository stores a null input_hash when the caller omits it", "
   });
 }
 
+TEST_CASE("AuditRepository updates metadata for the matching audit row", "[unit][storage][audit_repository]") {
+  TempDb db{"oran-audit-repo-update-metadata"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::AuditRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+
+    auto request = make_request("scope-A", "file.read", "allow");
+    request.input_hash_hex = std::string(64, 'b');
+    request.metadata_json = R"json({"dispatch":{"sequence":7}})json";
+    auto appended = co_await repo.append_event(request);
+    REQUIRE(appended.has_value());
+
+    auto updated = co_await repo.update_event_metadata(storage::UpdateAuditEventMetadataRequest{
+        .scope_key = "scope-A",
+        .agent_key = "coder",
+        .tool_name = "file.read",
+        .identity = "operator-1",
+        .input_hash_hex = std::string(64, 'b'),
+        .previous_metadata_json = R"json({"dispatch":{"sequence":7}})json",
+        .metadata_json = R"json({"dispatch":{"sequence":7},"usage":{"bytes_read":4096}})json",
+    });
+    REQUIRE(updated.has_value());
+    REQUIRE(updated->id == appended->id);
+    REQUIRE(updated->metadata_json == R"json({"dispatch":{"sequence":7},"usage":{"bytes_read":4096}})json");
+
+    auto listed = co_await repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-A"});
+    REQUIRE(listed.has_value());
+    REQUIRE(listed->size() == 1);
+    REQUIRE((*listed)[0].metadata_json == R"json({"dispatch":{"sequence":7},"usage":{"bytes_read":4096}})json");
+  });
+}
+
 TEST_CASE("AuditRepository list_events orders newest first and applies filters", "[unit][storage][audit_repository]") {
   TempDb db{"oran-audit-repo-filters"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
@@ -308,6 +342,16 @@ TEST_CASE("AuditRepository validates required fields", "[unit][storage][audit_re
     auto count_no_scope = co_await repo.count_events("");
     REQUIRE_FALSE(count_no_scope.has_value());
     REQUIRE(count_no_scope.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto update_missing_metadata = co_await repo.update_event_metadata(storage::UpdateAuditEventMetadataRequest{
+        .scope_key = "scope-A",
+        .agent_key = "coder",
+        .tool_name = "file.read",
+        .identity = "op",
+        .previous_metadata_json = "",
+    });
+    REQUIRE_FALSE(update_missing_metadata.has_value());
+    REQUIRE(update_missing_metadata.error().kind() == core::ErrorKind::invalid_argument);
   });
 }
 
