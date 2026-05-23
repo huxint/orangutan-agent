@@ -678,7 +678,16 @@ Current and future policy:
   followed by the requested body, and slice 62 also stores a serialized JSON
   object in `Output::data_json` with `kind=file_read`, `path`, requested
   `text`, `fingerprint`, `start_line`, `end_line`, `returned_bytes`, and
-  `truncated`.
+  `truncated`. Slice 63 migrates `file.search` next: handlers keep the
+  `path:line:text` text rendering plus the trailing truncation summary, and
+  also store a serialized JSON object in `Output::data_json` with
+  `kind=file_search`, `path`, `pattern`, `regex`, `matches[]` (one
+  `{path, line_number, text}` object per match), `match_count`,
+  `truncated`, `truncation_reason` (null / `matches` / `bytes`),
+  `files_scanned`, and `bytes_read`. `Output::usage` carries
+  `bytes_read` (cumulative scanned file bytes), `files_touched`
+  (non-binary scanned files), `match_count` (post-truncation), and the
+  `truncated` cap flag.
 - Slice 61 migrates the current mutation built-ins to fill counters:
   `file.write` reports `bytes_written` and `files_touched`; `file.edit`
   reports `bytes_read`, `bytes_written`, `files_touched`, and
@@ -690,8 +699,8 @@ Current and future policy:
   Responses, Gemini, and OpenAI-compatible mappings remain spec-0014 follow-up
   work because `oran-provider` does not exist yet.
 - Scheduler byte caps, audit usage fan-out, raw `data_json` hook redaction for
-  trusted-local sinks, and structured payload migration for `file.search` /
-  `directory.list` remain downstream spec-0014 items.
+  trusted-local sinks, and structured payload migration for `directory.list`
+  remain downstream spec-0014 items.
 - The `tool::parse_input<T>` helper tracked under the deep-review backlog
   (`exec-plans/tech-debt-tracker.md`) lands in the same arc so handlers
   stop hand-rolling their JSON parsers.

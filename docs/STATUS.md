@@ -7,15 +7,26 @@
 
 ## Snapshot
 
-- **Slice:** 62 (`xmake run orangutan` reports slice 62)
+- **Slice:** 63 (`xmake run orangutan` reports slice 63)
 - **Last completed history:**
-  [`histories/2026-05/20260524-0245-tool-file-read-structured-output.md`](histories/2026-05/20260524-0245-tool-file-read-structured-output.md)
+  [`histories/2026-05/20260524-0420-tool-file-search-structured-output.md`](histories/2026-05/20260524-0420-tool-file-search-structured-output.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 62
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 63
+  continues spec 0014's built-in structured-output migration for
+  `file.search`: the handler keeps the existing
+  `path:line:text` text rendering (with the slice-47 byte-cap and
+  slice-20 match-cap trailing summary), now fills `Output::data_json`
+  with a `{kind:"file_search", path, pattern, regex, matches[],
+  match_count, truncated, truncation_reason, files_scanned,
+  bytes_read}` payload, and fills `Output::usage.bytes_read`
+  (cumulative scanned file bytes), `files_touched` (non-binary scanned
+  file count), `match_count` (post-truncation match count), and the
+  `truncated` cap flag. The next built-in is `directory.list`
+  (spec 0014 migration list step 3). Slice 62
   continues spec 0014's built-in structured-output migration for
   `file.read`: the tool keeps the spec-0011 text header/body fallback,
   now fills `Output::data_json` with a JSON object carrying `kind`,
@@ -131,7 +142,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 24 cases / 171 assertions.
 - `oran-permission`: 86 cases / 390 assertions.
 - `oran-hook`: 15 cases / 97 assertions.
-- `oran-tool`: 146 cases / 1323 assertions.
+- `oran-tool`: 152 cases / 1415 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 153 assertions.
 

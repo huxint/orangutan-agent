@@ -2276,6 +2276,227 @@ TEST_CASE("file.search aborts a large-file read when cancellation fires mid-walk
 }
 
 // ---------------------------------------------------------------------------
+// Slice 63 — `file.search` structured `Output::data_json` + usage counters.
+// Closes the second built-in step of spec 0014's text→structured migration
+// (after slice 62's `file.read`). The text fallback is unchanged: every prior
+// `file.search` case still passes verbatim. These tests pin the new shape so
+// provider adapters, the web UI, and audit fan-out can consume matches as
+// JSON instead of re-parsing `path:line:text` lines.
+
+TEST_CASE("file.search single-file happy path fills data_json with structured matches",
+          "[unit][tool][file_search][structured]") {
+  TempFile file{"search-structured-single"};
+  file.write("alpha\nNEEDLE one\nfiller\nNEEDLE two\n");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + file.string() + R"(","pattern":"NEEDLE"})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+
+    // Text fallback survives the structured-output migration verbatim.
+    REQUIRE(result->text.contains(file.string() + ":2:NEEDLE one"));
+    REQUIRE(result->text.contains(file.string() + ":4:NEEDLE two"));
+    REQUIRE_FALSE(result->text.contains("(truncated"));
+
+    REQUIRE(result->data_json.has_value());
+    const auto data = nlohmann::json::parse(*result->data_json);
+    REQUIRE(data["kind"] == "file_search");
+    REQUIRE(data["path"] == file.string());
+    REQUIRE(data["pattern"] == "NEEDLE");
+    REQUIRE(data["regex"] == false);
+    REQUIRE(data["match_count"] == 2);
+    REQUIRE(data["truncated"] == false);
+    REQUIRE(data["truncation_reason"].is_null());
+    REQUIRE(data["files_scanned"] == 1);
+    // 35 bytes: "alpha\nNEEDLE one\nfiller\nNEEDLE two\n" (6+11+7+11) — pinned
+    // exactly so the cost figure stays meaningful for audit fan-out.
+    REQUIRE(data["bytes_read"] == 35);
+    REQUIRE(data["matches"].is_array());
+    REQUIRE(data["matches"].size() == 2);
+    REQUIRE(data["matches"][0]["path"] == file.string());
+    REQUIRE(data["matches"][0]["line_number"] == 2);
+    REQUIRE(data["matches"][0]["text"] == "NEEDLE one");
+    REQUIRE(data["matches"][1]["line_number"] == 4);
+    REQUIRE(data["matches"][1]["text"] == "NEEDLE two");
+
+    REQUIRE(result->usage.bytes_read.has_value());
+    REQUIRE(*result->usage.bytes_read == std::uintmax_t{35});
+    REQUIRE(result->usage.files_touched.has_value());
+    REQUIRE(*result->usage.files_touched == std::uint32_t{1});
+    REQUIRE(result->usage.match_count.has_value());
+    REQUIRE(*result->usage.match_count == std::uint64_t{2});
+    REQUIRE_FALSE(result->usage.truncated);
+  });
+}
+
+TEST_CASE("file.search recursive walk reports per-walk usage and structured matches",
+          "[unit][tool][file_search][structured]") {
+  TempDir dir{"search-structured-walk"};
+  // Each file body has a deterministic size: total bytes_read should equal
+  // the sum of the *scanned* files (not the binary skip).
+  dir.write_file("a.txt", "TARGET\n");        // 7 bytes
+  dir.write_file("sub/b.txt", "TARGET\n");    // 7 bytes
+  dir.write_file("noise.txt", "no match\n");  // 9 bytes
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"(","pattern":"TARGET"})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+
+    REQUIRE(result->data_json.has_value());
+    const auto data = nlohmann::json::parse(*result->data_json);
+    REQUIRE(data["kind"] == "file_search");
+    REQUIRE(data["path"] == dir.string());
+    REQUIRE(data["pattern"] == "TARGET");
+    REQUIRE(data["match_count"] == 2);
+    REQUIRE(data["truncated"] == false);
+    REQUIRE(data["files_scanned"] == 3);
+    REQUIRE(data["bytes_read"] == 23);
+
+    // Matches sorted by walk order; the matches array carries the absolute
+    // path of every scanned file with a match.
+    REQUIRE(data["matches"].size() == 2);
+    const auto paths = std::vector<std::string>{
+        data["matches"][0]["path"].get<std::string>(),
+        data["matches"][1]["path"].get<std::string>(),
+    };
+    REQUIRE(std::ranges::contains(paths, dir.child("a.txt").string()));
+    REQUIRE(std::ranges::contains(paths, dir.child("sub/b.txt").string()));
+
+    REQUIRE(*result->usage.bytes_read == std::uintmax_t{23});
+    REQUIRE(*result->usage.files_touched == std::uint32_t{3});
+    REQUIRE(*result->usage.match_count == std::uint64_t{2});
+    REQUIRE_FALSE(result->usage.truncated);
+  });
+}
+
+TEST_CASE("file.search match-cap truncation sets usage.truncated and truncation_reason=matches",
+          "[unit][tool][file_search][structured]") {
+  TempFile file{"search-structured-trunc-matches"};
+  file.write("X\nX\nX\nX\nX\n");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + file.string() + R"(","pattern":"X","max_matches":2})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+
+    REQUIRE(result->text.contains("(truncated; matches capped at 2)"));
+    REQUIRE(result->data_json.has_value());
+    const auto data = nlohmann::json::parse(*result->data_json);
+    REQUIRE(data["match_count"] == 2);
+    REQUIRE(data["truncated"] == true);
+    REQUIRE(data["truncation_reason"] == "matches");
+    REQUIRE(data["matches"].size() == 2);
+
+    REQUIRE(*result->usage.match_count == std::uint64_t{2});
+    REQUIRE(result->usage.truncated);
+  });
+}
+
+TEST_CASE("file.search byte-cap truncation sets truncation_reason=bytes", "[unit][tool][file_search][structured]") {
+  TempFile file{"search-structured-trunc-bytes"};
+  file.write("NEEDLE\nNEEDLE\nNEEDLE\n");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto first_cost = file.string().size() + std::string_view{":1:NEEDLE"}.size();
+    const auto input = std::string{R"({"path":")"} + file.string() + R"(","pattern":"NEEDLE","max_output_bytes":)" +
+                       std::to_string(first_cost) + "}";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+
+    REQUIRE(result->text.contains("(truncated; output capped at "));
+    REQUIRE(result->data_json.has_value());
+    const auto data = nlohmann::json::parse(*result->data_json);
+    REQUIRE(data["match_count"] == 1);
+    REQUIRE(data["truncated"] == true);
+    REQUIRE(data["truncation_reason"] == "bytes");
+
+    REQUIRE(*result->usage.match_count == std::uint64_t{1});
+    REQUIRE(result->usage.truncated);
+  });
+}
+
+TEST_CASE("file.search no-matches still emits an empty structured payload", "[unit][tool][file_search][structured]") {
+  TempFile file{"search-structured-nomatch"};
+  file.write("alpha\nbeta\n");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + file.string() + R"(","pattern":"absent"})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "no matches");
+
+    REQUIRE(result->data_json.has_value());
+    const auto data = nlohmann::json::parse(*result->data_json);
+    REQUIRE(data["kind"] == "file_search");
+    REQUIRE(data["matches"].is_array());
+    REQUIRE(data["matches"].empty());
+    REQUIRE(data["match_count"] == 0);
+    REQUIRE(data["truncated"] == false);
+    REQUIRE(data["files_scanned"] == 1);
+    REQUIRE(data["bytes_read"] == 11);
+
+    REQUIRE(*result->usage.match_count == std::uint64_t{0});
+    REQUIRE(*result->usage.files_touched == std::uint32_t{1});
+    REQUIRE_FALSE(result->usage.truncated);
+  });
+}
+
+TEST_CASE("file.search regex=true echoes regex flag in data_json", "[unit][tool][file_search][structured]") {
+  TempFile file{"search-structured-regex"};
+  file.write("error: 42\nok\n");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_search(registry).has_value());
+    auto rules = search_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + file.string() + R"(","pattern":"error: \\d+","regex":true})";
+    auto result = co_await registry.dispatch(tool::kFileSearchName, input, ctx);
+    REQUIRE(result.has_value());
+
+    REQUIRE(result->data_json.has_value());
+    const auto data = nlohmann::json::parse(*result->data_json);
+    REQUIRE(data["regex"] == true);
+    REQUIRE(data["pattern"] == "error: \\d+");
+    REQUIRE(data["match_count"] == 1);
+    REQUIRE(data["matches"][0]["text"] == "error: 42");
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Slice 21 — approval-broker dispatch wiring.
 //
 // The cases below exercise the new `ctx.approval_broker` + `ctx.approval_token`

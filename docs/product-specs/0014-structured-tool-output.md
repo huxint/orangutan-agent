@@ -46,18 +46,21 @@ caches all consume one shape.
 The MVP delivers a forward-compatible envelope that today's text-only
 handlers can adopt without churning every callsite at once.
 
-> **Status (slice 62, 2026-05-24):** the base envelope now ships in
+> **Status (slice 63, 2026-05-24):** the base envelope ships in
 > `oran-tool`. `Output::text_only(...)` preserves the existing text path,
 > `Output::error(...)` marks structured-capable errors, `ToolAfterPayload`
-> copies `Output::usage` on successful dispatch, `file.read` now carries its
-> requested text plus range/fingerprint tuple in serialized `data_json` while
-> keeping the spec-0011 text fallback, and the current mutation built-ins fill
-> measured usage counters while keeping `data_json=nullopt` for the v1
-> migration path. `bench-tool` has `output.text_only` vs.
-> `output.with_data_16kib` coverage. Provider adapter mapping, scheduler
-> byte caps, audit usage fan-out, hook raw-data redaction, and structured
-> `data_json` migrations for `file.search` / `directory.list` remain
-> downstream.
+> copies `Output::usage` on successful dispatch, `file.read` carries its
+> requested text plus range/fingerprint tuple in serialized `data_json`
+> while keeping the spec-0011 text fallback, the current mutation built-ins
+> fill measured usage counters while keeping `data_json=nullopt` for the v1
+> migration path, and `file.search` now fills serialized `data_json` with
+> `{kind:"file_search", path, pattern, regex, matches[], match_count,
+> truncated, truncation_reason, files_scanned, bytes_read}` plus usage
+> `bytes_read` / `files_touched` / `match_count` / `truncated`. `bench-tool`
+> has `output.text_only` vs. `output.with_data_16kib` coverage. Provider
+> adapter mapping, scheduler byte caps, audit usage fan-out, hook raw-data
+> redaction, and the structured `data_json` migration for `directory.list`
+> remain downstream.
 
 - **`tool::Output v2`**:
   ```cpp
@@ -144,7 +147,13 @@ handlers can adopt without churning every callsite at once.
      and fills `data_json` with `{kind:"file_read", path, text, fingerprint,
      start_line, end_line, returned_bytes, truncated}` plus
      `usage.bytes_read`, `files_touched`, and `truncated`.
-  2. `file.search` (gains structured `matches[]` and per-file usage).
+  2. `file.search` — shipped in slice 63: keeps the existing
+     `path:line:text` text rendering and trailing truncation summary, and
+     fills `data_json` with `{kind:"file_search", path, pattern, regex,
+     matches[], match_count, truncated, truncation_reason, files_scanned,
+     bytes_read}` plus `usage.bytes_read` (cumulative scanned file bytes),
+     `files_touched` (non-binary scanned files), `match_count`
+     (post-truncation), and the `truncated` cap flag.
   3. `directory.list` (gains structured `entries[]`).
   4. `file.write` / `file.edit` / `file.delete` — shipped in slice 61:
      `file.write` fills `usage.bytes_written` and `files_touched`;

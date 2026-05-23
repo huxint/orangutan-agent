@@ -97,6 +97,12 @@ inline constexpr std::string_view kFileDeleteName{"file.delete"};
 /// files from the search root downward for comments, blanks, escaped
 /// leading `#` / `!` literals, `!` negation, trailing `/` directory rules,
 /// slash-relative patterns, basename patterns, and fnmatch-style globs.
+/// Successful calls also fill `Output::data_json` with `kind`, `path`,
+/// `pattern`, `regex`, `matches[]`, `match_count`, `truncated`,
+/// `truncation_reason`, `files_scanned`, and `bytes_read`, and fill
+/// `Output::usage` with `bytes_read` (cumulative scanned file bytes),
+/// `files_touched` (non-binary scanned file count), `match_count`
+/// (post-truncation), and the `truncated` cap flag.
 [[nodiscard]] core::Result<void> register_file_search(Registry& registry);
 
 /// Register the `directory.list` tool. Enumerates the immediate children of

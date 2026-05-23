@@ -2,6 +2,17 @@
 //
 // Slice 20 shipped literal-substring matching; slice 24 adds the
 // `"regex": true` opt-in tracked in `docs/exec-plans/tech-debt-tracker.md`.
+// Slice 63 (2026-05-24) closes spec 0014's "structured `data_json` migration
+// for `file.search`" item: successful calls keep the existing
+// `path:line:text` text rendering for current callers AND fill
+// `Output::data_json` with a serialized `{kind:"file_search", path, pattern,
+// regex, matches[], match_count, truncated, truncation_reason, files_scanned,
+// bytes_read}` payload. `Output::usage` is filled with `bytes_read`
+// (cumulative file bytes scanned across the walk), `files_touched`
+// (count of non-binary files actually run through the matcher),
+// `match_count` (post-truncation match count surfaced to the caller),
+// and `truncated` (true when either the match-count cap or the byte cap
+// fired).
 // Slice 39 resolves the input path through `tool::Workspace::resolve_list`
 // when `DispatchContext::workspace` is supplied so a directory search cannot
 // escape the workspace via traversal or a root-side symlink. Nested entries
@@ -209,6 +220,8 @@ enum class TruncReason : std::uint8_t {
 struct SearchOutcome {
   std::vector<Match> matches;
   TruncReason truncated{TruncReason::none};
+  std::uintmax_t bytes_read{0};
+  std::uint32_t files_scanned{0};
 };
 
 /// Per-call line matcher. Owns the compiled regex when the caller opted in
@@ -676,6 +689,8 @@ private:
     // Single-file mode does NOT apply the binary heuristic — the caller named
     // this file explicitly, so we trust their intent. The heuristic only
     // filters during recursive directory walks.
+    outcome.bytes_read += static_cast<std::uintmax_t>(contents->size());
+    ++outcome.files_scanned;
     const auto reason = scan_text(*contents,
                                   *matcher,
                                   root.string(),
@@ -744,7 +759,9 @@ private:
         }
 
         if (auto file_contents = read_text_capped(entry_path, cancellation); file_contents) {
+          outcome.bytes_read += static_cast<std::uintmax_t>(file_contents->size());
           if (!looks_binary(*file_contents)) {
+            ++outcome.files_scanned;
             const auto reason = scan_text(*file_contents,
                                           *matcher,
                                           entry_path.string(),
@@ -812,6 +829,48 @@ private:
   return text;
 }
 
+/// Build the structured `Output::data_json` payload that mirrors the rendered
+/// text but exposes match cardinality and per-walk usage to callers that no
+/// longer want to parse the trailing summary line. The shape is intentionally
+/// flat: every consumer (provider adapter, audit fan-out, web UI) reads the
+/// same JSON object and decides how to project it.
+[[nodiscard]] std::string format_data_json(const SearchOutcome& outcome, const SearchOptions& opts) {
+  nlohmann::json matches = nlohmann::json::array();
+  for (const auto& m : outcome.matches) {
+    matches.push_back(nlohmann::json{
+        {"path", m.path},
+        {"line_number", m.line_number},
+        {"text", m.text},
+    });
+  }
+
+  nlohmann::json truncation_reason = nullptr;
+  switch (outcome.truncated) {
+    case TruncReason::none:
+      break;
+    case TruncReason::matches:
+      truncation_reason = "matches";
+      break;
+    case TruncReason::bytes:
+      truncation_reason = "bytes";
+      break;
+  }
+
+  return nlohmann::json{
+      {"kind", "file_search"},
+      {"path", opts.path},
+      {"pattern", opts.pattern},
+      {"regex", opts.regex},
+      {"matches", std::move(matches)},
+      {"match_count", outcome.matches.size()},
+      {"truncated", outcome.truncated != TruncReason::none},
+      {"truncation_reason", truncation_reason},
+      {"files_scanned", outcome.files_scanned},
+      {"bytes_read", outcome.bytes_read},
+  }
+      .dump();
+}
+
 [[nodiscard]] async::Awaitable<core::Result<Output>> file_search_handler(std::string_view input_json,
                                                                          DispatchContext& ctx) {
   auto opts = parse_input(input_json);
@@ -845,7 +904,20 @@ private:
   if (!outcome) {
     co_return std::unexpected(std::move(outcome).error());
   }
-  co_return Output{.text = render(*outcome, *opts)};
+  auto text = render(*outcome, *opts);
+  auto data_json = format_data_json(*outcome, *opts);
+  const auto truncated = outcome->truncated != TruncReason::none;
+  co_return Output{
+      .text = std::move(text),
+      .data_json = std::move(data_json),
+      .usage =
+          ToolUsage{
+              .bytes_read = outcome->bytes_read,
+              .files_touched = outcome->files_scanned,
+              .match_count = static_cast<std::uint64_t>(outcome->matches.size()),
+              .truncated = truncated,
+          },
+  };
 }
 
 }  // namespace
@@ -870,7 +942,10 @@ core::Result<void> register_file_search(Registry& registry) {
                      "`!` literals, `!` negation, trailing `/` directory rules, slash-relative patterns, basename "
                      "patterns, and fnmatch-style globs. "
                      "Returns the literal text `no "
-                     "matches` (non-error) when nothing matched.",
+                     "matches` (non-error) when nothing matched. Successful calls also fill `data_json` with "
+                     "kind, path, pattern, regex, matches[], match_count, truncated, truncation_reason, "
+                     "files_scanned, and bytes_read; `usage` reports `bytes_read`, `files_touched`, "
+                     "`match_count`, and the `truncated` cap flag.",
       .input_schema_json = std::string{kFileSearchSchema},
       .required_capabilities = {core::Capability::read_file},
       .deferred = false,
