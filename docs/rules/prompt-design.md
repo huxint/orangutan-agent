@@ -159,13 +159,11 @@ Two layers:
 - **Code review.** Anything that adds bytes to sections (1)–(6) is
   reviewed for membership in this rule. Reviewers flag clocks, per-call
   IDs, conversation status, and inline skill bodies.
-- **Bench / regression gate.** When `oran-agent` lands, `bench/oran-agent/`
-  ships a `prompt_cache_hit_rate.cpp` scenario that runs N synthetic
-  iterations against a recorded fixture and asserts the cached-prefix
-  byte-count is *identical across iterations 2..N*. Failure means a
-  drift snuck in. The exact threshold and fixture shape lives in
-  `docs/product-specs/0010-benchmark-harness.md` once the bench is
-  written.
+- **Bench / regression gate.** `bench-agent` ships the SessionState-owned
+  `prompt_cache_hit_rate` scenario that runs synthetic prompt builds before
+  and after a `tool.search` promotion and aborts if the cached-prefix
+  `RenderedPrompt::prefix_hash` drifts across changing conversation tails.
+  Future full-loop fixtures can extend the same bucket with recorded turns.
 
 There is no static-grep enforcement yet because the slice-70 prompt builder
 accepts preamble bytes but `oran-agent` has not minted the first stable

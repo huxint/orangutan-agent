@@ -68,10 +68,11 @@ own library, its own tests, its own bench, its own design doc."
 
 ## Prompt Assembly
 
-> **Status (slice 71, 2026-05-24):** `oran-prompt` now owns the first
-> deterministic `prompt::Builder` skeleton plus `prompt::PromotionState`.
-> `oran-agent` still does not exist, but the future loop can call the builder
-> and own a session-local promotion set instead of inventing prompt bytes.
+> **Status (slice 72, 2026-05-24):** `oran-prompt` owns the first
+> deterministic `prompt::Builder` skeleton plus `prompt::PromotionState`, and
+> `oran-agent` now owns the narrow `agent::SessionState` surface that observes
+> successful `tool.search` output and promotes deferred matches into the next
+> prompt snapshot. The full loop/provider/memory/hook runtime remains future.
 > The invariants — section order, byte-identical cached prefix, no clocks /
 > per-call state in sections (1)–(6) — remain canonical in
 > [`../rules/prompt-design.md`](../rules/prompt-design.md).
@@ -108,12 +109,14 @@ conversation-progress bytes in sections (1)–(6). The minted section IDs are
 `system_preamble`, `tool_catalog`, `deferred_tools`, `skills_catalog`,
 `memory_framing`, `per_agent_overlay`, and `conversation_tail`; all start at
 `cache_version=1` through `prompt::SectionVersions`. Slice 71 adds the
-promotion snapshot path: `tool.search` side effects remain future agent work, but
-the builder can already consume promoted tool names and move those tools from
-section 3 to section 2 on the next build. `bench-prompt` now compares default,
-explicit, promoted, and promotion-state snapshot paths. The agent-owned
-`bench/oran-agent/prompt_cache_hit_rate.cpp` fixture remains future work because
-provider cache mapping and the first loop still need `oran-agent`.
+promotion snapshot path, and slice 72 adds the first `oran-agent` owner for
+that path: `agent::SessionState` consumes successful `tool.search`
+structured output, promotes deferred matches, and exposes the sorted snapshot
+for the next build. `bench-prompt` compares default, explicit, promoted, and
+promotion-state snapshot paths; `bench-agent` now pins no-promotion and
+after-promotion session snapshots against conversation-tail drift. Provider
+cache mapping and the fake-provider loop still need to connect these pieces
+into a turn loop.
 
 ## Cross-Cutting Concerns
 

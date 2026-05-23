@@ -107,7 +107,9 @@ proves the loop behaves correctly without a network.
      builder skeleton already owns section order, active/deferred catalog
      rendering, prefix hashes, and breakpoint placement, and the slice-71
      `prompt::PromotionState` snapshot can feed promoted deferred tools into
-     the next active catalog once the loop owns `tool.search` side effects).
+     the next active catalog. Slice 72 adds `agent::SessionState` as the
+     session owner that observes successful `tool.search` output and performs
+     that promotion before the full loop lands).
   4. Send `provider::Request` with streaming sink.
   5. Parse response blocks into typed `core::Content`.
   6. For each `tool_use`: validate schema → dispatch through

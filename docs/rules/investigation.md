@@ -20,7 +20,7 @@ the rule for the *research before code* phase.
 - More than one viable implementation shape exists and you cannot
   immediately rank them.
 - A library you intend to use has a recent API break and the version
-  pinned in `xmake-requires.lock` may not match the docs you remember.
+  pinned in `xmake/packages.lua` may not match the docs you remember.
 - An approach you tried failed in a way that does not match the
   exception message — i.e. the failure mode itself is unfamiliar.
 
@@ -104,9 +104,9 @@ tooling has since changed. Symptoms:
 Before retrying the same approach with minor tweaks, **stop and
 refresh**:
 
-1. Check `xmake-requires.lock` for the actual pinned version of the
-   library in question. Your "knowledge" of the API may be from a
-   different major version.
+1. Check `xmake/packages.lua` and `docs/rules/libraries.md` for the requested
+   version of the library in question. Your "knowledge" of the API may be from
+   a different major version.
 2. Use `Context7` to fetch the current docs for that pinned version.
 3. If `Context7` does not cover it, fall back to `WebFetch` against
    the library's own docs site / changelog. Forum posts are a last

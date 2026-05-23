@@ -5,10 +5,12 @@ that ships native binaries.
 
 ## Default Controls
 
-- **Dependency pinning**: `xmake-requires.lock` pins every package by sha + version.
+- **Dependency pinning**: `xmake/packages.lua` pins requested package versions
+  and `docs/rules/libraries.md` documents every approved dependency.
 - **Dependency review**: enabled via `actions/dependency-review-action` on PRs.
 - **Vulnerability scanning**: `google/osv-scanner-action` on PRs, scheduled runs, and
-  manual dispatch. Picks up `xmake-requires.lock`.
+  manual dispatch. It scans checked-in manifests; `xmake-requires.lock` is
+  ignored until CI owns a stable refresh/check flow.
 - **SBOM**: `anchore/sbom-action` produces an SPDX SBOM for release artifacts.
 - **Provenance**: `actions/attest-build-provenance` generates a signed attestation
   for each release.
@@ -28,8 +30,9 @@ that ships native binaries.
 
 - Dependency Review is fully available on public repositories; private repositories
   need GitHub Advanced Security.
-- OSV picks up xmake lockfile + system-package manifests; for sources we vendor
-  directly (rare), the manifest is encoded in `docs/generated/vendored-deps.json`.
+- OSV coverage depends on checked-in package declarations and system-package
+  manifests; for sources we vendor directly (rare), the manifest is encoded in
+  `docs/generated/vendored-deps.json`.
 - SBOM quality depends on `xmake/packages.lua` listing canonical versions and
   source URLs.
 - Provenance is meaningful once `scripts/release-package.sh` reflects the real
@@ -42,15 +45,16 @@ that ships native binaries.
 - **Static binaries**: when we ship a fully static binary (musl-clang stretch), the
   SBOM must list every library statically linked.
 - **Bundled C dependencies** (libcurl + OpenSSL + sqlite3 + libsodium): we prefer
-  system packages on production hosts; lockfile pins the versions used in `xmake`
-  source builds for reproducibility.
+  system packages on production hosts; requested `xmake` source-build versions
+  stay in `xmake/packages.lua` plus `docs/rules/libraries.md`.
 - **Random hashing libraries**: `rapidhash` is a small inline lib; `simdutf` is a
   larger native code dep — both are listed in the SBOM.
 
 ## Reviewer Checklist For New Packages
 
 - Is the package in `docs/rules/libraries.md`?
-- Is the version pinned in `xmake-requires.lock`?
+- Is the requested version pinned in `xmake/packages.lua` and documented in
+  `docs/rules/libraries.md`?
 - Is the source URL canonical (upstream repo, not a mirror unless required)?
 - License compatibility verified?
 - Compile-cost estimate recorded?
@@ -58,7 +62,7 @@ that ships native binaries.
 
 ## What To Do When The Project Becomes Real
 
-- Add ecosystem-specific lockfiles and keep them committed.
+- Add ecosystem-specific lockfiles only when CI owns their refresh/check flow.
 - Make the release build deterministic and produce explicit versioned artifacts.
 - Gate production deployment on provenance verification when possible.
 - Consider verifying attestations in the deployment environment (cluster admission,

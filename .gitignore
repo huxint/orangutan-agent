@@ -21,6 +21,7 @@ temp/
 build/
 .xmake/
 compile_commands.json
+xmake-requires.lock
 *.o
 *.obj
 *.a

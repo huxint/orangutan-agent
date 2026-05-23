@@ -7,34 +7,39 @@
 
 ## Snapshot
 
-- **Slice:** 71 (`xmake run orangutan` reports slice 71)
+- **Slice:** 72 (`xmake run orangutan` reports slice 72)
 - **Last completed history:**
-  [`histories/2026-05/20260524-0715-prompt-promotion-state.md`](histories/2026-05/20260524-0715-prompt-promotion-state.md)
+  [`histories/2026-05/20260524-0725-agent-session-promotion.md`](histories/2026-05/20260524-0725-agent-session-promotion.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
-  the promotion-state increment closed in one history/commit and did not
-  need a new plan.
+  the agent session promotion increment closed in one history/commit and
+  did not need a new plan.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 71
-  extends `oran-prompt` with `prompt::PromotionState`, a session-owned
-  value type for deferred-tool promotions. It keeps at most 16 promoted
-  names by LRU, reaps entries older than 24 hours when callers supply
-  explicit `core::Time`, rejects empty names, exposes aggregate stats, and
-  returns sorted snapshots so prompt bytes stay deterministic. `BuilderInputs`
-  now accepts `promoted_tools`; `prompt::Builder` treats those snapshot names
-  as active for section 2 on the next build while leaving unpromoted tools in
-  section 3. Missing or stale promoted names are ignored because snapshots
-  are session hints, while explicit config allowlists still validate against
-  the catalog and fail with `ErrorKind::not_found`. `test-prompt` covers the
-  builder snapshot path plus promotion-state LRU, TTL, and validation
-  semantics; `bench-prompt` now compares default, explicit, promoted, and
-  promotion-state snapshot paths. Remaining spec-0016 work is the
-  `oran-agent` owner that calls `promote` after `tool.search`, provider cache
-  mapping, and the agent-owned prompt-cache stability fixture. Slice 70
-  opened the `prompt::Builder` skeleton, slice 69 landed the typed
-  `runtime.prompt.active_tools` config surface, and slice 68 landed the
-  registry-owned non-deferred `tool.search` lookup primitive.
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 72
+  opens `oran-agent` with the narrow session-state owner needed by spec
+  0016 before the full ReAct loop lands. `agent::SessionState` owns
+  `prompt::PromotionState`, observes successful `tool.search` outputs,
+  parses their structured `{kind:"tool_search", matches[]}` payload in a
+  private `nlohmann_json` TU, promotes only deferred match names into the
+  next prompt snapshot, ignores non-search and failed-search outputs, and
+  returns `ErrorKind::invalid_argument` for malformed successful structured
+  data without mutating state. `test-agent` covers promotion into the next
+  prompt, no-op non-search / failed-search outputs, and malformed successful
+  payload rejection; `bench-agent` now runs the agent-owned prompt-cache
+  fixture (`agent.prompt_cache_no_promotions` about 54.4 us / fixture,
+  `agent.prompt_cache_after_promotion` about 63.1 us / fixture) and aborts
+  if `RenderedPrompt::prefix_hash` drifts across changing conversation tails.
+  `oran-agent` is not linked into the `orangutan` binary yet and does not
+  contain the fake-provider ReAct loop. Remaining near-term work is provider
+  cache mapping from `RenderedPrompt` plus the first fake-provider loop /
+  provider-adapter mapping. Slice 71
+  extended `oran-prompt` with `prompt::PromotionState`, a session-owned
+  value type for deferred-tool promotions, and taught `prompt::Builder` to
+  consume sorted promotion snapshots. Slice 70 opened the `prompt::Builder`
+  skeleton, slice 69 landed the typed `runtime.prompt.active_tools` config
+  surface, and slice 68 landed the registry-owned non-deferred
+  `tool.search` lookup primitive.
   Slice 67
   closes spec 0014's audit usage fan-out for the pre-scheduler direct
   dispatch path: `permission::AuditSink` now exposes
@@ -221,6 +226,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-hook`: 17 cases / 109 assertions.
 - `oran-tool`: 166 cases / 1588 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
+- `oran-agent`: 3 cases / 23 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 153 assertions.
 
@@ -249,9 +255,6 @@ Closed entries do *not* live here — the tracker is canonical.
 - 2026-05-17 — `scripts/check-prompt-preamble` static grep promised in
   `rules/prompt-design.md` not yet implemented (waits on first stable
   preamble template in `oran-agent`).
-- 2026-05-17 — `bench/oran-agent/prompt_cache_hit_rate.cpp` regression
-  scenario promised in `rules/prompt-design.md` not yet implemented
-  (waits on `oran-agent` slice 1).
 - 2026-05-14 — Generated `docs/generated/config.schema.json` not yet
   implemented.
 - 2026-05-14 — bench A-vs-B scenarios listed in

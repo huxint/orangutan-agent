@@ -6,7 +6,7 @@ compile-time discipline lives in
 [`FAST_COMPILATION.md`](FAST_COMPILATION.md) and [`rules/compile-budget.md`](rules/compile-budget.md).
 
 > Why xmake (kept): the legacy project already used xmake, the team is fluent in it,
-> the lockfile workflow is good, and per-target packaging is clean.
+> and per-target packaging is clean.
 >
 > Why GCC 16.1 + C++26: by the v2 timeframe GCC 16.1 ships stable `-std=c++26`,
 > `<print>`, mature `std::expected`, `std::generator`, deducing-`this`, `std::span`,
@@ -220,6 +220,7 @@ oran_lib("permission", { "oran-core", "oran-config", "oran-storage", "oran-async
 oran_lib("hook", { "oran-core", "oran-async" }, {})
 oran_lib("tool", { "oran-core", "oran-async", "oran-io", "oran-permission", "oran-hook" }, { "nlohmann_json" })
 oran_lib("prompt", { "oran-core", "oran-async", "oran-config", "oran-tool" }, {})
+oran_lib("agent", { "oran-core", "oran-prompt", "oran-tool" }, { "nlohmann_json" })
 oran_lib("cli", { "oran-core" }, {})
 oran_lib("bootstrap", { "oran-core", "oran-async", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-tool", "oran-cli" }, {})
 
@@ -229,6 +230,10 @@ target("orangutan")
     add_files(path.join(root, "src/main.cpp"))
     set_rundir(root)
 ```
+
+`oran-agent` is currently the slice-72 session-state library only; it is
+registered with `test-agent` and `bench-agent`, but the `orangutan` binary does
+not link it until the first fake-provider ReAct loop lands.
 
 **Key compile-time wins from this shape:**
 
@@ -353,8 +358,9 @@ for distributing the bench runner.
 
 ## Reproducibility
 
-- `set_policy("package.requires_lock", true)` pins package versions via
-  `xmake-requires.lock`.
+- Package versions are declared in `xmake/packages.lua` and documented in
+  [`rules/libraries.md`](rules/libraries.md); `xmake-requires.lock` is ignored
+  as a per-machine resolver artifact until CI owns a stable refresh/check flow.
 - `-fmacro-prefix-map` strips the build dir from `__FILE__` strings.
 - `SOURCE_DATE_EPOCH` honored if set (CI sets it from the commit timestamp).
 

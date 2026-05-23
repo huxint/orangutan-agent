@@ -33,8 +33,8 @@ the *invariants*; this spec is the *what ships and how it is verified*.
 ## Scope (v1)
 
 The MVP delivers the smallest builder that lets `oran-agent` send a
-cacheable prompt with a deterministic tool catalog, plus the prompt-side
-promotion state that the first agent loop will own.
+cacheable prompt with a deterministic tool catalog, plus the session-owned
+promotion side effect that the first agent loop will reuse.
 
 - **`oran-prompt` library skeleton**.
   - **Status (slice 71, 2026-05-24):** the library exists with
@@ -104,7 +104,8 @@ promotion state that the first agent loop will own.
     Slice 69 adds the typed `runtime.prompt.active_tools` config surface in
     `oran-config`; slice 70 consumes that selector in `prompt::Builder`.
     Slice 71 adds `prompt::PromotionState` plus builder consumption of its
-    sorted snapshot.
+    sorted snapshot. Slice 72 adds `agent::SessionState` as the first owner
+    that observes successful `tool.search` outputs and mutates that state.
   - Pure function of `ToolDef`:
     `(name, description, input_schema, required_capabilities,
     category)`.
@@ -135,13 +136,16 @@ promotion state that the first agent loop will own.
     config is below the tool layer. `prompt::Builder` resolves explicit
     names against the tool catalog snapshot and returns `ErrorKind::not_found`
     for missing names.
-- **`tool.search` built-in** (the *non-deferred* lookup tool; future
-  session promotion consumes its matches):
-  - **Status (slice 71, 2026-05-24):** the registry lookup primitive is
-    implemented in `oran-tool`; `prompt::PromotionState` now exists in
-    `oran-prompt`. The side effect that calls `promote(...)` after a
-    successful lookup remains future agent work because
-    `oran-agent::SessionState` does not exist yet.
+- **`tool.search` built-in** (the *non-deferred* lookup tool; session
+  promotion consumes its matches):
+  - **Status (slice 72, 2026-05-24):** the registry lookup primitive is
+    implemented in `oran-tool`; `prompt::PromotionState` exists in
+    `oran-prompt`; and `agent::SessionState` now observes successful
+    `tool.search` `Output::data_json`, validates
+    `{kind:"tool_search", matches[]}`, and promotes only deferred matches by
+    name into the next prompt snapshot. Non-search outputs and failed
+    `tool.search` outputs are no-ops; malformed successful structured data
+    returns `ErrorKind::invalid_argument` without mutating state.
   - Input: `{ name?, category?, capability? }`. At least one field
     required. Supplied fields are ANDed; `name` and `category` are exact
     string matches, and `capability` is parsed through
@@ -150,10 +154,9 @@ promotion state that the first agent loop will own.
     `{kind:"tool_search", query, match_count, matches[]}`. Each match
     includes name, full description, nested full JSON schema,
     required capabilities, deferred flag, and nullable category.
-  - Future side effect: append the matched tool name(s) to the
-    per-session `prompt::PromotionState` so the *next* turn's catalog
-    includes the full schema. The promotion state is owned by
-    `oran-agent::SessionState` once that type lands.
+  - Side effect: `agent::SessionState` appends deferred matched tool name(s)
+    to its per-session `prompt::PromotionState` so the *next* turn's catalog
+    includes the full schema.
 - **Promotion set bounding**:
   - **Status (slice 71, 2026-05-24):** `prompt::PromotionState` ships this
     bounded state with LRU + TTL per the spec 0012 inventory
@@ -170,11 +173,13 @@ promotion state that the first agent loop will own.
   to place the vendor cache marker; no other section is a breakpoint
   in v1 (Anthropic allows 4; we ship 1 to keep the model simple).
 - **Prompt-cache stability bench** —
-  `bench/oran-agent/prompt_cache_hit_rate.cpp` (already named in the
-  rule + tracked under the 2026-05-17 bench tech-debt row). N
-  iterations against a recorded fixture; asserts `prefix_hash` is
-  identical across iterations 2..N for every fixture in the suite.
-  Failure means a drift sneaked in; CI fails.
+  `bench/agent/scenarios/prompt_cache_hit_rate.cpp`. N iterations against a
+  session-owned fixture; asserts `prefix_hash` is identical across changing
+  conversation tails after the promotion snapshot is fixed. Slice 72 ships
+  the no-promotion and after-promotion paths (`agent.prompt_cache_no_promotions`
+  about 54.4 us / fixture; `agent.prompt_cache_after_promotion` about 63.1 us /
+  fixture). Failure means a drift sneaked in; CI fails once the bench gate is
+  wired.
 
 ## Scope (v1.1)
 
@@ -237,15 +242,15 @@ promotion state that the first agent loop will own.
 4. **Deferred-tool absence.** A tool registered with
    `deferred=true` does not appear in section 2's tool catalog;
    appears in section 3's deferred-tool index with name + one-line
-   description only; does not appear in section 2 *even after the future
-   `tool.search` promotion flow selects it* — promotion shifts the
+   description only; does not appear in section 2 *during the same turn
+   where `tool.search` discovers it* — promotion shifts the
    *next* turn's section 2, not the current.
-5. **Future promotion semantics.** Calling `tool.search(name="memory.recall")`
-   from a turn eventually adds `memory.recall` to the next turn's
+5. **Promotion semantics.** Calling `tool.search(name="memory.recall")`
+   from a turn lets `agent::SessionState` add `memory.recall` to the next turn's
    active catalog with its full schema. After 16 promotions in a
    session, the oldest evicts back to the deferred index (LRU per
    spec 0012). Slice 71 ships the state and builder snapshot consumption;
-   the `tool.search` side effect still waits for `oran-agent`.
+   slice 72 ships the agent-owned `tool.search` side effect.
    The evicted tool stays callable; the agent that uses it without
    re-promotion sees the same dispatch error as any other
    not-promoted call to a deferred tool (`tool.search` is the
@@ -271,12 +276,12 @@ promotion state that the first agent loop will own.
    slice 70 renders the explicit active set and validates missing names in
    `test-prompt`.
 10. **Prompt-cache stability bench.** Running
-    `bench/oran-agent/prompt_cache_hit_rate.cpp` against three
-    fixtures (small catalog, large catalog, with-promotion) produces
-    `prefix_hash` identical across iterations 2..N for every
-    fixture. CI fails on any drift. Slice 71 keeps the precursor
-    `bench-prompt` bucket current with default, explicit, promoted, and
-    promotion-state snapshot scenarios; the agent fixture remains future work.
+    `bench-agent`'s `prompt_cache_hit_rate` fixture produces
+    `prefix_hash` identical across changing conversation tails for the
+    no-promotion and after-promotion session snapshots. CI fails on any drift
+    once the bench gate is wired. Slice 72 ships the agent-owned fixture;
+    larger recorded fixtures can extend the same scenario when the full loop
+    lands.
 11. **`tests/prompt/`** ≥ 90% coverage of the matrix
     (section × deterministic-input × cache_version × promotion
     state × breakpoint placement × config override). Slice 71 covers
@@ -327,12 +332,11 @@ promotion state that the first agent loop will own.
 
 ## Risks
 
-- **Latent drift before the bench lands.** Slices that ship sections
-  1–6 without the cache-stability bench can introduce drift that
-  goes undetected. Mitigation: the prompt-owned `bench-prompt` precursor
-  now exercises deterministic builder inputs, and the agent-owned
-  cache-hit-rate fixture remains tracked in the tech-debt row until
-  `oran-agent` can host session fixtures.
+- **Latent drift before the full loop lands.** Slices that ship sections
+  1–6 without recorded loop fixtures can introduce drift outside the
+  current synthetic session coverage. Mitigation: `bench-prompt` exercises
+  deterministic builder inputs, and slice 72's `bench-agent` fixture now pins
+  the session-owned no-promotion and after-promotion cache paths.
 - **Promotion set fights cache stability.** If promotion mutates
   section 2 mid-session, every promotion is a cache miss for the
   whole prefix. Mitigation: promotion only shifts the *next* turn's
@@ -353,10 +357,10 @@ promotion state that the first agent loop will own.
 ```sh
 xmake build oran-prompt
 xmake run test-prompt                     # builder determinism + promotion state + breakpoint
+xmake run test-agent                      # SessionState tool.search promotion owner
 xmake run test-config                     # active-tool config parser contract
 xmake run bench-prompt                    # prompt-owned precursor bench, including promoted snapshots
-xmake build bench-oran-agent              # future agent cache-hit-rate fixture
-xmake run bench-oran-agent prompt_cache_hit_rate
+xmake run bench-agent                     # agent-owned prompt-cache stability fixture
 xmake run orangutan -- --explain-prompt   # planned debug surface; lands with agent/prompt wiring
 ```
 
@@ -374,8 +378,7 @@ xmake run orangutan -- --explain-prompt   # planned debug surface; lands with ag
   preamble template. Slice 70's builder accepts preamble bytes but does
   not define the final text.
 - `docs/exec-plans/tech-debt-tracker.md` — the 2026-05-17
-  `bench/oran-agent/prompt_cache_hit_rate.cpp` row closes when the
-  agent-owned prompt-cache fixture ships; `bench-prompt` is only the
-  prompt-owned precursor.
+  prompt-cache bench row closes in slice 72 because `bench-agent` now owns
+  the SessionState fixture; `bench-prompt` remains the prompt-owned precursor.
 - `docs/STATUS.md` — `oran-prompt` reaches `C` (per
   [`QUALITY_SCORE.md`](../QUALITY_SCORE.md)) when v1 lands.

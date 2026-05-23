@@ -26,9 +26,9 @@ Today's seams that motivate this spec:
 
 - `tool::Registry::dispatch` handles one call at a time (`src/oran-tool/
   registry.cpp:182-184`). No batching, no scheduler, no per-path lock.
-- `oran-agent` does not exist yet (`docs/STATUS.md`), so the scheduler can
-  land *before* the loop and dictate the loop's tool-call contract rather
-  than retrofit one.
+- `oran-agent` now exists only as the slice-72 `SessionState` promotion owner
+  (`docs/STATUS.md`); the scheduler can still land *before* the full loop and
+  dictate the loop's tool-call contract rather than retrofit one.
 - `permission::ApprovalBroker` now reaps expired grants
   (`reap_expired(now)`) and, as of slice 56, enforces the v1
   "max grants per identity" ceiling on `approve`.
@@ -186,11 +186,11 @@ implicitly via the capability list.
   `tool::CatalogRenderer`, whose bounded rendered-block cache is capped at
   256 entries by default and reports aggregate hit/miss/eviction counters
   via `ToolCatalogCacheStats` without exposing tool schemas or cache keys.
-  **Status (slice 71, 2026-05-24):** `oran-prompt` now exposes
+  **Status (slice 72, 2026-05-24):** `oran-prompt` exposes
   `prompt::PromotionState` for the deferred-tool promotion set with the
   documented 16-entry cap, 24-hour TTL, explicit `core::Time` inputs, and
-  aggregate stats; `oran-agent` still needs to own that state and mutate it
-  after `tool.search`.
+  aggregate stats; `agent::SessionState` now owns that state and mutates it
+  after successful `tool.search` output.
   Pre-`oran-log`, `--explain-rules`-style debug surfaces in `oran-bootstrap`
   can reuse the same numbers.
 
