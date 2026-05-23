@@ -9,7 +9,7 @@
 // from any CWD — the `.sql` files remain the canonical artefact
 // developers edit, and the compiler keeps the binary in sync with them.
 //
-// Both `Migration` lists are returned as a `std::span` over a
+// The `Migration` lists are returned as a `std::span` over a
 // function-local `static const std::array`. The local-static idiom keeps
 // the `std::string` initialization off the global-constructor critical
 // path and is thread-safe to call from any caller (per [stmt.dcl]/4).
@@ -35,6 +35,10 @@ constexpr unsigned char kSessionsInitialBytes[] = {
 #embed "migrations/sessions/0001-sessions-initial.sql"
 };
 
+constexpr unsigned char kTraceInitialBytes[] = {
+#embed "migrations/audit/0002-trace-turns-initial.sql"
+};
+
 template <std::size_t N>
 [[nodiscard]] std::string to_sql_string(const unsigned char (&bytes)[N]) {
   return std::string{reinterpret_cast<const char*>(bytes), N};
@@ -43,11 +47,18 @@ template <std::size_t N>
 }  // namespace
 
 std::span<const Migration> built_in_audit_migrations() {
-  static const std::array<Migration, 1> kMigrations{Migration{
-      .version = 1,
-      .name = "audit-initial",
-      .sql = to_sql_string(kAuditInitialBytes),
-  }};
+  static const std::array<Migration, 2> kMigrations{
+      Migration{
+          .version = 1,
+          .name = "audit-initial",
+          .sql = to_sql_string(kAuditInitialBytes),
+      },
+      Migration{
+          .version = 2,
+          .name = "trace-turns-initial",
+          .sql = to_sql_string(kTraceInitialBytes),
+      },
+  };
   return kMigrations;
 }
 
@@ -58,6 +69,10 @@ std::span<const Migration> built_in_session_migrations() {
       .sql = to_sql_string(kSessionsInitialBytes),
   }};
   return kMigrations;
+}
+
+std::span<const Migration> built_in_trace_migrations() {
+  return built_in_audit_migrations();
 }
 
 }  // namespace orangutan::storage

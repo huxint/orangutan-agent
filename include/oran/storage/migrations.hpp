@@ -39,5 +39,6 @@ struct MigrationReport {
 // can author one-off schemas under a tempdir.
 [[nodiscard]] std::span<const Migration> built_in_audit_migrations();
 [[nodiscard]] std::span<const Migration> built_in_session_migrations();
+[[nodiscard]] std::span<const Migration> built_in_trace_migrations();
 
 }  // namespace orangutan::storage

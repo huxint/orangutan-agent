@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -34,6 +35,7 @@ enum class StepResult : std::uint8_t {
 };
 
 using ColumnValue = std::optional<std::string>;
+using BlobValue = std::optional<std::vector<std::byte>>;
 
 struct Row {
   std::vector<ColumnValue> values;
@@ -60,6 +62,7 @@ public:
   [[nodiscard]] core::Result<void> bind_int64(int index, std::int64_t value);
   [[nodiscard]] core::Result<void> bind_double(int index, double value);
   [[nodiscard]] core::Result<void> bind_text(int index, std::string_view value);
+  [[nodiscard]] core::Result<void> bind_blob(int index, std::span<const std::byte> value);
   [[nodiscard]] core::Result<void> clear_bindings();
   [[nodiscard]] core::Result<void> reset();
 
@@ -68,6 +71,7 @@ public:
   [[nodiscard]] core::Result<int> column_count() const;
   [[nodiscard]] core::Result<std::string> column_name(int index) const;
   [[nodiscard]] core::Result<ColumnValue> column_text(int index) const;
+  [[nodiscard]] core::Result<BlobValue> column_blob(int index) const;
   [[nodiscard]] core::Result<std::int64_t> column_int64(int index) const;
   [[nodiscard]] core::Result<double> column_double(int index) const;
 

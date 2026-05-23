@@ -5,9 +5,11 @@ automation, audit logs, and configuration metadata. It owns the SQLite dependenc
 does not expose `sqlite3.h` from public headers.
 
 > **Storage status (2026-05-24):** `oran-storage` ships `Connection`, `Statement`,
-> typed binding/stepping/column readers, WAL + foreign-key setup, a simple `query`
+> typed binding/stepping/column readers (including BLOB bind/read for trace ids),
+> WAL + foreign-key setup, a simple `query`
 > helper, the synchronous `run_migrations` runner plus SQL-file migration
-> loading, compile-time embedded audit/session migrations via C++26 `#embed`,
+> loading, compile-time embedded audit/session migrations plus the audit-db
+> trace migration via C++26 `#embed`,
 > an async writer/reader `Pool` driven by `oran-async` executors with one
 > `StatementCache` per writer or reader slot, and the standalone per-connection
 > `StatementCache` with LRU eviction. `SessionRepository` persists opaque
@@ -15,8 +17,12 @@ does not expose `sqlite3.h` from public headers.
 > `core::Role` at the API boundary). `AuditRepository` persists permission
 > decision rows in `audit_events` with append/list/count plus slice-67
 > `update_event_metadata` so post-result usage metadata can enrich the same
-> audit row without appending a second decision. Backups and the memory /
-> automation repositories are future slices.
+> audit row without appending a second decision. Slice 78 adds
+> `TraceRepository`, the spec-0018 `trace_turns` schema, and
+> `built_in_trace_migrations()` for redacted per-turn rows keyed by 16-byte BLOB
+> ids. The trace migration is version 2 of the audit database so existing
+> audit DBs upgrade in place. Backups and the memory / automation repositories
+> are future slices.
 
 ## Public Surface
 
@@ -35,6 +41,7 @@ struct ConnectionOptions {
 
 enum class StepResult { row, done };
 using ColumnValue = std::optional<std::string>;
+using BlobValue = std::optional<std::vector<std::byte>>;
 
 struct Row {
   std::vector<ColumnValue> values;
@@ -72,10 +79,12 @@ class Statement {
   core::Result<void> bind_int64(int index, std::int64_t value);
   core::Result<void> bind_double(int index, double value);
   core::Result<void> bind_text(int index, std::string_view value);
+  core::Result<void> bind_blob(int index, std::span<const std::byte> value);
   core::Result<StepResult> step();
   core::Result<void> reset();
   core::Result<void> clear_bindings();
   core::Result<ColumnValue> column_text(int index) const;
+  core::Result<BlobValue> column_blob(int index) const;
   core::Result<std::int64_t> column_int64(int index) const;
   core::Result<double> column_double(int index) const;
 };
@@ -563,9 +572,91 @@ agent/time, and outcome/time indexes. `metadata_json` is intentionally opaque to
 SQLite v1; callers own the JSON shape and storage validates only that it is
 non-empty.
 
+The default `AuditRepository::migrate()` path now applies the complete audit DB
+migration stream: version 1 creates `audit_events`, and version 2 adds
+`trace_turns` for spec 0018. Explicit `AuditRepositoryOptions::migrations_directory`
+still supplies a caller-owned migration set for tests and packaged layouts.
+
 ### Error Model
 
 Empty required append/update fields return `core::ErrorKind::invalid_argument`
 before touching SQLite. An update whose key + previous metadata do not match an
 existing row returns `core::ErrorKind::not_found`, which callers may treat as
 best-effort enrichment failure while preserving the original decision row.
+
+## Trace Repository
+
+`TraceRepository` is the storage-owned foundation for spec 0018's first-loop
+observability row. It stores one redacted row per agent turn in `trace_turns`.
+The row is body-free: prompt bytes, tool inputs, memory facts, and provider
+responses stay out of the trace table; only ids, hashes, byte counts, token
+counts, route labels, stop/cancellation classifications, and opaque context
+bytes are persisted.
+
+```cpp
+namespace orangutan::storage {
+
+using TraceId = std::array<std::byte, 16>;
+
+struct AppendTraceTurnRequest {
+  TraceId turn_id;
+  std::optional<TraceId> parent_turn_id;
+  TraceId session_id;
+  std::string agent_key;
+  std::string origin;
+  std::string route_profile;
+  std::string route_model;
+  std::int64_t started_at_ns;
+  std::int64_t finished_at_ns;
+  std::string stop_reason;
+  std::int64_t iteration_count{1};
+  std::uint64_t prompt_prefix_hash;
+  std::int64_t prompt_prefix_bytes;
+  std::uint64_t active_catalog_hash;
+  std::uint64_t deferred_catalog_hash;
+  std::int64_t cache_creation_tokens{};
+  std::int64_t cache_read_tokens{};
+  std::int64_t input_tokens{};
+  std::int64_t output_tokens{};
+  double cost_estimate_usd{};
+  std::optional<std::string> cancellation_phase;
+  std::string context_json{"{}"};
+  std::int64_t schema_version{1};
+};
+
+class TraceRepository {
+ public:
+  explicit TraceRepository(Pool&, TraceRepositoryOptions = {}) noexcept;
+
+  async::Awaitable<core::Result<MigrationReport>> migrate();
+  async::Awaitable<core::Result<TraceTurnRecord>>
+  append_turn(AppendTraceTurnRequest);
+  async::Awaitable<core::Result<std::optional<TraceTurnRecord>>>
+  get_turn(TraceId turn_id);
+  async::Awaitable<core::Result<std::vector<TraceTurnRecord>>>
+  list_turns(ListTraceTurnsOptions);
+  async::Awaitable<core::Result<std::int64_t>> count_turns();
+};
+
+}  // namespace orangutan::storage
+```
+
+Migration `2 / trace-turns-initial` lives at
+`src/oran-storage/migrations/audit/0002-trace-turns-initial.sql` and creates
+`trace_turns(turn_id, parent_turn_id, session_id, agent_key, origin,
+route_profile, route_model, started_at_ns, finished_at_ns, stop_reason,
+iteration_count, prompt_prefix_hash, prompt_prefix_bytes, active_catalog_hash,
+deferred_catalog_hash, cache_creation_tokens, cache_read_tokens, input_tokens,
+output_tokens, cost_estimate_usd, cancellation_phase, context_json,
+schema_version)` plus session/time and agent/time indexes. `turn_id`,
+`parent_turn_id`, and `session_id` are 16-byte BLOB values; `context_json` is
+stored as BLOB bytes and defaults to `{}`.
+
+The repository validates non-zero ids, non-empty required text fields,
+positive `iteration_count` / `schema_version`, non-negative counters, and
+`finished_at_ns >= started_at_ns` before touching SQLite. It does not parse
+`context_json`; the agent/trace writer owns redaction and JSON shape.
+
+Slice 78 deliberately stops at the storage primitive. The next spec-0018 slice
+threads a typed turn id through `agent::Loop`, `tool::DispatchContext`, and the
+permission audit sink so tool audit rows can join against `trace_turns`.

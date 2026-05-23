@@ -3,6 +3,7 @@
 #include <chrono>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <asio/io_context.hpp>
@@ -14,6 +15,7 @@
 #include <oran/core/error.hpp>
 #include <oran/core/time.hpp>
 #include <oran/permission.hpp>
+#include <oran/storage.hpp>
 #include <oran/tool/workspace.hpp>
 
 #include "../test-helpers/run_async.hpp"
@@ -22,6 +24,7 @@ namespace async = orangutan::async;
 namespace bootstrap = orangutan::bootstrap;
 namespace core = orangutan::core;
 namespace permission = orangutan::permission;
+namespace storage = orangutan::storage;
 namespace test = orangutan::tests;
 namespace tool = orangutan::tool;
 
@@ -91,6 +94,23 @@ permission::AuditEvent make_event(std::string scope, std::string tool, permissio
   return core::Time{sys_days{year{2026} / January / day{1}}};
 }
 
+bool table_exists(const std::filesystem::path& db_path, std::string_view table) {
+  auto connection = storage::Connection::open(storage::ConnectionOptions{
+      .path = db_path.string(),
+      .mode = storage::OpenMode::read_only,
+      .enable_wal = false,
+      .enforce_foreign_keys = false,
+  });
+  REQUIRE(connection.has_value());
+
+  auto query = connection->prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?");
+  REQUIRE(query.has_value());
+  REQUIRE(query->bind_text(1, table).has_value());
+  auto row = query->step();
+  REQUIRE(row.has_value());
+  return *row == storage::StepResult::row;
+}
+
 }  // namespace
 
 TEST_CASE("RuntimeAssembly::build installs NullAuditSink when audit disabled", "[unit][bootstrap][runtime_assembly]") {
@@ -115,7 +135,10 @@ TEST_CASE("RuntimeAssembly::build provisions audit.db at the workspace default p
   REQUIRE(assembly.has_value());
   REQUIRE(assembly->audit_enabled());
   REQUIRE(assembly->audit_path() == (temp.path() / ".orangutan" / "audit.db").string());
-  REQUIRE(std::filesystem::exists(temp.path() / ".orangutan" / "audit.db"));
+  const auto audit_db = temp.path() / ".orangutan" / "audit.db";
+  REQUIRE(std::filesystem::exists(audit_db));
+  REQUIRE(table_exists(audit_db, "audit_events"));
+  REQUIRE(table_exists(audit_db, "trace_turns"));
 }
 
 TEST_CASE("RuntimeAssembly::build honors an explicit audit DB path", "[unit][bootstrap][runtime_assembly]") {

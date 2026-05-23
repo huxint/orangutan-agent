@@ -56,6 +56,18 @@ makes the existing audit rows joinable. Nothing else.
 
 - **`oran-storage::TraceRepository`** — new repository neighbour of
   the existing `SessionRepository` and `AuditRepository`. Schema:
+  **Status (slice 78, 2026-05-24):** the storage foundation is shipped.
+  `<oran/storage.hpp>` exports `TraceRepository`, `TraceId`,
+  `AppendTraceTurnRequest`, `TraceTurnRecord`, and
+  `ListTraceTurnsOptions`; `src/oran-storage/migrations/audit/0002-trace-turns-initial.sql`
+  creates `trace_turns` in the existing audit DB migration stream; and
+  `storage::built_in_trace_migrations()` exposes the same complete audit DB
+  migration set as `storage::built_in_audit_migrations()`. The SQLite wrapper
+  now supports BLOB bind/read so turn/session ids stay 16-byte BLOB values at
+  the storage boundary. The repository covers append/get/list/count,
+  audit-v1-to-trace-v2 upgrade, and validation; loop writes,
+  `AuditEvent::parent_turn_id`, hook publish rows, trace config, and the CLI
+  inspector remain downstream.
   ```sql
   CREATE TABLE trace_turns (
     turn_id           BLOB PRIMARY KEY,             -- 16-byte UUID
@@ -85,9 +97,10 @@ makes the existing audit rows joinable. Nothing else.
   CREATE INDEX idx_trace_session ON trace_turns(session_id, started_at_ns);
   CREATE INDEX idx_trace_agent   ON trace_turns(agent_key, started_at_ns);
   ```
-  SQL ships under `migrations/trace/` via the existing `#embed`
-  pattern that `storage::built_in_audit_migrations()` already uses for
-  audit and sessions.
+  SQL ships as audit DB migration version 2 under `migrations/audit/` via the
+  existing `#embed` pattern. **Status (slice 78):** shipped as
+  `storage::built_in_trace_migrations()`, intentionally equivalent to the
+  complete `storage::built_in_audit_migrations()` set.
 - **`oran-core::TurnId`** — 16-byte UUID type (existing pattern; new
   alias if no equivalent exists). Generated at turn start; passed
   through every dispatch context, every audit event, every hook

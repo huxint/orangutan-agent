@@ -136,9 +136,11 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > assembly installs a `NullAuditSink` and never touches the audit
 > DB. The agent-loop slice owns the assembly for the lifetime of
 > the process. Slice 15 packages the audit/sessions migration SQL
-> into `oran-storage` itself via C++26 `#embed`
+> into `oran-storage` itself via C++26 `#embed`, and slice 78 extends
+> the audit DB stream to version 2 with the trace table
 > (`storage::built_in_audit_migrations()` /
-> `storage::built_in_session_migrations()`), so `bootstrap::run`
+> `storage::built_in_session_migrations()` /
+> `storage::built_in_trace_migrations()`), so `bootstrap::run`
 > defaults the assembly to `audit_enabled=true` regardless of
 > CWD; the disk override
 > (`AuditRepositoryOptions::migrations_directory`) still wins for

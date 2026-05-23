@@ -15,11 +15,13 @@
 #include <oran/config/config.hpp>
 #include <oran/core/error.hpp>
 #include <oran/permission/rule_set.hpp>
+#include <oran/storage.hpp>
 
 namespace bootstrap = orangutan::bootstrap;
 namespace config = orangutan::config;
 namespace core = orangutan::core;
 namespace permission = orangutan::permission;
+namespace storage = orangutan::storage;
 
 namespace {
 
@@ -48,6 +50,23 @@ void write_file(const std::filesystem::path& path, std::string_view contents) {
   std::filesystem::create_directories(path.parent_path());
   auto out = std::ofstream{path};
   out << contents;
+}
+
+bool table_exists(const std::filesystem::path& db_path, std::string_view table) {
+  auto connection = storage::Connection::open(storage::ConnectionOptions{
+      .path = db_path.string(),
+      .mode = storage::OpenMode::read_only,
+      .enable_wal = false,
+      .enforce_foreign_keys = false,
+  });
+  REQUIRE(connection.has_value());
+
+  auto query = connection->prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?");
+  REQUIRE(query.has_value());
+  REQUIRE(query->bind_text(1, table).has_value());
+  auto row = query->step();
+  REQUIRE(row.has_value());
+  return *row == storage::StepResult::row;
 }
 
 bootstrap::BootstrapOptions options(std::vector<std::string_view>& args, const std::filesystem::path& workspace) {
@@ -219,6 +238,8 @@ TEST_CASE("run --audit-init applies the audit schema at the default workspace pa
   REQUIRE(*result == 0);
   const auto expected_db = temp.path() / ".orangutan" / "audit.db";
   REQUIRE(std::filesystem::exists(expected_db));
+  REQUIRE(table_exists(expected_db, "audit_events"));
+  REQUIRE(table_exists(expected_db, "trace_turns"));
 
   // Idempotent on a second run.
   auto repeat = bootstrap::run(options(args, temp.path()));

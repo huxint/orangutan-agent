@@ -3,9 +3,10 @@
 ## What this bucket benchmarks
 
 `oran-storage` is the expected-only SQLite core used by sessions, memory, automation,
-and audit repositories. The scenarios measure insert-path tradeoffs, compiled
-and SQL-file migration startup cost, statement-cache reuse, the per-query overhead of the async
-writer/reader pool, and the first session repository wrapper.
+audit, and trace repositories. The scenarios measure insert-path tradeoffs,
+compiled and SQL-file migration startup cost, statement-cache reuse, the
+per-query overhead of the async writer/reader pool, and the first domain
+repository wrappers.
 
 ## Scenarios
 
@@ -18,6 +19,7 @@ writer/reader pool, and the first session repository wrapper.
 | [`scenarios/pool_statement_cache.cpp`](scenarios/pool_statement_cache.cpp) | Pool writer fresh prepare *vs.* pool writer slot `StatementCache` reuse. |
 | [`scenarios/session_repository.cpp`](scenarios/session_repository.cpp) | Raw pool + cache SQL append/load *vs.* `SessionRepository` append/load. |
 | [`scenarios/audit_repository.cpp`](scenarios/audit_repository.cpp) | Raw pool + cache SQL append/count *vs.* `AuditRepository` append/list for a 64-event batch. |
+| [`scenarios/trace_repository.cpp`](scenarios/trace_repository.cpp) | Raw pool + cache SQL trace insert *vs.* `TraceRepository` insert for a 32-turn batch. |
 
 ## Running
 

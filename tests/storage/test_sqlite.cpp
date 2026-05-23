@@ -1,7 +1,9 @@
 // tests/storage/test_sqlite.cpp — expected-only SQLite core coverage.
 
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -99,20 +101,23 @@ TEST_CASE("execute and query round-trip rows as text values", "[unit][storage][s
 
 TEST_CASE("prepared statements bind and read typed values", "[unit][storage][sqlite]") {
   auto connection = open_memory();
-  REQUIRE(connection.execute("CREATE TABLE metrics(id INTEGER PRIMARY KEY, label TEXT, score REAL, note TEXT)")
-              .has_value());
+  REQUIRE(
+      connection.execute("CREATE TABLE metrics(id INTEGER PRIMARY KEY, label TEXT, score REAL, note TEXT, raw BLOB)")
+          .has_value());
 
-  auto insert = connection.prepare("INSERT INTO metrics(id, label, score, note) VALUES (?, ?, ?, ?)");
+  auto insert = connection.prepare("INSERT INTO metrics(id, label, score, note, raw) VALUES (?, ?, ?, ?, ?)");
   REQUIRE(insert.has_value());
+  const std::vector<std::byte> raw{std::byte{0x01}, std::byte{0x02}, std::byte{0xff}};
   REQUIRE(insert->bind_int64(1, 42).has_value());
   REQUIRE(insert->bind_text(2, "latency").has_value());
   REQUIRE(insert->bind_double(3, 12.5).has_value());
   REQUIRE(insert->bind_null(4).has_value());
+  REQUIRE(insert->bind_blob(5, std::span<const std::byte>{raw}).has_value());
   auto inserted = insert->step();
   REQUIRE(inserted.has_value());
   REQUIRE(*inserted == storage::StepResult::done);
 
-  auto select = connection.prepare("SELECT id, label, score, note FROM metrics");
+  auto select = connection.prepare("SELECT id, label, score, note, raw FROM metrics");
   REQUIRE(select.has_value());
   auto row = select->step();
   REQUIRE(row.has_value());
@@ -122,6 +127,7 @@ TEST_CASE("prepared statements bind and read typed values", "[unit][storage][sql
   auto label = select->column_text(1);
   auto score = select->column_double(2);
   auto note = select->column_text(3);
+  auto blob = select->column_blob(4);
   REQUIRE(id.has_value());
   REQUIRE(*id == 42);
   REQUIRE(label.has_value());
@@ -130,6 +136,9 @@ TEST_CASE("prepared statements bind and read typed values", "[unit][storage][sql
   REQUIRE(*score == 12.5);
   REQUIRE(note.has_value());
   REQUIRE_FALSE(note->has_value());
+  REQUIRE(blob.has_value());
+  REQUIRE(blob->has_value());
+  REQUIRE(**blob == raw);
 }
 
 TEST_CASE("column readers require a current row", "[unit][storage][sqlite]") {

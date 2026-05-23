@@ -8,3 +8,4 @@
 #include <oran/storage/session_repository.hpp>
 #include <oran/storage/sqlite.hpp>
 #include <oran/storage/statement_cache.hpp>
+#include <oran/storage/trace_repository.hpp>

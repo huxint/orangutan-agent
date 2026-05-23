@@ -2,12 +2,15 @@
 
 #include <oran/storage/sqlite.hpp>
 
+#include <cstddef>
 #include <expected>
 #include <limits>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <sqlite3.h>
 
@@ -172,6 +175,27 @@ core::Result<void> Statement::bind_text(int index, std::string_view value) {
   return check_bind_result(impl_->handle->db, rc, "sqlite bind text failed");
 }
 
+core::Result<void> Statement::bind_blob(int index, std::span<const std::byte> value) {
+  if (!valid()) {
+    return std::unexpected(invalid_statement_error());
+  }
+  if (value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    return std::unexpected(core::Error::invalid_argument("sqlite bind blob exceeds INT_MAX bytes")
+                               .with("size", std::to_string(value.size())));
+  }
+  if (value.empty()) {
+    return check_bind_result(impl_->handle->db,
+                             sqlite3_bind_zeroblob(impl_->stmt, index, 0),
+                             "sqlite bind blob failed");
+  }
+  const auto rc = sqlite3_bind_blob(impl_->stmt,
+                                    index,
+                                    static_cast<const void*>(value.data()),
+                                    static_cast<int>(value.size()),
+                                    SQLITE_TRANSIENT);
+  return check_bind_result(impl_->handle->db, rc, "sqlite bind blob failed");
+}
+
 core::Result<void> Statement::clear_bindings() {
   if (!valid()) {
     return std::unexpected(invalid_statement_error());
@@ -248,6 +272,37 @@ core::Result<ColumnValue> Statement::column_text(int index) const {
     return ColumnValue{std::string{}};
   }
   return ColumnValue{std::string{reinterpret_cast<const char*>(text), static_cast<std::size_t>(bytes)}};
+}
+
+core::Result<BlobValue> Statement::column_blob(int index) const {
+  if (!valid()) {
+    return std::unexpected(invalid_statement_error());
+  }
+  if (!impl_->has_current_row) {
+    return std::unexpected(no_current_row_error());
+  }
+  const auto count = sqlite3_column_count(impl_->stmt);
+  if (index < 0 || index >= count) {
+    return std::unexpected(invalid_column_error(index));
+  }
+  if (sqlite3_column_type(impl_->stmt, index) == SQLITE_NULL) {
+    return BlobValue{};
+  }
+
+  const auto bytes = sqlite3_column_bytes(impl_->stmt, index);
+  if (bytes < 0) {
+    return std::unexpected(
+        core::Error::storage("sqlite blob column returned negative byte count").with("index", std::to_string(index)));
+  }
+  if (bytes == 0) {
+    return BlobValue{std::vector<std::byte>{}};
+  }
+  const auto* blob = static_cast<const std::byte*>(sqlite3_column_blob(impl_->stmt, index));
+  if (blob == nullptr) {
+    return std::unexpected(
+        core::Error::storage("sqlite blob column returned null data").with("index", std::to_string(index)));
+  }
+  return BlobValue{std::vector<std::byte>{blob, blob + bytes}};
 }
 
 core::Result<std::int64_t> Statement::column_int64(int index) const {

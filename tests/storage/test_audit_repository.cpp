@@ -125,13 +125,13 @@ TEST_CASE("AuditRepository::migrate applies the audit schema once", "[unit][stor
     auto first = co_await repo.migrate();
     REQUIRE(first.has_value());
     REQUIRE(first->previous_version == 0);
-    REQUIRE(first->current_version == 1);
-    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1});
+    REQUIRE(first->current_version == 2);
+    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2});
 
     auto second = co_await repo.migrate();
     REQUIRE(second.has_value());
-    REQUIRE(second->previous_version == 1);
-    REQUIRE(second->current_version == 1);
+    REQUIRE(second->previous_version == 2);
+    REQUIRE(second->current_version == 2);
     REQUIRE(second->applied_versions.empty());
   });
 }

@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 77 (`xmake run orangutan` reports slice 77)
+- **Slice:** 78 (`xmake run orangutan` reports slice 78)
 - **Last completed history:**
-  [`histories/2026-05/20260524-1110-agent-loop-cancellation-phase.md`](histories/2026-05/20260524-1110-agent-loop-cancellation-phase.md)
+  [`histories/2026-05/20260524-1125-storage-trace-repository.md`](histories/2026-05/20260524-1125-storage-trace-repository.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
@@ -17,14 +17,36 @@
   and did not need a new plan because they stayed under the existing spec-0017
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 77 extends
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 78 opens
+  the storage foundation for spec 0018: `oran-storage` now exports
+  `TraceRepository`, `TraceId` (16-byte BLOB at the database boundary),
+  `AppendTraceTurnRequest`, `TraceTurnRecord`, `ListTraceTurnsOptions`,
+  and `built_in_trace_migrations()`. Migration
+  `src/oran-storage/migrations/audit/0002-trace-turns-initial.sql`
+  extends the existing audit DB migration stream with the redacted
+  `trace_turns` row shape: prompt/cache hashes, token/cost rollups,
+  optional `cancellation_phase`, and opaque `context_json` bytes.
+  `built_in_audit_migrations()` and `built_in_trace_migrations()` both expose
+  the complete audit DB migration set so an existing version-1 audit database
+  upgrades to version 2 instead of treating trace as a separate database. The
+  SQLite core also gained `Statement::bind_blob`
+  / `column_blob` so trace IDs match the spec's BLOB contract instead of
+  becoming text. `test-storage` now covers trace migration, explicit
+  migration directories, audit-v1-to-trace-v2 upgrade, insert/get/list/count,
+  validation, and BLOB round-trips (68 cases / 827 assertions). The next
+  implementation step is
+  threading a turn id through `agent::Loop` / `tool::DispatchContext` /
+  permission audit so tool audit rows can join back to the trace row;
+  CLI `--trace`, hook publish rows, trace config, and loop-owned trace writes
+  remain downstream. Slice 77 extends
   the real `agent::Loop` driver from the slice-76 sequential tool loop into
   the first cancellation-phase classification needed by specs 0017/0018.
   Provider-await cancellations and tool-dispatch cancellations still return
   `ErrorKind::cancelled`, but the loop now adds
   `reason=parent_cancelled` plus `cancellation_phase=provider|tools` before
   returning the error, giving the future trace row a stable source for
-  `trace_turns.cancellation_phase` without introducing the trace schema yet.
+  `trace_turns.cancellation_phase`; slice 78 then introduced the trace schema
+  and repository without wiring the loop writer yet.
   Ordinary provider errors, retryable network/upstream failures, storage
   failures, and model-repairable tool errors keep their existing behavior.
   `test-agent` now covers both cancellation phases through parent
@@ -309,7 +331,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-core`: 69 cases / 450 assertions.
 - `oran-async`: 9 cases / 43 assertions.
 - `oran-io`: 49 cases / 286 assertions.
-- `oran-storage`: 61 cases / 718 assertions.
+- `oran-storage`: 68 cases / 827 assertions.
 - `oran-config`: 28 cases / 207 assertions.
 - `oran-permission`: 88 cases / 403 assertions.
 - `oran-hook`: 17 cases / 109 assertions.
@@ -318,7 +340,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 11 cases / 89 assertions.
 - `oran-agent`: 14 cases / 154 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
-- `oran-bootstrap`: 48 cases / 153 assertions.
+- `oran-bootstrap`: 48 cases / 173 assertions.
 
 ## Open Tech-Debt Rows
 
