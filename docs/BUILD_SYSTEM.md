@@ -220,8 +220,8 @@ oran_lib("permission", { "oran-core", "oran-config", "oran-storage", "oran-async
 oran_lib("hook", { "oran-core", "oran-async" }, {})
 oran_lib("tool", { "oran-core", "oran-async", "oran-io", "oran-permission", "oran-hook" }, { "nlohmann_json" })
 oran_lib("prompt", { "oran-core", "oran-async", "oran-config", "oran-tool" }, {})
-oran_lib("provider", { "oran-core", "oran-prompt" }, {})
-oran_lib("agent", { "oran-core", "oran-prompt", "oran-tool" }, { "nlohmann_json" })
+oran_lib("provider", { "oran-core", "oran-async", "oran-prompt" }, {})
+oran_lib("agent", { "oran-core", "oran-async", "oran-prompt", "oran-tool", "oran-provider" }, { "nlohmann_json" })
 oran_lib("cli", { "oran-core" }, {})
 oran_lib("bootstrap", { "oran-core", "oran-async", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-tool", "oran-cli" }, {})
 
@@ -232,15 +232,18 @@ target("orangutan")
     set_rundir(root)
 ```
 
-`oran-provider` is currently the slice-73 cache-hint/domain-shape library
-only; it is registered with `test-provider` and `bench-provider`, but no
-transport, protocol adapter, or fake provider is linked into the binary yet.
-The intentional `provider -> prompt` same-layer dependency is limited to
-adapter-side consumption of `prompt::RenderedPrompt`.
+`oran-provider` is currently the provider-domain + fake-provider library. It
+depends on `oran-async` for `FakeProvider`'s cancel-aware scripted latency and
+on `oran-prompt` for adapter-side `prompt::RenderedPrompt` cache-hint mapping.
+It is registered with `test-provider` and `bench-provider`, but no transport,
+protocol adapter, or real vendor runtime is linked into the binary yet.
 
-`oran-agent` is currently the slice-72 session-state library only; it is
-registered with `test-agent` and `bench-agent`, but the `orangutan` binary does
-not link it until the first fake-provider ReAct loop lands.
+`oran-agent` now owns both the slice-72 `SessionState` promotion owner and the
+slice-75 text-only `Loop` turn driver. The new provider dependency is
+intentional and downward: the agent runtime layer drives `provider::System`,
+while `oran-provider` never calls back into `oran-agent`. The `orangutan`
+binary still does not link `oran-agent`; CLI/binary handoff waits for the
+multi-iteration tool loop.
 
 **Key compile-time wins from this shape:**
 

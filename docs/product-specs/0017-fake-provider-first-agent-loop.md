@@ -41,7 +41,7 @@ proves the loop behaves correctly without a network.
   "Domain Model" are the source of truth (`provider::Request`,
   `provider::Response`, `core::Content` variant, `StopReason`, `Usage`,
   `EventSink`). This spec freezes their *behaviour* for v1:
-  - **Status (slice 74, 2026-05-24):** `oran-provider` now ships the
+  - **Status (slice 75, 2026-05-24):** `oran-provider` now ships the
     value-type `Request`, `Response`, `Usage`, and `RetryPolicy` shapes
     plus prompt-cache hints, the abstract `provider::System` with
     `send(Request, Route, EventSink*) const`, the `provider::EventSink`
@@ -54,7 +54,14 @@ proves the loop behaves correctly without a network.
     sink, awaits scripted latency via `async::sleep_for` so parent
     cancellation interrupts the wait, serialises concurrent `send` calls,
     and returns `Error::internal` on plan exhaustion or empty-body turns.
-    Real protocol adapters and the `agent::Loop` driver land next.
+    Slice 75 adds the first `agent::Loop` driver over that contract:
+    a one-iteration text-turn path that builds `prompt::RenderedPrompt`,
+    maps prompt-cache hints, mirrors active/promoted tools into
+    name-sorted `provider::Request::tools`, sends through a supplied
+    `provider::System`, returns terminal text responses, forwards provider
+    errors unchanged, and rejects `tool_use` responses with an explicit
+    not-yet-implemented error. Real protocol adapters and multi-iteration
+    tool dispatch remain downstream.
   - The loop emits **one** `provider::Request` per iteration.
   - The provider emits **one** `provider::Response` per request (after
     streaming completes if streaming is enabled).
@@ -113,6 +120,14 @@ proves the loop behaves correctly without a network.
   uses the fake provider with a hand-written plan.
 - **`agent::Loop` MVP**. Wraps the seven phases listed in the deep
   review §What a better `oran-agent` should look like:
+  - **Status (slice 75, 2026-05-24):** `<oran/agent.hpp>` exports
+    `agent::Loop`, `LoopOptions`, `RunTurnInputs`, and `RunTurnResult`.
+    The first implementation covers phase 3/4/5 only for scenario #1:
+    render prompt, send one provider request, and return terminal text
+    blocks. It intentionally does not dispatch tool calls yet; seeing
+    `StopReason::tool_use` or a `ToolUseContent` block returns an
+    `Error::internal` so tests cannot treat the first slice as a complete
+    ReAct loop.
   1. Build `TurnContext` (identity, route, session id, origin,
      cancellation slot, stable service refs).
   2. Load/render memory once per turn (memory: `nullopt` in v1 — the
@@ -306,11 +321,11 @@ proves the loop behaves correctly without a network.
 ```sh
 xmake build oran-agent oran-provider
 xmake test test-provider                    # provider domain/cache mapping
-xmake test test-agent                       # ten fake-provider scenarios
-xmake build bench-oran-agent
-xmake run bench-oran-agent iteration_overhead  # ≤ 5ms ex provider per spec 0001 #9
+xmake run test-agent                        # current text-turn Loop + session-state coverage
+xmake build bench-agent
+xmake run bench-agent                       # prompt-cache fixture; loop-overhead bench still future
 unset ANTHROPIC_API_KEY OPENAI_API_KEY      # CI proves offline
-xmake test test-agent
+xmake run test-agent
 ```
 
 ## Out-of-Band Cross-Cuts
