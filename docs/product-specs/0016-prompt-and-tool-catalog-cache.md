@@ -33,16 +33,18 @@ the *invariants*; this spec is the *what ships and how it is verified*.
 ## Scope (v1)
 
 The MVP delivers the smallest builder that lets `oran-agent` send a
-cacheable prompt with a deterministic tool catalog. Nothing else.
+cacheable prompt with a deterministic tool catalog, plus the prompt-side
+promotion state that the first agent loop will own.
 
 - **`oran-prompt` library skeleton**.
-  - **Status (slice 70, 2026-05-24):** the library exists with
+  - **Status (slice 71, 2026-05-24):** the library exists with
     `prompt::Builder`, `BuilderInputs`, `BuilderOptions`, `CacheSection`,
-    `RenderedPrompt`, `SectionVersions`, `test-prompt`, and `bench-prompt`.
-    It depends on `oran-core` (messages / tool definitions), `oran-async`
-    (awaitable contract), `oran-config` (active-tool selector), and
-    `oran-tool` (catalog bytes via `CatalogRenderer`). Memory and skill
-    renderers are still plain section inputs until their libraries land.
+    `RenderedPrompt`, `SectionVersions`, `prompt::PromotionState`,
+    `test-prompt`, and `bench-prompt`. It depends on `oran-core` (messages /
+    tool definitions / explicit `Time` inputs), `oran-async` (awaitable
+    contract), `oran-config` (active-tool selector), and `oran-tool` (catalog
+    bytes via `CatalogRenderer`). Memory and skill renderers are still plain
+    section inputs until their libraries land.
 - **`prompt::CacheSection`**:
   ```cpp
   struct CacheSection {
@@ -64,6 +66,7 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
     std::string_view                 system_preamble;
     std::span<const core::ToolDef>   tool_catalog;
     config::PromptActiveToolsConfig  active_tools;
+    std::span<const std::string>     promoted_tools;
     std::string_view                 skills_catalog;
     std::string_view                 memory_framing;
     std::string_view                 per_agent_overlay;
@@ -81,11 +84,15 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
     std::size_t               prefix_bytes;
   };
   ```
+  `promoted_tools` is the sorted snapshot from `prompt::PromotionState`.
+  Missing snapshot names are ignored by catalog selection because they are
+  stale session hints; explicit config allowlists still validate against the
+  catalog snapshot and return `ErrorKind::not_found` on missing names.
   The agent loop calls `build(inputs)` once per turn. Adapter sees
   `RenderedPrompt` and maps to vendor cache shape per
   `api-portability.md`.
 - **Deterministic tool-catalog renderer**:
-  - **Status (slices 59 + 68 + 69 + 70):** the renderer exists in
+  - **Status (slices 59 + 68 + 69 + 70 + 71):** the renderer exists in
     `oran-tool` as `tool::CatalogRenderer`, alongside the new
     `ToolDef::deferred` and `ToolDef::category` metadata. It renders
     active full-schema blocks and deferred name/description rows from a
@@ -96,7 +103,8 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
     the registry-owned `tool.search` lookup primitive in `oran-tool`.
     Slice 69 adds the typed `runtime.prompt.active_tools` config surface in
     `oran-config`; slice 70 consumes that selector in `prompt::Builder`.
-    Session promotion state is still unimplemented.
+    Slice 71 adds `prompt::PromotionState` plus builder consumption of its
+    sorted snapshot.
   - Pure function of `ToolDef`:
     `(name, description, input_schema, required_capabilities,
     category)`.
@@ -111,15 +119,14 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
   - Default active set:
     `file.read`, `file.write`, `file.edit` (or `file.modify` once spec
     0011 v2 lands), `file.search`, `directory.list`, `tool.search`.
-  - Everything else registered with `ToolDef::deferred = true` lands
-    in section 3 (deferred-tool index) as name + one-line description
+  - Deferred tools not selected by active config or the promotion snapshot
+    land in section 3 (deferred-tool index) as name + one-line description
     only.
   - The active set is config-driven:
     `runtime.prompt.active_tools` accepts an explicit allowlist or
     `"defaults"` to use the list above. Operators who add a new
-    coding tool will be able to promote it without touching code once
-    the prompt builder consumes this config.
-  - **Status (slice 70, 2026-05-24):** `oran-config` parses this field into
+    coding tool can promote it without touching code.
+  - **Status (slice 71, 2026-05-24):** `oran-config` parses this field into
     `config::RuntimeConfig::prompt.active_tools`. The `"defaults"`
     sentinel sets `use_defaults=true`; an array preserves the authored
     tool-name allowlist with `use_defaults=false`; empty explicit
@@ -130,9 +137,11 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
     for missing names.
 - **`tool.search` built-in** (the *non-deferred* lookup tool; future
   session promotion consumes its matches):
-  - **Status (slice 68, 2026-05-24):** the registry lookup primitive is
-    implemented in `oran-tool`; session promotion remains future agent
-    work because `oran-agent::SessionState` does not exist yet.
+  - **Status (slice 71, 2026-05-24):** the registry lookup primitive is
+    implemented in `oran-tool`; `prompt::PromotionState` now exists in
+    `oran-prompt`. The side effect that calls `promote(...)` after a
+    successful lookup remains future agent work because
+    `oran-agent::SessionState` does not exist yet.
   - Input: `{ name?, category?, capability? }`. At least one field
     required. Supplied fields are ANDed; `name` and `category` are exact
     string matches, and `capability` is parsed through
@@ -142,11 +151,16 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
     includes name, full description, nested full JSON schema,
     required capabilities, deferred flag, and nullable category.
   - Future side effect: append the matched tool name(s) to the
-    per-session promotion set so the *next* turn's catalog includes the
-    full schema. The promotion set lives on `oran-agent::SessionState`.
+    per-session `prompt::PromotionState` so the *next* turn's catalog
+    includes the full schema. The promotion state is owned by
+    `oran-agent::SessionState` once that type lands.
 - **Promotion set bounding**:
-  - LRU + TTL per the spec 0012 inventory
-    (`max_entries=16`, `ttl=24h`).
+  - **Status (slice 71, 2026-05-24):** `prompt::PromotionState` ships this
+    bounded state with LRU + TTL per the spec 0012 inventory
+    (`max_entries=16`, `ttl=24h`). It takes explicit `core::Time` values so
+    prompt sections never read hidden clocks, reports aggregate stats, rejects
+    empty tool names, and returns sorted snapshots for deterministic section-2
+    bytes.
   - Evicted promotions drop back to the deferred index; they are
     *never* removed from `Registry::catalog()`. Cache controls prompt
     size, not tool availability.
@@ -230,7 +244,8 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
    from a turn eventually adds `memory.recall` to the next turn's
    active catalog with its full schema. After 16 promotions in a
    session, the oldest evicts back to the deferred index (LRU per
-   spec 0012).
+   spec 0012). Slice 71 ships the state and builder snapshot consumption;
+   the `tool.search` side effect still waits for `oran-agent`.
    The evicted tool stays callable; the agent that uses it without
    re-promotion sees the same dispatch error as any other
    not-promoted call to a deferred tool (`tool.search` is the
@@ -259,16 +274,16 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
     `bench/oran-agent/prompt_cache_hit_rate.cpp` against three
     fixtures (small catalog, large catalog, with-promotion) produces
     `prefix_hash` identical across iterations 2..N for every
-    fixture. CI fails on any drift. Slice 70 adds the precursor
-    `bench-prompt` default-vs-explicit active-set assembly bench; the
-    agent fixture remains future work.
+    fixture. CI fails on any drift. Slice 71 keeps the precursor
+    `bench-prompt` bucket current with default, explicit, promoted, and
+    promotion-state snapshot scenarios; the agent fixture remains future work.
 11. **`tests/prompt/`** ≥ 90% coverage of the matrix
     (section × deterministic-input × cache_version × promotion
-    state × breakpoint placement × config override). Slice 70 covers
+    state × breakpoint placement × config override). Slice 71 covers
     section order, breakpoint count, cache-version invalidation,
     tail-independent prefix hashes, default/explicit config overrides,
-    and explicit promotion of a deferred tool; session promotion state
-    remains future work.
+    explicit promotion of a deferred tool, builder consumption of a promotion
+    snapshot, and promotion-state LRU / TTL / validation semantics.
 
 ## Design Doc Cross-References
 
@@ -300,8 +315,10 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
   — `tool.search` uses the shipped `Output::data_json` structured
   channel plus a text fallback.
 - [`0012-tool-scheduler-and-state.md`](0012-tool-scheduler-and-state.md)
-  — the rendered-block cache and the promotion-set bound both use
-  the `BoundedCache` primitive defined there.
+  — the rendered-block cache uses `BoundedCache`; the promotion set follows
+  the same bounded-state policy but ships as a dedicated enumerable
+  `prompt::PromotionState` because prompt assembly needs sorted live names and
+  promotion-vs-refresh stats.
 - [`0009-skills.md`](0009-skills.md) — section 4 (skills catalog)
   consumes the skill loader's catalog snapshot.
 - [`0010-benchmark-harness.md`](0010-benchmark-harness.md) — the
@@ -312,8 +329,10 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
 
 - **Latent drift before the bench lands.** Slices that ship sections
   1–6 without the cache-stability bench can introduce drift that
-  goes undetected. Mitigation: v1 acceptance criterion #10 is
-  blocking — the bench ships with v1, not as a follow-up.
+  goes undetected. Mitigation: the prompt-owned `bench-prompt` precursor
+  now exercises deterministic builder inputs, and the agent-owned
+  cache-hit-rate fixture remains tracked in the tech-debt row until
+  `oran-agent` can host session fixtures.
 - **Promotion set fights cache stability.** If promotion mutates
   section 2 mid-session, every promotion is a cache miss for the
   whole prefix. Mitigation: promotion only shifts the *next* turn's
@@ -333,9 +352,9 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
 
 ```sh
 xmake build oran-prompt
-xmake run test-prompt                     # builder determinism + explicit promotion + breakpoint
+xmake run test-prompt                     # builder determinism + promotion state + breakpoint
 xmake run test-config                     # active-tool config parser contract
-xmake run bench-prompt                    # prompt-owned precursor bench
+xmake run bench-prompt                    # prompt-owned precursor bench, including promoted snapshots
 xmake build bench-oran-agent              # future agent cache-hit-rate fixture
 xmake run bench-oran-agent prompt_cache_hit_rate
 xmake run orangutan -- --explain-prompt   # planned debug surface; lands with agent/prompt wiring

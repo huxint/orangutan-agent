@@ -460,7 +460,7 @@ Some tools are **deferred** — present in the catalog but not surfaced to the L
 explicitly looked up via `tool.search`. This pattern compresses the prompt without
 losing capability.
 
-> **Status (slice 70, 2026-05-24):** `core::ToolDef` carries
+> **Status (slice 71, 2026-05-24):** `core::ToolDef` carries
 > `deferred` and `category`, and `tool::CatalogRenderer` can split a
 > `Registry::catalog()` snapshot into sorted active full-schema blocks and
 > sorted deferred name/description rows. `Registry::catalog()` still returns
@@ -471,8 +471,11 @@ losing capability.
 > containing matched tool definitions. `oran-config` now parses
 > `runtime.prompt.active_tools` as either `"defaults"` or an explicit
 > allowlist. `prompt::Builder` now consumes that typed selector and feeds a
-> selected catalog snapshot into `tool::CatalogRenderer`; per-session promotion
-> state remains future `oran-agent` / `oran-prompt` work.
+> selected catalog snapshot into `tool::CatalogRenderer`. `oran-prompt` now
+> ships `prompt::PromotionState`, a session-owned 16-entry / 24-hour LRU+TTL
+> promotion set whose sorted snapshot lets the next builder call move selected
+> deferred tools into the active catalog. Wiring `tool.search` results into that
+> state remains future `oran-agent` work.
 
 Implementation:
 
@@ -482,11 +485,12 @@ Implementation:
 - `prompt::Builder` lists the deferred tool *names + one-line descriptions*
   in section 3's compact deferred-tool index.
 - `tool.search` is a non-deferred tool that returns the full schema on demand.
-- A future agent session keeps a per-agent set of "promoted" deferred tools
-  whose full schema is now in the prompt; the prompt builder honors it.
+- The future agent session owns `prompt::PromotionState` and calls `promote`
+  after `tool.search` results. The prompt builder already honors the resulting
+  snapshot by rendering promoted tools with full schemas.
 
 `async::Channel<Promotion>` could push promotions across iterations if needed; for now
-a per-loop mutable set is simpler.
+a per-loop `prompt::PromotionState` is simpler.
 
 ## Output Scrubbing
 
@@ -621,8 +625,8 @@ unbounded cache. The public
 `ToolCatalogCacheStats` shape exposes only aggregate counters and the
 renderer version, never tool schemas or cache keys. `oran-prompt` consumes
 this renderer for sections 2 and 3; it owns the active/deferred selection
-from `runtime.prompt.active_tools`, while promotion state remains future
-work. The registry-owned lookup half of the
+from `runtime.prompt.active_tools` plus the promoted-tool snapshot consumed by
+`prompt::Builder`. The registry-owned lookup half of the
 deferred-tool design is shipped as `tool.search`: it accepts
 `{name?, category?, capability?}`, requires at least one selector, ANDs
 provided selectors, and returns `{kind:"tool_search", query,

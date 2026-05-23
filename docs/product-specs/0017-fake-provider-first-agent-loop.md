@@ -105,7 +105,9 @@ proves the loop behaves correctly without a network.
      hook exists; the renderer ships in spec 0005's slice).
   3. Render the prompt via `prompt::Builder` (spec 0016; the slice-70
      builder skeleton already owns section order, active/deferred catalog
-     rendering, prefix hashes, and breakpoint placement).
+     rendering, prefix hashes, and breakpoint placement, and the slice-71
+     `prompt::PromotionState` snapshot can feed promoted deferred tools into
+     the next active catalog once the loop owns `tool.search` side effects).
   4. Send `provider::Request` with streaming sink.
   5. Parse response blocks into typed `core::Content`.
   6. For each `tool_use`: validate schema → dispatch through

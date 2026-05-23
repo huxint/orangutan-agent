@@ -68,9 +68,10 @@ own library, its own tests, its own bench, its own design doc."
 
 ## Prompt Assembly
 
-> **Status (slice 70, 2026-05-24):** `oran-prompt` now owns the first
-> deterministic `prompt::Builder` skeleton. `oran-agent` still does not exist,
-> but the future loop can call the builder instead of inventing prompt bytes.
+> **Status (slice 71, 2026-05-24):** `oran-prompt` now owns the first
+> deterministic `prompt::Builder` skeleton plus `prompt::PromotionState`.
+> `oran-agent` still does not exist, but the future loop can call the builder
+> and own a session-local promotion set instead of inventing prompt bytes.
 > The invariants — section order, byte-identical cached prefix, no clocks /
 > per-call state in sections (1)–(6) — remain canonical in
 > [`../rules/prompt-design.md`](../rules/prompt-design.md).
@@ -85,9 +86,10 @@ The agent loop owns:
   will own the real preamble text.
 - **Tool catalog renderer** — section (2). Will walk `tool::Registry::catalog()`,
   filter the full-schema active set through `config::RuntimeConfig::prompt.active_tools`,
-  and render each selected `core::ToolDef` to a deterministic block (name +
-  one-line description + JSON Schema) by delegating to `tool::CatalogRenderer`.
-  Memoized per `ToolDef`; see [`tool-runtime.md`](tool-runtime.md).
+  apply the session's sorted `prompt::PromotionState` snapshot, and render each
+  selected `core::ToolDef` to a deterministic block (name + one-line description
+  + JSON Schema) by delegating to `tool::CatalogRenderer`. Memoized per
+  `ToolDef`; see [`tool-runtime.md`](tool-runtime.md).
 - **Deferred-tool index renderer** — section (3). Compact name + one-line
   description listing; full schema arrives via `tool.search`. See
   [`tool-runtime.md`](tool-runtime.md) "Deferred Tools".
@@ -105,10 +107,13 @@ for deferred tools. It rejects per-invocation status, timing, and inline
 conversation-progress bytes in sections (1)–(6). The minted section IDs are
 `system_preamble`, `tool_catalog`, `deferred_tools`, `skills_catalog`,
 `memory_framing`, `per_agent_overlay`, and `conversation_tail`; all start at
-`cache_version=1` through `prompt::SectionVersions`. `bench-prompt` now compares
-default active-set assembly against an explicit active subset. The
-agent-owned `bench/oran-agent/prompt_cache_hit_rate.cpp` fixture remains future
-work because session promotion and provider cache mapping still need `oran-agent`.
+`cache_version=1` through `prompt::SectionVersions`. Slice 71 adds the
+promotion snapshot path: `tool.search` side effects remain future agent work, but
+the builder can already consume promoted tool names and move those tools from
+section 3 to section 2 on the next build. `bench-prompt` now compares default,
+explicit, promoted, and promotion-state snapshot paths. The agent-owned
+`bench/oran-agent/prompt_cache_hit_rate.cpp` fixture remains future work because
+provider cache mapping and the first loop still need `oran-agent`.
 
 ## Cross-Cutting Concerns
 

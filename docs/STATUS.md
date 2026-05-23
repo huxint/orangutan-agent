@@ -7,37 +7,34 @@
 
 ## Snapshot
 
-- **Slice:** 70 (`xmake run orangutan` reports slice 70)
+- **Slice:** 71 (`xmake run orangutan` reports slice 71)
 - **Last completed history:**
-  [`histories/2026-05/20260524-0705-prompt-builder-skeleton.md`](histories/2026-05/20260524-0705-prompt-builder-skeleton.md)
-- **Active exec-plan:** none — the prompt-builder skeleton plan is
+  [`histories/2026-05/20260524-0715-prompt-promotion-state.md`](histories/2026-05/20260524-0715-prompt-promotion-state.md)
+- **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
-  the next promotion-state slice can open a fresh plan if it crosses the
-  plan threshold.
+  the promotion-state increment closed in one history/commit and did not
+  need a new plan.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 70
-  opens the `oran-prompt` implementation with
-  `prompt::Builder`, `BuilderInputs`, `CacheSection`, `RenderedPrompt`,
-  and `BuilderOptions`. The builder consumes
-  `config::PromptActiveToolsConfig` and delegates schema/catalog bytes to
-  `tool::CatalogRenderer`: section 2 contains full-schema active tools
-  selected by `"defaults"` or an explicit allowlist, section 3 contains
-  compact deferred/index rows for every other registered tool, and missing
-  explicit active names fail as `ErrorKind::not_found` at the prompt layer
-  where the registry/catalog snapshot is available. It emits the seven
-  `prompt-design.md` sections with stable content hashes, cache-versioned
-  prefix hashing over sections 1-6, prefix byte count, and exactly one
-  cache breakpoint before section 7. `test-prompt` covers default active
-  selection, explicit allowlists, explicit promotion of a deferred tool,
-  missing-tool errors, tail-independent prefix hashes, and cache-version
-  invalidation; `bench-prompt` compares the default active set against an
-  explicit two-tool active subset. Remaining spec-0016 work is
-  session-local promotion state and the agent-owned prompt-cache stability
-  fixture; the first spec-0017 fake-provider loop can now call the builder
-  instead of inventing prompt bytes. Slice 69
-  landed the typed `runtime.prompt.active_tools` config surface, and slice
-  68 landed the registry-owned non-deferred `tool.search` lookup primitive.
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 71
+  extends `oran-prompt` with `prompt::PromotionState`, a session-owned
+  value type for deferred-tool promotions. It keeps at most 16 promoted
+  names by LRU, reaps entries older than 24 hours when callers supply
+  explicit `core::Time`, rejects empty names, exposes aggregate stats, and
+  returns sorted snapshots so prompt bytes stay deterministic. `BuilderInputs`
+  now accepts `promoted_tools`; `prompt::Builder` treats those snapshot names
+  as active for section 2 on the next build while leaving unpromoted tools in
+  section 3. Missing or stale promoted names are ignored because snapshots
+  are session hints, while explicit config allowlists still validate against
+  the catalog and fail with `ErrorKind::not_found`. `test-prompt` covers the
+  builder snapshot path plus promotion-state LRU, TTL, and validation
+  semantics; `bench-prompt` now compares default, explicit, promoted, and
+  promotion-state snapshot paths. Remaining spec-0016 work is the
+  `oran-agent` owner that calls `promote` after `tool.search`, provider cache
+  mapping, and the agent-owned prompt-cache stability fixture. Slice 70
+  opened the `prompt::Builder` skeleton, slice 69 landed the typed
+  `runtime.prompt.active_tools` config surface, and slice 68 landed the
+  registry-owned non-deferred `tool.search` lookup primitive.
   Slice 67
   closes spec 0014's audit usage fan-out for the pre-scheduler direct
   dispatch path: `permission::AuditSink` now exposes
@@ -223,7 +220,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-permission`: 88 cases / 403 assertions.
 - `oran-hook`: 17 cases / 109 assertions.
 - `oran-tool`: 166 cases / 1588 assertions.
-- `oran-prompt`: 6 cases / 71 assertions.
+- `oran-prompt`: 10 cases / 98 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 153 assertions.
 

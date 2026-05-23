@@ -42,6 +42,7 @@ struct BuilderInputs {
   std::string_view system_preamble{};
   std::span<const core::ToolDef> tool_catalog{};
   config::PromptActiveToolsConfig active_tools{};
+  std::span<const std::string> promoted_tools{};
   std::string_view skills_catalog{};
   std::string_view memory_framing{};
   std::string_view per_agent_overlay{};

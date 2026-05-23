@@ -64,6 +64,10 @@ constexpr auto kDefaultActiveTools = std::array<std::string_view, 6>{
   return std::ranges::contains(active_tools.tool_names, name);
 }
 
+[[nodiscard]] bool is_promoted_tool(std::span<const std::string> promoted_tools, std::string_view name) noexcept {
+  return std::ranges::contains(promoted_tools, name);
+}
+
 [[nodiscard]] core::Result<void> validate_explicit_active_tools(std::span<const core::ToolDef> catalog,
                                                                 const config::PromptActiveToolsConfig& active_tools) {
   if (active_tools.use_defaults) {
@@ -78,12 +82,13 @@ constexpr auto kDefaultActiveTools = std::array<std::string_view, 6>{
 }
 
 [[nodiscard]] std::vector<core::ToolDef> select_catalog(std::span<const core::ToolDef> catalog,
-                                                        const config::PromptActiveToolsConfig& active_tools) {
+                                                        const config::PromptActiveToolsConfig& active_tools,
+                                                        std::span<const std::string> promoted_tools) {
   std::vector<core::ToolDef> selected;
   selected.reserve(catalog.size());
   for (const auto& def : catalog) {
     auto copy = def;
-    copy.deferred = !is_active_tool(active_tools, copy.name);
+    copy.deferred = !is_active_tool(active_tools, copy.name) && !is_promoted_tool(promoted_tools, copy.name);
     selected.push_back(std::move(copy));
   }
   return selected;
@@ -184,7 +189,7 @@ public:
       co_return std::unexpected(std::move(validation.error()));
     }
 
-    auto selected_catalog = select_catalog(inputs.tool_catalog, inputs.active_tools);
+    auto selected_catalog = select_catalog(inputs.tool_catalog, inputs.active_tools, inputs.promoted_tools);
     auto rendered_catalog = catalog_renderer_.render_catalog(selected_catalog);
     if (!rendered_catalog) {
       co_return std::unexpected(std::move(rendered_catalog.error()));

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -26,6 +27,10 @@ namespace prompt = orangutan::prompt;
 namespace test = orangutan::tests;
 
 namespace {
+
+core::Time at_seconds(int seconds) {
+  return core::Time{core::Time::time_point{std::chrono::seconds{seconds}}};
+}
 
 core::ToolDef tool_def(std::string name, std::string description, bool deferred = false) {
   return core::ToolDef{
@@ -144,6 +149,31 @@ TEST_CASE("Builder can explicitly promote a deferred tool into the active catalo
   });
 }
 
+TEST_CASE("Builder applies a promotion snapshot to the next active catalog", "[unit][prompt]") {
+  test::run_async([](asio::io_context&) -> asio::awaitable<void> {
+    const std::vector<core::ToolDef> catalog{
+        tool_def("memory.recall", "Recall memory", true),
+        tool_def("agent.spawn", "Spawn an agent", true),
+        tool_def("file.read", "Read a file"),
+    };
+
+    prompt::PromotionState promotions;
+    REQUIRE(promotions.promote("memory.recall", at_seconds(1)).has_value());
+    auto snapshot = promotions.snapshot(at_seconds(2));
+    auto inputs = inputs_for(catalog);
+    inputs.promoted_tools = snapshot.tool_names;
+
+    prompt::Builder builder;
+    auto result = co_await builder.build(inputs);
+
+    REQUIRE(result.has_value());
+    REQUIRE(section(*result, "tool_catalog").content.contains("Tool: memory.recall"));
+    REQUIRE(section(*result, "tool_catalog").content.contains("Tool: file.read"));
+    REQUIRE_FALSE(section(*result, "tool_catalog").content.contains("Tool: agent.spawn"));
+    REQUIRE(section(*result, "deferred_tools").content == "agent.spawn - Spawn an agent");
+  });
+}
+
 TEST_CASE("Builder reports missing explicit active tools", "[unit][prompt]") {
   test::run_async([](asio::io_context&) -> asio::awaitable<void> {
     const std::vector<core::ToolDef> catalog{
@@ -163,6 +193,46 @@ TEST_CASE("Builder reports missing explicit active tools", "[unit][prompt]") {
       return entry.first == "tool" && entry.second == "tool.missing";
     }));
   });
+}
+
+TEST_CASE("PromotionState bounds promotions by LRU and returns a sorted snapshot", "[unit][prompt]") {
+  auto state = prompt::PromotionState{prompt::PromotionStateOptions{
+      .max_promoted_tools = 2,
+      .ttl = std::chrono::hours{24},
+  }};
+
+  REQUIRE(state.promote("zeta.tool", at_seconds(1)).has_value());
+  REQUIRE(state.promote("alpha.tool", at_seconds(2)).has_value());
+  REQUIRE(state.contains("zeta.tool", at_seconds(3)));
+  REQUIRE(state.promote("beta.tool", at_seconds(4)).has_value());
+
+  auto snapshot = state.snapshot(at_seconds(5));
+  REQUIRE(snapshot.tool_names == std::vector<std::string>{"beta.tool", "zeta.tool"});
+  REQUIRE(snapshot.stats.promotions == 3);
+  REQUIRE(snapshot.stats.hits == 1);
+  REQUIRE(snapshot.stats.evictions_lru == 1);
+  REQUIRE(snapshot.stats.current_entries == 2);
+}
+
+TEST_CASE("PromotionState reaps expired promotions", "[unit][prompt]") {
+  auto state = prompt::PromotionState{prompt::PromotionStateOptions{
+      .max_promoted_tools = 16,
+      .ttl = std::chrono::seconds{10},
+  }};
+
+  REQUIRE(state.promote("memory.recall", at_seconds(1)).has_value());
+  REQUIRE(state.contains("memory.recall", at_seconds(10)));
+  REQUIRE_FALSE(state.contains("memory.recall", at_seconds(12)));
+  REQUIRE(state.stats().evictions_ttl == 1);
+  REQUIRE(state.stats().current_entries == 0);
+}
+
+TEST_CASE("PromotionState rejects empty tool names", "[unit][prompt]") {
+  prompt::PromotionState state;
+  auto result = state.promote("", at_seconds(1));
+
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
 }
 
 TEST_CASE("Builder keeps the cached prefix stable across conversation tails", "[unit][prompt]") {

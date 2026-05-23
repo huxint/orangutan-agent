@@ -160,7 +160,7 @@ implicitly via the capability list.
   | Structure | Policy | Default |
   | --- | --- | --- |
   | Path-lock table | reap idle rows on TTL | 5 min |
-  | Deferred-tool promotion set (per session) | LRU on session size | 16 entries |
+  | Deferred-tool promotion set (per session) | LRU on session size + 24-hour TTL (`prompt::PromotionState`, slice 71; explicit `core::Time` inputs, sorted snapshots for prompt determinism) | 16 entries |
   | Approval broker grants | TTL + max-per-identity (slice 56 shipped the cap; `approve` lazily reaps expired rows then evicts the oldest same-identity grant before inserting a new distinct triple) | existing TTL + 64 per identity |
   | Provider route health / retry backoff | TTL per route | 30 s |
   | Regex compile cache (`file.search`) | LRU | 64 entries |
@@ -186,6 +186,11 @@ implicitly via the capability list.
   `tool::CatalogRenderer`, whose bounded rendered-block cache is capped at
   256 entries by default and reports aggregate hit/miss/eviction counters
   via `ToolCatalogCacheStats` without exposing tool schemas or cache keys.
+  **Status (slice 71, 2026-05-24):** `oran-prompt` now exposes
+  `prompt::PromotionState` for the deferred-tool promotion set with the
+  documented 16-entry cap, 24-hour TTL, explicit `core::Time` inputs, and
+  aggregate stats; `oran-agent` still needs to own that state and mutate it
+  after `tool.search`.
   Pre-`oran-log`, `--explain-rules`-style debug surfaces in `oran-bootstrap`
   can reuse the same numbers.
 

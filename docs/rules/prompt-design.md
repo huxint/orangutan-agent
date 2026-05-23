@@ -83,16 +83,17 @@ The prompt is assembled in this order, oldest-stable to newest-dynamic:
 
 1. **System preamble** — agent identity, operating principles, output
    shape contract, error model. Changes only on slice boundaries.
-2. **Tool catalog** — one entry per active registered non-deferred tool,
-   where the active set is selected by `runtime.prompt.active_tools`
-   (`"defaults"` or an explicit allowlist). The available tool universe
-   changes when `tool::Registry::add` / `remove` runs; *the rendering of
-   a single tool's description must be deterministic in the tool's static
-   fields*, never the call site.
-3. **Deferred-tool index** — name + one-line description only (no
-   schema). The shipped `tool.search` returns full metadata on demand;
-   future session promotion moves selected tools into the next turn's
-   full-schema catalog.
+2. **Tool catalog** — one entry per active registered tool, where the
+   active set is selected by `runtime.prompt.active_tools` (`"defaults"`
+   or an explicit allowlist) plus the session's promoted-tool snapshot.
+   Promoted deferred tools move into this full-schema catalog on the next
+   build. The available tool universe changes when `tool::Registry::add` /
+   `remove` runs; *the rendering of a single tool's description must be
+   deterministic in the tool's static fields*, never the call site.
+3. **Deferred-tool index** — remaining deferred tools as name + one-line
+   description only (no schema). The shipped `tool.search` returns full
+   metadata on demand; session promotion moves selected tools into the next
+   turn's full-schema catalog.
 4. **Skills catalog** — compact listing of activated skills. Adding /
    removing a skill is a cache-break by design.
 5. **Memory framing** — working-memory + session-memory summary. The

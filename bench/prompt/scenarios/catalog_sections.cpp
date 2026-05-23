@@ -5,6 +5,7 @@
 #include <nanobench.h>
 
 #include <cstdlib>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -50,7 +51,8 @@ std::vector<core::ToolDef> make_catalog() {
 
 prompt::RenderedPrompt build_once(prompt::Builder& builder,
                                   const std::vector<core::ToolDef>& catalog,
-                                  config::PromptActiveToolsConfig active_tools = {}) {
+                                  config::PromptActiveToolsConfig active_tools = {},
+                                  std::span<const std::string> promoted_tools = {}) {
   asio::io_context io;
   prompt::RenderedPrompt rendered;
   asio::co_spawn(
@@ -60,6 +62,7 @@ prompt::RenderedPrompt build_once(prompt::Builder& builder,
             .system_preamble = "system",
             .tool_catalog = catalog,
             .active_tools = std::move(active_tools),
+            .promoted_tools = promoted_tools,
             .skills_catalog = "",
             .memory_framing = "",
             .per_agent_overlay = "",
@@ -85,6 +88,7 @@ void register_catalog_sections(ankerl::nanobench::Bench& bench) {
       .use_defaults = false,
       .tool_names = {"file.read", "tool.search"},
   };
+  const std::vector<std::string> promoted_tools{"memory.recall", "agent.spawn"};
 
   bench.run("prompt.build_default_active_set", [&] {
     auto rendered = build_once(default_builder, catalog);
@@ -94,6 +98,12 @@ void register_catalog_sections(ankerl::nanobench::Bench& bench) {
 
   bench.run("prompt.build_explicit_subset", [&] {
     auto rendered = build_once(explicit_builder, catalog, explicit_tools);
+    ankerl::nanobench::doNotOptimizeAway(rendered.prefix_hash);
+    ankerl::nanobench::doNotOptimizeAway(rendered.prefix_bytes);
+  });
+
+  bench.run("prompt.build_promoted_subset", [&] {
+    auto rendered = build_once(default_builder, catalog, {}, promoted_tools);
     ankerl::nanobench::doNotOptimizeAway(rendered.prefix_hash);
     ankerl::nanobench::doNotOptimizeAway(rendered.prefix_bytes);
   });
