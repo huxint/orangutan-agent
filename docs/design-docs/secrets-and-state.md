@@ -45,8 +45,9 @@ Current implementation status:
 - `runtime.prompt.active_tools` accepts `"defaults"` or an explicit string
   array. The loader preserves the authored array order, accepts an empty
   explicit allowlist, rejects empty tool names, and leaves registry-name
-  resolution to the future prompt builder because `oran-config` sits below
-  `oran-tool`.
+  resolution to `prompt::Builder` because `oran-config` sits below
+  `oran-tool`; missing explicit names fail at the prompt layer where the
+  catalog snapshot is available.
 - `profiles` and `routes` are objects keyed by profile/route name. Profile entries
   require `provider`, `model`, `base_url`, and `api_key_env`; route entries require
   `primary` and may include `fallbacks`.

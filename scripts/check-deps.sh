@@ -83,12 +83,14 @@ declare -A LAYER_NAME=(
 #   config -> storage  : typed permissions block reuses storage's migration shape.
 #   tool   -> permission: dispatch consults RuleSet + AuditSink directly.
 #   tool   -> hook     : dispatch publishes tool_before / tool_dispatched / tool_error / tool_after.
+#   prompt -> tool     : prompt assembly delegates schema/catalog bytes to CatalogRenderer.
 declare -A ALLOWED_SIBLING=(
   [io__async]=1
   [storage__async]=1
   [config__storage]=1
   [tool__permission]=1
   [tool__hook]=1
+  [prompt__tool]=1
 )
 
 failed=0

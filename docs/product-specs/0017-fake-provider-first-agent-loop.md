@@ -103,7 +103,9 @@ proves the loop behaves correctly without a network.
      cancellation slot, stable service refs).
   2. Load/render memory once per turn (memory: `nullopt` in v1 — the
      hook exists; the renderer ships in spec 0005's slice).
-  3. Render the prompt via `prompt::Builder` (spec 0016).
+  3. Render the prompt via `prompt::Builder` (spec 0016; the slice-70
+     builder skeleton already owns section order, active/deferred catalog
+     rendering, prefix hashes, and breakpoint placement).
   4. Send `provider::Request` with streaming sink.
   5. Parse response blocks into typed `core::Content`.
   6. For each `tool_use`: validate schema → dispatch through

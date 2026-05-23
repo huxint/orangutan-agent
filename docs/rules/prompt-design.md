@@ -166,11 +166,11 @@ Two layers:
   `docs/product-specs/0010-benchmark-harness.md` once the bench is
   written.
 
-There is no static-grep enforcement yet because the prompt builder does
-not exist yet. Once the first stable preamble template lands in code,
-add a `scripts/check-prompt-preamble` grep modeled on
-`check-banned-includes.sh` and list it under "Mechanical Enforcement"
-in [`docs-in-sync.md`](docs-in-sync.md).
+There is no static-grep enforcement yet because the slice-70 prompt builder
+accepts preamble bytes but `oran-agent` has not minted the first stable
+preamble template. Once that template lands in code, add a
+`scripts/check-prompt-preamble` grep modeled on `check-banned-includes.sh`
+and list it under "Mechanical Enforcement" in [`docs-in-sync.md`](docs-in-sync.md).
 
 ## Adding A New Prompt Surface
 

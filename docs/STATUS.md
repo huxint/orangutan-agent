@@ -7,48 +7,38 @@
 
 ## Snapshot
 
-- **Slice:** 69 (`xmake run orangutan` reports slice 69)
+- **Slice:** 70 (`xmake run orangutan` reports slice 70)
 - **Last completed history:**
-  [`histories/2026-05/20260524-0655-prompt-active-tools-config.md`](histories/2026-05/20260524-0655-prompt-active-tools-config.md)
-- **Active exec-plan:** none — current slice intent fits inside the
-  `Next intended slice` bullet below; see
-  [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
-  When `active/` is non-empty, link the file path here instead.
+  [`histories/2026-05/20260524-0705-prompt-builder-skeleton.md`](histories/2026-05/20260524-0705-prompt-builder-skeleton.md)
+- **Active exec-plan:** none — the prompt-builder skeleton plan is
+  archived at
+  [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
+  the next promotion-state slice can open a fresh plan if it crosses the
+  plan threshold.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 69
-  lands spec 0016's typed active-tool config surface:
-  `runtime.prompt.active_tools` now parses into
-  `config::RuntimeConfig::prompt.active_tools` as either
-  `"defaults"` (`use_defaults=true`) or an explicit tool-name
-  allowlist (`use_defaults=false`, `tool_names` preserving author
-  order). `config.example.json` documents the default sentinel, and
-  `test-config` covers defaults, explicit allowlists, empty explicit
-  allowlists, and malformed prompt blocks / active-tool shapes. The
-  config layer intentionally validates only JSON shape and non-empty
-  names; it does not resolve names against `tool::Registry`, because
-  `oran-config` sits below `oran-tool`. The remaining 0016 work is
-  prompt-builder integration that consumes this typed config and
-  per-session promotion state before/alongside the first 0017
-  fake-provider agent loop tracer bullet. Slice 68
-  landed spec 0016's registry-owned deferred-tool lookup primitive:
-  `register_builtins` now includes the non-deferred `tool.search`
-  built-in, categorized as `runtime`, with no required runtime
-  capability. The handler searches the current `Registry::catalog()`
-  snapshot by exact `name`, exact `category`, and/or declared
-  `capability`; `Registry::dispatch` sets and restores the non-owning
-  `DispatchContext::registry` pointer so the handler can inspect the
-  live dispatching registry without capturing a self-reference inside a
-  movable registry value. At least one selector is required and supplied
-  selectors are ANDed. Successful calls return a text fallback plus
-  structured `Output::data_json` shaped as
-  `{kind:"tool_search", query, match_count, matches[]}`, where each
-  match carries `name`, `description`, nested `input_schema`,
-  `required_capabilities`, `deferred`, and nullable `category`;
-  `Output::usage.match_count` mirrors the number of matches. This is
-  deliberately not the per-session promotion side effect yet: there is
-  no `oran-agent::SessionState` or prompt builder to own LRU/TTL
-  promotions, so prompt-builder integration and session promotion remain
-  future 0016/0017 work. Slice 67
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 70
+  opens the `oran-prompt` implementation with
+  `prompt::Builder`, `BuilderInputs`, `CacheSection`, `RenderedPrompt`,
+  and `BuilderOptions`. The builder consumes
+  `config::PromptActiveToolsConfig` and delegates schema/catalog bytes to
+  `tool::CatalogRenderer`: section 2 contains full-schema active tools
+  selected by `"defaults"` or an explicit allowlist, section 3 contains
+  compact deferred/index rows for every other registered tool, and missing
+  explicit active names fail as `ErrorKind::not_found` at the prompt layer
+  where the registry/catalog snapshot is available. It emits the seven
+  `prompt-design.md` sections with stable content hashes, cache-versioned
+  prefix hashing over sections 1-6, prefix byte count, and exactly one
+  cache breakpoint before section 7. `test-prompt` covers default active
+  selection, explicit allowlists, explicit promotion of a deferred tool,
+  missing-tool errors, tail-independent prefix hashes, and cache-version
+  invalidation; `bench-prompt` compares the default active set against an
+  explicit two-tool active subset. Remaining spec-0016 work is
+  session-local promotion state and the agent-owned prompt-cache stability
+  fixture; the first spec-0017 fake-provider loop can now call the builder
+  instead of inventing prompt bytes. Slice 69
+  landed the typed `runtime.prompt.active_tools` config surface, and slice
+  68 landed the registry-owned non-deferred `tool.search` lookup primitive.
+  Slice 67
   closes spec 0014's audit usage fan-out for the pre-scheduler direct
   dispatch path: `permission::AuditSink` now exposes
   `update_metadata(AuditMetadataUpdate)`, `RecordingAuditSink` and
@@ -220,7 +210,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 | ----- | ----- |
 | **A** | *(none yet — pre-v1)* |
 | **B** | Architecture docs, Build system, Async model, Security defaults, Supply chain |
-| **C** | Compile-time discipline, Tests, Benches, IO, Storage, Config, Bootstrap, Provider system, Tool registry, Memory tiers, Permissions, Hooks, Channels, Orchestration, Automation, Web UI, CLI, Static analysis |
+| **C** | Compile-time discipline, Tests, Benches, IO, Storage, Config, Bootstrap, Provider system, Tool registry, Prompt builder, Memory tiers, Permissions, Hooks, Channels, Orchestration, Automation, Web UI, CLI, Static analysis |
 | **D** | Skills, Observability |
 
 ## Latest Library Surfaces
@@ -233,6 +223,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-permission`: 88 cases / 403 assertions.
 - `oran-hook`: 17 cases / 109 assertions.
 - `oran-tool`: 166 cases / 1588 assertions.
+- `oran-prompt`: 6 cases / 71 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 153 assertions.
 

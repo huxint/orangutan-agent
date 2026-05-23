@@ -66,29 +66,28 @@ The lesson from `orangutan/` is that the *interesting* features live in the plat
 The v2 design promotes each of these from "feature" to "first-class subsystem with its
 own library, its own tests, its own bench, its own design doc."
 
-## Prompt Assembly (deferred)
+## Prompt Assembly
 
-> **Status:** placeholder. The `oran-agent` library does not exist yet; this
-> section is the agreed home for prompt-builder decisions when it lands. The
-> invariants — section order, byte-identical cached prefix, no clocks / per-call
-> state in sections (1)–(6) — are already canonical in
-> [`../rules/prompt-design.md`](../rules/prompt-design.md); this section will
-> record *which patterns from*
-> <https://github.com/Piebald-AI/claude-code-system-prompts> *we adopted or
-> rejected*, with a one-line reason each.
+> **Status (slice 70, 2026-05-24):** `oran-prompt` now owns the first
+> deterministic `prompt::Builder` skeleton. `oran-agent` still does not exist,
+> but the future loop can call the builder instead of inventing prompt bytes.
+> The invariants — section order, byte-identical cached prefix, no clocks /
+> per-call state in sections (1)–(6) — remain canonical in
+> [`../rules/prompt-design.md`](../rules/prompt-design.md).
 
 The agent loop owns:
 
-- **System preamble builder** — sections (1) and (6) of the
+- **System preamble / overlay inputs** — sections (1) and (6) of the
   [`prompt-design.md` CacheSection order](../rules/prompt-design.md). Produces
-  a `CacheSection` whose bytes depend only on agent identity, model target,
-  capability set, and the active mode — never on the wall clock or the current
-  iteration.
+  `system_preamble` and `per_agent_overlay` sections whose bytes must depend only
+  on stable agent/model/config inputs — never on the wall clock or the current
+  iteration. The slice-70 skeleton accepts those bytes as inputs; `oran-agent`
+  will own the real preamble text.
 - **Tool catalog renderer** — section (2). Will walk `tool::Registry::catalog()`,
-  filter the full-schema active set through
-  `config::RuntimeConfig::prompt.active_tools`, and render each selected
-  `core::ToolDef` to a deterministic block (name + one-line description +
-  JSON Schema). Memoized per `ToolDef`; see [`tool-runtime.md`](tool-runtime.md).
+  filter the full-schema active set through `config::RuntimeConfig::prompt.active_tools`,
+  and render each selected `core::ToolDef` to a deterministic block (name +
+  one-line description + JSON Schema) by delegating to `tool::CatalogRenderer`.
+  Memoized per `ToolDef`; see [`tool-runtime.md`](tool-runtime.md).
 - **Deferred-tool index renderer** — section (3). Compact name + one-line
   description listing; full schema arrives via `tool.search`. See
   [`tool-runtime.md`](tool-runtime.md) "Deferred Tools".
@@ -100,10 +99,16 @@ The agent loop owns:
 - **Conversation tail assembler** — section (7), the only intentionally
   dynamic block. Cache breakpoint sits between (6) and (7).
 
-When the first prompt builder lands, append: which Piebald-AI shape was
-adopted for each section, which `CacheSection` IDs were chosen, what
-`cache_version` numbers were minted, and a pointer to the
-`bench/oran-agent/prompt_cache_hit_rate.cpp` fixture this builder must pass.
+Slice 70 adopts the Piebald Claude Code prompt corpus' stable catalog shape:
+one deterministic full-schema block per active tool plus compact discovery rows
+for deferred tools. It rejects per-invocation status, timing, and inline
+conversation-progress bytes in sections (1)–(6). The minted section IDs are
+`system_preamble`, `tool_catalog`, `deferred_tools`, `skills_catalog`,
+`memory_framing`, `per_agent_overlay`, and `conversation_tail`; all start at
+`cache_version=1` through `prompt::SectionVersions`. `bench-prompt` now compares
+default active-set assembly against an explicit active subset. The
+agent-owned `bench/oran-agent/prompt_cache_hit_rate.cpp` fixture remains future
+work because session promotion and provider cache mapping still need `oran-agent`.
 
 ## Cross-Cutting Concerns
 

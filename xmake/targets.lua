@@ -37,6 +37,7 @@ oran_lib("config", { "oran-core", "oran-storage" }, { "nlohmann_json", "re2" })
 oran_lib("permission", { "oran-core", "oran-config", "oran-storage", "oran-async" }, { "re2", "libsodium" })
 oran_lib("hook", { "oran-core", "oran-async" }, {})
 oran_lib("tool", { "oran-core", "oran-async", "oran-io", "oran-permission", "oran-hook" }, { "nlohmann_json" })
+oran_lib("prompt", { "oran-core", "oran-async", "oran-config", "oran-tool" }, {})
 oran_lib("cli", { "oran-core" }, {})
 oran_lib("bootstrap", { "oran-core", "oran-async", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-tool", "oran-cli" }, {})
 

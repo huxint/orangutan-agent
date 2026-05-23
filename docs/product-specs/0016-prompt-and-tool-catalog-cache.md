@@ -26,8 +26,8 @@ modes appear at the same time:
   availability*.
 
 This spec defines the prompt + tool-catalog cache as a first-class
-subsystem owned by `oran-prompt` (a library that does not yet exist),
-consumed by `oran-agent` and the provider adapters. The rule provides
+subsystem owned by `oran-prompt` and consumed by `oran-agent` plus the
+provider adapters. The rule provides
 the *invariants*; this spec is the *what ships and how it is verified*.
 
 ## Scope (v1)
@@ -35,16 +35,20 @@ the *invariants*; this spec is the *what ships and how it is verified*.
 The MVP delivers the smallest builder that lets `oran-agent` send a
 cacheable prompt with a deterministic tool catalog. Nothing else.
 
-- **`oran-prompt` library skeleton**. New library; depends on
-  `oran-core` (for `core::ToolDef`, `core::Message`, `core::Capability`),
-  `oran-tool` (for `Registry::catalog()` snapshot), and `oran-memory`
-  (forward-declared; populated when memory framing arrives).
+- **`oran-prompt` library skeleton**.
+  - **Status (slice 70, 2026-05-24):** the library exists with
+    `prompt::Builder`, `BuilderInputs`, `BuilderOptions`, `CacheSection`,
+    `RenderedPrompt`, `SectionVersions`, `test-prompt`, and `bench-prompt`.
+    It depends on `oran-core` (messages / tool definitions), `oran-async`
+    (awaitable contract), `oran-config` (active-tool selector), and
+    `oran-tool` (catalog bytes via `CatalogRenderer`). Memory and skill
+    renderers are still plain section inputs until their libraries land.
 - **`prompt::CacheSection`**:
   ```cpp
   struct CacheSection {
     std::string                   id;             // stable, human-readable
     std::string                   content;        // raw bytes
-    std::uint64_t                 content_hash;   // xxh3 of content, computed at build
+    std::uint64_t                 content_hash;   // stable hash of content, computed at build
     std::uint32_t                 cache_version;  // bumped on content-rule change
     bool                          is_breakpoint;  // last section before tail when true
   };
@@ -56,25 +60,24 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
   "Cache Key Versioning".
 - **`prompt::Builder`**:
   ```cpp
+  struct BuilderInputs {
+    std::string_view                 system_preamble;
+    std::span<const core::ToolDef>   tool_catalog;
+    config::PromptActiveToolsConfig  active_tools;
+    std::string_view                 skills_catalog;
+    std::string_view                 memory_framing;
+    std::string_view                 per_agent_overlay;
+    std::span<const core::Message>   conversation_tail;
+  };
+
   class Builder {
    public:
-    struct Inputs {
-      core::Identity                 identity;
-      provider::ModelTarget          model;
-      tool::CatalogSnapshot          tool_catalog;
-      skill::CatalogSnapshot         skill_catalog;
-      memory::Framing                memory_framing;
-      std::vector<core::Message>     conversation_tail;
-      std::optional<std::string>     per_agent_overlay;
-    };
-
-    Awaitable<core::Result<RenderedPrompt>>
-    build(Inputs) const;
+    Awaitable<core::Result<RenderedPrompt>> build(BuilderInputs);
   };
 
   struct RenderedPrompt {
     std::vector<CacheSection> sections;  // ordered 1..7 per the rule
-    std::uint64_t             prefix_hash; // hash of sections 1..6 concatenated
+    std::uint64_t             prefix_hash; // cache-versioned hash of sections 1..6
     std::size_t               prefix_bytes;
   };
   ```
@@ -82,7 +85,7 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
   `RenderedPrompt` and maps to vendor cache shape per
   `api-portability.md`.
 - **Deterministic tool-catalog renderer**:
-  - **Status (slices 59 + 68 + 69):** the renderer exists in
+  - **Status (slices 59 + 68 + 69 + 70):** the renderer exists in
     `oran-tool` as `tool::CatalogRenderer`, alongside the new
     `ToolDef::deferred` and `ToolDef::category` metadata. It renders
     active full-schema blocks and deferred name/description rows from a
@@ -92,8 +95,8 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
     block bytes plus renderer version, with aggregate stats. Slice 68 adds
     the registry-owned `tool.search` lookup primitive in `oran-tool`.
     Slice 69 adds the typed `runtime.prompt.active_tools` config surface in
-    `oran-config`; the remaining bullets below that mention `oran-prompt`
-    consumption and promotion state are still unimplemented.
+    `oran-config`; slice 70 consumes that selector in `prompt::Builder`.
+    Session promotion state is still unimplemented.
   - Pure function of `ToolDef`:
     `(name, description, input_schema, required_capabilities,
     category)`.
@@ -116,14 +119,15 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
     `"defaults"` to use the list above. Operators who add a new
     coding tool will be able to promote it without touching code once
     the prompt builder consumes this config.
-  - **Status (slice 69, 2026-05-24):** `oran-config` parses this field into
+  - **Status (slice 70, 2026-05-24):** `oran-config` parses this field into
     `config::RuntimeConfig::prompt.active_tools`. The `"defaults"`
     sentinel sets `use_defaults=true`; an array preserves the authored
     tool-name allowlist with `use_defaults=false`; empty explicit
     allowlists are valid. The loader rejects malformed shapes and empty
     tool names but does not resolve names against `tool::Registry`, because
-    config is below the tool layer. The prompt builder still needs to
-    consume this typed surface when `oran-prompt` lands.
+    config is below the tool layer. `prompt::Builder` resolves explicit
+    names against the tool catalog snapshot and returns `ErrorKind::not_found`
+    for missing names.
 - **`tool.search` built-in** (the *non-deferred* lookup tool; future
   session promotion consumes its matches):
   - **Status (slice 68, 2026-05-24):** the registry lookup primitive is
@@ -248,16 +252,23 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
    `runtime.prompt.active_tools = ["file.read", "file.search"]`
    produces a section 2 that contains *only* those two tools; every
    other registered tool moves to section 3. Parser status: slice 69
-   validates both config shapes and exposes the typed data; the section 2
-   rendering behaviour remains part of the first prompt-builder slice.
+   validates both config shapes and exposes the typed data; builder status:
+   slice 70 renders the explicit active set and validates missing names in
+   `test-prompt`.
 10. **Prompt-cache stability bench.** Running
     `bench/oran-agent/prompt_cache_hit_rate.cpp` against three
     fixtures (small catalog, large catalog, with-promotion) produces
     `prefix_hash` identical across iterations 2..N for every
-    fixture. CI fails on any drift.
+    fixture. CI fails on any drift. Slice 70 adds the precursor
+    `bench-prompt` default-vs-explicit active-set assembly bench; the
+    agent fixture remains future work.
 11. **`tests/prompt/`** ≥ 90% coverage of the matrix
     (section × deterministic-input × cache_version × promotion
-    state × breakpoint placement × config override).
+    state × breakpoint placement × config override). Slice 70 covers
+    section order, breakpoint count, cache-version invalidation,
+    tail-independent prefix hashes, default/explicit config overrides,
+    and explicit promotion of a deferred tool; session promotion state
+    remains future work.
 
 ## Design Doc Cross-References
 
@@ -322,11 +333,12 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
 
 ```sh
 xmake build oran-prompt
-xmake test test-prompt                    # builder determinism + promotion + breakpoint
+xmake run test-prompt                     # builder determinism + explicit promotion + breakpoint
 xmake run test-config                     # active-tool config parser contract
-xmake build bench-oran-agent
+xmake run bench-prompt                    # prompt-owned precursor bench
+xmake build bench-oran-agent              # future agent cache-hit-rate fixture
 xmake run bench-oran-agent prompt_cache_hit_rate
-xmake run orangutan -- --explain-prompt   # planned debug surface; lands with builder
+xmake run orangutan -- --explain-prompt   # planned debug surface; lands with agent/prompt wiring
 ```
 
 ## Out-of-Band Cross-Cuts
@@ -339,10 +351,12 @@ xmake run orangutan -- --explain-prompt   # planned debug surface; lands with bu
   rationale per choice.
 - `docs/rules/prompt-design.md` "Enforcement" — `scripts/
   check-prompt-preamble` static grep tracked under the 2026-05-17
-  prompt tech-debt row lands in the same slice as v1, since the
-  first stable preamble template now exists.
+  prompt tech-debt row lands when `oran-agent` adds the first stable
+  preamble template. Slice 70's builder accepts preamble bytes but does
+  not define the final text.
 - `docs/exec-plans/tech-debt-tracker.md` — the 2026-05-17
-  `bench/oran-agent/prompt_cache_hit_rate.cpp` row closes when v1
-  ships; the `check-prompt-preamble` row closes in the same arc.
+  `bench/oran-agent/prompt_cache_hit_rate.cpp` row closes when the
+  agent-owned prompt-cache fixture ships; `bench-prompt` is only the
+  prompt-owned precursor.
 - `docs/STATUS.md` — `oran-prompt` reaches `C` (per
   [`QUALITY_SCORE.md`](../QUALITY_SCORE.md)) when v1 lands.

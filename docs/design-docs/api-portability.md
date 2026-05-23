@@ -174,8 +174,9 @@ All adapters support streaming when the vendor supports it. The contract:
 
 ## Caching
 
-Prompt caching is **first-class**. The agent's prompt builder produces a list of
-`CacheSection`s, each with a cache key. Adapters map these to vendor cache APIs:
+Prompt caching is **first-class**. `prompt::Builder` produces a
+`RenderedPrompt` with ordered `CacheSection`s, per-section content hashes,
+`prefix_hash`, and `prefix_bytes`. Adapters map these to vendor cache APIs:
 
 - Anthropic: `cache_control: { type: "ephemeral" }` blocks.
 - OpenAI Responses: prompt prefix hashing where available.
@@ -193,6 +194,8 @@ Each section carries a `cache_version` integer. When upstream caching is
 provider-managed (Anthropic), the key is opaque; when we need to invalidate (e.g., a
 skill activated/deactivated), we bump the version. The legacy code's string-concat
 cache key is replaced by a tuple `(section_id, content_hash, version)`.
+`prompt::Builder` includes each section version in `prefix_hash`, so a version
+bump invalidates the cached prefix even when content bytes are unchanged.
 
 ## Configuration Shape
 

@@ -460,7 +460,7 @@ Some tools are **deferred** — present in the catalog but not surfaced to the L
 explicitly looked up via `tool.search`. This pattern compresses the prompt without
 losing capability.
 
-> **Status (slice 69, 2026-05-24):** `core::ToolDef` carries
+> **Status (slice 70, 2026-05-24):** `core::ToolDef` carries
 > `deferred` and `category`, and `tool::CatalogRenderer` can split a
 > `Registry::catalog()` snapshot into sorted active full-schema blocks and
 > sorted deferred name/description rows. `Registry::catalog()` still returns
@@ -470,16 +470,17 @@ losing capability.
 > required capability and returns text plus structured `Output::data_json`
 > containing matched tool definitions. `oran-config` now parses
 > `runtime.prompt.active_tools` as either `"defaults"` or an explicit
-> allowlist; prompt-builder consumption and per-session promotion state
-> remain future `oran-agent` / `oran-prompt` work.
+> allowlist. `prompt::Builder` now consumes that typed selector and feeds a
+> selected catalog snapshot into `tool::CatalogRenderer`; per-session promotion
+> state remains future `oran-agent` / `oran-prompt` work.
 
 Implementation:
 
 - `ToolDef::deferred = true` marks the tool for deferred rendering.
   Today this is consumed by `tool::CatalogRenderer`; a future
   `deferred_catalog()` convenience may expose the filtered snapshot.
-- The default system prompt builder lists the deferred tool *names + one-line descriptions*
-  in a compact "Deferred Tools" section.
+- `prompt::Builder` lists the deferred tool *names + one-line descriptions*
+  in section 3's compact deferred-tool index.
 - `tool.search` is a non-deferred tool that returns the full schema on demand.
 - A future agent session keeps a per-agent set of "promoted" deferred tools
   whose full schema is now in the prompt; the prompt builder honors it.
@@ -601,7 +602,7 @@ criteria live in
 
 ## Catalog Renderer
 
-`tool::CatalogRenderer` is the pre-`oran-prompt` renderer for prompt-facing
+`tool::CatalogRenderer` is the registry-owned renderer for prompt-facing
 tool-catalog bytes. It accepts a `core::ToolDef` snapshot, sorts by tool
 name, renders non-deferred tools as full-schema blocks, and renders
 deferred tools as compact name/description rows. Rendering a block depends
@@ -618,10 +619,10 @@ entries, matching spec 0012's bounded-state inventory; setting
 `max_cached_blocks = 0` disables memoisation rather than creating an
 unbounded cache. The public
 `ToolCatalogCacheStats` shape exposes only aggregate counters and the
-renderer version, never tool schemas or cache keys. `oran-prompt` will
-consume this renderer when the prompt builder lands; `oran-config` already
-exposes the active-tool selector, while prompt-builder consumption and
-promotion state remain future work. The registry-owned lookup half of the
+renderer version, never tool schemas or cache keys. `oran-prompt` consumes
+this renderer for sections 2 and 3; it owns the active/deferred selection
+from `runtime.prompt.active_tools`, while promotion state remains future
+work. The registry-owned lookup half of the
 deferred-tool design is shipped as `tool.search`: it accepts
 `{name?, category?, capability?}`, requires at least one selector, ANDs
 provided selectors, and returns `{kind:"tool_search", query,
