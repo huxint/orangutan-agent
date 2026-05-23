@@ -687,7 +687,15 @@ Current and future policy:
   `files_scanned`, and `bytes_read`. `Output::usage` carries
   `bytes_read` (cumulative scanned file bytes), `files_touched`
   (non-binary scanned files), `match_count` (post-truncation), and the
-  `truncated` cap flag.
+  `truncated` cap flag. Slice 64 migrates `directory.list`: handlers
+  keep the `<path>:<kind>:<size_bytes or '-'>` text rendering, and also
+  store a serialized JSON object in `Output::data_json` with
+  `kind=directory_list`, `path`, `include_hidden`, `max_entries`,
+  `entry_count`, and an `entries[]` array of `{name, path, kind,
+  size_bytes}` (JSON null `size_bytes` for non-regular kinds);
+  `Output::usage` carries `files_touched=1` (the directory itself) and
+  `match_count=entry_count`. Every filesystem built-in in `oran-tool`
+  has now completed its v1 migration to the structured envelope.
 - Slice 61 migrates the current mutation built-ins to fill counters:
   `file.write` reports `bytes_written` and `files_touched`; `file.edit`
   reports `bytes_read`, `bytes_written`, `files_touched`, and
@@ -698,9 +706,8 @@ Current and future policy:
   supports structured tool-result bytes. Anthropic Messages, OpenAI
   Responses, Gemini, and OpenAI-compatible mappings remain spec-0014 follow-up
   work because `oran-provider` does not exist yet.
-- Scheduler byte caps, audit usage fan-out, raw `data_json` hook redaction for
-  trusted-local sinks, and structured payload migration for `directory.list`
-  remain downstream spec-0014 items.
+- Scheduler byte caps, audit usage fan-out, and raw `data_json` hook
+  redaction for trusted-local sinks remain downstream spec-0014 items.
 - The `tool::parse_input<T>` helper tracked under the deep-review backlog
   (`exec-plans/tech-debt-tracker.md`) lands in the same arc so handlers
   stop hand-rolling their JSON parsers.

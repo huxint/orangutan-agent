@@ -3740,6 +3740,157 @@ TEST_CASE("directory.list rejects malformed input as invalid_argument", "[unit][
 }
 
 // ---------------------------------------------------------------------------
+// Slice 64 — `directory.list` structured `Output::data_json` + usage counters.
+// Third built-in step of spec 0014's text -> structured migration (after
+// slice 62 `file.read` and slice 63 `file.search`). The text rendering and
+// every prior `directory.list` test pass verbatim. These cases pin the new
+// JSON shape and usage so provider adapters and the web UI can render a
+// typed entries array without re-parsing `<path>:<kind>:<size>` lines.
+
+TEST_CASE("directory.list happy path fills data_json with structured entries",
+          "[unit][tool][directory_list][structured]") {
+  TempDir dir{"list-structured-happy"};
+  dir.write_file("a.txt", "alpha");
+  dir.write_file("b.txt", "be");
+  dir.write_file("nested/inner.txt", "ignored at top level");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_directory_list(registry).has_value());
+    auto rules = directory_list_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"("})";
+    auto result = co_await registry.dispatch(tool::kDirectoryListName, input, ctx);
+    REQUIRE(result.has_value());
+
+    // Text fallback unchanged.
+    REQUIRE(result->text.contains(dir.child("a.txt").string() + ":regular_file:5"));
+    REQUIRE(result->text.contains(dir.child("b.txt").string() + ":regular_file:2"));
+    REQUIRE(result->text.contains(dir.child("nested").string() + ":directory:-"));
+
+    REQUIRE(result->data_json.has_value());
+    const auto data = nlohmann::json::parse(*result->data_json);
+    REQUIRE(data["kind"] == "directory_list");
+    REQUIRE(data["path"] == dir.string());
+    REQUIRE(data["include_hidden"] == false);
+    REQUIRE(data["max_entries"] == 256);
+    REQUIRE(data["entry_count"] == 3);
+    REQUIRE(data["entries"].is_array());
+    REQUIRE(data["entries"].size() == 3);
+
+    // io::list_directory sorts by path, so the array order is stable.
+    REQUIRE(data["entries"][0]["name"] == "a.txt");
+    REQUIRE(data["entries"][0]["path"] == dir.child("a.txt").string());
+    REQUIRE(data["entries"][0]["kind"] == "regular_file");
+    REQUIRE(data["entries"][0]["size_bytes"] == 5);
+
+    REQUIRE(data["entries"][1]["name"] == "b.txt");
+    REQUIRE(data["entries"][1]["kind"] == "regular_file");
+    REQUIRE(data["entries"][1]["size_bytes"] == 2);
+
+    // The nested directory entry surfaces with size_bytes=null (JSON null,
+    // not the literal `-` from the text rendering).
+    REQUIRE(data["entries"][2]["name"] == "nested");
+    REQUIRE(data["entries"][2]["kind"] == "directory");
+    REQUIRE(data["entries"][2]["size_bytes"].is_null());
+
+    REQUIRE(result->usage.files_touched.has_value());
+    REQUIRE(*result->usage.files_touched == std::uint32_t{1});
+    REQUIRE(result->usage.match_count.has_value());
+    REQUIRE(*result->usage.match_count == std::uint64_t{3});
+    REQUIRE_FALSE(result->usage.truncated);
+  });
+}
+
+TEST_CASE("directory.list empty directory emits an empty entries array", "[unit][tool][directory_list][structured]") {
+  TempDir dir{"list-structured-empty"};
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_directory_list(registry).has_value());
+    auto rules = directory_list_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"("})";
+    auto result = co_await registry.dispatch(tool::kDirectoryListName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "no entries");
+
+    REQUIRE(result->data_json.has_value());
+    const auto data = nlohmann::json::parse(*result->data_json);
+    REQUIRE(data["kind"] == "directory_list");
+    REQUIRE(data["entry_count"] == 0);
+    REQUIRE(data["entries"].is_array());
+    REQUIRE(data["entries"].empty());
+
+    REQUIRE(*result->usage.files_touched == std::uint32_t{1});
+    REQUIRE(*result->usage.match_count == std::uint64_t{0});
+  });
+}
+
+TEST_CASE("directory.list include_hidden round-trips through data_json", "[unit][tool][directory_list][structured]") {
+  TempDir dir{"list-structured-hidden"};
+  dir.write_file("visible.txt", "v");
+  dir.write_file(".hidden", "h");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_directory_list(registry).has_value());
+    auto rules = directory_list_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    auto opt_in = co_await registry.dispatch(tool::kDirectoryListName,
+                                             std::string{R"({"path":")"} + dir.string() + R"(","include_hidden":true})",
+                                             ctx);
+    REQUIRE(opt_in.has_value());
+    REQUIRE(opt_in->data_json.has_value());
+    const auto data = nlohmann::json::parse(*opt_in->data_json);
+    REQUIRE(data["include_hidden"] == true);
+    REQUIRE(data["entry_count"] == 2);
+
+    // The hidden entry is now in the structured payload, in sort order
+    // (dotfile sorts before non-dot ASCII).
+    const auto names = std::vector<std::string>{
+        data["entries"][0]["name"].get<std::string>(),
+        data["entries"][1]["name"].get<std::string>(),
+    };
+    REQUIRE(std::ranges::contains(names, std::string{".hidden"}));
+    REQUIRE(std::ranges::contains(names, std::string{"visible.txt"}));
+  });
+}
+
+TEST_CASE("directory.list max_entries=1 honors the cap before failing on the second entry",
+          "[unit][tool][directory_list][structured]") {
+  TempDir dir{"list-structured-cap"};
+  dir.write_file("a", "1");
+  dir.write_file("b", "2");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_directory_list(registry).has_value());
+    auto rules = directory_list_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    // Two entries with a cap of two still succeeds (the cap is a `>` check
+    // inside `io::list_directory`); structured payload should reflect that.
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"(","max_entries":2})";
+    auto result = co_await registry.dispatch(tool::kDirectoryListName, input, ctx);
+    REQUIRE(result.has_value());
+
+    REQUIRE(result->data_json.has_value());
+    const auto data = nlohmann::json::parse(*result->data_json);
+    REQUIRE(data["max_entries"] == 2);
+    REQUIRE(data["entry_count"] == 2);
+    REQUIRE(*result->usage.match_count == std::uint64_t{2});
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Slice 30 — `file.delete` built-in. Thin wrapper over `oran-io::delete_file`.
 // Capability is the existing `core::Capability::delete_path` (first built-in
 // that actually requires it). Tests cover: registration surface, happy

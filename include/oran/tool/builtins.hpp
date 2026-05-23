@@ -118,6 +118,12 @@ inline constexpr std::string_view kFileDeleteName{"file.delete"};
 /// is a decimal integer for regular files and the literal `-` for every
 /// other kind. The call returns an `io` error when the directory has
 /// strictly more than `max_entries` entries — raise the cap and retry.
+/// Successful calls also fill `Output::data_json` with `kind`, `path`,
+/// `include_hidden`, `max_entries`, `entry_count`, and an `entries[]`
+/// array of `{name, path, kind, size_bytes}` (size_bytes is JSON null
+/// for non-regular files), and fill `Output::usage` with
+/// `files_touched=1` (the directory itself) and `match_count`
+/// (the entry count).
 [[nodiscard]] core::Result<void> register_directory_list(Registry& registry);
 
 /// Register the `file.delete` tool. Deletes the regular file at `path`

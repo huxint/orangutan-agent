@@ -11,6 +11,16 @@
 // `DispatchContext::workspace` is supplied so the listing cannot escape the
 // workspace via traversal or a root-side symlink; the underlying
 // `oran-io::list_directory` semantics are unchanged.
+//
+// Slice 64 (2026-05-24) closes spec 0014's third built-in migration step
+// (after slice 62 `file.read` and slice 63 `file.search`): successful calls
+// keep the existing `<path>:<kind>:<size_bytes or '-'>` text rendering and
+// also fill `Output::data_json` with `{kind:"directory_list", path,
+// include_hidden, max_entries, entry_count, entries[]}`, where each entry
+// carries `{name, path, kind, size_bytes}`. `Output::usage` is filled with
+// `files_touched=1` (the directory itself) and `match_count` (entry
+// count) so audit fan-out and the future scheduler can see directory-walk
+// cost without parsing prose.
 
 #include <oran/tool/builtins.hpp>
 
@@ -114,6 +124,38 @@ struct ParsedInput {
   return out;
 }
 
+/// Build the structured `Output::data_json` payload that mirrors the text
+/// rendering but exposes a typed entries array. `size_bytes` is a JSON
+/// integer for regular files and JSON null otherwise — the text path uses
+/// the literal `-` for the same case, but null is the natural JSON shape so
+/// callers do not have to parse a sentinel.
+[[nodiscard]] std::string
+format_data_json(std::string_view path, const ParsedInput& parsed, const std::vector<io::DirectoryEntry>& entries) {
+  nlohmann::json entry_array = nlohmann::json::array();
+  for (const auto& entry : entries) {
+    nlohmann::json size_value = nullptr;
+    if (entry.size_bytes.has_value()) {
+      size_value = *entry.size_bytes;
+    }
+    entry_array.push_back(nlohmann::json{
+        {"name", entry.name},
+        {"path", entry.path},
+        {"kind", core::enum_name(entry.kind)},
+        {"size_bytes", std::move(size_value)},
+    });
+  }
+
+  return nlohmann::json{
+      {"kind", "directory_list"},
+      {"path", std::string{path}},
+      {"include_hidden", parsed.include_hidden},
+      {"max_entries", parsed.max_entries},
+      {"entry_count", entries.size()},
+      {"entries", std::move(entry_array)},
+  }
+      .dump();
+}
+
 [[nodiscard]] async::Awaitable<core::Result<Output>> directory_list_handler(std::string_view input_json,
                                                                             DispatchContext& ctx) {
   auto parsed = parse_input(input_json);
@@ -135,12 +177,24 @@ struct ParsedInput {
       .include_hidden = parsed->include_hidden,
       .max_entries = parsed->max_entries,
   };
+  const auto resolved_path = parsed->path;
   auto entries = co_await io::list_directory(ctx.executor, std::move(parsed->path), options);
   if (!entries) {
     co_return std::unexpected(std::move(entries).error());
   }
 
-  co_return Output{.text = render(*entries)};
+  auto text = render(*entries);
+  auto data_json = format_data_json(resolved_path, *parsed, *entries);
+  const auto match_count = static_cast<std::uint64_t>(entries->size());
+  co_return Output{
+      .text = std::move(text),
+      .data_json = std::move(data_json),
+      .usage =
+          ToolUsage{
+              .files_touched = 1,
+              .match_count = match_count,
+          },
+  };
 }
 
 }  // namespace
@@ -153,7 +207,11 @@ core::Result<void> register_directory_list(Registry& registry) {
                      "Returns one `<path>:<kind>:<size_bytes or '-'>` line per entry, sorted by path; "
                      "`no entries` when the directory is empty. `kind` is one of "
                      "`regular_file` | `directory` | `symlink` | `other`. Errors with `io` if the "
-                     "directory has more entries than `max_entries`; raise the cap and retry.",
+                     "directory has more entries than `max_entries`; raise the cap and retry. "
+                     "Successful calls also fill `data_json` with kind, path, include_hidden, "
+                     "max_entries, entry_count, and an `entries[]` array of "
+                     "`{name, path, kind, size_bytes}` (size_bytes is null for non-regular files); "
+                     "`usage` reports `files_touched=1` (the directory) and `match_count` (entry count).",
       .input_schema_json = std::string{kDirectoryListSchema},
       .required_capabilities = {core::Capability::list_directory},
       .deferred = false,

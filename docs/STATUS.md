@@ -7,17 +7,30 @@
 
 ## Snapshot
 
-- **Slice:** 63 (`xmake run orangutan` reports slice 63)
+- **Slice:** 64 (`xmake run orangutan` reports slice 64)
 - **Last completed history:**
-  [`histories/2026-05/20260524-0420-tool-file-search-structured-output.md`](histories/2026-05/20260524-0420-tool-file-search-structured-output.md)
+  [`histories/2026-05/20260524-0540-tool-directory-list-structured-output.md`](histories/2026-05/20260524-0540-tool-directory-list-structured-output.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 63
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 64
   continues spec 0014's built-in structured-output migration for
-  `file.search`: the handler keeps the existing
+  `directory.list`: the handler keeps the existing
+  `<path>:<kind>:<size_bytes or '-'>` text rendering, now fills
+  `Output::data_json` with a `{kind:"directory_list", path,
+  include_hidden, max_entries, entry_count, entries[]}` payload
+  (each entry carries `{name, path, kind, size_bytes}` with JSON null
+  for non-regular kinds), and fills `Output::usage.files_touched=1`
+  plus `match_count=entry_count` so audit fan-out can see directory-walk
+  cost without parsing prose. With `file.read` (slice 62),
+  `file.search` (slice 63), and `directory.list` (slice 64) migrated
+  and the mutation tools holding measured usage counters from slice 61,
+  the built-in side of spec 0014's structured-output migration is done.
+  Provider adapter mapping, scheduler byte caps, audit usage fan-out,
+  and hook raw-data redaction remain downstream spec-0014 items.
+  Slice 63 migrated `file.search`: the handler keeps the existing
   `path:line:text` text rendering (with the slice-47 byte-cap and
   slice-20 match-cap trailing summary), now fills `Output::data_json`
   with a `{kind:"file_search", path, pattern, regex, matches[],
@@ -25,8 +38,7 @@
   bytes_read}` payload, and fills `Output::usage.bytes_read`
   (cumulative scanned file bytes), `files_touched` (non-binary scanned
   file count), `match_count` (post-truncation match count), and the
-  `truncated` cap flag. The next built-in is `directory.list`
-  (spec 0014 migration list step 3). Slice 62
+  `truncated` cap flag. Slice 62
   continues spec 0014's built-in structured-output migration for
   `file.read`: the tool keeps the spec-0011 text header/body fallback,
   now fills `Output::data_json` with a JSON object carrying `kind`,
@@ -142,7 +154,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 24 cases / 171 assertions.
 - `oran-permission`: 86 cases / 390 assertions.
 - `oran-hook`: 15 cases / 97 assertions.
-- `oran-tool`: 152 cases / 1415 assertions.
+- `oran-tool`: 156 cases / 1470 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 153 assertions.
 

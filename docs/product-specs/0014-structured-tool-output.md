@@ -46,21 +46,26 @@ caches all consume one shape.
 The MVP delivers a forward-compatible envelope that today's text-only
 handlers can adopt without churning every callsite at once.
 
-> **Status (slice 63, 2026-05-24):** the base envelope ships in
+> **Status (slice 64, 2026-05-24):** the base envelope ships in
 > `oran-tool`. `Output::text_only(...)` preserves the existing text path,
 > `Output::error(...)` marks structured-capable errors, `ToolAfterPayload`
 > copies `Output::usage` on successful dispatch, `file.read` carries its
 > requested text plus range/fingerprint tuple in serialized `data_json`
 > while keeping the spec-0011 text fallback, the current mutation built-ins
 > fill measured usage counters while keeping `data_json=nullopt` for the v1
-> migration path, and `file.search` now fills serialized `data_json` with
+> migration path, `file.search` fills serialized `data_json` with
 > `{kind:"file_search", path, pattern, regex, matches[], match_count,
 > truncated, truncation_reason, files_scanned, bytes_read}` plus usage
-> `bytes_read` / `files_touched` / `match_count` / `truncated`. `bench-tool`
+> `bytes_read` / `files_touched` / `match_count` / `truncated`, and
+> `directory.list` fills serialized `data_json` with
+> `{kind:"directory_list", path, include_hidden, max_entries, entry_count,
+> entries[]}` plus usage `files_touched=1` and `match_count=entry_count`.
+> With slice 64 the built-in side of spec 0014's structured-output migration
+> is complete — every shipped filesystem built-in fills usage counters and
+> every read-side built-in also fills `data_json`. `bench-tool`
 > has `output.text_only` vs. `output.with_data_16kib` coverage. Provider
-> adapter mapping, scheduler byte caps, audit usage fan-out, hook raw-data
-> redaction, and the structured `data_json` migration for `directory.list`
-> remain downstream.
+> adapter mapping, scheduler byte caps, audit usage fan-out, and hook
+> raw-data redaction remain downstream.
 
 - **`tool::Output v2`**:
   ```cpp
@@ -154,14 +159,21 @@ handlers can adopt without churning every callsite at once.
      bytes_read}` plus `usage.bytes_read` (cumulative scanned file bytes),
      `files_touched` (non-binary scanned files), `match_count`
      (post-truncation), and the `truncated` cap flag.
-  3. `directory.list` (gains structured `entries[]`).
+  3. `directory.list` — shipped in slice 64: keeps the existing
+     `<path>:<kind>:<size_bytes or '-'>` text rendering, and fills
+     `data_json` with `{kind:"directory_list", path, include_hidden,
+     max_entries, entry_count, entries[]}` where each entry is
+     `{name, path, kind, size_bytes}` (JSON null `size_bytes` for
+     non-regular kinds) plus `usage.files_touched=1` and
+     `usage.match_count=entry_count`.
   4. `file.write` / `file.edit` / `file.delete` — shipped in slice 61:
      `file.write` fills `usage.bytes_written` and `files_touched`;
      `file.edit` fills `bytes_read`, `bytes_written`, `files_touched`,
      and `match_count`; `file.delete` fills `bytes_written=0` and
      `files_touched=1`; `data_json` stays `nullopt` for v1.
-  Until each migrates, its handler constructs `Output::text_only(...)`
-  and behaves exactly as today.
+  All built-ins shipped to date have completed their v1 migration to the
+  structured envelope; new built-ins ship with usage counters and
+  `data_json` from the start.
 
 ## Scope (v1.1)
 
