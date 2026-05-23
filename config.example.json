@@ -3,6 +3,10 @@
   "runtime": {
     "workers": 4,
     "request_timeout_ms": 600000,
+    "tool_output": {
+      "max_text_bytes": 262144,
+      "max_data_bytes": 1048576
+    },
     "redaction_patterns": [
       "(?i)(api[_-]?key)[=:][^\\s]+",
       "Bearer [A-Za-z0-9_.-]+"

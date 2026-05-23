@@ -46,12 +46,20 @@ caches all consume one shape.
 The MVP delivers a forward-compatible envelope that today's text-only
 handlers can adopt without churning every callsite at once.
 
-> **Status (slice 65, 2026-05-24):** the base envelope ships in
+> **Status (slice 66, 2026-05-24):** the base envelope ships in
 > `oran-tool`. `Output::text_only(...)` preserves the existing text path,
 > `Output::error(...)` marks structured-capable errors, `ToolAfterPayload`
 > copies `Output::usage` on successful dispatch, and slice 65 copies
 > successful `Output::data_json` into `ToolAfterPayload::data_json` while
 > `hook::Bus` redacts it for every sink except `SinkKind::trusted_local`.
+> Slice 66 adds the shared cap primitive:
+> `OutputCapOptions`, `OutputCapReport`, and `apply_output_caps` live in
+> `<oran/tool/output.hpp>`, `Registry::dispatch` applies
+> `DispatchContext::output_caps` to successful handler output before it is
+> returned or published to `tool_after`, and `oran-config` parses the
+> documented `runtime.tool_output.max_text_bytes` /
+> `runtime.tool_output.max_data_bytes` defaults for the future scheduler /
+> agent owner to thread into that context.
 > `file.read` carries its
 > requested text plus range/fingerprint tuple in serialized `data_json`
 > while keeping the spec-0011 text fallback, the current mutation built-ins
@@ -66,9 +74,9 @@ handlers can adopt without churning every callsite at once.
 > With slice 64 the built-in side of spec 0014's structured-output migration
 > is complete — every shipped filesystem built-in fills usage counters and
 > every read-side built-in also fills `data_json`. `bench-tool`
-> has `output.text_only` vs. `output.with_data_16kib` coverage. Provider
-> adapter mapping, scheduler byte caps, and audit usage fan-out remain
-> downstream.
+> has `output.text_only` vs. `output.with_data_16kib` plus
+> `output.apply_caps` coverage. Provider adapter mapping and audit usage
+> fan-out remain downstream.
 
 - **`tool::Output v2`**:
   ```cpp
@@ -151,7 +159,10 @@ handlers can adopt without churning every callsite at once.
   - `runtime.tool_output.max_data_bytes` (default 1 MiB) — applies to
     serialised `data_json`. Exceeding it drops `data_json`, leaves `text` intact,
     and records `data_dropped=true` in `usage`.
-  Caps fire in the scheduler (spec 0012), not in each handler.
+  Caps fire at the dispatch/scheduler boundary, not in each handler. Until
+  the scheduler exists, `Registry::dispatch` applies the same helper after a
+  successful handler return; when `oran-agent` lands, the scheduler owns the
+  options and calls the shared primitive before returning ordered results.
 - **Migration path.** Built-ins migrate one at a time:
   1. `file.read` — shipped in slice 62: keeps the text header/body fallback
      and fills `data_json` with `{kind:"file_read", path, text, fingerprint,
@@ -240,14 +251,14 @@ handlers can adopt without churning every callsite at once.
    the same fields, and (once audit/log fan-out lands) a trace row
    carrying them. Slice 60 pins the hook half; audit/log fan-out remains
    downstream.
-4. **Byte cap enforcement (text).** A handler that returns 257 KiB of
+4. **Byte cap enforcement (text).** Shipped in slice 66. A handler that returns 257 KiB of
    `text` with the default cap produces an output whose `text.size() ≤
    256 KiB`, `usage.truncated = true`, and a single `tool_after` hook
-   publish recording the truncation reason.
-5. **Byte cap enforcement (data).** A handler that returns 1 MiB + 1
+   publish carrying the capped text plus `usage.truncated`.
+5. **Byte cap enforcement (data).** Shipped in slice 66. A handler that returns 1 MiB + 1
    bytes of serialised `data_json` produces an output whose `text` is intact,
    `data_json == std::nullopt`, and `usage.data_dropped = true`. The
-   provider-adapter call still succeeds (with the text fallback).
+   future provider-adapter call still succeeds (with the text fallback).
 6. **Hook redaction.** Shipped in slice 65. A structured-output handler's
    `ToolAfterPayload` delivered to a default sink contains the text fallback
    and byte/count metrics in `usage` but no raw `data_json`; the same payload
@@ -265,9 +276,10 @@ handlers can adopt without churning every callsite at once.
 9. **`tests/tool/test_output.cpp` ≥ 90% coverage** of the envelope (cap
    matrix × adapter matrix × audit-context matrix × hook-redaction matrix).
 10. **`bench-tool` output scenarios** report envelope construction
-    + serialisation cost ≤ 5 µs for `Output::text_only(...)` and ≤ 50 µs
-    for a 16 KiB `data_json` payload. The latter is within spec 0002's
-    ≤ 50 µs dispatch ceiling.
+    + serialisation cost ≤ 5 µs for `Output::text_only(...)`, ≤ 50 µs
+    for a 16 KiB `data_json` payload, and the cap helper cost for a
+    representative oversized payload. The structured-output path remains
+    within spec 0002's ≤ 50 µs dispatch ceiling.
 
 ## Design Doc Cross-References
 
@@ -286,8 +298,9 @@ handlers can adopt without churning every callsite at once.
   truncated)` payload now rides in `Output::data_json`, while v1 of 0011
   keeps the same facts as a text header for forward compatibility.
 - [`0012-tool-scheduler-and-state.md`](0012-tool-scheduler-and-state.md)
-  — the scheduler enforces the byte caps and aggregates `usage` across
-  parallel calls.
+  — slice 66 provides the shared byte-cap helper and direct dispatch applies
+  it for pre-scheduler callers; the scheduler owns the same cap options and
+  aggregates `usage` across parallel calls once batched tool calls land.
 - [`../rules/compile-budget.md`](../rules/compile-budget.md) — serialized
   `data_json` plus the concrete metadata-only `Attachment` keep the public
   header within budget; full JSON dependencies stay in handler/provider

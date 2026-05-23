@@ -163,6 +163,11 @@ struct DispatchContext {
   /// filesystem built-in. Cleared on every dispatch entry so callers can
   /// reuse a context object safely.
   std::optional<ResolvedToolPath> resolved_path{};
+  /// Output byte caps applied after a successful handler return and before
+  /// hook/provider-facing output leaves the dispatch boundary. The future
+  /// scheduler owns these options for batched calls; direct registry callers
+  /// get the spec-0014 defaults.
+  OutputCapOptions output_caps{};
   /// Per-process scope key the audit row gets stamped with. See
   /// `docs/design-docs/secrets-and-state.md` "Identity And Scope".
   std::string scope_key;

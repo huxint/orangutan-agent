@@ -93,3 +93,7 @@ A-vs-B comparisons:
   16 KiB serialized structured payload plus usage counters. This pins the
   fixed overhead of the spec-0014 envelope before provider adapters start
   serializing it into vendor tool-result shapes.
+- `output.apply_caps`: cost of applying spec-0014 output byte caps to an
+  oversized text fallback plus oversized structured payload. The scenario
+  covers the dispatch/scheduler helper that truncates text and drops
+  `data_json` before hook/provider-facing output leaves the tool boundary.

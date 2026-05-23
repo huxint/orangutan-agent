@@ -221,6 +221,17 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
   return value.get<std::int64_t>();
 }
 
+[[nodiscard]] Result<std::int64_t> positive_integer_value(const json& value, std::string_view path) {
+  auto parsed = integer_value(value, path);
+  if (!parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+  if (*parsed <= 0) {
+    return std::unexpected(config_error("expected positive integer", std::string{path}));
+  }
+  return parsed;
+}
+
 [[nodiscard]] Result<bool> parse_strict_config(const json& root) {
   const auto it = root.find("strict_config");
   if (it == root.end()) {
@@ -230,6 +241,36 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
     return std::unexpected(config_error("expected boolean", "$.strict_config"));
   }
   return it->get<bool>();
+}
+
+[[nodiscard]] Result<ToolOutputRuntimeConfig> parse_tool_output_runtime(const json& runtime) {
+  auto config = ToolOutputRuntimeConfig{};
+  const auto it = runtime.find("tool_output");
+  if (it == runtime.end()) {
+    return config;
+  }
+  auto object = require_object(*it, "$.runtime.tool_output");
+  if (!object) {
+    return std::unexpected(std::move(object.error()));
+  }
+
+  if (const auto max_text = it->find("max_text_bytes"); max_text != it->end()) {
+    auto parsed = positive_integer_value(*max_text, "$.runtime.tool_output.max_text_bytes");
+    if (!parsed) {
+      return std::unexpected(std::move(parsed.error()));
+    }
+    config.max_text_bytes = *parsed;
+  }
+
+  if (const auto max_data = it->find("max_data_bytes"); max_data != it->end()) {
+    auto parsed = positive_integer_value(*max_data, "$.runtime.tool_output.max_data_bytes");
+    if (!parsed) {
+      return std::unexpected(std::move(parsed.error()));
+    }
+    config.max_data_bytes = *parsed;
+  }
+
+  return config;
 }
 
 [[nodiscard]] Result<RuntimeConfig> parse_runtime(const json& root) {
@@ -263,6 +304,12 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
     if (runtime.request_timeout_ms <= 0) {
       return std::unexpected(config_error("expected positive integer", "$.runtime.request_timeout_ms"));
     }
+  }
+
+  if (auto tool_output = parse_tool_output_runtime(*it); !tool_output) {
+    return std::unexpected(std::move(tool_output.error()));
+  } else {
+    runtime.tool_output = *tool_output;
   }
 
   if (const auto patterns = it->find("redaction_patterns"); patterns != it->end()) {

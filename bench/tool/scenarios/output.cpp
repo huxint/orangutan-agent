@@ -4,6 +4,7 @@
 //
 //   1. `output.text_only`      : v1-compatible text-only construction.
 //   2. `output.with_data_16kib`: structured payload metadata construction.
+//   3. `output.apply_caps`     : dispatch/scheduler cap helper on oversized output.
 
 #include <nanobench.h>
 
@@ -31,6 +32,19 @@ void register_tool_output(ankerl::nanobench::Bench& bench) {
             },
     };
     ankerl::nanobench::doNotOptimizeAway(output);
+  });
+
+  const auto long_text = std::string(512U, 't');
+  const auto long_data = std::string(512U, 'd');
+  bench.run("output.apply_caps", [&] {
+    auto output = tool::Output{
+        .text = long_text,
+        .data_json = long_data,
+    };
+    auto report =
+        tool::apply_output_caps(output, tool::OutputCapOptions{.max_text_bytes = 256U, .max_data_bytes = 256U});
+    ankerl::nanobench::doNotOptimizeAway(output);
+    ankerl::nanobench::doNotOptimizeAway(report);
   });
 }
 

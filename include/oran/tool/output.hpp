@@ -9,6 +9,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -64,5 +65,37 @@ struct Output {
 
   friend bool operator==(const Output&, const Output&) = default;
 };
+
+inline constexpr std::size_t kDefaultMaxOutputTextBytes = 256U * 1024U;
+inline constexpr std::size_t kDefaultMaxOutputDataBytes = 1024U * 1024U;
+
+/// Byte caps applied at the dispatch/scheduler boundary. A cap value of 0
+/// disables that channel's cap; the defaults match spec 0014.
+struct OutputCapOptions {
+  std::size_t max_text_bytes{kDefaultMaxOutputTextBytes};
+  std::size_t max_data_bytes{kDefaultMaxOutputDataBytes};
+
+  friend bool operator==(const OutputCapOptions&, const OutputCapOptions&) = default;
+};
+
+struct OutputCapReport {
+  bool text_truncated{false};
+  bool data_dropped{false};
+  std::size_t text_bytes_before{0};
+  std::size_t text_bytes_after{0};
+  std::size_t data_bytes_before{0};
+
+  [[nodiscard]] bool empty() const noexcept {
+    return !text_truncated && !data_dropped;
+  }
+
+  friend bool operator==(const OutputCapReport&, const OutputCapReport&) = default;
+};
+
+/// Apply text/data byte caps in-place. Text truncation keeps a valid UTF-8
+/// code-point boundary when possible, sets `usage.truncated`, and leaves
+/// `data_json` untouched. Data overflow drops only `data_json` and sets
+/// `usage.data_dropped`; the text fallback remains available.
+[[nodiscard]] OutputCapReport apply_output_caps(Output& output, OutputCapOptions options = {});
 
 }  // namespace orangutan::tool

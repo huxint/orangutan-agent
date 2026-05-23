@@ -2966,6 +2966,13 @@ async::Awaitable<core::Result<tool::Output>> noop_data_handler(std::string_view,
   };
 }
 
+async::Awaitable<core::Result<tool::Output>> noop_oversize_handler(std::string_view, tool::DispatchContext& /*ctx*/) {
+  co_return tool::Output{
+      .text = "abcdef",
+      .data_json = std::string{"12345"},
+  };
+}
+
 async::Awaitable<core::Result<tool::Output>> noop_error_handler(std::string_view, tool::DispatchContext& /*ctx*/) {
   co_return std::unexpected(core::Error::internal("handler exploded").with("tool", "noop"));
 }
@@ -3093,6 +3100,38 @@ TEST_CASE("dispatch redacts structured output from untrusted tool_after sinks", 
     REQUIRE(trusted_sink.captures()[0].output_text == "noop-data");
     REQUIRE(trusted_sink.captures()[0].data_json == R"({"kind":"noop","raw":true})");
     REQUIRE(trusted_sink.captures()[0].usage.files_touched == 1);
+  });
+}
+
+TEST_CASE("dispatch applies output caps before returning and publishing tool_after",
+          "[unit][tool][hook][output][caps]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(noop_tool_def(), &noop_oversize_handler).has_value());
+
+    auto rules = allow_rule_set();
+    permission::RecordingAuditSink audit;
+
+    orangutan::hook::Bus bus;
+    CaptureSink trusted_sink{"capture-cap", orangutan::hook::SinkKind::trusted_local};
+    bus.bind(trusted_sink, {orangutan::hook::Event::tool_after});
+
+    auto ctx = make_hooked_ctx(io, rules, audit, &bus);
+    ctx.output_caps = tool::OutputCapOptions{.max_text_bytes = 4, .max_data_bytes = 4};
+
+    auto result = co_await registry.dispatch("noop", R"({})", ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "abcd");
+    REQUIRE_FALSE(result->data_json.has_value());
+    REQUIRE(result->usage.truncated);
+    REQUIRE(result->usage.data_dropped);
+
+    REQUIRE(trusted_sink.captures().size() == 1);
+    REQUIRE(trusted_sink.captures()[0].succeeded);
+    REQUIRE(trusted_sink.captures()[0].output_text == "abcd");
+    REQUIRE_FALSE(trusted_sink.captures()[0].data_json.has_value());
+    REQUIRE(trusted_sink.captures()[0].usage.truncated);
+    REQUIRE(trusted_sink.captures()[0].usage.data_dropped);
   });
 }
 

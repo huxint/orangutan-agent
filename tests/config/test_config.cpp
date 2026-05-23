@@ -73,6 +73,10 @@ constexpr auto kMinimalConfig = R"json(
   "runtime": {
     "workers": 2,
     "request_timeout_ms": 1500,
+    "tool_output": {
+      "max_text_bytes": 4096,
+      "max_data_bytes": 8192
+    },
     "redaction_patterns": ["token=[^ ]+"]
   },
   "profiles": {
@@ -127,6 +131,8 @@ TEST_CASE("Config::parse returns typed config values", "[unit][config]") {
   REQUIRE_FALSE(result->strict_config());
   REQUIRE(result->runtime().workers == 2);
   REQUIRE(result->runtime().request_timeout_ms == 1500);
+  REQUIRE(result->runtime().tool_output.max_text_bytes == 4096);
+  REQUIRE(result->runtime().tool_output.max_data_bytes == 8192);
   REQUIRE(result->runtime().redaction_patterns.size() == 1);
 
   REQUIRE(result->profiles().size() == 1);
@@ -247,6 +253,8 @@ TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][con
   REQUIRE(result->profiles()[0].model == "claude-3-5-sonnet-latest");
   REQUIRE(result->routes().size() == 1);
   REQUIRE(result->web().port == 8787);
+  REQUIRE(result->runtime().tool_output.max_text_bytes == 262144);
+  REQUIRE(result->runtime().tool_output.max_data_bytes == 1048576);
 
   // The example config now carries a non-empty permissions block + one
   // example agent overlay so the file documents the new schema.
@@ -254,6 +262,41 @@ TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][con
   REQUIRE(result->agents().size() == 1);
   REQUIRE(result->agents()[0].name == "researcher");
   REQUIRE(result->agents()[0].permissions.rules.size() == 1);
+}
+
+TEST_CASE("Config::parse extracts runtime.tool_output byte caps", "[unit][config][runtime]") {
+  auto result = config::Config::parse(R"json({
+  "runtime": {
+    "tool_output": {
+      "max_text_bytes": 1234,
+      "max_data_bytes": 5678
+    }
+  }
+})json");
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->runtime().tool_output.max_text_bytes == 1234);
+  REQUIRE(result->runtime().tool_output.max_data_bytes == 5678);
+}
+
+TEST_CASE("Config::parse rejects malformed runtime.tool_output caps", "[unit][config][runtime]") {
+  SECTION("non-object block") {
+    auto result = config::Config::parse(R"json({"runtime": {"tool_output": []}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-integer text cap") {
+    auto result = config::Config::parse(R"json({"runtime": {"tool_output": {"max_text_bytes": "large"}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("zero data cap") {
+    auto result = config::Config::parse(R"json({"runtime": {"tool_output": {"max_data_bytes": 0}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
 }
 
 TEST_CASE("PermissionVerdict round-trips through its stable spellings", "[unit][config]") {

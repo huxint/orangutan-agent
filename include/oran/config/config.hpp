@@ -22,9 +22,17 @@ struct ConfigWarning {
   std::string message;
 };
 
+struct ToolOutputRuntimeConfig {
+  std::int64_t max_text_bytes{256 * 1024};
+  std::int64_t max_data_bytes{1024 * 1024};
+
+  friend bool operator==(const ToolOutputRuntimeConfig&, const ToolOutputRuntimeConfig&) = default;
+};
+
 struct RuntimeConfig {
   std::int64_t workers{4};
   std::int64_t request_timeout_ms{600000};
+  ToolOutputRuntimeConfig tool_output{};
   std::vector<std::string> redaction_patterns{};
 };
 

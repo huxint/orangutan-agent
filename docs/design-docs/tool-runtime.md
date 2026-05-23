@@ -653,6 +653,13 @@ struct Output {
   ToolUsage usage;
   bool is_error = false;
 };
+
+struct OutputCapOptions {
+  std::size_t max_text_bytes = 256 * 1024;
+  std::size_t max_data_bytes = 1024 * 1024;
+};
+
+OutputCapReport apply_output_caps(Output&, OutputCapOptions = {});
 ```
 
 `data_json` is serialized JSON rather than a public `nlohmann::json` value.
@@ -669,6 +676,12 @@ Current and future policy:
 - `Output::text_only(...)` is the v1-compatible path for current handlers;
   `Output::error(...)` marks an error envelope and may carry serialized
   structured error bytes.
+- `apply_output_caps(...)` is the shared dispatch/scheduler helper for
+  spec-0014 byte caps. It truncates over-budget `text` at a UTF-8
+  code-point boundary and sets `usage.truncated`; it drops over-budget
+  `data_json` while leaving `text` intact and sets `usage.data_dropped`.
+  `OutputCapOptions` defaults match `runtime.tool_output`'s 256 KiB text
+  cap and 1 MiB structured-data cap.
 - `Registry::dispatch` copies `Output::usage` into
   `hook::ToolAfterPayload::usage` on successful handler returns and now also
   copies successful `Output::data_json` into
@@ -712,8 +725,11 @@ Current and future policy:
   the field only to sinks whose `Sink::kind()` returns
   `SinkKind::trusted_local`; default sinks receive the text fallback and usage
   metrics with `data_json` cleared.
-- Scheduler byte caps and audit usage fan-out remain downstream spec-0014
-  items.
+- Slice 66 applies output caps at the direct dispatch boundary via
+  `DispatchContext::output_caps` before `Registry::dispatch` returns the
+  output or publishes `tool_after`. The future scheduler owns those options
+  for batched calls and will call the same helper before returning ordered
+  results. Audit usage fan-out remains downstream spec-0014 work.
 - The `tool::parse_input<T>` helper tracked under the deep-review backlog
   (`exec-plans/tech-debt-tracker.md`) lands in the same arc so handlers
   stop hand-rolling their JSON parsers.
@@ -732,6 +748,8 @@ Current and future policy:
   `output.with_data_16kib` — v1-compatible text-only envelope construction
   against a structured envelope carrying 16 KiB of serialized payload bytes
   plus usage counters.
+- `bench/oran-tool/output.apply_caps` — cap helper cost for truncating text
+  and dropping oversized structured data.
 
 `compare.cpp` reports the dispatch overhead as a percentage of typical tool latency
 (file.read of 4 KB; shell.exec of `/bin/true`).

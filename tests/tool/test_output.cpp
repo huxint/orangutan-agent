@@ -82,3 +82,50 @@ TEST_CASE("Output carries serialized data and attachment metadata without parsin
   REQUIRE(output.usage.match_count == 1);
   REQUIRE_FALSE(output.is_error);
 }
+
+TEST_CASE("apply_output_caps truncates text at a UTF-8 boundary", "[unit][tool][output][caps]") {
+  auto text = std::string{"abc"};
+  text.append("\xE4\xBD\xA0", 3);  // U+4F60, encoded without a non-ASCII source literal.
+  text.append("def");
+
+  auto output = tool::Output::text_only(std::move(text));
+  const auto report = tool::apply_output_caps(output, tool::OutputCapOptions{.max_text_bytes = 5, .max_data_bytes = 0});
+
+  REQUIRE(report.text_truncated);
+  REQUIRE_FALSE(report.data_dropped);
+  REQUIRE(report.text_bytes_before == 9);
+  REQUIRE(report.text_bytes_after == 3);
+  REQUIRE(output.text == "abc");
+  REQUIRE(output.usage.truncated);
+}
+
+TEST_CASE("apply_output_caps drops oversized structured data while keeping text", "[unit][tool][output][caps]") {
+  auto output = tool::Output{
+      .text = "summary",
+      .data_json = std::string{"12345"},
+  };
+
+  const auto report = tool::apply_output_caps(output, tool::OutputCapOptions{.max_text_bytes = 0, .max_data_bytes = 4});
+
+  REQUIRE_FALSE(report.text_truncated);
+  REQUIRE(report.data_dropped);
+  REQUIRE(report.data_bytes_before == 5);
+  REQUIRE(output.text == "summary");
+  REQUIRE_FALSE(output.data_json.has_value());
+  REQUIRE(output.usage.data_dropped);
+}
+
+TEST_CASE("apply_output_caps treats zero caps as disabled", "[unit][tool][output][caps]") {
+  auto output = tool::Output{
+      .text = std::string(32, 'x'),
+      .data_json = std::string(32, 'y'),
+  };
+
+  const auto report = tool::apply_output_caps(output, tool::OutputCapOptions{.max_text_bytes = 0, .max_data_bytes = 0});
+
+  REQUIRE(report.empty());
+  REQUIRE(output.text.size() == 32);
+  REQUIRE(output.data_json.has_value());
+  REQUIRE(output.data_json->size() == 32);
+  REQUIRE(output.usage.empty());
+}

@@ -38,13 +38,14 @@ Current implementation status:
 
 - `orangutan::config::Config::parse(std::string_view, LoadOptions)` parses JSON text.
 - `Config::load_file(std::string_view, LoadOptions)` reads and parses a file.
-- Typed fields currently cover `strict_config`, `runtime`, `profiles`, `routes`,
-  `session`, and `web`.
+- Typed fields currently cover `strict_config`, `runtime` (including
+  `tool_output.max_text_bytes` / `max_data_bytes`), `profiles`, `routes`,
+  `session`, `web`, `permissions`, and `agents.<name>.permissions`.
 - `profiles` and `routes` are objects keyed by profile/route name. Profile entries
   require `provider`, `model`, `base_url`, and `api_key_env`; route entries require
   `primary` and may include `fallbacks`.
-- `permissions`, `agents`, `teams`, `channels`, `hooks`, `memory`, and `automation`
-  are recognized root fields but do not have typed models yet.
+- `teams`, `channels`, `hooks`, `memory`, and `automation` are recognized
+  root fields but do not have typed models yet.
 
 ### Schema Validation
 

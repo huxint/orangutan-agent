@@ -301,8 +301,10 @@ implicitly via the capability list.
 - [`0013-workspace-and-path-policy.md`](0013-workspace-and-path-policy.md)
   — lock keys are *resolved* canonical paths, not input strings.
 - [`0014-structured-tool-output.md`](0014-structured-tool-output.md) —
-  the scheduler enforces output byte caps and aggregates
-  `ToolUsage` across parallel calls.
+  slice 66 ships the shared `tool::apply_output_caps` primitive and direct
+  `Registry::dispatch` applies it for pre-scheduler callers; the scheduler
+  owns those output-cap options for batched calls and aggregates
+  `ToolUsage` across parallel results.
 - [`0015-blocking-hook-decisions.md`](0015-blocking-hook-decisions.md)
   — the scheduler is the first consumer of `publish_blocking`;
   per-call timeout enforcement covers the blocking-hook timeout too.

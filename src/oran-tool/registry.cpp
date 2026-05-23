@@ -307,6 +307,10 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
     }
   }
 
+  if (result.has_value()) {
+    [[maybe_unused]] const auto cap_report = apply_output_caps(*result, ctx.output_caps);
+  }
+
   // Slice 22 + 25: publish `tool_error` (failure-only narrow channel) when
   // the dispatch produced an error, then `tool_after` with the dispatch
   // outcome (always). Both share the same `finished_at` so sinks can
