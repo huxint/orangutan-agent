@@ -7,16 +7,36 @@
 
 ## Snapshot
 
-- **Slice:** 73 (`xmake run orangutan` reports slice 73)
+- **Slice:** 74 (`xmake run orangutan` reports slice 74)
 - **Last completed history:**
-  [`histories/2026-05/20260524-0740-provider-cache-hints.md`](histories/2026-05/20260524-0740-provider-cache-hints.md)
+  [`histories/2026-05/20260524-1000-provider-fake-foundation.md`](histories/2026-05/20260524-1000-provider-fake-foundation.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
-  the provider cache-hint increment closed in one history/commit and
+  the fake-provider foundation increment closed in one history/commit and
   did not need a new plan.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 73
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 74 closes
+  spec 0017's provider prework: `oran-provider` now exports the abstract
+  `provider::System` (single `send(Request, Route, EventSink*) const`
+  entry), the `provider::EventSink` streaming observer with default no-op
+  callbacks for text/thinking/tool deltas plus terminal `on_done`, the
+  `ProtocolKind` / `ModelTarget` / `Route` value shapes the loop will
+  resolve once per turn, and `provider::FakeProvider` — the first concrete
+  `System` — with a `ScriptedTurn` / `StreamDelta` plan, plan-exhaustion
+  guard, cancel-aware scripted latency through `async::sleep_for`, and a
+  delta-to-`Response` assembler that fans the same calls out to the
+  observer. `oran-provider` now depends on `oran-async` (the layer-1
+  platform dep already used by `oran-prompt`). `test-provider` covers
+  the canned-response path, delta assembly with text+tool blocks, scripted
+  error injection, plan exhaustion, empty-turn rejection, multi-turn
+  drive, null-sink tolerance, and parent cancellation during scripted
+  latency. The provider library is still not linked into the `orangutan`
+  binary and does not yet contain a real transport, protocol adapter,
+  retry runtime, or vendor cache-control mapping. Remaining near-term
+  work is the `agent::Loop` MVP driving `FakeProvider` through the
+  spec-0017 scenario matrix (scenarios 1-10), followed by provider
+  adapter mapping for real protocols. Slice 73
   opens `oran-provider` with the adapter-facing cache-hint surface needed
   between spec 0016 and the fake-provider-first loop. `<oran/provider.hpp>`
   now exports provider-domain `Request`, `Response`, `Usage`, `RetryPolicy`,
@@ -31,11 +51,9 @@
   covers successful prefix-only mapping, disable/size-floor skips, and
   malformed boundary rejection; `bench-provider` compares
   `provider.cache_hints_enabled` at about 394 ns / mapping with the disabled
-  route at about 317 ns / mapping. `oran-provider` is not linked into the
-  `orangutan` binary yet and does not contain a fake provider, transport,
-  protocol adapter, retry runtime, or real vendor cache-control mapping.
-  Remaining near-term work is the fake-provider-first loop over these
-  domain shapes, followed by provider adapter mapping for real protocols.
+  route at about 317 ns / mapping. Slice 73's surface is the prerequisite the
+  slice-74 fake-provider foundation consumes; together they leave the
+  `agent::Loop` and the spec-0017 scenario matrix as the next milestone.
   Slice 72
   opens `oran-agent` with the narrow session-state owner needed by spec
   0016 before the full ReAct loop lands. `agent::SessionState` owns
@@ -244,7 +262,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-hook`: 17 cases / 109 assertions.
 - `oran-tool`: 166 cases / 1588 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
-- `oran-provider`: 3 cases / 25 assertions.
+- `oran-provider`: 11 cases / 89 assertions.
 - `oran-agent`: 3 cases / 23 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 153 assertions.

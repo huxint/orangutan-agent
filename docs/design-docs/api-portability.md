@@ -35,13 +35,18 @@ struct Response {
 
 `core::Content` is a typed variant; protocol adapters translate to/from vendor JSON.
 
-> **Status (slice 73, 2026-05-24):** `oran-provider` exists as the
-> provider-domain and prompt-cache-hint library. `<oran/provider.hpp>` exports
-> `Request`, `Response`, `Usage`, `RetryPolicy`, `PromptCacheHints`,
-> `PromptCacheOptions`, and
-> `make_prompt_cache_hints(prompt::RenderedPrompt, options)`. Transport,
-> protocol adapters, route resolution, streaming `EventSink`, retry/fallback
-> execution, and `FakeProvider` remain planned.
+> **Status (slice 74, 2026-05-24):** `oran-provider` exists as the
+> provider-domain, prompt-cache-hint, and fake-provider library.
+> `<oran/provider.hpp>` exports the slice-73 value shapes (`Request`,
+> `Response`, `Usage`, `RetryPolicy`, `PromptCacheHints`,
+> `PromptCacheOptions`, `make_prompt_cache_hints(prompt::RenderedPrompt,
+> options)`) plus the slice-74 system surface (`ProtocolKind`,
+> `ModelTarget`, `Route`, abstract `provider::EventSink` with default
+> no-op delta callbacks, abstract `provider::System::send(Request, Route,
+> EventSink*) const`, and the first concrete `provider::FakeProvider`
+> with `ScriptedTurn` / `StreamDelta`). Real transports, protocol
+> adapters, route resolution from config profiles, and retry/fallback
+> execution remain planned.
 
 ## Layered Implementation
 

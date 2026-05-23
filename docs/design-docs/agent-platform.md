@@ -68,13 +68,16 @@ own library, its own tests, its own bench, its own design doc."
 
 ## Prompt Assembly
 
-> **Status (slice 72, 2026-05-24):** `oran-prompt` owns the first
-> deterministic `prompt::Builder` skeleton plus `prompt::PromotionState`, and
-> `oran-agent` now owns the narrow `agent::SessionState` surface that observes
-> successful `tool.search` output and promotes deferred matches into the next
-> prompt snapshot. Slice 73 adds the provider-side cache-hint mapper from
-> `prompt::RenderedPrompt` to adapter-facing prefix keys. The full
-> loop/provider/memory/hook runtime remains future.
+> **Status (slice 74, 2026-05-24):** `oran-prompt` owns the first
+> deterministic `prompt::Builder` skeleton plus `prompt::PromotionState`,
+> `oran-agent` owns the narrow `agent::SessionState` surface that observes
+> successful `tool.search` output and promotes deferred matches into the
+> next prompt snapshot, and `oran-provider` owns the cache-hint mapper plus
+> the slice-74 abstract `provider::System` / `EventSink` / `Route` surface
+> with the first concrete `provider::FakeProvider` (scripted-turn plan,
+> delta-to-`Response` assembly, cancel-aware scripted latency). The
+> `agent::Loop` driving these pieces through a turn loop is the next
+> spec-0017 slice; memory + hook + audit envelope follow.
 > The invariants — section order, byte-identical cached prefix, no clocks /
 > per-call state in sections (1)–(6) — remain canonical in
 > [`../rules/prompt-design.md`](../rules/prompt-design.md).
@@ -118,8 +121,10 @@ for the next build. `bench-prompt` compares default, explicit, promoted, and
 promotion-state snapshot paths; `bench-agent` now pins no-promotion and
 after-promotion session snapshots against conversation-tail drift. Slice 73
 connects the cache boundary to `oran-provider` through
-`provider::make_prompt_cache_hints`; the fake-provider loop still needs to
-drive these pieces through a turn loop.
+`provider::make_prompt_cache_hints`, and slice 74 closes the provider
+prework by shipping `provider::System` / `EventSink` / `Route` plus the
+first concrete `provider::FakeProvider`. The `agent::Loop` that drives
+those pieces through a turn loop is the next slice.
 
 ## Cross-Cutting Concerns
 

@@ -41,10 +41,20 @@ proves the loop behaves correctly without a network.
   "Domain Model" are the source of truth (`provider::Request`,
   `provider::Response`, `core::Content` variant, `StopReason`, `Usage`,
   `EventSink`). This spec freezes their *behaviour* for v1:
-  - **Status (slice 73, 2026-05-24):** `oran-provider` now ships the
+  - **Status (slice 74, 2026-05-24):** `oran-provider` now ships the
     value-type `Request`, `Response`, `Usage`, and `RetryPolicy` shapes
-    plus prompt-cache hints. `System`, route resolution, `EventSink`, and
-    `FakeProvider` still land with the first loop slice.
+    plus prompt-cache hints, the abstract `provider::System` with
+    `send(Request, Route, EventSink*) const`, the `provider::EventSink`
+    streaming observer with default no-op callbacks for text / thinking /
+    tool-start / tool-input-delta plus the terminal `on_done(StopReason)`,
+    the `ProtocolKind` / `ModelTarget` / `Route` value shapes the loop will
+    resolve once per turn, and the first concrete `provider::FakeProvider`
+    that walks a `std::vector<ScriptedTurn>`, opens/extends typed content
+    blocks from `StreamDelta`s, fans the same deltas through the supplied
+    sink, awaits scripted latency via `async::sleep_for` so parent
+    cancellation interrupts the wait, serialises concurrent `send` calls,
+    and returns `Error::internal` on plan exhaustion or empty-body turns.
+    Real protocol adapters and the `agent::Loop` driver land next.
   - The loop emits **one** `provider::Request` per iteration.
   - The provider emits **one** `provider::Response` per request (after
     streaming completes if streaming is enabled).
