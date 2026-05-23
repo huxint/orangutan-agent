@@ -493,7 +493,7 @@ TEST_CASE("register_builtins seeds the file tool catalog", "[unit][tool][builtin
   REQUIRE(catalog[5].name == tool::kFileDeleteName);
 }
 
-TEST_CASE("file.read happy path returns the file contents verbatim", "[unit][tool][file_read]") {
+TEST_CASE("file.read returns text fallback and structured metadata", "[unit][tool][file_read]") {
   TempFile file{"happy"};
   file.write("hello, slice 17");
 
@@ -523,6 +523,21 @@ TEST_CASE("file.read happy path returns the file contents verbatim", "[unit][too
     REQUIRE(header.starts_with(file.string() + ":1-1 fingerprint=v1:"));
     REQUIRE(header.find("bytes=15") != std::string_view::npos);
     REQUIRE(header.find(" truncated") == std::string_view::npos);
+    REQUIRE(result->data_json.has_value());
+    const auto data = nlohmann::json::parse(*result->data_json);
+    REQUIRE(data["kind"] == "file_read");
+    REQUIRE(data["path"] == file.string());
+    REQUIRE(data["text"] == "hello, slice 17");
+    REQUIRE(data["fingerprint"].get<std::string>().starts_with("v1:"));
+    REQUIRE(data["start_line"] == 1);
+    REQUIRE(data["end_line"] == 1);
+    REQUIRE(data["returned_bytes"] == 15);
+    REQUIRE(data["truncated"] == false);
+    REQUIRE(result->usage.bytes_read.has_value());
+    REQUIRE(*result->usage.bytes_read == std::uintmax_t{15});
+    REQUIRE(result->usage.files_touched.has_value());
+    REQUIRE(*result->usage.files_touched == std::uint32_t{1});
+    REQUIRE_FALSE(result->usage.truncated);
     REQUIRE(sink.events().size() == 1);
     REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
   });
@@ -621,6 +636,16 @@ TEST_CASE("file.read line range returns only the requested span", "[unit][tool][
     auto [header, body] = split_file_read_envelope(result->text);
     REQUIRE(header.find(":2-3 ") != std::string_view::npos);
     REQUIRE(body == "beta\ngamma\n");
+    REQUIRE(result->data_json.has_value());
+    const auto data = nlohmann::json::parse(*result->data_json);
+    REQUIRE(data["path"] == file.string());
+    REQUIRE(data["text"] == "beta\ngamma\n");
+    REQUIRE(data["start_line"] == 2);
+    REQUIRE(data["end_line"] == 3);
+    REQUIRE(data["returned_bytes"] == 11);
+    REQUIRE(data["truncated"] == false);
+    REQUIRE(result->usage.bytes_read.has_value());
+    REQUIRE(*result->usage.bytes_read == std::uintmax_t{11});
   });
 }
 
@@ -647,6 +672,47 @@ TEST_CASE("file.read byte range returns the requested byte span", "[unit][tool][
     // `offset_bytes` is the byte skip count from the start of the file — the
     // first read byte sits at zero-based index `offset_bytes`.
     REQUIRE(body == "34567");
+    REQUIRE(result->data_json.has_value());
+    const auto data = nlohmann::json::parse(*result->data_json);
+    REQUIRE(data["text"] == "34567");
+    REQUIRE(data["start_line"] == 1);
+    REQUIRE(data["end_line"] == 0);
+    REQUIRE(data["returned_bytes"] == 5);
+    REQUIRE(data["truncated"] == false);
+  });
+}
+
+TEST_CASE("file.read max_bytes reports truncation in data_json and usage", "[unit][tool][file_read][range]") {
+  TempFile file{"read-max-bytes"};
+  file.write("0123456789");
+
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_read(registry).has_value());
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kFileReadName},
+        .capability = core::Capability::read_file,
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::format(R"({{"path":"{}","max_bytes":4}})", file.string());
+    auto result = co_await registry.dispatch(tool::kFileReadName, input, ctx);
+    REQUIRE(result.has_value());
+    auto [header, body] = split_file_read_envelope(result->text);
+    REQUIRE(header.find("bytes=4 truncated") != std::string_view::npos);
+    REQUIRE(body == "0123");
+    REQUIRE(result->data_json.has_value());
+    const auto data = nlohmann::json::parse(*result->data_json);
+    REQUIRE(data["text"] == "0123");
+    REQUIRE(data["returned_bytes"] == 4);
+    REQUIRE(data["truncated"] == true);
+    REQUIRE(result->usage.bytes_read.has_value());
+    REQUIRE(*result->usage.bytes_read == std::uintmax_t{4});
+    REQUIRE(result->usage.files_touched.has_value());
+    REQUIRE(*result->usage.files_touched == std::uint32_t{1});
+    REQUIRE(result->usage.truncated);
   });
 }
 

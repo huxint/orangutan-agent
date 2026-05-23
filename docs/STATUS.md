@@ -7,22 +7,27 @@
 
 ## Snapshot
 
-- **Slice:** 61 (`xmake run orangutan` reports slice 61)
+- **Slice:** 62 (`xmake run orangutan` reports slice 62)
 - **Last completed history:**
-  [`histories/2026-05/20260524-0230-tool-mutation-usage-counters.md`](histories/2026-05/20260524-0230-tool-mutation-usage-counters.md)
+  [`histories/2026-05/20260524-0245-tool-file-read-structured-output.md`](histories/2026-05/20260524-0245-tool-file-read-structured-output.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 61
-  continues spec 0014's built-in migration path for current mutation
-  tools: `file.write` now fills `Output::usage.bytes_written` and
-  `files_touched`; `file.edit` fills `bytes_read`, `bytes_written`,
-  `files_touched`, and `match_count`; and `file.delete` fills
-  `bytes_written=0` plus `files_touched=1`. All three keep their
-  existing text summaries and leave `data_json` empty for the v1
-  migration path. Slice 60
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 62
+  continues spec 0014's built-in structured-output migration for
+  `file.read`: the tool keeps the spec-0011 text header/body fallback,
+  now fills `Output::data_json` with a JSON object carrying `kind`,
+  `path`, requested `text`, `fingerprint`, `start_line`, `end_line`,
+  `returned_bytes`, and `truncated`, and fills `Output::usage.bytes_read`,
+  `files_touched`, and `truncated`. Slice 61 moved the current mutation
+  tools onto usage counters: `file.write` fills
+  `Output::usage.bytes_written` and `files_touched`; `file.edit` fills
+  `bytes_read`, `bytes_written`, `files_touched`, and `match_count`; and
+  `file.delete` fills `bytes_written=0` plus `files_touched=1`. The
+  mutation tools keep their existing text summaries and leave `data_json`
+  empty for the v1 migration path. Slice 60
   closed the deep-review "tool output is too small" finding and started
   spec 0014 inside `oran-tool`: `tool::Output` now lives in
   `<oran/tool/output.hpp>` with required `text`, optional serialized
@@ -34,7 +39,8 @@
   now copies `Output::usage` into `hook::ToolAfterPayload::usage` on
   successful handler returns. This is not yet provider-adapter mapping,
   scheduler byte-cap enforcement, audit usage fan-out, hook raw-data
-  redaction, or structured `data_json` migration for built-ins. Slice 59
+  redaction, or structured `data_json` migration for `file.search` /
+  `directory.list`. Slice 59
   starts the prompt-catalog cache prework shared by specs 0012 and
   0016: `core::ToolDef` now carries the documented `deferred` and
   `category` metadata, and `oran-tool` exposes `tool::CatalogRenderer`,
@@ -125,7 +131,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 24 cases / 171 assertions.
 - `oran-permission`: 86 cases / 390 assertions.
 - `oran-hook`: 15 cases / 97 assertions.
-- `oran-tool`: 145 cases / 1279 assertions.
+- `oran-tool`: 146 cases / 1323 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 153 assertions.
 

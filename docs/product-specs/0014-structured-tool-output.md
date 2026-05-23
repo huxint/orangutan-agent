@@ -46,15 +46,18 @@ caches all consume one shape.
 The MVP delivers a forward-compatible envelope that today's text-only
 handlers can adopt without churning every callsite at once.
 
-> **Status (slice 61, 2026-05-24):** the base envelope now ships in
+> **Status (slice 62, 2026-05-24):** the base envelope now ships in
 > `oran-tool`. `Output::text_only(...)` preserves the existing text path,
 > `Output::error(...)` marks structured-capable errors, `ToolAfterPayload`
-> copies `Output::usage` on successful dispatch, and the current mutation
-> built-ins fill measured usage counters while keeping `data_json=nullopt`
-> for the v1 migration path. `bench-tool` has `output.text_only` vs.
+> copies `Output::usage` on successful dispatch, `file.read` now carries its
+> requested text plus range/fingerprint tuple in serialized `data_json` while
+> keeping the spec-0011 text fallback, and the current mutation built-ins fill
+> measured usage counters while keeping `data_json=nullopt` for the v1
+> migration path. `bench-tool` has `output.text_only` vs.
 > `output.with_data_16kib` coverage. Provider adapter mapping, scheduler
 > byte caps, audit usage fan-out, hook raw-data redaction, and structured
-> `data_json` migrations for built-ins remain downstream.
+> `data_json` migrations for `file.search` / `directory.list` remain
+> downstream.
 
 - **`tool::Output v2`**:
   ```cpp
@@ -137,7 +140,10 @@ handlers can adopt without churning every callsite at once.
     and records `data_dropped=true` in `usage`.
   Caps fire in the scheduler (spec 0012), not in each handler.
 - **Migration path.** Built-ins migrate one at a time:
-  1. `file.read` (becomes v2's primary structured caller via spec 0011).
+  1. `file.read` — shipped in slice 62: keeps the text header/body fallback
+     and fills `data_json` with `{kind:"file_read", path, text, fingerprint,
+     start_line, end_line, returned_bytes, truncated}` plus
+     `usage.bytes_read`, `files_touched`, and `truncated`.
   2. `file.search` (gains structured `matches[]` and per-file usage).
   3. `directory.list` (gains structured `entries[]`).
   4. `file.write` / `file.edit` / `file.delete` — shipped in slice 61:
@@ -249,9 +255,9 @@ handlers can adopt without churning every callsite at once.
   `tool_result` rendering site.
 - [`0011-file-view-and-caching.md`](0011-file-view-and-caching.md) —
   the first structured caller: `file.read` v2's
-  `(start_line, end_line, fingerprint, returned_bytes, truncated)`
-  tuple rides in `Output::data_json` once both specs ship. v1 of 0011
-  encodes the same tuple as a text header for forward compatibility.
+  `(path, text, start_line, end_line, fingerprint, returned_bytes,
+  truncated)` payload now rides in `Output::data_json`, while v1 of 0011
+  keeps the same facts as a text header for forward compatibility.
 - [`0012-tool-scheduler-and-state.md`](0012-tool-scheduler-and-state.md)
   — the scheduler enforces the byte caps and aggregates `usage` across
   parallel calls.

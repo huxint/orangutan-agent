@@ -672,9 +672,13 @@ Current and future policy:
 - `Registry::dispatch` copies `Output::usage` into
   `hook::ToolAfterPayload::usage` on successful handler returns. Dispatch
   failures keep usage empty.
-- Built-ins migrate one at a time. Until the migration completes, range-read
-  metadata for `file.read` (spec 0011) rides as a stable text header line:
-  `<path>:<start_line>-<end_line> fingerprint=<token> bytes=<n>[ truncated]`.
+- Built-ins migrate one at a time. `file.read` still keeps the stable
+  spec-0011 text fallback
+  `<path>:<start_line>-<end_line> fingerprint=<token> bytes=<n>[ truncated]`
+  followed by the requested body, and slice 62 also stores a serialized JSON
+  object in `Output::data_json` with `kind=file_read`, `path`, requested
+  `text`, `fingerprint`, `start_line`, `end_line`, `returned_bytes`, and
+  `truncated`.
 - Slice 61 migrates the current mutation built-ins to fill counters:
   `file.write` reports `bytes_written` and `files_touched`; `file.edit`
   reports `bytes_read`, `bytes_written`, `files_touched`, and
@@ -686,8 +690,8 @@ Current and future policy:
   Responses, Gemini, and OpenAI-compatible mappings remain spec-0014 follow-up
   work because `oran-provider` does not exist yet.
 - Scheduler byte caps, audit usage fan-out, raw `data_json` hook redaction for
-  trusted-local sinks, and built-in structured payload migration remain
-  downstream spec-0014 items.
+  trusted-local sinks, and structured payload migration for `file.search` /
+  `directory.list` remain downstream spec-0014 items.
 - The `tool::parse_input<T>` helper tracked under the deep-review backlog
   (`exec-plans/tech-debt-tracker.md`) lands in the same arc so handlers
   stop hand-rolling their JSON parsers.

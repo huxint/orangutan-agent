@@ -95,6 +95,14 @@ v1.1 (line-offset index, file-view cache, regex compile cache,
 singleflight, external-edit awareness) is next on top of the
 slice-44 `BoundedCache` primitive.
 
+**Status (slice 62, 2026-05-24):** spec 0014's `Output::data_json`
+migration now covers `file.read` without removing the text fallback.
+Successful reads still render the header line plus requested body for
+current callers, and also fill serialized `data_json` with
+`{kind:"file_read", path, text, fingerprint, start_line, end_line,
+returned_bytes, truncated}`. `Output::usage` carries `bytes_read`,
+`files_touched=1`, and the truncation flag.
+
 **Status (slice 47, 2026-05-23):** the first v1.1 item — "Output cap
 on `file.search`" — ships in `oran-tool`. `file.search` accepts an
 optional `max_output_bytes` field (default 1 MiB) that caps the
@@ -309,10 +317,11 @@ deltas (single-strand, `Value*` from `get`, `erase_if`,
     "if_version": "<previous version token, optional>"
   }
   ```
-  Returned text is wrapped in a small header line so today's text-only
-  `tool::Output` can still carry it: `<path>:<start_line>-<end_line>
-  fingerprint=<token> bytes=<n>[ truncated]`. When `Output v2` lands, the
-  same payload moves into `Output::structured` verbatim.
+  Returned text is wrapped in a small header line so text-fallback callers
+  can still carry it: `<path>:<start_line>-<end_line> fingerprint=<token>
+  bytes=<n>[ truncated]`. Since slice 62, the same file-view payload also
+  rides in `Output::data_json` as serialized JSON with the requested text
+  and the range/fingerprint tuple.
 - **Version token shape**: opaque string
   `v1:<sha256(canonical_path)>:<size>:<mtime_ns>` (sha256 of *path*, not
   content). Stable across tools; embeds the cheap fingerprint so the agent
@@ -493,7 +502,7 @@ correctness is anchored:
    Capacity, byte budget, and TTL are observable via a stats accessor for
    the future `oran-log` to publish.
 9. **Output v2 forward compat.** v1's text-header rendering is feature-flag
-   compatible with the future `Output::structured` field: the same
+   compatible with `Output::data_json`: the same
    `(path, start_line, end_line, fingerprint, bytes, truncated)` tuple
    round-trips through both shapes.
 10. **`tests/io/`** and **`tests/tool/`** ≥ 90% coverage of the matrix
@@ -506,9 +515,9 @@ correctness is anchored:
   `oran-io` surface (`ReadTextResult`, `FileFingerprint`, `FileRange`);
   the "Future Slices" section gains the v1 shape when this spec ships.
 - [`../design-docs/tool-runtime.md`](../design-docs/tool-runtime.md) —
-  `tool::Output` v2 (the `{text, data, attachments, cost, is_error}` shape
-  in the design doc) is a prerequisite for v1.1 onward; v1 lives inside
-  the current text-only `Output` via the header-line rendering above.
+  `tool::Output` v2 (the `{text, data_json, attachments, usage, is_error}`
+  shape in the design doc) is now the structured side of `file.read`; the
+  header-line rendering remains the text fallback.
 - [`0013-workspace-and-path-policy.md`](0013-workspace-and-path-policy.md)
   — every path in the file-view system goes through `tool::Workspace`
   resolution first; the version token embeds the canonical path so two
@@ -522,11 +531,11 @@ correctness is anchored:
 
 ## Risks
 
-- **`tool::Output` churn.** Returning richer metadata before `Output v2`
-  ships means re-parsing the text header from agent code. Mitigation: ship
-  v1 with the header-line shape and a stable `(path, start_line,
-  end_line, fingerprint, bytes, truncated)` parser in `oran-tool`; flip to
-  `Output::structured` in a one-line callsite change when v2 lands.
+- **`tool::Output` churn.** Returning richer metadata before provider
+  adapters consume `Output v2` still means current callers need the text
+  header. Mitigation: keep the header-line fallback and pin the same
+  `(path, start_line, end_line, fingerprint, bytes, truncated)` facts in
+  `Output::data_json` so adapter work can switch without re-parsing prose.
 - **Fingerprint forgery.** A motivated adversary can produce a file with
   the same size + mtime as the original. Mitigation: high-trust paths
   (`file.modify` v2, memory citations) set `compute_hash=true` and use the
@@ -562,7 +571,8 @@ xmake run bench-oran-tool file_view_cache  # cold vs. hot, stat vs. SHA-256 vali
   the slice that lands them moves the old `read_text_file` overload to
   "compat alias".
 - `docs/design-docs/tool-runtime.md` "Tool Handler Shape" notes that
-  `file.read` v2 is the first consumer of the `Output v2` migration plan.
+  `file.read` v2 is the first built-in with a structured `Output::data_json`
+  payload.
 - `docs/exec-plans/tech-debt-tracker.md` retires the deep-review §File
   read range / change detection / cache plan rows in the slice that
   closes v1.

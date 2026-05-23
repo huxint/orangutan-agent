@@ -6,8 +6,9 @@
 // validation in `Registry::add` and at handler time by
 // `io::FileRange` itself). The response wraps the returned text in a
 // single header line carrying the version token, the covered span, the
-// returned byte count, and the truncated flag so today's text-only
-// `tool::Output` can still surface the metadata until `Output v2` lands.
+// returned byte count, and the truncated flag. Since slice 62, the same
+// facts also ride in `Output::data_json` so downstream adapters and UIs do
+// not have to re-parse the header line.
 // `if_version` short-circuits to `Error::not_modified` (carrying the
 // current token in context) when the supplied token matches the current
 // fingerprint, so a cached caller does not re-pay the body bytes.
@@ -163,6 +164,23 @@ format_header(std::string_view path, const io::ReadTextResult& result, const std
   return header;
 }
 
+[[nodiscard]] std::string format_data_json(std::string_view path,
+                                           std::string_view body,
+                                           const io::ReadTextResult& result,
+                                           const std::string& token) {
+  return nlohmann::json{
+      {"kind", "file_read"},
+      {"path", std::string{path}},
+      {"text", std::string{body}},
+      {"fingerprint", token},
+      {"start_line", result.start_line},
+      {"end_line", result.end_line},
+      {"returned_bytes", result.returned_bytes},
+      {"truncated", result.truncated},
+  }
+      .dump();
+}
+
 [[nodiscard]] async::Awaitable<core::Result<Output>> file_read_handler(std::string_view input_json,
                                                                        DispatchContext& ctx) {
   nlohmann::json parsed;
@@ -227,10 +245,21 @@ format_header(std::string_view path, const io::ReadTextResult& result, const std
 
   const auto token = detail::version_token(path, result->fingerprint);
   const auto header = format_header(path, *result, token);
-  std::string text = std::move(result->text);
-  text.insert(0, "\n");
-  text.insert(0, header);
-  co_return Output{.text = std::move(text)};
+  auto body = std::move(result->text);
+  auto data_json = format_data_json(path, body, *result, token);
+  std::string text = header;
+  text.push_back('\n');
+  text.append(body);
+  co_return Output{
+      .text = std::move(text),
+      .data_json = std::move(data_json),
+      .usage =
+          ToolUsage{
+              .bytes_read = result->returned_bytes,
+              .files_touched = 1,
+              .truncated = result->truncated,
+          },
+  };
 }
 
 }  // namespace
@@ -248,7 +277,8 @@ core::Result<void> register_file_read(Registry& registry) {
                      "fingerprint the call short-circuits with `not_modified`; otherwise "
                      "the output is a single header line "
                      "`<path>:<start_line>-<end_line> fingerprint=<token> bytes=<n>[ truncated]` "
-                     "followed by the requested file slice on the next line.",
+                     "followed by the requested file slice on the next line; `data_json` carries "
+                     "kind, path, text, fingerprint, start_line, end_line, returned_bytes, and truncated.",
       .input_schema_json = std::string{kFileReadSchema},
       .required_capabilities = {core::Capability::read_file},
       .deferred = false,

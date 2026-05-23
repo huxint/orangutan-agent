@@ -45,7 +45,10 @@ inline constexpr std::string_view kFileDeleteName{"file.delete"};
 /// Line and byte ranges are mutually exclusive. Output is a header line
 /// `<path>:<start>-<end> fingerprint=<token> bytes=<n>[ truncated]` followed
 /// by the requested file slice on the next line. `if_version` matching the
-/// current fingerprint short-circuits to `Error::not_modified`.
+/// current fingerprint short-circuits to `Error::not_modified`. Successful
+/// reads also fill `Output::data_json` with the requested text plus
+/// range/fingerprint metadata, and fill `Output::usage.bytes_read`,
+/// `files_touched`, and `truncated`.
 [[nodiscard]] core::Result<void> register_file_read(Registry& registry);
 
 /// Register the `file.write` tool. Writes UTF-8 content to a path using
