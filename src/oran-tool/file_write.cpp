@@ -207,7 +207,14 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
   if (!written) {
     co_return std::unexpected(std::move(written).error());
   }
-  co_return Output{.text = std::format("wrote {} bytes to {}", byte_count, path)};
+  co_return Output{
+      .text = std::format("wrote {} bytes to {}", byte_count, path),
+      .usage =
+          ToolUsage{
+              .bytes_written = byte_count,
+              .files_touched = 1,
+          },
+  };
 }
 
 }  // namespace
@@ -224,7 +231,8 @@ core::Result<void> register_file_write(Registry& registry) {
                      "When `expected_version` is supplied the call fails with "
                      "`conflict` (reason=stale_fingerprint, current `fingerprint` in "
                      "context) if the file's current version differs. Returns a brief "
-                     "confirmation listing the number of bytes written.",
+                     "confirmation listing the number of bytes written and fills usage "
+                     "with bytes_written plus files_touched.",
       .input_schema_json = std::string{kFileWriteSchema},
       .required_capabilities = {core::Capability::write_file},
       .deferred = false,

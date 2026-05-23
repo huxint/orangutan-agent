@@ -7,16 +7,23 @@
 
 ## Snapshot
 
-- **Slice:** 60 (`xmake run orangutan` reports slice 60)
+- **Slice:** 61 (`xmake run orangutan` reports slice 61)
 - **Last completed history:**
-  [`histories/2026-05/20260524-0215-tool-output-envelope.md`](histories/2026-05/20260524-0215-tool-output-envelope.md)
+  [`histories/2026-05/20260524-0230-tool-mutation-usage-counters.md`](histories/2026-05/20260524-0230-tool-mutation-usage-counters.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 60
-  closes the deep-review "tool output is too small" finding and starts
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 61
+  continues spec 0014's built-in migration path for current mutation
+  tools: `file.write` now fills `Output::usage.bytes_written` and
+  `files_touched`; `file.edit` fills `bytes_read`, `bytes_written`,
+  `files_touched`, and `match_count`; and `file.delete` fills
+  `bytes_written=0` plus `files_touched=1`. All three keep their
+  existing text summaries and leave `data_json` empty for the v1
+  migration path. Slice 60
+  closed the deep-review "tool output is too small" finding and started
   spec 0014 inside `oran-tool`: `tool::Output` now lives in
   `<oran/tool/output.hpp>` with required `text`, optional serialized
   `data_json`, attachment metadata, usage counters, and `is_error`;
@@ -27,7 +34,7 @@
   now copies `Output::usage` into `hook::ToolAfterPayload::usage` on
   successful handler returns. This is not yet provider-adapter mapping,
   scheduler byte-cap enforcement, audit usage fan-out, hook raw-data
-  redaction, or built-in structured payload migration. Slice 59
+  redaction, or structured `data_json` migration for built-ins. Slice 59
   starts the prompt-catalog cache prework shared by specs 0012 and
   0016: `core::ToolDef` now carries the documented `deferred` and
   `category` metadata, and `oran-tool` exposes `tool::CatalogRenderer`,
@@ -118,7 +125,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 24 cases / 171 assertions.
 - `oran-permission`: 86 cases / 390 assertions.
 - `oran-hook`: 15 cases / 97 assertions.
-- `oran-tool`: 145 cases / 1250 assertions.
+- `oran-tool`: 145 cases / 1279 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 153 assertions.
 

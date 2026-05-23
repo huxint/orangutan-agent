@@ -66,16 +66,21 @@ enum class Capability {
 > `requires` is a reserved C++20 keyword). Built-ins shipped so far:
 > `file.read` (slice 17, `Capability::read_file`), `file.write`
 > (slice 18, `Capability::write_file`, input
-> `{path, content, mode?, create_parents?, max_bytes?}` with
+> `{path, content, mode?, create_parents?, max_bytes?,
+> expected_version?}` with
 > `mode ∈ {truncate, append, fail_if_exists}` and `max_bytes`
-> capped at 16 MiB), `file.edit` (slice 19,
+> capped at 16 MiB; slice 61 fills `Output::usage.bytes_written`
+> and `files_touched` on success), `file.edit` (slice 19,
 > `Capability::edit_file`, input
-> `{path, old_string, new_string, replace_all?, max_bytes?}` —
+> `{path, old_string, new_string, replace_all?, max_bytes?,
+> expected_version?}` —
 > `not_found` if `old_string` is absent, `conflict` (`match_count`
 > carried) if it is ambiguous and `replace_all` was not set; the
 > read and final replacement output are capped by `max_bytes`
 > (default / hard ceiling 16 MiB); truncating rewrite via
-> `io::write_text_file`), and `file.search` (slice 20,
+> `io::write_text_file`; slice 61 fills `Output::usage.bytes_read`,
+> `bytes_written`, `files_touched`, and `match_count` on success),
+> and `file.search` (slice 20,
 > `Capability::read_file`, input
 > `{path, pattern, max_matches?, include_hidden?, regex?,
 > max_output_bytes?, respect_ignore?}` — literal substring match by
@@ -670,6 +675,12 @@ Current and future policy:
 - Built-ins migrate one at a time. Until the migration completes, range-read
   metadata for `file.read` (spec 0011) rides as a stable text header line:
   `<path>:<start_line>-<end_line> fingerprint=<token> bytes=<n>[ truncated]`.
+- Slice 61 migrates the current mutation built-ins to fill counters:
+  `file.write` reports `bytes_written` and `files_touched`; `file.edit`
+  reports `bytes_read`, `bytes_written`, `files_touched`, and
+  `match_count`; `file.delete` reports `bytes_written=0` and
+  `files_touched=1`. Their model-facing summaries stay unchanged and
+  `data_json` remains empty.
 - Provider adapters will consume `data_json` only when the target protocol
   supports structured tool-result bytes. Anthropic Messages, OpenAI
   Responses, Gemini, and OpenAI-compatible mappings remain spec-0014 follow-up

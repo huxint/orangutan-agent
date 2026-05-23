@@ -46,13 +46,15 @@ caches all consume one shape.
 The MVP delivers a forward-compatible envelope that today's text-only
 handlers can adopt without churning every callsite at once.
 
-> **Status (slice 60, 2026-05-24):** the base envelope now ships in
+> **Status (slice 61, 2026-05-24):** the base envelope now ships in
 > `oran-tool`. `Output::text_only(...)` preserves the existing text path,
 > `Output::error(...)` marks structured-capable errors, `ToolAfterPayload`
-> copies `Output::usage` on successful dispatch, and `bench-tool` has
-> `output.text_only` vs. `output.with_data_16kib` coverage. Provider
-> adapter mapping, scheduler byte caps, audit usage fan-out, hook raw-data
-> redaction, and built-in structured payload migrations remain downstream.
+> copies `Output::usage` on successful dispatch, and the current mutation
+> built-ins fill measured usage counters while keeping `data_json=nullopt`
+> for the v1 migration path. `bench-tool` has `output.text_only` vs.
+> `output.with_data_16kib` coverage. Provider adapter mapping, scheduler
+> byte caps, audit usage fan-out, hook raw-data redaction, and structured
+> `data_json` migrations for built-ins remain downstream.
 
 - **`tool::Output v2`**:
   ```cpp
@@ -138,8 +140,11 @@ handlers can adopt without churning every callsite at once.
   1. `file.read` (becomes v2's primary structured caller via spec 0011).
   2. `file.search` (gains structured `matches[]` and per-file usage).
   3. `directory.list` (gains structured `entries[]`).
-  4. `file.write` / `file.edit` / `file.delete` (gain `usage.bytes_written`
-     and `usage.files_touched`; `data_json` stays `nullopt` for v1).
+  4. `file.write` / `file.edit` / `file.delete` — shipped in slice 61:
+     `file.write` fills `usage.bytes_written` and `files_touched`;
+     `file.edit` fills `bytes_read`, `bytes_written`, `files_touched`,
+     and `match_count`; `file.delete` fills `bytes_written=0` and
+     `files_touched=1`; `data_json` stays `nullopt` for v1.
   Until each migrates, its handler constructs `Output::text_only(...)`
   and behaves exactly as today.
 
@@ -284,6 +289,7 @@ handlers can adopt without churning every callsite at once.
 xmake build oran-tool
 xmake build test-tool
 xmake run test-tool "[output]"             # envelope + hook usage coverage
+xmake run test-tool "[file_write],[file_edit],[file_delete]"
 xmake build bench-tool
 xmake run bench-tool                       # includes output.text_only / output.with_data_16kib
 xmake run bench-provider protocol_overhead # planned adapter mapping A/B once oran-provider lands

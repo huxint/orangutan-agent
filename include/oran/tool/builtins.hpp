@@ -56,7 +56,8 @@ inline constexpr std::string_view kFileDeleteName{"file.delete"};
 /// "expected_version"?: <version token from a prior `file.read`>}`. When
 /// `expected_version` is supplied the call fails with `conflict`
 /// (reason=stale_fingerprint, current `fingerprint` in context) if the
-/// file's current version differs.
+/// file's current version differs. Successful writes fill
+/// `Output::usage.bytes_written` and `files_touched`.
 [[nodiscard]] core::Result<void> register_file_write(Registry& registry);
 
 /// Register the `file.edit` tool. Replaces `old_string` with `new_string` in
@@ -68,7 +69,9 @@ inline constexpr std::string_view kFileDeleteName{"file.delete"};
 /// is set; `not_found` if `old_string` does not occur. When
 /// `expected_version` is supplied the call fails with `conflict`
 /// (reason=stale_fingerprint, current `fingerprint` in context) if the
-/// file's current version differs.
+/// file's current version differs. Successful edits fill
+/// `Output::usage.bytes_read`, `bytes_written`, `files_touched`, and
+/// `match_count`.
 [[nodiscard]] core::Result<void> register_file_edit(Registry& registry);
 
 /// Register the `file.search` tool. Scans a UTF-8 text file or (recursively)
@@ -115,7 +118,8 @@ inline constexpr std::string_view kFileDeleteName{"file.delete"};
 /// a regular file so an LLM-driven delete cannot recursively destroy a
 /// tree or unlink a symlink to a directory outside the workspace);
 /// `not_found` when no file exists at `path`. Successful deletes return
-/// the literal text `deleted <path>`.
+/// the literal text `deleted <path>` and fill
+/// `Output::usage.bytes_written=0` plus `files_touched=1`.
 [[nodiscard]] core::Result<void> register_file_delete(Registry& registry);
 
 /// Register every built-in this slice ships. Currently wires `file.read`,

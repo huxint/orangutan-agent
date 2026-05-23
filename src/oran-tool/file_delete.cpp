@@ -62,7 +62,14 @@ constexpr std::string_view kFileDeleteSchema =
   if (!deleted) {
     co_return std::unexpected(std::move(deleted).error());
   }
-  co_return Output{.text = "deleted " + path};
+  co_return Output{
+      .text = "deleted " + path,
+      .usage =
+          ToolUsage{
+              .bytes_written = 0,
+              .files_touched = 1,
+          },
+  };
 }
 
 }  // namespace
@@ -73,7 +80,8 @@ core::Result<void> register_file_delete(Registry& registry) {
       .description = "Delete a regular file. Input: {\"path\": <string>}. Refuses directories and symlinks with "
                      "`invalid_argument` (the v1 surface is deliberately narrow so a recursive delete or a "
                      "symlink-follow cannot escape the workspace). Returns `not_found` when no file exists at the "
-                     "path. On success returns the literal text `deleted <path>`.",
+                     "path. On success returns the literal text `deleted <path>` and fills usage with "
+                     "bytes_written=0 plus files_touched=1.",
       .input_schema_json = std::string{kFileDeleteSchema},
       .required_capabilities = {core::Capability::delete_path},
       .deferred = false,

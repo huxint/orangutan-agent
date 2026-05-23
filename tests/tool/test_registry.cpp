@@ -794,6 +794,12 @@ TEST_CASE("file.write happy path writes the bytes verbatim and reports the size"
     REQUIRE(result.has_value());
     REQUIRE(result->text.contains("wrote 15 bytes"));
     REQUIRE(result->text.contains(file.string()));
+    REQUIRE(result->usage.bytes_written.has_value());
+    REQUIRE(*result->usage.bytes_written == std::uintmax_t{15});
+    REQUIRE_FALSE(result->usage.bytes_read.has_value());
+    REQUIRE(result->usage.files_touched.has_value());
+    REQUIRE(*result->usage.files_touched == std::uint32_t{1});
+    REQUIRE_FALSE(result->data_json.has_value());
     REQUIRE(sink.events().size() == 1);
     REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
   });
@@ -1137,6 +1143,15 @@ TEST_CASE("file.edit happy path replaces a unique occurrence and reports a count
     REQUIRE(result->text.contains("1 replacement"));
     REQUIRE_FALSE(result->text.contains("replacements"));
     REQUIRE(result->text.contains(file.string()));
+    REQUIRE(result->usage.bytes_read.has_value());
+    REQUIRE(*result->usage.bytes_read == std::uintmax_t{16});
+    REQUIRE(result->usage.bytes_written.has_value());
+    REQUIRE(*result->usage.bytes_written == std::uintmax_t{16});
+    REQUIRE(result->usage.files_touched.has_value());
+    REQUIRE(*result->usage.files_touched == std::uint32_t{1});
+    REQUIRE(result->usage.match_count.has_value());
+    REQUIRE(*result->usage.match_count == std::uint64_t{1});
+    REQUIRE_FALSE(result->data_json.has_value());
     REQUIRE(sink.events().size() == 1);
     REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
   });
@@ -1159,6 +1174,15 @@ TEST_CASE("file.edit replace_all=true rewrites every occurrence", "[unit][tool][
     auto result = co_await registry.dispatch(tool::kFileEditName, input.dump(), ctx);
     REQUIRE(result.has_value());
     REQUIRE(result->text.contains("3 replacements"));
+    REQUIRE(result->usage.bytes_read.has_value());
+    REQUIRE(*result->usage.bytes_read == std::uintmax_t{19});
+    REQUIRE(result->usage.bytes_written.has_value());
+    REQUIRE(*result->usage.bytes_written == std::uintmax_t{19});
+    REQUIRE(result->usage.files_touched.has_value());
+    REQUIRE(*result->usage.files_touched == std::uint32_t{1});
+    REQUIRE(result->usage.match_count.has_value());
+    REQUIRE(*result->usage.match_count == std::uint64_t{3});
+    REQUIRE_FALSE(result->data_json.has_value());
   });
 
   REQUIRE(slurp(file.string()) == "qux bar qux baz qux");
@@ -3474,6 +3498,11 @@ TEST_CASE("file.delete happy path removes the file and reports the deletion", "[
     auto result = co_await registry.dispatch(tool::kFileDeleteName, input, ctx);
     REQUIRE(result.has_value());
     REQUIRE(result->text == "deleted " + path);
+    REQUIRE(result->usage.bytes_written.has_value());
+    REQUIRE(*result->usage.bytes_written == std::uintmax_t{0});
+    REQUIRE(result->usage.files_touched.has_value());
+    REQUIRE(*result->usage.files_touched == std::uint32_t{1});
+    REQUIRE_FALSE(result->data_json.has_value());
     REQUIRE_FALSE(std::filesystem::exists(path));
     REQUIRE(sink.events().size() == 1);
     REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);

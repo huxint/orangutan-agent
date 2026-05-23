@@ -259,16 +259,26 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
   }
 
   auto replaced = apply_replacements(*contents, old_string, new_string, target_positions);
+  const auto replaced_bytes = replaced.size();
   io::WriteTextOptions write_opts{.mode = io::WriteMode::truncate, .atomic = true};
   auto written = co_await io::write_text_file(ctx.executor, std::move(path), std::move(replaced), write_opts);
   if (!written) {
     co_return std::unexpected(std::move(written).error());
   }
 
-  co_return Output{.text = std::format("edited {}: {} replacement{}",
-                                       parsed["path"].get<std::string>(),
-                                       applied,
-                                       applied == 1U ? "" : "s")};
+  co_return Output{
+      .text = std::format("edited {}: {} replacement{}",
+                          parsed["path"].get<std::string>(),
+                          applied,
+                          applied == 1U ? "" : "s"),
+      .usage =
+          ToolUsage{
+              .bytes_read = contents->size(),
+              .bytes_written = replaced_bytes,
+              .files_touched = 1,
+              .match_count = applied,
+          },
+  };
 }
 
 }  // namespace
@@ -285,7 +295,8 @@ core::Result<void> register_file_edit(Registry& registry) {
                      "occurrence. When `expected_version` is supplied the call fails with "
                      "`conflict` (reason=stale_fingerprint, current `fingerprint` in context) "
                      "if the file's current version differs. Returns a brief confirmation "
-                     "listing the number of replacements applied.",
+                     "listing the number of replacements applied and fills usage with "
+                     "bytes_read, bytes_written, files_touched, and match_count.",
       .input_schema_json = std::string{kFileEditSchema},
       .required_capabilities = {core::Capability::edit_file},
       .deferred = false,
