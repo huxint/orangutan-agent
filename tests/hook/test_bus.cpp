@@ -33,6 +33,7 @@ namespace {
 struct Capture {
   hook::Event event;
   std::string payload_kind;  // "before", "dispatched", "after", "error", "monostate"
+  std::optional<std::string> data_json;
 };
 
 [[nodiscard]] std::string payload_kind(const hook::Payload& payload) {
@@ -56,14 +57,23 @@ struct Capture {
 
 class RecordingSink final : public hook::Sink {
 public:
-  explicit RecordingSink(std::string id) : id_(std::move(id)) {}
+  explicit RecordingSink(std::string id, hook::SinkKind kind = hook::SinkKind::default_)
+      : id_(std::move(id)), kind_(kind) {}
 
   [[nodiscard]] std::string_view id() const noexcept override {
     return id_;
   }
 
+  [[nodiscard]] hook::SinkKind kind() const noexcept override {
+    return kind_;
+  }
+
   [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event event, hook::Payload payload) override {
-    captures_.push_back({.event = event, .payload_kind = payload_kind(payload)});
+    std::optional<std::string> data_json;
+    if (const auto* after = std::get_if<hook::ToolAfterPayload>(&payload); after != nullptr) {
+      data_json = after->data_json;
+    }
+    captures_.push_back({.event = event, .payload_kind = payload_kind(payload), .data_json = std::move(data_json)});
     co_return core::Result<void>{};
   }
 
@@ -73,6 +83,7 @@ public:
 
 private:
   std::string id_;
+  hook::SinkKind kind_{hook::SinkKind::default_};
   std::vector<Capture> captures_;
 };
 
@@ -123,6 +134,21 @@ hook::ToolBeforePayload sample_before() {
       .input_json = "{}",
       .who = hook::Identity{.scope_key = "scope", .agent_key = "agent", .identity = "operator"},
       .started_at = core::Time::epoch(),
+  };
+}
+
+hook::ToolAfterPayload sample_after_with_data() {
+  return hook::ToolAfterPayload{
+      .tool_name = "noop",
+      .input_json = "{}",
+      .who = hook::Identity{.scope_key = "scope", .agent_key = "agent", .identity = "operator"},
+      .succeeded = true,
+      .output_text = "ok",
+      .data_json = std::string{R"({"kind":"sample","raw":true})"},
+      .error_kind = "",
+      .error_message = "",
+      .started_at = core::Time::epoch(),
+      .finished_at = core::Time::epoch(),
   };
 }
 
@@ -212,6 +238,29 @@ TEST_CASE("multiple sinks subscribed to same event run in subscription order", "
   REQUIRE(first.captures().size() == 1);
   REQUIRE(second.captures().size() == 1);
   REQUIRE(third.captures().size() == 1);
+}
+
+TEST_CASE("publish_advisory redacts tool_after data_json unless sink is trusted-local", "[hook][bus][redaction]") {
+  hook::Bus bus;
+  RecordingSink default_sink{"default"};
+  RecordingSink trusted_sink{"trusted", hook::SinkKind::trusted_local};
+  bus.bind(default_sink, {hook::Event::tool_after});
+  bus.bind(trusted_sink, {hook::Event::tool_after});
+
+  test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
+    auto outcome = co_await bus.publish_advisory(hook::Event::tool_after, sample_after_with_data());
+    REQUIRE(outcome.sinks.size() == 2);
+    REQUIRE(outcome.all_succeeded());
+    co_return;
+  });
+
+  REQUIRE(default_sink.captures().size() == 1);
+  REQUIRE(default_sink.captures()[0].payload_kind == "after");
+  REQUIRE_FALSE(default_sink.captures()[0].data_json.has_value());
+
+  REQUIRE(trusted_sink.captures().size() == 1);
+  REQUIRE(trusted_sink.captures()[0].payload_kind == "after");
+  REQUIRE(trusted_sink.captures()[0].data_json == R"({"kind":"sample","raw":true})");
 }
 
 TEST_CASE("bind is idempotent — duplicate pair does not double-fire", "[hook][bus]") {

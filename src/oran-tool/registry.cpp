@@ -103,6 +103,7 @@ namespace {
       .who = make_hook_identity(ctx),
       .succeeded = result.has_value(),
       .output_text = result.has_value() ? result->text : std::string{},
+      .data_json = result.has_value() ? result->data_json : std::nullopt,
       .usage = usage,
       .error_kind = result.has_value() ? std::string{} : std::string{core::enum_name(result.error().kind())},
       .error_message = result.has_value() ? std::string{} : std::string{result.error().message()},

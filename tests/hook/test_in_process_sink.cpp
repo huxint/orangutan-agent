@@ -39,6 +39,16 @@ TEST_CASE("InProcessSink reports its construction id", "[hook][in-process-sink]"
                              co_return core::Result<void>{};
                            }};
   REQUIRE(sink.id() == "recorder");
+  REQUIRE(sink.kind() == hook::SinkKind::default_);
+}
+
+TEST_CASE("InProcessSink may opt into trusted-local delivery", "[hook][in-process-sink]") {
+  hook::InProcessSink sink{
+      "trusted",
+      [](hook::Event, hook::Payload) -> async::Awaitable<core::Result<void>> { co_return core::Result<void>{}; },
+      hook::SinkKind::trusted_local};
+  REQUIRE(sink.id() == "trusted");
+  REQUIRE(sink.kind() == hook::SinkKind::trusted_local);
 }
 
 TEST_CASE("InProcessSink forwards event + payload to the callback", "[hook][in-process-sink]") {

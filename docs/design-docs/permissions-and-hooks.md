@@ -286,21 +286,26 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 
 ## Hook Bus
 
-> **Bus status (2026-05-21, slice 31):** the foundation
+> **Bus status (2026-05-23, slice 65):** the foundation
 > ships as `oran-hook`. `hook::Event` enumerates the 41
 > lifecycle events listed below; `hook::Mode { advisory,
 > blocking }` plus `default_mode(Event)` annotates each
 > with the design-doc semantics ("before" events +
 > `permission_ask_rendered` default to `blocking`,
 > everything else is `advisory`). `hook::Sink` is the
-> abstract base; `hook::InProcessSink` is the first
-> concrete implementation (a `std::function<async::
-> Awaitable<Result<void>>(Event, Payload)>` callback).
+> abstract base and exposes `kind()`, which defaults to
+> `SinkKind::default_`; `SinkKind::trusted_local` is the
+> explicit opt-in for same-process observers that may
+> receive raw structured tool output. `hook::InProcessSink`
+> is the first concrete implementation (a `std::function<
+> async::Awaitable<Result<void>>(Event, Payload)>`
+> callback) and can be constructed with either sink kind.
 > `hook::Bus` exposes `bind(Sink&, events)` /
 > `unbind(Sink&)` and one publish method —
 > `publish_advisory(Event, Payload) -> Awaitable<
 > PublishOutcome>` — that iterates subscribed sinks in
-> subscription order, captures each sink's `Result<void>`
+> subscription order, builds per-sink payload copies,
+> captures each sink's `Result<void>`
 > in a `PublishOutcome::SinkResult` row, and never aborts
 > the publish on a sink error (advisory contract). The
 > `PublishOutcome` lets the caller surface sink failures
@@ -313,7 +318,13 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > `ToolErrorPayload`. Slice 60 adds the `ToolUsage`
 > metrics copied from `tool::Output::usage` onto successful
 > `ToolAfterPayload`s without making `oran-hook` depend on
-> `oran-tool`. Typed shapes for the remaining non-tool
+> `oran-tool`; slice 65 adds optional
+> `ToolAfterPayload::data_json` for raw serialized structured
+> output bytes. `publish_advisory` redacts that field for
+> every sink whose `kind()` is not `SinkKind::trusted_local`,
+> so default sinks receive the existing text + usage view and
+> trusted-local sinks receive the raw data. Typed shapes for
+> the remaining non-tool
 > events ship with their producers (provider request /
 > response payloads when the Anthropic adapter lands,
 > memory payloads when `oran-memory` lands, and so on).
@@ -421,7 +432,25 @@ class Bus {
 
 ### Sink Kinds
 
-`Sink` is an abstract interface; built-in implementations:
+`SinkKind` is a coarse trust label on every `Sink`:
+
+```cpp
+enum class SinkKind {
+  default_,
+  trusted_local,
+};
+```
+
+`Sink::kind()` defaults to `SinkKind::default_`. A sink may return
+`SinkKind::trusted_local` only when it is a same-process observer whose
+operator intentionally allowed raw tool-result data to stay in process.
+`Bus::publish_advisory` enforces this for `ToolAfterPayload`: it delivers
+`output_text`, timing, error fields, and `usage` to every sink, but clears
+`ToolAfterPayload::data_json` for all non-trusted-local sinks. The registry
+may publish raw serialized `tool::Output::data_json` once; redaction remains a
+bus responsibility so each producer does not need to duplicate the policy.
+
+Built-in implementations:
 
 | Sink kind     | When to use                                                  |
 | ------------- | ------------------------------------------------------------ |
@@ -431,8 +460,8 @@ class Bus {
 | `WasmSink`    | (stretch) wasmtime; sandboxed.                                |
 | `WebhookSink` | HTTP POST to a URL via `oran-http::Client`.                  |
 
-Sinks declare `kind()` and a `Capabilities` struct (e.g. "this sink may block"; the
-bus respects blocking-vs-fire-and-forget semantics).
+Sinks will also declare a `Capabilities` struct (e.g. "this sink may block"; the
+bus respects blocking-vs-fire-and-forget semantics) once blocking sinks land.
 
 ### Synchronous vs. Async Hooks
 

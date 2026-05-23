@@ -81,6 +81,10 @@ struct ToolAfterPayload {
   bool succeeded{false};
   /// Verbatim `Output::text` on success; empty string on failure.
   std::string output_text;
+  /// Raw structured output bytes copied from `Output::data_json` on success.
+  /// `Bus` redacts this field for sinks whose `Sink::kind()` is not
+  /// `SinkKind::trusted_local`.
+  std::optional<std::string> data_json{};
   /// Metrics copied from `Output::usage` on success; all fields empty on
   /// dispatch failure.
   ToolUsage usage{};

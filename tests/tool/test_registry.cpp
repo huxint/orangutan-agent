@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -2839,6 +2840,7 @@ struct CapturedEvent {
   std::string identity;
   bool succeeded{false};
   std::string output_text;
+  std::optional<std::string> data_json{};
   orangutan::hook::ToolUsage usage{};
   std::string error_kind;
   std::string error_message;
@@ -2847,10 +2849,15 @@ struct CapturedEvent {
 
 class CaptureSink final : public orangutan::hook::Sink {
 public:
-  explicit CaptureSink(std::string id) : id_(std::move(id)) {}
+  explicit CaptureSink(std::string id, orangutan::hook::SinkKind kind = orangutan::hook::SinkKind::default_)
+      : id_(std::move(id)), kind_(kind) {}
 
   [[nodiscard]] std::string_view id() const noexcept override {
     return id_;
+  }
+
+  [[nodiscard]] orangutan::hook::SinkKind kind() const noexcept override {
+    return kind_;
   }
 
   [[nodiscard]] async::Awaitable<core::Result<void>> receive(orangutan::hook::Event event,
@@ -2872,6 +2879,7 @@ public:
             row.identity = alt.who.identity;
             row.succeeded = alt.succeeded;
             row.output_text = alt.output_text;
+            row.data_json = alt.data_json;
             row.usage = alt.usage;
             row.error_kind = alt.error_kind;
             row.error_message = alt.error_message;
@@ -2893,6 +2901,7 @@ public:
 
 private:
   std::string id_;
+  orangutan::hook::SinkKind kind_{orangutan::hook::SinkKind::default_};
   std::vector<CapturedEvent> captures_;
 };
 
@@ -2941,6 +2950,18 @@ async::Awaitable<core::Result<tool::Output>> noop_usage_handler(std::string_view
               .match_count = 3,
               .wall_time = std::chrono::nanoseconds{42},
               .truncated = true,
+          },
+  };
+}
+
+async::Awaitable<core::Result<tool::Output>> noop_data_handler(std::string_view, tool::DispatchContext& /*ctx*/) {
+  co_return tool::Output{
+      .text = "noop-data",
+      .data_json = std::string{R"({"kind":"noop","raw":true})"},
+      .usage =
+          tool::ToolUsage{
+              .bytes_read = 7,
+              .files_touched = 1,
           },
   };
 }
@@ -3038,6 +3059,40 @@ TEST_CASE("dispatch copies output usage into tool_after payload", "[unit][tool][
 
     REQUIRE(audit.events().size() == 1);
     REQUIRE(audit.events()[0].metadata_json == "{}");
+  });
+}
+
+TEST_CASE("dispatch redacts structured output from untrusted tool_after sinks", "[unit][tool][hook][output]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(noop_tool_def(), &noop_data_handler).has_value());
+
+    auto rules = allow_rule_set();
+    permission::RecordingAuditSink audit;
+
+    orangutan::hook::Bus bus;
+    CaptureSink default_sink{"capture-default"};
+    CaptureSink trusted_sink{"capture-trusted", orangutan::hook::SinkKind::trusted_local};
+    bus.bind(default_sink, {orangutan::hook::Event::tool_after});
+    bus.bind(trusted_sink, {orangutan::hook::Event::tool_after});
+
+    auto ctx = make_hooked_ctx(io, rules, audit, &bus);
+    auto result = co_await registry.dispatch("noop", R"({})", ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "noop-data");
+    REQUIRE(result->data_json == R"({"kind":"noop","raw":true})");
+
+    REQUIRE(default_sink.captures().size() == 1);
+    REQUIRE(default_sink.captures()[0].succeeded);
+    REQUIRE(default_sink.captures()[0].output_text == "noop-data");
+    REQUIRE_FALSE(default_sink.captures()[0].data_json.has_value());
+    REQUIRE(default_sink.captures()[0].usage.bytes_read == 7);
+
+    REQUIRE(trusted_sink.captures().size() == 1);
+    REQUIRE(trusted_sink.captures()[0].succeeded);
+    REQUIRE(trusted_sink.captures()[0].output_text == "noop-data");
+    REQUIRE(trusted_sink.captures()[0].data_json == R"({"kind":"noop","raw":true})");
+    REQUIRE(trusted_sink.captures()[0].usage.files_touched == 1);
   });
 }
 

@@ -10,6 +10,7 @@
 #include <span>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <oran/async/awaitable_fwd.hpp>
@@ -19,6 +20,19 @@
 #include <oran/hook/sink.hpp>
 
 namespace orangutan::hook {
+namespace {
+
+[[nodiscard]] Payload payload_for_sink(const Sink& sink, const Payload& payload) {
+  auto delivered = payload;
+  if (sink.kind() != SinkKind::trusted_local) {
+    if (auto* after = std::get_if<ToolAfterPayload>(&delivered); after != nullptr) {
+      after->data_json.reset();
+    }
+  }
+  return delivered;
+}
+
+}  // namespace
 
 bool PublishOutcome::all_succeeded() const noexcept {
   return std::ranges::all_of(sinks, [](const auto& row) { return !row.error.has_value(); });
@@ -67,7 +81,7 @@ async::Awaitable<PublishOutcome> Bus::publish_advisory(Event event, Payload payl
     // tool_after publish is `[[maybe_unused]]` — would crash on any
     // throwing extension.
     try {
-      auto result = co_await sink->receive(event, payload);
+      auto result = co_await sink->receive(event, payload_for_sink(*sink, payload));
       if (!result) {
         row.error = std::move(result).error();
       }

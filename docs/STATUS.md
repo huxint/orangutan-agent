@@ -7,15 +7,31 @@
 
 ## Snapshot
 
-- **Slice:** 64 (`xmake run orangutan` reports slice 64)
+- **Slice:** 65 (`xmake run orangutan` reports slice 65)
 - **Last completed history:**
-  [`histories/2026-05/20260524-0540-tool-directory-list-structured-output.md`](histories/2026-05/20260524-0540-tool-directory-list-structured-output.md)
+  [`histories/2026-05/20260524-0600-hook-structured-output-redaction.md`](histories/2026-05/20260524-0600-hook-structured-output-redaction.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 64
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 65
+  closes spec 0014's hook raw-data redaction item: `hook::Sink` now
+  exposes `kind()` with `SinkKind::default_` and
+  `SinkKind::trusted_local`, `hook::InProcessSink` stores the chosen
+  kind, `ToolAfterPayload` can carry optional raw structured
+  `data_json`, `Registry::dispatch` copies successful
+  `Output::data_json` into the hook payload, and
+  `Bus::publish_advisory` clears that field for every sink that is not
+  `trusted_local`. Default sinks therefore keep text + usage only, while
+  trusted-local observers can receive the raw structured bytes. With
+  `file.read` (slice 62), `file.search` (slice 63), and
+  `directory.list` (slice 64) migrated and the mutation tools holding
+  measured usage counters from slice 61, the built-in side of spec 0014's
+  structured-output migration is done. Provider adapter mapping,
+  scheduler byte caps, and audit usage fan-out remain downstream
+  spec-0014 items.
+  Slice 64
   continues spec 0014's built-in structured-output migration for
   `directory.list`: the handler keeps the existing
   `<path>:<kind>:<size_bytes or '-'>` text rendering, now fills
@@ -24,12 +40,7 @@
   (each entry carries `{name, path, kind, size_bytes}` with JSON null
   for non-regular kinds), and fills `Output::usage.files_touched=1`
   plus `match_count=entry_count` so audit fan-out can see directory-walk
-  cost without parsing prose. With `file.read` (slice 62),
-  `file.search` (slice 63), and `directory.list` (slice 64) migrated
-  and the mutation tools holding measured usage counters from slice 61,
-  the built-in side of spec 0014's structured-output migration is done.
-  Provider adapter mapping, scheduler byte caps, audit usage fan-out,
-  and hook raw-data redaction remain downstream spec-0014 items.
+  cost without parsing prose.
   Slice 63 migrated `file.search`: the handler keeps the existing
   `path:line:text` text rendering (with the slice-47 byte-cap and
   slice-20 match-cap trailing summary), now fills `Output::data_json`
@@ -60,10 +71,10 @@
   header stays `nlohmann`-free by storing structured payload bytes as a
   string for provider adapters to parse/serialize later. `Registry::dispatch`
   now copies `Output::usage` into `hook::ToolAfterPayload::usage` on
-  successful handler returns. This is not yet provider-adapter mapping,
-  scheduler byte-cap enforcement, audit usage fan-out, hook raw-data
-  redaction, or structured `data_json` migration for `file.search` /
-  `directory.list`. Slice 59
+  successful handler returns. Provider-adapter mapping, scheduler
+  byte-cap enforcement, and audit usage fan-out remain downstream; later
+  slices migrated `file.search` / `directory.list` structured `data_json`
+  and shipped trusted-local hook raw-data redaction. Slice 59
   starts the prompt-catalog cache prework shared by specs 0012 and
   0016: `core::ToolDef` now carries the documented `deferred` and
   `category` metadata, and `oran-tool` exposes `tool::CatalogRenderer`,
@@ -153,8 +164,8 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-storage`: 60 cases / 706 assertions.
 - `oran-config`: 24 cases / 171 assertions.
 - `oran-permission`: 86 cases / 390 assertions.
-- `oran-hook`: 15 cases / 97 assertions.
-- `oran-tool`: 156 cases / 1470 assertions.
+- `oran-hook`: 17 cases / 109 assertions.
+- `oran-tool`: 157 cases / 1485 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 153 assertions.
 

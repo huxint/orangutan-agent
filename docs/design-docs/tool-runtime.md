@@ -670,8 +670,10 @@ Current and future policy:
   `Output::error(...)` marks an error envelope and may carry serialized
   structured error bytes.
 - `Registry::dispatch` copies `Output::usage` into
-  `hook::ToolAfterPayload::usage` on successful handler returns. Dispatch
-  failures keep usage empty.
+  `hook::ToolAfterPayload::usage` on successful handler returns and now also
+  copies successful `Output::data_json` into
+  `ToolAfterPayload::data_json`. Dispatch failures keep usage and `data_json`
+  empty.
 - Built-ins migrate one at a time. `file.read` still keeps the stable
   spec-0011 text fallback
   `<path>:<start_line>-<end_line> fingerprint=<token> bytes=<n>[ truncated]`
@@ -706,8 +708,12 @@ Current and future policy:
   supports structured tool-result bytes. Anthropic Messages, OpenAI
   Responses, Gemini, and OpenAI-compatible mappings remain spec-0014 follow-up
   work because `oran-provider` does not exist yet.
-- Scheduler byte caps, audit usage fan-out, and raw `data_json` hook
-  redaction for trusted-local sinks remain downstream spec-0014 items.
+- Raw `data_json` hook redaction shipped in slice 65: `hook::Bus` delivers
+  the field only to sinks whose `Sink::kind()` returns
+  `SinkKind::trusted_local`; default sinks receive the text fallback and usage
+  metrics with `data_json` cleared.
+- Scheduler byte caps and audit usage fan-out remain downstream spec-0014
+  items.
 - The `tool::parse_input<T>` helper tracked under the deep-review backlog
   (`exec-plans/tech-debt-tracker.md`) lands in the same arc so handlers
   stop hand-rolling their JSON parsers.

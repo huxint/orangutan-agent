@@ -46,10 +46,13 @@ caches all consume one shape.
 The MVP delivers a forward-compatible envelope that today's text-only
 handlers can adopt without churning every callsite at once.
 
-> **Status (slice 64, 2026-05-24):** the base envelope ships in
+> **Status (slice 65, 2026-05-24):** the base envelope ships in
 > `oran-tool`. `Output::text_only(...)` preserves the existing text path,
 > `Output::error(...)` marks structured-capable errors, `ToolAfterPayload`
-> copies `Output::usage` on successful dispatch, `file.read` carries its
+> copies `Output::usage` on successful dispatch, and slice 65 copies
+> successful `Output::data_json` into `ToolAfterPayload::data_json` while
+> `hook::Bus` redacts it for every sink except `SinkKind::trusted_local`.
+> `file.read` carries its
 > requested text plus range/fingerprint tuple in serialized `data_json`
 > while keeping the spec-0011 text fallback, the current mutation built-ins
 > fill measured usage counters while keeping `data_json=nullopt` for the v1
@@ -64,8 +67,8 @@ handlers can adopt without churning every callsite at once.
 > is complete — every shipped filesystem built-in fills usage counters and
 > every read-side built-in also fills `data_json`. `bench-tool`
 > has `output.text_only` vs. `output.with_data_16kib` coverage. Provider
-> adapter mapping, scheduler byte caps, audit usage fan-out, and hook
-> raw-data redaction remain downstream.
+> adapter mapping, scheduler byte caps, and audit usage fan-out remain
+> downstream.
 
 - **`tool::Output v2`**:
   ```cpp
@@ -134,11 +137,13 @@ handlers can adopt without churning every callsite at once.
   `cost_estimate`, `wall_time_ms`) when the tool returns them. The
   existing `input_hash` discipline is unchanged.
 - **Hook fan-out.** `ToolAfterPayload` (already defined in slice 22 +
-  slice 25) now has a `usage` field carrying the same metrics. The
-  payload's `output_text` stays the truncated rendering used today;
-  full structured `data_json` rides as a separate optional field only when
-  the consuming sink declares the `kind::trusted_local` capability
-  documented in the deep-review §Hook/audit redaction recommendation.
+  slice 25) now has a `usage` field carrying the same metrics and, as of
+  slice 65, optional `data_json` carrying the raw serialized structured output
+  bytes from successful tool dispatch. The payload's `output_text` stays the
+  truncated rendering used today. `hook::Bus` builds per-sink payload copies
+  and clears `data_json` unless the consuming sink's `kind()` returns
+  `SinkKind::trusted_local`, matching the deep-review §Hook/audit redaction
+  recommendation.
 - **Byte caps**. Two caps, independent:
   - `runtime.tool_output.max_text_bytes` (default 256 KiB) — applies to
     `text`. Exceeding it truncates and sets `is_error=false` with a
@@ -243,11 +248,12 @@ handlers can adopt without churning every callsite at once.
    bytes of serialised `data_json` produces an output whose `text` is intact,
    `data_json == std::nullopt`, and `usage.data_dropped = true`. The
    provider-adapter call still succeeds (with the text fallback).
-6. **Hook redaction.** A `file.write` v2 handler's `ToolAfterPayload`
-   delivered to a default-capability sink contains hashed input + byte
-   counts in `usage`; the same payload delivered to a sink declaring
-   `kind::trusted_local` contains the raw `data_json` field. Pinned by a
-   two-sink test.
+6. **Hook redaction.** Shipped in slice 65. A structured-output handler's
+   `ToolAfterPayload` delivered to a default sink contains the text fallback
+   and byte/count metrics in `usage` but no raw `data_json`; the same payload
+   delivered to a sink whose `kind()` returns `SinkKind::trusted_local`
+   contains the raw `data_json` field. Pinned by hook-bus and registry
+   two-sink tests.
 7. **Adapter mapping.** Three adapter tests (Anthropic, OpenAI
    Responses, fake) prove that `Output::text_only(...)` maps to a
    single text block in each vendor's tool-result shape, and that
@@ -329,6 +335,6 @@ xmake run bench-provider protocol_overhead # planned adapter mapping A/B once or
 - `docs/exec-plans/tech-debt-tracker.md` — the deep-review §`tool::Output`
   is too small P2 row closes in slice 60; the `tool::parse_input<T>` P1
   row remains open because input parsing was not part of this slice.
-- `docs/design-docs/permissions-and-hooks.md` "Sink Kinds" gains a
-  `kind::trusted_local` annotation when the redaction policy lands;
-  this is a small edit in the same PR as v1.1.
+- `docs/design-docs/permissions-and-hooks.md` "Sink Kinds" records the
+  shipped `SinkKind::trusted_local` annotation and the bus-enforced
+  `ToolAfterPayload::data_json` redaction policy.

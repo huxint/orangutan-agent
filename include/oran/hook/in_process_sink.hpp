@@ -26,10 +26,15 @@ public:
   /// `id` is the stable sink identifier (see `Sink::id`); `callback` is
   /// invoked once per received event. The callback may return an error;
   /// the bus captures it in the publish outcome but other sinks still run.
-  InProcessSink(std::string id, Callback callback) : id_(std::move(id)), callback_(std::move(callback)) {}
+  InProcessSink(std::string id, Callback callback, SinkKind kind = SinkKind::default_)
+      : id_(std::move(id)), callback_(std::move(callback)), kind_(kind) {}
 
   [[nodiscard]] std::string_view id() const noexcept override {
     return id_;
+  }
+
+  [[nodiscard]] SinkKind kind() const noexcept override {
+    return kind_;
   }
 
   [[nodiscard]] async::Awaitable<core::Result<void>> receive(Event event, Payload payload) override;
@@ -37,6 +42,7 @@ public:
 private:
   std::string id_;
   Callback callback_;
+  SinkKind kind_{SinkKind::default_};
 };
 
 }  // namespace orangutan::hook
