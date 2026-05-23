@@ -7,16 +7,36 @@
 
 ## Snapshot
 
-- **Slice:** 72 (`xmake run orangutan` reports slice 72)
+- **Slice:** 73 (`xmake run orangutan` reports slice 73)
 - **Last completed history:**
-  [`histories/2026-05/20260524-0725-agent-session-promotion.md`](histories/2026-05/20260524-0725-agent-session-promotion.md)
+  [`histories/2026-05/20260524-0740-provider-cache-hints.md`](histories/2026-05/20260524-0740-provider-cache-hints.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
-  the agent session promotion increment closed in one history/commit and
+  the provider cache-hint increment closed in one history/commit and
   did not need a new plan.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 72
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 73
+  opens `oran-provider` with the adapter-facing cache-hint surface needed
+  between spec 0016 and the fake-provider-first loop. `<oran/provider.hpp>`
+  now exports provider-domain `Request`, `Response`, `Usage`, `RetryPolicy`,
+  `PromptCacheHints`, `PromptCacheOptions`, and
+  `make_prompt_cache_hints(RenderedPrompt, options)`. The mapper validates
+  the prompt-design boundary (`RenderedPrompt::sections` has exactly seven
+  sections, exactly one breakpoint, and that breakpoint is section 6 before
+  the conversation tail), checks `prefix_bytes` against the actual section
+  bytes, maps sections 1-6 into `(id, content_hash, cache_version)` cache
+  keys plus the prefix hash/byte count, excludes `conversation_tail`, and
+  supports route-level cache disable / minimum-prefix skip. `test-provider`
+  covers successful prefix-only mapping, disable/size-floor skips, and
+  malformed boundary rejection; `bench-provider` compares
+  `provider.cache_hints_enabled` at about 394 ns / mapping with the disabled
+  route at about 317 ns / mapping. `oran-provider` is not linked into the
+  `orangutan` binary yet and does not contain a fake provider, transport,
+  protocol adapter, retry runtime, or real vendor cache-control mapping.
+  Remaining near-term work is the fake-provider-first loop over these
+  domain shapes, followed by provider adapter mapping for real protocols.
+  Slice 72
   opens `oran-agent` with the narrow session-state owner needed by spec
   0016 before the full ReAct loop lands. `agent::SessionState` owns
   `prompt::PromotionState`, observes successful `tool.search` outputs,
@@ -31,9 +51,7 @@
   `agent.prompt_cache_after_promotion` about 63.1 us / fixture) and aborts
   if `RenderedPrompt::prefix_hash` drifts across changing conversation tails.
   `oran-agent` is not linked into the `orangutan` binary yet and does not
-  contain the fake-provider ReAct loop. Remaining near-term work is provider
-  cache mapping from `RenderedPrompt` plus the first fake-provider loop /
-  provider-adapter mapping. Slice 71
+  contain the fake-provider ReAct loop. Slice 71
   extended `oran-prompt` with `prompt::PromotionState`, a session-owned
   value type for deferred-tool promotions, and taught `prompt::Builder` to
   consume sorted promotion snapshots. Slice 70 opened the `prompt::Builder`
@@ -226,6 +244,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-hook`: 17 cases / 109 assertions.
 - `oran-tool`: 166 cases / 1588 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
+- `oran-provider`: 3 cases / 25 assertions.
 - `oran-agent`: 3 cases / 23 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 153 assertions.

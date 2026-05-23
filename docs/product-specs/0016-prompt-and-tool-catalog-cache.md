@@ -91,6 +91,12 @@ promotion side effect that the first agent loop will reuse.
   The agent loop calls `build(inputs)` once per turn. Adapter sees
   `RenderedPrompt` and maps to vendor cache shape per
   `api-portability.md`.
+  **Status (slice 73, 2026-05-24):** `oran-provider` now exposes
+  `provider::make_prompt_cache_hints(RenderedPrompt, options)`, the first
+  adapter-facing mapper for that contract. It validates the seven-section
+  prompt shape, the single section-6 breakpoint, and the prefix-byte count,
+  then returns section 1-6 `(id, content_hash, cache_version)` keys plus the
+  prefix hash/bytes while excluding section 7's conversation tail.
 - **Deterministic tool-catalog renderer**:
   - **Status (slices 59 + 68 + 69 + 70 + 71):** the renderer exists in
     `oran-tool` as `tool::CatalogRenderer`, alongside the new
@@ -172,6 +178,10 @@ promotion side effect that the first agent loop will reuse.
   7 (conversation tail) as `is_breakpoint = true`. Adapters use this
   to place the vendor cache marker; no other section is a breakpoint
   in v1 (Anthropic allows 4; we ship 1 to keep the model simple).
+  Slice 73 pins that adapter-side boundary with
+  `provider::make_prompt_cache_hints`, which rejects missing, duplicate,
+  misplaced, or prefix-byte-drifted breakpoints and supports disabled /
+  minimum-prefix skip paths for routes that cannot use upstream caching.
 - **Prompt-cache stability bench** —
   `bench/agent/scenarios/prompt_cache_hit_rate.cpp`. N iterations against a
   session-owned fixture; asserts `prefix_hash` is identical across changing
@@ -267,7 +277,11 @@ promotion side effect that the first agent loop will reuse.
 8. **Breakpoint placement.** The adapter sees exactly one
    `is_breakpoint = true` section in v1, at the boundary between
    section 6 and section 7. The adapter test asserts the vendor
-   cache marker lands at the right byte offset.
+   cache marker lands at the right byte offset. Slice 73 ships the
+   provider-side validation/mapping half in `test-provider`: successful
+   mappings expose only sections 1-6, disabled and size-floor routes skip
+   cache hints cleanly, and malformed boundaries return
+   `ErrorKind::invalid_argument`.
 9. **Active-set config drives section 2.** A config with
    `runtime.prompt.active_tools = ["file.read", "file.search"]`
    produces a section 2 that contains *only* those two tools; every

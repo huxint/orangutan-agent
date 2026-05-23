@@ -67,7 +67,7 @@ xmake run orangutan-bench --json > all.json
 | `prompt`           | default active-tool set        | explicit active-tool subset |
 | `agent`            | no promoted tools              | after `tool.search` promotion |
 | `memory`           | FTS5 backend                   | sqlite-vec backend (v2)    |
-| `provider`         | nlohmann_json encode/decode    | simdjson (stretch)         |
+| `provider`         | cache hints enabled            | cache hints disabled       |
 | `orchestration`    | leader-worker strategy         | vote strategy              |
 | `tool`             | hashmap registry lookup        | static dispatch (stretch)  |
 | `channel`          | bounded `Channel<T>`           | unbounded queue            |
@@ -78,5 +78,5 @@ Each table row corresponds to at least one scenario file in the bucket.
 
 `bench/core/`, `bench/async/`, `bench/io/`, `bench/storage/`, `bench/config/`,
 `bench/permission/`, `bench/hook/`, `bench/tool/`, `bench/prompt/`,
-`bench/agent/`, `bench/cli/`, and `bench/bootstrap/` are live.
+`bench/provider/`, `bench/agent/`, `bench/cli/`, and `bench/bootstrap/` are live.
 Additional buckets land with their owning libraries.

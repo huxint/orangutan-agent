@@ -72,7 +72,9 @@ own library, its own tests, its own bench, its own design doc."
 > deterministic `prompt::Builder` skeleton plus `prompt::PromotionState`, and
 > `oran-agent` now owns the narrow `agent::SessionState` surface that observes
 > successful `tool.search` output and promotes deferred matches into the next
-> prompt snapshot. The full loop/provider/memory/hook runtime remains future.
+> prompt snapshot. Slice 73 adds the provider-side cache-hint mapper from
+> `prompt::RenderedPrompt` to adapter-facing prefix keys. The full
+> loop/provider/memory/hook runtime remains future.
 > The invariants — section order, byte-identical cached prefix, no clocks /
 > per-call state in sections (1)–(6) — remain canonical in
 > [`../rules/prompt-design.md`](../rules/prompt-design.md).
@@ -114,9 +116,10 @@ that path: `agent::SessionState` consumes successful `tool.search`
 structured output, promotes deferred matches, and exposes the sorted snapshot
 for the next build. `bench-prompt` compares default, explicit, promoted, and
 promotion-state snapshot paths; `bench-agent` now pins no-promotion and
-after-promotion session snapshots against conversation-tail drift. Provider
-cache mapping and the fake-provider loop still need to connect these pieces
-into a turn loop.
+after-promotion session snapshots against conversation-tail drift. Slice 73
+connects the cache boundary to `oran-provider` through
+`provider::make_prompt_cache_hints`; the fake-provider loop still needs to
+drive these pieces through a turn loop.
 
 ## Cross-Cutting Concerns
 

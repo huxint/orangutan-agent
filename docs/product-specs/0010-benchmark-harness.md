@@ -55,7 +55,7 @@ one A-vs-B scenario:
 | `oran-bootstrap` | missing default config fallback | explicit config file load |
 | `oran-tool`     | hashmap lookup                 | static dispatch (stretch)  |
 | `oran-memory`   | FTS5                           | sqlite-vec (v2)            |
-| `oran-provider` | nlohmann_json encode/decode    | simdjson (stretch)         |
+| `oran-provider` | cache hints enabled            | cache hints disabled       |
 | `oran-orchestration` | leader-worker             | vote                       |
 | `oran-channel`  | bounded asio channel           | unbounded queue (with backpressure metric) |
 

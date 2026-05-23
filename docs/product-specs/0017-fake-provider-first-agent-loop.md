@@ -41,6 +41,10 @@ proves the loop behaves correctly without a network.
   "Domain Model" are the source of truth (`provider::Request`,
   `provider::Response`, `core::Content` variant, `StopReason`, `Usage`,
   `EventSink`). This spec freezes their *behaviour* for v1:
+  - **Status (slice 73, 2026-05-24):** `oran-provider` now ships the
+    value-type `Request`, `Response`, `Usage`, and `RetryPolicy` shapes
+    plus prompt-cache hints. `System`, route resolution, `EventSink`, and
+    `FakeProvider` still land with the first loop slice.
   - The loop emits **one** `provider::Request` per iteration.
   - The provider emits **one** `provider::Response` per request (after
     streaming completes if streaming is enabled).
@@ -138,7 +142,7 @@ proves the loop behaves correctly without a network.
   Ships *after* v1 with no loop changes — the adapter satisfies the
   `provider::System` interface defined in v1.
 - **OpenAI Responses adapter** in the same slice (or the next),
-  parity gated by `bench/oran-provider/protocol-overhead`.
+  parity gated by a future `bench-provider` protocol-overhead scenario.
 - **Streaming sink** — `provider::EventSink` becomes a real coroutine
   channel surfaced through `oran-cli` so the REPL renders deltas
   character-by-character (spec 0001 acceptance #3).
@@ -270,7 +274,7 @@ proves the loop behaves correctly without a network.
   responses real vendors never emit. Mitigation: the v2 replay
   harness records real conversations and replays them; until then
   the fake is the *contract*, not the *vendor* — adapter bugs are
-  caught in `bench/oran-provider/protocol-overhead`.
+  caught in a future `bench-provider` protocol-overhead scenario.
 - **Stop reason mapping mistakes.** Adapters that map a vendor stop
   reason to the wrong internal `StopReason` look fine in the fake
   but loop forever in production. Mitigation: every adapter test
@@ -291,6 +295,7 @@ proves the loop behaves correctly without a network.
 
 ```sh
 xmake build oran-agent oran-provider
+xmake test test-provider                    # provider domain/cache mapping
 xmake test test-agent                       # ten fake-provider scenarios
 xmake build bench-oran-agent
 xmake run bench-oran-agent iteration_overhead  # ≤ 5ms ex provider per spec 0001 #9
@@ -301,8 +306,8 @@ xmake test test-agent
 ## Out-of-Band Cross-Cuts
 
 - `docs/ARCHITECTURE.md` — `oran-agent` flips from "planned" to
-  "skeleton" in the slice that lands v1; `oran-provider` ships with
-  `FakeProvider` only.
+  "skeleton" in the slice that lands v1; `oran-provider` already carries the
+  request/response/cache-hint shapes and later ships `FakeProvider`.
 - `docs/design-docs/agent-platform.md` "Goals For The First 12
   Months" — the MVP runtime goal #1 gets a sub-point pointing at
   this spec for the v1 sequencing.

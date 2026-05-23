@@ -238,7 +238,7 @@ list, stop when the bench is satisfied. Going straight to tier 4
 
 | Category | Library | Compares |
 | --- | --- | --- |
-| Encoding overhead | provider | nlohmann_json vs. simdjson |
+| Provider cache mapping | provider | cache hints enabled vs. disabled |
 | File read wrapper | io | direct `std::ifstream` vs. coroutine wrapper |
 | SQLite insert path | storage | literal execute inserts vs. prepared statement binding |
 | SQLite migration path | storage | cold migration apply vs. no-op migration check |

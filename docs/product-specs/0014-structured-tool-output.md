@@ -84,7 +84,9 @@ handlers can adopt without churning every callsite at once.
 > every read-side built-in also fills `data_json`. `bench-tool`
 > has `output.text_only` vs. `output.with_data_16kib` plus
 > `output.apply_caps` coverage. Provider adapter mapping remains downstream
-> because `oran-provider` does not exist yet.
+> after slice 73: `oran-provider` now ships provider-domain values and
+> prompt-cache hints only; structured tool-result protocol mapping remains
+> downstream.
 
 - **`tool::Output v2`**:
   ```cpp
@@ -256,7 +258,9 @@ handlers can adopt without churning every callsite at once.
    Responses adapter as a JSON `output` field, and a fake-provider
    (spec 0017) test sink as the parsed `data_json`. The agent transcript's
    *bytes* sent to the provider differ when `data_json` is present and
-   match v1 when absent.
+   match v1 when absent. `oran-provider` now exists for request/response
+   values and prompt-cache hints (slice 73), but this structured tool-result
+   protocol mapping is still future work.
 3. **Usage propagation.** Shipped for direct dispatch in slice 67. A handler that fills
    `usage = { .bytes_read = 4096, .files_touched = 1 }` produces an
    audit row whose `metadata_json.usage` carries those keys, a
@@ -332,8 +336,8 @@ handlers can adopt without churning every callsite at once.
   `content` array, OpenAI Responses' `output`, and Gemini's
   `functionResponse.response` are not byte-equivalent. Mitigation: the
   agent loop sends the same `Output` value to every adapter; the
-  adapter owns its serialisation. Cross-adapter A/B tests live in
-  `bench/oran-provider/protocol-overhead`.
+  adapter owns its serialisation. Cross-adapter A/B tests will extend
+  `bench-provider` once the first protocol mapper lands.
 - **Spec 0011 timing dependency.** `file.read` v2's structured metadata
   is more useful with `Output` v2 shipped first. Mitigation: spec 0011
   v1 explicitly ships the same tuple as a text header so the two specs
@@ -352,7 +356,7 @@ xmake run test-tool "[output]"             # envelope + hook usage coverage
 xmake run test-tool "[file_write],[file_edit],[file_delete]"
 xmake build bench-tool
 xmake run bench-tool                       # includes output.text_only / output.with_data_16kib
-xmake run bench-provider protocol_overhead # planned adapter mapping A/B once oran-provider lands
+xmake run bench-provider                  # cache-hint mapping today; protocol mapping A/B later
 ```
 
 ## Out-of-Band Cross-Cuts

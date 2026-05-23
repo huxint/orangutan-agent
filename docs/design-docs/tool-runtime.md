@@ -750,7 +750,9 @@ Current and future policy:
 - Provider adapters will consume `data_json` only when the target protocol
   supports structured tool-result bytes. Anthropic Messages, OpenAI
   Responses, Gemini, and OpenAI-compatible mappings remain spec-0014 follow-up
-  work because `oran-provider` does not exist yet.
+  work. Slice 73 opens `oran-provider` for domain request/response values and
+  prompt-cache hints only; it does not yet map structured tool results to any
+  vendor protocol.
 - Raw `data_json` hook redaction shipped in slice 65: `hook::Bus` delivers
   the field only to sinks whose `Sink::kind()` returns
   `SinkKind::trusted_local`; default sinks receive the text fallback and usage

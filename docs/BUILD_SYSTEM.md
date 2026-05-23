@@ -220,6 +220,7 @@ oran_lib("permission", { "oran-core", "oran-config", "oran-storage", "oran-async
 oran_lib("hook", { "oran-core", "oran-async" }, {})
 oran_lib("tool", { "oran-core", "oran-async", "oran-io", "oran-permission", "oran-hook" }, { "nlohmann_json" })
 oran_lib("prompt", { "oran-core", "oran-async", "oran-config", "oran-tool" }, {})
+oran_lib("provider", { "oran-core", "oran-prompt" }, {})
 oran_lib("agent", { "oran-core", "oran-prompt", "oran-tool" }, { "nlohmann_json" })
 oran_lib("cli", { "oran-core" }, {})
 oran_lib("bootstrap", { "oran-core", "oran-async", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-tool", "oran-cli" }, {})
@@ -230,6 +231,12 @@ target("orangutan")
     add_files(path.join(root, "src/main.cpp"))
     set_rundir(root)
 ```
+
+`oran-provider` is currently the slice-73 cache-hint/domain-shape library
+only; it is registered with `test-provider` and `bench-provider`, but no
+transport, protocol adapter, or fake provider is linked into the binary yet.
+The intentional `provider -> prompt` same-layer dependency is limited to
+adapter-side consumption of `prompt::RenderedPrompt`.
 
 `oran-agent` is currently the slice-72 session-state library only; it is
 registered with `test-agent` and `bench-agent`, but the `orangutan` binary does

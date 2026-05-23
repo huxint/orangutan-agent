@@ -19,7 +19,7 @@ struct Request {
   std::optional<std::uint32_t> max_tokens;
   std::optional<std::uint32_t> thinking_budget;
   bool                       stream = true;
-  std::optional<CacheHints>  cache;
+  std::optional<PromptCacheHints> cache;
   RetryPolicy                retry;             // execution-layer concern
 };
 
@@ -34,6 +34,14 @@ struct Response {
 ```
 
 `core::Content` is a typed variant; protocol adapters translate to/from vendor JSON.
+
+> **Status (slice 73, 2026-05-24):** `oran-provider` exists as the
+> provider-domain and prompt-cache-hint library. `<oran/provider.hpp>` exports
+> `Request`, `Response`, `Usage`, `RetryPolicy`, `PromptCacheHints`,
+> `PromptCacheOptions`, and
+> `make_prompt_cache_hints(prompt::RenderedPrompt, options)`. Transport,
+> protocol adapters, route resolution, streaming `EventSink`, retry/fallback
+> execution, and `FakeProvider` remain planned.
 
 ## Layered Implementation
 
@@ -90,7 +98,7 @@ struct ModelTarget {
   std::string model;                // vendor model id
   ProtocolKind protocol;            // enum: anthropic_messages, openai_chat, …
   std::optional<std::uint32_t> thinking_budget;
-  std::optional<CacheHints> cache;
+  std::optional<PromptCacheOptions> cache;
   Capabilities caps;                // streaming, tool_use, thinking, vision, …
 };
 ```
@@ -188,6 +196,17 @@ in [`docs/rules/prompt-design.md`](../rules/prompt-design.md). That rule is
 the canonical home for what goes where; this doc owns the adapter-side
 mapping only.
 
+Slice 73 adds the first shared mapping helper:
+`provider::make_prompt_cache_hints(rendered, options)` validates that a
+rendered prompt has exactly the seven prompt-design sections, exactly one
+breakpoint, and that the breakpoint is the final prefix section before the
+conversation tail. It then maps sections 1-6 to adapter-facing
+`PromptCacheSectionKey { id, content_hash, cache_version }` entries and
+copies the prefix hash/byte count. The conversation tail is deliberately
+excluded. `PromptCacheOptions` lets a route disable prompt caching or skip it
+when the prefix is below a provider-specific minimum byte floor; real
+Anthropic/OpenAI wire mapping still belongs to the adapter slices.
+
 ### Cache Key Versioning
 
 Each section carries a `cache_version` integer. When upstream caching is
@@ -256,11 +275,18 @@ enum class ErrorCategory {
 
 ## Bench
 
-`bench/oran-provider/` ships:
+`bench/provider/` ships:
 
-- `bench/request-encode` — serializing a 32-message conversation to vendor JSON.
-- `bench/response-decode` — parsing a streamed response (synthetic; no network).
-- `bench/protocol-overhead` — A/B between adapters on the same canonical request.
+- `bench/provider/scenarios/cache_mapping.cpp` —
+  `provider.cache_hints_enabled` validates and maps a `RenderedPrompt` prefix
+  to adapter-facing cache keys, while `provider.cache_hints_disabled` is the
+  route-level off-switch baseline.
+
+Planned adapter benches:
+
+- `request_encode` — serializing a 32-message conversation to vendor JSON.
+- `response_decode` — parsing a streamed response (synthetic; no network).
+- `protocol_overhead` — A/B between adapters on the same canonical request.
 
 ## See Also
 

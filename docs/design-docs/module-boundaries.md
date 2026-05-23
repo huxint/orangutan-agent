@@ -39,6 +39,9 @@ The canonical layering is:
 **Rule**: a library may depend only on libraries strictly below itself in the diagram.
 Sibling libraries inside the same layer are mutually exclusive unless an explicit
 dependency is listed in [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md#library-inventory).
+The live sibling exceptions are narrow and directional: `io -> async`,
+`storage -> async`, `config -> storage`, `tool -> permission`, `tool -> hook`,
+`prompt -> tool`, and `provider -> prompt`.
 
 CI script `scripts/check-deps.sh` (in the build skeleton) walks each library's
 `xmake.lua` and rejects PRs that introduce upward or sideways deps.

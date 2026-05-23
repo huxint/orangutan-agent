@@ -84,6 +84,7 @@ declare -A LAYER_NAME=(
 #   tool   -> permission: dispatch consults RuleSet + AuditSink directly.
 #   tool   -> hook     : dispatch publishes tool_before / tool_dispatched / tool_error / tool_after.
 #   prompt -> tool     : prompt assembly delegates schema/catalog bytes to CatalogRenderer.
+#   provider-> prompt  : provider adapters consume RenderedPrompt cache hints; prompt never calls providers.
 declare -A ALLOWED_SIBLING=(
   [io__async]=1
   [storage__async]=1
@@ -91,6 +92,7 @@ declare -A ALLOWED_SIBLING=(
   [tool__permission]=1
   [tool__hook]=1
   [prompt__tool]=1
+  [provider__prompt]=1
 )
 
 failed=0
