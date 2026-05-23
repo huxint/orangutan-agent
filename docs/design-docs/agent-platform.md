@@ -89,7 +89,7 @@ The agent loop owns:
   one-line description + JSON Schema). Memoized per `ToolDef`; see
   [`tool-runtime.md`](tool-runtime.md).
 - **Deferred-tool index renderer** — section (3). Compact name + one-line
-  description listing; full schema arrives via `tool-search`. See
+  description listing; full schema arrives via `tool.search`. See
   [`tool-runtime.md`](tool-runtime.md) "Deferred Tools".
 - **Skills catalog renderer** — section (4). Compact listing only;
   activated skill bodies shift this section, never section (1). See

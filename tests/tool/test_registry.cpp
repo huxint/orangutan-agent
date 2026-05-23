@@ -481,17 +481,164 @@ TEST_CASE("register_file_read advertises a `read_file` capability and a path sch
   REQUIRE(def->input_schema_json.contains("\"path\""));
 }
 
+TEST_CASE("register_tool_search advertises a capability-free runtime lookup", "[unit][tool][tool_search]") {
+  tool::Registry registry;
+  REQUIRE(tool::register_tool_search(registry).has_value());
+  REQUIRE(registry.size() == 1);
+  const auto* def = registry.find(tool::kToolSearchName);
+  REQUIRE(def != nullptr);
+  REQUIRE(def->required_capabilities.empty());
+  REQUIRE_FALSE(def->deferred);
+  REQUIRE(def->category.has_value());
+  REQUIRE(*def->category == "runtime");
+  REQUIRE(def->input_schema_json.contains("\"name\""));
+  REQUIRE(def->input_schema_json.contains("\"category\""));
+  REQUIRE(def->input_schema_json.contains("\"capability\""));
+}
+
 TEST_CASE("register_builtins seeds the file tool catalog", "[unit][tool][builtins]") {
   tool::Registry registry;
   REQUIRE(tool::register_builtins(registry).has_value());
   const auto catalog = registry.catalog();
-  REQUIRE(catalog.size() == 6);
+  REQUIRE(catalog.size() == 7);
   REQUIRE(catalog[0].name == tool::kFileReadName);
   REQUIRE(catalog[1].name == tool::kFileWriteName);
   REQUIRE(catalog[2].name == tool::kFileEditName);
   REQUIRE(catalog[3].name == tool::kFileSearchName);
   REQUIRE(catalog[4].name == tool::kDirectoryListName);
   REQUIRE(catalog[5].name == tool::kFileDeleteName);
+  REQUIRE(catalog[6].name == tool::kToolSearchName);
+}
+
+TEST_CASE("tool.search returns structured tool metadata by exact name", "[unit][tool][tool_search]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_read(registry).has_value());
+    REQUIRE(tool::register_tool_search(registry).has_value());
+
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kToolSearchName},
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    auto result = co_await registry.dispatch(tool::kToolSearchName, R"({"name":"file.read"})", ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.starts_with("tool.search: 1 match"));
+    REQUIRE(result->text.contains("file.read"));
+    REQUIRE(result->data_json.has_value());
+    const auto data = nlohmann::json::parse(*result->data_json);
+    REQUIRE(data["kind"] == "tool_search");
+    REQUIRE(data["query"]["name"] == "file.read");
+    REQUIRE(data["match_count"] == 1);
+    REQUIRE(data["matches"].size() == 1);
+    const auto& match = data["matches"][0];
+    REQUIRE(match["name"] == "file.read");
+    REQUIRE(match["category"] == "file");
+    REQUIRE(match["deferred"] == false);
+    REQUIRE(match["description"].get<std::string>().contains("Read"));
+    REQUIRE(match["input_schema"]["properties"].contains("path"));
+    REQUIRE(match["required_capabilities"] == nlohmann::json::array({"read_file"}));
+    REQUIRE(result->usage.match_count.has_value());
+    REQUIRE(*result->usage.match_count == 1);
+  });
+}
+
+TEST_CASE("tool.search filters late-registered deferred tools by category and capability",
+          "[unit][tool][tool_search]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_tool_search(registry).has_value());
+
+    auto memory = core::ToolDef::with_no_input("memory.recall", "Recall long-term memory.");
+    memory.required_capabilities = {core::Capability::read_memory};
+    memory.deferred = true;
+    memory.category = "memory";
+    REQUIRE(registry.add(std::move(memory), make_echo_handler()).has_value());
+
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kToolSearchName},
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    auto result =
+        co_await registry.dispatch(tool::kToolSearchName, R"({"category":"memory","capability":"read_memory"})", ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text.contains("memory.recall [memory] [deferred]"));
+    REQUIRE(result->data_json.has_value());
+    const auto data = nlohmann::json::parse(*result->data_json);
+    REQUIRE(data["query"]["category"] == "memory");
+    REQUIRE(data["query"]["capability"] == "read_memory");
+    REQUIRE(data["match_count"] == 1);
+    REQUIRE(data["matches"][0]["name"] == "memory.recall");
+    REQUIRE(data["matches"][0]["deferred"] == true);
+    REQUIRE(data["matches"][0]["required_capabilities"] == nlohmann::json::array({"read_memory"}));
+  });
+}
+
+TEST_CASE("tool.search reads the dispatching registry after Registry move", "[unit][tool][tool_search]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry original;
+    REQUIRE(tool::register_tool_search(original).has_value());
+
+    tool::Registry registry = std::move(original);
+    REQUIRE(tool::register_file_read(registry).has_value());
+
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kToolSearchName},
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    auto result = co_await registry.dispatch(tool::kToolSearchName, R"({"name":"file.read"})", ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->data_json.has_value());
+    const auto data = nlohmann::json::parse(*result->data_json);
+    REQUIRE(data["match_count"] == 1);
+    REQUIRE(data["matches"][0]["name"] == "file.read");
+  });
+}
+
+TEST_CASE("tool.search rejects malformed selectors as invalid_argument", "[unit][tool][tool_search]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_tool_search(registry).has_value());
+
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kToolSearchName},
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    auto bad_json = co_await registry.dispatch(tool::kToolSearchName, "{not-json}", ctx);
+    REQUIRE_FALSE(bad_json.has_value());
+    REQUIRE(bad_json.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto non_object = co_await registry.dispatch(tool::kToolSearchName, "[]", ctx);
+    REQUIRE_FALSE(non_object.has_value());
+    REQUIRE(non_object.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto missing_selector = co_await registry.dispatch(tool::kToolSearchName, "{}", ctx);
+    REQUIRE_FALSE(missing_selector.has_value());
+    REQUIRE(missing_selector.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto wrong_type = co_await registry.dispatch(tool::kToolSearchName, R"({"name":42})", ctx);
+    REQUIRE_FALSE(wrong_type.has_value());
+    REQUIRE(wrong_type.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(context_has(wrong_type.error(), "field", "name"));
+
+    auto unknown_capability = co_await registry.dispatch(tool::kToolSearchName, R"({"capability":"warp_drive"})", ctx);
+    REQUIRE_FALSE(unknown_capability.has_value());
+    REQUIRE(unknown_capability.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(context_has(unknown_capability.error(), "capability", "warp_drive"));
+
+    REQUIRE(sink.events().size() == 5);
+  });
 }
 
 TEST_CASE("file.read returns text fallback and structured metadata", "[unit][tool][file_read]") {

@@ -216,6 +216,17 @@ std::vector<core::ToolDef> Registry::catalog() const {
 
 async::Awaitable<core::Result<Output>>
 Registry::dispatch(std::string_view name, std::string_view input_json, DispatchContext& ctx) const {
+  struct RegistryContextGuard {
+    DispatchContext& ctx;
+    const Registry* previous_registry;
+
+    ~RegistryContextGuard() {
+      ctx.registry = previous_registry;
+    }
+  };
+
+  RegistryContextGuard registry_guard{.ctx = ctx, .previous_registry = ctx.registry};
+  ctx.registry = this;
   ctx.resolved_path.reset();
   const auto it = entries_.find(name);
   if (it == entries_.end()) {

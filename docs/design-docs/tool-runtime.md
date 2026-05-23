@@ -5,7 +5,7 @@ The tool registry is the agent's hand. It is the place where:
 - The agent decides what it *can* do (the catalog presented to the LLM).
 - The runtime checks whether it *may* do something (permissions).
 - The runtime observes when it does (hooks).
-- The runtime knows when it's *deferred* (tool-search style discovery).
+- The runtime knows when it's *deferred* (`tool.search`-style discovery).
 
 This doc covers the v2 design. The legacy `ToolRuntimeContext` sprawl is explicitly
 replaced.
@@ -391,7 +391,11 @@ class Registry {
 ```
 
 Note that `dispatch` *takes* the permission evaluator and hook bus by reference. The
-registry does **not** own them; bootstrap does.
+registry does **not** own them; bootstrap does. The current implementation also sets
+`DispatchContext::registry` to the dispatching `Registry` for the duration of a call
+and restores the previous pointer on exit. Normal handlers ignore this non-owning
+pointer; metadata tools such as `tool.search` use it to inspect the live catalog
+without capturing a self-reference inside a movable registry value.
 
 ## Built-in Tool Categories
 
@@ -410,7 +414,7 @@ Each category is a small library that calls `Registry::add` from a single
 | `oran-tool-background`        | async job orchestration                                  |
 | `oran-tool-attachments`       | message attachment management                           |
 | `oran-tool-runtime-loader`    | dynamic tool reloading                                  |
-| `oran-tool-search`            | deferred tool discovery / metadata lookup               |
+| `oran-tool` core built-in     | `tool.search` deferred tool discovery / metadata lookup |
 | `oran-tool-script`            | scriptable batch tool                                   |
 
 Each tool library is **independent** — adding a new category does not recompile the
@@ -453,16 +457,19 @@ their handler.
 ## Deferred Tools
 
 Some tools are **deferred** — present in the catalog but not surfaced to the LLM until
-explicitly looked up via `tool-search`. This pattern compresses the prompt without
+explicitly looked up via `tool.search`. This pattern compresses the prompt without
 losing capability.
 
-> **Status (slice 59, 2026-05-24):** `core::ToolDef` now carries
+> **Status (slice 68, 2026-05-24):** `core::ToolDef` carries
 > `deferred` and `category`, and `tool::CatalogRenderer` can split a
 > `Registry::catalog()` snapshot into sorted active full-schema blocks and
 > sorted deferred name/description rows. `Registry::catalog()` still returns
-> all registered tools; there is no `deferred_catalog()` API yet, and
-> `tool.search` / per-session promotion state remain future `oran-agent` /
-> `oran-prompt` work.
+> all registered tools; there is no `deferred_catalog()` API yet. `oran-tool`
+> now also registers the non-deferred `tool.search` metadata lookup, which
+> searches the current registry snapshot by exact name, category, and/or
+> required capability and returns text plus structured `Output::data_json`
+> containing matched tool definitions. Per-session promotion state remains
+> future `oran-agent` / `oran-prompt` work.
 
 Implementation:
 
@@ -471,9 +478,9 @@ Implementation:
   `deferred_catalog()` convenience may expose the filtered snapshot.
 - The default system prompt builder lists the deferred tool *names + one-line descriptions*
   in a compact "Deferred Tools" section.
-- `tool-search` is a non-deferred tool that returns the full schema on demand.
-- The registry keeps a per-agent set of "promoted" deferred tools whose full schema is
-  now in the prompt; the prompt builder honors it.
+- `tool.search` is a non-deferred tool that returns the full schema on demand.
+- A future agent session keeps a per-agent set of "promoted" deferred tools
+  whose full schema is now in the prompt; the prompt builder honors it.
 
 `async::Channel<Promotion>` could push promotions across iterations if needed; for now
 a per-loop mutable set is simpler.
@@ -610,8 +617,15 @@ entries, matching spec 0012's bounded-state inventory; setting
 unbounded cache. The public
 `ToolCatalogCacheStats` shape exposes only aggregate counters and the
 renderer version, never tool schemas or cache keys. `oran-prompt` will
-consume this renderer when the prompt builder lands; active-tool config,
-`tool.search`, and promotion state remain future work.
+consume this renderer when the prompt builder lands; active-tool config
+and promotion state remain future work. The registry-owned lookup half of
+the deferred-tool design is shipped as `tool.search`: it accepts
+`{name?, category?, capability?}`, requires at least one selector, ANDs
+provided selectors, and returns `{kind:"tool_search", query,
+match_count, matches[]}` in `Output::data_json`. Each match carries
+`name`, `description`, nested `input_schema`, `required_capabilities`,
+`deferred`, and nullable `category`, with `Output::usage.match_count`
+mirroring the number of matches.
 
 Prompt-shape reference: this slice adopts the Piebald Claude Code prompt
 corpus' stable tool-description pattern — one deterministic block per tool

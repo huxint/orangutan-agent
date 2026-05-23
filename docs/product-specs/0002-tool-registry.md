@@ -14,7 +14,7 @@ the surface where these capabilities are presented, gated, observed, and extende
   - `oran-tool-shell` — `shell.exec`, `shell.glob`, `shell.ls`, `shell.move`.
   - `oran-tool-memory` — `memory.recall`, `memory.remember`, `memory.forget`.
 - Capability declarations on every built-in.
-- `tool-search` (deferred-tool discovery) — non-deferred tool that returns schemas for
+- `tool.search` (deferred-tool discovery) — non-deferred tool that returns schemas for
   deferred tools on demand.
 - Output redaction via runtime regex from config.
 - Hook lifecycle wired (tool_before / tool_dispatched / tool_after / tool_error).
@@ -42,7 +42,7 @@ the surface where these capabilities are presented, gated, observed, and extende
    ask flow if applicable → hook dispatched → handler → hook after.
 3. A tool with `Capability::read_file` declared cannot call `runtime.workspace()` if
    the permission engine did not grant it (returns `Error::capability_not_granted`).
-4. `tool-search` returns the schema of any deferred tool within 10 ms.
+4. `tool.search` returns the schema of any deferred tool within 10 ms.
 5. `file.edit` performs structured patches with conflict detection (returns a
    typed error when the file changed underneath).
 6. `shell.exec("rm -rf /")` is denied by default permission rules; audit log records

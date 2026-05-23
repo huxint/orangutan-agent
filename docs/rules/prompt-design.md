@@ -88,7 +88,9 @@ The prompt is assembled in this order, oldest-stable to newest-dynamic:
    *the rendering of a single tool's description must be deterministic
    in the tool's static fields*, never the call site.
 3. **Deferred-tool index** — name + one-line description only (no
-   schema). Promotion to the full schema happens via `tool-search`.
+   schema). The shipped `tool.search` returns full metadata on demand;
+   future session promotion moves selected tools into the next turn's
+   full-schema catalog.
 4. **Skills catalog** — compact listing of activated skills. Adding /
    removing a skill is a cache-break by design.
 5. **Memory framing** — working-memory + session-memory summary. The

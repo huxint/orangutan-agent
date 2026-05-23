@@ -82,16 +82,17 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
   `RenderedPrompt` and maps to vendor cache shape per
   `api-portability.md`.
 - **Deterministic tool-catalog renderer**:
-  - **Status (slice 59, 2026-05-24):** the renderer now exists in
+  - **Status (slices 59 + 68):** the renderer exists in
     `oran-tool` as `tool::CatalogRenderer`, alongside the new
     `ToolDef::deferred` and `ToolDef::category` metadata. It renders
     active full-schema blocks and deferred name/description rows from a
     `Registry::catalog()` snapshot, sorts both by tool name, canonicalises
     JSON Schema bytes in `src/oran-tool/catalog.cpp`, and keeps a bounded
     256-entry rendered-block cache keyed by the fields that affect the
-    block bytes plus renderer version, with aggregate stats. The remaining
-    bullets below that mention `oran-prompt`, active-tool config,
-    `tool.search`, and promotion state are still unimplemented.
+    block bytes plus renderer version, with aggregate stats. Slice 68 adds
+    the registry-owned `tool.search` lookup primitive in `oran-tool`; the
+    remaining bullets below that mention `oran-prompt`, active-tool config,
+    and promotion state are still unimplemented.
   - Pure function of `ToolDef`:
     `(name, description, input_schema, required_capabilities,
     category)`.
@@ -113,16 +114,22 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
     `runtime.prompt.active_tools` accepts an explicit allowlist or
     `"defaults"` to use the list above. Operators who add a new
     coding tool can promote it without touching code.
-- **`tool.search` built-in** (the *non-deferred* lookup tool that
-  promotes deferred tools on demand):
+- **`tool.search` built-in** (the *non-deferred* lookup tool; future
+  session promotion consumes its matches):
+  - **Status (slice 68, 2026-05-24):** the registry lookup primitive is
+    implemented in `oran-tool`; session promotion remains future agent
+    work because `oran-agent::SessionState` does not exist yet.
   - Input: `{ name?, category?, capability? }`. At least one field
-    required.
-  - Output: structured (consumes `Output::data` per spec 0014 once
-    that ships; v1 falls back to a text rendering) — name, full
-    description, full JSON schema, required capabilities.
-  - Side effect: appends the matched tool name(s) to the per-session
-    promotion set so the *next* turn's catalog includes the full
-    schema. The promotion set lives on `oran-agent::SessionState`.
+    required. Supplied fields are ANDed; `name` and `category` are exact
+    string matches, and `capability` is parsed through
+    `core::parse_enum<core::Capability>`.
+  - Output: text fallback plus structured `Output::data_json` carrying
+    `{kind:"tool_search", query, match_count, matches[]}`. Each match
+    includes name, full description, nested full JSON schema,
+    required capabilities, deferred flag, and nullable category.
+  - Future side effect: append the matched tool name(s) to the
+    per-session promotion set so the *next* turn's catalog includes the
+    full schema. The promotion set lives on `oran-agent::SessionState`.
 - **Promotion set bounding**:
   - LRU + TTL per the spec 0012 inventory
     (`max_entries=16`, `ttl=24h`).
@@ -202,13 +209,14 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
 4. **Deferred-tool absence.** A tool registered with
    `deferred=true` does not appear in section 2's tool catalog;
    appears in section 3's deferred-tool index with name + one-line
-   description only; does not appear in section 2 *even after
-   `tool.search` promotes it* — promotion shifts the *next* turn's
-   section 2, not the current.
-5. **Promotion semantics.** Calling `tool.search(name="memory.recall")`
-   from a turn adds `memory.recall` to the next turn's active
-   catalog with its full schema. After 16 promotions in a session,
-   the oldest evicts back to the deferred index (LRU per spec 0012).
+   description only; does not appear in section 2 *even after the future
+   `tool.search` promotion flow selects it* — promotion shifts the
+   *next* turn's section 2, not the current.
+5. **Future promotion semantics.** Calling `tool.search(name="memory.recall")`
+   from a turn eventually adds `memory.recall` to the next turn's
+   active catalog with its full schema. After 16 promotions in a
+   session, the oldest evicts back to the deferred index (LRU per
+   spec 0012).
    The evicted tool stays callable; the agent that uses it without
    re-promotion sees the same dispatch error as any other
    not-promoted call to a deferred tool (`tool.search` is the
@@ -266,8 +274,8 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
   — records `RenderedPrompt::prefix_hash`, prefix bytes,
   active/deferred catalog hashes, and cache-token usage per turn.
 - [`0014-structured-tool-output.md`](0014-structured-tool-output.md)
-  — `tool.search`'s output uses `Output::data` once that lands;
-  v1 ships text-only.
+  — `tool.search` uses the shipped `Output::data_json` structured
+  channel plus a text fallback.
 - [`0012-tool-scheduler-and-state.md`](0012-tool-scheduler-and-state.md)
   — the rendered-block cache and the promotion-set bound both use
   the `BoundedCache` primitive defined there.

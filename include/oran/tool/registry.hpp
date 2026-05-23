@@ -85,6 +85,7 @@
 
 namespace orangutan::tool {
 
+class Registry;
 class Workspace;
 
 /// Registry-pre-resolved filesystem target for a built-in tool call.
@@ -150,6 +151,12 @@ struct DispatchContext {
   /// reported by sinks are logged into the publish outcome but do
   /// not change the dispatch result.
   hook::Bus* bus{nullptr};
+  /// Registry currently running this dispatch. Set by `Registry::dispatch`
+  /// before any handler runs and restored when dispatch exits. Most handlers
+  /// ignore it; metadata tools such as `tool.search` use it to inspect the
+  /// live catalog without capturing a self-reference inside a movable
+  /// `Registry`.
+  const Registry* registry{nullptr};
   /// Optional workspace resolver for file built-ins. The pointer is
   /// non-owning; bootstrap/agent runtime owns the workspace value and keeps it
   /// alive for the dispatch. Dispatch pre-resolves current filesystem

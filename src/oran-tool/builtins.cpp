@@ -26,6 +26,9 @@ core::Result<void> register_builtins(Registry& registry) {
   if (auto r = register_file_delete(registry); !r) {
     return r;
   }
+  if (auto r = register_tool_search(registry); !r) {
+    return r;
+  }
   return {};
 }
 

@@ -3,12 +3,9 @@
 // Each `register_*` free function adds one tool to a `tool::Registry`,
 // returning the same `Result<void>` shape `Registry::add` does so callers
 // can early-return on the first failure. The aggregate `register_builtins`
-// wires every tool this slice ships in catalog order.
+// wires every tool this repository currently ships in catalog order.
 //
-// Slice 30 grows the catalog to `file.read` + `file.write` + `file.edit` +
-// `file.search` + `directory.list` + `file.delete`; future slices will fold
-// in the shell tools and so on. This header is the one place callers learn
-// what shipped.
+// This header is the one place callers learn what shipped.
 
 #pragma once
 
@@ -36,6 +33,9 @@ inline constexpr std::string_view kDirectoryListName{"directory.list"};
 
 /// Stable wire name for the file-delete built-in.
 inline constexpr std::string_view kFileDeleteName{"file.delete"};
+
+/// Stable wire name for the catalog metadata lookup built-in.
+inline constexpr std::string_view kToolSearchName{"tool.search"};
 
 /// Register the `file.read` tool. Reads UTF-8 content using `oran-io`'s
 /// coroutine helper; when `DispatchContext::workspace` is set, the input path
@@ -137,10 +137,21 @@ inline constexpr std::string_view kFileDeleteName{"file.delete"};
 /// `Output::usage.bytes_written=0` plus `files_touched=1`.
 [[nodiscard]] core::Result<void> register_file_delete(Registry& registry);
 
-/// Register every built-in this slice ships. Currently wires `file.read`,
+/// Register the `tool.search` tool. Searches the current registry catalog by
+/// exact `name`, exact `category`, and/or declared `capability`; at least one
+/// selector is required and supplied selectors are ANDed. Input shape:
+/// `{"name"?: <string>, "category"?: <string>, "capability"?:
+/// <Capability wire name>}`. Metadata lookup requires no runtime capability,
+/// is not deferred, and returns a text fallback plus structured `data_json`
+/// with `kind`, `query`, `match_count`, and `matches[]` entries carrying the
+/// matched tool's name, description, input schema, required capabilities,
+/// deferred flag, and category.
+[[nodiscard]] core::Result<void> register_tool_search(Registry& registry);
+
+/// Register every built-in this repository ships. Currently wires `file.read`,
 /// `file.write`, `file.edit`, `file.search`, `directory.list`, then
-/// `file.delete`; future slices append additional tools so production
-/// callers can stay on this single entry point.
+/// `file.delete`, then `tool.search`; future slices append additional tools
+/// so production callers can stay on this single entry point.
 [[nodiscard]] core::Result<void> register_builtins(Registry& registry);
 
 }  // namespace orangutan::tool

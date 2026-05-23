@@ -7,15 +7,35 @@
 
 ## Snapshot
 
-- **Slice:** 67 (`xmake run orangutan` reports slice 67)
+- **Slice:** 68 (`xmake run orangutan` reports slice 68)
 - **Last completed history:**
-  [`histories/2026-05/20260524-0635-tool-audit-usage-metadata.md`](histories/2026-05/20260524-0635-tool-audit-usage-metadata.md)
+  [`histories/2026-05/20260524-0645-tool-search-registry-lookup.md`](histories/2026-05/20260524-0645-tool-search-registry-lookup.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 67
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 68
+  lands spec 0016's registry-owned deferred-tool lookup primitive:
+  `register_builtins` now includes the non-deferred `tool.search`
+  built-in, categorized as `runtime`, with no required runtime
+  capability. The handler searches the current `Registry::catalog()`
+  snapshot by exact `name`, exact `category`, and/or declared
+  `capability`; `Registry::dispatch` sets and restores the non-owning
+  `DispatchContext::registry` pointer so the handler can inspect the
+  live dispatching registry without capturing a self-reference inside a
+  movable registry value. At least one selector is required and supplied
+  selectors are ANDed. Successful calls return a text fallback plus
+  structured `Output::data_json` shaped as
+  `{kind:"tool_search", query, match_count, matches[]}`, where each
+  match carries `name`, `description`, nested `input_schema`,
+  `required_capabilities`, `deferred`, and nullable `category`;
+  `Output::usage.match_count` mirrors the number of matches. This is
+  deliberately not the per-session promotion side effect yet: there is
+  no `oran-agent::SessionState` or prompt builder to own LRU/TTL
+  promotions, so the remaining 0016 work is active-tool config,
+  prompt-builder integration, and session promotion before/alongside
+  the first 0017 fake-provider agent loop tracer bullet. Slice 67
   closes spec 0014's audit usage fan-out for the pre-scheduler direct
   dispatch path: `permission::AuditSink` now exposes
   `update_metadata(AuditMetadataUpdate)`, `RecordingAuditSink` and
@@ -115,7 +135,9 @@
   full-schema blocks in a bounded 256-entry cache keyed by stable
   rendered-block fields plus renderer version. The public stats report
   aggregate cache counters only. This is not yet the `oran-prompt`
-  builder, active-tool config, `tool.search`, or promotion-set slice.
+  builder, active-tool config, or promotion-set slice; slice 68 adds the
+  registry-local `tool.search` lookup primitive that this renderer's
+  future prompt builder will advertise as an active tool.
   Slice 58
   closes spec 0011 v1.1's IO-layer watcher item: `oran-io` now exposes
   `watch_read_text_file_ranged_cache(executor, root, options)`, a
@@ -196,7 +218,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 26 cases / 184 assertions.
 - `oran-permission`: 88 cases / 403 assertions.
 - `oran-hook`: 17 cases / 109 assertions.
-- `oran-tool`: 161 cases / 1524 assertions.
+- `oran-tool`: 166 cases / 1588 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 153 assertions.
 
