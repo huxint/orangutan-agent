@@ -41,7 +41,7 @@ proves the loop behaves correctly without a network.
   "Domain Model" are the source of truth (`provider::Request`,
   `provider::Response`, `core::Content` variant, `StopReason`, `Usage`,
   `EventSink`). This spec freezes their *behaviour* for v1:
-  - **Status (slice 75, 2026-05-24):** `oran-provider` now ships the
+  - **Status (slice 76, 2026-05-24):** `oran-provider` now ships the
     value-type `Request`, `Response`, `Usage`, and `RetryPolicy` shapes
     plus prompt-cache hints, the abstract `provider::System` with
     `send(Request, Route, EventSink*) const`, the `provider::EventSink`
@@ -54,14 +54,22 @@ proves the loop behaves correctly without a network.
     sink, awaits scripted latency via `async::sleep_for` so parent
     cancellation interrupts the wait, serialises concurrent `send` calls,
     and returns `Error::internal` on plan exhaustion or empty-body turns.
-    Slice 75 adds the first `agent::Loop` driver over that contract:
+    Slice 75 added the first `agent::Loop` driver over that contract:
     a one-iteration text-turn path that builds `prompt::RenderedPrompt`,
     maps prompt-cache hints, mirrors active/promoted tools into
     name-sorted `provider::Request::tools`, sends through a supplied
     `provider::System`, returns terminal text responses, forwards provider
     errors unchanged, and rejects `tool_use` responses with an explicit
-    not-yet-implemented error. Real protocol adapters and multi-iteration
-    tool dispatch remain downstream.
+    not-yet-implemented error. Slice 76 extends that driver with the first
+    sequential direct-dispatch loop: callers may supply `tool::Registry*`
+    plus `tool::DispatchContext*`; the loop appends assistant tool-use
+    messages, dispatches each `ToolUseContent` through the registry in
+    original order, appends a `Role::tool` message with ordered
+    `ToolResultContent` blocks, rebuilds the prompt, re-enters the provider,
+    aggregates provider usage across iterations, and enforces
+    `LoopOptions::max_iterations`. Real protocol adapters, the parallel
+    scheduler, turn-level audit rows, blocking approval rendering, and
+    provider retry/fallback remain downstream.
   - The loop emits **one** `provider::Request` per iteration.
   - The provider emits **one** `provider::Response` per request (after
     streaming completes if streaming is enabled).
@@ -120,14 +128,17 @@ proves the loop behaves correctly without a network.
   uses the fake provider with a hand-written plan.
 - **`agent::Loop` MVP**. Wraps the seven phases listed in the deep
   review §What a better `oran-agent` should look like:
-  - **Status (slice 75, 2026-05-24):** `<oran/agent.hpp>` exports
+  - **Status (slice 76, 2026-05-24):** `<oran/agent.hpp>` exports
     `agent::Loop`, `LoopOptions`, `RunTurnInputs`, and `RunTurnResult`.
-    The first implementation covers phase 3/4/5 only for scenario #1:
-    render prompt, send one provider request, and return terminal text
-    blocks. It intentionally does not dispatch tool calls yet; seeing
-    `StopReason::tool_use` or a `ToolUseContent` block returns an
-    `Error::internal` so tests cannot treat the first slice as a complete
-    ReAct loop.
+    The current implementation covers phases 3/4/5 for terminal text turns
+    plus the first phase-6 sequential dispatch path for scenarios #2/#3/#4/#6:
+    render prompt, send a provider request, dispatch tool-use blocks through
+    the existing registry boundary when caller-supplied services are present,
+    append ordered tool-result messages, rebuild the prompt, and stop on a
+    terminal text-style response or iteration cap. If no registry/context pair
+    is supplied, tool-use responses still fail loudly with `Error::internal` so
+    callers cannot accidentally run a loop without permission/audit
+    infrastructure.
   1. Build `TurnContext` (identity, route, session id, origin,
      cancellation slot, stable service refs).
   2. Load/render memory once per turn (memory: `nullopt` in v1 — the
@@ -205,29 +216,41 @@ proves the loop behaves correctly without a network.
 1. **Single-text turn.** Scenario #1: the loop sends one `Request`,
    the fake returns one text-only `Response` with
    `StopReason::end_turn`, the loop returns the assembled text to the
-   caller, emits exactly one turn audit row and zero tool audit rows.
+   caller. **Status (slice 76):** shipped for the loop return/request
+   mapping path; turn-level audit rows are still future spec-0018 work.
 2. **Single-tool turn.** Scenario #2: the loop sends a `Request`, the
    fake returns one `tool_use` block, the loop dispatches the tool
    (using the existing `file.read` built-in), appends the tool result,
    sends a second `Request`, the fake returns final text. Audit
    records: one turn row, one tool row; the tool row's
-   `parent_event_id` matches the turn row's id.
+   `parent_event_id` matches the turn row's id. **Status (slice 76):**
+   shipped for direct registry dispatch, ordered `tool_result` append,
+   provider re-entry, provider-usage aggregation, and complete returned
+   transcript. The test fixture uses a minimal registry tool rather than the
+   `file.read` built-in so loop coverage stays focused on the registry
+   boundary; turn row + parent correlation remain future work.
 3. **Multiple tools in one response.** Scenario #3: the fake returns
    `[tool_use A, tool_use B]`. v1 dispatches sequentially (parallel
    dispatch is spec 0012's responsibility); the agent transcript
    contains both `tool_result`s in original `tool_use` order
    regardless of execution order; the next `Request` carries both
-   results.
+   results. **Status (slice 76):** shipped for sequential dispatch and
+   original-order result appends.
 4. **Missing tool.** Scenario #4: the fake returns
    `tool_use { name: "tool.does_not_exist" }`. The loop synthesises a
    `tool_result` carrying an error message ("tool not found"); the
    audit row records `outcome=error,
    error_kind=tool_not_found`; the next `Request` carries the error
-   text so the model can repair. The loop does not crash.
+   text so the model can repair. The loop does not crash. **Status
+   (slice 76):** shipped for model-visible `tool_result` synthesis and
+   provider re-entry; the richer audit row fields remain future work.
 5. **Tool failure repair.** Scenario #6: the tool dispatch returns
    `Error::io`; the loop synthesises a `tool_result` with the error
    message; the next `Request` carries it; the fake returns either a
    repaired tool call or final text. Both paths terminate normally.
+   **Status (slice 76):** model-visible dispatch errors become error
+   `tool_result` blocks; cancellation, storage, and internal dispatch
+   failures propagate out of the loop.
 6. **Retryable provider error.** Scenario #7: the fake returns
    `core::Error{ category: network }` once, then a successful
    `Response`. The loop's retry logic
@@ -253,7 +276,9 @@ proves the loop behaves correctly without a network.
     `tool_use` blocks forever causes the loop to terminate with
     `StopReason::error, reason=iteration_cap` after
     `config.agent.max_iterations` iterations. Audit row records the
-    cap; no infinite loop.
+    cap; no infinite loop. **Status (slice 76):** the loop enforces
+    `LoopOptions::max_iterations` and returns `Error::internal` with
+    `reason=iteration_cap`; the audit row remains future work.
 11. **CI runs offline.** `xmake test test-agent` passes with no
     network access and no API key in env. Pinned by a CI job that
     explicitly unsets `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` /
@@ -321,7 +346,7 @@ proves the loop behaves correctly without a network.
 ```sh
 xmake build oran-agent oran-provider
 xmake test test-provider                    # provider domain/cache mapping
-xmake run test-agent                        # current text-turn Loop + session-state coverage
+xmake run test-agent                        # current text/tool Loop + session-state coverage
 xmake build bench-agent
 xmake run bench-agent                       # prompt-cache fixture; loop-overhead bench still future
 unset ANTHROPIC_API_KEY OPENAI_API_KEY      # CI proves offline

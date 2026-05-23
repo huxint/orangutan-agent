@@ -7,40 +7,55 @@
 
 ## Snapshot
 
-- **Slice:** 75 (`xmake run orangutan` reports slice 75)
+- **Slice:** 76 (`xmake run orangutan` reports slice 76)
 - **Last completed history:**
-  [`histories/2026-05/20260524-1015-agent-loop-text-turn.md`](histories/2026-05/20260524-1015-agent-loop-text-turn.md)
+  [`histories/2026-05/20260524-1050-agent-loop-tool-dispatch.md`](histories/2026-05/20260524-1050-agent-loop-tool-dispatch.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
-  the first text-only agent-loop increment closed in one history/commit and
-  did not need a new plan because it stayed under the existing spec-0017
+  the first two agent-loop increments closed in focused history/commit slices
+  and did not need a new plan because they stayed under the existing spec-0017
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 75 opens
-  the real `agent::Loop` driver but deliberately limits it to spec-0017
-  scenario #1 and request-mapping boundaries. `<oran/agent.hpp>` now exports
-  `agent::Loop`, `LoopOptions`, `RunTurnInputs`, and `RunTurnResult`; the loop
-  owns a `prompt::Builder`, builds the seven-section prompt from caller-supplied
-  stable inputs and the conversation tail, maps the rendered prefix into
-  `provider::PromptCacheHints`, mirrors the prompt active/promoted tool set into
-  deterministically name-sorted `provider::Request::tools`, sends one
-  `provider::Request` through the supplied `provider::System` / resolved
-  `provider::Route`, and returns assembled text,
-  assistant blocks, usage, model id, rendered prompt, cache hints, and
-  `iterations=1` for terminal text-style responses. Provider errors are
-  forwarded unchanged, and any `StopReason::tool_use` or `ToolUseContent` block
-  returns an explicit `Error::internal` naming that tool iteration belongs to a
-  later slice, so this first loop cannot be mistaken for the complete ReAct
-  implementation. `oran-agent` now depends on `oran-async` and `oran-provider`
-  in addition to its session-state dependencies. `test-agent` now covers the
-  FakeProvider text-turn path, provider request mapping for prompt/messages/
-  active tools/cache hints, provider error forwarding, and the loud
-  not-yet-implemented tool-use boundary (7 cases / 64 assertions). The
-  `orangutan` binary is still not wired to `oran-agent`; remaining near-term
-  work is spec-0017 scenario #2/#3: dispatch tool calls through the existing
-  registry, append ordered `tool_result` blocks, re-enter the fake provider,
-  and then add turn-level audit / cancellation / iteration-cap coverage.
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 76 extends
+  the real `agent::Loop` driver from the slice-75 text-only path into the
+  first sequential direct-dispatch tool loop. `<oran/agent.hpp>` exports
+  `agent::Loop`, `LoopOptions`, `RunTurnInputs`, and `RunTurnResult`;
+  `RunTurnInputs` can now carry optional non-owning `tool::Registry*` and
+  `tool::DispatchContext*` pointers. When both are present and the provider
+  returns `ToolUseContent`, the loop appends the assistant tool-use message,
+  dispatches each tool through the existing registry boundary in original
+  tool-use order, appends a `Role::tool` message with ordered
+  `ToolResultContent` blocks, rebuilds the seven-section prompt from the
+  updated transcript, and sends the next `provider::Request` through the same
+  `provider::System` / `provider::Route`. It aggregates provider usage across
+  iterations, returns the terminal assistant text/blocks/model id, final
+  rendered prompt/cache hints, `iterations`, and the complete transcript tail
+  including the final assistant answer. Missing tools and model-repairable
+  dispatch errors are converted into `tool_result` error blocks so the model can
+  repair; cancellation, storage, and internal dispatch errors propagate out of
+  the loop. If the registry/context pair is absent, `tool_use` still returns
+  the explicit not-yet-implemented error from slice 75. The loop enforces the
+  existing `LoopOptions::max_iterations` cap with `reason=iteration_cap`, but
+  turn-level audit rows, cancellation-specific tool-dispatch tests, provider
+  retry/fallback, blocking approval rendering, and the parallel `ToolScheduler`
+  remain downstream. `test-agent` now covers the FakeProvider text-turn path,
+  provider request mapping, provider error forwarding, the no-dispatch-context
+  tool-use boundary, one-tool provider re-entry, ordered multi-tool results,
+  model-visible missing-tool repair, infrastructure error propagation, and the
+  iteration cap (12 cases / 140 assertions). The `orangutan` binary is still
+  not wired to `oran-agent`; remaining near-term work is the turn-level audit /
+  cancellation / approval-observability envelope before CLI/binary handoff.
+  Slice 75 opened
+  the real `agent::Loop` driver but deliberately limited it to spec-0017
+  scenario #1 and request-mapping boundaries. `<oran/agent.hpp>` began
+  exporting `agent::Loop`, `LoopOptions`, `RunTurnInputs`, and
+  `RunTurnResult`; the loop owned a `prompt::Builder`, built the seven-section
+  prompt from caller-supplied stable inputs and the conversation tail, mapped
+  the rendered prefix into `provider::PromptCacheHints`, mirrored the prompt
+  active/promoted tool set into deterministically name-sorted
+  `provider::Request::tools`, sent one `provider::Request`, and returned
+  terminal text-style responses while loudly rejecting `tool_use`.
   Slice 74 closes
   spec 0017's provider prework: `oran-provider` now exports the abstract
   `provider::System` (single `send(Request, Route, EventSink*) const`
@@ -59,9 +74,9 @@
   latency. The provider library is still not linked into the `orangutan`
   binary and does not yet contain a real transport, protocol adapter,
   retry runtime, or vendor cache-control mapping. Remaining near-term
-  work at that point was the `agent::Loop` MVP; slice 75 now opens the
-  text-only subset, while the multi-iteration tool scenarios and provider
-  adapter mapping remain downstream. Slice 73
+  work at that point was the `agent::Loop` MVP; slice 75 opened the
+  text-only subset and slice 76 added sequential direct-dispatch
+  provider re-entry, while provider adapter mapping remains downstream. Slice 73
   opens `oran-provider` with the adapter-facing cache-hint surface needed
   between spec 0016 and the fake-provider-first loop. `<oran/provider.hpp>`
   now exports provider-domain `Request`, `Response`, `Usage`, `RetryPolicy`,
@@ -78,8 +93,8 @@
   `provider.cache_hints_enabled` at about 394 ns / mapping with the disabled
   route at about 317 ns / mapping. Slice 73's surface is the prerequisite the
   slice-74 fake-provider foundation consumes; together they enabled the
-  slice-75 text-turn `agent::Loop` foundation and leave the tool-dispatch
-  scenario matrix as the next milestone.
+  slice-75 text-turn `agent::Loop` foundation; slice 76 consumes the same
+  provider contract for the first sequential tool-dispatch scenario matrix.
   Slice 72
   opens `oran-agent` with the narrow session-state owner needed by spec
   0016 before the full ReAct loop lands. `agent::SessionState` owns
@@ -289,7 +304,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-tool`: 166 cases / 1588 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 11 cases / 89 assertions.
-- `oran-agent`: 7 cases / 64 assertions.
+- `oran-agent`: 12 cases / 140 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 153 assertions.
 

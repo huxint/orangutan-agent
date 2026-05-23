@@ -238,12 +238,13 @@ on `oran-prompt` for adapter-side `prompt::RenderedPrompt` cache-hint mapping.
 It is registered with `test-provider` and `bench-provider`, but no transport,
 protocol adapter, or real vendor runtime is linked into the binary yet.
 
-`oran-agent` now owns both the slice-72 `SessionState` promotion owner and the
-slice-75 text-only `Loop` turn driver. The new provider dependency is
+`oran-agent` now owns the slice-72 `SessionState` promotion owner plus the
+slice-76 sequential direct-dispatch `Loop` turn driver. The provider
+dependency is
 intentional and downward: the agent runtime layer drives `provider::System`,
 while `oran-provider` never calls back into `oran-agent`. The `orangutan`
 binary still does not link `oran-agent`; CLI/binary handoff waits for the
-multi-iteration tool loop.
+turn-level audit / cancellation / approval-observability envelope.
 
 **Key compile-time wins from this shape:**
 

@@ -15,6 +15,8 @@
 #include <vector>
 
 #include <oran/core/error.hpp>
+#include <oran/core/role.hpp>
+#include <oran/tool/registry.hpp>
 
 namespace orangutan::agent {
 namespace {
@@ -100,14 +102,78 @@ void append_text_block(std::string& output, std::string_view text) {
   return text;
 }
 
-[[nodiscard]] bool contains_tool_use(std::span<const core::Content> blocks) noexcept {
-  return std::ranges::any_of(blocks, [](const core::Content& block) {
-    return std::holds_alternative<core::ToolUseContent>(block);
-  });
-}
-
 [[nodiscard]] core::Error unsupported_response(std::string reason) {
   return core::Error::internal("agent loop: response requires a later loop slice").with("reason", std::move(reason));
+}
+
+[[nodiscard]] core::Error iteration_cap_error(std::uint32_t max_iterations) {
+  return core::Error::internal("agent loop: iteration cap reached")
+      .with("reason", "iteration_cap")
+      .with("max_iterations", std::to_string(max_iterations));
+}
+
+[[nodiscard]] std::vector<core::ToolUseContent> tool_uses_in(std::span<const core::Content> blocks) {
+  std::vector<core::ToolUseContent> uses;
+  for (const auto& block : blocks) {
+    if (auto* tool = std::get_if<core::ToolUseContent>(&block); tool != nullptr) {
+      uses.push_back(*tool);
+    }
+  }
+  return uses;
+}
+
+void add_usage(provider::Usage& total, const provider::Usage& next) {
+  total.input_tokens += next.input_tokens;
+  total.output_tokens += next.output_tokens;
+  total.cache_creation_tokens += next.cache_creation_tokens;
+  total.cache_read_tokens += next.cache_read_tokens;
+  if (next.cost_estimate.has_value()) {
+    total.cost_estimate = total.cost_estimate.value_or(0.0) + *next.cost_estimate;
+  }
+}
+
+[[nodiscard]] std::string render_tool_error(const core::Error& error) {
+  std::string output;
+  output.reserve(error.message().size() + 64);
+  output.append("tool error: ");
+  output.append(error.message());
+  for (const auto& [key, value] : error.context()) {
+    output.append("\n");
+    output.append(key);
+    output.append(": ");
+    output.append(value);
+  }
+  return output;
+}
+
+[[nodiscard]] bool model_visible_tool_error(core::ErrorKind kind) noexcept {
+  switch (kind) {
+    case core::ErrorKind::cancelled:
+    case core::ErrorKind::storage:
+    case core::ErrorKind::internal:
+      return false;
+    default:
+      return true;
+  }
+}
+
+[[nodiscard]] core::Result<core::ToolResultContent> tool_result_from(std::string tool_use_id,
+                                                                     core::Result<tool::Output> output) {
+  if (output.has_value()) {
+    return core::ToolResultContent{
+        .tool_use_id = std::move(tool_use_id),
+        .output = std::move(output->text),
+        .is_error = output->is_error,
+    };
+  }
+  if (!model_visible_tool_error(output.error().kind())) {
+    return std::unexpected(std::move(output).error());
+  }
+  return core::ToolResultContent{
+      .tool_use_id = std::move(tool_use_id),
+      .output = render_tool_error(output.error()),
+      .is_error = true,
+  };
 }
 
 }  // namespace
@@ -120,70 +186,111 @@ public:
 
   [[nodiscard]] async::Awaitable<core::Result<RunTurnResult>> run_turn(RunTurnInputs inputs,
                                                                        provider::EventSink* sink) {
-    auto rendered = co_await builder_.build(prompt::BuilderInputs{
-        .system_preamble = inputs.system_preamble,
-        .tool_catalog = inputs.tool_catalog,
-        .active_tools = inputs.active_tools,
-        .promoted_tools = inputs.promoted_tools,
-        .skills_catalog = inputs.skills_catalog,
-        .memory_framing = inputs.memory_framing,
-        .per_agent_overlay = inputs.per_agent_overlay,
-        .conversation_tail = inputs.conversation_tail,
-    });
-    if (!rendered) {
-      co_return std::unexpected(std::move(rendered).error());
-    }
-
-    auto cache =
-        provider::make_prompt_cache_hints(*rendered, route_.primary.cache.value_or(provider::PromptCacheOptions{}));
-    if (!cache) {
-      co_return std::unexpected(std::move(cache).error());
-    }
-
+    std::vector<core::Message> transcript{inputs.conversation_tail.begin(), inputs.conversation_tail.end()};
+    auto total_usage = provider::Usage{};
+    const auto native_tools = request_tools_for(inputs.tool_catalog, inputs.active_tools, inputs.promoted_tools);
     const auto thinking_budget =
         inputs.thinking_budget.has_value() ? inputs.thinking_budget : route_.primary.thinking_budget;
 
-    auto request = provider::Request{
-        .messages = std::vector<core::Message>{inputs.conversation_tail.begin(), inputs.conversation_tail.end()},
-        .system_prompt = join_prompt_prefix(*rendered),
-        .tools = request_tools_for(inputs.tool_catalog, inputs.active_tools, inputs.promoted_tools),
-        .tool_choice = inputs.tool_choice,
-        .max_tokens = inputs.max_tokens,
-        .thinking_budget = thinking_budget,
-        .stream = inputs.stream,
-        .cache = *cache,
-        .retry = inputs.retry,
-    };
+    for (std::uint32_t iteration = 1; iteration <= options_.max_iterations; ++iteration) {
+      auto rendered = co_await builder_.build(prompt::BuilderInputs{
+          .system_preamble = inputs.system_preamble,
+          .tool_catalog = inputs.tool_catalog,
+          .active_tools = inputs.active_tools,
+          .promoted_tools = inputs.promoted_tools,
+          .skills_catalog = inputs.skills_catalog,
+          .memory_framing = inputs.memory_framing,
+          .per_agent_overlay = inputs.per_agent_overlay,
+          .conversation_tail = transcript,
+      });
+      if (!rendered) {
+        co_return std::unexpected(std::move(rendered).error());
+      }
 
-    auto response = co_await provider_.send(std::move(request), route_, sink);
-    if (!response) {
-      co_return std::unexpected(std::move(response).error());
+      auto cache =
+          provider::make_prompt_cache_hints(*rendered, route_.primary.cache.value_or(provider::PromptCacheOptions{}));
+      if (!cache) {
+        co_return std::unexpected(std::move(cache).error());
+      }
+
+      auto request = provider::Request{
+          .messages = transcript,
+          .system_prompt = join_prompt_prefix(*rendered),
+          .tools = native_tools,
+          .tool_choice = inputs.tool_choice,
+          .max_tokens = inputs.max_tokens,
+          .thinking_budget = thinking_budget,
+          .stream = inputs.stream,
+          .cache = *cache,
+          .retry = inputs.retry,
+      };
+
+      auto response = co_await provider_.send(std::move(request), route_, sink);
+      if (!response) {
+        co_return std::unexpected(std::move(response).error());
+      }
+
+      add_usage(total_usage, response->usage);
+
+      const auto tool_uses = tool_uses_in(response->blocks);
+      if (response->stop_reason == core::StopReason::tool_use || !tool_uses.empty()) {
+        if (inputs.tools == nullptr || inputs.dispatch_context == nullptr) {
+          co_return std::unexpected(unsupported_response("tool_use response"));
+        }
+        if (tool_uses.empty()) {
+          co_return std::unexpected(unsupported_response("tool_use stop reason without tool blocks"));
+        }
+
+        transcript.push_back(core::Message{
+            .role = core::Role::assistant,
+            .blocks = response->blocks,
+            .created_at = std::nullopt,
+        });
+
+        std::vector<core::Content> tool_results;
+        tool_results.reserve(tool_uses.size());
+        for (const auto& use : tool_uses) {
+          auto output = co_await inputs.tools->dispatch(use.name, use.input_json, *inputs.dispatch_context);
+          auto tool_result = tool_result_from(use.id, std::move(output));
+          if (!tool_result) {
+            co_return std::unexpected(std::move(tool_result).error());
+          }
+          tool_results.emplace_back(std::move(*tool_result));
+        }
+        transcript.push_back(core::Message{
+            .role = core::Role::tool,
+            .blocks = std::move(tool_results),
+            .created_at = std::nullopt,
+        });
+        continue;
+      }
+
+      if (response->stop_reason != core::StopReason::end_turn &&
+          response->stop_reason != core::StopReason::stop_sequence &&
+          response->stop_reason != core::StopReason::max_tokens) {
+        co_return std::unexpected(unsupported_response("non-terminal stop reason"));
+      }
+
+      auto text = assemble_terminal_text(response->blocks);
+      transcript.push_back(core::Message{
+          .role = core::Role::assistant,
+          .blocks = response->blocks,
+          .created_at = std::nullopt,
+      });
+      co_return RunTurnResult{
+          .text = std::move(text),
+          .assistant_blocks = std::move(response->blocks),
+          .stop_reason = response->stop_reason,
+          .usage = total_usage,
+          .model_used = std::move(response->model_used),
+          .rendered_prompt = std::move(*rendered),
+          .cache_hints = std::move(*cache),
+          .iterations = iteration,
+          .transcript = std::move(transcript),
+      };
     }
 
-    // This first loop slice is allowed to finish a text-style assistant turn;
-    // it is not allowed to quietly consume a tool-use turn. Returning a loud
-    // error here keeps scenario #2+#3 honest until the next slice appends
-    // tool_result blocks and re-enters the provider.
-    if (response->stop_reason == core::StopReason::tool_use || contains_tool_use(response->blocks)) {
-      co_return std::unexpected(unsupported_response("tool_use response"));
-    }
-    if (response->stop_reason != core::StopReason::end_turn &&
-        response->stop_reason != core::StopReason::stop_sequence &&
-        response->stop_reason != core::StopReason::max_tokens) {
-      co_return std::unexpected(unsupported_response("non-terminal stop reason"));
-    }
-
-    auto text = assemble_terminal_text(response->blocks);
-    co_return RunTurnResult{
-        .text = std::move(text),
-        .assistant_blocks = std::move(response->blocks),
-        .stop_reason = response->stop_reason,
-        .usage = response->usage,
-        .model_used = std::move(response->model_used),
-        .rendered_prompt = std::move(*rendered),
-        .cache_hints = std::move(*cache),
-        .iterations = 1,
-    };
+    co_return std::unexpected(iteration_cap_error(options_.max_iterations));
   }
 
   [[nodiscard]] const provider::Route& route() const noexcept {

@@ -2,11 +2,13 @@
 //
 // This header opens the real `oran-agent` runtime surface without pulling the
 // tool scheduler, memory runtime, storage audit rows, or blocking hooks into
-// the first slice. The intent is deliberate: spec 0017 says the loop must be
+// the first loop increments. The intent is deliberate: spec 0017 says the loop must be
 // proven against `provider::FakeProvider` before any vendor adapter ships. This
 // class is that seam. It builds the cached prompt, maps it into a
-// `provider::Request`, sends exactly one provider iteration, and accepts only
-// terminal text-style responses. Tool-use iteration is a later slice.
+// `provider::Request`, sends provider iterations, and accepts terminal
+// text-style responses. When the caller supplies the existing registry dispatch
+// boundary, it can also run the first sequential tool-use iteration path and
+// re-enter the provider.
 
 #pragma once
 
@@ -30,13 +32,17 @@
 #include <oran/provider/system.hpp>
 #include <oran/provider/types.hpp>
 
+namespace orangutan::tool {
+class Registry;
+struct DispatchContext;
+}  // namespace orangutan::tool
+
 namespace orangutan::agent {
 
 struct LoopOptions {
-  /// Spec 0017 makes the iteration cap a runtime invariant. The first loop
-  /// slice performs one provider iteration only, but storing the cap now keeps
-  /// the public construction shape stable when the tool loop starts consuming
-  /// repeated provider turns.
+  /// Spec 0017 makes the iteration cap a runtime invariant. The current loop
+  /// consumes repeated provider turns sequentially; the future scheduler keeps
+  /// the same cap at the agent boundary.
   std::uint32_t max_iterations{16};
   prompt::BuilderOptions prompt_options{};
 
@@ -68,6 +74,12 @@ struct RunTurnInputs {
   std::optional<std::uint32_t> thinking_budget{};
   provider::RetryPolicy retry{};
   bool stream{true};
+  /// Optional direct-dispatch bridge for spec 0017 scenarios #2/#3. Both
+  /// pointers must be non-null to execute tool_use blocks; otherwise the loop
+  /// still fails loudly on tool_use so callers do not accidentally run a
+  /// partial ReAct loop without permission/audit infrastructure.
+  tool::Registry* tools{nullptr};
+  tool::DispatchContext* dispatch_context{nullptr};
 };
 
 struct RunTurnResult {
@@ -82,6 +94,10 @@ struct RunTurnResult {
   prompt::RenderedPrompt rendered_prompt{};
   std::optional<provider::PromptCacheHints> cache_hints{};
   std::uint32_t iterations{0};
+  /// Complete transcript tail after the turn, including the terminal assistant
+  /// response. Tool-loop callers can persist this value as the turn's
+  /// working-memory delta until the real session repository owner lands.
+  std::vector<core::Message> transcript;
 };
 
 class Loop {
@@ -95,10 +111,11 @@ public:
   Loop& operator=(Loop&&) noexcept;
 
   /// Run one user turn through the current MVP loop. This is intentionally
-  /// narrower than the final ReAct loop: it sends one request and accepts
-  /// terminal text-style stop reasons. `StopReason::tool_use` returns an
-  /// explicit `internal` error so callers and tests cannot mistake the first
-  /// slice for a complete tool-dispatch implementation.
+  /// narrower than the final ReAct loop: it sends requests sequentially,
+  /// accepts terminal text-style stop reasons, and only dispatches tool_use
+  /// blocks when `RunTurnInputs::tools` and `dispatch_context` are supplied.
+  /// Parallel scheduling, turn audit rows, blocking approval rendering, and
+  /// provider retry/fallback remain later slices.
   [[nodiscard]] async::Awaitable<core::Result<RunTurnResult>> run_turn(RunTurnInputs inputs,
                                                                        provider::EventSink* sink = nullptr);
 

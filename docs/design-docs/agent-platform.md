@@ -68,20 +68,21 @@ own library, its own tests, its own bench, its own design doc."
 
 ## Prompt Assembly
 
-> **Status (slice 75, 2026-05-24):** `oran-prompt` owns the first
+> **Status (slice 76, 2026-05-24):** `oran-prompt` owns the first
 > deterministic `prompt::Builder` skeleton plus `prompt::PromotionState`,
 > `oran-agent` owns the narrow `agent::SessionState` surface that observes
 > successful `tool.search` output and promotes deferred matches into the
 > next prompt snapshot, and `oran-provider` owns the cache-hint mapper plus
 > the slice-74 abstract `provider::System` / `EventSink` / `Route` surface
 > with the first concrete `provider::FakeProvider` (scripted-turn plan,
-> delta-to-`Response` assembly, cancel-aware scripted latency). Slice 75
-> opens `agent::Loop` as the first driver over those pieces: it builds a
+> delta-to-`Response` assembly, cancel-aware scripted latency). Slice 76
+> extends `agent::Loop` over those pieces: it builds a
 > `prompt::RenderedPrompt`, maps cache hints, mirrors active/promoted tools
-> into name-sorted `provider::Request::tools`, sends one request through a supplied
-> `provider::System`, and returns terminal text-style turns while rejecting
-> tool-use responses until the dispatch iteration slice lands. Memory + hook
-> + audit envelope remain downstream.
+> into name-sorted `provider::Request::tools`, sends requests through a
+> supplied `provider::System`, and, when supplied a `tool::Registry` plus
+> `tool::DispatchContext`, sequentially dispatches tool-use blocks, appends
+> ordered tool results, rebuilds the prompt, and re-enters the provider.
+> Memory + hook + turn-level audit envelope remain downstream.
 > The invariants — section order, byte-identical cached prefix, no clocks /
 > per-call state in sections (1)–(6) — remain canonical in
 > [`../rules/prompt-design.md`](../rules/prompt-design.md).
@@ -127,10 +128,13 @@ after-promotion session snapshots against conversation-tail drift. Slice 73
 connects the cache boundary to `oran-provider` through
 `provider::make_prompt_cache_hints`, and slice 74 closes the provider
 prework by shipping `provider::System` / `EventSink` / `Route` plus the
-first concrete `provider::FakeProvider`. Slice 75 adds the first
-`agent::Loop` consumer for that chain; it is intentionally one iteration
-and text-only so the next slice can add ordered `tool_result` appends and
-provider re-entry without changing the provider contract.
+first concrete `provider::FakeProvider`. Slice 75 added the first
+text-only `agent::Loop` consumer for that chain, and slice 76 adds the
+sequential direct-dispatch tool path: callers provide the existing registry
+and dispatch context, the loop appends ordered `tool_result` blocks and
+provider re-entry without changing the provider contract. The future
+`ToolScheduler` can replace the direct loop call without changing the
+provider-facing request/response shape.
 
 ## Cross-Cutting Concerns
 
