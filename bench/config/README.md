@@ -8,7 +8,8 @@ parse surface.
 ### `bench-config` block
 
 - `config.parse_memory`: parses an in-memory JSON document through
-  `Config::parse`.
+  `Config::parse`. The fixture includes `runtime.prompt.active_tools`
+  so prompt config remains covered by the startup loading path.
 - `config.load_file_example`: reads and parses the checked-in
   `config.example.json` through `Config::load_file`.
 

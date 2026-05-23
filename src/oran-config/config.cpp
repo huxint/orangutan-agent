@@ -273,6 +273,57 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
   return config;
 }
 
+[[nodiscard]] Result<PromptActiveToolsConfig> parse_prompt_active_tools(const json& value, std::string_view path) {
+  auto config = PromptActiveToolsConfig{};
+  if (value.is_string()) {
+    const auto& text = value.get_ref<const std::string&>();
+    if (text != "defaults") {
+      return std::unexpected(
+          config_error("expected \"defaults\" or array of tool names", std::string{path}).with("value", text));
+    }
+    return config;
+  }
+
+  auto parsed = string_array(value, path);
+  if (!parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+
+  auto index = std::size_t{0};
+  for (const auto& name : *parsed) {
+    if (name.empty()) {
+      return std::unexpected(config_error("tool name must be non-empty", element_path(path, index)));
+    }
+    ++index;
+  }
+
+  config.use_defaults = false;
+  config.tool_names = std::move(*parsed);
+  return config;
+}
+
+[[nodiscard]] Result<PromptRuntimeConfig> parse_prompt_runtime(const json& runtime) {
+  auto prompt = PromptRuntimeConfig{};
+  const auto it = runtime.find("prompt");
+  if (it == runtime.end()) {
+    return prompt;
+  }
+  auto object = require_object(*it, "$.runtime.prompt");
+  if (!object) {
+    return std::unexpected(std::move(object.error()));
+  }
+
+  if (const auto active_tools = it->find("active_tools"); active_tools != it->end()) {
+    auto parsed = parse_prompt_active_tools(*active_tools, "$.runtime.prompt.active_tools");
+    if (!parsed) {
+      return std::unexpected(std::move(parsed.error()));
+    }
+    prompt.active_tools = std::move(*parsed);
+  }
+
+  return prompt;
+}
+
 [[nodiscard]] Result<RuntimeConfig> parse_runtime(const json& root) {
   auto runtime = RuntimeConfig{};
   const auto it = root.find("runtime");
@@ -310,6 +361,12 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
     return std::unexpected(std::move(tool_output.error()));
   } else {
     runtime.tool_output = *tool_output;
+  }
+
+  if (auto prompt = parse_prompt_runtime(*it); !prompt) {
+    return std::unexpected(std::move(prompt.error()));
+  } else {
+    runtime.prompt = std::move(*prompt);
   }
 
   if (const auto patterns = it->find("redaction_patterns"); patterns != it->end()) {

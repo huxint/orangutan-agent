@@ -22,6 +22,9 @@ constexpr auto kConfigText = std::string_view{R"json(
   "runtime": {
     "workers": 4,
     "request_timeout_ms": 600000,
+    "prompt": {
+      "active_tools": ["file.read", "file.search", "tool.search"]
+    },
     "redaction_patterns": ["token=[^ ]+", "Bearer [A-Za-z0-9_.-]+"]
   },
   "profiles": {
@@ -72,7 +75,8 @@ std::string example_config_path() {
   if (!parsed) {
     std::abort();
   }
-  return parsed->profiles().size() + parsed->routes().size() + parsed->runtime().redaction_patterns.size();
+  return parsed->profiles().size() + parsed->routes().size() + parsed->runtime().redaction_patterns.size() +
+         parsed->runtime().prompt.active_tools.tool_names.size();
 }
 
 [[gnu::noinline]] std::size_t load_example_file() {
@@ -81,7 +85,8 @@ std::string example_config_path() {
   if (!parsed) {
     std::abort();
   }
-  return parsed->profiles().size() + parsed->routes().size() + parsed->runtime().redaction_patterns.size();
+  return parsed->profiles().size() + parsed->routes().size() + parsed->runtime().redaction_patterns.size() +
+         parsed->runtime().prompt.active_tools.tool_names.size();
 }
 
 }  // namespace

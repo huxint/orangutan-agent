@@ -84,10 +84,11 @@ The agent loop owns:
   a `CacheSection` whose bytes depend only on agent identity, model target,
   capability set, and the active mode — never on the wall clock or the current
   iteration.
-- **Tool catalog renderer** — section (2). Walks `tool::Registry::catalog()`
-  and renders each `core::ToolDef` to a deterministic block (name +
-  one-line description + JSON Schema). Memoized per `ToolDef`; see
-  [`tool-runtime.md`](tool-runtime.md).
+- **Tool catalog renderer** — section (2). Will walk `tool::Registry::catalog()`,
+  filter the full-schema active set through
+  `config::RuntimeConfig::prompt.active_tools`, and render each selected
+  `core::ToolDef` to a deterministic block (name + one-line description +
+  JSON Schema). Memoized per `ToolDef`; see [`tool-runtime.md`](tool-runtime.md).
 - **Deferred-tool index renderer** — section (3). Compact name + one-line
   description listing; full schema arrives via `tool.search`. See
   [`tool-runtime.md`](tool-runtime.md) "Deferred Tools".

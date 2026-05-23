@@ -82,7 +82,7 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
   `RenderedPrompt` and maps to vendor cache shape per
   `api-portability.md`.
 - **Deterministic tool-catalog renderer**:
-  - **Status (slices 59 + 68):** the renderer exists in
+  - **Status (slices 59 + 68 + 69):** the renderer exists in
     `oran-tool` as `tool::CatalogRenderer`, alongside the new
     `ToolDef::deferred` and `ToolDef::category` metadata. It renders
     active full-schema blocks and deferred name/description rows from a
@@ -90,9 +90,10 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
     JSON Schema bytes in `src/oran-tool/catalog.cpp`, and keeps a bounded
     256-entry rendered-block cache keyed by the fields that affect the
     block bytes plus renderer version, with aggregate stats. Slice 68 adds
-    the registry-owned `tool.search` lookup primitive in `oran-tool`; the
-    remaining bullets below that mention `oran-prompt`, active-tool config,
-    and promotion state are still unimplemented.
+    the registry-owned `tool.search` lookup primitive in `oran-tool`.
+    Slice 69 adds the typed `runtime.prompt.active_tools` config surface in
+    `oran-config`; the remaining bullets below that mention `oran-prompt`
+    consumption and promotion state are still unimplemented.
   - Pure function of `ToolDef`:
     `(name, description, input_schema, required_capabilities,
     category)`.
@@ -113,7 +114,16 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
   - The active set is config-driven:
     `runtime.prompt.active_tools` accepts an explicit allowlist or
     `"defaults"` to use the list above. Operators who add a new
-    coding tool can promote it without touching code.
+    coding tool will be able to promote it without touching code once
+    the prompt builder consumes this config.
+  - **Status (slice 69, 2026-05-24):** `oran-config` parses this field into
+    `config::RuntimeConfig::prompt.active_tools`. The `"defaults"`
+    sentinel sets `use_defaults=true`; an array preserves the authored
+    tool-name allowlist with `use_defaults=false`; empty explicit
+    allowlists are valid. The loader rejects malformed shapes and empty
+    tool names but does not resolve names against `tool::Registry`, because
+    config is below the tool layer. The prompt builder still needs to
+    consume this typed surface when `oran-prompt` lands.
 - **`tool.search` built-in** (the *non-deferred* lookup tool; future
   session promotion consumes its matches):
   - **Status (slice 68, 2026-05-24):** the registry lookup primitive is
@@ -237,7 +247,9 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
 9. **Active-set config drives section 2.** A config with
    `runtime.prompt.active_tools = ["file.read", "file.search"]`
    produces a section 2 that contains *only* those two tools; every
-   other registered tool moves to section 3.
+   other registered tool moves to section 3. Parser status: slice 69
+   validates both config shapes and exposes the typed data; the section 2
+   rendering behaviour remains part of the first prompt-builder slice.
 10. **Prompt-cache stability bench.** Running
     `bench/oran-agent/prompt_cache_hit_rate.cpp` against three
     fixtures (small catalog, large catalog, with-promotion) produces
@@ -311,6 +323,7 @@ cacheable prompt with a deterministic tool catalog. Nothing else.
 ```sh
 xmake build oran-prompt
 xmake test test-prompt                    # builder determinism + promotion + breakpoint
+xmake run test-config                     # active-tool config parser contract
 xmake build bench-oran-agent
 xmake run bench-oran-agent prompt_cache_hit_rate
 xmake run orangutan -- --explain-prompt   # planned debug surface; lands with builder

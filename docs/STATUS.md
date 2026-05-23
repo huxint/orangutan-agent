@@ -7,16 +7,30 @@
 
 ## Snapshot
 
-- **Slice:** 68 (`xmake run orangutan` reports slice 68)
+- **Slice:** 69 (`xmake run orangutan` reports slice 69)
 - **Last completed history:**
-  [`histories/2026-05/20260524-0645-tool-search-registry-lookup.md`](histories/2026-05/20260524-0645-tool-search-registry-lookup.md)
+  [`histories/2026-05/20260524-0655-prompt-active-tools-config.md`](histories/2026-05/20260524-0655-prompt-active-tools-config.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 68
-  lands spec 0016's registry-owned deferred-tool lookup primitive:
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 69
+  lands spec 0016's typed active-tool config surface:
+  `runtime.prompt.active_tools` now parses into
+  `config::RuntimeConfig::prompt.active_tools` as either
+  `"defaults"` (`use_defaults=true`) or an explicit tool-name
+  allowlist (`use_defaults=false`, `tool_names` preserving author
+  order). `config.example.json` documents the default sentinel, and
+  `test-config` covers defaults, explicit allowlists, empty explicit
+  allowlists, and malformed prompt blocks / active-tool shapes. The
+  config layer intentionally validates only JSON shape and non-empty
+  names; it does not resolve names against `tool::Registry`, because
+  `oran-config` sits below `oran-tool`. The remaining 0016 work is
+  prompt-builder integration that consumes this typed config and
+  per-session promotion state before/alongside the first 0017
+  fake-provider agent loop tracer bullet. Slice 68
+  landed spec 0016's registry-owned deferred-tool lookup primitive:
   `register_builtins` now includes the non-deferred `tool.search`
   built-in, categorized as `runtime`, with no required runtime
   capability. The handler searches the current `Registry::catalog()`
@@ -33,9 +47,8 @@
   `Output::usage.match_count` mirrors the number of matches. This is
   deliberately not the per-session promotion side effect yet: there is
   no `oran-agent::SessionState` or prompt builder to own LRU/TTL
-  promotions, so the remaining 0016 work is active-tool config,
-  prompt-builder integration, and session promotion before/alongside
-  the first 0017 fake-provider agent loop tracer bullet. Slice 67
+  promotions, so prompt-builder integration and session promotion remain
+  future 0016/0017 work. Slice 67
   closes spec 0014's audit usage fan-out for the pre-scheduler direct
   dispatch path: `permission::AuditSink` now exposes
   `update_metadata(AuditMetadataUpdate)`, `RecordingAuditSink` and
@@ -135,9 +148,10 @@
   full-schema blocks in a bounded 256-entry cache keyed by stable
   rendered-block fields plus renderer version. The public stats report
   aggregate cache counters only. This is not yet the `oran-prompt`
-  builder, active-tool config, or promotion-set slice; slice 68 adds the
-  registry-local `tool.search` lookup primitive that this renderer's
-  future prompt builder will advertise as an active tool.
+  builder or promotion-set slice; slice 68 adds the registry-local
+  `tool.search` lookup primitive that this renderer's future prompt
+  builder will advertise as an active tool, and slice 69 adds the typed
+  config surface that will select the active set.
   Slice 58
   closes spec 0011 v1.1's IO-layer watcher item: `oran-io` now exposes
   `watch_read_text_file_ranged_cache(executor, root, options)`, a
@@ -215,7 +229,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-async`: 9 cases / 43 assertions.
 - `oran-io`: 49 cases / 286 assertions.
 - `oran-storage`: 61 cases / 718 assertions.
-- `oran-config`: 26 cases / 184 assertions.
+- `oran-config`: 28 cases / 207 assertions.
 - `oran-permission`: 88 cases / 403 assertions.
 - `oran-hook`: 17 cases / 109 assertions.
 - `oran-tool`: 166 cases / 1588 assertions.

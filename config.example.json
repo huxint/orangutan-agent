@@ -7,6 +7,9 @@
       "max_text_bytes": 262144,
       "max_data_bytes": 1048576
     },
+    "prompt": {
+      "active_tools": "defaults"
+    },
     "redaction_patterns": [
       "(?i)(api[_-]?key)[=:][^\\s]+",
       "Bearer [A-Za-z0-9_.-]+"

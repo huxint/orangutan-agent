@@ -29,10 +29,24 @@ struct ToolOutputRuntimeConfig {
   friend bool operator==(const ToolOutputRuntimeConfig&, const ToolOutputRuntimeConfig&) = default;
 };
 
+struct PromptActiveToolsConfig {
+  bool use_defaults{true};
+  std::vector<std::string> tool_names{};
+
+  friend bool operator==(const PromptActiveToolsConfig&, const PromptActiveToolsConfig&) = default;
+};
+
+struct PromptRuntimeConfig {
+  PromptActiveToolsConfig active_tools{};
+
+  friend bool operator==(const PromptRuntimeConfig&, const PromptRuntimeConfig&) = default;
+};
+
 struct RuntimeConfig {
   std::int64_t workers{4};
   std::int64_t request_timeout_ms{600000};
   ToolOutputRuntimeConfig tool_output{};
+  PromptRuntimeConfig prompt{};
   std::vector<std::string> redaction_patterns{};
 };
 

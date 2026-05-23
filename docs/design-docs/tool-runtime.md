@@ -460,7 +460,7 @@ Some tools are **deferred** — present in the catalog but not surfaced to the L
 explicitly looked up via `tool.search`. This pattern compresses the prompt without
 losing capability.
 
-> **Status (slice 68, 2026-05-24):** `core::ToolDef` carries
+> **Status (slice 69, 2026-05-24):** `core::ToolDef` carries
 > `deferred` and `category`, and `tool::CatalogRenderer` can split a
 > `Registry::catalog()` snapshot into sorted active full-schema blocks and
 > sorted deferred name/description rows. `Registry::catalog()` still returns
@@ -468,8 +468,10 @@ losing capability.
 > now also registers the non-deferred `tool.search` metadata lookup, which
 > searches the current registry snapshot by exact name, category, and/or
 > required capability and returns text plus structured `Output::data_json`
-> containing matched tool definitions. Per-session promotion state remains
-> future `oran-agent` / `oran-prompt` work.
+> containing matched tool definitions. `oran-config` now parses
+> `runtime.prompt.active_tools` as either `"defaults"` or an explicit
+> allowlist; prompt-builder consumption and per-session promotion state
+> remain future `oran-agent` / `oran-prompt` work.
 
 Implementation:
 
@@ -617,9 +619,10 @@ entries, matching spec 0012's bounded-state inventory; setting
 unbounded cache. The public
 `ToolCatalogCacheStats` shape exposes only aggregate counters and the
 renderer version, never tool schemas or cache keys. `oran-prompt` will
-consume this renderer when the prompt builder lands; active-tool config
-and promotion state remain future work. The registry-owned lookup half of
-the deferred-tool design is shipped as `tool.search`: it accepts
+consume this renderer when the prompt builder lands; `oran-config` already
+exposes the active-tool selector, while prompt-builder consumption and
+promotion state remain future work. The registry-owned lookup half of the
+deferred-tool design is shipped as `tool.search`: it accepts
 `{name?, category?, capability?}`, requires at least one selector, ANDs
 provided selectors, and returns `{kind:"tool_search", query,
 match_count, matches[]}` in `Output::data_json`. Each match carries

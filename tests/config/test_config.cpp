@@ -77,6 +77,9 @@ constexpr auto kMinimalConfig = R"json(
       "max_text_bytes": 4096,
       "max_data_bytes": 8192
     },
+    "prompt": {
+      "active_tools": ["file.read", "tool.search"]
+    },
     "redaction_patterns": ["token=[^ ]+"]
   },
   "profiles": {
@@ -133,6 +136,8 @@ TEST_CASE("Config::parse returns typed config values", "[unit][config]") {
   REQUIRE(result->runtime().request_timeout_ms == 1500);
   REQUIRE(result->runtime().tool_output.max_text_bytes == 4096);
   REQUIRE(result->runtime().tool_output.max_data_bytes == 8192);
+  REQUIRE_FALSE(result->runtime().prompt.active_tools.use_defaults);
+  REQUIRE(result->runtime().prompt.active_tools.tool_names == std::vector<std::string>{"file.read", "tool.search"});
   REQUIRE(result->runtime().redaction_patterns.size() == 1);
 
   REQUIRE(result->profiles().size() == 1);
@@ -255,6 +260,8 @@ TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][con
   REQUIRE(result->web().port == 8787);
   REQUIRE(result->runtime().tool_output.max_text_bytes == 262144);
   REQUIRE(result->runtime().tool_output.max_data_bytes == 1048576);
+  REQUIRE(result->runtime().prompt.active_tools.use_defaults);
+  REQUIRE(result->runtime().prompt.active_tools.tool_names.empty());
 
   // The example config now carries a non-empty permissions block + one
   // example agent overlay so the file documents the new schema.
@@ -294,6 +301,83 @@ TEST_CASE("Config::parse rejects malformed runtime.tool_output caps", "[unit][co
 
   SECTION("zero data cap") {
     auto result = config::Config::parse(R"json({"runtime": {"tool_output": {"max_data_bytes": 0}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+}
+
+TEST_CASE("Config::parse extracts runtime.prompt active tools", "[unit][config][runtime][prompt]") {
+  SECTION("defaults sentinel") {
+    auto result = config::Config::parse(R"json({
+  "runtime": {
+    "prompt": {
+      "active_tools": "defaults"
+    }
+  }
+})json");
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->runtime().prompt.active_tools.use_defaults);
+    REQUIRE(result->runtime().prompt.active_tools.tool_names.empty());
+  }
+
+  SECTION("explicit allowlist") {
+    auto result = config::Config::parse(R"json({
+  "runtime": {
+    "prompt": {
+      "active_tools": ["file.read", "file.search", "tool.search"]
+    }
+  }
+})json");
+
+    REQUIRE(result.has_value());
+    REQUIRE_FALSE(result->runtime().prompt.active_tools.use_defaults);
+    REQUIRE(result->runtime().prompt.active_tools.tool_names ==
+            std::vector<std::string>{"file.read", "file.search", "tool.search"});
+  }
+
+  SECTION("empty explicit allowlist") {
+    auto result = config::Config::parse(R"json({
+  "runtime": {
+    "prompt": {
+      "active_tools": []
+    }
+  }
+})json");
+
+    REQUIRE(result.has_value());
+    REQUIRE_FALSE(result->runtime().prompt.active_tools.use_defaults);
+    REQUIRE(result->runtime().prompt.active_tools.tool_names.empty());
+  }
+}
+
+TEST_CASE("Config::parse rejects malformed runtime.prompt active tools", "[unit][config][runtime][prompt]") {
+  SECTION("non-object prompt block") {
+    auto result = config::Config::parse(R"json({"runtime": {"prompt": []}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("unknown sentinel") {
+    auto result = config::Config::parse(R"json({"runtime": {"prompt": {"active_tools": "all"}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-array active_tools") {
+    auto result = config::Config::parse(R"json({"runtime": {"prompt": {"active_tools": {"name": "file.read"}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-string tool name") {
+    auto result = config::Config::parse(R"json({"runtime": {"prompt": {"active_tools": ["file.read", 42]}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("empty tool name") {
+    auto result = config::Config::parse(R"json({"runtime": {"prompt": {"active_tools": ["file.read", ""]}}})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }
