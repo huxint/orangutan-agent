@@ -84,12 +84,26 @@ namespace {
                                                          core::Time started_at,
                                                          core::Time finished_at,
                                                          const core::Result<Output>& result) {
+  auto usage = hook::ToolUsage{};
+  if (result.has_value()) {
+    usage = hook::ToolUsage{
+        .bytes_read = result->usage.bytes_read,
+        .bytes_written = result->usage.bytes_written,
+        .files_touched = result->usage.files_touched,
+        .match_count = result->usage.match_count,
+        .cost_estimate = result->usage.cost_estimate,
+        .wall_time = result->usage.wall_time,
+        .truncated = result->usage.truncated,
+        .data_dropped = result->usage.data_dropped,
+    };
+  }
   hook::ToolAfterPayload payload{
       .tool_name = std::string{name},
       .input_json = std::string{input_json},
       .who = make_hook_identity(ctx),
       .succeeded = result.has_value(),
       .output_text = result.has_value() ? result->text : std::string{},
+      .usage = usage,
       .error_kind = result.has_value() ? std::string{} : std::string{core::enum_name(result.error().kind())},
       .error_message = result.has_value() ? std::string{} : std::string{result.error().message()},
       .started_at = started_at,

@@ -88,3 +88,8 @@ A-vs-B comparisons:
   fields plus renderer version, then still sorts and joins the catalog
   snapshot. The delta is the cache value future `oran-prompt` should
   see when repeated turns keep the same tool declarations.
+- `output.text_only` vs. `output.with_data_16kib`: construction cost for
+  the v1-compatible text-only envelope and for an envelope that carries a
+  16 KiB serialized structured payload plus usage counters. This pins the
+  fixed overhead of the spec-0014 envelope before provider adapters start
+  serializing it into vendor tool-result shapes.

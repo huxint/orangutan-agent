@@ -81,20 +81,11 @@
 #include <oran/permission/approval_broker.hpp>
 #include <oran/permission/audit.hpp>
 #include <oran/permission/rule_set.hpp>
+#include <oran/tool/output.hpp>
 
 namespace orangutan::tool {
 
 class Workspace;
-
-/// One tool's response. The structured JSON / attachment / cost surface from
-/// the design doc lands when a tool genuinely needs them; the first built-in
-/// (`file.read`) is text-only so this slice keeps the shape minimal.
-struct Output {
-  std::string text;
-  bool is_error{false};
-
-  friend bool operator==(const Output&, const Output&) = default;
-};
 
 /// Registry-pre-resolved filesystem target for a built-in tool call.
 /// `absolute_path` is the path handlers pass to `oran-io`; the rest is

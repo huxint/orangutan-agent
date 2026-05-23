@@ -13,6 +13,7 @@ void register_tool_file_search(ankerl::nanobench::Bench&);
 void register_tool_approval(ankerl::nanobench::Bench&);
 void register_tool_hooks(ankerl::nanobench::Bench&);
 void register_tool_catalog(ankerl::nanobench::Bench&);
+void register_tool_output(ankerl::nanobench::Bench&);
 }  // namespace orangutan::bench
 
 int main() {
@@ -29,6 +30,7 @@ int main() {
   orangutan::bench::register_tool_approval(b);
   orangutan::bench::register_tool_hooks(b);
   orangutan::bench::register_tool_catalog(b);
+  orangutan::bench::register_tool_output(b);
 
   std::println();
   return 0;

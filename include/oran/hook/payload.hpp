@@ -9,6 +9,8 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <variant>
 
@@ -53,6 +55,21 @@ struct ToolDispatchedPayload {
   std::string verdict;
 };
 
+/// Usage metrics copied from `tool::Output::usage` without making
+/// `oran-hook` depend on `oran-tool`.
+struct ToolUsage {
+  std::optional<std::uintmax_t> bytes_read{};
+  std::optional<std::uintmax_t> bytes_written{};
+  std::optional<std::uint32_t> files_touched{};
+  std::optional<std::uint64_t> match_count{};
+  std::optional<double> cost_estimate{};
+  std::optional<std::chrono::nanoseconds> wall_time{};
+  bool truncated{false};
+  bool data_dropped{false};
+
+  friend bool operator==(const ToolUsage&, const ToolUsage&) = default;
+};
+
 /// Post-dispatch payload. Published at every exit from `Registry::dispatch`
 /// (handler returned, permission denied, broker rejection, audit error).
 /// The `succeeded` boolean tracks the dispatch outcome; on failure
@@ -64,6 +81,9 @@ struct ToolAfterPayload {
   bool succeeded{false};
   /// Verbatim `Output::text` on success; empty string on failure.
   std::string output_text;
+  /// Metrics copied from `Output::usage` on success; all fields empty on
+  /// dispatch failure.
+  ToolUsage usage{};
   /// `core::Error::kind` enumerator wire spelling (e.g. `permission_denied`,
   /// `not_found`, `internal`) on failure; empty on success.
   std::string error_kind;

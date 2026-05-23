@@ -313,23 +313,49 @@ defensive against tools that *try* to escalate after registration.
 ```cpp
 namespace orangutan::tool {
 
+struct ToolUsage {
+  std::optional<std::uintmax_t> bytes_read;
+  std::optional<std::uintmax_t> bytes_written;
+  std::optional<std::uint32_t> files_touched;
+  std::optional<std::uint64_t> match_count;
+  std::optional<double> cost_estimate;
+  std::optional<std::chrono::nanoseconds> wall_time;
+  bool truncated = false;
+  bool data_dropped = false;
+};
+
+struct Attachment {
+  std::string file_path;
+  std::string mime_type;
+  std::optional<std::uintmax_t> byte_size;
+  std::optional<std::string> fingerprint;
+};
+
 struct Output {
-  std::string text;                          // primary output
-  std::optional<nlohmann::json> structured;  // for the LLM if the protocol supports it
-  std::vector<Attachment> attachments;       // files, images, etc.
-  std::optional<double> cost_estimate;       // for cost-aware planning
+  std::string text;                          // required model-facing fallback
+  std::optional<std::string> data_json;      // serialized structured JSON bytes
+  std::vector<Attachment> attachments;       // files, images, blobs
+  ToolUsage usage;                           // measured counters and cap flags
   bool is_error = false;
+
+  static Output text_only(std::string text);
+  static Output error(std::string message,
+                      std::optional<std::string> data_json = std::nullopt);
 };
 
 using Handler =
     std::function<async::Awaitable<core::Result<Output>>(
-        const nlohmann::json& input, Runtime&)>;
+        std::string_view input_json, DispatchContext&)>;
 
 }  // namespace orangutan::tool
 ```
 
-Tools are coroutines. They can `co_await` other services. They run on the agent's
-strand by default; for CPU-heavy tools, `co_await async::post(runtime.cpu_executor())`.
+Tools are coroutines. Today's registry passes raw JSON bytes so the public
+handler type stays free of `nlohmann::json`; handlers parse in their own
+implementation TUs. The later `tool::Runtime` handle will replace the
+interim `DispatchContext` service bundle once the agent runtime exists.
+Tools run on the agent's strand by default; CPU-heavy tools hop through the
+runtime's CPU executor.
 
 ## Registry
 
@@ -588,33 +614,69 @@ with name, description, and schema, plus compact discovery rows for deferred
 tools — and rejects per-invocation status or timing text in catalog bytes
 because that would violate `prompt-design.md`'s cache-prefix invariants.
 
-## Output Shape v2 (Forward-Looking)
+## Output Shape v2
 
-The current `tool::Output { text, is_error }` is too small for the target
-platform. The richer shape is already documented above in "Tool Handler
-Shape":
+Slice 60 moves `tool::Output` out of `registry.hpp` and into
+[`../../include/oran/tool/output.hpp`](../../include/oran/tool/output.hpp).
+This closes the deep-review "tool output is too small" finding without
+claiming the whole spec-0014 transport stack is complete. The shipped public
+shape is:
 
 ```cpp
+struct ToolUsage {
+  std::optional<std::uintmax_t> bytes_read;
+  std::optional<std::uintmax_t> bytes_written;
+  std::optional<std::uint32_t> files_touched;
+  std::optional<std::uint64_t> match_count;
+  std::optional<double> cost_estimate;
+  std::optional<std::chrono::nanoseconds> wall_time;
+  bool truncated = false;
+  bool data_dropped = false;
+};
+
+struct Attachment {
+  std::string file_path;
+  std::string mime_type;
+  std::optional<std::uintmax_t> byte_size;
+  std::optional<std::string> fingerprint;
+};
+
 struct Output {
-  std::string                    text;
-  std::optional<nlohmann::json>  structured;     // data_json in older drafts
-  std::vector<Attachment>        attachments;
-  std::optional<double>          cost_estimate;
-  bool                           is_error = false;
+  std::string text;
+  std::optional<std::string> data_json;
+  std::vector<Attachment> attachments;
+  ToolUsage usage;
+  bool is_error = false;
 };
 ```
 
-Migration policy:
+`data_json` is serialized JSON rather than a public `nlohmann::json` value.
+That keeps `<oran/tool/output.hpp>` third-party-free and cheap to include,
+while leaving provider adapters responsible for protocol-specific parsing and
+serialization when they land. `Attachment` is a concrete metadata value now;
+tools keep the vector empty until a real file/image/blob producer exists.
 
-- Keep the JSON forward-declared in the public header so the
-  compile-budget rule in [`../rules/compile-budget.md`](../rules/compile-budget.md)
-  stays honoured. Heavy JSON lives in `src/oran-tool/`.
+Current and future policy:
+
+- Keep the public header free of heavy JSON includes so the compile-budget
+  rule in [`../rules/compile-budget.md`](../rules/compile-budget.md) stays
+  honoured. Heavy JSON lives in handler/provider implementation TUs.
+- `Output::text_only(...)` is the v1-compatible path for current handlers;
+  `Output::error(...)` marks an error envelope and may carry serialized
+  structured error bytes.
+- `Registry::dispatch` copies `Output::usage` into
+  `hook::ToolAfterPayload::usage` on successful handler returns. Dispatch
+  failures keep usage empty.
 - Built-ins migrate one at a time. Until the migration completes, range-read
   metadata for `file.read` (spec 0011) rides as a stable text header line:
   `<path>:<start_line>-<end_line> fingerprint=<token> bytes=<n>[ truncated]`.
-- Provider adapters consume `structured` only when the target protocol
-  supports it (Anthropic Messages tool result blocks accept JSON, OpenAI
-  Responses accepts JSON, both via the adapter layer).
+- Provider adapters will consume `data_json` only when the target protocol
+  supports structured tool-result bytes. Anthropic Messages, OpenAI
+  Responses, Gemini, and OpenAI-compatible mappings remain spec-0014 follow-up
+  work because `oran-provider` does not exist yet.
+- Scheduler byte caps, audit usage fan-out, raw `data_json` hook redaction for
+  trusted-local sinks, and built-in structured payload migration remain
+  downstream spec-0014 items.
 - The `tool::parse_input<T>` helper tracked under the deep-review backlog
   (`exec-plans/tech-debt-tracker.md`) lands in the same arc so handlers
   stop hand-rolling their JSON parsers.
@@ -629,6 +691,10 @@ Migration policy:
 - `bench/oran-tool/catalog.render_cold_32_tools` vs.
   `catalog.render_hot_32_tools` — cold JSON Schema canonicalisation and
   block rendering vs. the bounded rendered-block cache hot path.
+- `bench/oran-tool/output.text_only` vs.
+  `output.with_data_16kib` — v1-compatible text-only envelope construction
+  against a structured envelope carrying 16 KiB of serialized payload bytes
+  plus usage counters.
 
 `compare.cpp` reports the dispatch overhead as a percentage of typical tool latency
 (file.read of 4 KB; shell.exec of `/bin/true`).

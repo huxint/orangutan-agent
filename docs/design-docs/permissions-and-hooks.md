@@ -308,17 +308,23 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > single error policy. `hook::Payload` is a `std::variant`
 > that today covers `std::monostate` (placeholder for
 > events whose typed shape lands with the producing
-> subsystem) plus `ToolBeforePayload` and
-> `ToolAfterPayload` — typed shapes for the remaining
+> subsystem) plus `ToolBeforePayload`,
+> `ToolDispatchedPayload`, `ToolAfterPayload`, and
+> `ToolErrorPayload`. Slice 60 adds the `ToolUsage`
+> metrics copied from `tool::Output::usage` onto successful
+> `ToolAfterPayload`s without making `oran-hook` depend on
+> `oran-tool`. Typed shapes for the remaining non-tool
 > events ship with their producers (provider request /
 > response payloads when the Anthropic adapter lands,
 > memory payloads when `oran-memory` lands, and so on).
 > `Registry::dispatch` consumes the bus through the
 > optional `DispatchContext::bus` field: when non-null,
 > dispatch publishes `tool_before` after the registry
-> resolves the tool def and `tool_after` at every exit
-> (handler success, permission deny, broker rejection,
-> audit error). Hooks are advisory in this slice — sinks
+> resolves the tool def, `tool_dispatched` before handlers
+> run on allow / ask-approved paths, `tool_error` on error
+> exits, and `tool_after` at every exit (handler success,
+> permission deny, broker rejection, audit error). Hooks are
+> advisory in this slice — sinks
 > observe but cannot veto; the blocking-veto path
 > (`publish_blocking`, `EventTraits<E>::Decision`) is
 > tracked in `exec-plans/tech-debt-tracker.md` and lands

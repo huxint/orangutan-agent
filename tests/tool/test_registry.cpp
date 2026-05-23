@@ -2528,6 +2528,7 @@ struct CapturedEvent {
   std::string identity;
   bool succeeded{false};
   std::string output_text;
+  orangutan::hook::ToolUsage usage{};
   std::string error_kind;
   std::string error_message;
   std::string verdict;
@@ -2560,6 +2561,7 @@ public:
             row.identity = alt.who.identity;
             row.succeeded = alt.succeeded;
             row.output_text = alt.output_text;
+            row.usage = alt.usage;
             row.error_kind = alt.error_kind;
             row.error_message = alt.error_message;
           } else if constexpr (std::is_same_v<T, orangutan::hook::ToolErrorPayload>) {
@@ -2615,7 +2617,21 @@ permission::RuleSet deny_rule_set(std::string tool_pattern = "noop") {
 }
 
 async::Awaitable<core::Result<tool::Output>> noop_ok_handler(std::string_view, tool::DispatchContext& /*ctx*/) {
-  co_return tool::Output{.text = "noop-ok"};
+  co_return tool::Output::text_only("noop-ok");
+}
+
+async::Awaitable<core::Result<tool::Output>> noop_usage_handler(std::string_view, tool::DispatchContext& /*ctx*/) {
+  co_return tool::Output{
+      .text = "noop-usage",
+      .usage =
+          tool::ToolUsage{
+              .bytes_read = 4096,
+              .files_touched = 1,
+              .match_count = 3,
+              .wall_time = std::chrono::nanoseconds{42},
+              .truncated = true,
+          },
+  };
 }
 
 async::Awaitable<core::Result<tool::Output>> noop_error_handler(std::string_view, tool::DispatchContext& /*ctx*/) {
@@ -2678,6 +2694,39 @@ TEST_CASE("dispatch publishes tool_before + tool_after on the allow path", "[uni
     REQUIRE(sink.captures()[1].succeeded);
     REQUIRE(sink.captures()[1].output_text == "noop-ok");
     REQUIRE(sink.captures()[1].error_kind.empty());
+  });
+}
+
+TEST_CASE("dispatch copies output usage into tool_after payload", "[unit][tool][hook][output]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(noop_tool_def(), &noop_usage_handler).has_value());
+
+    auto rules = allow_rule_set();
+    permission::RecordingAuditSink audit;
+
+    orangutan::hook::Bus bus;
+    CaptureSink sink{"capture-usage"};
+    bus.bind(sink, {orangutan::hook::Event::tool_after});
+
+    auto ctx = make_hooked_ctx(io, rules, audit, &bus);
+    auto result = co_await registry.dispatch("noop", R"({})", ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "noop-usage");
+
+    REQUIRE(sink.captures().size() == 1);
+    REQUIRE(sink.captures()[0].event == orangutan::hook::Event::tool_after);
+    REQUIRE(sink.captures()[0].succeeded);
+    REQUIRE(sink.captures()[0].output_text == "noop-usage");
+    REQUIRE(sink.captures()[0].usage.bytes_read == 4096);
+    REQUIRE(sink.captures()[0].usage.files_touched == 1);
+    REQUIRE(sink.captures()[0].usage.match_count == 3);
+    REQUIRE(sink.captures()[0].usage.wall_time == std::chrono::nanoseconds{42});
+    REQUIRE(sink.captures()[0].usage.truncated);
+    REQUIRE_FALSE(sink.captures()[0].usage.data_dropped);
+
+    REQUIRE(audit.events().size() == 1);
+    REQUIRE(audit.events()[0].metadata_json == "{}");
   });
 }
 

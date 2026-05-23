@@ -2,9 +2,12 @@
 
 ## User Problem
 
-`tool::Output` today is `{ std::string text; bool is_error; }`
-([`include/oran/tool/registry.hpp:80-87`](../../include/oran/tool/registry.hpp)).
-Every built-in flattens structured facts into prose:
+`tool::Output` used to be `{ std::string text; bool is_error; }`.
+Slice 60 promotes it into a forward-compatible envelope in
+[`include/oran/tool/output.hpp`](../../include/oran/tool/output.hpp);
+the remaining problem is that most built-ins and every future provider
+adapter still consume only the text fallback. Current built-ins still
+flatten structured facts into prose:
 
 - `file.read` returns the file body as text; range metadata, fingerprint,
   and truncation flag (spec 0011) have nowhere to live except a
@@ -43,8 +46,15 @@ caches all consume one shape.
 The MVP delivers a forward-compatible envelope that today's text-only
 handlers can adopt without churning every callsite at once.
 
-- **`tool::Output v2`** (final spelling chosen at implementation; the
-  field set is the load-bearing part):
+> **Status (slice 60, 2026-05-24):** the base envelope now ships in
+> `oran-tool`. `Output::text_only(...)` preserves the existing text path,
+> `Output::error(...)` marks structured-capable errors, `ToolAfterPayload`
+> copies `Output::usage` on successful dispatch, and `bench-tool` has
+> `output.text_only` vs. `output.with_data_16kib` coverage. Provider
+> adapter mapping, scheduler byte caps, audit usage fan-out, hook raw-data
+> redaction, and built-in structured payload migrations remain downstream.
+
+- **`tool::Output v2`**:
   ```cpp
   // include/oran/tool/output.hpp — PUBLIC
   struct ToolUsage {
@@ -53,47 +63,56 @@ handlers can adopt without churning every callsite at once.
     std::optional<std::uint32_t>   files_touched;
     std::optional<std::uint64_t>   match_count;
     std::optional<double>          cost_estimate;
-    std::optional<core::Duration>  wall_time;
+    std::optional<std::chrono::nanoseconds> wall_time;
+    bool                           truncated{false};
+    bool                           data_dropped{false};
+  };
+
+  struct Attachment {
+    std::string                    file_path;
+    std::string                    mime_type;
+    std::optional<std::uintmax_t>  byte_size;
+    std::optional<std::string>     fingerprint;
   };
 
   struct Output {
     std::string                              text;          // required, model-facing summary
-    std::optional<nlohmann::json_fwd>        data;          // structured payload, opaque to oran-tool
-    std::vector<Attachment>                  attachments;   // file / image / blob (forward-declared)
+    std::optional<std::string>               data_json;     // serialized structured JSON bytes
+    std::vector<Attachment>                  attachments;   // file / image / blob metadata
     ToolUsage                                usage;         // metrics; defaults to all-nullopt
     bool                                     is_error{false};
   };
   ```
   - `text` stays **required** so provider adapters always have a textual
     fallback. The conversion-from-v1 path is a `text`-only
-    `Output{ .text = … }` construction with the other fields default.
-  - `data` is forward-declared in the public header to preserve the
-    compile budget per [`../rules/compile-budget.md`](../rules/compile-budget.md);
-    the full `nlohmann::json` only appears in `src/oran-tool/output.cpp`
-    and downstream adapter TUs.
-  - `Attachment` (forward-declared) is a tagged value type for
-    `{ file_path, mime_type, byte_size, fingerprint }`. Full shape lands
-    when the first tool needs it (`file.read` v2's optional binary
-    fallback, `file.search` match attachments, future channel uploads).
+    `Output::text_only(...)` construction with the other fields default.
+  - `data_json` is serialized JSON, not a public `nlohmann::json` value.
+    This keeps the public header third-party-free and preserves the
+    compile budget per
+    [`../rules/compile-budget.md`](../rules/compile-budget.md). Provider
+    adapters own protocol-specific parsing / serialization later.
+  - `Attachment` is a concrete metadata value for
+    `{ file_path, mime_type, byte_size, fingerprint }`; tools keep the
+    vector empty until a file / image / blob producer needs it.
   - `usage` defaults to all-nullopt; tools fill only the fields they
     measure. Audit fan-out and cost-aware scheduling (spec 0012) read
     from here.
-- **`tool::OutputBuilder`** convenience for the common path:
+- **Convenience helpers** for the common path:
   ```cpp
-  ToolOutput Output::text_only(std::string text);
-  ToolOutput Output::error(std::string message, std::optional<nlohmann::json> data = std::nullopt);
+  Output Output::text_only(std::string text);
+  Output Output::error(std::string message, std::optional<std::string> data_json = std::nullopt);
   ```
   Two helpers, not a fluent DSL. Tools that need structured output
   construct the value directly.
 - **Provider adapter contract.** Each `protocol::Adapter` decides how to
-  carry `Output::data` into its vendor format:
-  - Anthropic Messages tool-result: `data` rides as the JSON `content`
+  carry `Output::data_json` into its vendor format:
+  - Anthropic Messages tool-result: `data_json` rides as the JSON `content`
     array when present; otherwise the adapter sends `text` as a single
     text block.
-  - OpenAI Responses tool-result: `data` is serialised as JSON in the
+  - OpenAI Responses tool-result: `data_json` is serialised as JSON in the
     `output` field; otherwise the rendered `text`.
   - Gemini, custom-OpenAI-compatible: same pattern — JSON when
-    `data.has_value()`, plain text otherwise.
+    `data_json.has_value()`, plain text otherwise.
   - Adapters never *invent* structure: the agent loop, not the adapter,
     decides what to send.
 - **Audit fan-out.** `permission::AuditEvent` already carries a
@@ -102,9 +121,9 @@ handlers can adopt without churning every callsite at once.
   `cost_estimate`, `wall_time_ms`) when the tool returns them. The
   existing `input_hash` discipline is unchanged.
 - **Hook fan-out.** `ToolAfterPayload` (already defined in slice 22 +
-  slice 25) gains a `usage` field carrying the same metrics. The
+  slice 25) now has a `usage` field carrying the same metrics. The
   payload's `output_text` stays the truncated rendering used today;
-  full structured `data` rides as a separate optional field only when
+  full structured `data_json` rides as a separate optional field only when
   the consuming sink declares the `kind::trusted_local` capability
   documented in the deep-review §Hook/audit redaction recommendation.
 - **Byte caps**. Two caps, independent:
@@ -112,7 +131,7 @@ handlers can adopt without churning every callsite at once.
     `text`. Exceeding it truncates and sets `is_error=false` with a
     `truncated=true` flag captured in `usage`.
   - `runtime.tool_output.max_data_bytes` (default 1 MiB) — applies to
-    serialised `data`. Exceeding it drops `data`, leaves `text` intact,
+    serialised `data_json`. Exceeding it drops `data_json`, leaves `text` intact,
     and records `data_dropped=true` in `usage`.
   Caps fire in the scheduler (spec 0012), not in each handler.
 - **Migration path.** Built-ins migrate one at a time:
@@ -120,7 +139,7 @@ handlers can adopt without churning every callsite at once.
   2. `file.search` (gains structured `matches[]` and per-file usage).
   3. `directory.list` (gains structured `entries[]`).
   4. `file.write` / `file.edit` / `file.delete` (gain `usage.bytes_written`
-     and `usage.files_touched`; `data` stays `nullopt` for v1).
+     and `usage.files_touched`; `data_json` stays `nullopt` for v1).
   Until each migrates, its handler constructs `Output::text_only(...)`
   and behaves exactly as today.
 
@@ -134,8 +153,8 @@ handlers can adopt without churning every callsite at once.
   (LSP, MCP) fill `usage.cost_estimate`; the scheduler aggregates it for
   cost-aware preemption (spec 0012 v2).
 - **Structured error envelope.** `Output{ .is_error = true }` may carry
-  `data = { "kind": "...", "context": { ... } }` so an agent can branch on
-  error class without parsing prose. The kind set tracks
+  `data_json = { "kind": "...", "context": { ... } }` so an agent can
+  branch on error class without parsing prose. The kind set tracks
   `core::Error::Kind`.
 - **`tool::parse_input<T>`** helper (tracked under the deep-review
   follow-up tech-debt row) lands alongside `tool::Output` v2 so handlers
@@ -156,10 +175,10 @@ handlers can adopt without churning every callsite at once.
 - A typed-variant alternative (`std::variant<TextOutput, FileReadOutput,
   SearchOutput, ...>`). Considered; rejected because every new tool
   would force a recompile of every consumer, breaking the compile
-  budget. The `nlohmann::json` `data` channel is the escape hatch that
+  budget. The serialized `data_json` channel is the escape hatch that
   keeps the public header narrow.
 - Binary patch / diff representation. `file.modify` (spec 0011 v2)
-  defines its own per-edit conflict shape inside `data`; a generic
+  defines its own per-edit conflict shape inside `data_json`; a generic
   binary-diff attachment is out of scope until a real call site needs
   it.
 
@@ -172,78 +191,79 @@ handlers can adopt without churning every callsite at once.
    that diffs v1 vs. v2 transport bytes for every migrated built-in
    against a fixture.
 2. **Structured payload visibility.** A handler that returns
-   `Output{ .text = "matched 3 files", .data = json::array({...}) }`
+   `Output{ .text = "matched 3 files", .data_json = R"([...])" }`
    reaches the Anthropic adapter as a JSON `content` array, the OpenAI
    Responses adapter as a JSON `output` field, and a fake-provider
-   (spec 0017) test sink as the parsed `data`. The agent transcript's
-   *bytes* sent to the provider differ when `data` is present and
+   (spec 0017) test sink as the parsed `data_json`. The agent transcript's
+   *bytes* sent to the provider differ when `data_json` is present and
    match v1 when absent.
 3. **Usage propagation.** A handler that fills
    `usage = { .bytes_read = 4096, .files_touched = 1 }` produces an
    `AuditEvent` with those keys in `context`, a `ToolAfterPayload` with
-   the same fields, and (once `oran-log` lands) a trace row carrying
-   them. Pinned by a multi-sink test.
+   the same fields, and (once audit/log fan-out lands) a trace row
+   carrying them. Slice 60 pins the hook half; audit/log fan-out remains
+   downstream.
 4. **Byte cap enforcement (text).** A handler that returns 257 KiB of
    `text` with the default cap produces an output whose `text.size() ≤
    256 KiB`, `usage.truncated = true`, and a single `tool_after` hook
    publish recording the truncation reason.
 5. **Byte cap enforcement (data).** A handler that returns 1 MiB + 1
-   bytes of serialised `data` produces an output whose `text` is intact,
-   `data == std::nullopt`, and `usage.data_dropped = true`. The
+   bytes of serialised `data_json` produces an output whose `text` is intact,
+   `data_json == std::nullopt`, and `usage.data_dropped = true`. The
    provider-adapter call still succeeds (with the text fallback).
 6. **Hook redaction.** A `file.write` v2 handler's `ToolAfterPayload`
    delivered to a default-capability sink contains hashed input + byte
    counts in `usage`; the same payload delivered to a sink declaring
-   `kind::trusted_local` contains the raw `data` field. Pinned by a
+   `kind::trusted_local` contains the raw `data_json` field. Pinned by a
    two-sink test.
 7. **Adapter mapping.** Three adapter tests (Anthropic, OpenAI
    Responses, fake) prove that `Output::text_only(...)` maps to a
    single text block in each vendor's tool-result shape, and that
-   `Output{ .text, .data }` maps to the vendor's structured channel.
+   `Output{ .text, .data_json }` maps to the vendor's structured channel.
 8. **Migration tax.** A v1 handler kept on `Output::text_only(...)`
    compiles, links, and passes its existing test suite **without
    modification** for at least one slice after `Output` v2 lands. The
    migration is gated, not forced.
 9. **`tests/tool/test_output.cpp` ≥ 90% coverage** of the envelope (cap
    matrix × adapter matrix × audit-context matrix × hook-redaction matrix).
-10. **`bench/oran-tool/output_v2_overhead`** reports envelope construction
+10. **`bench-tool` output scenarios** report envelope construction
     + serialisation cost ≤ 5 µs for `Output::text_only(...)` and ≤ 50 µs
-    for a 16 KiB `data` payload. The latter is within spec 0002's
+    for a 16 KiB `data_json` payload. The latter is within spec 0002's
     ≤ 50 µs dispatch ceiling.
 
 ## Design Doc Cross-References
 
 - [`../design-docs/tool-runtime.md`](../design-docs/tool-runtime.md) —
   "Tool Handler Shape" already documents the target envelope; the
-  "Output Shape v2 (Forward-Looking)" section added in slice 34 points
+  "Output Shape v2" section records the slice-60 public shape and points
   at this spec. The design doc owns *what the field set looks like in
   code*; this spec owns *what the user gets and how it's tested*.
 - [`../design-docs/api-portability.md`](../design-docs/api-portability.md)
-  — provider adapters consume `Output::data` per their vendor shape;
+  — provider adapters consume `Output::data_json` per their vendor shape;
   the existing `Adapter::send` contract changes only at the
   `tool_result` rendering site.
 - [`0011-file-view-and-caching.md`](0011-file-view-and-caching.md) —
   the first structured caller: `file.read` v2's
   `(start_line, end_line, fingerprint, returned_bytes, truncated)`
-  tuple rides in `Output::data` once both specs ship. v1 of 0011
+  tuple rides in `Output::data_json` once both specs ship. v1 of 0011
   encodes the same tuple as a text header for forward compatibility.
 - [`0012-tool-scheduler-and-state.md`](0012-tool-scheduler-and-state.md)
   — the scheduler enforces the byte caps and aggregates `usage` across
   parallel calls.
-- [`../rules/compile-budget.md`](../rules/compile-budget.md) — the
-  forward-declared `nlohmann::json_fwd` and `Attachment` keep the public
-  header within budget; the full JSON dependency lives in
-  `src/oran-tool/output.cpp` only.
+- [`../rules/compile-budget.md`](../rules/compile-budget.md) — serialized
+  `data_json` plus the concrete metadata-only `Attachment` keep the public
+  header within budget; full JSON dependencies stay in handler/provider
+  implementation TUs.
 
 ## Risks
 
 - **JSON-in-public-header creep.** `nlohmann::json` is a heavy include.
-  Mitigation: `json_fwd` only in the public header; full include in
-  `.cpp` files; a `scripts/check-banned-includes.sh` rule (already
-  stubbed in `xmake/checks.lua`) flags any `nlohmann/json.hpp` inclusion
-  from `include/oran/tool/*.hpp`. Pinned by the compile-budget bench
-  before and after the migration.
-- **Adapter divergence on `data`.** Anthropic's tool-result
+  Mitigation: public `Output` stores serialized `data_json` bytes and no
+  JSON type; full JSON parsing belongs in `.cpp` files. A
+  `scripts/check-banned-includes.sh` rule (already stubbed in
+  `xmake/checks.lua`) flags any `nlohmann/json.hpp` inclusion from
+  `include/oran/tool/*.hpp`.
+- **Adapter divergence on `data_json`.** Anthropic's tool-result
   `content` array, OpenAI Responses' `output`, and Gemini's
   `functionResponse.response` are not byte-equivalent. Mitigation: the
   agent loop sends the same `Output` value to every adapter; the
@@ -253,7 +273,7 @@ handlers can adopt without churning every callsite at once.
   is more useful with `Output` v2 shipped first. Mitigation: spec 0011
   v1 explicitly ships the same tuple as a text header so the two specs
   decouple — `Output` v2 is *required by* spec 0011 v1.1, not v1.
-- **Caps surprise an agent.** A truncated `text` or dropped `data`
+- **Caps surprise an agent.** A truncated `text` or dropped `data_json`
   field may break an agent that assumed full bytes. Mitigation: every
   truncation/drop is reflected in `usage`; agents that care can branch
   on the flag instead of silently ingesting a shorter blob.
@@ -262,19 +282,20 @@ handlers can adopt without churning every callsite at once.
 
 ```sh
 xmake build oran-tool
-xmake test test-tool                       # output envelope + cap + redaction suite
-xmake build bench-oran-tool
-xmake run bench-oran-tool output_v2_overhead
-xmake run bench-oran-provider protocol_overhead   # adapter mapping A/B
+xmake build test-tool
+xmake run test-tool "[output]"             # envelope + hook usage coverage
+xmake build bench-tool
+xmake run bench-tool                       # includes output.text_only / output.with_data_16kib
+xmake run bench-provider protocol_overhead # planned adapter mapping A/B once oran-provider lands
 ```
 
 ## Out-of-Band Cross-Cuts
 
-- `docs/design-docs/tool-runtime.md` "Output Shape v2 (Forward-Looking)"
-  flips from "forward-looking" to "shipped" in the slice that lands v1.
+- `docs/design-docs/tool-runtime.md` "Output Shape v2" records the
+  shipped envelope and the remaining downstream transport work.
 - `docs/exec-plans/tech-debt-tracker.md` — the deep-review §`tool::Output`
-  is too small P2 row closes when v1 ships; the `tool::parse_input<T>`
-  P1 row closes in the same arc.
+  is too small P2 row closes in slice 60; the `tool::parse_input<T>` P1
+  row remains open because input parsing was not part of this slice.
 - `docs/design-docs/permissions-and-hooks.md` "Sink Kinds" gains a
   `kind::trusted_local` annotation when the redaction policy lands;
   this is a small edit in the same PR as v1.1.

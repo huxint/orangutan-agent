@@ -7,15 +7,27 @@
 
 ## Snapshot
 
-- **Slice:** 59 (`xmake run orangutan` reports slice 59)
+- **Slice:** 60 (`xmake run orangutan` reports slice 60)
 - **Last completed history:**
-  [`histories/2026-05/20260524-0200-tool-catalog-renderer.md`](histories/2026-05/20260524-0200-tool-catalog-renderer.md)
+  [`histories/2026-05/20260524-0215-tool-output-envelope.md`](histories/2026-05/20260524-0215-tool-output-envelope.md)
 - **Active exec-plan:** none — current slice intent fits inside the
   `Next intended slice` bullet below; see
   [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
   When `active/` is non-empty, link the file path here instead.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 59
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 60
+  closes the deep-review "tool output is too small" finding and starts
+  spec 0014 inside `oran-tool`: `tool::Output` now lives in
+  `<oran/tool/output.hpp>` with required `text`, optional serialized
+  `data_json`, attachment metadata, usage counters, and `is_error`;
+  `Output::text_only` preserves the v1-compatible text path, and
+  `Output::error` can carry serialized structured error data. The public
+  header stays `nlohmann`-free by storing structured payload bytes as a
+  string for provider adapters to parse/serialize later. `Registry::dispatch`
+  now copies `Output::usage` into `hook::ToolAfterPayload::usage` on
+  successful handler returns. This is not yet provider-adapter mapping,
+  scheduler byte-cap enforcement, audit usage fan-out, hook raw-data
+  redaction, or built-in structured payload migration. Slice 59
   starts the prompt-catalog cache prework shared by specs 0012 and
   0016: `core::ToolDef` now carries the documented `deferred` and
   `category` metadata, and `oran-tool` exposes `tool::CatalogRenderer`,
@@ -106,7 +118,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 24 cases / 171 assertions.
 - `oran-permission`: 86 cases / 390 assertions.
 - `oran-hook`: 15 cases / 97 assertions.
-- `oran-tool`: 140 cases / 1209 assertions.
+- `oran-tool`: 145 cases / 1250 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 153 assertions.
 
@@ -118,7 +130,8 @@ Closed entries do *not* live here — the tracker is canonical.
 - 2026-05-21 — Deep-review backlog: the stale root review artifact was
   deleted after its actionable findings were absorbed into the tracker and
   specs 0011-0018. Slices 31-36 closed the rank-0 items plus the P0
-  follow-ups; remaining follow-ups are grouped P1/P2/P3 in the tracker.
+  follow-ups, and slice 60 closed the P2 `tool::Output` envelope item;
+  remaining follow-ups are grouped P1/P2/P3 in the tracker.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on
   the documented reference hardware (8-core / NVMe / native Linux);
