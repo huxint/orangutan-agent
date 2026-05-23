@@ -112,6 +112,13 @@ void append_text_block(std::string& output, std::string_view text) {
       .with("max_iterations", std::to_string(max_iterations));
 }
 
+[[nodiscard]] core::Error with_cancellation_phase(core::Error error, std::string_view phase) {
+  if (error.kind() != core::ErrorKind::cancelled) {
+    return error;
+  }
+  return std::move(error).with("reason", "parent_cancelled").with("cancellation_phase", std::string{phase});
+}
+
 [[nodiscard]] std::vector<core::ToolUseContent> tool_uses_in(std::span<const core::Content> blocks) {
   std::vector<core::ToolUseContent> uses;
   for (const auto& block : blocks) {
@@ -227,7 +234,7 @@ public:
 
       auto response = co_await provider_.send(std::move(request), route_, sink);
       if (!response) {
-        co_return std::unexpected(std::move(response).error());
+        co_return std::unexpected(with_cancellation_phase(std::move(response).error(), "provider"));
       }
 
       add_usage(total_usage, response->usage);
@@ -253,7 +260,7 @@ public:
           auto output = co_await inputs.tools->dispatch(use.name, use.input_json, *inputs.dispatch_context);
           auto tool_result = tool_result_from(use.id, std::move(output));
           if (!tool_result) {
-            co_return std::unexpected(std::move(tool_result).error());
+            co_return std::unexpected(with_cancellation_phase(std::move(tool_result).error(), "tools"));
           }
           tool_results.emplace_back(std::move(*tool_result));
         }

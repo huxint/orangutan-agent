@@ -7,18 +7,31 @@
 
 ## Snapshot
 
-- **Slice:** 76 (`xmake run orangutan` reports slice 76)
+- **Slice:** 77 (`xmake run orangutan` reports slice 77)
 - **Last completed history:**
-  [`histories/2026-05/20260524-1050-agent-loop-tool-dispatch.md`](histories/2026-05/20260524-1050-agent-loop-tool-dispatch.md)
+  [`histories/2026-05/20260524-1110-agent-loop-cancellation-phase.md`](histories/2026-05/20260524-1110-agent-loop-cancellation-phase.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
-  the first two agent-loop increments closed in focused history/commit slices
+  the first three agent-loop increments closed in focused history/commit slices
   and did not need a new plan because they stayed under the existing spec-0017
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 76 extends
-  the real `agent::Loop` driver from the slice-75 text-only path into the
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 77 extends
+  the real `agent::Loop` driver from the slice-76 sequential tool loop into
+  the first cancellation-phase classification needed by specs 0017/0018.
+  Provider-await cancellations and tool-dispatch cancellations still return
+  `ErrorKind::cancelled`, but the loop now adds
+  `reason=parent_cancelled` plus `cancellation_phase=provider|tools` before
+  returning the error, giving the future trace row a stable source for
+  `trace_turns.cancellation_phase` without introducing the trace schema yet.
+  Ordinary provider errors, retryable network/upstream failures, storage
+  failures, and model-repairable tool errors keep their existing behavior.
+  `test-agent` now covers both cancellation phases through parent
+  `asio::cancellation_signal` tests (14 cases / 154 assertions). Turn-level
+  trace/audit rows, blocking approval rendering, provider retry/fallback, the
+  parallel `ToolScheduler`, and CLI/binary handoff remain downstream. Slice 76
+  extended the real `agent::Loop` driver from the slice-75 text-only path into the
   first sequential direct-dispatch tool loop. `<oran/agent.hpp>` exports
   `agent::Loop`, `LoopOptions`, `RunTurnInputs`, and `RunTurnResult`;
   `RunTurnInputs` can now carry optional non-owning `tool::Registry*` and
@@ -37,15 +50,14 @@
   the loop. If the registry/context pair is absent, `tool_use` still returns
   the explicit not-yet-implemented error from slice 75. The loop enforces the
   existing `LoopOptions::max_iterations` cap with `reason=iteration_cap`, but
-  turn-level audit rows, cancellation-specific tool-dispatch tests, provider
-  retry/fallback, blocking approval rendering, and the parallel `ToolScheduler`
+  turn-level audit rows, provider retry/fallback, blocking approval rendering, and the parallel `ToolScheduler`
   remain downstream. `test-agent` now covers the FakeProvider text-turn path,
   provider request mapping, provider error forwarding, the no-dispatch-context
   tool-use boundary, one-tool provider re-entry, ordered multi-tool results,
   model-visible missing-tool repair, infrastructure error propagation, and the
-  iteration cap (12 cases / 140 assertions). The `orangutan` binary is still
-  not wired to `oran-agent`; remaining near-term work is the turn-level audit /
-  cancellation / approval-observability envelope before CLI/binary handoff.
+  iteration cap. The `orangutan` binary is still not wired to `oran-agent`;
+  remaining near-term work is the turn-level audit /
+  approval-observability envelope before CLI/binary handoff.
   Slice 75 opened
   the real `agent::Loop` driver but deliberately limited it to spec-0017
   scenario #1 and request-mapping boundaries. `<oran/agent.hpp>` began
@@ -304,7 +316,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-tool`: 166 cases / 1588 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 11 cases / 89 assertions.
-- `oran-agent`: 12 cases / 140 assertions.
+- `oran-agent`: 14 cases / 154 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 153 assertions.
 

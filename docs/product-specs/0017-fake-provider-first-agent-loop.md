@@ -41,7 +41,7 @@ proves the loop behaves correctly without a network.
   "Domain Model" are the source of truth (`provider::Request`,
   `provider::Response`, `core::Content` variant, `StopReason`, `Usage`,
   `EventSink`). This spec freezes their *behaviour* for v1:
-  - **Status (slice 76, 2026-05-24):** `oran-provider` now ships the
+  - **Status (slice 77, 2026-05-24):** `oran-provider` now ships the
     value-type `Request`, `Response`, `Usage`, and `RetryPolicy` shapes
     plus prompt-cache hints, the abstract `provider::System` with
     `send(Request, Route, EventSink*) const`, the `provider::EventSink`
@@ -69,7 +69,12 @@ proves the loop behaves correctly without a network.
     aggregates provider usage across iterations, and enforces
     `LoopOptions::max_iterations`. Real protocol adapters, the parallel
     scheduler, turn-level audit rows, blocking approval rendering, and
-    provider retry/fallback remain downstream.
+    provider retry/fallback remain downstream. Slice 77 adds the first
+    cancellation-observability prework at the loop boundary: provider-await
+    cancellations and direct tool-dispatch cancellations keep returning
+    `ErrorKind::cancelled`, now with `reason=parent_cancelled` plus
+    `cancellation_phase=provider|tools` so the future spec-0018 trace row
+    can record the phase without guessing.
   - The loop emits **one** `provider::Request` per iteration.
   - The provider emits **one** `provider::Response` per request (after
     streaming completes if streaming is enabled).
@@ -128,17 +133,18 @@ proves the loop behaves correctly without a network.
   uses the fake provider with a hand-written plan.
 - **`agent::Loop` MVP**. Wraps the seven phases listed in the deep
   review §What a better `oran-agent` should look like:
-  - **Status (slice 76, 2026-05-24):** `<oran/agent.hpp>` exports
+  - **Status (slice 77, 2026-05-24):** `<oran/agent.hpp>` exports
     `agent::Loop`, `LoopOptions`, `RunTurnInputs`, and `RunTurnResult`.
     The current implementation covers phases 3/4/5 for terminal text turns
     plus the first phase-6 sequential dispatch path for scenarios #2/#3/#4/#6:
     render prompt, send a provider request, dispatch tool-use blocks through
     the existing registry boundary when caller-supplied services are present,
     append ordered tool-result messages, rebuild the prompt, and stop on a
-    terminal text-style response or iteration cap. If no registry/context pair
-    is supplied, tool-use responses still fail loudly with `Error::internal` so
-    callers cannot accidentally run a loop without permission/audit
-    infrastructure.
+    terminal text-style response or iteration cap. Provider/tool parent
+    cancellations are classified with `cancellation_phase=provider|tools`.
+    If no registry/context pair is supplied, tool-use responses still fail
+    loudly with `Error::internal` so callers cannot accidentally run a loop
+    without permission/audit infrastructure.
   1. Build `TurnContext` (identity, route, session id, origin,
      cancellation slot, stable service refs).
   2. Load/render memory once per turn (memory: `nullopt` in v1 — the
@@ -249,8 +255,10 @@ proves the loop behaves correctly without a network.
    message; the next `Request` carries it; the fake returns either a
    repaired tool call or final text. Both paths terminate normally.
    **Status (slice 76):** model-visible dispatch errors become error
-   `tool_result` blocks; cancellation, storage, and internal dispatch
-   failures propagate out of the loop.
+   `tool_result` blocks; storage and internal dispatch failures propagate out
+   of the loop. **Status (slice 77):** cancellation dispatch failures also
+   propagate out, now annotated with `reason=parent_cancelled` and
+   `cancellation_phase=tools`.
 6. **Retryable provider error.** Scenario #7: the fake returns
    `core::Error{ category: network }` once, then a successful
    `Response`. The loop's retry logic
@@ -267,11 +275,17 @@ proves the loop behaves correctly without a network.
 8. **Cancellation during provider await.** Scenario #9: the fake
    sleeps `latency=10s`; the parent token fires at `t=100ms`. The
    loop returns `Error::cancelled` within `< 200ms`; the audit row
-   records `stop_reason=cancelled, reason=parent_cancelled`.
+   records `stop_reason=cancelled, reason=parent_cancelled`. **Status
+   (slice 77):** the loop returns `ErrorKind::cancelled` with
+   `reason=parent_cancelled` and `cancellation_phase=provider`; the audit /
+   trace row remains future spec-0018 work.
 9. **Cancellation during tool dispatch.** Scenario #10: the fake
    returns one `tool_use`; the tool handler sleeps long; the parent
    token fires; the loop returns `Error::cancelled` within `< 200ms`;
-   the tool audit row records `outcome=cancelled`.
+   the tool audit row records `outcome=cancelled`. **Status (slice 77):**
+   the loop returns `ErrorKind::cancelled` with `reason=parent_cancelled`
+   and `cancellation_phase=tools`; the richer tool/turn audit rows remain
+   future work.
 10. **Iteration cap.** A fake that returns
     `tool_use` blocks forever causes the loop to terminate with
     `StopReason::error, reason=iteration_cap` after

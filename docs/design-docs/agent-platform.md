@@ -68,20 +68,24 @@ own library, its own tests, its own bench, its own design doc."
 
 ## Prompt Assembly
 
-> **Status (slice 76, 2026-05-24):** `oran-prompt` owns the first
+> **Status (slice 77, 2026-05-24):** `oran-prompt` owns the first
 > deterministic `prompt::Builder` skeleton plus `prompt::PromotionState`,
 > `oran-agent` owns the narrow `agent::SessionState` surface that observes
 > successful `tool.search` output and promotes deferred matches into the
 > next prompt snapshot, and `oran-provider` owns the cache-hint mapper plus
 > the slice-74 abstract `provider::System` / `EventSink` / `Route` surface
 > with the first concrete `provider::FakeProvider` (scripted-turn plan,
-> delta-to-`Response` assembly, cancel-aware scripted latency). Slice 76
+> delta-to-`Response` assembly, cancel-aware scripted latency). Slices 76-77
 > extends `agent::Loop` over those pieces: it builds a
 > `prompt::RenderedPrompt`, maps cache hints, mirrors active/promoted tools
 > into name-sorted `provider::Request::tools`, sends requests through a
 > supplied `provider::System`, and, when supplied a `tool::Registry` plus
 > `tool::DispatchContext`, sequentially dispatches tool-use blocks, appends
 > ordered tool results, rebuilds the prompt, and re-enters the provider.
+> Parent cancellation during the provider await or direct tool dispatch now
+> returns `ErrorKind::cancelled` with `reason=parent_cancelled` and
+> `cancellation_phase=provider|tools`, which is the pre-trace source for
+> spec-0018's future trace row.
 > Memory + hook + turn-level audit envelope remain downstream.
 > The invariants — section order, byte-identical cached prefix, no clocks /
 > per-call state in sections (1)–(6) — remain canonical in
@@ -129,10 +133,12 @@ connects the cache boundary to `oran-provider` through
 `provider::make_prompt_cache_hints`, and slice 74 closes the provider
 prework by shipping `provider::System` / `EventSink` / `Route` plus the
 first concrete `provider::FakeProvider`. Slice 75 added the first
-text-only `agent::Loop` consumer for that chain, and slice 76 adds the
+text-only `agent::Loop` consumer for that chain, slice 76 adds the
 sequential direct-dispatch tool path: callers provide the existing registry
 and dispatch context, the loop appends ordered `tool_result` blocks and
-provider re-entry without changing the provider contract. The future
+provider re-entry without changing the provider contract, and slice 77 tags
+provider/tool parent cancellations with a stable `cancellation_phase` error
+context without introducing trace storage yet. The future
 `ToolScheduler` can replace the direct loop call without changing the
 provider-facing request/response shape.
 

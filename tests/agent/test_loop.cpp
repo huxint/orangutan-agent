@@ -1,14 +1,17 @@
 // tests/agent/test_loop.cpp — first fake-provider-backed Loop coverage.
 //
-// These tests intentionally cover only the first spec-0017 loop slice:
-// prompt/request construction, text-only terminal responses, and error
-// boundaries. Tool dispatch is tested later when `Loop` owns the
-// tool_result-and-retry iteration path.
+// These tests intentionally stay inside spec 0017's fake-provider-first loop
+// envelope: prompt/request construction, direct sequential tool dispatch,
+// model-visible repair errors, cancellation-phase tagging, and loop boundary
+// errors. Provider retry/fallback, turn trace rows, and the scheduler remain
+// later slices.
 
 #include <oran/agent.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
+#include <exception>
 #include <expected>
 #include <optional>
 #include <span>
@@ -17,6 +20,10 @@
 #include <utility>
 #include <vector>
 
+#include <asio/bind_cancellation_slot.hpp>
+#include <asio/cancellation_signal.hpp>
+#include <asio/co_spawn.hpp>
+#include <asio/post.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <oran/async.hpp>
@@ -43,6 +50,8 @@ namespace test = orangutan::tests;
 namespace tool = orangutan::tool;
 
 namespace {
+
+using namespace std::chrono_literals;
 
 provider::Route default_route(provider::PromptCacheOptions cache = {}) {
   return provider::Route{
@@ -351,6 +360,56 @@ TEST_CASE("Loop forwards provider errors unchanged", "[unit][agent][loop]") {
   });
 }
 
+TEST_CASE("Loop annotates cancellation during provider await", "[unit][agent][loop][cancellation]") {
+  asio::io_context io;
+  asio::cancellation_signal signal;
+
+  std::vector<provider::ScriptedTurn> plan;
+  plan.push_back(provider::ScriptedTurn{
+      .response =
+          provider::Response{
+              .blocks = {core::TextContent{.text = "late"}},
+              .stop_reason = core::StopReason::end_turn,
+              .usage = {},
+              .model_used = std::nullopt,
+          },
+      .deltas = {},
+      .error = std::nullopt,
+      .latency = 1s,
+  });
+  provider::FakeProvider fake{std::move(plan)};
+  agent::Loop loop{fake, default_route()};
+
+  const auto catalog = loop_catalog();
+  const std::vector<core::Message> tail{core::Message::user_text("cancel provider")};
+  std::optional<core::Result<agent::RunTurnResult>> result;
+  std::exception_ptr failure;
+
+  asio::co_spawn(
+      io,
+      [&]() -> async::Awaitable<core::Result<agent::RunTurnResult>> {
+        co_return co_await loop.run_turn(base_inputs(catalog, tail));
+      },
+      asio::bind_cancellation_slot(signal.slot(), [&](std::exception_ptr ep, core::Result<agent::RunTurnResult> r) {
+        failure = ep;
+        result = std::move(r);
+        io.stop();
+      }));
+
+  asio::post(io, [&] { signal.emit(asio::cancellation_type::terminal); });
+  io.run();
+
+  if (failure) {
+    std::rethrow_exception(failure);
+  }
+  REQUIRE(result.has_value());
+  REQUIRE_FALSE(result->has_value());
+  REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
+  REQUIRE(contains_context(result->error(), "reason", "parent_cancelled"));
+  REQUIRE(contains_context(result->error(), "cancellation_phase", "provider"));
+  REQUIRE(fake.turns_consumed() == 1);
+}
+
 TEST_CASE("Loop rejects tool-use responses until the dispatch iteration slice lands", "[unit][agent][loop]") {
   test::run_async([](asio::io_context&) -> async::Awaitable<void> {
     std::vector<provider::ScriptedTurn> plan;
@@ -568,6 +627,64 @@ TEST_CASE("Loop propagates infrastructure errors from tool dispatch", "[unit][ag
     REQUIRE(result.error().kind() == core::ErrorKind::internal);
     REQUIRE(result.error().message() == "audit broke");
   });
+}
+
+TEST_CASE("Loop annotates cancellation during tool dispatch", "[unit][agent][loop][cancellation]") {
+  asio::io_context io;
+  asio::cancellation_signal signal;
+
+  RecordingSequenceProvider provider{std::vector<provider::Response>{
+      provider::Response{
+          .blocks = {core::ToolUseContent{.id = "t1", .name = "file.read", .input_json = "{}"}},
+          .stop_reason = core::StopReason::tool_use,
+          .usage = {},
+          .model_used = std::nullopt,
+      },
+  }};
+  agent::Loop loop{provider, default_route()};
+  tool::Registry registry;
+  auto handler = [](std::string_view, tool::DispatchContext& ctx) -> async::Awaitable<core::Result<tool::Output>> {
+    auto slept = co_await async::sleep_for(ctx.executor, 1s);
+    if (!slept) {
+      co_return std::unexpected(std::move(slept).error());
+    }
+    co_return tool::Output::text_only("late");
+  };
+  REQUIRE(registry.add(canned_tool_def("file.read"), std::move(handler)).has_value());
+  auto rules = allow_all_rules();
+  permission::RecordingAuditSink audit;
+  auto ctx = dispatch_context(io, rules, audit);
+
+  const auto catalog = registry.catalog();
+  const std::vector<core::Message> tail{core::Message::user_text("cancel tool")};
+  auto inputs = base_inputs(catalog, tail);
+  inputs.tools = &registry;
+  inputs.dispatch_context = &ctx;
+  std::optional<core::Result<agent::RunTurnResult>> result;
+  std::exception_ptr failure;
+
+  asio::co_spawn(
+      io,
+      [&]() -> async::Awaitable<core::Result<agent::RunTurnResult>> { co_return co_await loop.run_turn(inputs); },
+      asio::bind_cancellation_slot(signal.slot(), [&](std::exception_ptr ep, core::Result<agent::RunTurnResult> r) {
+        failure = ep;
+        result = std::move(r);
+        io.stop();
+      }));
+
+  asio::post(io, [&] { signal.emit(asio::cancellation_type::terminal); });
+  io.run();
+
+  if (failure) {
+    std::rethrow_exception(failure);
+  }
+  REQUIRE(result.has_value());
+  REQUIRE_FALSE(result->has_value());
+  REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
+  REQUIRE(contains_context(result->error(), "reason", "parent_cancelled"));
+  REQUIRE(contains_context(result->error(), "cancellation_phase", "tools"));
+  REQUIRE(provider.requests().size() == 1);
+  REQUIRE(audit.events().size() == 1);
 }
 
 TEST_CASE("Loop stops repeated tool_use turns at the iteration cap", "[unit][agent][loop]") {

@@ -199,7 +199,11 @@ makes the existing audit rows joinable. Nothing else.
    await (spec 0017 scenario #9) produces a trace row with
    `cancellation_phase='provider'`, `stop_reason='cancelled'`.
    Cancellation during tool dispatch (scenario #10) produces
-   `cancellation_phase='tools'`.
+   `cancellation_phase='tools'`. **Status (slice 77):** the trace row is not
+   implemented yet, but `agent::Loop` now returns parent-cancelled provider /
+   tool failures with `reason=parent_cancelled` and
+   `cancellation_phase=provider|tools`, giving the future writer a stable
+   source value.
 5. **Hook publish observable.** A blocking `tool_before` veto
    (spec 0015) appends a `hook_publish` audit row with
    `parent_turn_id` matching the trace row; the row's

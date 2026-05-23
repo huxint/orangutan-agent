@@ -115,7 +115,11 @@ public:
   /// accepts terminal text-style stop reasons, and only dispatches tool_use
   /// blocks when `RunTurnInputs::tools` and `dispatch_context` are supplied.
   /// Parallel scheduling, turn audit rows, blocking approval rendering, and
-  /// provider retry/fallback remain later slices.
+  /// provider retry/fallback remain later slices. Parent cancellation during
+  /// the provider await or direct tool dispatch is surfaced as
+  /// `ErrorKind::cancelled` with `reason=parent_cancelled` plus
+  /// `cancellation_phase=provider|tools` so the future trace row has a stable
+  /// source without making trace storage part of this loop slice.
   [[nodiscard]] async::Awaitable<core::Result<RunTurnResult>> run_turn(RunTurnInputs inputs,
                                                                        provider::EventSink* sink = nullptr);
 

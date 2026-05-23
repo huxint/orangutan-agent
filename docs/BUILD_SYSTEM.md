@@ -239,12 +239,13 @@ It is registered with `test-provider` and `bench-provider`, but no transport,
 protocol adapter, or real vendor runtime is linked into the binary yet.
 
 `oran-agent` now owns the slice-72 `SessionState` promotion owner plus the
-slice-76 sequential direct-dispatch `Loop` turn driver. The provider
+slice-77 sequential direct-dispatch `Loop` turn driver with cancellation-phase
+context on provider/tool parent cancellations. The provider
 dependency is
 intentional and downward: the agent runtime layer drives `provider::System`,
 while `oran-provider` never calls back into `oran-agent`. The `orangutan`
 binary still does not link `oran-agent`; CLI/binary handoff waits for the
-turn-level audit / cancellation / approval-observability envelope.
+turn-level trace/audit and approval-observability envelope.
 
 **Key compile-time wins from this shape:**
 
