@@ -1,6 +1,8 @@
 // bench/hook/scenarios/bus.cpp
 //
 // Slice 22 — `hook::Bus::publish_advisory` overhead at varying fan-out.
+// Slice 91 — matching `publish_blocking<Event::tool_before>` overhead so
+// spec 0015 can compare the blocking path against the advisory baseline.
 //
 // A/B/C scenarios:
 //
@@ -55,6 +57,25 @@ namespace {
   return counter;
 }
 
+[[gnu::noinline]] std::size_t
+drive_blocking_publish(asio::io_context& io, hook::Bus& bus, hook::ToolBeforePayload& payload) {
+  std::size_t counter = 0;
+  asio::co_spawn(
+      io,
+      [&]() -> async::Awaitable<void> {
+        auto decision = co_await bus.publish_blocking<hook::Event::tool_before>(payload);
+        if (decision.has_value()) {
+          counter += decision->trace.size();
+          counter += static_cast<std::size_t>(decision->kind);
+        }
+        co_return;
+      },
+      asio::detached);
+  io.run();
+  io.restart();
+  return counter;
+}
+
 hook::InProcessSink make_noop_sink(std::string id, std::size_t& counter) {
   return hook::InProcessSink{std::move(id),
                              [&counter](hook::Event, hook::Payload) -> async::Awaitable<core::Result<void>> {
@@ -62,6 +83,31 @@ hook::InProcessSink make_noop_sink(std::string id, std::size_t& counter) {
                                co_return core::Result<void>{};
                              }};
 }
+
+class BlockingBenchSink final : public hook::Sink {
+public:
+  BlockingBenchSink(std::string id, std::size_t& counter, hook::HookDecision decision = {})
+      : id_(std::move(id)), counter_(&counter), decision_(std::move(decision)) {}
+
+  [[nodiscard]] std::string_view id() const noexcept override {
+    return id_;
+  }
+
+  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event, hook::Payload) override {
+    co_return core::Result<void>{};
+  }
+
+  [[nodiscard]] async::Awaitable<core::Result<hook::HookDecision>> handle_blocking(hook::Event,
+                                                                                   hook::Payload) override {
+    ++(*counter_);
+    co_return decision_;
+  }
+
+private:
+  std::string id_;
+  std::size_t* counter_;
+  hook::HookDecision decision_;
+};
 
 hook::ToolBeforePayload sample_payload() {
   return hook::ToolBeforePayload{
@@ -113,6 +159,65 @@ void register_hook_bus(ankerl::nanobench::Bench& bench) {
   ankerl::nanobench::doNotOptimizeAway(counter_c1);
   ankerl::nanobench::doNotOptimizeAway(counter_c2);
   ankerl::nanobench::doNotOptimizeAway(counter_c3);
+
+  auto payload_d = sample_payload();
+  hook::Bus bus_d;
+  bench.run("publish_blocking_no_sinks", [&] {
+    const auto value = drive_blocking_publish(io, bus_d, payload_d);
+    ankerl::nanobench::doNotOptimizeAway(value);
+  });
+
+  auto payload_e = sample_payload();
+  hook::Bus bus_e;
+  std::size_t counter_e = 0;
+  BlockingBenchSink sink_e{"sink-e", counter_e};
+  bus_e.bind(sink_e, {hook::Event::tool_before});
+  bench.run("publish_blocking_one_sink", [&] {
+    const auto value = drive_blocking_publish(io, bus_e, payload_e);
+    ankerl::nanobench::doNotOptimizeAway(value);
+  });
+  ankerl::nanobench::doNotOptimizeAway(counter_e);
+
+  auto payload_f = sample_payload();
+  hook::Bus bus_f;
+  std::size_t counter_f1 = 0;
+  std::size_t counter_f2 = 0;
+  std::size_t counter_f3 = 0;
+  BlockingBenchSink sink_f1{"sink-f1", counter_f1};
+  BlockingBenchSink sink_f2{"sink-f2", counter_f2};
+  BlockingBenchSink sink_f3{"sink-f3", counter_f3};
+  bus_f.bind(sink_f1, {hook::Event::tool_before});
+  bus_f.bind(sink_f2, {hook::Event::tool_before});
+  bus_f.bind(sink_f3, {hook::Event::tool_before});
+  bench.run("publish_blocking_three_sinks_all_proceed", [&] {
+    const auto value = drive_blocking_publish(io, bus_f, payload_f);
+    ankerl::nanobench::doNotOptimizeAway(value);
+  });
+  ankerl::nanobench::doNotOptimizeAway(counter_f1);
+  ankerl::nanobench::doNotOptimizeAway(counter_f2);
+  ankerl::nanobench::doNotOptimizeAway(counter_f3);
+
+  auto payload_g = sample_payload();
+  hook::Bus bus_g;
+  std::size_t counter_g1 = 0;
+  std::size_t counter_g2 = 0;
+  std::size_t counter_g3 = 0;
+  hook::HookDecision veto{};
+  veto.kind = hook::HookDecisionKind::veto;
+  veto.reason = "bench";
+  BlockingBenchSink sink_g1{"sink-g1", counter_g1};
+  BlockingBenchSink sink_g2{"sink-g2", counter_g2, std::move(veto)};
+  BlockingBenchSink sink_g3{"sink-g3", counter_g3};
+  bus_g.bind(sink_g1, {hook::Event::tool_before});
+  bus_g.bind(sink_g2, {hook::Event::tool_before});
+  bus_g.bind(sink_g3, {hook::Event::tool_before});
+  bench.run("publish_blocking_short_circuit_second", [&] {
+    const auto value = drive_blocking_publish(io, bus_g, payload_g);
+    ankerl::nanobench::doNotOptimizeAway(value);
+  });
+  ankerl::nanobench::doNotOptimizeAway(counter_g1);
+  ankerl::nanobench::doNotOptimizeAway(counter_g2);
+  ankerl::nanobench::doNotOptimizeAway(counter_g3);
 }
 
 }  // namespace orangutan::bench

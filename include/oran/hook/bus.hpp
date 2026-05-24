@@ -6,12 +6,11 @@
 // events they care about. The bootstrap layer constructs the bus and binds
 // the configured sinks once per process.
 //
-// Slice 22 ships *advisory* publish only: every sink subscribed to an event
+// Slice 22 shipped advisory publish: every sink subscribed to an event
 // receives the (event, payload) pair, each sink's success/failure is
-// captured in the returned `PublishOutcome`, but no sink can veto the
-// publish or the action that triggered it. Blocking semantics with veto
-// land in a follow-up slice when the first blocking consumer (likely
-// `permission_ask_rendered`) needs them.
+// captured in the returned `PublishOutcome`, and no sink can veto that
+// advisory publish. Slice 90 added `publish_blocking<E>` for the spec-0015
+// whitelist, and slice 91 made `tool_before` the first dispatch consumer.
 //
 // Concurrency. The bus is not thread-safe; the runtime owns one per strand.
 // Subscribers (`Sink&`) are non-owning — the caller keeps them alive for the
@@ -93,8 +92,8 @@ public:
   ///
   /// A sink that returns `std::unexpected(error)` or throws is treated
   /// as `veto` with `reason = "hook_error"`; the underlying error is
-  /// converted into the same `HookDecision::reason` so the audit layer
-  /// can record the cause once dispatch consumption lands.
+  /// converted into the same `HookDecision::reason` so the dispatch/audit
+  /// layer can record the cause.
   ///
   /// The whitelist of blocking events is encoded in `EventTraits<E>`;
   /// calling `publish_blocking<Event::tool_after>` fails to compile.

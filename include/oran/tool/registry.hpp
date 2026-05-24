@@ -25,24 +25,24 @@
 //      `decision_reason` context entries so the agent loop can hand
 //      them straight to `ApprovalBroker::approve` without re-evaluating
 //      the rule set.
-//   5. The slice-22+25 hook-bus tap: when the caller supplies a
-//      `hook::Bus*` on the context, dispatch publishes
-//      `hook::Event::tool_before` after the registry resolves the
-//      tool def, `tool_dispatched` on paths where the handler will run,
-//      `tool_error` on error exits, and `tool_after` at every exit.
-//      Hooks are advisory in this slice — sinks observe but cannot veto.
-//      Sinks subscribed to other events (provider, memory, …) are
-//      unaffected.
+//   5. The slice-22+25+91 hook-bus tap: when the caller supplies a
+//      `hook::Bus*` on the context, dispatch first publishes blocking
+//      `hook::Event::tool_before`, consuming veto / rewrite /
+//      require_approval decisions before permission evaluation. It then
+//      publishes advisory `tool_dispatched` on paths where the handler will
+//      run, `tool_error` on error exits, and `tool_after` at every exit.
+//      Sinks subscribed to other events (provider, memory, …) are unaffected.
 //   6. The slice-55 workspace pre-resolution boundary: when a caller
 //      supplies `DispatchContext::workspace`, dispatch resolves known
 //      filesystem built-in `path` inputs before permission evaluation,
 //      carries the absolute path to handlers via `ctx.resolved_path`, and
 //      records redacted resolver metadata in the audit row.
 //
-// What this slice does NOT cover. Blocking hook semantics with veto, output
-// scrubbing through `oran-log::redact`, deferred-tool promotion, and the
-// future capability-gated `tool::Runtime::workspace()` accessor all live in
-// later slices.
+// What this slice does NOT cover. The operator-prompt sink for
+// `permission_ask_rendered`, hook timeout/config enforcement, hook publish
+// audit rows, output scrubbing through `oran-log::redact`, deferred-tool
+// promotion, and the future capability-gated `tool::Runtime::workspace()`
+// accessor all live in later slices.
 //
 // Why a single `DispatchContext` rather than the design-doc's parameter
 // fan-out. Passing `permission::RuleSet&`, `permission::AuditSink&`,
@@ -141,16 +141,14 @@ struct DispatchContext {
   /// uninitialised value cannot accidentally satisfy a real TTL
   /// — every realistic call site supplies a fresh value.
   core::Time now{};
-  /// Optional hook bus. When non-null, `dispatch` publishes
-  /// `hook::Event::tool_before` after the registry resolves the tool
-  /// def (i.e., for every known tool name) and
-  /// `hook::Event::tool_after` at every exit (handler success,
-  /// permission denied, broker rejection, audit error). Hooks are
-  /// advisory in this slice — sinks observe but cannot veto. The
-  /// pointer is non-owning; the caller (typically the agent loop)
-  /// keeps the bus alive across dispatch invocations. Failures
-  /// reported by sinks are logged into the publish outcome but do
-  /// not change the dispatch result.
+  /// Optional hook bus. When non-null, `dispatch` publishes blocking
+  /// `hook::Event::tool_before` after the registry resolves the tool def
+  /// (i.e., for every known tool name) and consumes veto / rewrite /
+  /// require_approval decisions before workspace resolution and permission
+  /// evaluation. It then publishes advisory `tool_dispatched` before
+  /// handlers run, `tool_error` on failures, and `tool_after` at every
+  /// exit. The pointer is non-owning; the caller (typically the agent loop)
+  /// keeps the bus alive across dispatch invocations.
   hook::Bus* bus{nullptr};
   /// Registry currently running this dispatch. Set by `Registry::dispatch`
   /// before any handler runs and restored when dispatch exits. Most handlers
@@ -238,30 +236,37 @@ public:
   ///   1. lookup `name`; `Error::not_found` on miss. No hook event
   ///      is published for an unknown tool name — the dispatch
   ///      never started.
-  ///   2. if `ctx.bus` is non-null, publish
+  ///   2. if `ctx.bus` is non-null, publish blocking
   ///      `hook::Event::tool_before` with `ToolBeforePayload{name,
   ///      input_json, identity, scope_key, agent_key, started_at}`.
-  ///      Sink failures are recorded in the outcome but do not
-  ///      change the dispatch path.
+  ///      A veto records `outcome=blocked_by_hook`, skips the handler,
+  ///      publishes the advisory failure events, and returns
+  ///      `Error::permission_denied`. A rewrite substitutes the effective
+  ///      input before workspace resolution, permission evaluation, broker
+  ///      checks, audit, handler execution, and later hook payloads. A
+  ///      require_approval decision promotes an otherwise-allow verdict into
+  ///      the existing broker path.
   ///   3. if `ctx.workspace` is supplied and `name` is one of the built-in
   ///      filesystem tools, pre-resolve its `path` field through the
   ///      intent-specific `Workspace` method, stash the absolute path in
   ///      `ctx.resolved_path`, and carry redacted resolver metadata for audit.
   ///      A resolver failure is kept as the pending dispatch result.
-  ///   4. evaluate `(name, input_json, def.required_capabilities, ctx.mode)`
+  ///   4. evaluate `(name, effective_input, def.required_capabilities, ctx.mode)`
   ///      against `ctx.rules` so audit still records the permission context
   ///      for known filesystem attempts that fail path policy.
   ///   5. if the verdict is `ask` and both `ctx.approval_broker` and
   ///      `ctx.approval_token` are set, and no path-resolution failure is
   ///      pending, consult
-  ///      `broker.check(*token, name, input, identity, now)` and
+  ///      `broker.check(*token, name, effective_input, identity, now)` and
   ///      remap the audit outcome to `approved` (broker accepted) or
   ///      `rejected` (broker rejected — the broker's `reason`
   ///      context entry replaces the rule reason in the audit row).
   ///   6. record one `permission::AuditEvent` carrying the final
   ///      verdict, the (possibly remapped) outcome,
-  ///      `input_hash = SHA-256(input_json)`, the identity columns from
-  ///      `ctx`, and any resolver metadata under `metadata_json`.
+  ///      `input_hash = SHA-256(effective_input)`, the identity columns from
+  ///      `ctx`, and any resolver / blocking-hook metadata under
+  ///      `metadata_json` (`hook_decisions`, `original_input_hash`,
+  ///      `rewritten_input_hash` when applicable).
   ///   7. branch:
   ///        - resolver failure -> return the resolver error; the handler is
   ///                              not run and approval replay is not spent.
@@ -282,15 +287,16 @@ public:
   ///                               the agent loop can hand them
   ///                               straight to
   ///                               `ApprovalBroker::approve`.
-  ///   8. if `ctx.bus` is non-null, publish
-  ///      `hook::Event::tool_after` with `ToolAfterPayload{name,
-  ///      input_json, identity, succeeded, output_text, error_kind,
-  ///      error_message, started_at, finished_at, duration}` —
-  ///      always, regardless of which branch in step 6 fired.
+  ///   8. if `ctx.bus` is non-null, publish `hook::Event::tool_error`
+  ///      on failures, then always publish `hook::Event::tool_after` with
+  ///      `ToolAfterPayload{name, effective_input, identity, succeeded,
+  ///      output_text, error_kind, error_message, started_at, finished_at,
+  ///      duration}` regardless of which branch in step 6 fired.
   ///
   /// Audit-sink errors are propagated verbatim so a flaky storage backend
-  /// does not silently lose decisions. Hook publish errors are *not*
-  /// propagated to the caller (advisory contract).
+  /// does not silently lose decisions. Advisory hook publish errors are not
+  /// propagated to the caller; blocking `tool_before` sink errors are
+  /// converted by the bus into a hook veto.
   [[nodiscard]] async::Awaitable<core::Result<Output>>
   dispatch(std::string_view name, std::string_view input_json, DispatchContext& ctx) const;
 

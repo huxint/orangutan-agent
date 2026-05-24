@@ -1,11 +1,11 @@
 // include/oran/hook/decision.hpp — blocking-hook decision value types.
 //
-// Slice 90 opens the spec-0015 v1 surface. `HookDecision` is what a blocking
+// Slice 90 opened the spec-0015 v1 surface. `HookDecision` is what a blocking
 // sink returns from `Sink::handle_blocking`; the bus collects the first
 // non-`proceed` decision from the subscribed sinks and forwards it to the
-// dispatch pipeline (consumer wiring lands in a follow-up slice — see
-// `docs/product-specs/0015-blocking-hook-decisions.md` v1 acceptance
-// criteria 1-4).
+// dispatch pipeline. Slice 91 adds the in-memory `trace` entries that let
+// `Registry::dispatch` serialize every consulted sink decision into audit
+// metadata.
 //
 // The rewritten input is serialized JSON bytes so the public header stays
 // `nlohmann`-free per `docs/rules/critical-rules.md` C6; consumers that
@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <oran/core/time.hpp>
 
@@ -42,6 +43,17 @@ enum class HookDecisionKind : std::uint8_t {
   require_approval,
 };
 
+/// One sink decision observed during a blocking publish. The bus fills this
+/// trace in subscription order so dispatch can serialize it into audit
+/// metadata without each sink knowing about the audit layer.
+struct HookDecisionTrace {
+  std::string sink_id;
+  HookDecisionKind kind{HookDecisionKind::proceed};
+  std::string reason;
+
+  friend bool operator==(const HookDecisionTrace&, const HookDecisionTrace&) = default;
+};
+
 /// Returned by every blocking publish. The `kind` carries the
 /// short-circuit semantics; `reason` is free-form text that travels to
 /// the audit row; `rewritten_input_json` is required when `kind ==
@@ -61,6 +73,10 @@ struct HookDecision {
   /// Optional override for the broker TTL when `kind == require_approval`.
   /// Ignored for every other kind.
   std::optional<core::Time> approval_expires_at;
+  /// Per-sink decisions the bus actually evaluated, in subscription order.
+  /// If the first sink vetoes, the trace contains one row; if all sinks
+  /// proceed, it contains every consulted sink.
+  std::vector<HookDecisionTrace> trace;
 };
 
 }  // namespace orangutan::hook

@@ -39,6 +39,17 @@ Planned secret slice:
 - Approval prompts are HMAC-signed; the signing key is process-local and discarded
   on shutdown.
 
+## Hook-Driven Veto
+
+- Blocking `tool_before` hooks now run inside `tool::Registry::dispatch` before
+  workspace resolution and permission evaluation. A veto or hook failure records
+  `AuditOutcome::blocked_by_hook`, skips the handler, emits advisory failure
+  events, and returns `Error::permission_denied`.
+- Rewrite decisions replace the effective input before permission, approval,
+  audit, handler execution, and later hook payloads. Audit metadata keeps the
+  original and rewritten input hashes plus the consulted sink decisions, so the
+  security boundary stays reviewable without storing raw redacted input twice.
+
 ## Sandbox Posture
 
 - `shell.exec` runs subprocesses with the runtime's UID. We do not run as root and

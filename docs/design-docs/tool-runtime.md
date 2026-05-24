@@ -125,13 +125,23 @@ enum class Capability {
 > permission deny, broker rejection, audit error) with a
 > `ToolAfterPayload { succeeded, output_text, error_kind,
 > error_message, started_at, finished_at, duration }` that
-> flattens the dispatch outcome for forensic queries. Both events
-> are advisory in slice 22 — sinks observe but cannot veto the
-> dispatch; blocking semantics for `tool_before` rewrite/short-
-> circuit are deferred to a follow-up slice. Unknown tool names
-> are silently rejected without a hook publish (the dispatch never
-> started). Capability-gated runtime services (`tool::Runtime`
-> accessor surface) and config wiring stay on future slices.
+> flattens the dispatch outcome for forensic queries. Slice 25 adds
+> `tool_dispatched` on the paths where the handler will run and
+> `tool_error` on failure exits; slices 60/65/66/67 add structured
+> output usage/data fan-out, byte caps, and same-row audit usage
+> enrichment. Slice 91 turns `tool_before` into the first blocking
+> consumer: `Registry::dispatch` calls
+> `Bus::publish_blocking<Event::tool_before>` before workspace
+> resolution and permission evaluation, records every consulted sink
+> decision in `metadata_json.hook_decisions`, converts veto / hook
+> error / malformed rewrite decisions into
+> `AuditOutcome::blocked_by_hook`, substitutes rewrite input before
+> permission/handler execution, and promotes otherwise-allow calls
+> into the broker path on `require_approval`. Unknown tool names
+> are still silently rejected without a hook publish (the dispatch
+> never started). Capability-gated runtime services
+> (`tool::Runtime` accessor surface), hook timeout/config
+> enforcement, and the operator-prompt sink stay on future slices.
 > Slice 29 (2026-05-20) extends the built-in catalog with
 > `directory.list` (`tool::register_directory_list`, capability
 > `list_directory` — a new `core::Capability` enumerator so a
@@ -451,13 +461,23 @@ internally, but the public surface is distinct.
 The dispatch order is fixed:
 
 ```
-1. Hook bus → tool.before     (advisory; may short-circuit on error)
-2. Permission engine evaluates rules against {tool name, input, identity, capability set}
-3. If "ask" → render approval prompt, wait, replay-sign
-4. If "allow" → continue; if "deny" → return PermissionDenied error
-5. Hook bus → tool.dispatched (after permission, before handler)
-6. Handler runs
-7. Hook bus → tool.after       (always, even on error)
+1. Hook bus → tool.before (blocking)
+   - proceed: continue with the original input.
+   - rewrite: replace the effective input before workspace resolution,
+     permission evaluation, broker checks, audit, handler execution, and
+     later hook payloads.
+   - veto / hook error / malformed rewrite: record
+     outcome=blocked_by_hook, skip the handler, and return
+     Error::permission_denied.
+   - require_approval: continue, but promote an otherwise-allow verdict into
+     the existing broker path.
+2. Workspace pre-resolution for known filesystem built-ins.
+3. Permission engine evaluates rules against {tool name, effective input,
+   identity, capability set}.
+4. If "ask" → ApprovalBroker (existing flow).
+5. Hook bus → tool.dispatched (after approval/permission, before handler).
+6. Handler runs.
+7. Hook bus → tool.error on failures and tool.after always.
 ```
 
 The legacy code's per-tool boilerplate ("check permission inside the tool handler") is

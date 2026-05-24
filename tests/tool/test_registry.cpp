@@ -8,6 +8,7 @@
 #include <iterator>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -2996,6 +2997,7 @@ namespace {
 struct CapturedEvent {
   orangutan::hook::Event event;
   std::string tool_name;
+  std::string input_json;
   std::string identity;
   bool succeeded{false};
   std::string output_text;
@@ -3011,6 +3013,10 @@ public:
   explicit CaptureSink(std::string id, orangutan::hook::SinkKind kind = orangutan::hook::SinkKind::default_)
       : id_(std::move(id)), kind_(kind) {}
 
+  void set_blocking_decision(orangutan::hook::HookDecision decision) {
+    blocking_decision_ = std::move(decision);
+  }
+
   [[nodiscard]] std::string_view id() const noexcept override {
     return id_;
   }
@@ -3021,6 +3027,22 @@ public:
 
   [[nodiscard]] async::Awaitable<core::Result<void>> receive(orangutan::hook::Event event,
                                                              orangutan::hook::Payload payload) override {
+    capture(event, payload);
+    co_return core::Result<void>{};
+  }
+
+  [[nodiscard]] async::Awaitable<core::Result<orangutan::hook::HookDecision>>
+  handle_blocking(orangutan::hook::Event event, orangutan::hook::Payload payload) override {
+    capture(event, payload);
+    co_return blocking_decision_;
+  }
+
+  [[nodiscard]] std::span<const CapturedEvent> captures() const noexcept {
+    return captures_;
+  }
+
+private:
+  void capture(orangutan::hook::Event event, const orangutan::hook::Payload& payload) {
     auto row = CapturedEvent{};
     row.event = event;
     std::visit(
@@ -3028,13 +3050,16 @@ public:
           using T = std::decay_t<decltype(alt)>;
           if constexpr (std::is_same_v<T, orangutan::hook::ToolBeforePayload>) {
             row.tool_name = alt.tool_name;
+            row.input_json = alt.input_json;
             row.identity = alt.who.identity;
           } else if constexpr (std::is_same_v<T, orangutan::hook::ToolDispatchedPayload>) {
             row.tool_name = alt.tool_name;
+            row.input_json = alt.input_json;
             row.identity = alt.who.identity;
             row.verdict = alt.verdict;
           } else if constexpr (std::is_same_v<T, orangutan::hook::ToolAfterPayload>) {
             row.tool_name = alt.tool_name;
+            row.input_json = alt.input_json;
             row.identity = alt.who.identity;
             row.succeeded = alt.succeeded;
             row.output_text = alt.output_text;
@@ -3044,6 +3069,7 @@ public:
             row.error_message = alt.error_message;
           } else if constexpr (std::is_same_v<T, orangutan::hook::ToolErrorPayload>) {
             row.tool_name = alt.tool_name;
+            row.input_json = alt.input_json;
             row.identity = alt.who.identity;
             row.error_kind = alt.error_kind;
             row.error_message = alt.error_message;
@@ -3051,16 +3077,11 @@ public:
         },
         payload);
     captures_.push_back(std::move(row));
-    co_return core::Result<void>{};
   }
 
-  [[nodiscard]] std::span<const CapturedEvent> captures() const noexcept {
-    return captures_;
-  }
-
-private:
   std::string id_;
   orangutan::hook::SinkKind kind_{orangutan::hook::SinkKind::default_};
+  orangutan::hook::HookDecision blocking_decision_{};
   std::vector<CapturedEvent> captures_;
 };
 
@@ -3079,6 +3100,32 @@ public:
 
 private:
   std::string id_;
+};
+
+class BlockingFailureSink final : public orangutan::hook::Sink {
+public:
+  explicit BlockingFailureSink(std::string id, bool throws = false) : id_(std::move(id)), throws_(throws) {}
+
+  [[nodiscard]] std::string_view id() const noexcept override {
+    return id_;
+  }
+
+  [[nodiscard]] async::Awaitable<core::Result<void>> receive(orangutan::hook::Event,
+                                                             orangutan::hook::Payload) override {
+    co_return core::Result<void>{};
+  }
+
+  [[nodiscard]] async::Awaitable<core::Result<orangutan::hook::HookDecision>>
+  handle_blocking(orangutan::hook::Event, orangutan::hook::Payload) override {
+    if (throws_) {
+      throw std::runtime_error{"blocking sink threw"};
+    }
+    co_return std::unexpected(core::Error::internal("blocking sink failed"));
+  }
+
+private:
+  std::string id_;
+  bool throws_{false};
 };
 
 permission::RuleSet allow_rule_set(std::string tool_pattern = "noop") {
@@ -3164,6 +3211,10 @@ tool::DispatchContext make_hooked_ctx(asio::io_context& io,
   };
 }
 
+[[nodiscard]] std::string input_hash_hex(std::string_view input) {
+  return permission::to_hex(permission::ApprovalAuthority::input_hash(input));
+}
+
 }  // namespace
 
 TEST_CASE("dispatch publishes tool_before + tool_after on the allow path", "[unit][tool][hook]") {
@@ -3192,6 +3243,341 @@ TEST_CASE("dispatch publishes tool_before + tool_after on the allow path", "[uni
     REQUIRE(sink.captures()[1].succeeded);
     REQUIRE(sink.captures()[1].output_text == "noop-ok");
     REQUIRE(sink.captures()[1].error_kind.empty());
+
+    REQUIRE(audit.events().size() == 1);
+    auto metadata = nlohmann::json::parse(audit.events()[0].metadata_json);
+    REQUIRE(metadata.contains("hook_decisions"));
+    REQUIRE(metadata["hook_decisions"].size() == 1);
+    REQUIRE(metadata["hook_decisions"][0]["sink_id"] == "capture-1");
+    REQUIRE(metadata["hook_decisions"][0]["kind"] == "proceed");
+    REQUIRE(metadata["hook_decisions"][0]["reason"] == "");
+  });
+}
+
+TEST_CASE("blocking tool_before veto skips the handler and records blocked_by_hook", "[unit][tool][hook][blocking]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    std::size_t handler_calls = 0;
+    tool::Registry registry;
+    REQUIRE(registry
+                .add(noop_tool_def(),
+                     [&](std::string_view /*input*/,
+                         tool::DispatchContext& /*ctx*/) -> async::Awaitable<core::Result<tool::Output>> {
+                       ++handler_calls;
+                       co_return tool::Output::text_only("should-not-run");
+                     })
+                .has_value());
+
+    auto rules = allow_rule_set();
+    permission::RecordingAuditSink audit;
+
+    orangutan::hook::HookDecision veto{};
+    veto.kind = orangutan::hook::HookDecisionKind::veto;
+    veto.reason = "policy";
+
+    orangutan::hook::Bus bus;
+    CaptureSink first{"first"};
+    CaptureSink blocker{"blocker"};
+    blocker.set_blocking_decision(veto);
+    CaptureSink late{"late"};
+    bus.bind(first, {orangutan::hook::Event::tool_before});
+    bus.bind(blocker, {orangutan::hook::Event::tool_before, orangutan::hook::Event::tool_after});
+    bus.bind(late, {orangutan::hook::Event::tool_before});
+
+    const std::string input = R"({"k":1})";
+    auto ctx = make_hooked_ctx(io, rules, audit, &bus);
+    auto result = co_await registry.dispatch("noop", input, ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::permission_denied);
+    REQUIRE(context_has(result.error(), "reason", "blocked_by_hook"));
+    REQUIRE(context_has(result.error(), "hook_reason", "policy"));
+    REQUIRE(handler_calls == 0);
+
+    REQUIRE(first.captures().size() == 1);
+    REQUIRE(first.captures()[0].event == orangutan::hook::Event::tool_before);
+    REQUIRE(blocker.captures().size() == 2);
+    REQUIRE(blocker.captures()[0].event == orangutan::hook::Event::tool_before);
+    REQUIRE(blocker.captures()[1].event == orangutan::hook::Event::tool_after);
+    REQUIRE_FALSE(blocker.captures()[1].succeeded);
+    REQUIRE(blocker.captures()[1].error_kind == "blocked_by_hook");
+    REQUIRE(late.captures().empty());
+
+    REQUIRE(audit.events().size() == 1);
+    const auto& event = audit.events()[0];
+    REQUIRE(event.outcome == permission::AuditOutcome::blocked_by_hook);
+    REQUIRE(event.reason == "policy");
+    REQUIRE(event.input_hash.has_value());
+    REQUIRE(permission::to_hex(*event.input_hash) == input_hash_hex(input));
+
+    auto metadata = nlohmann::json::parse(event.metadata_json);
+    REQUIRE(metadata["original_input_hash"] == input_hash_hex(input));
+    REQUIRE_FALSE(metadata.contains("rewritten_input_hash"));
+    REQUIRE(metadata["hook_decisions"].size() == 2);
+    REQUIRE(metadata["hook_decisions"][0]["sink_id"] == "first");
+    REQUIRE(metadata["hook_decisions"][0]["kind"] == "proceed");
+    REQUIRE(metadata["hook_decisions"][1]["sink_id"] == "blocker");
+    REQUIRE(metadata["hook_decisions"][1]["kind"] == "veto");
+    REQUIRE(metadata["hook_decisions"][1]["reason"] == "policy");
+  });
+}
+
+TEST_CASE("blocking tool_before rewrite feeds permission, handler, audit, and hooks the rewritten input",
+          "[unit][tool][hook][blocking]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(noop_tool_def(), make_echo_handler()).has_value());
+
+    auto denied_original = permission::InputPattern::compile("danger");
+    REQUIRE(denied_original.has_value());
+    permission::RuleSet rules;
+    rules.add(permission::Rule{
+        .verdict = permission::Verdict::deny,
+        .tool_pattern = "noop",
+        .input_pattern = std::move(*denied_original),
+    });
+    rules.add(permission::Rule{.verdict = permission::Verdict::allow, .tool_pattern = "noop"});
+    permission::RecordingAuditSink audit;
+
+    const std::string original_input = R"({"mode":"danger"})";
+    const std::string rewritten_input = R"({"mode":"safe"})";
+    orangutan::hook::HookDecision rewrite{};
+    rewrite.kind = orangutan::hook::HookDecisionKind::rewrite;
+    rewrite.reason = "redacted";
+    rewrite.rewritten_input_json = rewritten_input;
+
+    orangutan::hook::Bus bus;
+    CaptureSink sink{"rewriter"};
+    sink.set_blocking_decision(rewrite);
+    bus.bind(sink,
+             {orangutan::hook::Event::tool_before,
+              orangutan::hook::Event::tool_dispatched,
+              orangutan::hook::Event::tool_after});
+
+    auto ctx = make_hooked_ctx(io, rules, audit, &bus);
+    auto result = co_await registry.dispatch("noop", original_input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == rewritten_input);
+
+    REQUIRE(sink.captures().size() == 3);
+    REQUIRE(sink.captures()[0].event == orangutan::hook::Event::tool_before);
+    REQUIRE(sink.captures()[0].input_json == original_input);
+    REQUIRE(sink.captures()[1].event == orangutan::hook::Event::tool_dispatched);
+    REQUIRE(sink.captures()[1].input_json == rewritten_input);
+    REQUIRE(sink.captures()[2].event == orangutan::hook::Event::tool_after);
+    REQUIRE(sink.captures()[2].input_json == rewritten_input);
+    REQUIRE(sink.captures()[2].succeeded);
+
+    REQUIRE(audit.events().size() == 1);
+    const auto& event = audit.events()[0];
+    REQUIRE(event.verdict == permission::Verdict::allow);
+    REQUIRE(event.outcome == permission::AuditOutcome::rewritten);
+    REQUIRE(event.input_hash.has_value());
+    REQUIRE(permission::to_hex(*event.input_hash) == input_hash_hex(rewritten_input));
+
+    auto metadata = nlohmann::json::parse(event.metadata_json);
+    REQUIRE(metadata["original_input_hash"] == input_hash_hex(original_input));
+    REQUIRE(metadata["rewritten_input_hash"] == input_hash_hex(rewritten_input));
+    REQUIRE(metadata["hook_decisions"].size() == 1);
+    REQUIRE(metadata["hook_decisions"][0]["sink_id"] == "rewriter");
+    REQUIRE(metadata["hook_decisions"][0]["kind"] == "rewrite");
+    REQUIRE(metadata["hook_decisions"][0]["reason"] == "redacted");
+  });
+}
+
+TEST_CASE("blocking tool_before require_approval promotes allow through the broker",
+          "[unit][tool][hook][blocking][approval]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(core::ToolDef::with_no_input("noop", "noop"), make_echo_handler()).has_value());
+
+    auto rules = allow_rule_set();
+    permission::RecordingAuditSink audit;
+    auto broker = make_broker();
+    const auto now = fixed_now();
+    const std::string input = R"({"requires":"operator"})";
+    const auto token = grant(broker, "noop", input, "operator-1", now);
+
+    orangutan::hook::HookDecision require_approval{};
+    require_approval.kind = orangutan::hook::HookDecisionKind::require_approval;
+    require_approval.reason = "operator_review";
+
+    orangutan::hook::Bus bus;
+    CaptureSink sink{"approval-hook"};
+    sink.set_blocking_decision(require_approval);
+    bus.bind(sink, {orangutan::hook::Event::tool_before, orangutan::hook::Event::tool_after});
+
+    auto ctx = make_approval_ctx(io, rules, audit, &broker, &token, now);
+    ctx.bus = &bus;
+
+    auto result = co_await registry.dispatch("noop", input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == input);
+
+    REQUIRE(sink.captures().size() == 2);
+    REQUIRE(sink.captures()[0].event == orangutan::hook::Event::tool_before);
+    REQUIRE(sink.captures()[1].event == orangutan::hook::Event::tool_after);
+    REQUIRE(sink.captures()[1].succeeded);
+
+    REQUIRE(audit.events().size() == 1);
+    const auto& event = audit.events()[0];
+    REQUIRE(event.verdict == permission::Verdict::ask);
+    REQUIRE(event.outcome == permission::AuditOutcome::approved);
+    REQUIRE(event.reason == "operator_review");
+    auto metadata = nlohmann::json::parse(event.metadata_json);
+    REQUIRE(metadata["hook_decisions"].size() == 1);
+    REQUIRE(metadata["hook_decisions"][0]["sink_id"] == "approval-hook");
+    REQUIRE(metadata["hook_decisions"][0]["kind"] == "require_approval");
+    REQUIRE(metadata["hook_decisions"][0]["reason"] == "operator_review");
+  });
+}
+
+TEST_CASE("blocking tool_before require_approval preserves a permission deny",
+          "[unit][tool][hook][blocking][approval]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(core::ToolDef::with_no_input("noop", "noop"), make_echo_handler()).has_value());
+
+    auto rules = deny_rule_set();
+    permission::RecordingAuditSink audit;
+
+    orangutan::hook::HookDecision require_approval{};
+    require_approval.kind = orangutan::hook::HookDecisionKind::require_approval;
+    require_approval.reason = "operator_review";
+
+    orangutan::hook::Bus bus;
+    CaptureSink sink{"approval-hook"};
+    sink.set_blocking_decision(require_approval);
+    bus.bind(sink, {orangutan::hook::Event::tool_before, orangutan::hook::Event::tool_after});
+
+    auto ctx = make_hooked_ctx(io, rules, audit, &bus);
+
+    auto result = co_await registry.dispatch("noop", R"({"requires":"operator"})", ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::permission_denied);
+    REQUIRE(context_has(result.error(), "reason", "rule #0 (deny: noop)"));
+
+    REQUIRE(sink.captures().size() == 2);
+    REQUIRE(sink.captures()[0].event == orangutan::hook::Event::tool_before);
+    REQUIRE(sink.captures()[1].event == orangutan::hook::Event::tool_after);
+    REQUIRE_FALSE(sink.captures()[1].succeeded);
+    REQUIRE(sink.captures()[1].error_kind == "permission_denied");
+
+    REQUIRE(audit.events().size() == 1);
+    const auto& event = audit.events()[0];
+    REQUIRE(event.verdict == permission::Verdict::deny);
+    REQUIRE(event.outcome == permission::AuditOutcome::deny);
+    REQUIRE(event.reason == "rule #0 (deny: noop)");
+    auto metadata = nlohmann::json::parse(event.metadata_json);
+    REQUIRE(metadata["hook_decisions"].size() == 1);
+    REQUIRE(metadata["hook_decisions"][0]["sink_id"] == "approval-hook");
+    REQUIRE(metadata["hook_decisions"][0]["kind"] == "require_approval");
+  });
+}
+
+TEST_CASE("blocking tool_before rewrite without replacement is recorded as blocked_by_hook",
+          "[unit][tool][hook][blocking]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    std::size_t handler_calls = 0;
+    tool::Registry registry;
+    REQUIRE(registry
+                .add(noop_tool_def(),
+                     [&](std::string_view /*input*/,
+                         tool::DispatchContext& /*ctx*/) -> async::Awaitable<core::Result<tool::Output>> {
+                       ++handler_calls;
+                       co_return tool::Output::text_only("should-not-run");
+                     })
+                .has_value());
+
+    auto rules = allow_rule_set();
+    permission::RecordingAuditSink audit;
+
+    orangutan::hook::HookDecision rewrite{};
+    rewrite.kind = orangutan::hook::HookDecisionKind::rewrite;
+    rewrite.reason = "redact";
+
+    orangutan::hook::Bus bus;
+    CaptureSink sink{"rewriter"};
+    sink.set_blocking_decision(rewrite);
+    bus.bind(sink, {orangutan::hook::Event::tool_before, orangutan::hook::Event::tool_after});
+
+    const std::string input = R"({"mode":"danger"})";
+    auto ctx = make_hooked_ctx(io, rules, audit, &bus);
+
+    auto result = co_await registry.dispatch("noop", input, ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::permission_denied);
+    REQUIRE(context_has(result.error(), "reason", "blocked_by_hook"));
+    REQUIRE(context_has(result.error(), "hook_reason", "hook rewrite missing rewritten_input_json"));
+    REQUIRE(handler_calls == 0);
+
+    REQUIRE(sink.captures().size() == 2);
+    REQUIRE(sink.captures()[0].event == orangutan::hook::Event::tool_before);
+    REQUIRE(sink.captures()[1].event == orangutan::hook::Event::tool_after);
+    REQUIRE_FALSE(sink.captures()[1].succeeded);
+    REQUIRE(sink.captures()[1].error_kind == "blocked_by_hook");
+
+    REQUIRE(audit.events().size() == 1);
+    const auto& event = audit.events()[0];
+    REQUIRE(event.outcome == permission::AuditOutcome::blocked_by_hook);
+    REQUIRE(event.reason == "hook rewrite missing rewritten_input_json");
+    REQUIRE(event.input_hash.has_value());
+    REQUIRE(permission::to_hex(*event.input_hash) == input_hash_hex(input));
+
+    auto metadata = nlohmann::json::parse(event.metadata_json);
+    REQUIRE(metadata["original_input_hash"] == input_hash_hex(input));
+    REQUIRE_FALSE(metadata.contains("rewritten_input_hash"));
+    REQUIRE(metadata["hook_decisions"].size() == 1);
+    REQUIRE(metadata["hook_decisions"][0]["sink_id"] == "rewriter");
+    REQUIRE(metadata["hook_decisions"][0]["kind"] == "rewrite");
+    REQUIRE(metadata["hook_decisions"][0]["reason"] == "redact");
+  });
+}
+
+TEST_CASE("blocking tool_before sink error is recorded as blocked_by_hook", "[unit][tool][hook][blocking]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    std::size_t handler_calls = 0;
+    tool::Registry registry;
+    REQUIRE(registry
+                .add(noop_tool_def(),
+                     [&](std::string_view /*input*/,
+                         tool::DispatchContext& /*ctx*/) -> async::Awaitable<core::Result<tool::Output>> {
+                       ++handler_calls;
+                       co_return tool::Output::text_only("should-not-run");
+                     })
+                .has_value());
+
+    auto rules = allow_rule_set();
+    permission::RecordingAuditSink audit;
+
+    orangutan::hook::Bus bus;
+    CaptureSink first{"first"};
+    BlockingFailureSink failing{"failing"};
+    CaptureSink late{"late"};
+    bus.bind(first, {orangutan::hook::Event::tool_before});
+    bus.bind(failing, {orangutan::hook::Event::tool_before, orangutan::hook::Event::tool_after});
+    bus.bind(late, {orangutan::hook::Event::tool_before});
+
+    auto ctx = make_hooked_ctx(io, rules, audit, &bus);
+    auto result = co_await registry.dispatch("noop", R"({})", ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::permission_denied);
+    REQUIRE(context_has(result.error(), "reason", "blocked_by_hook"));
+    REQUIRE(handler_calls == 0);
+
+    REQUIRE(first.captures().size() == 1);
+    REQUIRE(late.captures().empty());
+
+    REQUIRE(audit.events().size() == 1);
+    const auto& event = audit.events()[0];
+    REQUIRE(event.outcome == permission::AuditOutcome::blocked_by_hook);
+    REQUIRE(event.reason.starts_with("hook_error"));
+    REQUIRE(event.reason.contains("blocking sink failed"));
+
+    auto metadata = nlohmann::json::parse(event.metadata_json);
+    REQUIRE(metadata["hook_decisions"].size() == 2);
+    REQUIRE(metadata["hook_decisions"][0]["kind"] == "proceed");
+    REQUIRE(metadata["hook_decisions"][1]["sink_id"] == "failing");
+    REQUIRE(metadata["hook_decisions"][1]["kind"] == "veto");
+    REQUIRE(metadata["hook_decisions"][1]["reason"].get<std::string>().contains("blocking sink failed"));
   });
 }
 
@@ -3395,7 +3781,7 @@ TEST_CASE("dispatch swallows sink errors — hook publish is advisory", "[unit][
     REQUIRE(result.has_value());
     REQUIRE(result->text == "noop-ok");
 
-    // The failing sink errored on both events but the alive sink still saw them.
+    // The failing sink's advisory `tool_after` error does not stop later sinks.
     REQUIRE(alive.captures().size() == 2);
   });
 }

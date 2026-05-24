@@ -77,9 +77,9 @@ enum class Event : std::uint8_t {
 
 /// Per-event semantics. `advisory` sinks observe and may report errors but
 /// cannot block the runtime action; `blocking` sinks are awaited and may
-/// veto the action. Slice 22 only implements advisory dispatch in `Bus`;
-/// blocking semantics land with the first sink that needs them
-/// (`permission_ask_rendered` is the most likely first consumer).
+/// veto the action. `Bus` exposes both publish modes; runtime producers
+/// choose which path they consume. `tool_before` is the first blocking
+/// consumer inside `tool::Registry::dispatch`.
 enum class Mode : std::uint8_t {
   advisory,
   blocking,

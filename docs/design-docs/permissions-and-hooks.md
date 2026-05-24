@@ -303,7 +303,7 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 
 ## Hook Bus
 
-> **Bus status (2026-05-24, slice 90):** the foundation
+> **Bus status (2026-05-25, slice 91):** the foundation
 > ships as `oran-hook`. `hook::Event` enumerates the 41
 > lifecycle events listed below; `hook::Mode { advisory,
 > blocking }` plus `default_mode(Event)` annotates each
@@ -347,23 +347,29 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > memory payloads when `oran-memory` lands, and so on).
 > `Registry::dispatch` consumes the bus through the
 > optional `DispatchContext::bus` field: when non-null,
-> dispatch publishes `tool_before` after the registry
-> resolves the tool def, `tool_dispatched` before handlers
-> run on allow / ask-approved paths, `tool_error` on error
-> exits, and `tool_after` at every exit (handler success,
-> permission deny, broker rejection, audit error). Hooks are
-> advisory in this slice — sinks
-> observe but cannot veto; the blocking-veto path
-> (`publish_blocking`, `EventTraits<E>::Decision`) is
-> tracked in `exec-plans/tech-debt-tracker.md` and lands
-> when the first blocking consumer needs it (the
-> operator-prompt sink for `permission_ask_rendered` is
-> the most likely first caller). The render-side flow
-> that asks the operator (`permission_ask_rendered`) and
-> captures the response (`permission_ask_resolved`)
-> therefore still lives in the `oran-agent` slice — slice
-> 22 ships the bus that those events will publish
-> through, not the events themselves. Bench (`bench-hook`
+> dispatch first publishes blocking `tool_before` through
+> `Bus::publish_blocking<Event::tool_before>` before
+> workspace resolution and permission evaluation. Veto,
+> hook-error, or malformed-rewrite decisions record
+> `AuditOutcome::blocked_by_hook`, skip the handler, publish
+> advisory failure events, and return
+> `Error::permission_denied` with `reason=blocked_by_hook`;
+> rewrite decisions substitute the effective input before
+> workspace resolution, permission evaluation, broker checks,
+> audit, handler execution, and later hook payloads, then
+> record `AuditOutcome::rewritten` on allowed calls; and
+> `require_approval` promotes otherwise-allow decisions into
+> the existing broker path. Every consulted sink decision is
+> serialized in `AuditEvent::metadata_json.hook_decisions`
+> (subscription order, up to the first non-`proceed`).
+> Dispatch then publishes advisory `tool_dispatched` before
+> handlers run on allow / ask-approved paths, `tool_error`
+> on error exits, and `tool_after` at every exit. The
+> render-side flow that asks the operator
+> (`permission_ask_rendered`) and captures the response
+> (`permission_ask_resolved`) still lives in the upcoming
+> agent/CLI slice, and timeout enforcement remains a future
+> config-driven hook-policy slice. Bench (`bench-hook`
 > + `bench-tool`): `publish_no_sinks` ~242 ns vs.
 > `publish_one_sink` ~446 ns vs. `publish_three_sinks`
 > ~698 ns (~204 ns first-sink dispatch, ~126 ns per
@@ -374,13 +380,13 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > with two observers" tax — small relative to the
 > ~18 µs StorageAuditSink record).
 >
-> Slice 90 opens the spec-0015 v1 blocking surface
-> alongside the still-advisory tool-dispatch wiring:
+> Slice 90 opened the spec-0015 v1 blocking surface:
 > `<oran/hook/decision.hpp>` ships `HookDecisionKind {
 > proceed, veto, rewrite, require_approval }` and
 > `HookDecision { kind, reason, optional<string>
 > rewritten_input_json, optional<core::Time>
-> approval_expires_at }`; `<oran/hook/event_traits.hpp>`
+> approval_expires_at, vector<HookDecisionTrace> trace }`;
+> `<oran/hook/event_traits.hpp>`
 > ships the empty primary `EventTraits<E>` template plus
 > explicit specialisations for the v1 whitelist
 > (`tool_before`, `permission_ask_rendered`,
@@ -406,19 +412,12 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > `reason="hook_error: <message> [sink=<id>]"`. With no
 > sinks subscribed or every sink returning `proceed`,
 > the bus yields a default-constructed `HookDecision{}`.
-> Slice 90 stops at the bus surface: `Registry::dispatch`
-> still publishes the existing advisory `tool_before` /
-> `tool_dispatched` / `tool_error` / `tool_after` payloads.
-> The blocking-veto consumer (new
-> `permission::AuditOutcome::blocked_by_hook` /
-> `rewritten` enumerators, the seven-step canonical
-> dispatch order, the
-> `AuditEvent::context.hook_decisions` array,
-> `config.hooks.timeout_ms` enforcement, and the spec-0018
-> AC5 `hook_publish` row writer) lands in the next slice;
-> the first user-visible sink is the operator-prompt
-> `permission_ask_rendered` sink owned by `oran-cli` in
-> the slice after that.
+> Slice 91 adds the dispatch consumer and the audit-side
+> `permission::AuditOutcome::blocked_by_hook` / `rewritten`
+> enumerators. The spec-0018 AC5 `hook_publish` audit-row
+> writer, `config.hooks.timeout_ms` enforcement, and the
+> first user-visible operator-prompt `permission_ask_rendered`
+> sink owned by `oran-cli` remain downstream.
 
 ### Surface
 

@@ -62,11 +62,13 @@ struct AppendAuditEventRequest {
   /// silently.
   std::string verdict;
   /// Wire spelling of `permission::AuditOutcome`
-  /// (`allow`/`deny`/`ask`/`approved`/`rejected`). Carries the
-  /// actual end-state — an `ask` row that was later approved by
-  /// the operator lands as `outcome=approved`; an `ask` row that
-  /// was never resolved (process restarted, timeout) lands as
-  /// `outcome=ask`.
+  /// (`allow`/`deny`/`ask`/`approved`/`rejected`/
+  /// `blocked_by_hook`/`rewritten`). Carries the actual end-state —
+  /// an `ask` row that was later approved by the operator lands as
+  /// `outcome=approved`; an `ask` row that was never resolved
+  /// (process restarted, timeout) lands as `outcome=ask`; a
+  /// blocking `tool_before` decision can record hook-driven
+  /// `blocked_by_hook` or `rewritten` outcomes.
   std::string outcome;
   /// Human-readable explanation. Comes from `Decision::reason` for
   /// rule-engine decisions and from `Error::with("reason", ...)`

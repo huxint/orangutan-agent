@@ -132,6 +132,7 @@ TEST_CASE("publish_blocking on empty bus returns proceed", "[hook][bus][blocking
     REQUIRE(result.has_value());
     REQUIRE(result->kind == hook::HookDecisionKind::proceed);
     REQUIRE(result->reason.empty());
+    REQUIRE(result->trace.empty());
     co_return;
   });
 }
@@ -168,6 +169,10 @@ TEST_CASE("publish_blocking returns single sink's veto decision", "[hook][bus][b
     REQUIRE(result.has_value());
     REQUIRE(result->kind == hook::HookDecisionKind::veto);
     REQUIRE(result->reason == "policy");
+    REQUIRE(result->trace.size() == 1);
+    REQUIRE(result->trace[0].sink_id == "policy-sink");
+    REQUIRE(result->trace[0].kind == hook::HookDecisionKind::veto);
+    REQUIRE(result->trace[0].reason == "policy");
     co_return;
   });
 
@@ -228,6 +233,9 @@ TEST_CASE("publish_blocking short-circuits at first non-proceed sink", "[hook][b
     REQUIRE(result.has_value());
     REQUIRE(result->kind == hook::HookDecisionKind::veto);
     REQUIRE(result->reason == "first-veto");
+    REQUIRE(result->trace.size() == 1);
+    REQUIRE(result->trace[0].sink_id == "first");
+    REQUIRE(result->trace[0].kind == hook::HookDecisionKind::veto);
     co_return;
   });
 
@@ -252,6 +260,11 @@ TEST_CASE("publish_blocking consults later sink when earlier returns proceed", "
     REQUIRE(result.has_value());
     REQUIRE(result->kind == hook::HookDecisionKind::require_approval);
     REQUIRE(result->reason == "second-required");
+    REQUIRE(result->trace.size() == 2);
+    REQUIRE(result->trace[0].sink_id == "first");
+    REQUIRE(result->trace[0].kind == hook::HookDecisionKind::proceed);
+    REQUIRE(result->trace[1].sink_id == "second");
+    REQUIRE(result->trace[1].kind == hook::HookDecisionKind::require_approval);
     co_return;
   });
 
@@ -271,6 +284,11 @@ TEST_CASE("publish_blocking returns proceed when all sinks proceed", "[hook][bus
     auto result = co_await bus.publish_blocking<hook::Event::tool_before>(sample_before());
     REQUIRE(result.has_value());
     REQUIRE(result->kind == hook::HookDecisionKind::proceed);
+    REQUIRE(result->trace.size() == 2);
+    REQUIRE(result->trace[0].sink_id == "first");
+    REQUIRE(result->trace[0].kind == hook::HookDecisionKind::proceed);
+    REQUIRE(result->trace[1].sink_id == "second");
+    REQUIRE(result->trace[1].kind == hook::HookDecisionKind::proceed);
     co_return;
   });
 
@@ -291,8 +309,11 @@ TEST_CASE("sink error becomes veto with reason=hook_error", "[hook][bus][blockin
     REQUIRE(result.has_value());
     REQUIRE(result->kind == hook::HookDecisionKind::veto);
     REQUIRE(result->reason.starts_with("hook_error"));
-    REQUIRE(result->reason.find("boom") != std::string::npos);
-    REQUIRE(result->reason.find("[sink=failing]") != std::string::npos);
+    REQUIRE(result->reason.contains("boom"));
+    REQUIRE(result->reason.contains("[sink=failing]"));
+    REQUIRE(result->trace.size() == 1);
+    REQUIRE(result->trace[0].sink_id == "failing");
+    REQUIRE(result->trace[0].kind == hook::HookDecisionKind::veto);
     co_return;
   });
 
@@ -310,8 +331,11 @@ TEST_CASE("throwing sink becomes veto with reason=hook_error", "[hook][bus][bloc
     REQUIRE(result.has_value());
     REQUIRE(result->kind == hook::HookDecisionKind::veto);
     REQUIRE(result->reason.starts_with("hook_error"));
-    REQUIRE(result->reason.find("kaboom") != std::string::npos);
-    REQUIRE(result->reason.find("[sink=thrower]") != std::string::npos);
+    REQUIRE(result->reason.contains("kaboom"));
+    REQUIRE(result->reason.contains("[sink=thrower]"));
+    REQUIRE(result->trace.size() == 1);
+    REQUIRE(result->trace[0].sink_id == "thrower");
+    REQUIRE(result->trace[0].kind == hook::HookDecisionKind::veto);
     co_return;
   });
 }

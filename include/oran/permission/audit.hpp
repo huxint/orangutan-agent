@@ -60,6 +60,10 @@ enum class AuditOutcome : std::uint8_t {
   ask,
   approved,
   rejected,
+  /// A blocking hook vetoed the call before permission evaluation.
+  blocked_by_hook,
+  /// A blocking hook rewrote the input and the rewritten call was allowed.
+  rewritten,
 };
 
 /// One row destined for the audit log. The value type matches the

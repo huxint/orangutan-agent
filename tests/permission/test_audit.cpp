@@ -77,7 +77,7 @@ core::TurnId turn_id_with(unsigned char seed) {
 
 TEST_CASE("AuditOutcome wire spelling round-trips through core::enum_name/parse_enum", "[unit][permission][audit]") {
   using O = permission::AuditOutcome;
-  for (auto outcome : {O::allow, O::deny, O::ask, O::approved, O::rejected}) {
+  for (auto outcome : core::enum_values<O>()) {
     const auto name = core::enum_name(outcome);
     REQUIRE_FALSE(name.empty());
     auto parsed = core::parse_enum<permission::AuditOutcome>(name);
@@ -86,6 +86,8 @@ TEST_CASE("AuditOutcome wire spelling round-trips through core::enum_name/parse_
   }
   REQUIRE(core::enum_name(permission::AuditOutcome::approved) == "approved");
   REQUIRE(core::enum_name(permission::AuditOutcome::rejected) == "rejected");
+  REQUIRE(core::enum_name(permission::AuditOutcome::blocked_by_hook) == "blocked_by_hook");
+  REQUIRE(core::enum_name(permission::AuditOutcome::rewritten) == "rewritten");
 }
 
 TEST_CASE("verdict_to_outcome maps each Verdict to its rule-engine outcome", "[unit][permission][audit]") {
@@ -335,7 +337,7 @@ TEST_CASE("StorageAuditSink writes each AuditOutcome wire spelling", "[unit][per
     permission::StorageAuditSink sink{repo};
 
     using O = permission::AuditOutcome;
-    const std::array outcomes{O::allow, O::deny, O::ask, O::approved, O::rejected};
+    constexpr auto outcomes = core::enum_values<O>();
     for (auto outcome : outcomes) {
       auto event = make_audit_event("scope-A", "file.read", outcome);
       auto recorded = co_await sink.record(std::move(event));

@@ -367,8 +367,8 @@ proves the loop behaves correctly without a network.
   — `agent::ToolScheduler` becomes the v1.1 replacement for the
   sequential dispatch in scenario #3.
 - [`0015-blocking-hook-decisions.md`](0015-blocking-hook-decisions.md)
-  — `publish_blocking` consumption lands in v1.1 once the operator
-  prompt sink exists; v1's loop only emits advisory publishes.
+  — direct tool dispatch now consumes blocking `tool_before`; the
+  operator-prompt `permission_ask_rendered` sink remains downstream.
 - [`0016-prompt-and-tool-catalog-cache.md`](0016-prompt-and-tool-catalog-cache.md)
   — `prompt::Builder` is the loop's prompt source from v1 onward.
 - [`0014-structured-tool-output.md`](0014-structured-tool-output.md)

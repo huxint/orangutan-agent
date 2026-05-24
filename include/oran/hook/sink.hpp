@@ -71,8 +71,9 @@ public:
   ///
   /// Returning an error is treated as a veto by `publish_blocking`
   /// (`reason = hook_error`); a thrown exception is captured the same
-  /// way. The dispatch consumer (registry / agent loop) lands in a
-  /// follow-up slice.
+  /// way. `tool::Registry::dispatch` is the first consumer for
+  /// `tool_before`; the agent/CLI approval-rendering consumer for
+  /// `permission_ask_rendered` lands downstream.
   [[nodiscard]] virtual async::Awaitable<core::Result<HookDecision>> handle_blocking(Event event, Payload payload);
 };
 

@@ -10,6 +10,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <oran/core/enum_names.hpp>
+#include <oran/hook/decision.hpp>
 #include <oran/tool/output.hpp>
 
 namespace orangutan::tool::detail {
@@ -64,6 +66,29 @@ std::optional<std::string> with_usage_metadata(std::string_view metadata_json, c
   }
   auto metadata = parse_metadata_object(metadata_json);
   metadata["usage"] = usage_to_json(usage);
+  return metadata.dump();
+}
+
+std::string with_hook_decision_metadata(std::string_view metadata_json,
+                                        std::span<const hook::HookDecisionTrace> trace,
+                                        std::optional<std::string> original_input_hash,
+                                        std::optional<std::string> rewritten_input_hash) {
+  auto metadata = parse_metadata_object(metadata_json);
+  auto rows = nlohmann::json::array();
+  for (const auto& decision : trace) {
+    auto row = nlohmann::json::object();
+    row["sink_id"] = decision.sink_id;
+    row["kind"] = std::string{core::enum_name(decision.kind)};
+    row["reason"] = decision.reason;
+    rows.push_back(std::move(row));
+  }
+  metadata["hook_decisions"] = std::move(rows);
+  if (original_input_hash.has_value()) {
+    metadata["original_input_hash"] = std::move(*original_input_hash);
+  }
+  if (rewritten_input_hash.has_value()) {
+    metadata["rewritten_input_hash"] = std::move(*rewritten_input_hash);
+  }
   return metadata.dump();
 }
 

@@ -130,6 +130,8 @@ async::Awaitable<core::Result<HookDecision>> Bus::publish_blocking_impl(Event ev
   if (it == bindings_.end()) {
     co_return HookDecision{};
   }
+  std::vector<HookDecisionTrace> trace;
+  trace.reserve(it->second.size());
   for (auto* sink : it->second) {
     HookDecision decision{};
     try {
@@ -138,19 +140,36 @@ async::Awaitable<core::Result<HookDecision>> Bus::publish_blocking_impl(Event ev
         // Spec 0015 v1: sink error -> veto with reason=hook_error;
         // short-circuit the walk so the dispatch consumer sees a single
         // authoritative decision per call.
-        co_return veto_from_error(result.error(), sink->id());
+        decision = veto_from_error(result.error(), sink->id());
+        trace.push_back(
+            HookDecisionTrace{.sink_id = std::string{sink->id()}, .kind = decision.kind, .reason = decision.reason});
+        decision.trace = std::move(trace);
+        co_return decision;
       }
       decision = std::move(result).value();
     } catch (const std::exception& ex) {
-      co_return veto_from_exception(ex.what(), sink->id());
+      decision = veto_from_exception(ex.what(), sink->id());
+      trace.push_back(
+          HookDecisionTrace{.sink_id = std::string{sink->id()}, .kind = decision.kind, .reason = decision.reason});
+      decision.trace = std::move(trace);
+      co_return decision;
     } catch (...) {
-      co_return veto_from_exception("sink threw non-std exception", sink->id());
+      decision = veto_from_exception("sink threw non-std exception", sink->id());
+      trace.push_back(
+          HookDecisionTrace{.sink_id = std::string{sink->id()}, .kind = decision.kind, .reason = decision.reason});
+      decision.trace = std::move(trace);
+      co_return decision;
     }
+    trace.push_back(
+        HookDecisionTrace{.sink_id = std::string{sink->id()}, .kind = decision.kind, .reason = decision.reason});
     if (decision.kind != HookDecisionKind::proceed) {
+      decision.trace = std::move(trace);
       co_return decision;
     }
   }
-  co_return HookDecision{};
+  HookDecision decision{};
+  decision.trace = std::move(trace);
+  co_return decision;
 }
 
 std::size_t Bus::binding_count() const noexcept {

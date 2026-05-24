@@ -51,6 +51,10 @@ namespace {
   return event;
 }
 
+[[nodiscard]] std::string input_hash_hex(std::string_view input_json) {
+  return permission::to_hex(permission::ApprovalAuthority::input_hash(input_json));
+}
+
 [[nodiscard]] permission::AuditMetadataUpdate build_metadata_update(const permission::AuditEvent& event) {
   return permission::AuditMetadataUpdate{
       .scope_key = event.scope_key,
@@ -63,6 +67,45 @@ namespace {
   };
 }
 
+[[nodiscard]] std::string hook_decision_reason(const hook::HookDecision& decision, std::string_view fallback) {
+  return decision.reason.empty() ? std::string{fallback} : decision.reason;
+}
+
+[[nodiscard]] permission::Decision hook_blocked_decision(std::string reason) {
+  return permission::Decision{
+      .verdict = permission::Verdict::deny,
+      .reason = std::move(reason),
+  };
+}
+
+[[nodiscard]] core::Error hook_veto_error(std::string_view name, std::string reason) {
+  return core::Error::permission_denied("tool blocked by hook")
+      .with("tool", std::string{name})
+      .with("reason", "blocked_by_hook")
+      .with("hook_reason", std::move(reason));
+}
+
+[[nodiscard]] core::Error hook_rewrite_error(std::string_view name, std::string reason) {
+  return core::Error::permission_denied("tool rewrite rejected by hook")
+      .with("tool", std::string{name})
+      .with("reason", "blocked_by_hook")
+      .with("hook_reason", std::move(reason));
+}
+
+[[nodiscard]] permission::Decision
+require_approval_decision(permission::Decision decision, const hook::HookDecision& hook_decision, core::Time now) {
+  if (decision.verdict != permission::Verdict::allow) {
+    return decision;
+  }
+  decision.verdict = permission::Verdict::ask;
+  decision.reason = hook_decision_reason(hook_decision, "hook require_approval");
+  if (hook_decision.approval_expires_at.has_value() && *hook_decision.approval_expires_at > now) {
+    decision.approval_ttl = std::chrono::duration_cast<std::chrono::seconds>(
+        hook_decision.approval_expires_at->to_system_time_point() - now.to_system_time_point());
+  }
+  return decision;
+}
+
 /// Extract the `reason` context entry the approval broker stamps onto every
 /// rejection. Returns an empty view when no such entry exists — callers
 /// fall back to the rule's decision reason on that path.
@@ -70,6 +113,18 @@ namespace {
   const auto entries = error.context();
   const auto it = std::ranges::find_if(entries, [](const auto& kv) { return kv.first == "reason"; });
   return it != entries.end() ? std::string_view{it->second} : std::string_view{};
+}
+
+[[nodiscard]] bool has_context(const core::Error& error, std::string_view key, std::string_view value) noexcept {
+  return std::ranges::any_of(error.context(),
+                             [&](const auto& entry) { return entry.first == key && entry.second == value; });
+}
+
+[[nodiscard]] std::string error_kind_label(const core::Error& error) {
+  if (has_context(error, "reason", "blocked_by_hook")) {
+    return "blocked_by_hook";
+  }
+  return std::string{core::enum_name(error.kind())};
 }
 
 [[nodiscard]] hook::Identity make_hook_identity(const DispatchContext& ctx) {
@@ -119,7 +174,7 @@ namespace {
       .output_text = result.has_value() ? result->text : std::string{},
       .data_json = result.has_value() ? result->data_json : std::nullopt,
       .usage = usage,
-      .error_kind = result.has_value() ? std::string{} : std::string{core::enum_name(result.error().kind())},
+      .error_kind = result.has_value() ? std::string{} : error_kind_label(result.error()),
       .error_message = result.has_value() ? std::string{} : std::string{result.error().message()},
       .started_at = started_at,
       .finished_at = finished_at,
@@ -153,7 +208,7 @@ namespace {
       .tool_name = std::string{name},
       .input_json = std::string{input_json},
       .who = make_hook_identity(ctx),
-      .error_kind = std::string{core::enum_name(error.kind())},
+      .error_kind = error_kind_label(error),
       .error_message = std::string{error.message()},
       .started_at = started_at,
       .finished_at = finished_at,
@@ -237,15 +292,46 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
   const auto& entry = it->second;
 
   const auto started_at = core::time::now_utc();
+  std::optional<std::string> rewritten_input;
+  std::string_view effective_input = input_json;
+  hook::HookDecision hook_decision{};
+  bool hook_blocked = false;
+  bool hook_rewrote = false;
+  bool hook_requires_approval = false;
+  std::string hook_reason;
+  std::optional<core::Error> blocking_publish_error;
 
-  // Slice 22: publish `tool_before` now that the registry knows the tool
-  // exists. Sinks see every call attempt regardless of how the call is
-  // subsequently gated; the publish is advisory so its outcome cannot
-  // change the dispatch path.
   if (ctx.bus != nullptr) {
-    [[maybe_unused]] auto before_outcome =
-        co_await ctx.bus->publish_advisory(hook::Event::tool_before,
-                                           build_before_payload(name, input_json, ctx, started_at));
+    auto before_decision = co_await ctx.bus->publish_blocking<hook::Event::tool_before>(
+        build_before_payload(name, input_json, ctx, started_at));
+    if (!before_decision) {
+      blocking_publish_error = std::move(before_decision).error();
+    } else {
+      hook_decision = std::move(*before_decision);
+      switch (hook_decision.kind) {
+        case hook::HookDecisionKind::proceed:
+          break;
+        case hook::HookDecisionKind::veto:
+          hook_blocked = true;
+          hook_reason = hook_decision_reason(hook_decision, "hook veto");
+          break;
+        case hook::HookDecisionKind::rewrite:
+          hook_reason = hook_decision_reason(hook_decision, "hook rewrite");
+          if (!hook_decision.rewritten_input_json.has_value()) {
+            hook_blocked = true;
+            hook_reason = "hook rewrite missing rewritten_input_json";
+          } else {
+            rewritten_input = std::move(*hook_decision.rewritten_input_json);
+            effective_input = *rewritten_input;
+            hook_rewrote = true;
+          }
+          break;
+        case hook::HookDecisionKind::require_approval:
+          hook_requires_approval = true;
+          hook_reason = hook_decision_reason(hook_decision, "hook require_approval");
+          break;
+      }
+    }
   }
 
   // Compute the dispatch result inside an inner scope so the
@@ -255,11 +341,42 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
   // the bottom" case so static analysis sees no uninitialised path.
   core::Result<Output> result = std::unexpected(core::Error::internal("dispatch did not produce a result"));
   std::optional<permission::AuditMetadataUpdate> audit_metadata_update;
-  {
-    auto path_resolution = detail::pre_resolve_tool_path(name, input_json, ctx);
-    const auto decision = ctx.rules.evaluate(name, input_json, entry.def.required_capabilities, ctx.mode);
+  if (blocking_publish_error.has_value()) {
+    result = std::unexpected(std::move(*blocking_publish_error).with("tool", std::string{name}));
+  } else if (hook_blocked) {
+    const auto metadata_json =
+        detail::with_hook_decision_metadata("{}", hook_decision.trace, input_hash_hex(input_json), std::nullopt);
+    auto event = build_event(name, effective_input, hook_blocked_decision(hook_reason), ctx, metadata_json);
+    event.outcome = permission::AuditOutcome::blocked_by_hook;
 
-    auto event = build_event(name, input_json, decision, ctx, std::move(path_resolution.metadata_json));
+    if (auto recorded = co_await ctx.audit.record(std::move(event)); !recorded) {
+      result = std::unexpected(std::move(recorded).error());
+    } else {
+      result =
+          std::unexpected(hook_decision.kind == hook::HookDecisionKind::rewrite ? hook_rewrite_error(name, hook_reason)
+                                                                                : hook_veto_error(name, hook_reason));
+    }
+  } else {
+    auto path_resolution = detail::pre_resolve_tool_path(name, effective_input, ctx);
+    auto decision = ctx.rules.evaluate(name, effective_input, entry.def.required_capabilities, ctx.mode);
+    if (hook_requires_approval) {
+      decision = require_approval_decision(std::move(decision), hook_decision, ctx.now);
+    }
+
+    auto metadata_json = std::move(path_resolution.metadata_json);
+    if (hook_rewrote) {
+      metadata_json = detail::with_hook_decision_metadata(metadata_json,
+                                                          hook_decision.trace,
+                                                          input_hash_hex(input_json),
+                                                          input_hash_hex(effective_input));
+    } else if (!hook_decision.trace.empty()) {
+      metadata_json = detail::with_hook_decision_metadata(metadata_json, hook_decision.trace);
+    }
+
+    auto event = build_event(name, effective_input, decision, ctx, std::move(metadata_json));
+    if (hook_rewrote && decision.verdict == permission::Verdict::allow) {
+      event.outcome = permission::AuditOutcome::rewritten;
+    }
 
     // Slice 21: when the verdict is `ask` AND the caller supplied both an
     // approval broker and a candidate token, consult the broker BEFORE
@@ -270,7 +387,7 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
     const bool broker_consulted = !path_resolution.error.has_value() && decision.verdict == permission::Verdict::ask &&
                                   ctx.approval_broker != nullptr && ctx.approval_token != nullptr;
     if (broker_consulted) {
-      auto checked = ctx.approval_broker->check(*ctx.approval_token, name, input_json, ctx.identity, ctx.now);
+      auto checked = ctx.approval_broker->check(*ctx.approval_token, name, effective_input, ctx.identity, ctx.now);
       if (checked) {
         event.outcome = permission::AuditOutcome::approved;
       } else {
@@ -309,7 +426,7 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
       if (handler_about_to_run && ctx.bus != nullptr) {
         [[maybe_unused]] auto dispatched_outcome = co_await ctx.bus->publish_advisory(
             hook::Event::tool_dispatched,
-            build_dispatched_payload(name, input_json, ctx, started_at, decision.verdict));
+            build_dispatched_payload(name, effective_input, ctx, started_at, decision.verdict));
       }
 
       switch (decision.verdict) {
@@ -324,7 +441,7 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
           } else if (broker_consulted) {
             // Broker accepted — run handler. The audit row already records
             // `approved`.
-            result = co_await entry.handler(input_json, ctx);
+            result = co_await entry.handler(effective_input, ctx);
           } else {
             result = std::unexpected(core::Error::permission_denied("tool requires approval")
                                          .with("tool", std::string{name})
@@ -335,7 +452,7 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
           }
           break;
         case permission::Verdict::allow:
-          result = co_await entry.handler(input_json, ctx);
+          result = co_await entry.handler(effective_input, ctx);
           break;
       }
     }
@@ -362,11 +479,11 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
     if (!result) {
       [[maybe_unused]] auto error_outcome = co_await ctx.bus->publish_advisory(
           hook::Event::tool_error,
-          build_error_payload(name, input_json, ctx, started_at, finished_at, result.error()));
+          build_error_payload(name, effective_input, ctx, started_at, finished_at, result.error()));
     }
-    [[maybe_unused]] auto after_outcome =
-        co_await ctx.bus->publish_advisory(hook::Event::tool_after,
-                                           build_after_payload(name, input_json, ctx, started_at, finished_at, result));
+    [[maybe_unused]] auto after_outcome = co_await ctx.bus->publish_advisory(
+        hook::Event::tool_after,
+        build_after_payload(name, effective_input, ctx, started_at, finished_at, result));
   }
 
   co_return result;

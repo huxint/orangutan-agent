@@ -220,10 +220,11 @@ implicitly via the capability list.
   `ReadTextSingleflightStats` exposing leader/follower/completion/error
   counters and current table size. Scheduler-level `(tool_name,
   input_hash)` singleflight still lands with the future scheduler.
-- **`publish_blocking` consumption.** The scheduler is the first consumer
-  of `hook::Bus::publish_blocking` (tracked in the tracker's 2026-05-18
-  row) for `permission_ask_rendered` rendering. The advisory hook bus
-  stays for fire-and-forget sinks.
+- **`publish_blocking` consumption.** Direct `Registry::dispatch` is now
+  the first consumer for `tool_before`. The scheduler remains responsible
+  for future batched dispatch, per-call timeout enforcement, and
+  `permission_ask_rendered` rendering once the operator-prompt sink lands.
+  The advisory hook bus stays for fire-and-forget sinks.
 
 ## Scope (v2)
 
@@ -306,7 +307,8 @@ implicitly via the capability list.
   use `core::Time` (steady clock) for TTL reaping so they are unaffected
   by wall-clock skew.
 - [`../design-docs/permissions-and-hooks.md`](../design-docs/permissions-and-hooks.md)
-  — `publish_blocking` consumption is the scheduler's, not each tool's.
+  — direct dispatch consumes `tool_before` blocking decisions; the scheduler
+  consumes the same contract later for batched calls and timeout policy.
 - [`0011-file-view-and-caching.md`](0011-file-view-and-caching.md) —
   consumes the per-path lock for synchronous cache invalidation; consumes
   `BoundedCache` for the line-offset index and regex cache.
@@ -320,8 +322,8 @@ implicitly via the capability list.
   usage metadata enrichment; the scheduler must preserve that same-row update
   invariant for parallel calls.
 - [`0015-blocking-hook-decisions.md`](0015-blocking-hook-decisions.md)
-  — the scheduler is the first consumer of `publish_blocking`;
-  per-call timeout enforcement covers the blocking-hook timeout too.
+  — slice 91 ships the direct-dispatch `tool_before` consumer; scheduler
+  per-call timeout enforcement covers the remaining blocking-hook timeout.
 - [`0017-fake-provider-first-agent-loop.md`](0017-fake-provider-first-agent-loop.md)
   — scheduler tests piggyback on the fake-provider harness: a
   fake provider emits a multi-`tool_use` response, the scheduler
