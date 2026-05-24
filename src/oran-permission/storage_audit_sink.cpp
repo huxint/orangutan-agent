@@ -19,6 +19,7 @@ StorageAuditSink::StorageAuditSink(storage::AuditRepository& repository) noexcep
 
 async::Awaitable<core::Result<void>> StorageAuditSink::record(AuditEvent event) {
   storage::AppendAuditEventRequest request{
+      .event_kind = std::move(event.event_kind),
       .scope_key = std::move(event.scope_key),
       .agent_key = std::move(event.agent_key),
       .tool_name = std::move(event.tool_name),
@@ -42,6 +43,7 @@ async::Awaitable<core::Result<void>> StorageAuditSink::record(AuditEvent event) 
 
 async::Awaitable<core::Result<void>> StorageAuditSink::update_metadata(AuditMetadataUpdate update) {
   storage::UpdateAuditEventMetadataRequest request{
+      .event_kind = std::move(update.event_kind),
       .scope_key = std::move(update.scope_key),
       .agent_key = std::move(update.agent_key),
       .tool_name = std::move(update.tool_name),

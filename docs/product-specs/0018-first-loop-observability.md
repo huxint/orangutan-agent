@@ -79,15 +79,19 @@ makes the existing audit rows joinable. Nothing else.
   the storage boundary. Slice 79 adds `core::TurnId`,
   `audit_events.parent_turn_id` as audit DB migration version 3, and typed
   `parent_turn_id` fields on storage/permission audit requests and records.
+  Slice 93 adds `audit_events.event_kind` as audit DB migration version 4 so
+  ordinary permission decisions and `hook_publish` observability rows can share
+  the same table and parent-turn cause chain without overloading metadata.
   The repository covers append/get/list/count, audit-v1-to-trace-v2/v3
   upgrade, and validation; `agent::Loop` now uses it for terminal-success rows,
   skips it when `TraceContext::enabled=false`, writes cancelled rows for
   provider/tool parent cancellation, writes ordinary provider/loop-boundary
   error rows, and writes iteration-cap error rows when
   `LoopOptions::max_iterations` is exhausted. `bootstrap::run` now constructs
-  the assembly-owned `TraceRepository` from `config.trace().enabled`. Hook
-  publish rows, the CLI inspector, and the binary handoff that threads the
-  assembly repository into `RunTurnInputs::trace` remain downstream.
+  the assembly-owned `TraceRepository` from `config.trace().enabled`. Slice 93
+  writes direct-dispatch blocking `tool_before` hook-publish rows when the
+  dispatch context carries a parent turn id. The binary handoff that threads
+  the assembly repository into `RunTurnInputs::trace` remains downstream.
   ```sql
   CREATE TABLE trace_turns (
     turn_id           BLOB PRIMARY KEY,             -- 16-byte UUID
@@ -120,8 +124,8 @@ makes the existing audit rows joinable. Nothing else.
   SQL ships as audit DB migration version 2 under `migrations/audit/` via the
   existing `#embed` pattern. **Status (slice 79):** shipped as
   `storage::built_in_trace_migrations()`, intentionally equivalent to the
-  complete `storage::built_in_audit_migrations()` set, now including version 3
-  for `audit_events.parent_turn_id`.
+  complete `storage::built_in_audit_migrations()` set, now including version 4
+  for `audit_events.event_kind`.
 - **`oran-core::TurnId`** — 16-byte UUID type (existing pattern; new
   alias if no equivalent exists). Generated at turn start; passed
   through every dispatch context, every audit event, every hook
@@ -140,7 +144,14 @@ makes the existing audit rows joinable. Nothing else.
   appended to the existing `audit_events` table with a
   `event_kind=hook_publish` row. The row carries the same
   `parent_turn_id`, lets cause-chain queries find every hook that
-  fired during a turn.
+  fired during a turn. **Status (slice 93):** direct
+  `tool::Registry::dispatch` now records the v1 blocking
+  `tool_before` publish outcome when `DispatchContext::parent_turn_id`
+  is set and the blocking bus consulted at least one sink. The
+  persisted row uses `event_kind=hook_publish`, carries the same
+  parent turn id as the permission decision, and stores
+  `metadata_json.event`, `sink_id`, `decision_kind`, `reason`,
+  optional `elapsed_ms` / `error`, and `hook_decisions[]`.
 - **`agent::Loop::TurnContext`** — the loop's per-turn carrier that
   threads `TurnId`, `parent_turn_id`, identity, route, cancellation
   slot, and stable service refs through every callsite. The
@@ -219,10 +230,11 @@ makes the existing audit rows joinable. Nothing else.
   renders both blocks to stdout before exiting `0`. The inspector returns
   `Error::not_found` for a missing audit DB and for an unknown turn id, and
   forwards SIGINT/SIGTERM through the existing `SignalScope` so it shares the
-  `--audit-init` cancellation contract. Hook-publish rows are still
-  downstream, so the inspector's per-turn rendering currently omits the
-  AC5 `hook_publish` block; that block fills in once spec-0015/0018 add the
-  rows.
+  `--audit-init` cancellation contract. Slice 93 adds
+  `event_kind=hook_publish` rows to the same `list_events_for_turn`
+  join and the inspector's audit-row output now prints
+  `kind=<event_kind>`, so operators can tell hook publish rows from
+  ordinary permission decisions in deterministic `id ASC` order.
 
 ## Scope (v1.1)
 
@@ -305,7 +317,12 @@ makes the existing audit rows joinable. Nothing else.
    (spec 0015) appends a `hook_publish` audit row with
    `parent_turn_id` matching the trace row; the row's
    `context.decision_kind='veto'` and `context.sink_id='<id>'` so
-   the cause-chain shows *which sink* vetoed.
+   the cause-chain shows *which sink* vetoed. **Status (slice 93):**
+   shipped for direct dispatch. A traced blocking `tool_before` publish writes
+   a `hook_publish` row before the permission decision row; storage tests cover
+   audit schema version 4, event-kind filtering, and mixed
+   `list_events_for_turn` ordering, and tool tests cover the joinable veto row
+   with sink trace metadata.
 6. **Token / cost rollup.** A turn whose provider response carries
    `Usage = { input_tokens: 1500, output_tokens: 200,
    cache_read_tokens: 4096, cost_estimate: 0.012 }` writes the
@@ -339,17 +356,17 @@ makes the existing audit rows joinable. Nothing else.
     the trace row + every joined audit row + every joined
     `hook_publish` row in deterministic order; exit code 0.
     Unknown `<turn_id>` exits non-zero with `Error::not_found`.
-    **Status (slice 88):** shipped for the trace row + joined audit rows.
+    **Status (slice 93):** shipped for the trace row + joined audit rows,
+    including `hook_publish` rows.
     `oran-bootstrap` parses `--trace <hex>` / `--trace=<hex>` (32-char
     lowercase hex matching the storage BLOB round-trip), uses the new
     `AuditRepository::list_events_for_turn(TurnId, limit)` to join audit
     rows ordered `id ASC` (preserving the original spec-0017 `tool_use`
     order), and renders the trace turn + audit rows in `--explain-rules`-
     style lines. Unknown turn id returns `Error::not_found`; missing
-    audit DB returns `Error::not_found` with a path-pointing message.
-    The `hook_publish` portion of the inspector waits on the spec
-    -0015/0018 hook-publish row writer (still tracked under spec 0018
-    follow-ups).
+    audit DB returns `Error::not_found` with a path-pointing message. Slice 93
+    adds `kind=<event_kind>` to each audit row line so the joined output is
+    readable once hook-publish rows are present.
 11. **Schema migration.** Migrating an existing `audit.db` from
     schema 1 to schema with the trace tables succeeds idempotently;
     re-running the migration is a no-op. Pinned by a migration
@@ -436,10 +453,11 @@ makes the existing audit rows joinable. Nothing else.
 xmake build oran-storage oran-agent
 xmake run test-storage                        # trace_turns migration + insert + query
 xmake run test-agent                          # trace rows joined to spec 0017 scenarios
+xmake run test-tool                           # direct tool_before hook_publish rows
+xmake run test-bootstrap                      # --trace inspector output over mixed rows
 xmake build bench-oran-storage
 xmake run bench-oran-storage trace_turn_insert
 xmake run orangutan -- --trace <turn-id>      # CLI inspector
-xmake run orangutan -- --trace-export jsonl   # v1.1 surface
 ```
 
 ## Out-of-Band Cross-Cuts

@@ -45,9 +45,10 @@ in what order.
 
 ## Scope (v1)
 
-> **Status (slice 92, 2026-05-25):** the bus surface, the
-> `tool_before` dispatch consumer, and the configured blocking-timeout
-> policy are shipped.
+> **Status (slice 93, 2026-05-25):** the bus surface, the
+> `tool_before` dispatch consumer, the configured blocking-timeout
+> policy, and traced direct-dispatch `hook_publish` audit rows are
+> shipped.
 > `<oran/hook/decision.hpp>` exports `HookDecisionKind { proceed, veto,
 > rewrite, require_approval }` and `HookDecision { kind, reason,
 > optional<string> rewritten_input_json, optional<core::Time>
@@ -84,9 +85,10 @@ in what order.
 > also threads `config.hooks.timeout_ms` through `RuntimeAssembly` into
 > the assembly-owned `hook::Bus` and records timeout decisions in
 > `metadata_json.hook_decisions[].elapsed_ms`.
-> `test-tool` now reports 173 cases / 1739 assertions. The v1 first
-> user-visible sink (`permission_ask_rendered` owned by `oran-cli`) and
-> the spec-0018 AC5 `hook_publish` audit-row writer remain downstream.
+> `test-tool` now reports 173 cases / 1739 assertions. Slice 93 adds
+> the spec-0018 AC5 direct-dispatch `hook_publish` audit-row writer for
+> traced blocking `tool_before` publishes; the v1 first user-visible sink
+> (`permission_ask_rendered` owned by `oran-cli`) remains downstream.
 
 The MVP is the *minimum* surface needed by the agent loop's approval
 render flow — the first real consumer. Everything else that wants a
@@ -292,8 +294,9 @@ blocking hook waits for v1.1.
    `core::Error` or throwing surfaces as `HookDecision{ veto,
    reason="hook_error: <message> [sink=<id>]" }`; direct dispatch records
    `outcome=blocked_by_hook` and writes the reason inside
-   `metadata_json.hook_decisions`. A dedicated `context.error` field can
-   still be added with the future `hook_publish` audit-row writer.
+   `metadata_json.hook_decisions`. Slice 93's direct-dispatch
+   `hook_publish` row also mirrors hook-error reasons into
+   `metadata_json.error` for the joined trace/audit view.
 8. **Advisory unchanged.** Existing advisory publishes
    (`tool_after`, `iteration_end`, etc.) maintain their
    `publish_advisory` contract — sinks observe, no decision is
@@ -398,9 +401,8 @@ xmake run orangutan -- --explain-rules  # rule-side unchanged; hook bindings sur
   the design-doc edit lands in the same slice as v1.
 - `docs/design-docs/tool-runtime.md` "Permission Ordering" updates to
   the seven-step canonical order.
-- `docs/exec-plans/tech-debt-tracker.md` — the 2026-05-18 hook row now
-  tracks only the operator-prompt sink, the `hook_publish` audit-row
-  writer, and external sink implementations.
+- `docs/exec-plans/tech-debt-tracker.md` — after slice 93, the
+  2026-05-18 hook row tracks only the operator-prompt sink.
 - `docs/SECURITY.md` — gains a "Hook-driven veto" subsection citing
   spec 0015 once v1 ships, so the workspace-confinement claim (spec
   0013) and the hook-veto claim sit side-by-side.

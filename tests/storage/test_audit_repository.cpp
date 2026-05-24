@@ -134,13 +134,13 @@ TEST_CASE("AuditRepository::migrate applies the audit schema once", "[unit][stor
     auto first = co_await repo.migrate();
     REQUIRE(first.has_value());
     REQUIRE(first->previous_version == 0);
-    REQUIRE(first->current_version == 3);
-    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3});
+    REQUIRE(first->current_version == 4);
+    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3, 4});
 
     auto second = co_await repo.migrate();
     REQUIRE(second.has_value());
-    REQUIRE(second->previous_version == 3);
-    REQUIRE(second->current_version == 3);
+    REQUIRE(second->previous_version == 4);
+    REQUIRE(second->current_version == 4);
     REQUIRE(second->applied_versions.empty());
   });
 }
@@ -185,6 +185,7 @@ TEST_CASE("AuditRepository append_event round-trips a typical decision row", "[u
     auto appended = co_await repo.append_event(request);
     REQUIRE(appended.has_value());
     REQUIRE(appended->id > 0);
+    REQUIRE(appended->event_kind == "permission_decision");
     REQUIRE(appended->scope_key == "scope-A");
     REQUIRE(appended->tool_name == "file.read");
     REQUIRE(appended->outcome == "allow");
@@ -199,6 +200,7 @@ TEST_CASE("AuditRepository append_event round-trips a typical decision row", "[u
     REQUIRE(listed.has_value());
     REQUIRE(listed->size() == 1);
     REQUIRE((*listed)[0].id == appended->id);
+    REQUIRE((*listed)[0].event_kind == "permission_decision");
     REQUIRE((*listed)[0].tool_name == "file.read");
     REQUIRE_FALSE((*listed)[0].parent_turn_id.has_value());
 
@@ -344,13 +346,19 @@ TEST_CASE("AuditRepository list_events orders newest first and applies filters",
     REQUIRE(a3.has_value());
     auto a4 = co_await repo.append_event(make_request("scope-B", "file.read", "allow"));
     REQUIRE(a4.has_value());
+    auto hook_publish = make_request("scope-A", "file.read", "allow");
+    hook_publish.event_kind = "hook_publish";
+    hook_publish.metadata_json = R"json({"event":"tool_before","sink_id":"policy","decision_kind":"veto"})json";
+    auto a5 = co_await repo.append_event(std::move(hook_publish));
+    REQUIRE(a5.has_value());
 
     auto all = co_await repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-A"});
     REQUIRE(all.has_value());
-    REQUIRE(all->size() == 3);
-    REQUIRE((*all)[0].tool_name == "shell.exec");
-    REQUIRE((*all)[1].tool_name == "file.write");
-    REQUIRE((*all)[2].tool_name == "file.read");
+    REQUIRE(all->size() == 4);
+    REQUIRE((*all)[0].event_kind == "hook_publish");
+    REQUIRE((*all)[1].tool_name == "shell.exec");
+    REQUIRE((*all)[2].tool_name == "file.write");
+    REQUIRE((*all)[3].tool_name == "file.read");
 
     auto only_deny =
         co_await repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-A", .outcome = "deny"});
@@ -361,16 +369,24 @@ TEST_CASE("AuditRepository list_events orders newest first and applies filters",
     auto only_file_read =
         co_await repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-A", .tool_name = "file.read"});
     REQUIRE(only_file_read.has_value());
-    REQUIRE(only_file_read->size() == 1);
+    REQUIRE(only_file_read->size() == 2);
+
+    auto only_hook_publish = co_await repo.list_events(
+        storage::ListAuditEventsOptions{.scope_key = "scope-A", .event_kind = "hook_publish"});
+    REQUIRE(only_hook_publish.has_value());
+    REQUIRE(only_hook_publish->size() == 1);
+    REQUIRE((*only_hook_publish)[0].id == a5->id);
+    REQUIRE((*only_hook_publish)[0].metadata_json ==
+            R"json({"event":"tool_before","sink_id":"policy","decision_kind":"veto"})json");
 
     auto limited = co_await repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-A", .limit = 1});
     REQUIRE(limited.has_value());
     REQUIRE(limited->size() == 1);
-    REQUIRE((*limited)[0].tool_name == "shell.exec");
+    REQUIRE((*limited)[0].event_kind == "hook_publish");
 
     auto count_a = co_await repo.count_events("scope-A");
     REQUIRE(count_a.has_value());
-    REQUIRE(*count_a == 3);
+    REQUIRE(*count_a == 4);
     auto count_b = co_await repo.count_events("scope-B");
     REQUIRE(count_b.has_value());
     REQUIRE(*count_b == 1);
@@ -394,6 +410,12 @@ TEST_CASE("AuditRepository validates required fields", "[unit][storage][audit_re
     });
     REQUIRE_FALSE(missing_scope.has_value());
     REQUIRE(missing_scope.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto missing_event_kind = make_request("scope-A", "file.read", "allow");
+    missing_event_kind.event_kind = "";
+    auto missing_event_kind_result = co_await repo.append_event(std::move(missing_event_kind));
+    REQUIRE_FALSE(missing_event_kind_result.has_value());
+    REQUIRE(missing_event_kind_result.error().kind() == core::ErrorKind::invalid_argument);
 
     auto missing_metadata = co_await repo.append_event(storage::AppendAuditEventRequest{
         .scope_key = "scope-A",
@@ -470,6 +492,7 @@ BEGIN;
 ALTER TABLE audit_events RENAME TO audit_events_strict;
 CREATE TABLE audit_events(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_kind TEXT NOT NULL DEFAULT 'permission_decision',
   scope_key TEXT NOT NULL,
   agent_key TEXT NOT NULL,
   tool_name TEXT NOT NULL,
@@ -538,7 +561,9 @@ TEST_CASE("AuditRepository::list_events_for_turn preserves dispatch order and ig
     REQUIRE(first_row.has_value());
 
     auto second = make_request("scope-A", "file.write", "allow");
+    second.event_kind = "hook_publish";
     second.parent_turn_id = turn_a;
+    second.metadata_json = R"json({"event":"tool_before","sink_id":"policy","decision_kind":"proceed"})json";
     auto second_row = co_await repo.append_event(std::move(second));
     REQUIRE(second_row.has_value());
 
@@ -562,6 +587,9 @@ TEST_CASE("AuditRepository::list_events_for_turn preserves dispatch order and ig
     REQUIRE((*joined)[0].id == first_row->id);
     REQUIRE((*joined)[1].id == second_row->id);
     REQUIRE((*joined)[2].id == third_row->id);
+    REQUIRE((*joined)[0].event_kind == "permission_decision");
+    REQUIRE((*joined)[1].event_kind == "hook_publish");
+    REQUIRE((*joined)[2].event_kind == "permission_decision");
     REQUIRE((*joined)[0].tool_name == "file.read");
     REQUIRE((*joined)[1].tool_name == "file.write");
     REQUIRE((*joined)[2].tool_name == "directory.list");

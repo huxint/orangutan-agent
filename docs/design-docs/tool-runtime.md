@@ -143,6 +143,13 @@ enum class Capability {
 > assembly-owned `hook::Bus`, so a blocking sink that exceeds the
 > per-sink deadline is recorded as `blocked_by_hook` with
 > `reason=hook_timeout` and `metadata_json.hook_decisions[].elapsed_ms`.
+> Slice 93 writes a second, joinable audit row for traced blocking
+> `tool_before` publishes before the permission-decision row:
+> `event_kind=hook_publish`, the same `parent_turn_id`, and
+> `metadata_json` fields for `event`, `sink_id`, `decision_kind`,
+> `reason`, optional `elapsed_ms` / `error`, and the full
+> `hook_decisions[]` trace. The ordinary permission row remains the
+> durable permission decision and keeps its existing outcome semantics.
 > Capability-gated runtime services (`tool::Runtime` accessor surface)
 > and the operator-prompt sink stay on future slices.
 > Slice 29 (2026-05-20) extends the built-in catalog with

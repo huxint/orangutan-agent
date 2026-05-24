@@ -303,7 +303,7 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 
 ## Hook Bus
 
-> **Bus status (2026-05-25, slice 92):** the foundation
+> **Bus status (2026-05-25, slice 93):** the foundation
 > ships as `oran-hook`. `hook::Event` enumerates the 41
 > lifecycle events listed below; `hook::Mode { advisory,
 > blocking }` plus `default_mode(Event)` annotates each
@@ -426,10 +426,10 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > `permission::AuditOutcome::blocked_by_hook` / `rewritten`
 > enumerators. Slice 92 adds `hook::BusOptions` and
 > `HookDecisionTrace::elapsed` for blocking timeouts, plus
-> bootstrap/config wiring for `hooks.timeout_ms`. The
-> spec-0018 AC5 `hook_publish` audit-row writer and the first
-> user-visible operator-prompt `permission_ask_rendered` sink
-> owned by `oran-cli` remain downstream.
+> bootstrap/config wiring for `hooks.timeout_ms`. Slice 93 adds
+> joinable `event_kind=hook_publish` audit rows for traced blocking
+> `tool_before` publishes. The first user-visible operator-prompt
+> `permission_ask_rendered` sink owned by `oran-cli` remains downstream.
 
 ### Surface
 

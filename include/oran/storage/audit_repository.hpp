@@ -52,6 +52,10 @@ class Pool;
 /// rows often do not compute it). `metadata_json` defaults to the
 /// empty object so callers may simply leave it default-constructed.
 struct AppendAuditEventRequest {
+  /// Row discriminator. Ordinary permission decision rows use the default;
+  /// spec-0018 hook publish rows use `hook_publish` and put their per-sink
+  /// decision details in `metadata_json`.
+  std::string event_kind{"permission_decision"};
   std::string scope_key;
   std::string agent_key;
   std::string tool_name;
@@ -89,6 +93,7 @@ struct AppendAuditEventRequest {
 };
 
 struct UpdateAuditEventMetadataRequest {
+  std::string event_kind{"permission_decision"};
   std::string scope_key;
   std::string agent_key;
   std::string tool_name;
@@ -107,6 +112,7 @@ struct UpdateAuditEventMetadataRequest {
 
 struct AuditEventRecord {
   std::int64_t id{};
+  std::string event_kind;
   std::string scope_key;
   std::string agent_key;
   std::string tool_name;
@@ -131,6 +137,7 @@ struct ListAuditEventsOptions {
   /// Optional secondary filters. Empty means "no filter".
   std::string agent_key{};
   std::string tool_name{};
+  std::string event_kind{};
   std::string outcome{};
   std::size_t limit{50};
 };

@@ -4,7 +4,7 @@
 automation, audit logs, and configuration metadata. It owns the SQLite dependency and
 does not expose `sqlite3.h` from public headers.
 
-> **Storage status (2026-05-24):** `oran-storage` ships `Connection`, `Statement`,
+> **Storage status (2026-05-25):** `oran-storage` ships `Connection`, `Statement`,
 > typed binding/stepping/column readers (including BLOB bind/read for trace ids),
 > WAL + foreign-key setup, a simple `query`
 > helper, the synchronous `run_migrations` runner plus SQL-file migration
@@ -17,12 +17,17 @@ does not expose `sqlite3.h` from public headers.
 > `core::Role` at the API boundary). `AuditRepository` persists permission
 > decision rows in `audit_events` with append/list/count plus slice-67
 > `update_event_metadata` so post-result usage metadata can enrich the same
-> audit row without appending a second decision. Slice 78 adds
+> audit row without appending a second decision. Slice 93 adds the
+> `audit_events.event_kind` discriminator (audit DB version 4) so ordinary
+> permission rows keep `event_kind=permission_decision` while spec-0018
+> hook observability rows use `event_kind=hook_publish`; `AuditRepository`
+> exposes the field on append/update/list records and can filter
+> `list_events` by it. Slice 78 adds
 > `TraceRepository`, the spec-0018 `trace_turns` schema, and
 > `built_in_trace_migrations()` for redacted per-turn rows keyed by 16-byte BLOB
 > ids. Slice 79 adds the audit DB version-3 `audit_events.parent_turn_id`
-> column and the shared `core::TurnId` / `TraceId` value shape so tool audit
-> rows can join back to trace rows. Slice 80 adds the first agent-loop writer:
+> column and the shared `core::TurnId` / `TraceId` value shape so tool and
+> hook-publish audit rows can join back to trace rows. Slice 80 adds the first agent-loop writer:
 > terminal-success fake-provider turns can append one body-free `trace_turns`
 > row through `TraceRepository` before returning to the caller. Backups and the
 > memory / automation repositories are future slices.
@@ -509,15 +514,17 @@ DDL itself lives in the migration file.
 ## Audit Repository
 
 `AuditRepository` is the storage-backed half of the permission audit pipeline.
-It stores one row per permission decision in `audit.db`, partitioned by
-`scope_key` and searchable by `agent_key`, `tool_name`, and `outcome`. The
-permission layer owns the enum vocabulary and sink abstraction; storage owns the
-SQLite schema and typed repository operations.
+It stores permission decisions and hook-publish observability rows in
+`audit.db`, partitioned by `scope_key` and searchable by `agent_key`,
+`tool_name`, `event_kind`, and `outcome`. The permission layer owns the enum
+vocabulary and sink abstraction; storage owns the SQLite schema and typed
+repository operations.
 
 ```cpp
 namespace orangutan::storage {
 
 struct AppendAuditEventRequest {
+  std::string event_kind{"permission_decision"};
   std::string scope_key;
   std::string agent_key;
   std::string tool_name;
@@ -531,6 +538,7 @@ struct AppendAuditEventRequest {
 };
 
 struct UpdateAuditEventMetadataRequest {
+  std::string event_kind{"permission_decision"};
   std::string scope_key;
   std::string agent_key;
   std::string tool_name;
@@ -552,6 +560,8 @@ class AuditRepository {
   update_event_metadata(UpdateAuditEventMetadataRequest);
   async::Awaitable<core::Result<std::vector<AuditEventRecord>>>
   list_events(ListAuditEventsOptions);
+  async::Awaitable<core::Result<std::vector<AuditEventRecord>>>
+  list_events_for_turn(core::TurnId parent_turn_id, std::size_t limit = 200);
   async::Awaitable<core::Result<std::int64_t>>
   count_events(std::string scope_key);
 };
@@ -561,11 +571,13 @@ class AuditRepository {
 
 Slice 67 adds `update_event_metadata` for post-result audit enrichment. Slice
 79 adds optional `parent_turn_id` to append records, listed records, and
-metadata updates. The update matches by the same event identity fields as the
-append path (`scope_key`, `agent_key`, `tool_name`, `identity`, optional input
-hash, optional parent turn id) plus the previously stored metadata JSON, then
-updates the newest matching row. This lets `tool::Registry::dispatch` record
-the permission decision before the handler runs and later add
+metadata updates. Slice 93 adds `event_kind` to append/update/list records and
+to the update match key, so enrichment for ordinary permission rows cannot
+clobber a same-tool `hook_publish` row. The update matches by the same event
+identity fields as the append path (`event_kind`, `scope_key`, `agent_key`,
+`tool_name`, `identity`, optional input hash, optional parent turn id) plus the
+previously stored metadata JSON, then updates the newest matching row. This lets
+`tool::Registry::dispatch` record the permission decision before the handler runs and later add
 `metadata_json.usage` after a successful, capped tool result without weakening
 the durable decision audit or clobbering a same-tool call from another turn.
 
@@ -584,7 +596,11 @@ migration stream: version 1 creates `audit_events`, and version 2 adds
 `trace_turns` for spec 0018. Version 3 adds nullable
 `audit_events.parent_turn_id` as a 16-byte BLOB plus
 `idx_audit_events_parent_turn` so trace inspectors can join a turn row to its
-tool audit rows without scanning the whole audit table. Explicit
+tool audit rows without scanning the whole audit table. Version 4 adds
+`audit_events.event_kind TEXT NOT NULL DEFAULT 'permission_decision'` plus the
+`idx_audit_events_kind_parent_turn` partial index so hook-publish rows can share
+the same parent-turn cause chain without changing existing permission-decision
+payloads. Explicit
 `AuditRepositoryOptions::migrations_directory` still supplies a caller-owned
 migration set for tests and packaged layouts.
 

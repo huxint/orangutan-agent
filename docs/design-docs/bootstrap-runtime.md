@@ -121,6 +121,12 @@ No provider credentials are read and no agent runtime loop is started in this sl
 The runtime assembly opens the audit DB when audit is enabled so migrations, trace
 repository ownership, and audit sinks are ready before the future loop handoff.
 
+`orangutan --trace <turn-id>` is a bootstrap-owned one-shot inspector. It
+opens the workspace audit DB, runs the idempotent audit migration, loads the
+`trace_turns` row, then prints joined `audit_events` rows ordered by `id ASC`.
+Since slice 93 those audit lines include `kind=<event_kind>`, so mixed
+permission-decision and `hook_publish` rows are readable in the same output.
+
 ## Next Steps
 
 - Bind configured hook sinks to the assembly-owned bus once the hook sink models land.

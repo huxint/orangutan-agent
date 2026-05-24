@@ -70,6 +70,9 @@ enum class AuditOutcome : std::uint8_t {
 /// `storage::AppendAuditEventRequest` columns 1:1 so the storage
 /// adapter can build the request without translation.
 struct AuditEvent {
+  /// Row discriminator in `audit_events`. Ordinary tool permission rows use
+  /// the default; hook publish observability rows use `hook_publish`.
+  std::string event_kind{"permission_decision"};
   /// Optional caller-supplied timestamp. Storage adapters that stamp
   /// `created_at` from the database ignore this field; the in-memory
   /// `RecordingAuditSink` keeps it verbatim so tests can pin the
@@ -113,6 +116,7 @@ struct AuditEvent {
 /// this to add post-result metadata such as structured tool usage without
 /// appending a second permission-decision row.
 struct AuditMetadataUpdate {
+  std::string event_kind{"permission_decision"};
   std::string scope_key;
   std::string agent_key;
   std::string tool_name;

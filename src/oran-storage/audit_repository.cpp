@@ -27,10 +27,10 @@ namespace {
 
 constexpr std::string_view kAppendEventSql = R"sql(
 INSERT INTO audit_events(
-  scope_key, agent_key, tool_name, identity, verdict, outcome, reason,
+  event_kind, scope_key, agent_key, tool_name, identity, verdict, outcome, reason,
   input_hash_hex, parent_turn_id, metadata_json, created_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 RETURNING id, created_at
 )sql";
 
@@ -39,7 +39,7 @@ SELECT COUNT(*) FROM audit_events WHERE scope_key = ?
 )sql";
 
 constexpr std::string_view kListEventsForTurnSql = R"sql(
-SELECT id, scope_key, agent_key, tool_name, identity, verdict, outcome, reason,
+SELECT id, event_kind, scope_key, agent_key, tool_name, identity, verdict, outcome, reason,
   input_hash_hex, parent_turn_id, metadata_json, created_at
 FROM audit_events WHERE parent_turn_id = ?
 ORDER BY id ASC LIMIT ?
@@ -50,7 +50,8 @@ UPDATE audit_events
 SET metadata_json = ?
 WHERE id = (
   SELECT id FROM audit_events
-  WHERE scope_key = ?
+  WHERE event_kind = ?
+    AND scope_key = ?
     AND agent_key = ?
     AND tool_name = ?
     AND identity = ?
@@ -60,7 +61,7 @@ WHERE id = (
   ORDER BY id DESC
   LIMIT 1
 )
-RETURNING id, scope_key, agent_key, tool_name, identity, verdict, outcome,
+RETURNING id, event_kind, scope_key, agent_key, tool_name, identity, verdict, outcome,
   reason, input_hash_hex, parent_turn_id, metadata_json, created_at
 )sql";
 
@@ -69,6 +70,9 @@ RETURNING id, scope_key, agent_key, tool_name, identity, verdict, outcome,
 }
 
 [[nodiscard]] core::Result<void> validate_append_request(const AppendAuditEventRequest& request) {
+  if (request.event_kind.empty()) {
+    return std::unexpected(invalid_field("event_kind"));
+  }
   if (request.scope_key.empty()) {
     return std::unexpected(invalid_field("scope_key"));
   }
@@ -100,6 +104,9 @@ RETURNING id, scope_key, agent_key, tool_name, identity, verdict, outcome,
 }
 
 [[nodiscard]] core::Result<void> validate_update_request(const UpdateAuditEventMetadataRequest& request) {
+  if (request.event_kind.empty()) {
+    return std::unexpected(invalid_field("event_kind"));
+  }
   if (request.scope_key.empty()) {
     return std::unexpected(invalid_field("scope_key"));
   }
@@ -222,53 +229,58 @@ optional_turn_id(Statement& statement, int index, std::string_view field) {
   if (!id) {
     return std::unexpected(id.error().with("field", "id"));
   }
-  auto scope_key = required_text(statement, 1, "scope_key");
+  auto event_kind = required_text(statement, 1, "event_kind");
+  if (!event_kind) {
+    return std::unexpected(event_kind.error());
+  }
+  auto scope_key = required_text(statement, 2, "scope_key");
   if (!scope_key) {
     return std::unexpected(scope_key.error());
   }
-  auto agent_key = required_text(statement, 2, "agent_key");
+  auto agent_key = required_text(statement, 3, "agent_key");
   if (!agent_key) {
     return std::unexpected(agent_key.error());
   }
-  auto tool_name = required_text(statement, 3, "tool_name");
+  auto tool_name = required_text(statement, 4, "tool_name");
   if (!tool_name) {
     return std::unexpected(tool_name.error());
   }
-  auto identity = required_text(statement, 4, "identity");
+  auto identity = required_text(statement, 5, "identity");
   if (!identity) {
     return std::unexpected(identity.error());
   }
-  auto verdict = required_text(statement, 5, "verdict");
+  auto verdict = required_text(statement, 6, "verdict");
   if (!verdict) {
     return std::unexpected(verdict.error());
   }
-  auto outcome = required_text(statement, 6, "outcome");
+  auto outcome = required_text(statement, 7, "outcome");
   if (!outcome) {
     return std::unexpected(outcome.error());
   }
-  auto reason = required_text(statement, 7, "reason");
+  auto reason = required_text(statement, 8, "reason");
   if (!reason) {
     return std::unexpected(reason.error());
   }
-  auto input_hash = optional_text(statement, 8);
+  auto input_hash = optional_text(statement, 9);
   if (!input_hash) {
     return std::unexpected(input_hash.error());
   }
-  auto parent_turn_id = optional_turn_id(statement, 9, "parent_turn_id");
+  auto parent_turn_id = optional_turn_id(statement, 10, "parent_turn_id");
   if (!parent_turn_id) {
     return std::unexpected(parent_turn_id.error());
   }
-  auto metadata_json = required_text(statement, 10, "metadata_json");
+  auto metadata_json = required_text(statement, 11, "metadata_json");
   if (!metadata_json) {
     return std::unexpected(metadata_json.error());
   }
-  auto created_at = required_text(statement, 11, "created_at");
+  auto created_at = required_text(statement, 12, "created_at");
   if (!created_at) {
     return std::unexpected(created_at.error());
   }
 
   return AuditEventRecord{
       .id = *id,
+      .event_kind = std::move(*event_kind),
       .scope_key = std::move(*scope_key),
       .agent_key = std::move(*agent_key),
       .tool_name = std::move(*tool_name),
@@ -287,7 +299,7 @@ optional_turn_id(Statement& statement, int index, std::string_view field) {
 /// filters as bind parameters so re-used statement cache entries can hit
 /// for repeat callers with the same shape.
 [[nodiscard]] std::string build_list_sql(const ListAuditEventsOptions& options) {
-  std::string sql{"SELECT id, scope_key, agent_key, tool_name, identity, verdict, outcome, reason, "
+  std::string sql{"SELECT id, event_kind, scope_key, agent_key, tool_name, identity, verdict, outcome, reason, "
                   "input_hash_hex, parent_turn_id, metadata_json, created_at "
                   "FROM audit_events WHERE scope_key = ?"};
   if (!options.agent_key.empty()) {
@@ -295,6 +307,9 @@ optional_turn_id(Statement& statement, int index, std::string_view field) {
   }
   if (!options.tool_name.empty()) {
     sql += " AND tool_name = ?";
+  }
+  if (!options.event_kind.empty()) {
+    sql += " AND event_kind = ?";
   }
   if (!options.outcome.empty()) {
     sql += " AND outcome = ?";
@@ -345,40 +360,43 @@ async::Awaitable<core::Result<AuditEventRecord>> AuditRepository::append_event(A
   }
   auto& statement = cached->statement();
 
-  if (auto bound = statement.bind_text(1, request.scope_key); !bound) {
+  if (auto bound = statement.bind_text(1, request.event_kind); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = statement.bind_text(2, request.agent_key); !bound) {
+  if (auto bound = statement.bind_text(2, request.scope_key); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = statement.bind_text(3, request.tool_name); !bound) {
+  if (auto bound = statement.bind_text(3, request.agent_key); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = statement.bind_text(4, request.identity); !bound) {
+  if (auto bound = statement.bind_text(4, request.tool_name); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = statement.bind_text(5, request.verdict); !bound) {
+  if (auto bound = statement.bind_text(5, request.identity); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = statement.bind_text(6, request.outcome); !bound) {
+  if (auto bound = statement.bind_text(6, request.verdict); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = statement.bind_text(7, request.reason); !bound) {
+  if (auto bound = statement.bind_text(7, request.outcome); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(8, request.reason); !bound) {
     co_return std::unexpected(bound.error());
   }
   if (request.input_hash_hex.empty()) {
-    if (auto bound = statement.bind_null(8); !bound) {
+    if (auto bound = statement.bind_null(9); !bound) {
       co_return std::unexpected(bound.error());
     }
   } else {
-    if (auto bound = statement.bind_text(8, request.input_hash_hex); !bound) {
+    if (auto bound = statement.bind_text(9, request.input_hash_hex); !bound) {
       co_return std::unexpected(bound.error());
     }
   }
-  if (auto bound = bind_optional_turn_id(statement, 9, request.parent_turn_id); !bound) {
+  if (auto bound = bind_optional_turn_id(statement, 10, request.parent_turn_id); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = statement.bind_text(10, request.metadata_json); !bound) {
+  if (auto bound = statement.bind_text(11, request.metadata_json); !bound) {
     co_return std::unexpected(bound.error());
   }
 
@@ -404,6 +422,7 @@ async::Awaitable<core::Result<AuditEventRecord>> AuditRepository::append_event(A
 
   auto record = AuditEventRecord{
       .id = *id,
+      .event_kind = std::move(request.event_kind),
       .scope_key = std::move(request.scope_key),
       .agent_key = std::move(request.agent_key),
       .tool_name = std::move(request.tool_name),
@@ -442,28 +461,31 @@ AuditRepository::update_event_metadata(UpdateAuditEventMetadataRequest request) 
   if (auto bound = statement.bind_text(1, request.metadata_json); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = statement.bind_text(2, request.scope_key); !bound) {
+  if (auto bound = statement.bind_text(2, request.event_kind); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = statement.bind_text(3, request.agent_key); !bound) {
+  if (auto bound = statement.bind_text(3, request.scope_key); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = statement.bind_text(4, request.tool_name); !bound) {
+  if (auto bound = statement.bind_text(4, request.agent_key); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = statement.bind_text(5, request.identity); !bound) {
+  if (auto bound = statement.bind_text(5, request.tool_name); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = statement.bind_text(6, request.previous_metadata_json); !bound) {
+  if (auto bound = statement.bind_text(6, request.identity); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = statement.bind_text(7, request.input_hash_hex); !bound) {
+  if (auto bound = statement.bind_text(7, request.previous_metadata_json); !bound) {
     co_return std::unexpected(bound.error());
   }
   if (auto bound = statement.bind_text(8, request.input_hash_hex); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = bind_turn_id_match(statement, 9, 10, request.parent_turn_id); !bound) {
+  if (auto bound = statement.bind_text(9, request.input_hash_hex); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = bind_turn_id_match(statement, 10, 11, request.parent_turn_id); !bound) {
     co_return std::unexpected(bound.error());
   }
 
@@ -515,6 +537,11 @@ AuditRepository::list_events(ListAuditEventsOptions options) {
   }
   if (!options.tool_name.empty()) {
     if (auto bound = statement.bind_text(index++, options.tool_name); !bound) {
+      co_return std::unexpected(bound.error());
+    }
+  }
+  if (!options.event_kind.empty()) {
+    if (auto bound = statement.bind_text(index++, options.event_kind); !bound) {
       co_return std::unexpected(bound.error());
     }
   }

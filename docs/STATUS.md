@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 92 (`xmake run orangutan` reports slice 92)
+- **Slice:** 93 (`xmake run orangutan` reports slice 93)
 - **Last completed history:**
-  [`histories/2026-05/20260525-0203-hook-blocking-timeout-policy.md`](histories/2026-05/20260525-0203-hook-blocking-timeout-policy.md)
+  [`histories/2026-05/20260525-0331-hook-publish-audit-rows.md`](histories/2026-05/20260525-0331-hook-publish-audit-rows.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
@@ -18,7 +18,32 @@
   plan because they stayed under the existing spec-0015/0017/0018
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 92 closes
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 93 closes
+  spec-0018 AC5 for direct `tool_before` blocking publishes. The audit DB
+  migration stream now reaches version 4:
+  `src/oran-storage/migrations/audit/0004-audit-event-kind.sql` adds
+  `audit_events.event_kind TEXT NOT NULL DEFAULT 'permission_decision'` plus a
+  parent-turn index for hook rows. `storage::AppendAuditEventRequest`,
+  `UpdateAuditEventMetadataRequest`, `AuditEventRecord`, and
+  `ListAuditEventsOptions` expose the discriminator, and update-metadata
+  matching includes it so ordinary permission-row enrichment cannot clobber a
+  same-tool `hook_publish` row. `permission::AuditEvent` and
+  `AuditMetadataUpdate` carry the same field through `RecordingAuditSink` and
+  `StorageAuditSink`. `tool::Registry::dispatch` now writes an extra
+  `event_kind=hook_publish` audit row after a blocking `tool_before` publish
+  when `DispatchContext::parent_turn_id` is set and the bus returned consulted
+  sink traces; the row uses the same parent turn id and serializes
+  `metadata_json.event`, `sink_id`, `decision_kind`, `reason`, optional
+  `elapsed_ms` / `error`, and the full `hook_decisions[]` trace before the
+  existing permission-decision row is recorded. `orangutan --trace` already
+  joins the new row through `AuditRepository::list_events_for_turn`; its audit
+  line now prints `kind=<event_kind>` so operators can distinguish hook
+  publishes from permission decisions. Focused results: `test-storage` 72 cases
+  / 899 assertions, `test-permission` 89 / 426, `test-tool` 174 / 1769, and
+  `test-bootstrap` 57 / 226. Remaining spec-0015/0018 items are the v1
+  operator-prompt sink for `permission_ask_rendered` and the binary handoff
+  that drives `agent::Loop` from inside the `orangutan` binary once a real
+  provider adapter exists. Slice 92 closes
   spec-0015's direct-dispatch blocking timeout follow-up. `oran-config`
   now parses the top-level `hooks.timeout_ms` policy as a positive integer
   with a default of 2000 ms, `config.example.json` documents that default,
@@ -35,11 +60,7 @@
   audit row `outcome=blocked_by_hook`, and
   `metadata_json.hook_decisions[].elapsed_ms` persisted. Focused results:
   `test-config` 32 cases / 235 assertions, `test-hook` 30 / 207,
-  `test-bootstrap` 57 / 224, and `test-tool` 173 / 1739. Remaining
-  spec-0015/0018 items are the v1 operator-prompt sink for
-  `permission_ask_rendered`, the spec-0018 AC5 `hook_publish` audit-row writer,
-  and the binary handoff that drives `agent::Loop` from inside the `orangutan`
-  binary once a real provider adapter exists. Slice 91 consumes
+  `test-bootstrap` 57 / 224, and `test-tool` 173 / 1739. Slice 91 consumes
   spec-0015's blocking `tool_before` surface inside direct
   `tool::Registry::dispatch`: `<oran/hook/decision.hpp>` now carries
   `HookDecisionTrace { sink_id, kind, reason }` and
@@ -527,16 +548,16 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-core`: 69 cases / 450 assertions.
 - `oran-async`: 9 cases / 43 assertions.
 - `oran-io`: 49 cases / 286 assertions.
-- `oran-storage`: 72 cases / 886 assertions.
+- `oran-storage`: 72 cases / 899 assertions.
 - `oran-config`: 32 cases / 235 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 30 cases / 207 assertions.
-- `oran-tool`: 173 cases / 1739 assertions.
+- `oran-tool`: 174 cases / 1769 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 11 cases / 89 assertions.
 - `oran-agent`: 23 cases / 363 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
-- `oran-bootstrap`: 57 cases / 224 assertions.
+- `oran-bootstrap`: 57 cases / 226 assertions.
 
 ## Open Tech-Debt Rows
 
@@ -553,16 +574,17 @@ Closed entries do *not* live here — the tracker is canonical.
   the documented reference hardware (8-core / NVMe / native Linux);
   otherwise the gate fires on environmental drift, not real regressions.
 - 2026-05-18 — Hook bus blocking-policy follow-ups remain after slices 90,
-  91, and 92. Slice 90 shipped the publish surface
+  91, 92, and 93. Slice 90 shipped the publish surface
   (`Bus::publish_blocking<E>`, `HookDecision`,
   `EventTraits<E>` / `HasBlockingDecision<E>`, `Sink::handle_blocking`
   default). Slice 91 consumes `tool_before` inside direct
   `Registry::dispatch` with `AuditOutcome::blocked_by_hook` /
   `rewritten`, the canonical dispatch order, and
   `metadata_json.hook_decisions`. Slice 92 wires `hooks.timeout_ms` into
-  the assembly-owned hook bus and persists timeout `elapsed_ms`. Remaining:
-  the first operator-prompt sink for `permission_ask_rendered` and the
-  `hook_publish` audit-row writer that spec-0018 AC5 consumes.
+  the assembly-owned hook bus and persists timeout `elapsed_ms`. Slice 93
+  writes joinable `event_kind=hook_publish` audit rows for traced blocking
+  `tool_before` publishes. Remaining: the first operator-prompt sink for
+  `permission_ask_rendered`.
 - 2026-05-17 — `file.search` does not yet ship ripgrep-class optimisations
   (mmap, extension-based binary skip, multi-threaded walk).
   Adequate at slice 20 (~27 µs / 4-file tree) but 3-10× slower than a tuned

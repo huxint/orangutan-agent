@@ -37,6 +37,7 @@
 #include <oran/core/turn_id.hpp>
 #include <oran/hook.hpp>
 #include <oran/permission.hpp>
+#include <oran/storage.hpp>
 #include <oran/tool.hpp>
 
 #include "../test-helpers/run_async.hpp"
@@ -44,6 +45,7 @@
 namespace async = orangutan::async;
 namespace core = orangutan::core;
 namespace permission = orangutan::permission;
+namespace storage = orangutan::storage;
 namespace tool = orangutan::tool;
 namespace test = orangutan::tests;
 
@@ -68,6 +70,31 @@ public:
     std::ofstream out{path_, std::ios::binary};
     out.write(contents.data(), static_cast<std::streamsize>(contents.size()));
   }
+
+  [[nodiscard]] std::string string() const {
+    return path_.string();
+  }
+
+private:
+  std::filesystem::path path_;
+};
+
+class TempDb {
+public:
+  explicit TempDb(std::string name)
+      : path_(std::filesystem::temp_directory_path() /
+              (std::move(name) + "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
+               ".db")) {}
+
+  ~TempDb() {
+    std::error_code ec;
+    std::filesystem::remove(path_, ec);
+    std::filesystem::remove(path_.string() + "-wal", ec);
+    std::filesystem::remove(path_.string() + "-shm", ec);
+  }
+
+  TempDb(const TempDb&) = delete;
+  TempDb& operator=(const TempDb&) = delete;
 
   [[nodiscard]] std::string string() const {
     return path_.string();
@@ -3355,6 +3382,73 @@ TEST_CASE("blocking tool_before veto skips the handler and records blocked_by_ho
   });
 }
 
+TEST_CASE("blocking tool_before writes a joinable hook_publish row for traced dispatch",
+          "[unit][tool][hook][blocking][trace]") {
+  TempDb db{"oran-tool-hook-publish"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    std::size_t handler_calls = 0;
+    tool::Registry registry;
+    REQUIRE(registry
+                .add(noop_tool_def(),
+                     [&](std::string_view /*input*/,
+                         tool::DispatchContext& /*ctx*/) -> async::Awaitable<core::Result<tool::Output>> {
+                       ++handler_calls;
+                       co_return tool::Output::text_only("should-not-run");
+                     })
+                .has_value());
+
+    auto pool_result = storage::Pool::open(
+        io.get_executor(),
+        storage::PoolOptions{.path = db.string(), .reader_count = 2, .statement_cache_capacity = 8});
+    REQUIRE(pool_result.has_value());
+    auto pool = std::move(*pool_result);
+    storage::AuditRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+    permission::StorageAuditSink audit{repo};
+
+    auto rules = allow_rule_set();
+    orangutan::hook::HookDecision veto{};
+    veto.kind = orangutan::hook::HookDecisionKind::veto;
+    veto.reason = "policy";
+
+    orangutan::hook::Bus bus;
+    CaptureSink first{"first"};
+    CaptureSink blocker{"blocker"};
+    blocker.set_blocking_decision(veto);
+    bus.bind(first, {orangutan::hook::Event::tool_before});
+    bus.bind(blocker, {orangutan::hook::Event::tool_before});
+
+    auto ctx = make_hooked_ctx(io, rules, audit, &bus);
+    ctx.parent_turn_id = turn_id_with(0x72);
+    auto result = co_await registry.dispatch("noop", R"({"k":1})", ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::permission_denied);
+    REQUIRE(handler_calls == 0);
+
+    auto joined = co_await repo.list_events_for_turn(*ctx.parent_turn_id);
+    REQUIRE(joined.has_value());
+    REQUIRE(joined->size() == 2);
+    REQUIRE((*joined)[0].event_kind == "hook_publish");
+    REQUIRE((*joined)[0].parent_turn_id == ctx.parent_turn_id);
+    REQUIRE((*joined)[0].reason == "policy");
+    auto hook_metadata = nlohmann::json::parse((*joined)[0].metadata_json);
+    REQUIRE(hook_metadata["event"] == "tool_before");
+    REQUIRE(hook_metadata["sink_id"] == "blocker");
+    REQUIRE(hook_metadata["decision_kind"] == "veto");
+    REQUIRE(hook_metadata["reason"] == "policy");
+    REQUIRE(hook_metadata["hook_decisions"].size() == 2);
+    REQUIRE(hook_metadata["hook_decisions"][0]["sink_id"] == "first");
+    REQUIRE(hook_metadata["hook_decisions"][0]["kind"] == "proceed");
+    REQUIRE(hook_metadata["hook_decisions"][1]["sink_id"] == "blocker");
+    REQUIRE(hook_metadata["hook_decisions"][1]["kind"] == "veto");
+
+    REQUIRE((*joined)[1].event_kind == "permission_decision");
+    REQUIRE((*joined)[1].outcome == "blocked_by_hook");
+    REQUIRE((*joined)[1].reason == "policy");
+  });
+}
+
 TEST_CASE("blocking tool_before rewrite feeds permission, handler, audit, and hooks the rewritten input",
           "[unit][tool][hook][blocking]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
@@ -3592,6 +3686,7 @@ TEST_CASE("blocking tool_before sink error is recorded as blocked_by_hook", "[un
     bus.bind(late, {orangutan::hook::Event::tool_before});
 
     auto ctx = make_hooked_ctx(io, rules, audit, &bus);
+    ctx.parent_turn_id = turn_id_with(0x73);
     auto result = co_await registry.dispatch("noop", R"({})", ctx);
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::permission_denied);
@@ -3601,8 +3696,16 @@ TEST_CASE("blocking tool_before sink error is recorded as blocked_by_hook", "[un
     REQUIRE(first.captures().size() == 1);
     REQUIRE(late.captures().empty());
 
-    REQUIRE(audit.events().size() == 1);
-    const auto& event = audit.events()[0];
+    REQUIRE(audit.events().size() == 2);
+    REQUIRE(audit.events()[0].event_kind == "hook_publish");
+    REQUIRE(audit.events()[0].parent_turn_id == ctx.parent_turn_id);
+    auto hook_publish_metadata = nlohmann::json::parse(audit.events()[0].metadata_json);
+    REQUIRE(hook_publish_metadata["event"] == "tool_before");
+    REQUIRE(hook_publish_metadata["sink_id"] == "failing");
+    REQUIRE(hook_publish_metadata["decision_kind"] == "veto");
+    REQUIRE(hook_publish_metadata["error"].get<std::string>().contains("blocking sink failed"));
+
+    const auto& event = audit.events()[1];
     REQUIRE(event.outcome == permission::AuditOutcome::blocked_by_hook);
     REQUIRE(event.reason.starts_with("hook_error"));
     REQUIRE(event.reason.contains("blocking sink failed"));

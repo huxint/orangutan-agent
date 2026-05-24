@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include <oran/hook/decision.hpp>
+#include <oran/hook/event.hpp>
 #include <oran/tool/output.hpp>
 
 namespace orangutan::tool::detail {
@@ -18,5 +19,9 @@ namespace orangutan::tool::detail {
                                                       std::span<const hook::HookDecisionTrace> trace,
                                                       std::optional<std::string> original_input_hash = std::nullopt,
                                                       std::optional<std::string> rewritten_input_hash = std::nullopt);
+
+[[nodiscard]] std::string hook_publish_metadata_json(hook::Event event,
+                                                     const hook::HookDecisionTrace& winning_trace,
+                                                     std::span<const hook::HookDecisionTrace> trace);
 
 }  // namespace orangutan::tool::detail

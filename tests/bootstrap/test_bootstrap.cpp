@@ -560,6 +560,21 @@ void populate_trace_fixture(const std::filesystem::path& audit_db, const core::T
     auto first_audit_row = co_await audit_repo.append_event(std::move(first_audit));
     REQUIRE(first_audit_row.has_value());
 
+    auto hook_publish = storage::AppendAuditEventRequest{
+        .event_kind = "hook_publish",
+        .scope_key = "scope-A",
+        .agent_key = "coder",
+        .tool_name = "file.write",
+        .identity = "operator-1",
+        .verdict = "allow",
+        .outcome = "allow",
+        .reason = "policy",
+        .parent_turn_id = turn_id,
+        .metadata_json = R"json({"event":"tool_before","sink_id":"policy","decision_kind":"veto"})json",
+    };
+    auto hook_publish_row = co_await audit_repo.append_event(std::move(hook_publish));
+    REQUIRE(hook_publish_row.has_value());
+
     auto second_audit = storage::AppendAuditEventRequest{
         .scope_key = "scope-A",
         .agent_key = "coder",

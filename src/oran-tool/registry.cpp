@@ -6,6 +6,7 @@
 #include <chrono>
 #include <expected>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -57,6 +58,7 @@ namespace {
 
 [[nodiscard]] permission::AuditMetadataUpdate build_metadata_update(const permission::AuditEvent& event) {
   return permission::AuditMetadataUpdate{
+      .event_kind = event.event_kind,
       .scope_key = event.scope_key,
       .agent_key = event.agent_key,
       .tool_name = event.tool_name,
@@ -65,6 +67,40 @@ namespace {
       .parent_turn_id = event.parent_turn_id,
       .previous_metadata_json = event.metadata_json,
   };
+}
+
+[[nodiscard]] permission::AuditEvent build_hook_publish_event(std::string_view name,
+                                                              hook::Event event,
+                                                              const hook::HookDecision& decision,
+                                                              const DispatchContext& ctx) {
+  auto audit_event = permission::AuditEvent{};
+  const auto winning_sink = decision.trace.empty() ? hook::HookDecisionTrace{} : decision.trace.back();
+  audit_event.event_kind = "hook_publish";
+  audit_event.scope_key = ctx.scope_key;
+  audit_event.agent_key = ctx.agent_key;
+  audit_event.tool_name = std::string{name};
+  audit_event.identity = ctx.identity;
+  audit_event.verdict = permission::Verdict::allow;
+  audit_event.outcome = permission::AuditOutcome::allow;
+  audit_event.reason = decision.reason.empty() ? std::string{core::enum_name(decision.kind)} : decision.reason;
+  audit_event.parent_turn_id = ctx.parent_turn_id;
+  audit_event.metadata_json = detail::hook_publish_metadata_json(event, winning_sink, decision.trace);
+  return audit_event;
+}
+
+[[nodiscard]] async::Awaitable<core::Result<void>> record_hook_publish_event(std::string_view name,
+                                                                             hook::Event event,
+                                                                             const hook::HookDecision& decision,
+                                                                             permission::AuditSink& audit,
+                                                                             const DispatchContext& ctx) {
+  if (!ctx.parent_turn_id.has_value() || decision.trace.empty()) {
+    co_return core::Result<void>{};
+  }
+  auto recorded = co_await audit.record(build_hook_publish_event(name, event, decision, ctx));
+  if (!recorded) {
+    co_return std::unexpected(std::move(recorded).error().with("event_kind", "hook_publish"));
+  }
+  co_return core::Result<void>{};
 }
 
 [[nodiscard]] std::string hook_decision_reason(const hook::HookDecision& decision, std::string_view fallback) {
@@ -330,6 +366,11 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
           hook_requires_approval = true;
           hook_reason = hook_decision_reason(hook_decision, "hook require_approval");
           break;
+      }
+      auto recorded_hook_publish =
+          co_await record_hook_publish_event(name, hook::Event::tool_before, hook_decision, ctx.audit, ctx);
+      if (!recorded_hook_publish) {
+        blocking_publish_error = std::move(recorded_hook_publish).error();
       }
     }
   }

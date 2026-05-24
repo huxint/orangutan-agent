@@ -38,7 +38,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice92";
+constexpr std::string_view kVersion = "2.0.0-slice93";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 
 struct ParsedArgs {
@@ -241,7 +241,7 @@ void print_usage() {
   std::println("                --mode picks the baseline (strict|default|permissive|sandboxed),");
   std::println("                --agent picks an `agents.<name>.permissions` overlay.");
   std::println("--audit-init applies the audit.db schema (defaults to <workspace>/.orangutan/audit.db) and exits.");
-  std::println("--trace prints the trace_turns row and joined audit rows for <turn-id>");
+  std::println("--trace prints the trace_turns row and joined audit rows, including hook_publish, for <turn-id>");
   std::println("        (32 lowercase hex characters); reads <workspace>/.orangutan/audit.db.");
 }
 
@@ -506,8 +506,9 @@ void print_usage() {
   std::println("audit rows: {}", audit_rows.size());
   std::size_t audit_index = 0;
   for (const auto& audit : audit_rows) {
-    std::println("  #{:<3} verdict={} outcome={} tool={} scope={} agent={} identity={} reason={}",
+    std::println("  #{:<3} kind={} verdict={} outcome={} tool={} scope={} agent={} identity={} reason={}",
                  audit_index,
+                 audit.event_kind,
                  audit.verdict,
                  audit.outcome,
                  audit.tool_name,

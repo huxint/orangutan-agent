@@ -12,6 +12,7 @@
 
 #include <oran/core/enum_names.hpp>
 #include <oran/hook/decision.hpp>
+#include <oran/hook/event.hpp>
 #include <oran/tool/output.hpp>
 
 namespace orangutan::tool::detail {
@@ -58,6 +59,17 @@ namespace {
   return out;
 }
 
+[[nodiscard]] nlohmann::json hook_decision_trace_to_json(const hook::HookDecisionTrace& decision) {
+  auto row = nlohmann::json::object();
+  row["sink_id"] = decision.sink_id;
+  row["kind"] = std::string{core::enum_name(decision.kind)};
+  row["reason"] = decision.reason;
+  if (decision.elapsed.has_value()) {
+    row["elapsed_ms"] = decision.elapsed->count();
+  }
+  return row;
+}
+
 }  // namespace
 
 std::optional<std::string> with_usage_metadata(std::string_view metadata_json, const ToolUsage& usage) {
@@ -76,14 +88,7 @@ std::string with_hook_decision_metadata(std::string_view metadata_json,
   auto metadata = parse_metadata_object(metadata_json);
   auto rows = nlohmann::json::array();
   for (const auto& decision : trace) {
-    auto row = nlohmann::json::object();
-    row["sink_id"] = decision.sink_id;
-    row["kind"] = std::string{core::enum_name(decision.kind)};
-    row["reason"] = decision.reason;
-    if (decision.elapsed.has_value()) {
-      row["elapsed_ms"] = decision.elapsed->count();
-    }
-    rows.push_back(std::move(row));
+    rows.push_back(hook_decision_trace_to_json(decision));
   }
   metadata["hook_decisions"] = std::move(rows);
   if (original_input_hash.has_value()) {
@@ -92,6 +97,28 @@ std::string with_hook_decision_metadata(std::string_view metadata_json,
   if (rewritten_input_hash.has_value()) {
     metadata["rewritten_input_hash"] = std::move(*rewritten_input_hash);
   }
+  return metadata.dump();
+}
+
+std::string hook_publish_metadata_json(hook::Event event,
+                                       const hook::HookDecisionTrace& winning_trace,
+                                       std::span<const hook::HookDecisionTrace> trace) {
+  auto metadata = nlohmann::json::object();
+  metadata["event"] = std::string{core::enum_name(event)};
+  metadata["sink_id"] = winning_trace.sink_id;
+  metadata["decision_kind"] = std::string{core::enum_name(winning_trace.kind)};
+  metadata["reason"] = winning_trace.reason;
+  if (winning_trace.reason.starts_with("hook_error")) {
+    metadata["error"] = winning_trace.reason;
+  }
+  if (winning_trace.elapsed.has_value()) {
+    metadata["elapsed_ms"] = winning_trace.elapsed->count();
+  }
+  auto rows = nlohmann::json::array();
+  for (const auto& decision : trace) {
+    rows.push_back(hook_decision_trace_to_json(decision));
+  }
+  metadata["hook_decisions"] = std::move(rows);
   return metadata.dump();
 }
 
