@@ -56,7 +56,7 @@ makes the existing audit rows joinable. Nothing else.
 
 - **`oran-storage::TraceRepository`** — new repository neighbour of
   the existing `SessionRepository` and `AuditRepository`. Schema:
-  **Status (slice 86, 2026-05-24):** the storage foundation, the first
+  **Status (slice 87, 2026-05-24):** the storage foundation, the first
   direct-dispatch audit join key, the first terminal-success loop writer, the
   explicit trace-disabled loop policy, and provider/tool cancellation trace
   rows are shipped. The first ordinary error rows are also shipped for
@@ -64,7 +64,11 @@ makes the existing audit rows joinable. Nothing else.
   `agent::Loop` now generates a non-zero turn id when an enabled trace writer
   is configured and callers leave `RunTurnInputs::turn_id` unset, and persists
   iteration-cap exits with a body-free `stop_reason=error` row before the
-  existing `Error::internal` (reason=`iteration_cap`) returns.
+  existing `Error::internal` (reason=`iteration_cap`) returns. `bootstrap::run`
+  now threads `config.trace().enabled` into `RuntimeAssemblyOptions::trace_enabled`
+  so `RuntimeAssembly::build` constructs a `storage::TraceRepository` on the
+  shared audit `Pool` whenever both audit and trace are enabled; the agent-loop
+  owner consumes the assembly-exposed pointer during CLI/binary handoff.
   `<oran/storage.hpp>` exports `TraceRepository`, `TraceId`,
   `AppendTraceTurnRequest`, `TraceTurnRecord`, and
   `ListTraceTurnsOptions`; `src/oran-storage/migrations/audit/0002-trace-turns-initial.sql`
@@ -80,8 +84,10 @@ makes the existing audit rows joinable. Nothing else.
   skips it when `TraceContext::enabled=false`, writes cancelled rows for
   provider/tool parent cancellation, writes ordinary provider/loop-boundary
   error rows, and writes iteration-cap error rows when
-  `LoopOptions::max_iterations` is exhausted. Hook publish rows, config-to-loop
-  wiring, and the CLI inspector remain downstream.
+  `LoopOptions::max_iterations` is exhausted. `bootstrap::run` now constructs
+  the assembly-owned `TraceRepository` from `config.trace().enabled`. Hook
+  publish rows, the CLI inspector, and the binary handoff that threads the
+  assembly repository into `RunTurnInputs::trace` remain downstream.
   ```sql
   CREATE TABLE trace_turns (
     turn_id           BLOB PRIMARY KEY,             -- 16-byte UUID
@@ -188,13 +194,19 @@ makes the existing audit rows joinable. Nothing else.
   }
   ```
   `enabled=false` skips the SQLite insert entirely (still emits
-  audit rows; trace is the *joining* layer). **Status (slice 82):**
+  audit rows; trace is the *joining* layer). **Status (slice 87):**
   `oran-config` parses this top-level block into `config::TraceConfig` with
   defaults `{enabled=true, store_raw_bodies=false, retention_days=30}` and
   validates boolean flags plus positive integer retention. `agent::Loop` now
   honors the equivalent explicit `RunTurnInputs::trace.enabled=false` policy
-  by writing no trace row and preserving NULL audit parent ids; bootstrap does
-  not map `config::TraceConfig` into loop inputs yet.
+  by writing no trace row and preserving NULL audit parent ids. `bootstrap::run`
+  threads `config.trace().enabled` into the new
+  `RuntimeAssemblyOptions::trace_enabled`, and `RuntimeAssembly::build`
+  constructs a `storage::TraceRepository` on the shared audit `Pool` whenever
+  both audit and trace are enabled (`RuntimeAssembly::trace_repository()`
+  exposes the pointer for the future agent-loop owner; audit-disabled forces
+  the trace repository to stay null). `store_raw_bodies` and `retention_days`
+  still wait for the trace runtime that will consume them.
 - **CLI surface**. `orangutan --trace <turn_id>` prints the row
   plus every joined audit row (`WHERE parent_turn_id = ?`) in the
   same `--explain-rules`-style table format that already exists for
@@ -300,13 +312,17 @@ makes the existing audit rows joinable. Nothing else.
 9. **Trace disabled is byte-identical.** Setting
    `trace.enabled=false` produces zero `trace_turns` rows and
    leaves `audit_events` rows unchanged byte-for-byte (parent_turn_id
-   is NULL when trace is off). **Status (slice 82):** shipped at the
+   is NULL when trace is off). **Status (slice 87):** shipped at both the
    `agent::Loop` input boundary for explicit
-   `RunTurnInputs::trace.enabled=false`: the loop writes zero trace rows,
+   `RunTurnInputs::trace.enabled=false` and the `RuntimeAssembly` boundary:
+   `bootstrap::run` maps `config.trace().enabled` into
+   `RuntimeAssemblyOptions::trace_enabled`, and the assembly only constructs
+   a `storage::TraceRepository` when both audit and trace are enabled.
+   The loop writes zero trace rows when `TraceContext::enabled=false`,
    direct-dispatch audit rows keep `parent_turn_id = NULL`, and any previous
    reusable dispatch-context parent id is restored after the tool call.
-   Bootstrap still needs to map `config::TraceConfig::enabled` into this
-   input before the operator config path is closed end-to-end.
+   Threading the assembly-owned repository into `RunTurnInputs::trace` lives
+   with the upcoming agent-loop owner alongside CLI/binary handoff.
 10. **CLI inspector.** `orangutan --trace <turn_id>` returns
     the trace row + every joined audit row + every joined
     `hook_publish` row in deterministic order; exit code 0.

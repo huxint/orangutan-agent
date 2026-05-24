@@ -38,6 +38,10 @@
 #include <oran/permission/audit.hpp>
 #include <oran/tool/workspace.hpp>
 
+namespace orangutan::storage {
+class TraceRepository;
+}  // namespace orangutan::storage
+
 namespace orangutan::bootstrap {
 
 struct RuntimeAssemblyOptions {
@@ -65,6 +69,14 @@ struct RuntimeAssemblyOptions {
   /// respectively. The strings are passed through verbatim;
   /// `tool::Workspace::create` canonicalises and validates each root.
   tool::WorkspaceOptions workspace_options{};
+  /// Operator-level trace policy from `config.trace().enabled`. When
+  /// `true`, the assembly builds a `storage::TraceRepository` on the shared
+  /// audit `Pool` so the upcoming agent loop can persist per-turn rows.
+  /// Forced off when `audit_enabled` is `false` — the trace surface joins
+  /// audit rows, so there is nothing to write into without an audit DB.
+  /// Mirrors the default in `config::TraceConfig` so callers that do not
+  /// surface trace policy still get the spec-0018 v1 behaviour.
+  bool trace_enabled{true};
 };
 
 /// Per-process permission + audit infrastructure. Move-only; only
@@ -123,6 +135,20 @@ public:
   /// lifetime of the assembly; the assembly outlives every borrower.
   [[nodiscard]] tool::Workspace& workspace() noexcept;
   [[nodiscard]] const tool::Workspace& workspace() const noexcept;
+
+  /// Pointer to the assembly-owned `storage::TraceRepository`. Non-null
+  /// iff `audit_enabled()` is `true` and `options.trace_enabled` was
+  /// `true` at build time. Future agent-loop owners read this pointer
+  /// into `agent::TraceContext::repository` so spec-0018 trace rows land
+  /// on the same audit `Pool` as the cause-chain audit rows. The pointer
+  /// is stable for the lifetime of the assembly; the assembly outlives
+  /// every borrower.
+  [[nodiscard]] storage::TraceRepository* trace_repository() noexcept;
+
+  /// `true` iff a `TraceRepository` was constructed at build time. Useful
+  /// for diagnostics (the bootstrap startup banner) and for tests that
+  /// branch on whether the trace writer is reachable.
+  [[nodiscard]] bool trace_enabled() const noexcept;
 
 private:
   struct Impl;

@@ -136,7 +136,12 @@ own test bucket, its own bench bucket, and its own public header set under
 > over an internal `Pool` + `AuditRepository` when audit is on,
 > `NullAuditSink` otherwise; audit defaults to enabled now that
 > `oran-storage` ships its migrations compile-time-embedded via
-> `#embed`; slice 16 adds `--mode` / `--agent` selectors to
+> `#embed`; slice 87 also threads `config.trace().enabled` into the
+> bundle by constructing a `storage::TraceRepository` over the same
+> audit `Pool` when both audit and trace are enabled, exposing it via
+> `RuntimeAssembly::trace_repository()` so the upcoming agent loop can
+> persist spec-0018 rows without owning a second DB handle; slice 16
+> adds `--mode` / `--agent` selectors to
 > `--explain-rules` via the public `parse_explain_rules_selector`
 > and `materialize_rules` helpers), the first `oran-cli` handoff
 > shell, the slice-73 + slice-74 `oran-provider` surface
@@ -400,7 +405,7 @@ own test bucket, its own bench bucket, and its own public header set under
 | `oran-channel-webhook` | generic webhook adapter | `oran-channel`, `oran-http` |
 | `oran-web`           | HTTP web UI (cpp-httplib in skeleton, asio later) | `oran-agent`, `oran-orchestration`, `oran-http` |
 | `oran-cli`           | early REPL / single-shot shell; planned slash commands and agent handoff | currently `oran-core`; planned `oran-agent`, `oran-orchestration` |
-| `oran-bootstrap`     | process entry + config loading + CLI handoff + `--explain-rules` (with `--mode` / `--agent` selectors) + `--audit-init` + per-process `RuntimeAssembly` (bundles a fresh `permission::ApprovalBroker`, the active `permission::AuditSink`, and (slice 41) the assembly-owned `tool::Workspace` built from `permissions.workspace.extra_{read,write}_roots`; defaults to `audit_enabled=true` now that the migrations ship inside the binary) + the slice-23 `SignalScope` SIGINT/SIGTERM trap (`asio::signal_set` RAII, `release()` cancel + `signum()` capture) that `--audit-init` adopts so Ctrl-C / `kill` interrupt the one-shot `io_context` drain promptly, with `bootstrap::run` translating the resulting `Error::cancelled` into the shell-conventional `128 + signum` exit code | currently `oran-core`, `oran-async`, `oran-io`, `oran-storage`, `oran-config`, `oran-permission`, `oran-hook`, `oran-tool`, `oran-cli`; planned every public lib above |
+| `oran-bootstrap`     | process entry + config loading + CLI handoff + `--explain-rules` (with `--mode` / `--agent` selectors) + `--audit-init` + per-process `RuntimeAssembly` (bundles a fresh `permission::ApprovalBroker`, the active `permission::AuditSink`, the slice-41 assembly-owned `tool::Workspace` built from `permissions.workspace.extra_{read,write}_roots`, and (slice 87) an optional `storage::TraceRepository` on the shared audit `Pool` when `config.trace().enabled` is `true` so the upcoming agent loop inherits spec-0018's per-turn writer; defaults to `audit_enabled=true` and `trace_enabled=true` now that the migrations ship inside the binary) + the slice-23 `SignalScope` SIGINT/SIGTERM trap (`asio::signal_set` RAII, `release()` cancel + `signum()` capture) that `--audit-init` adopts so Ctrl-C / `kill` interrupt the one-shot `io_context` drain promptly, with `bootstrap::run` translating the resulting `Error::cancelled` into the shell-conventional `128 + signum` exit code | currently `oran-core`, `oran-async`, `oran-io`, `oran-storage`, `oran-config`, `oran-permission`, `oran-hook`, `oran-tool`, `oran-cli`; planned every public lib above |
 
 **Binaries** built on top:
 

@@ -34,7 +34,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice86";
+constexpr std::string_view kVersion = "2.0.0-slice87";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 
 struct ParsedArgs {
@@ -453,14 +453,16 @@ core::Result<int> run(BootstrapOptions options) {
       .extra_read_roots = loaded->value.permissions().workspace.extra_read_roots,
       .extra_write_roots = loaded->value.permissions().workspace.extra_write_roots,
   };
+  assembly_options.trace_enabled = loaded->value.trace().enabled;
   auto assembly = RuntimeAssembly::build(options.workspace, runtime.executor(), std::move(assembly_options));
   if (!assembly) {
     return std::unexpected(std::move(assembly).error());
   }
-  std::println("runtime assembly ready: audit={} ({}), approval-broker=fresh, workspace={}",
+  std::println("runtime assembly ready: audit={} ({}), approval-broker=fresh, workspace={}, trace={}",
                assembly->audit_enabled() ? "enabled" : "disabled",
                assembly->audit_enabled() ? assembly->audit_path() : std::string_view{"<null sink>"},
-               assembly->workspace().root());
+               assembly->workspace().root(),
+               assembly->trace_enabled() ? "enabled" : "disabled");
 
   auto cli_result = cli::run(cli::CliOptions{.args = std::span<const std::string_view>{parsed->cli_args}});
   if (!cli_result) {

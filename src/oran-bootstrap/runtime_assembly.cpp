@@ -106,6 +106,7 @@ struct RuntimeAssembly::Impl {
   // changes hands, but the Impl itself stays put on the heap.
   std::unique_ptr<storage::Pool> audit_pool;
   std::unique_ptr<storage::AuditRepository> audit_repository;
+  std::unique_ptr<storage::TraceRepository> trace_repository;
   std::unique_ptr<permission::AuditSink> audit_sink;
   std::unique_ptr<permission::ApprovalBroker> approval_broker;
   std::unique_ptr<tool::Workspace> workspace;
@@ -141,6 +142,14 @@ tool::Workspace& RuntimeAssembly::workspace() noexcept {
 
 const tool::Workspace& RuntimeAssembly::workspace() const noexcept {
   return *impl_->workspace;
+}
+
+storage::TraceRepository* RuntimeAssembly::trace_repository() noexcept {
+  return impl_->trace_repository.get();
+}
+
+bool RuntimeAssembly::trace_enabled() const noexcept {
+  return impl_->trace_repository != nullptr;
 }
 
 Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
@@ -201,6 +210,15 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
   impl->audit_pool = std::make_unique<storage::Pool>(std::move(*long_lived_pool));
   impl->audit_repository = std::make_unique<storage::AuditRepository>(*impl->audit_pool);
   impl->audit_sink = std::make_unique<permission::StorageAuditSink>(*impl->audit_repository);
+
+  // The trace schema rides on the same audit DB migration stream (slice 78
+  // pinned `built_in_trace_migrations()` to the complete audit set), so the
+  // `trace_turns` table is already present at this point. Building the
+  // repository over the same `Pool` lets future agent-loop owners persist
+  // spec-0018 rows without owning a second DB handle.
+  if (options.trace_enabled) {
+    impl->trace_repository = std::make_unique<storage::TraceRepository>(*impl->audit_pool);
+  }
 
   return RuntimeAssembly{std::move(impl)};
 }

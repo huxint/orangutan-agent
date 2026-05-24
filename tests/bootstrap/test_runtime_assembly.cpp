@@ -326,3 +326,67 @@ TEST_CASE("RuntimeAssembly::build rejects an extra root that does not exist",
   REQUIRE_FALSE(built.has_value());
   REQUIRE(built.error().kind() == core::ErrorKind::not_found);
 }
+
+TEST_CASE("RuntimeAssembly::build defaults to a live TraceRepository when audit is enabled",
+          "[unit][bootstrap][runtime_assembly][trace]") {
+  TempDir temp{"oran-assembly-trace-default"};
+
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor());
+    REQUIRE(built.has_value());
+    REQUIRE(built->trace_enabled());
+    REQUIRE(built->trace_repository() != nullptr);
+
+    storage::TraceId turn_id{};
+    storage::TraceId session_id{};
+    for (std::size_t i = 0; i < turn_id.size(); ++i) {
+      turn_id[i] = static_cast<std::byte>(0x10 + i);
+      session_id[i] = static_cast<std::byte>(0x80 + i);
+    }
+    auto appended = co_await built->trace_repository()->append_turn(storage::AppendTraceTurnRequest{
+        .turn_id = turn_id,
+        .session_id = session_id,
+        .agent_key = "coder",
+        .origin = "bootstrap",
+        .route_profile = "fake-main",
+        .route_model = "fake-model",
+        .started_at_ns = 1'000,
+        .finished_at_ns = 1'025,
+        .stop_reason = "end_turn",
+    });
+    REQUIRE(appended.has_value());
+
+    auto count = co_await built->trace_repository()->count_turns();
+    REQUIRE(count.has_value());
+    REQUIRE(*count == 1);
+  });
+}
+
+TEST_CASE("RuntimeAssembly::build omits the TraceRepository when trace_enabled is false",
+          "[unit][bootstrap][runtime_assembly][trace]") {
+  TempDir temp{"oran-assembly-trace-off"};
+  asio::io_context io;
+
+  auto options = bootstrap::RuntimeAssemblyOptions{};
+  options.trace_enabled = false;
+  auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
+  REQUIRE(built.has_value());
+  REQUIRE(built->audit_enabled());
+  REQUIRE_FALSE(built->trace_enabled());
+  REQUIRE(built->trace_repository() == nullptr);
+}
+
+TEST_CASE("RuntimeAssembly::build forces trace off when audit is disabled",
+          "[unit][bootstrap][runtime_assembly][trace]") {
+  TempDir temp{"oran-assembly-trace-no-audit"};
+  asio::io_context io;
+
+  auto options = bootstrap::RuntimeAssemblyOptions{};
+  options.audit_enabled = false;
+  options.trace_enabled = true;
+  auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
+  REQUIRE(built.has_value());
+  REQUIRE_FALSE(built->audit_enabled());
+  REQUIRE_FALSE(built->trace_enabled());
+  REQUIRE(built->trace_repository() == nullptr);
+}

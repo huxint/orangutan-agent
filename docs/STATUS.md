@@ -7,18 +7,32 @@
 
 ## Snapshot
 
-- **Slice:** 86 (`xmake run orangutan` reports slice 86)
+- **Slice:** 87 (`xmake run orangutan` reports slice 87)
 - **Last completed history:**
-  [`histories/2026-05/20260524-1340-agent-iteration-cap-trace-rows.md`](histories/2026-05/20260524-1340-agent-iteration-cap-trace-rows.md)
+  [`histories/2026-05/20260524-1400-bootstrap-trace-wiring.md`](histories/2026-05/20260524-1400-bootstrap-trace-wiring.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
-  the recent agent-loop increments closed in focused history/commit slices
-  and did not need a new plan because they stayed under the existing spec-0017
-  sequencing contract.
+  the recent agent-loop and bootstrap increments closed in focused
+  history/commit slices and did not need a new plan because they stayed
+  under the existing spec-0017/0018 sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 86 closes the
-  last loop-owned spec-0018 writer gap by persisting iteration-cap exits.
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 87 closes
+  the first downstream item on the spec-0018 punch list by threading
+  `config.trace().enabled` from `oran-config` through `bootstrap::run` into
+  the new `RuntimeAssemblyOptions::trace_enabled` switch and constructing
+  a `storage::TraceRepository` on the assembly-owned audit `Pool` when
+  both audit and trace are enabled. `RuntimeAssembly` now exposes
+  `trace_repository()` (non-null only when `trace_enabled()` returns true)
+  so the upcoming agent-loop owner can plug the repository into
+  `agent::TraceContext` without minting a second DB handle. The bootstrap
+  startup banner reports `trace=enabled|disabled` alongside the existing
+  audit/workspace summary, and `test-bootstrap` now reports 51 cases /
+  188 assertions covering the default-on path (smoke `append_turn`),
+  explicit trace-off, and audit-disabled-forces-trace-off cases. Hook
+  publish rows, CLI `--trace`, and binary handoff remain downstream.
+  Slice 86 closes
+  the last loop-owned spec-0018 writer gap by persisting iteration-cap exits.
   When `LoopOptions::max_iterations` is exhausted by repeated tool_use
   responses and `RunTurnInputs::trace` has an enabled `TraceRepository`,
   `agent::Loop` now writes a body-free `trace_turns` row with
@@ -441,7 +455,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 11 cases / 89 assertions.
 - `oran-agent`: 23 cases / 363 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
-- `oran-bootstrap`: 48 cases / 173 assertions.
+- `oran-bootstrap`: 51 cases / 188 assertions.
 
 ## Open Tech-Debt Rows
 
