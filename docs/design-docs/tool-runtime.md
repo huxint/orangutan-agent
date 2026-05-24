@@ -139,9 +139,12 @@ enum class Capability {
 > permission/handler execution, and promotes otherwise-allow calls
 > into the broker path on `require_approval`. Unknown tool names
 > are still silently rejected without a hook publish (the dispatch
-> never started). Capability-gated runtime services
-> (`tool::Runtime` accessor surface), hook timeout/config
-> enforcement, and the operator-prompt sink stay on future slices.
+> never started). Slice 92 threads `config.hooks.timeout_ms` through the
+> assembly-owned `hook::Bus`, so a blocking sink that exceeds the
+> per-sink deadline is recorded as `blocked_by_hook` with
+> `reason=hook_timeout` and `metadata_json.hook_decisions[].elapsed_ms`.
+> Capability-gated runtime services (`tool::Runtime` accessor surface)
+> and the operator-prompt sink stay on future slices.
 > Slice 29 (2026-05-20) extends the built-in catalog with
 > `directory.list` (`tool::register_directory_list`, capability
 > `list_directory` — a new `core::Capability` enumerator so a

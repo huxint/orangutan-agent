@@ -83,6 +83,12 @@ struct TraceConfig {
   friend bool operator==(const TraceConfig&, const TraceConfig&) = default;
 };
 
+struct HooksConfig {
+  std::int64_t timeout_ms{2000};
+
+  friend bool operator==(const HooksConfig&, const HooksConfig&) = default;
+};
+
 /// Verdict spelling that appears in `config.permissions.{allow,deny,ask}`.
 /// Mirrors `permission::Verdict` but stays inside `oran-config` because the
 /// dependency direction (config below permission) forbids importing the
@@ -193,6 +199,9 @@ public:
   [[nodiscard]] const TraceConfig& trace() const noexcept {
     return trace_;
   }
+  [[nodiscard]] const HooksConfig& hooks() const noexcept {
+    return hooks_;
+  }
   [[nodiscard]] const PermissionsConfig& permissions() const noexcept {
     return permissions_;
   }
@@ -211,6 +220,7 @@ private:
   SessionConfig session_{};
   WebConfig web_{};
   TraceConfig trace_{};
+  HooksConfig hooks_{};
   PermissionsConfig permissions_{};
   std::vector<AgentConfig> agents_{};
   std::vector<ConfigWarning> warnings_{};

@@ -45,6 +45,10 @@ Planned secret slice:
   workspace resolution and permission evaluation. A veto or hook failure records
   `AuditOutcome::blocked_by_hook`, skips the handler, emits advisory failure
   events, and returns `Error::permission_denied`.
+- Blocking hook sinks are bounded by `hooks.timeout_ms` (default 2000). A timed-out
+  sink is treated as a hook veto with `reason=hook_timeout`; direct tool dispatch
+  records the blocking sink id plus `elapsed_ms` in audit metadata and does not run
+  the handler.
 - Rewrite decisions replace the effective input before permission, approval,
   audit, handler execution, and later hook payloads. Audit metadata keeps the
   original and rewritten input hashes plus the consulted sink decisions, so the

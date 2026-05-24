@@ -27,6 +27,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -37,6 +38,10 @@
 #include <oran/permission/approval_broker.hpp>
 #include <oran/permission/audit.hpp>
 #include <oran/tool/workspace.hpp>
+
+namespace orangutan::hook {
+class Bus;
+}  // namespace orangutan::hook
 
 namespace orangutan::storage {
 class TraceRepository;
@@ -77,6 +82,10 @@ struct RuntimeAssemblyOptions {
   /// Mirrors the default in `config::TraceConfig` so callers that do not
   /// surface trace policy still get the spec-0018 v1 behaviour.
   bool trace_enabled{true};
+  /// Per-sink timeout for blocking hook publishes. Parsed from
+  /// `config.hooks.timeout_ms` by bootstrap and applied to the
+  /// assembly-owned hook bus.
+  std::chrono::milliseconds hook_blocking_timeout{2000};
 };
 
 /// Per-process permission + audit infrastructure. Move-only; only
@@ -149,6 +158,12 @@ public:
   /// for diagnostics (the bootstrap startup banner) and for tests that
   /// branch on whether the trace writer is reachable.
   [[nodiscard]] bool trace_enabled() const noexcept;
+
+  /// Reference to the process-owned hook bus. Bootstrap applies the
+  /// configured blocking timeout at assembly build time; later slices bind
+  /// configured sinks to this bus and thread it into agent/tool contexts.
+  [[nodiscard]] hook::Bus& hook_bus() noexcept;
+  [[nodiscard]] const hook::Bus& hook_bus() const noexcept;
 
 private:
   struct Impl;

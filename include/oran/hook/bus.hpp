@@ -10,7 +10,8 @@
 // receives the (event, payload) pair, each sink's success/failure is
 // captured in the returned `PublishOutcome`, and no sink can veto that
 // advisory publish. Slice 90 added `publish_blocking<E>` for the spec-0015
-// whitelist, and slice 91 made `tool_before` the first dispatch consumer.
+// whitelist, slice 91 made `tool_before` the first dispatch consumer, and
+// slice 92 added the configured blocking timeout policy.
 //
 // Concurrency. The bus is not thread-safe; the runtime owns one per strand.
 // Subscribers (`Sink&`) are non-owning — the caller keeps them alive for the
@@ -18,6 +19,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <initializer_list>
 #include <optional>
@@ -36,6 +38,14 @@
 #include <oran/hook/sink.hpp>
 
 namespace orangutan::hook {
+
+/// Runtime policy for hook dispatch. The default blocking timeout mirrors
+/// `config.hooks.timeout_ms` in the operator config surface.
+struct BusOptions {
+  std::chrono::milliseconds blocking_timeout{2000};
+
+  friend bool operator==(const BusOptions&, const BusOptions&) = default;
+};
 
 /// Result of one `publish_advisory` call. Lists every sink that received
 /// the event in subscription order, with the per-sink error (if any). The
@@ -57,7 +67,7 @@ struct PublishOutcome {
 
 class Bus {
 public:
-  Bus() = default;
+  explicit Bus(BusOptions options = {});
   ~Bus() = default;
 
   Bus(const Bus&) = delete;
@@ -109,6 +119,16 @@ public:
   /// Number of sinks subscribed to `event`.
   [[nodiscard]] std::size_t sink_count(Event event) const noexcept;
 
+  /// Current dispatch policy. Exposed for bootstrap/tests; mutation goes
+  /// through `set_options` so future invariants stay centralized.
+  [[nodiscard]] const BusOptions& options() const noexcept {
+    return options_;
+  }
+
+  void set_options(BusOptions options) noexcept {
+    options_ = options;
+  }
+
 private:
   /// Runtime body for `publish_blocking<E>`. Lives in `bus.cpp` so the
   /// template instantiation is a thin forward and the per-TU compile
@@ -116,6 +136,7 @@ private:
   [[nodiscard]] async::Awaitable<core::Result<HookDecision>> publish_blocking_impl(Event event, Payload payload);
 
   std::unordered_map<Event, std::vector<Sink*>> bindings_;
+  BusOptions options_{};
 };
 
 }  // namespace orangutan::hook

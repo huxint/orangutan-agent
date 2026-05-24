@@ -13,6 +13,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -50,6 +51,9 @@ struct HookDecisionTrace {
   std::string sink_id;
   HookDecisionKind kind{HookDecisionKind::proceed};
   std::string reason;
+  /// Populated when the bus synthesized the decision from a timed-out
+  /// blocking sink. Advisory and ordinary blocking decisions leave it empty.
+  std::optional<std::chrono::milliseconds> elapsed{};
 
   friend bool operator==(const HookDecisionTrace&, const HookDecisionTrace&) = default;
 };

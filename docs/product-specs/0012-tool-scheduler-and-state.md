@@ -222,9 +222,13 @@ implicitly via the capability list.
   input_hash)` singleflight still lands with the future scheduler.
 - **`publish_blocking` consumption.** Direct `Registry::dispatch` is now
   the first consumer for `tool_before`. The scheduler remains responsible
-  for future batched dispatch, per-call timeout enforcement, and
-  `permission_ask_rendered` rendering once the operator-prompt sink lands.
-  The advisory hook bus stays for fire-and-forget sinks.
+  for future batched dispatch and tool-handler per-call timeout enforcement.
+  The blocking-hook sink deadline is bus-level policy now: slice 92 adds
+  `hook::BusOptions::blocking_timeout` from `hooks.timeout_ms`, so direct
+  dispatch and future scheduler-owned dispatches inherit the same sink
+  timeout by publishing through the configured bus. `permission_ask_rendered`
+  rendering still lands once the operator-prompt sink is implemented. The
+  advisory hook bus stays for fire-and-forget sinks.
 
 ## Scope (v2)
 
@@ -322,8 +326,9 @@ implicitly via the capability list.
   usage metadata enrichment; the scheduler must preserve that same-row update
   invariant for parallel calls.
 - [`0015-blocking-hook-decisions.md`](0015-blocking-hook-decisions.md)
-  — slice 91 ships the direct-dispatch `tool_before` consumer; scheduler
-  per-call timeout enforcement covers the remaining blocking-hook timeout.
+  — slice 91 ships the direct-dispatch `tool_before` consumer and slice 92
+  ships the bus-level blocking-sink timeout; scheduler per-call timeout
+  enforcement remains about tool handlers, not hook sinks.
 - [`0017-fake-provider-first-agent-loop.md`](0017-fake-provider-first-agent-loop.md)
   — scheduler tests piggyback on the fake-provider harness: a
   fake provider emits a multi-`tool_use` response, the scheduler

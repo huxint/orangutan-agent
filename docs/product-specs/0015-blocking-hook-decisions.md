@@ -45,8 +45,9 @@ in what order.
 
 ## Scope (v1)
 
-> **Status (slice 91, 2026-05-25):** the bus surface and the
-> `tool_before` dispatch consumer are shipped.
+> **Status (slice 92, 2026-05-25):** the bus surface, the
+> `tool_before` dispatch consumer, and the configured blocking-timeout
+> policy are shipped.
 > `<oran/hook/decision.hpp>` exports `HookDecisionKind { proceed, veto,
 > rewrite, require_approval }` and `HookDecision { kind, reason,
 > optional<string> rewritten_input_json, optional<core::Time>
@@ -67,18 +68,25 @@ in what order.
 > order, applies the same per-sink redaction the advisory path uses,
 > short-circuits at the first non-`proceed` decision, and converts sink
 > `core::Result` errors / thrown exceptions into a veto with
-> `reason="hook_error: <message> [sink=<id>]"`. `test-hook` now reports
-> 29 cases / 196 assertions. Slice 91 adds the `HookDecisionTrace`
+> `reason="hook_error: <message> [sink=<id>]"`. Slice 92 adds
+> `hook::BusOptions { blocking_timeout }` (default 2000 ms, matching
+> `config.hooks.timeout_ms`) and races each blocking sink against
+> `async::sleep_for`; a timeout synthesizes a veto with
+> `reason="hook_timeout"` and fills `HookDecisionTrace::elapsed`.
+> `test-hook` now reports 30 cases / 207 assertions. Slice 91 adds the
+> `HookDecisionTrace`
 > vector so dispatch can serialize every consulted sink decision into
 > audit metadata; `Registry::dispatch` now calls
 > `publish_blocking<Event::tool_before>` before workspace resolution and
 > permission evaluation, consumes veto/rewrite/require_approval
 > decisions, and persists the audit-side
-> `AuditOutcome::blocked_by_hook` / `rewritten` enumerators.
-> `test-tool` now reports 172 cases / 1722 assertions. The v1
-> first user-visible sink (`permission_ask_rendered` owned by
-> `oran-cli`), `config.hooks.timeout_ms` enforcement, and the
-> spec-0018 AC5 `hook_publish` audit-row writer remain downstream.
+> `AuditOutcome::blocked_by_hook` / `rewritten` enumerators. Slice 92
+> also threads `config.hooks.timeout_ms` through `RuntimeAssembly` into
+> the assembly-owned `hook::Bus` and records timeout decisions in
+> `metadata_json.hook_decisions[].elapsed_ms`.
+> `test-tool` now reports 173 cases / 1739 assertions. The v1 first
+> user-visible sink (`permission_ask_rendered` owned by `oran-cli`) and
+> the spec-0018 AC5 `hook_publish` audit-row writer remain downstream.
 
 The MVP is the *minimum* surface needed by the agent loop's approval
 render flow — the first real consumer. Everything else that wants a
@@ -135,10 +143,10 @@ blocking hook waits for v1.1.
   a `require_approval` decision flips it to the existing `ask` /
   `approved` / `rejected` triad once the broker resolves.
 - **Hook timeout**. `config.hooks.timeout_ms` (default 2000, per the
-  existing design doc). A blocking sink that exceeds the timeout
-  returns `Error::HookTimeout`; the dispatch treats this as a veto
-  with `reason=timeout`. Audit records `blocked_by_hook`,
-  `reason=hook_timeout`, and the offending sink's id.
+  existing design doc). A blocking sink that exceeds the timeout is
+  cancelled by the bus race and reported as a synthesized veto with
+  `reason=hook_timeout`. Audit records `blocked_by_hook`,
+  `reason=hook_timeout`, the offending sink's id, and `elapsed_ms`.
 - **Hook failure**. A blocking sink that returns an `Error` is treated
   as a veto with `reason=hook_error`; the underlying error is forwarded
   to the audit context. A sink that throws is captured by the bus
@@ -267,9 +275,16 @@ blocking hook waits for v1.1.
    `outcome=blocked_by_hook, reason=hook_timeout`; the
    `AuditEvent::context` records the offending `sink_id` and
    `elapsed_ms`. Tested against a controllable-latency fake sink.
-   **Status (slice 91):** still downstream. The dispatch consumer is
-   shipped; per-sink deadline wiring through `config.hooks.timeout_ms`
-   remains the hook-policy follow-up.
+   **Status (slice 92):** shipped for direct dispatch. `oran-config`
+   parses `hooks.timeout_ms` as a positive integer (default 2000), the
+   checked-in example config carries that default, `bootstrap::run`
+   threads the value into `RuntimeAssemblyOptions::hook_blocking_timeout`,
+   and the assembly-owned `hook::Bus` applies it per blocking sink.
+   `Bus::publish_blocking` returns a synthesized veto with
+   `reason=hook_timeout`, and `Registry::dispatch` records
+   `AuditOutcome::blocked_by_hook` plus
+   `metadata_json.hook_decisions[].elapsed_ms` before skipping the
+   handler.
 7. **Sink error.** A blocking sink returning `Error::internal` is
    treated as veto with `reason=hook_error`; the underlying error
    message rides in `AuditEvent::context.error`.
@@ -303,9 +318,10 @@ blocking hook waits for v1.1.
    `STATIC_REQUIRE_FALSE` cases.
 10. **`tests/hook/`** ≥ 90% coverage of the matrix (event × decision
     kind × sink ordering × timeout × error).
-    **Status (slice 91):** decision-kind, ordering, error, exception, and
-    dispatch-consumer axes are covered; timeout coverage lands with the
-    timeout-enforcement follow-up.
+    **Status (slice 92):** decision-kind, ordering, error, exception,
+    timeout, and dispatch-consumer axes are covered. The dispatch-side
+    timeout regression uses a controllable-latency sink and asserts the
+    `blocked_by_hook` audit row plus `elapsed_ms`.
 11. **`bench/oran-hook/publish_blocking_overhead`** reports a
     single-sink blocking publish cost ≤ 2× the single-sink advisory
     publish baseline (~446 ns per `bench-hook/publish_one_sink`), and
@@ -328,8 +344,9 @@ blocking hook waits for v1.1.
   blocking-hook-driven.
 - [`0012-tool-scheduler-and-state.md`](0012-tool-scheduler-and-state.md)
   — the scheduler owns future batched dispatch, cancellation slots, and
-  timeout enforcement; direct `Registry::dispatch` is now the first
-  `tool_before` blocking consumer.
+  tool per-call timeout enforcement; direct `Registry::dispatch` is now
+  the first `tool_before` blocking consumer and inherits the
+  bus-level blocking-hook timeout from `hook::BusOptions`.
 - [`0014-structured-tool-output.md`](0014-structured-tool-output.md) —
   `HookDecision::rewritten_input_json` uses the same serialized JSON byte
   envelope as `Output::data_json` to keep the public header compile-cheap.
@@ -367,8 +384,8 @@ blocking hook waits for v1.1.
 
 ```sh
 xmake build oran-hook oran-tool
-xmake run test-hook                    # decision matrix + ordering + error
-xmake run test-tool                    # dispatch order with blocking hook
+xmake run test-hook                    # decision matrix + ordering + timeout + error
+xmake run test-tool                    # dispatch order and timeout with blocking hook
 xmake build bench-hook
 xmake run bench-hook
 xmake run orangutan -- --explain-rules  # rule-side unchanged; hook bindings surface
@@ -382,8 +399,8 @@ xmake run orangutan -- --explain-rules  # rule-side unchanged; hook bindings sur
 - `docs/design-docs/tool-runtime.md` "Permission Ordering" updates to
   the seven-step canonical order.
 - `docs/exec-plans/tech-debt-tracker.md` — the 2026-05-18 hook row now
-  tracks only timeout enforcement, the operator-prompt sink, the
-  `hook_publish` audit-row writer, and external sink implementations.
+  tracks only the operator-prompt sink, the `hook_publish` audit-row
+  writer, and external sink implementations.
 - `docs/SECURITY.md` — gains a "Hook-driven veto" subsection citing
   spec 0015 once v1 ships, so the workspace-confinement claim (spec
   0013) and the hook-veto claim sit side-by-side.

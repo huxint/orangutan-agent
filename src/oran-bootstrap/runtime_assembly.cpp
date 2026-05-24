@@ -19,6 +19,7 @@
 
 #include <oran/async.hpp>
 #include <oran/core/error.hpp>
+#include <oran/hook.hpp>
 #include <oran/permission.hpp>
 #include <oran/storage.hpp>
 #include <oran/tool/workspace.hpp>
@@ -110,6 +111,7 @@ struct RuntimeAssembly::Impl {
   std::unique_ptr<permission::AuditSink> audit_sink;
   std::unique_ptr<permission::ApprovalBroker> approval_broker;
   std::unique_ptr<tool::Workspace> workspace;
+  std::unique_ptr<hook::Bus> hook_bus;
 };
 
 RuntimeAssembly::RuntimeAssembly(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
@@ -152,6 +154,14 @@ bool RuntimeAssembly::trace_enabled() const noexcept {
   return impl_->trace_repository != nullptr;
 }
 
+hook::Bus& RuntimeAssembly::hook_bus() noexcept {
+  return *impl_->hook_bus;
+}
+
+const hook::Bus& RuntimeAssembly::hook_bus() const noexcept {
+  return *impl_->hook_bus;
+}
+
 Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
                                                asio::any_io_executor runtime_executor,
                                                RuntimeAssemblyOptions options) {
@@ -181,6 +191,9 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
     return std::unexpected(std::move(broker_result).error());
   }
   impl->approval_broker = std::make_unique<permission::ApprovalBroker>(std::move(*broker_result));
+  impl->hook_bus = std::make_unique<hook::Bus>(hook::BusOptions{
+      .blocking_timeout = options.hook_blocking_timeout,
+  });
 
   if (!options.audit_enabled) {
     impl->audit_sink = std::make_unique<permission::NullAuditSink>();

@@ -65,7 +65,9 @@
   },
   "teams": {},
   "channels": [],
-  "hooks": {},
+  "hooks": {
+    "timeout_ms": 2000
+  },
   "memory": {},
   "automation": {},
   "web": {

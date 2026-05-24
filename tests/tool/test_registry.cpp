@@ -24,6 +24,7 @@
 #include <asio/co_spawn.hpp>
 #include <asio/executor_work_guard.hpp>
 #include <asio/io_context.hpp>
+#include <asio/this_coro.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -3128,6 +3129,40 @@ private:
   bool throws_{false};
 };
 
+class SlowBlockingHookSink final : public orangutan::hook::Sink {
+public:
+  SlowBlockingHookSink(std::string id, std::chrono::milliseconds delay) : id_(std::move(id)), delay_(delay) {}
+
+  [[nodiscard]] std::string_view id() const noexcept override {
+    return id_;
+  }
+
+  [[nodiscard]] async::Awaitable<core::Result<void>> receive(orangutan::hook::Event,
+                                                             orangutan::hook::Payload) override {
+    co_return core::Result<void>{};
+  }
+
+  [[nodiscard]] async::Awaitable<core::Result<orangutan::hook::HookDecision>>
+  handle_blocking(orangutan::hook::Event, orangutan::hook::Payload) override {
+    ++calls_;
+    const auto executor = co_await asio::this_coro::executor;
+    auto slept = co_await async::sleep_for(executor, delay_);
+    if (!slept) {
+      co_return std::unexpected(std::move(slept).error());
+    }
+    co_return orangutan::hook::HookDecision{};
+  }
+
+  [[nodiscard]] std::size_t calls() const noexcept {
+    return calls_;
+  }
+
+private:
+  std::string id_;
+  std::chrono::milliseconds delay_;
+  std::size_t calls_{0};
+};
+
 permission::RuleSet allow_rule_set(std::string tool_pattern = "noop") {
   return single_rule(permission::Rule{
       .verdict = permission::Verdict::allow,
@@ -3579,6 +3614,55 @@ TEST_CASE("blocking tool_before sink error is recorded as blocked_by_hook", "[un
     REQUIRE(metadata["hook_decisions"][1]["kind"] == "veto");
     REQUIRE(metadata["hook_decisions"][1]["reason"].get<std::string>().contains("blocking sink failed"));
   });
+}
+
+TEST_CASE("blocking tool_before timeout is recorded as blocked_by_hook", "[unit][tool][hook][blocking]") {
+  test::run_async(
+      [](asio::io_context& io) -> async::Awaitable<void> {
+        std::size_t handler_calls = 0;
+        tool::Registry registry;
+        REQUIRE(registry
+                    .add(noop_tool_def(),
+                         [&](std::string_view /*input*/,
+                             tool::DispatchContext& /*ctx*/) -> async::Awaitable<core::Result<tool::Output>> {
+                           ++handler_calls;
+                           co_return tool::Output::text_only("should-not-run");
+                         })
+                    .has_value());
+
+        auto rules = allow_rule_set();
+        permission::RecordingAuditSink audit;
+
+        orangutan::hook::Bus bus{orangutan::hook::BusOptions{.blocking_timeout = std::chrono::milliseconds{5}}};
+        SlowBlockingHookSink slow{"slow", std::chrono::seconds{1}};
+        CaptureSink late{"late"};
+        bus.bind(slow, {orangutan::hook::Event::tool_before});
+        bus.bind(late, {orangutan::hook::Event::tool_before});
+
+        auto ctx = make_hooked_ctx(io, rules, audit, &bus);
+        auto result = co_await registry.dispatch("noop", R"({"k":1})", ctx);
+        REQUIRE_FALSE(result.has_value());
+        REQUIRE(result.error().kind() == core::ErrorKind::permission_denied);
+        REQUIRE(context_has(result.error(), "reason", "blocked_by_hook"));
+        REQUIRE(context_has(result.error(), "hook_reason", "hook_timeout"));
+        REQUIRE(handler_calls == 0);
+        REQUIRE(slow.calls() == 1);
+        REQUIRE(late.captures().empty());
+
+        REQUIRE(audit.events().size() == 1);
+        const auto& event = audit.events()[0];
+        REQUIRE(event.outcome == permission::AuditOutcome::blocked_by_hook);
+        REQUIRE(event.reason == "hook_timeout");
+
+        auto metadata = nlohmann::json::parse(event.metadata_json);
+        REQUIRE(metadata["hook_decisions"].size() == 1);
+        REQUIRE(metadata["hook_decisions"][0]["sink_id"] == "slow");
+        REQUIRE(metadata["hook_decisions"][0]["kind"] == "veto");
+        REQUIRE(metadata["hook_decisions"][0]["reason"] == "hook_timeout");
+        REQUIRE(metadata["hook_decisions"][0]["elapsed_ms"] == 5);
+        co_return;
+      },
+      std::chrono::milliseconds{250});
 }
 
 TEST_CASE("dispatch copies output usage into tool_after payload", "[unit][tool][hook][output]") {

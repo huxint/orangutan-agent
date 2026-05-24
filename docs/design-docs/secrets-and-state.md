@@ -41,7 +41,8 @@ Current implementation status:
 - Typed fields currently cover `strict_config`, `runtime` (including
   `tool_output.max_text_bytes` / `max_data_bytes` and
   `prompt.active_tools`), top-level `trace` policy
-  (`enabled`, `store_raw_bodies`, `retention_days`), `profiles`, `routes`,
+  (`enabled`, `store_raw_bodies`, `retention_days`), top-level hook timeout
+  policy (`hooks.timeout_ms`, default 2000), `profiles`, `routes`,
   `session`, `web`, `permissions`, and `agents.<name>.permissions`.
 - `runtime.prompt.active_tools` accepts `"defaults"` or an explicit string
   array. The loader preserves the authored array order, accepts an empty
@@ -52,8 +53,9 @@ Current implementation status:
 - `profiles` and `routes` are objects keyed by profile/route name. Profile entries
   require `provider`, `model`, `base_url`, and `api_key_env`; route entries require
   `primary` and may include `fallbacks`.
-- `teams`, `channels`, `hooks`, `memory`, and `automation` are recognized
-  root fields but do not have typed models yet.
+- `teams`, `channels`, `memory`, and `automation` are recognized root fields but do
+  not have typed models yet. The `hooks` root has the v1 typed timeout field; sink
+  and binding arrays remain recognized-but-untyped until external hook sinks land.
 
 ### Schema Validation
 

@@ -1,8 +1,8 @@
 # Bootstrap Runtime
 
 `oran-bootstrap` is the process entry boundary. It owns command-line bootstrap
-parsing, config discovery, and future runtime assembly. The current slice loads
-configuration, reports the config source, and hands CLI-facing modes to `oran-cli`.
+parsing, config discovery, and runtime assembly for the services the early binary can
+construct before the provider-backed agent loop is wired.
 
 ## Current Public API
 
@@ -36,6 +36,45 @@ All public functions return `core::Result<T>`. `src/main.cpp` only builds the ar
 span, calls `bootstrap::run`, and converts an error into process exit code `1`.
 `bootstrap::run` consumes bootstrap-owned flags, loads config, and forwards remaining
 CLI args to `cli::run`.
+
+`<oran/bootstrap/runtime_assembly.hpp>` also exposes the per-process service bundle:
+
+```cpp
+namespace orangutan::bootstrap {
+
+struct RuntimeAssemblyOptions {
+  std::string audit_db_path{};
+  bool audit_enabled = true;
+  std::size_t audit_reader_count{1};
+  std::size_t audit_statement_cache_capacity{4};
+  tool::WorkspaceOptions workspace_options;
+  bool trace_enabled = true;
+  std::chrono::milliseconds hook_blocking_timeout{2000};
+};
+
+class RuntimeAssembly {
+ public:
+  static core::Result<RuntimeAssembly> build(
+      std::string_view workspace,
+      asio::any_io_executor runtime_executor,
+      RuntimeAssemblyOptions options = {});
+
+  permission::ApprovalBroker& approval_broker() noexcept;
+  permission::AuditSink& audit_sink() noexcept;
+  tool::Workspace& workspace() noexcept;
+  storage::TraceRepository* trace_repository() noexcept;
+  bool trace_enabled() const noexcept;
+  hook::Bus& hook_bus() noexcept;
+};
+
+}  // namespace orangutan::bootstrap
+```
+
+The assembly owns the approval broker, audit sink/repository pool, workspace resolver,
+optional trace repository, and the process hook bus. `bootstrap::run` threads
+`config.trace().enabled` into `trace_enabled` and `config.hooks().timeout_ms` into
+`hook_blocking_timeout`; the startup banner prints both `trace=<enabled|disabled>` and
+`hook-timeout=<ms>`.
 
 ## Config Resolution
 
@@ -74,13 +113,15 @@ The current `orangutan` binary prints:
 - version / slice banner,
 - config source and path,
 - profile / route / worker / web summary,
+- runtime assembly summary including audit path, workspace root, trace state, and
+  blocking hook timeout,
 - the `oran-cli` mode output.
 
-No provider credentials are read, no storage files are opened, and no agent runtime loop
-is started in this slice.
+No provider credentials are read and no agent runtime loop is started in this slice.
+The runtime assembly opens the audit DB when audit is enabled so migrations, trace
+repository ownership, and audit sinks are ready before the future loop handoff.
 
 ## Next Steps
 
-- Build runtime assembly around loaded config.
-- Initialize storage files and apply domain migrations.
-- Add signal handling and cancellation once the agent loop exists.
+- Bind configured hook sinks to the assembly-owned bus once the hook sink models land.
+- Thread the assembly services into the provider-backed agent loop and CLI handoff.

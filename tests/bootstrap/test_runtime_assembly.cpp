@@ -14,6 +14,7 @@
 #include <oran/bootstrap.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/time.hpp>
+#include <oran/hook.hpp>
 #include <oran/permission.hpp>
 #include <oran/storage.hpp>
 #include <oran/tool/workspace.hpp>
@@ -29,6 +30,8 @@ namespace test = orangutan::tests;
 namespace tool = orangutan::tool;
 
 namespace {
+
+using namespace std::chrono_literals;
 
 class TempDir {
 public:
@@ -124,6 +127,21 @@ TEST_CASE("RuntimeAssembly::build installs NullAuditSink when audit disabled", "
   REQUIRE_FALSE(assembly->audit_enabled());
   REQUIRE(assembly->audit_path().empty());
   REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan" / "audit.db"));
+}
+
+TEST_CASE("RuntimeAssembly::build installs a hook bus with blocking timeout",
+          "[unit][bootstrap][runtime_assembly][hook]") {
+  TempDir temp{"oran-assembly-hook-bus"};
+  asio::io_context io;
+
+  auto options = bootstrap::RuntimeAssemblyOptions{};
+  options.audit_enabled = false;
+  options.hook_blocking_timeout = 75ms;
+  auto assembly = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
+
+  REQUIRE(assembly.has_value());
+  REQUIRE(assembly->hook_bus().options().blocking_timeout == 75ms);
+  REQUIRE(assembly->hook_bus().binding_count() == 0);
 }
 
 TEST_CASE("RuntimeAssembly::build provisions audit.db at the workspace default path",

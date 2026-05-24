@@ -8,12 +8,14 @@
 // consumer (`Registry::dispatch` consumption) lands in a follow-up
 // slice, so this bucket only exercises the bus-side contract.
 
+#include <chrono>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 
 #include <asio/io_context.hpp>
+#include <asio/this_coro.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -30,6 +32,8 @@ namespace hook = orangutan::hook;
 namespace test = orangutan::tests;
 
 namespace {
+
+using namespace std::chrono_literals;
 
 [[nodiscard]] hook::ToolBeforePayload sample_before() {
   return hook::ToolBeforePayload{
@@ -94,6 +98,43 @@ public:
 private:
   std::string id_;
   std::string reason_;
+};
+
+/// Cancellation-aware sink that stays inside `handle_blocking` longer
+/// than the bus timeout. The bus should synthesize `hook_timeout` and
+/// cancel this awaitable before the test helper's hard timeout fires.
+class SlowBlockingSink final : public hook::Sink {
+public:
+  SlowBlockingSink(std::string id, std::chrono::milliseconds delay) : id_(std::move(id)), delay_(delay) {}
+
+  [[nodiscard]] std::string_view id() const noexcept override {
+    return id_;
+  }
+
+  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/,
+                                                             hook::Payload /*payload*/) override {
+    co_return core::Result<void>{};
+  }
+
+  [[nodiscard]] async::Awaitable<core::Result<hook::HookDecision>> handle_blocking(hook::Event /*event*/,
+                                                                                   hook::Payload /*payload*/) override {
+    ++calls_;
+    const auto executor = co_await asio::this_coro::executor;
+    auto slept = co_await async::sleep_for(executor, delay_);
+    if (!slept) {
+      co_return std::unexpected(std::move(slept).error());
+    }
+    co_return hook::HookDecision{};
+  }
+
+  [[nodiscard]] std::size_t calls() const noexcept {
+    return calls_;
+  }
+
+private:
+  std::string id_;
+  std::chrono::milliseconds delay_;
+  std::size_t calls_{0};
 };
 
 /// `Sink` whose `handle_blocking` throws an exception from its
@@ -338,6 +379,33 @@ TEST_CASE("throwing sink becomes veto with reason=hook_error", "[hook][bus][bloc
     REQUIRE(result->trace[0].kind == hook::HookDecisionKind::veto);
     co_return;
   });
+}
+
+TEST_CASE("blocking sink timeout becomes veto with elapsed trace", "[hook][bus][blocking]") {
+  hook::Bus bus{hook::BusOptions{.blocking_timeout = 5ms}};
+  SlowBlockingSink first{"slow", 1s};
+  hook::HookDecision proceed{};
+  BlockingSink second{"second", proceed};
+  bus.bind(first, {hook::Event::tool_before});
+  bus.bind(second, {hook::Event::tool_before});
+
+  test::run_async(
+      [&](asio::io_context& /*io*/) -> async::Awaitable<void> {
+        auto result = co_await bus.publish_blocking<hook::Event::tool_before>(sample_before());
+        REQUIRE(result.has_value());
+        REQUIRE(result->kind == hook::HookDecisionKind::veto);
+        REQUIRE(result->reason == "hook_timeout");
+        REQUIRE(result->trace.size() == 1);
+        REQUIRE(result->trace[0].sink_id == "slow");
+        REQUIRE(result->trace[0].kind == hook::HookDecisionKind::veto);
+        REQUIRE(result->trace[0].reason == "hook_timeout");
+        REQUIRE(result->trace[0].elapsed == 5ms);
+        co_return;
+      },
+      250ms);
+
+  REQUIRE(first.calls() == 1);
+  REQUIRE(second.calls() == 0);
 }
 
 TEST_CASE("InProcessSink blocking handler drives the decision", "[hook][bus][blocking]") {

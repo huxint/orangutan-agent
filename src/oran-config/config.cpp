@@ -417,6 +417,28 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
   return trace;
 }
 
+[[nodiscard]] Result<HooksConfig> parse_hooks(const json& root) {
+  auto hooks = HooksConfig{};
+  const auto it = root.find("hooks");
+  if (it == root.end()) {
+    return hooks;
+  }
+  auto object = require_object(*it, "$.hooks");
+  if (!object) {
+    return std::unexpected(std::move(object.error()));
+  }
+
+  if (const auto timeout = it->find("timeout_ms"); timeout != it->end()) {
+    auto parsed = positive_integer_value(*timeout, "$.hooks.timeout_ms");
+    if (!parsed) {
+      return std::unexpected(std::move(parsed.error()));
+    }
+    hooks.timeout_ms = *parsed;
+  }
+
+  return hooks;
+}
+
 [[nodiscard]] Result<std::vector<ProfileConfig>> parse_profiles(const json& root) {
   auto profiles = std::vector<ProfileConfig>{};
   const auto it = root.find("profiles");
@@ -908,6 +930,10 @@ core::Result<Config> Config::parse(std::string_view contents, LoadOptions option
     if (!trace) {
       return std::unexpected(std::move(trace.error()));
     }
+    auto hooks = parse_hooks(root);
+    if (!hooks) {
+      return std::unexpected(std::move(hooks.error()));
+    }
     auto permissions = parse_root_permissions(root, strict_effective, warnings);
     if (!permissions) {
       return std::unexpected(std::move(permissions.error()));
@@ -925,6 +951,7 @@ core::Result<Config> Config::parse(std::string_view contents, LoadOptions option
     config.session_ = std::move(*session);
     config.web_ = std::move(*web);
     config.trace_ = std::move(*trace);
+    config.hooks_ = std::move(*hooks);
     config.permissions_ = std::move(*permissions);
     config.agents_ = std::move(*agents);
     config.warnings_ = std::move(warnings);

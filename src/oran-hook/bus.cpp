@@ -3,6 +3,7 @@
 #include <oran/hook/bus.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <exception>
 #include <expected>
@@ -14,7 +15,11 @@
 #include <variant>
 #include <vector>
 
+#include <asio/experimental/awaitable_operators.hpp>
+#include <asio/this_coro.hpp>
+
 #include <oran/async/awaitable_fwd.hpp>
+#include <oran/async/sleep.hpp>
 #include <oran/core/error.hpp>
 #include <oran/hook/decision.hpp>
 #include <oran/hook/event.hpp>
@@ -23,6 +28,13 @@
 
 namespace orangutan::hook {
 namespace {
+
+using namespace std::chrono_literals;
+
+struct SinkDecision {
+  HookDecision decision;
+  std::optional<std::chrono::milliseconds> elapsed{};
+};
 
 [[nodiscard]] Payload payload_for_sink(const Sink& sink, const Payload& payload) {
   auto delivered = payload;
@@ -62,7 +74,58 @@ namespace {
   return decision;
 }
 
+[[nodiscard]] HookDecision veto_from_timeout() {
+  HookDecision decision{};
+  decision.kind = HookDecisionKind::veto;
+  decision.reason = "hook_timeout";
+  return decision;
+}
+
+[[nodiscard]] async::Awaitable<SinkDecision> call_blocking_sink(Sink& sink, Event event, Payload payload) {
+  try {
+    auto result = co_await sink.handle_blocking(event, std::move(payload));
+    if (!result) {
+      co_return SinkDecision{.decision = veto_from_error(result.error(), sink.id())};
+    }
+    co_return SinkDecision{.decision = std::move(result).value()};
+  } catch (const std::exception& ex) {
+    co_return SinkDecision{.decision = veto_from_exception(ex.what(), sink.id())};
+  } catch (...) {
+    co_return SinkDecision{.decision = veto_from_exception("sink threw non-std exception", sink.id())};
+  }
+}
+
+[[nodiscard]] async::Awaitable<core::Result<void>> sleep_for_timeout(std::chrono::milliseconds timeout) {
+  const auto executor = co_await asio::this_coro::executor;
+  co_return co_await async::sleep_for(executor, timeout);
+}
+
+[[nodiscard]] async::Awaitable<core::Result<SinkDecision>>
+call_blocking_sink_with_timeout(Sink& sink, Event event, Payload payload, std::chrono::milliseconds timeout) {
+  if (timeout <= 0ms) {
+    co_return co_await call_blocking_sink(sink, event, std::move(payload));
+  }
+
+  using namespace asio::experimental::awaitable_operators;
+  auto raced = co_await (call_blocking_sink(sink, event, std::move(payload)) || sleep_for_timeout(timeout));
+  if (auto* decision = std::get_if<SinkDecision>(&raced); decision != nullptr) {
+    co_return std::move(*decision);
+  }
+
+  auto timer = std::get<core::Result<void>>(std::move(raced));
+  if (!timer) {
+    co_return std::unexpected(std::move(timer).error());
+  }
+
+  co_return SinkDecision{
+      .decision = veto_from_timeout(),
+      .elapsed = timeout,
+  };
+}
+
 }  // namespace
+
+Bus::Bus(BusOptions options) : options_(options) {}
 
 bool PublishOutcome::all_succeeded() const noexcept {
   return std::ranges::all_of(sinks, [](const auto& row) { return !row.error.has_value(); });
@@ -133,35 +196,20 @@ async::Awaitable<core::Result<HookDecision>> Bus::publish_blocking_impl(Event ev
   std::vector<HookDecisionTrace> trace;
   trace.reserve(it->second.size());
   for (auto* sink : it->second) {
-    HookDecision decision{};
-    try {
-      auto result = co_await sink->handle_blocking(event, payload_for_sink(*sink, payload));
-      if (!result) {
-        // Spec 0015 v1: sink error -> veto with reason=hook_error;
-        // short-circuit the walk so the dispatch consumer sees a single
-        // authoritative decision per call.
-        decision = veto_from_error(result.error(), sink->id());
-        trace.push_back(
-            HookDecisionTrace{.sink_id = std::string{sink->id()}, .kind = decision.kind, .reason = decision.reason});
-        decision.trace = std::move(trace);
-        co_return decision;
-      }
-      decision = std::move(result).value();
-    } catch (const std::exception& ex) {
-      decision = veto_from_exception(ex.what(), sink->id());
-      trace.push_back(
-          HookDecisionTrace{.sink_id = std::string{sink->id()}, .kind = decision.kind, .reason = decision.reason});
-      decision.trace = std::move(trace);
-      co_return decision;
-    } catch (...) {
-      decision = veto_from_exception("sink threw non-std exception", sink->id());
-      trace.push_back(
-          HookDecisionTrace{.sink_id = std::string{sink->id()}, .kind = decision.kind, .reason = decision.reason});
-      decision.trace = std::move(trace);
-      co_return decision;
+    auto sink_result = co_await call_blocking_sink_with_timeout(*sink,
+                                                                event,
+                                                                payload_for_sink(*sink, payload),
+                                                                options_.blocking_timeout);
+    if (!sink_result) {
+      co_return std::unexpected(std::move(sink_result).error());
     }
-    trace.push_back(
-        HookDecisionTrace{.sink_id = std::string{sink->id()}, .kind = decision.kind, .reason = decision.reason});
+    auto decision = std::move(sink_result->decision);
+    trace.push_back(HookDecisionTrace{
+        .sink_id = std::string{sink->id()},
+        .kind = decision.kind,
+        .reason = decision.reason,
+        .elapsed = sink_result->elapsed,
+    });
     if (decision.kind != HookDecisionKind::proceed) {
       decision.trace = std::move(trace);
       co_return decision;

@@ -39,10 +39,9 @@
 //      records redacted resolver metadata in the audit row.
 //
 // What this slice does NOT cover. The operator-prompt sink for
-// `permission_ask_rendered`, hook timeout/config enforcement, hook publish
-// audit rows, output scrubbing through `oran-log::redact`, deferred-tool
-// promotion, and the future capability-gated `tool::Runtime::workspace()`
-// accessor all live in later slices.
+// `permission_ask_rendered`, hook publish audit rows, output scrubbing through
+// `oran-log::redact`, deferred-tool promotion, and the future capability-gated
+// `tool::Runtime::workspace()` accessor all live in later slices.
 //
 // Why a single `DispatchContext` rather than the design-doc's parameter
 // fan-out. Passing `permission::RuleSet&`, `permission::AuditSink&`,

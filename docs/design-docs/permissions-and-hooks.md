@@ -303,7 +303,7 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 
 ## Hook Bus
 
-> **Bus status (2026-05-25, slice 91):** the foundation
+> **Bus status (2026-05-25, slice 92):** the foundation
 > ships as `oran-hook`. `hook::Event` enumerates the 41
 > lifecycle events listed below; `hook::Mode { advisory,
 > blocking }` plus `default_mode(Event)` annotates each
@@ -318,11 +318,13 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > async::Awaitable<Result<void>>(Event, Payload)>`
 > callback) and can be constructed with either sink kind.
 > `hook::Bus` exposes `bind(Sink&, events)` /
-> `unbind(Sink&)` and one publish method —
+> `unbind(Sink&)`, the advisory
 > `publish_advisory(Event, Payload) -> Awaitable<
-> PublishOutcome>` — that iterates subscribed sinks in
-> subscription order, builds per-sink payload copies,
-> captures each sink's `Result<void>`
+> PublishOutcome>` method, and the constrained blocking
+> `publish_blocking<E>(Payload) -> Awaitable<
+> Result<HookDecision>>` method. Advisory publishing iterates
+> subscribed sinks in subscription order, builds per-sink
+> payload copies, captures each sink's `Result<void>`
 > in a `PublishOutcome::SinkResult` row, and never aborts
 > the publish on a sink error (advisory contract). The
 > `PublishOutcome` lets the caller surface sink failures
@@ -368,8 +370,16 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > render-side flow that asks the operator
 > (`permission_ask_rendered`) and captures the response
 > (`permission_ask_resolved`) still lives in the upcoming
-> agent/CLI slice, and timeout enforcement remains a future
-> config-driven hook-policy slice. Bench (`bench-hook`
+> agent/CLI slice. Slice 92 adds the config-driven blocking
+> timeout policy: `config::HooksConfig::timeout_ms` defaults
+> to 2000, `bootstrap::RuntimeAssembly` owns the process
+> `hook::Bus`, and `bootstrap::run` applies the parsed value
+> through `RuntimeAssemblyOptions::hook_blocking_timeout`.
+> `Bus::publish_blocking` races each sink against that
+> per-sink deadline, synthesizes a veto with
+> `reason=hook_timeout` on expiry, and records
+> `HookDecisionTrace::elapsed` so direct dispatch serializes
+> `metadata_json.hook_decisions[].elapsed_ms`. Bench (`bench-hook`
 > + `bench-tool`): `publish_no_sinks` ~242 ns vs.
 > `publish_one_sink` ~446 ns vs. `publish_three_sinks`
 > ~698 ns (~204 ns first-sink dispatch, ~126 ns per
@@ -414,10 +424,12 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > the bus yields a default-constructed `HookDecision{}`.
 > Slice 91 adds the dispatch consumer and the audit-side
 > `permission::AuditOutcome::blocked_by_hook` / `rewritten`
-> enumerators. The spec-0018 AC5 `hook_publish` audit-row
-> writer, `config.hooks.timeout_ms` enforcement, and the
-> first user-visible operator-prompt `permission_ask_rendered`
-> sink owned by `oran-cli` remain downstream.
+> enumerators. Slice 92 adds `hook::BusOptions` and
+> `HookDecisionTrace::elapsed` for blocking timeouts, plus
+> bootstrap/config wiring for `hooks.timeout_ms`. The
+> spec-0018 AC5 `hook_publish` audit-row writer and the first
+> user-visible operator-prompt `permission_ask_rendered` sink
+> owned by `oran-cli` remain downstream.
 
 ### Surface
 
@@ -572,6 +584,7 @@ concept HasBlockingDecision = requires { typename EventTraits<E>::Decision; }
 ```jsonc
 {
   "hooks": {
+    "timeout_ms": 2000,
     "sinks": [
       { "id": "shell-1", "kind": "shell", "path": "/.orangutan/hooks/pre-tool.sh" },
       { "id": "audit",   "kind": "webhook", "url": "https://audit.local/event" }
@@ -592,8 +605,9 @@ Every blocking hook decision is recorded in `audit.db` with `event`, `sink_id`,
 ### Failure Modes
 
 - A blocking sink that times out (`config.hooks.timeout_ms`, default 2000) → the bus
-  treats it as `Error::HookTimeout`. The triggering action is *not* executed; the agent
-  receives a `tool.error`-style response.
+  synthesizes a veto with `reason=hook_timeout`. The triggering action is *not*
+  executed; direct tool dispatch records `outcome=blocked_by_hook` plus the offending
+  sink id and `elapsed_ms`, and the agent receives a `tool.error`-style response.
 - A blocking sink that crashes (shell exit ≠ 0) → same as timeout.
 - An advisory sink failure → logged at WARN; otherwise ignored.
 

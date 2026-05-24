@@ -3,6 +3,7 @@
 #include <oran/bootstrap/bootstrap.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -26,6 +27,7 @@
 #include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/turn_id.hpp>
+#include <oran/hook.hpp>
 #include <oran/permission.hpp>
 #include <oran/storage.hpp>
 #include <oran/tool/workspace.hpp>
@@ -36,7 +38,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice91";
+constexpr std::string_view kVersion = "2.0.0-slice92";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 
 struct ParsedArgs {
@@ -679,15 +681,18 @@ core::Result<int> run(BootstrapOptions options) {
       .extra_write_roots = loaded->value.permissions().workspace.extra_write_roots,
   };
   assembly_options.trace_enabled = loaded->value.trace().enabled;
+  assembly_options.hook_blocking_timeout = std::chrono::milliseconds{loaded->value.hooks().timeout_ms};
   auto assembly = RuntimeAssembly::build(options.workspace, runtime.executor(), std::move(assembly_options));
   if (!assembly) {
     return std::unexpected(std::move(assembly).error());
   }
-  std::println("runtime assembly ready: audit={} ({}), approval-broker=fresh, workspace={}, trace={}",
-               assembly->audit_enabled() ? "enabled" : "disabled",
-               assembly->audit_enabled() ? assembly->audit_path() : std::string_view{"<null sink>"},
-               assembly->workspace().root(),
-               assembly->trace_enabled() ? "enabled" : "disabled");
+  std::println(
+      "runtime assembly ready: audit={} ({}), approval-broker=fresh, workspace={}, trace={}, hook-timeout={}ms",
+      assembly->audit_enabled() ? "enabled" : "disabled",
+      assembly->audit_enabled() ? assembly->audit_path() : std::string_view{"<null sink>"},
+      assembly->workspace().root(),
+      assembly->trace_enabled() ? "enabled" : "disabled",
+      assembly->hook_bus().options().blocking_timeout.count());
 
   auto cli_result = cli::run(cli::CliOptions{.args = std::span<const std::string_view>{parsed->cli_args}});
   if (!cli_result) {

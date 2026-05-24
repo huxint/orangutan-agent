@@ -87,6 +87,9 @@ constexpr auto kMinimalConfig = R"json(
     "store_raw_bodies": true,
     "retention_days": 14
   },
+  "hooks": {
+    "timeout_ms": 1234
+  },
   "profiles": {
     "default": {
       "provider": "openai",
@@ -147,6 +150,7 @@ TEST_CASE("Config::parse returns typed config values", "[unit][config]") {
   REQUIRE_FALSE(result->trace().enabled);
   REQUIRE(result->trace().store_raw_bodies);
   REQUIRE(result->trace().retention_days == 14);
+  REQUIRE(result->hooks().timeout_ms == 1234);
 
   REQUIRE(result->profiles().size() == 1);
   REQUIRE(result->profiles()[0].name == "default");
@@ -273,6 +277,7 @@ TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][con
   REQUIRE(result->trace().enabled);
   REQUIRE_FALSE(result->trace().store_raw_bodies);
   REQUIRE(result->trace().retention_days == 30);
+  REQUIRE(result->hooks().timeout_ms == 2000);
 
   // The example config now carries a non-empty permissions block + one
   // example agent overlay so the file documents the new schema.
@@ -430,6 +435,37 @@ TEST_CASE("Config::parse rejects malformed trace policy", "[unit][config][trace]
 
   SECTION("zero retention") {
     auto result = config::Config::parse(R"json({"trace": {"retention_days": 0}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+}
+
+TEST_CASE("Config::parse extracts hook policy", "[unit][config][hooks]") {
+  auto result = config::Config::parse(R"json({
+  "hooks": {
+    "timeout_ms": 75
+  }
+})json");
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->hooks().timeout_ms == 75);
+}
+
+TEST_CASE("Config::parse rejects malformed hook policy", "[unit][config][hooks]") {
+  SECTION("non-object hooks block") {
+    auto result = config::Config::parse(R"json({"hooks": []})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-integer timeout") {
+    auto result = config::Config::parse(R"json({"hooks": {"timeout_ms": "slow"}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("zero timeout") {
+    auto result = config::Config::parse(R"json({"hooks": {"timeout_ms": 0}})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }

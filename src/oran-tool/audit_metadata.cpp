@@ -80,6 +80,9 @@ std::string with_hook_decision_metadata(std::string_view metadata_json,
     row["sink_id"] = decision.sink_id;
     row["kind"] = std::string{core::enum_name(decision.kind)};
     row["reason"] = decision.reason;
+    if (decision.elapsed.has_value()) {
+      row["elapsed_ms"] = decision.elapsed->count();
+    }
     rows.push_back(std::move(row));
   }
   metadata["hook_decisions"] = std::move(rows);
