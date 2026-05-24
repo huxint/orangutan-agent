@@ -13,17 +13,20 @@
 //   3. A capability-aware glue between `core::ToolDef::required_capabilities`
 //      and `Rule::capability`, so a `Capability::read_file`-scoped rule
 //      only fires for tools that declared the capability.
-//   4. The slice-21 approval-broker bridge: when a rule fires
+//   4. The slice-21 + slice-94 approval-broker bridge: when a rule fires
 //      `Verdict::ask` and the caller supplies a
 //      `permission::ApprovalBroker` plus a `permission::ApprovalToken`
-//      in the context, dispatch consults the broker, promotes the
-//      audit outcome to `approved`/`rejected`, and either runs the
-//      handler or forwards the broker's rejection verbatim. When no
-//      broker or no token is supplied, the short-circuit
-//      `approval_required` path is preserved — but the resulting
-//      `Error` now carries `replay_max` / `approval_ttl_seconds` /
-//      `decision_reason` context entries so the agent loop can hand
-//      them straight to `ApprovalBroker::approve` without re-evaluating
+//      in the context, dispatch consults the broker, promotes the audit
+//      outcome to `approved`/`rejected`, and either runs the handler or
+//      forwards the broker's rejection verbatim. When a broker and bus are
+//      present but no replay token was supplied, dispatch publishes blocking
+//      `permission_ask_rendered`; a subscribed sink returning `proceed`
+//      issues a fresh broker token, stores it in `approval_token_output`
+//      when requested, and runs the handler after immediate broker.check.
+//      With no token and no subscribed ask sink, the short-circuit
+//      `approval_required` path is preserved — but the resulting `Error`
+//      carries `replay_max` / `approval_ttl_seconds` / `decision_reason`
+//      context entries so the agent loop can approve without re-evaluating
 //      the rule set.
 //   5. The slice-22+25+91 hook-bus tap: when the caller supplies a
 //      `hook::Bus*` on the context, dispatch first publishes blocking
@@ -38,10 +41,10 @@
 //      carries the absolute path to handlers via `ctx.resolved_path`, and
 //      records redacted resolver metadata in the audit row.
 //
-// What this slice does NOT cover. The operator-prompt sink for
-// `permission_ask_rendered`, output scrubbing through `oran-log::redact`,
-// deferred-tool promotion, and the future capability-gated
-// `tool::Runtime::workspace()` accessor all live in later slices.
+// What this slice does NOT cover. The concrete operator-prompt sink that
+// renders `permission_ask_rendered`, output scrubbing through
+// `oran-log::redact`, deferred-tool promotion, and the future capability-
+// gated `tool::Runtime::workspace()` accessor all live in later slices.
 //
 // Why a single `DispatchContext` rather than the design-doc's parameter
 // fan-out. Passing `permission::RuleSet&`, `permission::AuditSink&`,
@@ -122,16 +125,28 @@ struct DispatchContext {
   /// `expired` / `tool_mismatch` / `identity_mismatch` /
   /// `input_mismatch` / `mac_mismatch` / `no_grant` /
   /// `replay_exhausted`) is forwarded to the caller. When either
-  /// field is null, the legacy short-circuit applies — the audit
-  /// outcome stays `ask` and the call returns
-  /// `permission_denied` with `reason=approval_required`. The pointer
-  /// is non-owning; the caller (typically the agent loop) keeps the
-  /// broker alive across dispatch invocations.
+  /// field is null, dispatch may publish blocking
+  /// `hook::Event::permission_ask_rendered` when `bus` is also present.
+  /// A subscribed sink returning `proceed` issues a fresh broker token and
+  /// can copy it to `approval_token_output`; a `veto` returns
+  /// `permission_denied` with `reason=operator_denied`. With no subscribed
+  /// ask sink, the legacy short-circuit applies — the audit outcome stays
+  /// `ask` and the call returns `permission_denied` with
+  /// `reason=approval_required`. The pointer is non-owning; the caller
+  /// (typically the agent loop) keeps the broker alive across dispatch
+  /// invocations.
   permission::ApprovalBroker* approval_broker{nullptr};
   /// Optional approval token. See `approval_broker` above for how
   /// `dispatch` consumes the pair. The pointer is non-owning; the
   /// caller keeps the token alive across the dispatch invocation.
   const permission::ApprovalToken* approval_token{nullptr};
+  /// Optional output slot for approvals issued after a blocking
+  /// `permission_ask_rendered` prompt. When a sink approves an ask and no
+  /// caller-supplied `approval_token` was present, `dispatch` stores the
+  /// freshly issued token here before checking it through the broker. The
+  /// caller may keep the token for identical-input replay until the broker
+  /// exhausts or expires the grant.
+  permission::ApprovalToken* approval_token_output{nullptr};
   /// Wall-clock instant the broker uses to evaluate `expires_at`.
   /// The agent loop sets this from `core::time::now_utc()` per
   /// dispatch; tests pin it to a fixed time so the broker's TTL
@@ -253,13 +268,20 @@ public:
   ///   4. evaluate `(name, effective_input, def.required_capabilities, ctx.mode)`
   ///      against `ctx.rules` so audit still records the permission context
   ///      for known filesystem attempts that fail path policy.
-  ///   5. if the verdict is `ask` and both `ctx.approval_broker` and
-  ///      `ctx.approval_token` are set, and no path-resolution failure is
-  ///      pending, consult
-  ///      `broker.check(*token, name, effective_input, identity, now)` and
-  ///      remap the audit outcome to `approved` (broker accepted) or
-  ///      `rejected` (broker rejected — the broker's `reason`
-  ///      context entry replaces the rule reason in the audit row).
+  ///   5. if the verdict is `ask` and no path-resolution failure is pending:
+  ///      - if both `ctx.approval_broker` and `ctx.approval_token` are set,
+  ///        consult `broker.check(*token, name, effective_input, identity,
+  ///        now)` and remap the audit outcome to `approved` (broker
+  ///        accepted) or `rejected` (broker rejected — the broker's `reason`
+  ///        context entry replaces the rule reason in the audit row);
+  ///      - else if `ctx.approval_broker` and `ctx.bus` are set, publish
+  ///        blocking `hook::Event::permission_ask_rendered`. A subscribed
+  ///        sink returning `proceed` issues a broker token, optionally stores
+  ///        it in `approval_token_output`, checks it immediately, and runs the
+  ///        handler on success. A `veto` records `outcome=rejected` and
+  ///        returns `permission_denied` with `reason=operator_denied`.
+  ///        With no subscribed ask sink, the legacy `approval_required`
+  ///        short-circuit below is preserved.
   ///   6. record one `permission::AuditEvent` carrying the final
   ///      verdict, the (possibly remapped) outcome,
   ///      `input_hash = SHA-256(effective_input)`, the identity columns from

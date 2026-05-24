@@ -91,7 +91,14 @@ human approval for high-risk operations.
    carries them through with the design-doc defaults (`replay_max=8`,
    `approval_ttl=3600s`); and `permission::Decision` copies the matched
    rule's policy fields so the agent loop can pass them straight to
-   `ApprovalBroker::approve` via an `ApprovalGrant`. Bench: broker_approve
+   `ApprovalBroker::approve` via an `ApprovalGrant`. Slice 94 adds the
+   dispatch-side render bridge: when an `ask` decision has a broker and bus
+   but no replay token, `Registry::dispatch` publishes blocking
+   `permission_ask_rendered`, issues/checks a broker token on `proceed`, may
+   return it through `DispatchContext::approval_token_output`, records
+   operator vetoes as `outcome=rejected` / `reason=operator_denied`, and still
+   returns `approval_required` when no ask sink is subscribed. The concrete UI
+   prompt sink remains downstream. Bench: broker_approve
    ~9.9 µs (matches authority issue), broker_check_ok ~10.7 µs
    (authority verify + map find + decrement), broker_check_no_grant /
    broker_check_exhausted ~10.9 µs / ~11.0 µs (the two broker-only

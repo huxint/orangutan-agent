@@ -150,8 +150,18 @@ enum class Capability {
 > `reason`, optional `elapsed_ms` / `error`, and the full
 > `hook_decisions[]` trace. The ordinary permission row remains the
 > durable permission decision and keeps its existing outcome semantics.
+> Slice 94 adds the direct `permission_ask_rendered` bridge: when an
+> `ask` rule matches, a broker is present, no replay token was supplied,
+> and a bus is attached, dispatch publishes the typed approval payload.
+> A subscribed sink returning `proceed` issues a broker grant, optionally
+> copies the token into `DispatchContext::approval_token_output`, records
+> `outcome=approved`, and runs the handler; `veto` records
+> `outcome=rejected` / `reason=operator_denied`, skips the handler, and
+> serializes the sink trace under
+> `metadata_json.permission_ask_decisions[]`. With no subscribed ask sink,
+> the legacy `approval_required` short-circuit is preserved.
 > Capability-gated runtime services (`tool::Runtime` accessor surface)
-> and the operator-prompt sink stay on future slices.
+> and the concrete operator-prompt sink stay on future slices.
 > Slice 29 (2026-05-20) extends the built-in catalog with
 > `directory.list` (`tool::register_directory_list`, capability
 > `list_directory` — a new `core::Capability` enumerator so a
@@ -635,8 +645,8 @@ The registry is — and stays — **single-threaded**. Concurrency is owned by a
   byte-stable ordering),
 - enforces the per-call timeout and propagates the parent cancellation
   signal,
-- consumes `hook::Bus::publish_blocking` for `permission_ask_rendered`
-  rendering (the first blocking-hook consumer).
+- supplies the concrete UI sink for `permission_ask_rendered` rendering
+  (the registry already owns the blocking publish + broker handoff).
 
 Do **not** add internal locks to `tool::Registry` as a first move. The
 registry runs on the agent strand; the scheduler hops to worker executors at

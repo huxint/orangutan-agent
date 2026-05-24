@@ -2904,6 +2904,30 @@ TEST_CASE("Registry::dispatch with broker but no token keeps the short-circuit a
   });
 }
 
+TEST_CASE("Registry::dispatch with broker and bus but no ask sink keeps approval_required",
+          "[unit][tool][registry][approval][hook]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(core::ToolDef::with_no_input("noop", "noop"), make_echo_handler()).has_value());
+    auto rules = single_rule(permission::Rule{.verdict = permission::Verdict::ask, .tool_pattern = "noop"});
+    permission::RecordingAuditSink sink;
+    auto broker = make_broker();
+    orangutan::hook::Bus bus;
+    auto ctx = make_approval_ctx(io, rules, sink, &broker, /*token=*/nullptr, fixed_now());
+    ctx.bus = &bus;
+
+    auto result = co_await registry.dispatch("noop", "{}", ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(context_has(result.error(), "reason", "approval_required"));
+    REQUIRE(broker.outstanding_grants() == 0);
+
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::ask);
+    auto metadata = nlohmann::json::parse(sink.events()[0].metadata_json);
+    REQUIRE_FALSE(metadata.contains("permission_ask_decisions"));
+  });
+}
+
 TEST_CASE("Registry::dispatch does not consult the broker on allow verdicts (token ignored)",
           "[unit][tool][registry][approval]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
@@ -3034,6 +3058,9 @@ struct CapturedEvent {
   std::string error_kind;
   std::string error_message;
   std::string verdict;
+  std::string decision_reason;
+  std::uint32_t replay_max{0};
+  std::chrono::seconds approval_ttl{0};
 };
 
 class CaptureSink final : public orangutan::hook::Sink {
@@ -3101,6 +3128,13 @@ private:
             row.identity = alt.who.identity;
             row.error_kind = alt.error_kind;
             row.error_message = alt.error_message;
+          } else if constexpr (std::is_same_v<T, orangutan::hook::PermissionAskRenderedPayload>) {
+            row.tool_name = alt.tool_name;
+            row.input_json = alt.input_json;
+            row.identity = alt.who.identity;
+            row.decision_reason = alt.decision_reason;
+            row.replay_max = alt.replay_max;
+            row.approval_ttl = alt.approval_ttl;
           }
         },
         payload);
@@ -4048,6 +4082,162 @@ TEST_CASE("ask + broker rejection publishes tool_after with broker reason in the
     REQUIRE(sink.captures().size() == 1);
     REQUIRE_FALSE(sink.captures()[0].succeeded);
     REQUIRE(sink.captures()[0].error_kind == "permission_denied");
+  });
+}
+
+TEST_CASE("ask publishes permission_ask_rendered and proceeds when the operator approves",
+          "[unit][tool][hook][approval]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(core::ToolDef::with_no_input("noop", "noop"), make_echo_handler()).has_value());
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::ask,
+        .tool_pattern = "noop",
+        .replay_max = 3,
+        .approval_ttl = std::chrono::seconds{120},
+    });
+    permission::RecordingAuditSink audit;
+    auto broker = make_broker();
+    const auto now = fixed_now();
+    const std::string input = R"({"hello":"world"})";
+    permission::ApprovalToken issued_token{};
+
+    orangutan::hook::Bus bus;
+    CaptureSink prompt{"operator-prompt"};
+    orangutan::hook::HookDecision approved{};
+    approved.reason = "operator_approved:operator-1";
+    prompt.set_blocking_decision(approved);
+    bus.bind(prompt, {orangutan::hook::Event::permission_ask_rendered});
+
+    auto ctx = make_approval_ctx(io, rules, audit, &broker, /*token=*/nullptr, now);
+    ctx.bus = &bus;
+    ctx.approval_token_output = &issued_token;
+
+    auto result = co_await registry.dispatch("noop", input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == input);
+
+    REQUIRE(prompt.captures().size() == 1);
+    REQUIRE(prompt.captures()[0].event == orangutan::hook::Event::permission_ask_rendered);
+    REQUIRE(prompt.captures()[0].tool_name == "noop");
+    REQUIRE(prompt.captures()[0].input_json == input);
+    REQUIRE(prompt.captures()[0].identity == "operator-1");
+    REQUIRE(prompt.captures()[0].decision_reason == "rule #0 (ask: noop)");
+    REQUIRE(prompt.captures()[0].replay_max == 3);
+    REQUIRE(prompt.captures()[0].approval_ttl == std::chrono::seconds{120});
+
+    REQUIRE(audit.events().size() == 1);
+    const auto& event = audit.events()[0];
+    REQUIRE(event.verdict == permission::Verdict::ask);
+    REQUIRE(event.outcome == permission::AuditOutcome::approved);
+    REQUIRE(event.reason == "rule #0 (ask: noop)");
+    auto metadata = nlohmann::json::parse(event.metadata_json);
+    REQUIRE(metadata["permission_ask_decisions"].size() == 1);
+    REQUIRE(metadata["permission_ask_decisions"][0]["sink_id"] == "operator-prompt");
+    REQUIRE(metadata["permission_ask_decisions"][0]["kind"] == "proceed");
+    REQUIRE(metadata["permission_ask_decisions"][0]["reason"] == "operator_approved:operator-1");
+
+    auto replay_ctx = make_approval_ctx(io, rules, audit, &broker, &issued_token, now);
+    auto replay = co_await registry.dispatch("noop", input, replay_ctx);
+    REQUIRE(replay.has_value());
+    REQUIRE(replay->text == input);
+    REQUIRE(audit.events().size() == 2);
+    REQUIRE(audit.events()[1].outcome == permission::AuditOutcome::approved);
+  });
+}
+
+TEST_CASE("ask rejects permission_ask_rendered proceed without operator identity", "[unit][tool][hook][approval]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    std::size_t handler_calls = 0;
+    tool::Registry registry;
+    REQUIRE(registry
+                .add(core::ToolDef::with_no_input("noop", "noop"),
+                     [&](std::string_view /*input*/,
+                         tool::DispatchContext& /*ctx*/) -> async::Awaitable<core::Result<tool::Output>> {
+                       ++handler_calls;
+                       co_return tool::Output::text_only("should-not-run");
+                     })
+                .has_value());
+    auto rules = single_rule(permission::Rule{.verdict = permission::Verdict::ask, .tool_pattern = "noop"});
+    permission::RecordingAuditSink audit;
+    auto broker = make_broker();
+
+    orangutan::hook::Bus bus;
+    CaptureSink prompt{"operator-prompt"};
+    bus.bind(prompt, {orangutan::hook::Event::permission_ask_rendered});
+
+    auto ctx = make_approval_ctx(io, rules, audit, &broker, /*token=*/nullptr, fixed_now());
+    ctx.bus = &bus;
+
+    auto result = co_await registry.dispatch("noop", R"({"empty_proceed":true})", ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::permission_denied);
+    REQUIRE(context_has(result.error(), "reason", "operator_denied"));
+    REQUIRE(context_has(result.error(), "decision_kind", "proceed"));
+    REQUIRE(context_has(result.error(), "hook_reason", "permission_ask_missing_operator_reason"));
+    REQUIRE(handler_calls == 0);
+    REQUIRE(broker.outstanding_grants() == 0);
+
+    REQUIRE(audit.events().size() == 1);
+    const auto& event = audit.events()[0];
+    REQUIRE(event.verdict == permission::Verdict::ask);
+    REQUIRE(event.outcome == permission::AuditOutcome::rejected);
+    REQUIRE(event.reason == "operator_denied");
+    auto metadata = nlohmann::json::parse(event.metadata_json);
+    REQUIRE(metadata["permission_ask_decisions"].size() == 1);
+    REQUIRE(metadata["permission_ask_decisions"][0]["sink_id"] == "operator-prompt");
+    REQUIRE(metadata["permission_ask_decisions"][0]["kind"] == "proceed");
+    REQUIRE(metadata["permission_ask_decisions"][0]["reason"] == "");
+  });
+}
+
+TEST_CASE("ask publishes permission_ask_rendered and rejects when the operator vetoes",
+          "[unit][tool][hook][approval]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    std::size_t handler_calls = 0;
+    tool::Registry registry;
+    REQUIRE(registry
+                .add(core::ToolDef::with_no_input("noop", "noop"),
+                     [&](std::string_view /*input*/,
+                         tool::DispatchContext& /*ctx*/) -> async::Awaitable<core::Result<tool::Output>> {
+                       ++handler_calls;
+                       co_return tool::Output::text_only("should-not-run");
+                     })
+                .has_value());
+    auto rules = single_rule(permission::Rule{.verdict = permission::Verdict::ask, .tool_pattern = "noop"});
+    permission::RecordingAuditSink audit;
+    auto broker = make_broker();
+
+    orangutan::hook::HookDecision veto{};
+    veto.kind = orangutan::hook::HookDecisionKind::veto;
+    veto.reason = "operator_approved:false";
+
+    orangutan::hook::Bus bus;
+    CaptureSink prompt{"operator-prompt"};
+    prompt.set_blocking_decision(veto);
+    bus.bind(prompt, {orangutan::hook::Event::permission_ask_rendered});
+
+    auto ctx = make_approval_ctx(io, rules, audit, &broker, /*token=*/nullptr, fixed_now());
+    ctx.bus = &bus;
+
+    auto result = co_await registry.dispatch("noop", R"({"denied":true})", ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::permission_denied);
+    REQUIRE(context_has(result.error(), "reason", "operator_denied"));
+    REQUIRE(context_has(result.error(), "hook_reason", "operator_approved:false"));
+    REQUIRE(handler_calls == 0);
+    REQUIRE(broker.outstanding_grants() == 0);
+
+    REQUIRE(audit.events().size() == 1);
+    const auto& event = audit.events()[0];
+    REQUIRE(event.verdict == permission::Verdict::ask);
+    REQUIRE(event.outcome == permission::AuditOutcome::rejected);
+    REQUIRE(event.reason == "operator_denied");
+    auto metadata = nlohmann::json::parse(event.metadata_json);
+    REQUIRE(metadata["permission_ask_decisions"].size() == 1);
+    REQUIRE(metadata["permission_ask_decisions"][0]["sink_id"] == "operator-prompt");
+    REQUIRE(metadata["permission_ask_decisions"][0]["kind"] == "veto");
+    REQUIRE(metadata["permission_ask_decisions"][0]["reason"] == "operator_approved:false");
   });
 }
 

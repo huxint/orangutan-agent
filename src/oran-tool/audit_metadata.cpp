@@ -100,6 +100,17 @@ std::string with_hook_decision_metadata(std::string_view metadata_json,
   return metadata.dump();
 }
 
+std::string with_permission_ask_metadata(std::string_view metadata_json,
+                                         std::span<const hook::HookDecisionTrace> trace) {
+  auto metadata = parse_metadata_object(metadata_json);
+  auto rows = nlohmann::json::array();
+  for (const auto& decision : trace) {
+    rows.push_back(hook_decision_trace_to_json(decision));
+  }
+  metadata["permission_ask_decisions"] = std::move(rows);
+  return metadata.dump();
+}
+
 std::string hook_publish_metadata_json(hook::Event event,
                                        const hook::HookDecisionTrace& winning_trace,
                                        std::span<const hook::HookDecisionTrace> trace) {

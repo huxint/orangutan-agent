@@ -1,10 +1,12 @@
 // include/oran/hook/payload.hpp — typed payloads for hook events.
 //
 // Slices 22 + 25 ship typed shapes for the four tool-lifecycle events
-// (`tool_before`, `tool_dispatched`, `tool_after`, `tool_error`). Events
-// without a typed shape yet carry `std::monostate` so sinks subscribed to
-// them can observe occurrence without payload content; typed shapes land
-// with the producing subsystem.
+// (`tool_before`, `tool_dispatched`, `tool_after`, `tool_error`). Slice 94
+// adds the first permission ask-flow shape (`permission_ask_rendered`) so UI
+// sinks can render an approval prompt and return a blocking decision. Events
+// without a typed shape yet carry `std::monostate` so sinks subscribed to them
+// can observe occurrence without payload content; typed shapes land with the
+// producing subsystem.
 
 #pragma once
 
@@ -118,12 +120,32 @@ struct ToolErrorPayload {
   std::chrono::nanoseconds duration{0};
 };
 
+/// Approval prompt payload. Published when a permission rule returns `ask`
+/// and the dispatch has an approval broker but no caller-supplied token.
+/// UI-facing sinks render this into their own channel-specific prompt and
+/// return a blocking decision: `proceed` approves, `veto` denies.
+struct PermissionAskRenderedPayload {
+  std::string tool_name;
+  std::string input_json;
+  Identity who;
+  /// Human-readable rule/hook reason that caused the ask.
+  std::string decision_reason;
+  /// Replay policy copied from the matched permission decision.
+  std::uint32_t replay_max{8};
+  std::chrono::seconds approval_ttl{3600};
+  core::Time requested_at{};
+};
+
 /// `std::monostate` is the placeholder for events whose typed payload has
 /// not landed yet — provider, memory, channel, orchestration, automation,
-/// session, and permission ask-flow events. Sinks subscribed to those
-/// events receive the variant in its monostate alternative; they can still
-/// react to the occurrence and the event kind.
-using Payload =
-    std::variant<std::monostate, ToolBeforePayload, ToolDispatchedPayload, ToolAfterPayload, ToolErrorPayload>;
+/// and session events. Sinks subscribed to those events receive the variant
+/// in its monostate alternative; they can still react to the occurrence and
+/// the event kind.
+using Payload = std::variant<std::monostate,
+                             ToolBeforePayload,
+                             ToolDispatchedPayload,
+                             ToolAfterPayload,
+                             ToolErrorPayload,
+                             PermissionAskRenderedPayload>;
 
 }  // namespace orangutan::hook

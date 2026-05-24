@@ -184,7 +184,14 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > copied from the matched rule so the agent loop can hand them
 > straight to `ApprovalBroker::approve` without re-running
 > `RuleSet::evaluate`. Allow/deny verdicts ignore the broker
-> entirely. Bench (`bench-tool/approval.cpp`):
+> entirely. Slice 94 adds the dispatch-side blocking prompt bridge:
+> when a broker and bus are present but no token was supplied,
+> `Registry::dispatch` publishes `permission_ask_rendered` with a typed
+> payload, treats a `proceed` decision as operator approval by issuing and
+> immediately checking a broker token, optionally returns that token through
+> `DispatchContext::approval_token_output`, and treats `veto` as
+> `outcome=rejected` / `reason=operator_denied`. Bench
+> (`bench-tool/approval.cpp`):
 > `dispatch_ask_short_circuit` ~2.4 µs (baseline — same shape as
 > `registry.dispatch_allow` plus the new error-context build),
 > `dispatch_ask_approved` ~13.4 µs, `dispatch_ask_rejected`
@@ -192,9 +199,8 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > short-circuit, ~10 µs of which is the HMAC verify
 > (`bench-permission/approval` shows ~9.3 µs for verify_ok), so
 > the registry-side overhead on top of the broker work is
-> ~875 ns. The remaining `0008-permissions.md` criterion 2
-> render-side flow (operator prompt + token capture) lives in
-> the upcoming `oran-agent` slice.
+> ~875 ns. The remaining render-side work is the concrete operator-prompt
+> sink that turns the typed payload into a terminal/UI question.
 
 ### Sources
 
@@ -303,7 +309,7 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 
 ## Hook Bus
 
-> **Bus status (2026-05-25, slice 93):** the foundation
+> **Bus status (2026-05-25, slice 94):** the foundation
 > ships as `oran-hook`. `hook::Event` enumerates the 41
 > lifecycle events listed below; `hook::Mode { advisory,
 > blocking }` plus `default_mode(Event)` annotates each
@@ -333,8 +339,8 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > that today covers `std::monostate` (placeholder for
 > events whose typed shape lands with the producing
 > subsystem) plus `ToolBeforePayload`,
-> `ToolDispatchedPayload`, `ToolAfterPayload`, and
-> `ToolErrorPayload`. Slice 60 adds the `ToolUsage`
+> `ToolDispatchedPayload`, `ToolAfterPayload`, `ToolErrorPayload`, and
+> slice 94's `PermissionAskRenderedPayload`. Slice 60 adds the `ToolUsage`
 > metrics copied from `tool::Output::usage` onto successful
 > `ToolAfterPayload`s without making `oran-hook` depend on
 > `oran-tool`; slice 65 adds optional
@@ -366,11 +372,16 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > (subscription order, up to the first non-`proceed`).
 > Dispatch then publishes advisory `tool_dispatched` before
 > handlers run on allow / ask-approved paths, `tool_error`
-> on error exits, and `tool_after` at every exit. The
-> render-side flow that asks the operator
-> (`permission_ask_rendered`) and captures the response
-> (`permission_ask_resolved`) still lives in the upcoming
-> agent/CLI slice. Slice 92 adds the config-driven blocking
+> on error exits, and `tool_after` at every exit. Slice 94 also
+> consumes blocking `permission_ask_rendered` for direct dispatch: if an
+> `ask` decision has a broker and bus but no replay token, dispatch
+> publishes the typed approval payload, treats `proceed` as approval by
+> issuing/checking a broker token, treats `veto` as
+> `operator_denied`, and records `metadata_json.permission_ask_decisions`.
+> A bus with no subscribed ask sink still falls through to the legacy
+> `approval_required` error. The concrete renderer that asks the
+> operator remains in the upcoming CLI slice. Slice 92 adds the
+> config-driven blocking
 > timeout policy: `config::HooksConfig::timeout_ms` defaults
 > to 2000, `bootstrap::RuntimeAssembly` owns the process
 > `hook::Bus`, and `bootstrap::run` applies the parsed value
@@ -428,8 +439,10 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > `HookDecisionTrace::elapsed` for blocking timeouts, plus
 > bootstrap/config wiring for `hooks.timeout_ms`. Slice 93 adds
 > joinable `event_kind=hook_publish` audit rows for traced blocking
-> `tool_before` publishes. The first user-visible operator-prompt
-> `permission_ask_rendered` sink owned by `oran-cli` remains downstream.
+> `tool_before` publishes. Slice 94 adds the typed
+> `PermissionAskRenderedPayload` and direct-dispatch
+> `permission_ask_rendered` broker bridge. The first user-visible
+> operator-prompt sink owned by `oran-cli` remains downstream.
 
 ### Surface
 

@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 93 (`xmake run orangutan` reports slice 93)
+- **Slice:** 94 (`xmake run orangutan` reports slice 94)
 - **Last completed history:**
-  [`histories/2026-05/20260525-0331-hook-publish-audit-rows.md`](histories/2026-05/20260525-0331-hook-publish-audit-rows.md)
+  [`histories/2026-05/20260525-0442-permission-ask-dispatch-bridge.md`](histories/2026-05/20260525-0442-permission-ask-dispatch-bridge.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
@@ -18,7 +18,32 @@
   plan because they stayed under the existing spec-0015/0017/0018
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 93 closes
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 94 closes
+  the direct-dispatch half of spec-0015's `permission_ask_rendered`
+  round-trip. `<oran/hook/payload.hpp>` now carries
+  `hook::PermissionAskRenderedPayload { tool_name, input_json, who,
+  decision_reason, replay_max, approval_ttl, requested_at }` in the public
+  `hook::Payload` variant. `tool::DispatchContext` gains an optional
+  `approval_token_output` slot. When a permission rule returns `ask`, a
+  broker is present, no caller-supplied token exists, and a bus is attached,
+  `Registry::dispatch` publishes blocking
+  `Event::permission_ask_rendered`. A subscribed sink returning `proceed`
+  issues a broker grant using the matched rule's TTL/replay policy, stores
+  the token for the caller when requested, immediately verifies it, records
+  `outcome=approved`, and runs the handler. A sink returning `veto` records
+  `outcome=rejected`, `reason=operator_denied`, skips the handler, and returns
+  `Error::permission_denied` with `reason=operator_denied` plus the sink
+  reason as `hook_reason`. Unsupported ask decisions (`rewrite` /
+  `require_approval`) are rejected the same way, and buses with no subscribed
+  ask sink preserve the legacy `approval_required` short-circuit. Permission
+  ask sink traces are serialized under
+  `metadata_json.permission_ask_decisions[]`. Focused result: `test-tool` 178
+  cases / 1838 assertions. Remaining spec-0015 work is now the concrete
+  operator-prompt sink owned by `oran-cli`, which will render the payload and
+  return the human decision through this bridge, plus the later binary handoff
+  that drives `agent::Loop` from inside `orangutan` once a real provider
+  adapter exists.
+  Slice 93 closes
   spec-0018 AC5 for direct `tool_before` blocking publishes. The audit DB
   migration stream now reaches version 4:
   `src/oran-storage/migrations/audit/0004-audit-event-kind.sql` adds
@@ -574,7 +599,7 @@ Closed entries do *not* live here — the tracker is canonical.
   the documented reference hardware (8-core / NVMe / native Linux);
   otherwise the gate fires on environmental drift, not real regressions.
 - 2026-05-18 — Hook bus blocking-policy follow-ups remain after slices 90,
-  91, 92, and 93. Slice 90 shipped the publish surface
+  91, 92, 93, and 94. Slice 90 shipped the publish surface
   (`Bus::publish_blocking<E>`, `HookDecision`,
   `EventTraits<E>` / `HasBlockingDecision<E>`, `Sink::handle_blocking`
   default). Slice 91 consumes `tool_before` inside direct
@@ -583,8 +608,9 @@ Closed entries do *not* live here — the tracker is canonical.
   `metadata_json.hook_decisions`. Slice 92 wires `hooks.timeout_ms` into
   the assembly-owned hook bus and persists timeout `elapsed_ms`. Slice 93
   writes joinable `event_kind=hook_publish` audit rows for traced blocking
-  `tool_before` publishes. Remaining: the first operator-prompt sink for
-  `permission_ask_rendered`.
+  `tool_before` publishes. Slice 94 ships the direct-dispatch
+  `permission_ask_rendered` broker bridge and token handoff. Remaining: the
+  concrete operator-prompt sink for `permission_ask_rendered`.
 - 2026-05-17 — `file.search` does not yet ship ripgrep-class optimisations
   (mmap, extension-based binary skip, multi-threaded walk).
   Adequate at slice 20 (~27 µs / 4-file tree) but 3-10× slower than a tuned

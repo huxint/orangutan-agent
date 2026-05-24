@@ -6,6 +6,7 @@
 #include <chrono>
 #include <expected>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -128,6 +129,42 @@ namespace {
       .with("hook_reason", std::move(reason));
 }
 
+[[nodiscard]] core::Error operator_denied_error(std::string reason) {
+  if (reason.empty()) {
+    reason = "permission_ask_veto";
+  }
+  return core::Error::permission_denied("operator denied approval")
+      .with("reason", "operator_denied")
+      .with("hook_reason", std::move(reason));
+}
+
+[[nodiscard]] core::Error unsupported_permission_ask_decision_error(const hook::HookDecision& decision) {
+  return core::Error::permission_denied("permission approval prompt returned an unsupported decision")
+      .with("reason", "operator_denied")
+      .with("decision_kind", std::string{core::enum_name(decision.kind)})
+      .with("hook_reason", hook_decision_reason(decision, "unsupported_permission_ask_decision"));
+}
+
+[[nodiscard]] core::Error missing_permission_ask_reason_error() {
+  return core::Error::permission_denied("permission approval prompt returned proceed without operator identity")
+      .with("reason", "operator_denied")
+      .with("decision_kind", std::string{core::enum_name(hook::HookDecisionKind::proceed)})
+      .with("hook_reason", "permission_ask_missing_operator_reason");
+}
+
+[[nodiscard]] std::string_view permission_ask_operator_reason(const hook::HookDecision& decision) {
+  if (!decision.reason.empty()) {
+    return decision.reason;
+  }
+  auto reversed_trace = decision.trace | std::views::reverse;
+  const auto it =
+      std::ranges::find_if(reversed_trace, [](const hook::HookDecisionTrace& trace) { return !trace.reason.empty(); });
+  if (it == reversed_trace.end()) {
+    return {};
+  }
+  return it->reason;
+}
+
 [[nodiscard]] permission::Decision
 require_approval_decision(permission::Decision decision, const hook::HookDecision& hook_decision, core::Time now) {
   if (decision.verdict != permission::Verdict::allow) {
@@ -231,6 +268,21 @@ require_approval_decision(permission::Decision decision, const hook::HookDecisio
       .who = make_hook_identity(ctx),
       .started_at = started_at,
       .verdict = std::string{core::enum_name(verdict)},
+  };
+}
+
+[[nodiscard]] hook::PermissionAskRenderedPayload build_permission_ask_payload(std::string_view name,
+                                                                              std::string_view input_json,
+                                                                              const DispatchContext& ctx,
+                                                                              const permission::Decision& decision) {
+  return hook::PermissionAskRenderedPayload{
+      .tool_name = std::string{name},
+      .input_json = std::string{input_json},
+      .who = make_hook_identity(ctx),
+      .decision_reason = decision.reason,
+      .replay_max = decision.replay_max,
+      .approval_ttl = decision.approval_ttl,
+      .requested_at = ctx.now,
   };
 }
 
@@ -419,15 +471,17 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
       event.outcome = permission::AuditOutcome::rewritten;
     }
 
-    // Slice 21: when the verdict is `ask` AND the caller supplied both an
-    // approval broker and a candidate token, consult the broker BEFORE
+    // Slice 21 + 94: when the verdict is `ask`, resolve approval BEFORE
     // recording so the audit row carries the final outcome (approved or
-    // rejected) rather than the pre-broker `ask`. Allow/deny paths are
-    // unaffected — the broker is meaningless without an `ask`-fired rule.
+    // rejected) rather than the pre-approval `ask`. A caller-supplied token
+    // is the replay path; otherwise a subscribed `permission_ask_rendered`
+    // blocking sink can approve/deny this dispatch in-place.
     std::optional<core::Error> broker_rejection;
-    const bool broker_consulted = !path_resolution.error.has_value() && decision.verdict == permission::Verdict::ask &&
-                                  ctx.approval_broker != nullptr && ctx.approval_token != nullptr;
-    if (broker_consulted) {
+    bool broker_consulted = false;
+    const bool approval_possible = !path_resolution.error.has_value() && decision.verdict == permission::Verdict::ask &&
+                                   ctx.approval_broker != nullptr;
+    if (approval_possible && ctx.approval_token != nullptr) {
+      broker_consulted = true;
       auto checked = ctx.approval_broker->check(*ctx.approval_token, name, effective_input, ctx.identity, ctx.now);
       if (checked) {
         event.outcome = permission::AuditOutcome::approved;
@@ -441,6 +495,63 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
           event.reason = std::string{reason};
         }
         broker_rejection = std::move(checked).error();
+      }
+    } else if (approval_possible && ctx.bus != nullptr) {
+      auto ask_decision = co_await ctx.bus->publish_blocking<hook::Event::permission_ask_rendered>(
+          build_permission_ask_payload(name, effective_input, ctx, decision));
+      if (!ask_decision) {
+        event.outcome = permission::AuditOutcome::rejected;
+        event.reason = "operator_denied";
+        broker_rejection = std::move(ask_decision).error();
+      } else if (!ask_decision->trace.empty()) {
+        event.metadata_json = detail::with_permission_ask_metadata(event.metadata_json, ask_decision->trace);
+        switch (ask_decision->kind) {
+          case hook::HookDecisionKind::proceed: {
+            if (permission_ask_operator_reason(*ask_decision).empty()) {
+              event.outcome = permission::AuditOutcome::rejected;
+              event.reason = "operator_denied";
+              broker_rejection = missing_permission_ask_reason_error();
+              break;
+            }
+            broker_consulted = true;
+            auto issued = ctx.approval_broker->approve(
+                permission::ApprovalGrant{
+                    .tool_name = name,
+                    .input = effective_input,
+                    .identity = ctx.identity,
+                    .ttl = decision.approval_ttl,
+                    .replay_max = decision.replay_max,
+                },
+                ctx.now);
+            const auto* token_to_check = &issued;
+            if (ctx.approval_token_output != nullptr) {
+              *ctx.approval_token_output = std::move(issued);
+              token_to_check = ctx.approval_token_output;
+            }
+            auto checked = ctx.approval_broker->check(*token_to_check, name, effective_input, ctx.identity, ctx.now);
+            if (checked) {
+              event.outcome = permission::AuditOutcome::approved;
+            } else {
+              event.outcome = permission::AuditOutcome::rejected;
+              if (const auto reason = broker_reason(checked.error()); !reason.empty()) {
+                event.reason = std::string{reason};
+              }
+              broker_rejection = std::move(checked).error();
+            }
+            break;
+          }
+          case hook::HookDecisionKind::veto:
+            event.outcome = permission::AuditOutcome::rejected;
+            event.reason = "operator_denied";
+            broker_rejection = operator_denied_error(ask_decision->reason);
+            break;
+          case hook::HookDecisionKind::rewrite:
+          case hook::HookDecisionKind::require_approval:
+            event.outcome = permission::AuditOutcome::rejected;
+            event.reason = "operator_denied";
+            broker_rejection = unsupported_permission_ask_decision_error(*ask_decision);
+            break;
+        }
       }
     }
 

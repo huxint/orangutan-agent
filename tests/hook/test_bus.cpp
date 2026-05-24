@@ -32,7 +32,7 @@ namespace {
 /// `payload_kind` is a stable string the test can match against.
 struct Capture {
   hook::Event event;
-  std::string payload_kind;  // "before", "dispatched", "after", "error", "monostate"
+  std::string payload_kind;  // "before", "dispatched", "after", "error", "ask", "monostate"
   std::optional<std::string> data_json;
 };
 
@@ -50,6 +50,8 @@ struct Capture {
           return "after";
         } else if constexpr (std::is_same_v<T, hook::ToolErrorPayload>) {
           return "error";
+        } else if constexpr (std::is_same_v<T, hook::PermissionAskRenderedPayload>) {
+          return "ask";
         }
       },
       payload);
