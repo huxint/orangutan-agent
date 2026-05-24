@@ -55,10 +55,14 @@ struct LoopOptions {
 };
 
 struct TraceContext {
+  /// Operator trace switch after the caller maps `config::TraceConfig` into
+  /// turn inputs. `false` preserves trace-disabled bytes: no `trace_turns` row
+  /// is written and direct tool audit rows keep `parent_turn_id = NULL`.
+  bool enabled{true};
   /// Optional storage writer for spec-0018 per-turn trace rows. When null, the
   /// loop preserves the pre-trace behavior and only `turn_id` audit stamping can
-  /// occur. When non-null, `RunTurnInputs::turn_id`, `session_id`, `agent_key`,
-  /// and `origin` must also be set.
+  /// occur if `enabled` is true. When non-null, `RunTurnInputs::turn_id`,
+  /// `session_id`, `agent_key`, and `origin` must also be set.
   storage::TraceRepository* repository{nullptr};
   core::TurnId session_id{};
   std::optional<core::TurnId> parent_turn_id{};
@@ -92,10 +96,10 @@ struct RunTurnInputs {
   std::optional<std::uint32_t> thinking_budget{};
   provider::RetryPolicy retry{};
   bool stream{true};
-  /// Optional trace/audit correlation id for this turn. When set, the loop
-  /// threads it into every direct tool dispatch as
-  /// `DispatchContext::parent_turn_id`; when unset, dispatch audit rows keep
-  /// `parent_turn_id = NULL` for trace-disabled and pre-trace callers.
+  /// Optional trace/audit correlation id for this turn. When set and
+  /// `trace.enabled` is true, the loop threads it into every direct tool
+  /// dispatch as `DispatchContext::parent_turn_id`; when unset, dispatch audit
+  /// rows keep `parent_turn_id = NULL` for trace-disabled and pre-trace callers.
   std::optional<core::TurnId> turn_id{};
   /// Optional per-turn trace writer context. This first writer slice records
   /// redacted `trace_turns` rows when a caller supplies both `trace.repository`

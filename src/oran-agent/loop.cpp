@@ -170,6 +170,13 @@ void add_usage(provider::Usage& total, const provider::Usage& next) {
   return it == rendered.sections.end() ? 0 : it->content_hash;
 }
 
+[[nodiscard]] std::optional<core::TurnId> dispatch_parent_turn_id(const RunTurnInputs& inputs) {
+  if (!inputs.trace.enabled) {
+    return std::nullopt;
+  }
+  return inputs.turn_id;
+}
+
 [[nodiscard]] core::Result<storage::AppendTraceTurnRequest>
 make_trace_request(const RunTurnInputs& inputs,
                    const provider::Route& route,
@@ -182,6 +189,9 @@ make_trace_request(const RunTurnInputs& inputs,
                    std::optional<std::string> cancellation_phase = std::nullopt) {
   if (inputs.trace.repository == nullptr) {
     return std::unexpected(core::Error::invalid_argument("trace repository is not configured"));
+  }
+  if (!inputs.trace.enabled) {
+    return std::unexpected(core::Error::invalid_argument("trace writer is disabled"));
   }
   if (!inputs.turn_id.has_value()) {
     return std::unexpected(core::Error::invalid_argument("trace writer requires a turn id"));
@@ -244,7 +254,7 @@ write_trace_turn(const RunTurnInputs& inputs,
                  std::string route_model,
                  core::StopReason stop_reason,
                  std::optional<std::string> cancellation_phase = std::nullopt) {
-  if (inputs.trace.repository == nullptr) {
+  if (!inputs.trace.enabled || inputs.trace.repository == nullptr) {
     co_return core::Result<void>{};
   }
   auto request = make_trace_request(inputs,
@@ -407,7 +417,7 @@ public:
         for (const auto& use : tool_uses) {
           core::Result<tool::Output> output;
           {
-            ScopedParentTurnId parent_turn_id{*inputs.dispatch_context, inputs.turn_id};
+            ScopedParentTurnId parent_turn_id{*inputs.dispatch_context, dispatch_parent_turn_id(inputs)};
             output = co_await inputs.tools->dispatch(use.name, use.input_json, *inputs.dispatch_context);
           }
           auto tool_result = tool_result_from(use.id, std::move(output));

@@ -732,6 +732,73 @@ TEST_CASE("Loop persists a terminal trace row and correlates storage audit rows"
   });
 }
 
+TEST_CASE("Loop disables trace rows and audit parent ids when trace is off", "[unit][agent][loop][trace]") {
+  TempDb db{"oran-agent-loop-trace-disabled"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_trace_pool(io, db);
+    storage::TraceRepository trace{pool};
+    storage::AuditRepository audit_repo{pool};
+    auto migrated = co_await trace.migrate();
+    REQUIRE(migrated.has_value());
+
+    RecordingSequenceProvider provider{std::vector<provider::Response>{
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "t1",
+                .name = "file.read",
+                .input_json = R"({"value":"a"})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::nullopt,
+        },
+        provider::Response{
+            .blocks = {core::TextContent{.text = "final"}},
+            .stop_reason = core::StopReason::end_turn,
+            .usage = {},
+            .model_used = std::string{"fake-trace-model"},
+        },
+    }};
+    agent::Loop loop{provider, default_route()};
+    tool::Registry registry;
+    add_canned_tool(registry, canned_tool_def("file.read"), "read-ok");
+    auto rules = allow_all_rules();
+    permission::StorageAuditSink audit{audit_repo};
+    auto ctx = dispatch_context(io, rules, audit);
+    ctx.parent_turn_id = turn_id_with(0x70);
+
+    const auto catalog = registry.catalog();
+    const std::vector<core::Message> tail{core::Message::user_text("trace disabled read")};
+    auto inputs = base_inputs(catalog, tail);
+    inputs.turn_id = turn_id_with(0x31);
+    inputs.trace = agent::TraceContext{
+        .enabled = false,
+        .repository = &trace,
+        .session_id = turn_id_with(0x80),
+        .agent_key = "coder",
+        .origin = "cli",
+    };
+    inputs.tools = &registry;
+    inputs.dispatch_context = &ctx;
+    auto result = co_await loop.run_turn(inputs);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "final");
+
+    auto count = co_await trace.count_turns();
+    REQUIRE(count.has_value());
+    REQUIRE(*count == 0);
+
+    auto events = co_await audit_repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-A", .limit = 10});
+    REQUIRE(events.has_value());
+    REQUIRE(events->size() == 1);
+    REQUIRE((*events)[0].tool_name == "file.read");
+    REQUIRE_FALSE((*events)[0].parent_turn_id.has_value());
+    REQUIRE(ctx.parent_turn_id.has_value());
+    REQUIRE(*ctx.parent_turn_id == turn_id_with(0x70));
+  });
+}
+
 TEST_CASE("Loop preserves multiple tool_results in tool_use order", "[unit][agent][loop]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     RecordingSequenceProvider provider{std::vector<provider::Response>{

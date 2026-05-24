@@ -7,26 +7,40 @@
 
 ## Snapshot
 
-- **Slice:** 81 (`xmake run orangutan` reports slice 81)
+- **Slice:** 82 (`xmake run orangutan` reports slice 82)
 - **Last completed history:**
-  [`histories/2026-05/20260524-1225-trace-config-policy.md`](histories/2026-05/20260524-1225-trace-config-policy.md)
+  [`histories/2026-05/20260524-1240-agent-trace-disable-policy.md`](histories/2026-05/20260524-1240-agent-trace-disable-policy.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
-  the first three agent-loop increments closed in focused history/commit slices
+  the recent agent-loop increments closed in focused history/commit slices
   and did not need a new plan because they stayed under the existing spec-0017
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 81 lands the
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 82 lands the
+  explicit trace-disabled loop policy required by spec-0018 AC9.
+  `agent::TraceContext` now has an `enabled` switch that defaults to true for
+  existing trace-enabled and pre-trace callers. When callers set
+  `RunTurnInputs::trace.enabled=false`, `agent::Loop` writes zero
+  `trace_turns` rows even if a `TraceRepository` is present, threads
+  `std::nullopt` into direct tool dispatch so new audit rows keep
+  `audit_events.parent_turn_id = NULL`, and restores any reusable
+  `tool::DispatchContext::parent_turn_id` after the dispatch finishes.
+  `test-agent` covers the policy with a storage-backed single-tool turn and
+  now reports 17 cases / 247 assertions. Bootstrap still does not map
+  `config::TraceConfig` into loop inputs; cancellation/error trace rows,
+  turn-id generation, hook publish rows, CLI `--trace`, and binary handoff
+  remain downstream. Slice 81 lands the
   typed operator trace policy surface: `config::TraceConfig` and
   `Config::trace()` parse the top-level `trace.enabled`,
   `trace.store_raw_bodies`, and `trace.retention_days` block documented by
   spec 0018, with defaults `{true, false, 30}` and config-time validation for
   boolean flags plus positive integer retention. `config.example.json` carries
   the default block, and `test-config` covers custom values, the example file,
-  and malformed trace policy (30 cases / 225 assertions). This slice does not
-  wire the policy into bootstrap or `agent::Loop`; trace rows still require the
-  caller-supplied `RunTurnInputs::trace` context from slice 80. Slice 80 lands the
+  and malformed trace policy (30 cases / 225 assertions). The parsed config is
+  still not wired through bootstrap; slice 82 adds the equivalent explicit loop
+  switch on `RunTurnInputs::trace`, and trace rows still require the
+  caller-supplied trace context from slice 80. Slice 80 lands the
   first loop-owned spec-0018 `trace_turns` writer for terminal-success fake
   provider turns. `agent::RunTurnInputs::trace` carries a non-owning
   `storage::TraceRepository*`, `session_id`, optional `parent_turn_id`,
@@ -39,9 +53,10 @@
   context bytes. The existing direct-dispatch audit path still stamps
   `audit_events.parent_turn_id` with the same turn id, so a single-tool loop turn
   now has both sides of the cause-chain join. `test-agent` covers single-text
-  trace rows and storage-backed tool-audit correlation (16 cases / 233
-  assertions). Cancellation/error trace rows, turn-id generation, operator trace
-  config, hook publish rows, CLI `--trace`, and binary handoff remain downstream.
+  trace rows, storage-backed tool-audit correlation, and the slice-82 disabled
+  policy case (17 cases / 247 assertions). Cancellation/error trace rows,
+  turn-id generation, config-to-loop wiring, hook publish rows, CLI `--trace`,
+  and binary handoff remain downstream.
   Slice 79 threads the first spec-0018 cause-chain id through the direct
   tool-dispatch path. `oran-core` now owns `core::TurnId`, the shared 16-byte
   value shape used by storage trace ids and audit correlation. `storage::TraceId`
@@ -56,8 +71,8 @@
   not clobber each other. `tool::DispatchContext` carries the optional parent
   turn id into `Registry::dispatch`, and `agent::RunTurnInputs::turn_id` is the
   loop-owned source for direct tool calls: traced turns stamp every dispatch
-  with that id, while trace-disabled turns force `parent_turn_id = NULL` during
-  dispatch and restore any reusable context value afterward. `test-core` covers
+  with that id, while explicit trace-disabled turns force `parent_turn_id = NULL`
+  during dispatch and restore any reusable context value afterward. `test-core` covers
   the value type (70 cases / 453 assertions), `test-storage` covers audit
   version-3 migration, BLOB round-trip, metadata update scoping, and zero-id
   validation (70 cases / 856 assertions), `test-permission` covers
@@ -79,7 +94,7 @@
   Ordinary provider errors, retryable network/upstream failures, storage
   failures, and model-repairable tool errors keep their existing behavior.
   `test-agent` covers both cancellation phases through parent
-  `asio::cancellation_signal` tests (16 cases / 233 assertions overall).
+  `asio::cancellation_signal` tests (17 cases / 247 assertions overall).
   Cancellation/error trace rows, blocking approval rendering, provider retry/fallback, the
   parallel `ToolScheduler`, and CLI/binary handoff remain downstream. Slice 76
   extended the real `agent::Loop` driver from the slice-75 text-only path into the

@@ -56,9 +56,9 @@ makes the existing audit rows joinable. Nothing else.
 
 - **`oran-storage::TraceRepository`** — new repository neighbour of
   the existing `SessionRepository` and `AuditRepository`. Schema:
-  **Status (slice 80, 2026-05-24):** the storage foundation, the first
-  direct-dispatch audit join key, and the first terminal-success loop writer
-  are shipped.
+  **Status (slice 82, 2026-05-24):** the storage foundation, the first
+  direct-dispatch audit join key, the first terminal-success loop writer, and
+  the explicit trace-disabled loop policy are shipped.
   `<oran/storage.hpp>` exports `TraceRepository`, `TraceId`,
   `AppendTraceTurnRequest`, `TraceTurnRecord`, and
   `ListTraceTurnsOptions`; `src/oran-storage/migrations/audit/0002-trace-turns-initial.sql`
@@ -71,8 +71,9 @@ makes the existing audit rows joinable. Nothing else.
   `parent_turn_id` fields on storage/permission audit requests and records.
   The repository covers append/get/list/count, audit-v1-to-trace-v2/v3
   upgrade, and validation; `agent::Loop` now uses it for terminal-success
-  rows. Cancellation/error rows, hook publish rows, trace config, and the CLI
-  inspector remain downstream.
+  rows and skips it when `TraceContext::enabled=false`. Cancellation/error rows,
+  hook publish rows, config-to-loop wiring, and the CLI inspector remain
+  downstream.
   ```sql
   CREATE TABLE trace_turns (
     turn_id           BLOB PRIMARY KEY,             -- 16-byte UUID
@@ -129,22 +130,25 @@ makes the existing audit rows joinable. Nothing else.
   threads `TurnId`, `parent_turn_id`, identity, route, cancellation
   slot, and stable service refs through every callsite. The
   agent-loop-foundation note's "phase 1" (Build `TurnContext`) is
-  exactly this. **Status (slice 79):** the public interim surface is
-  `RunTurnInputs::turn_id`; when set, direct tool dispatches receive it as
-  `DispatchContext::parent_turn_id`, and when unset the loop forces
-  `parent_turn_id = NULL` for the dispatch duration. Slice 80 adds the
-  optional `RunTurnInputs::trace` context (`TraceRepository`, session id,
-  parent turn id, agent key, origin, redacted context JSON) used by the first
-  terminal-success writer.
+  exactly this. **Status (slice 82):** the public interim surface is
+  `RunTurnInputs::turn_id`; when set and trace is enabled, direct tool
+  dispatches receive it as `DispatchContext::parent_turn_id`. When the turn id
+  is unset or `RunTurnInputs::trace.enabled=false`, the loop forces
+  `parent_turn_id = NULL` for the dispatch duration and restores any reusable
+  context value afterward. Slice 80 adds the optional `RunTurnInputs::trace`
+  context (`TraceRepository`, session id, parent turn id, agent key, origin,
+  redacted context JSON) used by the first terminal-success writer; slice 82
+  adds the explicit `enabled` gate.
 - **Turn-finished publisher**. `agent::Loop::run_turn` writes one
   `trace_turns` row at terminal stop reason. The write is
   *synchronous* w.r.t. the user-visible response (the loop awaits
   the insert before returning) so the row is durable before the
   agent answers. The cost is one SQLite insert per turn (≤ 30 µs
-  per the existing `bench-storage` numbers). **Status (slice 80):**
-  shipped for terminal-success stop reasons (`end_turn`, `stop_sequence`,
-  `max_tokens`) through `RunTurnInputs::trace`; cancellation/error rows remain
-  downstream.
+  per the existing `bench-storage` numbers). **Status (slice 82):**
+  shipped for trace-enabled terminal-success stop reasons (`end_turn`,
+  `stop_sequence`, `max_tokens`) through `RunTurnInputs::trace`; explicit
+  `TraceContext::enabled=false` skips the insert entirely. Cancellation/error
+  rows remain downstream.
 - **Redaction policy**. The trace row never carries raw prompt
   bytes, raw tool inputs, raw memory facts, or raw provider
   responses. Only hashes, byte counts, token counts, identifiers,
@@ -161,11 +165,13 @@ makes the existing audit rows joinable. Nothing else.
   }
   ```
   `enabled=false` skips the SQLite insert entirely (still emits
-  audit rows; trace is the *joining* layer). **Status (slice 81):**
+  audit rows; trace is the *joining* layer). **Status (slice 82):**
   `oran-config` parses this top-level block into `config::TraceConfig` with
   defaults `{enabled=true, store_raw_bodies=false, retention_days=30}` and
-  validates boolean flags plus positive integer retention. Bootstrap and
-  `agent::Loop` do not consume the policy yet.
+  validates boolean flags plus positive integer retention. `agent::Loop` now
+  honors the equivalent explicit `RunTurnInputs::trace.enabled=false` policy
+  by writing no trace row and preserving NULL audit parent ids; bootstrap does
+  not map `config::TraceConfig` into loop inputs yet.
 - **CLI surface**. `orangutan --trace <turn_id>` prints the row
   plus every joined audit row (`WHERE parent_turn_id = ?`) in the
   same `--explain-rules`-style table format that already exists for
@@ -270,7 +276,13 @@ makes the existing audit rows joinable. Nothing else.
 9. **Trace disabled is byte-identical.** Setting
    `trace.enabled=false` produces zero `trace_turns` rows and
    leaves `audit_events` rows unchanged byte-for-byte (parent_turn_id
-   is NULL when trace is off). Pinned by a side-by-side test.
+   is NULL when trace is off). **Status (slice 82):** shipped at the
+   `agent::Loop` input boundary for explicit
+   `RunTurnInputs::trace.enabled=false`: the loop writes zero trace rows,
+   direct-dispatch audit rows keep `parent_turn_id = NULL`, and any previous
+   reusable dispatch-context parent id is restored after the tool call.
+   Bootstrap still needs to map `config::TraceConfig::enabled` into this
+   input before the operator config path is closed end-to-end.
 10. **CLI inspector.** `orangutan --trace <turn_id>` returns
     the trace row + every joined audit row + every joined
     `hook_publish` row in deterministic order; exit code 0.
@@ -346,8 +358,8 @@ makes the existing audit rows joinable. Nothing else.
 
 ```sh
 xmake build oran-storage oran-agent
-xmake test test-storage                       # trace_turns migration + insert + query
-xmake test test-agent                         # trace rows joined to spec 0017 scenarios
+xmake run test-storage                        # trace_turns migration + insert + query
+xmake run test-agent                          # trace rows joined to spec 0017 scenarios
 xmake build bench-oran-storage
 xmake run bench-oran-storage trace_turn_insert
 xmake run orangutan -- --trace <turn-id>      # CLI inspector
