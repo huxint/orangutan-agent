@@ -68,7 +68,7 @@ own library, its own tests, its own bench, its own design doc."
 
 ## Prompt Assembly
 
-> **Status (slice 85, 2026-05-24):** `oran-prompt` owns the first
+> **Status (slice 96, 2026-05-25):** `oran-prompt` owns the first
 > deterministic `prompt::Builder` skeleton plus `prompt::PromotionState`,
 > `oran-agent` owns the narrow `agent::SessionState` surface that observes
 > successful `tool.search` output and promotes deferred matches into the
@@ -88,7 +88,11 @@ own library, its own tests, its own bench, its own design doc."
 > `trace_turns` rows when trace is configured, slice 84 writes
 > `stop_reason=error` rows for non-cancelled provider and response-backed
 > loop-boundary failures, and slice 85 generates a turn id when trace is
-> configured and the caller leaves it unset. Slice 79 adds the first
+> configured and the caller leaves it unset. Slice 96 refreshes
+> `DispatchContext::now` around each direct tool dispatch and restores the
+> previous value afterward, which lets broker-backed `permission_ask_rendered`
+> approvals inside the fake-provider loop use a real request timestamp without
+> making reusable dispatch contexts stateful across calls. Slice 79 adds the first
 > trace/audit join
 > primitive: `RunTurnInputs::turn_id` can be copied into
 > `DispatchContext::parent_turn_id` for direct tool dispatches in that turn.
@@ -100,8 +104,8 @@ own library, its own tests, its own bench, its own design doc."
 > skips the trace row, forces direct dispatch audit rows to keep
 > `parent_turn_id = NULL`, and restores any reusable dispatch-context parent id
 > after the tool call.
-> Memory, hook rows, iteration-cap trace rows, config-to-loop wiring, and CLI
-> inspection remain downstream.
+> Memory, scheduler handoff, provider retry/fallback, and binary CLI
+> agent-loop wiring remain downstream.
 > The invariants — section order, byte-identical cached prefix, no clocks /
 > per-call state in sections (1)–(6) — remain canonical in
 > [`../rules/prompt-design.md`](../rules/prompt-design.md).
@@ -161,7 +165,9 @@ direct-dispatch parent id behind `TraceContext::enabled` for explicitly
 disabled turns, slice 83 writes cancelled trace rows for provider/tool parent
 cancellations, slice 84 writes ordinary provider/loop-boundary error rows, and
 slice 85 generates a missing turn id for trace-enabled turns before prompt
-render/dispatch. The future
+render/dispatch. Slice 96 also refreshes `DispatchContext::now` for each direct
+dispatch, so the registry-owned blocking approval prompt path uses a real
+per-call timestamp and then restores the caller's reusable context. The future
 `ToolScheduler` can replace the direct loop call without changing the
 provider-facing request/response shape.
 

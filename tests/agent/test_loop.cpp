@@ -20,6 +20,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <asio/bind_cancellation_slot.hpp>
@@ -36,6 +37,7 @@
 #include <oran/core/role.hpp>
 #include <oran/core/stop_reason.hpp>
 #include <oran/core/tool_def.hpp>
+#include <oran/hook.hpp>
 #include <oran/permission.hpp>
 #include <oran/prompt.hpp>
 #include <oran/provider.hpp>
@@ -48,6 +50,7 @@ namespace agent = orangutan::agent;
 namespace async = orangutan::async;
 namespace config = orangutan::config;
 namespace core = orangutan::core;
+namespace hook = orangutan::hook;
 namespace permission = orangutan::permission;
 namespace prompt = orangutan::prompt;
 namespace provider = orangutan::provider;
@@ -149,6 +152,23 @@ permission::RuleSet allow_all_rules() {
       .capability = std::nullopt,
   });
   return rules;
+}
+
+permission::RuleSet ask_file_read_rules() {
+  permission::RuleSet rules;
+  rules.add(permission::Rule{
+      .verdict = permission::Verdict::ask,
+      .tool_pattern = "file.read",
+      .replay_max = 2,
+      .approval_ttl = 30s,
+  });
+  return rules;
+}
+
+permission::ApprovalBroker make_broker() {
+  auto broker = permission::ApprovalBroker::with_random_secret();
+  REQUIRE(broker.has_value());
+  return std::move(*broker);
 }
 
 core::TurnId turn_id_with(unsigned char seed) {
@@ -673,6 +693,95 @@ TEST_CASE("Loop dispatches one tool_use and re-enters the provider with a tool r
     REQUIRE(*audit.events()[0].parent_turn_id == turn_id_with(0x20));
     REQUIRE(ctx.parent_turn_id.has_value());
     REQUIRE(*ctx.parent_turn_id == turn_id_with(0x70));
+  });
+}
+
+TEST_CASE("Loop refreshes dispatch time for blocking permission approvals", "[unit][agent][loop][approval]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    constexpr std::string_view input = R"({"value":"approve"})";
+    RecordingSequenceProvider provider{std::vector<provider::Response>{
+        provider::Response{
+            .blocks = {core::ToolUseContent{.id = "approval-1", .name = "file.read", .input_json = std::string{input}}},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::nullopt,
+        },
+        provider::Response{
+            .blocks = {core::TextContent{.text = "approved final"}},
+            .stop_reason = core::StopReason::end_turn,
+            .usage = {},
+            .model_used = std::string{"fake-1"},
+        },
+    }};
+    agent::Loop loop{provider, default_route()};
+    tool::Registry registry;
+    add_canned_tool(registry, canned_tool_def("file.read"), "approved-read");
+    auto rules = ask_file_read_rules();
+    permission::RecordingAuditSink audit;
+    auto broker = make_broker();
+    permission::ApprovalToken issued_token{};
+
+    hook::Bus bus;
+    std::vector<hook::PermissionAskRenderedPayload> prompts;
+    hook::InProcessSink prompt{
+        "agent-approval",
+        [](hook::Event /*event*/, hook::Payload /*payload*/) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        }};
+    prompt.set_blocking_handler(
+        [&prompts](hook::Event event, hook::Payload payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
+          REQUIRE(event == hook::Event::permission_ask_rendered);
+          const auto* ask = std::get_if<hook::PermissionAskRenderedPayload>(&payload);
+          REQUIRE(ask != nullptr);
+          prompts.push_back(*ask);
+
+          hook::HookDecision decision{};
+          decision.reason = "operator_approved:operator-1";
+          co_return decision;
+        });
+    bus.bind(prompt, {hook::Event::permission_ask_rendered});
+
+    auto ctx = dispatch_context(io, rules, audit);
+    ctx.approval_broker = &broker;
+    ctx.approval_token_output = &issued_token;
+    ctx.bus = &bus;
+    ctx.now = core::Time::epoch();
+
+    const auto catalog = registry.catalog();
+    const std::vector<core::Message> tail{core::Message::user_text("read with approval")};
+    auto inputs = base_inputs(catalog, tail);
+    inputs.tools = &registry;
+    inputs.dispatch_context = &ctx;
+    auto result = co_await loop.run_turn(inputs);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "approved final");
+    REQUIRE(result->iterations == 2);
+    REQUIRE(provider.requests().size() == 2);
+    REQUIRE(tool_result_output_in(provider.requests()[1], "approval-1") == R"(approved-read:{"value":"approve"})");
+
+    REQUIRE(prompts.size() == 1);
+    const auto& ask = prompts[0];
+    REQUIRE(ask.tool_name == "file.read");
+    REQUIRE(ask.input_json == input);
+    REQUIRE(ask.who.scope_key == "scope-A");
+    REQUIRE(ask.who.agent_key == "coder");
+    REQUIRE(ask.who.identity == "operator-1");
+    REQUIRE(ask.decision_reason == "rule #0 (ask: file.read)");
+    REQUIRE(ask.replay_max == 2);
+    REQUIRE(ask.approval_ttl == 30s);
+    REQUIRE(ask.requested_at > core::Time::epoch());
+    REQUIRE(ctx.now == core::Time::epoch());
+
+    REQUIRE(audit.events().size() == 1);
+    REQUIRE(audit.events()[0].verdict == permission::Verdict::ask);
+    REQUIRE(audit.events()[0].outcome == permission::AuditOutcome::approved);
+    REQUIRE(audit.events()[0].metadata_json.contains("permission_ask_decisions"));
+    REQUIRE(audit.events()[0].metadata_json.contains("agent-approval"));
+    REQUIRE(audit.events()[0].metadata_json.contains("operator_approved:operator-1"));
+
+    auto replay = broker.check(issued_token, "file.read", input, "operator-1", ask.requested_at);
+    REQUIRE(replay.has_value());
   });
 }
 

@@ -68,7 +68,7 @@ proves the loop behaves correctly without a network.
     `ToolResultContent` blocks, rebuilds the prompt, re-enters the provider,
     aggregates provider usage across iterations, and enforces
     `LoopOptions::max_iterations`. Real protocol adapters, the parallel
-    scheduler, blocking approval rendering, and provider retry/fallback remain
+    scheduler, binary CLI handoff, and provider retry/fallback remain
     downstream. Slice 77 adds the first
     cancellation-observability prework at the loop boundary: provider-await
     cancellations and direct tool-dispatch cancellations keep returning
@@ -88,7 +88,12 @@ proves the loop behaves correctly without a network.
     provider/tool parent cancellation; slice 84 adds `stop_reason=error` trace
     rows for non-cancelled provider failures and response-backed loop-boundary
     failures; slice 85 generates a turn id when a trace writer is configured
-    and the caller did not supply one.
+    and the caller did not supply one. Slice 96 refreshes
+    `DispatchContext::now` from `core::time::now_utc()` around every direct
+    tool dispatch, then restores the caller's reusable context value. That
+    lets the already-shipped blocking `permission_ask_rendered` dispatch bridge
+    issue/check approval grants and render `requested_at` from the per-call
+    wall clock instead of a stale caller value such as the default epoch.
   - The loop emits **one** `provider::Request` per iteration.
   - The provider emits **one** `provider::Response` per request (after
     streaming completes if streaming is enabled).
@@ -147,7 +152,7 @@ proves the loop behaves correctly without a network.
   uses the fake provider with a hand-written plan.
 - **`agent::Loop` MVP**. Wraps the seven phases listed in the deep
   review §What a better `oran-agent` should look like:
-  - **Status (slice 85, 2026-05-24):** `<oran/agent.hpp>` exports
+  - **Status (slice 96, 2026-05-25):** `<oran/agent.hpp>` exports
     `agent::Loop`, `LoopOptions`, `RunTurnInputs`, and `RunTurnResult`.
     The current implementation covers phases 3/4/5 for terminal text turns
     plus the first phase-6 sequential dispatch path for scenarios #2/#3/#4/#6:
@@ -163,7 +168,11 @@ proves the loop behaves correctly without a network.
     trace writer is configured and the caller leaves it unset. Terminal-success turns can also
     append one body-free `trace_turns` row through the optional
     `RunTurnInputs::trace` context; explicitly disabled trace contexts skip
-    both the row and the dispatch parent id for AC9 coverage.
+    both the row and the dispatch parent id for AC9 coverage. The direct
+    dispatch bridge also refreshes `DispatchContext::now` per tool call and
+    restores the previous value afterward, so broker-backed
+    `permission_ask_rendered` approvals inside fake-provider turns use a real
+    request time while keeping reusable contexts deterministic for callers.
     If no registry/context pair is supplied, tool-use responses still fail
     loudly with `Error::internal` so callers cannot accidentally run a loop
     without permission/audit infrastructure.
@@ -182,8 +191,9 @@ proves the loop behaves correctly without a network.
   5. Parse response blocks into typed `core::Content`.
   6. For each `tool_use`: validate schema → dispatch through
      `tool::Registry` (later via `agent::ToolScheduler`, spec 0012) →
-     run approval render via `publish_blocking` (later, spec 0015) →
-     append `tool_result` to working memory + session log.
+     reuse the registry-owned blocking `permission_ask_rendered` broker bridge
+     when an `ask` rule fires → append `tool_result` to working memory +
+     session log.
   7. Stop on terminal `StopReason` or iteration cap.
 - **Iteration cap** — `config.agent.max_iterations` (default 16) so an
   infinite tool-call loop terminates with `StopReason::error` and
@@ -205,8 +215,11 @@ proves the loop behaves correctly without a network.
   dispatch so trace and audit rows still join. Parent-cancelled provider/tool
   phases now write
   cancelled trace rows when trace is configured, and non-cancelled provider /
-  response-backed loop-boundary failures write `stop_reason=error` rows. Hook
-  rows, config-to-loop wiring, and CLI inspection remain downstream.
+  response-backed loop-boundary failures write `stop_reason=error` rows. Slice
+  93 added joinable direct-dispatch `hook_publish` rows, slice 88 added the CLI
+  trace inspector, and slice 96 pins broker-backed approval prompts inside the
+  fake-provider loop. Provider retry/fallback, scheduler handoff, and binary
+  CLI agent-loop wiring remain downstream.
 - **CI runs against the fake provider only**. v1 CI gate:
   `xmake test test-agent` exercises all ten scenarios; no network
   is required, no API key is required, no flake budget is needed.

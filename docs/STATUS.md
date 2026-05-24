@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 95 (`xmake run orangutan` reports slice 95)
+- **Slice:** 96 (`xmake run orangutan` reports slice 96)
 - **Last completed history:**
-  [`histories/2026-05/20260525-0524-cli-operator-prompt-sink.md`](histories/2026-05/20260525-0524-cli-operator-prompt-sink.md)
+  [`histories/2026-05/20260525-0557-agent-loop-approval-clock.md`](histories/2026-05/20260525-0557-agent-loop-approval-clock.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
@@ -18,8 +18,27 @@
   plan because they stayed under the existing spec-0015/0017/0018
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 95 closes
-  spec-0015's first concrete user-visible approval renderer. `oran-cli`
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 96 closes
+  the agent-loop approval-observability gap that sat between the direct
+  dispatch ask bridge and the later binary handoff. `agent::Loop` now wraps
+  each direct `tool::Registry::dispatch` with a scoped dispatch context that
+  installs the loop's trace parent id and refreshes `DispatchContext::now` from
+  `core::time::now_utc()`, then restores the caller's reusable `parent_turn_id`
+  and `now` values after the call. That makes `PermissionAskRenderedPayload`
+  `requested_at`, approval-token expiry, and immediate broker verification use
+  the real per-tool-call clock instead of a stale caller value such as the
+  default epoch. `test-agent` adds an offline fake-provider turn that asks for
+  `file.read`, flows through `permission::ApprovalBroker` plus a blocking
+  `hook::InProcessSink` on `permission_ask_rendered`, asserts the prompt
+  payload's identity/replay/TTL/request time, records
+  `metadata_json.permission_ask_decisions[]`, returns the approved tool result
+  to the second provider request, and verifies the issued token against that
+  request time. Focused result: `test-agent` 24 cases / 391 assertions. The
+  remaining approval work is still binary handoff: bind the existing
+  `cli::OperatorPromptSink` into the real CLI agent-loop runtime once
+  `orangutan` constructs `agent::Loop` with provider/assembly services. Slice
+  95 closed spec-0015's first concrete user-visible approval renderer.
+  `oran-cli`
   now exports `cli::OperatorPromptSink` from
   `<oran/cli/operator_prompt_sink.hpp>` and the umbrella `<oran/cli.hpp>`.
   The sink implements `hook::Sink`, handles blocking
@@ -304,7 +323,8 @@
   loop-boundary failures as `stop_reason=error`.
   `test-agent` covers both cancellation phases through parent
   `asio::cancellation_signal` tests.
-  Iteration-cap trace rows, blocking approval rendering, provider retry/fallback, the
+  Iteration-cap trace rows, approval-observability coverage, and the
+  trace/audit inspector rows are now in place; provider retry/fallback, the
   parallel `ToolScheduler`, and CLI/binary handoff remain downstream. Slice 76
   extended the real `agent::Loop` driver from the slice-75 text-only path into the
   first sequential direct-dispatch tool loop. `<oran/agent.hpp>` exports
@@ -324,17 +344,19 @@
   repair; cancellation, storage, and internal dispatch errors propagate out of
   the loop. If the registry/context pair is absent, `tool_use` still returns
   the explicit not-yet-implemented error from slice 75. The loop enforces the
-  existing `LoopOptions::max_iterations` cap with `reason=iteration_cap`, but
-  iteration-cap trace rows, provider retry/fallback, blocking approval
-  rendering, and the parallel `ToolScheduler` remain downstream. `test-agent`
+  existing `LoopOptions::max_iterations` cap with `reason=iteration_cap`,
+  writes iteration-cap trace rows when tracing is configured, and refreshes
+  `DispatchContext::now` around direct dispatch so broker-backed
+  `permission_ask_rendered` approvals use the real per-call clock. Provider
+  retry/fallback and the parallel `ToolScheduler` remain downstream. `test-agent`
   now covers the FakeProvider text-turn path,
   provider request mapping, provider error forwarding, the no-dispatch-context
   tool-use boundary, one-tool provider re-entry, ordered multi-tool results,
   model-visible missing-tool repair, infrastructure error propagation, and the
   iteration cap, provider/tool cancellation trace rows, and provider/loop-boundary
-  error trace rows. The `orangutan` binary is still not wired to `oran-agent`;
-  remaining near-term work is the approval-observability envelope before
-  CLI/binary handoff.
+  error trace rows, and the fake-provider approval-clock path. The
+  `orangutan` binary is still not wired to `oran-agent`; remaining near-term
+  work is CLI/binary handoff.
   Slice 75 opened
   the real `agent::Loop` driver but deliberately limited it to spec-0017
   scenario #1 and request-mapping boundaries. `<oran/agent.hpp>` began

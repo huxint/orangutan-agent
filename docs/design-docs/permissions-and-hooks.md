@@ -193,7 +193,12 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > `outcome=rejected` / `reason=operator_denied`. Slice 95 adds
 > `cli::OperatorPromptSink`, the first terminal renderer for that payload:
 > it returns `operator_approved:<identity>` on yes/approve/proceed answers
-> and `operator_denied:<identity>` on no/deny/reject answers. Bench
+> and `operator_denied:<identity>` on no/deny/reject answers. Slice 96
+> confirms the first agent-loop consumer: direct tool calls issued by
+> `agent::Loop` refresh `DispatchContext::now` before entering
+> `Registry::dispatch`, so prompt `requested_at` and broker expiry are based on
+> the real per-call clock even if the reusable context previously held the
+> default epoch. Bench
 > (`bench-tool/approval.cpp`):
 > `dispatch_ask_short_circuit` ~2.4 µs (baseline — same shape as
 > `registry.dispatch_allow` plus the new error-context build),
@@ -312,7 +317,7 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 
 ## Hook Bus
 
-> **Bus status (2026-05-25, slice 95):** the foundation
+> **Bus status (2026-05-25, slice 96):** the foundation
 > ships as `oran-hook`. `hook::Event` enumerates the 41
 > lifecycle events listed below; `hook::Mode { advisory,
 > blocking }` plus `default_mode(Event)` annotates each
@@ -385,7 +390,10 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > `approval_required` error. Slice 95 adds the concrete CLI renderer
 > (`cli::OperatorPromptSink`) that turns the typed payload into a terminal
 > yes/no question and returns the operator decision through this blocking
-> path. Slice 92 adds the
+> path. Slice 96 pins the fake-provider loop consumer by proving
+> `agent::Loop` enters direct dispatch with a fresh wall-clock
+> `DispatchContext::now` and restores the caller's previous value after the
+> call. Slice 92 adds the
 > config-driven blocking
 > timeout policy: `config::HooksConfig::timeout_ms` defaults
 > to 2000, `bootstrap::RuntimeAssembly` owns the process
@@ -447,7 +455,8 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > `tool_before` publishes. Slice 94 adds the typed
 > `PermissionAskRenderedPayload` and direct-dispatch
 > `permission_ask_rendered` broker bridge. Slice 95 adds the first
-> user-visible operator-prompt sink in `oran-cli`; binary binding waits for
+> user-visible operator-prompt sink in `oran-cli`, and slice 96 proves the
+> broker-backed prompt path from inside `agent::Loop`; binary binding waits for
 > the real CLI agent-loop handoff.
 
 ### Surface

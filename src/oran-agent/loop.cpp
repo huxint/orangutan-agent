@@ -27,6 +27,7 @@
 #include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/role.hpp>
+#include <oran/core/time.hpp>
 #include <oran/storage/trace_repository.hpp>
 #include <oran/tool/registry.hpp>
 
@@ -342,23 +343,26 @@ write_trace_turn(const RunTurnInputs& inputs,
                                       core::StopReason::error);
 }
 
-class ScopedParentTurnId {
+class ScopedDispatchContext {
 public:
-  ScopedParentTurnId(tool::DispatchContext& context, std::optional<core::TurnId> parent_turn_id) noexcept
-      : context_{&context}, previous_{context.parent_turn_id} {
+  ScopedDispatchContext(tool::DispatchContext& context, std::optional<core::TurnId> parent_turn_id) noexcept
+      : context_{&context}, previous_parent_turn_id_{context.parent_turn_id}, previous_now_{context.now} {
     context.parent_turn_id = std::move(parent_turn_id);
+    context.now = core::time::now_utc();
   }
 
-  ~ScopedParentTurnId() {
-    context_->parent_turn_id = std::move(previous_);
+  ~ScopedDispatchContext() {
+    context_->parent_turn_id = std::move(previous_parent_turn_id_);
+    context_->now = previous_now_;
   }
 
-  ScopedParentTurnId(const ScopedParentTurnId&) = delete;
-  ScopedParentTurnId& operator=(const ScopedParentTurnId&) = delete;
+  ScopedDispatchContext(const ScopedDispatchContext&) = delete;
+  ScopedDispatchContext& operator=(const ScopedDispatchContext&) = delete;
 
 private:
   tool::DispatchContext* context_;
-  std::optional<core::TurnId> previous_;
+  std::optional<core::TurnId> previous_parent_turn_id_;
+  core::Time previous_now_;
 };
 
 [[nodiscard]] std::string render_tool_error(const core::Error& error) {
@@ -545,7 +549,7 @@ public:
         for (const auto& use : tool_uses) {
           core::Result<tool::Output> output;
           {
-            ScopedParentTurnId parent_turn_id{*inputs.dispatch_context, dispatch_parent_turn_id(inputs)};
+            ScopedDispatchContext dispatch_context{*inputs.dispatch_context, dispatch_parent_turn_id(inputs)};
             output = co_await inputs.tools->dispatch(use.name, use.input_json, *inputs.dispatch_context);
           }
           auto tool_result = tool_result_from(use.id, std::move(output));

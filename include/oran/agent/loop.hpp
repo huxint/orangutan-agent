@@ -1,7 +1,7 @@
 // include/oran/agent/loop.hpp — first fake-provider-backed agent loop.
 //
 // This header opens the real `oran-agent` runtime surface without pulling the
-// tool scheduler, memory runtime, storage audit rows, or blocking hooks into
+// tool scheduler, memory runtime, or full storage/session runtime into
 // the first loop increments. The intent is deliberate: spec 0017 says the loop must be
 // proven against `provider::FakeProvider` before any vendor adapter ships. This
 // class is that seam. It builds the cached prompt, maps it into a
@@ -149,8 +149,12 @@ public:
   /// narrower than the final ReAct loop: it sends requests sequentially,
   /// accepts terminal text-style stop reasons, and only dispatches tool_use
   /// blocks when `RunTurnInputs::tools` and `dispatch_context` are supplied.
-  /// Parallel scheduling, turn audit rows, blocking approval rendering, and
-  /// provider retry/fallback remain later slices. Parent cancellation during
+  /// The supplied dispatch context still owns permissions, audit, approvals,
+  /// hooks, workspace, and output-cap services; the loop refreshes its per-call
+  /// wall-clock time and trace parent id around every direct dispatch, then
+  /// restores the caller's reusable context values. Parallel scheduling,
+  /// session persistence, provider retry/fallback, and binary CLI handoff
+  /// remain later slices. Parent cancellation during
   /// the provider await or direct tool dispatch is surfaced as
   /// `ErrorKind::cancelled` with `reason=parent_cancelled` plus
   /// `cancellation_phase=provider|tools`; when a trace context is configured,

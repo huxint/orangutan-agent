@@ -45,7 +45,7 @@ in what order.
 
 ## Scope (v1)
 
-> **Status (slice 95, 2026-05-25):** the bus surface, the
+> **Status (slice 96, 2026-05-25):** the bus surface, the
 > `tool_before` dispatch consumer, the configured blocking-timeout
 > policy, and traced direct-dispatch `hook_publish` audit rows are
 > shipped.
@@ -99,7 +99,16 @@ in what order.
 > terminal, accepts yes/approve/proceed or no/deny/reject answers, returns
 > `operator_approved:<identity>` / `operator_denied:<identity>` through the
 > blocking decision trace, and has scripted-answer coverage for
-> noninteractive tests. `test-cli` reports 10 cases / 68 assertions.
+> noninteractive tests. `test-cli` reports 10 cases / 68 assertions. Slice 96
+> pins the first agent-loop consumer of that direct-dispatch bridge:
+> `agent::Loop` refreshes `DispatchContext::now` around every direct tool
+> dispatch, so `PermissionAskRenderedPayload::requested_at`, broker grant
+> expiry, and immediate broker verification use the per-call wall clock even
+> when the caller's reusable context held a stale value. `test-agent` covers a
+> fake-provider turn whose `file.read` ask flows through
+> `permission::ApprovalBroker` plus a blocking `permission_ask_rendered` sink,
+> records `metadata_json.permission_ask_decisions[]`, returns the approved tool
+> result to the provider, and verifies the issued token against the prompt time.
 
 The MVP is the *minimum* surface needed by the agent loop's approval
 render flow — the first real consumer. Everything else that wants a
@@ -279,7 +288,12 @@ blocking hook waits for v1.1.
    `approval_required` path when no ask sink is subscribed. Slice 95 adds the
    concrete `oran-cli` operator prompt that renders the payload and returns
    the expected operator approval/denial reason strings through the blocking
-   trace.
+   trace. **Status (slice 96):** the fake-provider loop now covers the same
+   bridge at the agent boundary. `agent::Loop` supplies a fresh
+   `DispatchContext::now` for the direct dispatch, the prompt payload's
+   `requested_at` is greater than the default epoch, the caller's context value
+   is restored after dispatch, and the issued token replays against that prompt
+   time.
 5. **Sink ordering**. Three blocking sinks subscribed to the same
    event execute in subscription order; the first non-`proceed`
    short-circuits the rest. All three decisions are recorded in
