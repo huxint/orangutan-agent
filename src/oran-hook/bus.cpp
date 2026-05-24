@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <exception>
+#include <expected>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -15,6 +16,7 @@
 
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/core/error.hpp>
+#include <oran/hook/decision.hpp>
 #include <oran/hook/event.hpp>
 #include <oran/hook/payload.hpp>
 #include <oran/hook/sink.hpp>
@@ -30,6 +32,34 @@ namespace {
     }
   }
   return delivered;
+}
+
+[[nodiscard]] HookDecision veto_from_error(const core::Error& error, std::string_view sink_id) {
+  HookDecision decision{};
+  decision.kind = HookDecisionKind::veto;
+  // Spec 0015 v1: a blocking sink that returns or throws an error
+  // surfaces as `reason = hook_error`; the underlying message rides
+  // along so the (future) audit row can record the cause.
+  decision.reason = "hook_error";
+  if (!error.message().empty()) {
+    decision.reason.append(": ");
+    decision.reason.append(error.message());
+  }
+  decision.reason.append(" [sink=");
+  decision.reason.append(sink_id);
+  decision.reason.append("]");
+  return decision;
+}
+
+[[nodiscard]] HookDecision veto_from_exception(std::string_view what, std::string_view sink_id) {
+  HookDecision decision{};
+  decision.kind = HookDecisionKind::veto;
+  decision.reason = "hook_error: ";
+  decision.reason.append(what);
+  decision.reason.append(" [sink=");
+  decision.reason.append(sink_id);
+  decision.reason.append("]");
+  return decision;
 }
 
 }  // namespace
@@ -93,6 +123,34 @@ async::Awaitable<PublishOutcome> Bus::publish_advisory(Event event, Payload payl
     outcome.sinks.push_back(std::move(row));
   }
   co_return outcome;
+}
+
+async::Awaitable<core::Result<HookDecision>> Bus::publish_blocking_impl(Event event, Payload payload) {
+  const auto it = bindings_.find(event);
+  if (it == bindings_.end()) {
+    co_return HookDecision{};
+  }
+  for (auto* sink : it->second) {
+    HookDecision decision{};
+    try {
+      auto result = co_await sink->handle_blocking(event, payload_for_sink(*sink, payload));
+      if (!result) {
+        // Spec 0015 v1: sink error -> veto with reason=hook_error;
+        // short-circuit the walk so the dispatch consumer sees a single
+        // authoritative decision per call.
+        co_return veto_from_error(result.error(), sink->id());
+      }
+      decision = std::move(result).value();
+    } catch (const std::exception& ex) {
+      co_return veto_from_exception(ex.what(), sink->id());
+    } catch (...) {
+      co_return veto_from_exception("sink threw non-std exception", sink->id());
+    }
+    if (decision.kind != HookDecisionKind::proceed) {
+      co_return decision;
+    }
+  }
+  co_return HookDecision{};
 }
 
 std::size_t Bus::binding_count() const noexcept {

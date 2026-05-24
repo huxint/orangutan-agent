@@ -25,11 +25,14 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/core/error.hpp>
+#include <oran/hook/decision.hpp>
 #include <oran/hook/event.hpp>
+#include <oran/hook/event_traits.hpp>
 #include <oran/hook/payload.hpp>
 #include <oran/hook/sink.hpp>
 
@@ -81,6 +84,26 @@ public:
   /// subsequent sinks (advisory semantics — see file header).
   [[nodiscard]] async::Awaitable<PublishOutcome> publish_advisory(Event event, Payload payload);
 
+  /// Publish `event` + `payload` as a blocking call (spec 0015 v1).
+  /// Walks subscribed sinks in subscription order, calling each one's
+  /// `Sink::handle_blocking`. The first non-`proceed` decision short-
+  /// circuits the walk and is returned. With no sinks subscribed, or
+  /// when every sink returns `proceed`, the bus returns a default-
+  /// constructed `HookDecision{}` (kind = `proceed`).
+  ///
+  /// A sink that returns `std::unexpected(error)` or throws is treated
+  /// as `veto` with `reason = "hook_error"`; the underlying error is
+  /// converted into the same `HookDecision::reason` so the audit layer
+  /// can record the cause once dispatch consumption lands.
+  ///
+  /// The whitelist of blocking events is encoded in `EventTraits<E>`;
+  /// calling `publish_blocking<Event::tool_after>` fails to compile.
+  template <Event E>
+    requires HasBlockingDecision<E>
+  [[nodiscard]] async::Awaitable<core::Result<HookDecision>> publish_blocking(Payload payload) {
+    return publish_blocking_impl(E, std::move(payload));
+  }
+
   /// Total `(sink, event)` bindings across all events.
   [[nodiscard]] std::size_t binding_count() const noexcept;
 
@@ -88,6 +111,11 @@ public:
   [[nodiscard]] std::size_t sink_count(Event event) const noexcept;
 
 private:
+  /// Runtime body for `publish_blocking<E>`. Lives in `bus.cpp` so the
+  /// template instantiation is a thin forward and the per-TU compile
+  /// cost stays bounded.
+  [[nodiscard]] async::Awaitable<core::Result<HookDecision>> publish_blocking_impl(Event event, Payload payload);
+
   std::unordered_map<Event, std::vector<Sink*>> bindings_;
 };
 

@@ -15,6 +15,7 @@
 
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/core/result.hpp>
+#include <oran/hook/decision.hpp>
 #include <oran/hook/event.hpp>
 #include <oran/hook/payload.hpp>
 
@@ -58,6 +59,21 @@ public:
   /// publish outcome but does not abort the publish for other sinks
   /// (advisory contract).
   [[nodiscard]] virtual async::Awaitable<core::Result<void>> receive(Event event, Payload payload) = 0;
+
+  /// Decide how to handle a blocking event (`tool_before`,
+  /// `permission_ask_rendered`, `memory_write_before` per spec 0015 v1).
+  /// The bus calls this through `publish_blocking<E>` once per subscribed
+  /// sink in subscription order and stops at the first non-`proceed`
+  /// decision. The default implementation returns `HookDecision{}`
+  /// (i.e. `kind = proceed`, empty `reason`) so sinks that only care
+  /// about advisory events can ignore this method entirely; sinks that
+  /// want to veto / rewrite / require_approval override it.
+  ///
+  /// Returning an error is treated as a veto by `publish_blocking`
+  /// (`reason = hook_error`); a thrown exception is captured the same
+  /// way. The dispatch consumer (registry / agent loop) lands in a
+  /// follow-up slice.
+  [[nodiscard]] virtual async::Awaitable<core::Result<HookDecision>> handle_blocking(Event event, Payload payload);
 };
 
 }  // namespace orangutan::hook

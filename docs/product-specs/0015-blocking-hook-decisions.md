@@ -45,6 +45,38 @@ in what order.
 
 ## Scope (v1)
 
+> **Status (slice 90, 2026-05-24):** the bus surface is shipped.
+> `<oran/hook/decision.hpp>` exports `HookDecisionKind { proceed, veto,
+> rewrite, require_approval }` and `HookDecision { kind, reason,
+> optional<string> rewritten_input_json, optional<core::Time>
+> approval_expires_at }` — the public header stays `nlohmann`-free
+> (`rewritten_input_json` carries serialised JSON bytes, the same
+> envelope as `ToolBeforePayload::input_json` and
+> `tool::Output::data_json`). `<oran/hook/event_traits.hpp>` exports the
+> empty primary `EventTraits<E>` template plus explicit specialisations
+> for the v1 whitelist (`tool_before`, `permission_ask_rendered`,
+> `memory_write_before`) and the `HasBlockingDecision<E>` concept that
+> constrains `Bus::publish_blocking<E>`. `hook::Sink` grows a virtual
+> `handle_blocking(Event, Payload) -> Awaitable<Result<HookDecision>>`
+> whose default body returns `proceed`; `hook::InProcessSink` adds an
+> optional `BlockingCallback` via `set_blocking_handler` so tests and
+> in-tree sinks can opt in without breaking existing constructors.
+> `Bus::publish_blocking<E>` walks subscribed sinks in subscription
+> order, applies the same per-sink redaction the advisory path uses,
+> short-circuits at the first non-`proceed` decision, and converts sink
+> `core::Result` errors / thrown exceptions into a veto with
+> `reason="hook_error: <message> [sink=<id>]"`. `test-hook` now reports
+> 29 cases / 172 assertions. The slice deliberately stops at the bus
+> surface — `Registry::dispatch` still publishes the existing advisory
+> envelope, the audit-side `AuditOutcome::blocked_by_hook` / `rewritten`
+> enumerators do not yet exist, and `config.hooks.timeout_ms`
+> enforcement is not yet wired. The dispatch consumer + audit
+> enumerators + canonical seven-step dispatch order land in the next
+> slice; the v1 first user-visible sink (`permission_ask_rendered`
+> owned by `oran-cli`) lands in the slice after that. The spec-0018
+> AC5 `hook_publish` audit-row writer joins the dispatch consumer
+> slice so the row exists once the data does.
+
 The MVP is the *minimum* surface needed by the agent loop's approval
 render flow — the first real consumer. Everything else that wants a
 blocking hook waits for v1.1.
@@ -57,20 +89,25 @@ blocking hook waits for v1.1.
   enum class HookDecisionKind {
     proceed,         // run handler with original input
     veto,            // do not run handler; treat as permission_denied
-    rewrite,         // run handler with HookDecision::rewritten_input
+    rewrite,         // run handler with HookDecision::rewritten_input_json
     require_approval // route through ApprovalBroker before running
   };
 
   struct HookDecision {
     HookDecisionKind                 kind{HookDecisionKind::proceed};
-    std::string                      reason;            // free-form, audited
-    std::optional<nlohmann::json_fwd> rewritten_input;  // required iff kind==rewrite
-    std::optional<core::Time>        approval_expires_at; // optional, kind==require_approval only
+    std::string                      reason;                  // free-form, audited
+    std::optional<std::string>       rewritten_input_json;    // required iff kind==rewrite
+    std::optional<core::Time>        approval_expires_at;     // optional, kind==require_approval only
   };
   ```
-  Compile budget: `nlohmann::json_fwd` only in the public header per
-  [`../rules/compile-budget.md`](../rules/compile-budget.md); the full
-  include lives in `src/oran-hook/bus.cpp`.
+  **Status (slice 90, shipped):** the value types ship as shown above.
+  `rewritten_input_json` is the serialised JSON envelope (matching
+  `ToolBeforePayload::input_json` / `tool::Output::data_json`) so the
+  public header avoids `<nlohmann/json.hpp>` per critical rule C6;
+  consumers that want a structured form parse the bytes inside their
+  own TU. The spec sketch's `std::optional<nlohmann::json_fwd>` was a
+  shorthand — `std::optional<T>` requires a complete type, so the
+  shipped shape carries bytes instead of a fwd-decl handle.
 - **Whitelist of blocking events** (v1 — the rest fall back to
   advisory until a consumer asks):
   - `tool_before` — veto / rewrite / require_approval.
@@ -166,21 +203,30 @@ blocking hook waits for v1.1.
    one `tool_after` payload with `succeeded=false` and
    `error_kind=blocked_by_hook`, and return
    `Error::permission_denied` to the agent loop. Pinned by a
-   regression test.
+   regression test. **Status (slice 90):** the bus surface emits the
+   veto decision; `Registry::dispatch` consumption + the new
+   `AuditOutcome::blocked_by_hook` enumerator land in the follow-up
+   slice.
 2. **`tool_before` rewrite.** A rewrite sink that returns
-   `HookDecision{ .kind=rewrite, .rewritten_input=... }` causes the
+   `HookDecision{ .kind=rewrite, .rewritten_input_json=... }` causes the
    permission engine to evaluate against the rewritten input, the
    handler to receive the rewritten input, the `AuditEvent`'s
    `context` map to carry both `input_hash` and
    `rewritten_input_hash`, and the `outcome` to be `rewritten`
    (followed by the verdict on the rewritten input). The agent
    transcript records the rewritten input, never the original.
+   **Status (slice 90):** the bus surface emits the rewrite decision;
+   dispatch consumption + the new `AuditOutcome::rewritten` enumerator
+   land in the follow-up slice.
 3. **`tool_before` require_approval.** A sink that returns
    `HookDecision{ .kind=require_approval }` causes
    `Registry::dispatch` to consult the broker exactly as if a
    `Verdict::ask` rule had matched, even when the permission engine
    would otherwise have returned `allow`. Approval succeeds →
    `outcome=approved`; approval fails → `outcome=rejected`.
+   **Status (slice 90):** the bus surface emits the require_approval
+   decision; the broker re-entry from a hook-driven decision lands in
+   the follow-up dispatch-consumer slice.
 4. **`permission_ask_rendered` round-trip.** When a `Verdict::ask`
    rule matches, the dispatch pipeline publishes
    `permission_ask_rendered` *blocking*; the sink's `HookDecision`
@@ -188,35 +234,70 @@ blocking hook waits for v1.1.
    `reason=operator_approved:huxint`); the broker accepts the
    resulting `ApprovalToken` and resumes dispatch. A
    `kind=veto` decision aborts with `outcome=rejected,
-   reason=operator_denied`.
+   reason=operator_denied`. **Status (slice 90):** publish surface
+   shipped; the first sink (`oran-cli`'s operator prompt) ships in
+   the slice after the dispatch consumer.
 5. **Sink ordering**. Three blocking sinks subscribed to the same
    event execute in subscription order; the first non-`proceed`
    short-circuits the rest. All three decisions are recorded in
    `AuditEvent::context.hook_decisions` (a JSON array of
    `{sink_id, kind, reason}`). Pinned by a multi-sink test.
+   **Status (slice 90):** the subscription-order short-circuit ships
+   in `Bus::publish_blocking`; the `AuditEvent::context.hook_decisions`
+   array waits for the dispatch-consumer slice that records the
+   decision (since v1 short-circuits at first non-proceed, the array
+   carries at most one decision plus any leading proceeds — the
+   contract intentionally remains "record every sink's decision" but
+   the bus already short-circuits later sinks, so the array length is
+   bounded by the index of the first decisive sink).
 6. **Timeout.** A sink whose handler awaits longer than
    `config.hooks.timeout_ms` causes the dispatch to abort with
    `outcome=blocked_by_hook, reason=hook_timeout`; the
    `AuditEvent::context` records the offending `sink_id` and
    `elapsed_ms`. Tested against a controllable-latency fake sink.
+   **Status (slice 90):** the per-sink timeout enforcement lands with
+   the dispatch consumer slice; the bus already cancel-awaits each
+   sink awaitable, so the timeout work is the per-call deadline.
 7. **Sink error.** A blocking sink returning `Error::internal` is
    treated as veto with `reason=hook_error`; the underlying error
    message rides in `AuditEvent::context.error`.
+   **Status (slice 90):** shipped at the bus surface. A sink returning
+   `core::Error` or throwing surfaces as `HookDecision{ veto,
+   reason="hook_error: <message> [sink=<id>]" }`. The audit-side
+   `context.error` field follows in the dispatch-consumer slice.
 8. **Advisory unchanged.** Existing advisory publishes
    (`tool_after`, `iteration_end`, etc.) maintain their
    `publish_advisory` contract — sinks observe, no decision is
    honoured, no dispatch flow change. Regression-test asserts that
    `publish_advisory` bytes-on-the-wire equal pre-spec.
+   **Status (slice 90):** shipped. `publish_advisory` is byte-identical
+   to slice 22's behaviour (existing tests still pass without
+   modification).
 9. **Type safety.** `publish_blocking<Event::tool_after>` fails to
    compile (no `EventTraits<tool_after>::Decision`). Pinned by a
    compile-fail test under the existing `tests/compile-fail` harness
    pattern.
+   **Status (slice 90):** shipped. The `HasBlockingDecision<E>` concept
+   is the publish-blocking constraint;
+   `tests/hook/test_publish_blocking.cpp` pins the whitelist with
+   `STATIC_REQUIRE`/`STATIC_REQUIRE_FALSE` over the v1 events plus
+   `tool_after` / `iteration_start` / `memory_read_before` /
+   `permission_denied` as negative cases. A dedicated
+   `tests/compile-fail` harness does not yet exist in this repo;
+   when it lands, a dedicated compile-fail file can replace the
+   `STATIC_REQUIRE_FALSE` cases.
 10. **`tests/hook/`** ≥ 90% coverage of the matrix (event × decision
     kind × sink ordering × timeout × error).
+    **Status (slice 90):** decision-kind, ordering, error, and
+    exception axes are covered; timeout coverage lands with the
+    timeout-enforcement consumer slice.
 11. **`bench/oran-hook/publish_blocking_overhead`** reports a
     single-sink blocking publish cost ≤ 2× the single-sink advisory
     publish baseline (~446 ns per `bench-hook/publish_one_sink`), and
     a no-sink blocking publish ≤ 1.5× the no-sink advisory baseline.
+    **Status (slice 90):** bench scenario not yet added; lands
+    alongside the dispatch consumer slice so the same bench can also
+    sample the new short-circuit path the consumer takes.
 
 ## Design Doc Cross-References
 

@@ -303,7 +303,7 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 
 ## Hook Bus
 
-> **Bus status (2026-05-23, slice 65):** the foundation
+> **Bus status (2026-05-24, slice 90):** the foundation
 > ships as `oran-hook`. `hook::Event` enumerates the 41
 > lifecycle events listed below; `hook::Mode { advisory,
 > blocking }` plus `default_mode(Event)` annotates each
@@ -373,6 +373,52 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > attached, nothing listens" tax, ~914 ns "bus attached
 > with two observers" tax — small relative to the
 > ~18 µs StorageAuditSink record).
+>
+> Slice 90 opens the spec-0015 v1 blocking surface
+> alongside the still-advisory tool-dispatch wiring:
+> `<oran/hook/decision.hpp>` ships `HookDecisionKind {
+> proceed, veto, rewrite, require_approval }` and
+> `HookDecision { kind, reason, optional<string>
+> rewritten_input_json, optional<core::Time>
+> approval_expires_at }`; `<oran/hook/event_traits.hpp>`
+> ships the empty primary `EventTraits<E>` template plus
+> explicit specialisations for the v1 whitelist
+> (`tool_before`, `permission_ask_rendered`,
+> `memory_write_before`) that set
+> `Decision = HookDecision`, and the
+> `HasBlockingDecision<E>` concept that constrains
+> `Bus::publish_blocking<E>`. `hook::Sink` grows a
+> virtual `handle_blocking(Event, Payload) ->
+> Awaitable<Result<HookDecision>>` defaulting to
+> `proceed` (the coroutine body lives in
+> `src/oran-hook/sink.cpp` to keep public-header
+> compile cost bounded). `hook::InProcessSink` adds an
+> optional `BlockingCallback` installed via
+> `set_blocking_handler`; existing constructors do not
+> change. `hook::Bus::publish_blocking<E>(Payload) ->
+> Awaitable<Result<HookDecision>>` walks subscribed
+> sinks in subscription order, awaits each one's
+> `handle_blocking`, applies the same
+> `ToolAfterPayload::data_json` redaction the advisory
+> path uses, short-circuits at the first non-`proceed`
+> decision, and converts sink `core::Result` errors
+> and thrown exceptions into a veto with
+> `reason="hook_error: <message> [sink=<id>]"`. With no
+> sinks subscribed or every sink returning `proceed`,
+> the bus yields a default-constructed `HookDecision{}`.
+> Slice 90 stops at the bus surface: `Registry::dispatch`
+> still publishes the existing advisory `tool_before` /
+> `tool_dispatched` / `tool_error` / `tool_after` payloads.
+> The blocking-veto consumer (new
+> `permission::AuditOutcome::blocked_by_hook` /
+> `rewritten` enumerators, the seven-step canonical
+> dispatch order, the
+> `AuditEvent::context.hook_decisions` array,
+> `config.hooks.timeout_ms` enforcement, and the spec-0018
+> AC5 `hook_publish` row writer) lands in the next slice;
+> the first user-visible sink is the operator-prompt
+> `permission_ask_rendered` sink owned by `oran-cli` in
+> the slice after that.
 
 ### Surface
 
@@ -442,6 +488,14 @@ class Bus {
 
   // Publish; the bus dispatches to all sinks subscribed to the event.
   async::Awaitable<core::Result<DispatchOutcome>> publish(Event, Payload);
+
+  // Slice-90 blocking publish (spec 0015 v1). Constrained at the call site
+  // by `EventTraits<E>::Decision`; only the v1 whitelist
+  // (`tool_before`, `permission_ask_rendered`, `memory_write_before`)
+  // satisfies `HasBlockingDecision<E>`.
+  template <Event E>
+    requires HasBlockingDecision<E>
+  async::Awaitable<core::Result<HookDecision>> publish_blocking(Payload);
 };
 
 }  // namespace orangutan::hook
@@ -493,14 +547,25 @@ Each event is annotated `blocking` or `advisory`:
 This is statically known per event so the type system can enforce it:
 
 ```cpp
+// include/oran/hook/event_traits.hpp — generic HookDecision per spec
+// 0015 v1. Specialisations are added for every event that wants to
+// expose a blocking decision; events without one (e.g. `tool_after`)
+// fail to satisfy `HasBlockingDecision` so `publish_blocking<E>` fails
+// to compile against them.
+
 template <Event E>
-struct EventTraits;
+struct EventTraits {};  // primary: no Decision = advisory only
 
 template <>
-struct EventTraits<Event::tool_before> { using Decision = ToolBeforeDecision; };
-
+struct EventTraits<Event::tool_before>             { using Decision = HookDecision; };
 template <>
-struct EventTraits<Event::tool_after>  { /* no Decision; advisory */ };
+struct EventTraits<Event::permission_ask_rendered> { using Decision = HookDecision; };
+template <>
+struct EventTraits<Event::memory_write_before>     { using Decision = HookDecision; };
+
+template <Event E>
+concept HasBlockingDecision = requires { typename EventTraits<E>::Decision; }
+    && std::same_as<typename EventTraits<E>::Decision, HookDecision>;
 ```
 
 ### Configuration

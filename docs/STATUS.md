@@ -7,17 +7,51 @@
 
 ## Snapshot
 
-- **Slice:** 89 (`xmake run orangutan` reports slice 89)
+- **Slice:** 90 (`xmake run orangutan` reports slice 90)
 - **Last completed history:**
-  [`histories/2026-05/20260524-1600-bench-trace-turn-insert.md`](histories/2026-05/20260524-1600-bench-trace-turn-insert.md)
+  [`histories/2026-05/20260524-1700-hook-publish-blocking-foundation.md`](histories/2026-05/20260524-1700-hook-publish-blocking-foundation.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
-  the recent agent-loop, bootstrap, inspector, and bench increments closed
-  in focused history/commit slices and did not need a new plan because they
-  stayed under the existing spec-0017/0018 sequencing contract.
+  the recent agent-loop, bootstrap, inspector, bench, and hook-foundation
+  increments closed in focused history/commit slices and did not need a new
+  plan because they stayed under the existing spec-0015/0017/0018
+  sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 89 closes
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 90 opens
+  the spec-0015 v1 blocking-hook surface: `<oran/hook/decision.hpp>` ships
+  `HookDecisionKind { proceed, veto, rewrite, require_approval }` and
+  `HookDecision { kind, reason, optional<string> rewritten_input_json,
+  optional<core::Time> approval_expires_at }`;
+  `<oran/hook/event_traits.hpp>` ships the primary `EventTraits<E>`
+  template plus explicit specialisations for the v1 whitelist
+  (`tool_before`, `permission_ask_rendered`, `memory_write_before`) and the
+  `HasBlockingDecision<E>` concept; `hook::Sink` gains a default
+  `handle_blocking(Event, Payload) -> Awaitable<Result<HookDecision>>`
+  that returns `proceed` (body in the new `src/oran-hook/sink.cpp` so the
+  coroutine machinery stays out of the public header); `hook::InProcessSink`
+  gains an optional `BlockingCallback` via `set_blocking_handler`; and
+  `hook::Bus::publish_blocking<E>(Payload)` (constrained by
+  `requires HasBlockingDecision<E>`) walks subscribed sinks in
+  subscription order, short-circuits at the first non-`proceed` decision,
+  applies the same `ToolAfterPayload::data_json` redaction the advisory
+  path uses, and converts sink `core::Result` errors / thrown exceptions
+  into a veto with `reason="hook_error: <message> [sink=<id>]"`.
+  `tests/hook/test_publish_blocking.cpp` covers proceed/veto/rewrite/
+  require_approval, multi-sink short-circuit, all-proceed continuation,
+  error and exception classification, the `InProcessSink::set_blocking_handler`
+  path, and `STATIC_REQUIRE`/`STATIC_REQUIRE_FALSE` matrices over the
+  blocking whitelist (closes spec-0015 v1 AC9's compile-time type-safety
+  half without needing the not-yet-built `tests/compile-fail` harness).
+  `test-hook` now reports 29 cases / 172 assertions (was 17 / 109). The
+  slice deliberately stops at the bus surface so the audit-side
+  `AuditOutcome::blocked_by_hook` / `rewritten` enumerators land in the
+  follow-up slice that consumes the decision inside `Registry::dispatch`.
+  Hook publish rows (spec-0018 AC5) remain downstream of that dispatch
+  consumer, the v1 operator-prompt sink for `permission_ask_rendered` is
+  the consumer-after-that, and the binary handoff that drives
+  `agent::Loop` from inside the `orangutan` binary remains blocked on the
+  absent real provider adapter. Slice 89 closes
   spec-0018 AC12 by adding `bench/storage/scenarios/trace_turn_insert.cpp`,
   a single-insert A-vs-B pair for `trace_turns`:
   `storage.trace_turn_insert_raw_pool` runs one raw `Pool` +
@@ -37,10 +71,7 @@
   into non-overlapping byte ranges so every tuple maps to a distinct id,
   and the batch scenarios now report stable numbers alongside the new
   single-insert pair. `test-storage` still reports 72 cases / 886
-  assertions; the change is bench-only. Hook publish rows (AC5) and the
-  binary handoff that drives `agent::Loop` from inside the binary remain
-  downstream — AC5 is blocked on spec 0015's blocking-veto semantics and
-  the binary handoff is blocked on the absent real provider adapter.
+  assertions; the change is bench-only.
   Slice 88 closes spec-0018 AC10 by adding the operator inspector: `oran-storage` exports
   `AuditRepository::list_events_for_turn(TurnId, limit)` — a `parent_turn_id =
   ?` read ordered `id ASC` so the original `tool_use` order of a spec-0017
@@ -489,7 +520,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-storage`: 72 cases / 886 assertions.
 - `oran-config`: 28 cases / 207 assertions.
 - `oran-permission`: 88 cases / 403 assertions.
-- `oran-hook`: 17 cases / 109 assertions.
+- `oran-hook`: 29 cases / 172 assertions.
 - `oran-tool`: 166 cases / 1588 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 11 cases / 89 assertions.
@@ -511,9 +542,15 @@ Closed entries do *not* live here — the tracker is canonical.
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on
   the documented reference hardware (8-core / NVMe / native Linux);
   otherwise the gate fires on environmental drift, not real regressions.
-- 2026-05-18 — Hook bus dispatch is advisory-only (slice 22); blocking
-  semantics with veto for `tool_before` / `memory_*_before` /
-  `permission_ask_rendered` are deferred to a follow-up slice.
+- 2026-05-18 — Hook bus blocking-veto consumer is pending. Slice 90
+  shipped the publish surface (`Bus::publish_blocking<E>`, `HookDecision`,
+  `EventTraits<E>` / `HasBlockingDecision<E>`, `Sink::handle_blocking`
+  default). Remaining: `Registry::dispatch` consumption (new
+  `AuditOutcome::blocked_by_hook` / `rewritten`, the seven-step
+  canonical dispatch order in `tool-runtime.md`, the
+  `AuditEvent::context.hook_decisions` array), the first operator-prompt
+  sink for `permission_ask_rendered`, and the `hook_publish` audit-row
+  writer that spec-0018 AC5 consumes.
 - 2026-05-17 — `file.search` does not yet ship ripgrep-class optimisations
   (mmap, extension-based binary skip, multi-threaded walk).
   Adequate at slice 20 (~27 µs / 4-file tree) but 3-10× slower than a tuned
