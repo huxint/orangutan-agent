@@ -68,7 +68,7 @@ own library, its own tests, its own bench, its own design doc."
 
 ## Prompt Assembly
 
-> **Status (slice 83, 2026-05-24):** `oran-prompt` owns the first
+> **Status (slice 84, 2026-05-24):** `oran-prompt` owns the first
 > deterministic `prompt::Builder` skeleton plus `prompt::PromotionState`,
 > `oran-agent` owns the narrow `agent::SessionState` surface that observes
 > successful `tool.search` output and promotes deferred matches into the
@@ -85,7 +85,9 @@ own library, its own tests, its own bench, its own design doc."
 > Parent cancellation during the provider await or direct tool dispatch now
 > returns `ErrorKind::cancelled` with `reason=parent_cancelled` and
 > `cancellation_phase=provider|tools`; slice 83 persists the same phase into
-> `trace_turns` rows when trace is configured. Slice 79 adds the first
+> `trace_turns` rows when trace is configured, and slice 84 writes
+> `stop_reason=error` rows for non-cancelled provider and response-backed
+> loop-boundary failures. Slice 79 adds the first
 > trace/audit join
 > primitive: `RunTurnInputs::turn_id` can be copied into
 > `DispatchContext::parent_turn_id` for direct tool dispatches in that turn.
@@ -97,7 +99,8 @@ own library, its own tests, its own bench, its own design doc."
 > skips the trace row, forces direct dispatch audit rows to keep
 > `parent_turn_id = NULL`, and restores any reusable dispatch-context parent id
 > after the tool call.
-> Memory + hook + ordinary error trace rows remain downstream.
+> Memory, hook rows, iteration-cap trace rows, config-to-loop wiring, and CLI
+> inspection remain downstream.
 > The invariants — section order, byte-identical cached prefix, no clocks /
 > per-call state in sections (1)–(6) — remain canonical in
 > [`../rules/prompt-design.md`](../rules/prompt-design.md).
@@ -154,8 +157,9 @@ supplied `RunTurnInputs::turn_id` through the direct dispatch context so tool
 audit rows can join to trace rows. Slice 80 adds the first terminal-success
 trace writer on top of the same turn id, slice 82 gates both the trace row and
 direct-dispatch parent id behind `TraceContext::enabled` for explicitly
-disabled turns, and slice 83 writes cancelled trace rows for provider/tool
-parent cancellations. The future
+disabled turns, slice 83 writes cancelled trace rows for provider/tool parent
+cancellations, and slice 84 writes ordinary provider/loop-boundary error rows.
+The future
 `ToolScheduler` can replace the direct loop call without changing the
 provider-facing request/response shape.
 

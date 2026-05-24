@@ -2,9 +2,9 @@
 //
 // These tests intentionally stay inside spec 0017's fake-provider-first loop
 // envelope: prompt/request construction, direct sequential tool dispatch,
-// model-visible repair errors, terminal-success trace rows, cancellation trace
-// rows, and loop boundary errors. Provider retry/fallback, non-cancellation
-// error trace rows, and the scheduler remain later slices.
+// model-visible repair errors, terminal-success / error / cancellation trace
+// rows, and loop boundary errors. Provider retry/fallback and the scheduler
+// remain later slices.
 
 #include <oran/agent.hpp>
 
@@ -413,6 +413,57 @@ TEST_CASE("Loop forwards provider errors unchanged", "[unit][agent][loop]") {
   });
 }
 
+TEST_CASE("Loop persists provider error trace rows", "[unit][agent][loop][trace]") {
+  TempDb db{"oran-agent-loop-trace-provider-error"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_trace_pool(io, db);
+    storage::TraceRepository trace{pool};
+    auto migrated = co_await trace.migrate();
+    REQUIRE(migrated.has_value());
+
+    std::vector<provider::ScriptedTurn> plan;
+    plan.push_back(provider::ScriptedTurn{
+        .response = std::nullopt,
+        .deltas = {},
+        .error = core::Error::network("upstream timeout"),
+        .latency = {},
+    });
+    provider::FakeProvider fake{std::move(plan)};
+    agent::Loop loop{fake, default_route()};
+
+    const auto catalog = loop_catalog();
+    const std::vector<core::Message> tail{core::Message::user_text("trace provider error")};
+    auto inputs = base_inputs(catalog, tail);
+    inputs.turn_id = turn_id_with(0x43);
+    inputs.trace = agent::TraceContext{
+        .repository = &trace,
+        .session_id = turn_id_with(0x80),
+        .agent_key = "coder",
+        .origin = "cli",
+    };
+    auto result = co_await loop.run_turn(inputs);
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::network);
+    REQUIRE(result.error().retryable());
+
+    auto row = co_await trace.get_turn(turn_id_with(0x43));
+    REQUIRE(row.has_value());
+    REQUIRE(row->has_value());
+    REQUIRE((*row)->turn_id == turn_id_with(0x43));
+    REQUIRE((*row)->session_id == turn_id_with(0x80));
+    REQUIRE((*row)->route_profile == "fake");
+    REQUIRE((*row)->route_model == "fake-1");
+    REQUIRE((*row)->stop_reason == "error");
+    REQUIRE((*row)->iteration_count == 1);
+    REQUIRE((*row)->input_tokens == 0);
+    REQUIRE((*row)->output_tokens == 0);
+    REQUIRE((*row)->cache_creation_tokens == 0);
+    REQUIRE((*row)->cache_read_tokens == 0);
+    REQUIRE_FALSE((*row)->cancellation_phase.has_value());
+  });
+}
+
 TEST_CASE("Loop annotates cancellation during provider await", "[unit][agent][loop][cancellation]") {
   asio::io_context io;
   asio::cancellation_signal signal;
@@ -488,6 +539,67 @@ TEST_CASE("Loop rejects tool-use responses until the dispatch iteration slice la
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::internal);
     REQUIRE(result.error().message() == "agent loop: response requires a later loop slice");
+  });
+}
+
+TEST_CASE("Loop persists loop-boundary error trace rows", "[unit][agent][loop][trace]") {
+  TempDb db{"oran-agent-loop-trace-boundary-error"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_trace_pool(io, db);
+    storage::TraceRepository trace{pool};
+    auto migrated = co_await trace.migrate();
+    REQUIRE(migrated.has_value());
+
+    std::vector<provider::ScriptedTurn> plan;
+    plan.push_back(provider::ScriptedTurn{
+        .response =
+            provider::Response{
+                .blocks = {core::ToolUseContent{.id = "t1", .name = "file.read", .input_json = R"({"path":"x"})"}},
+                .stop_reason = core::StopReason::tool_use,
+                .usage = provider::Usage{.input_tokens = 13,
+                                         .output_tokens = 2,
+                                         .cache_creation_tokens = 1,
+                                         .cache_read_tokens = 4,
+                                         .cost_estimate = 0.003},
+                .model_used = std::string{"fake-boundary-model"},
+            },
+        .deltas = {},
+        .error = std::nullopt,
+        .latency = {},
+    });
+    provider::FakeProvider fake{std::move(plan)};
+    agent::Loop loop{fake, default_route()};
+
+    const auto catalog = loop_catalog();
+    const std::vector<core::Message> tail{core::Message::user_text("trace missing dispatch context")};
+    auto inputs = base_inputs(catalog, tail);
+    inputs.turn_id = turn_id_with(0x44);
+    inputs.trace = agent::TraceContext{
+        .repository = &trace,
+        .session_id = turn_id_with(0x80),
+        .agent_key = "coder",
+        .origin = "cli",
+    };
+    auto result = co_await loop.run_turn(inputs);
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::internal);
+    REQUIRE(result.error().message() == "agent loop: response requires a later loop slice");
+
+    auto row = co_await trace.get_turn(turn_id_with(0x44));
+    REQUIRE(row.has_value());
+    REQUIRE(row->has_value());
+    REQUIRE((*row)->turn_id == turn_id_with(0x44));
+    REQUIRE((*row)->session_id == turn_id_with(0x80));
+    REQUIRE((*row)->route_model == "fake-boundary-model");
+    REQUIRE((*row)->stop_reason == "error");
+    REQUIRE((*row)->iteration_count == 1);
+    REQUIRE((*row)->input_tokens == 13);
+    REQUIRE((*row)->output_tokens == 2);
+    REQUIRE((*row)->cache_creation_tokens == 1);
+    REQUIRE((*row)->cache_read_tokens == 4);
+    REQUIRE((*row)->cost_estimate_usd == 0.003);
+    REQUIRE_FALSE((*row)->cancellation_phase.has_value());
   });
 }
 

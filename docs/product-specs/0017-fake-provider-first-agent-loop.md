@@ -85,7 +85,9 @@ proves the loop behaves correctly without a network.
     boundary: explicitly disabled turns write no trace row, install
     `parent_turn_id = NULL` during direct dispatch, and restore any reusable
     dispatch-context parent id afterward. Slice 83 adds cancelled trace rows for
-    provider/tool parent cancellation.
+    provider/tool parent cancellation; slice 84 adds `stop_reason=error` trace
+    rows for non-cancelled provider failures and response-backed loop-boundary
+    failures.
   - The loop emits **one** `provider::Request` per iteration.
   - The provider emits **one** `provider::Response` per request (after
     streaming completes if streaming is enabled).
@@ -144,7 +146,7 @@ proves the loop behaves correctly without a network.
   uses the fake provider with a hand-written plan.
 - **`agent::Loop` MVP**. Wraps the seven phases listed in the deep
   review §What a better `oran-agent` should look like:
-  - **Status (slice 83, 2026-05-24):** `<oran/agent.hpp>` exports
+  - **Status (slice 84, 2026-05-24):** `<oran/agent.hpp>` exports
     `agent::Loop`, `LoopOptions`, `RunTurnInputs`, and `RunTurnResult`.
     The current implementation covers phases 3/4/5 for terminal text turns
     plus the first phase-6 sequential dispatch path for scenarios #2/#3/#4/#6:
@@ -153,8 +155,9 @@ proves the loop behaves correctly without a network.
     append ordered tool-result messages, rebuild the prompt, and stop on a
     terminal text-style response or iteration cap. Provider/tool parent
     cancellations are classified with `cancellation_phase=provider|tools` and
-    written to `trace_turns` when trace is configured, and
-    direct dispatch audit rows can now carry the optional loop turn id as
+    written to `trace_turns` when trace is configured, ordinary provider and
+    response-backed loop-boundary failures are written as `stop_reason=error`,
+    and direct dispatch audit rows can now carry the optional loop turn id as
     `parent_turn_id` when trace is enabled. Terminal-success turns can also
     append one body-free `trace_turns` row through the optional
     `RunTurnInputs::trace` context; explicitly disabled trace contexts skip
@@ -191,14 +194,15 @@ proves the loop behaves correctly without a network.
   total_usage, wall_time)`. The turn row is the parent of every
   child tool audit row through `parent_event_id` — the field already
   exists in `permission::AuditEvent::context` but is unused. **Status
-  (slice 83):** the current trace direction moved to spec 0018's
+  (slice 84):** the current trace direction moved to spec 0018's
   `parent_turn_id` join key instead of `parent_event_id`: direct tool audit
   rows can carry the loop turn id, and terminal-success turns can write the
   matching `trace_turns` row. Explicitly disabled trace contexts preserve the
   trace-off audit shape by writing no row and keeping direct-dispatch
   `parent_turn_id` NULL. Parent-cancelled provider/tool phases now write
-  cancelled trace rows when trace is configured. Ordinary error trace rows,
-  hook rows, config-to-loop wiring, and CLI inspection remain downstream.
+  cancelled trace rows when trace is configured, and non-cancelled provider /
+  response-backed loop-boundary failures write `stop_reason=error` rows. Hook
+  rows, config-to-loop wiring, and CLI inspection remain downstream.
 - **CI runs against the fake provider only**. v1 CI gate:
   `xmake test test-agent` exercises all ten scenarios; no network
   is required, no API key is required, no flake budget is needed.
@@ -297,11 +301,16 @@ proves the loop behaves correctly without a network.
    `retries=1`. (Until spec 0001 v1.1 wires retry, this scenario
    asserts the loop *forwards* the retryable error unchanged for the
    next slice to handle — current criterion: the error reaches the
-   caller with `Error::retryable() == true`.)
+   caller with `Error::retryable() == true`.) **Status (slice 84):**
+   trace-enabled turns write one `trace_turns` row with
+   `stop_reason=error`, primary route model, zero new usage for the failed
+   provider call, and then return the retryable error unchanged.
 7. **Fatal provider error.** Scenario #8: the fake returns
    `core::Error{ category: auth }`. The loop does *not* retry;
    returns the error to the caller; emits one turn row with
-   `stop_reason=error`.
+   `stop_reason=error`. **Status (slice 84):** the same non-cancelled
+   provider-error trace path covers fatal provider errors; retry/fallback
+   policy remains downstream.
 8. **Cancellation during provider await.** Scenario #9: the fake
    sleeps `latency=10s`; the parent token fires at `t=100ms`. The
    loop returns `Error::cancelled` within `< 200ms`; the audit row

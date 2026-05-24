@@ -283,6 +283,26 @@ write_trace_turn(const RunTurnInputs& inputs,
   co_return core::Result<void>{};
 }
 
+[[nodiscard]] async::Awaitable<core::Result<void>> write_error_trace_turn(const RunTurnInputs& inputs,
+                                                                          const provider::Route& route,
+                                                                          const prompt::RenderedPrompt& rendered,
+                                                                          const provider::Usage& usage,
+                                                                          std::uint32_t iterations,
+                                                                          std::int64_t started_at_ns,
+                                                                          std::string route_model) {
+  if (!trace_writer_configured(inputs)) {
+    co_return core::Result<void>{};
+  }
+  co_return co_await write_trace_turn(inputs,
+                                      route,
+                                      rendered,
+                                      usage,
+                                      iterations,
+                                      started_at_ns,
+                                      std::move(route_model),
+                                      core::StopReason::error);
+}
+
 class ScopedParentTurnId {
 public:
   ScopedParentTurnId(tool::DispatchContext& context, std::optional<core::TurnId> parent_turn_id) noexcept
@@ -413,6 +433,17 @@ public:
           if (!traced) {
             co_return std::unexpected(std::move(traced).error());
           }
+        } else if (error.kind() != core::ErrorKind::cancelled) {
+          auto traced = co_await write_error_trace_turn(inputs,
+                                                        route_,
+                                                        *rendered,
+                                                        total_usage,
+                                                        iteration,
+                                                        started_at_ns,
+                                                        route_.primary.model);
+          if (!traced) {
+            co_return std::unexpected(std::move(traced).error());
+          }
         }
         co_return std::unexpected(std::move(error));
       }
@@ -422,10 +453,34 @@ public:
       const auto tool_uses = tool_uses_in(response->blocks);
       if (response->stop_reason == core::StopReason::tool_use || !tool_uses.empty()) {
         if (inputs.tools == nullptr || inputs.dispatch_context == nullptr) {
-          co_return std::unexpected(unsupported_response("tool_use response"));
+          auto error = unsupported_response("tool_use response");
+          const auto route_model = response->model_used.value_or(route_.primary.model);
+          auto traced = co_await write_error_trace_turn(inputs,
+                                                        route_,
+                                                        *rendered,
+                                                        total_usage,
+                                                        iteration,
+                                                        started_at_ns,
+                                                        route_model);
+          if (!traced) {
+            co_return std::unexpected(std::move(traced).error());
+          }
+          co_return std::unexpected(std::move(error));
         }
         if (tool_uses.empty()) {
-          co_return std::unexpected(unsupported_response("tool_use stop reason without tool blocks"));
+          auto error = unsupported_response("tool_use stop reason without tool blocks");
+          const auto route_model = response->model_used.value_or(route_.primary.model);
+          auto traced = co_await write_error_trace_turn(inputs,
+                                                        route_,
+                                                        *rendered,
+                                                        total_usage,
+                                                        iteration,
+                                                        started_at_ns,
+                                                        route_model);
+          if (!traced) {
+            co_return std::unexpected(std::move(traced).error());
+          }
+          co_return std::unexpected(std::move(error));
         }
 
         transcript.push_back(core::Message{
@@ -460,6 +515,18 @@ public:
               if (!traced) {
                 co_return std::unexpected(std::move(traced).error());
               }
+            } else if (error.kind() != core::ErrorKind::cancelled) {
+              const auto route_model = response->model_used.value_or(route_.primary.model);
+              auto traced = co_await write_error_trace_turn(inputs,
+                                                            route_,
+                                                            *rendered,
+                                                            total_usage,
+                                                            iteration,
+                                                            started_at_ns,
+                                                            route_model);
+              if (!traced) {
+                co_return std::unexpected(std::move(traced).error());
+              }
             }
             co_return std::unexpected(std::move(error));
           }
@@ -477,6 +544,17 @@ public:
           response->stop_reason != core::StopReason::stop_sequence &&
           response->stop_reason != core::StopReason::max_tokens) {
         auto error = unsupported_response("non-terminal stop reason");
+        const auto route_model = response->model_used.value_or(route_.primary.model);
+        auto traced = co_await write_error_trace_turn(inputs,
+                                                      route_,
+                                                      *rendered,
+                                                      total_usage,
+                                                      iteration,
+                                                      started_at_ns,
+                                                      route_model);
+        if (!traced) {
+          co_return std::unexpected(std::move(traced).error());
+        }
         co_return std::unexpected(std::move(error));
       }
 

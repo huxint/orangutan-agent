@@ -56,10 +56,11 @@ makes the existing audit rows joinable. Nothing else.
 
 - **`oran-storage::TraceRepository`** — new repository neighbour of
   the existing `SessionRepository` and `AuditRepository`. Schema:
-  **Status (slice 83, 2026-05-24):** the storage foundation, the first
+  **Status (slice 84, 2026-05-24):** the storage foundation, the first
   direct-dispatch audit join key, the first terminal-success loop writer, the
   explicit trace-disabled loop policy, and provider/tool cancellation trace
-  rows are shipped.
+  rows are shipped. The first ordinary error rows are also shipped for
+  non-cancelled provider failures and response-backed loop-boundary failures.
   `<oran/storage.hpp>` exports `TraceRepository`, `TraceId`,
   `AppendTraceTurnRequest`, `TraceTurnRecord`, and
   `ListTraceTurnsOptions`; `src/oran-storage/migrations/audit/0002-trace-turns-initial.sql`
@@ -71,10 +72,11 @@ makes the existing audit rows joinable. Nothing else.
   `audit_events.parent_turn_id` as audit DB migration version 3, and typed
   `parent_turn_id` fields on storage/permission audit requests and records.
   The repository covers append/get/list/count, audit-v1-to-trace-v2/v3
-  upgrade, and validation; `agent::Loop` now uses it for terminal-success
-  rows, skips it when `TraceContext::enabled=false`, and writes cancelled rows
-  for provider/tool parent cancellation. Ordinary error rows, hook publish rows,
-  config-to-loop wiring, and the CLI inspector remain downstream.
+  upgrade, and validation; `agent::Loop` now uses it for terminal-success rows,
+  skips it when `TraceContext::enabled=false`, writes cancelled rows for
+  provider/tool parent cancellation, and writes ordinary provider/loop-boundary
+  error rows. Iteration-cap rows, hook publish rows, config-to-loop wiring, and
+  the CLI inspector remain downstream.
   ```sql
   CREATE TABLE trace_turns (
     turn_id           BLOB PRIMARY KEY,             -- 16-byte UUID
@@ -131,7 +133,7 @@ makes the existing audit rows joinable. Nothing else.
   threads `TurnId`, `parent_turn_id`, identity, route, cancellation
   slot, and stable service refs through every callsite. The
   agent-loop-foundation note's "phase 1" (Build `TurnContext`) is
-  exactly this. **Status (slice 83):** the public interim surface is
+  exactly this. **Status (slice 84):** the public interim surface is
   `RunTurnInputs::turn_id`; when set and trace is enabled, direct tool
   dispatches receive it as `DispatchContext::parent_turn_id`. When the turn id
   is unset or `RunTurnInputs::trace.enabled=false`, the loop forces
@@ -140,19 +142,22 @@ makes the existing audit rows joinable. Nothing else.
   context (`TraceRepository`, session id, parent turn id, agent key, origin,
   redacted context JSON) used by the first terminal-success writer; slice 82
   adds the explicit `enabled` gate; slice 83 writes cancelled trace rows using
-  the same turn context.
+  the same turn context; slice 84 writes ordinary provider and loop-boundary
+  error rows with the same context.
 - **Turn-finished publisher**. `agent::Loop::run_turn` writes one
   `trace_turns` row at terminal stop reason. The write is
   *synchronous* w.r.t. the user-visible response (the loop awaits
   the insert before returning) so the row is durable before the
   agent answers. The cost is one SQLite insert per turn (≤ 30 µs
-  per the existing `bench-storage` numbers). **Status (slice 83):**
+  per the existing `bench-storage` numbers). **Status (slice 84):**
   shipped for trace-enabled terminal-success stop reasons (`end_turn`,
   `stop_sequence`, `max_tokens`) through `RunTurnInputs::trace`; explicit
   `TraceContext::enabled=false` skips the insert entirely. Parent-cancelled
   provider/tool failures also write `stop_reason=cancelled` rows after
-  briefly shielding the insert from the parent cancellation state. Ordinary
-  error rows remain downstream.
+  briefly shielding the insert from the parent cancellation state. Non-cancelled
+  provider errors and response-backed loop-boundary failures write
+  `stop_reason=error` rows while preserving the original returned error.
+  Iteration-cap rows remain downstream.
 - **Redaction policy**. The trace row never carries raw prompt
   bytes, raw tool inputs, raw memory facts, or raw provider
   responses. Only hashes, byte counts, token counts, identifiers,
