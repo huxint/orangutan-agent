@@ -38,6 +38,10 @@ class Registry;
 struct DispatchContext;
 }  // namespace orangutan::tool
 
+namespace orangutan::storage {
+class TraceRepository;
+}  // namespace orangutan::storage
+
 namespace orangutan::agent {
 
 struct LoopOptions {
@@ -48,6 +52,19 @@ struct LoopOptions {
   prompt::BuilderOptions prompt_options{};
 
   friend bool operator==(const LoopOptions&, const LoopOptions&) = default;
+};
+
+struct TraceContext {
+  /// Optional storage writer for spec-0018 per-turn trace rows. When null, the
+  /// loop preserves the pre-trace behavior and only `turn_id` audit stamping can
+  /// occur. When non-null, `RunTurnInputs::turn_id`, `session_id`, `agent_key`,
+  /// and `origin` must also be set.
+  storage::TraceRepository* repository{nullptr};
+  core::TurnId session_id{};
+  std::optional<core::TurnId> parent_turn_id{};
+  std::string_view agent_key{};
+  std::string_view origin{};
+  std::string_view context_json{"{}"};
 };
 
 struct RunTurnInputs {
@@ -80,6 +97,11 @@ struct RunTurnInputs {
   /// `DispatchContext::parent_turn_id`; when unset, dispatch audit rows keep
   /// `parent_turn_id = NULL` for trace-disabled and pre-trace callers.
   std::optional<core::TurnId> turn_id{};
+  /// Optional per-turn trace writer context. This first writer slice records
+  /// redacted `trace_turns` rows when a caller supplies both `trace.repository`
+  /// and `turn_id`; ID generation, operator config, and CLI inspection remain
+  /// downstream.
+  TraceContext trace{};
   /// Optional direct-dispatch bridge for spec 0017 scenarios #2/#3. Both
   /// pointers must be non-null to execute tool_use blocks; otherwise the loop
   /// still fails loudly on tool_use so callers do not accidentally run a

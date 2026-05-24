@@ -4,7 +4,10 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <cstdint>
 #include <expected>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -14,8 +17,10 @@
 #include <variant>
 #include <vector>
 
+#include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/role.hpp>
+#include <oran/storage/trace_repository.hpp>
 #include <oran/tool/registry.hpp>
 
 namespace orangutan::agent {
@@ -139,6 +144,128 @@ void add_usage(provider::Usage& total, const provider::Usage& next) {
   }
 }
 
+[[nodiscard]] std::int64_t now_epoch_ns() noexcept {
+  using namespace std::chrono;
+  return duration_cast<nanoseconds>(system_clock::now().time_since_epoch()).count();
+}
+
+[[nodiscard]] core::Result<std::int64_t> checked_i64(std::uint64_t value, std::string field) {
+  if (value > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+    return std::unexpected(
+        core::Error::invalid_argument("trace counter exceeds storage range").with("field", std::move(field)));
+  }
+  return static_cast<std::int64_t>(value);
+}
+
+[[nodiscard]] core::Result<std::int64_t> checked_size_i64(std::size_t value, std::string field) {
+  if (value > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
+    return std::unexpected(
+        core::Error::invalid_argument("trace byte count exceeds storage range").with("field", std::move(field)));
+  }
+  return static_cast<std::int64_t>(value);
+}
+
+[[nodiscard]] std::uint64_t section_hash(const prompt::RenderedPrompt& rendered, std::string_view id) noexcept {
+  const auto it = std::ranges::find(rendered.sections, id, &prompt::CacheSection::id);
+  return it == rendered.sections.end() ? 0 : it->content_hash;
+}
+
+[[nodiscard]] core::Result<storage::AppendTraceTurnRequest>
+make_trace_request(const RunTurnInputs& inputs,
+                   const provider::Route& route,
+                   const prompt::RenderedPrompt& rendered,
+                   const provider::Usage& usage,
+                   std::uint32_t iterations,
+                   std::int64_t started_at_ns,
+                   std::string route_model,
+                   core::StopReason stop_reason,
+                   std::optional<std::string> cancellation_phase = std::nullopt) {
+  if (inputs.trace.repository == nullptr) {
+    return std::unexpected(core::Error::invalid_argument("trace repository is not configured"));
+  }
+  if (!inputs.turn_id.has_value()) {
+    return std::unexpected(core::Error::invalid_argument("trace writer requires a turn id"));
+  }
+
+  auto prefix_bytes = checked_size_i64(rendered.prefix_bytes, "prompt_prefix_bytes");
+  if (!prefix_bytes) {
+    return std::unexpected(prefix_bytes.error());
+  }
+  auto input_tokens = checked_i64(usage.input_tokens, "input_tokens");
+  if (!input_tokens) {
+    return std::unexpected(input_tokens.error());
+  }
+  auto output_tokens = checked_i64(usage.output_tokens, "output_tokens");
+  if (!output_tokens) {
+    return std::unexpected(output_tokens.error());
+  }
+  auto cache_creation_tokens = checked_i64(usage.cache_creation_tokens, "cache_creation_tokens");
+  if (!cache_creation_tokens) {
+    return std::unexpected(cache_creation_tokens.error());
+  }
+  auto cache_read_tokens = checked_i64(usage.cache_read_tokens, "cache_read_tokens");
+  if (!cache_read_tokens) {
+    return std::unexpected(cache_read_tokens.error());
+  }
+
+  return storage::AppendTraceTurnRequest{
+      .turn_id = *inputs.turn_id,
+      .parent_turn_id = inputs.trace.parent_turn_id,
+      .session_id = inputs.trace.session_id,
+      .agent_key = std::string{inputs.trace.agent_key},
+      .origin = std::string{inputs.trace.origin},
+      .route_profile = route.primary.profile,
+      .route_model = std::move(route_model),
+      .started_at_ns = started_at_ns,
+      .finished_at_ns = now_epoch_ns(),
+      .stop_reason = std::string{core::enum_name(stop_reason)},
+      .iteration_count = static_cast<std::int64_t>(iterations),
+      .prompt_prefix_hash = rendered.prefix_hash,
+      .prompt_prefix_bytes = *prefix_bytes,
+      .active_catalog_hash = section_hash(rendered, "tool_catalog"),
+      .deferred_catalog_hash = section_hash(rendered, "deferred_tools"),
+      .cache_creation_tokens = *cache_creation_tokens,
+      .cache_read_tokens = *cache_read_tokens,
+      .input_tokens = *input_tokens,
+      .output_tokens = *output_tokens,
+      .cost_estimate_usd = usage.cost_estimate.value_or(0.0),
+      .cancellation_phase = std::move(cancellation_phase),
+      .context_json = std::string{inputs.trace.context_json},
+  };
+}
+
+[[nodiscard]] async::Awaitable<core::Result<void>>
+write_trace_turn(const RunTurnInputs& inputs,
+                 const provider::Route& route,
+                 const prompt::RenderedPrompt& rendered,
+                 const provider::Usage& usage,
+                 std::uint32_t iterations,
+                 std::int64_t started_at_ns,
+                 std::string route_model,
+                 core::StopReason stop_reason,
+                 std::optional<std::string> cancellation_phase = std::nullopt) {
+  if (inputs.trace.repository == nullptr) {
+    co_return core::Result<void>{};
+  }
+  auto request = make_trace_request(inputs,
+                                    route,
+                                    rendered,
+                                    usage,
+                                    iterations,
+                                    started_at_ns,
+                                    std::move(route_model),
+                                    stop_reason,
+                                    std::move(cancellation_phase));
+  if (!request) {
+    co_return std::unexpected(std::move(request).error());
+  }
+  auto appended = co_await inputs.trace.repository->append_turn(std::move(*request));
+  if (!appended) {
+    co_return std::unexpected(std::move(appended).error());
+  }
+  co_return core::Result<void>{};
+}
+
 class ScopedParentTurnId {
 public:
   ScopedParentTurnId(tool::DispatchContext& context, std::optional<core::TurnId> parent_turn_id) noexcept
@@ -214,6 +341,7 @@ public:
                                                                        provider::EventSink* sink) {
     std::vector<core::Message> transcript{inputs.conversation_tail.begin(), inputs.conversation_tail.end()};
     auto total_usage = provider::Usage{};
+    const auto started_at_ns = now_epoch_ns();
     const auto native_tools = request_tools_for(inputs.tool_catalog, inputs.active_tools, inputs.promoted_tools);
     const auto thinking_budget =
         inputs.thinking_budget.has_value() ? inputs.thinking_budget : route_.primary.thinking_budget;
@@ -253,7 +381,8 @@ public:
 
       auto response = co_await provider_.send(std::move(request), route_, sink);
       if (!response) {
-        co_return std::unexpected(with_cancellation_phase(std::move(response).error(), "provider"));
+        auto error = with_cancellation_phase(std::move(response).error(), "provider");
+        co_return std::unexpected(std::move(error));
       }
 
       add_usage(total_usage, response->usage);
@@ -283,7 +412,8 @@ public:
           }
           auto tool_result = tool_result_from(use.id, std::move(output));
           if (!tool_result) {
-            co_return std::unexpected(with_cancellation_phase(std::move(tool_result).error(), "tools"));
+            auto error = with_cancellation_phase(std::move(tool_result).error(), "tools");
+            co_return std::unexpected(std::move(error));
           }
           tool_results.emplace_back(std::move(*tool_result));
         }
@@ -298,7 +428,8 @@ public:
       if (response->stop_reason != core::StopReason::end_turn &&
           response->stop_reason != core::StopReason::stop_sequence &&
           response->stop_reason != core::StopReason::max_tokens) {
-        co_return std::unexpected(unsupported_response("non-terminal stop reason"));
+        auto error = unsupported_response("non-terminal stop reason");
+        co_return std::unexpected(std::move(error));
       }
 
       auto text = assemble_terminal_text(response->blocks);
@@ -307,6 +438,18 @@ public:
           .blocks = response->blocks,
           .created_at = std::nullopt,
       });
+      const auto model_used = response->model_used.value_or(route_.primary.model);
+      if (auto traced = co_await write_trace_turn(inputs,
+                                                  route_,
+                                                  *rendered,
+                                                  total_usage,
+                                                  iteration,
+                                                  started_at_ns,
+                                                  model_used,
+                                                  response->stop_reason);
+          !traced) {
+        co_return std::unexpected(std::move(traced).error());
+      }
       co_return RunTurnResult{
           .text = std::move(text),
           .assistant_blocks = std::move(response->blocks),

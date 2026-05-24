@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 79 (`xmake run orangutan` reports slice 79)
+- **Slice:** 80 (`xmake run orangutan` reports slice 80)
 - **Last completed history:**
-  [`histories/2026-05/20260524-1145-trace-audit-parent-turn-id.md`](histories/2026-05/20260524-1145-trace-audit-parent-turn-id.md)
+  [`histories/2026-05/20260524-1210-agent-loop-trace-row.md`](histories/2026-05/20260524-1210-agent-loop-trace-row.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
@@ -17,11 +17,26 @@
   and did not need a new plan because they stayed under the existing spec-0017
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 79 threads
-  the first spec-0018 cause-chain id through the direct tool-dispatch path
-  without writing trace rows yet. `oran-core` now owns `core::TurnId`, the
-  shared 16-byte value shape used by storage trace ids and audit correlation.
-  `storage::TraceId` aliases it; audit DB migration
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 80 lands the
+  first loop-owned spec-0018 `trace_turns` writer for terminal-success fake
+  provider turns. `agent::RunTurnInputs::trace` carries a non-owning
+  `storage::TraceRepository*`, `session_id`, optional `parent_turn_id`,
+  `agent_key`, `origin`, and redacted `context_json`; when callers also supply
+  `RunTurnInputs::turn_id`, `agent::Loop` awaits one `TraceRepository::append_turn`
+  before returning terminal `end_turn` / `stop_sequence` / `max_tokens` results.
+  The row records route profile/model, start/finish timestamps, stop reason,
+  iteration count, prompt prefix hash/bytes, active/deferred catalog hashes,
+  aggregate provider usage tokens/cost, cache token counters, and body-free
+  context bytes. The existing direct-dispatch audit path still stamps
+  `audit_events.parent_turn_id` with the same turn id, so a single-tool loop turn
+  now has both sides of the cause-chain join. `test-agent` covers single-text
+  trace rows and storage-backed tool-audit correlation (16 cases / 233
+  assertions). Cancellation/error trace rows, turn-id generation, operator trace
+  config, hook publish rows, CLI `--trace`, and binary handoff remain downstream.
+  Slice 79 threads the first spec-0018 cause-chain id through the direct
+  tool-dispatch path. `oran-core` now owns `core::TurnId`, the shared 16-byte
+  value shape used by storage trace ids and audit correlation. `storage::TraceId`
+  aliases it; audit DB migration
   `src/oran-storage/migrations/audit/0003-audit-parent-turn-id.sql` adds the
   nullable `audit_events.parent_turn_id` BLOB plus an index, so the embedded
   audit/trace migration stream now reaches version 3. `AppendAuditEventRequest`,
@@ -33,15 +48,13 @@
   turn id into `Registry::dispatch`, and `agent::RunTurnInputs::turn_id` is the
   loop-owned source for direct tool calls: traced turns stamp every dispatch
   with that id, while trace-disabled turns force `parent_turn_id = NULL` during
-  dispatch and restore any reusable context value afterward. `test-core` now
-  covers the value type (70 cases / 453 assertions), `test-storage` covers
-  audit version-3 migration, BLOB round-trip, metadata update scoping, and
-  zero-id validation (70 cases / 856 assertions), `test-permission` covers
-  recording/storage sink propagation (89 cases / 414 assertions), `test-tool`
-  covers registry audit stamping (166 cases / 1590 assertions), and
-  `test-agent` covers loop stamping plus stale-context clearing/restoration
-  (14 cases / 162 assertions). Loop-owned `trace_turns` writes, CLI `--trace`,
-  hook publish rows, and trace config remain downstream. Slice 78 opened the
+  dispatch and restore any reusable context value afterward. `test-core` covers
+  the value type (70 cases / 453 assertions), `test-storage` covers audit
+  version-3 migration, BLOB round-trip, metadata update scoping, and zero-id
+  validation (70 cases / 856 assertions), `test-permission` covers
+  recording/storage sink propagation (89 cases / 414 assertions), and
+  `test-tool` covers registry audit stamping (166 cases / 1590 assertions).
+  Slice 78 opened the
   storage foundation for spec 0018: `oran-storage` exports
   `TraceRepository`, `TraceId` (16-byte BLOB at the database boundary),
   `AppendTraceTurnRequest`, `TraceTurnRecord`, `ListTraceTurnsOptions`, and
@@ -51,14 +64,14 @@
   Provider-await cancellations and tool-dispatch cancellations still return
   `ErrorKind::cancelled`, but the loop now adds
   `reason=parent_cancelled` plus `cancellation_phase=provider|tools` before
-  returning the error, giving the future trace row a stable source for
+  returning the error, giving the cancellation/error trace writer a stable source for
   `trace_turns.cancellation_phase`; slice 78 then introduced the trace schema
-  and repository without wiring the loop writer yet.
+  and repository, and slice 80 wires terminal-success rows.
   Ordinary provider errors, retryable network/upstream failures, storage
   failures, and model-repairable tool errors keep their existing behavior.
-  `test-agent` now covers both cancellation phases through parent
-  `asio::cancellation_signal` tests (14 cases / 154 assertions). Turn-level
-  trace/audit rows, blocking approval rendering, provider retry/fallback, the
+  `test-agent` covers both cancellation phases through parent
+  `asio::cancellation_signal` tests (16 cases / 233 assertions overall).
+  Cancellation/error trace rows, blocking approval rendering, provider retry/fallback, the
   parallel `ToolScheduler`, and CLI/binary handoff remain downstream. Slice 76
   extended the real `agent::Loop` driver from the slice-75 text-only path into the
   first sequential direct-dispatch tool loop. `<oran/agent.hpp>` exports
@@ -79,13 +92,13 @@
   the loop. If the registry/context pair is absent, `tool_use` still returns
   the explicit not-yet-implemented error from slice 75. The loop enforces the
   existing `LoopOptions::max_iterations` cap with `reason=iteration_cap`, but
-  turn-level audit rows, provider retry/fallback, blocking approval rendering, and the parallel `ToolScheduler`
+  cancellation/error trace rows, provider retry/fallback, blocking approval rendering, and the parallel `ToolScheduler`
   remain downstream. `test-agent` now covers the FakeProvider text-turn path,
   provider request mapping, provider error forwarding, the no-dispatch-context
   tool-use boundary, one-tool provider re-entry, ordered multi-tool results,
   model-visible missing-tool repair, infrastructure error propagation, and the
   iteration cap. The `orangutan` binary is still not wired to `oran-agent`;
-  remaining near-term work is the turn-level audit /
+  remaining near-term work is the cancellation/error trace /
   approval-observability envelope before CLI/binary handoff.
   Slice 75 opened
   the real `agent::Loop` driver but deliberately limited it to spec-0017

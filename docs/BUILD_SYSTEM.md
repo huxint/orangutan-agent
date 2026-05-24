@@ -221,7 +221,7 @@ oran_lib("hook", { "oran-core", "oran-async" }, {})
 oran_lib("tool", { "oran-core", "oran-async", "oran-io", "oran-permission", "oran-hook" }, { "nlohmann_json" })
 oran_lib("prompt", { "oran-core", "oran-async", "oran-config", "oran-tool" }, {})
 oran_lib("provider", { "oran-core", "oran-async", "oran-prompt" }, {})
-oran_lib("agent", { "oran-core", "oran-async", "oran-prompt", "oran-tool", "oran-provider" }, { "nlohmann_json" })
+oran_lib("agent", { "oran-core", "oran-async", "oran-storage", "oran-prompt", "oran-tool", "oran-provider" }, { "nlohmann_json" })
 oran_lib("cli", { "oran-core" }, {})
 oran_lib("bootstrap", { "oran-core", "oran-async", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-tool", "oran-cli" }, {})
 
@@ -239,13 +239,14 @@ It is registered with `test-provider` and `bench-provider`, but no transport,
 protocol adapter, or real vendor runtime is linked into the binary yet.
 
 `oran-agent` now owns the slice-72 `SessionState` promotion owner plus the
-slice-77 sequential direct-dispatch `Loop` turn driver with cancellation-phase
-context on provider/tool parent cancellations. The provider
-dependency is
-intentional and downward: the agent runtime layer drives `provider::System`,
-while `oran-provider` never calls back into `oran-agent`. The `orangutan`
-binary still does not link `oran-agent`; CLI/binary handoff waits for the
-turn-level trace/audit and approval-observability envelope.
+slice-80 sequential direct-dispatch `Loop` turn driver with cancellation-phase
+context on provider/tool parent cancellations and the first terminal-success
+`trace_turns` writer. The `oran-storage` dependency is an intentional downward
+agent-runtime → platform dependency for `storage::TraceRepository`; the provider
+dependency is also downward: the agent runtime layer drives
+`provider::System`, while `oran-provider` never calls back into `oran-agent`.
+The `orangutan` binary still does not link `oran-agent`; CLI/binary handoff
+waits for cancellation/error trace rows and approval-observability coverage.
 
 **Key compile-time wins from this shape:**
 

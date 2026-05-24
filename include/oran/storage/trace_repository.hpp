@@ -2,9 +2,9 @@
 //
 // `TraceRepository` is the storage-owned foundation for product spec 0018.
 // It persists one redacted row per agent turn in `trace_turns`. The agent
-// loop will thread a core-level turn id through tools/audit in a later slice;
-// this repository keeps the database-facing contract ready now: 16-byte BLOB
-// identifiers, prompt/cache hashes, token rollups, and an opaque context blob.
+// loop now has the first terminal-success writer for this repository; the
+// database-facing contract stays narrow: 16-byte BLOB identifiers, prompt/cache
+// hashes, token rollups, and an opaque context blob.
 
 #pragma once
 

@@ -22,8 +22,10 @@ does not expose `sqlite3.h` from public headers.
 > `built_in_trace_migrations()` for redacted per-turn rows keyed by 16-byte BLOB
 > ids. Slice 79 adds the audit DB version-3 `audit_events.parent_turn_id`
 > column and the shared `core::TurnId` / `TraceId` value shape so tool audit
-> rows can join back to future trace rows. Backups and the memory / automation
-> repositories are future slices.
+> rows can join back to trace rows. Slice 80 adds the first agent-loop writer:
+> terminal-success fake-provider turns can append one body-free `trace_turns`
+> row through `TraceRepository` before returning to the caller. Backups and the
+> memory / automation repositories are future slices.
 
 ## Public Surface
 
@@ -667,7 +669,10 @@ positive `iteration_count` / `schema_version`, non-negative counters, and
 `finished_at_ns >= started_at_ns` before touching SQLite. It does not parse
 `context_json`; the agent/trace writer owns redaction and JSON shape.
 
-Slice 78 deliberately stops at the storage primitive. Slice 79 threads a typed
+Slice 78 deliberately stopped at the storage primitive. Slice 79 threads a typed
 turn id through `agent::Loop`, `tool::DispatchContext`, and the permission audit
-sink so tool audit rows can join against future `trace_turns` rows. The loop
-writer that appends one `trace_turns` row per turn remains downstream.
+sink so tool audit rows can join against `trace_turns` rows. Slice 80 adds the
+first consumer: `agent::Loop` appends one row for terminal-success turns when
+callers supply `RunTurnInputs::trace.repository` and `RunTurnInputs::turn_id`.
+Cancellation/error rows, trace retention/config, and the CLI inspector remain
+downstream.

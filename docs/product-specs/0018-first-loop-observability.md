@@ -56,8 +56,9 @@ makes the existing audit rows joinable. Nothing else.
 
 - **`oran-storage::TraceRepository`** — new repository neighbour of
   the existing `SessionRepository` and `AuditRepository`. Schema:
-  **Status (slice 79, 2026-05-24):** the storage foundation plus the first
-  direct-dispatch audit join key are shipped.
+  **Status (slice 80, 2026-05-24):** the storage foundation, the first
+  direct-dispatch audit join key, and the first terminal-success loop writer
+  are shipped.
   `<oran/storage.hpp>` exports `TraceRepository`, `TraceId`,
   `AppendTraceTurnRequest`, `TraceTurnRecord`, and
   `ListTraceTurnsOptions`; `src/oran-storage/migrations/audit/0002-trace-turns-initial.sql`
@@ -69,8 +70,9 @@ makes the existing audit rows joinable. Nothing else.
   `audit_events.parent_turn_id` as audit DB migration version 3, and typed
   `parent_turn_id` fields on storage/permission audit requests and records.
   The repository covers append/get/list/count, audit-v1-to-trace-v2/v3
-  upgrade, and validation; loop-owned `trace_turns` writes, hook publish rows,
-  trace config, and the CLI inspector remain downstream.
+  upgrade, and validation; `agent::Loop` now uses it for terminal-success
+  rows. Cancellation/error rows, hook publish rows, trace config, and the CLI
+  inspector remain downstream.
   ```sql
   CREATE TABLE trace_turns (
     turn_id           BLOB PRIMARY KEY,             -- 16-byte UUID
@@ -130,13 +132,19 @@ makes the existing audit rows joinable. Nothing else.
   exactly this. **Status (slice 79):** the public interim surface is
   `RunTurnInputs::turn_id`; when set, direct tool dispatches receive it as
   `DispatchContext::parent_turn_id`, and when unset the loop forces
-  `parent_turn_id = NULL` for the dispatch duration.
+  `parent_turn_id = NULL` for the dispatch duration. Slice 80 adds the
+  optional `RunTurnInputs::trace` context (`TraceRepository`, session id,
+  parent turn id, agent key, origin, redacted context JSON) used by the first
+  terminal-success writer.
 - **Turn-finished publisher**. `agent::Loop::run_turn` writes one
   `trace_turns` row at terminal stop reason. The write is
   *synchronous* w.r.t. the user-visible response (the loop awaits
   the insert before returning) so the row is durable before the
   agent answers. The cost is one SQLite insert per turn (≤ 30 µs
-  per the existing `bench-storage` numbers).
+  per the existing `bench-storage` numbers). **Status (slice 80):**
+  shipped for terminal-success stop reasons (`end_turn`, `stop_sequence`,
+  `max_tokens`) through `RunTurnInputs::trace`; cancellation/error rows remain
+  downstream.
 - **Redaction policy**. The trace row never carries raw prompt
   bytes, raw tool inputs, raw memory facts, or raw provider
   responses. Only hashes, byte counts, token counts, identifiers,
@@ -210,20 +218,22 @@ makes the existing audit rows joinable. Nothing else.
    scenario #1) produces exactly one `trace_turns` row with
    `stop_reason=end_turn`, `iteration_count=1`, `cancellation_phase=
    NULL`, and the prompt prefix hash from `RenderedPrompt::prefix_hash`.
+   **Status (slice 80):** shipped for trace-enabled terminal-success turns and
+   covered by `test-agent`'s single-text trace-row case.
 2. **Cause-chain join.** A single-tool turn (spec 0017 scenario #2)
    produces one trace row + one audit row whose `parent_turn_id`
    matches the trace row's `turn_id`. The join query in the CLI
-   inspector returns both. **Status (slice 79):** the audit row side is
-   shipped for direct dispatch when `RunTurnInputs::turn_id` is supplied; the
-   trace row writer and CLI join query remain downstream.
+   inspector returns both. **Status (slice 80):** the storage join is shipped
+   for direct dispatch when callers configure `RunTurnInputs::turn_id` plus
+   `RunTurnInputs::trace`; CLI inspection remains downstream.
 3. **Multi-tool fan-out.** A multi-tool turn (spec 0017 scenario
    #3, sequential dispatch in v1) produces one trace row + N audit
    rows, all sharing the same `parent_turn_id`. Sorted by
    `started_at_ns`, the audit rows preserve the original
-   `tool_use` order. **Status (slice 79):** direct sequential dispatch stamps
-   every tool audit row with the same loop turn id and preserves the existing
-   tool-use order at the loop boundary; the trace row writer remains
-   downstream.
+   `tool_use` order. **Status (slice 80):** direct sequential dispatch stamps
+   every tool audit row with the same loop turn id, preserves the existing
+   tool-use order at the loop boundary, and terminal-success turns write the
+   parent trace row. Dedicated N-tool storage-join coverage remains downstream.
 4. **Cancellation phase recorded.** Cancellation during provider
    await (spec 0017 scenario #9) produces a trace row with
    `cancellation_phase='provider'`, `stop_reason='cancelled'`.

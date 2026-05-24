@@ -68,8 +68,8 @@ proves the loop behaves correctly without a network.
     `ToolResultContent` blocks, rebuilds the prompt, re-enters the provider,
     aggregates provider usage across iterations, and enforces
     `LoopOptions::max_iterations`. Real protocol adapters, the parallel
-    scheduler, loop-owned trace rows, blocking approval rendering, and
-    provider retry/fallback remain downstream. Slice 77 adds the first
+    scheduler, blocking approval rendering, and provider retry/fallback remain
+    downstream. Slice 77 adds the first
     cancellation-observability prework at the loop boundary: provider-await
     cancellations and direct tool-dispatch cancellations keep returning
     `ErrorKind::cancelled`, now with `reason=parent_cancelled` plus
@@ -78,7 +78,11 @@ proves the loop behaves correctly without a network.
     join primitive: `RunTurnInputs::turn_id` is copied into
     `DispatchContext::parent_turn_id` for every direct tool dispatch in a
     traced loop turn, and the loop clears that field during trace-disabled
-    dispatches so audit rows keep `parent_turn_id = NULL`.
+    dispatches so audit rows keep `parent_turn_id = NULL`. Slice 80 adds the
+    first loop-owned trace writer: when `RunTurnInputs::trace` supplies a
+    `storage::TraceRepository`, session id, agent key, origin, and redacted
+    context, the loop writes one `trace_turns` row before returning terminal
+    success responses.
   - The loop emits **one** `provider::Request` per iteration.
   - The provider emits **one** `provider::Response` per request (after
     streaming completes if streaming is enabled).
@@ -137,7 +141,7 @@ proves the loop behaves correctly without a network.
   uses the fake provider with a hand-written plan.
 - **`agent::Loop` MVP**. Wraps the seven phases listed in the deep
   review §What a better `oran-agent` should look like:
-  - **Status (slice 79, 2026-05-24):** `<oran/agent.hpp>` exports
+  - **Status (slice 80, 2026-05-24):** `<oran/agent.hpp>` exports
     `agent::Loop`, `LoopOptions`, `RunTurnInputs`, and `RunTurnResult`.
     The current implementation covers phases 3/4/5 for terminal text turns
     plus the first phase-6 sequential dispatch path for scenarios #2/#3/#4/#6:
@@ -147,7 +151,8 @@ proves the loop behaves correctly without a network.
     terminal text-style response or iteration cap. Provider/tool parent
     cancellations are classified with `cancellation_phase=provider|tools`, and
     direct dispatch audit rows can now carry the optional loop turn id as
-    `parent_turn_id`.
+    `parent_turn_id`. Terminal-success turns can also append one body-free
+    `trace_turns` row through the optional `RunTurnInputs::trace` context.
     If no registry/context pair is supplied, tool-use responses still fail
     loudly with `Error::internal` so callers cannot accidentally run a loop
     without permission/audit infrastructure.
@@ -180,10 +185,11 @@ proves the loop behaves correctly without a network.
   total_usage, wall_time)`. The turn row is the parent of every
   child tool audit row through `parent_event_id` — the field already
   exists in `permission::AuditEvent::context` but is unused. **Status
-  (slice 79):** the current trace direction moved to spec 0018's
+  (slice 80):** the current trace direction moved to spec 0018's
   `parent_turn_id` join key instead of `parent_event_id`: direct tool audit
-  rows can now carry the loop turn id, but the loop-owned turn/trace row is
-  still downstream.
+  rows can carry the loop turn id, and terminal-success turns can write the
+  matching `trace_turns` row. Cancellation/error trace rows, hook rows, trace
+  config, and CLI inspection remain downstream.
 - **CI runs against the fake provider only**. v1 CI gate:
   `xmake test test-agent` exercises all ten scenarios; no network
   is required, no API key is required, no flake budget is needed.
@@ -244,9 +250,10 @@ proves the loop behaves correctly without a network.
    provider re-entry, provider-usage aggregation, and complete returned
    transcript. The test fixture uses a minimal registry tool rather than the
    `file.read` built-in so loop coverage stays focused on the registry
-   boundary. **Status (slice 79):** direct dispatch audit rows can now carry
-   `parent_turn_id` from `RunTurnInputs::turn_id`; the loop-owned turn/trace
-   row remains future work.
+   boundary. **Status (slice 80):** direct dispatch audit rows can now carry
+   `parent_turn_id` from `RunTurnInputs::turn_id`; terminal-success turns write
+   the loop-owned `trace_turns` row when `RunTurnInputs::trace` is configured.
+   Cancellation/error rows and CLI inspection remain future work.
 3. **Multiple tools in one response.** Scenario #3: the fake returns
    `[tool_use A, tool_use B]`. v1 dispatches sequentially (parallel
    dispatch is spec 0012's responsibility); the agent transcript

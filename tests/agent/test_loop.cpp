@@ -2,17 +2,19 @@
 //
 // These tests intentionally stay inside spec 0017's fake-provider-first loop
 // envelope: prompt/request construction, direct sequential tool dispatch,
-// model-visible repair errors, cancellation-phase tagging, and loop boundary
-// errors. Provider retry/fallback, turn trace rows, and the scheduler remain
-// later slices.
+// model-visible repair errors, terminal-success trace rows, cancellation-phase
+// tagging, and loop boundary errors. Provider retry/fallback, cancellation/error
+// trace rows, and the scheduler remain later slices.
 
 #include <oran/agent.hpp>
 
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <expected>
+#include <filesystem>
 #include <optional>
 #include <span>
 #include <string>
@@ -35,7 +37,9 @@
 #include <oran/core/stop_reason.hpp>
 #include <oran/core/tool_def.hpp>
 #include <oran/permission.hpp>
+#include <oran/prompt.hpp>
 #include <oran/provider.hpp>
+#include <oran/storage.hpp>
 #include <oran/tool.hpp>
 
 #include "../test-helpers/run_async.hpp"
@@ -45,7 +49,9 @@ namespace async = orangutan::async;
 namespace config = orangutan::config;
 namespace core = orangutan::core;
 namespace permission = orangutan::permission;
+namespace prompt = orangutan::prompt;
 namespace provider = orangutan::provider;
+namespace storage = orangutan::storage;
 namespace test = orangutan::tests;
 namespace tool = orangutan::tool;
 
@@ -151,6 +157,45 @@ core::TurnId turn_id_with(unsigned char seed) {
     id[i] = static_cast<std::byte>(seed + i);
   }
   return id;
+}
+
+class TempDb {
+public:
+  explicit TempDb(std::string name)
+      : path_(std::filesystem::temp_directory_path() /
+              (std::move(name) + "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
+               ".db")) {}
+
+  ~TempDb() {
+    std::error_code ec;
+    std::filesystem::remove(path_, ec);
+    std::filesystem::remove(path_.string() + "-wal", ec);
+    std::filesystem::remove(path_.string() + "-shm", ec);
+  }
+
+  TempDb(const TempDb&) = delete;
+  TempDb& operator=(const TempDb&) = delete;
+
+  [[nodiscard]] std::string string() const {
+    return path_.string();
+  }
+
+private:
+  std::filesystem::path path_;
+};
+
+storage::Pool open_trace_pool(asio::io_context& io, TempDb& db) {
+  auto pool =
+      storage::Pool::open(io.get_executor(),
+                          storage::PoolOptions{.path = db.string(), .reader_count = 2, .statement_cache_capacity = 8});
+  REQUIRE(pool.has_value());
+  return std::move(*pool);
+}
+
+std::uint64_t prompt_section_hash(const prompt::RenderedPrompt& rendered, std::string_view id) {
+  const auto it = std::ranges::find(rendered.sections, id, &prompt::CacheSection::id);
+  REQUIRE(it != rendered.sections.end());
+  return it->content_hash;
 }
 
 tool::DispatchContext dispatch_context(asio::io_context& io,
@@ -516,6 +561,174 @@ TEST_CASE("Loop dispatches one tool_use and re-enters the provider with a tool r
     REQUIRE(*audit.events()[0].parent_turn_id == turn_id_with(0x20));
     REQUIRE(ctx.parent_turn_id.has_value());
     REQUIRE(*ctx.parent_turn_id == turn_id_with(0x70));
+  });
+}
+
+TEST_CASE("Loop persists one terminal trace row for a text turn", "[unit][agent][loop][trace]") {
+  TempDb db{"oran-agent-loop-trace-text"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_trace_pool(io, db);
+    storage::TraceRepository trace{pool};
+    auto migrated = co_await trace.migrate();
+    REQUIRE(migrated.has_value());
+
+    std::vector<provider::ScriptedTurn> plan;
+    plan.push_back(provider::ScriptedTurn{
+        .response =
+            provider::Response{
+                .blocks = {core::TextContent{.text = "done"}},
+                .stop_reason = core::StopReason::end_turn,
+                .usage = provider::Usage{.input_tokens = 11,
+                                         .output_tokens = 5,
+                                         .cache_creation_tokens = 2,
+                                         .cache_read_tokens = 7,
+                                         .cost_estimate = 0.012},
+                .model_used = std::string{"fake-trace-model"},
+            },
+        .deltas = {},
+        .error = std::nullopt,
+        .latency = {},
+    });
+    provider::FakeProvider fake{std::move(plan)};
+    agent::Loop loop{fake, default_route()};
+
+    const auto catalog = loop_catalog();
+    const std::vector<core::Message> tail{core::Message::user_text("trace me")};
+    auto inputs = base_inputs(catalog, tail);
+    inputs.turn_id = turn_id_with(0x31);
+    inputs.trace = agent::TraceContext{
+        .repository = &trace,
+        .session_id = turn_id_with(0x80),
+        .parent_turn_id = turn_id_with(0x22),
+        .agent_key = "coder",
+        .origin = "cli",
+        .context_json = R"json({"source":"test"})json",
+    };
+    auto result = co_await loop.run_turn(inputs);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "done");
+
+    auto row = co_await trace.get_turn(turn_id_with(0x31));
+    REQUIRE(row.has_value());
+    REQUIRE(row->has_value());
+    REQUIRE((*row)->turn_id == turn_id_with(0x31));
+    REQUIRE((*row)->parent_turn_id.has_value());
+    REQUIRE(*(*row)->parent_turn_id == turn_id_with(0x22));
+    REQUIRE((*row)->session_id == turn_id_with(0x80));
+    REQUIRE((*row)->agent_key == "coder");
+    REQUIRE((*row)->origin == "cli");
+    REQUIRE((*row)->route_profile == "fake");
+    REQUIRE((*row)->route_model == "fake-trace-model");
+    REQUIRE((*row)->started_at_ns > 0);
+    REQUIRE((*row)->finished_at_ns >= (*row)->started_at_ns);
+    REQUIRE((*row)->stop_reason == "end_turn");
+    REQUIRE((*row)->iteration_count == 1);
+    REQUIRE((*row)->prompt_prefix_hash == result->rendered_prompt.prefix_hash);
+    REQUIRE((*row)->prompt_prefix_bytes == static_cast<std::int64_t>(result->rendered_prompt.prefix_bytes));
+    REQUIRE((*row)->active_catalog_hash == prompt_section_hash(result->rendered_prompt, "tool_catalog"));
+    REQUIRE((*row)->deferred_catalog_hash == prompt_section_hash(result->rendered_prompt, "deferred_tools"));
+    REQUIRE((*row)->cache_creation_tokens == 2);
+    REQUIRE((*row)->cache_read_tokens == 7);
+    REQUIRE((*row)->input_tokens == 11);
+    REQUIRE((*row)->output_tokens == 5);
+    REQUIRE((*row)->cost_estimate_usd == 0.012);
+    REQUIRE_FALSE((*row)->cancellation_phase.has_value());
+    REQUIRE((*row)->context_json == R"json({"source":"test"})json");
+  });
+}
+
+TEST_CASE("Loop persists a terminal trace row and correlates storage audit rows", "[unit][agent][loop][trace]") {
+  TempDb db{"oran-agent-loop-trace-audit"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_trace_pool(io, db);
+    storage::TraceRepository trace{pool};
+    storage::AuditRepository audit_repo{pool};
+    auto migrated = co_await trace.migrate();
+    REQUIRE(migrated.has_value());
+
+    RecordingSequenceProvider provider{std::vector<provider::Response>{
+        provider::Response{
+            .blocks = {core::ToolUseContent{.id = "t1", .name = "file.read", .input_json = R"({"value":"a"})"}},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = provider::Usage{.input_tokens = 11,
+                                     .output_tokens = 1,
+                                     .cache_creation_tokens = 2,
+                                     .cache_read_tokens = 7,
+                                     .cost_estimate = 0.010},
+            .model_used = std::nullopt,
+        },
+        provider::Response{
+            .blocks = {core::TextContent{.text = "final"}},
+            .stop_reason = core::StopReason::end_turn,
+            .usage = provider::Usage{.input_tokens = 3,
+                                     .output_tokens = 5,
+                                     .cache_creation_tokens = 0,
+                                     .cache_read_tokens = 1,
+                                     .cost_estimate = 0.002},
+            .model_used = std::string{"fake-trace-model"},
+        },
+    }};
+    agent::Loop loop{provider, default_route()};
+    tool::Registry registry;
+    add_canned_tool(registry, canned_tool_def("file.read"), "read-ok");
+    auto rules = allow_all_rules();
+    permission::StorageAuditSink audit{audit_repo};
+    auto ctx = dispatch_context(io, rules, audit);
+
+    const auto catalog = registry.catalog();
+    const std::vector<core::Message> tail{core::Message::user_text("trace read")};
+    auto inputs = base_inputs(catalog, tail);
+    inputs.turn_id = turn_id_with(0x31);
+    inputs.trace = agent::TraceContext{
+        .repository = &trace,
+        .session_id = turn_id_with(0x80),
+        .parent_turn_id = turn_id_with(0x22),
+        .agent_key = "coder",
+        .origin = "cli",
+        .context_json = R"json({"source":"test"})json",
+    };
+    inputs.tools = &registry;
+    inputs.dispatch_context = &ctx;
+    auto result = co_await loop.run_turn(inputs);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "final");
+    REQUIRE(result->iterations == 2);
+
+    auto row = co_await trace.get_turn(turn_id_with(0x31));
+    REQUIRE(row.has_value());
+    REQUIRE(row->has_value());
+    REQUIRE((*row)->turn_id == turn_id_with(0x31));
+    REQUIRE((*row)->parent_turn_id.has_value());
+    REQUIRE(*(*row)->parent_turn_id == turn_id_with(0x22));
+    REQUIRE((*row)->session_id == turn_id_with(0x80));
+    REQUIRE((*row)->agent_key == "coder");
+    REQUIRE((*row)->origin == "cli");
+    REQUIRE((*row)->route_profile == "fake");
+    REQUIRE((*row)->route_model == "fake-trace-model");
+    REQUIRE((*row)->started_at_ns > 0);
+    REQUIRE((*row)->finished_at_ns >= (*row)->started_at_ns);
+    REQUIRE((*row)->stop_reason == "end_turn");
+    REQUIRE((*row)->iteration_count == 2);
+    REQUIRE((*row)->prompt_prefix_hash == result->rendered_prompt.prefix_hash);
+    REQUIRE((*row)->prompt_prefix_bytes == static_cast<std::int64_t>(result->rendered_prompt.prefix_bytes));
+    REQUIRE((*row)->active_catalog_hash == prompt_section_hash(result->rendered_prompt, "tool_catalog"));
+    REQUIRE((*row)->deferred_catalog_hash == prompt_section_hash(result->rendered_prompt, "deferred_tools"));
+    REQUIRE((*row)->cache_creation_tokens == 2);
+    REQUIRE((*row)->cache_read_tokens == 8);
+    REQUIRE((*row)->input_tokens == 14);
+    REQUIRE((*row)->output_tokens == 6);
+    REQUIRE((*row)->cost_estimate_usd == 0.012);
+    REQUIRE_FALSE((*row)->cancellation_phase.has_value());
+    REQUIRE((*row)->context_json == R"json({"source":"test"})json");
+
+    auto events = co_await audit_repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-A", .limit = 10});
+    REQUIRE(events.has_value());
+    REQUIRE(events->size() == 1);
+    REQUIRE((*events)[0].tool_name == "file.read");
+    REQUIRE((*events)[0].parent_turn_id.has_value());
+    REQUIRE(*(*events)[0].parent_turn_id == (*row)->turn_id);
   });
 }
 

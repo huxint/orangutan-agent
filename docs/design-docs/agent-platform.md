@@ -68,7 +68,7 @@ own library, its own tests, its own bench, its own design doc."
 
 ## Prompt Assembly
 
-> **Status (slice 79, 2026-05-24):** `oran-prompt` owns the first
+> **Status (slice 80, 2026-05-24):** `oran-prompt` owns the first
 > deterministic `prompt::Builder` skeleton plus `prompt::PromotionState`,
 > `oran-agent` owns the narrow `agent::SessionState` surface that observes
 > successful `tool.search` output and promotes deferred matches into the
@@ -89,8 +89,12 @@ own library, its own tests, its own bench, its own design doc."
 > primitive: `RunTurnInputs::turn_id` is copied into
 > `DispatchContext::parent_turn_id` for every direct tool dispatch in that
 > turn, and unset turn ids clear the dispatch context while the call runs so
-> trace-disabled turns keep `audit_events.parent_turn_id = NULL`.
-> Memory + hook + loop-owned `trace_turns` writes remain downstream.
+> trace-disabled turns keep `audit_events.parent_turn_id = NULL`. Slice 80
+> adds `RunTurnInputs::trace` as the interim trace context and writes one
+> body-free `trace_turns` row through `storage::TraceRepository` before
+> returning terminal-success responses; the row captures prompt/cache hashes,
+> aggregate usage, route labels, timestamps, and redacted context bytes.
+> Memory + hook + cancellation/error trace rows remain downstream.
 > The invariants — section order, byte-identical cached prefix, no clocks /
 > per-call state in sections (1)–(6) — remain canonical in
 > [`../rules/prompt-design.md`](../rules/prompt-design.md).
@@ -144,7 +148,8 @@ provider re-entry without changing the provider contract, and slice 77 tags
 provider/tool parent cancellations with a stable `cancellation_phase` error
 context without introducing trace storage yet. Slice 79 then threads a caller-
 supplied `RunTurnInputs::turn_id` through the direct dispatch context so tool
-audit rows can join to future trace rows. The future
+audit rows can join to trace rows. Slice 80 adds the first terminal-success
+trace writer on top of the same turn id. The future
 `ToolScheduler` can replace the direct loop call without changing the
 provider-facing request/response shape.
 
