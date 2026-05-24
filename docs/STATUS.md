@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 94 (`xmake run orangutan` reports slice 94)
+- **Slice:** 95 (`xmake run orangutan` reports slice 95)
 - **Last completed history:**
-  [`histories/2026-05/20260525-0442-permission-ask-dispatch-bridge.md`](histories/2026-05/20260525-0442-permission-ask-dispatch-bridge.md)
+  [`histories/2026-05/20260525-0524-cli-operator-prompt-sink.md`](histories/2026-05/20260525-0524-cli-operator-prompt-sink.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
@@ -18,9 +18,26 @@
   plan because they stayed under the existing spec-0015/0017/0018
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 94 closes
-  the direct-dispatch half of spec-0015's `permission_ask_rendered`
-  round-trip. `<oran/hook/payload.hpp>` now carries
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 95 closes
+  spec-0015's first concrete user-visible approval renderer. `oran-cli`
+  now exports `cli::OperatorPromptSink` from
+  `<oran/cli/operator_prompt_sink.hpp>` and the umbrella `<oran/cli.hpp>`.
+  The sink implements `hook::Sink`, handles blocking
+  `Event::permission_ask_rendered` payloads, renders the tool name, caller
+  identity, matched decision reason, replay/TTL policy, request timestamp,
+  and input JSON, then accepts yes/approve/proceed or no/deny/reject style
+  answers. Approval returns `HookDecisionKind::proceed` with
+  `operator_approved:<identity>` in the sink trace; denial returns
+  `HookDecisionKind::veto` with `operator_denied:<identity>`. Test and
+  noninteractive callers can provide `scripted_answers`; otherwise the sink
+  reads one terminal line through an asio `posix::stream_descriptor` on the
+  current coroutine executor. `oran-cli` now depends on `oran-async` and
+  `oran-hook`. Focused result: `test-cli` 10 cases / 68 assertions. The
+  remaining approval work is binary handoff: bind this sink into the real
+  CLI agent-loop runtime once `orangutan` drives `agent::Loop` with a real
+  provider adapter. Slice 94 closed the direct-dispatch half of
+  spec-0015's `permission_ask_rendered` round-trip.
+  `<oran/hook/payload.hpp>` now carries
   `hook::PermissionAskRenderedPayload { tool_name, input_json, who,
   decision_reason, replay_max, approval_ttl, requested_at }` in the public
   `hook::Payload` variant. `tool::DispatchContext` gains an optional
@@ -38,11 +55,7 @@
   ask sink preserve the legacy `approval_required` short-circuit. Permission
   ask sink traces are serialized under
   `metadata_json.permission_ask_decisions[]`. Focused result: `test-tool` 178
-  cases / 1838 assertions. Remaining spec-0015 work is now the concrete
-  operator-prompt sink owned by `oran-cli`, which will render the payload and
-  return the human decision through this bridge, plus the later binary handoff
-  that drives `agent::Loop` from inside `orangutan` once a real provider
-  adapter exists.
+  cases / 1838 assertions.
   Slice 93 closes
   spec-0018 AC5 for direct `tool_before` blocking publishes. The audit DB
   migration stream now reaches version 4:
@@ -65,10 +78,10 @@
   line now prints `kind=<event_kind>` so operators can distinguish hook
   publishes from permission decisions. Focused results: `test-storage` 72 cases
   / 899 assertions, `test-permission` 89 / 426, `test-tool` 174 / 1769, and
-  `test-bootstrap` 57 / 226. Remaining spec-0015/0018 items are the v1
-  operator-prompt sink for `permission_ask_rendered` and the binary handoff
-  that drives `agent::Loop` from inside the `orangutan` binary once a real
-  provider adapter exists. Slice 92 closes
+  `test-bootstrap` 57 / 226. Slice 95 closes the v1 operator-prompt sink;
+  the remaining spec-0015/0018 item here is the binary handoff that drives
+  `agent::Loop` from inside the `orangutan` binary once a real provider
+  adapter exists. Slice 92 closes
   spec-0015's direct-dispatch blocking timeout follow-up. `oran-config`
   now parses the top-level `hooks.timeout_ms` policy as a positive integer
   with a default of 2000 ms, `config.example.json` documents that default,
@@ -546,8 +559,9 @@
   `tool::Runtime` lands. The first
   provider adapter (Anthropic Messages) remains a multi-slice
   effort that needs an exec plan plus `oran-http` + libcurl wiring
-  first; blocking hook semantics with veto are still gated on
-  `oran-agent`; and wiring `check-compile-budget.sh` into
+  first; binding the CLI approval sink into real turns is still gated on
+  the provider-backed `oran-agent` handoff; and wiring
+  `check-compile-budget.sh` into
   `scripts/ci.sh` remains gated by the slice-28 reference-hardware
   precondition. The current `file.delete` and `directory.list`
   shapes are expected to be re-shaped in a later refactor: one
@@ -570,18 +584,18 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 ## Latest Library Surfaces
 
-- `oran-core`: 69 cases / 450 assertions.
+- `oran-core`: 70 cases / 453 assertions.
 - `oran-async`: 9 cases / 43 assertions.
 - `oran-io`: 49 cases / 286 assertions.
 - `oran-storage`: 72 cases / 899 assertions.
 - `oran-config`: 32 cases / 235 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 30 cases / 207 assertions.
-- `oran-tool`: 174 cases / 1769 assertions.
+- `oran-tool`: 178 cases / 1838 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 11 cases / 89 assertions.
 - `oran-agent`: 23 cases / 363 assertions.
-- `oran-cli`: 5 cases / 30 assertions.
+- `oran-cli`: 10 cases / 68 assertions.
 - `oran-bootstrap`: 57 cases / 226 assertions.
 
 ## Open Tech-Debt Rows
@@ -598,19 +612,6 @@ Closed entries do *not* live here — the tracker is canonical.
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on
   the documented reference hardware (8-core / NVMe / native Linux);
   otherwise the gate fires on environmental drift, not real regressions.
-- 2026-05-18 — Hook bus blocking-policy follow-ups remain after slices 90,
-  91, 92, 93, and 94. Slice 90 shipped the publish surface
-  (`Bus::publish_blocking<E>`, `HookDecision`,
-  `EventTraits<E>` / `HasBlockingDecision<E>`, `Sink::handle_blocking`
-  default). Slice 91 consumes `tool_before` inside direct
-  `Registry::dispatch` with `AuditOutcome::blocked_by_hook` /
-  `rewritten`, the canonical dispatch order, and
-  `metadata_json.hook_decisions`. Slice 92 wires `hooks.timeout_ms` into
-  the assembly-owned hook bus and persists timeout `elapsed_ms`. Slice 93
-  writes joinable `event_kind=hook_publish` audit rows for traced blocking
-  `tool_before` publishes. Slice 94 ships the direct-dispatch
-  `permission_ask_rendered` broker bridge and token handoff. Remaining: the
-  concrete operator-prompt sink for `permission_ask_rendered`.
 - 2026-05-17 — `file.search` does not yet ship ripgrep-class optimisations
   (mmap, extension-based binary skip, multi-threaded walk).
   Adequate at slice 20 (~27 µs / 4-file tree) but 3-10× slower than a tuned

@@ -41,8 +41,8 @@
 //      carries the absolute path to handlers via `ctx.resolved_path`, and
 //      records redacted resolver metadata in the audit row.
 //
-// What this slice does NOT cover. The concrete operator-prompt sink that
-// renders `permission_ask_rendered`, output scrubbing through
+// What this slice does NOT cover. Binding the CLI operator-prompt sink into
+// the full binary agent-loop handoff, output scrubbing through
 // `oran-log::redact`, deferred-tool promotion, and the future capability-
 // gated `tool::Runtime::workspace()` accessor all live in later slices.
 //

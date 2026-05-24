@@ -222,7 +222,7 @@ oran_lib("tool", { "oran-core", "oran-async", "oran-io", "oran-permission", "ora
 oran_lib("prompt", { "oran-core", "oran-async", "oran-config", "oran-tool" }, {})
 oran_lib("provider", { "oran-core", "oran-async", "oran-prompt" }, {})
 oran_lib("agent", { "oran-core", "oran-async", "oran-storage", "oran-prompt", "oran-tool", "oran-provider" }, { "nlohmann_json" })
-oran_lib("cli", { "oran-core" }, {})
+oran_lib("cli", { "oran-core", "oran-async", "oran-hook" }, {})
 oran_lib("bootstrap", { "oran-core", "oran-async", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-tool", "oran-cli" }, {})
 
 target("orangutan")
@@ -237,6 +237,11 @@ depends on `oran-async` for `FakeProvider`'s cancel-aware scripted latency and
 on `oran-prompt` for adapter-side `prompt::RenderedPrompt` cache-hint mapping.
 It is registered with `test-provider` and `bench-provider`, but no transport,
 protocol adapter, or real vendor runtime is linked into the binary yet.
+
+`oran-cli` depends on `oran-async` and `oran-hook` because slice 95 adds the
+terminal `OperatorPromptSink`: it implements the blocking
+`permission_ask_rendered` decision surface and reads interactive answers through asio on
+the current coroutine executor. The ordinary CLI mode parser remains synchronous.
 
 `oran-agent` now owns the slice-72 `SessionState` promotion owner plus the
 slice-80 sequential direct-dispatch `Loop` turn driver with cancellation-phase

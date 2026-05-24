@@ -45,7 +45,7 @@ in what order.
 
 ## Scope (v1)
 
-> **Status (slice 94, 2026-05-25):** the bus surface, the
+> **Status (slice 95, 2026-05-25):** the bus surface, the
 > `tool_before` dispatch consumer, the configured blocking-timeout
 > policy, and traced direct-dispatch `hook_publish` audit rows are
 > shipped.
@@ -94,8 +94,12 @@ in what order.
 > broker grant and may copy the token to `DispatchContext::approval_token_output`,
 > `veto` records `operator_denied`, and no-sink buses preserve the legacy
 > `approval_required` short-circuit. `test-tool` now reports 178 cases / 1838
-> assertions. The concrete user-visible sink (`oran-cli`'s terminal prompt)
-> remains downstream.
+> assertions. Slice 95 adds the concrete user-visible sink:
+> `cli::OperatorPromptSink` renders `PermissionAskRenderedPayload` in the
+> terminal, accepts yes/approve/proceed or no/deny/reject answers, returns
+> `operator_approved:<identity>` / `operator_denied:<identity>` through the
+> blocking decision trace, and has scripted-answer coverage for
+> noninteractive tests. `test-cli` reports 10 cases / 68 assertions.
 
 The MVP is the *minimum* surface needed by the agent loop's approval
 render flow — the first real consumer. Everything else that wants a
@@ -272,8 +276,10 @@ blocking hook waits for v1.1.
    under `metadata_json.permission_ask_decisions[]`, issues and immediately
    checks a broker token on `proceed`, optionally copies it to
    `DispatchContext::approval_token_output`, and preserves the legacy
-   `approval_required` path when no ask sink is subscribed. The concrete
-   `oran-cli` operator prompt that renders the payload remains downstream.
+   `approval_required` path when no ask sink is subscribed. Slice 95 adds the
+   concrete `oran-cli` operator prompt that renders the payload and returns
+   the expected operator approval/denial reason strings through the blocking
+   trace.
 5. **Sink ordering**. Three blocking sinks subscribed to the same
    event execute in subscription order; the first non-`proceed`
    short-circuits the rest. All three decisions are recorded in
@@ -372,11 +378,11 @@ blocking hook waits for v1.1.
 ## Risks
 
 - **Wrong consumer leads to wrong contract.** If the operator-prompt
-  sink is the *only* blocking consumer for too long, the contract may
-  bake in render-specific assumptions. Mitigation: spec acceptance
-  criteria #2 (rewrite) and #3 (require_approval) are testable with
-  fake sinks before the operator-prompt sink ships; ship both with the
-  same slice that lands `publish_blocking`.
+  sink had been the *only* blocking consumer for too long, the contract
+  could have baked in render-specific assumptions. Mitigation already
+  shipped: slices 90-94 landed the generic bus, `tool_before` rewrite /
+  veto / require_approval consumers, timeout policy, hook-publish audit rows,
+  and the dispatch-side ask bridge before slice 95 added the terminal sink.
 - **Cancellation in flight.** A blocking sink hanging on operator
   input must be cancellable when the agent loop's parent token fires.
   Mitigation: the dispatch passes the parent cancellation slot into
@@ -413,8 +419,8 @@ xmake run orangutan -- --explain-rules  # rule-side unchanged; hook bindings sur
   the design-doc edit lands in the same slice as v1.
 - `docs/design-docs/tool-runtime.md` "Permission Ordering" updates to
   the seven-step canonical order.
-- `docs/exec-plans/tech-debt-tracker.md` — after slice 94, the
-  2026-05-18 hook row tracks only the concrete operator-prompt sink.
+- `docs/exec-plans/tech-debt-tracker.md` — slice 95 removes the
+  2026-05-18 hook row because the concrete operator-prompt sink has shipped.
 - `docs/SECURITY.md` — gains a "Hook-driven veto" subsection citing
   spec 0015 once v1 ships, so the workspace-confinement claim (spec
   0013) and the hook-veto claim sit side-by-side.

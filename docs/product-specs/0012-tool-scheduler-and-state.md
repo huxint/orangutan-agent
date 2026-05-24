@@ -227,8 +227,9 @@ implicitly via the capability list.
   `hook::BusOptions::blocking_timeout` from `hooks.timeout_ms`, so direct
   dispatch and future scheduler-owned dispatches inherit the same sink
   timeout by publishing through the configured bus. `permission_ask_rendered`
-  rendering still lands once the operator-prompt sink is implemented. The
-  advisory hook bus stays for fire-and-forget sinks.
+  rendering now has a terminal sink in `oran-cli`; the scheduler/binary
+  handoff still needs to bind it into the runtime that drives real agent
+  turns. The advisory hook bus stays for fire-and-forget sinks.
 
 ## Scope (v2)
 

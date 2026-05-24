@@ -190,7 +190,10 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > payload, treats a `proceed` decision as operator approval by issuing and
 > immediately checking a broker token, optionally returns that token through
 > `DispatchContext::approval_token_output`, and treats `veto` as
-> `outcome=rejected` / `reason=operator_denied`. Bench
+> `outcome=rejected` / `reason=operator_denied`. Slice 95 adds
+> `cli::OperatorPromptSink`, the first terminal renderer for that payload:
+> it returns `operator_approved:<identity>` on yes/approve/proceed answers
+> and `operator_denied:<identity>` on no/deny/reject answers. Bench
 > (`bench-tool/approval.cpp`):
 > `dispatch_ask_short_circuit` ~2.4 µs (baseline — same shape as
 > `registry.dispatch_allow` plus the new error-context build),
@@ -199,8 +202,8 @@ permissions used compile-time regex (`ctre`) — v2 expands both.
 > short-circuit, ~10 µs of which is the HMAC verify
 > (`bench-permission/approval` shows ~9.3 µs for verify_ok), so
 > the registry-side overhead on top of the broker work is
-> ~875 ns. The remaining render-side work is the concrete operator-prompt
-> sink that turns the typed payload into a terminal/UI question.
+> ~875 ns. The remaining approval work is binding the CLI sink into the
+> binary's real agent-loop runtime once that handoff exists.
 
 ### Sources
 
@@ -309,7 +312,7 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 
 ## Hook Bus
 
-> **Bus status (2026-05-25, slice 94):** the foundation
+> **Bus status (2026-05-25, slice 95):** the foundation
 > ships as `oran-hook`. `hook::Event` enumerates the 41
 > lifecycle events listed below; `hook::Mode { advisory,
 > blocking }` plus `default_mode(Event)` annotates each
@@ -379,8 +382,10 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > issuing/checking a broker token, treats `veto` as
 > `operator_denied`, and records `metadata_json.permission_ask_decisions`.
 > A bus with no subscribed ask sink still falls through to the legacy
-> `approval_required` error. The concrete renderer that asks the
-> operator remains in the upcoming CLI slice. Slice 92 adds the
+> `approval_required` error. Slice 95 adds the concrete CLI renderer
+> (`cli::OperatorPromptSink`) that turns the typed payload into a terminal
+> yes/no question and returns the operator decision through this blocking
+> path. Slice 92 adds the
 > config-driven blocking
 > timeout policy: `config::HooksConfig::timeout_ms` defaults
 > to 2000, `bootstrap::RuntimeAssembly` owns the process
@@ -441,8 +446,9 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > joinable `event_kind=hook_publish` audit rows for traced blocking
 > `tool_before` publishes. Slice 94 adds the typed
 > `PermissionAskRenderedPayload` and direct-dispatch
-> `permission_ask_rendered` broker bridge. The first user-visible
-> operator-prompt sink owned by `oran-cli` remains downstream.
+> `permission_ask_rendered` broker bridge. Slice 95 adds the first
+> user-visible operator-prompt sink in `oran-cli`; binary binding waits for
+> the real CLI agent-loop handoff.
 
 ### Surface
 

@@ -160,8 +160,10 @@ enum class Capability {
 > serializes the sink trace under
 > `metadata_json.permission_ask_decisions[]`. With no subscribed ask sink,
 > the legacy `approval_required` short-circuit is preserved.
-> Capability-gated runtime services (`tool::Runtime` accessor surface)
-> and the concrete operator-prompt sink stay on future slices.
+> Slice 95 adds the concrete `cli::OperatorPromptSink` that renders this
+> payload for terminal operators. Capability-gated runtime services
+> (`tool::Runtime` accessor surface) and binary binding of the CLI sink stay
+> on future slices.
 > Slice 29 (2026-05-20) extends the built-in catalog with
 > `directory.list` (`tool::register_directory_list`, capability
 > `list_directory` — a new `core::Capability` enumerator so a
@@ -645,8 +647,9 @@ The registry is — and stays — **single-threaded**. Concurrency is owned by a
   byte-stable ordering),
 - enforces the per-call timeout and propagates the parent cancellation
   signal,
-- supplies the concrete UI sink for `permission_ask_rendered` rendering
-  (the registry already owns the blocking publish + broker handoff).
+- binds the concrete UI sink for `permission_ask_rendered` rendering
+  (the registry already owns the blocking publish + broker handoff, and
+  `oran-cli` already owns the terminal sink).
 
 Do **not** add internal locks to `tool::Registry` as a first move. The
 registry runs on the agent strand; the scheduler hops to worker executors at

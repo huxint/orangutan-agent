@@ -367,8 +367,9 @@ proves the loop behaves correctly without a network.
   — `agent::ToolScheduler` becomes the v1.1 replacement for the
   sequential dispatch in scenario #3.
 - [`0015-blocking-hook-decisions.md`](0015-blocking-hook-decisions.md)
-  — direct tool dispatch now consumes blocking `tool_before`; the
-  operator-prompt `permission_ask_rendered` sink remains downstream.
+  — direct tool dispatch now consumes blocking `tool_before` and
+  `permission_ask_rendered`; `oran-cli` owns the terminal operator-prompt
+  sink, while binary binding waits for the real CLI agent-loop handoff.
 - [`0016-prompt-and-tool-catalog-cache.md`](0016-prompt-and-tool-catalog-cache.md)
   — `prompt::Builder` is the loop's prompt source from v1 onward.
 - [`0014-structured-tool-output.md`](0014-structured-tool-output.md)

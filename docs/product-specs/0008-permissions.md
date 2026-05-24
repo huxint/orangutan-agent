@@ -97,8 +97,10 @@ human approval for high-risk operations.
    `permission_ask_rendered`, issues/checks a broker token on `proceed`, may
    return it through `DispatchContext::approval_token_output`, records
    operator vetoes as `outcome=rejected` / `reason=operator_denied`, and still
-   returns `approval_required` when no ask sink is subscribed. The concrete UI
-   prompt sink remains downstream. Bench: broker_approve
+   returns `approval_required` when no ask sink is subscribed. Slice 95 adds
+   the concrete `oran-cli` terminal sink that renders the typed payload and
+   returns `operator_approved:<identity>` / `operator_denied:<identity>`
+   through the blocking hook decision. Bench: broker_approve
    ~9.9 µs (matches authority issue), broker_check_ok ~10.7 µs
    (authority verify + map find + decrement), broker_check_no_grant /
    broker_check_exhausted ~10.9 µs / ~11.0 µs (the two broker-only
