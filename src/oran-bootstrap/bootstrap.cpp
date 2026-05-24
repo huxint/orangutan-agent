@@ -10,6 +10,7 @@
 #include <optional>
 #include <print>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -24,6 +25,7 @@
 #include <oran/cli.hpp>
 #include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
+#include <oran/core/turn_id.hpp>
 #include <oran/permission.hpp>
 #include <oran/storage.hpp>
 #include <oran/tool/workspace.hpp>
@@ -34,7 +36,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice87";
+constexpr std::string_view kVersion = "2.0.0-slice88";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 
 struct ParsedArgs {
@@ -43,6 +45,8 @@ struct ParsedArgs {
   bool audit_init{false};
   bool has_audit_init_path{false};
   std::string audit_init_path{};
+  bool trace_inspect{false};
+  std::string trace_turn_id_hex{};
   bool has_explicit_config{false};
   std::string explicit_config_path{};
   ExplainRulesSelector explain_selector{};
@@ -152,6 +156,28 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
       continue;
     }
 
+    constexpr auto kTracePrefix = std::string_view{"--trace="};
+    if (arg.starts_with(kTracePrefix)) {
+      parsed.trace_inspect = true;
+      parsed.trace_turn_id_hex = std::string{arg.substr(kTracePrefix.size())};
+      if (parsed.trace_turn_id_hex.empty()) {
+        return std::unexpected(arg_error("--trace requires a non-empty turn id"));
+      }
+      continue;
+    }
+
+    if (arg == "--trace") {
+      parsed.trace_inspect = true;
+      if (index + 1 >= args.size()) {
+        return std::unexpected(arg_error("--trace requires a turn id"));
+      }
+      parsed.trace_turn_id_hex = std::string{args[++index]};
+      if (parsed.trace_turn_id_hex.empty()) {
+        return std::unexpected(arg_error("--trace requires a non-empty turn id"));
+      }
+      continue;
+    }
+
     constexpr auto kConfigPrefix = std::string_view{"--config="};
     if (arg.starts_with(kConfigPrefix)) {
       parsed.has_explicit_config = true;
@@ -206,13 +232,15 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
 void print_usage() {
   std::println("orangutan v{}", kVersion);
   std::println("usage: orangutan [--config <path>] [--explain-rules [--mode <m>] [--agent <name>]]");
-  std::println("                  [--audit-init [<path>]] [--prompt <text>] [--help]");
+  std::println("                  [--audit-init [<path>]] [--trace <turn-id>] [--prompt <text>] [--help]");
   std::println();
   std::println("The current bootstrap slice loads config, then hands CLI modes to oran-cli.");
   std::println("--explain-rules prints the materialized permission rule set and exits;");
   std::println("                --mode picks the baseline (strict|default|permissive|sandboxed),");
   std::println("                --agent picks an `agents.<name>.permissions` overlay.");
   std::println("--audit-init applies the audit.db schema (defaults to <workspace>/.orangutan/audit.db) and exits.");
+  std::println("--trace prints the trace_turns row and joined audit rows for <turn-id>");
+  std::println("        (32 lowercase hex characters); reads <workspace>/.orangutan/audit.db.");
 }
 
 [[nodiscard]] Result<int> print_materialized_rules(const config::Config& cfg, const ExplainRulesSelector& selector) {
@@ -301,6 +329,192 @@ void print_usage() {
                report.current_version,
                audit_path,
                report.applied_versions.size());
+  return 0;
+}
+
+/// Decode a 32-char lowercase hex string into a `core::TurnId`. The
+/// inspector takes the operator-visible spelling produced by the storage
+/// boundary's BLOB round-trip, so the only accepted shape is the same
+/// lowercase hex that `format_turn_id_hex` emits. Rejects empty strings,
+/// wrong-length inputs, uppercase / non-hex characters, and the all-zero
+/// turn id (which `TraceRepository::append_turn` already rejects).
+[[nodiscard]] Result<core::TurnId> parse_turn_id_hex(std::string_view text) {
+  constexpr auto kExpectedSize = core::TurnId{}.size() * 2;
+  if (text.size() != kExpectedSize) {
+    return std::unexpected(
+        arg_error("--trace turn id must be 32 lowercase hex characters").with("length", std::to_string(text.size())));
+  }
+
+  auto decode_nibble = [](char c) -> Result<unsigned char> {
+    if (c >= '0' && c <= '9') {
+      return static_cast<unsigned char>(c - '0');
+    }
+    if (c >= 'a' && c <= 'f') {
+      return static_cast<unsigned char>(10 + (c - 'a'));
+    }
+    return std::unexpected(arg_error("--trace turn id must be lowercase hex").with("char", std::string{1, c}));
+  };
+
+  core::TurnId id{};
+  for (std::size_t i = 0; i < id.size(); ++i) {
+    auto high = decode_nibble(text[i * 2]);
+    if (!high) {
+      return std::unexpected(std::move(high).error());
+    }
+    auto low = decode_nibble(text[i * 2 + 1]);
+    if (!low) {
+      return std::unexpected(std::move(low).error());
+    }
+    id[i] = static_cast<std::byte>(static_cast<unsigned char>((*high << 4) | *low));
+  }
+  if (core::is_zero_turn_id(id)) {
+    return std::unexpected(arg_error("--trace turn id must not be all zero"));
+  }
+  return id;
+}
+
+[[nodiscard]] std::string format_turn_id_hex(const core::TurnId& id) {
+  constexpr std::string_view kHexDigits{"0123456789abcdef"};
+  std::string out;
+  out.reserve(id.size() * 2);
+  for (auto byte : id) {
+    const auto value = static_cast<unsigned char>(byte);
+    out.push_back(kHexDigits[value >> 4]);
+    out.push_back(kHexDigits[value & 0x0fu]);
+  }
+  return out;
+}
+
+/// Spec 0018 AC10 — read-only operator inspector. Resolves the workspace
+/// audit DB, opens a single-reader `Pool`, runs the idempotent migration
+/// so the inspector tolerates a fresh DB that has not yet seen
+/// `--audit-init`, then prints the matching `trace_turns` row plus every
+/// `audit_events` row whose `parent_turn_id` matches the turn id. Audit
+/// rows are returned in `id ASC` order so the original `tool_use`
+/// sequence from a spec-0017 multi-tool turn survives the join.
+[[nodiscard]] Result<int> run_trace_inspect(std::string_view workspace, std::string_view turn_id_hex) {
+  if (workspace.empty()) {
+    return std::unexpected(Error::invalid_argument("workspace path is empty"));
+  }
+
+  auto turn_id = parse_turn_id_hex(turn_id_hex);
+  if (!turn_id) {
+    return std::unexpected(std::move(turn_id).error());
+  }
+
+  auto audit_path = default_audit_path(workspace);
+  auto exists = path_exists(audit_path);
+  if (!exists) {
+    return std::unexpected(std::move(exists).error());
+  }
+  if (!*exists) {
+    return std::unexpected(
+        Error::not_found("audit database not found; run --audit-init first").with("path", audit_path));
+  }
+
+  asio::io_context io;
+  SignalScope signals{io};
+
+  auto pool_result =
+      storage::Pool::open(io.get_executor(),
+                          storage::PoolOptions{.path = audit_path, .reader_count = 1, .statement_cache_capacity = 4});
+  if (!pool_result) {
+    return std::unexpected(std::move(pool_result).error());
+  }
+  auto pool = std::move(*pool_result);
+  storage::AuditRepository audit_repo{pool};
+  storage::TraceRepository trace_repo{pool};
+
+  auto inspect_error = std::optional<core::Error>{};
+  auto trace_row = std::optional<storage::TraceTurnRecord>{};
+  auto audit_rows = std::vector<storage::AuditEventRecord>{};
+
+  asio::co_spawn(
+      io,
+      [&]() -> async::Awaitable<void> {
+        auto migrated = co_await audit_repo.migrate();
+        if (!migrated) {
+          inspect_error = std::move(migrated).error();
+          signals.release();
+          co_return;
+        }
+
+        auto trace = co_await trace_repo.get_turn(*turn_id);
+        if (!trace) {
+          inspect_error = std::move(trace).error();
+          signals.release();
+          co_return;
+        }
+        trace_row = std::move(*trace);
+
+        auto audits = co_await audit_repo.list_events_for_turn(*turn_id);
+        if (!audits) {
+          inspect_error = std::move(audits).error();
+          signals.release();
+          co_return;
+        }
+        audit_rows = std::move(*audits);
+        signals.release();
+        co_return;
+      },
+      asio::detached);
+  io.run();
+
+  if (const auto sig = signals.signum(); sig != 0) {
+    return std::unexpected(
+        core::Error::cancelled().with("signal", std::string{signal_name(sig)}).with("signum", std::to_string(sig)));
+  }
+
+  if (inspect_error) {
+    return std::unexpected(std::move(*inspect_error));
+  }
+
+  if (!trace_row) {
+    return std::unexpected(Error::not_found("trace turn not found").with("turn_id", std::string{turn_id_hex}));
+  }
+
+  const auto& row = *trace_row;
+  std::println("trace turn {}:", format_turn_id_hex(row.turn_id));
+  std::println("  session_id={} agent={} origin={}", format_turn_id_hex(row.session_id), row.agent_key, row.origin);
+  std::println("  route={}/{} stop_reason={} iterations={}",
+               row.route_profile,
+               row.route_model,
+               row.stop_reason,
+               row.iteration_count);
+  std::println("  started_at_ns={} finished_at_ns={} duration_ns={}",
+               row.started_at_ns,
+               row.finished_at_ns,
+               row.finished_at_ns - row.started_at_ns);
+  std::println("  prompt_prefix_hash=0x{:016x} bytes={} active_catalog=0x{:016x} deferred_catalog=0x{:016x}",
+               row.prompt_prefix_hash,
+               row.prompt_prefix_bytes,
+               row.active_catalog_hash,
+               row.deferred_catalog_hash);
+  std::println("  usage: input={} output={} cache_creation={} cache_read={} cost_estimate_usd={}",
+               row.input_tokens,
+               row.output_tokens,
+               row.cache_creation_tokens,
+               row.cache_read_tokens,
+               row.cost_estimate_usd);
+  std::println("  cancellation_phase={}", row.cancellation_phase.value_or(std::string{"none"}));
+  std::println("  parent_turn_id={}",
+               row.parent_turn_id.has_value() ? format_turn_id_hex(*row.parent_turn_id) : std::string{"none"});
+  std::println("  schema_version={} context_json_bytes={}", row.schema_version, row.context_json.size());
+
+  std::println("audit rows: {}", audit_rows.size());
+  std::size_t audit_index = 0;
+  for (const auto& audit : audit_rows) {
+    std::println("  #{:<3} verdict={} outcome={} tool={} scope={} agent={} identity={} reason={}",
+                 audit_index,
+                 audit.verdict,
+                 audit.outcome,
+                 audit.tool_name,
+                 audit.scope_key,
+                 audit.agent_key,
+                 audit.identity,
+                 audit.reason);
+    ++audit_index;
+  }
   return 0;
 }
 
@@ -414,6 +628,17 @@ core::Result<int> run(BootstrapOptions options) {
       }
     }
     return audit_result;
+  }
+
+  if (parsed->trace_inspect) {
+    auto trace_result = run_trace_inspect(options.workspace, parsed->trace_turn_id_hex);
+    if (!trace_result && trace_result.error().kind() == core::ErrorKind::cancelled) {
+      if (auto signum = signum_from_error(trace_result.error()); signum) {
+        std::println(stderr, "orangutan: interrupted by {} ({})", signal_name(*signum), *signum);
+        return 128 + *signum;
+      }
+    }
+    return trace_result;
   }
 
   auto loaded = load_config(options);

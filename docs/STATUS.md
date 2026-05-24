@@ -7,17 +7,34 @@
 
 ## Snapshot
 
-- **Slice:** 87 (`xmake run orangutan` reports slice 87)
+- **Slice:** 88 (`xmake run orangutan` reports slice 88)
 - **Last completed history:**
-  [`histories/2026-05/20260524-1400-bootstrap-trace-wiring.md`](histories/2026-05/20260524-1400-bootstrap-trace-wiring.md)
+  [`histories/2026-05/20260524-1500-bootstrap-trace-inspector.md`](histories/2026-05/20260524-1500-bootstrap-trace-inspector.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
-  the recent agent-loop and bootstrap increments closed in focused
-  history/commit slices and did not need a new plan because they stayed
-  under the existing spec-0017/0018 sequencing contract.
+  the recent agent-loop, bootstrap, and inspector increments closed in
+  focused history/commit slices and did not need a new plan because they
+  stayed under the existing spec-0017/0018 sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 87 closes
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 88 closes
+  spec-0018 AC10 by adding the operator inspector: `oran-storage` exports
+  `AuditRepository::list_events_for_turn(TurnId, limit)` — a `parent_turn_id =
+  ?` read ordered `id ASC` so the original `tool_use` order of a spec-0017
+  multi-tool turn survives the trace/audit join — and `oran-bootstrap`'s
+  `--trace <turn-id>` / `--trace=<turn-id>` flag opens the workspace audit
+  DB, runs the idempotent audit migration, looks up the trace row through
+  `TraceRepository::get_turn`, lists the joined audit rows through the new
+  repository method, and prints both in the `--explain-rules`-style line
+  format before exiting zero. The inspector returns `Error::not_found` for
+  a missing audit DB and for an unknown turn id, propagates SIGINT/SIGTERM
+  through the existing `SignalScope` so the one-shot `io_context` drains
+  promptly, and accepts the 32-char lowercase hex spelling that storage
+  round-trips through `BLOB`. `test-storage` now reports 72 cases / 886
+  assertions and `test-bootstrap` reports 56 cases / 221 assertions. Hook
+  publish rows, the bench `trace_turn_insert` scenario, and the binary
+  handoff that drives `agent::Loop` from inside the binary remain
+  downstream. Slice 87 closed
   the first downstream item on the spec-0018 punch list by threading
   `config.trace().enabled` from `oran-config` through `bootstrap::run` into
   the new `RuntimeAssemblyOptions::trace_enabled` switch and constructing
@@ -446,7 +463,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-core`: 69 cases / 450 assertions.
 - `oran-async`: 9 cases / 43 assertions.
 - `oran-io`: 49 cases / 286 assertions.
-- `oran-storage`: 68 cases / 827 assertions.
+- `oran-storage`: 72 cases / 886 assertions.
 - `oran-config`: 28 cases / 207 assertions.
 - `oran-permission`: 88 cases / 403 assertions.
 - `oran-hook`: 17 cases / 109 assertions.
@@ -455,7 +472,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 11 cases / 89 assertions.
 - `oran-agent`: 23 cases / 363 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
-- `oran-bootstrap`: 51 cases / 188 assertions.
+- `oran-bootstrap`: 56 cases / 221 assertions.
 
 ## Open Tech-Debt Rows
 

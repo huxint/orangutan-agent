@@ -516,3 +516,84 @@ TEST_CASE("AuditRepository returns empty results for missing scopes", "[unit][st
     REQUIRE(*count == 0);
   });
 }
+
+TEST_CASE("AuditRepository::list_events_for_turn preserves dispatch order and ignores scope",
+          "[unit][storage][audit_repository][trace]") {
+  TempDb db{"oran-audit-repo-list-for-turn"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::AuditRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+
+    const auto turn_a = turn_id_with(0x10);
+    const auto turn_b = turn_id_with(0x20);
+
+    // Three rows belong to turn A under two scopes; one belongs to turn B; one
+    // has no parent turn. The trace inspector must surface every turn-A row
+    // regardless of scope and skip the unrelated rows.
+    auto first = make_request("scope-A", "file.read", "allow");
+    first.parent_turn_id = turn_a;
+    auto first_row = co_await repo.append_event(std::move(first));
+    REQUIRE(first_row.has_value());
+
+    auto second = make_request("scope-A", "file.write", "allow");
+    second.parent_turn_id = turn_a;
+    auto second_row = co_await repo.append_event(std::move(second));
+    REQUIRE(second_row.has_value());
+
+    auto third = make_request("scope-B", "directory.list", "allow");
+    third.parent_turn_id = turn_a;
+    auto third_row = co_await repo.append_event(std::move(third));
+    REQUIRE(third_row.has_value());
+
+    auto unrelated_turn = make_request("scope-A", "file.read", "deny");
+    unrelated_turn.parent_turn_id = turn_b;
+    auto unrelated_turn_row = co_await repo.append_event(std::move(unrelated_turn));
+    REQUIRE(unrelated_turn_row.has_value());
+
+    auto no_turn = make_request("scope-A", "file.read", "allow");
+    auto no_turn_row = co_await repo.append_event(std::move(no_turn));
+    REQUIRE(no_turn_row.has_value());
+
+    auto joined = co_await repo.list_events_for_turn(turn_a);
+    REQUIRE(joined.has_value());
+    REQUIRE(joined->size() == 3);
+    REQUIRE((*joined)[0].id == first_row->id);
+    REQUIRE((*joined)[1].id == second_row->id);
+    REQUIRE((*joined)[2].id == third_row->id);
+    REQUIRE((*joined)[0].tool_name == "file.read");
+    REQUIRE((*joined)[1].tool_name == "file.write");
+    REQUIRE((*joined)[2].tool_name == "directory.list");
+    REQUIRE((*joined)[2].scope_key == "scope-B");
+
+    auto limited = co_await repo.list_events_for_turn(turn_a, 2);
+    REQUIRE(limited.has_value());
+    REQUIRE(limited->size() == 2);
+    REQUIRE((*limited)[0].id == first_row->id);
+    REQUIRE((*limited)[1].id == second_row->id);
+
+    auto missing = co_await repo.list_events_for_turn(turn_id_with(0x99));
+    REQUIRE(missing.has_value());
+    REQUIRE(missing->empty());
+  });
+}
+
+TEST_CASE("AuditRepository::list_events_for_turn rejects malformed inputs",
+          "[unit][storage][audit_repository][trace]") {
+  TempDb db{"oran-audit-repo-list-for-turn-validate"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::AuditRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+
+    auto zero_id = co_await repo.list_events_for_turn(core::TurnId{});
+    REQUIRE_FALSE(zero_id.has_value());
+    REQUIRE(zero_id.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto zero_limit = co_await repo.list_events_for_turn(turn_id_with(0x10), 0);
+    REQUIRE_FALSE(zero_limit.has_value());
+    REQUIRE(zero_limit.error().kind() == core::ErrorKind::invalid_argument);
+  });
+}

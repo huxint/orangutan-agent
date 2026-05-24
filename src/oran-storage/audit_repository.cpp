@@ -38,6 +38,13 @@ constexpr std::string_view kCountEventsSql = R"sql(
 SELECT COUNT(*) FROM audit_events WHERE scope_key = ?
 )sql";
 
+constexpr std::string_view kListEventsForTurnSql = R"sql(
+SELECT id, scope_key, agent_key, tool_name, identity, verdict, outcome, reason,
+  input_hash_hex, parent_turn_id, metadata_json, created_at
+FROM audit_events WHERE parent_turn_id = ?
+ORDER BY id ASC LIMIT ?
+)sql";
+
 constexpr std::string_view kUpdateEventMetadataSql = R"sql(
 UPDATE audit_events
 SET metadata_json = ?
@@ -517,6 +524,55 @@ AuditRepository::list_events(ListAuditEventsOptions options) {
     }
   }
   if (auto bound = statement.bind_int64(index, static_cast<std::int64_t>(options.limit)); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+
+  std::vector<AuditEventRecord> events;
+  while (true) {
+    auto step = statement.step();
+    if (!step) {
+      co_return std::unexpected(step.error());
+    }
+    if (*step == StepResult::done) {
+      break;
+    }
+    auto event = read_event_row(statement);
+    if (!event) {
+      co_return std::unexpected(event.error());
+    }
+    events.push_back(std::move(*event));
+  }
+
+  co_return events;
+}
+
+async::Awaitable<core::Result<std::vector<AuditEventRecord>>>
+AuditRepository::list_events_for_turn(core::TurnId parent_turn_id, std::size_t limit) {
+  if (core::is_zero_turn_id(parent_turn_id)) {
+    co_return std::unexpected(invalid_field("parent_turn_id"));
+  }
+  if (limit == 0) {
+    co_return std::unexpected(core::Error::invalid_argument("audit list limit must be greater than zero"));
+  }
+  if (limit > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
+    co_return std::unexpected(core::Error::invalid_argument("audit list limit is too large"));
+  }
+
+  auto reader = co_await pool_->acquire_reader();
+  if (!reader) {
+    co_return std::unexpected(reader.error());
+  }
+
+  auto cached = reader->statement_cache().acquire(reader->connection(), kListEventsForTurnSql);
+  if (!cached) {
+    co_return std::unexpected(cached.error());
+  }
+  auto& statement = cached->statement();
+
+  if (auto bound = statement.bind_blob(1, turn_id_span(parent_turn_id)); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_int64(2, static_cast<std::int64_t>(limit)); !bound) {
     co_return std::unexpected(bound.error());
   }
 

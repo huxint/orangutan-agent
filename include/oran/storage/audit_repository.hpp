@@ -151,6 +151,16 @@ public:
   [[nodiscard]] async::Awaitable<core::Result<std::vector<AuditEventRecord>>>
   list_events(ListAuditEventsOptions options);
 
+  /// Operator-level read: every audit row whose `parent_turn_id` matches
+  /// the supplied trace turn id, ordered by `id ASC` so the original
+  /// `tool_use` order from spec 0017 multi-tool turns survives the join
+  /// (spec 0018 AC3). Unlike `list_events`, this query is *not* scoped to
+  /// a `scope_key` — the spec-0018 CLI inspector is a runtime-level tool
+  /// that joins one turn's cause-chain across whatever scope produced it.
+  /// Returns `Error::invalid_argument` for a zero turn id or zero limit.
+  [[nodiscard]] async::Awaitable<core::Result<std::vector<AuditEventRecord>>>
+  list_events_for_turn(core::TurnId parent_turn_id, std::size_t limit = 200);
+
   /// Count of rows visible under the same scope. Useful for the
   /// upcoming `--audit-stats` CLI and for tests that need to assert
   /// "exactly one decision was recorded". `scope_key` must be set.

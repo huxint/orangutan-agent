@@ -211,6 +211,18 @@ makes the existing audit rows joinable. Nothing else.
   plus every joined audit row (`WHERE parent_turn_id = ?`) in the
   same `--explain-rules`-style table format that already exists for
   permission rules. The query is read-only; no permission changes.
+  **Status (slice 88):** shipped. `oran-bootstrap` parses
+  `--trace <hex>` / `--trace=<hex>` (32-char lowercase hex turn id), runs the
+  idempotent audit migration, calls `TraceRepository::get_turn` for the trace
+  row, joins audit rows via the new `AuditRepository::list_events_for_turn`
+  (ordered `id ASC` so the original `tool_use` order is preserved), and
+  renders both blocks to stdout before exiting `0`. The inspector returns
+  `Error::not_found` for a missing audit DB and for an unknown turn id, and
+  forwards SIGINT/SIGTERM through the existing `SignalScope` so it shares the
+  `--audit-init` cancellation contract. Hook-publish rows are still
+  downstream, so the inspector's per-turn rendering currently omits the
+  AC5 `hook_publish` block; that block fills in once spec-0015/0018 add the
+  rows.
 
 ## Scope (v1.1)
 
@@ -327,6 +339,17 @@ makes the existing audit rows joinable. Nothing else.
     the trace row + every joined audit row + every joined
     `hook_publish` row in deterministic order; exit code 0.
     Unknown `<turn_id>` exits non-zero with `Error::not_found`.
+    **Status (slice 88):** shipped for the trace row + joined audit rows.
+    `oran-bootstrap` parses `--trace <hex>` / `--trace=<hex>` (32-char
+    lowercase hex matching the storage BLOB round-trip), uses the new
+    `AuditRepository::list_events_for_turn(TurnId, limit)` to join audit
+    rows ordered `id ASC` (preserving the original spec-0017 `tool_use`
+    order), and renders the trace turn + audit rows in `--explain-rules`-
+    style lines. Unknown turn id returns `Error::not_found`; missing
+    audit DB returns `Error::not_found` with a path-pointing message.
+    The `hook_publish` portion of the inspector waits on the spec
+    -0015/0018 hook-publish row writer (still tracked under spec 0018
+    follow-ups).
 11. **Schema migration.** Migrating an existing `audit.db` from
     schema 1 to schema with the trace tables succeeds idempotently;
     re-running the migration is a no-op. Pinned by a migration

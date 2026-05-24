@@ -1,6 +1,7 @@
 // tests/bootstrap/test_bootstrap.cpp — config-aware bootstrap coverage.
 
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <span>
@@ -9,19 +10,27 @@
 #include <utility>
 #include <vector>
 
+#include <asio/io_context.hpp>
+
 #include <catch2/catch_test_macros.hpp>
 
+#include <oran/async.hpp>
 #include <oran/bootstrap.hpp>
 #include <oran/config/config.hpp>
 #include <oran/core/error.hpp>
+#include <oran/core/turn_id.hpp>
 #include <oran/permission/rule_set.hpp>
 #include <oran/storage.hpp>
 
+#include "../test-helpers/run_async.hpp"
+
+namespace async = orangutan::async;
 namespace bootstrap = orangutan::bootstrap;
 namespace config = orangutan::config;
 namespace core = orangutan::core;
 namespace permission = orangutan::permission;
 namespace storage = orangutan::storage;
+namespace test = orangutan::tests;
 
 namespace {
 
@@ -479,4 +488,188 @@ TEST_CASE("run --explain-rules rejects unknown --agent", "[unit][bootstrap][expl
 
   REQUIRE_FALSE(result.has_value());
   REQUIRE(result.error().kind() == core::ErrorKind::not_found);
+}
+
+namespace {
+
+constexpr std::string_view kSampleTurnHex = "101112131415161718191a1b1c1d1e1f";
+
+core::TurnId sample_turn_id() {
+  core::TurnId id{};
+  for (std::size_t i = 0; i < id.size(); ++i) {
+    id[i] = static_cast<std::byte>(0x10 + i);
+  }
+  return id;
+}
+
+core::TurnId session_id_seed(unsigned char seed) {
+  core::TurnId id{};
+  for (std::size_t i = 0; i < id.size(); ++i) {
+    id[i] = static_cast<std::byte>(seed + i);
+  }
+  return id;
+}
+
+void populate_trace_fixture(const std::filesystem::path& audit_db, const core::TurnId& turn_id) {
+  test::run_async([&audit_db, &turn_id](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = storage::Pool::open(
+        io.get_executor(),
+        storage::PoolOptions{.path = audit_db.string(), .reader_count = 1, .statement_cache_capacity = 4});
+    REQUIRE(pool.has_value());
+
+    storage::AuditRepository audit_repo{*pool};
+    storage::TraceRepository trace_repo{*pool};
+    auto migrated = co_await audit_repo.migrate();
+    REQUIRE(migrated.has_value());
+
+    auto trace_request = storage::AppendTraceTurnRequest{
+        .turn_id = turn_id,
+        .session_id = session_id_seed(0x80),
+        .agent_key = "coder",
+        .origin = "cli",
+        .route_profile = "fake-main",
+        .route_model = "fake-model",
+        .started_at_ns = 1'000,
+        .finished_at_ns = 2'500,
+        .stop_reason = "end_turn",
+        .iteration_count = 2,
+        .prompt_prefix_hash = 0xfeed'face'1234'5678ULL,
+        .prompt_prefix_bytes = 4'096,
+        .active_catalog_hash = 0x1111'2222'3333'4444ULL,
+        .deferred_catalog_hash = 0x5555'6666'7777'8888ULL,
+        .cache_creation_tokens = 32,
+        .cache_read_tokens = 1024,
+        .input_tokens = 1'500,
+        .output_tokens = 200,
+        .cost_estimate_usd = 0.012,
+        .context_json = R"json({"source":"trace-inspector-test"})json",
+    };
+    auto trace_row = co_await trace_repo.append_turn(std::move(trace_request));
+    REQUIRE(trace_row.has_value());
+
+    auto first_audit = storage::AppendAuditEventRequest{
+        .scope_key = "scope-A",
+        .agent_key = "coder",
+        .tool_name = "file.read",
+        .identity = "operator-1",
+        .verdict = "allow",
+        .outcome = "allow",
+        .reason = "rule #1 (allow: file.*)",
+        .parent_turn_id = turn_id,
+    };
+    auto first_audit_row = co_await audit_repo.append_event(std::move(first_audit));
+    REQUIRE(first_audit_row.has_value());
+
+    auto second_audit = storage::AppendAuditEventRequest{
+        .scope_key = "scope-A",
+        .agent_key = "coder",
+        .tool_name = "file.write",
+        .identity = "operator-1",
+        .verdict = "allow",
+        .outcome = "allow",
+        .reason = "rule #1 (allow: file.*)",
+        .parent_turn_id = turn_id,
+    };
+    auto second_audit_row = co_await audit_repo.append_event(std::move(second_audit));
+    REQUIRE(second_audit_row.has_value());
+    co_return;
+  });
+}
+
+}  // namespace
+
+TEST_CASE("run --trace rejects missing or empty turn id", "[unit][bootstrap][trace]") {
+  TempDir temp{"oran-bootstrap-trace-no-id"};
+
+  SECTION("--trace without value") {
+    auto args = std::vector<std::string_view>{"--trace"};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+
+  SECTION("--trace= empty value") {
+    auto args = std::vector<std::string_view>{"--trace="};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+}
+
+TEST_CASE("run --trace rejects malformed turn ids", "[unit][bootstrap][trace]") {
+  TempDir temp{"oran-bootstrap-trace-bad-id"};
+
+  SECTION("wrong length") {
+    auto args = std::vector<std::string_view>{"--trace", "deadbeef"};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+
+  SECTION("uppercase hex") {
+    auto args = std::vector<std::string_view>{"--trace", "101112131415161718191A1B1C1D1E1F"};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+
+  SECTION("non-hex character") {
+    auto args = std::vector<std::string_view>{"--trace", "101112131415161718191a1b1c1d1ezz"};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+
+  SECTION("all zero") {
+    auto args = std::vector<std::string_view>{"--trace", "00000000000000000000000000000000"};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+}
+
+TEST_CASE("run --trace reports not_found when the audit database is absent", "[unit][bootstrap][trace]") {
+  TempDir temp{"oran-bootstrap-trace-no-db"};
+  auto args = std::vector<std::string_view>{"--trace", std::string_view{kSampleTurnHex}};
+
+  auto result = bootstrap::run(options(args, temp.path()));
+
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(result.error().kind() == core::ErrorKind::not_found);
+}
+
+TEST_CASE("run --trace reports not_found for unknown turn ids", "[unit][bootstrap][trace]") {
+  TempDir temp{"oran-bootstrap-trace-missing-turn"};
+  auto init_args = std::vector<std::string_view>{"--audit-init"};
+  auto init_result = bootstrap::run(options(init_args, temp.path()));
+  REQUIRE(init_result.has_value());
+
+  auto args = std::vector<std::string_view>{"--trace", std::string_view{kSampleTurnHex}};
+  auto result = bootstrap::run(options(args, temp.path()));
+
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(result.error().kind() == core::ErrorKind::not_found);
+}
+
+TEST_CASE("run --trace returns 0 when the turn row and joined audit rows exist", "[unit][bootstrap][trace]") {
+  TempDir temp{"oran-bootstrap-trace-happy"};
+  const auto audit_db = temp.path() / ".orangutan" / "audit.db";
+  std::filesystem::create_directories(audit_db.parent_path());
+
+  populate_trace_fixture(audit_db, sample_turn_id());
+
+  SECTION("space-separated form") {
+    auto args = std::vector<std::string_view>{"--trace", std::string_view{kSampleTurnHex}};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE(result.has_value());
+    REQUIRE(*result == 0);
+  }
+
+  SECTION("eq-form") {
+    const auto eq_arg = std::string{"--trace="}.append(kSampleTurnHex);
+    auto args = std::vector<std::string_view>{eq_arg};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE(result.has_value());
+    REQUIRE(*result == 0);
+  }
 }
