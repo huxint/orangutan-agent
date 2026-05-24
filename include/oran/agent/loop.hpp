@@ -153,7 +153,7 @@ public:
   /// hooks, workspace, and output-cap services; the loop refreshes its per-call
   /// wall-clock time and trace parent id around every direct dispatch, then
   /// restores the caller's reusable context values. Parallel scheduling,
-  /// session persistence, provider retry/fallback, and binary CLI handoff
+  /// session persistence, execution-runtime wiring, and binary CLI handoff
   /// remain later slices. Parent cancellation during
   /// the provider await or direct tool dispatch is surfaced as
   /// `ErrorKind::cancelled` with `reason=parent_cancelled` plus

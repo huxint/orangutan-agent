@@ -68,14 +68,16 @@ own library, its own tests, its own bench, its own design doc."
 
 ## Prompt Assembly
 
-> **Status (slice 96, 2026-05-25):** `oran-prompt` owns the first
+> **Status (slice 97, 2026-05-25):** `oran-prompt` owns the first
 > deterministic `prompt::Builder` skeleton plus `prompt::PromotionState`,
 > `oran-agent` owns the narrow `agent::SessionState` surface that observes
 > successful `tool.search` output and promotes deferred matches into the
 > next prompt snapshot, and `oran-provider` owns the cache-hint mapper plus
 > the slice-74 abstract `provider::System` / `EventSink` / `Route` surface
 > with the first concrete `provider::FakeProvider` (scripted-turn plan,
-> delta-to-`Response` assembly, cancel-aware scripted latency). Slices 76-77
+> delta-to-`Response` assembly, cancel-aware scripted latency) plus the
+> slice-97 `provider::execution::Runtime` decorator for per-target retry and
+> route fallback before real adapters land. Slices 76-77
 > extends `agent::Loop` over those pieces: it builds a
 > `prompt::RenderedPrompt`, maps cache hints, mirrors active/promoted tools
 > into name-sorted `provider::Request::tools`, sends requests through a
@@ -104,8 +106,8 @@ own library, its own tests, its own bench, its own design doc."
 > skips the trace row, forces direct dispatch audit rows to keep
 > `parent_turn_id = NULL`, and restores any reusable dispatch-context parent id
 > after the tool call.
-> Memory, scheduler handoff, provider retry/fallback, and binary CLI
-> agent-loop wiring remain downstream.
+> Memory, scheduler handoff, wiring the execution runtime into the loop, and
+> binary CLI agent-loop wiring remain downstream.
 > The invariants — section order, byte-identical cached prefix, no clocks /
 > per-call state in sections (1)–(6) — remain canonical in
 > [`../rules/prompt-design.md`](../rules/prompt-design.md).
@@ -167,9 +169,11 @@ cancellations, slice 84 writes ordinary provider/loop-boundary error rows, and
 slice 85 generates a missing turn id for trace-enabled turns before prompt
 render/dispatch. Slice 96 also refreshes `DispatchContext::now` for each direct
 dispatch, so the registry-owned blocking approval prompt path uses a real
-per-call timestamp and then restores the caller's reusable context. The future
-`ToolScheduler` can replace the direct loop call without changing the
-provider-facing request/response shape.
+per-call timestamp and then restores the caller's reusable context. Slice 97
+adds the provider execution decorator for retry/fallback; the loop still needs
+to be handed that decorated `provider::System` by the future binary/runtime
+assembly owner. The future `ToolScheduler` can replace the direct loop call
+without changing the provider-facing request/response shape.
 
 ## Cross-Cutting Concerns
 

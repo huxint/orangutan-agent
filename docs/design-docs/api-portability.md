@@ -27,7 +27,7 @@ struct Response {
   std::vector<core::Content> blocks;            // text, tool_use, thinking, ...
   StopReason                 stop_reason;
   Usage                      usage;             // input, output, cache tokens
-  std::optional<ModelTarget> model_used;        // for fallback observability
+  std::optional<std::string> model_used;        // model id for fallback observability
 };
 
 }  // namespace orangutan::provider
@@ -35,8 +35,9 @@ struct Response {
 
 `core::Content` is a typed variant; protocol adapters translate to/from vendor JSON.
 
-> **Status (slice 74, 2026-05-24):** `oran-provider` exists as the
-> provider-domain, prompt-cache-hint, and fake-provider library.
+> **Status (slice 97, 2026-05-25):** `oran-provider` exists as the
+> provider-domain, prompt-cache-hint, fake-provider, and first execution
+> wrapper library.
 > `<oran/provider.hpp>` exports the slice-73 value shapes (`Request`,
 > `Response`, `Usage`, `RetryPolicy`, `PromptCacheHints`,
 > `PromptCacheOptions`, `make_prompt_cache_hints(prompt::RenderedPrompt,
@@ -44,9 +45,14 @@ struct Response {
 > `ModelTarget`, `Route`, abstract `provider::EventSink` with default
 > no-op delta callbacks, abstract `provider::System::send(Request, Route,
 > EventSink*) const`, and the first concrete `provider::FakeProvider`
-> with `ScriptedTurn` / `StreamDelta`). Real transports, protocol
-> adapters, route resolution from config profiles, and retry/fallback
-> execution remain planned.
+> with `ScriptedTurn` / `StreamDelta`) plus slice-97
+> `provider::execution::Runtime`, a `provider::System` decorator that
+> consumes `Request::retry`, retries retryable errors per target, tries
+> `Route::fallbacks` after primary exhaustion, observes cancellation during
+> backoff, suppresses retry/fallback after visible stream output, and fills
+> missing `Response::model_used` from the selected target.
+> Real transports, protocol adapters, route resolution from config profiles,
+> provider hooks, and usage/cost rollups remain planned.
 
 ## Layered Implementation
 
@@ -58,7 +64,7 @@ struct Response {
                          │
 ┌────────────────────────▼─────────────────────────────────────┐
 │ execution::Runtime                                            │
-│   retry, fallback model, usage aggregation, cost tracking    │
+│   retry, fallback model; usage/cost/hooks later              │
 └────────────────────────┬─────────────────────────────────────┘
                          │
 ┌────────────────────────▼─────────────────────────────────────┐
@@ -78,12 +84,18 @@ struct Response {
 ```cpp
 class System {
  public:
-  System(execution::Runtime&, ProviderRegistry&);
-
-  // Single-shot blocking send (returns when stop_reason is terminal).
-  async::Awaitable<core::Result<Response>>
-  send(Request, Route, EventSink* sink = nullptr) const;
+  virtual async::Awaitable<core::Result<Response>>
+  send(Request, Route, EventSink* sink = nullptr) const = 0;
 };
+
+namespace execution {
+class Runtime final : public System {
+ public:
+  explicit Runtime(System& backend);
+  async::Awaitable<core::Result<Response>>
+  send(Request, Route, EventSink* sink = nullptr) const override;
+};
+}  // namespace execution
 ```
 
 `Route` is the resolved primary + fallbacks. `EventSink` is the streaming hook: the
@@ -168,13 +180,23 @@ avoided by construction.
 Concerns owned by `execution::Runtime`:
 
 - **Retry**: configurable per-route. Idempotent retry for transport errors, no retry
-  for upstream-classified semantic errors.
+  for upstream-classified semantic errors. **Status (slice 97):** shipped as a
+  `provider::System` decorator over any backend `System`; each target gets its
+  own `Request::retry.max_attempts` budget, `initial_backoff` is awaited
+  through cancel-aware `async::sleep_for`, and `retry_after` can extend that
+  delay. If an attempt has already emitted visible `EventSink` output, the
+  retry is skipped so callers do not render duplicate stream bytes.
 - **Fallback**: on retryable failure of the primary, try fallbacks in order.
+  **Status (slice 97):** shipped for `Route::fallbacks`; each backend call
+  receives a single-target route, and fallback successes fill missing
+  `Response::model_used` with the selected target model. Fallback is also
+  skipped after visible stream output for the same duplicate-output reason.
 - **Usage aggregation**: per-agent, per-route, per-day counters in `audit.db`.
+  Planned.
 - **Cost tracking**: profiles declare cost/1M tokens; aggregator computes spend and
-  emits `provider.cost_threshold` hooks.
+  emits `provider.cost_threshold` hooks. Planned.
 - **Hooks**: `provider_request` / `provider_response` / `provider_error` /
-  `provider_fallback` (see `permissions-and-hooks.md`).
+  `provider_fallback` (see `permissions-and-hooks.md`). Planned.
 
 ## Streaming
 

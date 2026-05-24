@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 96 (`xmake run orangutan` reports slice 96)
+- **Slice:** 97 (`xmake run orangutan` reports slice 97)
 - **Last completed history:**
-  [`histories/2026-05/20260525-0557-agent-loop-approval-clock.md`](histories/2026-05/20260525-0557-agent-loop-approval-clock.md)
+  [`histories/2026-05/20260525-0622-provider-execution-runtime.md`](histories/2026-05/20260525-0622-provider-execution-runtime.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
@@ -18,8 +18,31 @@
   plan because they stayed under the existing spec-0015/0017/0018
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 96 closes
-  the agent-loop approval-observability gap that sat between the direct
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 97 lands
+  the first provider execution layer required before real adapter and binary
+  handoff work. `<oran/provider/execution.hpp>` now exports
+  `provider::execution::Runtime`, a `provider::System` decorator over any
+  backend `System`. It consumes `Request::retry.max_attempts` and
+  `initial_backoff`, retries retryable `network` / `rate_limit` / `timeout` /
+  `upstream` errors on the same target, stops immediately for non-retryable
+  errors and cancellations, and after a retryable primary exhaustion tries
+  `Route::fallbacks` in order with the same per-target attempt budget. Each
+  concrete backend call receives a single-target `Route`, so adapters do not
+  implement fallback themselves. Successful responses that omit `model_used`
+  are filled with the selected target model, preserving later trace rows when a
+  fallback wins. Backoff uses `async::sleep_for` and observes parent
+  cancellation. If an attempt has already emitted visible `EventSink` output,
+  later retryable errors return immediately with `retry_skipped` /
+  `fallback_skipped=stream_already_emitted` so terminal/UI callers do not see
+  duplicate stream bytes. `test-provider` adds offline execution coverage for
+  same-target retry, fallback success, provider-supplied `model_used`,
+  non-retryable stop, stream-output retry suppression, zero-attempt validation,
+  and cancellation during retry backoff. Focused result: `test-provider` 18
+  cases / 132 assertions. Remaining provider work:
+  route/profile resolution into `ModelTarget`, provider request/response hooks,
+  usage/cost rollups, real Anthropic/OpenAI adapters, and wiring the execution
+  runtime into `agent::Loop` / the `orangutan` binary. Slice 96 closed the
+  agent-loop approval-observability gap that sat between the direct
   dispatch ask bridge and the later binary handoff. `agent::Loop` now wraps
   each direct `tool::Registry::dispatch` with a scoped dispatch context that
   installs the loop's trace parent id and refreshes `DispatchContext::now` from
@@ -324,8 +347,10 @@
   `test-agent` covers both cancellation phases through parent
   `asio::cancellation_signal` tests.
   Iteration-cap trace rows, approval-observability coverage, and the
-  trace/audit inspector rows are now in place; provider retry/fallback, the
-  parallel `ToolScheduler`, and CLI/binary handoff remain downstream. Slice 76
+  trace/audit inspector rows are now in place; slice 97 adds the provider
+  execution retry/fallback decorator, while loop/binary wiring of that
+  decorator, the parallel `ToolScheduler`, and CLI/binary handoff remain
+  downstream. Slice 76
   extended the real `agent::Loop` driver from the slice-75 text-only path into the
   first sequential direct-dispatch tool loop. `<oran/agent.hpp>` exports
   `agent::Loop`, `LoopOptions`, `RunTurnInputs`, and `RunTurnResult`;
