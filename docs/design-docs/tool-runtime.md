@@ -113,8 +113,9 @@ enum class Capability {
 > `DispatchContext::parent_turn_id` is an optional `core::TurnId` copied into
 > every permission audit event and metadata update produced by `dispatch`.
 > Direct agent-loop callers set it from `RunTurnInputs::turn_id`; when tracing
-> is disabled the loop clears it for the duration of the dispatch so audit rows
-> keep `parent_turn_id = NULL`.
+> is configured and the caller leaves that id unset, slice 85 generates one
+> before dispatch. When tracing is disabled the loop clears it for the duration
+> of the dispatch so audit rows keep `parent_turn_id = NULL`.
 > Slice 22 (2026-05-18) added the hook-bus tap: `DispatchContext`
 > now also carries an optional `hook::Bus*`; when non-null, dispatch
 > publishes `hook::Event::tool_before` after the registry resolves
@@ -775,7 +776,7 @@ Current and future policy:
   for batched calls and will call the same helper before returning ordered
   results. Slice 67 adds direct-dispatch audit usage metadata enrichment; the
   slice-79 `DispatchContext::parent_turn_id` field gives direct-dispatch audit
-  rows the trace join key when `agent::Loop` supplies a turn id. The
+  rows the trace join key when `agent::Loop` supplies or generates a turn id. The
   scheduler still owns batched-call correlation and option threading once
   parallel tool calls land.
 - The `tool::parse_input<T>` helper tracked under the deep-review backlog

@@ -844,6 +844,78 @@ TEST_CASE("Loop persists a terminal trace row and correlates storage audit rows"
   });
 }
 
+TEST_CASE("Loop generates trace turn ids and correlates storage audit rows", "[unit][agent][loop][trace]") {
+  TempDb db{"oran-agent-loop-trace-generated-id"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_trace_pool(io, db);
+    storage::TraceRepository trace{pool};
+    storage::AuditRepository audit_repo{pool};
+    auto migrated = co_await trace.migrate();
+    REQUIRE(migrated.has_value());
+
+    RecordingSequenceProvider provider{std::vector<provider::Response>{
+        provider::Response{
+            .blocks = {core::ToolUseContent{.id = "t1", .name = "file.read", .input_json = R"({"value":"a"})"}},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = provider::Usage{.input_tokens = 5,
+                                     .output_tokens = 1,
+                                     .cache_creation_tokens = 0,
+                                     .cache_read_tokens = 0,
+                                     .cost_estimate = std::nullopt},
+            .model_used = std::string{"fake-tool-model"},
+        },
+        provider::Response{
+            .blocks = {core::TextContent{.text = "final"}},
+            .stop_reason = core::StopReason::end_turn,
+            .usage = provider::Usage{.input_tokens = 3,
+                                     .output_tokens = 2,
+                                     .cache_creation_tokens = 0,
+                                     .cache_read_tokens = 0,
+                                     .cost_estimate = std::nullopt},
+            .model_used = std::string{"fake-final-model"},
+        },
+    }};
+    agent::Loop loop{provider, default_route()};
+    tool::Registry registry;
+    add_canned_tool(registry, canned_tool_def("file.read"), "read-ok");
+    auto rules = allow_all_rules();
+    permission::StorageAuditSink audit{audit_repo};
+    auto ctx = dispatch_context(io, rules, audit);
+
+    const auto catalog = registry.catalog();
+    const std::vector<core::Message> tail{core::Message::user_text("generate trace id")};
+    auto inputs = base_inputs(catalog, tail);
+    inputs.trace = agent::TraceContext{
+        .repository = &trace,
+        .session_id = turn_id_with(0x80),
+        .agent_key = "coder",
+        .origin = "cli",
+    };
+    inputs.tools = &registry;
+    inputs.dispatch_context = &ctx;
+    auto result = co_await loop.run_turn(inputs);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "final");
+
+    auto rows = co_await trace.list_turns(storage::ListTraceTurnsOptions{.limit = 10});
+    REQUIRE(rows.has_value());
+    REQUIRE(rows->size() == 1);
+    const auto& row = (*rows)[0];
+    REQUIRE_FALSE(core::is_zero_turn_id(row.turn_id));
+    REQUIRE(row.stop_reason == "end_turn");
+    REQUIRE(row.route_model == "fake-final-model");
+    REQUIRE(row.input_tokens == 8);
+    REQUIRE(row.output_tokens == 3);
+
+    auto events = co_await audit_repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-A", .limit = 10});
+    REQUIRE(events.has_value());
+    REQUIRE(events->size() == 1);
+    REQUIRE((*events)[0].parent_turn_id.has_value());
+    REQUIRE(*(*events)[0].parent_turn_id == row.turn_id);
+  });
+}
+
 TEST_CASE("Loop disables trace rows and audit parent ids when trace is off", "[unit][agent][loop][trace]") {
   TempDb db{"oran-agent-loop-trace-disabled"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {

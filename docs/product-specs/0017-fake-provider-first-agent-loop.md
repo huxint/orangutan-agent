@@ -87,7 +87,8 @@ proves the loop behaves correctly without a network.
     dispatch-context parent id afterward. Slice 83 adds cancelled trace rows for
     provider/tool parent cancellation; slice 84 adds `stop_reason=error` trace
     rows for non-cancelled provider failures and response-backed loop-boundary
-    failures.
+    failures; slice 85 generates a turn id when a trace writer is configured
+    and the caller did not supply one.
   - The loop emits **one** `provider::Request` per iteration.
   - The provider emits **one** `provider::Response` per request (after
     streaming completes if streaming is enabled).
@@ -146,7 +147,7 @@ proves the loop behaves correctly without a network.
   uses the fake provider with a hand-written plan.
 - **`agent::Loop` MVP**. Wraps the seven phases listed in the deep
   review §What a better `oran-agent` should look like:
-  - **Status (slice 84, 2026-05-24):** `<oran/agent.hpp>` exports
+  - **Status (slice 85, 2026-05-24):** `<oran/agent.hpp>` exports
     `agent::Loop`, `LoopOptions`, `RunTurnInputs`, and `RunTurnResult`.
     The current implementation covers phases 3/4/5 for terminal text turns
     plus the first phase-6 sequential dispatch path for scenarios #2/#3/#4/#6:
@@ -157,8 +158,9 @@ proves the loop behaves correctly without a network.
     cancellations are classified with `cancellation_phase=provider|tools` and
     written to `trace_turns` when trace is configured, ordinary provider and
     response-backed loop-boundary failures are written as `stop_reason=error`,
-    and direct dispatch audit rows can now carry the optional loop turn id as
-    `parent_turn_id` when trace is enabled. Terminal-success turns can also
+    and direct dispatch audit rows can now carry the loop turn id as
+    `parent_turn_id` when trace is enabled. The loop generates that id when a
+    trace writer is configured and the caller leaves it unset. Terminal-success turns can also
     append one body-free `trace_turns` row through the optional
     `RunTurnInputs::trace` context; explicitly disabled trace contexts skip
     both the row and the dispatch parent id for AC9 coverage.
@@ -194,12 +196,14 @@ proves the loop behaves correctly without a network.
   total_usage, wall_time)`. The turn row is the parent of every
   child tool audit row through `parent_event_id` — the field already
   exists in `permission::AuditEvent::context` but is unused. **Status
-  (slice 84):** the current trace direction moved to spec 0018's
+  (slice 85):** the current trace direction moved to spec 0018's
   `parent_turn_id` join key instead of `parent_event_id`: direct tool audit
   rows can carry the loop turn id, and terminal-success turns can write the
   matching `trace_turns` row. Explicitly disabled trace contexts preserve the
   trace-off audit shape by writing no row and keeping direct-dispatch
-  `parent_turn_id` NULL. Parent-cancelled provider/tool phases now write
+  `parent_turn_id` NULL. Trace-enabled turns generate a missing turn id before
+  dispatch so trace and audit rows still join. Parent-cancelled provider/tool
+  phases now write
   cancelled trace rows when trace is configured, and non-cancelled provider /
   response-backed loop-boundary failures write `stop_reason=error` rows. Hook
   rows, config-to-loop wiring, and CLI inspection remain downstream.
@@ -263,12 +267,12 @@ proves the loop behaves correctly without a network.
    provider re-entry, provider-usage aggregation, and complete returned
    transcript. The test fixture uses a minimal registry tool rather than the
    `file.read` built-in so loop coverage stays focused on the registry
-   boundary. **Status (slice 82):** direct dispatch audit rows can now carry
-   `parent_turn_id` from `RunTurnInputs::turn_id` when trace is enabled;
-   terminal-success turns write the loop-owned `trace_turns` row when enabled
-   `RunTurnInputs::trace` is configured; and explicit trace-disabled turns keep
-   audit `parent_turn_id` NULL. Cancellation/error rows and CLI inspection
-   remain future work.
+   boundary. **Status (slice 85):** direct dispatch audit rows can now carry
+   `parent_turn_id` from a caller-supplied or generated loop turn id when trace
+   is enabled; terminal-success turns write the loop-owned `trace_turns` row
+   when enabled `RunTurnInputs::trace` is configured; parent-cancelled and
+   ordinary error rows are also covered; and explicit trace-disabled turns keep
+   audit `parent_turn_id` NULL. CLI inspection remains future work.
 3. **Multiple tools in one response.** Scenario #3: the fake returns
    `[tool_use A, tool_use B]`. v1 dispatches sequentially (parallel
    dispatch is spec 0012's responsibility); the agent transcript

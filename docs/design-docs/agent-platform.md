@@ -68,7 +68,7 @@ own library, its own tests, its own bench, its own design doc."
 
 ## Prompt Assembly
 
-> **Status (slice 84, 2026-05-24):** `oran-prompt` owns the first
+> **Status (slice 85, 2026-05-24):** `oran-prompt` owns the first
 > deterministic `prompt::Builder` skeleton plus `prompt::PromotionState`,
 > `oran-agent` owns the narrow `agent::SessionState` surface that observes
 > successful `tool.search` output and promotes deferred matches into the
@@ -85,9 +85,10 @@ own library, its own tests, its own bench, its own design doc."
 > Parent cancellation during the provider await or direct tool dispatch now
 > returns `ErrorKind::cancelled` with `reason=parent_cancelled` and
 > `cancellation_phase=provider|tools`; slice 83 persists the same phase into
-> `trace_turns` rows when trace is configured, and slice 84 writes
+> `trace_turns` rows when trace is configured, slice 84 writes
 > `stop_reason=error` rows for non-cancelled provider and response-backed
-> loop-boundary failures. Slice 79 adds the first
+> loop-boundary failures, and slice 85 generates a turn id when trace is
+> configured and the caller leaves it unset. Slice 79 adds the first
 > trace/audit join
 > primitive: `RunTurnInputs::turn_id` can be copied into
 > `DispatchContext::parent_turn_id` for direct tool dispatches in that turn.
@@ -158,8 +159,9 @@ audit rows can join to trace rows. Slice 80 adds the first terminal-success
 trace writer on top of the same turn id, slice 82 gates both the trace row and
 direct-dispatch parent id behind `TraceContext::enabled` for explicitly
 disabled turns, slice 83 writes cancelled trace rows for provider/tool parent
-cancellations, and slice 84 writes ordinary provider/loop-boundary error rows.
-The future
+cancellations, slice 84 writes ordinary provider/loop-boundary error rows, and
+slice 85 generates a missing turn id for trace-enabled turns before prompt
+render/dispatch. The future
 `ToolScheduler` can replace the direct loop call without changing the
 provider-facing request/response shape.
 

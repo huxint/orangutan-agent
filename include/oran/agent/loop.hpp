@@ -60,9 +60,10 @@ struct TraceContext {
   /// is written and direct tool audit rows keep `parent_turn_id = NULL`.
   bool enabled{true};
   /// Optional storage writer for spec-0018 per-turn trace rows. When null, the
-  /// loop preserves the pre-trace behavior and only `turn_id` audit stamping can
-  /// occur if `enabled` is true. When non-null, `RunTurnInputs::turn_id`,
-  /// `session_id`, `agent_key`, and `origin` must also be set.
+  /// loop preserves the pre-trace behavior and only caller-supplied `turn_id`
+  /// audit stamping can occur if `enabled` is true. When non-null, the loop
+  /// generates `RunTurnInputs::turn_id` if absent; `session_id`, `agent_key`,
+  /// and `origin` must still be set.
   storage::TraceRepository* repository{nullptr};
   core::TurnId session_id{};
   std::optional<core::TurnId> parent_turn_id{};
@@ -98,13 +99,15 @@ struct RunTurnInputs {
   bool stream{true};
   /// Optional trace/audit correlation id for this turn. When set and
   /// `trace.enabled` is true, the loop threads it into every direct tool
-  /// dispatch as `DispatchContext::parent_turn_id`; when unset, dispatch audit
-  /// rows keep `parent_turn_id = NULL` for trace-disabled and pre-trace callers.
+  /// dispatch as `DispatchContext::parent_turn_id`. When unset but a trace
+  /// writer is configured, the loop generates one before the first prompt
+  /// render; trace-disabled and pre-trace callers still keep
+  /// `parent_turn_id = NULL`.
   std::optional<core::TurnId> turn_id{};
-  /// Optional per-turn trace writer context. This first writer slice records
-  /// redacted `trace_turns` rows when a caller supplies both `trace.repository`
-  /// and `turn_id`; ID generation, operator config, and CLI inspection remain
-  /// downstream.
+  /// Optional per-turn trace writer context. The loop records redacted
+  /// `trace_turns` rows when a caller supplies `trace.repository`, generating
+  /// a turn id if the caller did not provide one. Operator config and CLI
+  /// inspection remain downstream.
   TraceContext trace{};
   /// Optional direct-dispatch bridge for spec 0017 scenarios #2/#3. Both
   /// pointers must be non-null to execute tool_use blocks; otherwise the loop

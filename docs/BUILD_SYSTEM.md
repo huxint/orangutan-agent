@@ -243,7 +243,8 @@ slice-80 sequential direct-dispatch `Loop` turn driver with cancellation-phase
 context on provider/tool parent cancellations, the first terminal-success
 `trace_turns` writer, slice 82's explicit disabled trace gate, and slice 83's
 provider/tool cancellation trace rows, plus slice 84's provider/loop-boundary
-error trace rows. The `oran-storage` dependency is an intentional downward
+error trace rows and slice 85's loop-owned turn-id generation for configured
+trace writers. The `oran-storage` dependency is an intentional downward
 agent-runtime → platform dependency for
 `storage::TraceRepository`; the provider dependency is also downward: the agent
 runtime layer drives `provider::System`, while `oran-provider` never calls back

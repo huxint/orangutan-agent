@@ -4,12 +4,16 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <bit>
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <expected>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <random>
 #include <span>
 #include <string>
 #include <string_view>
@@ -182,6 +186,41 @@ void add_usage(provider::Usage& total, const provider::Usage& next) {
 
 [[nodiscard]] bool trace_writer_configured(const RunTurnInputs& inputs) noexcept {
   return inputs.trace.enabled && inputs.trace.repository != nullptr;
+}
+
+void write_u64_be(core::TurnId& id, std::size_t offset, std::uint64_t value) noexcept {
+  for (std::size_t index = 0; index < 8; ++index) {
+    const auto shift = static_cast<unsigned>((7 - index) * 8);
+    id[offset + index] = static_cast<std::byte>((value >> shift) & 0xffU);
+  }
+}
+
+[[nodiscard]] core::Result<core::TurnId> generate_turn_id() {
+  try {
+    static std::atomic<std::uint64_t> sequence{0};
+    std::random_device random;
+    const auto random_hi = static_cast<std::uint64_t>(random()) << 32U;
+    const auto random_lo = static_cast<std::uint64_t>(random());
+    const auto entropy = random_hi | random_lo;
+    const auto counter = sequence.fetch_add(1, std::memory_order_relaxed) + 1U;
+    const auto timestamp = static_cast<std::uint64_t>(now_epoch_ns());
+
+    core::TurnId id{};
+    write_u64_be(id, 0, entropy ^ std::rotl(timestamp, 17));
+    write_u64_be(id, 8, counter ^ std::rotl(entropy, 31) ^ timestamp);
+
+    id[6] = (id[6] & std::byte{0x0f}) | std::byte{0x40};
+    id[8] = (id[8] & std::byte{0x3f}) | std::byte{0x80};
+    if (core::is_zero_turn_id(id)) {
+      id[15] = std::byte{0x01};
+    }
+    return id;
+  } catch (const std::exception& error) {
+    return std::unexpected(
+        core::Error::internal("agent loop: failed to generate turn id").with("reason", error.what()));
+  } catch (...) {
+    return std::unexpected(core::Error::internal("agent loop: failed to generate turn id").with("reason", "unknown"));
+  }
 }
 
 [[nodiscard]] core::Result<storage::AppendTraceTurnRequest>
@@ -376,6 +415,14 @@ public:
 
   [[nodiscard]] async::Awaitable<core::Result<RunTurnResult>> run_turn(RunTurnInputs inputs,
                                                                        provider::EventSink* sink) {
+    if (trace_writer_configured(inputs) && !inputs.turn_id.has_value()) {
+      auto generated = generate_turn_id();
+      if (!generated) {
+        co_return std::unexpected(std::move(generated).error());
+      }
+      inputs.turn_id = *generated;
+    }
+
     std::vector<core::Message> transcript{inputs.conversation_tail.begin(), inputs.conversation_tail.end()};
     auto total_usage = provider::Usage{};
     const auto started_at_ns = now_epoch_ns();

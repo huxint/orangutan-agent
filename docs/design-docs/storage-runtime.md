@@ -673,6 +673,7 @@ Slice 78 deliberately stopped at the storage primitive. Slice 79 threads a typed
 turn id through `agent::Loop`, `tool::DispatchContext`, and the permission audit
 sink so tool audit rows can join against `trace_turns` rows. Slice 80 adds the
 first consumer: `agent::Loop` appends one row for terminal-success turns when
-callers supply `RunTurnInputs::trace.repository` and `RunTurnInputs::turn_id`.
-Cancellation/error rows, trace retention/config, and the CLI inspector remain
-downstream.
+callers supply `RunTurnInputs::trace.repository` and a turn id. Slice 85 lets the
+loop generate that turn id when a trace writer is configured and callers leave
+it unset. Iteration-cap rows, trace retention/config, and the CLI inspector
+remain downstream.

@@ -56,11 +56,13 @@ makes the existing audit rows joinable. Nothing else.
 
 - **`oran-storage::TraceRepository`** — new repository neighbour of
   the existing `SessionRepository` and `AuditRepository`. Schema:
-  **Status (slice 84, 2026-05-24):** the storage foundation, the first
+  **Status (slice 85, 2026-05-24):** the storage foundation, the first
   direct-dispatch audit join key, the first terminal-success loop writer, the
   explicit trace-disabled loop policy, and provider/tool cancellation trace
   rows are shipped. The first ordinary error rows are also shipped for
   non-cancelled provider failures and response-backed loop-boundary failures.
+  `agent::Loop` now generates a non-zero turn id when an enabled trace writer
+  is configured and callers leave `RunTurnInputs::turn_id` unset.
   `<oran/storage.hpp>` exports `TraceRepository`, `TraceId`,
   `AppendTraceTurnRequest`, `TraceTurnRecord`, and
   `ListTraceTurnsOptions`; `src/oran-storage/migrations/audit/0002-trace-turns-initial.sql`
@@ -114,9 +116,10 @@ makes the existing audit rows joinable. Nothing else.
 - **`oran-core::TurnId`** — 16-byte UUID type (existing pattern; new
   alias if no equivalent exists). Generated at turn start; passed
   through every dispatch context, every audit event, every hook
-  payload. **Status (slice 79):** `core::TurnId` is the shared 16-byte
-  `std::array<std::byte, 16>` value shape; generation remains owned by the
-  future trace writer.
+  payload. **Status (slice 85):** `core::TurnId` is the shared 16-byte
+  `std::array<std::byte, 16>` value shape; `agent::Loop` generates the first
+  trace-owned ids when a trace writer is configured and the caller does not
+  provide one.
 - **`permission::AuditEvent::parent_turn_id`** field promoted from a
   `context` map entry to a typed column on `audit_events`. The
   migration is additive (new column with a default of
@@ -133,30 +136,34 @@ makes the existing audit rows joinable. Nothing else.
   threads `TurnId`, `parent_turn_id`, identity, route, cancellation
   slot, and stable service refs through every callsite. The
   agent-loop-foundation note's "phase 1" (Build `TurnContext`) is
-  exactly this. **Status (slice 84):** the public interim surface is
+  exactly this. **Status (slice 85):** the public interim surface is
   `RunTurnInputs::turn_id`; when set and trace is enabled, direct tool
   dispatches receive it as `DispatchContext::parent_turn_id`. When the turn id
-  is unset or `RunTurnInputs::trace.enabled=false`, the loop forces
+  is unset but an enabled trace writer is configured, the loop generates one
+  before the first prompt render and uses it for both `trace_turns.turn_id` and
+  direct-dispatch audit parents. When trace is disabled, the loop forces
   `parent_turn_id = NULL` for the dispatch duration and restores any reusable
   context value afterward. Slice 80 adds the optional `RunTurnInputs::trace`
   context (`TraceRepository`, session id, parent turn id, agent key, origin,
   redacted context JSON) used by the first terminal-success writer; slice 82
   adds the explicit `enabled` gate; slice 83 writes cancelled trace rows using
   the same turn context; slice 84 writes ordinary provider and loop-boundary
-  error rows with the same context.
+  error rows; slice 85 generates missing trace turn ids.
 - **Turn-finished publisher**. `agent::Loop::run_turn` writes one
   `trace_turns` row at terminal stop reason. The write is
   *synchronous* w.r.t. the user-visible response (the loop awaits
   the insert before returning) so the row is durable before the
   agent answers. The cost is one SQLite insert per turn (≤ 30 µs
-  per the existing `bench-storage` numbers). **Status (slice 84):**
+  per the existing `bench-storage` numbers). **Status (slice 85):**
   shipped for trace-enabled terminal-success stop reasons (`end_turn`,
   `stop_sequence`, `max_tokens`) through `RunTurnInputs::trace`; explicit
   `TraceContext::enabled=false` skips the insert entirely. Parent-cancelled
   provider/tool failures also write `stop_reason=cancelled` rows after
   briefly shielding the insert from the parent cancellation state. Non-cancelled
   provider errors and response-backed loop-boundary failures write
-  `stop_reason=error` rows while preserving the original returned error.
+  `stop_reason=error` rows while preserving the original returned error. The
+  writer now generates a turn id when a trace repository is configured and the
+  caller leaves `RunTurnInputs::turn_id` empty.
   Iteration-cap rows remain downstream.
 - **Redaction policy**. The trace row never carries raw prompt
   bytes, raw tool inputs, raw memory facts, or raw provider
@@ -242,17 +249,19 @@ makes the existing audit rows joinable. Nothing else.
 2. **Cause-chain join.** A single-tool turn (spec 0017 scenario #2)
    produces one trace row + one audit row whose `parent_turn_id`
    matches the trace row's `turn_id`. The join query in the CLI
-   inspector returns both. **Status (slice 80):** the storage join is shipped
-   for direct dispatch when callers configure `RunTurnInputs::turn_id` plus
-   `RunTurnInputs::trace`; CLI inspection remains downstream.
+   inspector returns both. **Status (slice 85):** the storage join is shipped
+   for direct dispatch when callers configure `RunTurnInputs::trace`; callers
+   may provide `RunTurnInputs::turn_id`, and otherwise the loop generates one
+   before dispatch. CLI inspection remains downstream.
 3. **Multi-tool fan-out.** A multi-tool turn (spec 0017 scenario
    #3, sequential dispatch in v1) produces one trace row + N audit
    rows, all sharing the same `parent_turn_id`. Sorted by
    `started_at_ns`, the audit rows preserve the original
-   `tool_use` order. **Status (slice 80):** direct sequential dispatch stamps
+   `tool_use` order. **Status (slice 85):** direct sequential dispatch stamps
    every tool audit row with the same loop turn id, preserves the existing
-   tool-use order at the loop boundary, and terminal-success turns write the
-   parent trace row. Dedicated N-tool storage-join coverage remains downstream.
+   tool-use order at the loop boundary, terminal-success turns write the
+   parent trace row, and missing turn ids are generated when trace is
+   configured. Dedicated N-tool storage-join coverage remains downstream.
 4. **Cancellation phase recorded.** Cancellation during provider
    await (spec 0017 scenario #9) produces a trace row with
    `cancellation_phase='provider'`, `stop_reason='cancelled'`.

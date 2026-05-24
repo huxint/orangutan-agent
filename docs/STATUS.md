@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 84 (`xmake run orangutan` reports slice 84)
+- **Slice:** 85 (`xmake run orangutan` reports slice 85)
 - **Last completed history:**
-  [`histories/2026-05/20260524-1310-agent-error-trace-rows.md`](histories/2026-05/20260524-1310-agent-error-trace-rows.md)
+  [`histories/2026-05/20260524-1325-agent-trace-turn-id-generation.md`](histories/2026-05/20260524-1325-agent-trace-turn-id-generation.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
@@ -17,7 +17,19 @@
   and did not need a new plan because they stayed under the existing spec-0017
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 84 lands the
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 85 lands
+  loop-owned trace turn-id generation for spec-0018. When
+  `RunTurnInputs::trace` has an enabled `TraceRepository` and the caller does
+  not provide `RunTurnInputs::turn_id`, `agent::Loop` now generates a non-zero
+  version/variant-shaped 16-byte turn id before the first prompt render. The
+  generated id is used for the `trace_turns.turn_id` row and for every direct
+  `audit_events.parent_turn_id` stamped during that turn, preserving the
+  trace/audit join without requiring test-only or future bootstrap callers to
+  pre-fill the id. Trace-disabled and repository-less pre-trace callers still
+  keep `parent_turn_id = NULL` unless they explicitly supply a turn id.
+  `test-agent` now reports 22 cases / 345 assertions. Config-to-loop wiring,
+  hook publish rows, iteration-cap trace rows, CLI `--trace`, and binary
+  handoff remain downstream. Slice 84 lands the
   first ordinary error trace rows for spec-0018's loop-owned writer.
   `agent::Loop` now writes a durable `trace_turns` row with
   `stop_reason=error` before returning a non-cancelled provider error, using
@@ -30,10 +42,9 @@
   usage observed before the error. Parent-cancelled provider/tool paths still
   take the slice-83 `cancelled` writer and do not perform any extra await while
   a terminal cancellation is active unless the cancellation row path has first
-  reset the coroutine cancellation state. `test-agent` now reports 21 cases /
-  328 assertions. Iteration-cap trace rows, turn-id generation, config-to-loop
-  wiring, hook publish rows, CLI `--trace`, and binary handoff remain
-  downstream. Slice 83 lands the first cancellation trace rows for spec-0018
+  reset the coroutine cancellation state. Config-to-loop wiring, hook publish
+  rows, CLI `--trace`, and binary handoff remain downstream. Slice 83 lands the
+  first cancellation trace rows for spec-0018
   AC4. `agent::Loop` now writes a durable `trace_turns` row with
   `stop_reason=cancelled` and `cancellation_phase=provider|tools` when parent
   cancellation lands during the provider await or direct tool dispatch and
@@ -54,8 +65,8 @@
   `tool::DispatchContext::parent_turn_id` after the dispatch finishes.
   `test-agent` covers the policy with a storage-backed single-tool turn.
   Bootstrap still does not map
-  `config::TraceConfig` into loop inputs; turn-id generation, hook publish
-  rows, CLI `--trace`, and binary handoff remain downstream. Slice 81 lands the
+  `config::TraceConfig` into loop inputs; hook publish rows, CLI `--trace`,
+  and binary handoff remain downstream. Slice 81 lands the
   typed operator trace policy surface: `config::TraceConfig` and
   `Config::trace()` parse the top-level `trace.enabled`,
   `trace.store_raw_bodies`, and `trace.retention_days` block documented by
@@ -70,8 +81,9 @@
   provider turns. `agent::RunTurnInputs::trace` carries a non-owning
   `storage::TraceRepository*`, `session_id`, optional `parent_turn_id`,
   `agent_key`, `origin`, and redacted `context_json`; when callers also supply
-  `RunTurnInputs::turn_id`, `agent::Loop` awaits one `TraceRepository::append_turn`
-  before returning terminal `end_turn` / `stop_sequence` / `max_tokens` results.
+  `RunTurnInputs::turn_id`, or slice 85 generates one for a configured trace
+  writer, `agent::Loop` awaits one `TraceRepository::append_turn` before
+  returning terminal `end_turn` / `stop_sequence` / `max_tokens` results.
   The row records route profile/model, start/finish timestamps, stop reason,
   iteration count, prompt prefix hash/bytes, active/deferred catalog hashes,
   aggregate provider usage tokens/cost, cache token counters, and body-free
@@ -80,9 +92,10 @@
   now has both sides of the cause-chain join. `test-agent` covers single-text
   trace rows, storage-backed tool-audit correlation, the slice-82 disabled
   policy case, the slice-83 provider/tool cancellation trace rows, and the
-  slice-84 provider/loop-boundary error trace rows (21 cases / 328 assertions).
-  Iteration-cap trace rows, turn-id generation, config-to-loop wiring, hook
-  publish rows, CLI `--trace`, and binary handoff remain downstream.
+  slice-84 provider/loop-boundary error trace rows, and the slice-85 generated
+  turn-id trace/audit join path (22 cases / 345 assertions). Iteration-cap
+  trace rows, config-to-loop wiring, hook publish rows, CLI `--trace`, and
+  binary handoff remain downstream.
   Slice 79 threads the first spec-0018 cause-chain id through the direct
   tool-dispatch path. `oran-core` now owns `core::TurnId`, the shared 16-byte
   value shape used by storage trace ids and audit correlation. `storage::TraceId`
