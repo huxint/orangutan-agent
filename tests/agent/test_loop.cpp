@@ -1374,3 +1374,73 @@ TEST_CASE("Loop stops repeated tool_use turns at the iteration cap", "[unit][age
     REQUIRE(audit.events().size() == 2);
   });
 }
+
+TEST_CASE("Loop persists iteration-cap trace rows", "[unit][agent][loop][trace]") {
+  TempDb db{"oran-agent-loop-trace-iteration-cap"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_trace_pool(io, db);
+    storage::TraceRepository trace{pool};
+    auto migrated = co_await trace.migrate();
+    REQUIRE(migrated.has_value());
+
+    RecordingSequenceProvider provider{std::vector<provider::Response>{
+        provider::Response{
+            .blocks = {core::ToolUseContent{.id = "t1", .name = "file.read", .input_json = "{}"}},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = provider::Usage{.input_tokens = 4,
+                                     .output_tokens = 1,
+                                     .cache_creation_tokens = 0,
+                                     .cache_read_tokens = 0,
+                                     .cost_estimate = std::nullopt},
+            .model_used = std::nullopt,
+        },
+        provider::Response{
+            .blocks = {core::ToolUseContent{.id = "t2", .name = "file.read", .input_json = "{}"}},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = provider::Usage{.input_tokens = 6,
+                                     .output_tokens = 2,
+                                     .cache_creation_tokens = 0,
+                                     .cache_read_tokens = 0,
+                                     .cost_estimate = std::nullopt},
+            .model_used = std::string{"iteration-final"},
+        },
+    }};
+    agent::Loop loop{provider, default_route(), agent::LoopOptions{.max_iterations = 2}};
+    tool::Registry registry;
+    add_canned_tool(registry, canned_tool_def("file.read"), "read");
+    auto rules = allow_all_rules();
+    permission::RecordingAuditSink audit;
+    auto ctx = dispatch_context(io, rules, audit);
+
+    const auto catalog = registry.catalog();
+    const std::vector<core::Message> tail{core::Message::user_text("cap trace")};
+    auto inputs = base_inputs(catalog, tail);
+    inputs.tools = &registry;
+    inputs.dispatch_context = &ctx;
+    inputs.turn_id = turn_id_with(0x55);
+    inputs.trace = agent::TraceContext{
+        .repository = &trace,
+        .session_id = turn_id_with(0x90),
+        .agent_key = "coder",
+        .origin = "cli",
+    };
+    auto result = co_await loop.run_turn(inputs);
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::internal);
+    REQUIRE(contains_context(result.error(), "reason", "iteration_cap"));
+    REQUIRE(contains_context(result.error(), "max_iterations", "2"));
+
+    auto row = co_await trace.get_turn(turn_id_with(0x55));
+    REQUIRE(row.has_value());
+    REQUIRE(row->has_value());
+    REQUIRE((*row)->turn_id == turn_id_with(0x55));
+    REQUIRE((*row)->session_id == turn_id_with(0x90));
+    REQUIRE((*row)->stop_reason == "error");
+    REQUIRE((*row)->iteration_count == 2);
+    REQUIRE((*row)->route_model == "iteration-final");
+    REQUIRE((*row)->input_tokens == 10);
+    REQUIRE((*row)->output_tokens == 3);
+    REQUIRE_FALSE((*row)->cancellation_phase.has_value());
+  });
+}

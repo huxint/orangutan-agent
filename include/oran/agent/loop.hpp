@@ -155,6 +155,10 @@ public:
   /// `ErrorKind::cancelled` with `reason=parent_cancelled` plus
   /// `cancellation_phase=provider|tools`; when a trace context is configured,
   /// the same phase is persisted before the cancelled result is returned.
+  /// When `LoopOptions::max_iterations` is exhausted by repeated tool_use
+  /// responses and a trace context is configured, an `error` row is written
+  /// with the final iteration's rendered prompt and the cumulative usage
+  /// before the existing `Error::internal` (reason=`iteration_cap`) returns.
   [[nodiscard]] async::Awaitable<core::Result<RunTurnResult>> run_turn(RunTurnInputs inputs,
                                                                        provider::EventSink* sink = nullptr);
 

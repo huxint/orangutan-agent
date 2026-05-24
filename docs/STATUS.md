@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 85 (`xmake run orangutan` reports slice 85)
+- **Slice:** 86 (`xmake run orangutan` reports slice 86)
 - **Last completed history:**
-  [`histories/2026-05/20260524-1325-agent-trace-turn-id-generation.md`](histories/2026-05/20260524-1325-agent-trace-turn-id-generation.md)
+  [`histories/2026-05/20260524-1340-agent-iteration-cap-trace-rows.md`](histories/2026-05/20260524-1340-agent-iteration-cap-trace-rows.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
@@ -17,7 +17,21 @@
   and did not need a new plan because they stayed under the existing spec-0017
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 85 lands
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 86 closes the
+  last loop-owned spec-0018 writer gap by persisting iteration-cap exits.
+  When `LoopOptions::max_iterations` is exhausted by repeated tool_use
+  responses and `RunTurnInputs::trace` has an enabled `TraceRepository`,
+  `agent::Loop` now writes a body-free `trace_turns` row with
+  `stop_reason=error`, `iteration_count = LoopOptions::max_iterations`, the
+  final iteration's rendered prompt prefix hash/bytes and active/deferred
+  catalog hashes, the aggregated provider usage, and the last response's
+  model id (falling back to the primary route model when the final response
+  omitted one). The existing `Error::internal` with `reason=iteration_cap`
+  is still returned unchanged afterwards, and trace-disabled or
+  repository-less callers still take the legacy no-row path.
+  `test-agent` now reports 23 cases / 363 assertions. Config-to-loop wiring,
+  hook publish rows, CLI `--trace`, and binary handoff remain downstream.
+  Slice 85 lands
   loop-owned trace turn-id generation for spec-0018. When
   `RunTurnInputs::trace` has an enabled `TraceRepository` and the caller does
   not provide `RunTurnInputs::turn_id`, `agent::Loop` now generates a non-zero
@@ -28,7 +42,7 @@
   pre-fill the id. Trace-disabled and repository-less pre-trace callers still
   keep `parent_turn_id = NULL` unless they explicitly supply a turn id.
   `test-agent` now reports 22 cases / 345 assertions. Config-to-loop wiring,
-  hook publish rows, iteration-cap trace rows, CLI `--trace`, and binary
+  hook publish rows, CLI `--trace`, and binary
   handoff remain downstream. Slice 84 lands the
   first ordinary error trace rows for spec-0018's loop-owned writer.
   `agent::Loop` now writes a durable `trace_turns` row with
@@ -425,7 +439,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-tool`: 166 cases / 1588 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 11 cases / 89 assertions.
-- `oran-agent`: 14 cases / 154 assertions.
+- `oran-agent`: 23 cases / 363 assertions.
 - `oran-cli`: 5 cases / 30 assertions.
 - `oran-bootstrap`: 48 cases / 173 assertions.
 

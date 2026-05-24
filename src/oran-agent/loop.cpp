@@ -429,6 +429,8 @@ public:
     const auto native_tools = request_tools_for(inputs.tool_catalog, inputs.active_tools, inputs.promoted_tools);
     const auto thinking_budget =
         inputs.thinking_budget.has_value() ? inputs.thinking_budget : route_.primary.thinking_budget;
+    std::optional<prompt::RenderedPrompt> last_rendered;
+    std::string last_route_model = route_.primary.model;
 
     for (std::uint32_t iteration = 1; iteration <= options_.max_iterations; ++iteration) {
       auto rendered = co_await builder_.build(prompt::BuilderInputs{
@@ -496,6 +498,8 @@ public:
       }
 
       add_usage(total_usage, response->usage);
+      last_rendered = *rendered;
+      last_route_model = response->model_used.value_or(route_.primary.model);
 
       const auto tool_uses = tool_uses_in(response->blocks);
       if (response->stop_reason == core::StopReason::tool_use || !tool_uses.empty()) {
@@ -636,6 +640,18 @@ public:
       };
     }
 
+    if (trace_writer_configured(inputs) && last_rendered.has_value()) {
+      auto traced = co_await write_error_trace_turn(inputs,
+                                                    route_,
+                                                    *last_rendered,
+                                                    total_usage,
+                                                    options_.max_iterations,
+                                                    started_at_ns,
+                                                    last_route_model);
+      if (!traced) {
+        co_return std::unexpected(std::move(traced).error());
+      }
+    }
     co_return std::unexpected(iteration_cap_error(options_.max_iterations));
   }
 

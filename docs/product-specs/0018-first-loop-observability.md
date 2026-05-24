@@ -56,13 +56,15 @@ makes the existing audit rows joinable. Nothing else.
 
 - **`oran-storage::TraceRepository`** — new repository neighbour of
   the existing `SessionRepository` and `AuditRepository`. Schema:
-  **Status (slice 85, 2026-05-24):** the storage foundation, the first
+  **Status (slice 86, 2026-05-24):** the storage foundation, the first
   direct-dispatch audit join key, the first terminal-success loop writer, the
   explicit trace-disabled loop policy, and provider/tool cancellation trace
   rows are shipped. The first ordinary error rows are also shipped for
   non-cancelled provider failures and response-backed loop-boundary failures.
   `agent::Loop` now generates a non-zero turn id when an enabled trace writer
-  is configured and callers leave `RunTurnInputs::turn_id` unset.
+  is configured and callers leave `RunTurnInputs::turn_id` unset, and persists
+  iteration-cap exits with a body-free `stop_reason=error` row before the
+  existing `Error::internal` (reason=`iteration_cap`) returns.
   `<oran/storage.hpp>` exports `TraceRepository`, `TraceId`,
   `AppendTraceTurnRequest`, `TraceTurnRecord`, and
   `ListTraceTurnsOptions`; `src/oran-storage/migrations/audit/0002-trace-turns-initial.sql`
@@ -76,9 +78,10 @@ makes the existing audit rows joinable. Nothing else.
   The repository covers append/get/list/count, audit-v1-to-trace-v2/v3
   upgrade, and validation; `agent::Loop` now uses it for terminal-success rows,
   skips it when `TraceContext::enabled=false`, writes cancelled rows for
-  provider/tool parent cancellation, and writes ordinary provider/loop-boundary
-  error rows. Iteration-cap rows, hook publish rows, config-to-loop wiring, and
-  the CLI inspector remain downstream.
+  provider/tool parent cancellation, writes ordinary provider/loop-boundary
+  error rows, and writes iteration-cap error rows when
+  `LoopOptions::max_iterations` is exhausted. Hook publish rows, config-to-loop
+  wiring, and the CLI inspector remain downstream.
   ```sql
   CREATE TABLE trace_turns (
     turn_id           BLOB PRIMARY KEY,             -- 16-byte UUID
@@ -163,8 +166,12 @@ makes the existing audit rows joinable. Nothing else.
   provider errors and response-backed loop-boundary failures write
   `stop_reason=error` rows while preserving the original returned error. The
   writer now generates a turn id when a trace repository is configured and the
-  caller leaves `RunTurnInputs::turn_id` empty.
-  Iteration-cap rows remain downstream.
+  caller leaves `RunTurnInputs::turn_id` empty. Slice 86 also writes a
+  `stop_reason=error` row when `LoopOptions::max_iterations` is exhausted by
+  repeated tool_use responses; the row records the final iteration's prompt
+  hashes/bytes, the aggregated provider usage, and the last response's model
+  id (falling back to the primary route model) before the existing
+  `Error::internal` (reason=`iteration_cap`) returns.
 - **Redaction policy**. The trace row never carries raw prompt
   bytes, raw tool inputs, raw memory facts, or raw provider
   responses. Only hashes, byte counts, token counts, identifiers,
