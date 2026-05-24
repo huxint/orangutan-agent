@@ -227,6 +227,48 @@ TEST_CASE("run hands CLI arguments to oran-cli after config load", "[unit][boots
   REQUIRE(*result == 0);
 }
 
+TEST_CASE("run preflights configured default provider route before CLI handoff", "[unit][bootstrap][provider]") {
+  TempDir temp{"oran-bootstrap-provider-route"};
+  const auto config_path = temp.path() / "config.json";
+  write_file(config_path, kConfigText);
+  auto config_arg = config_path.string();
+  auto args = std::vector<std::string_view>{"--config", config_arg, "--prompt", "hello"};
+
+  auto result = bootstrap::run(options(args, temp.path()));
+
+  REQUIRE(result.has_value());
+  REQUIRE(*result == 0);
+}
+
+TEST_CASE("run rejects invalid provider route config before CLI handoff", "[unit][bootstrap][provider]") {
+  TempDir temp{"oran-bootstrap-provider-route-bad"};
+  const auto config_path = temp.path() / "config.json";
+  write_file(config_path, R"json(
+{
+  "profiles": {
+    "bad": {
+      "provider": "telepathy",
+      "model": "unknown",
+      "base_url": "http://127.0.0.1:1",
+      "api_key_env": "BAD_API_KEY"
+    }
+  },
+  "routes": {
+    "default": {
+      "primary": "bad"
+    }
+  }
+}
+)json");
+  auto config_arg = config_path.string();
+  auto args = std::vector<std::string_view>{"--config", config_arg, "--prompt", "hello"};
+
+  auto result = bootstrap::run(options(args, temp.path()));
+
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(result.error().kind() == core::ErrorKind::config);
+}
+
 TEST_CASE("run returns CLI argument errors after config load", "[unit][bootstrap]") {
   TempDir temp{"oran-bootstrap-cli-error"};
   auto args = std::vector<std::string_view>{"--unknown"};

@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 98 (`xmake run orangutan` reports slice 98)
+- **Slice:** 99 (`xmake run orangutan` reports slice 99)
 - **Last completed history:**
-  [`histories/2026-05/20260525-0709-provider-route-resolver.md`](histories/2026-05/20260525-0709-provider-route-resolver.md)
+  [`histories/2026-05/20260525-0726-bootstrap-provider-route-preflight.md`](histories/2026-05/20260525-0726-bootstrap-provider-route-preflight.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
@@ -18,7 +18,21 @@
   plan because they stayed under the existing spec-0015/0017/0018
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 98 lands
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 99 consumes
+  the route resolver at the binary boundary. Regular `bootstrap::run` startup
+  now preflights the configured `default` provider route whenever config
+  declares routes, prints
+  `provider route: default primary=<profile>/<model> protocol=<kind>
+  fallbacks=<n>` plus ordered fallback rows, and returns the resolver's
+  `Error::config` before CLI handoff when route/profile/protocol references are
+  invalid. Built-in empty defaults still report `provider route: none
+  configured` and continue to the deterministic pre-loop CLI shell; no provider
+  credentials are read, no adapter is constructed, no network request is sent,
+  and `agent::Loop` is still not started. `oran-bootstrap` now declares its
+  direct `oran-provider` dependency. Focused result: `test-bootstrap` 59
+  cases / 230 assertions. Remaining handoff work: construct a provider system,
+  wrap it in `provider::execution::Runtime`, bind `cli::OperatorPromptSink`,
+  and drive `agent::Loop` from the real CLI path. Slice 98 lands
   the config-to-provider route resolver required before loop/binary handoff.
   `<oran/provider/route_resolver.hpp>` exports
   `provider::resolve_route(const config::Config&, std::string_view)`, which

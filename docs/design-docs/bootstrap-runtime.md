@@ -113,11 +113,17 @@ The current `orangutan` binary prints:
 - version / slice banner,
 - config source and path,
 - profile / route / worker / web summary,
+- default provider-route summary when config declares routes (or
+  `provider route: none configured` for the built-in empty defaults),
 - runtime assembly summary including audit path, workspace root, trace state, and
   blocking hook timeout,
 - the `oran-cli` mode output.
 
-No provider credentials are read and no agent runtime loop is started in this slice.
+When config declares routes, bootstrap resolves the `default` route through
+`provider::resolve_route` before CLI handoff so profile/reference/protocol
+configuration errors fail at startup instead of at the future loop boundary. No
+provider credentials are read, no provider adapter is constructed, and no agent
+runtime loop is started in this slice.
 The runtime assembly opens the audit DB when audit is enabled so migrations, trace
 repository ownership, and audit sinks are ready before the future loop handoff.
 

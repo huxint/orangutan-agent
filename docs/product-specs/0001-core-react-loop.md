@@ -17,6 +17,10 @@ with persistent session history and a CLI surface. The first deliverable is "I c
   - `--help` / `-h` prints the current bootstrap usage.
   - The current CLI shell is deterministic and pre-agent-loop; it accepts prompts but
     does not call a provider yet.
+  - When config declares routes, bootstrap preflights the `default` provider route
+    through `provider::resolve_route`, reports the resolved primary/fallback summary,
+    and fails fast on bad profile references or provider spellings. Built-in empty
+    defaults still run without a provider route.
 - One agent runtime per process (multiplexing comes in spec 0004).
 - Anthropic Messages **and** OpenAI Chat Completions providers (one of the two
   configured + working end-to-end is acceptance; the other is built and bench-only).

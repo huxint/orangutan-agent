@@ -93,9 +93,9 @@ until the CLI/binary handoff slice has a dispatch path that can publish asks.
 ## Bootstrap Handoff
 
 `oran-bootstrap` consumes `--config`, `--config=...`, and global help. Arguments that are
-not bootstrap-owned are forwarded unchanged to `cli::run` after config loading. This keeps
-config discovery and terminal mode selection separate while preserving one process entry
-point.
+not bootstrap-owned are forwarded unchanged to `cli::run` after config loading and the
+default provider-route preflight. This keeps config discovery, provider-route validation,
+and terminal mode selection separate while preserving one process entry point.
 
 ## Next Steps
 

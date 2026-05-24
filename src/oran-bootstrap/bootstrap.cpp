@@ -29,6 +29,7 @@
 #include <oran/core/turn_id.hpp>
 #include <oran/hook.hpp>
 #include <oran/permission.hpp>
+#include <oran/provider.hpp>
 #include <oran/storage.hpp>
 #include <oran/tool/workspace.hpp>
 
@@ -38,7 +39,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice98";
+constexpr std::string_view kVersion = "2.0.0-slice99";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 
 struct ParsedArgs {
@@ -236,7 +237,8 @@ void print_usage() {
   std::println("usage: orangutan [--config <path>] [--explain-rules [--mode <m>] [--agent <name>]]");
   std::println("                  [--audit-init [<path>]] [--trace <turn-id>] [--prompt <text>] [--help]");
   std::println();
-  std::println("The current bootstrap slice loads config, then hands CLI modes to oran-cli.");
+  std::println(
+      "The current bootstrap slice loads config, preflights provider routes, then hands CLI modes to oran-cli.");
   std::println("--explain-rules prints the materialized permission rule set and exits;");
   std::println("                --mode picks the baseline (strict|default|permissive|sandboxed),");
   std::println("                --agent picks an `agents.<name>.permissions` overlay.");
@@ -521,6 +523,33 @@ void print_usage() {
   return 0;
 }
 
+[[nodiscard]] Result<std::optional<provider::Route>> resolve_default_provider_route(const config::Config& cfg) {
+  if (cfg.routes().empty()) {
+    return std::optional<provider::Route>{};
+  }
+  auto route = provider::resolve_route(cfg, "default");
+  if (!route) {
+    return std::unexpected(std::move(route).error());
+  }
+  return std::optional<provider::Route>{std::move(*route)};
+}
+
+void print_provider_route_summary(const provider::Route& route) {
+  std::println("provider route: default primary={}/{} protocol={} fallbacks={}",
+               route.primary.profile,
+               route.primary.model,
+               core::enum_name(route.primary.protocol),
+               route.fallbacks.size());
+  for (std::size_t index = 0; index < route.fallbacks.size(); ++index) {
+    const auto& fallback = route.fallbacks[index];
+    std::println("  fallback #{}: {}/{} protocol={}",
+                 index,
+                 fallback.profile,
+                 fallback.model,
+                 core::enum_name(fallback.protocol));
+  }
+}
+
 }  // namespace
 
 std::string_view to_string_view(ConfigSource source) noexcept {
@@ -663,6 +692,16 @@ core::Result<int> run(BootstrapOptions options) {
                loaded->value.web().enabled ? "enabled" : "disabled");
   if (!loaded->value.warnings().empty()) {
     std::println("config warnings: {}", loaded->value.warnings().size());
+  }
+
+  auto provider_route = resolve_default_provider_route(loaded->value);
+  if (!provider_route) {
+    return std::unexpected(std::move(provider_route).error());
+  }
+  if (provider_route->has_value()) {
+    print_provider_route_summary(**provider_route);
+  } else {
+    std::println("provider route: none configured");
   }
 
   // The runtime assembly composes the per-process permission infrastructure

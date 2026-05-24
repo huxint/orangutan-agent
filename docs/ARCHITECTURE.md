@@ -143,7 +143,11 @@ own test bucket, its own bench bucket, and its own public header set under
 > persist spec-0018 rows without owning a second DB handle; slice 92
 > adds the assembly-owned `hook::Bus` configured from
 > `config.hooks.timeout_ms`, exposing it via `RuntimeAssembly::hook_bus()`
-> for later agent/tool contexts; slice 16
+> for later agent/tool contexts; slice 99 preflights the configured default
+> provider route through `provider::resolve_route` during regular startup,
+> reports the resolved primary/fallback summary, and fails fast on route/profile
+> config errors before CLI handoff while still avoiding credentials, adapters,
+> network traffic, and `agent::Loop`; slice 16
 > adds `--mode` / `--agent` selectors to
 > `--explain-rules` via the public `parse_explain_rules_selector`
 > and `materialize_rules` helpers), the first `oran-cli` handoff shell plus
@@ -430,7 +434,7 @@ own test bucket, its own bench bucket, and its own public header set under
 | `oran-channel-webhook` | generic webhook adapter | `oran-channel`, `oran-http` |
 | `oran-web`           | HTTP web UI (cpp-httplib in skeleton, asio later) | `oran-agent`, `oran-orchestration`, `oran-http` |
 | `oran-cli`           | early REPL / single-shot shell plus slice-95 `OperatorPromptSink` for terminal `permission_ask_rendered` approvals (scripted answers for tests/noninteractive drivers, asio stdin read for interactive answers); planned slash commands and agent handoff | currently `oran-core`, `oran-async`, `oran-hook`; planned `oran-agent`, `oran-orchestration` |
-| `oran-bootstrap`     | process entry + config loading + CLI handoff + `--explain-rules` (with `--mode` / `--agent` selectors) + `--audit-init` + (slice 88) `--trace <turn-id>` operator inspector (32-char lowercase hex) that opens the workspace audit DB, runs the idempotent migration, looks up the trace row through `TraceRepository::get_turn`, lists joined audit rows through `AuditRepository::list_events_for_turn`, and renders both in `--explain-rules`-style lines (returns `Error::not_found` for missing DB or unknown turn id; slice 93 prints `kind=<event_kind>` for each audit row so `hook_publish` rows are distinguishable) + per-process `RuntimeAssembly` (bundles a fresh `permission::ApprovalBroker`, the active `permission::AuditSink`, the slice-41 assembly-owned `tool::Workspace` built from `permissions.workspace.extra_{read,write}_roots`, (slice 87) an optional `storage::TraceRepository` on the shared audit `Pool` when `config.trace().enabled` is `true` so the upcoming agent loop inherits spec-0018's per-turn writer, and (slice 92) the process `hook::Bus` configured from `config.hooks.timeout_ms`; defaults to `audit_enabled=true`, `trace_enabled=true`, and a 2000 ms hook timeout now that the migrations and hook foundation ship inside the binary) + the slice-23 `SignalScope` SIGINT/SIGTERM trap (`asio::signal_set` RAII, `release()` cancel + `signum()` capture) that `--audit-init` and `--trace` adopt so Ctrl-C / `kill` interrupt the one-shot `io_context` drain promptly, with `bootstrap::run` translating the resulting `Error::cancelled` into the shell-conventional `128 + signum` exit code | currently `oran-core`, `oran-async`, `oran-io`, `oran-storage`, `oran-config`, `oran-permission`, `oran-hook`, `oran-tool`, `oran-cli`; planned every public lib above |
+| `oran-bootstrap`     | process entry + config loading + provider-route preflight + CLI handoff + `--explain-rules` (with `--mode` / `--agent` selectors) + `--audit-init` + (slice 88) `--trace <turn-id>` operator inspector (32-char lowercase hex) that opens the workspace audit DB, runs the idempotent migration, looks up the trace row through `TraceRepository::get_turn`, lists joined audit rows through `AuditRepository::list_events_for_turn`, and renders both in `--explain-rules`-style lines (returns `Error::not_found` for missing DB or unknown turn id; slice 93 prints `kind=<event_kind>` for each audit row so `hook_publish` rows are distinguishable) + per-process `RuntimeAssembly` (bundles a fresh `permission::ApprovalBroker`, the active `permission::AuditSink`, the slice-41 assembly-owned `tool::Workspace` built from `permissions.workspace.extra_{read,write}_roots`, (slice 87) an optional `storage::TraceRepository` on the shared audit `Pool` when `config.trace().enabled` is `true` so the upcoming agent loop inherits spec-0018's per-turn writer, and (slice 92) the process `hook::Bus` configured from `config.hooks.timeout_ms`; defaults to `audit_enabled=true`, `trace_enabled=true`, and a 2000 ms hook timeout now that the migrations and hook foundation ship inside the binary) + the slice-23 `SignalScope` SIGINT/SIGTERM trap (`asio::signal_set` RAII, `release()` cancel + `signum()` capture) that `--audit-init` and `--trace` adopt so Ctrl-C / `kill` interrupt the one-shot `io_context` drain promptly, with `bootstrap::run` translating the resulting `Error::cancelled` into the shell-conventional `128 + signum` exit code | currently `oran-core`, `oran-async`, `oran-io`, `oran-storage`, `oran-config`, `oran-permission`, `oran-hook`, `oran-tool`, `oran-provider`, `oran-cli`; planned every public lib above |
 
 **Binaries** built on top:
 
@@ -498,8 +502,9 @@ own test bucket, its own bench bucket, and its own public header set under
 - `oran-bootstrap` now accepts `--config <path>` / `--config=<path>`. Explicit paths
   are required to load successfully; without `--config`, bootstrap loads
   `<workspace>/.orangutan/config.json` when present and uses built-in config defaults
-  when it is absent in this early runtime slice. After config loading, bootstrap hands
-  CLI mode flags such as `--prompt` to `oran-cli`.
+  when it is absent in this early runtime slice. After config loading, bootstrap
+  preflights the configured `default` provider route when routes exist, then hands CLI
+  mode flags such as `--prompt` to `oran-cli`.
 - The current typed surface covers `strict_config`, `runtime` (including
   `tool_output` caps and `prompt.active_tools`), `profiles`, `routes`,
   `session`, `web`, `trace`, `hooks.timeout_ms`, `permissions`, and
