@@ -73,8 +73,8 @@ proves the loop behaves correctly without a network.
     cancellation-observability prework at the loop boundary: provider-await
     cancellations and direct tool-dispatch cancellations keep returning
     `ErrorKind::cancelled`, now with `reason=parent_cancelled` plus
-    `cancellation_phase=provider|tools` so the future spec-0018 trace row
-    can record the phase without guessing. Slice 79 adds the first cause-chain
+    `cancellation_phase=provider|tools`; slice 83 records that phase in
+    spec-0018 trace rows when trace is configured. Slice 79 adds the first cause-chain
     join primitive: `RunTurnInputs::turn_id` is copied into
     `DispatchContext::parent_turn_id` for every direct tool dispatch in a
     traced loop turn. Slice 80 adds the
@@ -84,7 +84,8 @@ proves the loop behaves correctly without a network.
     success responses. Slice 82 adds `TraceContext::enabled=false` at the loop
     boundary: explicitly disabled turns write no trace row, install
     `parent_turn_id = NULL` during direct dispatch, and restore any reusable
-    dispatch-context parent id afterward.
+    dispatch-context parent id afterward. Slice 83 adds cancelled trace rows for
+    provider/tool parent cancellation.
   - The loop emits **one** `provider::Request` per iteration.
   - The provider emits **one** `provider::Response` per request (after
     streaming completes if streaming is enabled).
@@ -143,7 +144,7 @@ proves the loop behaves correctly without a network.
   uses the fake provider with a hand-written plan.
 - **`agent::Loop` MVP**. Wraps the seven phases listed in the deep
   review §What a better `oran-agent` should look like:
-  - **Status (slice 82, 2026-05-24):** `<oran/agent.hpp>` exports
+  - **Status (slice 83, 2026-05-24):** `<oran/agent.hpp>` exports
     `agent::Loop`, `LoopOptions`, `RunTurnInputs`, and `RunTurnResult`.
     The current implementation covers phases 3/4/5 for terminal text turns
     plus the first phase-6 sequential dispatch path for scenarios #2/#3/#4/#6:
@@ -151,7 +152,8 @@ proves the loop behaves correctly without a network.
     the existing registry boundary when caller-supplied services are present,
     append ordered tool-result messages, rebuild the prompt, and stop on a
     terminal text-style response or iteration cap. Provider/tool parent
-    cancellations are classified with `cancellation_phase=provider|tools`, and
+    cancellations are classified with `cancellation_phase=provider|tools` and
+    written to `trace_turns` when trace is configured, and
     direct dispatch audit rows can now carry the optional loop turn id as
     `parent_turn_id` when trace is enabled. Terminal-success turns can also
     append one body-free `trace_turns` row through the optional
@@ -189,13 +191,14 @@ proves the loop behaves correctly without a network.
   total_usage, wall_time)`. The turn row is the parent of every
   child tool audit row through `parent_event_id` — the field already
   exists in `permission::AuditEvent::context` but is unused. **Status
-  (slice 82):** the current trace direction moved to spec 0018's
+  (slice 83):** the current trace direction moved to spec 0018's
   `parent_turn_id` join key instead of `parent_event_id`: direct tool audit
   rows can carry the loop turn id, and terminal-success turns can write the
   matching `trace_turns` row. Explicitly disabled trace contexts preserve the
   trace-off audit shape by writing no row and keeping direct-dispatch
-  `parent_turn_id` NULL. Cancellation/error trace rows, hook rows,
-  config-to-loop wiring, and CLI inspection remain downstream.
+  `parent_turn_id` NULL. Parent-cancelled provider/tool phases now write
+  cancelled trace rows when trace is configured. Ordinary error trace rows,
+  hook rows, config-to-loop wiring, and CLI inspection remain downstream.
 - **CI runs against the fake provider only**. v1 CI gate:
   `xmake test test-agent` exercises all ten scenarios; no network
   is required, no API key is required, no flake budget is needed.
@@ -303,16 +306,18 @@ proves the loop behaves correctly without a network.
    sleeps `latency=10s`; the parent token fires at `t=100ms`. The
    loop returns `Error::cancelled` within `< 200ms`; the audit row
    records `stop_reason=cancelled, reason=parent_cancelled`. **Status
-   (slice 77):** the loop returns `ErrorKind::cancelled` with
-   `reason=parent_cancelled` and `cancellation_phase=provider`; the audit /
-   trace row remains future spec-0018 work.
+   (slice 83):** the loop returns `ErrorKind::cancelled` with
+   `reason=parent_cancelled` and `cancellation_phase=provider`, and writes a
+   `trace_turns` row with `stop_reason=cancelled` / `cancellation_phase=provider`
+   when trace is configured.
 9. **Cancellation during tool dispatch.** Scenario #10: the fake
    returns one `tool_use`; the tool handler sleeps long; the parent
    token fires; the loop returns `Error::cancelled` within `< 200ms`;
-   the tool audit row records `outcome=cancelled`. **Status (slice 77):**
+   the tool audit row records `outcome=cancelled`. **Status (slice 83):**
    the loop returns `ErrorKind::cancelled` with `reason=parent_cancelled`
-   and `cancellation_phase=tools`; the richer tool/turn audit rows remain
-   future work.
+   and `cancellation_phase=tools`, and writes a `trace_turns` row with
+   `stop_reason=cancelled` / `cancellation_phase=tools` when trace is configured.
+   Richer derived tool-rollup rows remain future work.
 10. **Iteration cap.** A fake that returns
     `tool_use` blocks forever causes the loop to terminate with
     `StopReason::error, reason=iteration_cap` after

@@ -2,9 +2,9 @@
 //
 // These tests intentionally stay inside spec 0017's fake-provider-first loop
 // envelope: prompt/request construction, direct sequential tool dispatch,
-// model-visible repair errors, terminal-success trace rows, cancellation-phase
-// tagging, and loop boundary errors. Provider retry/fallback, cancellation/error
-// trace rows, and the scheduler remain later slices.
+// model-visible repair errors, terminal-success trace rows, cancellation trace
+// rows, and loop boundary errors. Provider retry/fallback, non-cancellation
+// error trace rows, and the scheduler remain later slices.
 
 #include <oran/agent.hpp>
 
@@ -796,6 +796,172 @@ TEST_CASE("Loop disables trace rows and audit parent ids when trace is off", "[u
     REQUIRE_FALSE((*events)[0].parent_turn_id.has_value());
     REQUIRE(ctx.parent_turn_id.has_value());
     REQUIRE(*ctx.parent_turn_id == turn_id_with(0x70));
+  });
+}
+
+TEST_CASE("Loop persists provider cancellation trace rows", "[unit][agent][loop][trace][cancellation]") {
+  TempDb db{"oran-agent-loop-trace-provider-cancel"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_trace_pool(io, db);
+    storage::TraceRepository trace{pool};
+    auto migrated = co_await trace.migrate();
+    REQUIRE(migrated.has_value());
+
+    asio::cancellation_signal signal;
+    std::vector<provider::ScriptedTurn> plan;
+    plan.push_back(provider::ScriptedTurn{
+        .response =
+            provider::Response{
+                .blocks = {core::TextContent{.text = "late"}},
+                .stop_reason = core::StopReason::end_turn,
+                .usage = {},
+                .model_used = std::string{"never-used"},
+            },
+        .deltas = {},
+        .error = std::nullopt,
+        .latency = 1s,
+    });
+    provider::FakeProvider fake{std::move(plan)};
+    agent::Loop loop{fake, default_route()};
+
+    const auto catalog = loop_catalog();
+    const std::vector<core::Message> tail{core::Message::user_text("cancel provider trace")};
+    auto inputs = base_inputs(catalog, tail);
+    inputs.turn_id = turn_id_with(0x41);
+    inputs.trace = agent::TraceContext{
+        .repository = &trace,
+        .session_id = turn_id_with(0x80),
+        .agent_key = "coder",
+        .origin = "cli",
+    };
+
+    std::optional<core::Result<agent::RunTurnResult>> result;
+    std::exception_ptr failure;
+    asio::co_spawn(
+        io,
+        [&]() -> async::Awaitable<core::Result<agent::RunTurnResult>> { co_return co_await loop.run_turn(inputs); },
+        asio::bind_cancellation_slot(signal.slot(), [&](std::exception_ptr ep, core::Result<agent::RunTurnResult> r) {
+          failure = ep;
+          result = std::move(r);
+        }));
+
+    asio::post(io, [&] { signal.emit(asio::cancellation_type::terminal); });
+    while (!result.has_value() && !failure) {
+      auto tick = co_await async::sleep_for(io.get_executor(), 1ms);
+      REQUIRE(tick.has_value());
+    }
+    if (failure) {
+      std::rethrow_exception(failure);
+    }
+
+    REQUIRE(result.has_value());
+    REQUIRE_FALSE(result->has_value());
+    REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
+    REQUIRE(contains_context(result->error(), "cancellation_phase", "provider"));
+
+    auto row = co_await trace.get_turn(turn_id_with(0x41));
+    REQUIRE(row.has_value());
+    REQUIRE(row->has_value());
+    REQUIRE((*row)->turn_id == turn_id_with(0x41));
+    REQUIRE((*row)->session_id == turn_id_with(0x80));
+    REQUIRE((*row)->route_model == "fake-1");
+    REQUIRE((*row)->stop_reason == "cancelled");
+    REQUIRE((*row)->iteration_count == 1);
+    REQUIRE((*row)->input_tokens == 0);
+    REQUIRE((*row)->output_tokens == 0);
+    REQUIRE((*row)->cancellation_phase.has_value());
+    REQUIRE(*(*row)->cancellation_phase == "provider");
+  });
+}
+
+TEST_CASE("Loop persists tool cancellation trace rows", "[unit][agent][loop][trace][cancellation]") {
+  TempDb db{"oran-agent-loop-trace-tool-cancel"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_trace_pool(io, db);
+    storage::TraceRepository trace{pool};
+    auto migrated = co_await trace.migrate();
+    REQUIRE(migrated.has_value());
+
+    asio::cancellation_signal signal;
+    RecordingSequenceProvider provider{std::vector<provider::Response>{
+        provider::Response{
+            .blocks = {core::ToolUseContent{.id = "t1", .name = "file.read", .input_json = "{}"}},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = provider::Usage{.input_tokens = 9,
+                                     .output_tokens = 1,
+                                     .cache_creation_tokens = 2,
+                                     .cache_read_tokens = 3,
+                                     .cost_estimate = 0.004},
+            .model_used = std::string{"fake-tool-model"},
+        },
+    }};
+    agent::Loop loop{provider, default_route()};
+    tool::Registry registry;
+    auto handler = [](std::string_view, tool::DispatchContext& ctx) -> async::Awaitable<core::Result<tool::Output>> {
+      auto slept = co_await async::sleep_for(ctx.executor, 1s);
+      if (!slept) {
+        co_return std::unexpected(std::move(slept).error());
+      }
+      co_return tool::Output::text_only("late");
+    };
+    REQUIRE(registry.add(canned_tool_def("file.read"), std::move(handler)).has_value());
+    auto rules = allow_all_rules();
+    permission::RecordingAuditSink audit;
+    auto ctx = dispatch_context(io, rules, audit);
+
+    const auto catalog = registry.catalog();
+    const std::vector<core::Message> tail{core::Message::user_text("cancel tool trace")};
+    auto inputs = base_inputs(catalog, tail);
+    inputs.turn_id = turn_id_with(0x42);
+    inputs.trace = agent::TraceContext{
+        .repository = &trace,
+        .session_id = turn_id_with(0x80),
+        .agent_key = "coder",
+        .origin = "cli",
+    };
+    inputs.tools = &registry;
+    inputs.dispatch_context = &ctx;
+
+    std::optional<core::Result<agent::RunTurnResult>> result;
+    std::exception_ptr failure;
+    asio::co_spawn(
+        io,
+        [&]() -> async::Awaitable<core::Result<agent::RunTurnResult>> { co_return co_await loop.run_turn(inputs); },
+        asio::bind_cancellation_slot(signal.slot(), [&](std::exception_ptr ep, core::Result<agent::RunTurnResult> r) {
+          failure = ep;
+          result = std::move(r);
+        }));
+
+    asio::post(io, [&] { signal.emit(asio::cancellation_type::terminal); });
+    while (!result.has_value() && !failure) {
+      auto tick = co_await async::sleep_for(io.get_executor(), 1ms);
+      REQUIRE(tick.has_value());
+    }
+    if (failure) {
+      std::rethrow_exception(failure);
+    }
+
+    REQUIRE(result.has_value());
+    REQUIRE_FALSE(result->has_value());
+    REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
+    REQUIRE(contains_context(result->error(), "cancellation_phase", "tools"));
+
+    auto row = co_await trace.get_turn(turn_id_with(0x42));
+    REQUIRE(row.has_value());
+    REQUIRE(row->has_value());
+    REQUIRE((*row)->turn_id == turn_id_with(0x42));
+    REQUIRE((*row)->session_id == turn_id_with(0x80));
+    REQUIRE((*row)->route_model == "fake-tool-model");
+    REQUIRE((*row)->stop_reason == "cancelled");
+    REQUIRE((*row)->iteration_count == 1);
+    REQUIRE((*row)->input_tokens == 9);
+    REQUIRE((*row)->output_tokens == 1);
+    REQUIRE((*row)->cache_creation_tokens == 2);
+    REQUIRE((*row)->cache_read_tokens == 3);
+    REQUIRE((*row)->cost_estimate_usd == 0.004);
+    REQUIRE((*row)->cancellation_phase.has_value());
+    REQUIRE(*(*row)->cancellation_phase == "tools");
+    REQUIRE(audit.events().size() == 1);
   });
 }
 

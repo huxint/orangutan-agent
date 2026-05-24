@@ -17,6 +17,9 @@
 #include <variant>
 #include <vector>
 
+#include <asio/cancellation_state.hpp>
+#include <asio/this_coro.hpp>
+
 #include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/role.hpp>
@@ -177,6 +180,10 @@ void add_usage(provider::Usage& total, const provider::Usage& next) {
   return inputs.turn_id;
 }
 
+[[nodiscard]] bool trace_writer_configured(const RunTurnInputs& inputs) noexcept {
+  return inputs.trace.enabled && inputs.trace.repository != nullptr;
+}
+
 [[nodiscard]] core::Result<storage::AppendTraceTurnRequest>
 make_trace_request(const RunTurnInputs& inputs,
                    const provider::Route& route,
@@ -254,7 +261,7 @@ write_trace_turn(const RunTurnInputs& inputs,
                  std::string route_model,
                  core::StopReason stop_reason,
                  std::optional<std::string> cancellation_phase = std::nullopt) {
-  if (!inputs.trace.enabled || inputs.trace.repository == nullptr) {
+  if (!trace_writer_configured(inputs)) {
     co_return core::Result<void>{};
   }
   auto request = make_trace_request(inputs,
@@ -392,6 +399,21 @@ public:
       auto response = co_await provider_.send(std::move(request), route_, sink);
       if (!response) {
         auto error = with_cancellation_phase(std::move(response).error(), "provider");
+        if (error.kind() == core::ErrorKind::cancelled && trace_writer_configured(inputs)) {
+          co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+          auto traced = co_await write_trace_turn(inputs,
+                                                  route_,
+                                                  *rendered,
+                                                  total_usage,
+                                                  iteration,
+                                                  started_at_ns,
+                                                  route_.primary.model,
+                                                  core::StopReason::cancelled,
+                                                  std::string{"provider"});
+          if (!traced) {
+            co_return std::unexpected(std::move(traced).error());
+          }
+        }
         co_return std::unexpected(std::move(error));
       }
 
@@ -423,6 +445,22 @@ public:
           auto tool_result = tool_result_from(use.id, std::move(output));
           if (!tool_result) {
             auto error = with_cancellation_phase(std::move(tool_result).error(), "tools");
+            if (error.kind() == core::ErrorKind::cancelled && trace_writer_configured(inputs)) {
+              co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+              const auto route_model = response->model_used.value_or(route_.primary.model);
+              auto traced = co_await write_trace_turn(inputs,
+                                                      route_,
+                                                      *rendered,
+                                                      total_usage,
+                                                      iteration,
+                                                      started_at_ns,
+                                                      route_model,
+                                                      core::StopReason::cancelled,
+                                                      std::string{"tools"});
+              if (!traced) {
+                co_return std::unexpected(std::move(traced).error());
+              }
+            }
             co_return std::unexpected(std::move(error));
           }
           tool_results.emplace_back(std::move(*tool_result));

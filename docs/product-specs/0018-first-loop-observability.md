@@ -56,9 +56,10 @@ makes the existing audit rows joinable. Nothing else.
 
 - **`oran-storage::TraceRepository`** — new repository neighbour of
   the existing `SessionRepository` and `AuditRepository`. Schema:
-  **Status (slice 82, 2026-05-24):** the storage foundation, the first
-  direct-dispatch audit join key, the first terminal-success loop writer, and
-  the explicit trace-disabled loop policy are shipped.
+  **Status (slice 83, 2026-05-24):** the storage foundation, the first
+  direct-dispatch audit join key, the first terminal-success loop writer, the
+  explicit trace-disabled loop policy, and provider/tool cancellation trace
+  rows are shipped.
   `<oran/storage.hpp>` exports `TraceRepository`, `TraceId`,
   `AppendTraceTurnRequest`, `TraceTurnRecord`, and
   `ListTraceTurnsOptions`; `src/oran-storage/migrations/audit/0002-trace-turns-initial.sql`
@@ -71,9 +72,9 @@ makes the existing audit rows joinable. Nothing else.
   `parent_turn_id` fields on storage/permission audit requests and records.
   The repository covers append/get/list/count, audit-v1-to-trace-v2/v3
   upgrade, and validation; `agent::Loop` now uses it for terminal-success
-  rows and skips it when `TraceContext::enabled=false`. Cancellation/error rows,
-  hook publish rows, config-to-loop wiring, and the CLI inspector remain
-  downstream.
+  rows, skips it when `TraceContext::enabled=false`, and writes cancelled rows
+  for provider/tool parent cancellation. Ordinary error rows, hook publish rows,
+  config-to-loop wiring, and the CLI inspector remain downstream.
   ```sql
   CREATE TABLE trace_turns (
     turn_id           BLOB PRIMARY KEY,             -- 16-byte UUID
@@ -130,7 +131,7 @@ makes the existing audit rows joinable. Nothing else.
   threads `TurnId`, `parent_turn_id`, identity, route, cancellation
   slot, and stable service refs through every callsite. The
   agent-loop-foundation note's "phase 1" (Build `TurnContext`) is
-  exactly this. **Status (slice 82):** the public interim surface is
+  exactly this. **Status (slice 83):** the public interim surface is
   `RunTurnInputs::turn_id`; when set and trace is enabled, direct tool
   dispatches receive it as `DispatchContext::parent_turn_id`. When the turn id
   is unset or `RunTurnInputs::trace.enabled=false`, the loop forces
@@ -138,17 +139,20 @@ makes the existing audit rows joinable. Nothing else.
   context value afterward. Slice 80 adds the optional `RunTurnInputs::trace`
   context (`TraceRepository`, session id, parent turn id, agent key, origin,
   redacted context JSON) used by the first terminal-success writer; slice 82
-  adds the explicit `enabled` gate.
+  adds the explicit `enabled` gate; slice 83 writes cancelled trace rows using
+  the same turn context.
 - **Turn-finished publisher**. `agent::Loop::run_turn` writes one
   `trace_turns` row at terminal stop reason. The write is
   *synchronous* w.r.t. the user-visible response (the loop awaits
   the insert before returning) so the row is durable before the
   agent answers. The cost is one SQLite insert per turn (≤ 30 µs
-  per the existing `bench-storage` numbers). **Status (slice 82):**
+  per the existing `bench-storage` numbers). **Status (slice 83):**
   shipped for trace-enabled terminal-success stop reasons (`end_turn`,
   `stop_sequence`, `max_tokens`) through `RunTurnInputs::trace`; explicit
-  `TraceContext::enabled=false` skips the insert entirely. Cancellation/error
-  rows remain downstream.
+  `TraceContext::enabled=false` skips the insert entirely. Parent-cancelled
+  provider/tool failures also write `stop_reason=cancelled` rows after
+  briefly shielding the insert from the parent cancellation state. Ordinary
+  error rows remain downstream.
 - **Redaction policy**. The trace row never carries raw prompt
   bytes, raw tool inputs, raw memory facts, or raw provider
   responses. Only hashes, byte counts, token counts, identifiers,
@@ -248,11 +252,10 @@ makes the existing audit rows joinable. Nothing else.
    await (spec 0017 scenario #9) produces a trace row with
    `cancellation_phase='provider'`, `stop_reason='cancelled'`.
    Cancellation during tool dispatch (scenario #10) produces
-   `cancellation_phase='tools'`. **Status (slice 77):** the trace row is not
-   implemented yet, but `agent::Loop` now returns parent-cancelled provider /
-   tool failures with `reason=parent_cancelled` and
-   `cancellation_phase=provider|tools`, giving the future writer a stable
-   source value.
+   `cancellation_phase='tools'`. **Status (slice 83):** shipped for
+   trace-enabled parent-cancelled provider and tool phases. The loop still
+   returns `ErrorKind::cancelled` with `reason=parent_cancelled` and the same
+   phase after the row is written.
 5. **Hook publish observable.** A blocking `tool_before` veto
    (spec 0015) appends a `hook_publish` audit row with
    `parent_turn_id` matching the trace row; the row's

@@ -240,13 +240,15 @@ protocol adapter, or real vendor runtime is linked into the binary yet.
 
 `oran-agent` now owns the slice-72 `SessionState` promotion owner plus the
 slice-80 sequential direct-dispatch `Loop` turn driver with cancellation-phase
-context on provider/tool parent cancellations and the first terminal-success
-`trace_turns` writer. The `oran-storage` dependency is an intentional downward
-agent-runtime → platform dependency for `storage::TraceRepository`; the provider
-dependency is also downward: the agent runtime layer drives
-`provider::System`, while `oran-provider` never calls back into `oran-agent`.
-The `orangutan` binary still does not link `oran-agent`; CLI/binary handoff
-waits for cancellation/error trace rows and approval-observability coverage.
+context on provider/tool parent cancellations, the first terminal-success
+`trace_turns` writer, slice 82's explicit disabled trace gate, and slice 83's
+provider/tool cancellation trace rows. The `oran-storage` dependency is an
+intentional downward agent-runtime → platform dependency for
+`storage::TraceRepository`; the provider dependency is also downward: the agent
+runtime layer drives `provider::System`, while `oran-provider` never calls back
+into `oran-agent`. The `orangutan` binary still does not link `oran-agent`;
+CLI/binary handoff waits for ordinary error trace rows and
+approval-observability coverage.
 
 **Key compile-time wins from this shape:**
 
