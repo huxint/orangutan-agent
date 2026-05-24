@@ -1,8 +1,10 @@
 // tests/cli/test_cli.cpp — early CLI mode coverage.
 
+#include <expected>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <asio/io_context.hpp>
@@ -24,6 +26,27 @@ namespace hook = orangutan::hook;
 namespace test = orangutan::tests;
 
 namespace {
+
+class RecordingPromptRunner final : public cli::PromptRunner {
+public:
+  explicit RecordingPromptRunner(std::vector<core::Result<cli::PromptRunResult>> results = {})
+      : results_{std::move(results)} {}
+
+  async::Awaitable<core::Result<cli::PromptRunResult>> run_prompt(cli::PromptRunRequest request) override {
+    requests.push_back(std::move(request));
+    if (!results_.empty()) {
+      auto result = std::move(results_.front());
+      results_.erase(results_.begin());
+      co_return result;
+    }
+    co_return cli::PromptRunResult{.text = "ok"};
+  }
+
+  std::vector<cli::PromptRunRequest> requests;
+
+private:
+  std::vector<core::Result<cli::PromptRunResult>> results_;
+};
 
 cli::CliOptions options(std::vector<std::string_view>& args) {
   return cli::CliOptions{.args = std::span<const std::string_view>{args}, .quiet = true};
@@ -110,6 +133,75 @@ TEST_CASE("run selects single-shot mode from prompt arguments", "[unit][cli]") {
     REQUIRE(result->mode == cli::CliMode::single_shot);
     REQUIRE(result->prompts_processed == 1);
   }
+}
+
+TEST_CASE("run_async delegates a single-shot prompt to the supplied runner", "[unit][cli][async]") {
+  test::run_async([](asio::io_context& /*io*/) -> async::Awaitable<void> {
+    auto args = std::vector<std::string_view>{"--prompt", "hello"};
+    RecordingPromptRunner runner;
+
+    auto result = co_await cli::run_async(options(args), &runner);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->mode == cli::CliMode::single_shot);
+    REQUIRE(result->prompts_processed == 1);
+    REQUIRE(result->exit_code == 0);
+    REQUIRE(runner.requests.size() == 1);
+    REQUIRE(runner.requests[0].prompt == "hello");
+    REQUIRE(runner.requests[0].mode == cli::CliMode::single_shot);
+    REQUIRE(runner.requests[0].prompt_index == 0);
+  });
+}
+
+TEST_CASE("run_async delegates scripted REPL prompts in order", "[unit][cli][async]") {
+  test::run_async([](asio::io_context& /*io*/) -> async::Awaitable<void> {
+    auto args = std::vector<std::string_view>{};
+    auto repl_lines = std::vector<std::string_view>{"first", "", "second"};
+    RecordingPromptRunner runner;
+
+    auto result = co_await cli::run_async(options(args, repl_lines), &runner);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->mode == cli::CliMode::repl);
+    REQUIRE(result->prompts_processed == 2);
+    REQUIRE(runner.requests.size() == 2);
+    REQUIRE(runner.requests[0].prompt == "first");
+    REQUIRE(runner.requests[0].mode == cli::CliMode::repl);
+    REQUIRE(runner.requests[0].prompt_index == 0);
+    REQUIRE(runner.requests[1].prompt == "second");
+    REQUIRE(runner.requests[1].mode == cli::CliMode::repl);
+    REQUIRE(runner.requests[1].prompt_index == 1);
+  });
+}
+
+TEST_CASE("run_async preserves deterministic shell behavior without a runner", "[unit][cli][async]") {
+  test::run_async([](asio::io_context& /*io*/) -> async::Awaitable<void> {
+    auto args = std::vector<std::string_view>{};
+    auto repl_lines = std::vector<std::string_view>{"first", "", "second"};
+
+    auto result = co_await cli::run_async(options(args, repl_lines));
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->mode == cli::CliMode::repl);
+    REQUIRE(result->prompts_processed == 2);
+    REQUIRE(result->exit_code == 0);
+  });
+}
+
+TEST_CASE("run_async propagates prompt runner errors", "[unit][cli][async]") {
+  test::run_async([](asio::io_context& /*io*/) -> async::Awaitable<void> {
+    auto args = std::vector<std::string_view>{"--prompt=fail"};
+    auto failures = std::vector<core::Result<cli::PromptRunResult>>{
+        std::unexpected(core::Error::internal("runner failed")),
+    };
+    RecordingPromptRunner runner{std::move(failures)};
+
+    auto result = co_await cli::run_async(options(args), &runner);
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::internal);
+    REQUIRE(runner.requests.size() == 1);
+  });
 }
 
 TEST_CASE("run handles CLI help without dispatching a prompt", "[unit][cli]") {

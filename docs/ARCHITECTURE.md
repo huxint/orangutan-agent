@@ -147,7 +147,10 @@ own test bucket, its own bench bucket, and its own public header set under
 > provider route through `provider::resolve_route` during regular startup,
 > reports the resolved primary/fallback summary, and fails fast on route/profile
 > config errors before CLI handoff while still avoiding credentials, adapters,
-> network traffic, and `agent::Loop`; slice 16
+> network traffic, and `agent::Loop`; slice 100 adds an adapter-neutral
+> `cli::PromptRunner` / `cli::run_async` seam so bootstrap can hand parsed
+> prompts to a future agent-loop owner without making `oran-cli` depend on
+> `oran-agent`; slice 16
 > adds `--mode` / `--agent` selectors to
 > `--explain-rules` via the public `parse_explain_rules_selector`
 > and `materialize_rules` helpers), the first `oran-cli` handoff shell plus
@@ -433,7 +436,7 @@ own test bucket, its own bench bucket, and its own public header set under
 | `oran-channel-telegram` | Telegram adapter (optional, gated) | `oran-channel`, `oran-http` |
 | `oran-channel-webhook` | generic webhook adapter | `oran-channel`, `oran-http` |
 | `oran-web`           | HTTP web UI (cpp-httplib in skeleton, asio later) | `oran-agent`, `oran-orchestration`, `oran-http` |
-| `oran-cli`           | early REPL / single-shot shell plus slice-95 `OperatorPromptSink` for terminal `permission_ask_rendered` approvals (scripted answers for tests/noninteractive drivers, asio stdin read for interactive answers); planned slash commands and agent handoff | currently `oran-core`, `oran-async`, `oran-hook`; planned `oran-agent`, `oran-orchestration` |
+| `oran-cli`           | REPL / single-shot mode parser with deterministic no-runner shell plus slice-100 `PromptRunner` / `run_async` seam for caller-owned async prompt execution, and slice-95 `OperatorPromptSink` for terminal `permission_ask_rendered` approvals (scripted answers for tests/noninteractive drivers, asio stdin read for interactive answers); planned slash commands and bootstrap-owned agent runner binding | currently `oran-core`, `oran-async`, `oran-hook`; planned `oran-agent`, `oran-orchestration` |
 | `oran-bootstrap`     | process entry + config loading + provider-route preflight + CLI handoff + `--explain-rules` (with `--mode` / `--agent` selectors) + `--audit-init` + (slice 88) `--trace <turn-id>` operator inspector (32-char lowercase hex) that opens the workspace audit DB, runs the idempotent migration, looks up the trace row through `TraceRepository::get_turn`, lists joined audit rows through `AuditRepository::list_events_for_turn`, and renders both in `--explain-rules`-style lines (returns `Error::not_found` for missing DB or unknown turn id; slice 93 prints `kind=<event_kind>` for each audit row so `hook_publish` rows are distinguishable) + per-process `RuntimeAssembly` (bundles a fresh `permission::ApprovalBroker`, the active `permission::AuditSink`, the slice-41 assembly-owned `tool::Workspace` built from `permissions.workspace.extra_{read,write}_roots`, (slice 87) an optional `storage::TraceRepository` on the shared audit `Pool` when `config.trace().enabled` is `true` so the upcoming agent loop inherits spec-0018's per-turn writer, and (slice 92) the process `hook::Bus` configured from `config.hooks.timeout_ms`; defaults to `audit_enabled=true`, `trace_enabled=true`, and a 2000 ms hook timeout now that the migrations and hook foundation ship inside the binary) + the slice-23 `SignalScope` SIGINT/SIGTERM trap (`asio::signal_set` RAII, `release()` cancel + `signum()` capture) that `--audit-init` and `--trace` adopt so Ctrl-C / `kill` interrupt the one-shot `io_context` drain promptly, with `bootstrap::run` translating the resulting `Error::cancelled` into the shell-conventional `128 + signum` exit code | currently `oran-core`, `oran-async`, `oran-io`, `oran-storage`, `oran-config`, `oran-permission`, `oran-hook`, `oran-tool`, `oran-provider`, `oran-cli`; planned every public lib above |
 
 **Binaries** built on top:
@@ -504,7 +507,9 @@ own test bucket, its own bench bucket, and its own public header set under
   `<workspace>/.orangutan/config.json` when present and uses built-in config defaults
   when it is absent in this early runtime slice. After config loading, bootstrap
   preflights the configured `default` provider route when routes exist, then hands CLI
-  mode flags such as `--prompt` to `oran-cli`.
+  mode flags such as `--prompt` to `oran-cli`. `oran-cli` can now delegate parsed
+  prompts through `cli::run_async` when bootstrap supplies a runner, but the binary
+  still uses the no-runner shell until the agent-loop handoff lands.
 - The current typed surface covers `strict_config`, `runtime` (including
   `tool_output` caps and `prompt.active_tools`), `profiles`, `routes`,
   `session`, `web`, `trace`, `hooks.timeout_ms`, `permissions`, and

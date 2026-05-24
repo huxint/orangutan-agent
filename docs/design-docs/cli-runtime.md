@@ -1,11 +1,12 @@
 # CLI Runtime
 
 `oran-cli` owns terminal-facing mode selection and terminal-owned interaction surfaces.
-Bootstrap loads config first, then forwards non-bootstrap arguments to CLI. The CLI
-accepts prompts and reports the selected mode, but it does not create an agent runtime
-or provider request yet. It now also owns the first user-visible
-`permission_ask_rendered` sink so direct dispatch can ask a terminal operator through
-the blocking hook bus once a caller binds the sink to the process `hook::Bus`.
+Bootstrap loads config first, then forwards non-bootstrap arguments to CLI. The CLI can
+parse prompts through the deterministic pre-agent shell or delegate them to a caller-owned
+async `PromptRunner`; it still does not construct providers or an `agent::Loop` itself.
+It also owns the first user-visible `permission_ask_rendered` sink so direct dispatch can
+ask a terminal operator through the blocking hook bus once a caller binds the sink to the
+process `hook::Bus`.
 
 ## Current Public API
 
@@ -32,6 +33,27 @@ struct CliResult {
 
 core::Result<CliResult> run(CliOptions);
 
+struct PromptRunRequest {
+  std::string prompt;
+  CliMode mode;
+  std::size_t prompt_index;
+};
+
+struct PromptRunResult {
+  std::string text;
+};
+
+class PromptRunner {
+ public:
+  virtual ~PromptRunner() = default;
+
+  [[nodiscard]] virtual async::Awaitable<core::Result<PromptRunResult>>
+  run_prompt(PromptRunRequest request) = 0;
+};
+
+async::Awaitable<core::Result<CliResult>>
+run_async(CliOptions, PromptRunner* runner = nullptr);
+
 struct OperatorPromptSinkOptions {
   std::string sink_id;
   std::string operator_identity;
@@ -53,7 +75,8 @@ class OperatorPromptSink final : public hook::Sink {
 }  // namespace orangutan::cli
 ```
 
-All public functions return `core::Result<T>`. `quiet` exists so tests and benches can
+Public functions return `core::Result<T>` directly or inside the project coroutine
+vocabulary, `async::Awaitable<core::Result<T>>`. `quiet` exists so tests and benches can
 exercise the dispatch path without printing per-iteration output.
 
 ## Mode Selection
@@ -66,11 +89,16 @@ exercise the dispatch path without printing per-iteration output.
 
 No prompt flag selects `CliMode::repl`. The current REPL shell is deterministic: it
 reports that the shell is ready and, when `repl_lines` are supplied by tests or future
-callers, counts non-empty lines as prompts. It does not read provider credentials, open
-storage, or run tools.
+callers, counts non-empty lines as prompts. `run_async` calls the supplied
+`PromptRunner` once for each non-empty scripted REPL line in order, with
+`prompt_index` counting only dispatched prompts. Without a runner, the shell preserves
+the existing pre-agent-loop output and does not read provider credentials, open storage,
+or run tools.
 
-Single-shot mode accepts exactly one prompt and returns `prompts_processed = 1`. Duplicate
-or empty prompt values are `invalid_argument` errors.
+Single-shot mode accepts exactly one prompt and returns `prompts_processed = 1`.
+`run_async` passes that prompt to the supplied runner with
+`CliMode::single_shot` / `prompt_index = 0`; runner errors propagate unchanged.
+Duplicate or empty prompt values are `invalid_argument` errors.
 
 ## Operator Approval Prompt
 
@@ -95,13 +123,16 @@ until the CLI/binary handoff slice has a dispatch path that can publish asks.
 `oran-bootstrap` consumes `--config`, `--config=...`, and global help. Arguments that are
 not bootstrap-owned are forwarded unchanged to `cli::run` after config loading and the
 default provider-route preflight. This keeps config discovery, provider-route validation,
-and terminal mode selection separate while preserving one process entry point.
+and terminal mode selection separate while preserving one process entry point. The
+binary still uses the no-runner path; the next handoff slice can switch to
+`cli::run_async` with a bootstrap-owned runner that wraps `agent::Loop`.
 
 ## Next Steps
 
 - Replace the deterministic REPL shell with a line editor once terminal history/editing is
   needed.
-- Route single-shot and REPL prompts into `oran-agent` once provider/tool foundations land.
+- Supply a bootstrap-owned `PromptRunner` that constructs the provider execution runtime,
+  binds the CLI approval sink, and drives `agent::Loop`.
 - Bind `OperatorPromptSink` into the real CLI agent-loop runtime when the binary starts
   driving `agent::Loop`.
 - Add slash-command parsing after the runtime has command targets.

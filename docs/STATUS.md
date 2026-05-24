@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 99 (`xmake run orangutan` reports slice 99)
+- **Slice:** 100 (`xmake run orangutan` reports slice 100)
 - **Last completed history:**
-  [`histories/2026-05/20260525-0726-bootstrap-provider-route-preflight.md`](histories/2026-05/20260525-0726-bootstrap-provider-route-preflight.md)
+  [`histories/2026-05/20260525-0744-cli-prompt-runner.md`](histories/2026-05/20260525-0744-cli-prompt-runner.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
@@ -18,7 +18,20 @@
   plan because they stayed under the existing spec-0015/0017/0018
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 99 consumes
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 100 opens
+  the adapter-neutral CLI prompt-runner handoff seam. `<oran/cli/cli.hpp>`
+  now exports `PromptRunRequest`, `PromptRunResult`, `PromptRunner`, and
+  `cli::run_async(CliOptions, PromptRunner*)`; `run_async` reuses the existing
+  mode parser, delegates single-shot prompts and non-empty scripted REPL lines
+  to the caller-owned runner in order, prints non-empty runner text when not
+  quiet, and propagates runner errors unchanged. `cli::run` remains the
+  deterministic no-runner shell, and `bootstrap::run` still calls that path, so
+  no provider credentials are read, no adapter is constructed, no network
+  request is sent, and `agent::Loop` is still not started. Focused result:
+  `test-cli` 14 cases / 97 assertions. Remaining handoff work: construct a
+  bootstrap-owned runner that resolves the configured route, wraps a provider
+  backend in `provider::execution::Runtime`, binds `cli::OperatorPromptSink`,
+  and drives `agent::Loop` through `cli::run_async`. Slice 99 consumes
   the route resolver at the binary boundary. Regular `bootstrap::run` startup
   now preflights the configured `default` provider route whenever config
   declares routes, prints
@@ -669,10 +682,10 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-hook`: 30 cases / 207 assertions.
 - `oran-tool`: 178 cases / 1838 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
-- `oran-provider`: 11 cases / 89 assertions.
-- `oran-agent`: 23 cases / 363 assertions.
-- `oran-cli`: 10 cases / 68 assertions.
-- `oran-bootstrap`: 57 cases / 226 assertions.
+- `oran-provider`: 24 cases / 170 assertions.
+- `oran-agent`: 24 cases / 391 assertions.
+- `oran-cli`: 14 cases / 97 assertions.
+- `oran-bootstrap`: 59 cases / 230 assertions.
 
 ## Open Tech-Debt Rows
 

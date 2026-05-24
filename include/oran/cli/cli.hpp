@@ -1,12 +1,14 @@
-// include/oran/cli/cli.hpp — early CLI mode selection and shell entry points.
+// include/oran/cli/cli.hpp — CLI mode selection and prompt-runner handoff entry points.
 
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
 #include <string_view>
 
+#include <oran/async/awaitable_fwd.hpp>
 #include <oran/core/result.hpp>
 
 namespace orangutan::cli {
@@ -31,6 +33,32 @@ struct CliResult {
   int exit_code{0};
 };
 
+struct PromptRunRequest {
+  std::string prompt;
+  CliMode mode{CliMode::single_shot};
+  std::size_t prompt_index{0};
+};
+
+struct PromptRunResult {
+  std::string text;
+};
+
+class PromptRunner {
+public:
+  PromptRunner() = default;
+  virtual ~PromptRunner() = default;
+
+  PromptRunner(const PromptRunner&) = delete;
+  PromptRunner& operator=(const PromptRunner&) = delete;
+  PromptRunner(PromptRunner&&) = delete;
+  PromptRunner& operator=(PromptRunner&&) = delete;
+
+  [[nodiscard]] virtual async::Awaitable<core::Result<PromptRunResult>> run_prompt(PromptRunRequest request) = 0;
+};
+
 [[nodiscard]] core::Result<CliResult> run(CliOptions options = {});
+
+[[nodiscard]] async::Awaitable<core::Result<CliResult>> run_async(CliOptions options = {},
+                                                                  PromptRunner* runner = nullptr);
 
 }  // namespace orangutan::cli

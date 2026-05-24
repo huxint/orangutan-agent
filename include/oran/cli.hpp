@@ -1,4 +1,4 @@
-// include/oran/cli.hpp — umbrella header for oran-cli.
+// include/oran/cli.hpp — umbrella header for CLI mode, prompt-runner, and terminal sink APIs.
 
 #pragma once
 
