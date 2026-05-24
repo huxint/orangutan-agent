@@ -75,6 +75,14 @@ struct WebConfig {
   std::int64_t port{8787};
 };
 
+struct TraceConfig {
+  bool enabled{true};
+  bool store_raw_bodies{false};
+  std::int64_t retention_days{30};
+
+  friend bool operator==(const TraceConfig&, const TraceConfig&) = default;
+};
+
 /// Verdict spelling that appears in `config.permissions.{allow,deny,ask}`.
 /// Mirrors `permission::Verdict` but stays inside `oran-config` because the
 /// dependency direction (config below permission) forbids importing the
@@ -182,6 +190,9 @@ public:
   [[nodiscard]] const WebConfig& web() const noexcept {
     return web_;
   }
+  [[nodiscard]] const TraceConfig& trace() const noexcept {
+    return trace_;
+  }
   [[nodiscard]] const PermissionsConfig& permissions() const noexcept {
     return permissions_;
   }
@@ -199,6 +210,7 @@ private:
   std::vector<RouteConfig> routes_{};
   SessionConfig session_{};
   WebConfig web_{};
+  TraceConfig trace_{};
   PermissionsConfig permissions_{};
   std::vector<AgentConfig> agents_{};
   std::vector<ConfigWarning> warnings_{};

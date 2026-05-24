@@ -40,8 +40,9 @@ Current implementation status:
 - `Config::load_file(std::string_view, LoadOptions)` reads and parses a file.
 - Typed fields currently cover `strict_config`, `runtime` (including
   `tool_output.max_text_bytes` / `max_data_bytes` and
-  `prompt.active_tools`), `profiles`, `routes`, `session`, `web`,
-  `permissions`, and `agents.<name>.permissions`.
+  `prompt.active_tools`), top-level `trace` policy
+  (`enabled`, `store_raw_bodies`, `retention_days`), `profiles`, `routes`,
+  `session`, `web`, `permissions`, and `agents.<name>.permissions`.
 - `runtime.prompt.active_tools` accepts `"defaults"` or an explicit string
   array. The loader preserves the authored array order, accepts an empty
   explicit allowlist, rejects empty tool names, and leaves registry-name

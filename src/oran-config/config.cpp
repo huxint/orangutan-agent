@@ -32,9 +32,10 @@ using json = ::nlohmann::ordered_json;
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr auto kRecognizedRootFields = std::array<std::string_view, 13>{
+constexpr auto kRecognizedRootFields = std::array<std::string_view, 14>{
     "strict_config",
     "runtime",
+    "trace",
     "permissions",
     "profiles",
     "routes",
@@ -378,6 +379,42 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
   }
 
   return runtime;
+}
+
+[[nodiscard]] Result<TraceConfig> parse_trace(const json& root) {
+  auto trace = TraceConfig{};
+  const auto it = root.find("trace");
+  if (it == root.end()) {
+    return trace;
+  }
+  auto object = require_object(*it, "$.trace");
+  if (!object) {
+    return std::unexpected(std::move(object.error()));
+  }
+
+  if (const auto enabled = it->find("enabled"); enabled != it->end()) {
+    if (!enabled->is_boolean()) {
+      return std::unexpected(config_error("expected boolean", "$.trace.enabled"));
+    }
+    trace.enabled = enabled->get<bool>();
+  }
+
+  if (const auto store_raw_bodies = it->find("store_raw_bodies"); store_raw_bodies != it->end()) {
+    if (!store_raw_bodies->is_boolean()) {
+      return std::unexpected(config_error("expected boolean", "$.trace.store_raw_bodies"));
+    }
+    trace.store_raw_bodies = store_raw_bodies->get<bool>();
+  }
+
+  if (const auto retention_days = it->find("retention_days"); retention_days != it->end()) {
+    auto parsed = positive_integer_value(*retention_days, "$.trace.retention_days");
+    if (!parsed) {
+      return std::unexpected(std::move(parsed.error()));
+    }
+    trace.retention_days = *parsed;
+  }
+
+  return trace;
 }
 
 [[nodiscard]] Result<std::vector<ProfileConfig>> parse_profiles(const json& root) {
@@ -867,6 +904,10 @@ core::Result<Config> Config::parse(std::string_view contents, LoadOptions option
     if (!web) {
       return std::unexpected(std::move(web.error()));
     }
+    auto trace = parse_trace(root);
+    if (!trace) {
+      return std::unexpected(std::move(trace.error()));
+    }
     auto permissions = parse_root_permissions(root, strict_effective, warnings);
     if (!permissions) {
       return std::unexpected(std::move(permissions.error()));
@@ -883,6 +924,7 @@ core::Result<Config> Config::parse(std::string_view contents, LoadOptions option
     config.routes_ = std::move(*routes);
     config.session_ = std::move(*session);
     config.web_ = std::move(*web);
+    config.trace_ = std::move(*trace);
     config.permissions_ = std::move(*permissions);
     config.agents_ = std::move(*agents);
     config.warnings_ = std::move(warnings);

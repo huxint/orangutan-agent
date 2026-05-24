@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 80 (`xmake run orangutan` reports slice 80)
+- **Slice:** 81 (`xmake run orangutan` reports slice 81)
 - **Last completed history:**
-  [`histories/2026-05/20260524-1210-agent-loop-trace-row.md`](histories/2026-05/20260524-1210-agent-loop-trace-row.md)
+  [`histories/2026-05/20260524-1225-trace-config-policy.md`](histories/2026-05/20260524-1225-trace-config-policy.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
@@ -17,7 +17,16 @@
   and did not need a new plan because they stayed under the existing spec-0017
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 80 lands the
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 81 lands the
+  typed operator trace policy surface: `config::TraceConfig` and
+  `Config::trace()` parse the top-level `trace.enabled`,
+  `trace.store_raw_bodies`, and `trace.retention_days` block documented by
+  spec 0018, with defaults `{true, false, 30}` and config-time validation for
+  boolean flags plus positive integer retention. `config.example.json` carries
+  the default block, and `test-config` covers custom values, the example file,
+  and malformed trace policy (30 cases / 225 assertions). This slice does not
+  wire the policy into bootstrap or `agent::Loop`; trace rows still require the
+  caller-supplied `RunTurnInputs::trace` context from slice 80. Slice 80 lands the
   first loop-owned spec-0018 `trace_turns` writer for terminal-success fake
   provider turns. `agent::RunTurnInputs::trace` carries a non-owning
   `storage::TraceRepository*`, `session_id`, optional `parent_turn_id`,

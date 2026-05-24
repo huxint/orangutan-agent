@@ -161,7 +161,11 @@ makes the existing audit rows joinable. Nothing else.
   }
   ```
   `enabled=false` skips the SQLite insert entirely (still emits
-  audit rows; trace is the *joining* layer).
+  audit rows; trace is the *joining* layer). **Status (slice 81):**
+  `oran-config` parses this top-level block into `config::TraceConfig` with
+  defaults `{enabled=true, store_raw_bodies=false, retention_days=30}` and
+  validates boolean flags plus positive integer retention. Bootstrap and
+  `agent::Loop` do not consume the policy yet.
 - **CLI surface**. `orangutan --trace <turn_id>` prints the row
   plus every joined audit row (`WHERE parent_turn_id = ?`) in the
   same `--explain-rules`-style table format that already exists for

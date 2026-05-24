@@ -15,6 +15,11 @@
       "Bearer [A-Za-z0-9_.-]+"
     ]
   },
+  "trace": {
+    "enabled": true,
+    "store_raw_bodies": false,
+    "retention_days": 30
+  },
   "profiles": {
     "default": {
       "provider": "anthropic",

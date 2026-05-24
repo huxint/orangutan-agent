@@ -82,6 +82,11 @@ constexpr auto kMinimalConfig = R"json(
     },
     "redaction_patterns": ["token=[^ ]+"]
   },
+  "trace": {
+    "enabled": false,
+    "store_raw_bodies": true,
+    "retention_days": 14
+  },
   "profiles": {
     "default": {
       "provider": "openai",
@@ -139,6 +144,9 @@ TEST_CASE("Config::parse returns typed config values", "[unit][config]") {
   REQUIRE_FALSE(result->runtime().prompt.active_tools.use_defaults);
   REQUIRE(result->runtime().prompt.active_tools.tool_names == std::vector<std::string>{"file.read", "tool.search"});
   REQUIRE(result->runtime().redaction_patterns.size() == 1);
+  REQUIRE_FALSE(result->trace().enabled);
+  REQUIRE(result->trace().store_raw_bodies);
+  REQUIRE(result->trace().retention_days == 14);
 
   REQUIRE(result->profiles().size() == 1);
   REQUIRE(result->profiles()[0].name == "default");
@@ -262,6 +270,9 @@ TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][con
   REQUIRE(result->runtime().tool_output.max_data_bytes == 1048576);
   REQUIRE(result->runtime().prompt.active_tools.use_defaults);
   REQUIRE(result->runtime().prompt.active_tools.tool_names.empty());
+  REQUIRE(result->trace().enabled);
+  REQUIRE_FALSE(result->trace().store_raw_bodies);
+  REQUIRE(result->trace().retention_days == 30);
 
   // The example config now carries a non-empty permissions block + one
   // example agent overlay so the file documents the new schema.
@@ -378,6 +389,47 @@ TEST_CASE("Config::parse rejects malformed runtime.prompt active tools", "[unit]
 
   SECTION("empty tool name") {
     auto result = config::Config::parse(R"json({"runtime": {"prompt": {"active_tools": ["file.read", ""]}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+}
+
+TEST_CASE("Config::parse extracts trace policy", "[unit][config][trace]") {
+  auto result = config::Config::parse(R"json({
+  "trace": {
+    "enabled": false,
+    "store_raw_bodies": true,
+    "retention_days": 7
+  }
+})json");
+
+  REQUIRE(result.has_value());
+  REQUIRE_FALSE(result->trace().enabled);
+  REQUIRE(result->trace().store_raw_bodies);
+  REQUIRE(result->trace().retention_days == 7);
+}
+
+TEST_CASE("Config::parse rejects malformed trace policy", "[unit][config][trace]") {
+  SECTION("non-object trace block") {
+    auto result = config::Config::parse(R"json({"trace": []})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-boolean enabled") {
+    auto result = config::Config::parse(R"json({"trace": {"enabled": "yes"}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-boolean raw-body flag") {
+    auto result = config::Config::parse(R"json({"trace": {"store_raw_bodies": 1}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("zero retention") {
+    auto result = config::Config::parse(R"json({"trace": {"retention_days": 0}})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }
