@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 97 (`xmake run orangutan` reports slice 97)
+- **Slice:** 98 (`xmake run orangutan` reports slice 98)
 - **Last completed history:**
-  [`histories/2026-05/20260525-0622-provider-execution-runtime.md`](histories/2026-05/20260525-0622-provider-execution-runtime.md)
+  [`histories/2026-05/20260525-0709-provider-route-resolver.md`](histories/2026-05/20260525-0709-provider-route-resolver.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
@@ -18,9 +18,28 @@
   plan because they stayed under the existing spec-0015/0017/0018
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 97 lands
-  the first provider execution layer required before real adapter and binary
-  handoff work. `<oran/provider/execution.hpp>` now exports
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 98 lands
+  the config-to-provider route resolver required before loop/binary handoff.
+  `<oran/provider/route_resolver.hpp>` exports
+  `provider::resolve_route(const config::Config&, std::string_view)`, which
+  resolves a named `config::RouteConfig` into the existing `provider::Route`
+  value by looking up the primary/fallback `config::ProfileConfig` entries,
+  preserving authored fallback order, mapping provider spellings and exact
+  `ProtocolKind` names into `ProtocolKind`, and returning `Error::config`
+  with `route` / `profile` / `role` context for missing references or unknown
+  provider spellings. The current typed config still carries only
+  provider/model/base URL/API-key metadata, so resolved targets fill
+  `{profile, model, protocol}` and leave `thinking_budget` / `cache` unset
+  until those route/profile policy fields land. `oran-provider` now declares
+  its direct `oran-config` dependency instead of leaning on the transitive
+  `oran-prompt` path, and `<oran/provider.hpp>` re-exports the resolver.
+  Focused result: `test-provider` 24 cases / 170 assertions. Remaining
+  provider work: provider request/response hooks, usage/cost rollups, real
+  Anthropic/OpenAI adapters, and wiring `resolve_route` +
+  `provider::execution::Runtime` into `agent::Loop` / the `orangutan`
+  binary. Slice 97 lands the first provider execution layer required before
+  real adapter and binary handoff work. `<oran/provider/execution.hpp>` now
+  exports
   `provider::execution::Runtime`, a `provider::System` decorator over any
   backend `System`. It consumes `Request::retry.max_attempts` and
   `initial_backoff`, retries retryable `network` / `rate_limit` / `timeout` /
@@ -37,11 +56,7 @@
   duplicate stream bytes. `test-provider` adds offline execution coverage for
   same-target retry, fallback success, provider-supplied `model_used`,
   non-retryable stop, stream-output retry suppression, zero-attempt validation,
-  and cancellation during retry backoff. Focused result: `test-provider` 18
-  cases / 132 assertions. Remaining provider work:
-  route/profile resolution into `ModelTarget`, provider request/response hooks,
-  usage/cost rollups, real Anthropic/OpenAI adapters, and wiring the execution
-  runtime into `agent::Loop` / the `orangutan` binary. Slice 96 closed the
+  and cancellation during retry backoff. Slice 96 closed the
   agent-loop approval-observability gap that sat between the direct
   dispatch ask bridge and the later binary handoff. `agent::Loop` now wraps
   each direct `tool::Registry::dispatch` with a scoped dispatch context that

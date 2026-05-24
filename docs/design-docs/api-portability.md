@@ -35,9 +35,9 @@ struct Response {
 
 `core::Content` is a typed variant; protocol adapters translate to/from vendor JSON.
 
-> **Status (slice 97, 2026-05-25):** `oran-provider` exists as the
-> provider-domain, prompt-cache-hint, fake-provider, and first execution
-> wrapper library.
+> **Status (slice 98, 2026-05-25):** `oran-provider` exists as the
+> provider-domain, prompt-cache-hint, fake-provider, route-resolver, and
+> first execution wrapper library.
 > `<oran/provider.hpp>` exports the slice-73 value shapes (`Request`,
 > `Response`, `Usage`, `RetryPolicy`, `PromptCacheHints`,
 > `PromptCacheOptions`, `make_prompt_cache_hints(prompt::RenderedPrompt,
@@ -50,9 +50,14 @@ struct Response {
 > consumes `Request::retry`, retries retryable errors per target, tries
 > `Route::fallbacks` after primary exhaustion, observes cancellation during
 > backoff, suppresses retry/fallback after visible stream output, and fills
-> missing `Response::model_used` from the selected target.
-> Real transports, protocol adapters, route resolution from config profiles,
-> provider hooks, and usage/cost rollups remain planned.
+> missing `Response::model_used` from the selected target, plus slice-98
+> `provider::resolve_route(Config, route_name)`, which resolves configured
+> profile/route names into a `provider::Route`, preserves fallback order, maps
+> provider spellings and exact `ProtocolKind` names, and reports
+> `Error::config` for missing profile references or unknown provider
+> spellings.
+> Real transports, protocol adapters, provider hooks, and usage/cost rollups
+> remain planned.
 
 ## Layered Implementation
 
@@ -120,9 +125,16 @@ struct ModelTarget {
 };
 ```
 
-Profiles live in config; routes can be defined globally or per-agent. The agent's
-`Loop` resolves a `Route` once per turn (or once per `Loop` if static) and reuses it
-across iterations.
+Profiles live in config; routes can be defined globally or per-agent. Slice 98
+adds the first resolver, `provider::resolve_route(config, route_name)`, for the
+current top-level config shape. It looks up `config.routes()[route_name]`, maps
+the primary and fallback profile names through `config.profiles()`, preserves
+the fallback order authored by the operator, and fills `ModelTarget` with the
+profile key, vendor model id, and resolved `ProtocolKind`. The current typed
+config does not yet carry route-level `thinking_budget`, prompt-cache options,
+or capability metadata, so those fields stay unset until their schema lands.
+The agent's `Loop` will resolve a `Route` once per turn (or once per `Loop` if
+static) and reuse it across iterations.
 
 ### Protocol Adapters
 
