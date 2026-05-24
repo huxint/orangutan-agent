@@ -7,18 +7,41 @@
 
 ## Snapshot
 
-- **Slice:** 88 (`xmake run orangutan` reports slice 88)
+- **Slice:** 89 (`xmake run orangutan` reports slice 89)
 - **Last completed history:**
-  [`histories/2026-05/20260524-1500-bootstrap-trace-inspector.md`](histories/2026-05/20260524-1500-bootstrap-trace-inspector.md)
+  [`histories/2026-05/20260524-1600-bench-trace-turn-insert.md`](histories/2026-05/20260524-1600-bench-trace-turn-insert.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
-  the recent agent-loop, bootstrap, and inspector increments closed in
-  focused history/commit slices and did not need a new plan because they
+  the recent agent-loop, bootstrap, inspector, and bench increments closed
+  in focused history/commit slices and did not need a new plan because they
   stayed under the existing spec-0017/0018 sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 88 closes
-  spec-0018 AC10 by adding the operator inspector: `oran-storage` exports
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 89 closes
+  spec-0018 AC12 by adding `bench/storage/scenarios/trace_turn_insert.cpp`,
+  a single-insert A-vs-B pair for `trace_turns`:
+  `storage.trace_turn_insert_raw_pool` runs one raw `Pool` +
+  `StatementCache` INSERT per nanobench iteration and
+  `storage.trace_turn_insert_repository` runs one
+  `TraceRepository::append_turn` per iteration. Both use unique per-iteration
+  turn ids and their own temp DB so the bench measures steady-state
+  per-turn cost without batch overhead. Initial WSL2 numbers report about
+  13 µs / insert for the raw path and about 16 µs / insert for the
+  repository wrapper — both comfortably inside the spec's ≤ 50 µs
+  target. Adjacent to the new scenario, the existing
+  `scenarios/trace_repository.cpp` (32-row batch) needed an `id_for`
+  collision fix: the overlapping-sum encoding `salt + row + i + (batch &
+  0x0f)` produced identical bytes for distinct `(batch, row)` tuples — for
+  example `(0, 1)` and `(1, 0)` — and the trace `PRIMARY KEY` guard
+  aborted the second nanobench epoch. The fix packs `(salt, row, batch)`
+  into non-overlapping byte ranges so every tuple maps to a distinct id,
+  and the batch scenarios now report stable numbers alongside the new
+  single-insert pair. `test-storage` still reports 72 cases / 886
+  assertions; the change is bench-only. Hook publish rows (AC5) and the
+  binary handoff that drives `agent::Loop` from inside the binary remain
+  downstream — AC5 is blocked on spec 0015's blocking-veto semantics and
+  the binary handoff is blocked on the absent real provider adapter.
+  Slice 88 closes spec-0018 AC10 by adding the operator inspector: `oran-storage` exports
   `AuditRepository::list_events_for_turn(TurnId, limit)` — a `parent_turn_id =
   ?` read ordered `id ASC` so the original `tool_use` order of a spec-0017
   multi-tool turn survives the trace/audit join — and `oran-bootstrap`'s

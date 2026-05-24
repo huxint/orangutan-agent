@@ -6,11 +6,11 @@
 
 #include <nanobench.h>
 
-#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <span>
@@ -76,9 +76,17 @@ private:
 
 storage::TraceId id_for(std::uint64_t batch, int row, unsigned char salt) {
   storage::TraceId id{};
-  for (std::size_t i = 0; i < id.size(); ++i) {
-    id[i] = static_cast<std::byte>(salt + row + static_cast<int>(i) + static_cast<int>(batch & 0x0fU));
+  // Pack (salt, row, batch) into non-overlapping byte ranges so every
+  // (batch, row, salt) tuple maps to a distinct primary key. The earlier
+  // overlapping-sum encoding collided across nanobench iterations -- e.g.
+  // (batch=0, row=1) and (batch=1, row=0) produced identical bytes, which
+  // tripped the trace_turns PRIMARY KEY guard on the second epoch.
+  id[0] = static_cast<std::byte>(salt);
+  const auto row_u = static_cast<std::uint32_t>(row);
+  for (std::size_t i = 0; i < 4; ++i) {
+    id[1 + i] = static_cast<std::byte>((row_u >> (i * 8)) & 0xFFU);
   }
+  std::memcpy(id.data() + 8, &batch, sizeof(batch));
   return id;
 }
 

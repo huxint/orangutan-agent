@@ -359,6 +359,19 @@ makes the existing audit rows joinable. Nothing else.
     `audit_event_append` numbers (~18 µs end-to-end through
     SQLite). The trace insert is one row plus the per-tool audit
     inserts the loop already pays for.
+    **Status (slice 89):** shipped. `bench/storage/scenarios/trace_turn_insert.cpp`
+    registers a per-insert A-vs-B pair against `trace_turns`:
+    `storage.trace_turn_insert_raw_pool` (raw `Pool` + `StatementCache`,
+    one row per nanobench iteration) and
+    `storage.trace_turn_insert_repository` (`TraceRepository::append_turn`,
+    one row per iteration). Initial WSL2 numbers report about
+    13 µs / insert for the raw path and about 16 µs / insert for the
+    repository wrapper -- both inside the spec target. The existing
+    `scenarios/trace_repository.cpp` (32-row batch) needed an
+    `id_for` collision fix in the same slice because the original
+    overlapping-sum encoding broke the trace PRIMARY KEY guard the
+    moment nanobench advanced past the first epoch; both batch
+    scenarios now run alongside the new single-insert pair.
 
 ## Design Doc Cross-References
 

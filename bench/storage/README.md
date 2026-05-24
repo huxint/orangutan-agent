@@ -20,6 +20,7 @@ repository wrappers.
 | [`scenarios/session_repository.cpp`](scenarios/session_repository.cpp) | Raw pool + cache SQL append/load *vs.* `SessionRepository` append/load. |
 | [`scenarios/audit_repository.cpp`](scenarios/audit_repository.cpp) | Raw pool + cache SQL append/count *vs.* `AuditRepository` append/list for a 64-event batch. |
 | [`scenarios/trace_repository.cpp`](scenarios/trace_repository.cpp) | Raw pool + cache SQL trace insert *vs.* `TraceRepository` insert for a 32-turn batch. |
+| [`scenarios/trace_turn_insert.cpp`](scenarios/trace_turn_insert.cpp) | Raw pool + cache SQL trace insert *vs.* `TraceRepository::append_turn` for a single insert. Spec 0018 AC12 (≤ 50 µs / insert). |
 
 ## Running
 

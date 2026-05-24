@@ -14,6 +14,7 @@ void register_session_repository(ankerl::nanobench::Bench&);
 void register_sqlite_insert(ankerl::nanobench::Bench&);
 void register_statement_cache(ankerl::nanobench::Bench&);
 void register_trace_repository(ankerl::nanobench::Bench&);
+void register_trace_turn_insert(ankerl::nanobench::Bench&);
 }  // namespace orangutan::bench
 
 int main() {
@@ -31,6 +32,7 @@ int main() {
   orangutan::bench::register_session_repository(b);
   orangutan::bench::register_audit_repository(b);
   orangutan::bench::register_trace_repository(b);
+  orangutan::bench::register_trace_turn_insert(b);
 
   std::println();
   return 0;
