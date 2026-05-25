@@ -101,6 +101,52 @@ TEST_CASE("resolve_route maps configured primary and fallback profiles", "[unit]
   REQUIRE(route->fallbacks[1].protocol == provider::ProtocolKind::custom_openai_compatible);
 }
 
+TEST_CASE("resolve_route_profiles preserves endpoint metadata for adapter factories", "[unit][provider][route]") {
+  auto parsed = config::Config::parse(kRoutingConfig);
+  REQUIRE(parsed.has_value());
+
+  auto resolution = provider::resolve_route_profiles(*parsed, "default");
+
+  REQUIRE(resolution.has_value());
+  REQUIRE(resolution->primary.target.profile == "anthropic-main");
+  REQUIRE(resolution->primary.target.model == "claude-sonnet");
+  REQUIRE(resolution->primary.target.protocol == provider::ProtocolKind::anthropic_messages);
+  REQUIRE(resolution->primary.provider == "anthropic");
+  REQUIRE(resolution->primary.base_url == "https://api.anthropic.com");
+  REQUIRE(resolution->primary.api_key_env == "ANTHROPIC_API_KEY");
+
+  REQUIRE(resolution->fallbacks.size() == 2);
+  REQUIRE(resolution->fallbacks[0].target.profile == "openai-main");
+  REQUIRE(resolution->fallbacks[0].provider == "openai");
+  REQUIRE(resolution->fallbacks[0].base_url == "https://api.openai.com/v1");
+  REQUIRE(resolution->fallbacks[0].api_key_env == "OPENAI_API_KEY");
+  REQUIRE(resolution->fallbacks[1].target.profile == "local-main");
+  REQUIRE(resolution->fallbacks[1].provider == "deepseek");
+  REQUIRE(resolution->fallbacks[1].base_url == "http://127.0.0.1:11434/v1");
+  REQUIRE(resolution->fallbacks[1].api_key_env == "LOCAL_API_KEY");
+}
+
+TEST_CASE("RouteProfileResolution derives the loop-facing route shape", "[unit][provider][route]") {
+  auto parsed = config::Config::parse(kRoutingConfig);
+  REQUIRE(parsed.has_value());
+
+  auto resolution = provider::resolve_route_profiles(*parsed, "default");
+  REQUIRE(resolution.has_value());
+
+  auto route = resolution->route();
+
+  REQUIRE(route.primary.profile == "anthropic-main");
+  REQUIRE(route.primary.model == "claude-sonnet");
+  REQUIRE(route.primary.protocol == provider::ProtocolKind::anthropic_messages);
+  REQUIRE(route.fallbacks.size() == 2);
+  REQUIRE(route.fallbacks[0].profile == "openai-main");
+  REQUIRE(route.fallbacks[0].model == "gpt-main");
+  REQUIRE(route.fallbacks[0].protocol == provider::ProtocolKind::openai_chat_completions);
+  REQUIRE(route.fallbacks[1].profile == "local-main");
+  REQUIRE(route.fallbacks[1].model == "deepseek-coder");
+  REQUIRE(route.fallbacks[1].protocol == provider::ProtocolKind::custom_openai_compatible);
+}
+
 TEST_CASE("resolve_route accepts exact protocol spellings in profile provider", "[unit][provider][route]") {
   auto parsed = config::Config::parse(kRoutingConfig);
   REQUIRE(parsed.has_value());

@@ -141,10 +141,12 @@ The current `orangutan` binary prints:
 - the `oran-cli` mode output.
 
 When config declares routes, bootstrap resolves the `default` route through
-`provider::resolve_route` before CLI handoff so profile references, provider
-labels, and explicit profile-protocol spellings fail at startup instead of at
-the future loop boundary. No provider credentials are read, no provider adapter
-is constructed, and no agent runtime loop is started in this slice.
+`provider::resolve_route_profiles` before CLI handoff so profile references,
+provider labels, and explicit profile-protocol spellings fail at startup instead
+of at the future loop boundary while the same resolved bundle preserves endpoint
+metadata for the future adapter factory. `api_key_env` remains a string field
+only here: no provider credentials are read, no provider adapter is constructed,
+and no agent runtime loop is started in this slice.
 The runtime assembly opens the audit DB when audit is enabled so migrations, trace
 repository ownership, and audit sinks are ready before the future loop handoff.
 The `AgentPromptRunner` public seam can run `agent::Loop` when a caller supplies a

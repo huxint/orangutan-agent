@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 102 (`xmake run orangutan` reports slice 102)
+- **Slice:** 103 (`xmake run orangutan` reports slice 103)
 - **Last completed history:**
-  [`histories/2026-05/20260525-2108-provider-profile-protocol.md`](histories/2026-05/20260525-2108-provider-profile-protocol.md)
+  [`histories/2026-05/20260525-2134-provider-route-profiles.md`](histories/2026-05/20260525-2134-provider-route-profiles.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
@@ -18,7 +18,25 @@
   plan because they stayed under the existing spec-0015/0017/0018
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 102 closes
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 103 adds
+  the route-profile resolution bundle that real provider adapter construction
+  needs after the slice-102 protocol seam. `<oran/provider/route_resolver.hpp>`
+  now exports `provider::ResolvedProfileTarget`,
+  `provider::RouteProfileResolution`, and
+  `provider::resolve_route_profiles(config, route_name)`. That richer resolver
+  performs the same route/profile/protocol validation as `resolve_route`, but
+  keeps the profile endpoint metadata (`provider`, `base_url`, `api_key_env`)
+  beside the loop-facing `ModelTarget`; `RouteProfileResolution::route()`
+  derives the existing `provider::Route` so `agent::Loop` and
+  `provider::execution::Runtime` do not change. `bootstrap::run` now preflights
+  that adapter-factory-ready bundle for the configured `default` route while
+  preserving the existing non-secret startup summary; it still does not read
+  environment variables, decrypt credentials, construct an adapter, send a
+  network request, or start `agent::Loop` for ordinary binary prompts. Focused
+  result: `test-provider` 28 cases / 210 assertions. Remaining handoff work is
+  still constructing real Anthropic/OpenAI provider systems from config and
+  switching `bootstrap::run` to `cli::run_async` only when that backend exists.
+  Slice 102 closes
   the provider-profile protocol seam that was still implicit after the slice-98
   route resolver. `config::ProfileConfig` now carries optional
   `protocol`; `oran-config` parses `profiles.<name>.protocol` as a
@@ -110,7 +128,12 @@
   Remaining
   provider work: provider request/response hooks, usage/cost rollups, real
   Anthropic/OpenAI adapters, and binary construction of a concrete provider
-  backend for the bootstrap runner. Slice 97 lands the first provider execution layer required before
+  backend for the bootstrap runner. Slice 103 adds
+  `provider::resolve_route_profiles` as the adapter-factory-ready companion to
+  `resolve_route`: it preserves `provider`, `base_url`, and `api_key_env` for
+  the primary/fallback profiles while deriving the same loop-facing `Route`
+  value. Focused result through slice 103: `test-provider` 28 cases / 210
+  assertions. Slice 97 lands the first provider execution layer required before
   real adapter and binary handoff work. `<oran/provider/execution.hpp>` now
   exports
   `provider::execution::Runtime`, a `provider::System` decorator over any
@@ -729,7 +752,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-hook`: 30 cases / 207 assertions.
 - `oran-tool`: 178 cases / 1838 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
-- `oran-provider`: 26 cases / 181 assertions.
+- `oran-provider`: 28 cases / 210 assertions.
 - `oran-agent`: 24 cases / 391 assertions.
 - `oran-cli`: 14 cases / 97 assertions.
 - `oran-bootstrap`: 64 cases / 264 assertions.

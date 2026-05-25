@@ -99,10 +99,10 @@ resolve_protocol(const config::ProfileConfig& profile, std::string_view route_na
   return it == profiles.end() ? nullptr : std::addressof(*it);
 }
 
-[[nodiscard]] core::Result<ModelTarget> target_for_profile(const config::Config& config,
-                                                           std::string_view profile_name,
-                                                           std::string_view route_name,
-                                                           std::string_view role) {
+[[nodiscard]] core::Result<ResolvedProfileTarget> target_for_profile(const config::Config& config,
+                                                                     std::string_view profile_name,
+                                                                     std::string_view route_name,
+                                                                     std::string_view role) {
   const auto* profile = find_profile(config, profile_name);
   if (profile == nullptr) {
     return std::unexpected(config_error("route references an unknown provider profile")
@@ -116,18 +116,37 @@ resolve_protocol(const config::ProfileConfig& profile, std::string_view route_na
     return std::unexpected(std::move(protocol).error());
   }
 
-  return ModelTarget{
-      .profile = profile->name,
-      .model = profile->model,
-      .protocol = *protocol,
-      .thinking_budget = std::nullopt,
-      .cache = std::nullopt,
+  return ResolvedProfileTarget{
+      .target =
+          ModelTarget{
+              .profile = profile->name,
+              .model = profile->model,
+              .protocol = *protocol,
+              .thinking_budget = std::nullopt,
+              .cache = std::nullopt,
+          },
+      .provider = profile->provider,
+      .base_url = profile->base_url,
+      .api_key_env = profile->api_key_env,
   };
 }
 
 }  // namespace
 
-core::Result<Route> resolve_route(const config::Config& config, std::string_view route_name) {
+Route RouteProfileResolution::route() const {
+  auto route_fallbacks = std::vector<ModelTarget>{};
+  route_fallbacks.reserve(fallbacks.size());
+  for (const auto& fallback : fallbacks) {
+    route_fallbacks.push_back(fallback.target);
+  }
+
+  return Route{
+      .primary = primary.target,
+      .fallbacks = std::move(route_fallbacks),
+  };
+}
+
+core::Result<RouteProfileResolution> resolve_route_profiles(const config::Config& config, std::string_view route_name) {
   if (route_name.empty()) {
     return std::unexpected(Error::invalid_argument("route name must be non-empty"));
   }
@@ -142,7 +161,7 @@ core::Result<Route> resolve_route(const config::Config& config, std::string_view
     return std::unexpected(std::move(primary).error());
   }
 
-  auto fallbacks = std::vector<ModelTarget>{};
+  auto fallbacks = std::vector<ResolvedProfileTarget>{};
   fallbacks.reserve(route->fallback_profiles.size());
   for (const auto& fallback_profile : route->fallback_profiles) {
     auto fallback = target_for_profile(config, fallback_profile, route->name, "fallback");
@@ -152,10 +171,18 @@ core::Result<Route> resolve_route(const config::Config& config, std::string_view
     fallbacks.push_back(std::move(*fallback));
   }
 
-  return Route{
+  return RouteProfileResolution{
       .primary = std::move(*primary),
       .fallbacks = std::move(fallbacks),
   };
+}
+
+core::Result<Route> resolve_route(const config::Config& config, std::string_view route_name) {
+  auto resolution = resolve_route_profiles(config, route_name);
+  if (!resolution) {
+    return std::unexpected(std::move(resolution).error());
+  }
+  return resolution->route();
 }
 
 }  // namespace orangutan::provider

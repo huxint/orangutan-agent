@@ -39,7 +39,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice102";
+constexpr std::string_view kVersion = "2.0.0-slice103";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 
 struct ParsedArgs {
@@ -523,30 +523,31 @@ void print_usage() {
   return 0;
 }
 
-[[nodiscard]] Result<std::optional<provider::Route>> resolve_default_provider_route(const config::Config& cfg) {
+[[nodiscard]] Result<std::optional<provider::RouteProfileResolution>>
+resolve_default_provider_route(const config::Config& cfg) {
   if (cfg.routes().empty()) {
-    return std::optional<provider::Route>{};
+    return std::optional<provider::RouteProfileResolution>{};
   }
-  auto route = provider::resolve_route(cfg, "default");
-  if (!route) {
-    return std::unexpected(std::move(route).error());
+  auto resolution = provider::resolve_route_profiles(cfg, "default");
+  if (!resolution) {
+    return std::unexpected(std::move(resolution).error());
   }
-  return std::optional<provider::Route>{std::move(*route)};
+  return std::optional<provider::RouteProfileResolution>{std::move(*resolution)};
 }
 
-void print_provider_route_summary(const provider::Route& route) {
+void print_provider_route_summary(const provider::RouteProfileResolution& route) {
   std::println("provider route: default primary={}/{} protocol={} fallbacks={}",
-               route.primary.profile,
-               route.primary.model,
-               core::enum_name(route.primary.protocol),
+               route.primary.target.profile,
+               route.primary.target.model,
+               core::enum_name(route.primary.target.protocol),
                route.fallbacks.size());
   for (std::size_t index = 0; index < route.fallbacks.size(); ++index) {
     const auto& fallback = route.fallbacks[index];
     std::println("  fallback #{}: {}/{} protocol={}",
                  index,
-                 fallback.profile,
-                 fallback.model,
-                 core::enum_name(fallback.protocol));
+                 fallback.target.profile,
+                 fallback.target.model,
+                 core::enum_name(fallback.target.protocol));
   }
 }
 
