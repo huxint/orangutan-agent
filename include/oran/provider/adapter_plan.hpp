@@ -1,8 +1,9 @@
 // include/oran/provider/adapter_plan.hpp - offline provider adapter planning.
 //
-// This is the last non-network seam before real provider adapters: it consumes
-// resolved profile metadata, validates the endpoint fields a factory will need,
-// and records which protocol adapter family each target selects.
+// This is the offline validation seam before provider credential resolution:
+// it consumes resolved profile metadata, validates the endpoint fields a
+// factory will need, and records which protocol adapter family each target
+// selects without reading secrets.
 
 #pragma once
 

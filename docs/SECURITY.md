@@ -13,8 +13,13 @@ Use this document to keep secure defaults legible to agents and operators.
 
 Current slice:
 
-- `oran-config` loads provider profile metadata such as `api_key_env`; it does not
-  read or decrypt secret values yet.
+- `oran-config` loads provider profile metadata such as `api_key_env`; the
+  ordinary bootstrap path still treats it as metadata and does not read secret
+  values.
+- `oran-provider` exposes `resolve_adapter_credentials(plan)` for the future real
+  adapter factory. It reads API-key environment variables only when called
+  explicitly, keeps key values in memory, and reports failures with env-var names
+  rather than secret values.
 - `${VAR}` substitution exists for string config values. Missing variables are errors
   unless `${VAR:-default}` provides a fallback.
 - Secret values must not be placed in `config.example.json`.

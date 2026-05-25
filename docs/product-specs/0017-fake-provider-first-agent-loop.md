@@ -180,7 +180,10 @@ proves the loop behaves correctly without a network.
     execution wrapper that sits in front of a supplied `provider::System`, and
     slice 101 wires that wrapper into bootstrap's `AgentPromptRunner` for
     caller-supplied backends. The ordinary binary still waits on real provider
-    adapter construction before it can hand CLI prompts to that runner.
+    adapter construction before it can hand CLI prompts to that runner. Slice
+    105 adds the provider-owned credential-resolution API that future factories
+    will call after offline adapter planning, but ordinary bootstrap still does
+    not read provider API-key environment variables.
   1. Build `TurnContext` (identity, route, session id, origin,
      cancellation slot, stable service refs).
   2. Load/render memory once per turn (memory: `nullopt` in v1 — the

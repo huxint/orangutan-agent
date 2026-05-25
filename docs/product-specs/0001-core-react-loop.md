@@ -25,6 +25,9 @@ with persistent session history and a CLI surface. The first deliverable is "I c
     spellings, explicit profile protocol spellings, missing endpoint metadata, or
     unsupported endpoint schemes. Built-in empty defaults still run without a
     provider route.
+  - `oran-provider` exposes `resolve_adapter_credentials(plan)` for future real
+    adapter construction. The ordinary binary does not call it yet, so configured
+    `api_key_env` names are still not read during current startup.
   - Bootstrap exports `AgentPromptRunner` for tests and future adapter owners: callers
     can supply a provider backend and resolved route to drive `agent::Loop` with the
     runtime assembly's workspace/audit/broker/hook/trace services. The ordinary binary

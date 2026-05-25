@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 104 (`xmake run orangutan` reports slice 104)
+- **Slice:** 105 (`xmake run orangutan` reports slice 105)
 - **Last completed history:**
-  [`histories/2026-05/20260525-2215-provider-adapter-plan.md`](histories/2026-05/20260525-2215-provider-adapter-plan.md)
+  [`histories/2026-05/20260525-2356-provider-credentials.md`](histories/2026-05/20260525-2356-provider-credentials.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
@@ -18,7 +18,24 @@
   plan because they stayed under the existing spec-0015/0017/0018
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 104 adds
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 105 adds
+  the explicit provider credential-resolution boundary that a future concrete
+  adapter factory will call after slice 104's offline plan. New
+  `<oran/provider/credentials.hpp>` exports
+  `provider::AdapterCredentialTarget`, `provider::AdapterCredentialBundle`,
+  and `provider::resolve_adapter_credentials(plan)`. The resolver reads the
+  environment variables named by each plan target's `api_key_env`, stores only
+  in-memory API-key strings beside the existing adapter-plan target, derives
+  the same loop-facing `provider::Route`, returns `ErrorKind::auth` for
+  missing or empty API-key env vars, and keeps error context to non-secret
+  fields (`role`, `profile`, `api_key_env`). `bootstrap::run` does not call
+  this boundary yet, so ordinary startup still preflights route/profile/adapter
+  metadata without reading provider credentials, decrypting secrets, allocating
+  an HTTP client, constructing an adapter, sending a network request, or
+  starting `agent::Loop` for ordinary binary prompts. Focused result:
+  `test-provider` 36 cases / 259 assertions. Remaining handoff work is still
+  constructing real Anthropic/OpenAI provider systems from config and switching
+  `bootstrap::run` to `cli::run_async` only when that backend exists. Slice 104 adds
   the offline provider adapter construction plan that consumes slice 103's
   route-profile bundle. `<oran/provider/adapter_plan.hpp>` now exports
   `provider::AdapterConstructionTarget`, `provider::AdapterConstructionPlan`,

@@ -56,6 +56,10 @@ Current implementation status:
   include `protocol`, which is validated as a non-empty string by `oran-config` and
   parsed as an exact `provider::ProtocolKind` spelling by `oran-provider`.
   Route entries require `primary` and may include `fallbacks`.
+- `api_key_env` is still an environment-variable name in config. It is read only
+  when a caller explicitly invokes `provider::resolve_adapter_credentials(plan)`
+  after provider route/profile resolution and adapter planning. Regular
+  `bootstrap::run` does not call that secret-read boundary yet.
 - `teams`, `channels`, `memory`, and `automation` are recognized root fields but do
   not have typed models yet. The `hooks` root has the v1 typed timeout field; sink
   and binding arrays remain recognized-but-untyped until external hook sinks land.
