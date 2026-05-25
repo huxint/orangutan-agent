@@ -190,9 +190,10 @@ proves the loop behaves correctly without a network.
     preserves successful `tool::Output::data_json` on the provider-facing
     `ToolResultContent` transcript and adds offline Anthropic/OpenAI Responses
     request serialization, so structured tool results can reach protocol
-    mappers without changing the loop's typed request/response contract.
-    Response decoding, transport-backed factories, and ordinary binary handoff
-    remain downstream.
+    mappers without changing the loop's typed request/response contract. Slice
+    108 adds the paired offline response decoder, mapping Anthropic/OpenAI
+    response JSON back into the same typed `provider::Response` contract.
+    Transport-backed factories and ordinary binary handoff remain downstream.
   1. Build `TurnContext` (identity, route, session id, origin,
      cancellation slot, stable service refs).
   2. Load/render memory once per turn (memory: `nullopt` in v1 — the
@@ -415,7 +416,8 @@ proves the loop behaves correctly without a network.
   — `tool_result` blocks carry `Output::data_json` when present; v1 falls
   back to text per the migration plan. Slice 107 preserves that field through
   `agent::Loop` and proves the offline provider protocol mapper consumes it
-  for Anthropic Messages and OpenAI Responses.
+  for Anthropic Messages and OpenAI Responses. Slice 108 keeps response
+  decoding on the same typed `provider::Response` side of the loop contract.
 - [`0018-first-loop-observability.md`](0018-first-loop-observability.md)
   — defines the trace shape; this spec's loop emits the rows.
 

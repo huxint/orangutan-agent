@@ -51,6 +51,7 @@ ordinary binary prompts switch from the deterministic no-runner shell to
 - Compile-budget impact:
   - Slice 107 adds private JSON serialization to `oran-provider`; the dependency is
     documented in `docs/BUILD_SYSTEM.md` and `docs/rules/libraries.md`.
+    Slice 108 reuses that private dependency for offline response decoding.
 
 ## Risks
 
@@ -111,7 +112,8 @@ ordinary binary prompts switch from the deterministic no-runner shell to
 - [x] Slice 106: dispatch resolved credentials through registered adapter factories.
 - [x] Slice 107: serialize Anthropic Messages / OpenAI Responses request JSON bytes
       offline and preserve structured tool-result bytes through the agent loop.
-- [ ] Decode Anthropic/OpenAI response JSON into `provider::Response`.
+- [x] Slice 108: decode Anthropic Messages / OpenAI Responses response JSON bytes
+      offline into `provider::Response`.
 - [ ] Add transport-backed protocol factories.
 - [ ] Switch ordinary binary prompts to `cli::run_async`.
 - [ ] Move this plan to `docs/exec-plans/completed/` once the binary handoff lands.
@@ -121,6 +123,9 @@ ordinary binary prompts switch from the deterministic no-runner shell to
 - 2026-05-26: Keep request serialization as an offline `ProtocolRequest` boundary
   before adding HTTP transport. This lets the test suite prove vendor JSON shapes and
   structured tool-result mapping without API keys or network flake.
+- 2026-05-26: Keep response decoding as an offline `decode_protocol_response`
+  boundary before transport. It proves model/content/usage/stop-reason mapping
+  without coupling to HTTP status handling or streaming assembly.
 - 2026-05-26: Keep retry/fallback outside protocol factories. The adapter-factory
   seam constructs single-target backends; `provider::execution::Runtime` remains the
   owner of retry and fallback policy.
@@ -136,5 +141,6 @@ ordinary binary prompts switch from the deterministic no-runner shell to
 - History entries:
   - `docs/histories/2026-05/20260526-0008-provider-adapter-factory.md`
   - `docs/histories/2026-05/20260526-0114-provider-protocol-request.md`
+  - `docs/histories/2026-05/20260526-0228-provider-protocol-response.md`
 - Release note:
   - `docs/releases/feature-release-notes.md`

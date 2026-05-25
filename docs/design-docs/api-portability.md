@@ -35,9 +35,10 @@ struct Response {
 
 `core::Content` is a typed variant; protocol adapters translate to/from vendor JSON.
 
-> **Status (slice 107, 2026-05-26):** `oran-provider` exists as the
+> **Status (slice 108, 2026-05-26):** `oran-provider` exists as the
 > provider-domain, prompt-cache-hint, fake-provider, route-resolver, first
-> execution wrapper, and offline protocol request serialization library.
+> execution wrapper, and offline protocol request/response serialization
+> library.
 > `<oran/provider.hpp>` exports the slice-73 value shapes (`Request`,
 > `Response`, `Usage`, `RetryPolicy`, `PromptCacheHints`,
 > `PromptCacheOptions`, `make_prompt_cache_hints(prompt::RenderedPrompt,
@@ -85,14 +86,21 @@ struct Response {
 > validates opaque tool schema, tool input, and structured tool-result JSON in
 > the provider implementation TU, preserves text-only tool-result fallbacks,
 > and maps `ToolResultContent::data_json` into the structured Anthropic/OpenAI
-> tool-result channels. The
+> tool-result channels. Slice 108 adds
+> `<oran/provider/protocol_response.hpp>` with
+> `provider::decode_protocol_response(body_json, target)`, supporting the same
+> Anthropic Messages and OpenAI Responses protocol families. That offline
+> decoder maps vendor text, thinking/reasoning summaries, tool-use blocks,
+> model ids, token usage, and terminal status/stop reasons back into
+> `provider::Response` while rejecting malformed JSON or unsupported response
+> item types as `ErrorKind::parsing`. The
 > resolvers and plan report `Error::config` for missing profile references,
 > unknown provider spellings, unknown explicit protocol spellings, or malformed
 > adapter endpoint metadata. Slice 101's bootstrap `AgentPromptRunner` is the first owner that
 > consumes a resolved route plus `provider::execution::Runtime` to drive
 > `agent::Loop` with a caller-supplied backend.
-> Response decoding, real transports, concrete protocol factories, provider
-> hooks, binary adapter construction, and usage/cost rollups remain planned. Ordinary
+> Real transports, concrete protocol factories, provider hooks, binary adapter
+> construction, and usage/cost rollups remain planned. Ordinary
 > `bootstrap::run` still does not call the credential resolver or adapter
 > factory.
 
@@ -194,10 +202,12 @@ credential target's adapter-family name to a registered
 returns a `provider::System` that routes single-target execution calls by
 `route.primary.profile`. Slice 107 adds the offline
 `provider::make_protocol_request(request, target)` seam that those future
-factories can call before HTTP transport. It currently serializes Anthropic
-Messages and OpenAI Responses request bodies, including text-only and
-structured tool-result blocks, and rejects unsupported protocol families as
-configuration errors. The current typed config does not yet
+factories can call before HTTP transport; slice 108 adds the paired
+`provider::decode_protocol_response(body_json, target)` seam. They currently
+serialize/decode Anthropic Messages and OpenAI Responses bodies, including
+text/thinking/tool-use blocks, usage counters, model ids, stop reasons, and
+text-only/structured tool-result request mapping, and reject unsupported
+protocol families as configuration errors. The current typed config does not yet
 carry route-level `thinking_budget`, prompt-cache options, or capability
 metadata, so those fields stay unset until their schema lands. The agent's
 `Loop` will resolve a `Route` once per turn (or once per `Loop` if static) and
@@ -363,9 +373,9 @@ that resolves the named API-key environment variables for concrete factories.
 `provider::make_adapter_system` is the following construction seam: it consumes
 the credential bundle plus registered protocol factories and returns a
 profile-routed `provider::System`, but real HTTP transports and vendor protocol
-implementations still land in later slices. Slice 107 adds offline request-body
-serialization for Anthropic Messages and OpenAI Responses before that transport
-step; it does not decode responses or construct a backend.
+implementations still land in later slices. Slices 107-108 add offline
+request-body serialization and response-body decoding for Anthropic Messages and
+OpenAI Responses before that transport step; they do not construct a backend.
 Custom headers, context windows, thinking policy, and cost fields remain planned
 provider-schema fields until the typed parser accepts them.
 
