@@ -26,9 +26,11 @@ with persistent session history and a CLI surface. The first deliverable is "I c
     unsupported endpoint schemes. Built-in empty defaults still run without a
     provider route.
   - `oran-provider` exposes `resolve_adapter_credentials(plan)` and
-    `make_adapter_system(credentials, factories)` for future real adapter
-    construction. The ordinary binary does not call either boundary yet, so
-    configured `api_key_env` names are still not read during current startup.
+    `make_adapter_system(credentials, factories)` for real adapter
+    construction. `bootstrap::HttpProviderBackend::build` can call those
+    boundaries explicitly, while the ordinary binary does not call that seam
+    yet, so configured `api_key_env` names are still not read during ordinary
+    startup.
   - `oran-provider` also exposes the offline `make_protocol_request(request,
     target)` and `decode_protocol_response(body_json, target)` mappers for
     Anthropic Messages and OpenAI Responses JSON. Request serialization includes
@@ -38,13 +40,14 @@ with persistent session history and a CLI surface. The first deliverable is "I c
     `ProtocolTransportAdapterFactory`, which builds non-streaming Anthropic or
     OpenAI `provider::System` backends over an injected body-response
     `ProtocolTransport`. Slice 110 adds the platform `oran-http`/libcurl
-    body client, but bootstrap adapter construction that binds it into
-    `ProtocolTransport` still remains downstream of the current binary.
+    body client, and slice 111 adds bootstrap's `HttpProviderBackend`, which
+    binds that client into `ProtocolTransport` and constructs a profile-routed
+    backend for caller-supplied `AgentPromptRunner` use.
   - Bootstrap exports `AgentPromptRunner` for tests and future adapter owners: callers
     can supply a provider backend and resolved route to drive `agent::Loop` with the
     runtime assembly's workspace/audit/broker/hook/trace services. The ordinary binary
-    still stays on the deterministic no-runner shell until real provider adapters can
-    be constructed from config.
+    still stays on the deterministic no-runner shell until `bootstrap::run`
+    switches to constructing that backend and calling `cli::run_async`.
 - One agent runtime per process (multiplexing comes in spec 0004).
 - Anthropic Messages **and** OpenAI Chat Completions providers (one of the two
   configured + working end-to-end is acceptance; the other is built and bench-only).

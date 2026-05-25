@@ -85,10 +85,12 @@ own library, its own tests, its own bench, its own design doc."
 > dispatch seam for concrete factories; slices 107-108 add offline
 > Anthropic/OpenAI Responses request serialization and response decoding, slice
 > 107 preserves structured tool-result bytes from direct dispatch through the
-> provider-facing transcript, and slice 109 adds injected body-response
-> Anthropic/OpenAI protocol systems through `ProtocolTransportAdapterFactory`.
-> Ordinary bootstrap still does not call the credential/factory boundaries or
-> read provider API-key env vars.
+> provider-facing transcript, slice 109 adds injected body-response
+> Anthropic/OpenAI protocol systems through `ProtocolTransportAdapterFactory`,
+> slice 110 adds the platform `oran-http` body client, and slice 111 adds the
+> bootstrap-owned `HttpProviderBackend` construction seam over that client.
+> Ordinary `bootstrap::run` still does not call that seam or read provider
+> API-key env vars.
 > Slices 76-77
 > extend `agent::Loop` over those pieces: it builds a
 > `prompt::RenderedPrompt`, maps cache hints, mirrors active/promoted tools
@@ -185,9 +187,11 @@ per-call timestamp and then restores the caller's reusable context. Slice 97
 adds the provider execution decorator for retry/fallback, and slice 101 hands
 that decorated `provider::System` to the loop through bootstrap's
 `AgentPromptRunner` when a caller supplies a backend. Slice 109 adds injected
-body-response Anthropic/OpenAI protocol systems, but the ordinary binary still
-needs an `http::Client`-backed `ProtocolTransport` adapter plus bootstrap
-adapter construction before it can use the runner. The future
+body-response Anthropic/OpenAI protocol systems, slice 110 adds the concrete
+`oran-http` body client, and slice 111 adds bootstrap's `HttpProviderBackend`
+construction seam over that client. The ordinary binary still needs to switch
+`bootstrap::run` to that backend plus `cli::run_async` before it can use the
+runner. The future
 `ToolScheduler` can replace the direct loop call without changing the
 provider-facing request/response shape.
 

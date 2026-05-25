@@ -91,8 +91,9 @@ handlers can adopt without churning every callsite at once.
 > `tool_result.content[]` or serialized OpenAI Responses
 > `function_call_output.output` while keeping text-only fallback behavior.
 > Response decoding and the first injected transport-backed Anthropic/OpenAI
-> factories now land in slices 108-109, and slice 110 adds the `oran-http`
-> body client. Binding that client into `ProtocolTransport`, SSE transport,
+> factories now land in slices 108-109, slice 110 adds the `oran-http`
+> body client, and slice 111 adds the bootstrap-owned
+> `http::Client`-backed `ProtocolTransport` adapter. SSE transport,
 > Gemini/custom mappings, and ordinary binary handoff remain downstream.
 
 - **`tool::Output v2`**:
@@ -298,9 +299,10 @@ handlers can adopt without churning every callsite at once.
    tool-result field; a fake-provider loop test proves `tool::Output` reaches
    the provider-facing transcript without losing `data_json`. Slices 108-109
    add response decoding and an injected body-response transport factory seam,
-   and slice 110 adds the `oran-http` body client. The
-   `http::Client`-backed `ProtocolTransport` adapter, SSE transport, and
-   non-Anthropic/OpenAI protocol families remain follow-up work.
+   slice 110 adds the `oran-http` body client, and slice 111 adds the
+   bootstrap-owned `http::Client`-backed `ProtocolTransport` adapter. SSE
+   transport, ordinary binary handoff, and non-Anthropic/OpenAI protocol
+   families remain follow-up work.
 8. **Migration tax.** A v1 handler kept on `Output::text_only(...)`
    compiles, links, and passes its existing test suite **without
    modification** for at least one slice after `Output` v2 lands. The

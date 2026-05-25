@@ -1,9 +1,9 @@
 // include/oran/provider/protocol_transport.hpp - provider protocol transport seam.
 //
-// This is the protocol-factory boundary before a concrete oran-http client
-// exists. It composes the offline request/response mappers with an injected
-// HTTP-shaped transport while keeping curl/asio implementation types out of
-// provider public headers.
+// This is the protocol-factory boundary between provider JSON mappers and any
+// concrete HTTP client. It composes the offline request/response mappers with
+// an injected HTTP-shaped transport while keeping curl/asio implementation
+// types out of provider public headers.
 
 #pragma once
 

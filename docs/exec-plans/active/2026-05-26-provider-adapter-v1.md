@@ -56,7 +56,9 @@ ordinary binary prompts switch from the deterministic no-runner shell to
     transport; it does not add a third-party dependency.
     Slice 110 adds the first concrete platform HTTP target, links system
     `libcurl >=8.11.0` privately behind `oran-http::Client`, and keeps curl
-    handles out of public headers.
+    handles out of public headers. Slice 111 adds the bootstrap-owned
+    `HttpProviderBackend` construction seam over that client; it introduces no
+    new third-party dependency and keeps libcurl ownership in `oran-http`.
 
 ## Risks
 
@@ -64,9 +66,10 @@ ordinary binary prompts switch from the deterministic no-runner shell to
   Mitigation: keep all request serialization and future response decoding inside
   `oran-provider`; agent tests assert only domain `provider::Request` values.
 - Risk: ordinary bootstrap starts reading secrets or sending requests before the
-  adapter stack is complete.
-  Mitigation: keep each preflight slice explicit about the no-secret/no-network
-  boundary and test `bootstrap::run` before the handoff switch.
+  prompt handoff switch is intentional.
+  Mitigation: keep `HttpProviderBackend::build` as an explicit construction
+  boundary, keep regular `bootstrap::run` on the no-runner path until the next
+  slice, and test both backend construction and the existing bootstrap path.
 - Risk: response decoding and streaming are coupled too early.
   Mitigation: land offline request serialization first, then offline response
   decoding, then a non-streaming injected transport seam before SSE streaming.
@@ -122,8 +125,8 @@ ordinary binary prompts switch from the deterministic no-runner shell to
 - [x] Slice 109: build Anthropic/OpenAI protocol factories over an injected
       body-response `ProtocolTransport`.
 - [x] Slice 110: add the concrete `oran-http` / libcurl body-response client target.
-- [ ] Adapt `http::Client` to `provider::ProtocolTransport` and construct provider
-      backends from bootstrap config.
+- [x] Slice 111: adapt `http::Client` to `provider::ProtocolTransport` and
+      construct provider backends from bootstrap config.
 - [ ] Switch ordinary binary prompts to `cli::run_async`.
 - [ ] Move this plan to `docs/exec-plans/completed/` once the binary handoff lands.
 
@@ -146,6 +149,11 @@ ordinary binary prompts switch from the deterministic no-runner shell to
   adapter construction. The client takes a caller-owned blocking executor so libcurl
   work can run on `async::Runtime::cpu_executor()` rather than the main coroutine
   executor, while future SSE support can extend the same library boundary.
+- 2026-05-26: Keep the first concrete backend as an explicit
+  `bootstrap::HttpProviderBackend` object instead of immediately switching
+  `bootstrap::run`. That lets tests prove credentials, HTTP transport, protocol
+  factories, and route ownership without changing ordinary prompt behavior until the
+  final `cli::run_async` handoff slice.
 
 ## Linked Artifacts
 
@@ -161,5 +169,6 @@ ordinary binary prompts switch from the deterministic no-runner shell to
   - `docs/histories/2026-05/20260526-0228-provider-protocol-response.md`
   - `docs/histories/2026-05/20260526-0302-provider-protocol-transport.md`
   - `docs/histories/2026-05/20260526-0426-http-body-client.md`
+  - `docs/histories/2026-05/20260526-0627-bootstrap-provider-backend.md`
 - Release note:
   - `docs/releases/feature-release-notes.md`

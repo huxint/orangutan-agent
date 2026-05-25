@@ -145,15 +145,16 @@ When config declares routes, bootstrap resolves the `default` route through
 `provider::make_adapter_construction_plan` before CLI handoff. That startup
 preflight catches bad profile references, provider labels, explicit
 profile-protocol spellings, missing endpoint metadata, and unsupported endpoint
-schemes before the future loop boundary while preserving the non-secret startup
-summary. `api_key_env` remains a string field only here: even though
-`oran-provider` now exposes `provider::resolve_adapter_credentials(plan)` and
-`provider::make_adapter_system(credentials, factories)` plus the slice-109
-`provider::ProtocolTransportAdapterFactory` for future adapter factories, and
-slice 110 adds the platform `oran-http::Client` body transport. Regular
-bootstrap does not call any of those boundaries yet. No provider credentials
-are read, no concrete transport is allocated, no provider adapter is
-constructed, and no agent runtime loop is started in this slice.
+schemes before the loop boundary while preserving the non-secret startup
+summary. The explicit `HttpProviderBackend::build` seam can now cross the
+credential and adapter-construction boundary: it resolves the configured API
+key environment variables, owns an `http::Client`, adapts it to
+`provider::ProtocolTransport`, registers the built-in Anthropic/OpenAI protocol
+factories, and returns a `provider::System` plus route for a caller-supplied
+`AgentPromptRunner`. Regular `bootstrap::run` still does not call
+`HttpProviderBackend::build`; no provider credentials are read, no concrete
+transport is allocated, no provider adapter is constructed, and no agent
+runtime loop is started on ordinary binary prompts in this slice.
 The runtime assembly opens the audit DB when audit is enabled so migrations, trace
 repository ownership, and audit sinks are ready before the future loop handoff.
 The `AgentPromptRunner` public seam can run `agent::Loop` when a caller supplies a
@@ -170,7 +171,6 @@ permission-decision and `hook_publish` rows are readable in the same output.
 ## Next Steps
 
 - Bind configured hook sinks to the assembly-owned bus once the hook sink models land.
-- Construct real provider adapter backends from config by adapting
-  `http::Client` to `provider::ProtocolTransport`, and switch the ordinary
-  binary prompt path from `cli::run` to `cli::run_async` with
-  `AgentPromptRunner`.
+- Switch the ordinary binary prompt path from `cli::run` to `cli::run_async`
+  with `AgentPromptRunner` once `bootstrap::run` opts into
+  `HttpProviderBackend::build`.

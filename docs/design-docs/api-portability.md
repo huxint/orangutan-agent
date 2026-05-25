@@ -35,7 +35,7 @@ struct Response {
 
 `core::Content` is a typed variant; protocol adapters translate to/from vendor JSON.
 
-> **Status (slice 110, 2026-05-26):** `oran-provider` exists as the
+> **Status (slice 111, 2026-05-26):** `oran-provider` exists as the
 > provider-domain, prompt-cache-hint, fake-provider, route-resolver, first
 > execution wrapper, offline protocol request/response serialization library,
 > and injected body-response protocol transport seam.
@@ -110,14 +110,16 @@ struct Response {
 > returns one JSON body. The
 > resolvers and plan report `Error::config` for missing profile references,
 > unknown provider spellings, unknown explicit protocol spellings, or malformed
-> adapter endpoint metadata. Slice 101's bootstrap `AgentPromptRunner` is the first owner that
-> consumes a resolved route plus `provider::execution::Runtime` to drive
-> `agent::Loop` with a caller-supplied backend.
-> Adapting `http::Client` into `provider::ProtocolTransport`, SSE streaming,
-> provider hooks, binary adapter construction, and usage/cost rollups remain
-> planned. Ordinary
-> `bootstrap::run` still does not call the credential resolver or adapter
-> factory.
+> adapter endpoint metadata. Slice 111 adds bootstrap's
+> `HttpProviderBackend`, which adapts `http::Client` to
+> `provider::ProtocolTransport`, resolves configured credentials, registers
+> the built-in Anthropic/OpenAI protocol factories, and owns the transport plus
+> produced `provider::System` for `AgentPromptRunner` callers. Slice 101's
+> bootstrap `AgentPromptRunner` is the loop owner that consumes a resolved
+> route plus `provider::execution::Runtime` to drive `agent::Loop` with a
+> caller-supplied backend. SSE streaming, provider hooks, ordinary binary
+> handoff, and usage/cost rollups remain planned. Regular `bootstrap::run`
+> still does not call `HttpProviderBackend::build`.
 
 ## Layered Implementation
 
@@ -222,8 +224,11 @@ call before HTTP transport; slice 108 adds the paired
 `ProtocolTransportAdapterFactory`, which composes those mappers over an injected
 `ProtocolTransport` to build non-streaming Anthropic/OpenAI body-response
 systems without pulling libcurl into `oran-provider`. Slice 110 adds the
-platform `oran-http::Client` body transport, but provider/bootstrap have not
-adapted it to `ProtocolTransport` yet. They currently
+platform `oran-http::Client` body transport, and slice 111 adds bootstrap's
+`HttpProviderBackend`, which adapts that client to `ProtocolTransport`,
+resolves credentials, registers the built-in transport factories, and returns a
+profile-routed `provider::System` plus route for `AgentPromptRunner` callers.
+They currently
 serialize/decode Anthropic Messages and OpenAI Responses bodies, including
 text/thinking/tool-use blocks, usage counters, model ids, stop reasons, and
 text-only/structured tool-result request mapping, and reject unsupported
@@ -395,9 +400,10 @@ the credential bundle plus registered protocol factories and returns a
 profile-routed `provider::System`. Slice 109's
 `ProtocolTransportAdapterFactory` can now supply Anthropic Messages and OpenAI
 Responses backends over an injected body-response `ProtocolTransport`; slice
-110 adds `oran-http::Client` for real HTTP/TLS body I/O. The adapter that binds
-that client into `ProtocolTransport`, SSE streaming, provider hooks, and
-ordinary binary adapter construction still land in later slices. Slices 107-108 add offline request-body
+110 adds `oran-http::Client` for real HTTP/TLS body I/O, and slice 111's
+`bootstrap::HttpProviderBackend` binds that client into `ProtocolTransport` for
+explicit caller-owned backend construction. SSE streaming, provider hooks, and
+ordinary binary handoff still land in later slices. Slices 107-108 add offline request-body
 serialization and response-body decoding for Anthropic Messages and OpenAI
 Responses before that transport step.
 Custom headers, context windows, thinking policy, and cost fields remain planned

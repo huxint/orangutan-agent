@@ -7,16 +7,37 @@
 
 ## Snapshot
 
-- **Slice:** 110 (`xmake run orangutan` reports slice 110)
+- **Slice:** 111 (`xmake run orangutan` reports slice 111)
 - **Last completed history:**
-  [`histories/2026-05/20260526-0426-http-body-client.md`](histories/2026-05/20260526-0426-http-body-client.md)
+  [`histories/2026-05/20260526-0627-bootstrap-provider-backend.md`](histories/2026-05/20260526-0627-bootstrap-provider-backend.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-05-26-provider-adapter-v1.md`](exec-plans/active/2026-05-26-provider-adapter-v1.md)
   — tracks the remaining multi-slice provider adapter handoff from offline
   protocol bytes through transport-backed factories and ordinary binary
   `cli::run_async` wiring.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 110 adds
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 111 adds
+  the bootstrap-owned HTTP provider backend construction seam needed before
+  ordinary binary prompt handoff. New
+  `<oran/bootstrap/provider_backend.hpp>` exports `HttpProviderBackendOptions`
+  and movable `HttpProviderBackend`. `HttpProviderBackend::build(config,
+  options)` resolves the configured route profiles, builds the adapter plan,
+  reads the configured API-key environment variables, owns an `http::Client`
+  on the caller-provided blocking executor, adapts that client to
+  `provider::ProtocolTransport`, registers the built-in Anthropic Messages and
+  OpenAI Responses protocol factories, and returns a profile-routed
+  `provider::System` plus the resolved route for `AgentPromptRunner` callers.
+  The transport adapter converts protocol HTTP requests into `http::BodyRequest`
+  with a positive request timeout and maps `http::Client` failures back into
+  provider transport errors without logging secret header values. Focused
+  result: `test-bootstrap` 67 cases / 287 assertions, including a localhost
+  Anthropic Messages round trip through libcurl and a missing-credential
+  construction error with only non-secret context. Regular `bootstrap::run`
+  still does not call `HttpProviderBackend::build`, so ordinary binary prompts
+  still use the deterministic no-runner `cli::run` path and do not start
+  `agent::Loop`. Remaining handoff work is now switching `bootstrap::run` to
+  build this backend and call `cli::run_async` with `AgentPromptRunner` when a
+  configured provider backend is available. Slice 110 adds
   the platform-owned `oran-http` target and a libcurl-backed
   body-response client needed before provider factories can use real HTTP/TLS
   I/O. New `<oran/http/client.hpp>` exports stdlib-shaped `Header`,
@@ -28,13 +49,7 @@
   parent cancellation slot is already or becomes cancelled during the curl
   poll loop. The target links system `libcurl >=8.11.0`; curl handles stay
   private to `src/oran-http/client.cpp`. Focused result: `test-http` 3 cases /
-  21 assertions. `bootstrap::run` still does not read provider credentials,
-  construct adapters, allocate this HTTP client, send a network request, or
-  start `agent::Loop` for ordinary binary prompts. Remaining handoff work is
-  now the bootstrap adapter construction slice that adapts
-  `http::Client` to `provider::ProtocolTransport` and switches
-  `bootstrap::run` to `cli::run_async` only when that backend exists.
-  Slice 109 adds
+  21 assertions. Slice 109 adds
   the provider-owned protocol transport adapter seam needed before concrete
   HTTP/TLS transport and ordinary binary handoff. New
   `<oran/provider/protocol_transport.hpp>` exports the HTTP-shaped
@@ -884,7 +899,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 63 cases / 512 assertions.
 - `oran-agent`: 25 cases / 401 assertions.
 - `oran-cli`: 14 cases / 97 assertions.
-- `oran-bootstrap`: 65 cases / 269 assertions.
+- `oran-bootstrap`: 67 cases / 287 assertions.
 
 ## Open Tech-Debt Rows
 
