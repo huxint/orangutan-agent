@@ -16,10 +16,12 @@ Current slice:
 - `oran-config` loads provider profile metadata such as `api_key_env`; the
   ordinary bootstrap path still treats it as metadata and does not read secret
   values.
-- `oran-provider` exposes `resolve_adapter_credentials(plan)` for the future real
-  adapter factory. It reads API-key environment variables only when called
-  explicitly, keeps key values in memory, and reports failures with env-var names
-  rather than secret values.
+- `oran-provider` exposes `resolve_adapter_credentials(plan)` and
+  `make_adapter_system(credentials, factories)` for future real adapter
+  construction. The credential resolver reads API-key environment variables
+  only when called explicitly, the factory passes key values only through
+  in-memory targets to caller-registered protocol factories, and both surfaces
+  report failures with non-secret identifiers rather than secret values.
 - `${VAR}` substitution exists for string config values. Missing variables are errors
   unless `${VAR:-default}` provides a fallback.
 - Secret values must not be placed in `config.example.json`.

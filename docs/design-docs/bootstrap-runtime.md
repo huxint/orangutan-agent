@@ -147,8 +147,9 @@ preflight catches bad profile references, provider labels, explicit
 profile-protocol spellings, missing endpoint metadata, and unsupported endpoint
 schemes before the future loop boundary while preserving the non-secret startup
 summary. `api_key_env` remains a string field only here: even though
-`oran-provider` now exposes `provider::resolve_adapter_credentials(plan)` for
-future adapter factories, regular bootstrap does not call it. No provider
+`oran-provider` now exposes `provider::resolve_adapter_credentials(plan)` and
+`provider::make_adapter_system(credentials, factories)` for future adapter
+factories, regular bootstrap does not call either boundary. No provider
 credentials are read, no provider adapter is constructed, and no agent runtime
 loop is started in this slice.
 The runtime assembly opens the audit DB when audit is enabled so migrations, trace

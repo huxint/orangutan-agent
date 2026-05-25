@@ -35,7 +35,7 @@ struct Response {
 
 `core::Content` is a typed variant; protocol adapters translate to/from vendor JSON.
 
-> **Status (slice 105, 2026-05-25):** `oran-provider` exists as the
+> **Status (slice 106, 2026-05-26):** `oran-provider` exists as the
 > provider-domain, prompt-cache-hint, fake-provider, route-resolver, and
 > first execution wrapper library.
 > `<oran/provider.hpp>` exports the slice-73 value shapes (`Request`,
@@ -70,14 +70,22 @@ struct Response {
 > variables named by the adapter plan, stores only in-memory key strings beside
 > the matching plan targets, derives the same loop-facing route, and reports
 > missing or empty keys as `ErrorKind::auth` with non-secret context. The
+> slice-106 `provider::make_adapter_system(credentials, factories)` consumes
+> that credential bundle plus caller-registered `ProtocolAdapterFactory`
+> bindings, constructs one backend per primary/fallback profile, and returns a
+> profile-routed `provider::System` that forwards each single-target execution
+> call to the matching backend. The factory validates missing/null/duplicate
+> bindings and duplicate route profiles as config errors without logging
+> secret API-key values. The
 > resolvers and plan report `Error::config` for missing profile references,
 > unknown provider spellings, unknown explicit protocol spellings, or malformed
 > adapter endpoint metadata. Slice 101's bootstrap `AgentPromptRunner` is the first owner that
 > consumes a resolved route plus `provider::execution::Runtime` to drive
 > `agent::Loop` with a caller-supplied backend.
-> Real transports, protocol adapters, provider hooks, binary adapter
-> construction, and usage/cost rollups remain planned. Ordinary
-> `bootstrap::run` still does not call the credential resolver.
+> Real transports, protocol adapter implementations, provider hooks, binary
+> adapter construction, and usage/cost rollups remain planned. Ordinary
+> `bootstrap::run` still does not call the credential resolver or adapter
+> factory.
 
 ## Layered Implementation
 
@@ -170,7 +178,12 @@ input: it resolves the plan's `api_key_env` names through `std::getenv`,
 returns `ErrorKind::auth` for missing or empty environment variables, keeps
 error context to non-secret identifiers (`role`, `profile`, `api_key_env`),
 and yields `AdapterCredentialBundle { primary, fallbacks }` that can derive
-the same loop-facing `Route`. The current typed config does not yet
+the same loop-facing `Route`. Slice 106 adds
+`provider::make_adapter_system(credentials, factories)`: it matches each
+credential target's adapter-family name to a registered
+`ProtocolAdapterFactory`, constructs a backend for each route profile, and
+returns a `provider::System` that routes single-target execution calls by
+`route.primary.profile`. The current typed config does not yet
 carry route-level `thinking_budget`, prompt-cache options, or capability
 metadata, so those fields stay unset until their schema lands. The agent's
 `Loop` will resolve a `Route` once per turn (or once per `Loop` if static) and
@@ -333,6 +346,10 @@ endpoint metadata for the future adapter factory without reading `api_key_env`.
 constructing adapters or sending network traffic, and
 `provider::resolve_adapter_credentials` is the later, explicit secret-read step
 that resolves the named API-key environment variables for concrete factories.
+`provider::make_adapter_system` is the following construction seam: it consumes
+the credential bundle plus registered protocol factories and returns a
+profile-routed `provider::System`, but real HTTP transports and vendor protocol
+implementations still land in later slices.
 Custom headers, context windows, thinking policy, and cost fields remain planned
 provider-schema fields until the typed parser accepts them.
 

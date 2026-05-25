@@ -182,8 +182,11 @@ proves the loop behaves correctly without a network.
     caller-supplied backends. The ordinary binary still waits on real provider
     adapter construction before it can hand CLI prompts to that runner. Slice
     105 adds the provider-owned credential-resolution API that future factories
-    will call after offline adapter planning, but ordinary bootstrap still does
-    not read provider API-key environment variables.
+    will call after offline adapter planning, and slice 106 adds
+    `provider::make_adapter_system(credentials, factories)` so those resolved
+    credentials can be turned into one profile-routed backend once concrete
+    protocol factories exist. Ordinary bootstrap still does not read provider
+    API-key environment variables or construct provider adapters.
   1. Build `TurnContext` (identity, route, session id, origin,
      cancellation slot, stable service refs).
   2. Load/render memory once per turn (memory: `nullopt` in v1 — the

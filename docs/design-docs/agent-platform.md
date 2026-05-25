@@ -80,9 +80,10 @@ own library, its own tests, its own bench, its own design doc."
 > route fallback before real adapters land. Slice 101 adds bootstrap's
 > `AgentPromptRunner`, which borrows a caller-supplied backend, wraps it in
 > that execution runtime, binds the CLI approval sink, and runs `agent::Loop`
-> with runtime-assembly workspace/audit/broker/hook/trace services. Slice 105
-> adds the provider credential-resolution API for the future adapter factory;
-> ordinary bootstrap still does not call it or read provider API-key env vars.
+> with runtime-assembly workspace/audit/broker/hook/trace services. Slices
+> 105-106 add the provider credential-resolution API and adapter-factory
+> dispatch seam for future concrete factories; ordinary bootstrap still does
+> not call either boundary or read provider API-key env vars.
 > Slices 76-77
 > extend `agent::Loop` over those pieces: it builds a
 > `prompt::RenderedPrompt`, maps cache hints, mirrors active/promoted tools

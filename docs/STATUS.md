@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 105 (`xmake run orangutan` reports slice 105)
+- **Slice:** 106 (`xmake run orangutan` reports slice 106)
 - **Last completed history:**
-  [`histories/2026-05/20260525-2356-provider-credentials.md`](histories/2026-05/20260525-2356-provider-credentials.md)
+  [`histories/2026-05/20260526-0008-provider-adapter-factory.md`](histories/2026-05/20260526-0008-provider-adapter-factory.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
@@ -18,7 +18,28 @@
   plan because they stayed under the existing spec-0015/0017/0018
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 105 adds
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 106 adds
+  the provider-owned adapter factory dispatch seam that consumes slice 105's
+  credential bundle without introducing HTTP transport. New
+  `<oran/provider/adapter_factory.hpp>` exports
+  `provider::ProtocolAdapterFactory`,
+  `provider::ProtocolAdapterFactoryBinding`, and
+  `provider::make_adapter_system(credentials, factories)`. The factory builds
+  one concrete backend per primary/fallback credential target by matching each
+  target's `adapter_name` to a caller-registered protocol factory, rejects
+  missing/null/duplicate bindings and duplicate route profiles as
+  `Error::config`, and returns a profile-routed `provider::System`. That
+  returned system expects the execution layer to pass a single selected target
+  per call, forwards a one-target route to the matching backend, and leaves
+  retry/fallback ownership in `provider::execution::Runtime`. `bootstrap::run`
+  does not call this boundary yet, so ordinary startup still preflights
+  route/profile/adapter metadata without reading provider credentials,
+  decrypting secrets, allocating an HTTP client, constructing a real adapter,
+  sending a network request, or starting `agent::Loop` for ordinary binary
+  prompts. Focused result: `test-provider` 45 cases / 329 assertions.
+  Remaining handoff work is still implementing concrete Anthropic/OpenAI
+  protocol factories, wiring transport, and switching `bootstrap::run` to
+  `cli::run_async` only when that backend exists. Slice 105 adds
   the explicit provider credential-resolution boundary that a future concrete
   adapter factory will call after slice 104's offline plan. New
   `<oran/provider/credentials.hpp>` exports
@@ -786,10 +807,10 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-hook`: 30 cases / 207 assertions.
 - `oran-tool`: 178 cases / 1838 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
-- `oran-provider`: 28 cases / 210 assertions.
+- `oran-provider`: 45 cases / 329 assertions.
 - `oran-agent`: 24 cases / 391 assertions.
 - `oran-cli`: 14 cases / 97 assertions.
-- `oran-bootstrap`: 64 cases / 264 assertions.
+- `oran-bootstrap`: 65 cases / 269 assertions.
 
 ## Open Tech-Debt Rows
 

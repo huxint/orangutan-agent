@@ -58,8 +58,12 @@ Current implementation status:
   Route entries require `primary` and may include `fallbacks`.
 - `api_key_env` is still an environment-variable name in config. It is read only
   when a caller explicitly invokes `provider::resolve_adapter_credentials(plan)`
-  after provider route/profile resolution and adapter planning. Regular
-  `bootstrap::run` does not call that secret-read boundary yet.
+  after provider route/profile resolution and adapter planning. The returned
+  in-memory credential bundle can then be passed to
+  `provider::make_adapter_system(credentials, factories)`, which constructs
+  profile-routed provider backends without adding the key values to logs,
+  hook payloads, or error context. Regular `bootstrap::run` does not call either
+  boundary yet.
 - `teams`, `channels`, `memory`, and `automation` are recognized root fields but do
   not have typed models yet. The `hooks` root has the v1 typed timeout field; sink
   and binding arrays remain recognized-but-untyped until external hook sinks land.
