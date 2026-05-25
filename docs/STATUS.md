@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 101 (`xmake run orangutan` reports slice 101)
+- **Slice:** 102 (`xmake run orangutan` reports slice 102)
 - **Last completed history:**
-  [`histories/2026-05/20260525-2022-bootstrap-agent-prompt-runner.md`](histories/2026-05/20260525-2022-bootstrap-agent-prompt-runner.md)
+  [`histories/2026-05/20260525-2108-provider-profile-protocol.md`](histories/2026-05/20260525-2108-provider-profile-protocol.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
@@ -18,7 +18,26 @@
   plan because they stayed under the existing spec-0015/0017/0018
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 101 adds
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 102 closes
+  the provider-profile protocol seam that was still implicit after the slice-98
+  route resolver. `config::ProfileConfig` now carries optional
+  `protocol`; `oran-config` parses `profiles.<name>.protocol` as a
+  non-empty string, `config.example.json` documents
+  `"protocol": "anthropic_messages"` on the default profile, and
+  `provider::resolve_route` prefers that explicit exact `ProtocolKind`
+  spelling before falling back to provider-label aliases such as `anthropic`,
+  `openai`, or `deepseek`. That lets a custom/self-hosted vendor label resolve
+  to a shipped wire format without overloading `provider`, while preserving the
+  older alias path for existing profiles. Invalid explicit protocols now fail
+  with `Error::config` carrying `route` / `profile` / `role` / `protocol`
+  context during the same bootstrap preflight path that already caught unknown
+  provider labels. Focused result: `test-config` 33 cases / 241 assertions,
+  `test-provider` 26 cases / 181 assertions, and `test-bootstrap` 64 cases /
+  264 assertions. No provider credentials are read, no adapter is constructed,
+  no network request is sent, and ordinary binary prompts still do not start
+  `agent::Loop`; remaining handoff work is still constructing real
+  Anthropic/OpenAI provider systems from config and switching
+  `bootstrap::run` to `cli::run_async` only when that backend exists. Slice 101 adds
   the adapter-neutral bootstrap runner that consumes the slice-100 CLI seam.
   `<oran/bootstrap/prompt_runner.hpp>` now exports
   `AgentPromptRunnerOptions` and `AgentPromptRunner`, a caller-supplied
@@ -78,13 +97,17 @@
   preserving authored fallback order, mapping provider spellings and exact
   `ProtocolKind` names into `ProtocolKind`, and returning `Error::config`
   with `route` / `profile` / `role` context for missing references or unknown
-  provider spellings. The current typed config still carries only
-  provider/model/base URL/API-key metadata, so resolved targets fill
+  provider spellings. Slice 102 adds optional `profiles.<name>.protocol` so the
+  resolver can use an explicit wire-format spelling before provider-alias
+  inference and can report unknown explicit protocols with `protocol` context.
+  The current typed config still carries only provider/model/base URL/API-key
+  metadata plus that optional protocol field, so resolved targets fill
   `{profile, model, protocol}` and leave `thinking_budget` / `cache` unset
   until those route/profile policy fields land. `oran-provider` now declares
   its direct `oran-config` dependency instead of leaning on the transitive
   `oran-prompt` path, and `<oran/provider.hpp>` re-exports the resolver.
-  Focused result: `test-provider` 24 cases / 170 assertions. Remaining
+  Focused result through slice 102: `test-provider` 26 cases / 181 assertions.
+  Remaining
   provider work: provider request/response hooks, usage/cost rollups, real
   Anthropic/OpenAI adapters, and binary construction of a concrete provider
   backend for the bootstrap runner. Slice 97 lands the first provider execution layer required before
@@ -701,15 +724,15 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-async`: 9 cases / 43 assertions.
 - `oran-io`: 49 cases / 286 assertions.
 - `oran-storage`: 72 cases / 899 assertions.
-- `oran-config`: 32 cases / 235 assertions.
+- `oran-config`: 33 cases / 241 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 30 cases / 207 assertions.
 - `oran-tool`: 178 cases / 1838 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
-- `oran-provider`: 24 cases / 170 assertions.
+- `oran-provider`: 26 cases / 181 assertions.
 - `oran-agent`: 24 cases / 391 assertions.
 - `oran-cli`: 14 cases / 97 assertions.
-- `oran-bootstrap`: 63 cases / 259 assertions.
+- `oran-bootstrap`: 64 cases / 264 assertions.
 
 ## Open Tech-Debt Rows
 

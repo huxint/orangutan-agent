@@ -462,6 +462,16 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
     if (!provider) {
       return std::unexpected(std::move(provider.error()));
     }
+    auto protocol = std::optional<std::string>{};
+    if (const auto protocol_it = value.find("protocol"); protocol_it != value.end()) {
+      if (!protocol_it->is_string()) {
+        return std::unexpected(config_error("expected string", child_path(profile_path, "protocol")));
+      }
+      protocol = protocol_it->get<std::string>();
+      if (protocol->empty()) {
+        return std::unexpected(config_error("protocol must be non-empty", child_path(profile_path, "protocol")));
+      }
+    }
     auto model = required_string(value, "model", profile_path);
     if (!model) {
       return std::unexpected(std::move(model.error()));
@@ -478,6 +488,7 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
     profiles.push_back(ProfileConfig{
         .name = name,
         .provider = std::move(*provider),
+        .protocol = std::move(protocol),
         .model = std::move(*model),
         .base_url = std::move(*base_url),
         .api_key_env = std::move(*api_key_env),

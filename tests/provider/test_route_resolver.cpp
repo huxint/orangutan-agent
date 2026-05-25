@@ -38,6 +38,13 @@ constexpr auto kRoutingConfig = R"json(
       "base_url": "https://api.openai.com/v1",
       "api_key_env": "OPENAI_API_KEY"
     },
+    "proxied-responses": {
+      "provider": "self-hosted-gateway",
+      "protocol": "openai_responses",
+      "model": "gpt-proxy",
+      "base_url": "https://gateway.example.invalid/v1",
+      "api_key_env": "GATEWAY_API_KEY"
+    },
     "local-main": {
       "provider": "deepseek",
       "model": "deepseek-coder",
@@ -52,6 +59,10 @@ constexpr auto kRoutingConfig = R"json(
     },
     "responses": {
       "primary": "responses-main",
+      "fallbacks": []
+    },
+    "proxied": {
+      "primary": "proxied-responses",
       "fallbacks": []
     }
   }
@@ -100,6 +111,18 @@ TEST_CASE("resolve_route accepts exact protocol spellings in profile provider", 
   REQUIRE(route->primary.profile == "responses-main");
   REQUIRE(route->primary.protocol == provider::ProtocolKind::openai_responses);
   REQUIRE(route->fallbacks.empty());
+}
+
+TEST_CASE("resolve_route prefers explicit profile protocol over provider label", "[unit][provider][route]") {
+  auto parsed = config::Config::parse(kRoutingConfig);
+  REQUIRE(parsed.has_value());
+
+  auto route = provider::resolve_route(*parsed, "proxied");
+
+  REQUIRE(route.has_value());
+  REQUIRE(route->primary.profile == "proxied-responses");
+  REQUIRE(route->primary.model == "gpt-proxy");
+  REQUIRE(route->primary.protocol == provider::ProtocolKind::openai_responses);
 }
 
 TEST_CASE("resolve_route rejects missing route names", "[unit][provider][route]") {
@@ -170,6 +193,36 @@ TEST_CASE("resolve_route rejects unknown provider spellings", "[unit][provider][
   REQUIRE(context_value(route.error(), "profile") == std::optional<std::string_view>{"bad"});
   REQUIRE(context_value(route.error(), "role") == std::optional<std::string_view>{"primary"});
   REQUIRE(context_value(route.error(), "provider") == std::optional<std::string_view>{"telepathy"});
+}
+
+TEST_CASE("resolve_route rejects unknown explicit protocols", "[unit][provider][route]") {
+  auto parsed = config::Config::parse(R"json(
+{
+  "profiles": {
+    "bad": {
+      "provider": "openai",
+      "protocol": "responses-ish",
+      "model": "unknown",
+      "base_url": "http://127.0.0.1:1",
+      "api_key_env": "BAD_API_KEY"
+    }
+  },
+  "routes": {
+    "default": {
+      "primary": "bad"
+    }
+  }
+}
+)json");
+  REQUIRE(parsed.has_value());
+
+  auto route = provider::resolve_route(*parsed);
+
+  REQUIRE_FALSE(route.has_value());
+  REQUIRE(route.error().kind() == core::ErrorKind::config);
+  REQUIRE(context_value(route.error(), "profile") == std::optional<std::string_view>{"bad"});
+  REQUIRE(context_value(route.error(), "role") == std::optional<std::string_view>{"primary"});
+  REQUIRE(context_value(route.error(), "protocol") == std::optional<std::string_view>{"responses-ish"});
 }
 
 TEST_CASE("resolve_route rejects empty route names", "[unit][provider][route]") {

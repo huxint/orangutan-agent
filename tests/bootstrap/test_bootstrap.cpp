@@ -1,9 +1,11 @@
 // tests/bootstrap/test_bootstrap.cpp — config-aware bootstrap coverage.
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -83,6 +85,14 @@ bootstrap::BootstrapOptions options(std::vector<std::string_view>& args, const s
       .args = std::span<const std::string_view>{args},
       .workspace = workspace.string(),
   };
+}
+
+std::optional<std::string_view> context_value(const core::Error& error, std::string_view key) {
+  const auto it = std::ranges::find_if(error.context(), [&](const auto& entry) { return entry.first == key; });
+  if (it == error.context().end()) {
+    return std::nullopt;
+  }
+  return it->second;
 }
 
 constexpr auto kConfigText = R"json(
@@ -267,6 +277,39 @@ TEST_CASE("run rejects invalid provider route config before CLI handoff", "[unit
 
   REQUIRE_FALSE(result.has_value());
   REQUIRE(result.error().kind() == core::ErrorKind::config);
+}
+
+TEST_CASE("run rejects invalid provider protocol config before CLI handoff", "[unit][bootstrap][provider]") {
+  TempDir temp{"oran-bootstrap-provider-protocol-bad"};
+  const auto config_path = temp.path() / "config.json";
+  write_file(config_path, R"json(
+{
+  "profiles": {
+    "bad": {
+      "provider": "openai",
+      "protocol": "responses-ish",
+      "model": "unknown",
+      "base_url": "http://127.0.0.1:1",
+      "api_key_env": "BAD_API_KEY"
+    }
+  },
+  "routes": {
+    "default": {
+      "primary": "bad"
+    }
+  }
+}
+)json");
+  auto config_arg = config_path.string();
+  auto args = std::vector<std::string_view>{"--config", config_arg, "--prompt", "hello"};
+
+  auto result = bootstrap::run(options(args, temp.path()));
+
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(result.error().kind() == core::ErrorKind::config);
+  REQUIRE(context_value(result.error(), "profile") == std::optional<std::string_view>{"bad"});
+  REQUIRE(context_value(result.error(), "role") == std::optional<std::string_view>{"primary"});
+  REQUIRE(context_value(result.error(), "protocol") == std::optional<std::string_view>{"responses-ish"});
 }
 
 TEST_CASE("run returns CLI argument errors after config load", "[unit][bootstrap]") {

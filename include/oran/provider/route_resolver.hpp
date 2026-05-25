@@ -19,11 +19,14 @@ namespace orangutan::provider {
 
 /// Resolve a configured route by name into a provider `Route`.
 ///
-/// The current config surface carries only profile provider/model strings, so
-/// resolution fills `{profile, model, protocol}` and leaves route-level cache /
-/// thinking options unset until those typed config fields land. Provider
-/// spelling aliases are intentionally resolved here, keeping future protocol
-/// adapters dumb: they receive a `ProtocolKind`, not a provider-name string.
+/// The current config surface carries provider/model/base-url/API-key metadata
+/// plus an optional explicit profile protocol. Resolution fills
+/// `{profile, model, protocol}` and leaves route-level cache / thinking options
+/// unset until those typed config fields land. Explicit `profiles.*.protocol`
+/// values are parsed as exact `ProtocolKind` spellings and take precedence over
+/// provider aliases. Provider spelling aliases are intentionally resolved here,
+/// keeping future protocol adapters dumb: they receive a `ProtocolKind`, not a
+/// provider-name string.
 [[nodiscard]] core::Result<Route> resolve_route(const config::Config& config, std::string_view route_name = "default");
 
 }  // namespace orangutan::provider

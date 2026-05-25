@@ -50,9 +50,15 @@ struct RuntimeConfig {
   std::vector<std::string> redaction_patterns{};
 };
 
+/// One provider profile from `profiles.<name>`. `provider` remains the
+/// operator/vendor label used by future adapter factories and secret lookup;
+/// optional `protocol`, when set, is resolved by `oran-provider` as an exact
+/// `provider::ProtocolKind` spelling so self-hosted gateways can select their
+/// wire format without overloading the vendor label.
 struct ProfileConfig {
   std::string name;
   std::string provider;
+  std::optional<std::string> protocol;
   std::string model;
   std::string base_url;
   std::string api_key_env;

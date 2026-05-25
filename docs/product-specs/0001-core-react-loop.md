@@ -19,8 +19,9 @@ with persistent session history and a CLI surface. The first deliverable is "I c
     does not call a provider yet.
   - When config declares routes, bootstrap preflights the `default` provider route
     through `provider::resolve_route`, reports the resolved primary/fallback summary,
-    and fails fast on bad profile references or provider spellings. Built-in empty
-    defaults still run without a provider route.
+    and fails fast on bad profile references, provider spellings, or explicit
+    profile protocol spellings. Built-in empty defaults still run without a provider
+    route.
   - Bootstrap exports `AgentPromptRunner` for tests and future adapter owners: callers
     can supply a provider backend and resolved route to drive `agent::Loop` with the
     runtime assembly's workspace/audit/broker/hook/trace services. The ordinary binary

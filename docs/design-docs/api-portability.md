@@ -35,7 +35,7 @@ struct Response {
 
 `core::Content` is a typed variant; protocol adapters translate to/from vendor JSON.
 
-> **Status (slice 101, 2026-05-25):** `oran-provider` exists as the
+> **Status (slice 102, 2026-05-25):** `oran-provider` exists as the
 > provider-domain, prompt-cache-hint, fake-provider, route-resolver, and
 > first execution wrapper library.
 > `<oran/provider.hpp>` exports the slice-73 value shapes (`Request`,
@@ -53,8 +53,11 @@ struct Response {
 > missing `Response::model_used` from the selected target, plus slice-98
 > `provider::resolve_route(Config, route_name)`, which resolves configured
 > profile/route names into a `provider::Route`, preserves fallback order, maps
-> provider spellings and exact `ProtocolKind` names, and reports
-> `Error::config` for missing profile references or unknown provider
+> provider spellings and exact `ProtocolKind` names, and since slice 102
+> prefers an explicit `profiles.<name>.protocol` field over the vendor label
+> so self-hosted gateways can reuse a shipped protocol without pretending to be
+> a built-in provider. It reports `Error::config` for missing profile
+> references, unknown provider spellings, or unknown explicit protocol
 > spellings. Slice 101's bootstrap `AgentPromptRunner` is the first owner that
 > consumes a resolved route plus `provider::execution::Runtime` to drive
 > `agent::Loop` with a caller-supplied backend.
@@ -132,11 +135,15 @@ adds the first resolver, `provider::resolve_route(config, route_name)`, for the
 current top-level config shape. It looks up `config.routes()[route_name]`, maps
 the primary and fallback profile names through `config.profiles()`, preserves
 the fallback order authored by the operator, and fills `ModelTarget` with the
-profile key, vendor model id, and resolved `ProtocolKind`. The current typed
-config does not yet carry route-level `thinking_budget`, prompt-cache options,
-or capability metadata, so those fields stay unset until their schema lands.
-The agent's `Loop` will resolve a `Route` once per turn (or once per `Loop` if
-static) and reuse it across iterations.
+profile key, vendor model id, and resolved `ProtocolKind`. Slice 102 adds the
+optional `profiles.<name>.protocol` field: when present, the resolver parses it
+as an exact `ProtocolKind` spelling and uses it ahead of provider-name aliases;
+when absent, existing provider aliases such as `anthropic`, `openai`, and
+`deepseek` still infer the protocol. The current typed config does not yet carry
+route-level `thinking_budget`, prompt-cache options, or capability metadata, so
+those fields stay unset until their schema lands. The agent's `Loop` will
+resolve a `Route` once per turn (or once per `Loop` if static) and reuse it
+across iterations.
 
 ### Protocol Adapters
 
@@ -264,6 +271,7 @@ bump invalidates the cached prefix even when content bytes are unchanged.
   "profiles": {
     "anthropic-main": {
       "provider": "anthropic",
+      "protocol": "anthropic_messages",
       "model": "claude-3-5-sonnet-latest",
       "base_url": "https://api.anthropic.com",
       "api_key_env": "ANTHROPIC_API_KEY"
@@ -285,9 +293,11 @@ bump invalidates the cached prefix even when content bytes are unchanged.
 
 This is the current `oran-config` foundation shape and matches `config.example.json`:
 each profile key names one provider/model tuple, and routes reference those profile
-keys. Provider protocol metadata, custom headers, context windows, thinking policy,
-and cost fields remain planned provider-schema fields until the typed parser accepts
-them.
+keys. The optional `protocol` field is for profiles whose vendor/operator label
+should stay distinct from the wire protocol, for example a self-hosted gateway using
+the OpenAI Responses shape. If it is omitted, `provider::resolve_route` falls back to
+the provider alias table. Custom headers, context windows, thinking policy, and cost
+fields remain planned provider-schema fields until the typed parser accepts them.
 
 ## Error Categories
 

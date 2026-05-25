@@ -62,6 +62,31 @@ constexpr auto kOpenAiCompatibleAliases = std::array<std::string_view, 5>{"custo
   return std::nullopt;
 }
 
+[[nodiscard]] core::Result<ProtocolKind>
+resolve_protocol(const config::ProfileConfig& profile, std::string_view route_name, std::string_view role) {
+  if (profile.protocol.has_value()) {
+    auto parsed = core::parse_enum<ProtocolKind>(*profile.protocol);
+    if (!parsed) {
+      return std::unexpected(config_error("unknown provider protocol")
+                                 .with("route", std::string{route_name})
+                                 .with("profile", profile.name)
+                                 .with("role", std::string{role})
+                                 .with("protocol", *profile.protocol));
+    }
+    return *parsed;
+  }
+
+  auto protocol = protocol_for_provider(profile.provider);
+  if (!protocol) {
+    return std::unexpected(config_error("unknown provider protocol")
+                               .with("route", std::string{route_name})
+                               .with("profile", profile.name)
+                               .with("role", std::string{role})
+                               .with("provider", profile.provider));
+  }
+  return *protocol;
+}
+
 [[nodiscard]] const config::RouteConfig* find_route(const config::Config& config, std::string_view route_name) {
   const auto routes = config.routes();
   const auto it = std::ranges::find(routes, route_name, &config::RouteConfig::name);
@@ -86,13 +111,9 @@ constexpr auto kOpenAiCompatibleAliases = std::array<std::string_view, 5>{"custo
                                .with("role", std::string{role}));
   }
 
-  auto protocol = protocol_for_provider(profile->provider);
+  auto protocol = resolve_protocol(*profile, route_name, role);
   if (!protocol) {
-    return std::unexpected(config_error("unknown provider protocol")
-                               .with("route", std::string{route_name})
-                               .with("profile", profile->name)
-                               .with("role", std::string{role})
-                               .with("provider", profile->provider));
+    return std::unexpected(std::move(protocol).error());
   }
 
   return ModelTarget{

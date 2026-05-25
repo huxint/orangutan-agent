@@ -93,6 +93,7 @@ constexpr auto kMinimalConfig = R"json(
   "profiles": {
     "default": {
       "provider": "openai",
+      "protocol": "openai_responses",
       "model": "gpt-5.5",
       "base_url": "https://api.openai.com/v1",
       "api_key_env": "OPENAI_API_KEY"
@@ -155,6 +156,7 @@ TEST_CASE("Config::parse returns typed config values", "[unit][config]") {
   REQUIRE(result->profiles().size() == 1);
   REQUIRE(result->profiles()[0].name == "default");
   REQUIRE(result->profiles()[0].provider == "openai");
+  REQUIRE(result->profiles()[0].protocol == std::optional<std::string>{"openai_responses"});
   REQUIRE(result->profiles()[0].model == "gpt-5.5");
   REQUIRE(result->profiles()[0].base_url == "https://api.openai.com/v1");
   REQUIRE(result->profiles()[0].api_key_env == "OPENAI_API_KEY");
@@ -268,6 +270,7 @@ TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][con
   REQUIRE(result->profiles().size() == 1);
   REQUIRE(result->profiles()[0].name == "default");
   REQUIRE(result->profiles()[0].model == "claude-3-5-sonnet-latest");
+  REQUIRE(result->profiles()[0].protocol == std::optional<std::string>{"anthropic_messages"});
   REQUIRE(result->routes().size() == 1);
   REQUIRE(result->web().port == 8787);
   REQUIRE(result->runtime().tool_output.max_text_bytes == 262144);
@@ -285,6 +288,42 @@ TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][con
   REQUIRE(result->agents().size() == 1);
   REQUIRE(result->agents()[0].name == "researcher");
   REQUIRE(result->agents()[0].permissions.rules.size() == 1);
+}
+
+TEST_CASE("Config::parse validates optional provider profile protocol field", "[unit][config][profiles]") {
+  SECTION("non-string protocol") {
+    auto result = config::Config::parse(R"json({
+  "profiles": {
+    "default": {
+      "provider": "openai",
+      "protocol": false,
+      "model": "gpt-5.5",
+      "base_url": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY"
+    }
+  }
+})json");
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("empty protocol") {
+    auto result = config::Config::parse(R"json({
+  "profiles": {
+    "default": {
+      "provider": "openai",
+      "protocol": "",
+      "model": "gpt-5.5",
+      "base_url": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY"
+    }
+  }
+})json");
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
 }
 
 TEST_CASE("Config::parse extracts runtime.tool_output byte caps", "[unit][config][runtime]") {

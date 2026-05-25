@@ -42,8 +42,9 @@ Current implementation status:
   `tool_output.max_text_bytes` / `max_data_bytes` and
   `prompt.active_tools`), top-level `trace` policy
   (`enabled`, `store_raw_bodies`, `retention_days`), top-level hook timeout
-  policy (`hooks.timeout_ms`, default 2000), `profiles`, `routes`,
-  `session`, `web`, `permissions`, and `agents.<name>.permissions`.
+  policy (`hooks.timeout_ms`, default 2000), `profiles` (including optional
+  per-profile `protocol`), `routes`, `session`, `web`, `permissions`, and
+  `agents.<name>.permissions`.
 - `runtime.prompt.active_tools` accepts `"defaults"` or an explicit string
   array. The loader preserves the authored array order, accepts an empty
   explicit allowlist, rejects empty tool names, and leaves registry-name
@@ -51,8 +52,10 @@ Current implementation status:
   `oran-tool`; missing explicit names fail at the prompt layer where the
   catalog snapshot is available.
 - `profiles` and `routes` are objects keyed by profile/route name. Profile entries
-  require `provider`, `model`, `base_url`, and `api_key_env`; route entries require
-  `primary` and may include `fallbacks`.
+  require `provider`, `model`, `base_url`, and `api_key_env`; profile entries may
+  include `protocol`, which is validated as a non-empty string by `oran-config` and
+  parsed as an exact `provider::ProtocolKind` spelling by `oran-provider`.
+  Route entries require `primary` and may include `fallbacks`.
 - `teams`, `channels`, `memory`, and `automation` are recognized root fields but do
   not have typed models yet. The `hooks` root has the v1 typed timeout field; sink
   and binding arrays remain recognized-but-untyped until external hook sinks land.
