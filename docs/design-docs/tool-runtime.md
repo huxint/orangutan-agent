@@ -803,12 +803,14 @@ Current and future policy:
   `match_count`; `file.delete` reports `bytes_written=0` and
   `files_touched=1`. Their model-facing summaries stay unchanged and
   `data_json` remains empty.
-- Provider adapters will consume `data_json` only when the target protocol
-  supports structured tool-result bytes. Anthropic Messages, OpenAI
-  Responses, Gemini, and OpenAI-compatible mappings remain spec-0014 follow-up
-  work. Slice 73 opens `oran-provider` for domain request/response values and
-  prompt-cache hints only; it does not yet map structured tool results to any
-  vendor protocol.
+- Provider adapters consume `data_json` only when the target protocol supports
+  structured tool-result bytes. Slice 107 ships the first request-side mapping:
+  `agent::Loop` copies successful `tool::Output::data_json` into
+  `core::ToolResultContent`, and `provider::make_protocol_request` maps those
+  bytes into Anthropic Messages `tool_result.content[]` or serialized OpenAI
+  Responses `function_call_output.output` while preserving text-only fallback
+  behavior. Gemini/custom mappings, response decoding, transport, and ordinary
+  binary handoff remain follow-up work.
 - Raw `data_json` hook redaction shipped in slice 65: `hook::Bus` delivers
   the field only to sinks whose `Sink::kind()` returns
   `SinkKind::trusted_local`; default sinks receive the text fallback and usage

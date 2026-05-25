@@ -42,6 +42,9 @@ struct ToolResultContent {
   std::string tool_use_id;
   /// Tool output. Often plain text, occasionally JSON; opaque at this layer.
   std::string output;
+  /// Optional structured tool output. When present, it is a serialized JSON
+  /// document produced by the tool layer and preserved for provider adapters.
+  std::optional<std::string> data_json;
   bool is_error{false};
 
   friend bool operator==(const ToolResultContent&, const ToolResultContent&) = default;

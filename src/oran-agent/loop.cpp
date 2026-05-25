@@ -396,6 +396,7 @@ private:
     return core::ToolResultContent{
         .tool_use_id = std::move(tool_use_id),
         .output = std::move(output->text),
+        .data_json = std::move(output->data_json),
         .is_error = output->is_error,
     };
   }
@@ -405,6 +406,7 @@ private:
   return core::ToolResultContent{
       .tool_use_id = std::move(tool_use_id),
       .output = render_tool_error(output.error()),
+      .data_json = std::nullopt,
       .is_error = true,
   };
 }

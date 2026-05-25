@@ -179,9 +179,11 @@ add_requires("sqlite3 3.51.0+0")
 ```
 
 Packages land with the library that first consumes them. The full approval list
-and planned versions live in [`rules/libraries.md`](rules/libraries.md); for example
-`fmt`, `spdlog`, and `libcurl` are approved but not required by the current
-checked-in targets yet.
+and planned versions live in [`rules/libraries.md`](rules/libraries.md); for
+example `fmt`, `spdlog`, and `libcurl` are approved but not required by the
+current checked-in targets yet. `nlohmann_json` is now consumed privately by
+`oran-provider` for offline protocol request serialization; provider public
+headers still expose serialized JSON bytes only.
 
 **Notable removals vs. legacy:**
 
@@ -220,7 +222,7 @@ oran_lib("permission", { "oran-core", "oran-config", "oran-storage", "oran-async
 oran_lib("hook", { "oran-core", "oran-async" }, {})
 oran_lib("tool", { "oran-core", "oran-async", "oran-io", "oran-permission", "oran-hook" }, { "nlohmann_json" })
 oran_lib("prompt", { "oran-core", "oran-async", "oran-config", "oran-tool" }, {})
-oran_lib("provider", { "oran-core", "oran-async", "oran-config", "oran-prompt" }, {})
+oran_lib("provider", { "oran-core", "oran-async", "oran-config", "oran-prompt" }, { "nlohmann_json" })
 oran_lib("agent", { "oran-core", "oran-async", "oran-storage", "oran-prompt", "oran-tool", "oran-provider" }, { "nlohmann_json" })
 oran_lib("cli", { "oran-core", "oran-async", "oran-hook" }, {})
 oran_lib("bootstrap", { "oran-core", "oran-async", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-tool", "oran-provider", "oran-agent", "oran-cli" }, {})

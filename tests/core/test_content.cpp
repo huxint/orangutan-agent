@@ -21,7 +21,8 @@ TEST_CASE("Content holds_* predicates match the active alternative", "[unit][cor
   const Content text = TextContent{.text = "hello"};
   const Content thinking = ThinkingContent{.thinking = "deep", .signature = std::nullopt};
   const Content tool_use = ToolUseContent{.id = "t1", .name = "file.read", .input_json = "{}"};
-  const Content tool_result = ToolResultContent{.tool_use_id = "t1", .output = "ok", .is_error = false};
+  const Content tool_result =
+      ToolResultContent{.tool_use_id = "t1", .output = "ok", .data_json = std::nullopt, .is_error = false};
 
   REQUIRE(holds_text(text));
   REQUIRE_FALSE(holds_thinking(text));
@@ -72,12 +73,29 @@ TEST_CASE("Different alternatives with the same payload compare unequal", "[unit
 }
 
 TEST_CASE("ToolResultContent flags an error with member-wise compare", "[unit][core][content]") {
-  const Content ok = ToolResultContent{.tool_use_id = "t1", .output = "fine", .is_error = false};
-  const Content bad = ToolResultContent{.tool_use_id = "t1", .output = "fine", .is_error = true};
+  const Content ok =
+      ToolResultContent{.tool_use_id = "t1", .output = "fine", .data_json = std::nullopt, .is_error = false};
+  const Content bad =
+      ToolResultContent{.tool_use_id = "t1", .output = "fine", .data_json = std::nullopt, .is_error = true};
 
   REQUIRE_FALSE(ok == bad);
   REQUIRE(holds_tool_result(ok));
   REQUIRE(holds_tool_result(bad));
+}
+
+TEST_CASE("ToolResultContent preserves optional structured output", "[unit][core][content]") {
+  const Content text_only =
+      ToolResultContent{.tool_use_id = "t1", .output = "fine", .data_json = std::nullopt, .is_error = false};
+  const Content structured = ToolResultContent{
+      .tool_use_id = "t1",
+      .output = "fine",
+      .data_json = std::string{R"({"kind":"file_read"})"},
+      .is_error = false,
+  };
+
+  REQUIRE_FALSE(text_only == structured);
+  const auto& result = std::get<ToolResultContent>(structured);
+  REQUIRE(result.data_json == std::optional<std::string>{R"({"kind":"file_read"})"});
 }
 
 TEST_CASE("std::visit with Overloaded set walks every alternative", "[unit][core][content]") {
@@ -99,6 +117,11 @@ TEST_CASE("std::visit with Overloaded set walks every alternative", "[unit][core
   REQUIRE(std::visit(Overloaded{}, Content{TextContent{.text = "x"}}) == 1);
   REQUIRE(std::visit(Overloaded{}, Content{ThinkingContent{.thinking = "x", .signature = std::nullopt}}) == 2);
   REQUIRE(std::visit(Overloaded{}, Content{ToolUseContent{.id = "1", .name = "a", .input_json = "{}"}}) == 3);
-  REQUIRE(std::visit(Overloaded{}, Content{ToolResultContent{.tool_use_id = "1", .output = "y", .is_error = false}}) ==
-          4);
+  REQUIRE(std::visit(Overloaded{},
+                     Content{ToolResultContent{
+                         .tool_use_id = "1",
+                         .output = "y",
+                         .data_json = std::nullopt,
+                         .is_error = false,
+                     }}) == 4);
 }

@@ -7,18 +7,40 @@
 
 ## Snapshot
 
-- **Slice:** 106 (`xmake run orangutan` reports slice 106)
+- **Slice:** 107 (`xmake run orangutan` reports slice 107)
 - **Last completed history:**
-  [`histories/2026-05/20260526-0008-provider-adapter-factory.md`](histories/2026-05/20260526-0008-provider-adapter-factory.md)
-- **Active exec-plan:** none — the prompt-builder skeleton plan remains
-  archived at
-  [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
-  the recent agent-loop, bootstrap, inspector, bench, and hook-foundation
-  increments closed in focused history/commit slices and did not need a new
-  plan because they stayed under the existing spec-0015/0017/0018
-  sequencing contract.
+  [`histories/2026-05/20260526-0114-provider-protocol-request.md`](histories/2026-05/20260526-0114-provider-protocol-request.md)
+- **Active exec-plan:**
+  [`exec-plans/active/2026-05-26-provider-adapter-v1.md`](exec-plans/active/2026-05-26-provider-adapter-v1.md)
+  — tracks the remaining multi-slice provider adapter handoff from offline
+  protocol bytes through transport-backed factories and ordinary binary
+  `cli::run_async` wiring.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 106 adds
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 107 adds
+  the provider-owned offline protocol request serialization boundary needed
+  before HTTP transport. New `<oran/provider/protocol_request.hpp>` exports
+  `provider::ProtocolRequest { method, path, body_json }` and
+  `provider::make_protocol_request(request, target)`. The mapper supports
+  `ProtocolKind::anthropic_messages` and `ProtocolKind::openai_responses`,
+  converts the typed `provider::Request` / `core::Message` / `core::Content`
+  contract into vendor JSON body bytes, validates opaque tool schema,
+  tool-input, and structured tool-result JSON in the provider `.cpp`, maps
+  text-only tool results to the existing text fallback, maps
+  `ToolResultContent::data_json` into Anthropic `tool_result.content[]` or
+  serialized OpenAI Responses `function_call_output.output`, and rejects
+  unsupported protocol families as `Error::config`. `core::ToolResultContent`
+  now preserves optional `data_json`, and `agent::Loop` copies successful
+  `tool::Output::data_json` into the provider-facing tool-result transcript
+  so spec-0014 structured bytes reach the protocol mapper. `oran-provider`
+  now uses `nlohmann_json` privately for serialization; public headers still
+  expose only bytes and stdlib value types. `bootstrap::run` still does not
+  read provider credentials, construct adapters, allocate transport, send a
+  network request, or start `agent::Loop` for ordinary binary prompts.
+  Focused results: `test-core` 71 cases / 455 assertions, `test-provider`
+  51 cases / 398 assertions, and `test-agent` 25 cases / 401 assertions.
+  Remaining handoff work is still response decoding, transport-backed
+  Anthropic/OpenAI protocol factories, and switching `bootstrap::run` to
+  `cli::run_async` only when that backend exists. Slice 106 adds
   the provider-owned adapter factory dispatch seam that consumes slice 105's
   credential bundle without introducing HTTP transport. New
   `<oran/provider/adapter_factory.hpp>` exports
@@ -798,7 +820,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 ## Latest Library Surfaces
 
-- `oran-core`: 70 cases / 453 assertions.
+- `oran-core`: 71 cases / 455 assertions.
 - `oran-async`: 9 cases / 43 assertions.
 - `oran-io`: 49 cases / 286 assertions.
 - `oran-storage`: 72 cases / 899 assertions.
@@ -807,8 +829,8 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-hook`: 30 cases / 207 assertions.
 - `oran-tool`: 178 cases / 1838 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
-- `oran-provider`: 45 cases / 329 assertions.
-- `oran-agent`: 24 cases / 391 assertions.
+- `oran-provider`: 51 cases / 398 assertions.
+- `oran-agent`: 25 cases / 401 assertions.
 - `oran-cli`: 14 cases / 97 assertions.
 - `oran-bootstrap`: 65 cases / 269 assertions.
 

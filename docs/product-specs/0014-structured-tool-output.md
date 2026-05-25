@@ -46,7 +46,7 @@ caches all consume one shape.
 The MVP delivers a forward-compatible envelope that today's text-only
 handlers can adopt without churning every callsite at once.
 
-> **Status (slice 67, 2026-05-24):** the base envelope ships in
+> **Status (slice 107, 2026-05-26):** the base envelope ships in
 > `oran-tool`. `Output::text_only(...)` preserves the existing text path,
 > `Output::error(...)` marks structured-capable errors, `ToolAfterPayload`
 > copies `Output::usage` on successful dispatch, and slice 65 copies
@@ -83,10 +83,15 @@ handlers can adopt without churning every callsite at once.
 > is complete — every shipped filesystem built-in fills usage counters and
 > every read-side built-in also fills `data_json`. `bench-tool`
 > has `output.text_only` vs. `output.with_data_16kib` plus
-> `output.apply_caps` coverage. Provider adapter mapping remains downstream
-> after slice 73: `oran-provider` now ships provider-domain values and
-> prompt-cache hints only; structured tool-result protocol mapping remains
-> downstream.
+> `output.apply_caps` coverage. Slice 107 closes the first provider-facing
+> mapping step: `core::ToolResultContent` now preserves optional
+> `data_json`, `agent::Loop` copies successful `tool::Output::data_json`
+> into provider-facing tool-result blocks, and
+> `provider::make_protocol_request` maps those bytes into Anthropic Messages
+> `tool_result.content[]` or serialized OpenAI Responses
+> `function_call_output.output` while keeping text-only fallback behavior.
+> Response decoding, transport-backed factories, Gemini/custom mappings, and
+> ordinary binary handoff remain downstream.
 
 - **`tool::Output v2`**:
   ```cpp
@@ -256,11 +261,12 @@ handlers can adopt without churning every callsite at once.
    `Output{ .text = "matched 3 files", .data_json = R"([...])" }`
    reaches the Anthropic adapter as a JSON `content` array, the OpenAI
    Responses adapter as a JSON `output` field, and a fake-provider
-   (spec 0017) test sink as the parsed `data_json`. The agent transcript's
-   *bytes* sent to the provider differ when `data_json` is present and
-   match v1 when absent. `oran-provider` now exists for request/response
-   values and prompt-cache hints (slice 73), but this structured tool-result
-   protocol mapping is still future work.
+   (spec 0017) test sink as the preserved `data_json`. Slice 107 ships this
+   for the offline request-serialization boundary: the agent transcript keeps
+   both `output` and `data_json`, Anthropic/OpenAI protocol request tests prove
+   text-only and structured tool-result shapes, and malformed structured bytes
+   fail before transport. Response decoding and HTTP-backed adapter factories
+   remain downstream.
 3. **Usage propagation.** Shipped for direct dispatch in slice 67. A handler that fills
    `usage = { .bytes_read = 4096, .files_touched = 1 }` produces an
    audit row whose `metadata_json.usage` carries those keys, a
@@ -283,10 +289,13 @@ handlers can adopt without churning every callsite at once.
    delivered to a sink whose `kind()` returns `SinkKind::trusted_local`
    contains the raw `data_json` field. Pinned by hook-bus and registry
    two-sink tests.
-7. **Adapter mapping.** Three adapter tests (Anthropic, OpenAI
-   Responses, fake) prove that `Output::text_only(...)` maps to a
-   single text block in each vendor's tool-result shape, and that
-   `Output{ .text, .data_json }` maps to the vendor's structured channel.
+7. **Adapter mapping.** Slice 107 ships the first request-side mapping
+   coverage: Anthropic Messages and OpenAI Responses tests prove that
+   text-only tool results use the plain fallback and structured
+   `ToolResultContent::data_json` maps to each protocol's structured
+   tool-result field; a fake-provider loop test proves `tool::Output` reaches
+   the provider-facing transcript without losing `data_json`. Response
+   decoding and transport-backed adapter factories remain follow-up work.
 8. **Migration tax.** A v1 handler kept on `Output::text_only(...)`
    compiles, links, and passes its existing test suite **without
    modification** for at least one slice after `Output` v2 lands. The

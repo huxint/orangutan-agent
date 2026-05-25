@@ -29,6 +29,11 @@ with persistent session history and a CLI surface. The first deliverable is "I c
     `make_adapter_system(credentials, factories)` for future real adapter
     construction. The ordinary binary does not call either boundary yet, so
     configured `api_key_env` names are still not read during current startup.
+  - `oran-provider` also exposes the offline `make_protocol_request(request,
+    target)` mapper for Anthropic Messages and OpenAI Responses request JSON,
+    including structured tool-result bytes from the agent transcript. Response
+    decoding, HTTP transport, and concrete protocol factories still remain
+    downstream of the current binary.
   - Bootstrap exports `AgentPromptRunner` for tests and future adapter owners: callers
     can supply a provider backend and resolved route to drive `agent::Loop` with the
     runtime assembly's workspace/audit/broker/hook/trace services. The ordinary binary

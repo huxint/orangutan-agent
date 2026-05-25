@@ -35,9 +35,9 @@ struct Response {
 
 `core::Content` is a typed variant; protocol adapters translate to/from vendor JSON.
 
-> **Status (slice 106, 2026-05-26):** `oran-provider` exists as the
-> provider-domain, prompt-cache-hint, fake-provider, route-resolver, and
-> first execution wrapper library.
+> **Status (slice 107, 2026-05-26):** `oran-provider` exists as the
+> provider-domain, prompt-cache-hint, fake-provider, route-resolver, first
+> execution wrapper, and offline protocol request serialization library.
 > `<oran/provider.hpp>` exports the slice-73 value shapes (`Request`,
 > `Response`, `Usage`, `RetryPolicy`, `PromptCacheHints`,
 > `PromptCacheOptions`, `make_prompt_cache_hints(prompt::RenderedPrompt,
@@ -76,14 +76,23 @@ struct Response {
 > profile-routed `provider::System` that forwards each single-target execution
 > call to the matching backend. The factory validates missing/null/duplicate
 > bindings and duplicate route profiles as config errors without logging
-> secret API-key values. The
+> secret API-key values. Slice 107 adds `<oran/provider/protocol_request.hpp>`
+> with `provider::ProtocolRequest { method, path, body_json }` and
+> `provider::make_protocol_request(request, target)`, supporting
+> `ProtocolKind::anthropic_messages` and `ProtocolKind::openai_responses`.
+> That offline mapper converts the typed `provider::Request` /
+> `core::Message` / `core::Content` contract into vendor JSON body bytes,
+> validates opaque tool schema, tool input, and structured tool-result JSON in
+> the provider implementation TU, preserves text-only tool-result fallbacks,
+> and maps `ToolResultContent::data_json` into the structured Anthropic/OpenAI
+> tool-result channels. The
 > resolvers and plan report `Error::config` for missing profile references,
 > unknown provider spellings, unknown explicit protocol spellings, or malformed
 > adapter endpoint metadata. Slice 101's bootstrap `AgentPromptRunner` is the first owner that
 > consumes a resolved route plus `provider::execution::Runtime` to drive
 > `agent::Loop` with a caller-supplied backend.
-> Real transports, protocol adapter implementations, provider hooks, binary
-> adapter construction, and usage/cost rollups remain planned. Ordinary
+> Response decoding, real transports, concrete protocol factories, provider
+> hooks, binary adapter construction, and usage/cost rollups remain planned. Ordinary
 > `bootstrap::run` still does not call the credential resolver or adapter
 > factory.
 
@@ -183,7 +192,12 @@ the same loop-facing `Route`. Slice 106 adds
 credential target's adapter-family name to a registered
 `ProtocolAdapterFactory`, constructs a backend for each route profile, and
 returns a `provider::System` that routes single-target execution calls by
-`route.primary.profile`. The current typed config does not yet
+`route.primary.profile`. Slice 107 adds the offline
+`provider::make_protocol_request(request, target)` seam that those future
+factories can call before HTTP transport. It currently serializes Anthropic
+Messages and OpenAI Responses request bodies, including text-only and
+structured tool-result blocks, and rejects unsupported protocol families as
+configuration errors. The current typed config does not yet
 carry route-level `thinking_budget`, prompt-cache options, or capability
 metadata, so those fields stay unset until their schema lands. The agent's
 `Loop` will resolve a `Route` once per turn (or once per `Loop` if static) and
@@ -349,7 +363,9 @@ that resolves the named API-key environment variables for concrete factories.
 `provider::make_adapter_system` is the following construction seam: it consumes
 the credential bundle plus registered protocol factories and returns a
 profile-routed `provider::System`, but real HTTP transports and vendor protocol
-implementations still land in later slices.
+implementations still land in later slices. Slice 107 adds offline request-body
+serialization for Anthropic Messages and OpenAI Responses before that transport
+step; it does not decode responses or construct a backend.
 Custom headers, context windows, thinking policy, and cost fields remain planned
 provider-schema fields until the typed parser accepts them.
 

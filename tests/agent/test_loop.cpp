@@ -113,6 +113,21 @@ void add_canned_tool(tool::Registry& registry,
   REQUIRE(registry.add(std::move(def), std::move(handler)).has_value());
 }
 
+void add_structured_tool(tool::Registry& registry, core::ToolDef def, std::string output, std::string data_json) {
+  auto handler = [output = std::move(output), data_json = std::move(data_json)](
+                     std::string_view input,
+                     tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
+    co_return tool::Output{
+        .text = output + ":" + std::string{input},
+        .data_json = data_json,
+        .attachments = {},
+        .usage = {},
+        .is_error = false,
+    };
+  };
+  REQUIRE(registry.add(std::move(def), std::move(handler)).has_value());
+}
+
 const core::ToolResultContent& tool_result_at(const core::Message& message, std::size_t index) {
   REQUIRE(index < message.blocks.size());
   const auto* result = std::get_if<core::ToolResultContent>(&message.blocks[index]);
@@ -693,6 +708,52 @@ TEST_CASE("Loop dispatches one tool_use and re-enters the provider with a tool r
     REQUIRE(*audit.events()[0].parent_turn_id == turn_id_with(0x20));
     REQUIRE(ctx.parent_turn_id.has_value());
     REQUIRE(*ctx.parent_turn_id == turn_id_with(0x70));
+  });
+}
+
+TEST_CASE("Loop preserves structured tool output for provider protocol mapping", "[unit][agent][loop]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    RecordingSequenceProvider provider{std::vector<provider::Response>{
+        provider::Response{
+            .blocks = {core::ToolUseContent{.id = "structured-1",
+                                            .name = "file.read",
+                                            .input_json = R"({"value":"structured"})"}},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::nullopt,
+        },
+        provider::Response{
+            .blocks = {core::TextContent{.text = "final"}},
+            .stop_reason = core::StopReason::end_turn,
+            .usage = {},
+            .model_used = std::nullopt,
+        },
+    }};
+    agent::Loop loop{provider, default_route()};
+    tool::Registry registry;
+    add_structured_tool(registry,
+                        canned_tool_def("file.read"),
+                        "read-ok",
+                        R"({"kind":"file_read","path":"README.md","text":"body"})");
+    auto rules = allow_all_rules();
+    permission::RecordingAuditSink audit;
+    auto ctx = dispatch_context(io, rules, audit);
+
+    const auto catalog = registry.catalog();
+    const std::vector<core::Message> tail{core::Message::user_text("read")};
+    auto inputs = base_inputs(catalog, tail);
+    inputs.tools = &registry;
+    inputs.dispatch_context = &ctx;
+    auto result = co_await loop.run_turn(inputs);
+
+    REQUIRE(result.has_value());
+    REQUIRE(provider.requests().size() == 2);
+    const auto& tool_result = tool_result_at(provider.requests()[1].messages[2], 0);
+    REQUIRE(tool_result.tool_use_id == "structured-1");
+    REQUIRE(tool_result.output == R"(read-ok:{"value":"structured"})");
+    REQUIRE(tool_result.data_json ==
+            std::optional<std::string>{R"({"kind":"file_read","path":"README.md","text":"body"})"});
+    REQUIRE_FALSE(tool_result.is_error);
   });
 }
 

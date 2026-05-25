@@ -186,7 +186,13 @@ proves the loop behaves correctly without a network.
     `provider::make_adapter_system(credentials, factories)` so those resolved
     credentials can be turned into one profile-routed backend once concrete
     protocol factories exist. Ordinary bootstrap still does not read provider
-    API-key environment variables or construct provider adapters.
+    API-key environment variables or construct provider adapters. Slice 107
+    preserves successful `tool::Output::data_json` on the provider-facing
+    `ToolResultContent` transcript and adds offline Anthropic/OpenAI Responses
+    request serialization, so structured tool results can reach protocol
+    mappers without changing the loop's typed request/response contract.
+    Response decoding, transport-backed factories, and ordinary binary handoff
+    remain downstream.
   1. Build `TurnContext` (identity, route, session id, origin,
      cancellation slot, stable service refs).
   2. Load/render memory once per turn (memory: `nullopt` in v1 — the
@@ -406,8 +412,10 @@ proves the loop behaves correctly without a network.
 - [`0016-prompt-and-tool-catalog-cache.md`](0016-prompt-and-tool-catalog-cache.md)
   — `prompt::Builder` is the loop's prompt source from v1 onward.
 - [`0014-structured-tool-output.md`](0014-structured-tool-output.md)
-  — `tool_result` blocks carry `Output::data` when present; v1 falls
-  back to text per the migration plan.
+  — `tool_result` blocks carry `Output::data_json` when present; v1 falls
+  back to text per the migration plan. Slice 107 preserves that field through
+  `agent::Loop` and proves the offline provider protocol mapper consumes it
+  for Anthropic Messages and OpenAI Responses.
 - [`0018-first-loop-observability.md`](0018-first-loop-observability.md)
   — defines the trace shape; this spec's loop emits the rows.
 

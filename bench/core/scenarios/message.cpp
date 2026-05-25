@@ -81,6 +81,7 @@ struct TextLengthVisitor {
         m.blocks.emplace_back(ToolResultContent{
             .tool_use_id = "tool-" + std::to_string(i - 1),
             .output = "ok",
+            .data_json = std::nullopt,
             .is_error = false,
         });
         break;
