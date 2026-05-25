@@ -312,6 +312,39 @@ TEST_CASE("run rejects invalid provider protocol config before CLI handoff", "[u
   REQUIRE(context_value(result.error(), "protocol") == std::optional<std::string_view>{"responses-ish"});
 }
 
+TEST_CASE("run rejects invalid provider adapter endpoint config before CLI handoff", "[unit][bootstrap][provider]") {
+  TempDir temp{"oran-bootstrap-provider-adapter-bad"};
+  const auto config_path = temp.path() / "config.json";
+  write_file(config_path, R"json(
+{
+  "profiles": {
+    "bad": {
+      "provider": "anthropic",
+      "protocol": "anthropic_messages",
+      "model": "claude",
+      "base_url": "ftp://api.example.invalid",
+      "api_key_env": "ANTHROPIC_API_KEY"
+    }
+  },
+  "routes": {
+    "default": {
+      "primary": "bad"
+    }
+  }
+}
+)json");
+  auto config_arg = config_path.string();
+  auto args = std::vector<std::string_view>{"--config", config_arg, "--prompt", "hello"};
+
+  auto result = bootstrap::run(options(args, temp.path()));
+
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(result.error().kind() == core::ErrorKind::config);
+  REQUIRE(context_value(result.error(), "role") == std::optional<std::string_view>{"primary"});
+  REQUIRE(context_value(result.error(), "profile") == std::optional<std::string_view>{"bad"});
+  REQUIRE(context_value(result.error(), "field") == std::optional<std::string_view>{"base_url"});
+}
+
 TEST_CASE("run returns CLI argument errors after config load", "[unit][bootstrap]") {
   TempDir temp{"oran-bootstrap-cli-error"};
   auto args = std::vector<std::string_view>{"--unknown"};

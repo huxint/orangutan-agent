@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <oran/provider/adapter_plan.hpp>
 #include <oran/provider/cache.hpp>
 #include <oran/provider/execution.hpp>
 #include <oran/provider/fake.hpp>

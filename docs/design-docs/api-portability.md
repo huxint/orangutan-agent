@@ -35,7 +35,7 @@ struct Response {
 
 `core::Content` is a typed variant; protocol adapters translate to/from vendor JSON.
 
-> **Status (slice 103, 2026-05-25):** `oran-provider` exists as the
+> **Status (slice 104, 2026-05-25):** `oran-provider` exists as the
 > provider-domain, prompt-cache-hint, fake-provider, route-resolver, and
 > first execution wrapper library.
 > `<oran/provider.hpp>` exports the slice-73 value shapes (`Request`,
@@ -61,9 +61,13 @@ struct Response {
 > `provider::RouteProfileResolution` with the same loop-facing targets plus
 > endpoint metadata (`provider`, `base_url`, `api_key_env`) for the future
 > adapter factory; `api_key_env` is still only the configured environment
-> variable name. The resolvers report `Error::config` for missing profile
-> references, unknown provider spellings, or unknown explicit protocol
-> spellings. Slice 101's bootstrap `AgentPromptRunner` is the first owner that
+> variable name. Slice 104 adds `provider::make_adapter_construction_plan`,
+> which validates non-empty endpoint metadata and `http://` / `https://`
+> base-url schemes, records the protocol adapter-family name selected for each
+> primary/fallback profile, and derives the same loop-facing `provider::Route`.
+> The resolvers and plan report `Error::config` for missing profile references,
+> unknown provider spellings, unknown explicit protocol spellings, or malformed
+> adapter endpoint metadata. Slice 101's bootstrap `AgentPromptRunner` is the first owner that
 > consumes a resolved route plus `provider::execution::Runtime` to drive
 > `agent::Loop` with a caller-supplied backend.
 > Real transports, protocol adapters, provider hooks, binary adapter
@@ -150,7 +154,11 @@ it returns `RouteProfileResolution { primary, fallbacks }` where each
 `ResolvedProfileTarget` carries the resolved `ModelTarget` plus the profile's
 `provider`, `base_url`, and `api_key_env`. `RouteProfileResolution::route()`
 derives the existing `Route` value for loop/execution callers, so this richer
-surface does not change `agent::Loop`. The current typed config does not yet
+surface does not change `agent::Loop`. Slice 104 adds
+`provider::make_adapter_construction_plan(resolution)`, which validates those
+resolved endpoint fields for the future factory, classifies each target by the
+selected protocol adapter family, and still does not read API-key environment
+variables or allocate a transport. The current typed config does not yet
 carry route-level `thinking_budget`, prompt-cache options, or capability
 metadata, so those fields stay unset until their schema lands. The agent's
 `Loop` will resolve a `Route` once per turn (or once per `Loop` if static) and
@@ -308,7 +316,9 @@ keys. The optional `protocol` field is for profiles whose vendor/operator label
 should stay distinct from the wire protocol, for example a self-hosted gateway using
 the OpenAI Responses shape. If it is omitted, `provider::resolve_route` falls back to
 the provider alias table. `provider::resolve_route_profiles` preserves the profile's
-endpoint metadata for the future adapter factory without reading `api_key_env`.
+endpoint metadata for the future adapter factory without reading `api_key_env`, and
+`provider::make_adapter_construction_plan` preflights that metadata without
+constructing adapters or sending network traffic.
 Custom headers, context windows, thinking policy, and cost fields remain planned
 provider-schema fields until the typed parser accepts them.
 

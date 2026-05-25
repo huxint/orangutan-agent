@@ -18,11 +18,13 @@ with persistent session history and a CLI surface. The first deliverable is "I c
   - The current CLI shell is deterministic and pre-agent-loop; it accepts prompts but
     does not call a provider yet.
   - When config declares routes, bootstrap preflights the `default` provider route
-    through `provider::resolve_route_profiles`, reports the resolved
+    through `provider::resolve_route_profiles` and
+    `provider::make_adapter_construction_plan`, reports the resolved
     primary/fallback summary, preserves the profile endpoint metadata needed by the
     future adapter factory, and fails fast on bad profile references, provider
-    spellings, or explicit profile protocol spellings. Built-in empty defaults still
-    run without a provider route.
+    spellings, explicit profile protocol spellings, missing endpoint metadata, or
+    unsupported endpoint schemes. Built-in empty defaults still run without a
+    provider route.
   - Bootstrap exports `AgentPromptRunner` for tests and future adapter owners: callers
     can supply a provider backend and resolved route to drive `agent::Loop` with the
     runtime assembly's workspace/audit/broker/hook/trace services. The ordinary binary

@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 103 (`xmake run orangutan` reports slice 103)
+- **Slice:** 104 (`xmake run orangutan` reports slice 104)
 - **Last completed history:**
-  [`histories/2026-05/20260525-2134-provider-route-profiles.md`](histories/2026-05/20260525-2134-provider-route-profiles.md)
+  [`histories/2026-05/20260525-2215-provider-adapter-plan.md`](histories/2026-05/20260525-2215-provider-adapter-plan.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
@@ -18,7 +18,24 @@
   plan because they stayed under the existing spec-0015/0017/0018
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 103 adds
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 104 adds
+  the offline provider adapter construction plan that consumes slice 103's
+  route-profile bundle. `<oran/provider/adapter_plan.hpp>` now exports
+  `provider::AdapterConstructionTarget`, `provider::AdapterConstructionPlan`,
+  and `provider::make_adapter_construction_plan(resolution)`. The plan keeps
+  each resolved `ResolvedProfileTarget` beside the protocol adapter name that
+  a future concrete factory will dispatch on, derives the existing loop-facing
+  `provider::Route`, and preflights non-empty provider/model/base-url/API-key
+  env metadata plus `http://` / `https://` endpoint schemes. `bootstrap::run`
+  now resolves the configured `default` route profiles and builds this offline
+  plan before CLI handoff, preserving the same non-secret startup summary; it
+  still does not read environment variables, decrypt credentials, allocate an
+  HTTP client, construct an adapter, send a network request, or start
+  `agent::Loop` for ordinary binary prompts. Focused result:
+  `test-provider` 32 cases / 233 assertions and `test-bootstrap` 65 cases /
+  269 assertions. Remaining handoff work is still constructing real
+  Anthropic/OpenAI provider systems from config and switching `bootstrap::run`
+  to `cli::run_async` only when that backend exists. Slice 103 adds
   the route-profile resolution bundle that real provider adapter construction
   needs after the slice-102 protocol seam. `<oran/provider/route_resolver.hpp>`
   now exports `provider::ResolvedProfileTarget`,
