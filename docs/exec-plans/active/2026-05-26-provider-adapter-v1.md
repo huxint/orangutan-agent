@@ -52,6 +52,8 @@ ordinary binary prompts switch from the deterministic no-runner shell to
   - Slice 107 adds private JSON serialization to `oran-provider`; the dependency is
     documented in `docs/BUILD_SYSTEM.md` and `docs/rules/libraries.md`.
     Slice 108 reuses that private dependency for offline response decoding.
+    Slice 109 adds only provider value types plus an abstract injected
+    transport; it does not add a third-party dependency.
 
 ## Risks
 
@@ -64,7 +66,7 @@ ordinary binary prompts switch from the deterministic no-runner shell to
   boundary and test `bootstrap::run` before the handoff switch.
 - Risk: response decoding and streaming are coupled too early.
   Mitigation: land offline request serialization first, then offline response
-  decoding, then transport-backed factories.
+  decoding, then a non-streaming injected transport seam before SSE streaming.
 - Risk: structured tool output silently falls back to text.
   Mitigation: add provider protocol tests that prove `ToolResultContent::data_json`
   reaches Anthropic/OpenAI tool-result fields and an agent-loop test that proves
@@ -78,8 +80,8 @@ ordinary binary prompts switch from the deterministic no-runner shell to
 4. Serialize provider-domain requests into Anthropic Messages and OpenAI Responses
    JSON bytes offline.
 5. Decode Anthropic/OpenAI responses back into `provider::Response`.
-6. Add transport-backed protocol factories and wire request/response mapping through
-   a concrete HTTP client.
+6. Add protocol-backed factories over an injected transport, then wire that seam
+   through a concrete HTTP client.
 7. Switch ordinary binary prompts to `cli::run_async` with `AgentPromptRunner` when
    backend construction is available.
 
@@ -114,7 +116,9 @@ ordinary binary prompts switch from the deterministic no-runner shell to
       offline and preserve structured tool-result bytes through the agent loop.
 - [x] Slice 108: decode Anthropic Messages / OpenAI Responses response JSON bytes
       offline into `provider::Response`.
-- [ ] Add transport-backed protocol factories.
+- [x] Slice 109: build Anthropic/OpenAI protocol factories over an injected
+      body-response `ProtocolTransport`.
+- [ ] Add the concrete `oran-http` / libcurl transport and bootstrap adapter construction.
 - [ ] Switch ordinary binary prompts to `cli::run_async`.
 - [ ] Move this plan to `docs/exec-plans/completed/` once the binary handoff lands.
 
@@ -126,6 +130,10 @@ ordinary binary prompts switch from the deterministic no-runner shell to
 - 2026-05-26: Keep response decoding as an offline `decode_protocol_response`
   boundary before transport. It proves model/content/usage/stop-reason mapping
   without coupling to HTTP status handling or streaming assembly.
+- 2026-05-26: Put the first protocol factories behind an injected
+  `ProtocolTransport` instead of waiting for libcurl. This proves factory/header/
+  status/request-response composition while keeping real HTTP and SSE streaming
+  in the platform transport slice.
 - 2026-05-26: Keep retry/fallback outside protocol factories. The adapter-factory
   seam constructs single-target backends; `provider::execution::Runtime` remains the
   owner of retry and fallback policy.
@@ -142,5 +150,6 @@ ordinary binary prompts switch from the deterministic no-runner shell to
   - `docs/histories/2026-05/20260526-0008-provider-adapter-factory.md`
   - `docs/histories/2026-05/20260526-0114-provider-protocol-request.md`
   - `docs/histories/2026-05/20260526-0228-provider-protocol-response.md`
+  - `docs/histories/2026-05/20260526-0302-provider-protocol-transport.md`
 - Release note:
   - `docs/releases/feature-release-notes.md`

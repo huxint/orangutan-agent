@@ -7,16 +7,36 @@
 
 ## Snapshot
 
-- **Slice:** 108 (`xmake run orangutan` reports slice 108)
+- **Slice:** 109 (`xmake run orangutan` reports slice 109)
 - **Last completed history:**
-  [`histories/2026-05/20260526-0228-provider-protocol-response.md`](histories/2026-05/20260526-0228-provider-protocol-response.md)
+  [`histories/2026-05/20260526-0302-provider-protocol-transport.md`](histories/2026-05/20260526-0302-provider-protocol-transport.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-05-26-provider-adapter-v1.md`](exec-plans/active/2026-05-26-provider-adapter-v1.md)
   — tracks the remaining multi-slice provider adapter handoff from offline
   protocol bytes through transport-backed factories and ordinary binary
   `cli::run_async` wiring.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 108 adds
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 109 adds
+  the provider-owned protocol transport adapter seam needed before concrete
+  HTTP/TLS transport and ordinary binary handoff. New
+  `<oran/provider/protocol_transport.hpp>` exports the HTTP-shaped
+  `ProtocolHttpRequest` / `ProtocolHttpResponse` value types, abstract
+  `ProtocolTransport`, `ProtocolTransportAdapterFactory`, and
+  `protocol_transport_factory_bindings(anthropic, openai)`. The factory builds
+  Anthropic Messages or OpenAI Responses `provider::System` backends from
+  resolved credential targets, composes slice 107's request serializer with
+  slice 108's response decoder, injects provider API-key headers, maps HTTP
+  status classes into provider error categories, rejects mismatched selected
+  route profile/model/protocol values before sending, and remains
+  offline-testable through a fake transport. The current seam is body-response
+  only and forces `request.stream=false`; SSE streaming and real
+  `oran-http`/libcurl I/O remain downstream. `bootstrap::run` still does not
+  read provider credentials, construct adapters, allocate a concrete transport,
+  send a network request, or start `agent::Loop` for ordinary binary prompts.
+  Focused result: `test-provider` 63 cases / 512 assertions. Remaining handoff
+  work is now the concrete `oran-http`/libcurl transport plus bootstrap adapter
+  construction and switching `bootstrap::run` to `cli::run_async` only when
+  that backend exists. Slice 108 adds
   the provider-owned offline protocol response decoding boundary needed before
   HTTP transport-backed factories. New `<oran/provider/protocol_response.hpp>`
   exports `provider::decode_protocol_response(body_json, target)`. The decoder
@@ -29,8 +49,8 @@
   as `ErrorKind::parsing` with non-secret context. `bootstrap::run` still does
   not read provider credentials, construct adapters, allocate transport, send a
   network request, or start `agent::Loop` for ordinary binary prompts. Focused
-  result: `test-provider` 57 cases / 442 assertions. Remaining handoff work is
-  now transport-backed Anthropic/OpenAI protocol factories and switching
+  result: `test-provider` 57 cases / 442 assertions. Remaining handoff work after
+  that slice was transport-backed Anthropic/OpenAI protocol factories and switching
   `bootstrap::run` to `cli::run_async` only when that backend exists. Slice 107 adds
   the provider-owned offline protocol request serialization boundary needed
   before HTTP transport. New `<oran/provider/protocol_request.hpp>` exports
@@ -844,7 +864,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-hook`: 30 cases / 207 assertions.
 - `oran-tool`: 178 cases / 1838 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
-- `oran-provider`: 57 cases / 442 assertions.
+- `oran-provider`: 63 cases / 512 assertions.
 - `oran-agent`: 25 cases / 401 assertions.
 - `oran-cli`: 14 cases / 97 assertions.
 - `oran-bootstrap`: 65 cases / 269 assertions.

@@ -82,11 +82,13 @@ own library, its own tests, its own bench, its own design doc."
 > that execution runtime, binds the CLI approval sink, and runs `agent::Loop`
 > with runtime-assembly workspace/audit/broker/hook/trace services. Slices
 > 105-106 add the provider credential-resolution API and adapter-factory
-> dispatch seam for future concrete factories; slices 107-108 add offline
-> Anthropic/OpenAI Responses request serialization and response decoding, and
-> slice 107 preserves structured tool-result bytes from direct dispatch through
-> the provider-facing transcript; ordinary bootstrap still does not call the
-> credential/factory boundaries or read provider API-key env vars.
+> dispatch seam for concrete factories; slices 107-108 add offline
+> Anthropic/OpenAI Responses request serialization and response decoding, slice
+> 107 preserves structured tool-result bytes from direct dispatch through the
+> provider-facing transcript, and slice 109 adds injected body-response
+> Anthropic/OpenAI protocol systems through `ProtocolTransportAdapterFactory`.
+> Ordinary bootstrap still does not call the credential/factory boundaries or
+> read provider API-key env vars.
 > Slices 76-77
 > extend `agent::Loop` over those pieces: it builds a
 > `prompt::RenderedPrompt`, maps cache hints, mirrors active/promoted tools
@@ -116,8 +118,8 @@ own library, its own tests, its own bench, its own design doc."
 > skips the trace row, forces direct dispatch audit rows to keep
 > `parent_turn_id = NULL`, and restores any reusable dispatch-context parent id
 > after the tool call.
-> Memory, scheduler handoff, real provider adapter construction, and ordinary
-> binary CLI agent-loop wiring remain downstream.
+> Memory, scheduler handoff, concrete provider transport/bootstrap construction,
+> and ordinary binary CLI agent-loop wiring remain downstream.
 > The invariants — section order, byte-identical cached prefix, no clocks /
 > per-call state in sections (1)–(6) — remain canonical in
 > [`../rules/prompt-design.md`](../rules/prompt-design.md).
@@ -182,8 +184,10 @@ dispatch, so the registry-owned blocking approval prompt path uses a real
 per-call timestamp and then restores the caller's reusable context. Slice 97
 adds the provider execution decorator for retry/fallback, and slice 101 hands
 that decorated `provider::System` to the loop through bootstrap's
-`AgentPromptRunner` when a caller supplies a backend. The ordinary binary still
-needs real adapter construction before it can use the runner. The future
+`AgentPromptRunner` when a caller supplies a backend. Slice 109 adds injected
+body-response Anthropic/OpenAI protocol systems, but the ordinary binary still
+needs concrete transport and bootstrap adapter construction before it can use
+the runner. The future
 `ToolScheduler` can replace the direct loop call without changing the
 provider-facing request/response shape.
 

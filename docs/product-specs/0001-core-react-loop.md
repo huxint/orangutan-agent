@@ -34,8 +34,11 @@ with persistent session history and a CLI surface. The first deliverable is "I c
     Anthropic Messages and OpenAI Responses JSON. Request serialization includes
     structured tool-result bytes from the agent transcript; response decoding
     maps vendor text/thinking/tool-use blocks, usage, model ids, and stop
-    reasons back into `provider::Response`. HTTP transport and concrete
-    protocol factories still remain downstream of the current binary.
+    reasons back into `provider::Response`. Slice 109 adds
+    `ProtocolTransportAdapterFactory`, which builds non-streaming Anthropic or
+    OpenAI `provider::System` backends over an injected body-response
+    `ProtocolTransport`. Concrete `oran-http`/libcurl transport and bootstrap
+    adapter construction still remain downstream of the current binary.
   - Bootstrap exports `AgentPromptRunner` for tests and future adapter owners: callers
     can supply a provider backend and resolved route to drive `agent::Loop` with the
     runtime assembly's workspace/audit/broker/hook/trace services. The ordinary binary

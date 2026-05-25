@@ -9,9 +9,10 @@
 // one `Response` (or error) back. Stream deltas are advisory; if the caller
 // passes `nullptr` the provider must still synthesise the full `Response`.
 //
-// Adapters live downstream. The first concrete `System` is
-// `provider::FakeProvider` (`<oran/provider/fake.hpp>`); the Anthropic /
-// OpenAI adapters land in spec 0017 v1.1.
+// The first concrete `System` is `provider::FakeProvider`
+// (`<oran/provider/fake.hpp>`). Protocol-backed systems are constructed
+// through adapter factories such as `ProtocolTransportAdapterFactory`; concrete
+// HTTP/TLS transport and streaming remain downstream.
 
 #pragma once
 

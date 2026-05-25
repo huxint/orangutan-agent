@@ -10,6 +10,7 @@
 #include <oran/provider/fake.hpp>
 #include <oran/provider/protocol_request.hpp>
 #include <oran/provider/protocol_response.hpp>
+#include <oran/provider/protocol_transport.hpp>
 #include <oran/provider/route_resolver.hpp>
 #include <oran/provider/system.hpp>
 #include <oran/provider/types.hpp>

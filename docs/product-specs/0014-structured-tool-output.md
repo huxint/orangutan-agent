@@ -90,8 +90,9 @@ handlers can adopt without churning every callsite at once.
 > `provider::make_protocol_request` maps those bytes into Anthropic Messages
 > `tool_result.content[]` or serialized OpenAI Responses
 > `function_call_output.output` while keeping text-only fallback behavior.
-> Response decoding, transport-backed factories, Gemini/custom mappings, and
-> ordinary binary handoff remain downstream.
+> Response decoding and the first injected transport-backed Anthropic/OpenAI
+> factories now land in slices 108-109; concrete HTTP/SSE transport,
+> Gemini/custom mappings, and ordinary binary handoff remain downstream.
 
 - **`tool::Output v2`**:
   ```cpp
@@ -294,8 +295,10 @@ handlers can adopt without churning every callsite at once.
    text-only tool results use the plain fallback and structured
    `ToolResultContent::data_json` maps to each protocol's structured
    tool-result field; a fake-provider loop test proves `tool::Output` reaches
-   the provider-facing transcript without losing `data_json`. Response
-   decoding and transport-backed adapter factories remain follow-up work.
+   the provider-facing transcript without losing `data_json`. Slices 108-109
+   add response decoding and an injected body-response transport factory seam;
+   concrete HTTP/SSE transport and non-Anthropic/OpenAI protocol families remain
+   follow-up work.
 8. **Migration tax.** A v1 handler kept on `Output::text_only(...)`
    compiles, links, and passes its existing test suite **without
    modification** for at least one slice after `Output` v2 lands. The

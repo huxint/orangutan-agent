@@ -179,21 +179,24 @@ proves the loop behaves correctly without a network.
     without permission/audit infrastructure. Slice 97 adds the provider-side
     execution wrapper that sits in front of a supplied `provider::System`, and
     slice 101 wires that wrapper into bootstrap's `AgentPromptRunner` for
-    caller-supplied backends. The ordinary binary still waits on real provider
-    adapter construction before it can hand CLI prompts to that runner. Slice
+    caller-supplied backends. The ordinary binary still waits on concrete
+    transport and bootstrap adapter construction before it can hand CLI prompts
+    to that runner. Slice
     105 adds the provider-owned credential-resolution API that future factories
     will call after offline adapter planning, and slice 106 adds
     `provider::make_adapter_system(credentials, factories)` so those resolved
-    credentials can be turned into one profile-routed backend once concrete
-    protocol factories exist. Ordinary bootstrap still does not read provider
-    API-key environment variables or construct provider adapters. Slice 107
+    credentials can be turned into one profile-routed backend once protocol
+    factories exist. Ordinary bootstrap still does not read provider API-key
+    environment variables or construct provider adapters. Slice 107
     preserves successful `tool::Output::data_json` on the provider-facing
     `ToolResultContent` transcript and adds offline Anthropic/OpenAI Responses
     request serialization, so structured tool results can reach protocol
     mappers without changing the loop's typed request/response contract. Slice
     108 adds the paired offline response decoder, mapping Anthropic/OpenAI
-    response JSON back into the same typed `provider::Response` contract.
-    Transport-backed factories and ordinary binary handoff remain downstream.
+    response JSON back into the same typed `provider::Response` contract. Slice
+    109 adds the injected body-response `ProtocolTransportAdapterFactory` seam
+    for Anthropic/OpenAI systems. Concrete HTTP/SSE transport and ordinary
+    binary handoff remain downstream.
   1. Build `TurnContext` (identity, route, session id, origin,
      cancellation slot, stable service refs).
   2. Load/render memory once per turn (memory: `nullopt` in v1 — the
@@ -240,7 +243,8 @@ proves the loop behaves correctly without a network.
   `provider::System` decorator, and slice 101 wires that decorator into
   bootstrap's `AgentPromptRunner` with runtime-assembly workspace/audit/broker/
   hook/trace services. Scheduler handoff and ordinary binary CLI wiring with
-  real provider adapters remain downstream.
+  concrete provider transports and binary adapter construction remain
+  downstream.
 - **CI runs against the fake provider only**. v1 CI gate:
   `xmake test test-agent` exercises all ten scenarios; no network
   is required, no API key is required, no flake budget is needed.
@@ -417,7 +421,9 @@ proves the loop behaves correctly without a network.
   back to text per the migration plan. Slice 107 preserves that field through
   `agent::Loop` and proves the offline provider protocol mapper consumes it
   for Anthropic Messages and OpenAI Responses. Slice 108 keeps response
-  decoding on the same typed `provider::Response` side of the loop contract.
+  decoding on the same typed `provider::Response` side of the loop contract,
+  and slice 109 composes request/response mapping through an injected
+  body-response transport seam without changing the loop contract.
 - [`0018-first-loop-observability.md`](0018-first-loop-observability.md)
   — defines the trace shape; this spec's loop emits the rows.
 
