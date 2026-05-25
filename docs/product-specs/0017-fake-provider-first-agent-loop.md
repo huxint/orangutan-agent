@@ -195,8 +195,9 @@ proves the loop behaves correctly without a network.
     108 adds the paired offline response decoder, mapping Anthropic/OpenAI
     response JSON back into the same typed `provider::Response` contract. Slice
     109 adds the injected body-response `ProtocolTransportAdapterFactory` seam
-    for Anthropic/OpenAI systems. Concrete HTTP/SSE transport and ordinary
-    binary handoff remain downstream.
+    for Anthropic/OpenAI systems. Slice 110 adds the concrete `oran-http`
+    body client, but the `ProtocolTransport` adapter, SSE streaming, and
+    ordinary binary handoff remain downstream.
   1. Build `TurnContext` (identity, route, session id, origin,
      cancellation slot, stable service refs).
   2. Load/render memory once per turn (memory: `nullopt` in v1 — the

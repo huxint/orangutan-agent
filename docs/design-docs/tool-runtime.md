@@ -810,9 +810,10 @@ Current and future policy:
   bytes into Anthropic Messages `tool_result.content[]` or serialized OpenAI
   Responses `function_call_output.output` while preserving text-only fallback
   behavior. Slices 108-109 add response decoding and an injected body-response
-  transport factory seam for Anthropic/OpenAI systems. Gemini/custom mappings,
-  concrete HTTP/SSE transport, and ordinary binary handoff remain follow-up
-  work.
+  transport factory seam for Anthropic/OpenAI systems, and slice 110 adds the
+  `oran-http` body client. Gemini/custom mappings, the `http::Client`-backed
+  `ProtocolTransport` adapter, SSE transport, and ordinary binary handoff
+  remain follow-up work.
 - Raw `data_json` hook redaction shipped in slice 65: `hook::Bus` delivers
   the field only to sinks whose `Sink::kind()` returns
   `SinkKind::trusted_local`; default sinks receive the text fallback and usage

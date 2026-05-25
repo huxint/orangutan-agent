@@ -29,6 +29,7 @@ end
 
 oran_test("core", { "oran-core" })
 oran_test("async", { "oran-async" })
+oran_test("http", { "oran-http" })
 oran_test("io", { "oran-io" })
 oran_test("storage", { "oran-storage" })
 oran_test("config", { "oran-config" })

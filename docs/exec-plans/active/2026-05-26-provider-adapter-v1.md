@@ -54,6 +54,9 @@ ordinary binary prompts switch from the deterministic no-runner shell to
     Slice 108 reuses that private dependency for offline response decoding.
     Slice 109 adds only provider value types plus an abstract injected
     transport; it does not add a third-party dependency.
+    Slice 110 adds the first concrete platform HTTP target, links system
+    `libcurl >=8.11.0` privately behind `oran-http::Client`, and keeps curl
+    handles out of public headers.
 
 ## Risks
 
@@ -118,7 +121,9 @@ ordinary binary prompts switch from the deterministic no-runner shell to
       offline into `provider::Response`.
 - [x] Slice 109: build Anthropic/OpenAI protocol factories over an injected
       body-response `ProtocolTransport`.
-- [ ] Add the concrete `oran-http` / libcurl transport and bootstrap adapter construction.
+- [x] Slice 110: add the concrete `oran-http` / libcurl body-response client target.
+- [ ] Adapt `http::Client` to `provider::ProtocolTransport` and construct provider
+      backends from bootstrap config.
 - [ ] Switch ordinary binary prompts to `cli::run_async`.
 - [ ] Move this plan to `docs/exec-plans/completed/` once the binary handoff lands.
 
@@ -137,6 +142,10 @@ ordinary binary prompts switch from the deterministic no-runner shell to
 - 2026-05-26: Keep retry/fallback outside protocol factories. The adapter-factory
   seam constructs single-target backends; `provider::execution::Runtime` remains the
   owner of retry and fallback policy.
+- 2026-05-26: Land `oran-http` as a platform body-response client before bootstrap
+  adapter construction. The client takes a caller-owned blocking executor so libcurl
+  work can run on `async::Runtime::cpu_executor()` rather than the main coroutine
+  executor, while future SSE support can extend the same library boundary.
 
 ## Linked Artifacts
 
@@ -151,5 +160,6 @@ ordinary binary prompts switch from the deterministic no-runner shell to
   - `docs/histories/2026-05/20260526-0114-provider-protocol-request.md`
   - `docs/histories/2026-05/20260526-0228-provider-protocol-response.md`
   - `docs/histories/2026-05/20260526-0302-provider-protocol-transport.md`
+  - `docs/histories/2026-05/20260526-0426-http-body-client.md`
 - Release note:
   - `docs/releases/feature-release-notes.md`

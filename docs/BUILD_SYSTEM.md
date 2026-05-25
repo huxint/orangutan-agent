@@ -173,17 +173,20 @@ library that consumes them.
 -- xmake/packages.lua
 add_requires("asio 1.36.0")
 add_requires("catch2 3.7.1")
+add_requires("libcurl >=8.11.0", { system = true })
+add_requires("libsodium 1.0.21")
 add_requires("nanobench 4.3.11")
 add_requires("nlohmann_json 3.12.0")
+add_requires("re2 2025.11.05")
 add_requires("sqlite3 3.51.0+0")
 ```
 
 Packages land with the library that first consumes them. The full approval list
-and planned versions live in [`rules/libraries.md`](rules/libraries.md); for
-example `fmt`, `spdlog`, and `libcurl` are approved but not required by the
-current checked-in targets yet. `nlohmann_json` is now consumed privately by
-`oran-provider` for offline protocol request serialization; provider public
-headers still expose serialized JSON bytes only.
+and planned versions live in [`rules/libraries.md`](rules/libraries.md).
+`libcurl` is consumed privately by `oran-http` through the system package
+provider, and `nlohmann_json` is consumed privately by `oran-provider` for
+offline protocol request serialization; public headers still expose bytes and
+stdlib value types only.
 
 **Notable removals vs. legacy:**
 
@@ -215,6 +218,7 @@ end
 
 oran_lib("core", {}, {})
 oran_lib("async", { "oran-core" }, {}, { "asio" })
+oran_lib("http", { "oran-core", "oran-async" }, { "libcurl" }, { "asio" })
 oran_lib("io", { "oran-core", "oran-async" }, {}, { "asio" })
 oran_lib("storage", { "oran-core", "oran-async" }, { "sqlite3" })
 oran_lib("config", { "oran-core", "oran-storage" }, { "nlohmann_json", "re2" })
@@ -233,6 +237,12 @@ target("orangutan")
     add_files(path.join(root, "src/main.cpp"))
     set_rundir(root)
 ```
+
+`oran-http` is the platform HTTP/TLS client target. Slice 110 ships a
+body-response `http::Client` over private libcurl handles; callers pass a
+blocking executor, so production bootstrap can use `async::Runtime::cpu_executor()`
+instead of blocking the main coroutine executor. Streaming/SSE parser support
+remains downstream.
 
 `oran-provider` is currently the provider-domain + fake-provider +
 execution-runtime + route-resolution library. It depends on `oran-async` for

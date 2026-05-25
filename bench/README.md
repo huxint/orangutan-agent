@@ -59,6 +59,7 @@ xmake run orangutan-bench --json > all.json
 | ------------------ | ------------------------------ | -------------------------- |
 | `core`             | variant-based `Content`        | polymorphic `Content` (stretch) |
 | `async`            | direct coroutine post loop     | bounded `Channel<T>` handoff |
+| `http`             | client construction            | invalid request validation |
 | `io`               | direct `std::ifstream` read    | coroutine `read_text_file` wrapper |
 | `storage`          | literal `execute` inserts / compiled-span migration apply / direct `Connection` read / fresh prepare / raw pool session SQL | prepared statement binding / SQL-file migration load+apply / `Pool::acquire_reader` read / cached prepare / `SessionRepository` |
 | `config`           | in-memory JSON parse           | checked-in config file load |
@@ -76,7 +77,7 @@ Each table row corresponds to at least one scenario file in the bucket.
 
 ## Status
 
-`bench/core/`, `bench/async/`, `bench/io/`, `bench/storage/`, `bench/config/`,
+`bench/core/`, `bench/async/`, `bench/http/`, `bench/io/`, `bench/storage/`, `bench/config/`,
 `bench/permission/`, `bench/hook/`, `bench/tool/`, `bench/prompt/`,
 `bench/provider/`, `bench/agent/`, `bench/cli/`, and `bench/bootstrap/` are live.
 Additional buckets land with their owning libraries.

@@ -7,16 +7,34 @@
 
 ## Snapshot
 
-- **Slice:** 109 (`xmake run orangutan` reports slice 109)
+- **Slice:** 110 (`xmake run orangutan` reports slice 110)
 - **Last completed history:**
-  [`histories/2026-05/20260526-0302-provider-protocol-transport.md`](histories/2026-05/20260526-0302-provider-protocol-transport.md)
+  [`histories/2026-05/20260526-0426-http-body-client.md`](histories/2026-05/20260526-0426-http-body-client.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-05-26-provider-adapter-v1.md`](exec-plans/active/2026-05-26-provider-adapter-v1.md)
   — tracks the remaining multi-slice provider adapter handoff from offline
   protocol bytes through transport-backed factories and ordinary binary
   `cli::run_async` wiring.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 109 adds
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 110 adds
+  the platform-owned `oran-http` target and a libcurl-backed
+  body-response client needed before provider factories can use real HTTP/TLS
+  I/O. New `<oran/http/client.hpp>` exports stdlib-shaped `Header`,
+  `BodyRequest`, `BodyResponse`, and pimpl-backed `http::Client`. The client
+  accepts a caller-owned blocking executor (production callers should use
+  `async::Runtime::cpu_executor()`), validates method/scheme/timeout before
+  curl dispatch, collects response headers/body, maps curl transport failures
+  into `core::Error` categories, and returns `ErrorKind::cancelled` when the
+  parent cancellation slot is already or becomes cancelled during the curl
+  poll loop. The target links system `libcurl >=8.11.0`; curl handles stay
+  private to `src/oran-http/client.cpp`. Focused result: `test-http` 3 cases /
+  21 assertions. `bootstrap::run` still does not read provider credentials,
+  construct adapters, allocate this HTTP client, send a network request, or
+  start `agent::Loop` for ordinary binary prompts. Remaining handoff work is
+  now the bootstrap adapter construction slice that adapts
+  `http::Client` to `provider::ProtocolTransport` and switches
+  `bootstrap::run` to `cli::run_async` only when that backend exists.
+  Slice 109 adds
   the provider-owned protocol transport adapter seam needed before concrete
   HTTP/TLS transport and ordinary binary handoff. New
   `<oran/provider/protocol_transport.hpp>` exports the HTTP-shaped
@@ -29,14 +47,11 @@
   status classes into provider error categories, rejects mismatched selected
   route profile/model/protocol values before sending, and remains
   offline-testable through a fake transport. The current seam is body-response
-  only and forces `request.stream=false`; SSE streaming and real
-  `oran-http`/libcurl I/O remain downstream. `bootstrap::run` still does not
+  only and forces `request.stream=false`; SSE streaming and
+  `oran-http`/libcurl I/O remained downstream. `bootstrap::run` still does not
   read provider credentials, construct adapters, allocate a concrete transport,
   send a network request, or start `agent::Loop` for ordinary binary prompts.
-  Focused result: `test-provider` 63 cases / 512 assertions. Remaining handoff
-  work is now the concrete `oran-http`/libcurl transport plus bootstrap adapter
-  construction and switching `bootstrap::run` to `cli::run_async` only when
-  that backend exists. Slice 108 adds
+  Focused result: `test-provider` 63 cases / 512 assertions. Slice 108 adds
   the provider-owned offline protocol response decoding boundary needed before
   HTTP transport-backed factories. New `<oran/provider/protocol_response.hpp>`
   exports `provider::decode_protocol_response(body_json, target)`. The decoder
@@ -829,8 +844,9 @@
   capability-gated `tool::Runtime::workspace()` accessor when
   `tool::Runtime` lands. The first
   provider adapter (Anthropic Messages) remains a multi-slice
-  effort that needs an exec plan plus `oran-http` + libcurl wiring
-  first; binding the CLI approval sink into real turns is still gated on
+  effort under the active exec plan; its next code step is adapting the
+  shipped `oran-http` body client into `provider::ProtocolTransport`
+  during bootstrap construction. Binding the CLI approval sink into real turns is still gated on
   the provider-backed `oran-agent` handoff; and wiring
   `check-compile-budget.sh` into
   `scripts/ci.sh` remains gated by the slice-28 reference-hardware
@@ -857,6 +873,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 - `oran-core`: 71 cases / 455 assertions.
 - `oran-async`: 9 cases / 43 assertions.
+- `oran-http`: 3 cases / 21 assertions.
 - `oran-io`: 49 cases / 286 assertions.
 - `oran-storage`: 72 cases / 899 assertions.
 - `oran-config`: 33 cases / 241 assertions.

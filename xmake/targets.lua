@@ -31,6 +31,7 @@ end
 
 oran_lib("core", {}, {})
 oran_lib("async", { "oran-core" }, {}, { "asio" })
+oran_lib("http", { "oran-core", "oran-async" }, { "libcurl" }, { "asio" })
 oran_lib("io", { "oran-core", "oran-async" }, {}, { "asio" })
 oran_lib("storage", { "oran-core", "oran-async" }, { "sqlite3" })
 oran_lib("config", { "oran-core", "oran-storage" }, { "nlohmann_json", "re2" })
@@ -46,7 +47,7 @@ oran_lib("bootstrap", { "oran-core", "oran-async", "oran-io", "oran-storage", "o
 target("orangutan")
     set_kind("binary")
     set_group("oran-bins")
-    add_deps("oran-core", "oran-async", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-tool", "oran-provider", "oran-agent", "oran-cli", "oran-bootstrap")
+    add_deps("oran-core", "oran-async", "oran-http", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-tool", "oran-provider", "oran-agent", "oran-cli", "oran-bootstrap")
     add_files(path.join(root, "src/main.cpp"))
     set_rundir(root)
 target_end()

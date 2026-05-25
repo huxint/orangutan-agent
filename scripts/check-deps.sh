@@ -78,6 +78,7 @@ declare -A LAYER_NAME=(
 # trips shfmt's arithmetic reformatter inside `[]`).
 #
 # Current exceptions (all from xmake/targets.lua + ARCHITECTURE.md):
+#   http   -> async    : HTTP callers supply executor-owned blocking transport work.
 #   io     -> async    : every io call hops onto the executor.
 #   storage-> async    : Pool/Repository acquire writer/reader slots via the executor.
 #   config -> storage  : typed permissions block reuses storage's migration shape.
@@ -86,6 +87,7 @@ declare -A LAYER_NAME=(
 #   prompt -> tool     : prompt assembly delegates schema/catalog bytes to CatalogRenderer.
 #   provider-> prompt  : provider adapters consume RenderedPrompt cache hints; prompt never calls providers.
 declare -A ALLOWED_SIBLING=(
+  [http__async]=1
   [io__async]=1
   [storage__async]=1
   [config__storage]=1

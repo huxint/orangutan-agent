@@ -57,7 +57,7 @@ xmake run test-agent "specific test name"
 
 ## Status
 
-`tests/core/`, `tests/async/`, `tests/io/`, `tests/storage/`, `tests/config/`,
+`tests/core/`, `tests/async/`, `tests/http/`, `tests/io/`, `tests/storage/`, `tests/config/`,
 `tests/permission/`, `tests/hook/`, `tests/tool/`, `tests/prompt/`,
 `tests/provider/`, `tests/agent/`, `tests/cli/`, and `tests/bootstrap/` are live
 and registered with `xmake test`.

@@ -1,0 +1,70 @@
+// include/oran/http/client.hpp - body HTTP client boundary.
+//
+// Public request/response values stay stdlib-only. The constructor accepts an
+// executor for blocking transport work; libcurl handles and callbacks live in
+// src/oran-http/client.cpp.
+
+#pragma once
+
+#include <chrono>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include <asio/any_io_executor.hpp>
+
+#include <oran/async/awaitable_fwd.hpp>
+#include <oran/core/result.hpp>
+
+namespace orangutan::http {
+
+struct Header {
+  std::string name;
+  std::string value;
+
+  friend bool operator==(const Header&, const Header&) = default;
+};
+
+struct BodyRequest {
+  std::string method{"GET"};
+  std::string url;
+  std::vector<Header> headers;
+  std::string body;
+  std::chrono::milliseconds timeout{30000};
+
+  friend bool operator==(const BodyRequest&, const BodyRequest&) = default;
+};
+
+struct BodyResponse {
+  std::uint16_t status_code{0};
+  std::vector<Header> headers;
+  std::string body;
+
+  friend bool operator==(const BodyResponse&, const BodyResponse&) = default;
+};
+
+class Client {
+public:
+  /// The caller-owned executor is where libcurl's blocking body-response work
+  /// runs. In production this should be `async::Runtime::cpu_executor()`.
+  explicit Client(asio::any_io_executor blocking_executor);
+  ~Client();
+
+  Client(const Client&) = delete;
+  Client& operator=(const Client&) = delete;
+  Client(Client&&) noexcept;
+  Client& operator=(Client&&) noexcept;
+
+  /// Send one non-streaming request and collect the complete response body.
+  ///
+  /// This first slice is intentionally body-response only. Streaming/SSE will
+  /// use the same libcurl boundary but a different response contract.
+  [[nodiscard]] async::Awaitable<core::Result<BodyResponse>> send(BodyRequest request) const;
+
+private:
+  struct Impl;
+  std::shared_ptr<Impl> impl_;
+};
+
+}  // namespace orangutan::http

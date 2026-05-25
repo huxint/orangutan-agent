@@ -20,6 +20,7 @@ end
 
 oran_bench("core", { "oran-core" })
 oran_bench("async", { "oran-async" })
+oran_bench("http", { "oran-http" })
 oran_bench("io", { "oran-io" })
 oran_bench("storage", { "oran-storage" })
 oran_bench("config", { "oran-config" })

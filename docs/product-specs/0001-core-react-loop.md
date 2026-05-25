@@ -37,8 +37,9 @@ with persistent session history and a CLI surface. The first deliverable is "I c
     reasons back into `provider::Response`. Slice 109 adds
     `ProtocolTransportAdapterFactory`, which builds non-streaming Anthropic or
     OpenAI `provider::System` backends over an injected body-response
-    `ProtocolTransport`. Concrete `oran-http`/libcurl transport and bootstrap
-    adapter construction still remain downstream of the current binary.
+    `ProtocolTransport`. Slice 110 adds the platform `oran-http`/libcurl
+    body client, but bootstrap adapter construction that binds it into
+    `ProtocolTransport` still remains downstream of the current binary.
   - Bootstrap exports `AgentPromptRunner` for tests and future adapter owners: callers
     can supply a provider backend and resolved route to drive `agent::Loop` with the
     runtime assembly's workspace/audit/broker/hook/trace services. The ordinary binary

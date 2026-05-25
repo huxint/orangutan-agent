@@ -186,8 +186,8 @@ adds the provider execution decorator for retry/fallback, and slice 101 hands
 that decorated `provider::System` to the loop through bootstrap's
 `AgentPromptRunner` when a caller supplies a backend. Slice 109 adds injected
 body-response Anthropic/OpenAI protocol systems, but the ordinary binary still
-needs concrete transport and bootstrap adapter construction before it can use
-the runner. The future
+needs an `http::Client`-backed `ProtocolTransport` adapter plus bootstrap
+adapter construction before it can use the runner. The future
 `ToolScheduler` can replace the direct loop call without changing the
 provider-facing request/response shape.
 
