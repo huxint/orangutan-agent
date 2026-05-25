@@ -35,7 +35,7 @@ struct Response {
 
 `core::Content` is a typed variant; protocol adapters translate to/from vendor JSON.
 
-> **Status (slice 98, 2026-05-25):** `oran-provider` exists as the
+> **Status (slice 101, 2026-05-25):** `oran-provider` exists as the
 > provider-domain, prompt-cache-hint, fake-provider, route-resolver, and
 > first execution wrapper library.
 > `<oran/provider.hpp>` exports the slice-73 value shapes (`Request`,
@@ -55,9 +55,11 @@ struct Response {
 > profile/route names into a `provider::Route`, preserves fallback order, maps
 > provider spellings and exact `ProtocolKind` names, and reports
 > `Error::config` for missing profile references or unknown provider
-> spellings.
-> Real transports, protocol adapters, provider hooks, and usage/cost rollups
-> remain planned.
+> spellings. Slice 101's bootstrap `AgentPromptRunner` is the first owner that
+> consumes a resolved route plus `provider::execution::Runtime` to drive
+> `agent::Loop` with a caller-supplied backend.
+> Real transports, protocol adapters, provider hooks, binary adapter
+> construction, and usage/cost rollups remain planned.
 
 ## Layered Implementation
 

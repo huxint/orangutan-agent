@@ -114,9 +114,10 @@ operator for a yes/no answer. Approval answers (`y`, `yes`, `approve`, `approved
 
 `scripted_answers` exists for tests and future noninteractive drivers. When empty, the
 sink reads one line from terminal stdin through an asio `posix::stream_descriptor` on the
-current coroutine executor. Binding remains explicit: the binary still does not run the
-provider-backed agent loop, so bootstrap does not attach this sink to the process bus
-until the CLI/binary handoff slice has a dispatch path that can publish asks.
+current coroutine executor. Binding remains explicit: `AgentPromptRunner` binds this
+sink to the assembly-owned process bus when a caller supplies a provider backend, while
+the ordinary binary path still stays on the deterministic no-runner shell until real
+provider adapter construction exists.
 
 ## Bootstrap Handoff
 
@@ -124,15 +125,17 @@ until the CLI/binary handoff slice has a dispatch path that can publish asks.
 not bootstrap-owned are forwarded unchanged to `cli::run` after config loading and the
 default provider-route preflight. This keeps config discovery, provider-route validation,
 and terminal mode selection separate while preserving one process entry point. The
-binary still uses the no-runner path; the next handoff slice can switch to
-`cli::run_async` with a bootstrap-owned runner that wraps `agent::Loop`.
+binary still uses the no-runner path, but bootstrap now exports
+`AgentPromptRunner`, a caller-owned `PromptRunner` implementation that wraps a supplied
+provider backend in `provider::execution::Runtime`, binds `OperatorPromptSink`, and
+drives `agent::Loop` with runtime-assembly services. Tests exercise that path through
+`cli::run_async`; ordinary `bootstrap::run` will switch only after real adapters can be
+constructed from config.
 
 ## Next Steps
 
 - Replace the deterministic REPL shell with a line editor once terminal history/editing is
   needed.
-- Supply a bootstrap-owned `PromptRunner` that constructs the provider execution runtime,
-  binds the CLI approval sink, and drives `agent::Loop`.
-- Bind `OperatorPromptSink` into the real CLI agent-loop runtime when the binary starts
-  driving `agent::Loop`.
+- Construct real provider adapter backends from config and hand them to bootstrap's
+  `AgentPromptRunner` from the ordinary binary path.
 - Add slash-command parsing after the runtime has command targets.

@@ -223,11 +223,11 @@ oran_lib("prompt", { "oran-core", "oran-async", "oran-config", "oran-tool" }, {}
 oran_lib("provider", { "oran-core", "oran-async", "oran-config", "oran-prompt" }, {})
 oran_lib("agent", { "oran-core", "oran-async", "oran-storage", "oran-prompt", "oran-tool", "oran-provider" }, { "nlohmann_json" })
 oran_lib("cli", { "oran-core", "oran-async", "oran-hook" }, {})
-oran_lib("bootstrap", { "oran-core", "oran-async", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-tool", "oran-provider", "oran-cli" }, {})
+oran_lib("bootstrap", { "oran-core", "oran-async", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-tool", "oran-provider", "oran-agent", "oran-cli" }, {})
 
 target("orangutan")
     set_kind("binary")
-    add_deps("oran-core", "oran-async", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-tool", "oran-cli", "oran-bootstrap")
+    add_deps("oran-core", "oran-async", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-tool", "oran-provider", "oran-agent", "oran-cli", "oran-bootstrap")
     add_files(path.join(root, "src/main.cpp"))
     set_rundir(root)
 ```
@@ -241,10 +241,13 @@ adapter-side `prompt::RenderedPrompt` cache-hint mapping. It is registered with
 real vendor runtime is linked into the binary yet.
 
 `oran-bootstrap` depends on `oran-provider` so process startup can preflight the
-configured default provider route before handing prompts to `oran-cli`. The
-preflight resolves `config.profiles` / `config.routes` into a `provider::Route`
-and prints a provider-route summary; it does not construct a provider adapter,
-read credentials, or send network traffic.
+configured default provider route before handing prompts to `oran-cli`. It also
+depends on `oran-agent` for slice 101's `AgentPromptRunner`, the bootstrap-owned
+`cli::PromptRunner` implementation that wraps a caller-supplied provider backend in
+`provider::execution::Runtime`, binds the CLI approval sink, and drives
+`agent::Loop` with runtime-assembly services. The regular binary path still does not
+construct a provider adapter, read credentials, send network traffic, or start the loop
+until real provider backends exist.
 
 `oran-cli` depends on `oran-async` and `oran-hook` because slice 95 adds the
 terminal `OperatorPromptSink`: it implements the blocking
@@ -261,9 +264,9 @@ trace writers. The `oran-storage` dependency is an intentional downward
 agent-runtime → platform dependency for
 `storage::TraceRepository`; the provider dependency is also downward: the agent
 runtime layer drives `provider::System`, while `oran-provider` never calls back
-into `oran-agent`. The `orangutan` binary still does not link `oran-agent`;
-CLI/binary handoff waits for approval-observability coverage and trace config
-wiring.
+into `oran-agent`. The `orangutan` binary now links `oran-agent` transitively through
+`oran-bootstrap` so tests and future adapters can construct `AgentPromptRunner`; the
+ordinary prompt path remains on `cli::run` until provider adapter construction lands.
 
 **Key compile-time wins from this shape:**
 

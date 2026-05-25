@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 100 (`xmake run orangutan` reports slice 100)
+- **Slice:** 101 (`xmake run orangutan` reports slice 101)
 - **Last completed history:**
-  [`histories/2026-05/20260525-0744-cli-prompt-runner.md`](histories/2026-05/20260525-0744-cli-prompt-runner.md)
+  [`histories/2026-05/20260525-2022-bootstrap-agent-prompt-runner.md`](histories/2026-05/20260525-2022-bootstrap-agent-prompt-runner.md)
 - **Active exec-plan:** none — the prompt-builder skeleton plan remains
   archived at
   [`exec-plans/completed/2026-05-23-prompt-builder-v1.md`](exec-plans/completed/2026-05-23-prompt-builder-v1.md);
@@ -18,7 +18,30 @@
   plan because they stayed under the existing spec-0015/0017/0018
   sequencing contract.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 100 opens
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 101 adds
+  the adapter-neutral bootstrap runner that consumes the slice-100 CLI seam.
+  `<oran/bootstrap/prompt_runner.hpp>` now exports
+  `AgentPromptRunnerOptions` and `AgentPromptRunner`, a caller-supplied
+  `cli::PromptRunner` implementation that borrows a `RuntimeAssembly`,
+  config, provider backend, executor, and resolved `provider::Route`.
+  `AgentPromptRunner::create` registers the shipped builtin tool catalog,
+  materializes permissions from config plus an optional agent overlay, wraps
+  the backend in `provider::execution::Runtime`, binds
+  `cli::OperatorPromptSink` to the assembly-owned `permission_ask_rendered`
+  bus with scripted-answer support for tests, threads workspace/audit/broker/
+  hook/output-cap services into `tool::DispatchContext`, carries the
+  assembly-owned `TraceRepository` into `RunTurnInputs::trace`, and drives
+  `agent::Loop` for each parsed prompt while retaining the transcript across
+  calls. Focused result: `test-bootstrap` 63 cases / 259 assertions, including
+  CLI-to-loop handoff with trace row persistence, provider retry through the
+  execution wrapper, and a broker-backed `file.read` approval through the CLI
+  sink. Regular `bootstrap::run` still calls the deterministic no-runner
+  `cli::run` path until a real provider adapter factory exists, so no provider
+  credentials are read, no network request is sent, and the shipped binary
+  still does not start `agent::Loop` on ordinary `--prompt` runs. Remaining
+  handoff work: construct real Anthropic/OpenAI provider systems from config
+  and switch `bootstrap::run` to `cli::run_async` only when that backend exists.
+  Slice 100 opens
   the adapter-neutral CLI prompt-runner handoff seam. `<oran/cli/cli.hpp>`
   now exports `PromptRunRequest`, `PromptRunResult`, `PromptRunner`, and
   `cli::run_async(CliOptions, PromptRunner*)`; `run_async` reuses the existing
@@ -27,11 +50,10 @@
   quiet, and propagates runner errors unchanged. `cli::run` remains the
   deterministic no-runner shell, and `bootstrap::run` still calls that path, so
   no provider credentials are read, no adapter is constructed, no network
-  request is sent, and `agent::Loop` is still not started. Focused result:
-  `test-cli` 14 cases / 97 assertions. Remaining handoff work: construct a
-  bootstrap-owned runner that resolves the configured route, wraps a provider
-  backend in `provider::execution::Runtime`, binds `cli::OperatorPromptSink`,
-  and drives `agent::Loop` through `cli::run_async`. Slice 99 consumes
+  request is sent, and ordinary binary prompts still do not start
+  `agent::Loop`. Focused result: `test-cli` 14 cases / 97 assertions. Slice
+  101 consumes that seam with the bootstrap-owned runner described above.
+  Slice 99 consumes
   the route resolver at the binary boundary. Regular `bootstrap::run` startup
   now preflights the configured `default` provider route whenever config
   declares routes, prints
@@ -41,11 +63,13 @@
   invalid. Built-in empty defaults still report `provider route: none
   configured` and continue to the deterministic pre-loop CLI shell; no provider
   credentials are read, no adapter is constructed, no network request is sent,
-  and `agent::Loop` is still not started. `oran-bootstrap` now declares its
-  direct `oran-provider` dependency. Focused result: `test-bootstrap` 59
-  cases / 230 assertions. Remaining handoff work: construct a provider system,
-  wrap it in `provider::execution::Runtime`, bind `cli::OperatorPromptSink`,
-  and drive `agent::Loop` from the real CLI path. Slice 98 lands
+  and ordinary binary prompts still do not start `agent::Loop`.
+  `oran-bootstrap` now declares its direct `oran-provider` dependency. Focused
+  result: `test-bootstrap` 59 cases / 230 assertions. Slice 101 now supplies
+  the runner that wraps caller-provided provider systems in
+  `provider::execution::Runtime`; the remaining real-CLI work is provider
+  adapter construction and switching `bootstrap::run` to the async handoff.
+  Slice 98 lands
   the config-to-provider route resolver required before loop/binary handoff.
   `<oran/provider/route_resolver.hpp>` exports
   `provider::resolve_route(const config::Config&, std::string_view)`, which
@@ -62,9 +86,8 @@
   `oran-prompt` path, and `<oran/provider.hpp>` re-exports the resolver.
   Focused result: `test-provider` 24 cases / 170 assertions. Remaining
   provider work: provider request/response hooks, usage/cost rollups, real
-  Anthropic/OpenAI adapters, and wiring `resolve_route` +
-  `provider::execution::Runtime` into `agent::Loop` / the `orangutan`
-  binary. Slice 97 lands the first provider execution layer required before
+  Anthropic/OpenAI adapters, and binary construction of a concrete provider
+  backend for the bootstrap runner. Slice 97 lands the first provider execution layer required before
   real adapter and binary handoff work. `<oran/provider/execution.hpp>` now
   exports
   `provider::execution::Runtime`, a `provider::System` decorator over any
@@ -390,9 +413,10 @@
   `asio::cancellation_signal` tests.
   Iteration-cap trace rows, approval-observability coverage, and the
   trace/audit inspector rows are now in place; slice 97 adds the provider
-  execution retry/fallback decorator, while loop/binary wiring of that
-  decorator, the parallel `ToolScheduler`, and CLI/binary handoff remain
-  downstream. Slice 76
+  execution retry/fallback decorator, and slice 101 consumes that decorator
+  through bootstrap's `AgentPromptRunner` for caller-supplied backends while
+  the parallel `ToolScheduler` and ordinary CLI/binary handoff with real
+  adapters remain downstream. Slice 76
   extended the real `agent::Loop` driver from the slice-75 text-only path into the
   first sequential direct-dispatch tool loop. `<oran/agent.hpp>` exports
   `agent::Loop`, `LoopOptions`, `RunTurnInputs`, and `RunTurnResult`;
@@ -685,7 +709,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 24 cases / 170 assertions.
 - `oran-agent`: 24 cases / 391 assertions.
 - `oran-cli`: 14 cases / 97 assertions.
-- `oran-bootstrap`: 59 cases / 230 assertions.
+- `oran-bootstrap`: 63 cases / 259 assertions.
 
 ## Open Tech-Debt Rows
 

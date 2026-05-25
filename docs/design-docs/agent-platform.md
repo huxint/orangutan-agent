@@ -68,7 +68,7 @@ own library, its own tests, its own bench, its own design doc."
 
 ## Prompt Assembly
 
-> **Status (slice 97, 2026-05-25):** `oran-prompt` owns the first
+> **Status (slice 101, 2026-05-25):** `oran-prompt` owns the first
 > deterministic `prompt::Builder` skeleton plus `prompt::PromotionState`,
 > `oran-agent` owns the narrow `agent::SessionState` surface that observes
 > successful `tool.search` output and promotes deferred matches into the
@@ -77,8 +77,11 @@ own library, its own tests, its own bench, its own design doc."
 > with the first concrete `provider::FakeProvider` (scripted-turn plan,
 > delta-to-`Response` assembly, cancel-aware scripted latency) plus the
 > slice-97 `provider::execution::Runtime` decorator for per-target retry and
-> route fallback before real adapters land. Slices 76-77
-> extends `agent::Loop` over those pieces: it builds a
+> route fallback before real adapters land. Slice 101 adds bootstrap's
+> `AgentPromptRunner`, which borrows a caller-supplied backend, wraps it in
+> that execution runtime, binds the CLI approval sink, and runs `agent::Loop`
+> with runtime-assembly workspace/audit/broker/hook/trace services. Slices 76-77
+> extend `agent::Loop` over those pieces: it builds a
 > `prompt::RenderedPrompt`, maps cache hints, mirrors active/promoted tools
 > into name-sorted `provider::Request::tools`, sends requests through a
 > supplied `provider::System`, and, when supplied a `tool::Registry` plus
@@ -106,7 +109,7 @@ own library, its own tests, its own bench, its own design doc."
 > skips the trace row, forces direct dispatch audit rows to keep
 > `parent_turn_id = NULL`, and restores any reusable dispatch-context parent id
 > after the tool call.
-> Memory, scheduler handoff, wiring the execution runtime into the loop, and
+> Memory, scheduler handoff, real provider adapter construction, and ordinary
 > binary CLI agent-loop wiring remain downstream.
 > The invariants — section order, byte-identical cached prefix, no clocks /
 > per-call state in sections (1)–(6) — remain canonical in
@@ -170,10 +173,12 @@ slice 85 generates a missing turn id for trace-enabled turns before prompt
 render/dispatch. Slice 96 also refreshes `DispatchContext::now` for each direct
 dispatch, so the registry-owned blocking approval prompt path uses a real
 per-call timestamp and then restores the caller's reusable context. Slice 97
-adds the provider execution decorator for retry/fallback; the loop still needs
-to be handed that decorated `provider::System` by the future binary/runtime
-assembly owner. The future `ToolScheduler` can replace the direct loop call
-without changing the provider-facing request/response shape.
+adds the provider execution decorator for retry/fallback, and slice 101 hands
+that decorated `provider::System` to the loop through bootstrap's
+`AgentPromptRunner` when a caller supplies a backend. The ordinary binary still
+needs real adapter construction before it can use the runner. The future
+`ToolScheduler` can replace the direct loop call without changing the
+provider-facing request/response shape.
 
 ## Cross-Cutting Concerns
 

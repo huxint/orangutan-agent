@@ -21,6 +21,11 @@ with persistent session history and a CLI surface. The first deliverable is "I c
     through `provider::resolve_route`, reports the resolved primary/fallback summary,
     and fails fast on bad profile references or provider spellings. Built-in empty
     defaults still run without a provider route.
+  - Bootstrap exports `AgentPromptRunner` for tests and future adapter owners: callers
+    can supply a provider backend and resolved route to drive `agent::Loop` with the
+    runtime assembly's workspace/audit/broker/hook/trace services. The ordinary binary
+    still stays on the deterministic no-runner shell until real provider adapters can
+    be constructed from config.
 - One agent runtime per process (multiplexing comes in spec 0004).
 - Anthropic Messages **and** OpenAI Chat Completions providers (one of the two
   configured + working end-to-end is acceptance; the other is built and bench-only).

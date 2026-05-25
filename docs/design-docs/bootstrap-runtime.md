@@ -29,6 +29,17 @@ struct LoadedConfig {
 core::Result<LoadedConfig> load_config(BootstrapOptions);
 core::Result<int> run(BootstrapOptions);
 
+struct AgentPromptRunnerOptions;
+
+class AgentPromptRunner final : public cli::PromptRunner {
+ public:
+  static core::Result<std::unique_ptr<AgentPromptRunner>>
+  create(AgentPromptRunnerOptions);
+
+  async::Awaitable<core::Result<cli::PromptRunResult>>
+  run_prompt(cli::PromptRunRequest) override;
+};
+
 }  // namespace orangutan::bootstrap
 ```
 
@@ -75,6 +86,16 @@ optional trace repository, and the process hook bus. `bootstrap::run` threads
 `config.trace().enabled` into `trace_enabled` and `config.hooks().timeout_ms` into
 `hook_blocking_timeout`; the startup banner prints both `trace=<enabled|disabled>` and
 `hook-timeout=<ms>`.
+
+`<oran/bootstrap/prompt_runner.hpp>` exposes the bootstrap-owned CLI runner used by
+tests and the future binary handoff. `AgentPromptRunner::create` borrows a
+caller-supplied `RuntimeAssembly`, typed config, resolved `provider::Route`, executor,
+and provider backend; registers the builtin tool catalog; materializes permission rules
+from config plus an optional agent overlay; wraps the backend in
+`provider::execution::Runtime`; binds `cli::OperatorPromptSink` to the
+assembly-owned `permission_ask_rendered` bus; and drives `agent::Loop` with workspace,
+audit, broker, hook, output-cap, and trace services from the assembly. The runner does
+not construct real provider adapters or read provider credentials.
 
 ## Config Resolution
 
@@ -126,6 +147,10 @@ provider credentials are read, no provider adapter is constructed, and no agent
 runtime loop is started in this slice.
 The runtime assembly opens the audit DB when audit is enabled so migrations, trace
 repository ownership, and audit sinks are ready before the future loop handoff.
+The `AgentPromptRunner` public seam can run `agent::Loop` when a caller supplies a
+provider backend (tests use `provider::FakeProvider`), but regular `bootstrap::run`
+still calls the deterministic no-runner `cli::run` path until real provider adapter
+construction exists.
 
 `orangutan --trace <turn-id>` is a bootstrap-owned one-shot inspector. It
 opens the workspace audit DB, runs the idempotent audit migration, loads the
@@ -136,4 +161,5 @@ permission-decision and `hook_publish` rows are readable in the same output.
 ## Next Steps
 
 - Bind configured hook sinks to the assembly-owned bus once the hook sink models land.
-- Thread the assembly services into the provider-backed agent loop and CLI handoff.
+- Construct real provider adapter backends from config and switch the ordinary binary
+  prompt path from `cli::run` to `cli::run_async` with `AgentPromptRunner`.

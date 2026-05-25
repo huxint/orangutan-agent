@@ -67,8 +67,10 @@ makes the existing audit rows joinable. Nothing else.
   existing `Error::internal` (reason=`iteration_cap`) returns. `bootstrap::run`
   now threads `config.trace().enabled` into `RuntimeAssemblyOptions::trace_enabled`
   so `RuntimeAssembly::build` constructs a `storage::TraceRepository` on the
-  shared audit `Pool` whenever both audit and trace are enabled; the agent-loop
-  owner consumes the assembly-exposed pointer during CLI/binary handoff.
+  shared audit `Pool` whenever both audit and trace are enabled; slice 101's
+  `AgentPromptRunner` consumes the assembly-exposed pointer for
+  caller-supplied provider backends, while the ordinary binary handoff still
+  waits on real provider adapter construction.
   `<oran/storage.hpp>` exports `TraceRepository`, `TraceId`,
   `AppendTraceTurnRequest`, `TraceTurnRecord`, and
   `ListTraceTurnsOptions`; `src/oran-storage/migrations/audit/0002-trace-turns-initial.sql`
@@ -90,8 +92,10 @@ makes the existing audit rows joinable. Nothing else.
   `LoopOptions::max_iterations` is exhausted. `bootstrap::run` now constructs
   the assembly-owned `TraceRepository` from `config.trace().enabled`. Slice 93
   writes direct-dispatch blocking `tool_before` hook-publish rows when the
-  dispatch context carries a parent turn id. The binary handoff that threads
-  the assembly repository into `RunTurnInputs::trace` remains downstream.
+  dispatch context carries a parent turn id. Slice 101's `AgentPromptRunner`
+  now threads the assembly repository into `RunTurnInputs::trace` for
+  caller-supplied provider backends; the ordinary binary handoff remains
+  downstream until real provider adapters exist.
   ```sql
   CREATE TABLE trace_turns (
     turn_id           BLOB PRIMARY KEY,             -- 16-byte UUID
@@ -215,9 +219,10 @@ makes the existing audit rows joinable. Nothing else.
   `RuntimeAssemblyOptions::trace_enabled`, and `RuntimeAssembly::build`
   constructs a `storage::TraceRepository` on the shared audit `Pool` whenever
   both audit and trace are enabled (`RuntimeAssembly::trace_repository()`
-  exposes the pointer for the future agent-loop owner; audit-disabled forces
-  the trace repository to stay null). `store_raw_bodies` and `retention_days`
-  still wait for the trace runtime that will consume them.
+  exposes the pointer consumed by slice 101's `AgentPromptRunner` when a caller
+  supplies a provider backend; audit-disabled forces the trace repository to
+  stay null). `store_raw_bodies` and `retention_days` still wait for the trace
+  runtime that will consume them.
 - **CLI surface**. `orangutan --trace <turn_id>` prints the row
   plus every joined audit row (`WHERE parent_turn_id = ?`) in the
   same `--explain-rules`-style table format that already exists for
@@ -350,8 +355,10 @@ makes the existing audit rows joinable. Nothing else.
    The loop writes zero trace rows when `TraceContext::enabled=false`,
    direct-dispatch audit rows keep `parent_turn_id = NULL`, and any previous
    reusable dispatch-context parent id is restored after the tool call.
-   Threading the assembly-owned repository into `RunTurnInputs::trace` lives
-   with the upcoming agent-loop owner alongside CLI/binary handoff.
+   Slice 101's `AgentPromptRunner` threads the assembly-owned repository into
+   `RunTurnInputs::trace` when tests or future callers supply a provider
+   backend. The ordinary CLI/binary handoff still waits on real provider
+   adapter construction.
 10. **CLI inspector.** `orangutan --trace <turn_id>` returns
     the trace row + every joined audit row + every joined
     `hook_publish` row in deterministic order; exit code 0.

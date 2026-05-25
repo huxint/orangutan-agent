@@ -67,9 +67,10 @@ proves the loop behaves correctly without a network.
     original order, appends a `Role::tool` message with ordered
     `ToolResultContent` blocks, rebuilds the prompt, re-enters the provider,
     aggregates provider usage across iterations, and enforces
-    `LoopOptions::max_iterations`. Real protocol adapters, the parallel
-    scheduler, binary CLI handoff, and loop consumption of the provider
-    execution runtime remain downstream. Slice 77 adds the first
+    `LoopOptions::max_iterations`. Slice 101 consumes the provider execution
+    runtime through bootstrap's `AgentPromptRunner` when a caller supplies a
+    backend. Real protocol adapters, the parallel scheduler, and ordinary
+    binary CLI handoff remain downstream. Slice 77 adds the first
     cancellation-observability prework at the loop boundary: provider-await
     cancellations and direct tool-dispatch cancellations keep returning
     `ErrorKind::cancelled`, now with `reason=parent_cancelled` plus
@@ -152,7 +153,7 @@ proves the loop behaves correctly without a network.
   uses the fake provider with a hand-written plan.
 - **`agent::Loop` MVP**. Wraps the seven phases listed in the deep
   review §What a better `oran-agent` should look like:
-  - **Status (slice 97, 2026-05-25):** `<oran/agent.hpp>` exports
+  - **Status (slice 101, 2026-05-25):** `<oran/agent.hpp>` exports
     `agent::Loop`, `LoopOptions`, `RunTurnInputs`, and `RunTurnResult`.
     The current implementation covers phases 3/4/5 for terminal text turns
     plus the first phase-6 sequential dispatch path for scenarios #2/#3/#4/#6:
@@ -176,9 +177,10 @@ proves the loop behaves correctly without a network.
     If no registry/context pair is supplied, tool-use responses still fail
     loudly with `Error::internal` so callers cannot accidentally run a loop
     without permission/audit infrastructure. Slice 97 adds the provider-side
-    execution wrapper that will sit in front of this loop's supplied
-    `provider::System`, but the loop/binary owner has not wired that wrapper
-    into runtime assembly yet.
+    execution wrapper that sits in front of a supplied `provider::System`, and
+    slice 101 wires that wrapper into bootstrap's `AgentPromptRunner` for
+    caller-supplied backends. The ordinary binary still waits on real provider
+    adapter construction before it can hand CLI prompts to that runner.
   1. Build `TurnContext` (identity, route, session id, origin,
      cancellation slot, stable service refs).
   2. Load/render memory once per turn (memory: `nullopt` in v1 — the
@@ -222,8 +224,10 @@ proves the loop behaves correctly without a network.
   93 added joinable direct-dispatch `hook_publish` rows, slice 88 added the CLI
   trace inspector, and slice 96 pins broker-backed approval prompts inside the
   fake-provider loop. Slice 97 adds provider retry/fallback as a
-  `provider::System` decorator; scheduler handoff, loop/binary wiring of that
-  decorator, and CLI agent-loop wiring remain downstream.
+  `provider::System` decorator, and slice 101 wires that decorator into
+  bootstrap's `AgentPromptRunner` with runtime-assembly workspace/audit/broker/
+  hook/trace services. Scheduler handoff and ordinary binary CLI wiring with
+  real provider adapters remain downstream.
 - **CI runs against the fake provider only**. v1 CI gate:
   `xmake test test-agent` exercises all ten scenarios; no network
   is required, no API key is required, no flake budget is needed.
@@ -243,8 +247,10 @@ proves the loop behaves correctly without a network.
   `Request::retry`, retries retryable failures per target, tries
   `Route::fallbacks` after primary exhaustion, suppresses retry/fallback after
   visible stream output to avoid duplicate caller-rendered bytes, and stays
-  offline-testable against fake systems. Loop/binary wiring of the wrapper
-  remains downstream.
+  offline-testable against fake systems. Slice 101 consumes the wrapper in
+  bootstrap's `AgentPromptRunner`; `test-bootstrap` drives a retryable
+  fake-provider failure that succeeds on the second attempt. Real adapter
+  construction and ordinary binary handoff remain downstream.
 
 ## Scope (v2)
 

@@ -3,5 +3,6 @@
 #pragma once
 
 #include <oran/bootstrap/bootstrap.hpp>
+#include <oran/bootstrap/prompt_runner.hpp>
 #include <oran/bootstrap/runtime_assembly.hpp>
 #include <oran/bootstrap/signal_drain.hpp>
