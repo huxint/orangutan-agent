@@ -127,8 +127,9 @@ ordinary binary prompts switch from the deterministic no-runner shell to
 - [x] Slice 110: add the concrete `oran-http` / libcurl body-response client target.
 - [x] Slice 111: adapt `http::Client` to `provider::ProtocolTransport` and
       construct provider backends from bootstrap config.
-- [ ] Switch ordinary binary prompts to `cli::run_async`.
-- [ ] Move this plan to `docs/exec-plans/completed/` once the binary handoff lands.
+- [x] Slice 112: switch configured-route ordinary binary prompts to
+      `cli::run_async` with `AgentPromptRunner` and `HttpProviderBackend`.
+- [x] Move this plan to `docs/exec-plans/completed/` once the binary handoff lands.
 
 ## Decision Log
 
@@ -154,6 +155,11 @@ ordinary binary prompts switch from the deterministic no-runner shell to
   `bootstrap::run`. That lets tests prove credentials, HTTP transport, protocol
   factories, and route ownership without changing ordinary prompt behavior until the
   final `cli::run_async` handoff slice.
+- 2026-05-26: Switch configured-route `bootstrap::run` to
+  `HttpProviderBackend` plus `AgentPromptRunner`, while preserving the built-in
+  no-route defaults on the deterministic no-runner shell. This makes the
+  credential and network boundary explicit for configured operators without
+  making fresh checkouts require provider credentials.
 
 ## Linked Artifacts
 
@@ -170,5 +176,6 @@ ordinary binary prompts switch from the deterministic no-runner shell to
   - `docs/histories/2026-05/20260526-0302-provider-protocol-transport.md`
   - `docs/histories/2026-05/20260526-0426-http-body-client.md`
   - `docs/histories/2026-05/20260526-0627-bootstrap-provider-backend.md`
+  - `docs/histories/2026-05/20260526-0738-bootstrap-provider-handoff.md`
 - Release note:
   - `docs/releases/feature-release-notes.md`

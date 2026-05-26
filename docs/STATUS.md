@@ -7,18 +7,32 @@
 
 ## Snapshot
 
-- **Slice:** 111 (`xmake run orangutan` reports slice 111)
+- **Slice:** 112 (`xmake run orangutan` reports slice 112)
 - **Last completed history:**
-  [`histories/2026-05/20260526-0627-bootstrap-provider-backend.md`](histories/2026-05/20260526-0627-bootstrap-provider-backend.md)
+  [`histories/2026-05/20260526-0738-bootstrap-provider-handoff.md`](histories/2026-05/20260526-0738-bootstrap-provider-handoff.md)
 - **Active exec-plan:**
-  [`exec-plans/active/2026-05-26-provider-adapter-v1.md`](exec-plans/active/2026-05-26-provider-adapter-v1.md)
-  — tracks the remaining multi-slice provider adapter handoff from offline
-  protocol bytes through transport-backed factories and ordinary binary
-  `cli::run_async` wiring.
+  `none` — the provider adapter v1 handoff plan is completed at
+  [`exec-plans/completed/2026-05-26-provider-adapter-v1.md`](exec-plans/completed/2026-05-26-provider-adapter-v1.md);
+  open a new plan before the next multi-slice provider/runtime arc.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 111 adds
-  the bootstrap-owned HTTP provider backend construction seam needed before
-  ordinary binary prompt handoff. New
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 112 closes
+  the provider adapter v1 binary handoff: when config declares a `default`
+  provider route, regular `bootstrap::run` now builds `HttpProviderBackend`
+  on the process runtime's CPU executor, creates `AgentPromptRunner`, and
+  calls `cli::run_async` so ordinary `--prompt` runs drive `agent::Loop`
+  through the configured Anthropic Messages / OpenAI Responses HTTP-backed
+  provider system. Built-in empty defaults still report `provider route: none
+  configured` and preserve the deterministic no-runner CLI shell, so fresh
+  checkouts remain runnable without credentials. Configured-route startup now
+  reads the named API-key environment variables at the explicit credential
+  boundary, constructs the HTTP transport and adapter system, surfaces missing
+  credentials as `ErrorKind::auth` with only non-secret context, and uses
+  `runtime.request_timeout_ms` for provider body requests. Focused result:
+  `test-bootstrap` 68 cases / 297 assertions, including a localhost
+  Anthropic Messages prompt round trip through the ordinary binary handoff and
+  a missing-credential error before CLI async execution. Slice 111 added
+  the bootstrap-owned HTTP provider backend construction seam needed for that
+  handoff. New
   `<oran/bootstrap/provider_backend.hpp>` exports `HttpProviderBackendOptions`
   and movable `HttpProviderBackend`. `HttpProviderBackend::build(config,
   options)` resolves the configured route profiles, builds the adapter plan,
@@ -32,12 +46,7 @@
   provider transport errors without logging secret header values. Focused
   result: `test-bootstrap` 67 cases / 287 assertions, including a localhost
   Anthropic Messages round trip through libcurl and a missing-credential
-  construction error with only non-secret context. Regular `bootstrap::run`
-  still does not call `HttpProviderBackend::build`, so ordinary binary prompts
-  still use the deterministic no-runner `cli::run` path and do not start
-  `agent::Loop`. Remaining handoff work is now switching `bootstrap::run` to
-  build this backend and call `cli::run_async` with `AgentPromptRunner` when a
-  configured provider backend is available. Slice 110 adds
+  construction error with only non-secret context. Slice 110 adds
   the platform-owned `oran-http` target and a libcurl-backed
   body-response client needed before provider factories can use real HTTP/TLS
   I/O. New `<oran/http/client.hpp>` exports stdlib-shaped `Header`,
@@ -899,7 +908,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 63 cases / 512 assertions.
 - `oran-agent`: 25 cases / 401 assertions.
 - `oran-cli`: 14 cases / 97 assertions.
-- `oran-bootstrap`: 67 cases / 287 assertions.
+- `oran-bootstrap`: 68 cases / 297 assertions.
 
 ## Open Tech-Debt Rows
 

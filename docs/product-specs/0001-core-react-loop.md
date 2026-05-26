@@ -8,29 +8,29 @@ with persistent session history and a CLI surface. The first deliverable is "I c
 
 ## Scope (v1)
 
-- Current pre-loop bootstrap slice:
+- Current bootstrap slice:
   - `--config <path>` / `--config=<path>` loads a config through `oran-bootstrap`.
   - No `--config` loads `<workspace>/.orangutan/config.json` when present, otherwise
     uses built-in config defaults.
   - `--prompt <text>` / `--prompt=<text>` is handed to `oran-cli` single-shot mode.
   - No CLI mode args select a minimal REPL shell.
   - `--help` / `-h` prints the current bootstrap usage.
-  - The current CLI shell is deterministic and pre-agent-loop; it accepts prompts but
-    does not call a provider yet.
+  - Built-in empty defaults keep the deterministic pre-agent-loop CLI shell; a
+    configured provider route switches prompt execution into the agent loop.
   - When config declares routes, bootstrap preflights the `default` provider route
     through `provider::resolve_route_profiles` and
     `provider::make_adapter_construction_plan`, reports the resolved
     primary/fallback summary, preserves the profile endpoint metadata needed by the
-    future adapter factory, and fails fast on bad profile references, provider
+    adapter factory, and fails fast on bad profile references, provider
     spellings, explicit profile protocol spellings, missing endpoint metadata, or
     unsupported endpoint schemes. Built-in empty defaults still run without a
     provider route.
   - `oran-provider` exposes `resolve_adapter_credentials(plan)` and
     `make_adapter_system(credentials, factories)` for real adapter
-    construction. `bootstrap::HttpProviderBackend::build` can call those
-    boundaries explicitly, while the ordinary binary does not call that seam
-    yet, so configured `api_key_env` names are still not read during ordinary
-    startup.
+    construction. Configured-route `bootstrap::run` now calls
+    `bootstrap::HttpProviderBackend::build`, so configured `api_key_env` names
+    are read at the explicit credential boundary before async CLI prompt
+    execution. Built-in no-route startup still reads no provider credentials.
   - `oran-provider` also exposes the offline `make_protocol_request(request,
     target)` and `decode_protocol_response(body_json, target)` mappers for
     Anthropic Messages and OpenAI Responses JSON. Request serialization includes
@@ -42,12 +42,12 @@ with persistent session history and a CLI surface. The first deliverable is "I c
     `ProtocolTransport`. Slice 110 adds the platform `oran-http`/libcurl
     body client, and slice 111 adds bootstrap's `HttpProviderBackend`, which
     binds that client into `ProtocolTransport` and constructs a profile-routed
-    backend for caller-supplied `AgentPromptRunner` use.
-  - Bootstrap exports `AgentPromptRunner` for tests and future adapter owners: callers
+    backend for `AgentPromptRunner` use. Slice 112 switches configured-route
+    `bootstrap::run` to construct that backend and call `cli::run_async`.
+  - Bootstrap exports `AgentPromptRunner` for tests and provider owners: callers
     can supply a provider backend and resolved route to drive `agent::Loop` with the
-    runtime assembly's workspace/audit/broker/hook/trace services. The ordinary binary
-    still stays on the deterministic no-runner shell until `bootstrap::run`
-    switches to constructing that backend and calling `cli::run_async`.
+    runtime assembly's workspace/audit/broker/hook/trace services. The ordinary
+    binary now uses that same runner for configured-route prompts.
 - One agent runtime per process (multiplexing comes in spec 0004).
 - Anthropic Messages **and** OpenAI Chat Completions providers (one of the two
   configured + working end-to-end is acceptance; the other is built and bench-only).

@@ -35,7 +35,7 @@ struct Response {
 
 `core::Content` is a typed variant; protocol adapters translate to/from vendor JSON.
 
-> **Status (slice 111, 2026-05-26):** `oran-provider` exists as the
+> **Status (slice 112, 2026-05-26):** `oran-provider` exists as the
 > provider-domain, prompt-cache-hint, fake-provider, route-resolver, first
 > execution wrapper, offline protocol request/response serialization library,
 > and injected body-response protocol transport seam.
@@ -114,12 +114,16 @@ struct Response {
 > `HttpProviderBackend`, which adapts `http::Client` to
 > `provider::ProtocolTransport`, resolves configured credentials, registers
 > the built-in Anthropic/OpenAI protocol factories, and owns the transport plus
-> produced `provider::System` for `AgentPromptRunner` callers. Slice 101's
+> produced `provider::System` for `AgentPromptRunner` callers. Slice 112
+> switches configured-route `bootstrap::run` to construct that backend and call
+> `cli::run_async` with `AgentPromptRunner`, so ordinary binary `--prompt` runs
+> now drive `agent::Loop` through the HTTP-backed Anthropic/OpenAI body-response
+> systems. Built-in empty defaults still use the deterministic no-runner CLI
+> shell and read no provider credentials. Slice 101's
 > bootstrap `AgentPromptRunner` is the loop owner that consumes a resolved
 > route plus `provider::execution::Runtime` to drive `agent::Loop` with a
-> caller-supplied backend. SSE streaming, provider hooks, ordinary binary
-> handoff, and usage/cost rollups remain planned. Regular `bootstrap::run`
-> still does not call `HttpProviderBackend::build`.
+> caller-supplied backend. SSE streaming, provider hooks, and usage/cost
+> rollups remain planned.
 
 ## Layered Implementation
 
@@ -228,6 +232,8 @@ platform `oran-http::Client` body transport, and slice 111 adds bootstrap's
 `HttpProviderBackend`, which adapts that client to `ProtocolTransport`,
 resolves credentials, registers the built-in transport factories, and returns a
 profile-routed `provider::System` plus route for `AgentPromptRunner` callers.
+Slice 112 consumes that backend in configured-route `bootstrap::run` before
+`cli::run_async`.
 They currently
 serialize/decode Anthropic Messages and OpenAI Responses bodies, including
 text/thinking/tool-use blocks, usage counters, model ids, stop reasons, and
@@ -402,8 +408,9 @@ profile-routed `provider::System`. Slice 109's
 Responses backends over an injected body-response `ProtocolTransport`; slice
 110 adds `oran-http::Client` for real HTTP/TLS body I/O, and slice 111's
 `bootstrap::HttpProviderBackend` binds that client into `ProtocolTransport` for
-explicit caller-owned backend construction. SSE streaming, provider hooks, and
-ordinary binary handoff still land in later slices. Slices 107-108 add offline request-body
+explicit backend construction. Slice 112 uses that backend for configured-route
+ordinary binary prompts. SSE streaming and provider hooks still land in later
+slices. Slices 107-108 add offline request-body
 serialization and response-body decoding for Anthropic Messages and OpenAI
 Responses before that transport step.
 Custom headers, context windows, thinking policy, and cost fields remain planned

@@ -32,8 +32,8 @@ trust the audit log. This doc captures the operational expectations.
 
 | Variable                  | Required? | Default | Purpose |
 | ------------------------- | --------- | ------- | ------- |
-| `ANTHROPIC_API_KEY`       | One of when real adapters are constructed | — | Anthropic provider creds; read by the explicit provider credential resolver, not by ordinary pre-loop bootstrap. |
-| `OPENAI_API_KEY`          | One of when real adapters are constructed | — | OpenAI provider creds; read by the explicit provider credential resolver, not by ordinary pre-loop bootstrap. |
+| `ANTHROPIC_API_KEY`       | Yes when a configured route uses an Anthropic profile | — | Anthropic provider creds; read by configured-route `bootstrap::run` through the explicit provider credential resolver. |
+| `OPENAI_API_KEY`          | Yes when a configured route uses an OpenAI profile | — | OpenAI provider creds; read by configured-route `bootstrap::run` through the explicit provider credential resolver. |
 | `ORAN_SECRET_PASSWORD`    | Recommended | —     | Decrypts secret-protected config fields. |
 | `ORAN_WORKSPACE`          | No         | `cwd` | Workspace path. |
 | `ORAN_TEST_REAL_PROVIDERS` | No (tests only) | unset | Enable real-provider integration tests. |

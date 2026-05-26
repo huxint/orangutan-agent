@@ -179,9 +179,8 @@ proves the loop behaves correctly without a network.
     without permission/audit infrastructure. Slice 97 adds the provider-side
     execution wrapper that sits in front of a supplied `provider::System`, and
     slice 101 wires that wrapper into bootstrap's `AgentPromptRunner` for
-    caller-supplied backends. The ordinary binary still waits on concrete
-    transport and bootstrap adapter construction before it can hand CLI prompts
-    to that runner. Slice
+    caller-supplied backends. Slice 112 now hands configured-route CLI prompts
+    to that runner from ordinary `bootstrap::run`. Slice
     105 adds the provider-owned credential-resolution API that future factories
     will call after offline adapter planning, and slice 106 adds
     `provider::make_adapter_system(credentials, factories)` so those resolved
@@ -196,8 +195,9 @@ proves the loop behaves correctly without a network.
     response JSON back into the same typed `provider::Response` contract. Slice
     109 adds the injected body-response `ProtocolTransportAdapterFactory` seam
     for Anthropic/OpenAI systems. Slice 110 adds the concrete `oran-http`
-    body client, but the `ProtocolTransport` adapter, SSE streaming, and
-    ordinary binary handoff remain downstream.
+    body client, slice 111 adds the `ProtocolTransport` adapter through
+    bootstrap's HTTP backend, and slice 112 wires the ordinary binary handoff.
+    SSE streaming remains downstream.
   1. Build `TurnContext` (identity, route, session id, origin,
      cancellation slot, stable service refs).
   2. Load/render memory once per turn (memory: `nullopt` in v1 — the
@@ -243,9 +243,8 @@ proves the loop behaves correctly without a network.
   fake-provider loop. Slice 97 adds provider retry/fallback as a
   `provider::System` decorator, and slice 101 wires that decorator into
   bootstrap's `AgentPromptRunner` with runtime-assembly workspace/audit/broker/
-  hook/trace services. Scheduler handoff and ordinary binary CLI wiring with
-  concrete provider transports and binary adapter construction remain
-  downstream.
+  hook/trace services. Slice 112 now uses that path for configured-route
+  ordinary CLI prompts. Scheduler handoff and SSE streaming remain downstream.
 - **CI runs against the fake provider only**. v1 CI gate:
   `xmake test test-agent` exercises all ten scenarios; no network
   is required, no API key is required, no flake budget is needed.
@@ -267,8 +266,8 @@ proves the loop behaves correctly without a network.
   visible stream output to avoid duplicate caller-rendered bytes, and stays
   offline-testable against fake systems. Slice 101 consumes the wrapper in
   bootstrap's `AgentPromptRunner`; `test-bootstrap` drives a retryable
-  fake-provider failure that succeeds on the second attempt. Real adapter
-  construction and ordinary binary handoff remain downstream.
+  fake-provider failure that succeeds on the second attempt, and slice 112
+  drives configured-route ordinary binary prompts through the same wrapper.
 
 ## Scope (v2)
 

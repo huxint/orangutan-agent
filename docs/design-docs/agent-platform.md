@@ -89,8 +89,10 @@ own library, its own tests, its own bench, its own design doc."
 > Anthropic/OpenAI protocol systems through `ProtocolTransportAdapterFactory`,
 > slice 110 adds the platform `oran-http` body client, and slice 111 adds the
 > bootstrap-owned `HttpProviderBackend` construction seam over that client.
-> Ordinary `bootstrap::run` still does not call that seam or read provider
-> API-key env vars.
+> Slice 112 switches configured-route `bootstrap::run` to that backend plus
+> `cli::run_async`, so ordinary `--prompt` runs now drive `agent::Loop` through
+> the HTTP-backed provider system. Built-in empty defaults still take the
+> deterministic no-runner shell and read no provider credentials.
 > Slices 76-77
 > extend `agent::Loop` over those pieces: it builds a
 > `prompt::RenderedPrompt`, maps cache hints, mirrors active/promoted tools
@@ -120,8 +122,8 @@ own library, its own tests, its own bench, its own design doc."
 > skips the trace row, forces direct dispatch audit rows to keep
 > `parent_turn_id = NULL`, and restores any reusable dispatch-context parent id
 > after the tool call.
-> Memory, scheduler handoff, concrete provider transport/bootstrap construction,
-> and ordinary binary CLI agent-loop wiring remain downstream.
+> Memory, scheduler handoff, SSE streaming, and provider hook/cost rollups remain
+> downstream.
 > The invariants — section order, byte-identical cached prefix, no clocks /
 > per-call state in sections (1)–(6) — remain canonical in
 > [`../rules/prompt-design.md`](../rules/prompt-design.md).
@@ -189,9 +191,9 @@ that decorated `provider::System` to the loop through bootstrap's
 `AgentPromptRunner` when a caller supplies a backend. Slice 109 adds injected
 body-response Anthropic/OpenAI protocol systems, slice 110 adds the concrete
 `oran-http` body client, and slice 111 adds bootstrap's `HttpProviderBackend`
-construction seam over that client. The ordinary binary still needs to switch
-`bootstrap::run` to that backend plus `cli::run_async` before it can use the
-runner. The future
+construction seam over that client. Slice 112 switches configured-route
+`bootstrap::run` to that backend plus `cli::run_async`, so the ordinary binary
+can use the runner for provider-backed prompts. The future
 `ToolScheduler` can replace the direct loop call without changing the
 provider-facing request/response shape.
 

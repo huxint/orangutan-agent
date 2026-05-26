@@ -252,8 +252,9 @@ execution-runtime + route-resolution + protocol-mapping library. It depends on
 `oran-prompt` for adapter-side `prompt::RenderedPrompt` cache-hint mapping. It
 is registered with `test-provider` and `bench-provider`. Real HTTP/TLS I/O stays
 outside this target: slice 111's `bootstrap::HttpProviderBackend` adapts
-`oran-http::Client` to `provider::ProtocolTransport`, while streaming/SSE
-remains downstream.
+`oran-http::Client` to `provider::ProtocolTransport`, and slice 112 uses that
+backend from configured-route `bootstrap::run`; streaming/SSE remains
+downstream.
 
 `oran-bootstrap` depends on `oran-provider` so process startup can preflight the
 configured default provider route before handing prompts to `oran-cli`. It also
@@ -262,9 +263,11 @@ depends on `oran-agent` for slice 101's `AgentPromptRunner`, the bootstrap-owned
 `provider::execution::Runtime`, binds the CLI approval sink, and drives
 `agent::Loop` with runtime-assembly services. It now also depends on `oran-http`
 for the explicit `HttpProviderBackend` construction seam that can resolve
-credentials and produce a real HTTP-backed provider system for callers. The
-regular binary path still does not call that seam, read credentials, send
-network traffic, or start the loop until the final async handoff slice opts in.
+credentials and produce a real HTTP-backed provider system for callers.
+Configured-route `bootstrap::run` now calls that seam, reads the configured
+API-key environment variables at the credential boundary, and hands prompts to
+`AgentPromptRunner` through `cli::run_async`; the built-in no-route defaults
+still use the deterministic synchronous CLI shell.
 
 `oran-cli` depends on `oran-async` and `oran-hook` because slice 95 adds the
 terminal `OperatorPromptSink`: it implements the blocking

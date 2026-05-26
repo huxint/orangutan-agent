@@ -811,9 +811,10 @@ Current and future policy:
   Responses `function_call_output.output` while preserving text-only fallback
   behavior. Slices 108-109 add response decoding and an injected body-response
   transport factory seam for Anthropic/OpenAI systems, slice 110 adds the
-  `oran-http` body client, and slice 111 adds the bootstrap-owned
-  `http::Client`-backed `ProtocolTransport` adapter. Gemini/custom mappings,
-  SSE transport, and ordinary binary handoff remain follow-up work.
+  `oran-http` body client, slice 111 adds the bootstrap-owned
+  `http::Client`-backed `ProtocolTransport` adapter, and slice 112 wires that
+  backend into configured-route `bootstrap::run`. Gemini/custom mappings and
+  SSE transport remain follow-up work.
 - Raw `data_json` hook redaction shipped in slice 65: `hook::Bus` delivers
   the field only to sinks whose `Sink::kind()` returns
   `SinkKind::trusted_local`; default sinks receive the text fallback and usage

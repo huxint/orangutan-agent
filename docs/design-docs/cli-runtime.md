@@ -115,27 +115,25 @@ operator for a yes/no answer. Approval answers (`y`, `yes`, `approve`, `approved
 `scripted_answers` exists for tests and future noninteractive drivers. When empty, the
 sink reads one line from terminal stdin through an asio `posix::stream_descriptor` on the
 current coroutine executor. Binding remains explicit: `AgentPromptRunner` binds this
-sink to the assembly-owned process bus when a caller supplies a provider backend, while
-the ordinary binary path still stays on the deterministic no-runner shell until real
-provider adapter construction exists.
+sink to the assembly-owned process bus when a caller supplies a provider backend, and
+configured-route `bootstrap::run` now supplies the HTTP-backed provider runner from the
+ordinary binary path.
 
 ## Bootstrap Handoff
 
 `oran-bootstrap` consumes `--config`, `--config=...`, and global help. Arguments that are
-not bootstrap-owned are forwarded unchanged to `cli::run` after config loading and the
-default provider-route preflight. This keeps config discovery, provider-route validation,
-and terminal mode selection separate while preserving one process entry point. The
-binary still uses the no-runner path, but bootstrap now exports
-`AgentPromptRunner`, a caller-owned `PromptRunner` implementation that wraps a supplied
-provider backend in `provider::execution::Runtime`, binds `OperatorPromptSink`, and
-drives `agent::Loop` with runtime-assembly services. Tests exercise that path through
-`cli::run_async`; ordinary `bootstrap::run` will switch only after real adapters can be
-constructed from config.
+not bootstrap-owned are forwarded unchanged to `cli::run` only when no provider route is
+configured. When config declares a `default` route, bootstrap constructs the
+HTTP-backed provider backend, creates `AgentPromptRunner`, and calls
+`cli::run_async`. This keeps config discovery, provider-route validation, provider
+construction, and terminal mode selection separate while preserving one process entry
+point. `AgentPromptRunner` wraps the supplied provider backend in
+`provider::execution::Runtime`, binds `OperatorPromptSink`, and drives `agent::Loop`
+with runtime-assembly services.
 
 ## Next Steps
 
 - Replace the deterministic REPL shell with a line editor once terminal history/editing is
   needed.
-- Construct real provider adapter backends from config and hand them to bootstrap's
-  `AgentPromptRunner` from the ordinary binary path.
+- Add provider-backed streaming output once the protocol transport grows SSE support.
 - Add slash-command parsing after the runtime has command targets.

@@ -59,7 +59,7 @@ struct AgentPromptRunnerOptions {
 /// materialized permission rules, provider execution wrapper, CLI operator
 /// approval sink binding, and transcript tail for successive prompts. Real
 /// provider adapter construction remains a bootstrap concern outside this
-/// class; tests and future adapters can supply any `provider::System`.
+/// class; tests and `bootstrap::run` can supply any `provider::System`.
 class AgentPromptRunner final : public cli::PromptRunner {
 public:
   [[nodiscard]] static core::Result<std::unique_ptr<AgentPromptRunner>> create(AgentPromptRunnerOptions options);

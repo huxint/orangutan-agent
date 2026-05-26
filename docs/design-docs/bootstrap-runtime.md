@@ -46,7 +46,8 @@ class AgentPromptRunner final : public cli::PromptRunner {
 All public functions return `core::Result<T>`. `src/main.cpp` only builds the argument
 span, calls `bootstrap::run`, and converts an error into process exit code `1`.
 `bootstrap::run` consumes bootstrap-owned flags, loads config, and forwards remaining
-CLI args to `cli::run`.
+CLI args to `cli::run` when no provider route is configured, or to `cli::run_async`
+with a bootstrap-owned `AgentPromptRunner` when config declares a provider route.
 
 `<oran/bootstrap/runtime_assembly.hpp>` also exposes the per-process service bundle:
 
@@ -141,26 +142,24 @@ The current `orangutan` binary prints:
 - the `oran-cli` mode output.
 
 When config declares routes, bootstrap resolves the `default` route through
-`provider::resolve_route_profiles` and then builds
-`provider::make_adapter_construction_plan` before CLI handoff. That startup
-preflight catches bad profile references, provider labels, explicit
-profile-protocol spellings, missing endpoint metadata, and unsupported endpoint
-schemes before the loop boundary while preserving the non-secret startup
-summary. The explicit `HttpProviderBackend::build` seam can now cross the
-credential and adapter-construction boundary: it resolves the configured API
-key environment variables, owns an `http::Client`, adapts it to
+`provider::resolve_route_profiles`, builds
+`provider::make_adapter_construction_plan`, constructs `HttpProviderBackend`,
+creates `AgentPromptRunner`, and runs the remaining CLI args through
+`cli::run_async`. The route/plan preflight catches bad profile references,
+provider labels, explicit profile-protocol spellings, missing endpoint
+metadata, and unsupported endpoint schemes before credentials are read.
+`HttpProviderBackend::build` then crosses the credential and
+adapter-construction boundary: it resolves the configured API-key environment
+variables, owns an `http::Client`, adapts it to
 `provider::ProtocolTransport`, registers the built-in Anthropic/OpenAI protocol
-factories, and returns a `provider::System` plus route for a caller-supplied
-`AgentPromptRunner`. Regular `bootstrap::run` still does not call
-`HttpProviderBackend::build`; no provider credentials are read, no concrete
-transport is allocated, no provider adapter is constructed, and no agent
-runtime loop is started on ordinary binary prompts in this slice.
-The runtime assembly opens the audit DB when audit is enabled so migrations, trace
-repository ownership, and audit sinks are ready before the future loop handoff.
-The `AgentPromptRunner` public seam can run `agent::Loop` when a caller supplies a
-provider backend (tests use `provider::FakeProvider`), but regular `bootstrap::run`
-still calls the deterministic no-runner `cli::run` path until real provider adapter
-construction exists.
+factories, and returns a `provider::System` plus route for the runner.
+Configured-route prompts now start `agent::Loop` from the ordinary binary path;
+missing credentials fail as `ErrorKind::auth` with only non-secret context.
+The built-in empty-defaults path still reports `provider route: none configured`
+and uses the deterministic no-runner `cli::run` shell so fresh checkouts remain
+runnable without provider credentials. The runtime assembly opens the audit DB
+when audit is enabled so migrations, trace repository ownership, and audit
+sinks are available before configured-route prompt execution.
 
 `orangutan --trace <turn-id>` is a bootstrap-owned one-shot inspector. It
 opens the workspace audit DB, runs the idempotent audit migration, loads the
@@ -171,6 +170,5 @@ permission-decision and `hook_publish` rows are readable in the same output.
 ## Next Steps
 
 - Bind configured hook sinks to the assembly-owned bus once the hook sink models land.
-- Switch the ordinary binary prompt path from `cli::run` to `cli::run_async`
-  with `AgentPromptRunner` once `bootstrap::run` opts into
-  `HttpProviderBackend::build`.
+- Replace the placeholder REPL shell with a real interactive line reader and streaming
+  token renderer.

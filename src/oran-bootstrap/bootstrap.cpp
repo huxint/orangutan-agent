@@ -6,8 +6,10 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <expected>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <print>
 #include <string>
@@ -21,6 +23,8 @@
 #include <asio/io_context.hpp>
 
 #include <oran/async.hpp>
+#include <oran/bootstrap/prompt_runner.hpp>
+#include <oran/bootstrap/provider_backend.hpp>
 #include <oran/bootstrap/runtime_assembly.hpp>
 #include <oran/bootstrap/signal_drain.hpp>
 #include <oran/cli.hpp>
@@ -39,7 +43,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice111";
+constexpr std::string_view kVersion = "2.0.0-slice112";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 
 struct ParsedArgs {
@@ -238,7 +242,7 @@ void print_usage() {
   std::println("                  [--audit-init [<path>]] [--trace <turn-id>] [--prompt <text>] [--help]");
   std::println();
   std::println(
-      "The current bootstrap slice loads config, preflights provider routes, then hands CLI modes to oran-cli.");
+      "The current bootstrap slice loads config, builds configured provider backends, then hands prompts to oran-cli.");
   std::println("--explain-rules prints the materialized permission rule set and exits;");
   std::println("                --mode picks the baseline (strict|default|permissive|sandboxed),");
   std::println("                --agent picks an `agents.<name>.permissions` overlay.");
@@ -555,6 +559,39 @@ void print_provider_route_summary(const provider::AdapterConstructionPlan& route
   }
 }
 
+[[nodiscard]] Result<int>
+run_cli_async_on_runtime(async::Runtime& runtime, cli::CliOptions options, cli::PromptRunner* runner) {
+  auto result = std::make_shared<std::optional<core::Result<cli::CliResult>>>();
+  asio::co_spawn(
+      runtime.executor(),
+      [options, runner, &runtime, result]() mutable -> async::Awaitable<void> {
+        try {
+          *result = co_await cli::run_async(options, runner);
+        } catch (const std::exception& error) {
+          *result = std::unexpected(Error::internal("CLI async handoff failed").with("reason", error.what()));
+        } catch (...) {
+          *result = std::unexpected(Error::internal("CLI async handoff failed").with("reason", "unknown"));
+        }
+        runtime.stop();
+        co_return;
+      },
+      asio::detached);
+
+  auto runtime_result = runtime.run();
+  if (!runtime_result) {
+    return std::unexpected(std::move(runtime_result).error());
+  }
+  if (!result->has_value()) {
+    return std::unexpected(Error::internal("CLI async handoff did not complete"));
+  }
+
+  auto cli_result = std::move(**result);
+  if (!cli_result) {
+    return std::unexpected(std::move(cli_result).error());
+  }
+  return cli_result->exit_code;
+}
+
 }  // namespace
 
 std::string_view to_string_view(ConfigSource source) noexcept {
@@ -711,8 +748,8 @@ core::Result<int> run(BootstrapOptions options) {
 
   // The runtime assembly composes the per-process permission infrastructure
   // (`ApprovalBroker`, audit `Pool`, `AuditRepository`, `StorageAuditSink`)
-  // plus the file-tool `tool::Workspace` the upcoming agent loop will
-  // inherit. Slice 41 routes
+  // plus the file-tool `tool::Workspace` inherited by agent-loop prompt
+  // runs. Slice 41 routes
   // `permissions.workspace.extra_{read,write}_roots` from `oran-config` into
   // `tool::WorkspaceOptions` here so the workspace canonicalises overrides
   // once at boot instead of per-tool.
@@ -739,11 +776,49 @@ core::Result<int> run(BootstrapOptions options) {
       assembly->trace_enabled() ? "enabled" : "disabled",
       assembly->hook_bus().options().blocking_timeout.count());
 
-  auto cli_result = cli::run(cli::CliOptions{.args = std::span<const std::string_view>{parsed->cli_args}});
+  if (!provider_route->has_value()) {
+    auto cli_result = cli::run(cli::CliOptions{.args = std::span<const std::string_view>{parsed->cli_args}});
+    if (!cli_result) {
+      return std::unexpected(std::move(cli_result.error()));
+    }
+    return cli_result->exit_code;
+  }
+
+  auto provider_backend = HttpProviderBackend::build(
+      loaded->value,
+      HttpProviderBackendOptions{
+          .blocking_executor = runtime.cpu_executor(),
+          .request_timeout = std::chrono::milliseconds{loaded->value.runtime().request_timeout_ms},
+          .route_name = "default",
+      });
+  if (!provider_backend) {
+    return std::unexpected(std::move(provider_backend).error());
+  }
+
+  auto runner = AgentPromptRunner::create(AgentPromptRunnerOptions{
+      .executor = runtime.executor(),
+      .assembly = &*assembly,
+      .config = &loaded->value,
+      .provider = &provider_backend->system(),
+      .route = provider_backend->route(),
+      .scope_key = "cli",
+      .agent_key = "default",
+      .identity = "terminal",
+      .origin = "cli",
+      .max_tokens = 1024,
+  });
+  if (!runner) {
+    return std::unexpected(std::move(runner).error());
+  }
+
+  auto cli_result =
+      run_cli_async_on_runtime(runtime,
+                               cli::CliOptions{.args = std::span<const std::string_view>{parsed->cli_args}},
+                               runner->get());
   if (!cli_result) {
     return std::unexpected(std::move(cli_result.error()));
   }
-  return cli_result->exit_code;
+  return *cli_result;
 }
 
 }  // namespace orangutan::bootstrap

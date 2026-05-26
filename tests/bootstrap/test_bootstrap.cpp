@@ -1,18 +1,26 @@
 // tests/bootstrap/test_bootstrap.cpp — config-aware bootstrap coverage.
 
 #include <algorithm>
+#include <array>
+#include <atomic>
+#include <charconv>
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
 #include <asio/io_context.hpp>
+#include <asio/ip/tcp.hpp>
+#include <asio/write.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -33,6 +41,7 @@ namespace core = orangutan::core;
 namespace permission = orangutan::permission;
 namespace storage = orangutan::storage;
 namespace test = orangutan::tests;
+using asio::ip::tcp;
 
 namespace {
 
@@ -93,6 +102,199 @@ std::optional<std::string_view> context_value(const core::Error& error, std::str
     return std::nullopt;
   }
   return it->second;
+}
+
+class ScopedEnv {
+public:
+  ScopedEnv(std::string name, std::string value) : name_{std::move(name)} {
+    if (const auto* old = std::getenv(name_.c_str()); old != nullptr) {
+      old_value_ = old;
+    }
+    setenv(name_.c_str(), value.c_str(), 1);
+  }
+
+  ~ScopedEnv() {
+    if (old_value_) {
+      setenv(name_.c_str(), old_value_->c_str(), 1);
+    } else {
+      unsetenv(name_.c_str());
+    }
+  }
+
+  ScopedEnv(const ScopedEnv&) = delete;
+  ScopedEnv& operator=(const ScopedEnv&) = delete;
+
+private:
+  std::string name_;
+  std::optional<std::string> old_value_;
+};
+
+class ScopedUnsetEnv {
+public:
+  explicit ScopedUnsetEnv(std::string name) : name_{std::move(name)} {
+    if (const auto* old = std::getenv(name_.c_str()); old != nullptr) {
+      old_value_ = old;
+      unsetenv(name_.c_str());
+    }
+  }
+
+  ~ScopedUnsetEnv() {
+    if (old_value_) {
+      setenv(name_.c_str(), old_value_->c_str(), 1);
+    }
+  }
+
+  ScopedUnsetEnv(const ScopedUnsetEnv&) = delete;
+  ScopedUnsetEnv& operator=(const ScopedUnsetEnv&) = delete;
+
+private:
+  std::string name_;
+  std::optional<std::string> old_value_;
+};
+
+class OneShotHttpServer {
+public:
+  explicit OneShotHttpServer(std::string response) : response_{std::move(response)} {
+    tcp::endpoint endpoint{asio::ip::make_address("127.0.0.1"), 0};
+    acceptor_.open(endpoint.protocol());
+    acceptor_.set_option(tcp::acceptor::reuse_address(true));
+    acceptor_.bind(endpoint);
+    acceptor_.listen(1);
+    port_ = acceptor_.local_endpoint().port();
+    worker_ = std::jthread{[this] { serve(); }};
+  }
+
+  ~OneShotHttpServer() {
+    std::error_code ignored;
+    acceptor_.close(ignored);
+  }
+
+  [[nodiscard]] std::string base_url() const {
+    return "http://127.0.0.1:" + std::to_string(port_);
+  }
+
+  [[nodiscard]] std::string request_text() const {
+    return request_;
+  }
+
+  [[nodiscard]] bool served() const noexcept {
+    return served_.load();
+  }
+
+private:
+  [[nodiscard]] static std::optional<std::size_t> content_length(std::string_view request) {
+    constexpr auto kHeader = std::string_view{"Content-Length:"};
+    const auto header = request.find(kHeader);
+    if (header == std::string_view::npos) {
+      return std::nullopt;
+    }
+    auto value = request.substr(header + kHeader.size());
+    while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
+      value.remove_prefix(1);
+    }
+    const auto end = value.find("\r\n");
+    if (end != std::string_view::npos) {
+      value = value.substr(0, end);
+    }
+
+    auto length = std::size_t{0};
+    const auto* first = value.data();
+    const auto* last = value.data() + value.size();
+    const auto parsed = std::from_chars(first, last, length);
+    if (parsed.ec != std::errc{} || parsed.ptr == first) {
+      return std::nullopt;
+    }
+    return length;
+  }
+
+  [[nodiscard]] static bool request_complete(std::string_view request) {
+    const auto header_end = request.find("\r\n\r\n");
+    if (header_end == std::string_view::npos) {
+      return false;
+    }
+    const auto length = content_length(request);
+    if (!length) {
+      return true;
+    }
+    return request.size() >= header_end + 4 + *length;
+  }
+
+  void serve() {
+    std::error_code ec;
+    auto socket = acceptor_.accept(ec);
+    if (ec) {
+      return;
+    }
+
+    std::array<char, 4096> buffer{};
+    while (!request_complete(request_)) {
+      const auto read = socket.read_some(asio::buffer(buffer), ec);
+      if (ec && ec != asio::error::eof) {
+        return;
+      }
+      if (read > 0) {
+        request_.append(buffer.data(), read);
+      }
+      if (ec == asio::error::eof) {
+        break;
+      }
+    }
+
+    asio::write(socket, asio::buffer(response_), ec);
+    served_ = !ec;
+  }
+
+  asio::io_context io_;
+  tcp::acceptor acceptor_{io_};
+  std::uint16_t port_{0};
+  std::string response_;
+  std::string request_;
+  std::atomic_bool served_{false};
+  std::jthread worker_;
+};
+
+std::string anthropic_response(std::string_view text = "binary ok") {
+  auto body = std::string{
+      R"json({"type":"message","role":"assistant","model":"claude-test","content":[{"type":"text","text":")json"};
+  body.append(text);
+  body.append(R"json("}],"stop_reason":"end_turn","usage":{"input_tokens":4,"output_tokens":2}})json");
+  return "HTTP/1.1 200 OK\r\n"
+         "Content-Type: application/json\r\n"
+         "Content-Length: " +
+         std::to_string(body.size()) +
+         "\r\n"
+         "Connection: close\r\n"
+         "\r\n" +
+         body;
+}
+
+std::string provider_config_text(std::string_view base_url) {
+  auto text = std::string{R"json(
+{
+  "runtime": {
+    "workers": 1,
+    "request_timeout_ms": 2000
+  },
+  "profiles": {
+    "default": {
+      "provider": "anthropic",
+      "protocol": "anthropic_messages",
+      "model": "claude-test",
+      "base_url": ")json"};
+  text.append(base_url);
+  text.append(R"json(",
+      "api_key_env": "ORAN_BOOTSTRAP_RUN_PROVIDER_KEY"
+    }
+  },
+  "routes": {
+    "default": {
+      "primary": "default",
+      "fallbacks": []
+    }
+  }
+}
+)json");
+  return text;
 }
 
 constexpr auto kConfigText = R"json(
@@ -237,10 +439,12 @@ TEST_CASE("run hands CLI arguments to oran-cli after config load", "[unit][boots
   REQUIRE(*result == 0);
 }
 
-TEST_CASE("run preflights configured default provider route before CLI handoff", "[unit][bootstrap][provider]") {
-  TempDir temp{"oran-bootstrap-provider-route"};
+TEST_CASE("run hands configured provider prompts to AgentPromptRunner", "[unit][bootstrap][provider]") {
+  ScopedEnv api_key{"ORAN_BOOTSTRAP_RUN_PROVIDER_KEY", "test-secret"};
+  OneShotHttpServer server{anthropic_response()};
+  TempDir temp{"oran-bootstrap-provider-runner"};
   const auto config_path = temp.path() / "config.json";
-  write_file(config_path, kConfigText);
+  write_file(config_path, provider_config_text(server.base_url()));
   auto config_arg = config_path.string();
   auto args = std::vector<std::string_view>{"--config", config_arg, "--prompt", "hello"};
 
@@ -248,6 +452,29 @@ TEST_CASE("run preflights configured default provider route before CLI handoff",
 
   REQUIRE(result.has_value());
   REQUIRE(*result == 0);
+  REQUIRE(server.served());
+  REQUIRE(server.request_text().starts_with("POST /v1/messages HTTP/1.1"));
+  REQUIRE(server.request_text().contains("x-api-key: test-secret"));
+  REQUIRE(server.request_text().contains(R"json("model":"claude-test")json"));
+  REQUIRE(server.request_text().contains(R"json("max_tokens":1024)json"));
+  REQUIRE(server.request_text().contains(R"json("stream":false)json"));
+}
+
+TEST_CASE("run reports missing provider credentials before CLI async handoff", "[unit][bootstrap][provider]") {
+  ScopedUnsetEnv missing{"ORAN_BOOTSTRAP_RUN_PROVIDER_KEY"};
+  TempDir temp{"oran-bootstrap-provider-missing-credential"};
+  const auto config_path = temp.path() / "config.json";
+  write_file(config_path, provider_config_text("http://127.0.0.1:1"));
+  auto config_arg = config_path.string();
+  auto args = std::vector<std::string_view>{"--config", config_arg, "--prompt", "hello"};
+
+  auto result = bootstrap::run(options(args, temp.path()));
+
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(result.error().kind() == core::ErrorKind::auth);
+  REQUIRE(context_value(result.error(), "profile") == std::optional<std::string_view>{"default"});
+  REQUIRE(context_value(result.error(), "api_key_env") ==
+          std::optional<std::string_view>{"ORAN_BOOTSTRAP_RUN_PROVIDER_KEY"});
 }
 
 TEST_CASE("run rejects invalid provider route config before CLI handoff", "[unit][bootstrap][provider]") {

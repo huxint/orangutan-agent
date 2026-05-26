@@ -13,15 +13,15 @@ Use this document to keep secure defaults legible to agents and operators.
 
 Current slice:
 
-- `oran-config` loads provider profile metadata such as `api_key_env`; the
-  ordinary bootstrap path still treats it as metadata and does not read secret
-  values.
-- `oran-provider` exposes `resolve_adapter_credentials(plan)` and
-  `make_adapter_system(credentials, factories)` for future real adapter
-  construction. The credential resolver reads API-key environment variables
-  only when called explicitly, the factory passes key values only through
-  in-memory targets to caller-registered protocol factories, and both surfaces
-  report failures with non-secret identifiers rather than secret values.
+- `oran-config` loads provider profile metadata such as `api_key_env`; built-in
+  no-route startup treats it as absent metadata and reads no secret values.
+- Configured-route `bootstrap::run` now calls `HttpProviderBackend::build`, which
+  invokes `resolve_adapter_credentials(plan)` and
+  `make_adapter_system(credentials, factories)` after route/profile/endpoint
+  preflight. The credential resolver reads API-key environment variables only at
+  that explicit boundary, the factory passes key values only through in-memory
+  targets to caller-registered protocol factories, and both surfaces report
+  failures with non-secret identifiers rather than secret values.
 - `${VAR}` substitution exists for string config values. Missing variables are errors
   unless `${VAR:-default}` provides a fallback.
 - Secret values must not be placed in `config.example.json`.

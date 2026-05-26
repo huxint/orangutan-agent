@@ -148,8 +148,10 @@ Current binary smoke checks:
 ```sh
 xmake build orangutan
 xmake run orangutan
-xmake run orangutan -- --config config.example.json
 xmake run orangutan -- --prompt "What is 17 * 23?"
+# `config.example.json` declares an Anthropic route; set a real key before
+# provider-backed prompts, or use --help / --explain-rules for no-network checks.
+ANTHROPIC_API_KEY=... xmake run orangutan -- --config config.example.json --prompt "hello"
 ```
 
 ## License
