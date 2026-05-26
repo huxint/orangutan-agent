@@ -89,14 +89,19 @@ optional trace repository, and the process hook bus. `bootstrap::run` threads
 `hook-timeout=<ms>`.
 
 `<oran/bootstrap/prompt_runner.hpp>` exposes the bootstrap-owned CLI runner used by
-tests and the future binary handoff. `AgentPromptRunner::create` borrows a
-caller-supplied `RuntimeAssembly`, typed config, resolved `provider::Route`, executor,
-and provider backend; registers the builtin tool catalog; materializes permission rules
-from config plus an optional agent overlay; wraps the backend in
+tests and the ordinary binary handoff for configured routes. `AgentPromptRunner::create`
+borrows a caller-supplied `RuntimeAssembly`, typed config, resolved `provider::Route`,
+executor, and provider backend; registers the builtin tool catalog; materializes
+permission rules from config plus an optional agent overlay; wraps the backend in
 `provider::execution::Runtime`; binds `cli::OperatorPromptSink` to the
 assembly-owned `permission_ask_rendered` bus; and drives `agent::Loop` with workspace,
-audit, broker, hook, output-cap, and trace services from the assembly. The runner does
-not construct real provider adapters or read provider credentials.
+audit, broker, hook, output-cap, and trace services from the assembly. After every
+successful turn the runner walks the new transcript suffix and feeds each tool result
+back through `agent::SessionState::observe_tool_output(...)` so the next turn's
+`promotion_snapshot(...)` sees deferred-tool promotions; the count of observed
+`tool.search` results is exposed for diagnostics through
+`tool_search_observations_recorded()`. The runner does not construct real provider
+adapters or read provider credentials.
 
 ## Config Resolution
 

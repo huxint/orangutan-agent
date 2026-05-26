@@ -7,15 +7,29 @@
 
 ## Snapshot
 
-- **Slice:** 112 (`xmake run orangutan` reports slice 112)
+- **Slice:** 113 (`xmake run orangutan` reports slice 113)
 - **Last completed history:**
-  [`histories/2026-05/20260526-0738-bootstrap-provider-handoff.md`](histories/2026-05/20260526-0738-bootstrap-provider-handoff.md)
+  [`histories/2026-05/20260526-2348-prompt-runner-session-state-observe.md`](histories/2026-05/20260526-2348-prompt-runner-session-state-observe.md)
 - **Active exec-plan:**
-  `none` — the provider adapter v1 handoff plan is completed at
-  [`exec-plans/completed/2026-05-26-provider-adapter-v1.md`](exec-plans/completed/2026-05-26-provider-adapter-v1.md);
-  open a new plan before the next multi-slice provider/runtime arc.
+  `none` — slice 113 is a single-slice fix absorbed from the 2026-05-26 deep
+  review; further bullets live in the `review/deep-2026-05-26` tracker row and
+  do not need an exec plan.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 112 closes
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018) and absorb remaining
+  deep-review-2026-05-26 bullets in priority order. Slice 113 closes the
+  long-standing gap that left `agent::SessionState::observe_tool_output(...)`
+  unwired in `bootstrap::AgentPromptRunner`: the production runner now walks
+  each turn's new transcript suffix, reconstructs a minimal `tool::Output` from
+  every `ToolResultContent` block matched to its assistant `ToolUseContent`,
+  and feeds the pair through `SessionState::observe_tool_output(name, output,
+  now())`. `SessionState` keeps filtering to `tool::kToolSearchName`, so only
+  successful `tool.search` payloads trigger deferred-tool promotion; the runner
+  exposes a new `tool_search_observations_recorded()` accessor for diagnostics.
+  `validate_options` also now rejects a default-constructed `asio::any_io_executor`
+  at create time so an empty executor cannot silently propagate into
+  `tool::DispatchContext::executor`. Focused result: `test-bootstrap` 70 cases /
+  308 assertions, including a scripted `tool.search` round trip that asserts the
+  observation counter and a creation-time empty-executor rejection. Slice 112 closes
   the provider adapter v1 binary handoff: when config declares a `default`
   provider route, regular `bootstrap::run` now builds `HttpProviderBackend`
   on the process runtime's CPU executor, creates `AgentPromptRunner`, and
@@ -908,13 +922,23 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 63 cases / 512 assertions.
 - `oran-agent`: 25 cases / 401 assertions.
 - `oran-cli`: 14 cases / 97 assertions.
-- `oran-bootstrap`: 68 cases / 297 assertions.
+- `oran-bootstrap`: 70 cases / 308 assertions.
 
 ## Open Tech-Debt Rows
 
 Lifted from [`exec-plans/tech-debt-tracker.md`](exec-plans/tech-debt-tracker.md).
 Closed entries do *not* live here — the tracker is canonical.
 
+- 2026-05-26 — Deep-review backlog `review/deep-2026-05-26`: slice 113 absorbed
+  the SessionState observation bullet (F2) and the AgentPromptRunner executor
+  validation bullet (F19); remaining bullets are bug fixes for trace-write
+  error masking (F1/F18), `agent::Loop` `route_profile` attribution under
+  fallback (F5), bootstrap parse_args strictness (F6 + F12), OpenAI cancelled
+  status mapping (F9), retry-backoff target context (F10), OpenAI system
+  message duplication (F11), oran-io singleflight cancel-leak + cross-thread
+  timer race (F3 + F4 + F23), and a small style cleanup batch (F14, F15, F16,
+  F22, F24, F25) plus docs sync (F8 spec 0018 still claims downstream binary
+  handoff, F13 nonexistent `make_signal_cancelled_error` reference).
 - 2026-05-21 — Deep-review backlog: the stale root review artifact was
   deleted after its actionable findings were absorbed into the tracker and
   specs 0011-0018. Slices 31-36 closed the rank-0 items plus the P0

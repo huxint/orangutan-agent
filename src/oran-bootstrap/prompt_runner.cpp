@@ -11,13 +11,17 @@
 #include <ranges>
 #include <span>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <oran/agent.hpp>
 #include <oran/bootstrap/runtime_assembly.hpp>
 #include <oran/cli/operator_prompt_sink.hpp>
 #include <oran/config.hpp>
+#include <oran/core/content.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/message.hpp>
 #include <oran/core/time.hpp>
@@ -107,6 +111,9 @@ materialize_runner_rules(const config::Config& cfg, permission::Mode mode, std::
   if (options.provider == nullptr) {
     return std::unexpected(option_error("agent prompt runner requires a provider system"));
   }
+  if (!options.executor) {
+    return std::unexpected(option_error("agent prompt runner requires an executor"));
+  }
   if (options.route.primary.profile.empty()) {
     return std::unexpected(option_error("agent prompt runner route primary profile must not be empty"));
   }
@@ -172,6 +179,7 @@ public:
 
   [[nodiscard]] async::Awaitable<Result<cli::PromptRunResult>> run_prompt(cli::PromptRunRequest request) {
     auto catalog = registry_.catalog();
+    const auto prev_transcript_size = transcript_.size();
     auto conversation_tail = transcript_;
     conversation_tail.push_back(core::Message::user_text(std::move(request.prompt)));
 
@@ -224,6 +232,8 @@ public:
       co_return std::unexpected(std::move(result).error());
     }
 
+    observe_turn_results(result->transcript, prev_transcript_size);
+
     transcript_ = std::move(result->transcript);
     ++prompts_processed_;
     co_return cli::PromptRunResult{.text = std::move(result->text)};
@@ -237,11 +247,68 @@ public:
     return operator_sink_.prompts_rendered();
   }
 
+  [[nodiscard]] std::size_t tool_search_observations_recorded() const noexcept {
+    return tool_search_observations_;
+  }
+
   [[nodiscard]] const provider::Route& route() const noexcept {
     return loop_.route();
   }
 
 private:
+  // After a successful turn, walk the new transcript suffix for
+  // (ToolUseContent, ToolResultContent) pairs and feed each result through
+  // `agent::SessionState::observe_tool_output`. The session state filters by
+  // tool name (only `tool.search` drives promotion), so the work is best-effort
+  // and observation errors do not abort the prompt response — the loop has
+  // already committed its audit/trace rows.
+  void observe_turn_results(const std::vector<core::Message>& transcript, std::size_t start_index) {
+    if (start_index > transcript.size()) {
+      return;
+    }
+    std::unordered_map<std::string_view, std::string_view> tool_use_names;
+    for (auto i = start_index; i < transcript.size(); ++i) {
+      const auto& message = transcript[i];
+      if (message.role != core::Role::assistant) {
+        continue;
+      }
+      for (const auto& block : message.blocks) {
+        if (const auto* use = std::get_if<core::ToolUseContent>(&block); use != nullptr) {
+          tool_use_names.emplace(use->id, use->name);
+        }
+      }
+    }
+
+    const auto now = core::time::now_utc();
+    for (auto i = start_index; i < transcript.size(); ++i) {
+      const auto& message = transcript[i];
+      if (message.role != core::Role::tool) {
+        continue;
+      }
+      for (const auto& block : message.blocks) {
+        const auto* result_block = std::get_if<core::ToolResultContent>(&block);
+        if (result_block == nullptr) {
+          continue;
+        }
+        const auto name_it = tool_use_names.find(result_block->tool_use_id);
+        if (name_it == tool_use_names.end()) {
+          continue;
+        }
+        const auto output = tool::Output{
+            .text = result_block->output,
+            .data_json = result_block->data_json,
+            .attachments = {},
+            .usage = {},
+            .is_error = result_block->is_error,
+        };
+        auto report = session_state_.observe_tool_output(name_it->second, output, now);
+        if (report.has_value() && report->observed_tool_search) {
+          ++tool_search_observations_;
+        }
+      }
+    }
+  }
+
   asio::any_io_executor executor_;
   RuntimeAssembly* assembly_{};
   provider::execution::Runtime execution_runtime_;
@@ -270,6 +337,7 @@ private:
   cli::OperatorPromptSink operator_sink_;
   std::vector<core::Message> transcript_;
   std::size_t prompts_processed_{0};
+  std::size_t tool_search_observations_{0};
 };
 
 core::Result<std::unique_ptr<AgentPromptRunner>> AgentPromptRunner::create(AgentPromptRunnerOptions options) {
@@ -325,6 +393,10 @@ std::size_t AgentPromptRunner::prompts_processed() const noexcept {
 
 std::size_t AgentPromptRunner::approval_prompts_rendered() const noexcept {
   return impl_->approval_prompts_rendered();
+}
+
+std::size_t AgentPromptRunner::tool_search_observations_recorded() const noexcept {
+  return impl_->tool_search_observations_recorded();
 }
 
 const provider::Route& AgentPromptRunner::route() const noexcept {

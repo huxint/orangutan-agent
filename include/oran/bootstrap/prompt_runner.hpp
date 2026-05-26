@@ -75,6 +75,11 @@ public:
 
   [[nodiscard]] std::size_t prompts_processed() const noexcept;
   [[nodiscard]] std::size_t approval_prompts_rendered() const noexcept;
+  /// Count of `tool.search` results the runner fed back into the per-session
+  /// `agent::SessionState` after each turn. The counter increments once per
+  /// observed `tool.search` tool_result, including ones that returned no
+  /// deferred matches.
+  [[nodiscard]] std::size_t tool_search_observations_recorded() const noexcept;
   [[nodiscard]] const provider::Route& route() const noexcept;
 
 private:
