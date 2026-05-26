@@ -118,6 +118,9 @@ Runtime::send(provider::Request request, provider::Route route, provider::EventS
         if (!result->model_used.has_value()) {
           result->model_used = target.model;
         }
+        if (!result->route_profile_used.has_value()) {
+          result->route_profile_used = target.profile;
+        }
         co_return result;
       }
 
@@ -141,7 +144,7 @@ Runtime::send(provider::Request request, provider::Route route, provider::EventS
         auto executor = co_await asio::this_coro::executor;
         auto slept = co_await async::sleep_for(executor, delay);
         if (!slept) {
-          co_return std::unexpected(std::move(slept).error());
+          co_return std::unexpected(with_target_context(std::move(slept).error(), target, attempt, max_attempts));
         }
       }
     }

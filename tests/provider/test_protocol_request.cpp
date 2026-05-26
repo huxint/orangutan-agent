@@ -154,6 +154,28 @@ TEST_CASE("protocol request maps OpenAI Responses payloads", "[unit][provider][p
   REQUIRE(json::parse(body.at("input")[2].at("output").get<std::string>()).at("kind") == "file_read");
 }
 
+TEST_CASE("protocol request folds OpenAI Role::system messages into instructions", "[unit][provider][protocol]") {
+  auto request = tool_request();
+  request.system_prompt = std::string{"From system_prompt."};
+  request.messages.insert(request.messages.begin(),
+                          core::Message{
+                              .role = core::Role::system,
+                              .blocks = {core::TextContent{.text = "From a system message."}},
+                              .created_at = std::nullopt,
+                          });
+
+  const auto encoded = provider::make_protocol_request(request, target(provider::ProtocolKind::openai_responses));
+
+  REQUIRE(encoded.has_value());
+  const auto body = json::parse(encoded->body_json);
+  REQUIRE(body.at("instructions") == "From system_prompt.\n\nFrom a system message.");
+  for (const auto& item : body.at("input")) {
+    if (item.is_object() && item.contains("role")) {
+      REQUIRE(item.at("role") != "system");
+    }
+  }
+}
+
 TEST_CASE("protocol request preserves text-only tool results", "[unit][provider][protocol]") {
   auto request = tool_request();
   auto& result = std::get<core::ToolResultContent>(request.messages[2].blocks[0]);

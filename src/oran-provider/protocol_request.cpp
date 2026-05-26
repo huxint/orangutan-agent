@@ -258,6 +258,31 @@ append_anthropic_system_text(json& body, const core::Message& message, const Mod
   return ProtocolRequest{.method = "POST", .path = "/v1/messages", .body_json = body.dump()};
 }
 
+[[nodiscard]] core::Result<void>
+append_openai_instructions_text(json& body, const core::Message& message, const ModelTarget& target) {
+  auto parts = std::string{};
+  for (const auto& block : message.blocks) {
+    if (const auto* text = std::get_if<core::TextContent>(&block); text != nullptr) {
+      if (!parts.empty()) {
+        parts.append("\n\n");
+      }
+      parts.append(text->text);
+      continue;
+    }
+    return std::unexpected(protocol_error("openai system messages must contain only text blocks", target));
+  }
+
+  if (parts.empty()) {
+    return {};
+  }
+  if (body.contains("instructions")) {
+    body["instructions"] = body["instructions"].get<std::string>() + "\n\n" + parts;
+  } else {
+    body["instructions"] = std::move(parts);
+  }
+  return {};
+}
+
 [[nodiscard]] std::string openai_content_type(core::Role role) {
   return role == core::Role::assistant ? "output_text" : "input_text";
 }
@@ -339,6 +364,12 @@ openai_input_item(const core::Content& content, core::Role role, const ModelTarg
 
   auto input = json::array();
   for (const auto& message : request.messages) {
+    if (message.role == core::Role::system) {
+      if (auto appended = append_openai_instructions_text(body, message, target); !appended) {
+        return std::unexpected(std::move(appended).error());
+      }
+      continue;
+    }
     for (const auto& block : message.blocks) {
       auto item = openai_input_item(block, message.role, target);
       if (!item) {

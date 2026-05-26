@@ -611,7 +611,7 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
 [[nodiscard]] Result<std::vector<ConfigWarning>> collect_unknown_root_fields(const json& root, bool strict) {
   auto warnings = std::vector<ConfigWarning>{};
   for (const auto& [key, value] : root.items()) {
-    (void)value;
+    static_cast<void>(value);
     if (is_recognized_root(key)) {
       continue;
     }

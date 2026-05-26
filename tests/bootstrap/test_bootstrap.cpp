@@ -635,6 +635,41 @@ TEST_CASE("run --audit-init rejects empty explicit paths", "[unit][bootstrap]") 
   }
 }
 
+TEST_CASE("run --audit-init refuses to swallow short flags as its path", "[unit][bootstrap]") {
+  TempDir temp{"oran-bootstrap-audit-init-short-flag"};
+  auto args = std::vector<std::string_view>{"--audit-init", "-h"};
+  auto result = bootstrap::run(options(args, temp.path()));
+  // `-h` is a help-shaped short flag and must not be consumed as the audit-init
+  // path. With the strictness fix the optional-path sniff treats it as a flag
+  // and falls through to ordinary help handling; the call now succeeds (help
+  // text is printed) and the workspace audit directory is left untouched.
+  REQUIRE(result.has_value());
+  REQUIRE_FALSE(std::filesystem::exists(temp.path() / "-h"));
+}
+
+TEST_CASE("run rejects duplicate bootstrap flags", "[unit][bootstrap]") {
+  TempDir temp{"oran-bootstrap-duplicate-flags"};
+
+  SECTION("duplicate --config") {
+    auto args = std::vector<std::string_view>{"--config", "a.json", "--config", "b.json"};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+  SECTION("duplicate --audit-init") {
+    auto args = std::vector<std::string_view>{"--audit-init", "--audit-init"};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+  SECTION("duplicate --trace") {
+    auto args = std::vector<std::string_view>{"--trace", "abc", "--trace", "def"};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+}
+
 TEST_CASE("parse_explain_rules_selector defaults to default-mode, no agent", "[unit][bootstrap][explain_rules]") {
   auto args = std::vector<std::string_view>{};
   auto selector = bootstrap::parse_explain_rules_selector(std::span<const std::string_view>{args});

@@ -54,16 +54,9 @@ core::Result<ApprovalBroker> ApprovalBroker::with_random_secret() {
 ApprovalBroker::ApprovalBroker(ApprovalAuthority authority) noexcept : authority_(std::move(authority)) {}
 
 std::size_t ApprovalBroker::reap_expired(core::Time now) {
-  std::size_t removed = 0;
-  for (auto it = grants_.begin(); it != grants_.end();) {
-    if (it->second.expires_at <= now) {
-      it = grants_.erase(it);
-      ++removed;
-    } else {
-      ++it;
-    }
-  }
-  return removed;
+  const auto before = grants_.size();
+  std::erase_if(grants_, [now](const auto& kv) { return kv.second.expires_at <= now; });
+  return before - grants_.size();
 }
 
 void ApprovalBroker::enforce_identity_ceiling(std::string_view identity, const Key& new_key) {

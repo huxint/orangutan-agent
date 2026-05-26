@@ -431,6 +431,11 @@ void complete_read_text_singleflight(const FileViewCacheKey& key,
   std::vector<std::shared_ptr<asio::steady_timer>> waiters;
   {
     const std::scoped_lock lock{read_text_singleflight_mutex()};
+    if (entry->result) {
+      // Already completed (e.g. by a previous leader guard); preserve the
+      // first verdict and skip publishing a second time.
+      return;
+    }
     entry->result = result;
     auto& table = read_text_singleflight_table();
     if (auto existing = table.find(key); existing != table.end() && existing->second == entry) {
@@ -445,8 +450,14 @@ void complete_read_text_singleflight(const FileViewCacheKey& key,
     waiters.swap(entry->waiters);
   }
 
+  // Wake each follower via its OWN executor. asio::basic_waitable_timer is
+  // documented as "shared objects: Unsafe", and each waiter's timer was
+  // constructed on the follower's executor in `join_read_text_singleflight`.
+  // Posting the expires_at call onto that executor keeps every mutation of
+  // the timer on its owning strand.
   for (const auto& waiter : waiters) {
-    waiter->expires_at(std::chrono::steady_clock::time_point::min());
+    auto executor = waiter->get_executor();
+    asio::post(std::move(executor), [waiter] { waiter->expires_at(std::chrono::steady_clock::time_point::min()); });
   }
 }
 
@@ -1523,9 +1534,39 @@ read_text_file_ranged(asio::any_io_executor executor, std::string path, ReadText
     co_return co_await wait_for_read_text_singleflight(std::move(join));
   }
 
+  // Leader RAII guard: if the cold read is cancelled or throws before
+  // `complete_read_text_singleflight` runs, the entry would stay in the table
+  // and every follower's timer would wait forever. The guard publishes a
+  // cancelled error to followers on any unwind path so the table is never
+  // leaked. Bypass callers do not own an entry, so the guard short-circuits.
+  struct LeaderCompletionGuard {
+    bool armed{false};
+    FileViewCacheKey key{};
+    std::shared_ptr<ReadTextSingleflightEntry> entry{};
+
+    ~LeaderCompletionGuard() noexcept {
+      if (!armed || entry == nullptr) {
+        return;
+      }
+      try {
+        complete_read_text_singleflight(
+            key,
+            entry,
+            std::unexpected(core::Error::cancelled().with("reason", "singleflight_leader_unwound")));
+      } catch (...) {
+        // The destructor must remain noexcept; swallow any secondary failure
+        // here — completing late is better than leaking the entry, but a
+        // throw out of a destructor would terminate the process.
+      }
+    }
+  };
+  auto guard = LeaderCompletionGuard{};
   if (join.leader) {
-    co_await asio::post(executor, asio::use_awaitable);
+    guard.armed = true;
+    guard.key = cache_key;
+    guard.entry = join.entry;
   }
+
   auto result = co_await read_text_file_cold_async(std::move(executor),
                                                    std::move(path),
                                                    options,
@@ -1533,6 +1574,7 @@ read_text_file_ranged(asio::any_io_executor executor, std::string path, ReadText
                                                    cache_key);
   if (join.leader) {
     complete_read_text_singleflight(cache_key, join.entry, result);
+    guard.armed = false;
   }
   co_return result;
 }

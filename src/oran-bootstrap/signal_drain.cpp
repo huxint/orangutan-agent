@@ -8,6 +8,7 @@
 #include <csignal>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <system_error>
 
 #include <asio/io_context.hpp>
@@ -49,7 +50,7 @@ int SignalScope::signum() const noexcept {
   return impl_ ? impl_->signum.load(std::memory_order_acquire) : 0;
 }
 
-const char* signal_name(int signum) noexcept {
+std::string_view signal_name(int signum) noexcept {
   switch (signum) {
     case SIGINT:
       return "SIGINT";

@@ -7,16 +7,62 @@
 
 ## Snapshot
 
-- **Slice:** 113 (`xmake run orangutan` reports slice 113)
+- **Slice:** 114 (`xmake run orangutan` reports slice 114)
 - **Last completed history:**
-  [`histories/2026-05/20260526-2348-prompt-runner-session-state-observe.md`](histories/2026-05/20260526-2348-prompt-runner-session-state-observe.md)
+  [`histories/2026-05/20260527-0040-deep-review-batch-fixes.md`](histories/2026-05/20260527-0040-deep-review-batch-fixes.md)
 - **Active exec-plan:**
-  `none` — slice 113 is a single-slice fix absorbed from the 2026-05-26 deep
-  review; further bullets live in the `review/deep-2026-05-26` tracker row and
-  do not need an exec plan.
+  `none` — slice 114 bundles the remaining 2026-05-26 deep-review fixes;
+  follow-ups (singleflight regression test, etc.) live in the
+  `review/deep-2026-05-26` tracker row.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018) and absorb remaining
-  deep-review-2026-05-26 bullets in priority order. Slice 113 closes the
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 114 lands
+  the consolidated deep-review absorption pass:
+  (F1+F18) trace-write failures no longer mask the loop's underlying error —
+  `agent::Loop` attaches `trace_write_failed=<message>` context to the
+  original provider/tool/loop-boundary error instead of returning the
+  storage error in its place; (F5) `provider::Response` now carries
+  `route_profile_used`, `provider::execution::Runtime` fills it with the
+  served target's profile (mirroring how `model_used` is filled), and the
+  loop reads it so `trace_turns.route_profile` describes the profile that
+  actually answered the request even when a `Route::fallbacks` entry won;
+  (F6 + F12) `bootstrap::run` parse_args now rejects single-dash short
+  flags as `--audit-init` paths (so `--audit-init -h` no longer creates a
+  `-h` directory) and rejects duplicate `--config / --audit-init / --trace`
+  occurrences with `invalid_argument`; (F9) the agent loop's terminal arm
+  treats `core::StopReason::cancelled` as terminal-success so an OpenAI
+  Responses `status="cancelled"` returns through the success path with a
+  cancelled trace row instead of the `non-terminal stop reason` error
+  branch; (F10) the provider execution wrapper enriches retry-backoff
+  sleep errors with `with_target_context` so cancellation-during-backoff
+  carries the same `provider_profile / provider_model / attempt /
+  max_attempts` context every other early-exit attaches; (F11) the OpenAI
+  Responses encoder folds `core::Role::system` messages into
+  `body.instructions` (matching the Anthropic side) so a system message
+  inside `request.messages` no longer double-emits as `input[].role==system`;
+  (F3 + F4 + F23) the `oran-io` singleflight leader now wakes follower
+  `steady_timer`s by posting `expires_at` onto each waiter's own executor
+  (closing the asio "shared objects: Unsafe" race) and a RAII guard
+  publishes a `singleflight_leader_unwound` cancelled result on any leader
+  unwind path so a cancelled cold-read can no longer orphan followers
+  forever; the redundant pre-cold `co_await asio::post` is removed.
+  Style cleanups land alongside the bug fixes: (F14) `static_cast<void>`
+  replaces the C-style `(void)value;` in `oran-config`, (F15) `signal_name`
+  returns `std::string_view` instead of `const char*` and the signal-drain
+  docstring no longer references a nonexistent helper (F13), (F16/F20)
+  `AgentPromptRunner::create` uses `std::make_unique` with a passkey-tagged
+  public constructor instead of raw `new`, (F19) the runner's
+  `validate_options` now rejects an empty `asio::any_io_executor`, (F22)
+  `core::BoundedCache::put` introduces a new `EvictionReason::invalidated`
+  so a same-key overwrite or oversize rejection no longer double-counts in
+  `evictions_bytes` / `evictions_lru`, (F24) `permission::ApprovalBroker::reap_expired`
+  uses `std::erase_if` instead of a hand-rolled iterator erase loop, and
+  (F25) `storage::TraceRepository` drops its local `is_zero_id` in favour
+  of the shared `core::is_zero_turn_id` helper. Docs (F8 spec 0018) now
+  describe ordinary configured-route binary handoff as shipped through
+  slice 112 instead of downstream. Focused result across affected libs:
+  `test-agent` 26 cases / 407 assertions, `test-bootstrap` 72 cases / 316
+  assertions, `test-provider` 66 cases / 528 assertions; the other 11 test
+  suites are unchanged. Slice 113 closes the
   long-standing gap that left `agent::SessionState::observe_tool_output(...)`
   unwired in `bootstrap::AgentPromptRunner`: the production runner now walks
   each turn's new transcript suffix, reconstructs a minimal `tool::Output` from
@@ -919,26 +965,28 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-hook`: 30 cases / 207 assertions.
 - `oran-tool`: 178 cases / 1838 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
-- `oran-provider`: 63 cases / 512 assertions.
-- `oran-agent`: 25 cases / 401 assertions.
+- `oran-provider`: 66 cases / 528 assertions.
+- `oran-agent`: 26 cases / 407 assertions.
 - `oran-cli`: 14 cases / 97 assertions.
-- `oran-bootstrap`: 70 cases / 308 assertions.
+- `oran-bootstrap`: 72 cases / 316 assertions.
 
 ## Open Tech-Debt Rows
 
 Lifted from [`exec-plans/tech-debt-tracker.md`](exec-plans/tech-debt-tracker.md).
 Closed entries do *not* live here — the tracker is canonical.
 
-- 2026-05-26 — Deep-review backlog `review/deep-2026-05-26`: slice 113 absorbed
-  the SessionState observation bullet (F2) and the AgentPromptRunner executor
-  validation bullet (F19); remaining bullets are bug fixes for trace-write
-  error masking (F1/F18), `agent::Loop` `route_profile` attribution under
-  fallback (F5), bootstrap parse_args strictness (F6 + F12), OpenAI cancelled
-  status mapping (F9), retry-backoff target context (F10), OpenAI system
-  message duplication (F11), oran-io singleflight cancel-leak + cross-thread
-  timer race (F3 + F4 + F23), and a small style cleanup batch (F14, F15, F16,
-  F22, F24, F25) plus docs sync (F8 spec 0018 still claims downstream binary
-  handoff, F13 nonexistent `make_signal_cancelled_error` reference).
+- 2026-05-26 — Deep-review backlog `review/deep-2026-05-26`: slices 113 and
+  114 absorbed the high/medium bullets (F1, F2, F5, F6, F9, F10, F11, F12,
+  F18, F19) and most low-severity items (F3 + F4 + F23 oran-io singleflight
+  cancel + cross-thread wake; F8 spec 0018 binary-handoff sync; F13/F15
+  signal_drain docs + return type; F14 (void) discard; F16/F20 raw new in
+  prompt runner factory; F22 BoundedCache double-count; F24 erase_if;
+  F25 duplicate helper). Remaining: a future regression test for the
+  oran-io singleflight leader-cancel + cross-executor-wake fix; rebench
+  any cache stat consumers that previously read `evictions_bytes` /
+  `evictions_lru` after invalidations now that those evictions move to
+  `EvictionReason::invalidated` (no callers do today, but a future
+  observability consumer should be aware).
 - 2026-05-21 — Deep-review backlog: the stale root review artifact was
   deleted after its actionable findings were absorbed into the tracker and
   specs 0011-0018. Slices 31-36 closed the rank-0 items plus the P0

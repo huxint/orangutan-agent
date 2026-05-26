@@ -376,10 +376,10 @@ core::Result<std::unique_ptr<AgentPromptRunner>> AgentPromptRunner::create(Agent
                                      std::move(active_tools),
                                      *output_caps,
                                      session_id);
-  return std::unique_ptr<AgentPromptRunner>{new AgentPromptRunner{std::move(impl)}};
+  return std::make_unique<AgentPromptRunner>(std::move(impl), AgentPromptRunner::PrivateTag{});
 }
 
-AgentPromptRunner::AgentPromptRunner(std::unique_ptr<Impl> impl) noexcept : impl_{std::move(impl)} {}
+AgentPromptRunner::AgentPromptRunner(std::unique_ptr<Impl> impl, PrivateTag) noexcept : impl_{std::move(impl)} {}
 
 AgentPromptRunner::~AgentPromptRunner() = default;
 

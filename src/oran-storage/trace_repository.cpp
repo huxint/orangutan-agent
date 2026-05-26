@@ -68,10 +68,6 @@ constexpr std::string_view kCountTurnsSql = "SELECT COUNT(*) FROM trace_turns";
   return std::as_bytes(std::span{text.data(), text.size()});
 }
 
-[[nodiscard]] bool is_zero_id(const TraceId& id) noexcept {
-  return std::ranges::all_of(id, [](std::byte b) { return b == std::byte{}; });
-}
-
 [[nodiscard]] std::int64_t to_sql_hash(std::uint64_t value) noexcept {
   return static_cast<std::int64_t>(value);
 }
@@ -88,13 +84,13 @@ constexpr std::string_view kCountTurnsSql = "SELECT COUNT(*) FROM trace_turns";
 }
 
 [[nodiscard]] core::Result<void> validate_append_request(const AppendTraceTurnRequest& request) {
-  if (is_zero_id(request.turn_id)) {
+  if (core::is_zero_turn_id(request.turn_id)) {
     return std::unexpected(invalid_field("turn_id").with("reason", "zero_id"));
   }
-  if (is_zero_id(request.session_id)) {
+  if (core::is_zero_turn_id(request.session_id)) {
     return std::unexpected(invalid_field("session_id").with("reason", "zero_id"));
   }
-  if (request.parent_turn_id.has_value() && is_zero_id(*request.parent_turn_id)) {
+  if (request.parent_turn_id.has_value() && core::is_zero_turn_id(*request.parent_turn_id)) {
     return std::unexpected(invalid_field("parent_turn_id").with("reason", "zero_id"));
   }
   if (request.agent_key.empty()) {
@@ -524,7 +520,7 @@ async::Awaitable<core::Result<TraceTurnRecord>> TraceRepository::append_turn(App
 }
 
 async::Awaitable<core::Result<std::optional<TraceTurnRecord>>> TraceRepository::get_turn(TraceId turn_id) {
-  if (is_zero_id(turn_id)) {
+  if (core::is_zero_turn_id(turn_id)) {
     co_return std::unexpected(invalid_field("turn_id").with("reason", "zero_id"));
   }
 
@@ -565,7 +561,7 @@ TraceRepository::list_turns(ListTraceTurnsOptions options) {
   if (!limit) {
     co_return std::unexpected(limit.error());
   }
-  if (options.session_id.has_value() && is_zero_id(*options.session_id)) {
+  if (options.session_id.has_value() && core::is_zero_turn_id(*options.session_id)) {
     co_return std::unexpected(invalid_field("session_id").with("reason", "zero_id"));
   }
 

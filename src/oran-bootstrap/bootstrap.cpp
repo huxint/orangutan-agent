@@ -43,7 +43,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice113";
+constexpr std::string_view kVersion = "2.0.0-slice114";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 
 struct ParsedArgs {
@@ -139,6 +139,9 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
 
     constexpr auto kAuditInitPrefix = std::string_view{"--audit-init="};
     if (arg.starts_with(kAuditInitPrefix)) {
+      if (parsed.audit_init) {
+        return std::unexpected(arg_error("--audit-init may be provided only once"));
+      }
       parsed.audit_init = true;
       parsed.has_audit_init_path = true;
       parsed.audit_init_path = std::string{arg.substr(kAuditInitPrefix.size())};
@@ -149,11 +152,15 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
     }
 
     if (arg == "--audit-init") {
+      if (parsed.audit_init) {
+        return std::unexpected(arg_error("--audit-init may be provided only once"));
+      }
       parsed.audit_init = true;
       // The path argument is optional: when omitted, audit-init uses the
       // workspace default `<workspace>/.orangutan/audit.db`. Sniff the
-      // next token only if it does not look like another flag.
-      if (index + 1 < args.size() && !args[index + 1].starts_with("--")) {
+      // next token only if it does not look like another flag (any token
+      // starting with `-` — including single-dash short flags such as `-h`).
+      if (index + 1 < args.size() && !args[index + 1].starts_with("-")) {
         parsed.has_audit_init_path = true;
         parsed.audit_init_path = std::string{args[++index]};
         if (parsed.audit_init_path.empty()) {
@@ -165,6 +172,9 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
 
     constexpr auto kTracePrefix = std::string_view{"--trace="};
     if (arg.starts_with(kTracePrefix)) {
+      if (parsed.trace_inspect) {
+        return std::unexpected(arg_error("--trace may be provided only once"));
+      }
       parsed.trace_inspect = true;
       parsed.trace_turn_id_hex = std::string{arg.substr(kTracePrefix.size())};
       if (parsed.trace_turn_id_hex.empty()) {
@@ -174,6 +184,9 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
     }
 
     if (arg == "--trace") {
+      if (parsed.trace_inspect) {
+        return std::unexpected(arg_error("--trace may be provided only once"));
+      }
       parsed.trace_inspect = true;
       if (index + 1 >= args.size()) {
         return std::unexpected(arg_error("--trace requires a turn id"));
@@ -187,6 +200,9 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
 
     constexpr auto kConfigPrefix = std::string_view{"--config="};
     if (arg.starts_with(kConfigPrefix)) {
+      if (parsed.has_explicit_config) {
+        return std::unexpected(arg_error("--config may be provided only once"));
+      }
       parsed.has_explicit_config = true;
       parsed.explicit_config_path = std::string{arg.substr(kConfigPrefix.size())};
       if (parsed.explicit_config_path.empty()) {
@@ -196,6 +212,9 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
     }
 
     if (arg == "--config") {
+      if (parsed.has_explicit_config) {
+        return std::unexpected(arg_error("--config may be provided only once"));
+      }
       if (index + 1 >= args.size()) {
         return std::unexpected(arg_error("--config requires a path"));
       }

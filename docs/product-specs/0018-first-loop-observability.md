@@ -69,8 +69,9 @@ makes the existing audit rows joinable. Nothing else.
   so `RuntimeAssembly::build` constructs a `storage::TraceRepository` on the
   shared audit `Pool` whenever both audit and trace are enabled; slice 101's
   `AgentPromptRunner` consumes the assembly-exposed pointer for
-  caller-supplied provider backends, while the ordinary binary handoff still
-  waits on real provider adapter construction.
+  caller-supplied provider backends, while the ordinary binary handoff now
+  uses the same runner through slice 112's configured-route
+  `bootstrap::run` plus `HttpProviderBackend`.
   `<oran/storage.hpp>` exports `TraceRepository`, `TraceId`,
   `AppendTraceTurnRequest`, `TraceTurnRecord`, and
   `ListTraceTurnsOptions`; `src/oran-storage/migrations/audit/0002-trace-turns-initial.sql`
@@ -94,8 +95,9 @@ makes the existing audit rows joinable. Nothing else.
   writes direct-dispatch blocking `tool_before` hook-publish rows when the
   dispatch context carries a parent turn id. Slice 101's `AgentPromptRunner`
   now threads the assembly repository into `RunTurnInputs::trace` for
-  caller-supplied provider backends; the ordinary binary handoff remains
-  downstream until real provider adapters exist.
+  caller-supplied provider backends; slice 112 wires the same runner into
+  ordinary configured-route `bootstrap::run`, so trace rows are written from
+  the binary path as soon as a `default` provider route is declared.
   ```sql
   CREATE TABLE trace_turns (
     turn_id           BLOB PRIMARY KEY,             -- 16-byte UUID
@@ -357,8 +359,9 @@ makes the existing audit rows joinable. Nothing else.
    reusable dispatch-context parent id is restored after the tool call.
    Slice 101's `AgentPromptRunner` threads the assembly-owned repository into
    `RunTurnInputs::trace` when tests or future callers supply a provider
-   backend. The ordinary CLI/binary handoff still waits on real provider
-   adapter construction.
+   backend. Slice 112 then wires `bootstrap::run` to use that runner through
+   `HttpProviderBackend` for configured routes, so trace rows are now written
+   from the ordinary binary path as soon as config declares a `default` route.
 10. **CLI inspector.** `orangutan --trace <turn_id>` returns
     the trace row + every joined audit row + every joined
     `hook_publish` row in deterministic order; exit code 0.

@@ -280,5 +280,40 @@ TEST_CASE("execution runtime observes cancellation during retry backoff", "[unit
   REQUIRE(result.has_value());
   REQUIRE_FALSE(result->has_value());
   REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
+  REQUIRE(context_value(result->error(), "provider_profile") == std::optional<std::string_view>{"primary-profile"});
+  REQUIRE(context_value(result->error(), "provider_model") == std::optional<std::string_view>{"primary-model"});
+  REQUIRE(context_value(result->error(), "attempt") == std::optional<std::string_view>{"1"});
+  REQUIRE(context_value(result->error(), "max_attempts") == std::optional<std::string_view>{"2"});
   REQUIRE(backend.routes_seen().size() == 1);
+}
+
+TEST_CASE("execution runtime fills route_profile_used from served target", "[unit][provider][execution]") {
+  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    SECTION("primary success") {
+      RecordingSystem backend{std::vector<core::Result<prov::Response>>{
+          text_response("primary ok"),
+      }};
+      prov::execution::Runtime runtime{backend};
+
+      auto result = co_await runtime.send(request_with_retry(1), route_with_fallback(), nullptr);
+
+      REQUIRE(result.has_value());
+      REQUIRE(result->route_profile_used == std::optional<std::string>{"primary-profile"});
+    }
+    SECTION("fallback success") {
+      RecordingSystem backend{std::vector<core::Result<prov::Response>>{
+          std::unexpected(core::Error::network("first primary failure")),
+          std::unexpected(core::Error::upstream("second primary failure")),
+          text_response("fallback ok"),
+      }};
+      prov::execution::Runtime runtime{backend};
+
+      auto result = co_await runtime.send(request_with_retry(2), route_with_fallback(), nullptr);
+
+      REQUIRE(result.has_value());
+      REQUIRE(result->model_used == std::string{"fallback-model"});
+      REQUIRE(result->route_profile_used == std::optional<std::string>{"fallback-profile"});
+    }
+    co_return;
+  });
 }

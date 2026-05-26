@@ -161,6 +161,20 @@ TEST_CASE("protocol response maps OpenAI incomplete status to max_tokens", "[uni
   REQUIRE(decoded->stop_reason == core::StopReason::max_tokens);
 }
 
+TEST_CASE("protocol response maps OpenAI cancelled status to StopReason::cancelled", "[unit][provider][protocol]") {
+  constexpr std::string_view body = R"json({
+    "status": "cancelled",
+    "model": "gpt-5.1",
+    "output": [],
+    "usage": {"input_tokens": 1, "output_tokens": 0}
+  })json";
+
+  auto decoded = provider::decode_protocol_response(body, target(provider::ProtocolKind::openai_responses));
+
+  REQUIRE(decoded.has_value());
+  REQUIRE(decoded->stop_reason == core::StopReason::cancelled);
+}
+
 TEST_CASE("protocol response rejects malformed protocol JSON", "[unit][provider][protocol]") {
   SECTION("body is not JSON") {
     auto decoded = provider::decode_protocol_response("{", target(provider::ProtocolKind::anthropic_messages));

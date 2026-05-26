@@ -62,6 +62,14 @@ struct AgentPromptRunnerOptions {
 /// class; tests and `bootstrap::run` can supply any `provider::System`.
 class AgentPromptRunner final : public cli::PromptRunner {
 public:
+  /// Passkey for the public constructor — `AgentPromptRunner` is built only
+  /// through `create`, which constructs the tag internally so callers cannot
+  /// bypass the factory's validation.
+  class PrivateTag {
+    PrivateTag() = default;
+    friend class AgentPromptRunner;
+  };
+
   [[nodiscard]] static core::Result<std::unique_ptr<AgentPromptRunner>> create(AgentPromptRunnerOptions options);
 
   ~AgentPromptRunner() override;
@@ -82,11 +90,15 @@ public:
   [[nodiscard]] std::size_t tool_search_observations_recorded() const noexcept;
   [[nodiscard]] const provider::Route& route() const noexcept;
 
-private:
   class Impl;
-  std::unique_ptr<Impl> impl_;
+  /// Construct from an already-validated `Impl`. Public-but-tagged so
+  /// `std::make_unique` can invoke it from `create`. Constructing a
+  /// `PrivateTag` outside `AgentPromptRunner` is impossible (the default
+  /// constructor is private + only `AgentPromptRunner` is a friend).
+  AgentPromptRunner(std::unique_ptr<Impl> impl, PrivateTag) noexcept;
 
-  explicit AgentPromptRunner(std::unique_ptr<Impl> impl) noexcept;
+private:
+  std::unique_ptr<Impl> impl_;
 };
 
 }  // namespace orangutan::bootstrap

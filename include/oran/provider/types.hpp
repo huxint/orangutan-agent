@@ -52,6 +52,13 @@ struct Response {
   core::StopReason stop_reason{core::StopReason::end_turn};
   Usage usage{};
   std::optional<std::string> model_used;
+  /// Profile of the `Route` target that actually produced this response.
+  /// `provider::execution::Runtime` fills this with the served target's
+  /// `ModelTarget::profile` on success so trace consumers can distinguish a
+  /// primary response from one served by a `Route::fallbacks` entry. Concrete
+  /// backends are not required to set it; the execution runtime fills it when
+  /// missing so callers do not need to know which layer attributed the route.
+  std::optional<std::string> route_profile_used;
 
   friend bool operator==(const Response&, const Response&) = default;
 };

@@ -28,6 +28,7 @@
 
 #include <memory>
 #include <optional>
+#include <string_view>
 
 namespace asio {
 class io_context;
@@ -75,13 +76,15 @@ private:
 /// `"SIGTERM"`, or `"unknown"` so error context entries stay stable
 /// across log/redaction passes; the raw integer travels alongside in a
 /// separate context entry.
-[[nodiscard]] const char* signal_name(int signum) noexcept;
+[[nodiscard]] std::string_view signal_name(int signum) noexcept;
 
-/// Recover the POSIX signum carried on a `cancelled` error built by
-/// `make_signal_cancelled_error`. Returns `std::nullopt` when the error
-/// is not cancelled, when the `signum` context entry is absent, or
-/// when it does not parse as a positive integer. The helper exists so
-/// callers (including `bootstrap::run`) translate signal-driven
+/// Recover the POSIX signum carried on a `cancelled` error produced by
+/// `bootstrap::run` after a SIGINT/SIGTERM trap. The cancelled error
+/// carries `signal` (matching `signal_name`) and `signum` context
+/// entries, and this helper parses the latter. Returns `std::nullopt`
+/// when the error is not cancelled, when the `signum` context entry is
+/// absent, or when it does not parse as a positive integer. The helper
+/// exists so callers (including `bootstrap::run`) translate signal-driven
 /// cancellation into shell-conventional exit codes (128 + signum)
 /// without poking at `Error::context()` directly.
 [[nodiscard]] std::optional<int> signum_from_error(const core::Error& error) noexcept;

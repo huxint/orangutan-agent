@@ -499,6 +499,42 @@ TEST_CASE("Loop persists provider error trace rows", "[unit][agent][loop][trace]
   });
 }
 
+TEST_CASE("Loop preserves the original error when trace-row write fails", "[unit][agent][loop][trace]") {
+  TempDb db{"oran-agent-loop-trace-write-fail"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_trace_pool(io, db);
+    storage::TraceRepository trace{pool};
+    auto migrated = co_await trace.migrate();
+    REQUIRE(migrated.has_value());
+
+    std::vector<provider::ScriptedTurn> plan;
+    plan.push_back(provider::ScriptedTurn{
+        .response = std::nullopt,
+        .deltas = {},
+        .error = core::Error::network("upstream timeout"),
+        .latency = {},
+    });
+    provider::FakeProvider fake{std::move(plan)};
+    agent::Loop loop{fake, default_route()};
+
+    const auto catalog = loop_catalog();
+    const std::vector<core::Message> tail{core::Message::user_text("trace write fail")};
+    auto inputs = base_inputs(catalog, tail);
+    inputs.turn_id = turn_id_with(0x44);
+    inputs.trace = agent::TraceContext{
+        .repository = &trace,
+        .session_id = core::TurnId{},
+        .agent_key = "coder",
+        .origin = "cli",
+    };
+    auto result = co_await loop.run_turn(inputs);
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::network);
+    REQUIRE(contains_context(result.error(), "trace_write_failed", "trace repository field is invalid"));
+  });
+}
+
 TEST_CASE("Loop annotates cancellation during provider await", "[unit][agent][loop][cancellation]") {
   asio::io_context io;
   asio::cancellation_signal signal;

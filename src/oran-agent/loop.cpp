@@ -232,6 +232,7 @@ make_trace_request(const RunTurnInputs& inputs,
                    std::uint32_t iterations,
                    std::int64_t started_at_ns,
                    std::string route_model,
+                   std::string served_profile,
                    core::StopReason stop_reason,
                    std::optional<std::string> cancellation_phase = std::nullopt) {
   if (inputs.trace.repository == nullptr) {
@@ -242,6 +243,10 @@ make_trace_request(const RunTurnInputs& inputs,
   }
   if (!inputs.turn_id.has_value()) {
     return std::unexpected(core::Error::invalid_argument("trace writer requires a turn id"));
+  }
+
+  if (served_profile.empty()) {
+    served_profile = route.primary.profile;
   }
 
   auto prefix_bytes = checked_size_i64(rendered.prefix_bytes, "prompt_prefix_bytes");
@@ -271,7 +276,7 @@ make_trace_request(const RunTurnInputs& inputs,
       .session_id = inputs.trace.session_id,
       .agent_key = std::string{inputs.trace.agent_key},
       .origin = std::string{inputs.trace.origin},
-      .route_profile = route.primary.profile,
+      .route_profile = std::move(served_profile),
       .route_model = std::move(route_model),
       .started_at_ns = started_at_ns,
       .finished_at_ns = now_epoch_ns(),
@@ -299,6 +304,7 @@ write_trace_turn(const RunTurnInputs& inputs,
                  std::uint32_t iterations,
                  std::int64_t started_at_ns,
                  std::string route_model,
+                 std::string served_profile,
                  core::StopReason stop_reason,
                  std::optional<std::string> cancellation_phase = std::nullopt) {
   if (!trace_writer_configured(inputs)) {
@@ -311,6 +317,7 @@ write_trace_turn(const RunTurnInputs& inputs,
                                     iterations,
                                     started_at_ns,
                                     std::move(route_model),
+                                    std::move(served_profile),
                                     stop_reason,
                                     std::move(cancellation_phase));
   if (!request) {
@@ -329,7 +336,8 @@ write_trace_turn(const RunTurnInputs& inputs,
                                                                           const provider::Usage& usage,
                                                                           std::uint32_t iterations,
                                                                           std::int64_t started_at_ns,
-                                                                          std::string route_model) {
+                                                                          std::string route_model,
+                                                                          std::string served_profile) {
   if (!trace_writer_configured(inputs)) {
     co_return core::Result<void>{};
   }
@@ -340,7 +348,12 @@ write_trace_turn(const RunTurnInputs& inputs,
                                       iterations,
                                       started_at_ns,
                                       std::move(route_model),
+                                      std::move(served_profile),
                                       core::StopReason::error);
+}
+
+[[nodiscard]] core::Error attach_trace_write_error(core::Error original, core::Error trace_error) {
+  return std::move(original).with("trace_write_failed", std::string{trace_error.message()});
 }
 
 class ScopedDispatchContext {
@@ -437,6 +450,7 @@ public:
         inputs.thinking_budget.has_value() ? inputs.thinking_budget : route_.primary.thinking_budget;
     std::optional<prompt::RenderedPrompt> last_rendered;
     std::string last_route_model = route_.primary.model;
+    std::string last_route_profile = route_.primary.profile;
 
     for (std::uint32_t iteration = 1; iteration <= options_.max_iterations; ++iteration) {
       auto rendered = co_await builder_.build(prompt::BuilderInputs{
@@ -483,10 +497,11 @@ public:
                                                   iteration,
                                                   started_at_ns,
                                                   route_.primary.model,
+                                                  route_.primary.profile,
                                                   core::StopReason::cancelled,
                                                   std::string{"provider"});
           if (!traced) {
-            co_return std::unexpected(std::move(traced).error());
+            error = attach_trace_write_error(std::move(error), std::move(traced).error());
           }
         } else if (error.kind() != core::ErrorKind::cancelled) {
           auto traced = co_await write_error_trace_turn(inputs,
@@ -495,9 +510,10 @@ public:
                                                         total_usage,
                                                         iteration,
                                                         started_at_ns,
-                                                        route_.primary.model);
+                                                        route_.primary.model,
+                                                        route_.primary.profile);
           if (!traced) {
-            co_return std::unexpected(std::move(traced).error());
+            error = attach_trace_write_error(std::move(error), std::move(traced).error());
           }
         }
         co_return std::unexpected(std::move(error));
@@ -506,36 +522,41 @@ public:
       add_usage(total_usage, response->usage);
       last_rendered = *rendered;
       last_route_model = response->model_used.value_or(route_.primary.model);
+      last_route_profile = response->route_profile_used.value_or(route_.primary.profile);
 
       const auto tool_uses = tool_uses_in(response->blocks);
       if (response->stop_reason == core::StopReason::tool_use || !tool_uses.empty()) {
         if (inputs.tools == nullptr || inputs.dispatch_context == nullptr) {
           auto error = unsupported_response("tool_use response");
           const auto route_model = response->model_used.value_or(route_.primary.model);
+          const auto route_profile = response->route_profile_used.value_or(route_.primary.profile);
           auto traced = co_await write_error_trace_turn(inputs,
                                                         route_,
                                                         *rendered,
                                                         total_usage,
                                                         iteration,
                                                         started_at_ns,
-                                                        route_model);
+                                                        route_model,
+                                                        route_profile);
           if (!traced) {
-            co_return std::unexpected(std::move(traced).error());
+            error = attach_trace_write_error(std::move(error), std::move(traced).error());
           }
           co_return std::unexpected(std::move(error));
         }
         if (tool_uses.empty()) {
           auto error = unsupported_response("tool_use stop reason without tool blocks");
           const auto route_model = response->model_used.value_or(route_.primary.model);
+          const auto route_profile = response->route_profile_used.value_or(route_.primary.profile);
           auto traced = co_await write_error_trace_turn(inputs,
                                                         route_,
                                                         *rendered,
                                                         total_usage,
                                                         iteration,
                                                         started_at_ns,
-                                                        route_model);
+                                                        route_model,
+                                                        route_profile);
           if (!traced) {
-            co_return std::unexpected(std::move(traced).error());
+            error = attach_trace_write_error(std::move(error), std::move(traced).error());
           }
           co_return std::unexpected(std::move(error));
         }
@@ -560,6 +581,7 @@ public:
             if (error.kind() == core::ErrorKind::cancelled && trace_writer_configured(inputs)) {
               co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
               const auto route_model = response->model_used.value_or(route_.primary.model);
+              const auto route_profile = response->route_profile_used.value_or(route_.primary.profile);
               auto traced = co_await write_trace_turn(inputs,
                                                       route_,
                                                       *rendered,
@@ -567,22 +589,25 @@ public:
                                                       iteration,
                                                       started_at_ns,
                                                       route_model,
+                                                      route_profile,
                                                       core::StopReason::cancelled,
                                                       std::string{"tools"});
               if (!traced) {
-                co_return std::unexpected(std::move(traced).error());
+                error = attach_trace_write_error(std::move(error), std::move(traced).error());
               }
             } else if (error.kind() != core::ErrorKind::cancelled) {
               const auto route_model = response->model_used.value_or(route_.primary.model);
+              const auto route_profile = response->route_profile_used.value_or(route_.primary.profile);
               auto traced = co_await write_error_trace_turn(inputs,
                                                             route_,
                                                             *rendered,
                                                             total_usage,
                                                             iteration,
                                                             started_at_ns,
-                                                            route_model);
+                                                            route_model,
+                                                            route_profile);
               if (!traced) {
-                co_return std::unexpected(std::move(traced).error());
+                error = attach_trace_write_error(std::move(error), std::move(traced).error());
               }
             }
             co_return std::unexpected(std::move(error));
@@ -599,18 +624,21 @@ public:
 
       if (response->stop_reason != core::StopReason::end_turn &&
           response->stop_reason != core::StopReason::stop_sequence &&
-          response->stop_reason != core::StopReason::max_tokens) {
+          response->stop_reason != core::StopReason::max_tokens &&
+          response->stop_reason != core::StopReason::cancelled) {
         auto error = unsupported_response("non-terminal stop reason");
         const auto route_model = response->model_used.value_or(route_.primary.model);
+        const auto route_profile = response->route_profile_used.value_or(route_.primary.profile);
         auto traced = co_await write_error_trace_turn(inputs,
                                                       route_,
                                                       *rendered,
                                                       total_usage,
                                                       iteration,
                                                       started_at_ns,
-                                                      route_model);
+                                                      route_model,
+                                                      route_profile);
         if (!traced) {
-          co_return std::unexpected(std::move(traced).error());
+          error = attach_trace_write_error(std::move(error), std::move(traced).error());
         }
         co_return std::unexpected(std::move(error));
       }
@@ -622,6 +650,7 @@ public:
           .created_at = std::nullopt,
       });
       const auto model_used = response->model_used.value_or(route_.primary.model);
+      const auto served_profile = response->route_profile_used.value_or(route_.primary.profile);
       if (auto traced = co_await write_trace_turn(inputs,
                                                   route_,
                                                   *rendered,
@@ -629,6 +658,7 @@ public:
                                                   iteration,
                                                   started_at_ns,
                                                   model_used,
+                                                  served_profile,
                                                   response->stop_reason);
           !traced) {
         co_return std::unexpected(std::move(traced).error());
@@ -653,9 +683,12 @@ public:
                                                     total_usage,
                                                     options_.max_iterations,
                                                     started_at_ns,
-                                                    last_route_model);
+                                                    last_route_model,
+                                                    last_route_profile);
       if (!traced) {
-        co_return std::unexpected(std::move(traced).error());
+        auto error = iteration_cap_error(options_.max_iterations);
+        error = attach_trace_write_error(std::move(error), std::move(traced).error());
+        co_return std::unexpected(std::move(error));
       }
     }
     co_return std::unexpected(iteration_cap_error(options_.max_iterations));

@@ -113,21 +113,24 @@ public:
 
   /// Insert or refresh `key` -> `value`. When the new payload exceeds
   /// `max_bytes`, the entry is rejected (`rejected_oversize` increments)
-  /// AND any prior entry under the same key is removed — a stale hit
-  /// after a "refuses to cache" is worse than a clean miss.
+  /// AND any prior entry under the same key is removed via the
+  /// `EvictionReason::invalidated` path — a stale hit after a "refuses to
+  /// cache" is worse than a clean miss, and the invalidation itself does
+  /// not consume any `evictions_*` budget counter.
   void put(Key key, Value value, Time now) {
     const auto byte_size = static_cast<std::size_t>(size_of_(value));
     if (options_.max_bytes != 0 && byte_size > options_.max_bytes) {
       ++stats_.rejected_oversize;
       if (auto existing = index_.find(key); existing != index_.end()) {
         // Spec acceptance #7 (file-view cache safety) requires invalidation
-        // on mutation; honour the same invariant for oversize rejection.
-        drop_locked(existing, EvictionReason::bytes);
+        // on mutation; honour the same invariant for oversize rejection
+        // without double-counting against the byte-pressure eviction tally.
+        drop_locked(existing, EvictionReason::invalidated);
       }
       return;
     }
     if (auto existing = index_.find(key); existing != index_.end()) {
-      drop_locked(existing, EvictionReason::lru);
+      drop_locked(existing, EvictionReason::invalidated);
     }
     entries_.push_back(Entry{.key = key, .value = std::move(value), .byte_size = byte_size, .insert_time = now});
     index_.emplace(std::move(key), std::prev(entries_.end()));
@@ -220,7 +223,8 @@ private:
   enum class EvictionReason {
     lru,
     ttl,
-    bytes
+    bytes,
+    invalidated
   };
 
   [[nodiscard]] bool ttl_expired(const Entry& entry, Time now) const noexcept {
@@ -248,6 +252,11 @@ private:
         break;
       case EvictionReason::bytes:
         ++stats_.evictions_bytes;
+        break;
+      case EvictionReason::invalidated:
+        // Mutation-driven invalidation already accounts for the cause via
+        // `rejected_oversize` (oversize put) or callers' own counters. The
+        // eviction tallies stay reserved for budget-pressure evictions.
         break;
     }
   }
