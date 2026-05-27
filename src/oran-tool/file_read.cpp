@@ -16,7 +16,6 @@
 #include <oran/tool/builtins.hpp>
 
 #include <cstdint>
-#include <exception>
 #include <expected>
 #include <format>
 #include <optional>
@@ -36,6 +35,7 @@
 #include <oran/tool/registry.hpp>
 #include <oran/tool/workspace.hpp>
 
+#include "_impl/parse_input.hpp"
 #include "version_token.hpp"
 
 namespace orangutan::tool {
@@ -183,36 +183,30 @@ format_header(std::string_view path, const io::ReadTextResult& result, const std
 
 [[nodiscard]] async::Awaitable<core::Result<Output>> file_read_handler(std::string_view input_json,
                                                                        DispatchContext& ctx) {
-  nlohmann::json parsed;
-  try {
-    parsed = nlohmann::json::parse(input_json);
-  } catch (const nlohmann::json::parse_error& e) {
-    co_return std::unexpected(
-        core::Error::invalid_argument("file.read: input is not valid JSON").with("detail", e.what()));
-  } catch (const std::exception& e) {
-    co_return std::unexpected(
-        core::Error::invalid_argument("file.read: input is not valid JSON").with("detail", e.what()));
+  auto parsed = detail::parse_input_object(input_json, kFileReadName);
+  if (!parsed) {
+    co_return std::unexpected(std::move(parsed).error());
   }
 
-  if (!parsed.is_object() || !parsed.contains("path") || !parsed["path"].is_string()) {
-    co_return std::unexpected(
-        core::Error::invalid_argument("file.read: input must be an object with a string `path` field"));
+  auto path_field = detail::require_string_field(*parsed, kFileReadName, "path");
+  if (!path_field) {
+    co_return std::unexpected(std::move(path_field).error());
   }
 
-  auto options = parse_options(parsed);
+  auto options = parse_options(*parsed);
   if (!options) {
     co_return std::unexpected(std::move(options).error());
   }
 
   std::optional<std::string> if_version;
-  if (parsed.contains("if_version")) {
-    if (!parsed["if_version"].is_string()) {
+  if (parsed->contains("if_version")) {
+    if (!(*parsed)["if_version"].is_string()) {
       co_return std::unexpected(core::Error::invalid_argument("file.read: `if_version` must be a string"));
     }
-    if_version = parsed["if_version"].get<std::string>();
+    if_version = (*parsed)["if_version"].get<std::string>();
   }
 
-  auto path = ctx.resolved_path.has_value() ? ctx.resolved_path->absolute_path : parsed["path"].get<std::string>();
+  auto path = ctx.resolved_path.has_value() ? ctx.resolved_path->absolute_path : *std::move(path_field);
   if (!ctx.resolved_path.has_value() && ctx.workspace != nullptr) {
     auto resolved = ctx.workspace->resolve_read(path);
     if (!resolved) {

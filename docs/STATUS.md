@@ -7,16 +7,33 @@
 
 ## Snapshot
 
-- **Slice:** 114 (`xmake run orangutan` reports slice 114)
+- **Slice:** 115 (`xmake run orangutan` reports slice 114; binary slice tag
+  bumps only land when a behavior change touches the bootstrap entry banner)
 - **Last completed history:**
-  [`histories/2026-05/20260527-0040-deep-review-batch-fixes.md`](histories/2026-05/20260527-0040-deep-review-batch-fixes.md)
+  [`histories/2026-05/20260527-2135-tool-parse-input-helper.md`](histories/2026-05/20260527-2135-tool-parse-input-helper.md)
 - **Active exec-plan:**
-  `none` — slice 114 bundles the remaining 2026-05-26 deep-review fixes;
-  follow-ups (singleflight regression test, etc.) live in the
-  `review/deep-2026-05-26` tracker row.
+  `none` — slice 115 is a single-concern P1 cleanup; the next structural
+  candidates (ToolScheduler v1 first slice, singleflight regression test)
+  remain downstream as noted below.
 - **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 114 lands
-  the consolidated deep-review absorption pass:
+  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 115 closes
+  the 2026-05-21 deep-review P1 `tool::parse_input<T>` cleanup by extracting
+  `tool::detail::parse_input_object(input_json, tool_name)` and
+  `tool::detail::require_string_field(input, tool_name, field)` into
+  `src/oran-tool/_impl/parse_input.hpp` and rewriting all seven built-ins
+  (`file.read`, `file.write`, `file.edit`, `file.delete`, `file.search`,
+  `directory.list`, `tool.search`) to consume them. The shared helpers
+  standardise the error vocabulary — `"<tool>: input is not valid JSON"`
+  (with `detail`), `"<tool>: input must be a JSON object"`, and
+  `"<tool>: input must include a string `<field>` field"` — so three built-ins
+  (`file.read`, `file.delete`, `directory.list`) that previously combined the
+  object + path checks now report the two failure modes as separate, distinct
+  errors. The seven refactored built-ins keep their existing test coverage
+  unchanged; the new helper TU adds direct unit coverage at
+  `tests/tool/test_parse_input.cpp` (7 cases, 28 assertions). Focused result:
+  `test-tool` 178 / 1838 → **185 / 1866** (+7 cases, +28 assertions); the
+  other 13 test suites are unchanged. Slice 114 bundled the
+  remaining 2026-05-26 deep-review fixes;
   (F1+F18) trace-write failures no longer mask the loop's underlying error —
   `agent::Loop` attaches `trace_write_failed=<message>` context to the
   original provider/tool/loop-boundary error instead of returning the
@@ -963,7 +980,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 33 cases / 241 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 30 cases / 207 assertions.
-- `oran-tool`: 178 cases / 1838 assertions.
+- `oran-tool`: 185 cases / 1866 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 66 cases / 528 assertions.
 - `oran-agent`: 26 cases / 407 assertions.
@@ -990,8 +1007,9 @@ Closed entries do *not* live here — the tracker is canonical.
 - 2026-05-21 — Deep-review backlog: the stale root review artifact was
   deleted after its actionable findings were absorbed into the tracker and
   specs 0011-0018. Slices 31-36 closed the rank-0 items plus the P0
-  follow-ups, and slice 60 closed the P2 `tool::Output` envelope item;
-  remaining follow-ups are grouped P1/P2/P3 in the tracker.
+  follow-ups, slice 60 closed the P2 `tool::Output` envelope item, and
+  slice 115 closed the P1 `tool::parse_input<T>` helper item; remaining
+  follow-ups are grouped P1/P2/P3 in the tracker.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on
   the documented reference hardware (8-core / NVMe / native Linux);

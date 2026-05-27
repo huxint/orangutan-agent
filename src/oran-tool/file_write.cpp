@@ -3,7 +3,6 @@
 #include <oran/tool/builtins.hpp>
 
 #include <cstdint>
-#include <exception>
 #include <expected>
 #include <format>
 #include <optional>
@@ -22,6 +21,7 @@
 #include <oran/tool/registry.hpp>
 #include <oran/tool/workspace.hpp>
 
+#include "_impl/parse_input.hpp"
 #include "version_token.hpp"
 
 namespace orangutan::tool {
@@ -99,60 +99,53 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
 
 [[nodiscard]] async::Awaitable<core::Result<Output>> file_write_handler(std::string_view input_json,
                                                                         DispatchContext& ctx) {
-  nlohmann::json parsed;
-  try {
-    parsed = nlohmann::json::parse(input_json);
-  } catch (const nlohmann::json::parse_error& e) {
-    co_return std::unexpected(
-        core::Error::invalid_argument("file.write: input is not valid JSON").with("detail", e.what()));
-  } catch (const std::exception& e) {
-    co_return std::unexpected(
-        core::Error::invalid_argument("file.write: input is not valid JSON").with("detail", e.what()));
+  auto parsed = detail::parse_input_object(input_json, kFileWriteName);
+  if (!parsed) {
+    co_return std::unexpected(std::move(parsed).error());
   }
 
-  if (!parsed.is_object()) {
-    co_return std::unexpected(core::Error::invalid_argument("file.write: input must be a JSON object"));
+  auto path_field = detail::require_string_field(*parsed, kFileWriteName, "path");
+  if (!path_field) {
+    co_return std::unexpected(std::move(path_field).error());
   }
-  if (!parsed.contains("path") || !parsed["path"].is_string()) {
-    co_return std::unexpected(core::Error::invalid_argument("file.write: input must include a string `path` field"));
-  }
-  if (!parsed.contains("content") || !parsed["content"].is_string()) {
-    co_return std::unexpected(core::Error::invalid_argument("file.write: input must include a string `content` field"));
+  auto content_field = detail::require_string_field(*parsed, kFileWriteName, "content");
+  if (!content_field) {
+    co_return std::unexpected(std::move(content_field).error());
   }
 
-  auto max_bytes = parse_max_bytes(parsed);
+  auto max_bytes = parse_max_bytes(*parsed);
   if (!max_bytes) {
     co_return std::unexpected(std::move(max_bytes).error());
   }
 
   io::WriteTextOptions options{};
-  if (parsed.contains("mode")) {
-    if (!parsed["mode"].is_string()) {
+  if (parsed->contains("mode")) {
+    if (!(*parsed)["mode"].is_string()) {
       co_return std::unexpected(core::Error::invalid_argument("file.write: `mode` must be a string"));
     }
-    auto mode = parse_write_mode(parsed["mode"].get<std::string>());
+    auto mode = parse_write_mode((*parsed)["mode"].get<std::string>());
     if (!mode) {
       co_return std::unexpected(std::move(mode).error());
     }
     options.mode = *mode;
   }
-  if (parsed.contains("create_parents")) {
-    if (!parsed["create_parents"].is_boolean()) {
+  if (parsed->contains("create_parents")) {
+    if (!(*parsed)["create_parents"].is_boolean()) {
       co_return std::unexpected(core::Error::invalid_argument("file.write: `create_parents` must be a boolean"));
     }
-    options.create_parent_directories = parsed["create_parents"].get<bool>();
+    options.create_parent_directories = (*parsed)["create_parents"].get<bool>();
   }
 
   std::optional<std::string> expected_version;
-  if (parsed.contains("expected_version")) {
-    if (!parsed["expected_version"].is_string()) {
+  if (parsed->contains("expected_version")) {
+    if (!(*parsed)["expected_version"].is_string()) {
       co_return std::unexpected(core::Error::invalid_argument("file.write: `expected_version` must be a string"));
     }
-    expected_version = parsed["expected_version"].get<std::string>();
+    expected_version = (*parsed)["expected_version"].get<std::string>();
   }
 
-  auto path = ctx.resolved_path.has_value() ? ctx.resolved_path->absolute_path : parsed["path"].get<std::string>();
-  auto content = parsed["content"].get<std::string>();
+  auto path = ctx.resolved_path.has_value() ? ctx.resolved_path->absolute_path : *std::move(path_field);
+  auto content = *std::move(content_field);
   const auto byte_count = content.size();
   if (static_cast<std::uintmax_t>(byte_count) > *max_bytes) {
     co_return std::unexpected(core::Error::invalid_argument("file.write: `content` exceeds max_bytes")

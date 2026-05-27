@@ -65,7 +65,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <exception>
 #include <expected>
 #include <filesystem>
 #include <format>
@@ -98,6 +97,8 @@
 #include <oran/permission/input_pattern.hpp>
 #include <oran/tool/registry.hpp>
 #include <oran/tool/workspace.hpp>
+
+#include "_impl/parse_input.hpp"
 
 namespace orangutan::tool {
 
@@ -239,40 +240,33 @@ struct LineMatcher {
 };
 
 [[nodiscard]] core::Result<SearchOptions> parse_input(std::string_view input_json) {
-  nlohmann::json parsed;
-  try {
-    parsed = nlohmann::json::parse(input_json);
-  } catch (const nlohmann::json::parse_error& e) {
-    return std::unexpected(
-        core::Error::invalid_argument("file.search: input is not valid JSON").with("detail", e.what()));
-  } catch (const std::exception& e) {
-    return std::unexpected(
-        core::Error::invalid_argument("file.search: input is not valid JSON").with("detail", e.what()));
+  auto parsed = detail::parse_input_object(input_json, kFileSearchName);
+  if (!parsed) {
+    return std::unexpected(std::move(parsed).error());
   }
 
-  if (!parsed.is_object()) {
-    return std::unexpected(core::Error::invalid_argument("file.search: input must be a JSON object"));
+  auto path_field = detail::require_string_field(*parsed, kFileSearchName, "path");
+  if (!path_field) {
+    return std::unexpected(std::move(path_field).error());
   }
-  if (!parsed.contains("path") || !parsed["path"].is_string()) {
-    return std::unexpected(core::Error::invalid_argument("file.search: input must include a string `path` field"));
-  }
-  if (!parsed.contains("pattern") || !parsed["pattern"].is_string()) {
-    return std::unexpected(core::Error::invalid_argument("file.search: input must include a string `pattern` field"));
+  auto pattern_field = detail::require_string_field(*parsed, kFileSearchName, "pattern");
+  if (!pattern_field) {
+    return std::unexpected(std::move(pattern_field).error());
   }
 
   SearchOptions options;
-  options.path = parsed["path"].get<std::string>();
-  options.pattern = parsed["pattern"].get<std::string>();
+  options.path = *std::move(path_field);
+  options.pattern = *std::move(pattern_field);
 
   if (options.pattern.empty()) {
     return std::unexpected(core::Error::invalid_argument("file.search: `pattern` must be non-empty"));
   }
 
-  if (parsed.contains("max_matches")) {
-    if (!parsed["max_matches"].is_number_integer() || parsed["max_matches"].is_number_float()) {
+  if (parsed->contains("max_matches")) {
+    if (!(*parsed)["max_matches"].is_number_integer() || (*parsed)["max_matches"].is_number_float()) {
       return std::unexpected(core::Error::invalid_argument("file.search: `max_matches` must be a positive integer"));
     }
-    const auto raw = parsed["max_matches"].get<std::int64_t>();
+    const auto raw = (*parsed)["max_matches"].get<std::int64_t>();
     if (raw <= 0) {
       return std::unexpected(core::Error::invalid_argument("file.search: `max_matches` must be a positive integer")
                                  .with("value", std::to_string(raw)));
@@ -280,26 +274,26 @@ struct LineMatcher {
     options.max_matches = static_cast<std::size_t>(raw);
   }
 
-  if (parsed.contains("include_hidden")) {
-    if (!parsed["include_hidden"].is_boolean()) {
+  if (parsed->contains("include_hidden")) {
+    if (!(*parsed)["include_hidden"].is_boolean()) {
       return std::unexpected(core::Error::invalid_argument("file.search: `include_hidden` must be a boolean"));
     }
-    options.include_hidden = parsed["include_hidden"].get<bool>();
+    options.include_hidden = (*parsed)["include_hidden"].get<bool>();
   }
 
-  if (parsed.contains("regex")) {
-    if (!parsed["regex"].is_boolean()) {
+  if (parsed->contains("regex")) {
+    if (!(*parsed)["regex"].is_boolean()) {
       return std::unexpected(core::Error::invalid_argument("file.search: `regex` must be a boolean"));
     }
-    options.regex = parsed["regex"].get<bool>();
+    options.regex = (*parsed)["regex"].get<bool>();
   }
 
-  if (parsed.contains("max_output_bytes")) {
-    if (!parsed["max_output_bytes"].is_number_integer() || parsed["max_output_bytes"].is_number_float()) {
+  if (parsed->contains("max_output_bytes")) {
+    if (!(*parsed)["max_output_bytes"].is_number_integer() || (*parsed)["max_output_bytes"].is_number_float()) {
       return std::unexpected(
           core::Error::invalid_argument("file.search: `max_output_bytes` must be a positive integer"));
     }
-    const auto raw = parsed["max_output_bytes"].get<std::int64_t>();
+    const auto raw = (*parsed)["max_output_bytes"].get<std::int64_t>();
     if (raw <= 0) {
       return std::unexpected(core::Error::invalid_argument("file.search: `max_output_bytes` must be a positive integer")
                                  .with("value", std::to_string(raw)));
@@ -307,11 +301,11 @@ struct LineMatcher {
     options.max_output_bytes = static_cast<std::size_t>(raw);
   }
 
-  if (parsed.contains("respect_ignore")) {
-    if (!parsed["respect_ignore"].is_boolean()) {
+  if (parsed->contains("respect_ignore")) {
+    if (!(*parsed)["respect_ignore"].is_boolean()) {
       return std::unexpected(core::Error::invalid_argument("file.search: `respect_ignore` must be a boolean"));
     }
-    options.respect_ignore = parsed["respect_ignore"].get<bool>();
+    options.respect_ignore = (*parsed)["respect_ignore"].get<bool>();
   }
 
   return options;

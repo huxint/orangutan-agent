@@ -12,7 +12,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <exception>
 #include <expected>
 #include <format>
 #include <limits>
@@ -32,6 +31,8 @@
 #include <oran/io/fingerprint.hpp>
 #include <oran/tool/registry.hpp>
 #include <oran/tool/workspace.hpp>
+
+#include "_impl/parse_input.hpp"
 
 #include "version_token.hpp"
 
@@ -132,56 +133,49 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
 
 [[nodiscard]] async::Awaitable<core::Result<Output>> file_edit_handler(std::string_view input_json,
                                                                        DispatchContext& ctx) {
-  nlohmann::json parsed;
-  try {
-    parsed = nlohmann::json::parse(input_json);
-  } catch (const nlohmann::json::parse_error& e) {
-    co_return std::unexpected(
-        core::Error::invalid_argument("file.edit: input is not valid JSON").with("detail", e.what()));
-  } catch (const std::exception& e) {
-    co_return std::unexpected(
-        core::Error::invalid_argument("file.edit: input is not valid JSON").with("detail", e.what()));
+  auto parsed = detail::parse_input_object(input_json, kFileEditName);
+  if (!parsed) {
+    co_return std::unexpected(std::move(parsed).error());
   }
 
-  if (!parsed.is_object()) {
-    co_return std::unexpected(core::Error::invalid_argument("file.edit: input must be a JSON object"));
+  auto path_field = detail::require_string_field(*parsed, kFileEditName, "path");
+  if (!path_field) {
+    co_return std::unexpected(std::move(path_field).error());
   }
-  if (!parsed.contains("path") || !parsed["path"].is_string()) {
-    co_return std::unexpected(core::Error::invalid_argument("file.edit: input must include a string `path` field"));
+  auto old_string_field = detail::require_string_field(*parsed, kFileEditName, "old_string");
+  if (!old_string_field) {
+    co_return std::unexpected(std::move(old_string_field).error());
   }
-  if (!parsed.contains("old_string") || !parsed["old_string"].is_string()) {
-    co_return std::unexpected(
-        core::Error::invalid_argument("file.edit: input must include a string `old_string` field"));
-  }
-  if (!parsed.contains("new_string") || !parsed["new_string"].is_string()) {
-    co_return std::unexpected(
-        core::Error::invalid_argument("file.edit: input must include a string `new_string` field"));
+  auto new_string_field = detail::require_string_field(*parsed, kFileEditName, "new_string");
+  if (!new_string_field) {
+    co_return std::unexpected(std::move(new_string_field).error());
   }
 
   bool replace_all = false;
-  if (parsed.contains("replace_all")) {
-    if (!parsed["replace_all"].is_boolean()) {
+  if (parsed->contains("replace_all")) {
+    if (!(*parsed)["replace_all"].is_boolean()) {
       co_return std::unexpected(core::Error::invalid_argument("file.edit: `replace_all` must be a boolean"));
     }
-    replace_all = parsed["replace_all"].get<bool>();
+    replace_all = (*parsed)["replace_all"].get<bool>();
   }
 
   std::optional<std::string> expected_version;
-  if (parsed.contains("expected_version")) {
-    if (!parsed["expected_version"].is_string()) {
+  if (parsed->contains("expected_version")) {
+    if (!(*parsed)["expected_version"].is_string()) {
       co_return std::unexpected(core::Error::invalid_argument("file.edit: `expected_version` must be a string"));
     }
-    expected_version = parsed["expected_version"].get<std::string>();
+    expected_version = (*parsed)["expected_version"].get<std::string>();
   }
 
-  auto max_bytes = parse_max_bytes(parsed);
+  auto max_bytes = parse_max_bytes(*parsed);
   if (!max_bytes) {
     co_return std::unexpected(std::move(max_bytes).error());
   }
 
-  auto path = ctx.resolved_path.has_value() ? ctx.resolved_path->absolute_path : parsed["path"].get<std::string>();
-  auto old_string = parsed["old_string"].get<std::string>();
-  auto new_string = parsed["new_string"].get<std::string>();
+  const auto input_path = *std::move(path_field);
+  auto path = ctx.resolved_path.has_value() ? ctx.resolved_path->absolute_path : input_path;
+  auto old_string = *std::move(old_string_field);
+  auto new_string = *std::move(new_string_field);
 
   if (old_string.empty()) {
     co_return std::unexpected(core::Error::invalid_argument("file.edit: `old_string` must be non-empty"));
@@ -267,10 +261,7 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
   }
 
   co_return Output{
-      .text = std::format("edited {}: {} replacement{}",
-                          parsed["path"].get<std::string>(),
-                          applied,
-                          applied == 1U ? "" : "s"),
+      .text = std::format("edited {}: {} replacement{}", input_path, applied, applied == 1U ? "" : "s"),
       .usage =
           ToolUsage{
               .bytes_read = contents->size(),

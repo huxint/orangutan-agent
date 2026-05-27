@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <exception>
 #include <expected>
 #include <optional>
 #include <string>
@@ -25,6 +24,8 @@
 #include <oran/tool/output.hpp>
 #include <oran/tool/registry.hpp>
 
+#include "_impl/parse_input.hpp"
+
 namespace orangutan::tool {
 
 namespace {
@@ -40,18 +41,6 @@ struct ParsedQuery {
   std::optional<std::string> capability_name{};
   std::optional<core::Capability> capability{};
 };
-
-[[nodiscard]] core::Result<json> parse_json(std::string_view input_json) {
-  try {
-    return json::parse(input_json);
-  } catch (const json::parse_error& e) {
-    return std::unexpected(
-        core::Error::invalid_argument("tool.search: input is not valid JSON").with("detail", e.what()));
-  } catch (const std::exception& e) {
-    return std::unexpected(
-        core::Error::invalid_argument("tool.search: input is not valid JSON").with("detail", e.what()));
-  }
-}
 
 [[nodiscard]] core::Result<void>
 read_string_selector(const json& input, std::string_view field, std::optional<std::string>& output) {
@@ -72,12 +61,9 @@ read_string_selector(const json& input, std::string_view field, std::optional<st
 }
 
 [[nodiscard]] core::Result<ParsedQuery> parse_query(std::string_view input_json) {
-  auto parsed = parse_json(input_json);
+  auto parsed = detail::parse_input_object(input_json, kToolSearchName);
   if (!parsed) {
     return std::unexpected(std::move(parsed).error());
-  }
-  if (!parsed->is_object()) {
-    return std::unexpected(core::Error::invalid_argument("tool.search: input must be an object"));
   }
 
   ParsedQuery query;
