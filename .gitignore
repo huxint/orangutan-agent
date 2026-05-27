@@ -65,6 +65,10 @@ coverage/
 .codex/
 .snow/
 
+# Claude Code: per-developer overrides only; committed .claude/settings.json +
+# .claude/hooks/ stay tracked.
+.claude/settings.local.json
+
 # Workspace runtime state. `RuntimeAssembly::build` defaults `audit_enabled=true`
 # (slice 15) and writes the audit db to `<workspace>/.orangutan/audit.db`, so
 # running the binary from a checkout otherwise litters the tree with per-machine
