@@ -105,6 +105,12 @@ public:
 
   ~OneShotHttpServer() {
     std::error_code ignored;
+    if (!served_.load() && port_ != 0) {
+      asio::io_context poke_io;
+      tcp::socket poke{poke_io};
+      poke.connect(tcp::endpoint{asio::ip::make_address("127.0.0.1"), port_}, ignored);
+      poke.close(ignored);
+    }
     acceptor_.close(ignored);
   }
 
@@ -257,6 +263,8 @@ std::string anthropic_response() {
 
 TEST_CASE("HttpProviderBackend constructs an HTTP-backed provider system", "[unit][bootstrap][provider_backend]") {
   ScopedEnv api_key{"ORAN_BOOTSTRAP_PROVIDER_BACKEND_KEY", "test-secret"};
+  ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
+  ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
   OneShotHttpServer server{anthropic_response()};
   auto cfg = parse_config(server.base_url());
   asio::thread_pool blocking{1};

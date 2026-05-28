@@ -166,6 +166,12 @@ public:
 
   ~OneShotHttpServer() {
     std::error_code ignored;
+    if (!served_.load() && port_ != 0) {
+      asio::io_context poke_io;
+      tcp::socket poke{poke_io};
+      poke.connect(tcp::endpoint{asio::ip::make_address("127.0.0.1"), port_}, ignored);
+      poke.close(ignored);
+    }
     acceptor_.close(ignored);
   }
 
@@ -441,6 +447,8 @@ TEST_CASE("run hands CLI arguments to oran-cli after config load", "[unit][boots
 
 TEST_CASE("run hands configured provider prompts to AgentPromptRunner", "[unit][bootstrap][provider]") {
   ScopedEnv api_key{"ORAN_BOOTSTRAP_RUN_PROVIDER_KEY", "test-secret"};
+  ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
+  ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
   OneShotHttpServer server{anthropic_response()};
   TempDir temp{"oran-bootstrap-provider-runner"};
   const auto config_path = temp.path() / "config.json";

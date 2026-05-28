@@ -4,10 +4,12 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <expected>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 
 #include <asio/bind_cancellation_slot.hpp>
@@ -33,6 +35,31 @@ namespace http = orangutan::http;
 namespace test = orangutan::tests;
 using asio::ip::tcp;
 
+class ScopedEnv {
+public:
+  ScopedEnv(std::string name, std::string value) : name_{std::move(name)} {
+    if (const auto* old = std::getenv(name_.c_str()); old != nullptr) {
+      old_value_ = old;
+    }
+    setenv(name_.c_str(), value.c_str(), 1);
+  }
+
+  ~ScopedEnv() {
+    if (old_value_) {
+      setenv(name_.c_str(), old_value_->c_str(), 1);
+    } else {
+      unsetenv(name_.c_str());
+    }
+  }
+
+  ScopedEnv(const ScopedEnv&) = delete;
+  ScopedEnv& operator=(const ScopedEnv&) = delete;
+
+private:
+  std::string name_;
+  std::optional<std::string> old_value_;
+};
+
 class OneShotHttpServer {
 public:
   explicit OneShotHttpServer(std::string response) : response_{std::move(response)} {
@@ -47,6 +74,12 @@ public:
 
   ~OneShotHttpServer() {
     std::error_code ignored;
+    if (!served_.load() && port_ != 0) {
+      asio::io_context poke_io;
+      tcp::socket poke{poke_io};
+      poke.connect(tcp::endpoint{asio::ip::make_address("127.0.0.1"), port_}, ignored);
+      poke.close(ignored);
+    }
     acceptor_.close(ignored);
   }
 
@@ -105,6 +138,8 @@ private:
 }  // namespace
 
 TEST_CASE("Client sends a body request and collects the response", "[unit][http][client]") {
+  ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
+  ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
   OneShotHttpServer server{"HTTP/1.1 201 Created\r\n"
                            "Content-Type: application/json\r\n"
                            "X-Trace: abc\r\n"

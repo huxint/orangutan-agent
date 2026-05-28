@@ -10,13 +10,16 @@
 - **Slice:** 117 (`xmake run orangutan` reports slice 114; binary slice tag
   bumps only land when a behavior change touches the bootstrap entry banner)
 - **Last completed history:**
-  [`histories/2026-05/20260528-0040-agent-tool-scheduler-lock-table.md`](histories/2026-05/20260528-0040-agent-tool-scheduler-lock-table.md)
+  [`histories/2026-05/20260528-2210-localhost-http-test-proxy.md`](histories/2026-05/20260528-2210-localhost-http-test-proxy.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-05-27-tool-scheduler-v1.md`](exec-plans/active/2026-05-27-tool-scheduler-v1.md)
   — five-slice arc (116-120) landing spec
   [`product-specs/0012-tool-scheduler-and-state.md`](product-specs/0012-tool-scheduler-and-state.md);
   slices 116-117 close AC1, AC2, AC3, AC4, AC6, AC10, partial AC5, and partial AC11.
-- **Next intended slice:** Continue along the active plan. Slice 117 lands the
+- **Next intended slice:** Continue along the active plan. The latest
+  maintenance slice did not change production behavior; it hardened localhost
+  HTTP test fixtures so proxy-heavy developer environments no longer leave
+  `xmake test` waiting on a one-shot server thread. Slice 117 lands the
   per-canonical-path read/write lock table behind `agent::ToolScheduler`.
   `<oran/agent/scheduler.hpp>` now exposes `ToolSchedulerLockStats` and
   `ToolScheduler::lock_stats()` / `reap_idle_locks(core::Time)`. The lock
