@@ -132,6 +132,20 @@ Subsystems that initiate cancellation:
   the deferred refinement.
 - `oran-agent::Loop` on user `/cancel` or web "stop" button: cancels the in-flight
   iteration.
+- `oran-agent::ToolScheduler` (slice 116) on the agent loop's parent
+  cancellation: the scheduler holds one `asio::cancellation_signal` per
+  spawned tool call in a `std::deque<asio::cancellation_signal>` (the
+  signal is neither copyable nor movable, so `deque`'s stable addresses
+  are required) and emits on every child signal when its own
+  `completion.receive()` resolves with `Error::cancelled`. After emitting,
+  it drains remaining completions with
+  `asio::this_coro::reset_cancellation_state(asio::disable_cancellation())`
+  so cancelled children can still publish their final result row before
+  the batch returns `Error::cancelled` with `reason=parent_cancelled`. The
+  full 100 ms guarantee from spec 0012 AC5 and the
+  `cancellation_lag` audit kind for tools that ignore the cancellation
+  slot land in slice 119; the scheduler itself is wired through
+  `agent::Loop` in slice 120.
 - `oran-orchestration` when a worker is stopped by a leader.
 - `oran-automation` when a job is unscheduled mid-run.
 

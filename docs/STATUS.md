@@ -7,17 +7,85 @@
 
 ## Snapshot
 
-- **Slice:** 115 (`xmake run orangutan` reports slice 114; binary slice tag
+- **Slice:** 117 (`xmake run orangutan` reports slice 114; binary slice tag
   bumps only land when a behavior change touches the bootstrap entry banner)
 - **Last completed history:**
-  [`histories/2026-05/20260527-2135-tool-parse-input-helper.md`](histories/2026-05/20260527-2135-tool-parse-input-helper.md)
+  [`histories/2026-05/20260528-0040-agent-tool-scheduler-lock-table.md`](histories/2026-05/20260528-0040-agent-tool-scheduler-lock-table.md)
 - **Active exec-plan:**
-  `none` — slice 115 is a single-concern P1 cleanup; the next structural
-  candidates (ToolScheduler v1 first slice, singleflight regression test)
-  remain downstream as noted below.
-- **Next intended slice:** Continue along the spec dependency graph
-  (0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018). Slice 115 closes
-  the 2026-05-21 deep-review P1 `tool::parse_input<T>` cleanup by extracting
+  [`exec-plans/active/2026-05-27-tool-scheduler-v1.md`](exec-plans/active/2026-05-27-tool-scheduler-v1.md)
+  — five-slice arc (116-120) landing spec
+  [`product-specs/0012-tool-scheduler-and-state.md`](product-specs/0012-tool-scheduler-and-state.md);
+  slices 116-117 close AC1, AC2, AC3, AC4, AC6, AC10, partial AC5, and partial AC11.
+- **Next intended slice:** Continue along the active plan. Slice 117 lands the
+  per-canonical-path read/write lock table behind `agent::ToolScheduler`.
+  `<oran/agent/scheduler.hpp>` now exposes `ToolSchedulerLockStats` and
+  `ToolScheduler::lock_stats()` / `reap_idle_locks(core::Time)`. The lock
+  table itself lives in `src/oran-agent/_impl/path_lock_table.hpp` /
+  `src/oran-agent/path_lock_table.cpp` and is single-strand by contract
+  (matching `core::BoundedCache`). Tools declaring `Capability::write_file`,
+  `edit_file`, or `delete_path` take an exclusive lock; tools declaring
+  `read_file` or `list_directory` take a shared lock; tools with no
+  filesystem capability (and built-ins like `tool.search`) skip path locking
+  and run under bounded parallelism only. The lock key is the
+  workspace-resolved absolute path the scheduler derives from
+  `prototype.workspace` plus the JSON `path` field, matching the canonical
+  path the registry's own pre-resolution stamps on `DispatchContext::resolved_path`
+  for the common case. Per-entry state is FIFO: a queued exclusive blocks
+  new shared acquirers from skipping the line, but consecutive shared
+  waiters fan out together when no writer is active. Cancellation during
+  wait is reconciled — if a release has already pre-incremented the
+  counter on the cancelled waiter's behalf, the cancel arm undoes that
+  increment and forwards the wake to the next waiter so the queue does
+  not stall. `ToolSchedulerOptions::idle_lock_ttl` (default 5 min) sweeps
+  idle entries on `reap_idle_locks(core::Time)`; the future periodic tick
+  hangs off `agent::Loop` or a runtime service in a later slice. Slice
+  118 adds approval gating + same-row audit usage enrichment under
+  parallelism — most of AC7. Focused result: `test-agent` 32 / 462 →
+  **40 / 10 545** (+8 cases, +10 083 assertions); the AC10 test runs
+  10 000 acquire/release cycles inside a single Catch2 case, which is the
+  dominant assertion source. The other 13 test suites are unchanged.
+  Slice 116 opens
+  `agent::ToolScheduler` in `oran-agent` (`<oran/agent/scheduler.hpp>`,
+  `src/oran-agent/scheduler.cpp`, `tests/agent/test_scheduler.cpp`) with
+  channel-as-semaphore bounded parallelism via existing
+  `async::Channel<std::monostate>` (one permit per `max_parallel_tools`
+  slot), per-call timeout via
+  `asio::experimental::awaitable_operators::operator||` against
+  `async::sleep_for`, ordered results in original `tool_use` order, and
+  parent-cancellation propagation via one
+  `asio::cancellation_signal` per spawned call (held in a
+  `std::deque<asio::cancellation_signal>` so addresses stay stable across
+  emplace because the signal is neither copyable nor movable). The scheduler
+  brace-initialises a fresh `tool::DispatchContext` per call from the
+  caller-supplied prototype so concurrent dispatches do not race on the
+  prototype's `registry` / `resolved_path` / `approval_token_output` / `now`
+  fields. The scheduler is unwired from `agent::Loop` until slice 120;
+  `tool::Registry` stays single-threaded per the spec, with concurrent
+  dispatches safe because `Registry::dispatch` is `const` and the
+  registry's `entries_` map is read-only after boot. `ToolSchedulerOptions`
+  carries `max_parallel_tools=4`, `per_call_timeout=60 s`, and
+  `idle_lock_ttl=300 s` defaults from the spec; the lock-TTL field is
+  stored now so slice 117's lock-table consumer does not have to revise
+  the option struct. Tests pin AC1 (peak concurrency ≤ 4 with 10 calls /
+  50 ms each), AC2 (4-call mixed-latency ordering), AC6 (Error::cancelled
+  with `reason=timeout` plus tool / per_call_timeout_ms context), and
+  partial AC5 (parent terminal cancel returns `Error::cancelled` with
+  `reason=parent_cancelled`). Slice 117 adds AC3 (two writes to the same
+  workspace-resolved path serialize via the exclusive lock; peak in-flight
+  = 1), AC4 (concurrent read + write on the same path do not overlap;
+  peak in-flight = 1; shared+exclusive counters both move), the shared-lock
+  parallel-read case (peak in-flight = 2 with both calls under shared
+  acquires), the distinct-path parallel-write case (peak in-flight = 2;
+  two exclusive acquires, zero contention), the capability-free fall-through
+  case (no lock taken when `required_capabilities` is empty), `reap_idle_locks`
+  drops entries past the TTL (and leaves entries within TTL alone), AC10
+  via a direct `PathLockTable` exercise of 10 000 distinct paths + reap
+  past TTL — all entries evicted, `stats().current_entries == 0`,
+  `stats().reaped_entries == 10 000` — and a cancellation-during-wait case
+  that holds an exclusive lock, queues + cancels a second exclusive
+  waiter, then verifies a fresh acquire on the same key succeeds after the
+  original holder releases (no orphaned permit). Slice 115 closes the 2026-05-21
+  deep-review P1 `tool::parse_input<T>` cleanup by extracting
   `tool::detail::parse_input_object(input_json, tool_name)` and
   `tool::detail::require_string_field(input, tool_name, field)` into
   `src/oran-tool/_impl/parse_input.hpp` and rewriting all seven built-ins
@@ -983,7 +1051,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-tool`: 185 cases / 1866 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 66 cases / 528 assertions.
-- `oran-agent`: 26 cases / 407 assertions.
+- `oran-agent`: 40 cases / 10545 assertions.
 - `oran-cli`: 14 cases / 97 assertions.
 - `oran-bootstrap`: 72 cases / 316 assertions.
 

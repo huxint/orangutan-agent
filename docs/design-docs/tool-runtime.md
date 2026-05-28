@@ -655,6 +655,77 @@ Do **not** add internal locks to `tool::Registry` as a first move. The
 registry runs on the agent strand; the scheduler hops to worker executors at
 dispatch time.
 
+> **Status (slice 116, 2026-05-27):** the skeleton ships in
+> `oran-agent` as `agent::ToolScheduler` (`<oran/agent/scheduler.hpp>`,
+> `src/oran-agent/scheduler.cpp`). The skeleton lands:
+>
+> - bounded parallelism via `async::Channel<std::monostate>` filled with one
+>   permit per `ToolSchedulerOptions::max_parallel_tools` slot,
+> - per-call timeout via
+>   `asio::experimental::awaitable_operators::operator||` against
+>   `async::sleep_for(state->executor, options.per_call_timeout)` — a
+>   timeout returns `Error::cancelled` with
+>   `reason=timeout`, `tool=<name>`, `per_call_timeout_ms=<n>` context,
+> - parent-cancellation propagation via one `asio::cancellation_signal`
+>   per spawned call (held in a `std::deque<asio::cancellation_signal>` so
+>   addresses stay stable across `emplace_back` because the signal is
+>   neither copyable nor movable). When the parent's `completion.receive()`
+>   sees a cancelled error, the scheduler emits on every child signal and
+>   drains remaining completions with the parent slot filtered to
+>   `disable_cancellation()` so each spawned child can still publish its
+>   final completion message,
+> - ordered results via indexed `std::vector<std::optional<ToolBatchResult>>`
+>   collated into the return vector after every child has completed,
+> - per-call `tool::DispatchContext` brace-initialised from the caller's
+>   prototype so concurrent dispatches do not race on the prototype's
+>   `registry`, `resolved_path`, `approval_token_output`, or `now` fields.
+>   `Registry::dispatch` stays `const` and the `entries_` map is read-only
+>   after boot, so concurrent dispatch is safe; long-lived services
+>   referenced by the prototype (audit, hook bus, broker) remain
+>   responsible for their own concurrency story
+>   (`StorageAuditSink` already serialises writes through the SQLite
+>   `Pool` writer).
+>
+> The scheduler is **not** wired through `agent::Loop` yet.
+>
+> **Status (slice 117, 2026-05-28):** the per-canonical-path read/write lock
+> table now lives in
+> `src/oran-agent/_impl/path_lock_table.hpp` /
+> `src/oran-agent/path_lock_table.cpp` and is consumed by
+> `ToolScheduler::run_batch`. Tools declaring `Capability::write_file`,
+> `edit_file`, or `delete_path` take an exclusive lock; tools declaring
+> `read_file` or `list_directory` take a shared lock; tools without a
+> filesystem capability skip path locking entirely and run under the
+> existing bounded-parallelism slot only. The lock key is the
+> workspace-resolved absolute path the scheduler derives by extracting the
+> JSON `path` field from `ToolBatchCall::input_json` and passing it through
+> the prototype's `tool::Workspace` resolver (`resolve_read` / `resolve_list`
+> for shared, `resolve_write` / `resolve_delete` for exclusive); calls
+> without a workspace, without a `path` field, or whose path fails
+> workspace resolution fall through to bounded-parallelism only (the
+> registry's own pre-resolution path then surfaces the same resolution
+> failure with audit context intact). Per-entry state is FIFO: a queued
+> exclusive waiter blocks new shared acquirers from skipping the line, but
+> consecutive shared waiters fan out together when no writer is active.
+> Cancellation while waiting is reconciled by removing the cancelled
+> waiter from the queue, or — if a release has already pre-incremented the
+> counter on the waiter's behalf — by undoing that increment and waking
+> the next waiter so the chain does not stall. `ToolSchedulerOptions::idle_lock_ttl`
+> reaps idle entries on `ToolScheduler::reap_idle_locks(core::Time)` (the
+> spec-0012 background tick lands with a later slice); the public
+> `ToolScheduler::lock_stats()` returns a `ToolSchedulerLockStats` snapshot
+> of `shared_acquires`, `exclusive_acquires`, `contended_acquires`,
+> `cancelled_acquires`, `reaped_entries`, `current_entries`, and
+> `peak_entries` for `--explain-rules`-style consumers before
+> `oran-log` exists.
+>
+> Slice 118 adds approval gating + same-row audit usage enrichment under
+> parallelism, slice 119 adds the `cancellation_lag` audit kind and the
+> full 100 ms cancellation guarantee, and slice 120 replaces `agent::Loop`'s
+> sequential dispatch loop with `scheduler.run_batch(...)` for every batch
+> (including N=1) and ships `bench/agent/scheduler_overhead` plus
+> `scheduler_audit_fanout`.
+
 Full contract, ordering guarantees, bounded-state primitives, and acceptance
 criteria live in
 [`../product-specs/0012-tool-scheduler-and-state.md`](../product-specs/0012-tool-scheduler-and-state.md).
