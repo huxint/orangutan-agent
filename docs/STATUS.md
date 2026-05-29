@@ -7,17 +7,34 @@
 
 ## Snapshot
 
-- **Slice:** 117 (`xmake run orangutan` reports slice 114; binary slice tag
+- **Slice:** 118 (`xmake run orangutan` reports slice 114; binary slice tag
   bumps only land when a behavior change touches the bootstrap entry banner)
 - **Last completed history:**
-  [`histories/2026-05/20260528-2210-localhost-http-test-proxy.md`](histories/2026-05/20260528-2210-localhost-http-test-proxy.md)
+  [`histories/2026-05/20260529-2018-agent-scheduler-audit-approval.md`](histories/2026-05/20260529-2018-agent-scheduler-audit-approval.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-05-27-tool-scheduler-v1.md`](exec-plans/active/2026-05-27-tool-scheduler-v1.md)
   — five-slice arc (116-120) landing spec
   [`product-specs/0012-tool-scheduler-and-state.md`](product-specs/0012-tool-scheduler-and-state.md);
-  slices 116-117 close AC1, AC2, AC3, AC4, AC6, AC10, partial AC5, and partial AC11.
-- **Next intended slice:** Continue along the active plan. The latest
-  maintenance slice did not change production behavior; it hardened localhost
+  slices 116-118 close AC1, AC2, AC3, AC4, AC6, AC10, most of AC7, partial AC5,
+  and partial AC11.
+- **Next intended slice:** Slice 119 — cancellation propagation + the
+  `cancellation_lag` audit kind and the full 100 ms guarantee (AC5). Slice 118
+  just closed most of AC7 as a **verification slice with no production change**:
+  three new `tests/agent/test_scheduler.cpp` cases prove that under
+  `ToolScheduler` parallelism an N-call batch records exactly N
+  permission-decision rows and emits exactly N `tool_after` publishes (failures
+  included, regardless of completion order); that each `Verdict::ask` resolves
+  on its own held slot, with a denied call surfaced at its own ordered index
+  rather than hidden behind a successful one; and that slice-67 same-row usage
+  enrichment stays correct for two identical concurrent calls because each
+  `update_metadata` consumes exactly one not-yet-enriched row via the
+  `previous_metadata_json` match (the two enrichments pair 1:1 with the two
+  rows). Tracing the dispatch path showed the existing code already guarantees
+  these invariants, so slice 118 pins them with tests instead of minting the
+  "stronger per-call correlation" the spec hedged on. Focused result:
+  `test-agent` 40 / 10 545 → **43 / 10 590** (+3 cases, +45 assertions); the
+  other 13 test suites are unchanged. The earlier maintenance slice did not
+  change production behavior; it hardened localhost
   HTTP test fixtures so proxy-heavy developer environments no longer leave
   `xmake test` waiting on a one-shot server thread. Slice 117 lands the
   per-canonical-path read/write lock table behind `agent::ToolScheduler`.
@@ -42,8 +59,7 @@
   not stall. `ToolSchedulerOptions::idle_lock_ttl` (default 5 min) sweeps
   idle entries on `reap_idle_locks(core::Time)`; the future periodic tick
   hangs off `agent::Loop` or a runtime service in a later slice. Slice
-  118 adds approval gating + same-row audit usage enrichment under
-  parallelism — most of AC7. Focused result: `test-agent` 32 / 462 →
+  117's focused result: `test-agent` 32 / 462 →
   **40 / 10 545** (+8 cases, +10 083 assertions); the AC10 test runs
   10 000 acquire/release cycles inside a single Catch2 case, which is the
   dominant assertion source. The other 13 test suites are unchanged.
@@ -1054,7 +1070,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-tool`: 185 cases / 1866 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 66 cases / 528 assertions.
-- `oran-agent`: 40 cases / 10545 assertions.
+- `oran-agent`: 43 cases / 10590 assertions.
 - `oran-cli`: 14 cases / 97 assertions.
 - `oran-bootstrap`: 72 cases / 316 assertions.
 

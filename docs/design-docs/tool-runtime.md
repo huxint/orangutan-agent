@@ -719,12 +719,24 @@ dispatch time.
 > `peak_entries` for `--explain-rules`-style consumers before
 > `oran-log` exists.
 >
-> Slice 118 adds approval gating + same-row audit usage enrichment under
-> parallelism, slice 119 adds the `cancellation_lag` audit kind and the
-> full 100 ms cancellation guarantee, and slice 120 replaces `agent::Loop`'s
-> sequential dispatch loop with `scheduler.run_batch(...)` for every batch
-> (including N=1) and ships `bench/agent/scheduler_overhead` plus
-> `scheduler_audit_fanout`.
+> **Status (slice 118, 2026-05-29):** the audit / hook fan-out and approval
+> invariants are verified under parallelism with **no production change**. An
+> N-call batch records exactly N permission-decision rows and emits exactly N
+> `tool_after` publishes (failures included) regardless of completion order;
+> `Verdict::ask` resolves on each call's own slot (the channel-as-semaphore
+> permit is held across the whole `run_call`, so a pending approval does not
+> release the slot or hide a denied call behind a successful one); and the
+> slice-67 same-row usage enrichment stays correct for identical concurrent
+> calls because each `update_metadata` matches on `previous_metadata_json` and
+> so consumes exactly one not-yet-enriched row (the two enrichments pair 1:1
+> with the two decision rows, and identical calls carry identical usage). The
+> three new `tests/agent/test_scheduler.cpp` cases pin this; the same-row case
+> doubles as a cross-talk detector.
+>
+> Slice 119 adds the `cancellation_lag` audit kind and the full 100 ms
+> cancellation guarantee, and slice 120 replaces `agent::Loop`'s sequential
+> dispatch loop with `scheduler.run_batch(...)` for every batch (including N=1)
+> and ships `bench/agent/scheduler_overhead` plus `scheduler_audit_fanout`.
 
 Full contract, ordering guarantees, bounded-state primitives, and acceptance
 criteria live in

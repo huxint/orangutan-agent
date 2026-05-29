@@ -10,6 +10,7 @@
 
 #include <oran/agent.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -37,6 +38,7 @@
 #include <oran/core/error.hpp>
 #include <oran/core/time.hpp>
 #include <oran/core/tool_def.hpp>
+#include <oran/hook.hpp>
 #include <oran/permission.hpp>
 #include <oran/tool.hpp>
 
@@ -46,6 +48,7 @@
 namespace agent = orangutan::agent;
 namespace async = orangutan::async;
 namespace core = orangutan::core;
+namespace hook = orangutan::hook;
 namespace permission = orangutan::permission;
 namespace test = orangutan::tests;
 namespace tool = orangutan::tool;
@@ -122,6 +125,60 @@ void add_latency_tool(tool::Registry& registry,
     co_return tool::Output::text_only(std::string{"done:"} + std::string{input});
   };
   REQUIRE(registry.add(tool_def(std::move(name)), std::move(handler)).has_value());
+}
+
+/// Register a handler that sleeps for `latency` and then returns an
+/// infrastructure error. Used to prove a failing call still records its audit
+/// decision row and still emits `tool_after` (AC7's failure-path clause).
+void add_failing_tool(tool::Registry& registry, std::string name, std::chrono::milliseconds latency) {
+  auto handler = [latency](std::string_view,
+                           tool::DispatchContext& ctx) -> async::Awaitable<core::Result<tool::Output>> {
+    auto sleep_result = co_await async::sleep_for(ctx.executor, latency);
+    if (!sleep_result) {
+      co_return std::unexpected(sleep_result.error());
+    }
+    co_return std::unexpected(core::Error::internal("fake tool: deliberate handler failure"));
+  };
+  REQUIRE(registry.add(tool_def(std::move(name)), std::move(handler)).has_value());
+}
+
+/// Register a handler that sleeps for `latency` and returns text plus a
+/// non-empty `Output::usage`. A successful capped result with measured usage is
+/// what triggers slice-67 same-row audit metadata enrichment.
+void add_usage_tool(tool::Registry& registry,
+                    std::string name,
+                    std::chrono::milliseconds latency,
+                    tool::ToolUsage usage) {
+  auto handler = [latency, usage](std::string_view,
+                                  tool::DispatchContext& ctx) -> async::Awaitable<core::Result<tool::Output>> {
+    auto sleep_result = co_await async::sleep_for(ctx.executor, latency);
+    if (!sleep_result) {
+      co_return std::unexpected(sleep_result.error());
+    }
+    auto output = tool::Output::text_only("done");
+    output.usage = usage;
+    co_return output;
+  };
+  REQUIRE(registry.add(tool_def(std::move(name)), std::move(handler)).has_value());
+}
+
+[[nodiscard]] permission::ApprovalBroker make_broker() {
+  auto broker = permission::ApprovalBroker::with_random_secret();
+  REQUIRE(broker.has_value());
+  return std::move(*broker);
+}
+
+[[nodiscard]] permission::ApprovalToken
+grant(permission::ApprovalBroker& broker, std::string_view tool_name, std::string_view input, core::Time now) {
+  return broker.approve(
+      permission::ApprovalGrant{
+          .tool_name = tool_name,
+          .input = input,
+          .identity = "operator-1",
+          .ttl = std::chrono::seconds{60},
+          .replay_max = 4,
+      },
+      now);
 }
 
 [[nodiscard]] tool::DispatchContext
@@ -832,4 +889,192 @@ TEST_CASE("PathLockTable: cancellation during a contended wait does not orphan t
 
   const auto stats = table.stats();
   REQUIRE(stats.cancelled_acquires >= 1);
+}
+
+// ---------------------------------------------------------------------------
+// Slice 118 — approval gating + audit/hook fan-out correctness under
+// parallelism (most of AC7). The scheduler must preserve every per-call
+// invariant `tool::Registry::dispatch` guarantees for a single call when it
+// fans a batch out concurrently: exactly N audit rows, exactly N `tool_after`
+// publishes (failures included), per-call approval resolution, and slice-67
+// same-row usage enrichment with no cross-talk between identical calls.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("ToolScheduler: a batch records exactly N audit rows and N tool_after publishes (AC7)",
+          "[unit][agent][scheduler][audit]") {
+  test::run_async(
+      [](asio::io_context& io) -> async::Awaitable<void> {
+        tool::Registry registry;
+        add_latency_tool(registry, "fake.ok", 40ms);
+        add_failing_tool(registry, "fake.fail", 10ms);
+        auto rules = allow_all_rules();
+        permission::RecordingAuditSink audit;
+
+        // Count `tool_after` publishes through an advisory in-process sink.
+        auto after_publishes = std::make_shared<std::atomic<int>>(0);
+        hook::InProcessSink after_sink{
+            "after-counter",
+            [after_publishes](hook::Event, hook::Payload) -> async::Awaitable<core::Result<void>> {
+              after_publishes->fetch_add(1, std::memory_order_relaxed);
+              co_return core::Result<void>{};
+            }};
+        hook::Bus bus;
+        bus.bind(after_sink, {hook::Event::tool_after});
+
+        auto prototype = make_prototype(io, rules, audit);
+        prototype.bus = &bus;
+
+        agent::ToolScheduler scheduler{io.get_executor(),
+                                       registry,
+                                       agent::ToolSchedulerOptions{.max_parallel_tools = 4, .per_call_timeout = 10s}};
+
+        // Mixed success/failure with varied latency so completions interleave
+        // out of original order — AC7 must hold "regardless of execution order".
+        std::vector<agent::ToolBatchCall> batch;
+        batch.push_back(call(0, "fake.ok"));
+        batch.push_back(call(1, "fake.fail"));
+        batch.push_back(call(2, "fake.ok"));
+        batch.push_back(call(3, "fake.fail"));
+
+        auto result = co_await scheduler.run_batch(std::move(batch), prototype);
+        REQUIRE(result.has_value());
+        REQUIRE(result->size() == 4);
+
+        // Exactly N permission-decision rows. The bus carries no blocking
+        // `tool_before` sink, so the blocking publish consults nobody and no
+        // `hook_publish` row is appended.
+        REQUIRE(audit.events().size() == 4);
+        for (const auto& event : audit.events()) {
+          REQUIRE(event.event_kind == "permission_decision");
+        }
+
+        // Exactly N `tool_after` publishes, including the two failing calls.
+        REQUIRE(after_publishes->load() == 4);
+
+        // Ordered results preserve the per-call success/failure pattern.
+        REQUIRE((*result)[0].output.has_value());
+        REQUIRE_FALSE((*result)[1].output.has_value());
+        REQUIRE((*result)[2].output.has_value());
+        REQUIRE_FALSE((*result)[3].output.has_value());
+      },
+      5s);
+}
+
+TEST_CASE("ToolScheduler: identical concurrent calls each enrich their own audit row (slice 67 under parallelism)",
+          "[unit][agent][scheduler][audit]") {
+  test::run_async(
+      [](asio::io_context& io) -> async::Awaitable<void> {
+        tool::Registry registry;
+        // Non-zero usage so a successful result drives slice-67 enrichment to
+        // write a non-"{}" metadata blob the assertions below can detect.
+        add_usage_tool(registry, "fake.usage", 30ms, tool::ToolUsage{.bytes_read = 7, .files_touched = 1});
+        auto rules = allow_all_rules();
+        permission::RecordingAuditSink audit;
+
+        auto prototype = make_prototype(io, rules, audit);
+        // A shared trace turn id gives both rows the slice-79 correlation key;
+        // the same-row matcher must still pair each enrichment to a distinct row.
+        core::TurnId turn{};
+        turn[0] = std::byte{0x11};
+        prototype.parent_turn_id = turn;
+
+        agent::ToolScheduler scheduler{io.get_executor(),
+                                       registry,
+                                       agent::ToolSchedulerOptions{.max_parallel_tools = 4, .per_call_timeout = 10s}};
+
+        // Two byte-identical calls: same tool + same input => same input_hash,
+        // same identity/scope/agent/turn, same initial "{}" metadata. The
+        // decision rows are indistinguishable by the slice-67 match key except
+        // for the previous_metadata_json hook that lets each enrichment consume
+        // exactly one not-yet-enriched row. If that hook fails under
+        // parallelism, both updates land on the same row and the other stays
+        // "{}" — which the per-row assertion below would catch.
+        std::vector<agent::ToolBatchCall> batch;
+        batch.push_back(call(0, "fake.usage", R"({"path":"same"})"));
+        batch.push_back(call(1, "fake.usage", R"({"path":"same"})"));
+
+        auto result = co_await scheduler.run_batch(std::move(batch), prototype);
+        REQUIRE(result.has_value());
+        REQUIRE(result->size() == 2);
+        REQUIRE((*result)[0].output.has_value());
+        REQUIRE((*result)[1].output.has_value());
+
+        // Exactly two rows: enrichment updates in place and never appends a
+        // second decision row (AC7 holds even when calls collide).
+        REQUIRE(audit.events().size() == 2);
+        // Both rows carry the parent turn id and were enriched with usage — no
+        // row left stale, no cross-talk.
+        for (const auto& event : audit.events()) {
+          REQUIRE(event.event_kind == "permission_decision");
+          REQUIRE(event.parent_turn_id == turn);
+          REQUIRE(event.metadata_json != "{}");
+          REQUIRE(event.metadata_json.find("\"usage\"") != std::string::npos);
+          REQUIRE(event.metadata_json.find("bytes_read") != std::string::npos);
+        }
+      },
+      5s);
+}
+
+TEST_CASE("ToolScheduler: ask calls resolve per call and a denied call is not hidden",
+          "[unit][agent][scheduler][approval]") {
+  test::run_async(
+      [](asio::io_context& io) -> async::Awaitable<void> {
+        tool::Registry registry;
+        add_latency_tool(registry, "fake.ask", 20ms);
+        permission::RuleSet rules;
+        rules.add(permission::Rule{
+            .verdict = permission::Verdict::ask,
+            .tool_pattern = "fake.ask",
+            .capability = std::nullopt,
+        });
+        permission::RecordingAuditSink audit;
+
+        // The broker holds a grant for one specific input. The scheduler
+        // refreshes `now` to the wall clock per call, so grant at the real
+        // clock keeps the 60 s TTL valid through dispatch.
+        auto broker = make_broker();
+        const auto now = core::time::now_utc();
+        constexpr std::string_view approved_input = R"({"k":"approve"})";
+        const auto token = grant(broker, "fake.ask", approved_input, now);
+
+        auto prototype = make_prototype(io, rules, audit);
+        prototype.approval_broker = &broker;
+        prototype.approval_token = &token;
+
+        agent::ToolScheduler scheduler{io.get_executor(),
+                                       registry,
+                                       agent::ToolSchedulerOptions{.max_parallel_tools = 4, .per_call_timeout = 10s}};
+
+        // call 0 matches the broker grant -> approved -> handler runs.
+        // call 1 carries a different input the grant does not cover -> rejected.
+        // Both are `ask`; each must resolve through the broker on its own slot.
+        std::vector<agent::ToolBatchCall> batch;
+        batch.push_back(call(0, "fake.ask", std::string{approved_input}));
+        batch.push_back(call(1, "fake.ask", R"({"k":"unauthorized"})"));
+
+        auto result = co_await scheduler.run_batch(std::move(batch), prototype);
+        REQUIRE(result.has_value());
+        REQUIRE(result->size() == 2);
+
+        // Ordered results: the approved call ran; the unauthorized call surfaces
+        // as permission_denied at its own index rather than being hidden behind
+        // the successful call.
+        REQUIRE((*result)[0].output.has_value());
+        REQUIRE((*result)[0].output->text == R"(done:{"k":"approve"})");
+        REQUIRE_FALSE((*result)[1].output.has_value());
+        REQUIRE((*result)[1].output.error().kind() == core::ErrorKind::permission_denied);
+        REQUIRE(error_has_context((*result)[1].output.error(), "tool", "fake.ask"));
+
+        // Each call recorded exactly one decision row carrying its own outcome.
+        REQUIRE(audit.events().size() == 2);
+        const auto approved = std::ranges::count_if(audit.events(), [](const permission::AuditEvent& e) {
+          return e.outcome == permission::AuditOutcome::approved;
+        });
+        const auto rejected = std::ranges::count_if(audit.events(), [](const permission::AuditEvent& e) {
+          return e.outcome == permission::AuditOutcome::rejected;
+        });
+        REQUIRE(approved == 1);
+        REQUIRE(rejected == 1);
+      },
+      5s);
 }

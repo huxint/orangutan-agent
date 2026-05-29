@@ -267,8 +267,24 @@ cache primitives.
       `docs/ARCHITECTURE.md`, `docs/design-docs/tool-runtime.md`
       "Scheduler Boundary" slice-117 status, this progress log, history
       entry under `docs/histories/2026-05/`).
-- [ ] Slice 118: audit / hook fan-out invariants; close most of AC7.
-- [ ] Slice 118: docs + history.
+- [x] Slice 118: audit / hook fan-out invariants; close most of AC7. Outcome:
+      **verification, not new machinery.** Tracing the dispatch path showed the
+      existing code already preserves every per-call invariant under
+      parallelism — `Registry::dispatch` records exactly one decision row and
+      always publishes `tool_after` (success and failure), and slice-67 same-row
+      enrichment matches on `previous_metadata_json`, so two enrichments for
+      identical concurrent calls consume one not-yet-enriched row each (pair 1:1,
+      at worst permuted, and identical calls have identical usage → unobservable).
+      `parent_turn_id` (slice 79) separates turns; the `ask` slot is held across
+      `run_call` so it short-circuits inherently. Slice 118 therefore adds three
+      `tests/agent/test_scheduler.cpp` cases (AC7 N-rows/N-`tool_after` with a
+      mixed success/failure batch; same-row enrichment cross-talk detector for
+      two identical calls under one turn id; per-call `ask` approve-vs-reject
+      with the rejection surfaced at its own ordered index) and no production
+      change. `test-agent` 40 / 10 545 → 43 / 10 590.
+- [x] Slice 118: docs + history (`docs/STATUS.md`,
+      `docs/design-docs/tool-runtime.md` "Scheduler Boundary" slice-118 status,
+      this progress log, history entry under `docs/histories/2026-05/`).
 - [ ] Slice 119: cancellation propagation + `cancellation_lag` audit;
       close AC5.
 - [ ] Slice 119: docs + history.
