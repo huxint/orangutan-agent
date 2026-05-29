@@ -1255,3 +1255,64 @@ TEST_CASE("ToolScheduler: cancel-aware tools record no cancellation_lag rows on 
   });
   REQUIRE(lag_rows == 0);
 }
+
+TEST_CASE("ToolScheduler: a queued call cancelled before it runs is not mis-named as cancellation_lag (AC5)",
+          "[unit][agent][scheduler][cancellation]") {
+  asio::io_context io;
+  asio::cancellation_signal signal;
+
+  tool::Registry registry;
+  add_latency_tool(registry, "fake.slow", 1s);  // cancel-aware
+  auto rules = allow_all_rules();
+  permission::RecordingAuditSink audit;
+  auto prototype = make_prototype(io, rules, audit);
+
+  // max_parallel_tools = 2 < batch size, so four of the six calls sit queued on
+  // the channel-as-semaphore when the parent cancel lands. A queued call never
+  // ran a handler, so it must report its (cancelled) completion rather than be
+  // mis-named as a cancellation laggard.
+  agent::ToolScheduler scheduler{io.get_executor(),
+                                 registry,
+                                 agent::ToolSchedulerOptions{.max_parallel_tools = 2, .per_call_timeout = 30s}};
+
+  std::vector<agent::ToolBatchCall> batch;
+  for (std::size_t i = 0; i < 6; ++i) {
+    batch.push_back(call(i, "fake.slow"));
+  }
+
+  std::optional<core::Result<std::vector<agent::ToolBatchResult>>> result;
+  std::exception_ptr failure;
+  asio::co_spawn(
+      io,
+      [&]() -> async::Awaitable<core::Result<std::vector<agent::ToolBatchResult>>> {
+        co_return co_await scheduler.run_batch(std::move(batch), prototype);
+      },
+      asio::bind_cancellation_slot(signal.slot(),
+                                   [&](std::exception_ptr ep, core::Result<std::vector<agent::ToolBatchResult>> r) {
+                                     failure = ep;
+                                     result = std::move(r);
+                                   }));
+
+  asio::post(io, [&] { asio::post(io, [&] { signal.emit(asio::cancellation_type::terminal); }); });
+
+  const auto deadline = std::chrono::steady_clock::now() + 3s;
+  while (!result.has_value() && !failure && std::chrono::steady_clock::now() < deadline) {
+    io.run_one();
+  }
+  io.run();
+
+  if (failure) {
+    std::rethrow_exception(failure);
+  }
+  REQUIRE(result.has_value());
+  REQUIRE_FALSE(result->has_value());
+  REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
+  REQUIRE(error_has_context(result->error(), "reason", "parent_cancelled"));
+
+  // The two running tools are cancel-aware and the four queued ones never
+  // started a handler, so none ignored a cancellation slot: zero rows named.
+  const auto lag_rows = std::ranges::count_if(audit.events(), [](const permission::AuditEvent& e) {
+    return e.event_kind == "cancellation_lag";
+  });
+  REQUIRE(lag_rows == 0);
+}

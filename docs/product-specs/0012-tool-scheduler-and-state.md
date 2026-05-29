@@ -1,5 +1,21 @@
 # 0012 — Tool Scheduler + Bounded Runtime State
 
+> **Status (v1 complete, 2026-05-29):** the tool-scheduler v1 arc (slices
+> 116-120, exec-plan `2026-05-27-tool-scheduler-v1`) shipped
+> `agent::ToolScheduler` with bounded parallelism (AC1), ordered results (AC2),
+> per-path read/write locks (AC3/AC4), parent-cancellation propagation within a
+> 100 ms grace window plus the `cancellation_lag` audit row (AC5), per-call
+> timeout (AC6), per-call audit/hook coverage under parallelism (AC7), the
+> bounded path-lock table with TTL reap (AC10), and the
+> `bench/agent/scheduler_overhead` dispatch-overhead bench (AC12); the scheduler
+> matrix coverage clears AC11's ≥ 90% bar. AC8/AC9 (`core::BoundedCache`
+> invariants + stats) shipped earlier via slice 44. `agent::Loop` routes every
+> production tool batch through `ToolScheduler::run_batch`, and
+> `bootstrap::AgentPromptRunner` owns the scheduler built from
+> `runtime.tool_scheduler.*` config. The v1.1 items below (dispatch
+> singleflight, persisted index caches) and a periodic `reap_idle_locks` tick
+> remain future work.
+
 ## User Problem
 
 When `oran-agent` lands and providers start returning multiple `tool_use`

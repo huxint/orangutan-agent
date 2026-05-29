@@ -882,6 +882,65 @@ TEST_CASE("Loop refreshes dispatch time for blocking permission approvals", "[un
   });
 }
 
+TEST_CASE("Loop routes tool dispatch through a caller-supplied scheduler", "[unit][agent][loop][scheduler]") {
+  test::run_async(
+      [](asio::io_context& io) -> async::Awaitable<void> {
+        RecordingSequenceProvider provider{std::vector<provider::Response>{
+            provider::Response{
+                .blocks = {core::ToolUseContent{.id = "slow-1", .name = "file.read", .input_json = R"({"value":"x"})"}},
+                .stop_reason = core::StopReason::tool_use,
+                .usage = {},
+                .model_used = std::nullopt,
+            },
+            provider::Response{
+                .blocks = {core::TextContent{.text = "unreached"}},
+                .stop_reason = core::StopReason::end_turn,
+                .usage = {},
+                .model_used = std::string{"fake-1"},
+            },
+        }};
+        agent::Loop loop{provider, default_route()};
+
+        tool::Registry registry;
+        // Cancel-aware tool that sleeps well past the supplied per-call timeout.
+        auto slow = [](std::string_view, tool::DispatchContext& ctx) -> async::Awaitable<core::Result<tool::Output>> {
+          auto slept = co_await async::sleep_for(ctx.executor, 400ms);
+          if (!slept) {
+            co_return std::unexpected(slept.error());
+          }
+          co_return tool::Output::text_only("slow-done");
+        };
+        REQUIRE(registry.add(canned_tool_def("file.read"), slow).has_value());
+
+        auto rules = allow_all_rules();
+        permission::RecordingAuditSink audit;
+        auto ctx = dispatch_context(io, rules, audit);
+
+        // A caller-supplied scheduler with an aggressive 40 ms per-call timeout.
+        // If the loop honors it the slow tool times out and the turn fails; the
+        // loop's own 60 s default fallback would instead let the tool finish and
+        // re-enter the provider for a terminal response.
+        agent::ToolScheduler scheduler{io.get_executor(),
+                                       registry,
+                                       agent::ToolSchedulerOptions{.max_parallel_tools = 4, .per_call_timeout = 40ms}};
+
+        const auto catalog = registry.catalog();
+        const std::vector<core::Message> tail{core::Message::user_text("read")};
+        auto inputs = base_inputs(catalog, tail);
+        inputs.tools = &registry;
+        inputs.dispatch_context = &ctx;
+        inputs.scheduler = &scheduler;
+
+        auto result = co_await loop.run_turn(inputs);
+        REQUIRE_FALSE(result.has_value());
+        REQUIRE(result.error().kind() == core::ErrorKind::cancelled);
+        // Only the first (tool_use) request was sent: the timed-out tool ended
+        // the turn instead of producing a tool result that re-enters the provider.
+        REQUIRE(provider.requests().size() == 1);
+      },
+      3s);
+}
+
 TEST_CASE("Loop persists one terminal trace row for a text turn", "[unit][agent][loop][trace]") {
   TempDb db{"oran-agent-loop-trace-text"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {

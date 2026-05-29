@@ -7,6 +7,11 @@
       "max_text_bytes": 262144,
       "max_data_bytes": 1048576
     },
+    "tool_scheduler": {
+      "max_parallel_tools": 4,
+      "per_call_timeout_ms": 60000,
+      "idle_lock_ttl_ms": 300000
+    },
     "prompt": {
       "active_tools": "defaults"
     },

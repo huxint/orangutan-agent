@@ -149,8 +149,10 @@ Subsystems that initiate cancellation:
   that handler returns), so once the grace window expires the scheduler
   stops awaiting it: it records a `cancellation_lag` audit row naming the
   offending tool (slice 119) and returns, leaving the laggard to wind down
-  on its own while the shared batch state keeps it alive. The scheduler is
-  wired through `agent::Loop` in slice 120.
+  on its own while the shared batch state keeps it alive. As of slice 120 the
+  scheduler is the production tool-dispatch path: `agent::Loop` runs every
+  batch (including N=1) through `run_batch`, and `bootstrap::AgentPromptRunner`
+  owns a persistent one built from the `runtime.tool_scheduler.*` config block.
 - `oran-orchestration` when a worker is stopped by a leader.
 - `oran-automation` when a job is unscheduled mid-run.
 

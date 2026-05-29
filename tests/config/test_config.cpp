@@ -275,6 +275,9 @@ TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][con
   REQUIRE(result->web().port == 8787);
   REQUIRE(result->runtime().tool_output.max_text_bytes == 262144);
   REQUIRE(result->runtime().tool_output.max_data_bytes == 1048576);
+  REQUIRE(result->runtime().tool_scheduler.max_parallel_tools == 4);
+  REQUIRE(result->runtime().tool_scheduler.per_call_timeout_ms == 60000);
+  REQUIRE(result->runtime().tool_scheduler.idle_lock_ttl_ms == 300000);
   REQUIRE(result->runtime().prompt.active_tools.use_defaults);
   REQUIRE(result->runtime().prompt.active_tools.tool_names.empty());
   REQUIRE(result->trace().enabled);
@@ -356,6 +359,51 @@ TEST_CASE("Config::parse rejects malformed runtime.tool_output caps", "[unit][co
 
   SECTION("zero data cap") {
     auto result = config::Config::parse(R"json({"runtime": {"tool_output": {"max_data_bytes": 0}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+}
+
+TEST_CASE("Config::parse extracts runtime.tool_scheduler knobs", "[unit][config][runtime]") {
+  auto result = config::Config::parse(R"json({
+  "runtime": {
+    "tool_scheduler": {
+      "max_parallel_tools": 8,
+      "per_call_timeout_ms": 1500,
+      "idle_lock_ttl_ms": 90000
+    }
+  }
+})json");
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->runtime().tool_scheduler.max_parallel_tools == 8);
+  REQUIRE(result->runtime().tool_scheduler.per_call_timeout_ms == 1500);
+  REQUIRE(result->runtime().tool_scheduler.idle_lock_ttl_ms == 90000);
+}
+
+TEST_CASE("Config::parse defaults runtime.tool_scheduler when the block is absent", "[unit][config][runtime]") {
+  auto result = config::Config::parse(R"json({"runtime": {}})json");
+  REQUIRE(result.has_value());
+  REQUIRE(result->runtime().tool_scheduler.max_parallel_tools == 4);
+  REQUIRE(result->runtime().tool_scheduler.per_call_timeout_ms == 60000);
+  REQUIRE(result->runtime().tool_scheduler.idle_lock_ttl_ms == 300000);
+}
+
+TEST_CASE("Config::parse rejects malformed runtime.tool_scheduler knobs", "[unit][config][runtime]") {
+  SECTION("non-object block") {
+    auto result = config::Config::parse(R"json({"runtime": {"tool_scheduler": []}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("zero parallelism") {
+    auto result = config::Config::parse(R"json({"runtime": {"tool_scheduler": {"max_parallel_tools": 0}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-integer timeout") {
+    auto result = config::Config::parse(R"json({"runtime": {"tool_scheduler": {"per_call_timeout_ms": "soon"}}})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }

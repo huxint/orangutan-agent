@@ -311,13 +311,34 @@ cache primitives.
       slice-119 status, `docs/design-docs/async-model.md` ToolScheduler
       cancellation bullet, this progress log + decision log, history entry
       under `docs/histories/2026-05/`).
-- [ ] Slice 120: loop wiring + bench + config; close AC7 fully, AC12,
-      AC11.
-- [ ] Slice 120: `bench/agent/README.md` updated; docs + history.
-- [ ] Slice 120: `docs/QUALITY_SCORE.md` `oran-agent` row revisited.
-- [ ] Slice 120: feature release note in `docs/releases/feature-release-notes.md`
+- [x] Slice 120: loop wiring + bench + config; close AC7 fully, AC12,
+      AC11. `agent::Loop` now dispatches every batch (incl. N=1) through
+      `scheduler.run_batch` (the sequential `for (use : tool_uses)
+      registry.dispatch(...)` loop is gone), converting ordered results into
+      `tool_result` blocks with the same model-repairable-vs-fatal semantics
+      and the same `cancellation_phase=tools` trace handling.
+      `bootstrap::AgentPromptRunner` owns a persistent `ToolScheduler` built
+      from the new `runtime.tool_scheduler.*` config; a caller that omits
+      `RunTurnInputs::scheduler` gets a per-turn fallback. Two correctness
+      refinements surfaced: single-call batches thread `approval_token_output`
+      (blocking-ask replay) while parallel batches drop it, and the scheduler's
+      semaphore `!acquired` arm now resets cancellation before its completion
+      send so a queued-then-cancelled call is not mis-named `cancellation_lag`.
+      `test-config` 33 / 241 → 36 / 258; `test-agent` 45 / 10 607 → 47 / 10 618;
+      `test-bootstrap` unchanged 72 / 316.
+- [x] Slice 120: `bench/agent/README.md` updated; docs + history.
+      `scheduler_overhead` (direct ≈ 2.4 µs vs run_batch ≈ 6.7 µs — under the
+      ≤ 75 µs AC12 allowance; the B/A ratio is large only because a no-op
+      `NullAuditSink` dispatch is itself ≈ 2.4 µs) and `scheduler_audit_fanout`
+      (8-call batch null ≈ 44 µs vs in-memory `StorageAuditSink` ≈ 134 µs,
+      ≈ 11 µs/audit-row, no writer starvation) shipped.
+- [x] Slice 120: `docs/QUALITY_SCORE.md` `oran-agent` row revisited.
+- [x] Slice 120: feature release note in `docs/releases/feature-release-notes.md`
       (user-visible: parallel tool calls now go through the scheduler).
-- [ ] Plan moves to `docs/exec-plans/completed/`.
+- [x] Plan moved to `docs/exec-plans/completed/`. The tool-scheduler v1 arc
+      (116-120) closes spec 0012 AC1-AC7, AC10, AC12, and ≥90% of AC11
+      (AC8/AC9 shipped via slice 44). v1.1 (dispatch singleflight, persisted
+      index caches) and a periodic `reap_idle_locks` tick remain future specs.
 
 ## Decision Log
 

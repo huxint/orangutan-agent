@@ -44,6 +44,8 @@ class TraceRepository;
 
 namespace orangutan::agent {
 
+class ToolScheduler;
+
 struct LoopOptions {
   /// Spec 0017 makes the iteration cap a runtime invariant. The current loop
   /// consumes repeated provider turns sequentially; the future scheduler keeps
@@ -115,6 +117,15 @@ struct RunTurnInputs {
   /// partial ReAct loop without permission/audit infrastructure.
   tool::Registry* tools{nullptr};
   tool::DispatchContext* dispatch_context{nullptr};
+  /// Optional parallel tool-call scheduler (spec 0012). When set, the loop
+  /// routes every tool batch — including N == 1 — through
+  /// `ToolScheduler::run_batch`, so bounded parallelism, per-path locks,
+  /// per-call timeout, and parent-cancellation propagation apply uniformly.
+  /// `bootstrap::AgentPromptRunner` owns one for the runner's lifetime. When
+  /// null but `tools`/`dispatch_context` are present, the loop builds a
+  /// per-turn scheduler with default options so embedders and tests still get
+  /// the single batched dispatch path.
+  ToolScheduler* scheduler{nullptr};
 };
 
 struct RunTurnResult {

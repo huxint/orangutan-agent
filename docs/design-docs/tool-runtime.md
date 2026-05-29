@@ -749,9 +749,23 @@ dispatch time.
 > shared `BatchState` keeps it alive). A batch of purely cancel-aware tools
 > records no such row. Closes AC5.
 >
-> Slice 120 replaces `agent::Loop`'s sequential dispatch loop with
-> `scheduler.run_batch(...)` for every batch (including N=1) and ships
-> `bench/agent/scheduler_overhead` plus `scheduler_audit_fanout`.
+> **Status (slice 120, 2026-05-29):** the scheduler is the production
+> tool-dispatch path. `agent::Loop` dispatches every batch (including N=1)
+> through `scheduler.run_batch(...)` instead of the sequential
+> `for (use : tool_uses) registry.dispatch(...)` loop; ordered batch results
+> become `tool_result` blocks with the same model-repairable-vs-fatal error
+> semantics, and a parent cancellation or per-call infrastructure error ends
+> the turn with `cancellation_phase=tools`. `bootstrap::AgentPromptRunner`
+> constructs and owns a persistent `ToolScheduler` from the
+> `runtime.tool_scheduler.{max_parallel_tools, per_call_timeout_ms,
+> idle_lock_ttl_ms}` config block (defaults 4 / 60000 / 300000) and threads it
+> into `RunTurnInputs::scheduler`; a caller that omits it gets a per-turn
+> fallback with default options. A single-call batch threads
+> `approval_token_output` for blocking-ask replay; a parallel batch drops it
+> because one slot cannot disambiguate N issued tokens.
+> `bench/agent/scheduler_overhead` (AC12) and `scheduler_audit_fanout` ship.
+> The tool-scheduler v1 arc (spec 0012 AC1-AC7, AC10, AC12, ≥90% of AC11) is
+> complete, and the registry stays single-threaded throughout.
 
 Full contract, ordering guarantees, bounded-state primitives, and acceptance
 criteria live in

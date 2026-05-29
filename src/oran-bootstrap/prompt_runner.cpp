@@ -2,6 +2,7 @@
 
 #include <oran/bootstrap/prompt_runner.hpp>
 
+#include <chrono>
 #include <cstddef>
 #include <exception>
 #include <expected>
@@ -101,6 +102,22 @@ materialize_runner_rules(const config::Config& cfg, permission::Mode mode, std::
   };
 }
 
+[[nodiscard]] Result<agent::ToolSchedulerOptions> scheduler_options_from(const config::Config& cfg) {
+  const auto& sched = cfg.runtime().tool_scheduler;
+  auto max_parallel = checked_cap(sched.max_parallel_tools, "runtime.tool_scheduler.max_parallel_tools");
+  if (!max_parallel) {
+    return std::unexpected(std::move(max_parallel).error());
+  }
+  if (*max_parallel == 0) {
+    return std::unexpected(option_error("runtime.tool_scheduler.max_parallel_tools must be positive"));
+  }
+  return agent::ToolSchedulerOptions{
+      .max_parallel_tools = *max_parallel,
+      .per_call_timeout = std::chrono::milliseconds{sched.per_call_timeout_ms},
+      .idle_lock_ttl = std::chrono::milliseconds{sched.idle_lock_ttl_ms},
+  };
+}
+
 [[nodiscard]] Result<void> validate_options(const AgentPromptRunnerOptions& options) {
   if (options.assembly == nullptr) {
     return std::unexpected(option_error("agent prompt runner requires a runtime assembly"));
@@ -147,9 +164,11 @@ public:
        permission::RuleSet rules,
        config::PromptActiveToolsConfig active_tools,
        tool::OutputCapOptions output_caps,
+       agent::ToolSchedulerOptions scheduler_options,
        core::TurnId session_id)
       : executor_{std::move(options.executor)}, assembly_{options.assembly}, execution_runtime_{*options.provider},
-        loop_{execution_runtime_, std::move(options.route)}, registry_{std::move(registry)}, rules_{std::move(rules)},
+        loop_{execution_runtime_, std::move(options.route)}, registry_{std::move(registry)},
+        scheduler_{executor_, registry_, scheduler_options}, rules_{std::move(rules)},
         active_tools_{std::move(active_tools)}, output_caps_{output_caps}, session_id_{session_id}, mode_{options.mode},
         scope_key_{std::move(options.scope_key)}, agent_key_{std::move(options.agent_key)},
         identity_{std::move(options.identity)}, origin_{std::move(options.origin)},
@@ -215,6 +234,7 @@ public:
         .stream = stream_,
         .tools = &registry_,
         .dispatch_context = &dispatch_context,
+        .scheduler = &scheduler_,
     };
 
     if (auto* trace = assembly_->trace_repository(); trace != nullptr) {
@@ -314,6 +334,7 @@ private:
   provider::execution::Runtime execution_runtime_;
   agent::Loop loop_;
   tool::Registry registry_;
+  agent::ToolScheduler scheduler_;
   permission::RuleSet rules_;
   agent::SessionState session_state_;
   config::PromptActiveToolsConfig active_tools_;
@@ -360,6 +381,11 @@ core::Result<std::unique_ptr<AgentPromptRunner>> AgentPromptRunner::create(Agent
     return std::unexpected(std::move(output_caps).error());
   }
 
+  auto scheduler_options = scheduler_options_from(*options.config);
+  if (!scheduler_options) {
+    return std::unexpected(std::move(scheduler_options).error());
+  }
+
   auto session_id = options.session_id;
   if (core::is_zero_turn_id(session_id)) {
     auto generated = generate_session_id();
@@ -375,6 +401,7 @@ core::Result<std::unique_ptr<AgentPromptRunner>> AgentPromptRunner::create(Agent
                                      std::move(*rules),
                                      std::move(active_tools),
                                      *output_caps,
+                                     *scheduler_options,
                                      session_id);
   return std::make_unique<AgentPromptRunner>(std::move(impl), AgentPromptRunner::PrivateTag{});
 }

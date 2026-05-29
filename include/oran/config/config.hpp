@@ -29,6 +29,18 @@ struct ToolOutputRuntimeConfig {
   friend bool operator==(const ToolOutputRuntimeConfig&, const ToolOutputRuntimeConfig&) = default;
 };
 
+/// Tool-scheduler knobs (spec 0012). Defaults mirror `agent::ToolSchedulerOptions`:
+/// 4 concurrent tools, a 60 s per-call timeout, and a 5 min idle path-lock TTL.
+/// Bootstrap converts these into the typed `ToolSchedulerOptions` it threads
+/// into `AgentPromptRunner`.
+struct ToolSchedulerRuntimeConfig {
+  std::int64_t max_parallel_tools{4};
+  std::int64_t per_call_timeout_ms{60000};
+  std::int64_t idle_lock_ttl_ms{300000};
+
+  friend bool operator==(const ToolSchedulerRuntimeConfig&, const ToolSchedulerRuntimeConfig&) = default;
+};
+
 struct PromptActiveToolsConfig {
   bool use_defaults{true};
   std::vector<std::string> tool_names{};
@@ -46,6 +58,7 @@ struct RuntimeConfig {
   std::int64_t workers{4};
   std::int64_t request_timeout_ms{600000};
   ToolOutputRuntimeConfig tool_output{};
+  ToolSchedulerRuntimeConfig tool_scheduler{};
   PromptRuntimeConfig prompt{};
   std::vector<std::string> redaction_patterns{};
 };

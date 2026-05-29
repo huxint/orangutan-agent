@@ -274,6 +274,44 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
   return config;
 }
 
+[[nodiscard]] Result<ToolSchedulerRuntimeConfig> parse_tool_scheduler_runtime(const json& runtime) {
+  auto config = ToolSchedulerRuntimeConfig{};
+  const auto it = runtime.find("tool_scheduler");
+  if (it == runtime.end()) {
+    return config;
+  }
+  auto object = require_object(*it, "$.runtime.tool_scheduler");
+  if (!object) {
+    return std::unexpected(std::move(object.error()));
+  }
+
+  if (const auto max_parallel = it->find("max_parallel_tools"); max_parallel != it->end()) {
+    auto parsed = positive_integer_value(*max_parallel, "$.runtime.tool_scheduler.max_parallel_tools");
+    if (!parsed) {
+      return std::unexpected(std::move(parsed.error()));
+    }
+    config.max_parallel_tools = *parsed;
+  }
+
+  if (const auto per_call = it->find("per_call_timeout_ms"); per_call != it->end()) {
+    auto parsed = positive_integer_value(*per_call, "$.runtime.tool_scheduler.per_call_timeout_ms");
+    if (!parsed) {
+      return std::unexpected(std::move(parsed.error()));
+    }
+    config.per_call_timeout_ms = *parsed;
+  }
+
+  if (const auto idle_ttl = it->find("idle_lock_ttl_ms"); idle_ttl != it->end()) {
+    auto parsed = positive_integer_value(*idle_ttl, "$.runtime.tool_scheduler.idle_lock_ttl_ms");
+    if (!parsed) {
+      return std::unexpected(std::move(parsed.error()));
+    }
+    config.idle_lock_ttl_ms = *parsed;
+  }
+
+  return config;
+}
+
 [[nodiscard]] Result<PromptActiveToolsConfig> parse_prompt_active_tools(const json& value, std::string_view path) {
   auto config = PromptActiveToolsConfig{};
   if (value.is_string()) {
@@ -362,6 +400,12 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
     return std::unexpected(std::move(tool_output.error()));
   } else {
     runtime.tool_output = *tool_output;
+  }
+
+  if (auto tool_scheduler = parse_tool_scheduler_runtime(*it); !tool_scheduler) {
+    return std::unexpected(std::move(tool_scheduler.error()));
+  } else {
+    runtime.tool_scheduler = *tool_scheduler;
   }
 
   if (auto prompt = parse_prompt_runtime(*it); !prompt) {

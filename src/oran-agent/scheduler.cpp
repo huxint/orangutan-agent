@@ -82,7 +82,12 @@ constexpr std::chrono::milliseconds kCancellationGrace{100};
 /// rebind to the same long-lived services. `now` is refreshed per call so
 /// broker / approval TTL checks see the real clock; `registry` and
 /// `resolved_path` are reset because `Registry::dispatch` writes them itself.
-[[nodiscard]] tool::DispatchContext make_per_call_context(tool::DispatchContext& prototype) {
+/// `approval_token_output` is threaded only when `thread_token_output` is set
+/// (a single-call batch): a blocking ask-approval stores its freshly issued
+/// token there for caller replay. For a parallel batch the slot is dropped —
+/// one output pointer cannot disambiguate N concurrently issued tokens, and two
+/// approvals writing it at once would race.
+[[nodiscard]] tool::DispatchContext make_per_call_context(tool::DispatchContext& prototype, bool thread_token_output) {
   return tool::DispatchContext{
       .executor = prototype.executor,
       .mode = prototype.mode,
@@ -90,7 +95,7 @@ constexpr std::chrono::milliseconds kCancellationGrace{100};
       .audit = prototype.audit,
       .approval_broker = prototype.approval_broker,
       .approval_token = prototype.approval_token,
-      .approval_token_output = nullptr,
+      .approval_token_output = thread_token_output ? prototype.approval_token_output : nullptr,
       .now = core::time::now_utc(),
       .bus = prototype.bus,
       .registry = nullptr,
@@ -201,6 +206,10 @@ struct BatchState {
   asio::any_io_executor executor;
   ToolSchedulerOptions options;
   std::size_t total_calls;
+  /// True only for a single-call batch: with no concurrency the prototype's
+  /// `approval_token_output` slot is safe to thread through so a blocking
+  /// ask-approval can hand the caller its issued token for replay.
+  bool thread_approval_token_output;
   std::vector<std::optional<ToolBatchResult>> results;
   async::Channel<std::monostate> semaphore;
   async::Channel<std::size_t> completion;
@@ -214,7 +223,7 @@ struct BatchState {
   std::deque<asio::cancellation_signal> child_cancels;
 
   BatchState(asio::any_io_executor exec, std::size_t n, ToolSchedulerOptions opts)
-      : executor{std::move(exec)}, options{opts}, total_calls{n}, results(n),
+      : executor{std::move(exec)}, options{opts}, total_calls{n}, thread_approval_token_output{n == 1}, results(n),
         semaphore{executor, opts.max_parallel_tools}, completion{executor, n} {
     for (std::size_t i = 0; i < n; ++i) {
       child_cancels.emplace_back();
@@ -352,6 +361,12 @@ private:
           .name = std::move(call.name),
           .output = std::unexpected(parent_cancelled_error()),
       };
+      // The semaphore wait was cancelled before this call ever ran a handler,
+      // so the call is *not* a cancellation laggard. Filter cancellation on
+      // this coroutine before the completion send (`Channel::send` short-circuits
+      // to `cancelled` while the slot is armed) so the index still reports and
+      // the parent's grace drain does not mis-name a merely-queued call.
+      co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
       [[maybe_unused]] auto sent = co_await state->completion.send(index);
       co_return;
     }
@@ -386,7 +401,7 @@ private:
       }
     }
 
-    auto per_call_ctx = make_per_call_context(prototype);
+    auto per_call_ctx = make_per_call_context(prototype, state->thread_approval_token_output);
 
     core::Result<tool::Output> output =
         std::unexpected(core::Error::internal("scheduler: race did not produce a result"));

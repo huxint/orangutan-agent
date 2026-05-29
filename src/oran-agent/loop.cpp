@@ -24,6 +24,7 @@
 #include <asio/cancellation_state.hpp>
 #include <asio/this_coro.hpp>
 
+#include <oran/agent/scheduler.hpp>
 #include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/role.hpp>
@@ -451,6 +452,10 @@ public:
     std::optional<prompt::RenderedPrompt> last_rendered;
     std::string last_route_model = route_.primary.model;
     std::string last_route_profile = route_.primary.profile;
+    // Per-turn fallback scheduler, lazily built only when the caller did not
+    // supply one and the loop has a tool batch to run. Lives across iterations
+    // so a multi-iteration turn shares one path-lock table.
+    std::optional<ToolScheduler> owned_scheduler;
 
     for (std::uint32_t iteration = 1; iteration <= options_.max_iterations; ++iteration) {
       auto rendered = co_await builder_.build(prompt::BuilderInputs{
@@ -567,53 +572,95 @@ public:
             .created_at = std::nullopt,
         });
 
-        std::vector<core::Content> tool_results;
-        tool_results.reserve(tool_uses.size());
-        for (const auto& use : tool_uses) {
-          core::Result<tool::Output> output;
-          {
-            ScopedDispatchContext dispatch_context{*inputs.dispatch_context, dispatch_parent_turn_id(inputs)};
-            output = co_await inputs.tools->dispatch(use.name, use.input_json, *inputs.dispatch_context);
+        // Route every tool batch (including N == 1) through the scheduler so
+        // there is a single dispatch path with bounded parallelism, per-path
+        // read/write locks, per-call timeout, and parent-cancellation
+        // propagation. Fall back to a per-turn scheduler with default options
+        // when the caller did not supply a long-lived one.
+        ToolScheduler* scheduler = inputs.scheduler;
+        if (scheduler == nullptr) {
+          if (!owned_scheduler.has_value()) {
+            owned_scheduler.emplace(inputs.dispatch_context->executor, *inputs.tools, ToolSchedulerOptions{});
           }
-          auto tool_result = tool_result_from(use.id, std::move(output));
-          if (!tool_result) {
-            auto error = with_cancellation_phase(std::move(tool_result).error(), "tools");
-            if (error.kind() == core::ErrorKind::cancelled && trace_writer_configured(inputs)) {
-              co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
-              const auto route_model = response->model_used.value_or(route_.primary.model);
-              const auto route_profile = response->route_profile_used.value_or(route_.primary.profile);
-              auto traced = co_await write_trace_turn(inputs,
-                                                      route_,
-                                                      *rendered,
-                                                      total_usage,
-                                                      iteration,
-                                                      started_at_ns,
-                                                      route_model,
-                                                      route_profile,
-                                                      core::StopReason::cancelled,
-                                                      std::string{"tools"});
-              if (!traced) {
-                error = attach_trace_write_error(std::move(error), std::move(traced).error());
-              }
-            } else if (error.kind() != core::ErrorKind::cancelled) {
-              const auto route_model = response->model_used.value_or(route_.primary.model);
-              const auto route_profile = response->route_profile_used.value_or(route_.primary.profile);
-              auto traced = co_await write_error_trace_turn(inputs,
-                                                            route_,
-                                                            *rendered,
-                                                            total_usage,
-                                                            iteration,
-                                                            started_at_ns,
-                                                            route_model,
-                                                            route_profile);
-              if (!traced) {
-                error = attach_trace_write_error(std::move(error), std::move(traced).error());
-              }
-            }
-            co_return std::unexpected(std::move(error));
-          }
-          tool_results.emplace_back(std::move(*tool_result));
+          scheduler = &*owned_scheduler;
         }
+
+        std::vector<ToolBatchCall> batch;
+        batch.reserve(tool_uses.size());
+        for (const auto& use : tool_uses) {
+          batch.push_back(ToolBatchCall{
+              .tool_use_id = use.id,
+              .name = use.name,
+              .input_json = use.input_json,
+          });
+        }
+
+        core::Result<std::vector<ToolBatchResult>> batch_result =
+            std::unexpected(core::Error::internal("agent loop: scheduler produced no batch result"));
+        {
+          ScopedDispatchContext dispatch_context{*inputs.dispatch_context, dispatch_parent_turn_id(inputs)};
+          batch_result = co_await scheduler->run_batch(std::move(batch), *inputs.dispatch_context);
+        }
+
+        // Convert the ordered batch into tool-result blocks. A batch-level
+        // error is the parent cancellation; a per-call infrastructure error
+        // (cancelled / storage / internal, including a per-call timeout) ends
+        // the turn, while a model-repairable per-call error becomes a
+        // tool_result error block the model can repair from. All turn-ending
+        // exits share the tool-phase trace handling the sequential path used.
+        std::optional<core::Error> tool_phase_error;
+        std::vector<core::Content> tool_results;
+        if (!batch_result) {
+          tool_phase_error = with_cancellation_phase(std::move(batch_result).error(), "tools");
+        } else {
+          tool_results.reserve(batch_result->size());
+          for (auto& row : *batch_result) {
+            auto tool_result = tool_result_from(std::move(row.tool_use_id), std::move(row.output));
+            if (!tool_result) {
+              tool_phase_error = with_cancellation_phase(std::move(tool_result).error(), "tools");
+              break;
+            }
+            tool_results.emplace_back(std::move(*tool_result));
+          }
+        }
+
+        if (tool_phase_error.has_value()) {
+          auto error = std::move(*tool_phase_error);
+          if (error.kind() == core::ErrorKind::cancelled && trace_writer_configured(inputs)) {
+            co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+            const auto route_model = response->model_used.value_or(route_.primary.model);
+            const auto route_profile = response->route_profile_used.value_or(route_.primary.profile);
+            auto traced = co_await write_trace_turn(inputs,
+                                                    route_,
+                                                    *rendered,
+                                                    total_usage,
+                                                    iteration,
+                                                    started_at_ns,
+                                                    route_model,
+                                                    route_profile,
+                                                    core::StopReason::cancelled,
+                                                    std::string{"tools"});
+            if (!traced) {
+              error = attach_trace_write_error(std::move(error), std::move(traced).error());
+            }
+          } else if (error.kind() != core::ErrorKind::cancelled) {
+            const auto route_model = response->model_used.value_or(route_.primary.model);
+            const auto route_profile = response->route_profile_used.value_or(route_.primary.profile);
+            auto traced = co_await write_error_trace_turn(inputs,
+                                                          route_,
+                                                          *rendered,
+                                                          total_usage,
+                                                          iteration,
+                                                          started_at_ns,
+                                                          route_model,
+                                                          route_profile);
+            if (!traced) {
+              error = attach_trace_write_error(std::move(error), std::move(traced).error());
+            }
+          }
+          co_return std::unexpected(std::move(error));
+        }
+
         transcript.push_back(core::Message{
             .role = core::Role::tool,
             .blocks = std::move(tool_results),
