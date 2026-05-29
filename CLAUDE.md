@@ -8,6 +8,17 @@ This file is a **routing index**. Rules → `docs/rules/`. Architecture → `doc
 
 ---
 
+## Core Workflow
+
+Start to commit; the sections below hold the detail.
+
+1. **Orient** — read `docs/STATUS.md`, then the **Module Routing** row for your area.
+2. **Scope** — one small slice; beyond ~600 LoC / ~6 files wants a plan first ([`PLANS_GUIDE.md`](docs/PLANS_GUIDE.md)).
+3. **Build to the rules** — [`critical-rules.md`](docs/rules/critical-rules.md) + [`compile-budget.md`](docs/rules/compile-budget.md).
+4. **Verify** — add or tighten a test/bench ([`testing-and-bench.md`](docs/rules/testing-and-bench.md)).
+5. **Sync docs** — matching docs in the same commit (Prime Directive above).
+6. **Record + gate** — `make new-history`, bump `STATUS.md`, then `make ci`.
+
 ## Read At The Start Of Every Task
 
 | File | Why |
@@ -69,29 +80,36 @@ This file is a **routing index**. Rules → `docs/rules/`. Architecture → `doc
 ## Working Posture
 
 - Small, repository-legible abstractions over clever metaprogramming.
-- Compile time is a feature — stay inside [`compile-budget.md`](docs/rules/compile-budget.md).
 - Hooks are pluggable, not magical — all lifecycle points enumerated in [`permissions-and-hooks.md`](docs/design-docs/permissions-and-hooks.md).
-- Every library has `tests/` and `bench/` neighbours.
-- Exec plans are not the default — see [`PLANS_GUIDE.md`](docs/PLANS_GUIDE.md); `STATUS.md` always names the active plan or says `none` + why.
 - Do not conflate prompt concepts: this file / `AGENTS.md` routes the development agent, while [`prompt-design.md`](docs/rules/prompt-design.md) governs prompt bytes Orangutan will emit at runtime. Deleted review artifacts and `/tmp/...` notes are provenance only after their findings are copied into specs or the tracker; see [`deep-review.md`](docs/rules/deep-review.md) for the lifecycle (version stamp on creation, delete-on-close).
 
 ## Quick Commands
 
-```sh
-make ci                   # docs + hygiene + STATUS.md freshness (pre-PR gate)
-make new-plan SLUG=...    # scaffold an execution plan
-make new-history SLUG=... # scaffold a history entry
-make check-docs           # verify required docs exist
-```
-
-Once the C++ build is set up (see [`BUILD_SYSTEM.md`](docs/BUILD_SYSTEM.md)):
+Repo gates — docs, hygiene, scaffolding. No C++ build/test (that lives below):
 
 ```sh
-xmake f -m release && xmake build orangutan         # build the binary
-xmake test                                          # run every test-* target
-xmake build bench-<lib> && xmake run bench-<lib>    # run a benchmark
-scripts/bench-compare.sh                            # cross-impl benchmark report
+make ci                    # docs + hygiene + docs-sync + STATUS.md freshness + dep graph (pre-PR gate)
+make new-history SLUG=...  # scaffold a history entry
+make new-plan SLUG=...     # scaffold an execution plan
+make check-docs            # verify required docs exist
 ```
+
+C++ build & test — GCC 16.1 / xmake; canonical detail in [`BUILD_SYSTEM.md`](docs/BUILD_SYSTEM.md).
+`make ci` does **not** compile or test C++ — run these yourself before claiming a build/test passes:
+
+```sh
+xmake f -m release                      # configure (also: -m debug --sanitizers=y · --analyze=y · --modules=y)
+xmake -j$(nproc)                        # build everything (or: xmake build orangutan / xmake build oran-<lib>)
+xmake run orangutan -- --prompt "2+2"   # run the binary (add --config config.example.json + <PROVIDER>_API_KEY for a live model)
+
+xmake test                              # run every test-<lib> bucket
+xmake build test-<lib> && xmake run test-<lib>            # build + run one bucket (e.g. test-tool)
+build/linux/x86_64/release/test-<lib> "<case name>"       # one Catch2 case (or "[tag]"); --list-tests to enumerate
+xmake build bench-<lib> && xmake run bench-<lib>          # run a benchmark bucket
+make bench-compare LIB=<lib>            # bench + compare to baseline
+```
+
+Libraries are `oran-<lib>` (inventory in [`ARCHITECTURE.md`](docs/ARCHITECTURE.md)); each has matching `test-<lib>` / `bench-<lib>` targets. The single-case path is the release output tree — swap `release` for `debug` under a debug configure.
 
 ## What This Repository Is Not
 

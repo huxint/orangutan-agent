@@ -6,8 +6,8 @@ GitHub Actions jobs.
 
 ## What Exists By Default
 
-- `.github/workflows/ci.yml` — repository hygiene + docs + shell lint + (once C++
-  exists) `xmake build` + `xmake test`.
+- `.github/workflows/ci.yml` — repository hygiene + docs + shell lint + markdown lint
+  + (once C++ exists) `xmake build` + `xmake test`.
 - `.github/workflows/release.yml` — placeholder release pipeline; replace once a real
   binary exists.
 - `.github/workflows/supply-chain-security.yml` — dependency review + OSV scan +
@@ -18,6 +18,27 @@ GitHub Actions jobs.
 CI in early scaffolding proves out the delivery plumbing **without pretending to know
 the real build command**. As the project grows, the C++ build naturally takes more
 of the CI run; the doc/hygiene gates remain.
+
+## Markdown Lint
+
+`ci.yml` runs [`markdownlint-cli2-action`](https://github.com/DavidAnson/markdownlint-cli2-action)
+(SHA-pinned) over `**/*.md`, excluding `docs/generated/**`, configured by the
+repo-root [`.markdownlint.json`](../.markdownlint.json).
+
+That config keeps markdownlint's defaults **on** but disables the cosmetic /
+high-churn rules this agent-authored docs corpus does not follow — notably `MD060`
+(table-pipe alignment), `MD004` (list-marker style), and `MD031`/`MD032` (blank-line
+spacing). This is a deliberate **relaxation, not a cleanup**: the existing docs were
+never made compliant, so those rules are off to keep the gate green, while the rules
+the corpus already satisfies stay enabled and keep catching regressions.
+
+Do **not** re-enable a disabled rule without first making every matched `**/*.md`
+file pass it — otherwise every push goes red again. Reproduce CI locally with the
+pinned linter:
+
+```sh
+npx markdownlint-cli2@0.22.0 "**/*.md" "!docs/generated/**"
+```
 
 ## Recommended Customization Sequence
 
