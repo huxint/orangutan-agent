@@ -7,18 +7,43 @@
 
 ## Snapshot
 
-- **Slice:** 118 (`xmake run orangutan` reports slice 114; binary slice tag
+- **Slice:** 119 (`xmake run orangutan` reports slice 114; binary slice tag
   bumps only land when a behavior change touches the bootstrap entry banner)
 - **Last completed history:**
-  [`histories/2026-05/20260529-2018-agent-scheduler-audit-approval.md`](histories/2026-05/20260529-2018-agent-scheduler-audit-approval.md)
+  [`histories/2026-05/20260529-2230-agent-scheduler-cancellation-lag.md`](histories/2026-05/20260529-2230-agent-scheduler-cancellation-lag.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-05-27-tool-scheduler-v1.md`](exec-plans/active/2026-05-27-tool-scheduler-v1.md)
   — five-slice arc (116-120) landing spec
   [`product-specs/0012-tool-scheduler-and-state.md`](product-specs/0012-tool-scheduler-and-state.md);
-  slices 116-118 close AC1, AC2, AC3, AC4, AC6, AC10, most of AC7, partial AC5,
+  slices 116-119 close AC1, AC2, AC3, AC4, AC5, AC6, AC10, most of AC7,
   and partial AC11.
-- **Next intended slice:** Slice 119 — cancellation propagation + the
-  `cancellation_lag` audit kind and the full 100 ms guarantee (AC5). Slice 118
+- **Next intended slice:** Slice 120 — loop wiring + bench + config: replace
+  `agent::Loop`'s sequential dispatch with `scheduler.run_batch(...)` for every
+  batch (including N=1), have `bootstrap::AgentPromptRunner` construct and own
+  the `ToolScheduler`, land the `runtime.tool_scheduler.*` config surface, and
+  ship `bench/agent/scheduler_overhead` + `scheduler_audit_fanout` (closes the
+  full AC7, AC12, and the rest of AC11). Slice 119 closed AC5: parent
+  cancellation now ends every **cancel-aware** in-flight call within a 100 ms
+  grace window. `ToolScheduler::run_batch` emits on each child's
+  `asio::cancellation_signal`, disables its own cancellation filter
+  (`reset_cancellation_state(disable_cancellation())`), then races the
+  remaining drain against `async::sleep_for(kCancellationGrace=100 ms)` and
+  returns `Error::cancelled` with `reason=parent_cancelled` instead of waiting
+  unbounded. A handler that ignores its cancellation slot cannot be forced to
+  stop — asio cancellation is cooperative, and `co_await (dispatch || timeout)`
+  does not resolve until that handler returns (the `wait_for_one` parallel
+  group cancels the loser but still awaits it) — so once the grace window
+  expires the scheduler stops awaiting it: it records a `cancellation_lag`
+  audit row (`event_kind=cancellation_lag`,
+  `metadata_json.error_kind=cancellation_lag`) naming the offending tool and
+  returns, leaving the laggard detached but alive via the shared `BatchState`
+  (the per-call timeout still backstops its eventual exit). A batch of purely
+  cancel-aware tools records no such row. The production change is
+  `src/oran-agent/scheduler.cpp` only (the `run_call` race is unchanged); two
+  new `tests/agent/test_scheduler.cpp` cases pin selective naming + the prompt
+  return and the no-false-positive path. Focused result: `test-agent`
+  43 / 10 590 → **45 / 10 607** (+2 cases, +17 assertions); the other 13 test
+  suites are unchanged. Slice 118
   just closed most of AC7 as a **verification slice with no production change**:
   three new `tests/agent/test_scheduler.cpp` cases prove that under
   `ToolScheduler` parallelism an N-call batch records exactly N
@@ -1070,7 +1095,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-tool`: 185 cases / 1866 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 66 cases / 528 assertions.
-- `oran-agent`: 43 cases / 10590 assertions.
+- `oran-agent`: 45 cases / 10607 assertions.
 - `oran-cli`: 14 cases / 97 assertions.
 - `oran-bootstrap`: 72 cases / 316 assertions.
 

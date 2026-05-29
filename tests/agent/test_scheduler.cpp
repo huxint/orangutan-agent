@@ -28,10 +28,12 @@
 
 #include <asio/bind_cancellation_slot.hpp>
 #include <asio/cancellation_signal.hpp>
+#include <asio/cancellation_state.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 #include <asio/post.hpp>
+#include <asio/this_coro.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <oran/async.hpp>
@@ -158,6 +160,22 @@ void add_usage_tool(tool::Registry& registry,
     auto output = tool::Output::text_only("done");
     output.usage = usage;
     co_return output;
+  };
+  REQUIRE(registry.add(tool_def(std::move(name)), std::move(handler)).has_value());
+}
+
+/// Register a handler that DELIBERATELY ignores its cancellation slot: it
+/// disables cancellation for its own coroutine, then sleeps. Models the "tool
+/// bug" spec 0012 AC5 carves out — a handler that never polls its cancellation
+/// state. Under parent cancellation the scheduler's 100 ms guarantee must still
+/// hold (`run_batch` returns promptly without waiting for this handler) and the
+/// offending tool must be named in a `cancellation_lag` audit row.
+void add_uncancellable_tool(tool::Registry& registry, std::string name, std::chrono::milliseconds latency) {
+  auto handler = [latency](std::string_view,
+                           tool::DispatchContext& ctx) -> async::Awaitable<core::Result<tool::Output>> {
+    co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+    [[maybe_unused]] auto slept = co_await async::sleep_for(ctx.executor, latency);
+    co_return tool::Output::text_only("done-uncancellable");
   };
   REQUIRE(registry.add(tool_def(std::move(name)), std::move(handler)).has_value());
 }
@@ -1077,4 +1095,163 @@ TEST_CASE("ToolScheduler: ask calls resolve per call and a denied call is not hi
         REQUIRE(rejected == 1);
       },
       5s);
+}
+
+// ---------------------------------------------------------------------------
+// Slice 119 — cancellation propagation + `cancellation_lag` audit (AC5). A
+// parent cancel must end every *cancel-aware* in-flight call within the 100 ms
+// guarantee, and `run_batch` must return promptly even when a tool handler
+// ignores its cancellation slot. Such a handler cannot be forced to stop
+// (asio cancellation is cooperative; `co_await (dispatch || timeout)` will not
+// resolve until the ignoring handler finishes), so the scheduler stops
+// *awaiting* it: after the grace window it names the offending tool in a
+// `cancellation_lag` audit row and returns, leaving the laggard to wind down
+// on its own. A batch of purely cancel-aware tools records no such row.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("ToolScheduler: a cancellation-ignoring tool is named as cancellation_lag without stalling the batch (AC5)",
+          "[unit][agent][scheduler][cancellation]") {
+  asio::io_context io;
+  asio::cancellation_signal signal;
+
+  tool::Registry registry;
+  // Cancel-aware: its sleep resolves to `cancelled` the moment the scheduler
+  // emits, so it winds down well inside the 100 ms grace window.
+  add_latency_tool(registry, "fake.cancelaware", 5s);
+  // Cancellation-ignoring: runs its full 1 s regardless of the emitted cancel.
+  add_uncancellable_tool(registry, "fake.stuck", 1s);
+  auto rules = allow_all_rules();
+  permission::RecordingAuditSink audit;
+  auto prototype = make_prototype(io, rules, audit);
+
+  agent::ToolScheduler scheduler{io.get_executor(),
+                                 registry,
+                                 agent::ToolSchedulerOptions{.max_parallel_tools = 4, .per_call_timeout = 30s}};
+
+  std::vector<agent::ToolBatchCall> batch;
+  batch.push_back(call(0, "fake.cancelaware"));
+  batch.push_back(call(1, "fake.stuck"));
+
+  std::optional<core::Result<std::vector<agent::ToolBatchResult>>> result;
+  std::exception_ptr failure;
+  std::chrono::steady_clock::time_point cancel_at{};
+  std::chrono::steady_clock::time_point result_at{};
+  asio::co_spawn(
+      io,
+      [&]() -> async::Awaitable<core::Result<std::vector<agent::ToolBatchResult>>> {
+        co_return co_await scheduler.run_batch(std::move(batch), prototype);
+      },
+      asio::bind_cancellation_slot(signal.slot(),
+                                   [&](std::exception_ptr ep, core::Result<std::vector<agent::ToolBatchResult>> r) {
+                                     failure = ep;
+                                     result = std::move(r);
+                                     result_at = std::chrono::steady_clock::now();
+                                   }));
+
+  // Let the scheduler spawn its children and enter their handlers before the
+  // parent cancellation lands.
+  asio::post(io, [&] {
+    asio::post(io, [&] {
+      cancel_at = std::chrono::steady_clock::now();
+      signal.emit(asio::cancellation_type::terminal);
+    });
+  });
+
+  const auto deadline = std::chrono::steady_clock::now() + 3s;
+  while (!result.has_value() && !failure && std::chrono::steady_clock::now() < deadline) {
+    io.run_one();
+  }
+  // Drain the cancellation-ignoring tool so the stack-scoped registry / audit
+  // sink outlive the detached child that is still winding down.
+  io.run();
+
+  if (failure) {
+    std::rethrow_exception(failure);
+  }
+  REQUIRE(result.has_value());
+  REQUIRE_FALSE(result->has_value());
+  REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
+  REQUIRE(error_has_context(result->error(), "reason", "parent_cancelled"));
+
+  // 100 ms guarantee: the batch returned without blocking on the 1 s laggard.
+  // The 500 ms bound is a 5x margin over the grace window and well under the
+  // laggard's own latency, so a regression that re-introduced the unbounded
+  // drain would push this past 1 s and fail here.
+  REQUIRE(result_at - cancel_at < 500ms);
+
+  // Exactly one `cancellation_lag` row, naming the cancellation-ignoring tool;
+  // the cancel-aware tool wound down inside the grace window and is not named.
+  const auto lag_rows = std::ranges::count_if(audit.events(), [](const permission::AuditEvent& e) {
+    return e.event_kind == "cancellation_lag";
+  });
+  REQUIRE(lag_rows == 1);
+  const auto stuck_named = std::ranges::any_of(audit.events(), [](const permission::AuditEvent& e) {
+    return e.event_kind == "cancellation_lag" && e.tool_name == "fake.stuck";
+  });
+  REQUIRE(stuck_named);
+  const auto cancelaware_named = std::ranges::any_of(audit.events(), [](const permission::AuditEvent& e) {
+    return e.event_kind == "cancellation_lag" && e.tool_name == "fake.cancelaware";
+  });
+  REQUIRE_FALSE(cancelaware_named);
+  // The row carries the `error_kind=cancellation_lag` marker spec 0012 AC5 names.
+  const auto marked = std::ranges::any_of(audit.events(), [](const permission::AuditEvent& e) {
+    return e.event_kind == "cancellation_lag" && e.metadata_json.find("cancellation_lag") != std::string::npos;
+  });
+  REQUIRE(marked);
+}
+
+TEST_CASE("ToolScheduler: cancel-aware tools record no cancellation_lag rows on parent cancel (AC5)",
+          "[unit][agent][scheduler][cancellation]") {
+  asio::io_context io;
+  asio::cancellation_signal signal;
+
+  tool::Registry registry;
+  add_latency_tool(registry, "fake.slow", 1s);
+  auto rules = allow_all_rules();
+  permission::RecordingAuditSink audit;
+  auto prototype = make_prototype(io, rules, audit);
+
+  agent::ToolScheduler scheduler{io.get_executor(),
+                                 registry,
+                                 agent::ToolSchedulerOptions{.max_parallel_tools = 4, .per_call_timeout = 30s}};
+
+  std::vector<agent::ToolBatchCall> batch;
+  batch.push_back(call(0, "fake.slow"));
+  batch.push_back(call(1, "fake.slow"));
+
+  std::optional<core::Result<std::vector<agent::ToolBatchResult>>> result;
+  std::exception_ptr failure;
+  asio::co_spawn(
+      io,
+      [&]() -> async::Awaitable<core::Result<std::vector<agent::ToolBatchResult>>> {
+        co_return co_await scheduler.run_batch(std::move(batch), prototype);
+      },
+      asio::bind_cancellation_slot(signal.slot(),
+                                   [&](std::exception_ptr ep, core::Result<std::vector<agent::ToolBatchResult>> r) {
+                                     failure = ep;
+                                     result = std::move(r);
+                                   }));
+
+  asio::post(io, [&] { asio::post(io, [&] { signal.emit(asio::cancellation_type::terminal); }); });
+
+  const auto deadline = std::chrono::steady_clock::now() + 2s;
+  while (!result.has_value() && !failure && std::chrono::steady_clock::now() < deadline) {
+    io.run_one();
+  }
+  io.run();
+
+  if (failure) {
+    std::rethrow_exception(failure);
+  }
+  REQUIRE(result.has_value());
+  REQUIRE_FALSE(result->has_value());
+  REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
+  REQUIRE(error_has_context(result->error(), "reason", "parent_cancelled"));
+
+  // Cancel-aware tools all wound down inside the grace window: no tool is a
+  // cancellation laggard, so the audit log carries zero `cancellation_lag` rows.
+  const auto lag_rows = std::ranges::count_if(audit.events(), [](const permission::AuditEvent& e) {
+    return e.event_kind == "cancellation_lag";
+  });
+  REQUIRE(lag_rows == 0);
 }

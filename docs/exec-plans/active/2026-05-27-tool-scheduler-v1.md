@@ -285,9 +285,32 @@ cache primitives.
 - [x] Slice 118: docs + history (`docs/STATUS.md`,
       `docs/design-docs/tool-runtime.md` "Scheduler Boundary" slice-118 status,
       this progress log, history entry under `docs/histories/2026-05/`).
-- [ ] Slice 119: cancellation propagation + `cancellation_lag` audit;
-      close AC5.
-- [ ] Slice 119: docs + history.
+- [x] Slice 119: cancellation propagation + `cancellation_lag` audit;
+      close AC5. **Design choice (grace-window abandon, not a `run_call`
+      restructure).** asio's `awaitable_operators::operator||` runs on
+      `make_parallel_group(...).async_wait(wait_for_one_success())`, whose
+      completion handler fires only when *every* op finishes — the loser is
+      cancelled but still awaited (verified in
+      `asio/experimental/impl/parallel_group.hpp`: the group dispatches its
+      handler at `--outstanding_ == 0`). So `co_await (dispatch || timeout)`
+      cannot bound a handler that ignores its cancellation slot; the timeout
+      firing does not free the race. The 100 ms guarantee therefore has to be
+      enforced where the scheduler can *stop awaiting*: `run_batch` emits each
+      child's cancel signal, disables its own cancellation filter, then races
+      the remaining drain against `async::sleep_for(kCancellationGrace=100 ms)`.
+      At the deadline it records a `cancellation_lag` audit row per still-unreported
+      call (`event_kind=cancellation_lag`,
+      `metadata_json.error_kind=cancellation_lag`, naming the tool) and returns
+      `parent_cancelled`, leaving laggards detached but alive via the shared
+      `BatchState`. `run_call` is unchanged. Production diff is
+      `src/oran-agent/scheduler.cpp` only; `test-agent` 43 / 10 590 →
+      45 / 10 607 (+2 cases: selective-naming + 100 ms return, and the
+      no-false-positive path).
+- [x] Slice 119: docs + history (`docs/STATUS.md`, `docs/ARCHITECTURE.md`
+      oran-agent row, `docs/design-docs/tool-runtime.md` "Scheduler Boundary"
+      slice-119 status, `docs/design-docs/async-model.md` ToolScheduler
+      cancellation bullet, this progress log + decision log, history entry
+      under `docs/histories/2026-05/`).
 - [ ] Slice 120: loop wiring + bench + config; close AC7 fully, AC12,
       AC11.
 - [ ] Slice 120: `bench/agent/README.md` updated; docs + history.
@@ -319,6 +342,17 @@ cache primitives.
 - 2026-05-27: **Config tree: `runtime.tool_scheduler.*`.** Sits next
   to the existing `runtime.tool_output` block; symmetric with how
   output caps are scoped.
+- 2026-05-29: **Cancellation lag is named at the 100 ms grace boundary, not
+  "once the per-call timeout fires."** `co_await (dispatch || timeout)` cannot
+  bound a handler that ignores its cancellation slot — asio's `wait_for_one`
+  parallel group cancels the loser but still awaits it, so the race only
+  resolves when the handler returns. `run_batch` therefore stops awaiting
+  laggards after `kCancellationGrace` (100 ms) and records the
+  `cancellation_lag` row there. Prompt naming (100 ms) beats waiting out the
+  60 s per-call timeout the plan originally anticipated; the per-call timeout
+  still backstops the laggard's eventual exit. The row uses a distinct
+  `event_kind=cancellation_lag` so it does not perturb AC7's "exactly N
+  `permission_decision` rows" count.
 
 ## Linked Artifacts
 

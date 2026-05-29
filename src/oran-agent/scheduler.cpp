@@ -36,6 +36,7 @@
 #include <oran/core/result.hpp>
 #include <oran/core/time.hpp>
 #include <oran/core/tool_def.hpp>
+#include <oran/permission/audit.hpp>
 #include <oran/tool/output.hpp>
 #include <oran/tool/registry.hpp>
 #include <oran/tool/workspace.hpp>
@@ -56,6 +57,24 @@ namespace {
       .with("reason", "timeout")
       .with("tool", std::string{tool_name})
       .with("per_call_timeout_ms", std::to_string(per_call_timeout.count()));
+}
+
+/// AC5 cancellation budget: once the parent token is cancelled, `run_batch`
+/// waits at most this long for in-flight calls to wind down before returning
+/// `parent_cancelled`. Cancel-aware tools observe the emitted cancellation and
+/// resolve well inside this window; a tool that never polls its cancellation
+/// slot misses it and is named in a `cancellation_lag` audit row.
+constexpr std::chrono::milliseconds kCancellationGrace{100};
+
+/// Audit `metadata_json` for a `cancellation_lag` row. `error_kind` is the
+/// spec-0012 AC5 marker; `cancellation_grace_ms` records the window the tool
+/// missed and `per_call_timeout_ms` the bound that still backstops it.
+[[nodiscard]] std::string cancellation_lag_metadata_json(std::chrono::milliseconds per_call_timeout) {
+  nlohmann::json metadata;
+  metadata["error_kind"] = "cancellation_lag";
+  metadata["cancellation_grace_ms"] = kCancellationGrace.count();
+  metadata["per_call_timeout_ms"] = per_call_timeout.count();
+  return metadata.dump();
 }
 
 /// Per-call dispatch context built from the prototype + per-call mutable
@@ -253,42 +272,70 @@ public:
       [[maybe_unused]] auto permit = state->semaphore.try_send(std::monostate{});
     }
 
+    std::vector<std::string> names;
+    names.reserve(batch.size());
     for (std::size_t i = 0; i < batch.size(); ++i) {
+      names.push_back(batch[i].name);
       asio::co_spawn(executor_,
                      run_call(state, registry_, &locks_, std::move(batch[i]), i, std::ref(prototype)),
                      asio::bind_cancellation_slot(state->child_cancels[i].slot(), asio::detached));
     }
 
-    bool parent_cancelled = false;
+    std::vector<bool> reported(state->total_calls, false);
     std::size_t completed = 0;
+    bool parent_cancelled = false;
+
+    // Phase 1 — cancel-sensitive drain. A cancelled `receive()` means the
+    // parent token fired; otherwise every call reports its completion index.
     while (completed < state->total_calls) {
       auto next = co_await state->completion.receive();
       if (!next) {
-        // Parent cancellation reached our `receive()`. Emit on every child
-        // signal so each in-flight dispatch sees its own cancellation
-        // contract, then drain remaining completions with the parent slot
-        // filtered. Each spawned coroutine still sends exactly one completion
-        // before exiting, so the drain is finite.
         parent_cancelled = true;
-        for (auto& signal : state->child_cancels) {
-          signal.emit(asio::cancellation_type::all);
-        }
-        co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
-        continue;
+        break;
       }
+      reported[*next] = true;
       ++completed;
     }
 
-    if (parent_cancelled) {
-      co_return std::unexpected(parent_cancelled_error());
+    if (!parent_cancelled) {
+      std::vector<ToolBatchResult> ordered;
+      ordered.reserve(state->total_calls);
+      for (auto& slot : state->results) {
+        ordered.emplace_back(std::move(*slot));
+      }
+      co_return ordered;
     }
 
-    std::vector<ToolBatchResult> ordered;
-    ordered.reserve(state->total_calls);
-    for (auto& slot : state->results) {
-      ordered.emplace_back(std::move(*slot));
+    // Phase 2 — parent cancellation. Emit on every child signal so each
+    // in-flight dispatch sees its own cancellation contract, then stop
+    // honouring the parent token so the bounded drain below can still await.
+    for (auto& signal : state->child_cancels) {
+      signal.emit(asio::cancellation_type::all);
     }
-    co_return ordered;
+    co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+
+    // Wait out the AC5 grace window for the remaining calls. A cancel-aware
+    // tool resolves almost at once; a tool that ignores its cancellation slot
+    // keeps `run_call` suspended in its `dispatch || timeout` race — that race
+    // cannot resolve until the handler returns, because asio cancellation is
+    // cooperative — so we race the drain against `kCancellationGrace` and stop
+    // awaiting at the deadline instead of stalling the whole batch.
+    if (completed < state->total_calls) {
+      using namespace asio::experimental::awaitable_operators;
+      co_await (drain_remaining(state, reported, completed) || async::sleep_for(executor_, kCancellationGrace));
+    }
+
+    // Name every call that missed the grace window. A laggard keeps running
+    // (it holds the shared `BatchState` alive) and will wind down on its own;
+    // the audit row records `error_kind=cancellation_lag` against the tool so
+    // the offending handler is identifiable.
+    for (std::size_t i = 0; i < state->total_calls; ++i) {
+      if (!reported[i]) {
+        [[maybe_unused]] auto recorded = co_await record_cancellation_lag(prototype, names[i]);
+      }
+    }
+
+    co_return std::unexpected(parent_cancelled_error());
   }
 
 private:
@@ -380,6 +427,46 @@ private:
     // parent-emitted cancel does not turn this final signal into a no-op.
     co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
     [[maybe_unused]] auto sent = co_await state->completion.send(index);
+  }
+
+  /// Drain pending completions until every call has reported. Used inside the
+  /// phase-2 grace race in `run_batch`: when the grace timer wins, this
+  /// coroutine's `receive()` is cancelled and it returns, leaving the indices
+  /// it has not yet seen marked for `cancellation_lag` naming. `reported` and
+  /// `completed` reference the awaiting `run_batch` frame, which stays alive
+  /// across the race.
+  [[nodiscard]] static async::Awaitable<void>
+  drain_remaining(std::shared_ptr<BatchState> state, std::vector<bool>& reported, std::size_t& completed) {
+    while (completed < state->total_calls) {
+      auto next = co_await state->completion.receive();
+      if (!next) {
+        co_return;
+      }
+      reported[*next] = true;
+      ++completed;
+    }
+  }
+
+  /// Record one `cancellation_lag` audit row naming a tool that did not wind
+  /// down within `kCancellationGrace` after a parent cancellation. The row
+  /// reuses the prototype's scope / agent / identity / parent-turn correlation
+  /// so `--explain-rules`-style and `--trace` consumers see it beside the
+  /// call's permission-decision row. Best-effort: a failed record is discarded
+  /// by the caller and never masks the `parent_cancelled` result.
+  [[nodiscard]] async::Awaitable<core::Result<void>> record_cancellation_lag(tool::DispatchContext& prototype,
+                                                                             std::string_view tool_name) {
+    permission::AuditEvent event;
+    event.event_kind = "cancellation_lag";
+    event.scope_key = prototype.scope_key;
+    event.agent_key = prototype.agent_key;
+    event.tool_name = std::string{tool_name};
+    event.identity = prototype.identity;
+    event.verdict = permission::Verdict::allow;
+    event.outcome = permission::AuditOutcome::allow;
+    event.reason = "cancellation_lag";
+    event.parent_turn_id = prototype.parent_turn_id;
+    event.metadata_json = cancellation_lag_metadata_json(options_.per_call_timeout);
+    co_return co_await prototype.audit.record(std::move(event));
   }
 
   asio::any_io_executor executor_;

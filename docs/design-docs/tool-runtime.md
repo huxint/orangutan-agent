@@ -733,10 +733,25 @@ dispatch time.
 > three new `tests/agent/test_scheduler.cpp` cases pin this; the same-row case
 > doubles as a cross-talk detector.
 >
-> Slice 119 adds the `cancellation_lag` audit kind and the full 100 ms
-> cancellation guarantee, and slice 120 replaces `agent::Loop`'s sequential
-> dispatch loop with `scheduler.run_batch(...)` for every batch (including N=1)
-> and ships `bench/agent/scheduler_overhead` plus `scheduler_audit_fanout`.
+> **Status (slice 119, 2026-05-29):** parent cancellation now ends every
+> *cancel-aware* in-flight call within a 100 ms grace window
+> (`kCancellationGrace`, spec 0012 AC5). `run_batch` emits on each child's
+> `asio::cancellation_signal`, disables its own cancellation filter, then
+> races the remaining drain against `async::sleep_for(kCancellationGrace)` and
+> returns `Error::cancelled` with `reason=parent_cancelled` instead of waiting
+> unbounded. A handler that ignores its cancellation slot cannot be forced to
+> stop — asio cancellation is cooperative, and `co_await (dispatch || timeout)`
+> does not resolve until that handler returns (the `wait_for_one` parallel
+> group cancels the loser but still awaits it) — so the scheduler stops
+> awaiting at the deadline, records a `cancellation_lag` audit row
+> (`event_kind=cancellation_lag`, `metadata_json.error_kind=cancellation_lag`)
+> naming the offending tool, and lets the laggard wind down on its own (the
+> shared `BatchState` keeps it alive). A batch of purely cancel-aware tools
+> records no such row. Closes AC5.
+>
+> Slice 120 replaces `agent::Loop`'s sequential dispatch loop with
+> `scheduler.run_batch(...)` for every batch (including N=1) and ships
+> `bench/agent/scheduler_overhead` plus `scheduler_audit_fanout`.
 
 Full contract, ordering guarantees, bounded-state primitives, and acceptance
 criteria live in

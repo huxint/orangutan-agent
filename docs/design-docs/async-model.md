@@ -137,15 +137,20 @@ Subsystems that initiate cancellation:
   spawned tool call in a `std::deque<asio::cancellation_signal>` (the
   signal is neither copyable nor movable, so `deque`'s stable addresses
   are required) and emits on every child signal when its own
-  `completion.receive()` resolves with `Error::cancelled`. After emitting,
-  it drains remaining completions with
-  `asio::this_coro::reset_cancellation_state(asio::disable_cancellation())`
-  so cancelled children can still publish their final result row before
-  the batch returns `Error::cancelled` with `reason=parent_cancelled`. The
-  full 100 ms guarantee from spec 0012 AC5 and the
-  `cancellation_lag` audit kind for tools that ignore the cancellation
-  slot land in slice 119; the scheduler itself is wired through
-  `agent::Loop` in slice 120.
+  `completion.receive()` resolves with `Error::cancelled`. It then disables
+  its own cancellation filter
+  (`asio::this_coro::reset_cancellation_state(asio::disable_cancellation())`)
+  and waits out a 100 ms grace window (`kCancellationGrace`, spec 0012 AC5)
+  for the children to wind down — a cancel-aware child resolves almost
+  immediately, so the batch returns `Error::cancelled` with
+  `reason=parent_cancelled` well inside the budget. A handler that ignores
+  its cancellation slot cannot be forced to stop (asio cancellation is
+  cooperative, and `co_await (dispatch || timeout)` does not resolve until
+  that handler returns), so once the grace window expires the scheduler
+  stops awaiting it: it records a `cancellation_lag` audit row naming the
+  offending tool (slice 119) and returns, leaving the laggard to wind down
+  on its own while the shared batch state keeps it alive. The scheduler is
+  wired through `agent::Loop` in slice 120.
 - `oran-orchestration` when a worker is stopped by a leader.
 - `oran-automation` when a job is unscheduled mid-run.
 
