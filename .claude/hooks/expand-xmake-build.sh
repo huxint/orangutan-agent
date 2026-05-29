@@ -13,9 +13,6 @@
 # `xmake build a b 2>&1 | tail -5 && echo done` is left alone (the first
 # segment has `|` / `>` — operator stays in control of redirect / pipe scope).
 #
-# The user-level RTK wrapper (`rtk xmake build ...`) composes: each expanded
-# segment keeps its `rtk ` prefix.
-#
 # Whole-command bail-outs: we cannot reason about backticks or `$(...)`
 # without a real shell tokenizer, so the command passes through unchanged if
 # either appears.
@@ -135,12 +132,7 @@ expand_segment() {
     printf '%s' "$seg"
     return
   fi
-  local prefix=""
   local body="$trimmed"
-  if [[ "$body" == "rtk xmake build "* ]]; then
-    prefix="rtk "
-    body="${body#rtk }"
-  fi
   if [[ "$body" != "xmake build "* ]]; then
     printf '%s' "$seg"
     return
@@ -160,7 +152,7 @@ expand_segment() {
   fi
   local chained=""
   for tgt in "${tokens[@]}"; do
-    local segment_cmd="${prefix}xmake build ${tgt}"
+    local segment_cmd="xmake build ${tgt}"
     if [[ -z "$chained" ]]; then
       chained="$segment_cmd"
     else
