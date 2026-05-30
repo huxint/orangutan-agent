@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include <iosfwd>
 #include <memory>
 #include <optional>
 #include <string>
@@ -50,6 +51,10 @@ struct AgentPromptRunnerOptions {
   core::TurnId session_id{};
   std::vector<std::string> approval_answers{};
   bool quiet{false};
+  /// Destination for live streamed output when `stream` is set and `quiet` is
+  /// false. `nullptr` renders to `std::cout` (the production terminal); tests
+  /// inject their own `std::ostream`.
+  std::ostream* stream_out{nullptr};
 };
 
 /// Adapter-neutral bridge from `cli::run_async` into `agent::Loop`.

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <charconv>
 #include <chrono>
+#include <cstddef>
 #include <cstdlib>
 #include <expected>
 #include <optional>
@@ -27,6 +28,7 @@
 #include <oran/config.hpp>
 #include <oran/core/content.hpp>
 #include <oran/core/error.hpp>
+#include <oran/core/stop_reason.hpp>
 #include <oran/provider.hpp>
 
 #include "../test-helpers/run_async.hpp"
@@ -259,6 +261,52 @@ std::string anthropic_response() {
          std::string{kBody};
 }
 
+// A canned Anthropic Messages SSE stream that assembles to the same logical
+// turn as `anthropic_response()`. Mirrors the wire grammar the oran-http SSE
+// parser feeds the provider's `AnthropicSseDecoder`.
+std::string anthropic_sse_response() {
+  return "HTTP/1.1 200 OK\r\n"
+         "Content-Type: text/event-stream\r\n"
+         "Connection: close\r\n"
+         "\r\n"
+         "event: message_start\r\n"
+         R"(data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant",)"
+         R"("model":"claude-test","content":[],"stop_reason":null,"usage":{"input_tokens":4,"output_tokens":1}}})"
+         "\r\n\r\n"
+         "event: content_block_start\r\n"
+         R"(data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})"
+         "\r\n\r\n"
+         "event: content_block_delta\r\n"
+         R"(data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"backend ok"}})"
+         "\r\n\r\n"
+         "event: content_block_stop\r\n"
+         R"(data: {"type":"content_block_stop","index":0})"
+         "\r\n\r\n"
+         "event: message_delta\r\n"
+         R"(data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}})"
+         "\r\n\r\n"
+         "event: message_stop\r\n"
+         R"(data: {"type":"message_stop"})"
+         "\r\n\r\n";
+}
+
+// Records the ordered streaming callbacks so the round-trip test can assert the
+// backend drove the caller's `EventSink`, not just the assembled `Response`.
+class CapturingSink final : public provider::EventSink {
+public:
+  void on_text_delta(std::string_view delta) override {
+    text.append(delta);
+    ++text_deltas;
+  }
+  void on_done(core::StopReason stop_reason) override {
+    done = stop_reason;
+  }
+
+  std::string text;
+  std::size_t text_deltas{0};
+  std::optional<core::StopReason> done;
+};
+
 }  // namespace
 
 TEST_CASE("HttpProviderBackend constructs an HTTP-backed provider system", "[unit][bootstrap][provider_backend]") {
@@ -281,8 +329,12 @@ TEST_CASE("HttpProviderBackend constructs an HTTP-backed provider system", "[uni
   REQUIRE(backend->route().primary.model == "claude-test");
 
   test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
+    // A non-streaming request stays on the body path even though the transport
+    // now advertises streaming support.
+    auto req = request();
+    req.stream = false;
     auto response =
-        co_await backend->system().send(request(),
+        co_await backend->system().send(std::move(req),
                                         provider::Route{.primary = backend->route().primary, .fallbacks = {}},
                                         nullptr);
 
@@ -297,6 +349,48 @@ TEST_CASE("HttpProviderBackend constructs an HTTP-backed provider system", "[uni
   REQUIRE(server.request_text().contains("x-api-key: test-secret"));
   REQUIRE(server.request_text().contains(R"json("model":"claude-test")json"));
   REQUIRE(server.request_text().contains(R"json("stream":false)json"));
+  blocking.join();
+}
+
+TEST_CASE("HttpProviderBackend streams an Anthropic SSE turn through the EventSink",
+          "[unit][bootstrap][provider_backend][streaming]") {
+  ScopedEnv api_key{"ORAN_BOOTSTRAP_PROVIDER_BACKEND_KEY", "test-secret"};
+  ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
+  ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
+  OneShotHttpServer server{anthropic_sse_response()};
+  auto cfg = parse_config(server.base_url());
+  asio::thread_pool blocking{1};
+
+  auto backend = bootstrap::HttpProviderBackend::build(cfg,
+                                                       bootstrap::HttpProviderBackendOptions{
+                                                           .blocking_executor = blocking.get_executor(),
+                                                           .request_timeout = 2s,
+                                                           .route_name = "default",
+                                                       });
+  REQUIRE(backend.has_value());
+
+  CapturingSink sink;
+  test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
+    auto response =
+        co_await backend->system().send(request(),  // request().stream == true
+                                        provider::Route{.primary = backend->route().primary, .fallbacks = {}},
+                                        &sink);
+
+    REQUIRE(response.has_value());
+    REQUIRE(response->blocks.size() == 1);
+    REQUIRE(std::get<core::TextContent>(response->blocks.front()).text == "backend ok");
+    REQUIRE(response->stop_reason == core::StopReason::end_turn);
+    REQUIRE(response->usage.input_tokens == 4);
+    REQUIRE(response->usage.output_tokens == 2);
+    co_return;
+  });
+
+  REQUIRE(server.served());
+  REQUIRE(server.request_text().starts_with("POST /v1/messages HTTP/1.1"));
+  REQUIRE(server.request_text().contains(R"json("stream":true)json"));
+  REQUIRE(sink.text == "backend ok");
+  REQUIRE(sink.text_deltas == 1);
+  REQUIRE(sink.done == core::StopReason::end_turn);
   blocking.join();
 }
 

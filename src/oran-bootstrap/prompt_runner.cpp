@@ -21,6 +21,7 @@
 #include <oran/agent.hpp>
 #include <oran/bootstrap/runtime_assembly.hpp>
 #include <oran/cli/operator_prompt_sink.hpp>
+#include <oran/cli/streaming_prompt_sink.hpp>
 #include <oran/config.hpp>
 #include <oran/core/content.hpp>
 #include <oran/core/error.hpp>
@@ -176,12 +177,13 @@ public:
         memory_framing_{std::move(options.memory_framing)}, per_agent_overlay_{std::move(options.per_agent_overlay)},
         trace_context_json_{std::move(options.trace_context_json)}, tool_choice_{std::move(options.tool_choice)},
         max_tokens_{options.max_tokens}, thinking_budget_{options.thinking_budget}, retry_{options.retry},
-        stream_{options.stream}, operator_sink_{cli::OperatorPromptSinkOptions{
-                                     .sink_id = "cli-operator-prompt",
-                                     .operator_identity = identity_,
-                                     .scripted_answers = std::move(options.approval_answers),
-                                     .quiet = options.quiet,
-                                 }} {
+        stream_{options.stream}, quiet_{options.quiet}, stream_out_{options.stream_out},
+        operator_sink_{cli::OperatorPromptSinkOptions{
+            .sink_id = "cli-operator-prompt",
+            .operator_identity = identity_,
+            .scripted_answers = std::move(options.approval_answers),
+            .quiet = options.quiet,
+        }} {
     assembly_->hook_bus().bind(operator_sink_, {hook::Event::permission_ask_rendered});
   }
 
@@ -247,7 +249,17 @@ public:
       };
     }
 
-    auto result = co_await loop_.run_turn(std::move(inputs));
+    // Render streaming deltas live to the terminal when the operator can see
+    // them. A quiet or non-streaming run passes no sink, so the loop still
+    // assembles the same Response and the runner returns its text below.
+    std::optional<cli::StreamingPromptSink> streaming_sink;
+    provider::EventSink* sink = nullptr;
+    if (stream_ && !quiet_) {
+      streaming_sink.emplace(cli::StreamingPromptSinkOptions{.out = stream_out_});
+      sink = &*streaming_sink;
+    }
+
+    auto result = co_await loop_.run_turn(std::move(inputs), sink);
     if (!result) {
       co_return std::unexpected(std::move(result).error());
     }
@@ -256,7 +268,14 @@ public:
 
     transcript_ = std::move(result->transcript);
     ++prompts_processed_;
-    co_return cli::PromptRunResult{.text = std::move(result->text)};
+
+    auto text = std::move(result->text);
+    if (streaming_sink && streaming_sink->rendered_answer_text()) {
+      // The answer already appeared live; clear it so the CLI does not print
+      // the same text a second time after the stream.
+      text.clear();
+    }
+    co_return cli::PromptRunResult{.text = std::move(text)};
   }
 
   [[nodiscard]] std::size_t prompts_processed() const noexcept {
@@ -355,6 +374,8 @@ private:
   std::optional<std::uint32_t> thinking_budget_{};
   provider::RetryPolicy retry_{};
   bool stream_{true};
+  bool quiet_{false};
+  std::ostream* stream_out_{nullptr};
   cli::OperatorPromptSink operator_sink_;
   std::vector<core::Message> transcript_;
   std::size_t prompts_processed_{0};

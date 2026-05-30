@@ -259,19 +259,38 @@ private:
   std::jthread worker_;
 };
 
-std::string anthropic_response(std::string_view text = "binary ok") {
-  auto body = std::string{
-      R"json({"type":"message","role":"assistant","model":"claude-test","content":[{"type":"text","text":")json"};
-  body.append(text);
-  body.append(R"json("}],"stop_reason":"end_turn","usage":{"input_tokens":4,"output_tokens":2}})json");
+// Canned Anthropic Messages SSE stream used by the configured-route binary
+// handoff test: with streaming wired end-to-end, `bootstrap::run` drives the
+// provider's `send_streaming` path, so the mock endpoint must answer with a
+// `text/event-stream` body rather than a single JSON object.
+std::string anthropic_sse_response(std::string_view text = "binary ok") {
+  auto block_delta =
+      std::string{R"(data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":")"};
+  block_delta.append(text);
+  block_delta.append(R"("}})");
   return "HTTP/1.1 200 OK\r\n"
-         "Content-Type: application/json\r\n"
-         "Content-Length: " +
-         std::to_string(body.size()) +
-         "\r\n"
+         "Content-Type: text/event-stream\r\n"
          "Connection: close\r\n"
-         "\r\n" +
-         body;
+         "\r\n"
+         "event: message_start\r\n"
+         R"(data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant",)"
+         R"("model":"claude-test","content":[],"stop_reason":null,"usage":{"input_tokens":4,"output_tokens":1}}})"
+         "\r\n\r\n"
+         "event: content_block_start\r\n"
+         R"(data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})"
+         "\r\n\r\n"
+         "event: content_block_delta\r\n" +
+         block_delta +
+         "\r\n\r\n"
+         "event: content_block_stop\r\n"
+         R"(data: {"type":"content_block_stop","index":0})"
+         "\r\n\r\n"
+         "event: message_delta\r\n"
+         R"(data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}})"
+         "\r\n\r\n"
+         "event: message_stop\r\n"
+         R"(data: {"type":"message_stop"})"
+         "\r\n\r\n";
 }
 
 std::string provider_config_text(std::string_view base_url) {
@@ -449,7 +468,7 @@ TEST_CASE("run hands configured provider prompts to AgentPromptRunner", "[unit][
   ScopedEnv api_key{"ORAN_BOOTSTRAP_RUN_PROVIDER_KEY", "test-secret"};
   ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
   ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
-  OneShotHttpServer server{anthropic_response()};
+  OneShotHttpServer server{anthropic_sse_response()};
   TempDir temp{"oran-bootstrap-provider-runner"};
   const auto config_path = temp.path() / "config.json";
   write_file(config_path, provider_config_text(server.base_url()));
@@ -465,7 +484,9 @@ TEST_CASE("run hands configured provider prompts to AgentPromptRunner", "[unit][
   REQUIRE(server.request_text().contains("x-api-key: test-secret"));
   REQUIRE(server.request_text().contains(R"json("model":"claude-test")json"));
   REQUIRE(server.request_text().contains(R"json("max_tokens":1024)json"));
-  REQUIRE(server.request_text().contains(R"json("stream":false)json"));
+  // Streaming is wired end-to-end, so the configured Anthropic route now sends
+  // `stream=true` and the binary renders the SSE turn live.
+  REQUIRE(server.request_text().contains(R"json("stream":true)json"));
 }
 
 TEST_CASE("run reports missing provider credentials before CLI async handoff", "[unit][bootstrap][provider]") {

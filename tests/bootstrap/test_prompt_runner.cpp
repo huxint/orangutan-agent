@@ -5,6 +5,7 @@
 #include <fstream>
 #include <optional>
 #include <span>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -341,5 +342,76 @@ TEST_CASE("AgentPromptRunner binds the CLI approval sink for builtin tool dispat
     REQUIRE(result->text == "approved final");
     REQUIRE(fake.turns_consumed() == 2);
     REQUIRE((*runner)->approval_prompts_rendered() == 1);
+  });
+}
+
+TEST_CASE("AgentPromptRunner streams answer deltas to the injected sink",
+          "[unit][bootstrap][prompt_runner][streaming]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-stream"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false);
+    std::vector<provider::ScriptedTurn> plan;
+    plan.push_back(provider::ScriptedTurn{
+        .response = std::nullopt,
+        .deltas = {provider::TextDelta{.text = "hel"},
+                   provider::TextDelta{.text = "lo"},
+                   provider::StreamEnd{.stop_reason = core::StopReason::end_turn,
+                                       .usage = std::nullopt,
+                                       .model_used = std::string{"fake-1"}}},
+        .error = std::nullopt,
+        .latency = {},
+    });
+    provider::FakeProvider fake{std::move(plan)};
+
+    std::ostringstream captured;
+    auto options = base_runner_options(io, assembly, cfg, fake);
+    options.quiet = false;
+    options.stream_out = &captured;
+
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+    auto prompt = cli::PromptRunRequest{.prompt = "hi", .mode = cli::CliMode::single_shot};
+    auto result = co_await (*runner)->run_prompt(std::move(prompt));
+
+    REQUIRE(result.has_value());
+    REQUIRE(captured.str() == "hello\n");
+    // The answer already appeared live, so the runner returns empty text and the
+    // CLI does not print it a second time.
+    REQUIRE(result->text.empty());
+    REQUIRE(fake.turns_consumed() == 1);
+  });
+}
+
+TEST_CASE("AgentPromptRunner keeps assembled text when nothing streamed",
+          "[unit][bootstrap][prompt_runner][streaming]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-no-stream"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false);
+    std::vector<provider::ScriptedTurn> plan;
+    plan.push_back(provider::ScriptedTurn{
+        .response = text_response("not streamed"),
+        .deltas = {},
+        .error = std::nullopt,
+        .latency = {},
+    });
+    provider::FakeProvider fake{std::move(plan)};
+
+    std::ostringstream captured;
+    auto options = base_runner_options(io, assembly, cfg, fake);
+    options.quiet = false;
+    options.stream_out = &captured;
+
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+    auto prompt = cli::PromptRunRequest{.prompt = "hi", .mode = cli::CliMode::single_shot};
+    auto result = co_await (*runner)->run_prompt(std::move(prompt));
+
+    REQUIRE(result.has_value());
+    // No deltas fired, so nothing rendered live and the runner returns the
+    // assembled text for the CLI to print itself.
+    REQUIRE(captured.str().empty());
+    REQUIRE(result->text == "not streamed");
   });
 }

@@ -290,20 +290,47 @@ is a noted post-arc follow-up.
 - [x] Slice 122 (B): docs — `api-portability.md` "Streaming" full contract +
       AttemptSink note; spec 0017 status; `STATUS.md`; `QUALITY_SCORE.md`
       provider row; history.
-- [ ] Slice 123 (C): `HttpProtocolTransport::send_streaming`;
-      `cli::StreamingPromptSink`; `AgentPromptRunner` wiring (construct when not
-      quiet, pass `&sink` at `prompt_runner.cpp:250`).
-- [ ] Slice 123 (C): tests — localhost SSE round trip through
-      `HttpProviderBackend`; `StreamingPromptSink` rendering via
-      scripted/captured output.
-- [ ] Slice 123 (C): docs — `ARCHITECTURE.md` bootstrap narrative; spec 0001
-      AC3 shipped; spec 0017 v1.1 "Streaming sink" shipped;
-      `feature-release-notes.md`; `STATUS.md`; `QUALITY_SCORE.md` cli/bootstrap
-      rows; history.
-- [ ] Arc close: move plan to `completed/`; open the OpenAI Responses SSE
-      decoder follow-up (Slice 124).
+- [x] Slice 123 (C): `HttpProtocolTransport::send_streaming` (over
+      `http::Client::send_streaming`, translating `http::SseEvent`) +
+      `supports_streaming()` → `true`; `cli::StreamingPromptSink`;
+      `AgentPromptRunner` wiring (construct the sink when not quiet + streaming,
+      pass `&sink` to `run_turn`, clear the duplicate text once it streamed).
+- [x] Slice 123 (C): tests — localhost SSE round trip through
+      `HttpProviderBackend` (capturing `EventSink`, asserts `"stream":true` +
+      decoded text); `StreamingPromptSink` rendering via an injected
+      `std::ostringstream`; runner streams to an injected sink + suppresses the
+      duplicate text; binary E2E `--prompt` now answers SSE. `test-cli` 14 / 97 →
+      18 / 110; `test-bootstrap` 72 / 316 → 75 / 344.
+- [x] Slice 123 (C): docs — `ARCHITECTURE.md` cli/bootstrap rows; spec 0001 AC3
+      shipped; spec 0017 v1.1 "Streaming sink" shipped; `api-portability.md`
+      "Streaming" shipped end-to-end; `feature-release-notes.md`; `STATUS.md`;
+      `QUALITY_SCORE.md` cli/bootstrap/provider rows; history.
+- [x] Arc close: plan moved to `completed/`; the OpenAI Responses SSE decoder
+      (Slice 124) remains the noted post-arc follow-up (not gating).
 
 ## Decision Log
+
+- 2026-05-30 (Slice C): **Lift the streaming gate by overriding
+  `supports_streaming()` in `HttpProtocolTransport` only.** Slice B left the
+  capability query at its `false` default so every transport stayed body-only
+  between slices. Slice C overrides it to `true` (plus implements
+  `send_streaming`) in the single transport that can stream, so configured-route
+  Anthropic now streams by default — which flipped the two binary-level tests
+  that asserted `"stream":false` (`test_provider_backend.cpp`,
+  `test_bootstrap.cpp`). Those were updated truthfully: the provider-backend test
+  keeps a body-path case pinned to `stream=false` and adds a real SSE round-trip
+  case; the binary E2E test now answers `text/event-stream` and asserts
+  `"stream":true`. OpenAI Responses stays body-only (its transport is the same
+  `HttpProtocolTransport`, but the System forces `stream=false` for OpenAI).
+- 2026-05-30 (Slice C): **Injectable `std::ostream`, and suppress the duplicate
+  final-text print only when text actually streamed.** `StreamingPromptSink` and
+  `AgentPromptRunnerOptions::stream_out` take an `std::ostream*` (default
+  `std::cout`) so the sink is unit-testable with an `std::ostringstream`. The
+  runner clears `PromptRunResult::text` after the turn *only when*
+  `StreamingPromptSink::rendered_answer_text()` holds — a non-streaming/body-path
+  turn fires no text deltas, so its assembled text is still returned for the CLI
+  to print. Gating on the sink's own observation (not on `stream_`) keeps both
+  the streaming and non-streaming paths correct.
 
 - 2026-05-30 (Slice B): **Added a `ProtocolTransport::supports_streaming()`
   capability gate (default `false`), not in the original plan.** `ProtocolTransport`

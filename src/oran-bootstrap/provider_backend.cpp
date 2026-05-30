@@ -31,38 +31,58 @@ public:
 
   [[nodiscard]] async::Awaitable<core::Result<provider::ProtocolHttpResponse>>
   send(provider::ProtocolHttpRequest request) const override {
+    auto response = co_await client_->send(to_body_request(std::move(request)));
+    if (!response) {
+      co_return std::unexpected(std::move(response).error().with("transport", "oran-http"));
+    }
+    co_return to_protocol_response(std::move(*response));
+  }
+
+  [[nodiscard]] bool supports_streaming() const noexcept override {
+    return true;
+  }
+
+  [[nodiscard]] async::Awaitable<core::Result<provider::ProtocolHttpResponse>>
+  send_streaming(provider::ProtocolHttpRequest request, provider::ProtocolSseCallback on_event) const override {
+    auto response =
+        co_await client_->send_streaming(to_body_request(std::move(request)), [&on_event](const http::SseEvent& event) {
+          on_event(event.event, event.data);
+        });
+    if (!response) {
+      co_return std::unexpected(std::move(response).error().with("transport", "oran-http"));
+    }
+    co_return to_protocol_response(std::move(*response));
+  }
+
+private:
+  [[nodiscard]] http::BodyRequest to_body_request(provider::ProtocolHttpRequest request) const {
     auto headers = std::vector<http::Header>{};
     headers.reserve(request.headers.size());
     for (auto& header : request.headers) {
       headers.push_back(http::Header{.name = std::move(header.name), .value = std::move(header.value)});
     }
-
-    auto response = co_await client_->send(http::BodyRequest{
+    return http::BodyRequest{
         .method = std::move(request.method),
         .url = std::move(request.url),
         .headers = std::move(headers),
         .body = std::move(request.body_json),
         .timeout = request_timeout_,
-    });
-    if (!response) {
-      co_return std::unexpected(std::move(response).error().with("transport", "oran-http"));
-    }
-
-    auto protocol_headers = std::vector<provider::ProtocolHttpHeader>{};
-    protocol_headers.reserve(response->headers.size());
-    for (auto& header : response->headers) {
-      protocol_headers.push_back(
-          provider::ProtocolHttpHeader{.name = std::move(header.name), .value = std::move(header.value)});
-    }
-
-    co_return provider::ProtocolHttpResponse{
-        .status_code = response->status_code,
-        .headers = std::move(protocol_headers),
-        .body_json = std::move(response->body),
     };
   }
 
-private:
+  [[nodiscard]] static provider::ProtocolHttpResponse to_protocol_response(http::BodyResponse response) {
+    auto headers = std::vector<provider::ProtocolHttpHeader>{};
+    headers.reserve(response.headers.size());
+    for (auto& header : response.headers) {
+      headers.push_back(provider::ProtocolHttpHeader{.name = std::move(header.name), .value = std::move(header.value)});
+    }
+    return provider::ProtocolHttpResponse{
+        .status_code = response.status_code,
+        .headers = std::move(headers),
+        .body_json = std::move(response.body),
+    };
+  }
+
   http::Client* client_;
   std::chrono::milliseconds request_timeout_;
 };

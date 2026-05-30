@@ -2,6 +2,7 @@
 
 #include <expected>
 #include <span>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -14,6 +15,7 @@
 #include <oran/async.hpp>
 #include <oran/cli.hpp>
 #include <oran/core/error.hpp>
+#include <oran/core/stop_reason.hpp>
 #include <oran/core/time.hpp>
 #include <oran/hook.hpp>
 
@@ -366,4 +368,59 @@ TEST_CASE("OperatorPromptSink proceeds for non-ask blocking events", "[unit][cli
     REQUIRE(sink.prompts_rendered() == 0);
     REQUIRE(sink.answers_consumed() == 0);
   });
+}
+
+TEST_CASE("StreamingPromptSink renders answer-text deltas live", "[unit][cli][streaming]") {
+  std::ostringstream out;
+  cli::StreamingPromptSink sink{cli::StreamingPromptSinkOptions{.out = &out}};
+
+  sink.on_text_delta("Hello");
+  sink.on_text_delta(" world");
+  sink.on_done(core::StopReason::end_turn);
+
+  REQUIRE(out.str() == "Hello world\n");
+  REQUIRE(sink.text_deltas_rendered() == 2);
+  REQUIRE(sink.rendered_answer_text());
+  REQUIRE(sink.tool_starts_rendered() == 0);
+}
+
+TEST_CASE("StreamingPromptSink announces tool calls on their own line", "[unit][cli][streaming]") {
+  std::ostringstream out;
+  cli::StreamingPromptSink sink{cli::StreamingPromptSinkOptions{.out = &out}};
+
+  sink.on_tool_start("toolu_1", "get_weather");
+  sink.on_done(core::StopReason::tool_use);
+
+  // No answer text streamed, so `on_done` adds no trailing newline of its own;
+  // the tool marker self-terminates and `rendered_answer_text()` stays false so
+  // the runner still prints any assembled text.
+  REQUIRE(out.str() == "[tool: get_weather]\n");
+  REQUIRE(sink.tool_starts_rendered() == 1);
+  REQUIRE_FALSE(sink.rendered_answer_text());
+  REQUIRE(sink.text_deltas_rendered() == 0);
+}
+
+TEST_CASE("StreamingPromptSink streams thinking deltas when enabled", "[unit][cli][streaming]") {
+  std::ostringstream out;
+  cli::StreamingPromptSink sink{cli::StreamingPromptSinkOptions{.out = &out, .render_thinking = true}};
+
+  sink.on_thinking_delta("rea");
+  sink.on_thinking_delta("soning");
+  sink.on_done(core::StopReason::end_turn);
+
+  REQUIRE(out.str() == "reasoning\n");
+  REQUIRE_FALSE(sink.rendered_answer_text());
+}
+
+TEST_CASE("StreamingPromptSink suppresses thinking deltas when disabled", "[unit][cli][streaming]") {
+  std::ostringstream out;
+  cli::StreamingPromptSink sink{cli::StreamingPromptSinkOptions{.out = &out, .render_thinking = false}};
+
+  sink.on_thinking_delta("hidden reasoning");
+  sink.on_text_delta("answer");
+  sink.on_done(core::StopReason::end_turn);
+
+  REQUIRE(out.str() == "answer\n");
+  REQUIRE(sink.text_deltas_rendered() == 1);
+  REQUIRE(sink.rendered_answer_text());
 }

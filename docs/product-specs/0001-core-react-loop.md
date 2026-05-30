@@ -78,7 +78,7 @@ with persistent session history and a CLI surface. The first deliverable is "I c
 1. `xmake build orangutan` produces a binary within the compile-budget envelope.
 2. `./orangutan --prompt "Read this README and summarize it in one paragraph"` returns
    a sensible answer in single-shot mode.
-3. The REPL renders streaming tokens character-by-character.
+3. The REPL renders streaming tokens character-by-character. **(Shipped, slice 123 — configured-route `orangutan --prompt` over Anthropic Messages streams live through `cli::StreamingPromptSink`; the transport/decoder landed in slices 121–122.)**
 4. `Ctrl-C` during a tool call cancels within 1 s.
 5. After 100 turns of a conversation, the session file is < 1 MB and re-loadable.
 6. The permission engine refuses `shell.exec("rm -rf ...")` by default with an

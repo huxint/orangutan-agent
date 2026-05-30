@@ -4,3 +4,4 @@
 
 #include <oran/cli/cli.hpp>
 #include <oran/cli/operator_prompt_sink.hpp>
+#include <oran/cli/streaming_prompt_sink.hpp>

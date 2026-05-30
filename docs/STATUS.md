@@ -7,22 +7,33 @@
 
 ## Snapshot
 
-- **Slice:** 122 (`xmake run orangutan` reports slice 114; binary slice tag
+- **Slice:** 123 (`xmake run orangutan` reports slice 114; binary slice tag
   bumps only land when a behavior change touches the bootstrap entry banner)
 - **Last completed history:**
-  [`histories/2026-05/20260530-1428-provider-anthropic-sse-streaming.md`](histories/2026-05/20260530-1428-provider-anthropic-sse-streaming.md)
-- **Active exec-plan:**
-  [`exec-plans/active/2026-05-30-provider-sse-streaming.md`](exec-plans/active/2026-05-30-provider-sse-streaming.md)
-  — Slices A (slice 121, `oran-http` SSE transport) and B (slice 122, provider
-  Anthropic SSE decoder + streaming `ProtocolTransport` + streaming-capable
-  Anthropic `System`) landed; Slice C
-  (`cli::StreamingPromptSink` + runner wiring, lights up spec 0001 AC3) remains.
-- **Next intended slice:** Slice 123 (C) of the provider-SSE-streaming arc —
-  bootstrap's `HttpProtocolTransport::send_streaming` (overriding
-  `supports_streaming()` → true), `cli::StreamingPromptSink`, and the
-  `AgentPromptRunner` wiring that constructs the sink when not quiet and passes
-  it to `run_turn`, lighting up spec 0001 AC3; see the active exec-plan. Slice
-  122 (B) just landed the provider-side Anthropic Messages streaming: the
+  [`histories/2026-05/20260530-1519-cli-streaming-render.md`](histories/2026-05/20260530-1519-cli-streaming-render.md)
+- **Active exec-plan:** none — the provider-SSE-streaming arc (slices 121–123)
+  is complete and moved to
+  [`exec-plans/completed/2026-05-30-provider-sse-streaming.md`](exec-plans/completed/2026-05-30-provider-sse-streaming.md);
+  the OpenAI Responses SSE decoder (Slice 124) is a noted post-arc follow-up,
+  not an active plan.
+- **Next intended slice:** no committed plan. The arc's optional follow-up is
+  Slice 124 — the OpenAI Responses SSE decoder mirroring slice 122 — otherwise
+  the next runtime piece per the routing index. Slice 123 (C) just closed the
+  provider-SSE-streaming arc: streaming now runs end-to-end into the binary.
+  Bootstrap's `HttpProtocolTransport` overrides `supports_streaming()` → true and
+  implements `send_streaming` over `http::Client::send_streaming` (translating
+  each `http::SseEvent` into the provider `ProtocolSseCallback`);
+  `cli::StreamingPromptSink` (a `provider::EventSink`) renders answer/thinking
+  deltas to an injectable `std::ostream` (default `std::cout`, flushed per delta)
+  plus a one-line `[tool: <name>]` marker; and `AgentPromptRunner` builds the sink
+  for non-quiet streaming runs, passes it to `agent::Loop::run_turn`, and clears
+  the assembled `PromptRunResult::text` once it streamed live so the CLI does not
+  double-print. Configured-route `orangutan --prompt` over Anthropic now renders
+  tokens character-by-character (spec 0001 AC3); a mid-stream Ctrl-C surfaces as
+  `Error::cancelled` with `cancellation_phase=provider` (spec 0018). `oran-cli`
+  now depends on `oran-provider` (downward, interface → composition). `test-cli`
+  14 / 97 → **18 / 110**; `test-bootstrap` 72 / 316 → **75 / 344**. Slice
+  122 (B) landed the provider-side Anthropic Messages streaming: the
   stateful `AnthropicSseDecoder` (`src/oran-provider/_impl/`, the incremental
   sibling of `decode_protocol_response` that assembles a byte-identical
   `Response`), a provider-owned
@@ -34,9 +45,10 @@
   calling the caller's `EventSink` with ordered `on_text_delta` /
   `on_thinking_delta` / `on_tool_start` / `on_tool_delta` / `on_done`; otherwise
   it keeps the body path (OpenAI Responses stays body-only this arc). The
-  capability gate keeps configured-route production body-only until Slice C —
-  bootstrap's `HttpProtocolTransport` keeps the default `false`, so
-  `test-bootstrap`'s localhost round trip still sends `"stream":false`. Retry /
+  capability gate kept configured-route production body-only through slice 122;
+  slice 123 then overrode `HttpProtocolTransport::supports_streaming()` /
+  `send_streaming`, so the binary now streams and `test-bootstrap`'s localhost
+  round trip asserts `"stream":true`. Retry /
   fallback stream-suppression needed no new code: the slice-97
   `execution::Runtime` per-attempt `AttemptSink` already retries a pre-first-byte
   failure and returns `stream_already_emitted` once a delta has fired (both arms
@@ -1156,8 +1168,8 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 81 cases / 614 assertions.
 - `oran-agent`: 47 cases / 10618 assertions.
-- `oran-cli`: 14 cases / 97 assertions.
-- `oran-bootstrap`: 72 cases / 316 assertions.
+- `oran-cli`: 18 cases / 110 assertions.
+- `oran-bootstrap`: 75 cases / 344 assertions.
 
 ## Open Tech-Debt Rows
 

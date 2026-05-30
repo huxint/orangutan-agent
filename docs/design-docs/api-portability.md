@@ -137,10 +137,14 @@ struct Response {
 > stream-suppression needs no new code: the slice-97 `execution::Runtime`
 > already wraps the caller's `EventSink` in a per-attempt `AttemptSink`, so a
 > pre-first-byte failure retries while a post-first-byte failure returns
-> `stream_already_emitted`. Bootstrap's `HttpProtocolTransport` keeps the
-> default `supports_streaming()==false` until its `send_streaming` override and
-> the CLI streaming sink land (Slice C), so ordinary binary runs stay body-only
-> for now. Provider hooks and usage/cost rollups remain planned.
+> `stream_already_emitted`. Slice 123 wires the path into the binary: bootstrap's
+> `HttpProtocolTransport` overrides `supports_streaming()` to `true` and
+> implements `send_streaming` over `http::Client::send_streaming`, and
+> `cli::StreamingPromptSink` renders the provider's `EventSink` deltas live to the
+> terminal while `AgentPromptRunner` wires it into non-quiet streaming runs — so
+> ordinary configured-route `orangutan --prompt` over Anthropic now streams tokens
+> character-by-character (spec 0001 AC3). Provider hooks and usage/cost rollups
+> remain planned.
 
 ## Layered Implementation
 
@@ -344,9 +348,9 @@ All adapters support streaming when the vendor supports it. The contract:
 - The web UI's SSE route bridges these deltas to the client.
 - The CLI REPL renders deltas to the terminal in real time.
 
-**Status (slices 121–122):** the Anthropic Messages streaming path is shipped
-end-to-end at the provider boundary; the platform transport (`oran-http`,
-slice 121) feeds it.
+**Status (slices 121–123):** the Anthropic Messages streaming path is shipped
+end-to-end — from the platform transport (`oran-http`, slice 121) through the
+provider decoder/System (slice 122) to the binary + terminal (slice 123).
 
 - **Transport seam.** `ProtocolTransport` carries a body `send` plus a streaming
   `send_streaming(ProtocolHttpRequest, ProtocolSseCallback)` where
@@ -384,10 +388,19 @@ slice 121) feeds it.
   callers never see duplicate stream bytes. No streaming-specific suppression
   code exists — the slice-97 machinery covers it.
 
-The bootstrap `HttpProtocolTransport::send_streaming` override and the
-`cli::StreamingPromptSink` that renders deltas to the terminal are the remaining
-wiring (Slice C); until then `HttpProtocolTransport` reports
-`supports_streaming() == false` and ordinary binary runs stay body-only.
+**Slice 123** wires the path end-to-end into the binary. Bootstrap's
+`HttpProtocolTransport` overrides `supports_streaming()` to `true` and implements
+`send_streaming` over `http::Client::send_streaming`, translating each
+`http::SseEvent` into the provider `ProtocolSseCallback`. `cli::StreamingPromptSink`
+(a `provider::EventSink`) renders answer and thinking deltas to the terminal as
+they arrive — flushing per delta for character-by-character output — plus a
+one-line `[tool: <name>]` marker per tool call. `AgentPromptRunner` constructs the
+sink for non-quiet streaming runs, passes it to `agent::Loop::run_turn`, and clears
+the assembled `PromptRunResult::text` once the answer streamed live so the CLI does
+not print it twice. Ordinary configured-route `orangutan --prompt` over Anthropic
+now renders tokens character-by-character (spec 0001 AC3); a mid-stream Ctrl-C
+surfaces as `Error::cancelled` with `cancellation_phase=provider` (spec 0018,
+reused). The OpenAI Responses SSE decoder remains the noted post-arc follow-up.
 
 ## Caching
 
