@@ -7,20 +7,57 @@
 
 ## Snapshot
 
-- **Slice:** 120 (`xmake run orangutan` reports slice 114; binary slice tag
+- **Slice:** 122 (`xmake run orangutan` reports slice 114; binary slice tag
   bumps only land when a behavior change touches the bootstrap entry banner)
 - **Last completed history:**
-  [`histories/2026-05/20260529-2325-agent-loop-scheduler-wiring.md`](histories/2026-05/20260529-2325-agent-loop-scheduler-wiring.md)
-- **Active exec-plan:** none — the tool-scheduler v1 arc (slices 116-120) is
-  complete and moved to
-  [`exec-plans/completed/2026-05-27-tool-scheduler-v1.md`](exec-plans/completed/2026-05-27-tool-scheduler-v1.md).
-  Spec [`product-specs/0012-tool-scheduler-and-state.md`](product-specs/0012-tool-scheduler-and-state.md)
-  v1 is closed: slices 116-120 close AC1-AC7, AC10, AC12, and ≥90% of the AC11
-  scheduler matrix (AC8/AC9 `BoundedCache` invariants shipped earlier via
-  slice 44). The next arc gets its own plan when picked up — see
-  [`PLANS_GUIDE.md`](PLANS_GUIDE.md) "When NOT To Create A Plan".
-- **Next intended slice:** none committed — the tool-scheduler v1 arc is
-  closed. Slice 120 wired `agent::Loop` to dispatch every tool batch (including
+  [`histories/2026-05/20260530-1428-provider-anthropic-sse-streaming.md`](histories/2026-05/20260530-1428-provider-anthropic-sse-streaming.md)
+- **Active exec-plan:**
+  [`exec-plans/active/2026-05-30-provider-sse-streaming.md`](exec-plans/active/2026-05-30-provider-sse-streaming.md)
+  — Slices A (slice 121, `oran-http` SSE transport) and B (slice 122, provider
+  Anthropic SSE decoder + streaming `ProtocolTransport` + streaming-capable
+  Anthropic `System`) landed; Slice C
+  (`cli::StreamingPromptSink` + runner wiring, lights up spec 0001 AC3) remains.
+- **Next intended slice:** Slice 123 (C) of the provider-SSE-streaming arc —
+  bootstrap's `HttpProtocolTransport::send_streaming` (overriding
+  `supports_streaming()` → true), `cli::StreamingPromptSink`, and the
+  `AgentPromptRunner` wiring that constructs the sink when not quiet and passes
+  it to `run_turn`, lighting up spec 0001 AC3; see the active exec-plan. Slice
+  122 (B) just landed the provider-side Anthropic Messages streaming: the
+  stateful `AnthropicSseDecoder` (`src/oran-provider/_impl/`, the incremental
+  sibling of `decode_protocol_response` that assembles a byte-identical
+  `Response`), a provider-owned
+  `ProtocolTransport::send_streaming(ProtocolHttpRequest, ProtocolSseCallback)`
+  seam guarded by a `ProtocolTransport::supports_streaming()` capability query
+  (default false), and the Anthropic `ProtocolTransportSystem` honoring
+  `request.stream` — when the caller asks to stream and the transport advertises
+  support it sends `stream=true` and drives `send_streaming` + the decoder,
+  calling the caller's `EventSink` with ordered `on_text_delta` /
+  `on_thinking_delta` / `on_tool_start` / `on_tool_delta` / `on_done`; otherwise
+  it keeps the body path (OpenAI Responses stays body-only this arc). The
+  capability gate keeps configured-route production body-only until Slice C —
+  bootstrap's `HttpProtocolTransport` keeps the default `false`, so
+  `test-bootstrap`'s localhost round trip still sends `"stream":false`. Retry /
+  fallback stream-suppression needed no new code: the slice-97
+  `execution::Runtime` per-attempt `AttemptSink` already retries a pre-first-byte
+  failure and returns `stream_already_emitted` once a delta has fired (both arms
+  pinned for streaming). The decoder is its own `_impl` TU (not appended to
+  `protocol_response.cpp`), so no `nlohmann` provider TU grows toward the cap and
+  `compile_budget.json` is unchanged. `test-provider` 66 / 528 → **81 / 614**;
+  `test-bootstrap` and `test-agent` unchanged. Slice 121 (A) just
+  landed the self-contained `oran-http` SSE transport: `<oran/http.hpp>` exports
+  `http::SseEvent` and `Client::send_streaming(BodyRequest, SseEventCallback)`,
+  backed by an incremental `text/event-stream` parser in
+  `src/oran-http/_impl/sse_parser.hpp` (handles `\n`/`\r\n`, `field: value`,
+  multi-line `data:`, blank-line dispatch, `event` defaulting to `message`,
+  comment/`id`/`retry` ignore, chunk-split events). The parser runs inside the
+  libcurl write callback on the blocking executor; each complete event is
+  `asio::post`-ed to the caller's coroutine executor before the sink fires, so
+  the decoder/sink never run on the curl thread. A 2xx `text/event-stream`
+  resolves with status + headers and an empty body; any other response is
+  collected as a body for the caller to decode; the existing 50 ms curl poll
+  surfaces mid-stream cancellation. `oran-http` also gained its first
+  `compile_budget.json` category (`{1.0, 2.0, 2.5}`, the `oran-async` tier).
+  `test-http` 3 / 21 → 15 / 60. Slice 120 wired `agent::Loop` to dispatch every tool batch (including
   N=1) through `ToolScheduler::run_batch` instead of the sequential
   `for (use : tool_uses) registry.dispatch(...)` loop, so bounded parallelism,
   per-path read/write locks, per-call timeout, and parent-cancellation
@@ -1109,7 +1146,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 - `oran-core`: 71 cases / 455 assertions.
 - `oran-async`: 9 cases / 43 assertions.
-- `oran-http`: 3 cases / 21 assertions.
+- `oran-http`: 15 cases / 60 assertions.
 - `oran-io`: 49 cases / 286 assertions.
 - `oran-storage`: 72 cases / 899 assertions.
 - `oran-config`: 36 cases / 258 assertions.
@@ -1117,7 +1154,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-hook`: 30 cases / 207 assertions.
 - `oran-tool`: 185 cases / 1866 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
-- `oran-provider`: 66 cases / 528 assertions.
+- `oran-provider`: 81 cases / 614 assertions.
 - `oran-agent`: 47 cases / 10618 assertions.
 - `oran-cli`: 14 cases / 97 assertions.
 - `oran-bootstrap`: 72 cases / 316 assertions.

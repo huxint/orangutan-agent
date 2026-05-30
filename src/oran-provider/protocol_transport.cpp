@@ -13,6 +13,8 @@
 #include <oran/core/error.hpp>
 #include <oran/provider/protocol_response.hpp>
 
+#include "_impl/anthropic_sse_decoder.hpp"
+
 namespace orangutan::provider {
 namespace {
 
@@ -135,6 +137,17 @@ public:
       co_return std::unexpected(std::move(valid).error());
     }
 
+    // Stream only when the caller asked for it, this is the Anthropic Messages
+    // protocol, and the injected transport actually implements streaming.
+    // Otherwise force a single non-streaming body response. OpenAI Responses
+    // stays body-only this arc.
+    const bool stream = request.stream &&
+                        credentials_.target.profile.target.protocol == ProtocolKind::anthropic_messages &&
+                        transport_->supports_streaming();
+    if (stream) {
+      co_return co_await send_stream(std::move(request), std::move(route), sink);
+    }
+
     request.stream = false;
     auto protocol = make_protocol_request(request, route.primary);
     if (!protocol) {
@@ -173,12 +186,63 @@ public:
   }
 
 private:
+  // Drive the Anthropic SSE path: send `stream=true`, feed each decoded event
+  // into the incremental decoder (which calls the sink with ordered deltas and
+  // the terminal `on_done`), then return the assembled Response. The decoder
+  // lives in this coroutine frame and outlives every callback because each
+  // event is delivered before `send_streaming` resolves.
+  [[nodiscard]] async::Awaitable<core::Result<Response>>
+  send_stream(Request request, Route route, EventSink* sink) const {
+    request.stream = true;
+    auto protocol = make_protocol_request(request, route.primary);
+    if (!protocol) {
+      co_return std::unexpected(std::move(protocol).error());
+    }
+
+    detail::AnthropicSseDecoder decoder{route.primary, sink};
+    auto http_response = co_await transport_->send_streaming(
+        ProtocolHttpRequest{
+            .method = protocol->method,
+            .url = join_url(credentials_.target.profile.base_url, protocol->path),
+            .headers = protocol_headers(credentials_, options_),
+            .body_json = std::move(protocol->body_json),
+        },
+        [&decoder](std::string_view event, std::string_view data) { decoder.consume(event, data); });
+    if (!http_response) {
+      co_return std::unexpected(std::move(http_response)
+                                    .error()
+                                    .with("provider_profile", route.primary.profile)
+                                    .with("provider_model", route.primary.model)
+                                    .with("protocol", protocol_name(route.primary.protocol)));
+    }
+
+    if (http_response->status_code < 200 || http_response->status_code >= 300) {
+      co_return std::unexpected(http_status_error(*http_response, route.primary));
+    }
+
+    auto assembled = decoder.result();
+    if (!assembled) {
+      co_return std::unexpected(std::move(assembled)
+                                    .error()
+                                    .with("provider_profile", route.primary.profile)
+                                    .with("provider_model", route.primary.model));
+    }
+    co_return assembled;
+  }
+
   ProtocolTransport* transport_;
   AdapterCredentialTarget credentials_;
   ProtocolTransportAdapterFactoryOptions options_;
 };
 
 }  // namespace
+
+async::Awaitable<core::Result<ProtocolHttpResponse>>
+ProtocolTransport::send_streaming(ProtocolHttpRequest request, ProtocolSseCallback on_event) const {
+  static_cast<void>(request);
+  static_cast<void>(on_event);
+  co_return std::unexpected(Error::internal("protocol transport does not implement streaming"));
+}
 
 ProtocolTransportAdapterFactory::ProtocolTransportAdapterFactory(ProtocolTransport& transport,
                                                                  ProtocolKind protocol,

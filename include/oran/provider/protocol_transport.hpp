@@ -8,9 +8,11 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <oran/async/awaitable_fwd.hpp>
@@ -45,6 +47,13 @@ struct ProtocolHttpResponse {
   friend bool operator==(const ProtocolHttpResponse&, const ProtocolHttpResponse&) = default;
 };
 
+/// Invoked once per decoded SSE event during a streaming send. Provider-owned
+/// (rather than `http::SseEvent`) so `oran-http` types stay off the provider's
+/// public surface, symmetric with `ProtocolHttpRequest`/`ProtocolHttpResponse`
+/// forming the transport seam instead of `http::BodyRequest`. `event` defaults
+/// to "message" per the SSE grammar; `data` is the joined `data:` payload.
+using ProtocolSseCallback = std::function<void(std::string_view event, std::string_view data)>;
+
 /// Minimal async transport consumed by protocol adapters.
 ///
 /// Implementations own actual HTTP, TLS, and SSE mechanics. Requests may carry
@@ -61,6 +70,24 @@ public:
 
   [[nodiscard]] virtual async::Awaitable<core::Result<ProtocolHttpResponse>>
   send(ProtocolHttpRequest request) const = 0;
+
+  /// Whether this transport implements `send_streaming`. Adapters consult this
+  /// before choosing the streaming path so a transport that only does body
+  /// requests (or has not yet implemented streaming) stays on the body path.
+  /// Defaults to `false`; streaming-capable transports override it.
+  [[nodiscard]] virtual bool supports_streaming() const noexcept {
+    return false;
+  }
+
+  /// Send one request and stream the response, invoking `on_event` once per
+  /// decoded SSE event on the caller's executor. On a 2xx event stream the
+  /// resolved `ProtocolHttpResponse` carries the status and headers with an
+  /// empty body; on any other response no events fire and the full body is
+  /// returned for the caller to decode. The default returns an error so a
+  /// transport that reports `supports_streaming() == false` is never expected
+  /// to stream.
+  [[nodiscard]] virtual async::Awaitable<core::Result<ProtocolHttpResponse>>
+  send_streaming(ProtocolHttpRequest request, ProtocolSseCallback on_event) const;
 };
 
 struct ProtocolTransportAdapterFactoryOptions {

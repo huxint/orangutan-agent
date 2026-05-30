@@ -258,7 +258,13 @@ proves the loop behaves correctly without a network.
   parity gated by a future `bench-provider` protocol-overhead scenario.
 - **Streaming sink** — `provider::EventSink` becomes a real coroutine
   channel surfaced through `oran-cli` so the REPL renders deltas
-  character-by-character (spec 0001 acceptance #3).
+  character-by-character (spec 0001 acceptance #3). **Status (slices 121–122):**
+  the provider side is shipped — `oran-http` streams SSE (slice 121) and the
+  Anthropic `ProtocolTransportSystem` now drives `AnthropicSseDecoder` through
+  `ProtocolTransport::send_streaming`, calling the caller's `EventSink` with
+  ordered deltas (slice 122). The remaining piece is the `oran-cli`
+  `StreamingPromptSink` + `AgentPromptRunner` wiring that renders those deltas to
+  the terminal (slice 123).
 - **Provider retry / fallback policy** — **Status (slice 97):**
   `provider::execution::Runtime` now wraps any `provider::System`, consumes
   `Request::retry`, retries retryable failures per target, tries

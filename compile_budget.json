@@ -26,6 +26,7 @@
     "oran-log":          { "median_sec": 0.8, "p95_sec": 1.5, "hard_cap_sec": 2.0 },
     "oran-io":           { "median_sec": 0.8, "p95_sec": 1.5, "hard_cap_sec": 2.0 },
     "oran-async":        { "median_sec": 1.0, "p95_sec": 2.0, "hard_cap_sec": 2.5 },
+    "oran-http":         { "median_sec": 1.0, "p95_sec": 2.0, "hard_cap_sec": 2.5 },
     "oran-storage":      { "median_sec": 1.0, "p95_sec": 2.0, "hard_cap_sec": 2.5 },
     "oran-config":       { "median_sec": 1.0, "p95_sec": 2.0, "hard_cap_sec": 2.5 },
     "oran-permission":   { "median_sec": 1.0, "p95_sec": 2.0, "hard_cap_sec": 2.5 },

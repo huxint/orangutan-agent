@@ -136,6 +136,35 @@ public:
   std::string text;
 };
 
+// Streams nothing on the first attempt (a pre-first-byte failure), then streams
+// a delta and succeeds on the second. Pins that the slice-97 per-attempt
+// AttemptSink lets a failure that emitted no bytes retry, and the retry's deltas
+// still reach the caller's sink.
+class StreamingRetrySystem final : public prov::System {
+public:
+  [[nodiscard]] async::Awaitable<core::Result<prov::Response>>
+  send(prov::Request request, prov::Route route, prov::EventSink* sink = nullptr) const override {
+    static_cast<void>(request);
+    routes_seen_.push_back(route);
+    if (cursor_++ == 0) {
+      // First attempt fails before emitting any visible output.
+      co_return std::unexpected(core::Error::network("transient failure before first byte"));
+    }
+    if (sink != nullptr) {
+      sink->on_text_delta("recovered");
+    }
+    co_return text_response("recovered");
+  }
+
+  [[nodiscard]] const std::vector<prov::Route>& routes_seen() const noexcept {
+    return routes_seen_;
+  }
+
+private:
+  mutable std::vector<prov::Route> routes_seen_;
+  mutable std::size_t cursor_{0};
+};
+
 }  // namespace
 
 TEST_CASE("execution runtime retries retryable errors on the same target", "[unit][provider][execution]") {
@@ -230,6 +259,23 @@ TEST_CASE("execution runtime does not retry after visible stream output", "[unit
     REQUIRE(sink.text == "partial");
     REQUIRE(backend.routes_seen().size() == 1);
     REQUIRE(backend.routes_seen()[0].primary.model == "primary-model");
+  });
+}
+
+TEST_CASE("execution runtime retries a streaming failure that emitted nothing", "[unit][provider][execution]") {
+  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    StreamingRetrySystem backend;
+    TextSink sink;
+    prov::execution::Runtime runtime{backend};
+
+    auto result = co_await runtime.send(request_with_retry(2), route_with_fallback(), &sink);
+
+    REQUIRE(result.has_value());
+    REQUIRE(std::get<core::TextContent>(result->blocks.front()).text == "recovered");
+    REQUIRE(sink.text == "recovered");
+    REQUIRE(backend.routes_seen().size() == 2);
+    REQUIRE(backend.routes_seen()[0].primary.model == "primary-model");
+    REQUIRE(backend.routes_seen()[1].primary.model == "primary-model");
   });
 }
 

@@ -8,6 +8,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -44,6 +45,21 @@ struct BodyResponse {
   friend bool operator==(const BodyResponse&, const BodyResponse&) = default;
 };
 
+/// One decoded Server-Sent Events message. `event` defaults to "message" per
+/// the SSE grammar; `data` is the `data:` payload, multi-line values joined
+/// with "\n".
+struct SseEvent {
+  std::string event{"message"};
+  std::string data;
+
+  friend bool operator==(const SseEvent&, const SseEvent&) = default;
+};
+
+/// Invoked once per decoded SSE event during a streaming send. In production
+/// the callback runs on the caller's coroutine executor, never on the blocking
+/// transport thread.
+using SseEventCallback = std::function<void(const SseEvent&)>;
+
 class Client {
 public:
   /// The caller-owned executor is where libcurl's blocking body-response work
@@ -61,6 +77,14 @@ public:
   /// This first slice is intentionally body-response only. Streaming/SSE will
   /// use the same libcurl boundary but a different response contract.
   [[nodiscard]] async::Awaitable<core::Result<BodyResponse>> send(BodyRequest request) const;
+
+  /// Send one request and stream the response. On a 2xx `text/event-stream`
+  /// response, each decoded `SseEvent` is delivered to `on_event` and the
+  /// resolved `BodyResponse` carries the status and headers with an empty body.
+  /// On any other response, no events fire and the full body is returned for
+  /// the caller to decode (e.g. an error payload).
+  [[nodiscard]] async::Awaitable<core::Result<BodyResponse>> send_streaming(BodyRequest request,
+                                                                            SseEventCallback on_event) const;
 
 private:
   struct Impl;

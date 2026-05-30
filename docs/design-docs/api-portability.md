@@ -122,8 +122,25 @@ struct Response {
 > shell and read no provider credentials. Slice 101's
 > bootstrap `AgentPromptRunner` is the loop owner that consumes a resolved
 > route plus `provider::execution::Runtime` to drive `agent::Loop` with a
-> caller-supplied backend. SSE streaming, provider hooks, and usage/cost
-> rollups remain planned.
+> caller-supplied backend. Slice 121 adds the platform SSE transport in
+> `oran-http` (`http::SseEvent`, `Client::send_streaming(BodyRequest,
+> SseEventCallback)`, an incremental `text/event-stream` parser, and the
+> blocking-executor→coroutine-executor event handoff so the decoder/sink never
+> run on the curl thread). Slice 122 adds the provider-side Anthropic streaming:
+> a stateful `AnthropicSseDecoder` (the incremental sibling of
+> `decode_protocol_response`), `ProtocolTransport::send_streaming(ProtocolHttpRequest,
+> ProtocolSseCallback)` plus a `ProtocolTransport::supports_streaming()`
+> capability gate, and the Anthropic `ProtocolTransportSystem` now honoring
+> `request.stream` — it drives `send_streaming` + the decoder when the caller
+> asks to stream and the transport advertises support, otherwise it keeps the
+> single-body path (OpenAI Responses stays body-only this arc). Retry/fallback
+> stream-suppression needs no new code: the slice-97 `execution::Runtime`
+> already wraps the caller's `EventSink` in a per-attempt `AttemptSink`, so a
+> pre-first-byte failure retries while a post-first-byte failure returns
+> `stream_already_emitted`. Bootstrap's `HttpProtocolTransport` keeps the
+> default `supports_streaming()==false` until its `send_streaming` override and
+> the CLI streaming sink land (Slice C), so ordinary binary runs stay body-only
+> for now. Provider hooks and usage/cost rollups remain planned.
 
 ## Layered Implementation
 
@@ -326,6 +343,51 @@ All adapters support streaming when the vendor supports it. The contract:
 - During streaming, the `EventSink` (provided by the caller) receives deltas.
 - The web UI's SSE route bridges these deltas to the client.
 - The CLI REPL renders deltas to the terminal in real time.
+
+**Status (slices 121–122):** the Anthropic Messages streaming path is shipped
+end-to-end at the provider boundary; the platform transport (`oran-http`,
+slice 121) feeds it.
+
+- **Transport seam.** `ProtocolTransport` carries a body `send` plus a streaming
+  `send_streaming(ProtocolHttpRequest, ProtocolSseCallback)` where
+  `ProtocolSseCallback = void(std::string_view event, std::string_view data)` is
+  **provider-owned** so `oran-http` types stay off the provider's public surface
+  (symmetric with `ProtocolHttpRequest/Response`). A `supports_streaming()`
+  capability query (default `false`) lets a transport that only does body
+  requests — or has not yet implemented streaming — stay on the body path; an
+  adapter streams only when both the request asks for it and the transport
+  advertises support. On a 2xx event stream `send_streaming` resolves with
+  status + headers and an **empty** body (events already delivered); any other
+  response returns the body for the caller to decode through the same
+  HTTP-status→category path the body `send` uses.
+- **Decoder.** `AnthropicSseDecoder` (in `src/oran-provider/_impl/`, `nlohmann`
+  private to its `.cpp`) is the stateful sibling of `decode_protocol_response`.
+  It runs a strict state machine — `message_start`→usage/model;
+  `content_block_start`→open text/thinking/tool_use (+`on_tool_start`);
+  `content_block_delta`→append + `on_text_delta`/`on_thinking_delta`/`on_tool_delta`;
+  `content_block_stop`→finalize (parse accumulated tool-input JSON);
+  `message_delta`→stop_reason + output usage; `message_stop`→assemble `Response`
+  + `on_done`; `ping` ignored; an `error` event or malformed payload records the
+  first decode error. The assembled `Response` is byte-for-byte the one the body
+  decoder produces for the equivalent non-streaming body.
+- **System.** The Anthropic `ProtocolTransportSystem::send` honors
+  `request.stream`: when set (and the transport supports streaming) it sends
+  `stream=true`, drives `send_streaming` + the decoder, and returns the assembled
+  `Response`; otherwise it forces `stream=false` and takes the body path. OpenAI
+  Responses stays body-only until its own SSE decoder follow-up.
+- **Retry/fallback suppression — already sufficient (slice 97).** The streaming
+  System simply calls the `EventSink*` it is handed, which `execution::Runtime`
+  has already wrapped in a per-attempt `AttemptSink`. A pre-first-byte failure
+  emitted nothing, so it retries/falls back normally; once any `on_*` delta has
+  fired, a later retryable error returns immediately with
+  `retry_skipped` / `fallback_skipped = stream_already_emitted` so terminal/UI
+  callers never see duplicate stream bytes. No streaming-specific suppression
+  code exists — the slice-97 machinery covers it.
+
+The bootstrap `HttpProtocolTransport::send_streaming` override and the
+`cli::StreamingPromptSink` that renders deltas to the terminal are the remaining
+wiring (Slice C); until then `HttpProtocolTransport` reports
+`supports_streaming() == false` and ordinary binary runs stay body-only.
 
 ## Caching
 

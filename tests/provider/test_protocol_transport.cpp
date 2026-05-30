@@ -169,6 +169,96 @@ public:
   mutable std::size_t cursor{0};
 };
 
+using SseEvent = std::pair<std::string, std::string>;
+
+// A streaming observer that records the ordered delta callbacks so streaming
+// tests can assert the System drove the decoder (not just the body path).
+class CapturingSink final : public provider::EventSink {
+public:
+  void on_text_delta(std::string_view delta) override {
+    log.push_back("text:" + std::string{delta});
+  }
+  void on_thinking_delta(std::string_view delta) override {
+    log.push_back("thinking:" + std::string{delta});
+  }
+  void on_tool_start(std::string_view id, std::string_view name) override {
+    log.push_back("tool_start:" + std::string{id} + ":" + std::string{name});
+  }
+  void on_tool_delta(std::string_view id, std::string_view input_delta) override {
+    log.push_back("tool_delta:" + std::string{id} + ":" + std::string{input_delta});
+  }
+  void on_done(core::StopReason stop_reason) override {
+    done = stop_reason;
+    log.push_back("done");
+  }
+
+  std::vector<std::string> log;
+  std::optional<core::StopReason> done;
+};
+
+// A transport that can replay a canned Anthropic SSE event sequence. It records
+// which path the System chose (body vs streaming) so tests can pin the gate.
+class StreamingTransport final : public provider::ProtocolTransport {
+public:
+  [[nodiscard]] bool supports_streaming() const noexcept override {
+    return streaming_supported;
+  }
+
+  [[nodiscard]] async::Awaitable<core::Result<provider::ProtocolHttpResponse>>
+  send(provider::ProtocolHttpRequest request) const override {
+    body_requests.push_back(std::move(request));
+    co_return provider::ProtocolHttpResponse{.status_code = body_status, .headers = {}, .body_json = body_json};
+  }
+
+  [[nodiscard]] async::Awaitable<core::Result<provider::ProtocolHttpResponse>>
+  send_streaming(provider::ProtocolHttpRequest request, provider::ProtocolSseCallback on_event) const override {
+    streaming_requests.push_back(std::move(request));
+    for (const auto& [event, data] : events) {
+      on_event(event, data);
+    }
+    co_return provider::ProtocolHttpResponse{.status_code = stream_status, .headers = {}, .body_json = stream_body};
+  }
+
+  std::vector<SseEvent> events;
+  bool streaming_supported{true};
+  std::uint16_t stream_status{200};
+  std::string stream_body;  // empty on a 2xx event stream
+  std::uint16_t body_status{200};
+  std::string body_json;
+  mutable std::vector<provider::ProtocolHttpRequest> body_requests;
+  mutable std::vector<provider::ProtocolHttpRequest> streaming_requests;
+};
+
+std::vector<SseEvent> text_turn_events() {
+  return {
+      {"message_start",
+       R"({"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet","content":[],"stop_reason":null,"usage":{"input_tokens":4,"output_tokens":1}}})"},
+      {"content_block_start", R"({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})"},
+      {"content_block_delta",
+       R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"anthropic"}})"},
+      {"content_block_delta", R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" ok"}})"},
+      {"content_block_stop", R"({"type":"content_block_stop","index":0})"},
+      {"message_delta",
+       R"({"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}})"},
+      {"message_stop", R"({"type":"message_stop"})"},
+  };
+}
+
+std::vector<SseEvent> tool_turn_events() {
+  return {
+      {"message_start",
+       R"({"type":"message_start","message":{"id":"msg_2","type":"message","role":"assistant","model":"claude-sonnet","content":[],"stop_reason":null,"usage":{"input_tokens":4,"output_tokens":1}}})"},
+      {"content_block_start",
+       R"({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"get_weather","input":{}}})"},
+      {"content_block_delta",
+       R"({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"city\":\"NYC\"}"}})"},
+      {"content_block_stop", R"({"type":"content_block_stop","index":0})"},
+      {"message_delta",
+       R"({"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":9}})"},
+      {"message_stop", R"({"type":"message_stop"})"},
+  };
+}
+
 }  // namespace
 
 TEST_CASE("protocol transport factory sends Anthropic Messages bodies", "[unit][provider][protocol]") {
@@ -360,4 +450,152 @@ TEST_CASE("protocol transport system rejects mismatched selected route models", 
   });
 
   REQUIRE(transport.requests.empty());
+}
+
+TEST_CASE("protocol transport system streams Anthropic deltas through the decoder", "[unit][provider][protocol][sse]") {
+  StreamingTransport transport;
+  transport.events = text_turn_events();
+  provider::ProtocolTransportAdapterFactory factory{transport, provider::ProtocolKind::anthropic_messages};
+  auto credentials = credential_target(provider::ProtocolKind::anthropic_messages);
+  auto route = provider::Route{.primary = credentials.target.profile.target, .fallbacks = {}};
+  auto system = factory.create(std::move(credentials));
+  REQUIRE(system.has_value());
+
+  CapturingSink sink;
+  test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
+    auto response = co_await (*system)->send(request(), route, &sink);
+
+    REQUIRE(response.has_value());
+    REQUIRE(std::get<core::TextContent>(response->blocks.front()).text == "anthropic ok");
+    REQUIRE(response->stop_reason == core::StopReason::end_turn);
+    REQUIRE(response->usage.input_tokens == 4);
+    REQUIRE(response->usage.output_tokens == 2);
+    REQUIRE(response->model_used == std::optional<std::string>{"claude-sonnet"});
+  });
+
+  REQUIRE(transport.streaming_requests.size() == 1);
+  REQUIRE(transport.body_requests.empty());
+  REQUIRE(json::parse(transport.streaming_requests.front().body_json).at("stream") == true);
+  REQUIRE(sink.log == std::vector<std::string>{"text:anthropic", "text: ok", "done"});
+}
+
+TEST_CASE("protocol transport system assembles a streamed tool_use turn", "[unit][provider][protocol][sse]") {
+  StreamingTransport transport;
+  transport.events = tool_turn_events();
+  provider::ProtocolTransportAdapterFactory factory{transport, provider::ProtocolKind::anthropic_messages};
+  auto credentials = credential_target(provider::ProtocolKind::anthropic_messages);
+  auto route = provider::Route{.primary = credentials.target.profile.target, .fallbacks = {}};
+  auto system = factory.create(std::move(credentials));
+  REQUIRE(system.has_value());
+
+  CapturingSink sink;
+  test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
+    auto response = co_await (*system)->send(request(), route, &sink);
+
+    REQUIRE(response.has_value());
+    REQUIRE(response->stop_reason == core::StopReason::tool_use);
+    const auto& tool = std::get<core::ToolUseContent>(response->blocks.front());
+    REQUIRE(tool.id == "toolu_1");
+    REQUIRE(tool.name == "get_weather");
+    REQUIRE(json::parse(tool.input_json).at("city") == "NYC");
+  });
+
+  REQUIRE(transport.streaming_requests.size() == 1);
+  REQUIRE(sink.log == std::vector<std::string>{
+                          "tool_start:toolu_1:get_weather",
+                          R"(tool_delta:toolu_1:{"city":"NYC"})",
+                          "done",
+                      });
+}
+
+TEST_CASE("protocol transport system keeps the body path when the transport cannot stream",
+          "[unit][provider][protocol][sse]") {
+  RecordingTransport transport{{anthropic_response()}};  // supports_streaming() defaults to false.
+  provider::ProtocolTransportAdapterFactory factory{transport, provider::ProtocolKind::anthropic_messages};
+  auto credentials = credential_target(provider::ProtocolKind::anthropic_messages);
+  auto route = provider::Route{.primary = credentials.target.profile.target, .fallbacks = {}};
+  auto system = factory.create(std::move(credentials));
+  REQUIRE(system.has_value());
+
+  CapturingSink sink;
+  test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
+    auto response = co_await (*system)->send(request(), route, &sink);
+
+    REQUIRE(response.has_value());
+    REQUIRE(std::get<core::TextContent>(response->blocks.front()).text == "anthropic ok");
+  });
+
+  REQUIRE(transport.requests.size() == 1);
+  REQUIRE(json::parse(transport.requests.front().body_json).at("stream") == false);
+  // The body path still drives only the terminal on_done, never streaming deltas.
+  REQUIRE(sink.log == std::vector<std::string>{"done"});
+}
+
+TEST_CASE("protocol transport system keeps OpenAI body-only even when streaming is available",
+          "[unit][provider][protocol][sse]") {
+  StreamingTransport transport;
+  transport.body_json = openai_response().body_json;
+  provider::ProtocolTransportAdapterFactory factory{transport, provider::ProtocolKind::openai_responses};
+  auto credentials = credential_target(provider::ProtocolKind::openai_responses);
+  auto route = provider::Route{.primary = credentials.target.profile.target, .fallbacks = {}};
+  auto system = factory.create(std::move(credentials));
+  REQUIRE(system.has_value());
+
+  CapturingSink sink;
+  test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
+    auto response = co_await (*system)->send(request(), route, &sink);
+
+    REQUIRE(response.has_value());
+    REQUIRE(std::get<core::TextContent>(response->blocks.front()).text == "openai ok");
+  });
+
+  REQUIRE(transport.streaming_requests.empty());
+  REQUIRE(transport.body_requests.size() == 1);
+  REQUIRE(json::parse(transport.body_requests.front().body_json).at("stream") == false);
+}
+
+TEST_CASE("protocol transport system maps a streaming HTTP error", "[unit][provider][protocol][sse]") {
+  StreamingTransport transport;
+  transport.stream_status = 503;
+  transport.stream_body = "{}";
+  provider::ProtocolTransportAdapterFactory factory{transport, provider::ProtocolKind::anthropic_messages};
+  auto credentials = credential_target(provider::ProtocolKind::anthropic_messages);
+  auto route = provider::Route{.primary = credentials.target.profile.target, .fallbacks = {}};
+  auto system = factory.create(std::move(credentials));
+  REQUIRE(system.has_value());
+
+  CapturingSink sink;
+  test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
+    auto response = co_await (*system)->send(request(), route, &sink);
+
+    REQUIRE_FALSE(response.has_value());
+    REQUIRE(response.error().kind() == core::ErrorKind::upstream);
+    REQUIRE(context_value(response.error(), "http_status") == std::optional<std::string_view>{"503"});
+  });
+
+  REQUIRE(transport.streaming_requests.size() == 1);
+}
+
+TEST_CASE("protocol transport system surfaces a streamed error event", "[unit][provider][protocol][sse]") {
+  StreamingTransport transport;
+  transport.events = {
+      {"message_start",
+       R"({"type":"message_start","message":{"id":"msg_3","type":"message","role":"assistant","model":"claude-sonnet","content":[],"stop_reason":null,"usage":{"input_tokens":4,"output_tokens":1}}})"},
+      {"error", R"({"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}})"},
+  };
+  provider::ProtocolTransportAdapterFactory factory{transport, provider::ProtocolKind::anthropic_messages};
+  auto credentials = credential_target(provider::ProtocolKind::anthropic_messages);
+  auto route = provider::Route{.primary = credentials.target.profile.target, .fallbacks = {}};
+  auto system = factory.create(std::move(credentials));
+  REQUIRE(system.has_value());
+
+  CapturingSink sink;
+  test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
+    auto response = co_await (*system)->send(request(), route, &sink);
+
+    REQUIRE_FALSE(response.has_value());
+    REQUIRE(response.error().kind() == core::ErrorKind::upstream);
+  });
+
+  REQUIRE(sink.done == std::nullopt);
 }

@@ -15,7 +15,7 @@ for sanity.
 | Library category                  | Median   | p95     | Hard cap |
 | --------------------------------- | -------- | ------- | -------- |
 | `oran-core`, `oran-log`, `oran-io` | 0.8 s   | 1.5 s   | 2.0 s    |
-| `oran-async`                       | 1.0 s   | 2.0 s   | 2.5 s    |
+| `oran-async`, `oran-http`          | 1.0 s   | 2.0 s   | 2.5 s    |
 | `oran-storage`, `oran-config`      | 1.0 s   | 2.0 s   | 2.5 s    |
 | `oran-permission`, `oran-skill`    | 1.0 s   | 2.0 s   | 2.5 s    |
 | `oran-tool`, `oran-memory`, `oran-hook` | 1.2 s | 2.5 s | 3.0 s    |

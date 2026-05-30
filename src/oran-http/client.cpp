@@ -2,15 +2,18 @@
 
 #include <oran/http/client.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <expected>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #include <asio/associated_executor.hpp>
 #include <asio/async_result.hpp>
@@ -23,6 +26,8 @@
 #include <curl/curl.h>
 
 #include <oran/core/error.hpp>
+
+#include "_impl/sse_parser.hpp"
 
 namespace orangutan::http {
 namespace {
@@ -231,6 +236,61 @@ std::size_t write_header(char* data, std::size_t size, std::size_t count, void* 
   return bytes;
 }
 
+[[nodiscard]] bool ascii_iequals(std::string_view lhs, std::string_view rhs) noexcept {
+  return std::ranges::equal(lhs, rhs, [](char a, char b) noexcept {
+    const auto lower = [](char c) noexcept {
+      return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+    };
+    return lower(a) == lower(b);
+  });
+}
+
+[[nodiscard]] bool response_is_event_stream(CURL* easy, const std::vector<Header>& headers) {
+  long status = 0;
+  if (curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &status) != CURLE_OK) {
+    return false;
+  }
+  if (status < 200 || status >= 300) {
+    return false;
+  }
+  return std::ranges::any_of(headers, [](const Header& header) {
+    return ascii_iequals(header.name, "content-type") && header.value.contains("text/event-stream");
+  });
+}
+
+// Userdata for the streaming write callback. Lives on the blocking transport
+// thread for the duration of one request; the parser runs there, but each
+// decoded event is posted to the caller's executor before the sink sees it.
+struct StreamState {
+  detail::SseParser parser;
+  SseEventCallback on_event;
+  asio::any_io_executor completion_executor;
+  CURL* easy{nullptr};
+  const std::vector<Header>* headers{nullptr};
+  std::string* error_body{nullptr};
+  std::optional<bool> is_stream{};
+};
+
+std::size_t write_stream(char* data, std::size_t size, std::size_t count, void* userdata) {
+  auto* state = static_cast<StreamState*>(userdata);
+  const auto bytes = size * count;
+  if (!state->is_stream.has_value()) {
+    state->is_stream = response_is_event_stream(state->easy, *state->headers);
+  }
+  if (*state->is_stream) {
+    state->parser.feed(std::string_view{data, bytes}, [state](const SseEvent& event) {
+      asio::post(state->completion_executor, [callback = state->on_event, payload = event]() mutable {
+        if (callback) {
+          callback(payload);
+        }
+      });
+    });
+  } else if (state->error_body != nullptr) {
+    state->error_body->append(data, bytes);
+  }
+  return bytes;
+}
+
 [[nodiscard]] core::Result<void> validate_request(const BodyRequest& request) {
   if (request.url.empty()) {
     return std::unexpected(Error::invalid_argument("http request url must be non-empty"));
@@ -251,8 +311,12 @@ std::size_t write_header(char* data, std::size_t size, std::size_t count, void* 
   return {};
 }
 
-[[nodiscard]] core::Result<void>
-configure_easy(CURL* easy, const BodyRequest& request, CurlHeaders& headers, BodyResponse& response) {
+[[nodiscard]] core::Result<void> configure_easy(CURL* easy,
+                                                const BodyRequest& request,
+                                                CurlHeaders& headers,
+                                                std::vector<Header>* header_sink,
+                                                curl_write_callback body_callback,
+                                                void* body_data) {
   for (const auto& header : request.headers) {
     auto appended = headers.append(header);
     if (!appended) {
@@ -263,10 +327,10 @@ configure_easy(CURL* easy, const BodyRequest& request, CurlHeaders& headers, Bod
   if (curl_easy_setopt(easy, CURLOPT_URL, request.url.c_str()) != CURLE_OK ||
       curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, 0L) != CURLE_OK ||
       curl_easy_setopt(easy, CURLOPT_NOSIGNAL, 1L) != CURLE_OK ||
-      curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, write_body) != CURLE_OK ||
-      curl_easy_setopt(easy, CURLOPT_WRITEDATA, &response.body) != CURLE_OK ||
+      curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, body_callback) != CURLE_OK ||
+      curl_easy_setopt(easy, CURLOPT_WRITEDATA, body_data) != CURLE_OK ||
       curl_easy_setopt(easy, CURLOPT_HEADERFUNCTION, write_header) != CURLE_OK ||
-      curl_easy_setopt(easy, CURLOPT_HEADERDATA, &response.headers) != CURLE_OK ||
+      curl_easy_setopt(easy, CURLOPT_HEADERDATA, header_sink) != CURLE_OK ||
       curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers.get()) != CURLE_OK ||
       curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS, static_cast<long>(request.timeout.count())) != CURLE_OK) {
     return std::unexpected(Error::internal("failed to configure curl easy handle"));
@@ -376,7 +440,58 @@ struct Client::Impl {
 
     auto response = BodyResponse{};
     auto headers = CurlHeaders{};
-    if (auto configured = configure_easy(easy.get(), request, headers, response); !configured) {
+    if (auto configured = configure_easy(easy.get(), request, headers, &response.headers, write_body, &response.body);
+        !configured) {
+      return std::unexpected(std::move(configured).error());
+    }
+    if (auto performed = run_multi(multi.get(), easy.get(), cancellation); !performed) {
+      return std::unexpected(std::move(performed).error());
+    }
+
+    auto status = response_code(easy.get());
+    if (!status) {
+      return std::unexpected(std::move(status).error());
+    }
+    response.status_code = *status;
+    return response;
+  }
+
+  [[nodiscard]] core::Result<BodyResponse> send_streaming_blocking(const BodyRequest& request,
+                                                                   SseEventCallback on_event,
+                                                                   asio::any_io_executor completion_executor,
+                                                                   const asio::cancellation_state& cancellation) const {
+    if (!curl_global().ok()) {
+      return std::unexpected(Error::internal("curl global initialization failed"));
+    }
+    if (auto valid = validate_request(request); !valid) {
+      return std::unexpected(std::move(valid).error());
+    }
+    if (is_cancelled(cancellation)) {
+      return std::unexpected(Error::cancelled());
+    }
+
+    auto easy = CurlEasy{};
+    if (easy.get() == nullptr) {
+      return std::unexpected(Error::internal("failed to allocate curl easy handle"));
+    }
+    auto multi = CurlMulti{};
+    if (multi.get() == nullptr) {
+      return std::unexpected(Error::internal("failed to allocate curl multi handle"));
+    }
+
+    auto response = BodyResponse{};
+    auto headers = CurlHeaders{};
+    auto state = StreamState{
+        .parser = {},
+        .on_event = std::move(on_event),
+        .completion_executor = std::move(completion_executor),
+        .easy = easy.get(),
+        .headers = &response.headers,
+        .error_body = &response.body,
+        .is_stream = std::nullopt,
+    };
+    if (auto configured = configure_easy(easy.get(), request, headers, &response.headers, write_stream, &state);
+        !configured) {
       return std::unexpected(std::move(configured).error());
     }
     if (auto performed = run_multi(multi.get(), easy.get(), cancellation); !performed) {
@@ -423,6 +538,42 @@ auto async_send_on(asio::any_io_executor completion_executor,
       token);
 }
 
+template <typename ImplPtr, typename CompletionToken>
+auto async_send_streaming_on(asio::any_io_executor completion_executor,
+                             asio::any_io_executor blocking_executor,
+                             ImplPtr impl,
+                             BodyRequest request,
+                             SseEventCallback on_event,
+                             asio::cancellation_state cancellation,
+                             CompletionToken&& token) {
+  return asio::async_initiate<CompletionToken, void(core::Result<BodyResponse>)>(
+      [completion_executor = std::move(completion_executor),
+       blocking_executor = std::move(blocking_executor),
+       impl = std::move(impl),
+       request = std::move(request),
+       on_event = std::move(on_event),
+       cancellation](auto handler) mutable {
+        auto work = asio::make_work_guard(completion_executor);
+        asio::post(blocking_executor,
+                   [impl = std::move(impl),
+                    request = std::move(request),
+                    on_event = std::move(on_event),
+                    completion_executor = std::move(completion_executor),
+                    cancellation,
+                    handler = std::move(handler),
+                    work = std::move(work)]() mutable {
+                     auto result =
+                         impl->send_streaming_blocking(request, std::move(on_event), completion_executor, cancellation);
+                     auto resume_executor = work.get_executor();
+                     asio::post(resume_executor,
+                                [handler = std::move(handler),
+                                 result = std::move(result),
+                                 work = std::move(work)]() mutable { handler(std::move(result)); });
+                   });
+      },
+      token);
+}
+
 Client::Client(asio::any_io_executor blocking_executor) : impl_{std::make_shared<Impl>(std::move(blocking_executor))} {}
 
 Client::~Client() = default;
@@ -446,6 +597,26 @@ async::Awaitable<core::Result<BodyResponse>> Client::send(BodyRequest request) c
                                    std::move(request),
                                    cancellation,
                                    asio::use_awaitable);
+}
+
+async::Awaitable<core::Result<BodyResponse>> Client::send_streaming(BodyRequest request,
+                                                                    SseEventCallback on_event) const {
+  co_await asio::this_coro::throw_if_cancelled(false);
+  auto completion_executor = co_await asio::this_coro::executor;
+  const auto cancellation = co_await asio::this_coro::cancellation_state;
+  if (is_cancelled(cancellation)) {
+    co_return std::unexpected(Error::cancelled());
+  }
+
+  auto impl = impl_;
+  auto blocking_executor = impl->blocking_executor;
+  co_return co_await async_send_streaming_on(std::move(completion_executor),
+                                             std::move(blocking_executor),
+                                             std::move(impl),
+                                             std::move(request),
+                                             std::move(on_event),
+                                             cancellation,
+                                             asio::use_awaitable);
 }
 
 }  // namespace orangutan::http
