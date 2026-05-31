@@ -359,8 +359,9 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > trusted-local sinks receive the raw data. Typed shapes for
 > the remaining non-tool
 > events ship with their producers (provider request /
-> response payloads when the Anthropic adapter lands,
-> memory payloads when `oran-memory` lands, and so on).
+> response payloads now live with the agent/provider lifecycle path;
+> memory payloads remain planned until memory read/write hooks wire into
+> `oran-memory` callers, and so on).
 > `Registry::dispatch` consumes the bus through the
 > optional `DispatchContext::bus` field: when non-null,
 > dispatch first publishes blocking `tool_before` through

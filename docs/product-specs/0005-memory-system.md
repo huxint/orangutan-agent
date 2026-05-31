@@ -12,9 +12,11 @@ operators can reason about retention, scope, and visibility.
   `sessions.db` schema and provides expected-only append/load/get/list operations
   over the cached writer/reader `Pool`; its schema now loads from the checked-in
   SQL migration file under `src/oran-storage/migrations/sessions/`.
-- `oran-memory::session::Store` — typed per-session conversation history
-  (replaces legacy `SessionStore`) that wraps `SessionRepository` once
-  `core::Message` serialization lands.
+- `oran-memory::session::Store` shipped in slice 130 as typed per-session
+  conversation history (replaces legacy `SessionStore`) over
+  `SessionRepository`. It privately serializes/deserializes `core::Message`
+  blocks, keeps `oran-storage` JSON-opaque, validates required ids, and returns
+  parsing errors for malformed stored rows.
 - `oran-memory::longterm::Runtime` with `Fts5Backend` (default).
 - `MemoryRecord` kinds: `user`, `feedback`, `project`, `reference`.
 - Decay policy applied by a periodic job (`oran-automation`).
@@ -41,7 +43,9 @@ operators can reason about retention, scope, and visibility.
 ## Acceptance Criteria
 
 1. A `SessionStore::append(...)` followed by `SessionStore::load(...)` round-trips
-   500 messages without loss.
+   500 messages without loss. **Status:** closed for
+   `memory::session::Store` by `test-memory` slice 130 coverage; bootstrap
+   runner persistence is the next wiring step.
 2. `longterm::Runtime::search("react agent loop", limit=10)` returns within 50 ms on
    a 10 k-record corpus.
 3. The MEMORY.md mirror, when enabled, reflects all kinds + records within 1 s of the
@@ -73,6 +77,6 @@ operators can reason about retention, scope, and visibility.
 
 ```sh
 xmake build oran-memory
-xmake test test-memory
+xmake run test-memory
 scripts/bench-compare.sh memory
 ```

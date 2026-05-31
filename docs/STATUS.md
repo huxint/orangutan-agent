@@ -7,21 +7,34 @@
 
 ## Snapshot
 
-- **Slice:** 129 (`xmake run orangutan` reports slice 129)
+- **Slice:** 130 (`xmake run orangutan` reports slice 130)
 - **Last completed history:**
-  [`histories/2026-06/20260601-0412-provider-profile-costs.md`](histories/2026-06/20260601-0412-provider-profile-costs.md)
+  [`histories/2026-06/20260601-0446-memory-session-store.md`](histories/2026-06/20260601-0446-memory-session-store.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-01-memory-runtime-v1.md`](exec-plans/active/2026-06-01-memory-runtime-v1.md)
   — session memory is the next runtime arc. It starts by adding
   `oran-memory::session::Store` over the existing `storage::SessionRepository`,
   then assembles a separate `sessions.db` in bootstrap, then wires
   configured-route `AgentPromptRunner` to load/append conversation history.
-- **Next intended slice:** implement the first plan milestone:
-  add the `oran-memory` library skeleton plus typed session-store wrapper,
-  private `core::Message` JSON serialization, tests for ordered round-trips and
-  malformed rows, and minimal bench parity. Long-term FTS5, MEMORY.md mirror,
-  memory tools, and CLI session commands stay out of scope for that first slice.
-  Slice 129 adds provider profile-priced cost calculation: `config::ProfileConfig`
+- **Next intended slice:** continue the active memory plan with runtime assembly
+  ownership for session storage: add a separate `<workspace>/.orangutan/sessions.db`
+  path/pool/repository, run session migrations during assembly, expose the
+  session owner to bootstrap callers, and keep built-in no-route startup free of
+  provider credentials and memory requirements. Long-term FTS5, MEMORY.md mirror,
+  memory tools, and CLI session commands remain out of scope. Slice 130 adds the
+  first `oran-memory` implementation target: `<oran/memory.hpp>` exports
+  `memory::session::Store`, which wraps `storage::SessionRepository` with typed
+  `SessionId` / `AgentKey` / `SessionSummary` values and private
+  `core::Message` JSON serialization for text, thinking, tool-use, and
+  tool-result content blocks. Storage remains JSON-opaque and role-typed. New
+  `test-memory` coverage pins ordered round-trips, agent scoping, malformed
+  stored-row rejection, id validation, and the spec's 500-message round-trip
+  criterion; `bench-memory` compares raw `SessionRepository` append/load with the
+  typed memory wrapper. Focused result: `test-memory` **5 cases / 550
+  assertions**; `bench-memory` ran `memory.session_repository_append_load`
+  **~849.8 us / batch** vs. `memory.session_store_append_load` **~1022.4 us /
+  batch**. Slice 129 adds provider profile-priced cost calculation:
+  `config::ProfileConfig`
   now carries optional `pricing` fields for per-million input, output, cache
   creation, and cache read tokens; route resolution preserves those values on the
   loop-facing `provider::ModelTarget`; and `agent::Loop` now fills

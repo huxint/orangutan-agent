@@ -20,7 +20,7 @@ Each entry contains:
 
 | Lib | Version | Used by | Purpose | Cost | License | Boundary |
 | --- | --- | --- | --- | --- | --- | --- |
-| `nlohmann_json` | 3.12.0 | config, tool, provider, agent, future prompt/web | JSON parsing/serialization | med | MIT | `.cpp` only; public headers avoid JSON parser types |
+| `nlohmann_json` | 3.12.0 | config, tool, provider, agent, memory, future prompt/web | JSON parsing/serialization | med | MIT | `.cpp` only; public headers avoid JSON parser types |
 | `fmt` | 12.1.0 | log, prompt, web | string formatting | low | MIT | PCH set |
 | `spdlog` | 1.17.0 | oran-log only | structured logging | med | MIT | hidden behind `oran-log` shim |
 | `rapidhash` | 1.0 | core, storage | hashing | low | BSD-2 | wherever |
@@ -39,7 +39,7 @@ Each entry contains:
 
 | Lib | Version | Used by | Purpose | Cost | License | Boundary |
 | --- | --- | --- | --- | --- | --- | --- |
-| `sqlite3` | 3.51.0+0 | storage, memory, automation | embedded SQL | med | public domain | `oran-storage` only |
+| `sqlite3` | 3.51.0+0 | storage; memory and automation consume it through storage repositories | embedded SQL | med | public domain | `oran-storage` only |
 | `libsodium` | 1.0.21 | config, permission | AEAD + KDF for secret-at-rest (config); HMAC-SHA-256 + CSPRNG for approval signing (permission) | low-med | ISC | `oran-config` and `oran-permission` only |
 
 ### CLI / UX

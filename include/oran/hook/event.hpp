@@ -10,8 +10,8 @@
 // and the meta-tool `hook.events` can iterate the universe without library
 // bumps. The events without typed payloads in `payload.hpp` carry
 // `std::monostate` for now — the typed shape lands with the producing
-// subsystem (provider request/response when the Anthropic adapter ships,
-// memory events when `oran-memory` ships, and so on).
+// subsystem (provider lifecycle payloads now ship with the agent/provider path;
+// memory payloads land when memory hooks wire into memory callers, and so on).
 
 #pragma once
 

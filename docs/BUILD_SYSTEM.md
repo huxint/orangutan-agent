@@ -184,9 +184,9 @@ add_requires("sqlite3 3.51.0+0")
 Packages land with the library that first consumes them. The full approval list
 and planned versions live in [`rules/libraries.md`](rules/libraries.md).
 `libcurl` is consumed privately by `oran-http` through the system package
-provider, and `nlohmann_json` is consumed privately by `oran-provider` for
-offline protocol request serialization; public headers still expose bytes and
-stdlib value types only.
+provider, and `nlohmann_json` is consumed privately by JSON-owning implementation
+files in `oran-config`, `oran-tool`, `oran-provider`, `oran-agent`, and
+`oran-memory`; public headers still expose bytes and stdlib value types only.
 
 **Notable removals vs. legacy:**
 
@@ -224,6 +224,7 @@ oran_lib("storage", { "oran-core", "oran-async" }, { "sqlite3" })
 oran_lib("config", { "oran-core", "oran-storage" }, { "nlohmann_json", "re2" })
 oran_lib("permission", { "oran-core", "oran-config", "oran-storage", "oran-async" }, { "re2", "libsodium" })
 oran_lib("hook", { "oran-core", "oran-async" }, {})
+oran_lib("memory", { "oran-core", "oran-async", "oran-storage" }, { "nlohmann_json" })
 oran_lib("tool", { "oran-core", "oran-async", "oran-io", "oran-permission", "oran-hook" }, { "nlohmann_json" })
 oran_lib("prompt", { "oran-core", "oran-async", "oran-config", "oran-tool" }, {})
 oran_lib("provider", { "oran-core", "oran-async", "oran-config", "oran-prompt" }, { "nlohmann_json" })
@@ -257,6 +258,14 @@ backend from configured-route `bootstrap::run`; slices 121-124 add SSE transport
 and provider streaming decode while preserving that dependency direction.
 Provider lifecycle hooks also stay outside this target: slice 126 publishes them
 from `oran-agent`, so the provider domain remains hook-free.
+
+`oran-memory` ships the slice-130 session-store wrapper over
+`storage::SessionRepository`. It depends downward on `oran-storage` for the
+SQLite repository and on `oran-async` for awaitable APIs, and it consumes
+`nlohmann_json` only in `src/oran-memory/session.cpp` to keep message JSON out of
+`oran-storage` and out of public headers. Bootstrap does not depend on
+`oran-memory` yet; the next memory-plan slice wires the separate sessions DB and
+repository owner.
 
 `oran-bootstrap` depends on `oran-provider` so process startup can preflight the
 configured default provider route before handing prompts to `oran-cli`. It also

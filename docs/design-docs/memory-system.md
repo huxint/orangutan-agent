@@ -50,14 +50,22 @@ per-agent JSON-serialized message stream in SQLite. v2 changes:
 - **Schema migrations** versioned and applied at startup.
 - **Append-only fast path**: appending a message is one INSERT; loading is one SELECT.
 
-Storage foundation status (2026-05-16): `oran-storage::SessionRepository`
-implements the `sessions.db` schema, append/load/get/list operations, and hot
-SQL through `Pool` slot `StatementCache`s. Its schema loads from
+Storage foundation status: `oran-storage::SessionRepository` implements the
+`sessions.db` schema, append/load/get/list operations, and hot SQL through
+`Pool` slot `StatementCache`s. Its schema loads from
 `src/oran-storage/migrations/sessions/0001-sessions-initial.sql`. It stores
 `content_json` and `metadata_json` as opaque strings but types `role` as
-`core::Role` at the API boundary. The
-`oran-memory::session::Store` below is still the typed memory-layer wrapper that
-will serialize `core::Message` once that core surface exists.
+`core::Role` at the API boundary.
+
+Memory wrapper status (slice 130): `oran-memory::session::Store` is now the
+typed memory-layer owner over `SessionRepository`. It serializes
+`core::Message` / `core::Content` privately in `src/oran-memory/session.cpp`,
+using versioned JSON for text, thinking, tool-use, and tool-result blocks while
+keeping `oran-storage` unaware of message shape. It validates non-empty
+session/agent ids, maps repository summaries into typed session summaries, and
+returns parsing errors for malformed stored rows. Runtime assembly still needs
+to create the separate `<workspace>/.orangutan/sessions.db` pool before the
+configured-route runner can persist conversations.
 
 ```cpp
 // include/oran/memory/session.hpp
@@ -65,10 +73,18 @@ namespace orangutan::memory::session {
 
 struct SessionId  { std::string value; };
 struct AgentKey   { std::string value; };
+struct ListSessionsOptions { AgentKey agent_key; std::size_t limit = 50; };
+struct SessionSummary {
+  SessionId session_id;
+  AgentKey agent_key;
+  std::size_t message_count;
+  std::string created_at;
+  std::string updated_at;
+};
 
 class Store {
  public:
-  explicit Store(storage::Pool&);
+  explicit Store(storage::SessionRepository&);
 
   async::Awaitable<core::Result<void>>
   append(SessionId, AgentKey, core::Message);
@@ -76,11 +92,8 @@ class Store {
   async::Awaitable<core::Result<std::vector<core::Message>>>
   load(SessionId, AgentKey);
 
-  async::Awaitable<core::Result<void>>
-  truncate(SessionId, AgentKey, std::size_t keep_last);
-
-  async::Awaitable<core::Result<std::vector<SessionId>>>
-  list(AgentKey, ListOpts);
+  async::Awaitable<core::Result<std::vector<SessionSummary>>>
+  list(ListSessionsOptions);
 };
 
 }  // namespace orangutan::memory::session

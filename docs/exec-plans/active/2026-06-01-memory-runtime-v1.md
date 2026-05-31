@@ -158,7 +158,10 @@ memory search results without re-querying inside each ReAct iteration.
 - [x] 2026-06-01 04:32 +0800: Chose memory over CLI line editor/history because
   session persistence is part of the MVP runtime and currently has only storage
   foundation plus a static prompt slot.
-- [ ] Land milestone 2 as the first implementation slice.
+- [x] 2026-06-01 04:46 +0800: Landed milestone 2 as slice 130:
+  `oran-memory::session::Store` over `storage::SessionRepository`, private
+  `core::Message` JSON serialization, `test-memory` 5 / 550, and
+  `bench-memory` raw repository vs. typed store parity.
 - [ ] Land milestone 3 after the session store library is green.
 - [ ] Land milestone 4 after runtime assembly exposes the sessions owner.
 - [ ] Refresh docs/status/quality/history/release notes in every slice.
@@ -185,5 +188,5 @@ memory search results without re-querying inside each ReAct iteration.
 - Related product spec: `docs/product-specs/0005-memory-system.md`
 - Related product spec: `docs/product-specs/0001-core-react-loop.md`
 - PRs: TBD
-- History entry: TBD per slice
-- Release note: TBD per user-visible slice
+- History entry: `docs/histories/2026-06/20260601-0446-memory-session-store.md`
+- Release note: `docs/releases/feature-release-notes.md` (`memory-session-store`)

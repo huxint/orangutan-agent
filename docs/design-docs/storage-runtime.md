@@ -403,8 +403,8 @@ boundary.
 `SessionRepository` is the first storage domain repository. It stores session
 message rows in `sessions.db` using the cached pool surface. It is deliberately
 payload-oriented: `content_json` and `metadata_json` are opaque strings at this
-layer, and the future `oran-memory::session::Store` will own typed
-`core::Message` serialization. `role` is typed at the API boundary: requests
+layer; slice 130's `oran-memory::session::Store` owns typed `core::Message`
+serialization above it. `role` is typed at the API boundary: requests
 take and records expose `core::Role`, and the row's text column is parsed back
 into the enum on read (rows with unknown role text surface a storage error
 rather than being silently coerced).

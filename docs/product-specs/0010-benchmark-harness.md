@@ -54,7 +54,7 @@ one A-vs-B scenario:
 | `oran-cli`      | single-shot prompt dispatch      | empty REPL shell dispatch |
 | `oran-bootstrap` | missing default config fallback | explicit config file load |
 | `oran-tool`     | hashmap lookup                 | static dispatch (stretch)  |
-| `oran-memory`   | FTS5                           | sqlite-vec (v2)            |
+| `oran-memory`   | raw `SessionRepository` append/load | typed `memory::session::Store` append/load; FTS5 vs sqlite-vec returns with long-term memory |
 | `oran-provider` | cache hints enabled            | cache hints disabled       |
 | `oran-orchestration` | leader-worker             | vote                       |
 | `oran-channel`  | bounded asio channel           | unbounded queue (with backpressure metric) |
