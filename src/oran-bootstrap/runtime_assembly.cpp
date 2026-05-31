@@ -1,4 +1,4 @@
-// src/oran-bootstrap/runtime_assembly.cpp — per-process permission + audit assembly.
+// src/oran-bootstrap/runtime_assembly.cpp — per-process runtime service assembly.
 
 #include <oran/bootstrap/runtime_assembly.hpp>
 
@@ -20,6 +20,7 @@
 #include <oran/async.hpp>
 #include <oran/core/error.hpp>
 #include <oran/hook.hpp>
+#include <oran/memory.hpp>
 #include <oran/permission.hpp>
 #include <oran/storage.hpp>
 #include <oran/tool/workspace.hpp>
@@ -31,34 +32,39 @@ using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
+constexpr std::string_view kSessionsDatabaseRelative = ".orangutan/sessions.db";
 
-[[nodiscard]] std::string resolve_audit_path(std::string_view workspace, std::string_view override_path) {
+[[nodiscard]] std::string
+resolve_database_path(std::string_view workspace, std::string_view override_path, std::string_view relative_path) {
   if (!override_path.empty()) {
     return std::string{override_path};
   }
   auto path = std::filesystem::path{std::string{workspace}};
-  path /= kAuditDatabaseRelative;
+  path /= relative_path;
   return path.string();
 }
 
-[[nodiscard]] Result<void> ensure_parent_directory(const std::filesystem::path& target) {
+[[nodiscard]] Result<void> ensure_parent_directory(const std::filesystem::path& target, std::string_view kind) {
   if (auto parent = target.parent_path(); !parent.empty()) {
     auto ec = std::error_code{};
     std::filesystem::create_directories(parent, ec);
     if (ec) {
-      return std::unexpected(
-          Error::io("failed to create audit directory").with("path", parent.string()).with("detail", ec.message()));
+      return std::unexpected(Error::io("failed to create runtime database directory")
+                                 .with("path", parent.string())
+                                 .with("database", std::string{kind})
+                                 .with("detail", ec.message()));
     }
   }
   return {};
 }
 
-/// Drive `repo.migrate()` to completion on a one-shot `asio::io_context`.
-/// Mirrors `bootstrap::run_audit_init`'s pattern so the runtime
-/// assembly and the `--audit-init` operator command remain
+/// Drive the audit repository migration to completion on a one-shot
+/// `asio::io_context`. Mirrors `bootstrap::run_audit_init`'s pattern so the
+/// runtime assembly and the `--audit-init` operator command remain
 /// behaviourally identical at the schema-migration boundary.
-[[nodiscard]] Result<storage::MigrationReport>
-run_migration_inline(const std::string& audit_path, std::size_t reader_count, std::size_t statement_cache_capacity) {
+[[nodiscard]] Result<storage::MigrationReport> run_audit_migration_inline(const std::string& audit_path,
+                                                                          std::size_t reader_count,
+                                                                          std::size_t statement_cache_capacity) {
   asio::io_context io;
   auto temp_pool_result = storage::Pool::open(io.get_executor(),
                                               storage::PoolOptions{
@@ -94,11 +100,52 @@ run_migration_inline(const std::string& audit_path, std::size_t reader_count, st
   return report;
 }
 
+/// Drive the session repository migration to completion before the long-lived
+/// sessions pool is opened on the caller-supplied executor.
+[[nodiscard]] Result<storage::MigrationReport> run_session_migration_inline(const std::string& sessions_path,
+                                                                            std::size_t reader_count,
+                                                                            std::size_t statement_cache_capacity) {
+  asio::io_context io;
+  auto temp_pool_result = storage::Pool::open(io.get_executor(),
+                                              storage::PoolOptions{
+                                                  .path = sessions_path,
+                                                  .reader_count = reader_count,
+                                                  .statement_cache_capacity = statement_cache_capacity,
+                                              });
+  if (!temp_pool_result) {
+    return std::unexpected(std::move(temp_pool_result).error());
+  }
+  auto temp_pool = std::move(*temp_pool_result);
+  storage::SessionRepository repo{temp_pool};
+
+  auto report = storage::MigrationReport{};
+  auto migrate_error = std::optional<Error>{};
+  asio::co_spawn(
+      io,
+      [&]() -> async::Awaitable<void> {
+        auto migrated = co_await repo.migrate();
+        if (!migrated) {
+          migrate_error = std::move(migrated).error();
+          co_return;
+        }
+        report = std::move(*migrated);
+        co_return;
+      },
+      asio::detached);
+  io.run();
+
+  if (migrate_error) {
+    return std::unexpected(std::move(*migrate_error));
+  }
+  return report;
+}
+
 }  // namespace
 
 struct RuntimeAssembly::Impl {
   bool audit_enabled{false};
   std::string audit_path;
+  std::string sessions_path;
   // The members below are non-default-constructible in their final
   // shape and capture pointers into each other (`AuditRepository`
   // refers to `audit_pool`, `audit_sink` refers to `audit_repository`).
@@ -108,6 +155,9 @@ struct RuntimeAssembly::Impl {
   std::unique_ptr<storage::Pool> audit_pool;
   std::unique_ptr<storage::AuditRepository> audit_repository;
   std::unique_ptr<storage::TraceRepository> trace_repository;
+  std::unique_ptr<storage::Pool> sessions_pool;
+  std::unique_ptr<storage::SessionRepository> session_repository;
+  std::unique_ptr<memory::session::Store> session_store;
   std::unique_ptr<permission::AuditSink> audit_sink;
   std::unique_ptr<permission::ApprovalBroker> approval_broker;
   std::unique_ptr<tool::Workspace> workspace;
@@ -162,6 +212,18 @@ const hook::Bus& RuntimeAssembly::hook_bus() const noexcept {
   return *impl_->hook_bus;
 }
 
+memory::session::Store* RuntimeAssembly::session_store() noexcept {
+  return impl_->session_store.get();
+}
+
+bool RuntimeAssembly::session_memory_enabled() const noexcept {
+  return impl_->session_store != nullptr;
+}
+
+std::string_view RuntimeAssembly::sessions_path() const noexcept {
+  return impl_->sessions_path;
+}
+
 Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
                                                asio::any_io_executor runtime_executor,
                                                RuntimeAssemblyOptions options) {
@@ -195,18 +257,45 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
       .blocking_timeout = options.hook_blocking_timeout,
   });
 
+  if (options.session_memory_enabled) {
+    impl->sessions_path = resolve_database_path(workspace, options.sessions_db_path, kSessionsDatabaseRelative);
+    if (auto parent_ok = ensure_parent_directory(std::filesystem::path{impl->sessions_path}, "sessions"); !parent_ok) {
+      return std::unexpected(std::move(parent_ok).error());
+    }
+
+    auto session_migration = run_session_migration_inline(impl->sessions_path,
+                                                          options.session_reader_count,
+                                                          options.session_statement_cache_capacity);
+    if (!session_migration) {
+      return std::unexpected(std::move(session_migration).error());
+    }
+
+    auto sessions_pool = storage::Pool::open(runtime_executor,
+                                             storage::PoolOptions{
+                                                 .path = impl->sessions_path,
+                                                 .reader_count = options.session_reader_count,
+                                                 .statement_cache_capacity = options.session_statement_cache_capacity,
+                                             });
+    if (!sessions_pool) {
+      return std::unexpected(std::move(sessions_pool).error());
+    }
+    impl->sessions_pool = std::make_unique<storage::Pool>(std::move(*sessions_pool));
+    impl->session_repository = std::make_unique<storage::SessionRepository>(*impl->sessions_pool);
+    impl->session_store = std::make_unique<memory::session::Store>(*impl->session_repository);
+  }
+
   if (!options.audit_enabled) {
     impl->audit_sink = std::make_unique<permission::NullAuditSink>();
     return RuntimeAssembly{std::move(impl)};
   }
 
-  impl->audit_path = resolve_audit_path(workspace, options.audit_db_path);
-  if (auto parent_ok = ensure_parent_directory(std::filesystem::path{impl->audit_path}); !parent_ok) {
+  impl->audit_path = resolve_database_path(workspace, options.audit_db_path, kAuditDatabaseRelative);
+  if (auto parent_ok = ensure_parent_directory(std::filesystem::path{impl->audit_path}, "audit"); !parent_ok) {
     return std::unexpected(std::move(parent_ok).error());
   }
 
   auto migration =
-      run_migration_inline(impl->audit_path, options.audit_reader_count, options.audit_statement_cache_capacity);
+      run_audit_migration_inline(impl->audit_path, options.audit_reader_count, options.audit_statement_cache_capacity);
   if (!migration) {
     return std::unexpected(std::move(migration).error());
   }

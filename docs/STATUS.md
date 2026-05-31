@@ -7,21 +7,29 @@
 
 ## Snapshot
 
-- **Slice:** 130 (`xmake run orangutan` reports slice 130)
+- **Slice:** 131 (`xmake run orangutan` reports slice 131)
 - **Last completed history:**
-  [`histories/2026-06/20260601-0446-memory-session-store.md`](histories/2026-06/20260601-0446-memory-session-store.md)
+  [`histories/2026-06/20260601-0513-runtime-session-memory.md`](histories/2026-06/20260601-0513-runtime-session-memory.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-01-memory-runtime-v1.md`](exec-plans/active/2026-06-01-memory-runtime-v1.md)
-  — session memory is the next runtime arc. It starts by adding
-  `oran-memory::session::Store` over the existing `storage::SessionRepository`,
-  then assembles a separate `sessions.db` in bootstrap, then wires
-  configured-route `AgentPromptRunner` to load/append conversation history.
-- **Next intended slice:** continue the active memory plan with runtime assembly
-  ownership for session storage: add a separate `<workspace>/.orangutan/sessions.db`
-  path/pool/repository, run session migrations during assembly, expose the
-  session owner to bootstrap callers, and keep built-in no-route startup free of
-  provider credentials and memory requirements. Long-term FTS5, MEMORY.md mirror,
-  memory tools, and CLI session commands remain out of scope. Slice 130 adds the
+  — session memory is the active runtime arc. It now has the typed
+  `oran-memory::session::Store` owner and a bootstrap-owned separate
+  `sessions.db`; the next step is configured-route `AgentPromptRunner`
+  load/append persistence.
+- **Next intended slice:** continue the active memory plan by wiring
+  configured-route `AgentPromptRunner` to load persisted session history before
+  each prompt and append only the new transcript suffix after a successful turn.
+  Built-in no-route startup stays deterministic and does not require provider
+  credentials or `sessions.db`. Long-term FTS5, MEMORY.md mirror, memory tools,
+  and CLI session commands remain out of scope. Slice 131 extends
+  `RuntimeAssembly` with `sessions_db_path`, session enablement, sessions pool
+  sizing/cache options, `session_store()`, and `sessions_path()`. The assembly
+  runs the session migration, opens `<workspace>/.orangutan/sessions.db` by
+  default, and exposes a typed `memory::session::Store` over a separate
+  `storage::SessionRepository`; configured-route `bootstrap::run` enables that
+  owner while the built-in no-route CLI path explicitly disables it. The startup
+  banner now reports `sessions=enabled|disabled` and the sessions path. Focused
+  result: `test-bootstrap` **80 cases / 422 assertions**. Slice 130 adds the
   first `oran-memory` implementation target: `<oran/memory.hpp>` exports
   `memory::session::Store`, which wraps `storage::SessionRepository` with typed
   `SessionId` / `AgentKey` / `SessionSummary` values and private
@@ -1240,15 +1248,16 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-http`: 3 cases / 21 assertions.
 - `oran-io`: 49 cases / 286 assertions.
 - `oran-storage`: 73 cases / 938 assertions.
-- `oran-config`: 33 cases / 241 assertions.
+- `oran-config`: 37 cases / 270 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 30 cases / 207 assertions.
+- `oran-memory`: 5 cases / 550 assertions.
 - `oran-tool`: 178 cases / 1838 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
-- `oran-provider`: 86 cases / 643 assertions.
-- `oran-agent`: 50 cases / 10689 assertions.
+- `oran-provider`: 86 cases / 652 assertions.
+- `oran-agent`: 52 cases / 10705 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 77 cases / 380 assertions.
+- `oran-bootstrap`: 80 cases / 422 assertions.
 
 ## Open Tech-Debt Rows
 

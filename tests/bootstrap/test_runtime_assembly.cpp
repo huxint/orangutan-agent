@@ -15,6 +15,7 @@
 #include <oran/core/error.hpp>
 #include <oran/core/time.hpp>
 #include <oran/hook.hpp>
+#include <oran/memory.hpp>
 #include <oran/permission.hpp>
 #include <oran/storage.hpp>
 #include <oran/tool/workspace.hpp>
@@ -24,6 +25,7 @@
 namespace async = orangutan::async;
 namespace bootstrap = orangutan::bootstrap;
 namespace core = orangutan::core;
+namespace memory = orangutan::memory;
 namespace permission = orangutan::permission;
 namespace storage = orangutan::storage;
 namespace test = orangutan::tests;
@@ -159,6 +161,34 @@ TEST_CASE("RuntimeAssembly::build provisions audit.db at the workspace default p
   REQUIRE(table_exists(audit_db, "trace_turns"));
 }
 
+TEST_CASE("RuntimeAssembly::build provisions sessions.db at the workspace default path",
+          "[unit][bootstrap][runtime_assembly][memory]") {
+  TempDir temp{"oran-assembly-sessions-default"};
+
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor());
+    REQUIRE(built.has_value());
+    REQUIRE(built->session_memory_enabled());
+    REQUIRE(built->session_store() != nullptr);
+    REQUIRE(built->sessions_path() == (temp.path() / ".orangutan" / "sessions.db").string());
+
+    const auto sessions_db = temp.path() / ".orangutan" / "sessions.db";
+    REQUIRE(std::filesystem::exists(sessions_db));
+    REQUIRE(table_exists(sessions_db, "sessions"));
+    REQUIRE(table_exists(sessions_db, "session_messages"));
+
+    auto appended = co_await built->session_store()->append(memory::session::SessionId{.value = "s-1"},
+                                                            memory::session::AgentKey{.value = "coder"},
+                                                            core::Message::user_text("hello"));
+    REQUIRE(appended.has_value());
+    auto loaded = co_await built->session_store()->load(memory::session::SessionId{.value = "s-1"},
+                                                        memory::session::AgentKey{.value = "coder"});
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->size() == 1);
+    REQUIRE((*loaded)[0].blocks == core::Message::user_text("hello").blocks);
+  });
+}
+
 TEST_CASE("RuntimeAssembly::build honors an explicit audit DB path", "[unit][bootstrap][runtime_assembly]") {
   TempDir temp{"oran-assembly-explicit-path"};
   const auto explicit_path = (temp.path() / "nested" / "audit.db").string();
@@ -172,6 +202,37 @@ TEST_CASE("RuntimeAssembly::build honors an explicit audit DB path", "[unit][boo
   REQUIRE(std::filesystem::exists(explicit_path));
 }
 
+TEST_CASE("RuntimeAssembly::build honors an explicit sessions DB path", "[unit][bootstrap][runtime_assembly][memory]") {
+  TempDir temp{"oran-assembly-explicit-session-path"};
+  const auto explicit_path = (temp.path() / "nested" / "sessions.db").string();
+  asio::io_context io;
+
+  auto options = bootstrap::RuntimeAssemblyOptions{};
+  options.sessions_db_path = explicit_path;
+  auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
+
+  REQUIRE(built.has_value());
+  REQUIRE(built->session_memory_enabled());
+  REQUIRE(built->sessions_path() == explicit_path);
+  REQUIRE(std::filesystem::exists(explicit_path));
+  REQUIRE(table_exists(explicit_path, "sessions"));
+}
+
+TEST_CASE("RuntimeAssembly::build can disable session memory", "[unit][bootstrap][runtime_assembly][memory]") {
+  TempDir temp{"oran-assembly-sessions-disabled"};
+  asio::io_context io;
+
+  auto options = bootstrap::RuntimeAssemblyOptions{};
+  options.session_memory_enabled = false;
+  auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
+
+  REQUIRE(built.has_value());
+  REQUIRE_FALSE(built->session_memory_enabled());
+  REQUIRE(built->session_store() == nullptr);
+  REQUIRE(built->sessions_path().empty());
+  REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan" / "sessions.db"));
+}
+
 TEST_CASE("RuntimeAssembly::build is idempotent on re-run", "[unit][bootstrap][runtime_assembly]") {
   TempDir temp{"oran-assembly-idempotent"};
   asio::io_context io;
@@ -183,6 +244,7 @@ TEST_CASE("RuntimeAssembly::build is idempotent on re-run", "[unit][bootstrap][r
   auto second = bootstrap::RuntimeAssembly::build(temp.path().string(), io2.get_executor());
   REQUIRE(second.has_value());
   REQUIRE(std::filesystem::exists(temp.path() / ".orangutan" / "audit.db"));
+  REQUIRE(std::filesystem::exists(temp.path() / ".orangutan" / "sessions.db"));
 }
 
 TEST_CASE("RuntimeAssembly::build rejects an empty workspace", "[unit][bootstrap][runtime_assembly]") {

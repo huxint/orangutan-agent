@@ -1,14 +1,12 @@
-// include/oran/bootstrap/runtime_assembly.hpp — per-process permission +
-// audit infrastructure assembled at boot.
+// include/oran/bootstrap/runtime_assembly.hpp — per-process runtime services
+// assembled at boot.
 //
 // `RuntimeAssembly` is the long-lived bundle the agent loop inherits from
 // `oran-bootstrap`: a fresh `permission::ApprovalBroker` (per-process key
 // per `0008-permissions.md` criterion 5) plus the active
 // `permission::AuditSink` (storage-backed by default, `NullAuditSink`
-// when audit is disabled). The bundle is the wiring point the
-// `Next intended slice` bullet in `docs/STATUS.md` calls out — "Wire a
-// per-process `ApprovalBroker` + `StorageAuditSink` into runtime
-// assembly so the upcoming agent loop inherits both".
+// when audit is disabled), the workspace resolver, hook bus, optional trace
+// repository, and optional session-memory store.
 //
 // The assembly intentionally does *not* own the `async::Runtime`. The
 // caller (bootstrap today, the agent loop tomorrow) builds the
@@ -28,6 +26,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -43,6 +42,10 @@ namespace orangutan::hook {
 class Bus;
 }  // namespace orangutan::hook
 
+namespace orangutan::memory::session {
+class Store;
+}  // namespace orangutan::memory::session
+
 namespace orangutan::storage {
 class TraceRepository;
 }  // namespace orangutan::storage
@@ -54,9 +57,9 @@ struct RuntimeAssemblyOptions {
   /// is `<workspace>/.orangutan/audit.db`, matching `--audit-init`.
   std::string audit_db_path{};
   /// When `false`, the assembly installs a `NullAuditSink` and never
-  /// touches the audit DB. `runtime_executor` is ignored on this path,
-  /// so callers without an `async::Runtime` (e.g. tests for the
-  /// approval broker in isolation) can build the assembly cheaply.
+  /// touches the audit DB. `runtime_executor` is still used when
+  /// session memory is enabled; disable both audit and session memory
+  /// for tests that only need the broker/workspace path.
   bool audit_enabled{true};
   /// Reader-pool size handed to the audit `Pool`. The audit workload is
   /// dominated by `append_event` (writer) plus occasional `list_events`
@@ -86,23 +89,36 @@ struct RuntimeAssemblyOptions {
   /// `config.hooks.timeout_ms` by bootstrap and applied to the
   /// assembly-owned hook bus.
   std::chrono::milliseconds hook_blocking_timeout{2000};
+  /// When non-empty, overrides the default sessions DB path. The default
+  /// is `<workspace>/.orangutan/sessions.db`, intentionally separate from
+  /// `audit.db`.
+  std::string sessions_db_path{};
+  /// When `false`, the assembly does not open or migrate the sessions DB
+  /// and `session_store()` returns `nullptr`. This keeps tests and future
+  /// deterministic no-session modes from paying for session storage.
+  bool session_memory_enabled{true};
+  /// Reader-pool size handed to the sessions `Pool`.
+  std::size_t session_reader_count{2};
+  /// Per-slot statement cache size for the sessions `Pool`.
+  std::size_t session_statement_cache_capacity{8};
 };
 
-/// Per-process permission + audit infrastructure. Move-only; only
+/// Per-process runtime infrastructure. Move-only; only
 /// constructible via `RuntimeAssembly::build`.
 class RuntimeAssembly {
 public:
   /// Build the assembly. `workspace` is the workspace root used to
-  /// derive the default audit-DB path (same convention as
+  /// derive the default database paths (same convention as
   /// `--audit-init`). `runtime_executor` is the executor the long-lived
-  /// audit `Pool` will dispatch onto; for the agent loop this is
-  /// `async::Runtime::executor()`. When `options.audit_enabled` is
-  /// `false` the executor is unused and may be default-constructed.
+  /// audit and sessions `Pool`s will dispatch onto; for the agent loop
+  /// this is `async::Runtime::executor()`. When both `audit_enabled` and
+  /// `session_memory_enabled` are `false` the executor is unused and may
+  /// be default-constructed.
   ///
   /// Failure modes (the function returns `Error` instead of throwing):
   ///
   ///   * `Error::invalid_argument` — `workspace` is empty.
-  ///   * `Error::io` — could not create the audit directory.
+  ///   * `Error::io` — could not create an owned database directory.
   ///   * `Error::storage` — `Pool::open` or migration failed.
   ///   * `Error::internal` — libsodium failed to initialize (the
   ///     approval broker could not generate a per-process key).
@@ -164,6 +180,21 @@ public:
   /// configured sinks to this bus and thread it into agent/tool contexts.
   [[nodiscard]] hook::Bus& hook_bus() noexcept;
   [[nodiscard]] const hook::Bus& hook_bus() const noexcept;
+
+  /// Pointer to the assembly-owned typed session memory store. Non-null
+  /// iff `options.session_memory_enabled` was `true` at build time. The
+  /// store wraps a separate `storage::SessionRepository` over
+  /// `<workspace>/.orangutan/sessions.db` by default; audit and trace keep
+  /// using `audit.db`.
+  [[nodiscard]] memory::session::Store* session_store() noexcept;
+
+  /// `true` iff the sessions DB pool/repository/store were constructed at
+  /// build time.
+  [[nodiscard]] bool session_memory_enabled() const noexcept;
+
+  /// Filesystem path the sessions DB lives at. Empty when session memory
+  /// is disabled; the resolved absolute path otherwise.
+  [[nodiscard]] std::string_view sessions_path() const noexcept;
 
 private:
   struct Impl;

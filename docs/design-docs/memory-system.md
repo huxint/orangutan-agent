@@ -57,15 +57,19 @@ Storage foundation status: `oran-storage::SessionRepository` implements the
 `content_json` and `metadata_json` as opaque strings but types `role` as
 `core::Role` at the API boundary.
 
-Memory wrapper status (slice 130): `oran-memory::session::Store` is now the
-typed memory-layer owner over `SessionRepository`. It serializes
+Memory wrapper status (slice 130+131): `oran-memory::session::Store` is now the
+typed memory-layer owner over `SessionRepository`, and `RuntimeAssembly` now owns
+the configured-route sessions DB pool/repository/store. The wrapper serializes
 `core::Message` / `core::Content` privately in `src/oran-memory/session.cpp`,
 using versioned JSON for text, thinking, tool-use, and tool-result blocks while
 keeping `oran-storage` unaware of message shape. It validates non-empty
 session/agent ids, maps repository summaries into typed session summaries, and
-returns parsing errors for malformed stored rows. Runtime assembly still needs
-to create the separate `<workspace>/.orangutan/sessions.db` pool before the
-configured-route runner can persist conversations.
+returns parsing errors for malformed stored rows. `RuntimeAssembly` opens and
+migrates `<workspace>/.orangutan/sessions.db` separately from `audit.db`,
+exposes `session_store()`, and lets built-in no-route startup disable the store so
+fresh deterministic CLI runs do not create session state. `AgentPromptRunner`
+still needs to load persisted history and append successful transcript suffixes
+through that owner.
 
 ```cpp
 // include/oran/memory/session.hpp

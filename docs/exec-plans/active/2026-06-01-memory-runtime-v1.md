@@ -162,7 +162,12 @@ memory search results without re-querying inside each ReAct iteration.
   `oran-memory::session::Store` over `storage::SessionRepository`, private
   `core::Message` JSON serialization, `test-memory` 5 / 550, and
   `bench-memory` raw repository vs. typed store parity.
-- [ ] Land milestone 3 after the session store library is green.
+- [x] 2026-06-01 05:13 +0800: Landed milestone 3 as slice 131:
+  `RuntimeAssembly` now opens/migrates a separate
+  `<workspace>/.orangutan/sessions.db`, owns the session pool/repository/store,
+  exposes `session_store()` / `sessions_path()`, enables that path for
+  configured routes, and keeps built-in no-route startup disabled for session
+  memory. Focused validation: `test-bootstrap` 80 / 422.
 - [ ] Land milestone 4 after runtime assembly exposes the sessions owner.
 - [ ] Refresh docs/status/quality/history/release notes in every slice.
 
@@ -188,5 +193,9 @@ memory search results without re-querying inside each ReAct iteration.
 - Related product spec: `docs/product-specs/0005-memory-system.md`
 - Related product spec: `docs/product-specs/0001-core-react-loop.md`
 - PRs: TBD
-- History entry: `docs/histories/2026-06/20260601-0446-memory-session-store.md`
-- Release note: `docs/releases/feature-release-notes.md` (`memory-session-store`)
+- History entries:
+  - `docs/histories/2026-06/20260601-0446-memory-session-store.md`
+  - `docs/histories/2026-06/20260601-0513-runtime-session-memory.md`
+- Release notes:
+  - `docs/releases/feature-release-notes.md` (`memory-session-store`)
+  - `docs/releases/feature-release-notes.md` (`runtime-session-memory`)

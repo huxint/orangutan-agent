@@ -1,8 +1,8 @@
 # Bootstrap Runtime
 
 `oran-bootstrap` is the process entry boundary. It owns command-line bootstrap
-parsing, config discovery, and runtime assembly for the services the early binary can
-construct before the provider-backed agent loop is wired.
+parsing, config discovery, and runtime assembly for the services the binary can
+construct before handing prompts to the provider-backed agent loop.
 
 ## Current Public API
 
@@ -62,6 +62,10 @@ struct RuntimeAssemblyOptions {
   tool::WorkspaceOptions workspace_options;
   bool trace_enabled = true;
   std::chrono::milliseconds hook_blocking_timeout{2000};
+  std::string sessions_db_path{};
+  bool session_memory_enabled = true;
+  std::size_t session_reader_count{2};
+  std::size_t session_statement_cache_capacity{8};
 };
 
 class RuntimeAssembly {
@@ -77,15 +81,24 @@ class RuntimeAssembly {
   storage::TraceRepository* trace_repository() noexcept;
   bool trace_enabled() const noexcept;
   hook::Bus& hook_bus() noexcept;
+  memory::session::Store* session_store() noexcept;
+  bool session_memory_enabled() const noexcept;
+  std::string_view sessions_path() const noexcept;
 };
 
 }  // namespace orangutan::bootstrap
 ```
 
 The assembly owns the approval broker, audit sink/repository pool, workspace resolver,
-optional trace repository, and the process hook bus. `bootstrap::run` threads
-`config.trace().enabled` into `trace_enabled` and `config.hooks().timeout_ms` into
-`hook_blocking_timeout`; the startup banner prints both `trace=<enabled|disabled>` and
+optional trace repository, process hook bus, and optional session-memory store.
+Session memory uses a separate `storage::Pool` and `storage::SessionRepository` over
+`<workspace>/.orangutan/sessions.db` by default; it never shares the audit/trace
+`audit.db` pool. `bootstrap::run` threads `config.trace().enabled` into
+`trace_enabled`, `config.hooks().timeout_ms` into `hook_blocking_timeout`, and enables
+session memory only when a provider route is configured. The built-in empty-defaults
+path disables session memory so a fresh checkout can run the deterministic CLI shell
+without opening `sessions.db`. The startup banner prints
+`trace=<enabled|disabled>`, `sessions=<enabled|disabled> (<path|disabled>)`, and
 `hook-timeout=<ms>`.
 
 `<oran/bootstrap/prompt_runner.hpp>` exposes the bootstrap-owned CLI runner used by
@@ -143,7 +156,7 @@ The current `orangutan` binary prints:
 - default provider-route summary when config declares routes (or
   `provider route: none configured` for the built-in empty defaults),
 - runtime assembly summary including audit path, workspace root, trace state, and
-  blocking hook timeout,
+  sessions state/path plus blocking hook timeout,
 - the `oran-cli` mode output.
 
 When config declares routes, bootstrap resolves the `default` route through
@@ -174,9 +187,11 @@ fallback hooks are published for configured-route prompts without making
 `oran-provider` depend on the hook subsystem.
 The built-in empty-defaults path still reports `provider route: none configured`
 and uses the deterministic no-runner `cli::run` shell so fresh checkouts remain
-runnable without provider credentials. The runtime assembly opens the audit DB
-when audit is enabled so migrations, trace repository ownership, and audit
-sinks are available before configured-route prompt execution.
+runnable without provider credentials or a sessions DB. The runtime assembly opens
+the audit DB when audit is enabled so migrations, trace repository ownership, and
+audit sinks are available before configured-route prompt execution. Configured
+provider routes additionally open and migrate the separate sessions DB and expose
+the typed `memory::session::Store` for the runner persistence slice.
 
 `orangutan --trace <turn-id>` is a bootstrap-owned one-shot inspector. It
 opens the workspace audit DB, runs the idempotent audit migration, loads the
@@ -186,5 +201,7 @@ permission-decision and `hook_publish` rows are readable in the same output.
 
 ## Next Steps
 
+- Wire `AgentPromptRunner` to load persisted session history and append the new
+  transcript suffix through the assembly-owned `session_store()`.
 - Bind configured hook sinks to the assembly-owned bus once the hook sink models land.
 - Add CLI line editor/history on top of the interactive REPL handoff.

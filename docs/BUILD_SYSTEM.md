@@ -230,11 +230,11 @@ oran_lib("prompt", { "oran-core", "oran-async", "oran-config", "oran-tool" }, {}
 oran_lib("provider", { "oran-core", "oran-async", "oran-config", "oran-prompt" }, { "nlohmann_json" })
 oran_lib("agent", { "oran-core", "oran-async", "oran-storage", "oran-prompt", "oran-tool", "oran-provider", "oran-hook" }, { "nlohmann_json" })
 oran_lib("cli", { "oran-core", "oran-async", "oran-hook", "oran-provider" }, {})
-oran_lib("bootstrap", { "oran-core", "oran-async", "oran-http", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-tool", "oran-provider", "oran-agent", "oran-cli" }, {})
+oran_lib("bootstrap", { "oran-core", "oran-async", "oran-http", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-memory", "oran-tool", "oran-provider", "oran-agent", "oran-cli" }, {})
 
 target("orangutan")
     set_kind("binary")
-    add_deps("oran-core", "oran-async", "oran-http", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-tool", "oran-provider", "oran-agent", "oran-cli", "oran-bootstrap")
+    add_deps("oran-core", "oran-async", "oran-http", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-memory", "oran-tool", "oran-provider", "oran-agent", "oran-cli", "oran-bootstrap")
     add_files(path.join(root, "src/main.cpp"))
     set_rundir(root)
 ```
@@ -263,9 +263,10 @@ from `oran-agent`, so the provider domain remains hook-free.
 `storage::SessionRepository`. It depends downward on `oran-storage` for the
 SQLite repository and on `oran-async` for awaitable APIs, and it consumes
 `nlohmann_json` only in `src/oran-memory/session.cpp` to keep message JSON out of
-`oran-storage` and out of public headers. Bootstrap does not depend on
-`oran-memory` yet; the next memory-plan slice wires the separate sessions DB and
-repository owner.
+`oran-storage` and out of public headers. Slice 131 makes `oran-bootstrap`
+depend on `oran-memory` as the composition root for the separate
+`<workspace>/.orangutan/sessions.db` pool/repository/store; the agent runner
+persistence slice consumes that owner next.
 
 `oran-bootstrap` depends on `oran-provider` so process startup can preflight the
 configured default provider route before handing prompts to `oran-cli`. It also

@@ -505,6 +505,7 @@ TEST_CASE("run hands CLI arguments to oran-cli after config load", "[unit][boots
 
   REQUIRE(result.has_value());
   REQUIRE(*result == 0);
+  REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan" / "sessions.db"));
 }
 
 TEST_CASE("run hands configured provider prompts to AgentPromptRunner", "[unit][bootstrap][provider]") {
@@ -530,6 +531,9 @@ TEST_CASE("run hands configured provider prompts to AgentPromptRunner", "[unit][
   // Streaming is wired end-to-end, so the configured Anthropic route now sends
   // `stream=true` and the binary renders the SSE turn live.
   REQUIRE(server.request_text().contains(R"json("stream":true)json"));
+  const auto sessions_db = temp.path() / ".orangutan" / "sessions.db";
+  REQUIRE(std::filesystem::exists(sessions_db));
+  REQUIRE(table_exists(sessions_db, "sessions"));
 }
 
 TEST_CASE("run hands configured provider REPL prompts to AgentPromptRunner", "[unit][bootstrap][provider]") {

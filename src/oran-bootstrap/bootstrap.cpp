@@ -43,7 +43,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice130";
+constexpr std::string_view kVersion = "2.0.0-slice131";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 
 struct ParsedArgs {
@@ -766,9 +766,9 @@ core::Result<int> run(BootstrapOptions options) {
   }
 
   // The runtime assembly composes the per-process permission infrastructure
-  // (`ApprovalBroker`, audit `Pool`, `AuditRepository`, `StorageAuditSink`)
-  // plus the file-tool `tool::Workspace` inherited by agent-loop prompt
-  // runs. Slice 41 routes
+  // (`ApprovalBroker`, audit/trace storage, hook bus, and optional session
+  // memory) plus the file-tool `tool::Workspace` inherited by agent-loop
+  // prompt runs. Slice 41 routes
   // `permissions.workspace.extra_{read,write}_roots` from `oran-config` into
   // `tool::WorkspaceOptions` here so the workspace canonicalises overrides
   // once at boot instead of per-tool.
@@ -783,16 +783,20 @@ core::Result<int> run(BootstrapOptions options) {
   };
   assembly_options.trace_enabled = loaded->value.trace().enabled;
   assembly_options.hook_blocking_timeout = std::chrono::milliseconds{loaded->value.hooks().timeout_ms};
+  assembly_options.session_memory_enabled = provider_route->has_value();
   auto assembly = RuntimeAssembly::build(options.workspace, runtime.executor(), std::move(assembly_options));
   if (!assembly) {
     return std::unexpected(std::move(assembly).error());
   }
   std::println(
-      "runtime assembly ready: audit={} ({}), approval-broker=fresh, workspace={}, trace={}, hook-timeout={}ms",
+      "runtime assembly ready: audit={} ({}), approval-broker=fresh, workspace={}, trace={}, sessions={} ({}), "
+      "hook-timeout={}ms",
       assembly->audit_enabled() ? "enabled" : "disabled",
       assembly->audit_enabled() ? assembly->audit_path() : std::string_view{"<null sink>"},
       assembly->workspace().root(),
       assembly->trace_enabled() ? "enabled" : "disabled",
+      assembly->session_memory_enabled() ? "enabled" : "disabled",
+      assembly->session_memory_enabled() ? assembly->sessions_path() : std::string_view{"<disabled>"},
       assembly->hook_bus().options().blocking_timeout.count());
 
   if (!provider_route->has_value()) {
