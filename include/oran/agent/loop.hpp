@@ -79,9 +79,9 @@ struct TraceContext {
 };
 
 struct RunTurnInputs {
-  /// Stable section (1). The caller owns the actual preamble text for now;
-  /// later slices move the template into `oran-agent` once its wording is
-  /// stable enough to become a prompt contract.
+  /// Stable section (1). An empty value selects `agent::default_system_preamble()`.
+  /// Supplying text is an explicit override for tests or embedders that already
+  /// own a repository-versioned preamble.
   std::string_view system_preamble{};
   /// Catalog snapshot from `tool::Registry::catalog()`. `Loop` forwards it to
   /// `prompt::Builder` and also mirrors the active subset, sorted by tool name,

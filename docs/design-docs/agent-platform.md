@@ -122,8 +122,12 @@ own library, its own tests, its own bench, its own design doc."
 > skips the trace row, forces direct dispatch audit rows to keep
 > `parent_turn_id = NULL`, and restores any reusable dispatch-context parent id
 > after the tool call.
-> Memory, scheduler handoff, SSE streaming, and provider hook/cost rollups remain
-> downstream.
+> Slices 116-120 add scheduler handoff, slices 121-124 add SSE streaming,
+> slice 126 adds provider lifecycle hooks, slice 129 adds profile-priced cost
+> estimates, slices 131-133 add session-memory persistence plus the section-5
+> memory-framing owner, and slice 134 adds the first section-1
+> `agent::SystemPreambleOwner` with a stable default preamble and static grep
+> gate.
 > The invariants — section order, byte-identical cached prefix, no clocks /
 > per-call state in sections (1)–(6) — remain canonical in
 > [`../rules/prompt-design.md`](../rules/prompt-design.md).
@@ -134,8 +138,12 @@ The agent loop owns:
   [`prompt-design.md` CacheSection order](../rules/prompt-design.md). Produces
   `system_preamble` and `per_agent_overlay` sections whose bytes must depend only
   on stable agent/model/config inputs — never on the wall clock or the current
-  iteration. The slice-70 skeleton accepts those bytes as inputs; `oran-agent`
-  will own the real preamble text.
+  iteration. Slice 134 adds `agent::SystemPreamble`,
+  `agent::SystemPreambleOwner`, and `agent::default_system_preamble()` in
+  `oran-agent`; `agent::Loop` uses that owned default when
+  `RunTurnInputs::system_preamble` is empty, while explicit caller text remains
+  an override for tests and embedders. The default section-1 bytes intentionally
+  exclude tool catalogs, memory framing, skills, and conversation status.
 - **Tool catalog renderer** — section (2). Will walk `tool::Registry::catalog()`,
   filter the full-schema active set through `config::RuntimeConfig::prompt.active_tools`,
   apply the session's sorted `prompt::PromotionState` snapshot, and render each
@@ -196,9 +204,13 @@ body-response Anthropic/OpenAI protocol systems, slice 110 adds the concrete
 `oran-http` body client, and slice 111 adds bootstrap's `HttpProviderBackend`
 construction seam over that client. Slice 112 switches configured-route
 `bootstrap::run` to that backend plus `cli::run_async`, so the ordinary binary
-can use the runner for provider-backed prompts. The future
-`ToolScheduler` can replace the direct loop call without changing the
-provider-facing request/response shape.
+can use the runner for provider-backed prompts. Slices 116-120 move all tool
+batches through `ToolScheduler` without changing the provider-facing
+request/response shape. Slice 134 consults the Piebald corpus again for the
+system-preamble surface: it adopts the stable multi-part prompt separation and
+tool-catalog-outside-section-1 pattern, but rejects copying Claude Code's large
+Claude-specific system prompt because Orangutan's section 1 is a minimal runtime
+contract and sections 2-7 own tools, memory, skills, overlays, and tail state.
 
 ## Cross-Cutting Concerns
 

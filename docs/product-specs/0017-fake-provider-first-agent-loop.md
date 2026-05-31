@@ -198,7 +198,10 @@ proves the loop behaves correctly without a network.
     body client, slice 111 adds the `ProtocolTransport` adapter through
     bootstrap's HTTP backend, and slice 112 wires the ordinary binary handoff.
     Slices 121-124 add the HTTP SSE transport, Anthropic/OpenAI streaming
-    decoders, and the CLI streaming sink.
+    decoders, and the CLI streaming sink. Slice 134 adds the stable
+    section-1 preamble owner: empty `RunTurnInputs::system_preamble` now selects
+    `agent::Loop`'s owned `agent::default_system_preamble()`, while explicit
+    caller text remains an override.
   1. Build `TurnContext` (identity, route, session id, origin,
      cancellation slot, stable service refs).
   2. Load/render memory once per turn (memory: `nullopt` in v1 — the

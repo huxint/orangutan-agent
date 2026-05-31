@@ -77,6 +77,9 @@ broken.
   - Library names in `docs/ARCHITECTURE.md` inventory must match `xmake/targets.lua`.
   - Package versions in `docs/rules/libraries.md` must match `xmake/packages.lua`.
   - Required files listed in `docs/rules/README.md` must exist.
+- `scripts/check-prompt-preamble.sh` — guards the default `oran-agent`
+  section-1 preamble against clocks, ids, randomness, and prompt bytes owned by
+  other sections.
 - CI fails any PR that fails the above.
 
 The script reports each drift with the exact pair of files that disagree and a

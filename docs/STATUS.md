@@ -7,15 +7,23 @@
 
 ## Snapshot
 
-- **Slice:** 133 (`xmake run orangutan` reports slice 133)
+- **Slice:** 134 (`xmake run orangutan` reports slice 134)
 - **Last completed history:**
-  [`histories/2026-06/20260601-0622-prompt-memory-framing.md`](histories/2026-06/20260601-0622-prompt-memory-framing.md)
+  [`histories/2026-06/20260601-0709-stable-system-preamble.md`](histories/2026-06/20260601-0709-stable-system-preamble.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** continue the prompt-runtime arc with the first
-  loop-owned stable system-preamble template, including the prompt-design grep
-  follow-up, without moving tool catalogs, memory framing, skills, or
-  conversation-tail bytes into the preamble.
+- **Next intended slice:** continue the prompt-runtime arc with the real skill
+  catalog renderer / section-4 owner, keeping skill bodies out of the system
+  preamble and preserving the section-1 grep gate.
+  Slice 134 adds `agent::SystemPreamble` / `agent::SystemPreambleOwner` and the
+  repository default section-1 preamble. `agent::Loop` uses its owned default
+  when callers leave `RunTurnInputs::system_preamble` empty, and
+  `AgentPromptRunner` renders the stable preamble once before loop entry. The
+  prompt-cache fixture now uses the repository default preamble, and
+  `scripts/check-prompt-preamble.sh` runs from `scripts/ci.sh` to reject clocks,
+  ids, and cross-section prompt bytes in the default preamble. Focused result:
+  `test-agent` **56 cases / 10 744 assertions** and `test-bootstrap` **84 cases
+  / 477 assertions**.
   Slice 133 finished the memory runtime v1 plan by adding
   `memory::FramingOwner` as the minimal once-per-turn section-5 owner. It keeps
   `prompt::Builder` unchanged, lets future long-term recall fill the same
@@ -1059,8 +1067,8 @@
   data without mutating state. `test-agent` covers promotion into the next
   prompt, no-op non-search / failed-search outputs, and malformed successful
   payload rejection; `bench-agent` now runs the agent-owned prompt-cache
-  fixture (`agent.prompt_cache_no_promotions` about 54.4 us / fixture,
-  `agent.prompt_cache_after_promotion` about 63.1 us / fixture) and aborts
+  fixture (`agent.prompt_cache_no_promotions` about 56.6 us / fixture,
+  `agent.prompt_cache_after_promotion` about 63.0 us / fixture) and aborts
   if `RenderedPrompt::prefix_hash` drifts across changing conversation tails.
   `oran-agent` is not linked into the `orangutan` binary yet and does not
   contain the fake-provider ReAct loop. Slice 71
@@ -1261,9 +1269,9 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-tool`: 178 cases / 1838 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 86 cases / 652 assertions.
-- `oran-agent`: 52 cases / 10705 assertions.
+- `oran-agent`: 56 cases / 10744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 83 cases / 464 assertions.
+- `oran-bootstrap`: 84 cases / 477 assertions.
 
 ## Open Tech-Debt Rows
 
@@ -1297,9 +1305,6 @@ Closed entries do *not* live here — the tracker is canonical.
   Adequate at slice 20 (~27 µs / 4-file tree) but 3-10× slower than a tuned
   scanner on repo-scale inputs. Re-bench once `oran-agent` produces a real
   workload measurement.
-- 2026-05-17 — `scripts/check-prompt-preamble` static grep promised in
-  `rules/prompt-design.md` not yet implemented (waits on first stable
-  preamble template in `oran-agent`).
 - 2026-05-14 — Generated `docs/generated/config.schema.json` not yet
   implemented.
 - 2026-05-14 — bench A-vs-B scenarios listed in

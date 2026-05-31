@@ -27,6 +27,7 @@
 #include <asio/cancellation_signal.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/post.hpp>
+#include <asio/this_coro.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <oran/async.hpp>
@@ -480,6 +481,86 @@ TEST_CASE("Loop maps prompt, messages, active tools, and cache hints into the pr
     REQUIRE(request.cache->prefix_bytes == result->rendered_prompt.prefix_bytes);
     REQUIRE(provider.route().has_value());
     REQUIRE(provider.route()->primary.model == "fake-1");
+  });
+}
+
+TEST_CASE("Loop uses the stable default system preamble when no override is supplied", "[unit][agent][loop][prompt]") {
+  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    RecordingSequenceProvider provider{{
+        provider::Response{
+            .blocks =
+                {core::ToolUseContent{.id = "read-1", .name = "file.read", .input_json = R"({"path":"note.txt"})"}},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::nullopt,
+            .route_profile_used = std::nullopt,
+        },
+        provider::Response{
+            .blocks = {core::TextContent{.text = "defaulted"}},
+            .stop_reason = core::StopReason::end_turn,
+            .usage = {},
+            .model_used = std::nullopt,
+            .route_profile_used = std::nullopt,
+        },
+    }};
+    auto loop =
+        agent::Loop{provider, default_route(provider::PromptCacheOptions{.enabled = true, .min_prefix_bytes = 1})};
+    auto registry = tool::Registry{};
+    add_canned_tool(registry, canned_tool_def("file.read"), "read ok");
+    permission::NullAuditSink audit;
+    permission::RuleSet rules;
+    rules.add(permission::Rule{.verdict = permission::Verdict::allow, .tool_pattern = "file.*"});
+    auto context = tool::DispatchContext{
+        .executor = co_await asio::this_coro::executor,
+        .mode = permission::Mode::strict,
+        .rules = rules,
+        .audit = audit,
+        .scope_key = "scope-A",
+        .agent_key = "coder",
+        .identity = "operator-1",
+    };
+
+    const auto catalog = loop_catalog();
+    const std::vector<core::Message> first_tail{core::Message::user_text("first")};
+    auto first_inputs = base_inputs(catalog, first_tail);
+    first_inputs.system_preamble = "";
+    first_inputs.tools = &registry;
+    first_inputs.dispatch_context = &context;
+
+    auto first = co_await loop.run_turn(first_inputs);
+
+    REQUIRE(first.has_value());
+    REQUIRE(first->text == "defaulted");
+    REQUIRE(provider.requests().size() == 2);
+    REQUIRE(provider.requests()[0].system_prompt.has_value());
+    REQUIRE(provider.requests()[1].system_prompt.has_value());
+    REQUIRE(provider.requests()[0].system_prompt->contains("You are Orangutan"));
+    REQUIRE(provider.requests()[0].system_prompt->contains("Operating principles:"));
+    REQUIRE(provider.requests()[0].system_prompt->contains("Tool: file.read"));
+    REQUIRE(provider.requests()[0].system_prompt->contains("memory: none"));
+    REQUIRE(*provider.requests()[0].system_prompt == *provider.requests()[1].system_prompt);
+    REQUIRE(first->rendered_prompt.sections[0].id == "system_preamble");
+    REQUIRE(first->rendered_prompt.sections[0].content.contains("You are Orangutan"));
+
+    RecordingProvider second_provider{provider::Response{
+        .blocks = {core::TextContent{.text = "second"}},
+        .stop_reason = core::StopReason::end_turn,
+        .usage = {},
+        .model_used = std::nullopt,
+        .route_profile_used = std::nullopt,
+    }};
+    auto second_loop = agent::Loop{second_provider,
+                                   default_route(provider::PromptCacheOptions{.enabled = true, .min_prefix_bytes = 1})};
+    const std::vector<core::Message> second_tail{core::Message::user_text("second")};
+    auto second_inputs = base_inputs(catalog, second_tail);
+    second_inputs.system_preamble = "";
+
+    auto second = co_await second_loop.run_turn(second_inputs);
+
+    REQUIRE(second.has_value());
+    REQUIRE(second->rendered_prompt.sections[0].content == first->rendered_prompt.sections[0].content);
+    REQUIRE(second->rendered_prompt.sections[0].content_hash == first->rendered_prompt.sections[0].content_hash);
+    REQUIRE(second->rendered_prompt.prefix_hash == first->rendered_prompt.prefix_hash);
   });
 }
 

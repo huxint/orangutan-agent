@@ -112,17 +112,21 @@ audit, broker, hook, output-cap, trace, and session-memory services from the ass
 When the assembly exposes `session_store()`, the runner loads the persisted history for
 the current `session_id` + `agent_key` before each prompt and appends only the new
 successful transcript suffix afterward. The in-process transcript cache remains the
-fallback when session memory is disabled. The runner also owns a
-`memory::FramingOwner` for prompt section 5 and renders it exactly once before
-calling `agent::Loop`, so multi-iteration provider/tool turns reuse stable
-memory framing bytes without moving memory reads into the loop. After every
-successful turn the runner walks
+fallback when session memory is disabled. The runner also owns an
+`agent::SystemPreambleOwner` for prompt section 1 and a `memory::FramingOwner`
+for prompt section 5, rendering both exactly once before calling `agent::Loop`.
+Empty `AgentPromptRunnerOptions::system_preamble` selects
+`agent::default_system_preamble()`; explicit text is treated as an override for
+tests and embedders. Multi-iteration provider/tool turns therefore reuse stable
+system-preamble and memory-framing bytes without moving section rendering into
+the loop. After every successful turn the runner walks
 the new transcript suffix and feeds each tool result back through
 `agent::SessionState::observe_tool_output(...)` so the next turn's
 `promotion_snapshot(...)` sees deferred-tool promotions; the count of observed
 `tool.search` results is exposed for diagnostics through
-`tool_search_observations_recorded()`. The runner does not construct real provider
-adapters or read provider credentials.
+`tool_search_observations_recorded()`, and section render counters are exposed
+through `system_preamble_renders()` and `memory_framing_renders()`. The runner
+does not construct real provider adapters or read provider credentials.
 
 ## Config Resolution
 
@@ -209,7 +213,6 @@ permission-decision and `hook_publish` rows are readable in the same output.
 
 ## Next Steps
 
-- Add the first loop-owned stable system-preamble template and the prompt-design
-  grep follow-up.
+- Add the real skill catalog renderer / section-4 owner.
 - Bind configured hook sinks to the assembly-owned bus once the hook sink models land.
 - Add CLI line editor/history on top of the interactive REPL handoff.

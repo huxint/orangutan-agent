@@ -25,6 +25,7 @@
 #include <asio/this_coro.hpp>
 
 #include <oran/agent/scheduler.hpp>
+#include <oran/agent/system_preamble.hpp>
 #include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/role.hpp>
@@ -46,6 +47,13 @@ constexpr auto kDefaultActiveTools = std::array<std::string_view, 6>{
     "directory.list",
     "tool.search",
 };
+
+[[nodiscard]] std::string_view system_preamble_for(const RunTurnInputs& inputs, SystemPreambleOwner& default_preamble) {
+  if (!inputs.system_preamble.empty()) {
+    return inputs.system_preamble;
+  }
+  return default_preamble.render_once();
+}
 
 [[nodiscard]] bool is_promoted_tool(std::span<const std::string> promoted_tools, std::string_view name) noexcept {
   return std::ranges::contains(promoted_tools, name);
@@ -629,8 +637,8 @@ private:
 class Loop::Impl {
 public:
   Impl(provider::System& provider, provider::Route route, LoopOptions options)
-      : provider_{provider}, route_{std::move(route)}, options_{std::move(options)}, builder_{options_.prompt_options} {
-  }
+      : provider_{provider}, route_{std::move(route)}, options_{std::move(options)}, builder_{options_.prompt_options},
+        default_preamble_{} {}
 
   [[nodiscard]] async::Awaitable<core::Result<RunTurnResult>> run_turn(RunTurnInputs inputs,
                                                                        provider::EventSink* sink) {
@@ -646,6 +654,7 @@ public:
     auto total_usage = provider::Usage{};
     const auto started_at_ns = now_epoch_ns();
     const auto native_tools = request_tools_for(inputs.tool_catalog, inputs.active_tools, inputs.promoted_tools);
+    const auto system_preamble = system_preamble_for(inputs, default_preamble_);
     const auto thinking_budget =
         inputs.thinking_budget.has_value() ? inputs.thinking_budget : route_.primary.thinking_budget;
     std::optional<prompt::RenderedPrompt> last_rendered;
@@ -658,7 +667,7 @@ public:
 
     for (std::uint32_t iteration = 1; iteration <= options_.max_iterations; ++iteration) {
       auto rendered = co_await builder_.build(prompt::BuilderInputs{
-          .system_preamble = inputs.system_preamble,
+          .system_preamble = system_preamble,
           .tool_catalog = inputs.tool_catalog,
           .active_tools = inputs.active_tools,
           .promoted_tools = inputs.promoted_tools,
@@ -972,6 +981,7 @@ private:
   provider::Route route_;
   LoopOptions options_;
   prompt::Builder builder_;
+  SystemPreambleOwner default_preamble_;
 };
 
 Loop::Loop(provider::System& provider, provider::Route route, LoopOptions options)

@@ -72,7 +72,7 @@ prompt::RenderedPrompt build_once(prompt::Builder& builder,
       io,
       [&]() -> asio::awaitable<void> {
         auto result = co_await builder.build(prompt::BuilderInputs{
-            .system_preamble = "system",
+            .system_preamble = agent::default_system_preamble().section_text,
             .tool_catalog = catalog,
             .active_tools = config::PromptActiveToolsConfig{},
             .promoted_tools = promoted_tools,

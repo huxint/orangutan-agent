@@ -165,11 +165,11 @@ Two layers:
   `RenderedPrompt::prefix_hash` drifts across changing conversation tails.
   Future full-loop fixtures can extend the same bucket with recorded turns.
 
-There is no static-grep enforcement yet because the slice-70 prompt builder
-accepts preamble bytes but `oran-agent` has not minted the first stable
-preamble template. Once that template lands in code, add a
-`scripts/check-prompt-preamble` grep modeled on `check-banned-includes.sh`
-and list it under "Mechanical Enforcement" in [`docs-in-sync.md`](docs-in-sync.md).
+- **Static grep.** `scripts/check-prompt-preamble.sh` runs in `scripts/ci.sh`
+  and scans the default `oran-agent` section-1 preamble for clocks, ids,
+  randomness, and bytes owned by tool, skill, memory, or conversation sections.
+  The grep is intentionally narrow; it protects the versioned default preamble
+  and does not replace code review for future renderer inputs.
 
 ## Adding A New Prompt Surface
 

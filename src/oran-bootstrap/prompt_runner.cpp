@@ -132,6 +132,13 @@ materialize_runner_rules(const config::Config& cfg, permission::Mode mode, std::
   };
 }
 
+[[nodiscard]] agent::SystemPreamble make_system_preamble(std::string text) {
+  if (text.empty()) {
+    return agent::default_system_preamble();
+  }
+  return agent::SystemPreamble{.section_text = std::move(text)};
+}
+
 [[nodiscard]] Result<void> validate_options(const AgentPromptRunnerOptions& options) {
   if (options.assembly == nullptr) {
     return std::unexpected(option_error("agent prompt runner requires a runtime assembly"));
@@ -186,7 +193,7 @@ public:
         active_tools_{std::move(active_tools)}, output_caps_{output_caps}, session_id_{session_id},
         session_id_text_{format_session_id(session_id_)}, mode_{options.mode}, scope_key_{std::move(options.scope_key)},
         agent_key_{std::move(options.agent_key)}, identity_{std::move(options.identity)},
-        origin_{std::move(options.origin)}, system_preamble_{std::move(options.system_preamble)},
+        origin_{std::move(options.origin)}, system_preamble_{make_system_preamble(std::move(options.system_preamble))},
         skills_catalog_{std::move(options.skills_catalog)},
         memory_framing_{memory::Framing{.section_text = std::move(options.memory_framing)}},
         per_agent_overlay_{std::move(options.per_agent_overlay)},
@@ -230,6 +237,7 @@ public:
 
     const auto prev_transcript_size = conversation_tail.size();
     conversation_tail.push_back(core::Message::user_text(std::move(request.prompt)));
+    const auto system_preamble = std::string{system_preamble_.render_once()};
     const auto memory_framing = std::string{memory_framing_.render_once()};
 
     auto promotion_snapshot = session_state_.promotion_snapshot(core::time::now_utc());
@@ -249,7 +257,7 @@ public:
     };
 
     auto inputs = agent::RunTurnInputs{
-        .system_preamble = system_preamble_,
+        .system_preamble = system_preamble,
         .tool_catalog = std::span<const core::ToolDef>{catalog},
         .active_tools = active_tools_,
         .promoted_tools = std::span<const std::string>{promotion_snapshot.tool_names},
@@ -332,6 +340,10 @@ public:
 
   [[nodiscard]] std::size_t memory_framing_renders() const noexcept {
     return memory_framing_.stats().renders;
+  }
+
+  [[nodiscard]] std::size_t system_preamble_renders() const noexcept {
+    return system_preamble_.stats().renders;
   }
 
   [[nodiscard]] const provider::Route& route() const noexcept {
@@ -423,7 +435,7 @@ private:
   std::string agent_key_;
   std::string identity_;
   std::string origin_;
-  std::string system_preamble_;
+  agent::SystemPreambleOwner system_preamble_;
   std::string skills_catalog_;
   memory::FramingOwner memory_framing_;
   std::string per_agent_overlay_;
@@ -508,6 +520,10 @@ std::size_t AgentPromptRunner::tool_search_observations_recorded() const noexcep
 
 std::size_t AgentPromptRunner::memory_framing_renders() const noexcept {
   return impl_->memory_framing_renders();
+}
+
+std::size_t AgentPromptRunner::system_preamble_renders() const noexcept {
+  return impl_->system_preamble_renders();
 }
 
 const provider::Route& AgentPromptRunner::route() const noexcept {

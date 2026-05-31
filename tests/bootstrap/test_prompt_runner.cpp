@@ -552,6 +552,51 @@ TEST_CASE("AgentPromptRunner renders memory framing once per prompt before loop 
   });
 }
 
+TEST_CASE("AgentPromptRunner renders default system preamble once per prompt before loop iterations",
+          "[unit][bootstrap][prompt_runner][prompt]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-system-preamble"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false);
+    write_file(temp.path() / "note.txt", "system preamble fixture\n");
+
+    RecordingProvider recording{{
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "read-1",
+                .name = "file.read",
+                .input_json = R"({"path":"note.txt"})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        },
+        text_response("done"),
+    }};
+
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto result =
+        co_await (*runner)->run_prompt(cli::PromptRunRequest{.prompt = "read", .mode = cli::CliMode::single_shot});
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "done");
+
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 2);
+    REQUIRE(requests[0].system_prompt.has_value());
+    REQUIRE(requests[1].system_prompt.has_value());
+    REQUIRE(requests[0].system_prompt->contains("You are Orangutan"));
+    REQUIRE(requests[0].system_prompt->contains("Operating principles:"));
+    REQUIRE(requests[0].system_prompt->contains("Tool: file.read"));
+    REQUIRE(*requests[0].system_prompt == *requests[1].system_prompt);
+    REQUIRE((*runner)->system_preamble_renders() == 1);
+  });
+}
+
 TEST_CASE("AgentPromptRunner binds the CLI approval sink for builtin tool dispatch",
           "[unit][bootstrap][prompt_runner][approval]") {
   TempDir temp{"oran-bootstrap-prompt-runner-approval"};

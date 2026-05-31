@@ -38,6 +38,8 @@ struct AgentPromptRunnerOptions {
   std::string agent_key{"default"};
   std::string identity{"terminal"};
   std::string origin{"cli"};
+  /// Optional section-1 override. Empty uses the loop-owned default system
+  /// preamble from `oran-agent`.
   std::string system_preamble{};
   std::string skills_catalog{};
   std::string memory_framing{};
@@ -96,6 +98,9 @@ public:
   /// Count of prompt memory-framing renders performed at the runner boundary.
   /// A multi-iteration ReAct turn increments this once, before `agent::Loop`.
   [[nodiscard]] std::size_t memory_framing_renders() const noexcept;
+  /// Count of stable section-1 renders performed by the runner. A multi-iteration
+  /// turn increments this once, before `agent::Loop`.
+  [[nodiscard]] std::size_t system_preamble_renders() const noexcept;
   [[nodiscard]] const provider::Route& route() const noexcept;
 
   class Impl;

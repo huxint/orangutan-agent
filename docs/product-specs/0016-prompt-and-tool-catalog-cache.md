@@ -197,6 +197,15 @@ promotion side effect that the first agent loop will reuse.
   worth it (Anthropic allows up to 4). Breakpoints land at section
   boundaries selected by the builder; the breakpoint set is
   deterministic per (model, route, agent).
+- **System preamble owner** populates section 1.
+  **Status (slice 134, 2026-06-01):** `oran-agent` now exports
+  `agent::SystemPreamble`, `agent::SystemPreambleOwner`, and
+  `agent::default_system_preamble()`. `agent::Loop` uses its owned default
+  when callers leave `RunTurnInputs::system_preamble` empty, while
+  `AgentPromptRunner` renders the default once before loop entry for the
+  configured-route path. The default text is stable section-1 runtime contract
+  only; `scripts/check-prompt-preamble.sh` rejects clocks, ids, and
+  cross-section prompt bytes.
 - **Memory framing renderer** populates section 5.
   **Status (slice 133, 2026-06-01):** `oran-memory` now exports
   `memory::Framing` / `memory::FramingOwner`, a minimal once-per-turn owner
@@ -392,11 +401,9 @@ xmake run orangutan -- --explain-prompt   # planned debug surface; lands with ag
   — the placeholder is replaced by a "Prompt Assembly" section
   recording which Piebald-AI shapes were adopted, with one-line
   rationale per choice.
-- `docs/rules/prompt-design.md` "Enforcement" — `scripts/
-  check-prompt-preamble` static grep tracked under the 2026-05-17
-  prompt tech-debt row lands when `oran-agent` adds the first stable
-  preamble template. Slice 70's builder accepts preamble bytes but does
-  not define the final text.
+- `docs/rules/prompt-design.md` "Enforcement" — slice 134 adds
+  `scripts/check-prompt-preamble.sh` and wires it into `scripts/ci.sh` for the
+  default `oran-agent` section-1 preamble.
 - `docs/exec-plans/tech-debt-tracker.md` — the 2026-05-17
   prompt-cache bench row closes in slice 72 because `bench-agent` now owns
   the SessionState fixture; `bench-prompt` remains the prompt-owned precursor.

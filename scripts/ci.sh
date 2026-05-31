@@ -8,6 +8,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 "${repo_root}/scripts/check-docs-sync.sh"
 "${repo_root}/scripts/check-status-fresh.sh"
 "${repo_root}/scripts/check-deps.sh"
+"${repo_root}/scripts/check-prompt-preamble.sh"
 
 if [[ -f "${repo_root}/scripts/check-action-pinning.sh" ]]; then
   "${repo_root}/scripts/check-action-pinning.sh"
