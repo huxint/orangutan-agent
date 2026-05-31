@@ -152,7 +152,9 @@ When config declares routes, bootstrap resolves the `default` route through
 creates `AgentPromptRunner`, and runs the remaining CLI args through
 `cli::run_async`. No-prompt configured-route runs set
 `CliOptions::interactive_repl`, so `oran-cli` reads terminal prompts until an
-empty line or EOF and dispatches each one through that runner. The route/plan
+empty line, `/exit`, `/quit`, or EOF and dispatches each non-command prompt
+through that runner. `/help` is handled locally by `oran-cli` and never reaches
+`AgentPromptRunner`. The route/plan
 preflight catches bad profile references,
 provider labels, explicit profile-protocol spellings, missing endpoint
 metadata, and unsupported endpoint schemes before credentials are read.
@@ -182,6 +184,5 @@ permission-decision and `hook_publish` rows are readable in the same output.
 ## Next Steps
 
 - Bind configured hook sinks to the assembly-owned bus once the hook sink models land.
-- Add CLI line editor/history and slash-command handling on top of the interactive
-  REPL handoff.
-- Add provider usage/cost rollups.
+- Add CLI line editor/history on top of the interactive REPL handoff.
+- Add provider profile-cost calculation.

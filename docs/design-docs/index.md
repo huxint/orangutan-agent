@@ -27,7 +27,7 @@ If you are starting a non-trivial task, the rule is:
 - [`bootstrap-runtime.md`](bootstrap-runtime.md) — process entry, config discovery,
   and future runtime assembly boundary.
 - [`cli-runtime.md`](cli-runtime.md) — CLI mode parsing, prompt-runner handoff,
-  scripted and interactive REPL boundaries.
+  scripted/interactive REPL boundaries, and REPL-owned slash commands.
 
 ### Agent Runtime
 

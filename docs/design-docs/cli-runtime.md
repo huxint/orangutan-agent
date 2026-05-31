@@ -90,15 +90,19 @@ exercise the dispatch path without printing per-iteration output.
 
 No prompt flag selects `CliMode::repl`. `repl_lines` are the scripted REPL path for
 tests and noninteractive drivers; both `run` and `run_async` ignore empty scripted
-entries, and `run_async` calls the supplied `PromptRunner` once for each non-empty
-scripted line in order with `prompt_index` counting only dispatched prompts.
+entries. REPL lines that exactly match a recognized slash command after trimming are
+handled by `oran-cli` before prompt dispatch: `/help` renders the command list, and
+`/exit` / `/quit` stop the REPL. Leading and trailing ASCII whitespace is ignored for
+command matching. `run_async` calls the supplied `PromptRunner` once for each
+non-command prompt in order with `prompt_index` counting only dispatched prompts.
 
 `interactive_repl` enables terminal input only for the async runner path. When
 `run_async` receives a non-null `PromptRunner`, no scripted `repl_lines`, and
 `interactive_repl=true`, it reads terminal stdin on the current coroutine executor until
-an empty line or EOF. Each non-empty line is dispatched to the runner as
-`CliMode::repl`; the prompt is not echoed because the operator already typed it at the
-terminal prompt. Scripted lines always win over interactive input, including an
+an empty line, `/exit`, `/quit`, or EOF. Each non-command line is dispatched to the
+runner as `CliMode::repl`; the prompt is not echoed because the operator already typed
+it at the terminal prompt. `/help` is handled locally and does not increment
+`prompts_processed`. Scripted lines always win over interactive input, including an
 all-empty scripted span, so tests and noninteractive callers never accidentally block on
 stdin. Without a runner, the shell preserves the no-runner output and does not read
 provider credentials, open storage, block on stdin, or run tools.
@@ -142,4 +146,5 @@ with runtime-assembly services.
 ## Next Steps
 
 - Add a line editor/history once terminal editing is needed.
-- Add slash-command parsing after the runtime has command targets.
+- Add more slash-command targets only when bootstrap or runtime surfaces expose
+  concrete operations for them.

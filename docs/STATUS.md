@@ -7,22 +7,28 @@
 
 ## Snapshot
 
-- **Slice:** 127 (`xmake run orangutan` reports slice 127)
+- **Slice:** 128 (`xmake run orangutan` reports slice 128)
 - **Last completed history:**
-  [`histories/2026-06/20260601-0309-provider-usage-rollups.md`](histories/2026-06/20260601-0309-provider-usage-rollups.md)
+  [`histories/2026-06/20260601-0339-cli-repl-slash-commands.md`](histories/2026-06/20260601-0339-cli-repl-slash-commands.md)
 - **Active exec-plan:** none — the provider-SSE-streaming arc (slices 121–123)
   is complete and moved to
   [`exec-plans/completed/2026-05-30-provider-sse-streaming.md`](exec-plans/completed/2026-05-30-provider-sse-streaming.md);
-  Slices 124-127 were single-slice follow-ups and did not require a new
+  Slices 124-128 were single-slice follow-ups and did not require a new
   active plan.
 - **Next intended slice:** no committed plan. The next runtime piece should be
   selected from the routing index (likely memory ownership on the configured-route
   loop path, provider profile-cost calculation, or CLI line editing / slash
   commands).
-  Slice 127 adds the first provider usage rollup read over trace storage:
-  `TraceRepository::list_provider_usage_rollups` groups existing `trace_turns`
-  usage by UTC day, agent key, route profile, and route model, sums
-  input/output/cache tokens plus already-recorded `cost_estimate_usd`, and
+  Slice 128 adds slash-command handling to the CLI REPL paths: `/help` prints a
+  short command list, `/exit` and `/quit` stop the REPL without dispatching to
+  the prompt runner, and both scripted and interactive REPL input trim leading
+  and trailing ASCII whitespace before command recognition. `run` and
+  `run_async` keep non-command prompts flowing to the existing runner or
+  deterministic shell paths. Focused result: `test-cli` **26 / 205** (+3 cases,
+  +29 assertions). Slice 127 adds the first provider usage rollup read over
+  trace storage: `TraceRepository::list_provider_usage_rollups` groups existing
+  `trace_turns` usage by UTC day, agent key, route profile, and route model,
+  sums input/output/cache tokens plus already-recorded `cost_estimate_usd`, and
   supports optional agent/profile/model filters. This is trace-derived
   aggregation only; profile-priced cost calculation still waits for typed config
   cost fields. Focused result: `test-storage` **73 / 938** (+1 case, +39
@@ -1208,18 +1214,18 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 - `oran-core`: 71 cases / 455 assertions.
 - `oran-async`: 9 cases / 43 assertions.
-- `oran-http`: 15 cases / 60 assertions.
+- `oran-http`: 3 cases / 21 assertions.
 - `oran-io`: 49 cases / 286 assertions.
-- `oran-storage`: 72 cases / 899 assertions.
-- `oran-config`: 36 cases / 258 assertions.
+- `oran-storage`: 73 cases / 938 assertions.
+- `oran-config`: 33 cases / 241 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 30 cases / 207 assertions.
-- `oran-tool`: 185 cases / 1866 assertions.
+- `oran-tool`: 178 cases / 1838 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 86 cases / 643 assertions.
-- `oran-agent`: 47 cases / 10618 assertions.
-- `oran-cli`: 23 cases / 176 assertions.
-- `oran-bootstrap`: 76 cases / 355 assertions.
+- `oran-agent`: 50 cases / 10689 assertions.
+- `oran-cli`: 26 cases / 205 assertions.
+- `oran-bootstrap`: 77 cases / 380 assertions.
 
 ## Open Tech-Debt Rows
 

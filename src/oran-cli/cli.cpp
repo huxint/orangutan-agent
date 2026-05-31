@@ -43,6 +43,18 @@ struct ReplInputLine {
   bool reached_eof{false};
 };
 
+enum class ReplLineDisposition : std::uint8_t {
+  prompt,
+  handled,
+  exit,
+};
+
+enum class ReplCommand : std::uint8_t {
+  none,
+  help,
+  exit,
+};
+
 [[nodiscard]] Error arg_error(std::string message) {
   return Error::invalid_argument(std::move(message));
 }
@@ -106,17 +118,24 @@ void print_usage() {
   std::println("Configured provider routes run prompts through the agent loop; no-route runs use the built-in shell.");
 }
 
+void print_repl_help() {
+  std::println("commands:");
+  std::println("  /help  show REPL commands");
+  std::println("  /exit  exit the REPL");
+  std::println("  /quit  exit the REPL");
+}
+
 void print_repl_banner(bool has_runner, bool reads_terminal) {
   std::println("cli mode: repl");
   if (reads_terminal) {
-    std::println("REPL shell is ready. Enter an empty line to exit.");
+    std::println("REPL shell is ready. Enter an empty line or /exit to exit. Use /help for commands.");
     return;
   }
   if (has_runner) {
-    std::println("REPL shell is ready.");
+    std::println("REPL shell is ready. Use /help for commands.");
     return;
   }
-  std::println("REPL shell is ready, but the agent loop is not implemented yet.");
+  std::println("REPL shell is ready, but the agent loop is not implemented yet. Use /help for commands.");
 }
 
 void print_single_shot(std::string_view prompt, bool has_runner) {
@@ -143,6 +162,46 @@ void print_prompt_result(const PromptRunResult& result) {
 void print_repl_prompt() {
   std::print("> ");
   std::fflush(stdout);
+}
+
+[[nodiscard]] bool is_ascii_space(char ch) noexcept {
+  return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
+}
+
+[[nodiscard]] std::string_view trim_ascii_space(std::string_view text) noexcept {
+  while (!text.empty() && is_ascii_space(text.front())) {
+    text.remove_prefix(1);
+  }
+  while (!text.empty() && is_ascii_space(text.back())) {
+    text.remove_suffix(1);
+  }
+  return text;
+}
+
+[[nodiscard]] ReplCommand parse_repl_command(std::string_view line) noexcept {
+  const auto command = trim_ascii_space(line);
+  if (command == "/help") {
+    return ReplCommand::help;
+  }
+  if (command == "/exit" || command == "/quit") {
+    return ReplCommand::exit;
+  }
+  return ReplCommand::none;
+}
+
+[[nodiscard]] ReplLineDisposition handle_repl_command(std::string_view line, bool quiet) {
+  switch (parse_repl_command(line)) {
+    case ReplCommand::help:
+      if (!quiet) {
+        print_repl_help();
+      }
+      return ReplLineDisposition::handled;
+    case ReplCommand::exit:
+      return ReplLineDisposition::exit;
+    case ReplCommand::none:
+      return ReplLineDisposition::prompt;
+  }
+  return ReplLineDisposition::prompt;
 }
 
 [[nodiscard]] async::Awaitable<Result<ReplInputLine>> read_terminal_line(asio::posix::stream_descriptor& input,
@@ -234,6 +293,14 @@ core::Result<CliResult> run(CliOptions options) {
     if (line.empty()) {
       continue;
     }
+    switch (handle_repl_command(line, options.quiet)) {
+      case ReplLineDisposition::handled:
+        continue;
+      case ReplLineDisposition::exit:
+        return CliResult{.mode = CliMode::repl, .prompts_processed = prompts_processed, .exit_code = 0};
+      case ReplLineDisposition::prompt:
+        break;
+    }
     ++prompts_processed;
     if (!options.quiet) {
       print_scripted_prompt(line, false);
@@ -313,6 +380,17 @@ async::Awaitable<core::Result<CliResult>> run_async(CliOptions options, PromptRu
       if (line->line.empty()) {
         break;
       }
+      switch (handle_repl_command(line->line, options.quiet)) {
+        case ReplLineDisposition::handled:
+          if (line->reached_eof) {
+            co_return CliResult{.mode = CliMode::repl, .prompts_processed = prompts_processed, .exit_code = 0};
+          }
+          continue;
+        case ReplLineDisposition::exit:
+          co_return CliResult{.mode = CliMode::repl, .prompts_processed = prompts_processed, .exit_code = 0};
+        case ReplLineDisposition::prompt:
+          break;
+      }
       auto prompt_result =
           co_await dispatch_repl_prompt(runner, std::move(line->line), prompts_processed, options.quiet, false);
       if (!prompt_result) {
@@ -327,6 +405,14 @@ async::Awaitable<core::Result<CliResult>> run_async(CliOptions options, PromptRu
   }
 
   for (auto& prompt : prompts) {
+    switch (handle_repl_command(prompt, options.quiet)) {
+      case ReplLineDisposition::handled:
+        continue;
+      case ReplLineDisposition::exit:
+        co_return CliResult{.mode = CliMode::repl, .prompts_processed = prompts_processed, .exit_code = 0};
+      case ReplLineDisposition::prompt:
+        break;
+    }
     auto prompt_result =
         co_await dispatch_repl_prompt(runner, std::move(prompt), prompts_processed, options.quiet, true);
     if (!prompt_result) {

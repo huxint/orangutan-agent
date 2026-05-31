@@ -151,6 +151,37 @@ TEST_CASE("run counts scripted REPL prompts", "[unit][cli]") {
   REQUIRE(result->prompts_processed == 2);
 }
 
+TEST_CASE("run handles scripted REPL slash commands without counting prompts", "[unit][cli]") {
+  auto args = std::vector<std::string_view>{};
+
+  SECTION("help is handled locally") {
+    auto repl_lines = std::vector<std::string_view>{"/help", "continue"};
+    auto result = cli::run(options(args, repl_lines));
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->mode == cli::CliMode::repl);
+    REQUIRE(result->prompts_processed == 1);
+  }
+
+  SECTION("exit stops later scripted prompts") {
+    auto repl_lines = std::vector<std::string_view>{"first", "/exit", "ignored"};
+    auto result = cli::run(options(args, repl_lines));
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->mode == cli::CliMode::repl);
+    REQUIRE(result->prompts_processed == 1);
+  }
+
+  SECTION("quit is an exit alias") {
+    auto repl_lines = std::vector<std::string_view>{"  /quit  ", "ignored"};
+    auto result = cli::run(options(args, repl_lines));
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->mode == cli::CliMode::repl);
+    REQUIRE(result->prompts_processed == 0);
+  }
+}
+
 TEST_CASE("run selects single-shot mode from prompt arguments", "[unit][cli]") {
   SECTION("--prompt value") {
     auto args = std::vector<std::string_view>{"--prompt", "What is 17 * 23?"};
@@ -220,6 +251,23 @@ TEST_CASE("run_async delegates scripted REPL prompts in order", "[unit][cli][asy
   });
 }
 
+TEST_CASE("run_async handles scripted REPL slash commands before runner dispatch", "[unit][cli][async]") {
+  test::run_async([](asio::io_context& /*io*/) -> async::Awaitable<void> {
+    auto args = std::vector<std::string_view>{};
+    auto repl_lines = std::vector<std::string_view>{"/help", "first", " /exit ", "ignored"};
+    RecordingPromptRunner runner;
+
+    auto result = co_await cli::run_async(options(args, repl_lines), &runner);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->mode == cli::CliMode::repl);
+    REQUIRE(result->prompts_processed == 1);
+    REQUIRE(runner.requests.size() == 1);
+    REQUIRE(runner.requests[0].prompt == "first");
+    REQUIRE(runner.requests[0].prompt_index == 0);
+  });
+}
+
 TEST_CASE("run_async reads interactive REPL prompts until an empty line", "[unit][cli][async]") {
   test::run_async([](asio::io_context& /*io*/) -> async::Awaitable<void> {
     auto stdin_lines = ScopedStdin{"first\nsecond\n\nignored\n"};
@@ -241,6 +289,25 @@ TEST_CASE("run_async reads interactive REPL prompts until an empty line", "[unit
     REQUIRE(runner.requests[1].prompt == "second");
     REQUIRE(runner.requests[1].mode == cli::CliMode::repl);
     REQUIRE(runner.requests[1].prompt_index == 1);
+  });
+}
+
+TEST_CASE("run_async handles interactive REPL slash commands before runner dispatch", "[unit][cli][async]") {
+  test::run_async([](asio::io_context& /*io*/) -> async::Awaitable<void> {
+    auto stdin_lines = ScopedStdin{"/help\nfirst\n/quit\nignored\n"};
+    auto args = std::vector<std::string_view>{};
+    auto cli_options = options(args);
+    cli_options.interactive_repl = true;
+    RecordingPromptRunner runner;
+
+    auto result = co_await cli::run_async(cli_options, &runner);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->mode == cli::CliMode::repl);
+    REQUIRE(result->prompts_processed == 1);
+    REQUIRE(runner.requests.size() == 1);
+    REQUIRE(runner.requests[0].prompt == "first");
+    REQUIRE(runner.requests[0].prompt_index == 0);
   });
 }
 

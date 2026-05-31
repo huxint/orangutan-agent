@@ -14,8 +14,9 @@ with persistent session history and a CLI surface. The first deliverable is "I c
     uses built-in config defaults.
   - `--prompt <text>` / `--prompt=<text>` is handed to `oran-cli` single-shot mode.
   - No CLI mode args select REPL mode; configured provider routes read prompts
-    from terminal stdin until an empty line or EOF, while built-in empty defaults
-    keep the deterministic no-runner shell.
+    from terminal stdin until an empty line, `/exit`, `/quit`, or EOF, while
+    built-in empty defaults keep the deterministic no-runner shell. `/help`
+    renders the current REPL command list without dispatching to the agent loop.
   - `--help` / `-h` prints the current bootstrap usage.
   - Built-in empty defaults keep the deterministic pre-agent-loop CLI shell; a
     configured provider route switches prompt execution into the agent loop.

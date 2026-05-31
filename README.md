@@ -54,7 +54,7 @@ tests/    bench/     Catch2 + nanobench buckets, one per library
    # provider-backed prompts need a key:
    ANTHROPIC_API_KEY=... xmake run orangutan -- --config config.example.json --prompt "hello"
    ANTHROPIC_API_KEY=... xmake run orangutan -- --config config.example.json
-   # REPL mode exits on an empty line.
+   # REPL mode exits on an empty line, /exit, or /quit; /help lists commands.
    ```
 
 4. Before a PR: `make ci`.
