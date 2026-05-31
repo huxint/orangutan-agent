@@ -42,6 +42,10 @@ namespace orangutan::storage {
 class TraceRepository;
 }  // namespace orangutan::storage
 
+namespace orangutan::hook {
+class Bus;
+}  // namespace orangutan::hook
+
 namespace orangutan::agent {
 
 class ToolScheduler;
@@ -111,6 +115,15 @@ struct RunTurnInputs {
   /// a turn id if the caller did not provide one. Operator config and CLI
   /// inspection remain downstream.
   TraceContext trace{};
+  /// Optional process hook bus. When supplied, the loop publishes advisory
+  /// provider lifecycle events around every provider await: request, response,
+  /// error, and fallback attribution. Payloads carry route/usage metadata only;
+  /// prompt bytes and provider bodies stay out of hook delivery.
+  hook::Bus* bus{nullptr};
+  std::string_view scope_key{};
+  std::string_view agent_key{};
+  std::string_view identity{};
+  std::string_view origin{};
   /// Optional direct-dispatch bridge for spec 0017 scenarios #2/#3. Both
   /// pointers must be non-null to execute tool_use blocks; otherwise the loop
   /// still fails loudly on tool_use so callers do not accidentally run a

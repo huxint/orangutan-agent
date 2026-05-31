@@ -29,6 +29,9 @@
 #include <oran/core/error.hpp>
 #include <oran/core/role.hpp>
 #include <oran/core/time.hpp>
+#include <oran/hook/bus.hpp>
+#include <oran/hook/event.hpp>
+#include <oran/hook/payload.hpp>
 #include <oran/storage/trace_repository.hpp>
 #include <oran/tool/registry.hpp>
 
@@ -151,6 +154,184 @@ void add_usage(provider::Usage& total, const provider::Usage& next) {
   if (next.cost_estimate.has_value()) {
     total.cost_estimate = total.cost_estimate.value_or(0.0) + *next.cost_estimate;
   }
+}
+
+[[nodiscard]] hook::Identity hook_identity(const RunTurnInputs& inputs) {
+  return hook::Identity{
+      .scope_key = std::string{inputs.scope_key},
+      .agent_key = std::string{inputs.agent_key},
+      .identity = std::string{inputs.identity},
+  };
+}
+
+[[nodiscard]] hook::ProviderUsage hook_usage(const provider::Usage& usage) {
+  return hook::ProviderUsage{
+      .input_tokens = usage.input_tokens,
+      .output_tokens = usage.output_tokens,
+      .cache_creation_tokens = usage.cache_creation_tokens,
+      .cache_read_tokens = usage.cache_read_tokens,
+      .cost_estimate = usage.cost_estimate,
+  };
+}
+
+[[nodiscard]] std::chrono::nanoseconds duration_between(core::Time start, core::Time finish) noexcept {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(finish.to_system_time_point() -
+                                                              start.to_system_time_point());
+}
+
+[[nodiscard]] hook::ProviderRequestPayload make_provider_request_payload(const RunTurnInputs& inputs,
+                                                                         const provider::Request& request,
+                                                                         const provider::Route& route,
+                                                                         std::uint32_t iteration,
+                                                                         core::Time started_at) {
+  return hook::ProviderRequestPayload{
+      .who = hook_identity(inputs),
+      .origin = std::string{inputs.origin},
+      .turn_id = inputs.turn_id,
+      .iteration = iteration,
+      .route_profile = route.primary.profile,
+      .route_model = route.primary.model,
+      .route_protocol = std::string{core::enum_name(route.primary.protocol)},
+      .fallback_count = route.fallbacks.size(),
+      .message_count = request.messages.size(),
+      .tool_count = request.tools.size(),
+      .stream = request.stream,
+      .max_tokens = request.max_tokens,
+      .thinking_budget = request.thinking_budget,
+      .retry_max_attempts = request.retry.max_attempts,
+      .retry_initial_backoff = request.retry.initial_backoff,
+      .started_at = started_at,
+  };
+}
+
+[[nodiscard]] const provider::ModelTarget& served_target_for(const provider::Route& route,
+                                                             std::string_view served_profile) noexcept {
+  const auto it = std::ranges::find(route.fallbacks, served_profile, &provider::ModelTarget::profile);
+  return it == route.fallbacks.end() ? route.primary : *it;
+}
+
+[[nodiscard]] hook::ProviderResponsePayload make_provider_response_payload(const RunTurnInputs& inputs,
+                                                                           const provider::Response& response,
+                                                                           const provider::Route& route,
+                                                                           std::uint32_t iteration,
+                                                                           core::Time started_at,
+                                                                           core::Time finished_at) {
+  const auto served_profile = response.route_profile_used.value_or(route.primary.profile);
+  const auto& served_target = served_target_for(route, served_profile);
+  return hook::ProviderResponsePayload{
+      .who = hook_identity(inputs),
+      .origin = std::string{inputs.origin},
+      .turn_id = inputs.turn_id,
+      .iteration = iteration,
+      .route_profile = route.primary.profile,
+      .route_model = route.primary.model,
+      .route_protocol = std::string{core::enum_name(route.primary.protocol)},
+      .served_profile = std::string{served_profile},
+      .served_model = response.model_used.value_or(served_target.model),
+      .served_protocol = std::string{core::enum_name(served_target.protocol)},
+      .stop_reason = std::string{core::enum_name(response.stop_reason)},
+      .usage = hook_usage(response.usage),
+      .started_at = started_at,
+      .finished_at = finished_at,
+      .duration = duration_between(started_at, finished_at),
+  };
+}
+
+[[nodiscard]] hook::ProviderErrorPayload make_provider_error_payload(const RunTurnInputs& inputs,
+                                                                     const core::Error& error,
+                                                                     const provider::ModelTarget& primary,
+                                                                     std::uint32_t iteration,
+                                                                     core::Time started_at,
+                                                                     core::Time finished_at) {
+  return hook::ProviderErrorPayload{
+      .who = hook_identity(inputs),
+      .origin = std::string{inputs.origin},
+      .turn_id = inputs.turn_id,
+      .iteration = iteration,
+      .route_profile = primary.profile,
+      .route_model = primary.model,
+      .route_protocol = std::string{core::enum_name(primary.protocol)},
+      .error_kind = std::string{core::enum_name(error.kind())},
+      .error_message = std::string{error.message()},
+      .retryable = error.retryable(),
+      .started_at = started_at,
+      .finished_at = finished_at,
+      .duration = duration_between(started_at, finished_at),
+  };
+}
+
+[[nodiscard]] std::optional<hook::ProviderFallbackPayload>
+make_provider_fallback_payload(const RunTurnInputs& inputs,
+                               const provider::Response& response,
+                               const provider::Route& route,
+                               std::uint32_t iteration,
+                               core::Time started_at,
+                               core::Time finished_at) {
+  auto served_profile = response.route_profile_used.value_or(route.primary.profile);
+  if (served_profile == route.primary.profile) {
+    return std::nullopt;
+  }
+  const auto& served_target = served_target_for(route, served_profile);
+  return hook::ProviderFallbackPayload{
+      .who = hook_identity(inputs),
+      .origin = std::string{inputs.origin},
+      .turn_id = inputs.turn_id,
+      .iteration = iteration,
+      .primary_profile = route.primary.profile,
+      .primary_model = route.primary.model,
+      .primary_protocol = std::string{core::enum_name(route.primary.protocol)},
+      .served_profile = std::move(served_profile),
+      .served_model = response.model_used.value_or(served_target.model),
+      .served_protocol = std::string{core::enum_name(served_target.protocol)},
+      .started_at = started_at,
+      .finished_at = finished_at,
+      .duration = duration_between(started_at, finished_at),
+  };
+}
+
+[[nodiscard]] async::Awaitable<void> publish_provider_request(const RunTurnInputs& inputs,
+                                                              const provider::Request& request,
+                                                              const provider::Route& route,
+                                                              std::uint32_t iteration,
+                                                              core::Time started_at) {
+  if (inputs.bus == nullptr) {
+    co_return;
+  }
+  [[maybe_unused]] auto outcome = co_await inputs.bus->publish_advisory(
+      hook::Event::provider_request,
+      make_provider_request_payload(inputs, request, route, iteration, started_at));
+}
+
+[[nodiscard]] async::Awaitable<void> publish_provider_response(const RunTurnInputs& inputs,
+                                                               const provider::Response& response,
+                                                               const provider::Route& route,
+                                                               std::uint32_t iteration,
+                                                               core::Time started_at,
+                                                               core::Time finished_at) {
+  if (inputs.bus == nullptr) {
+    co_return;
+  }
+  [[maybe_unused]] auto response_outcome = co_await inputs.bus->publish_advisory(
+      hook::Event::provider_response,
+      make_provider_response_payload(inputs, response, route, iteration, started_at, finished_at));
+  if (auto fallback = make_provider_fallback_payload(inputs, response, route, iteration, started_at, finished_at)) {
+    [[maybe_unused]] auto fallback_outcome =
+        co_await inputs.bus->publish_advisory(hook::Event::provider_fallback, std::move(*fallback));
+  }
+}
+
+[[nodiscard]] async::Awaitable<void> publish_provider_error(const RunTurnInputs& inputs,
+                                                            const core::Error& error,
+                                                            const provider::ModelTarget& primary,
+                                                            std::uint32_t iteration,
+                                                            core::Time started_at,
+                                                            core::Time finished_at) {
+  if (inputs.bus == nullptr) {
+    co_return;
+  }
+  [[maybe_unused]] auto outcome = co_await inputs.bus->publish_advisory(
+      hook::Event::provider_error,
+      make_provider_error_payload(inputs, error, primary, iteration, started_at, finished_at));
 }
 
 [[nodiscard]] std::int64_t now_epoch_ns() noexcept {
@@ -490,11 +671,22 @@ public:
           .retry = inputs.retry,
       };
 
+      const auto provider_started_at = core::time::now_utc();
+      co_await publish_provider_request(inputs, request, route_, iteration, provider_started_at);
       auto response = co_await provider_.send(std::move(request), route_, sink);
+      const auto provider_finished_at = core::time::now_utc();
       if (!response) {
         auto error = with_cancellation_phase(std::move(response).error(), "provider");
-        if (error.kind() == core::ErrorKind::cancelled && trace_writer_configured(inputs)) {
+        if (error.kind() == core::ErrorKind::cancelled) {
           co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+        }
+        co_await publish_provider_error(inputs,
+                                        error,
+                                        route_.primary,
+                                        iteration,
+                                        provider_started_at,
+                                        provider_finished_at);
+        if (error.kind() == core::ErrorKind::cancelled && trace_writer_configured(inputs)) {
           auto traced = co_await write_trace_turn(inputs,
                                                   route_,
                                                   *rendered,
@@ -524,6 +716,12 @@ public:
         co_return std::unexpected(std::move(error));
       }
 
+      co_await publish_provider_response(inputs,
+                                         *response,
+                                         route_,
+                                         iteration,
+                                         provider_started_at,
+                                         provider_finished_at);
       add_usage(total_usage, response->usage);
       last_rendered = *rendered;
       last_route_model = response->model_used.value_or(route_.primary.model);

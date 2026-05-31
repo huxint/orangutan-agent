@@ -456,8 +456,14 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > `PermissionAskRenderedPayload` and direct-dispatch
 > `permission_ask_rendered` broker bridge. Slice 95 adds the first
 > user-visible operator-prompt sink in `oran-cli`, and slice 96 proves the
-> broker-backed prompt path from inside `agent::Loop`; binary binding waits for
-> the real CLI agent-loop handoff.
+> broker-backed prompt path from inside `agent::Loop`. Slice 126 adds typed
+> provider lifecycle payloads and has `agent::Loop` publish advisory
+> `provider_request`, `provider_response`, `provider_error`, and
+> `provider_fallback` events through the process bus supplied by bootstrap.
+> These payloads are metadata-only by construction: they include identity,
+> route/profile/model/protocol, counts, retry settings, usage, stop/error, and
+> timing fields, but no prompt text, messages, headers, credentials, or raw
+> provider bodies.
 
 ### Surface
 
@@ -559,6 +565,9 @@ operator intentionally allowed raw tool-result data to stay in process.
 `ToolAfterPayload::data_json` for all non-trusted-local sinks. The registry
 may publish raw serialized `tool::Output::data_json` once; redaction remains a
 bus responsibility so each producer does not need to duplicate the policy.
+Provider lifecycle payloads do not need per-sink body redaction because their
+public shape never contains prompt text, provider request/response bodies,
+headers, credentials, or message content.
 
 Built-in implementations:
 
@@ -582,6 +591,10 @@ Each event is annotated `blocking` or `advisory`:
   proceeds.
 - **Advisory** (e.g., `tool_after`, `iteration_end`): the bus fires-and-forgets. Sinks
   cannot veto.
+
+Provider lifecycle events are advisory in slice 126. `provider_request` observes
+the request boundary but cannot rewrite payloads yet; blocking provider rewrites
+remain a later spec-0015 extension.
 
 This is statically known per event so the type system can enforce it:
 
@@ -642,9 +655,12 @@ Every blocking hook decision is recorded in `audit.db` with `event`, `sink_id`,
 ## Per-Agent Wiring
 
 The bootstrap reads `config.hooks.bindings` once and constructs the bus. Each
-agent's `Loop` gets a reference to the same bus. Per-agent subscription filtering can
-be done with predicate sinks if needed (rare; usually a sink subscribes to all
-agents and filters by `identity` in its payload).
+agent's `Loop` gets a reference to the same bus. Today `AgentPromptRunner`
+threads `RuntimeAssembly::hook_bus()` plus scope/agent identity metadata into
+`agent::Loop`, so provider lifecycle events are visible on configured-route
+turns even before external sink bindings land. Per-agent subscription filtering
+can be done with predicate sinks if needed (rare; usually a sink subscribes to
+all agents and filters by `identity` in its payload).
 
 ## Hook Surface Discoverability
 

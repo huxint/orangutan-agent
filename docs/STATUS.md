@@ -7,18 +7,30 @@
 
 ## Snapshot
 
-- **Slice:** 125 (`xmake run orangutan` reports slice 125)
+- **Slice:** 126 (`xmake run orangutan` reports slice 126)
 - **Last completed history:**
-  [`histories/2026-06/20260601-0102-cli-interactive-repl.md`](histories/2026-06/20260601-0102-cli-interactive-repl.md)
+  [`histories/2026-06/20260601-0240-provider-lifecycle-hooks.md`](histories/2026-06/20260601-0240-provider-lifecycle-hooks.md)
 - **Active exec-plan:** none — the provider-SSE-streaming arc (slices 121–123)
   is complete and moved to
   [`exec-plans/completed/2026-05-30-provider-sse-streaming.md`](exec-plans/completed/2026-05-30-provider-sse-streaming.md);
-  Slices 124 and 125 were single-slice follow-ups and did not require a new
+  Slices 124-126 were single-slice follow-ups and did not require a new
   active plan.
 - **Next intended slice:** no committed plan. The next runtime piece should be
   selected from the routing index (likely memory ownership on the configured-route
-  loop path, provider hooks/usage-cost rollups, or CLI line editing / slash
-  commands). Slice 125 replaces the configured-route placeholder REPL with a
+  loop path, provider usage/cost rollups, or CLI line editing / slash commands).
+  Slice 126 publishes the first provider lifecycle hooks from `agent::Loop`.
+  `RunTurnInputs` now accepts the process `hook::Bus` plus
+  scope/agent/identity/origin metadata, and the loop emits advisory
+  `provider_request`, `provider_response`, `provider_error`, and
+  `provider_fallback` payloads around each provider await. Payloads carry
+  route/profile/model/protocol, counts, retry knobs, usage, stop/error, and
+  timing metadata only — no prompt text, messages, headers, credentials, or raw
+  provider bodies — so `oran-provider` stays hook-free while `oran-agent` owns
+  the lifecycle observation point. `AgentPromptRunner` wires
+  `RuntimeAssembly::hook_bus()` into configured-route turns. Focused result:
+  `test-hook` **30 / 207**, `test-agent` **50 / 10 689** (+3 cases, +71
+  assertions), and `test-bootstrap` **77 / 380** (+1 case, +25 assertions).
+  Slice 125 replaces the configured-route placeholder REPL with a
   provider-backed terminal input loop: `bootstrap::run` now enables
   `CliOptions::interactive_repl` when it calls `cli::run_async` with
   `AgentPromptRunner`, and `run_async` reads terminal stdin through a persistent

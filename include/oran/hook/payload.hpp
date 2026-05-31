@@ -11,12 +11,14 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <variant>
 
 #include <oran/core/time.hpp>
+#include <oran/core/turn_id.hpp>
 
 namespace orangutan::hook {
 
@@ -136,16 +138,109 @@ struct PermissionAskRenderedPayload {
   core::Time requested_at{};
 };
 
+/// Provider token/cost counters copied without making `oran-hook` depend on
+/// `oran-provider`.
+struct ProviderUsage {
+  std::uint64_t input_tokens{0};
+  std::uint64_t output_tokens{0};
+  std::uint64_t cache_creation_tokens{0};
+  std::uint64_t cache_read_tokens{0};
+  std::optional<double> cost_estimate{};
+
+  friend bool operator==(const ProviderUsage&, const ProviderUsage&) = default;
+};
+
+/// Provider request metadata. The payload intentionally carries counts and
+/// route identity, not prompt text, message bodies, headers, or credentials.
+struct ProviderRequestPayload {
+  Identity who;
+  std::string origin;
+  std::optional<core::TurnId> turn_id{};
+  std::uint32_t iteration{0};
+  std::string route_profile;
+  std::string route_model;
+  std::string route_protocol;
+  std::size_t fallback_count{0};
+  std::size_t message_count{0};
+  std::size_t tool_count{0};
+  bool stream{true};
+  std::optional<std::uint32_t> max_tokens{};
+  std::optional<std::uint32_t> thinking_budget{};
+  std::uint32_t retry_max_attempts{0};
+  std::chrono::milliseconds retry_initial_backoff{0};
+  core::Time started_at{};
+};
+
+/// Provider response metadata. `served_*` names the concrete route target that
+/// produced the response after execution-layer retry/fallback attribution.
+struct ProviderResponsePayload {
+  Identity who;
+  std::string origin;
+  std::optional<core::TurnId> turn_id{};
+  std::uint32_t iteration{0};
+  std::string route_profile;
+  std::string route_model;
+  std::string route_protocol;
+  std::string served_profile;
+  std::string served_model;
+  std::string served_protocol;
+  std::string stop_reason;
+  ProviderUsage usage{};
+  core::Time started_at{};
+  core::Time finished_at{};
+  std::chrono::nanoseconds duration{0};
+};
+
+/// Provider error metadata. Advisory sinks see the failure class and message,
+/// while raw request/response bodies stay outside the hook payload.
+struct ProviderErrorPayload {
+  Identity who;
+  std::string origin;
+  std::optional<core::TurnId> turn_id{};
+  std::uint32_t iteration{0};
+  std::string route_profile;
+  std::string route_model;
+  std::string route_protocol;
+  std::string error_kind;
+  std::string error_message;
+  bool retryable{false};
+  core::Time started_at{};
+  core::Time finished_at{};
+  std::chrono::nanoseconds duration{0};
+};
+
+/// Provider fallback metadata. Published when the served route profile differs
+/// from the primary route profile for the turn.
+struct ProviderFallbackPayload {
+  Identity who;
+  std::string origin;
+  std::optional<core::TurnId> turn_id{};
+  std::uint32_t iteration{0};
+  std::string primary_profile;
+  std::string primary_model;
+  std::string primary_protocol;
+  std::string served_profile;
+  std::string served_model;
+  std::string served_protocol;
+  core::Time started_at{};
+  core::Time finished_at{};
+  std::chrono::nanoseconds duration{0};
+};
+
 /// `std::monostate` is the placeholder for events whose typed payload has
-/// not landed yet — provider, memory, channel, orchestration, automation,
-/// and session events. Sinks subscribed to those events receive the variant
-/// in its monostate alternative; they can still react to the occurrence and
-/// the event kind.
+/// not landed yet — memory, channel, orchestration, automation, and session
+/// events. Sinks subscribed to those events receive the variant in its
+/// monostate alternative; they can still react to the occurrence and the
+/// event kind.
 using Payload = std::variant<std::monostate,
                              ToolBeforePayload,
                              ToolDispatchedPayload,
                              ToolAfterPayload,
                              ToolErrorPayload,
-                             PermissionAskRenderedPayload>;
+                             PermissionAskRenderedPayload,
+                             ProviderRequestPayload,
+                             ProviderResponsePayload,
+                             ProviderErrorPayload,
+                             ProviderFallbackPayload>;
 
 }  // namespace orangutan::hook

@@ -163,6 +163,10 @@ variables, owns an `http::Client`, adapts it to
 factories, and returns a `provider::System` plus route for the runner.
 Configured-route prompts now start `agent::Loop` from the ordinary binary path;
 missing credentials fail as `ErrorKind::auth` with only non-secret context.
+`AgentPromptRunner` also threads the assembly-owned hook bus plus scope/agent
+identity metadata into every loop turn, so provider request/response/error and
+fallback hooks are published for configured-route prompts without making
+`oran-provider` depend on the hook subsystem.
 The built-in empty-defaults path still reports `provider route: none configured`
 and uses the deterministic no-runner `cli::run` shell so fresh checkouts remain
 runnable without provider credentials. The runtime assembly opens the audit DB
@@ -180,4 +184,4 @@ permission-decision and `hook_publish` rows are readable in the same output.
 - Bind configured hook sinks to the assembly-owned bus once the hook sink models land.
 - Add CLI line editor/history and slash-command handling on top of the interactive
   REPL handoff.
-- Add provider hooks and usage/cost rollups.
+- Add provider usage/cost rollups.

@@ -227,8 +227,8 @@ oran_lib("hook", { "oran-core", "oran-async" }, {})
 oran_lib("tool", { "oran-core", "oran-async", "oran-io", "oran-permission", "oran-hook" }, { "nlohmann_json" })
 oran_lib("prompt", { "oran-core", "oran-async", "oran-config", "oran-tool" }, {})
 oran_lib("provider", { "oran-core", "oran-async", "oran-config", "oran-prompt" }, { "nlohmann_json" })
-oran_lib("agent", { "oran-core", "oran-async", "oran-storage", "oran-prompt", "oran-tool", "oran-provider" }, { "nlohmann_json" })
-oran_lib("cli", { "oran-core", "oran-async", "oran-hook" }, {})
+oran_lib("agent", { "oran-core", "oran-async", "oran-storage", "oran-prompt", "oran-tool", "oran-provider", "oran-hook" }, { "nlohmann_json" })
+oran_lib("cli", { "oran-core", "oran-async", "oran-hook", "oran-provider" }, {})
 oran_lib("bootstrap", { "oran-core", "oran-async", "oran-http", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-tool", "oran-provider", "oran-agent", "oran-cli" }, {})
 
 target("orangutan")
@@ -255,24 +255,29 @@ outside this target: slice 111's `bootstrap::HttpProviderBackend` adapts
 `oran-http::Client` to `provider::ProtocolTransport`, and slice 112 uses that
 backend from configured-route `bootstrap::run`; slices 121-124 add SSE transport
 and provider streaming decode while preserving that dependency direction.
+Provider lifecycle hooks also stay outside this target: slice 126 publishes them
+from `oran-agent`, so the provider domain remains hook-free.
 
 `oran-bootstrap` depends on `oran-provider` so process startup can preflight the
 configured default provider route before handing prompts to `oran-cli`. It also
 depends on `oran-agent` for slice 101's `AgentPromptRunner`, the bootstrap-owned
 `cli::PromptRunner` implementation that wraps a caller-supplied provider backend in
 `provider::execution::Runtime`, binds the CLI approval sink, and drives
-`agent::Loop` with runtime-assembly services. It now also depends on `oran-http`
-for the explicit `HttpProviderBackend` construction seam that can resolve
-credentials and produce a real HTTP-backed provider system for callers.
+`agent::Loop` with runtime-assembly services, including the process hook bus for
+slice-126 provider lifecycle events. It now also depends on `oran-http` for the
+explicit `HttpProviderBackend` construction seam that can resolve credentials
+and produce a real HTTP-backed provider system for callers.
 Configured-route `bootstrap::run` now calls that seam, reads the configured
 API-key environment variables at the credential boundary, and hands prompts to
 `AgentPromptRunner` through `cli::run_async`; the built-in no-route defaults
 still use the deterministic synchronous CLI shell.
 
-`oran-cli` depends on `oran-async` and `oran-hook` because slice 95 adds the
-terminal `OperatorPromptSink`: it implements the blocking
-`permission_ask_rendered` decision surface and reads interactive answers through asio on
-the current coroutine executor. The ordinary CLI mode parser remains synchronous.
+`oran-cli` depends on `oran-async`, `oran-hook`, and `oran-provider`: slice 95
+adds the terminal `OperatorPromptSink`, which implements the blocking
+`permission_ask_rendered` decision surface and reads interactive answers through
+asio on the current coroutine executor, and slice 123 adds
+`cli::StreamingPromptSink`, which implements `provider::EventSink` for live
+terminal streaming. The ordinary CLI mode parser remains synchronous.
 
 `oran-agent` now owns the slice-72 `SessionState` promotion owner plus the
 slice-80 sequential direct-dispatch `Loop` turn driver with cancellation-phase
@@ -284,10 +289,13 @@ trace writers. The `oran-storage` dependency is an intentional downward
 agent-runtime → platform dependency for
 `storage::TraceRepository`; the provider dependency is also downward: the agent
 runtime layer drives `provider::System`, while `oran-provider` never calls back
-into `oran-agent`. The `orangutan` binary now links `oran-agent` transitively through
-`oran-bootstrap` so tests and adapter owners can construct `AgentPromptRunner`; the
-ordinary prompt path remains on `cli::run` until `bootstrap::run` opts into
-`HttpProviderBackend` plus `cli::run_async`.
+into `oran-agent`. Slice 126 adds a downward dependency on `oran-hook` because
+the loop publishes advisory provider request/response/error/fallback metadata
+around provider awaits. The `orangutan` binary now links `oran-agent`
+transitively through `oran-bootstrap` so tests and adapter owners can construct
+`AgentPromptRunner`; the configured-route ordinary prompt path now reaches that
+runner through `HttpProviderBackend` plus `cli::run_async`, while built-in
+no-route defaults remain on the deterministic `cli::run` shell.
 
 **Key compile-time wins from this shape:**
 

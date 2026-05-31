@@ -344,7 +344,12 @@ Concerns owned by `execution::Runtime`:
 - **Cost tracking**: profiles declare cost/1M tokens; aggregator computes spend and
   emits `provider.cost_threshold` hooks. Planned.
 - **Hooks**: `provider_request` / `provider_response` / `provider_error` /
-  `provider_fallback` (see `permissions-and-hooks.md`). Planned.
+  `provider_fallback` (see `permissions-and-hooks.md`). **Status (slice 126):**
+  shipped as advisory `agent::Loop` publishes around each provider await. The
+  payloads are metadata-only (route identity, counts, retry knobs, usage,
+  stop/error, timing) and intentionally omit prompt bytes, messages, headers,
+  credentials, and raw provider bodies. Blocking provider rewrites remain a
+  later spec-0015 extension.
 
 ## Streaming
 
@@ -500,8 +505,9 @@ Responses backends over an injected `ProtocolTransport`; slice 110 adds
 `bootstrap::HttpProviderBackend` binds that client into `ProtocolTransport` for
 explicit backend construction. Slice 112 uses that backend for configured-route
 ordinary binary prompts. Slices 121-124 add the HTTP SSE transport, provider
-streaming decoders, and CLI streaming sink; provider hooks still land in later
-slices. Slices 107-108 add offline request-body
+streaming decoders, and CLI streaming sink; slice 126 adds metadata-only
+provider lifecycle hooks from `agent::Loop` while keeping `oran-provider`
+hook-free. Slices 107-108 add offline request-body
 serialization and response-body decoding for Anthropic Messages and OpenAI
 Responses before that transport step.
 Custom headers, context windows, thinking policy, and cost fields remain planned

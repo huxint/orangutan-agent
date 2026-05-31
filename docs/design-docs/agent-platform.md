@@ -311,9 +311,12 @@ Skills come from `<workspace>/.orangutan/skills/`. The runtime watches that dire
 
 ### Provider Cost Awareness
 
-Each `ProviderRoute` declares cost-per-1M-tokens; `oran-provider::execution` accumulates
-spend per `agent_key` and emits a hook event when crossing thresholds. Built-in
-thresholds + budget-exhausted fallback to a cheaper model.
+Each `ProviderRoute` declares cost-per-1M-tokens. Slice 126 gives the agent loop
+metadata-only provider request/response/error/fallback hooks, including
+identity, route, usage, and timing fields, without moving hook knowledge into
+`oran-provider`. A later cost subsystem can consume those events or the audit
+stream to accumulate spend per `agent_key` and emit threshold events. Built-in
+thresholds + budget-exhausted fallback to a cheaper model remain planned.
 
 ### Tool Capability Discovery
 

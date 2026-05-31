@@ -21,6 +21,7 @@
 #include <oran/core/content.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/stop_reason.hpp>
+#include <oran/hook.hpp>
 #include <oran/permission.hpp>
 #include <oran/provider.hpp>
 #include <oran/storage.hpp>
@@ -32,11 +33,17 @@ namespace bootstrap = orangutan::bootstrap;
 namespace cli = orangutan::cli;
 namespace config = orangutan::config;
 namespace core = orangutan::core;
+namespace hook = orangutan::hook;
 namespace permission = orangutan::permission;
 namespace provider = orangutan::provider;
 namespace test = orangutan::tests;
 
 namespace {
+
+struct ProviderHookCapture {
+  hook::Event event;
+  hook::Payload payload;
+};
 
 class TempDir {
 public:
@@ -92,6 +99,7 @@ provider::Response text_response(std::string text) {
                                .cache_read_tokens = 0,
                                .cost_estimate = std::nullopt},
       .model_used = std::string{"fake-1"},
+      .route_profile_used = std::nullopt,
   };
 }
 
@@ -133,6 +141,15 @@ bootstrap::AgentPromptRunnerOptions base_runner_options(asio::io_context& io,
   options.origin = "cli";
   options.quiet = true;
   return options;
+}
+
+hook::InProcessSink provider_capture_sink(std::vector<ProviderHookCapture>& captures) {
+  return hook::InProcessSink{
+      "provider-capture",
+      [&captures](hook::Event event, hook::Payload payload) -> async::Awaitable<core::Result<void>> {
+        captures.push_back(ProviderHookCapture{.event = event, .payload = std::move(payload)});
+        co_return core::Result<void>{};
+      }};
 }
 
 }  // namespace
@@ -238,6 +255,58 @@ TEST_CASE("AgentPromptRunner uses provider execution retry before returning text
   });
 }
 
+TEST_CASE("AgentPromptRunner publishes provider hooks through RuntimeAssembly",
+          "[unit][bootstrap][prompt_runner][provider][hooks]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-provider-hooks"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false);
+    std::vector<ProviderHookCapture> captures;
+    auto sink = provider_capture_sink(captures);
+    assembly.hook_bus().bind(sink, {hook::Event::provider_request, hook::Event::provider_response});
+
+    std::vector<provider::ScriptedTurn> plan;
+    plan.push_back(provider::ScriptedTurn{
+        .response = text_response("hooked"),
+        .deltas = {},
+        .error = std::nullopt,
+        .latency = {},
+    });
+    provider::FakeProvider fake{std::move(plan)};
+
+    auto runner = bootstrap::AgentPromptRunner::create(base_runner_options(io, assembly, cfg, fake));
+    REQUIRE(runner.has_value());
+    auto prompt = cli::PromptRunRequest{.prompt = "hooks", .mode = cli::CliMode::single_shot};
+    auto result = co_await (*runner)->run_prompt(std::move(prompt));
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "hooked");
+    REQUIRE(captures.size() == 2);
+    REQUIRE(captures[0].event == hook::Event::provider_request);
+    const auto* request = std::get_if<hook::ProviderRequestPayload>(&captures[0].payload);
+    REQUIRE(request != nullptr);
+    REQUIRE(request->who.scope_key == "scope-A");
+    REQUIRE(request->who.agent_key == "coder");
+    REQUIRE(request->who.identity == "operator-1");
+    REQUIRE(request->origin == "cli");
+    REQUIRE(request->route_profile == "fake");
+    REQUIRE(request->route_model == "fake-1");
+    REQUIRE(request->fallback_count == 0);
+    REQUIRE(request->message_count == 1);
+
+    REQUIRE(captures[1].event == hook::Event::provider_response);
+    const auto* response = std::get_if<hook::ProviderResponsePayload>(&captures[1].payload);
+    REQUIRE(response != nullptr);
+    REQUIRE(response->who.agent_key == "coder");
+    REQUIRE(response->served_profile == "fake");
+    REQUIRE(response->served_model == "fake-1");
+    REQUIRE(response->served_protocol == "anthropic_messages");
+    REQUIRE(response->usage.input_tokens == 3);
+    REQUIRE(response->usage.output_tokens == 2);
+    REQUIRE(response->stop_reason == "end_turn");
+  });
+}
+
 TEST_CASE("AgentPromptRunner feeds tool.search results back into per-session state",
           "[unit][bootstrap][prompt_runner][session_state]") {
   TempDir temp{"oran-bootstrap-prompt-runner-observe"};
@@ -260,6 +329,7 @@ TEST_CASE("AgentPromptRunner feeds tool.search results back into per-session sta
                                          .cache_read_tokens = 0,
                                          .cost_estimate = std::nullopt},
                 .model_used = std::string{"fake-1"},
+                .route_profile_used = std::nullopt,
             },
         .deltas = {},
         .error = std::nullopt,
@@ -317,6 +387,7 @@ TEST_CASE("AgentPromptRunner binds the CLI approval sink for builtin tool dispat
                                          .cache_read_tokens = 0,
                                          .cost_estimate = std::nullopt},
                 .model_used = std::string{"fake-1"},
+                .route_profile_used = std::nullopt,
             },
         .deltas = {},
         .error = std::nullopt,
