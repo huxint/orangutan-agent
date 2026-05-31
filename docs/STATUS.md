@@ -7,19 +7,28 @@
 
 ## Snapshot
 
-- **Slice:** 124 (`xmake run orangutan` reports slice 114; binary slice tag
-  bumps only land when a behavior change touches the bootstrap entry banner)
+- **Slice:** 125 (`xmake run orangutan` reports slice 125)
 - **Last completed history:**
-  [`histories/2026-06/20260601-0013-openai-responses-sse-streaming.md`](histories/2026-06/20260601-0013-openai-responses-sse-streaming.md)
+  [`histories/2026-06/20260601-0102-cli-interactive-repl.md`](histories/2026-06/20260601-0102-cli-interactive-repl.md)
 - **Active exec-plan:** none — the provider-SSE-streaming arc (slices 121–123)
   is complete and moved to
   [`exec-plans/completed/2026-05-30-provider-sse-streaming.md`](exec-plans/completed/2026-05-30-provider-sse-streaming.md);
-  Slice 124 was a single-slice post-arc follow-up and did not require a new
+  Slices 124 and 125 were single-slice follow-ups and did not require a new
   active plan.
-- **Next intended slice:** no committed plan. The provider-SSE-streaming parity
-  follow-up is now complete; the next runtime piece should be selected from the
-  routing index (likely memory ownership on the configured-route loop path, the
-  interactive REPL shell, or provider hooks/usage-cost rollups). Slice 124 adds
+- **Next intended slice:** no committed plan. The next runtime piece should be
+  selected from the routing index (likely memory ownership on the configured-route
+  loop path, provider hooks/usage-cost rollups, or CLI line editing / slash
+  commands). Slice 125 replaces the configured-route placeholder REPL with a
+  provider-backed terminal input loop: `bootstrap::run` now enables
+  `CliOptions::interactive_repl` when it calls `cli::run_async` with
+  `AgentPromptRunner`, and `run_async` reads terminal stdin through a persistent
+  asio descriptor/buffer until an empty line or EOF. Each non-empty interactive
+  line is dispatched to the runner as `CliMode::repl` with increasing
+  `prompt_index`; scripted `repl_lines` still win for tests/noninteractive
+  drivers, and no-runner/built-in default shells remain deterministic and
+  nonblocking. Focused result: `test-cli` **23 / 176** (+5 cases, +66
+  assertions) and `test-bootstrap` **76 / 355** (+1 case, +11 assertions).
+  Slice 124 adds
   the provider-side OpenAI Responses SSE decoder:
   `OpenAiResponsesSseDecoder` lives beside `AnthropicSseDecoder` under
   `src/oran-provider/_impl/`, consumes OpenAI Responses stream events
@@ -1183,10 +1192,10 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-hook`: 30 cases / 207 assertions.
 - `oran-tool`: 185 cases / 1866 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
-- `oran-provider`: 81 cases / 614 assertions.
+- `oran-provider`: 86 cases / 643 assertions.
 - `oran-agent`: 47 cases / 10618 assertions.
-- `oran-cli`: 18 cases / 110 assertions.
-- `oran-bootstrap`: 75 cases / 344 assertions.
+- `oran-cli`: 23 cases / 176 assertions.
+- `oran-bootstrap`: 76 cases / 355 assertions.
 
 ## Open Tech-Debt Rows
 

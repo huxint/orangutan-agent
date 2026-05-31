@@ -53,6 +53,8 @@ tests/    bench/     Catch2 + nanobench buckets, one per library
    xmake run orangutan -- --prompt "What is 17 * 23?"
    # provider-backed prompts need a key:
    ANTHROPIC_API_KEY=... xmake run orangutan -- --config config.example.json --prompt "hello"
+   ANTHROPIC_API_KEY=... xmake run orangutan -- --config config.example.json
+   # REPL mode exits on an empty line.
    ```
 
 4. Before a PR: `make ci`.

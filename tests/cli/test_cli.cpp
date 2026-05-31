@@ -1,5 +1,6 @@
 // tests/cli/test_cli.cpp — early CLI mode coverage.
 
+#include <cerrno>
 #include <expected>
 #include <span>
 #include <sstream>
@@ -11,6 +12,8 @@
 #include <asio/io_context.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+
+#include <unistd.h>
 
 #include <oran/async.hpp>
 #include <oran/cli.hpp>
@@ -48,6 +51,47 @@ public:
 
 private:
   std::vector<core::Result<cli::PromptRunResult>> results_;
+};
+
+class ScopedStdin final {
+public:
+  explicit ScopedStdin(std::string_view input) {
+    int pipe_fds[2] = {-1, -1};
+    REQUIRE(::pipe(pipe_fds) == 0);
+
+    saved_fd_ = ::dup(STDIN_FILENO);
+    REQUIRE(saved_fd_ >= 0);
+
+    auto remaining = input;
+    while (!remaining.empty()) {
+      const auto written = ::write(pipe_fds[1], remaining.data(), remaining.size());
+      if (written < 0 && errno == EINTR) {
+        continue;
+      }
+      REQUIRE(written > 0);
+      remaining.remove_prefix(static_cast<std::size_t>(written));
+    }
+
+    REQUIRE(::close(pipe_fds[1]) == 0);
+    pipe_fds[1] = -1;
+    REQUIRE(::dup2(pipe_fds[0], STDIN_FILENO) >= 0);
+    REQUIRE(::close(pipe_fds[0]) == 0);
+  }
+
+  ~ScopedStdin() {
+    if (saved_fd_ >= 0) {
+      (void)::dup2(saved_fd_, STDIN_FILENO);
+      (void)::close(saved_fd_);
+    }
+  }
+
+  ScopedStdin(const ScopedStdin&) = delete;
+  ScopedStdin& operator=(const ScopedStdin&) = delete;
+  ScopedStdin(ScopedStdin&&) = delete;
+  ScopedStdin& operator=(ScopedStdin&&) = delete;
+
+private:
+  int saved_fd_{-1};
 };
 
 cli::CliOptions options(std::vector<std::string_view>& args) {
@@ -176,6 +220,88 @@ TEST_CASE("run_async delegates scripted REPL prompts in order", "[unit][cli][asy
   });
 }
 
+TEST_CASE("run_async reads interactive REPL prompts until an empty line", "[unit][cli][async]") {
+  test::run_async([](asio::io_context& /*io*/) -> async::Awaitable<void> {
+    auto stdin_lines = ScopedStdin{"first\nsecond\n\nignored\n"};
+    auto args = std::vector<std::string_view>{};
+    auto cli_options = options(args);
+    cli_options.interactive_repl = true;
+    RecordingPromptRunner runner;
+
+    auto result = co_await cli::run_async(cli_options, &runner);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->mode == cli::CliMode::repl);
+    REQUIRE(result->prompts_processed == 2);
+    REQUIRE(result->exit_code == 0);
+    REQUIRE(runner.requests.size() == 2);
+    REQUIRE(runner.requests[0].prompt == "first");
+    REQUIRE(runner.requests[0].mode == cli::CliMode::repl);
+    REQUIRE(runner.requests[0].prompt_index == 0);
+    REQUIRE(runner.requests[1].prompt == "second");
+    REQUIRE(runner.requests[1].mode == cli::CliMode::repl);
+    REQUIRE(runner.requests[1].prompt_index == 1);
+  });
+}
+
+TEST_CASE("run_async treats EOF after a partial interactive REPL line as a prompt", "[unit][cli][async]") {
+  test::run_async([](asio::io_context& /*io*/) -> async::Awaitable<void> {
+    auto stdin_lines = ScopedStdin{"partial"};
+    auto args = std::vector<std::string_view>{};
+    auto cli_options = options(args);
+    cli_options.interactive_repl = true;
+    RecordingPromptRunner runner;
+
+    auto result = co_await cli::run_async(cli_options, &runner);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->mode == cli::CliMode::repl);
+    REQUIRE(result->prompts_processed == 1);
+    REQUIRE(runner.requests.size() == 1);
+    REQUIRE(runner.requests[0].prompt == "partial");
+    REQUIRE(runner.requests[0].prompt_index == 0);
+  });
+}
+
+TEST_CASE("run_async ignores interactive REPL input when scripted prompts are supplied", "[unit][cli][async]") {
+  test::run_async([](asio::io_context& /*io*/) -> async::Awaitable<void> {
+    auto stdin_lines = ScopedStdin{"interactive\n\n"};
+    auto args = std::vector<std::string_view>{};
+    auto repl_lines = std::vector<std::string_view>{"scripted"};
+    auto cli_options = options(args, repl_lines);
+    cli_options.interactive_repl = true;
+    RecordingPromptRunner runner;
+
+    auto result = co_await cli::run_async(cli_options, &runner);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->mode == cli::CliMode::repl);
+    REQUIRE(result->prompts_processed == 1);
+    REQUIRE(runner.requests.size() == 1);
+    REQUIRE(runner.requests[0].prompt == "scripted");
+    REQUIRE(runner.requests[0].prompt_index == 0);
+  });
+}
+
+TEST_CASE("run_async does not enter interactive REPL when only empty scripted prompts are supplied",
+          "[unit][cli][async]") {
+  test::run_async([](asio::io_context& /*io*/) -> async::Awaitable<void> {
+    auto stdin_lines = ScopedStdin{"interactive\n\n"};
+    auto args = std::vector<std::string_view>{};
+    auto repl_lines = std::vector<std::string_view>{"", ""};
+    auto cli_options = options(args, repl_lines);
+    cli_options.interactive_repl = true;
+    RecordingPromptRunner runner;
+
+    auto result = co_await cli::run_async(cli_options, &runner);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->mode == cli::CliMode::repl);
+    REQUIRE(result->prompts_processed == 0);
+    REQUIRE(runner.requests.empty());
+  });
+}
+
 TEST_CASE("run_async preserves deterministic shell behavior without a runner", "[unit][cli][async]") {
   test::run_async([](asio::io_context& /*io*/) -> async::Awaitable<void> {
     auto args = std::vector<std::string_view>{};
@@ -186,6 +312,22 @@ TEST_CASE("run_async preserves deterministic shell behavior without a runner", "
     REQUIRE(result.has_value());
     REQUIRE(result->mode == cli::CliMode::repl);
     REQUIRE(result->prompts_processed == 2);
+    REQUIRE(result->exit_code == 0);
+  });
+}
+
+TEST_CASE("run_async does not enter interactive REPL without a runner", "[unit][cli][async]") {
+  test::run_async([](asio::io_context& /*io*/) -> async::Awaitable<void> {
+    auto stdin_lines = ScopedStdin{"would-block-without-gate\n"};
+    auto args = std::vector<std::string_view>{};
+    auto cli_options = options(args);
+    cli_options.interactive_repl = true;
+
+    auto result = co_await cli::run_async(cli_options);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->mode == cli::CliMode::repl);
+    REQUIRE(result->prompts_processed == 0);
     REQUIRE(result->exit_code == 0);
   });
 }

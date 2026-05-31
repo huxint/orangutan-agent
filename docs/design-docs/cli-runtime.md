@@ -22,6 +22,7 @@ enum class CliMode {
 struct CliOptions {
   std::span<const std::string_view> args;
   std::span<const std::string_view> repl_lines;
+  bool interactive_repl = false;
   bool quiet = false;
 };
 
@@ -87,13 +88,20 @@ exercise the dispatch path without printing per-iteration output.
 - `--prompt=<text>`
 - `--help` / `-h`
 
-No prompt flag selects `CliMode::repl`. The current REPL shell is deterministic: it
-reports that the shell is ready and, when `repl_lines` are supplied by tests or future
-callers, counts non-empty lines as prompts. `run_async` calls the supplied
-`PromptRunner` once for each non-empty scripted REPL line in order, with
-`prompt_index` counting only dispatched prompts. Without a runner, the shell preserves
-the existing pre-agent-loop output and does not read provider credentials, open storage,
-or run tools.
+No prompt flag selects `CliMode::repl`. `repl_lines` are the scripted REPL path for
+tests and noninteractive drivers; both `run` and `run_async` ignore empty scripted
+entries, and `run_async` calls the supplied `PromptRunner` once for each non-empty
+scripted line in order with `prompt_index` counting only dispatched prompts.
+
+`interactive_repl` enables terminal input only for the async runner path. When
+`run_async` receives a non-null `PromptRunner`, no scripted `repl_lines`, and
+`interactive_repl=true`, it reads terminal stdin on the current coroutine executor until
+an empty line or EOF. Each non-empty line is dispatched to the runner as
+`CliMode::repl`; the prompt is not echoed because the operator already typed it at the
+terminal prompt. Scripted lines always win over interactive input, including an
+all-empty scripted span, so tests and noninteractive callers never accidentally block on
+stdin. Without a runner, the shell preserves the no-runner output and does not read
+provider credentials, open storage, block on stdin, or run tools.
 
 Single-shot mode accepts exactly one prompt and returns `prompts_processed = 1`.
 `run_async` passes that prompt to the supplied runner with
@@ -125,15 +133,13 @@ ordinary binary path.
 not bootstrap-owned are forwarded unchanged to `cli::run` only when no provider route is
 configured. When config declares a `default` route, bootstrap constructs the
 HTTP-backed provider backend, creates `AgentPromptRunner`, and calls
-`cli::run_async`. This keeps config discovery, provider-route validation, provider
-construction, and terminal mode selection separate while preserving one process entry
-point. `AgentPromptRunner` wraps the supplied provider backend in
+`cli::run_async` with `interactive_repl=true`. This keeps config discovery,
+provider-route validation, provider construction, and terminal mode selection separate
+while preserving one process entry point. `AgentPromptRunner` wraps the supplied provider backend in
 `provider::execution::Runtime`, binds `OperatorPromptSink`, and drives `agent::Loop`
 with runtime-assembly services.
 
 ## Next Steps
 
-- Replace the deterministic REPL shell with a line editor once terminal history/editing is
-  needed.
-- Add provider-backed streaming output once the protocol transport grows SSE support.
+- Add a line editor/history once terminal editing is needed.
 - Add slash-command parsing after the runtime has command targets.

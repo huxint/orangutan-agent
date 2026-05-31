@@ -13,7 +13,9 @@ with persistent session history and a CLI surface. The first deliverable is "I c
   - No `--config` loads `<workspace>/.orangutan/config.json` when present, otherwise
     uses built-in config defaults.
   - `--prompt <text>` / `--prompt=<text>` is handed to `oran-cli` single-shot mode.
-  - No CLI mode args select a minimal REPL shell.
+  - No CLI mode args select REPL mode; configured provider routes read prompts
+    from terminal stdin until an empty line or EOF, while built-in empty defaults
+    keep the deterministic no-runner shell.
   - `--help` / `-h` prints the current bootstrap usage.
   - Built-in empty defaults keep the deterministic pre-agent-loop CLI shell; a
     configured provider route switches prompt execution into the agent loop.
@@ -78,7 +80,11 @@ with persistent session history and a CLI surface. The first deliverable is "I c
 1. `xmake build orangutan` produces a binary within the compile-budget envelope.
 2. `./orangutan --prompt "Read this README and summarize it in one paragraph"` returns
    a sensible answer in single-shot mode.
-3. The REPL renders streaming tokens character-by-character. **(Shipped, slices 123-124 — configured-route `orangutan --prompt` streams live through `cli::StreamingPromptSink`; the transport/decoder path covers Anthropic Messages and OpenAI Responses.)**
+3. The REPL renders streaming tokens character-by-character. **(Shipped, slices
+   123-125 — configured-route `orangutan --prompt` streams live through
+   `cli::StreamingPromptSink`; the transport/decoder path covers Anthropic
+   Messages and OpenAI Responses, and no-prompt configured-route REPL now reads
+   terminal prompts through `cli::run_async`.)**
 4. `Ctrl-C` during a tool call cancels within 1 s.
 5. After 100 turns of a conversation, the session file is < 1 MB and re-loadable.
 6. The permission engine refuses `shell.exec("rm -rf ...")` by default with an

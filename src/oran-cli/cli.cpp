@@ -2,13 +2,28 @@
 
 #include <oran/cli/cli.hpp>
 
+#include <algorithm>
+#include <cerrno>
+#include <cstdio>
 #include <expected>
+#include <iterator>
 #include <print>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include <asio/buffer.hpp>
+#include <asio/buffers_iterator.hpp>
+#include <asio/posix/stream_descriptor.hpp>
+#include <asio/read_until.hpp>
+#include <asio/redirect_error.hpp>
+#include <asio/streambuf.hpp>
+#include <asio/this_coro.hpp>
+#include <asio/use_awaitable.hpp>
+#include <unistd.h>
+
+#include <oran/async/awaitable_fwd.hpp>
 #include <oran/core/error.hpp>
 
 namespace orangutan::cli {
@@ -21,6 +36,11 @@ struct ParsedArgs {
   CliMode mode{CliMode::repl};
   bool has_prompt{false};
   std::string prompt{};
+};
+
+struct ReplInputLine {
+  std::string line;
+  bool reached_eof{false};
 };
 
 [[nodiscard]] Error arg_error(std::string message) {
@@ -83,11 +103,15 @@ struct ParsedArgs {
 void print_usage() {
   std::println("usage: orangutan [--config <path>] [--prompt <text>] [--help]");
   std::println();
-  std::println("The current CLI slice accepts prompts but does not run the agent loop yet.");
+  std::println("Configured provider routes run prompts through the agent loop; no-route runs use the built-in shell.");
 }
 
-void print_repl_banner(bool has_runner) {
+void print_repl_banner(bool has_runner, bool reads_terminal) {
   std::println("cli mode: repl");
+  if (reads_terminal) {
+    std::println("REPL shell is ready. Enter an empty line to exit.");
+    return;
+  }
   if (has_runner) {
     std::println("REPL shell is ready.");
     return;
@@ -114,6 +138,58 @@ void print_prompt_result(const PromptRunResult& result) {
   if (!result.text.empty()) {
     std::println("{}", result.text);
   }
+}
+
+void print_repl_prompt() {
+  std::print("> ");
+  std::fflush(stdout);
+}
+
+[[nodiscard]] async::Awaitable<Result<ReplInputLine>> read_terminal_line(asio::posix::stream_descriptor& input,
+                                                                         asio::streambuf& buffer) {
+  auto read_ec = asio::error_code{};
+  [[maybe_unused]] const auto bytes =
+      co_await asio::async_read_until(input, buffer, '\n', asio::redirect_error(asio::use_awaitable, read_ec));
+  if (read_ec && read_ec != asio::error::eof) {
+    co_return std::unexpected(Error::io("failed to read REPL input").with("asio_error", read_ec.message()));
+  }
+
+  auto data = buffer.data();
+  const auto begin = asio::buffers_begin(data);
+  const auto end = asio::buffers_end(data);
+  const auto newline = std::find(begin, end, '\n');
+  const bool reached_eof = read_ec == asio::error::eof && newline == end;
+  auto line = std::string{begin, newline};
+  if (!line.empty() && line.back() == '\r') {
+    line.pop_back();
+  }
+  auto consume_count = static_cast<std::size_t>(std::distance(begin, newline));
+  if (newline != end) {
+    ++consume_count;
+  }
+  buffer.consume(consume_count);
+  co_return ReplInputLine{.line = std::move(line), .reached_eof = reached_eof};
+}
+
+[[nodiscard]] async::Awaitable<Result<void>>
+dispatch_repl_prompt(PromptRunner* runner, std::string prompt, std::size_t prompt_index, bool quiet, bool echo_prompt) {
+  if (!quiet && echo_prompt) {
+    print_scripted_prompt(prompt, runner != nullptr);
+  }
+  if (runner != nullptr) {
+    auto prompt_result = co_await runner->run_prompt(PromptRunRequest{
+        .prompt = std::move(prompt),
+        .mode = CliMode::repl,
+        .prompt_index = prompt_index,
+    });
+    if (!prompt_result) {
+      co_return std::unexpected(std::move(prompt_result).error());
+    }
+    if (!quiet) {
+      print_prompt_result(*prompt_result);
+    }
+  }
+  co_return Result<void>{};
 }
 
 }  // namespace
@@ -151,7 +227,7 @@ core::Result<CliResult> run(CliOptions options) {
   }
 
   if (!options.quiet) {
-    print_repl_banner(false);
+    print_repl_banner(false, false);
   }
   auto prompts_processed = std::size_t{0};
   for (const auto line : options.repl_lines) {
@@ -199,9 +275,6 @@ async::Awaitable<core::Result<CliResult>> run_async(CliOptions options, PromptRu
     co_return CliResult{.mode = CliMode::single_shot, .prompts_processed = 1, .exit_code = 0};
   }
 
-  if (!options.quiet) {
-    print_repl_banner(runner != nullptr);
-  }
   auto prompts = std::vector<std::string>{};
   prompts.reserve(options.repl_lines.size());
   for (const auto line : options.repl_lines) {
@@ -209,23 +282,55 @@ async::Awaitable<core::Result<CliResult>> run_async(CliOptions options, PromptRu
       prompts.emplace_back(line);
     }
   }
+  const bool interactive = options.interactive_repl && runner != nullptr && options.repl_lines.empty();
+  if (!options.quiet) {
+    print_repl_banner(runner != nullptr, interactive);
+  }
   auto prompts_processed = std::size_t{0};
-  for (const auto& prompt : prompts) {
-    if (!options.quiet) {
-      print_scripted_prompt(prompt, runner != nullptr);
+
+  if (interactive) {
+    const auto executor = co_await asio::this_coro::executor;
+    const int fd = ::dup(STDIN_FILENO);
+    if (fd < 0) {
+      co_return std::unexpected(Error::io("failed to duplicate stdin").with("errno", std::to_string(errno)));
     }
-    if (runner != nullptr) {
-      auto prompt_result = co_await runner->run_prompt(PromptRunRequest{
-          .prompt = prompt,
-          .mode = CliMode::repl,
-          .prompt_index = prompts_processed,
-      });
+    asio::posix::stream_descriptor input{executor};
+    auto assign_ec = asio::error_code{};
+    input.assign(fd, assign_ec);
+    if (assign_ec) {
+      ::close(fd);
+      co_return std::unexpected(Error::io("failed to attach stdin").with("asio_error", assign_ec.message()));
+    }
+    auto input_buffer = asio::streambuf{};
+    while (true) {
+      if (!options.quiet) {
+        print_repl_prompt();
+      }
+      auto line = co_await read_terminal_line(input, input_buffer);
+      if (!line) {
+        co_return std::unexpected(std::move(line).error());
+      }
+      if (line->line.empty()) {
+        break;
+      }
+      auto prompt_result =
+          co_await dispatch_repl_prompt(runner, std::move(line->line), prompts_processed, options.quiet, false);
       if (!prompt_result) {
         co_return std::unexpected(std::move(prompt_result).error());
       }
-      if (!options.quiet) {
-        print_prompt_result(*prompt_result);
+      ++prompts_processed;
+      if (line->reached_eof) {
+        break;
       }
+    }
+    co_return CliResult{.mode = CliMode::repl, .prompts_processed = prompts_processed, .exit_code = 0};
+  }
+
+  for (auto& prompt : prompts) {
+    auto prompt_result =
+        co_await dispatch_repl_prompt(runner, std::move(prompt), prompts_processed, options.quiet, true);
+    if (!prompt_result) {
+      co_return std::unexpected(std::move(prompt_result).error());
     }
     ++prompts_processed;
   }

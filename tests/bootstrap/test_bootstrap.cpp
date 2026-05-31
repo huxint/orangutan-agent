@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <charconv>
 #include <chrono>
 #include <cstddef>
@@ -23,6 +24,8 @@
 #include <asio/write.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+
+#include <unistd.h>
 
 #include <oran/async.hpp>
 #include <oran/bootstrap.hpp>
@@ -150,6 +153,46 @@ public:
 private:
   std::string name_;
   std::optional<std::string> old_value_;
+};
+
+class ScopedStdin {
+public:
+  explicit ScopedStdin(std::string_view input) {
+    int pipe_fds[2] = {-1, -1};
+    REQUIRE(::pipe(pipe_fds) == 0);
+
+    saved_fd_ = ::dup(STDIN_FILENO);
+    REQUIRE(saved_fd_ >= 0);
+
+    auto remaining = input;
+    while (!remaining.empty()) {
+      const auto written = ::write(pipe_fds[1], remaining.data(), remaining.size());
+      if (written < 0 && errno == EINTR) {
+        continue;
+      }
+      REQUIRE(written > 0);
+      remaining.remove_prefix(static_cast<std::size_t>(written));
+    }
+
+    REQUIRE(::close(pipe_fds[1]) == 0);
+    REQUIRE(::dup2(pipe_fds[0], STDIN_FILENO) >= 0);
+    REQUIRE(::close(pipe_fds[0]) == 0);
+  }
+
+  ~ScopedStdin() {
+    if (saved_fd_ >= 0) {
+      (void)::dup2(saved_fd_, STDIN_FILENO);
+      (void)::close(saved_fd_);
+    }
+  }
+
+  ScopedStdin(const ScopedStdin&) = delete;
+  ScopedStdin& operator=(const ScopedStdin&) = delete;
+  ScopedStdin(ScopedStdin&&) = delete;
+  ScopedStdin& operator=(ScopedStdin&&) = delete;
+
+private:
+  int saved_fd_{-1};
 };
 
 class OneShotHttpServer {
@@ -486,6 +529,27 @@ TEST_CASE("run hands configured provider prompts to AgentPromptRunner", "[unit][
   REQUIRE(server.request_text().contains(R"json("max_tokens":1024)json"));
   // Streaming is wired end-to-end, so the configured Anthropic route now sends
   // `stream=true` and the binary renders the SSE turn live.
+  REQUIRE(server.request_text().contains(R"json("stream":true)json"));
+}
+
+TEST_CASE("run hands configured provider REPL prompts to AgentPromptRunner", "[unit][bootstrap][provider]") {
+  ScopedEnv api_key{"ORAN_BOOTSTRAP_RUN_PROVIDER_KEY", "test-secret"};
+  ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
+  ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
+  ScopedStdin stdin_lines{"hello repl\n\n"};
+  OneShotHttpServer server{anthropic_sse_response("repl ok")};
+  TempDir temp{"oran-bootstrap-provider-repl-runner"};
+  const auto config_path = temp.path() / "config.json";
+  write_file(config_path, provider_config_text(server.base_url()));
+  auto config_arg = config_path.string();
+  auto args = std::vector<std::string_view>{"--config", config_arg};
+
+  auto result = bootstrap::run(options(args, temp.path()));
+
+  REQUIRE(result.has_value());
+  REQUIRE(*result == 0);
+  REQUIRE(server.served());
+  REQUIRE(server.request_text().contains("hello repl"));
   REQUIRE(server.request_text().contains(R"json("stream":true)json"));
 }
 

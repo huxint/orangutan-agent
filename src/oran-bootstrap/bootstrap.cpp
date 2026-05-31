@@ -43,7 +43,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice114";
+constexpr std::string_view kVersion = "2.0.0-slice125";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 
 struct ParsedArgs {
@@ -830,10 +830,12 @@ core::Result<int> run(BootstrapOptions options) {
     return std::unexpected(std::move(runner).error());
   }
 
-  auto cli_result =
-      run_cli_async_on_runtime(runtime,
-                               cli::CliOptions{.args = std::span<const std::string_view>{parsed->cli_args}},
-                               runner->get());
+  auto cli_result = run_cli_async_on_runtime(runtime,
+                                             cli::CliOptions{
+                                                 .args = std::span<const std::string_view>{parsed->cli_args},
+                                                 .interactive_repl = true,
+                                             },
+                                             runner->get());
   if (!cli_result) {
     return std::unexpected(std::move(cli_result.error()));
   }

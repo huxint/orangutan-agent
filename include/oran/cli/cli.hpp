@@ -23,7 +23,11 @@ enum class CliMode : std::uint8_t {
 
 struct CliOptions {
   std::span<const std::string_view> args{};
+  // Scripted REPL prompts for tests and noninteractive drivers; empty entries are ignored.
   std::span<const std::string_view> repl_lines{};
+  // Enables terminal stdin reads in run_async when a PromptRunner is supplied
+  // and repl_lines is empty.
+  bool interactive_repl{false};
   bool quiet{false};
 };
 

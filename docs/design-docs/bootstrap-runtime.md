@@ -150,7 +150,10 @@ When config declares routes, bootstrap resolves the `default` route through
 `provider::resolve_route_profiles`, builds
 `provider::make_adapter_construction_plan`, constructs `HttpProviderBackend`,
 creates `AgentPromptRunner`, and runs the remaining CLI args through
-`cli::run_async`. The route/plan preflight catches bad profile references,
+`cli::run_async`. No-prompt configured-route runs set
+`CliOptions::interactive_repl`, so `oran-cli` reads terminal prompts until an
+empty line or EOF and dispatches each one through that runner. The route/plan
+preflight catches bad profile references,
 provider labels, explicit profile-protocol spellings, missing endpoint
 metadata, and unsupported endpoint schemes before credentials are read.
 `HttpProviderBackend::build` then crosses the credential and
@@ -175,5 +178,6 @@ permission-decision and `hook_publish` rows are readable in the same output.
 ## Next Steps
 
 - Bind configured hook sinks to the assembly-owned bus once the hook sink models land.
-- Replace the placeholder REPL shell with a real interactive line reader and streaming
-  token renderer.
+- Add CLI line editor/history and slash-command handling on top of the interactive
+  REPL handoff.
+- Add provider hooks and usage/cost rollups.
