@@ -1,8 +1,11 @@
 // tests/bootstrap/test_prompt_runner.cpp - bootstrap AgentPromptRunner coverage.
 
 #include <chrono>
+#include <deque>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -22,6 +25,7 @@
 #include <oran/core/error.hpp>
 #include <oran/core/stop_reason.hpp>
 #include <oran/hook.hpp>
+#include <oran/memory.hpp>
 #include <oran/permission.hpp>
 #include <oran/provider.hpp>
 #include <oran/storage.hpp>
@@ -34,6 +38,7 @@ namespace cli = orangutan::cli;
 namespace config = orangutan::config;
 namespace core = orangutan::core;
 namespace hook = orangutan::hook;
+namespace memory = orangutan::memory;
 namespace permission = orangutan::permission;
 namespace provider = orangutan::provider;
 namespace test = orangutan::tests;
@@ -116,10 +121,13 @@ config::Config parse_config(std::string_view json) {
   return std::move(*parsed);
 }
 
-bootstrap::RuntimeAssembly
-build_assembly(const std::filesystem::path& workspace, asio::io_context& io, bool audit_enabled) {
+bootstrap::RuntimeAssembly build_assembly(const std::filesystem::path& workspace,
+                                          asio::io_context& io,
+                                          bool audit_enabled,
+                                          bool session_memory_enabled = false) {
   auto options = bootstrap::RuntimeAssemblyOptions{};
   options.audit_enabled = audit_enabled;
+  options.session_memory_enabled = session_memory_enabled;
   auto assembly = bootstrap::RuntimeAssembly::build(workspace.string(), io.get_executor(), std::move(options));
   REQUIRE(assembly.has_value());
   return std::move(*assembly);
@@ -151,6 +159,45 @@ hook::InProcessSink provider_capture_sink(std::vector<ProviderHookCapture>& capt
         co_return core::Result<void>{};
       }};
 }
+
+class RecordingProvider final : public provider::System {
+public:
+  explicit RecordingProvider(std::vector<provider::Response> responses)
+      : responses_{std::make_move_iterator(responses.begin()), std::make_move_iterator(responses.end())} {}
+
+  [[nodiscard]] async::Awaitable<core::Result<provider::Response>>
+  send(provider::Request request, provider::Route route, provider::EventSink* sink = nullptr) const override {
+    static_cast<void>(route);
+    {
+      const std::lock_guard lock{mutex_};
+      requests_.push_back(std::move(request));
+      if (responses_.empty()) {
+        co_return std::unexpected(core::Error::internal("recording provider plan exhausted"));
+      }
+    }
+
+    provider::Response response;
+    {
+      const std::lock_guard lock{mutex_};
+      response = std::move(responses_.front());
+      responses_.pop_front();
+    }
+    if (sink != nullptr) {
+      sink->on_done(response.stop_reason);
+    }
+    co_return response;
+  }
+
+  [[nodiscard]] std::vector<provider::Request> requests() const {
+    const std::lock_guard lock{mutex_};
+    return requests_;
+  }
+
+private:
+  mutable std::mutex mutex_;
+  mutable std::vector<provider::Request> requests_;
+  mutable std::deque<provider::Response> responses_;
+};
 
 }  // namespace
 
@@ -218,6 +265,107 @@ TEST_CASE("AgentPromptRunner drives CLI prompts through the agent loop and trace
     auto count = co_await assembly.trace_repository()->count_turns();
     REQUIRE(count.has_value());
     REQUIRE(*count == 1);
+  });
+}
+
+TEST_CASE("AgentPromptRunner persists successful turns through the session store",
+          "[unit][bootstrap][prompt_runner][memory]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-session-persist"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false, true);
+    REQUIRE(assembly.session_store() != nullptr);
+
+    provider::FakeProvider fake{std::vector<provider::ScriptedTurn>{
+        provider::ScriptedTurn{
+            .response = text_response("stored"),
+            .deltas = {},
+            .error = std::nullopt,
+            .latency = {},
+        },
+    }};
+
+    auto options = base_runner_options(io, assembly, cfg, fake);
+    core::TurnId session_id{};
+    session_id.back() = std::byte{0x42};
+    options.session_id = session_id;
+
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+    auto result =
+        co_await (*runner)->run_prompt(cli::PromptRunRequest{.prompt = "remember", .mode = cli::CliMode::single_shot});
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "stored");
+
+    auto loaded =
+        co_await assembly.session_store()->load(memory::session::SessionId{.value = "00000000000000000000000000000042"},
+                                                memory::session::AgentKey{.value = "coder"});
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->size() == 2);
+    REQUIRE((*loaded)[0].role == core::Role::user);
+    REQUIRE((*loaded)[0].blocks == core::Message::user_text("remember").blocks);
+    REQUIRE((*loaded)[1].role == core::Role::assistant);
+    REQUIRE((*loaded)[1].blocks == core::Message::assistant_text("stored").blocks);
+  });
+}
+
+TEST_CASE("AgentPromptRunner reloads persisted history for a new runner instance",
+          "[unit][bootstrap][prompt_runner][memory]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-session-reload"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false, true);
+
+    core::TurnId session_id{};
+    session_id[0] = std::byte{0x12};
+    session_id[15] = std::byte{0x34};
+
+    {
+      provider::FakeProvider fake{std::vector<provider::ScriptedTurn>{
+          provider::ScriptedTurn{
+              .response = text_response("first answer"),
+              .deltas = {},
+              .error = std::nullopt,
+              .latency = {},
+          },
+      }};
+      auto options = base_runner_options(io, assembly, cfg, fake);
+      options.session_id = session_id;
+      auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+      REQUIRE(runner.has_value());
+      auto first = co_await (*runner)->run_prompt(
+          cli::PromptRunRequest{.prompt = "first prompt", .mode = cli::CliMode::single_shot});
+      REQUIRE(first.has_value());
+    }
+
+    RecordingProvider recording{{text_response("second answer")}};
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.session_id = session_id;
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto second = co_await (*runner)->run_prompt(
+        cli::PromptRunRequest{.prompt = "second prompt", .mode = cli::CliMode::single_shot});
+
+    REQUIRE(second.has_value());
+    REQUIRE(second->text == "second answer");
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 1);
+    REQUIRE(requests[0].messages.size() == 3);
+    REQUIRE(requests[0].messages[0].role == core::Role::user);
+    REQUIRE(requests[0].messages[0].blocks == core::Message::user_text("first prompt").blocks);
+    REQUIRE(requests[0].messages[1].role == core::Role::assistant);
+    REQUIRE(requests[0].messages[1].blocks == core::Message::assistant_text("first answer").blocks);
+    REQUIRE(requests[0].messages[2].role == core::Role::user);
+    REQUIRE(requests[0].messages[2].blocks == core::Message::user_text("second prompt").blocks);
+
+    auto loaded =
+        co_await assembly.session_store()->load(memory::session::SessionId{.value = "12000000000000000000000000000034"},
+                                                memory::session::AgentKey{.value = "coder"});
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->size() == 4);
+    REQUIRE((*loaded)[3].blocks == core::Message::assistant_text("second answer").blocks);
   });
 }
 

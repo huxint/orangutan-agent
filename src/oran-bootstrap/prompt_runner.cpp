@@ -28,6 +28,7 @@
 #include <oran/core/message.hpp>
 #include <oran/core/time.hpp>
 #include <oran/hook.hpp>
+#include <oran/memory.hpp>
 #include <oran/permission.hpp>
 #include <oran/provider.hpp>
 #include <oran/storage.hpp>
@@ -71,6 +72,18 @@ using ::orangutan::core::Result;
     return std::unexpected(
         Error::internal("agent prompt runner: failed to generate session id").with("reason", "unknown"));
   }
+}
+
+[[nodiscard]] std::string format_session_id(const core::TurnId& id) {
+  constexpr std::string_view kHexDigits{"0123456789abcdef"};
+  std::string out;
+  out.reserve(id.size() * 2);
+  for (auto byte : id) {
+    const auto value = static_cast<unsigned char>(byte);
+    out.push_back(kHexDigits[value >> 4]);
+    out.push_back(kHexDigits[value & 0x0fu]);
+  }
+  return out;
 }
 
 [[nodiscard]] Result<permission::RuleSet>
@@ -170,11 +183,12 @@ public:
       : executor_{std::move(options.executor)}, assembly_{options.assembly}, execution_runtime_{*options.provider},
         loop_{execution_runtime_, std::move(options.route)}, registry_{std::move(registry)},
         scheduler_{executor_, registry_, scheduler_options}, rules_{std::move(rules)},
-        active_tools_{std::move(active_tools)}, output_caps_{output_caps}, session_id_{session_id}, mode_{options.mode},
-        scope_key_{std::move(options.scope_key)}, agent_key_{std::move(options.agent_key)},
-        identity_{std::move(options.identity)}, origin_{std::move(options.origin)},
-        system_preamble_{std::move(options.system_preamble)}, skills_catalog_{std::move(options.skills_catalog)},
-        memory_framing_{std::move(options.memory_framing)}, per_agent_overlay_{std::move(options.per_agent_overlay)},
+        active_tools_{std::move(active_tools)}, output_caps_{output_caps}, session_id_{session_id},
+        session_id_text_{format_session_id(session_id_)}, mode_{options.mode}, scope_key_{std::move(options.scope_key)},
+        agent_key_{std::move(options.agent_key)}, identity_{std::move(options.identity)},
+        origin_{std::move(options.origin)}, system_preamble_{std::move(options.system_preamble)},
+        skills_catalog_{std::move(options.skills_catalog)}, memory_framing_{std::move(options.memory_framing)},
+        per_agent_overlay_{std::move(options.per_agent_overlay)},
         trace_context_json_{std::move(options.trace_context_json)}, tool_choice_{std::move(options.tool_choice)},
         max_tokens_{options.max_tokens}, thinking_budget_{options.thinking_budget}, retry_{options.retry},
         stream_{options.stream}, quiet_{options.quiet}, stream_out_{options.stream_out},
@@ -200,8 +214,20 @@ public:
 
   [[nodiscard]] async::Awaitable<Result<cli::PromptRunResult>> run_prompt(cli::PromptRunRequest request) {
     auto catalog = registry_.catalog();
-    const auto prev_transcript_size = transcript_.size();
-    auto conversation_tail = transcript_;
+    auto conversation_tail = std::vector<core::Message>{};
+    memory::session::Store* session_store = assembly_->session_store();
+    if (session_store != nullptr) {
+      auto loaded = co_await session_store->load(memory::session::SessionId{.value = session_id_text_},
+                                                 memory::session::AgentKey{.value = agent_key_});
+      if (!loaded) {
+        co_return std::unexpected(std::move(loaded).error());
+      }
+      conversation_tail = std::move(*loaded);
+    } else {
+      conversation_tail = transcript_;
+    }
+
+    const auto prev_transcript_size = conversation_tail.size();
     conversation_tail.push_back(core::Message::user_text(std::move(request.prompt)));
 
     auto promotion_snapshot = session_state_.promotion_snapshot(core::time::now_utc());
@@ -271,6 +297,13 @@ public:
 
     observe_turn_results(result->transcript, prev_transcript_size);
 
+    if (session_store != nullptr) {
+      auto persisted = co_await append_transcript_suffix(*session_store, result->transcript, prev_transcript_size);
+      if (!persisted) {
+        co_return std::unexpected(std::move(persisted).error());
+      }
+    }
+
     transcript_ = std::move(result->transcript);
     ++prompts_processed_;
 
@@ -300,6 +333,20 @@ public:
   }
 
 private:
+  [[nodiscard]] async::Awaitable<Result<void>> append_transcript_suffix(memory::session::Store& store,
+                                                                        const std::vector<core::Message>& transcript,
+                                                                        std::size_t start_index) const {
+    for (std::size_t i = start_index; i < transcript.size(); ++i) {
+      auto appended = co_await store.append(memory::session::SessionId{.value = session_id_text_},
+                                            memory::session::AgentKey{.value = agent_key_},
+                                            transcript[i]);
+      if (!appended) {
+        co_return std::unexpected(std::move(appended).error());
+      }
+    }
+    co_return Result<void>{};
+  }
+
   // After a successful turn, walk the new transcript suffix for
   // (ToolUseContent, ToolResultContent) pairs and feed each result through
   // `agent::SessionState::observe_tool_output`. The session state filters by
@@ -364,6 +411,7 @@ private:
   config::PromptActiveToolsConfig active_tools_;
   tool::OutputCapOptions output_caps_{};
   core::TurnId session_id_{};
+  std::string session_id_text_;
   permission::Mode mode_{permission::Mode::default_};
   std::string scope_key_;
   std::string agent_key_;

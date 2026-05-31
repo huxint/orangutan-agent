@@ -21,6 +21,11 @@ operators can reason about retention, scope, and visibility.
   `RuntimeAssembly` opens and migrates a separate
   `<workspace>/.orangutan/sessions.db`, exposes `memory::session::Store` through
   `session_store()`, and keeps built-in no-route startup session-memory disabled.
+- Bootstrap runner persistence shipped in slice 132: configured-route
+  `AgentPromptRunner` now loads session history from `session_store()` before
+  each prompt and appends only the successful transcript suffix afterward, while
+  the in-process transcript remains the fallback when session memory is
+  disabled.
 - `oran-memory::longterm::Runtime` with `Fts5Backend` (default).
 - `MemoryRecord` kinds: `user`, `feedback`, `project`, `reference`.
 - Decay policy applied by a periodic job (`oran-automation`).
@@ -49,8 +54,8 @@ operators can reason about retention, scope, and visibility.
 1. A `SessionStore::append(...)` followed by `SessionStore::load(...)` round-trips
    500 messages without loss. **Status:** closed for
    `memory::session::Store` by `test-memory` slice 130 coverage; slice 131 wires
-   the runtime assembly owner. Bootstrap runner persistence is the next wiring
-   step.
+   the runtime assembly owner, and slice 132 wires the bootstrap runner
+   persistence path.
 2. `longterm::Runtime::search("react agent loop", limit=10)` returns within 50 ms on
    a 10 k-record corpus.
 3. The MEMORY.md mirror, when enabled, reflects all kinds + records within 1 s of the

@@ -65,7 +65,8 @@ with persistent session history and a CLI surface. The first deliverable is "I c
   - `file.edit`
   - `file.search`
   - `shell.exec` (sandboxed)
-- Session history persisted to `sessions.db`.
+- Session history persisted to `sessions.db` through the configured-route
+  bootstrap runner.
 - Hook bus skeleton — at least `tool.before` and `tool.after` events firing to a shell
   sink.
 - Permission engine — `default` mode, with a config-driven allow/deny/ask list.
@@ -91,7 +92,9 @@ with persistent session history and a CLI surface. The first deliverable is "I c
    Messages and OpenAI Responses, and no-prompt configured-route REPL now reads
    terminal prompts through `cli::run_async`.)**
 4. `Ctrl-C` during a tool call cancels within 1 s.
-5. After 100 turns of a conversation, the session file is < 1 MB and re-loadable.
+5. After 100 turns of a conversation, the session file is < 1 MB and
+   re-loadable. **(Session persistence now ships through the configured-route
+   bootstrap runner; the remaining check is size/robustness under long runs.)**
 6. The permission engine refuses `shell.exec("rm -rf ...")` by default with an
    audited entry.
 7. A `tool.after` shell hook fires for every tool call, observable in

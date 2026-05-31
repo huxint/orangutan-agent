@@ -108,9 +108,13 @@ executor, and provider backend; registers the builtin tool catalog; materializes
 permission rules from config plus an optional agent overlay; wraps the backend in
 `provider::execution::Runtime`; binds `cli::OperatorPromptSink` to the
 assembly-owned `permission_ask_rendered` bus; and drives `agent::Loop` with workspace,
-audit, broker, hook, output-cap, and trace services from the assembly. After every
-successful turn the runner walks the new transcript suffix and feeds each tool result
-back through `agent::SessionState::observe_tool_output(...)` so the next turn's
+audit, broker, hook, output-cap, trace, and session-memory services from the assembly.
+When the assembly exposes `session_store()`, the runner loads the persisted history for
+the current `session_id` + `agent_key` before each prompt and appends only the new
+successful transcript suffix afterward. The in-process transcript cache remains the
+fallback when session memory is disabled. After every successful turn the runner walks
+the new transcript suffix and feeds each tool result back through
+`agent::SessionState::observe_tool_output(...)` so the next turn's
 `promotion_snapshot(...)` sees deferred-tool promotions; the count of observed
 `tool.search` results is exposed for diagnostics through
 `tool_search_observations_recorded()`. The runner does not construct real provider
@@ -201,7 +205,7 @@ permission-decision and `hook_publish` rows are readable in the same output.
 
 ## Next Steps
 
-- Wire `AgentPromptRunner` to load persisted session history and append the new
-  transcript suffix through the assembly-owned `session_store()`.
+- Introduce the once-per-turn memory framing owner after session persistence is
+  stable.
 - Bind configured hook sinks to the assembly-owned bus once the hook sink models land.
 - Add CLI line editor/history on top of the interactive REPL handoff.

@@ -168,7 +168,11 @@ memory search results without re-querying inside each ReAct iteration.
   exposes `session_store()` / `sessions_path()`, enables that path for
   configured routes, and keeps built-in no-route startup disabled for session
   memory. Focused validation: `test-bootstrap` 80 / 422.
-- [ ] Land milestone 4 after runtime assembly exposes the sessions owner.
+- [x] 2026-06-01 05:36 +0800: Landed milestone 4 as slice 132:
+  `AgentPromptRunner` now loads persisted session history from the assembly-
+  owned session store before each prompt, appends only the successful transcript
+  suffix afterward, and falls back to in-process transcripts when session
+  memory is disabled. Focused validation: `test-bootstrap` 82 / 452.
 - [ ] Refresh docs/status/quality/history/release notes in every slice.
 
 ## Decision Log
