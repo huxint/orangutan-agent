@@ -197,7 +197,8 @@ proves the loop behaves correctly without a network.
     for Anthropic/OpenAI systems. Slice 110 adds the concrete `oran-http`
     body client, slice 111 adds the `ProtocolTransport` adapter through
     bootstrap's HTTP backend, and slice 112 wires the ordinary binary handoff.
-    SSE streaming remains downstream.
+    Slices 121-124 add the HTTP SSE transport, Anthropic/OpenAI streaming
+    decoders, and the CLI streaming sink.
   1. Build `TurnContext` (identity, route, session id, origin,
      cancellation slot, stable service refs).
   2. Load/render memory once per turn (memory: `nullopt` in v1 — the
@@ -244,7 +245,8 @@ proves the loop behaves correctly without a network.
   `provider::System` decorator, and slice 101 wires that decorator into
   bootstrap's `AgentPromptRunner` with runtime-assembly workspace/audit/broker/
   hook/trace services. Slice 112 now uses that path for configured-route
-  ordinary CLI prompts. Scheduler handoff and SSE streaming remain downstream.
+  ordinary CLI prompts; slices 116-120 ship scheduler handoff, and slices
+  121-124 ship provider SSE streaming for the configured-route CLI path.
 - **CI runs against the fake provider only**. v1 CI gate:
   `xmake test test-agent` exercises all ten scenarios; no network
   is required, no API key is required, no flake budget is needed.

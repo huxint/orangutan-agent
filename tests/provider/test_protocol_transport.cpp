@@ -259,6 +259,19 @@ std::vector<SseEvent> tool_turn_events() {
   };
 }
 
+std::vector<SseEvent> openai_text_turn_events() {
+  return {
+      {"response.output_item.added",
+       R"({"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","status":"in_progress","role":"assistant","content":[]},"sequence_number":1})"},
+      {"response.output_text.delta",
+       R"({"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"openai","sequence_number":2})"},
+      {"response.output_text.delta",
+       R"({"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":" ok","sequence_number":3})"},
+      {"response.completed",
+       R"({"type":"response.completed","response":{"id":"resp_1","object":"response","status":"completed","model":"gpt-main","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"openai ok"}]}],"usage":{"input_tokens":5,"output_tokens":3}},"sequence_number":4})"},
+  };
+}
+
 }  // namespace
 
 TEST_CASE("protocol transport factory sends Anthropic Messages bodies", "[unit][provider][protocol]") {
@@ -531,10 +544,10 @@ TEST_CASE("protocol transport system keeps the body path when the transport cann
   REQUIRE(sink.log == std::vector<std::string>{"done"});
 }
 
-TEST_CASE("protocol transport system keeps OpenAI body-only even when streaming is available",
+TEST_CASE("protocol transport system streams OpenAI Responses deltas when streaming is available",
           "[unit][provider][protocol][sse]") {
   StreamingTransport transport;
-  transport.body_json = openai_response().body_json;
+  transport.events = openai_text_turn_events();
   provider::ProtocolTransportAdapterFactory factory{transport, provider::ProtocolKind::openai_responses};
   auto credentials = credential_target(provider::ProtocolKind::openai_responses);
   auto route = provider::Route{.primary = credentials.target.profile.target, .fallbacks = {}};
@@ -547,11 +560,13 @@ TEST_CASE("protocol transport system keeps OpenAI body-only even when streaming 
 
     REQUIRE(response.has_value());
     REQUIRE(std::get<core::TextContent>(response->blocks.front()).text == "openai ok");
+    REQUIRE(response->usage.output_tokens == 3);
   });
 
-  REQUIRE(transport.streaming_requests.empty());
-  REQUIRE(transport.body_requests.size() == 1);
-  REQUIRE(json::parse(transport.body_requests.front().body_json).at("stream") == false);
+  REQUIRE(transport.streaming_requests.size() == 1);
+  REQUIRE(transport.body_requests.empty());
+  REQUIRE(json::parse(transport.streaming_requests.front().body_json).at("stream") == true);
+  REQUIRE(sink.log == std::vector<std::string>{"text:openai", "text: ok", "done"});
 }
 
 TEST_CASE("protocol transport system maps a streaming HTTP error", "[unit][provider][protocol][sse]") {

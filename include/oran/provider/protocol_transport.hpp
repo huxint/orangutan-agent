@@ -94,11 +94,11 @@ struct ProtocolTransportAdapterFactoryOptions {
   std::string anthropic_version{"2023-06-01"};
 };
 
-/// ProtocolAdapterFactory backed by an injected body transport.
+/// ProtocolAdapterFactory backed by an injected HTTP-shaped transport.
 ///
-/// The current implementation forces non-streaming vendor requests so the
-/// transport can return one JSON response body. SSE streaming remains a later
-/// concrete transport slice.
+/// The factory uses the body path by default and switches to `send_streaming`
+/// for protocols with a streaming decoder when `Request::stream` is set and
+/// the transport advertises `supports_streaming()`.
 class ProtocolTransportAdapterFactory final : public ProtocolAdapterFactory {
 public:
   ProtocolTransportAdapterFactory(ProtocolTransport& transport,

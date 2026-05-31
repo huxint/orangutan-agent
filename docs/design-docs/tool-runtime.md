@@ -921,8 +921,8 @@ Current and future policy:
   `core::ToolResultContent`, and `provider::make_protocol_request` maps those
   bytes into Anthropic Messages `tool_result.content[]` or serialized OpenAI
   Responses `function_call_output.output` while preserving text-only fallback
-  behavior. Slices 108-109 add response decoding and an injected body-response
-  transport factory seam for Anthropic/OpenAI systems, slice 110 adds the
+  behavior. Slices 108-109 add response decoding and an injected
+  `ProtocolTransport` factory seam for Anthropic/OpenAI systems, slice 110 adds the
   `oran-http` body client, slice 111 adds the bootstrap-owned
   `http::Client`-backed `ProtocolTransport` adapter, and slice 112 wires that
   backend into configured-route `bootstrap::run`. Gemini/custom mappings and

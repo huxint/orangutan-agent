@@ -4,6 +4,7 @@
 
 #include <expected>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -14,6 +15,7 @@
 #include <oran/provider/protocol_response.hpp>
 
 #include "_impl/anthropic_sse_decoder.hpp"
+#include "_impl/openai_responses_sse_decoder.hpp"
 
 namespace orangutan::provider {
 namespace {
@@ -137,12 +139,12 @@ public:
       co_return std::unexpected(std::move(valid).error());
     }
 
-    // Stream only when the caller asked for it, this is the Anthropic Messages
-    // protocol, and the injected transport actually implements streaming.
-    // Otherwise force a single non-streaming body response. OpenAI Responses
-    // stays body-only this arc.
+    // Stream only when the caller asked for it, this protocol has an
+    // incremental decoder, and the injected transport actually implements
+    // streaming. Otherwise force a single non-streaming body response.
     const bool stream = request.stream &&
-                        credentials_.target.profile.target.protocol == ProtocolKind::anthropic_messages &&
+                        (credentials_.target.profile.target.protocol == ProtocolKind::anthropic_messages ||
+                         credentials_.target.profile.target.protocol == ProtocolKind::openai_responses) &&
                         transport_->supports_streaming();
     if (stream) {
       co_return co_await send_stream(std::move(request), std::move(route), sink);
@@ -186,11 +188,11 @@ public:
   }
 
 private:
-  // Drive the Anthropic SSE path: send `stream=true`, feed each decoded event
-  // into the incremental decoder (which calls the sink with ordered deltas and
-  // the terminal `on_done`), then return the assembled Response. The decoder
-  // lives in this coroutine frame and outlives every callback because each
-  // event is delivered before `send_streaming` resolves.
+  // Drive the SSE path: send `stream=true`, feed each decoded event into the
+  // protocol-specific incremental decoder (which calls the sink with ordered
+  // deltas and the terminal `on_done`), then return the assembled Response.
+  // The decoder lives in this coroutine frame and outlives every callback
+  // because each event is delivered before `send_streaming` resolves.
   [[nodiscard]] async::Awaitable<core::Result<Response>>
   send_stream(Request request, Route route, EventSink* sink) const {
     request.stream = true;
@@ -199,7 +201,14 @@ private:
       co_return std::unexpected(std::move(protocol).error());
     }
 
-    detail::AnthropicSseDecoder decoder{route.primary, sink};
+    const bool openai = route.primary.protocol == ProtocolKind::openai_responses;
+    auto anthropic_decoder = std::optional<detail::AnthropicSseDecoder>{};
+    auto openai_decoder = std::optional<detail::OpenAiResponsesSseDecoder>{};
+    if (openai) {
+      openai_decoder.emplace(route.primary, sink);
+    } else {
+      anthropic_decoder.emplace(route.primary, sink);
+    }
     auto http_response = co_await transport_->send_streaming(
         ProtocolHttpRequest{
             .method = protocol->method,
@@ -207,7 +216,13 @@ private:
             .headers = protocol_headers(credentials_, options_),
             .body_json = std::move(protocol->body_json),
         },
-        [&decoder](std::string_view event, std::string_view data) { decoder.consume(event, data); });
+        [&anthropic_decoder, &openai_decoder](std::string_view event, std::string_view data) {
+          if (openai_decoder.has_value()) {
+            openai_decoder->consume(event, data);
+          } else {
+            anthropic_decoder->consume(event, data);
+          }
+        });
     if (!http_response) {
       co_return std::unexpected(std::move(http_response)
                                     .error()
@@ -220,7 +235,7 @@ private:
       co_return std::unexpected(http_status_error(*http_response, route.primary));
     }
 
-    auto assembled = decoder.result();
+    auto assembled = openai ? openai_decoder->result() : anthropic_decoder->result();
     if (!assembled) {
       co_return std::unexpected(std::move(assembled)
                                     .error()

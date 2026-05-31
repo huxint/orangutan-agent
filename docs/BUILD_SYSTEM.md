@@ -242,8 +242,8 @@ target("orangutan")
 body-response `http::Client` over private libcurl handles; callers pass a
 blocking executor, so production bootstrap can use `async::Runtime::cpu_executor()`
 instead of blocking the main coroutine executor. Slice 111 makes `oran-bootstrap`
-depend on `oran-http` for the explicit `HttpProviderBackend` construction seam.
-Streaming/SSE parser support remains downstream.
+depend on `oran-http` for the explicit `HttpProviderBackend` construction seam;
+slices 121-123 add the SSE parser/client path used by provider streaming.
 
 `oran-provider` is currently the provider-domain + fake-provider +
 execution-runtime + route-resolution + protocol-mapping library. It depends on
@@ -253,8 +253,8 @@ execution-runtime + route-resolution + protocol-mapping library. It depends on
 is registered with `test-provider` and `bench-provider`. Real HTTP/TLS I/O stays
 outside this target: slice 111's `bootstrap::HttpProviderBackend` adapts
 `oran-http::Client` to `provider::ProtocolTransport`, and slice 112 uses that
-backend from configured-route `bootstrap::run`; streaming/SSE remains
-downstream.
+backend from configured-route `bootstrap::run`; slices 121-124 add SSE transport
+and provider streaming decode while preserving that dependency direction.
 
 `oran-bootstrap` depends on `oran-provider` so process startup can preflight the
 configured default provider route before handing prompts to `oran-cli`. It also

@@ -85,10 +85,10 @@ own library, its own tests, its own bench, its own design doc."
 > dispatch seam for concrete factories; slices 107-108 add offline
 > Anthropic/OpenAI Responses request serialization and response decoding, slice
 > 107 preserves structured tool-result bytes from direct dispatch through the
-> provider-facing transcript, slice 109 adds injected body-response
-> Anthropic/OpenAI protocol systems through `ProtocolTransportAdapterFactory`,
-> slice 110 adds the platform `oran-http` body client, and slice 111 adds the
-> bootstrap-owned `HttpProviderBackend` construction seam over that client.
+> provider-facing transcript, slice 109 adds injected Anthropic/OpenAI protocol
+> systems through `ProtocolTransportAdapterFactory`, slice 110 adds the platform
+> `oran-http` body client, and slice 111 adds the bootstrap-owned
+> `HttpProviderBackend` construction seam over that client.
 > Slice 112 switches configured-route `bootstrap::run` to that backend plus
 > `cli::run_async`, so ordinary `--prompt` runs now drive `agent::Loop` through
 > the HTTP-backed provider system. Built-in empty defaults still take the

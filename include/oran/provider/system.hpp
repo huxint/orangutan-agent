@@ -12,8 +12,8 @@
 // The first concrete `System` is `provider::FakeProvider`
 // (`<oran/provider/fake.hpp>`). Protocol-backed systems are constructed
 // through adapter factories such as `ProtocolTransportAdapterFactory`; bootstrap
-// now owns the first `http::Client`-backed construction seam, while streaming
-// remains downstream.
+// owns the first `http::Client`-backed construction seam, and streaming-capable
+// transports surface SSE through the same protocol seam.
 
 #pragma once
 

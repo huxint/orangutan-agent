@@ -1,5 +1,11 @@
 # Feature Release Notes
 
+## 2026-06
+
+| Date | Area | User Impact | Change Summary | History |
+| ---- | ---- | ----------- | -------------- | ------- |
+| 2026-06-01 | openai-responses-sse | Configured-route prompts that use the OpenAI Responses protocol can now stream through the same provider/CLI path as Anthropic, so live terminal rendering is no longer Anthropic-only when the selected transport supports SSE. | Slice 124 adds internal `OpenAiResponsesSseDecoder` beside the Anthropic decoder. It forwards `response.output_text.delta`, reasoning deltas, and function-call argument deltas to the existing `provider::EventSink`, treats terminal `response.completed` / `response.incomplete` / `response.failed` events as the authoritative assembled response by decoding their embedded `response` object through `decode_protocol_response`, and surfaces `error` events as upstream failures. `ProtocolTransportSystem` now streams OpenAI Responses when `request.stream` is true and the injected transport reports `supports_streaming() == true`; otherwise it keeps the body path. Focused validation: `test-provider` 86 cases / 643 assertions. | [history](../histories/2026-06/20260601-0013-openai-responses-sse-streaming.md) |
+
 ## 2026-05
 
 | Date | Area | User Impact | Change Summary | History |

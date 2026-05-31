@@ -7,18 +7,33 @@
 
 ## Snapshot
 
-- **Slice:** 123 (`xmake run orangutan` reports slice 114; binary slice tag
+- **Slice:** 124 (`xmake run orangutan` reports slice 114; binary slice tag
   bumps only land when a behavior change touches the bootstrap entry banner)
 - **Last completed history:**
-  [`histories/2026-05/20260530-1519-cli-streaming-render.md`](histories/2026-05/20260530-1519-cli-streaming-render.md)
+  [`histories/2026-06/20260601-0013-openai-responses-sse-streaming.md`](histories/2026-06/20260601-0013-openai-responses-sse-streaming.md)
 - **Active exec-plan:** none — the provider-SSE-streaming arc (slices 121–123)
   is complete and moved to
   [`exec-plans/completed/2026-05-30-provider-sse-streaming.md`](exec-plans/completed/2026-05-30-provider-sse-streaming.md);
-  the OpenAI Responses SSE decoder (Slice 124) is a noted post-arc follow-up,
-  not an active plan.
-- **Next intended slice:** no committed plan. The arc's optional follow-up is
-  Slice 124 — the OpenAI Responses SSE decoder mirroring slice 122 — otherwise
-  the next runtime piece per the routing index. Slice 123 (C) just closed the
+  Slice 124 was a single-slice post-arc follow-up and did not require a new
+  active plan.
+- **Next intended slice:** no committed plan. The provider-SSE-streaming parity
+  follow-up is now complete; the next runtime piece should be selected from the
+  routing index (likely memory ownership on the configured-route loop path, the
+  interactive REPL shell, or provider hooks/usage-cost rollups). Slice 124 adds
+  the provider-side OpenAI Responses SSE decoder:
+  `OpenAiResponsesSseDecoder` lives beside `AnthropicSseDecoder` under
+  `src/oran-provider/_impl/`, consumes OpenAI Responses stream events
+  (`response.output_text.delta`, reasoning deltas,
+  `response.function_call_arguments.*`, terminal `response.completed` /
+  `response.incomplete` / `response.failed`, and `error`), drives the existing
+  `provider::EventSink` callbacks for live output, and decodes the terminal
+  embedded `response` through `decode_protocol_response` so streaming and body
+  paths assemble the same `provider::Response`. `ProtocolTransportSystem` now
+  streams both Anthropic Messages and OpenAI Responses when `request.stream` is
+  set and the injected transport reports `supports_streaming() == true`;
+  otherwise it keeps the existing body path. Focused result: `test-provider`
+  81 / 614 → **86 / 643** (+5 cases, +29 assertions); other buckets were not
+  run for this narrow provider slice. Slice 123 (C) just closed the
   provider-SSE-streaming arc: streaming now runs end-to-end into the binary.
   Bootstrap's `HttpProtocolTransport` overrides `supports_streaming()` → true and
   implements `send_streaming` over `http::Client::send_streaming` (translating
@@ -44,11 +59,13 @@
   support it sends `stream=true` and drives `send_streaming` + the decoder,
   calling the caller's `EventSink` with ordered `on_text_delta` /
   `on_thinking_delta` / `on_tool_start` / `on_tool_delta` / `on_done`; otherwise
-  it keeps the body path (OpenAI Responses stays body-only this arc). The
-  capability gate kept configured-route production body-only through slice 122;
-  slice 123 then overrode `HttpProtocolTransport::supports_streaming()` /
-  `send_streaming`, so the binary now streams and `test-bootstrap`'s localhost
-  round trip asserts `"stream":true`. Retry /
+  it keeps the body path. OpenAI Responses stayed body-only during that arc; the
+  slice 124 follow-up adds its SSE decoder and lifts the same transport gate for
+  OpenAI Responses. The capability gate kept configured-route production
+  body-only through slice 122; slice 123 then overrode
+  `HttpProtocolTransport::supports_streaming()` / `send_streaming`, so the binary
+  now streams and `test-bootstrap`'s localhost round trip asserts `"stream":true`.
+  Retry /
   fallback stream-suppression needed no new code: the slice-97
   `execution::Runtime` per-attempt `AttemptSink` already retries a pre-first-byte
   failure and returns `stream_already_emitted` once a delta has fired (both arms
@@ -331,9 +348,9 @@
   slice 108's response decoder, injects provider API-key headers, maps HTTP
   status classes into provider error categories, rejects mismatched selected
   route profile/model/protocol values before sending, and remains
-  offline-testable through a fake transport. The current seam is body-response
-  only and forces `request.stream=false`; SSE streaming and
-  `oran-http`/libcurl I/O remained downstream. `bootstrap::run` still does not
+  offline-testable through a fake transport. That slice's seam was body-response
+  only and forced `request.stream=false`; SSE streaming and `oran-http`/libcurl
+  I/O remained downstream at that point. `bootstrap::run` still does not
   read provider credentials, construct adapters, allocate a concrete transport,
   send a network request, or start `agent::Loop` for ordinary binary prompts.
   Focused result: `test-provider` 63 cases / 512 assertions. Slice 108 adds

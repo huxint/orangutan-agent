@@ -38,7 +38,7 @@ struct Response {
 > **Status (slice 112, 2026-05-26):** `oran-provider` exists as the
 > provider-domain, prompt-cache-hint, fake-provider, route-resolver, first
 > execution wrapper, offline protocol request/response serialization library,
-> and injected body-response protocol transport seam.
+> and injected protocol transport seam.
 > `oran-http` now also exists as the platform HTTP/TLS target: `<oran/http.hpp>`
 > exports `http::Header`, `http::BodyRequest`, `http::BodyResponse`, and
 > `http::Client`, a pimpl-backed libcurl body client whose constructor receives
@@ -106,8 +106,8 @@ struct Response {
 > resolved credential targets, composes the request serializer with the response
 > decoder, injects provider API-key headers, maps HTTP status classes into
 > provider error categories, rejects route profile/model/protocol mismatches
-> before sending, and forces `request.stream=false` while the injected transport
-> returns one JSON body. The
+> before sending, and uses the body path unless `request.stream` is set and the
+> injected transport supports streaming. The
 > resolvers and plan report `Error::config` for missing profile references,
 > unknown provider spellings, unknown explicit protocol spellings, or malformed
 > adapter endpoint metadata. Slice 111 adds bootstrap's
@@ -133,7 +133,14 @@ struct Response {
 > capability gate, and the Anthropic `ProtocolTransportSystem` now honoring
 > `request.stream` — it drives `send_streaming` + the decoder when the caller
 > asks to stream and the transport advertises support, otherwise it keeps the
-> single-body path (OpenAI Responses stays body-only this arc). Retry/fallback
+> single-body path. Slice 124 adds the matching OpenAI Responses streaming
+> decoder: `OpenAiResponsesSseDecoder` consumes OpenAI Responses SSE event
+> names (`response.output_text.delta`, reasoning deltas,
+> `response.function_call_arguments.*`, terminal `response.completed` /
+> `response.incomplete` / `response.failed`, and `error`), forwards live deltas
+> through the same `EventSink`, and decodes the terminal embedded `response`
+> through `decode_protocol_response` so streaming and body paths share one
+> authoritative assembler. Retry/fallback
 > stream-suppression needs no new code: the slice-97 `execution::Runtime`
 > already wraps the caller's `EventSink` in a per-attempt `AttemptSink`, so a
 > pre-first-byte failure retries while a post-first-byte failure returns
@@ -143,8 +150,9 @@ struct Response {
 > `cli::StreamingPromptSink` renders the provider's `EventSink` deltas live to the
 > terminal while `AgentPromptRunner` wires it into non-quiet streaming runs — so
 > ordinary configured-route `orangutan --prompt` over Anthropic now streams tokens
-> character-by-character (spec 0001 AC3). Provider hooks and usage/cost rollups
-> remain planned.
+> character-by-character (spec 0001 AC3), and the same transport capability now
+> lets configured-route OpenAI Responses prompts stream through the provider
+> boundary when selected. Provider hooks and usage/cost rollups remain planned.
 
 ## Layered Implementation
 
@@ -247,11 +255,10 @@ returns a `provider::System` that routes single-target execution calls by
 call before HTTP transport; slice 108 adds the paired
 `provider::decode_protocol_response(body_json, target)` seam. Slice 109 adds
 `ProtocolTransportAdapterFactory`, which composes those mappers over an injected
-`ProtocolTransport` to build non-streaming Anthropic/OpenAI body-response
-systems without pulling libcurl into `oran-provider`. Slice 110 adds the
-platform `oran-http::Client` body transport, and slice 111 adds bootstrap's
-`HttpProviderBackend`, which adapts that client to `ProtocolTransport`,
-resolves credentials, registers the built-in transport factories, and returns a
+`ProtocolTransport` without pulling libcurl into `oran-provider`. Slice 110 adds
+the platform `oran-http::Client` body transport, and slice 111 adds bootstrap's
+`HttpProviderBackend`, which adapts that client to `ProtocolTransport`, resolves
+credentials, registers the built-in transport factories, and returns a
 profile-routed `provider::System` plus route for `AgentPromptRunner` callers.
 Slice 112 consumes that backend in configured-route `bootstrap::run` before
 `cli::run_async`.
@@ -364,21 +371,27 @@ provider decoder/System (slice 122) to the binary + terminal (slice 123).
   status + headers and an **empty** body (events already delivered); any other
   response returns the body for the caller to decode through the same
   HTTP-status→category path the body `send` uses.
-- **Decoder.** `AnthropicSseDecoder` (in `src/oran-provider/_impl/`, `nlohmann`
-  private to its `.cpp`) is the stateful sibling of `decode_protocol_response`.
-  It runs a strict state machine — `message_start`→usage/model;
+- **Decoders.** `AnthropicSseDecoder` and `OpenAiResponsesSseDecoder` (both in
+  `src/oran-provider/_impl/`, `nlohmann` private to their `.cpp`s) are the
+  stateful siblings of `decode_protocol_response`. Anthropic runs a strict
+  state machine — `message_start`→usage/model;
   `content_block_start`→open text/thinking/tool_use (+`on_tool_start`);
   `content_block_delta`→append + `on_text_delta`/`on_thinking_delta`/`on_tool_delta`;
   `content_block_stop`→finalize (parse accumulated tool-input JSON);
   `message_delta`→stop_reason + output usage; `message_stop`→assemble `Response`
-  + `on_done`; `ping` ignored; an `error` event or malformed payload records the
-  first decode error. The assembled `Response` is byte-for-byte the one the body
-  decoder produces for the equivalent non-streaming body.
-- **System.** The Anthropic `ProtocolTransportSystem::send` honors
-  `request.stream`: when set (and the transport supports streaming) it sends
-  `stream=true`, drives `send_streaming` + the decoder, and returns the assembled
-  `Response`; otherwise it forces `stream=false` and takes the body path. OpenAI
-  Responses stays body-only until its own SSE decoder follow-up.
+  + `on_done`; `ping` ignored. OpenAI forwards
+  `response.output_text.delta`, reasoning deltas, and
+  `response.function_call_arguments.*` to the same sink methods, then treats the
+  terminal `response.completed` / `response.incomplete` / `response.failed`
+  embedded `response` object as authoritative and decodes it through the body
+  decoder. In both cases an `error` event or malformed payload records the first
+  decode error. The assembled `Response` is byte-for-byte the one the body
+  decoder produces for the equivalent non-streaming response.
+- **System.** `ProtocolTransportSystem::send` honors `request.stream` for
+  Anthropic Messages and OpenAI Responses: when set (and the transport supports
+  streaming) it sends `stream=true`, drives `send_streaming` + the relevant
+  decoder, and returns the assembled `Response`; otherwise it forces
+  `stream=false` and takes the body path.
 - **Retry/fallback suppression — already sufficient (slice 97).** The streaming
   System simply calls the `EventSink*` it is handed, which `execution::Runtime`
   has already wrapped in a per-attempt `AttemptSink`. A pre-first-byte failure
@@ -388,7 +401,8 @@ provider decoder/System (slice 122) to the binary + terminal (slice 123).
   callers never see duplicate stream bytes. No streaming-specific suppression
   code exists — the slice-97 machinery covers it.
 
-**Slice 123** wires the path end-to-end into the binary. Bootstrap's
+**Slices 123-124** wire the path end-to-end into the binary for both shipped
+protocol families. Bootstrap's
 `HttpProtocolTransport` overrides `supports_streaming()` to `true` and implements
 `send_streaming` over `http::Client::send_streaming`, translating each
 `http::SseEvent` into the provider `ProtocolSseCallback`. `cli::StreamingPromptSink`
@@ -400,7 +414,8 @@ the assembled `PromptRunResult::text` once the answer streamed live so the CLI d
 not print it twice. Ordinary configured-route `orangutan --prompt` over Anthropic
 now renders tokens character-by-character (spec 0001 AC3); a mid-stream Ctrl-C
 surfaces as `Error::cancelled` with `cancellation_phase=provider` (spec 0018,
-reused). The OpenAI Responses SSE decoder remains the noted post-arc follow-up.
+reused). Slice 124 adds the OpenAI Responses SSE decoder and lifts the provider
+gate so OpenAI Responses can use the same streaming transport when configured.
 
 ## Caching
 
@@ -480,11 +495,12 @@ that resolves the named API-key environment variables for concrete factories.
 the credential bundle plus registered protocol factories and returns a
 profile-routed `provider::System`. Slice 109's
 `ProtocolTransportAdapterFactory` can now supply Anthropic Messages and OpenAI
-Responses backends over an injected body-response `ProtocolTransport`; slice
-110 adds `oran-http::Client` for real HTTP/TLS body I/O, and slice 111's
+Responses backends over an injected `ProtocolTransport`; slice 110 adds
+`oran-http::Client` for real HTTP/TLS body I/O, and slice 111's
 `bootstrap::HttpProviderBackend` binds that client into `ProtocolTransport` for
 explicit backend construction. Slice 112 uses that backend for configured-route
-ordinary binary prompts. SSE streaming and provider hooks still land in later
+ordinary binary prompts. Slices 121-124 add the HTTP SSE transport, provider
+streaming decoders, and CLI streaming sink; provider hooks still land in later
 slices. Slices 107-108 add offline request-body
 serialization and response-body decoding for Anthropic Messages and OpenAI
 Responses before that transport step.
