@@ -503,6 +503,55 @@ TEST_CASE("AgentPromptRunner feeds tool.search results back into per-session sta
   });
 }
 
+TEST_CASE("AgentPromptRunner renders memory framing once per prompt before loop iterations",
+          "[unit][bootstrap][prompt_runner][memory]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-memory-framing"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false);
+    write_file(temp.path() / "note.txt", "memory framing fixture\n");
+
+    RecordingProvider recording{{
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "read-1",
+                .name = "file.read",
+                .input_json = R"({"path":"note.txt"})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = provider::Usage{.input_tokens = 1,
+                                     .output_tokens = 1,
+                                     .cache_creation_tokens = 0,
+                                     .cache_read_tokens = 0,
+                                     .cost_estimate = std::nullopt},
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        },
+        text_response("done"),
+    }};
+
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.memory_framing = "memory: stable";
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto result =
+        co_await (*runner)->run_prompt(cli::PromptRunRequest{.prompt = "read", .mode = cli::CliMode::single_shot});
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "done");
+
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 2);
+    REQUIRE(requests[0].system_prompt.has_value());
+    REQUIRE(requests[1].system_prompt.has_value());
+    REQUIRE(requests[0].system_prompt->contains("memory: stable"));
+    REQUIRE(requests[1].system_prompt->contains("memory: stable"));
+    REQUIRE(*requests[0].system_prompt == *requests[1].system_prompt);
+    REQUIRE((*runner)->memory_framing_renders() == 1);
+  });
+}
+
 TEST_CASE("AgentPromptRunner binds the CLI approval sink for builtin tool dispatch",
           "[unit][bootstrap][prompt_runner][approval]") {
   TempDir temp{"oran-bootstrap-prompt-runner-approval"};

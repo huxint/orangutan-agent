@@ -197,8 +197,14 @@ promotion side effect that the first agent loop will reuse.
   worth it (Anthropic allows up to 4). Breakpoints land at section
   boundaries selected by the builder; the breakpoint set is
   deterministic per (model, route, agent).
-- **Memory framing renderer** populates section 5. Pure function of
-  `memory::Framing` per the rule.
+- **Memory framing renderer** populates section 5.
+  **Status (slice 133, 2026-06-01):** `oran-memory` now exports
+  `memory::Framing` / `memory::FramingOwner`, a minimal once-per-turn owner
+  for already-materialized section-5 bytes. `AgentPromptRunner` renders it
+  before entering `agent::Loop`, and `prompt::Builder` continues to consume the
+  stable `BuilderInputs::memory_framing` string. Future long-term recall can
+  fill `memory::Framing` without changing the builder or re-querying inside
+  provider/tool iterations.
 - **Skill catalog renderer** populates section 4. Activating a skill
   shifts section 4, never section 1.
 - **Active-set hot reload**. `runtime.prompt.active_tools` honours

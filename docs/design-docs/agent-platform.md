@@ -149,7 +149,10 @@ The agent loop owns:
   activated skill bodies shift this section, never section (1). See
   [`../product-specs/0009-skills.md`](../product-specs/0009-skills.md).
 - **Memory framing renderer** — section (5). Pure function of memory state;
-  no per-iteration mutation. See [`memory-system.md`](memory-system.md).
+  no per-iteration mutation. Slice 133 adds `memory::FramingOwner` in
+  `oran-memory` and has `AgentPromptRunner` render it once before calling the
+  loop; the loop still receives stable `RunTurnInputs::memory_framing` bytes.
+  See [`memory-system.md`](memory-system.md).
 - **Conversation tail assembler** — section (7), the only intentionally
   dynamic block. Cache breakpoint sits between (6) and (7).
 

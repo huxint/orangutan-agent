@@ -123,6 +123,12 @@ memory search results without re-querying inside each ReAct iteration.
    persistence is stable; long-term recall remains outside this plan unless the
    docs are amended.
 
+## Completion
+
+Completed on 2026-06-01 with slice 133. The plan moved from
+`docs/exec-plans/active/` to `docs/exec-plans/completed/` in the same slice that
+landed the prompt memory framing owner.
+
 ## Validation
 
 - Commands:
@@ -173,7 +179,13 @@ memory search results without re-querying inside each ReAct iteration.
   owned session store before each prompt, appends only the successful transcript
   suffix afterward, and falls back to in-process transcripts when session
   memory is disabled. Focused validation: `test-bootstrap` 82 / 452.
-- [ ] Refresh docs/status/quality/history/release notes in every slice.
+- [x] 2026-06-01 06:24 +0800: Landed milestone 5 as slice 133:
+  `memory::FramingOwner` now owns the section-5 prompt memory bytes,
+  `AgentPromptRunner` renders them once before entering `agent::Loop`, and
+  long-term recall stays out of scope. Focused validation: `test-memory`
+  8 / 559 and `test-bootstrap` 83 / 464.
+- [x] 2026-06-01 06:24 +0800: Completed this active plan and moved it to
+  `docs/exec-plans/completed/`.
 
 ## Decision Log
 
@@ -189,6 +201,10 @@ memory search results without re-querying inside each ReAct iteration.
 - 2026-06-01: Assemble sessions separately from audit/trace. `sessions.db` is a
   product data store, not audit evidence, and the memory design doc explicitly
   splits database files to avoid contention.
+- 2026-06-01: Keep memory framing outside `agent::Loop`. The prompt builder
+  already accepts a stable section-5 string and may rebuild prompt bytes across
+  provider/tool iterations, so the memory owner lives in `oran-memory` and the
+  bootstrap runner renders it once before loop entry.
 
 ## Linked Artifacts
 
@@ -200,6 +216,10 @@ memory search results without re-querying inside each ReAct iteration.
 - History entries:
   - `docs/histories/2026-06/20260601-0446-memory-session-store.md`
   - `docs/histories/2026-06/20260601-0513-runtime-session-memory.md`
+  - `docs/histories/2026-06/20260601-0536-runner-session-persistence.md`
+  - `docs/histories/2026-06/20260601-0622-prompt-memory-framing.md`
 - Release notes:
   - `docs/releases/feature-release-notes.md` (`memory-session-store`)
   - `docs/releases/feature-release-notes.md` (`runtime-session-memory`)
+  - `docs/releases/feature-release-notes.md` (`runner-session-persistence`)
+  - `docs/releases/feature-release-notes.md` (`prompt-memory-framing`)

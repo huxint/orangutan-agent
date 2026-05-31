@@ -93,6 +93,9 @@ public:
   /// observed `tool.search` tool_result, including ones that returned no
   /// deferred matches.
   [[nodiscard]] std::size_t tool_search_observations_recorded() const noexcept;
+  /// Count of prompt memory-framing renders performed at the runner boundary.
+  /// A multi-iteration ReAct turn increments this once, before `agent::Loop`.
+  [[nodiscard]] std::size_t memory_framing_renders() const noexcept;
   [[nodiscard]] const provider::Route& route() const noexcept;
 
   class Impl;

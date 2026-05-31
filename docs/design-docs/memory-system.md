@@ -27,7 +27,16 @@ Built up while a single ReAct turn executes. It is the place where:
 Backed by in-process state, owned by `agent::Loop`. Cleared at turn end.
 No SQLite involvement.
 
-API (no public stand-alone trait — it's a private member of `agent::Loop`):
+The section-5 prompt memory bytes have a small public owner in `oran-memory`:
+`memory::FramingOwner` holds a `memory::Framing { section_text }` value and
+renders it at the runner boundary once per prompt. Today the value is supplied
+as already-materialized text; future long-term recall can populate the same
+value before the loop starts. `AgentPromptRunner` copies that rendered string
+into `RunTurnInputs::memory_framing`, so `agent::Loop` may rebuild
+`prompt::Builder` sections across provider/tool iterations without re-querying
+memory.
+
+Loop-local working state remains private to `agent::Loop`:
 
 ```cpp
 class Loop {
@@ -57,7 +66,7 @@ Storage foundation status: `oran-storage::SessionRepository` implements the
 `content_json` and `metadata_json` as opaque strings but types `role` as
 `core::Role` at the API boundary.
 
-Memory wrapper status (slice 130+132): `oran-memory::session::Store` is now the
+Memory wrapper status (slice 130+133): `oran-memory::session::Store` is now the
 typed memory-layer owner over `SessionRepository`, and `RuntimeAssembly` now owns
 the configured-route sessions DB pool/repository/store. The wrapper serializes
 `core::Message` / `core::Content` privately in `src/oran-memory/session.cpp`,
@@ -70,7 +79,9 @@ exposes `session_store()`, and lets built-in no-route startup disable the store 
 fresh deterministic CLI runs do not create session state. `AgentPromptRunner`
 now loads persisted history before each prompt and appends the successful
 transcript suffix back through that owner when session memory is enabled; the
-in-process transcript remains the fallback when it is not.
+in-process transcript remains the fallback when it is not. `memory::FramingOwner`
+separately owns prompt section 5 and is rendered once by `AgentPromptRunner`
+before each loop turn.
 
 ```cpp
 // include/oran/memory/session.hpp

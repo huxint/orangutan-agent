@@ -112,7 +112,11 @@ audit, broker, hook, output-cap, trace, and session-memory services from the ass
 When the assembly exposes `session_store()`, the runner loads the persisted history for
 the current `session_id` + `agent_key` before each prompt and appends only the new
 successful transcript suffix afterward. The in-process transcript cache remains the
-fallback when session memory is disabled. After every successful turn the runner walks
+fallback when session memory is disabled. The runner also owns a
+`memory::FramingOwner` for prompt section 5 and renders it exactly once before
+calling `agent::Loop`, so multi-iteration provider/tool turns reuse stable
+memory framing bytes without moving memory reads into the loop. After every
+successful turn the runner walks
 the new transcript suffix and feeds each tool result back through
 `agent::SessionState::observe_tool_output(...)` so the next turn's
 `promotion_snapshot(...)` sees deferred-tool promotions; the count of observed
@@ -205,7 +209,7 @@ permission-decision and `hook_publish` rows are readable in the same output.
 
 ## Next Steps
 
-- Introduce the once-per-turn memory framing owner after session persistence is
-  stable.
+- Add the first loop-owned stable system-preamble template and the prompt-design
+  grep follow-up.
 - Bind configured hook sinks to the assembly-owned bus once the hook sink models land.
 - Add CLI line editor/history on top of the interactive REPL handoff.

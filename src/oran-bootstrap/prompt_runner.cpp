@@ -187,7 +187,8 @@ public:
         session_id_text_{format_session_id(session_id_)}, mode_{options.mode}, scope_key_{std::move(options.scope_key)},
         agent_key_{std::move(options.agent_key)}, identity_{std::move(options.identity)},
         origin_{std::move(options.origin)}, system_preamble_{std::move(options.system_preamble)},
-        skills_catalog_{std::move(options.skills_catalog)}, memory_framing_{std::move(options.memory_framing)},
+        skills_catalog_{std::move(options.skills_catalog)},
+        memory_framing_{memory::Framing{.section_text = std::move(options.memory_framing)}},
         per_agent_overlay_{std::move(options.per_agent_overlay)},
         trace_context_json_{std::move(options.trace_context_json)}, tool_choice_{std::move(options.tool_choice)},
         max_tokens_{options.max_tokens}, thinking_budget_{options.thinking_budget}, retry_{options.retry},
@@ -229,6 +230,7 @@ public:
 
     const auto prev_transcript_size = conversation_tail.size();
     conversation_tail.push_back(core::Message::user_text(std::move(request.prompt)));
+    const auto memory_framing = std::string{memory_framing_.render_once()};
 
     auto promotion_snapshot = session_state_.promotion_snapshot(core::time::now_utc());
     auto dispatch_context = tool::DispatchContext{
@@ -252,7 +254,7 @@ public:
         .active_tools = active_tools_,
         .promoted_tools = std::span<const std::string>{promotion_snapshot.tool_names},
         .skills_catalog = skills_catalog_,
-        .memory_framing = memory_framing_,
+        .memory_framing = memory_framing,
         .per_agent_overlay = per_agent_overlay_,
         .conversation_tail = std::span<const core::Message>{conversation_tail},
         .tool_choice = tool_choice_,
@@ -326,6 +328,10 @@ public:
 
   [[nodiscard]] std::size_t tool_search_observations_recorded() const noexcept {
     return tool_search_observations_;
+  }
+
+  [[nodiscard]] std::size_t memory_framing_renders() const noexcept {
+    return memory_framing_.stats().renders;
   }
 
   [[nodiscard]] const provider::Route& route() const noexcept {
@@ -419,7 +425,7 @@ private:
   std::string origin_;
   std::string system_preamble_;
   std::string skills_catalog_;
-  std::string memory_framing_;
+  memory::FramingOwner memory_framing_;
   std::string per_agent_overlay_;
   std::string trace_context_json_;
   std::optional<std::string> tool_choice_{};
@@ -498,6 +504,10 @@ std::size_t AgentPromptRunner::approval_prompts_rendered() const noexcept {
 
 std::size_t AgentPromptRunner::tool_search_observations_recorded() const noexcept {
   return impl_->tool_search_observations_recorded();
+}
+
+std::size_t AgentPromptRunner::memory_framing_renders() const noexcept {
+  return impl_->memory_framing_renders();
 }
 
 const provider::Route& AgentPromptRunner::route() const noexcept {

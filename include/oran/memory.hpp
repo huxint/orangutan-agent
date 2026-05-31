@@ -2,4 +2,5 @@
 
 #pragma once
 
+#include <oran/memory/framing.hpp>
 #include <oran/memory/session.hpp>

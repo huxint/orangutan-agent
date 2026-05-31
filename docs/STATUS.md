@@ -7,19 +7,22 @@
 
 ## Snapshot
 
-- **Slice:** 132 (`xmake run orangutan` reports slice 132)
+- **Slice:** 133 (`xmake run orangutan` reports slice 133)
 - **Last completed history:**
-  [`histories/2026-06/20260601-0536-runner-session-persistence.md`](histories/2026-06/20260601-0536-runner-session-persistence.md)
-- **Active exec-plan:**
-  [`exec-plans/active/2026-06-01-memory-runtime-v1.md`](exec-plans/active/2026-06-01-memory-runtime-v1.md)
-  — session memory is the active runtime arc. It now has the typed
-  `oran-memory::session::Store` owner, a bootstrap-owned separate `sessions.db`,
-  and configured-route `AgentPromptRunner` load/append persistence.
-- **Next intended slice:** finish the active memory plan with the narrow prompt
-  memory-slot follow-up: introduce a once-per-turn owner for future long-term
-  memory framing without adding FTS5/vector search, MEMORY.md mirror, memory
-  tools, or CLI session commands yet. Built-in no-route startup stays
-  deterministic and does not require provider credentials or `sessions.db`.
+  [`histories/2026-06/20260601-0622-prompt-memory-framing.md`](histories/2026-06/20260601-0622-prompt-memory-framing.md)
+- **Active exec-plan:** none — the memory runtime v1 arc completed in
+  [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
+- **Next intended slice:** continue the prompt-runtime arc with the first
+  loop-owned stable system-preamble template, including the prompt-design grep
+  follow-up, without moving tool catalogs, memory framing, skills, or
+  conversation-tail bytes into the preamble.
+  Slice 133 finished the memory runtime v1 plan by adding
+  `memory::FramingOwner` as the minimal once-per-turn section-5 owner. It keeps
+  `prompt::Builder` unchanged, lets future long-term recall fill the same
+  `memory::Framing` value, and has `AgentPromptRunner` render the memory slot
+  once before `agent::Loop` even when the provider/tool path needs multiple
+  iterations. Focused result: `test-memory` **8 cases / 559 assertions** and
+  `test-bootstrap` **83 cases / 464 assertions**.
   Slice 132 landed `AgentPromptRunner` load/append persistence through
   `RuntimeAssembly::session_store()` before each prompt and kept the previous
   in-process transcript behavior as the fallback when session memory is
@@ -1254,13 +1257,13 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 37 cases / 270 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 30 cases / 207 assertions.
-- `oran-memory`: 5 cases / 550 assertions.
+- `oran-memory`: 8 cases / 559 assertions.
 - `oran-tool`: 178 cases / 1838 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 52 cases / 10705 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 82 cases / 452 assertions.
+- `oran-bootstrap`: 83 cases / 464 assertions.
 
 ## Open Tech-Debt Rows
 

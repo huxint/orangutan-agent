@@ -26,6 +26,10 @@ operators can reason about retention, scope, and visibility.
   each prompt and appends only the successful transcript suffix afterward, while
   the in-process transcript remains the fallback when session memory is
   disabled.
+- Prompt memory framing shipped in slice 133: `memory::FramingOwner` owns the
+  section-5 memory framing value and `AgentPromptRunner` renders it once before
+  `agent::Loop`, leaving long-term recall/search out of v1 while preserving the
+  once-per-turn boundary.
 - `oran-memory::longterm::Runtime` with `Fts5Backend` (default).
 - `MemoryRecord` kinds: `user`, `feedback`, `project`, `reference`.
 - Decay policy applied by a periodic job (`oran-automation`).
