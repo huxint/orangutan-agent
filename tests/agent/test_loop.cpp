@@ -101,6 +101,27 @@ provider::Route fallback_route() {
   };
 }
 
+provider::Route priced_route() {
+  return provider::Route{
+      .primary =
+          provider::ModelTarget{
+              .profile = "priced",
+              .model = "priced-1",
+              .protocol = provider::ProtocolKind::anthropic_messages,
+              .thinking_budget = std::nullopt,
+              .cache = std::nullopt,
+              .pricing =
+                  provider::ProviderPricing{
+                      .input_per_million_usd = 1.0,
+                      .output_per_million_usd = 2.0,
+                      .cache_creation_per_million_usd = 3.0,
+                      .cache_read_per_million_usd = 0.5,
+                  },
+          },
+      .fallbacks = {},
+  };
+}
+
 core::ToolDef tool_def(std::string name, std::string description, bool deferred = false) {
   return core::ToolDef{
       .name = std::move(name),
@@ -578,6 +599,100 @@ TEST_CASE("Loop publishes provider error hooks", "[unit][agent][loop][hooks]") {
     REQUIRE(error->retryable);
     REQUIRE(error->finished_at >= error->started_at);
     REQUIRE(error->duration.count() >= 0);
+  });
+}
+
+TEST_CASE("Loop computes missing provider usage cost from route pricing", "[unit][agent][loop][trace]") {
+  TempDb db{"oran-agent-loop-priced-trace"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_trace_pool(io, db);
+    storage::TraceRepository trace{pool};
+    auto migrated = co_await trace.migrate();
+    REQUIRE(migrated.has_value());
+
+    std::vector<provider::ScriptedTurn> plan;
+    plan.push_back(provider::ScriptedTurn{
+        .response =
+            provider::Response{
+                .blocks = {core::TextContent{.text = "priced"}},
+                .stop_reason = core::StopReason::end_turn,
+                .usage = provider::Usage{.input_tokens = 1'000'000,
+                                         .output_tokens = 500'000,
+                                         .cache_creation_tokens = 250'000,
+                                         .cache_read_tokens = 100'000,
+                                         .cost_estimate = std::nullopt},
+                .model_used = std::nullopt,
+                .route_profile_used = std::nullopt,
+            },
+        .deltas = {},
+        .error = std::nullopt,
+        .latency = {},
+    });
+    provider::FakeProvider fake{std::move(plan)};
+    agent::Loop loop{fake, priced_route()};
+    hook::Bus bus;
+    std::vector<ProviderHookCapture> captures;
+    auto sink = provider_capture_sink(captures);
+    bus.bind(sink, {hook::Event::provider_response});
+
+    const auto catalog = loop_catalog();
+    const std::vector<core::Message> tail{core::Message::user_text("price this")};
+    auto inputs = base_inputs(catalog, tail);
+    inputs.bus = &bus;
+    inputs.turn_id = turn_id_with(0x51);
+    inputs.trace = agent::TraceContext{
+        .repository = &trace,
+        .session_id = turn_id_with(0x80),
+        .agent_key = "coder",
+        .origin = "cli",
+    };
+    auto result = co_await loop.run_turn(inputs);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->usage.cost_estimate == std::optional<double>{2.8});
+    REQUIRE(captures.size() == 1);
+    const auto* response = std::get_if<hook::ProviderResponsePayload>(&captures[0].payload);
+    REQUIRE(response != nullptr);
+    REQUIRE(response->usage.cost_estimate == std::optional<double>{2.8});
+
+    auto row = co_await trace.get_turn(turn_id_with(0x51));
+    REQUIRE(row.has_value());
+    REQUIRE(row->has_value());
+    REQUIRE((*row)->route_profile == "priced");
+    REQUIRE((*row)->route_model == "priced-1");
+    REQUIRE((*row)->cost_estimate_usd == 2.8);
+  });
+}
+
+TEST_CASE("Loop preserves provider-supplied usage cost over route pricing", "[unit][agent][loop]") {
+  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    std::vector<provider::ScriptedTurn> plan;
+    plan.push_back(provider::ScriptedTurn{
+        .response =
+            provider::Response{
+                .blocks = {core::TextContent{.text = "provider priced"}},
+                .stop_reason = core::StopReason::end_turn,
+                .usage = provider::Usage{.input_tokens = 1'000'000,
+                                         .output_tokens = 1'000'000,
+                                         .cache_creation_tokens = 1'000'000,
+                                         .cache_read_tokens = 1'000'000,
+                                         .cost_estimate = 0.25},
+                .model_used = std::nullopt,
+                .route_profile_used = std::nullopt,
+            },
+        .deltas = {},
+        .error = std::nullopt,
+        .latency = {},
+    });
+    provider::FakeProvider fake{std::move(plan)};
+    agent::Loop loop{fake, priced_route()};
+
+    const auto catalog = loop_catalog();
+    const std::vector<core::Message> tail{core::Message::user_text("price this")};
+    auto result = co_await loop.run_turn(base_inputs(catalog, tail));
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->usage.cost_estimate == std::optional<double>{0.25});
   });
 }
 

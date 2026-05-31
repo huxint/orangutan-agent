@@ -45,18 +45,35 @@ enum class ProtocolKind : std::uint8_t {
   custom_openai_compatible,
 };
 
+/// USD pricing per one million provider tokens. Input and output prices are
+/// independent; cache token prices fall back to input pricing when unset so a
+/// partially specified profile still produces a conservative rollup.
+struct ProviderPricing {
+  std::optional<double> input_per_million_usd{};
+  std::optional<double> output_per_million_usd{};
+  std::optional<double> cache_creation_per_million_usd{};
+  std::optional<double> cache_read_per_million_usd{};
+
+  [[nodiscard]] bool empty() const noexcept {
+    return !input_per_million_usd.has_value() && !output_per_million_usd.has_value() &&
+           !cache_creation_per_million_usd.has_value() && !cache_read_per_million_usd.has_value();
+  }
+
+  friend bool operator==(const ProviderPricing&, const ProviderPricing&) = default;
+};
+
 /// A single (profile, model, protocol) tuple. Profiles live in config and name
 /// the credential + base URL; the model is the vendor identifier; the protocol
 /// is the wire family. The `oran-provider` library carries only enough of this
 /// shape to let the loop pick between primary and fallback targets — heavier
-/// fields (`Capabilities`, headers, cost) land with the first real adapter
-/// slice.
+/// fields (`Capabilities`, headers) land with the first real adapter slice.
 struct ModelTarget {
   std::string profile;
   std::string model;
   ProtocolKind protocol{ProtocolKind::anthropic_messages};
   std::optional<std::uint32_t> thinking_budget;
   std::optional<PromptCacheOptions> cache;
+  ProviderPricing pricing{};
 
   friend bool operator==(const ModelTarget&, const ModelTarget&) = default;
 };

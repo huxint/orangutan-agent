@@ -154,7 +154,12 @@ struct Response {
 > lets configured-route OpenAI Responses prompts stream through the provider
 > boundary when selected. Slice 126 ships metadata-only provider lifecycle hooks
 > from `agent::Loop`; slice 127 ships trace-derived usage/cost rollup reads over
-> recorded `trace_turns` rows. Profile-priced cost calculation remains planned.
+> recorded `trace_turns` rows. Slice 129 adds profile-priced cost calculation:
+> `profiles.<name>.pricing` can declare per-million-token USD prices for input,
+> output, cache-creation, and cache-read tokens; route resolution preserves that
+> non-secret metadata on `ModelTarget`; and `agent::Loop` fills missing
+> `Response::usage.cost_estimate` from the selected target before provider
+> response hooks, result aggregation, and trace writes consume the usage.
 
 ## Layered Implementation
 
@@ -342,14 +347,18 @@ Concerns owned by `execution::Runtime`:
   `Response::model_used` with the selected target model. Fallback is also
   skipped after visible stream output for the same duplicate-output reason.
 - **Usage aggregation**: per-agent, per-route, per-day counters in `audit.db`.
-  **Status (slice 127):** shipped as
+  **Status (slice 129):** shipped as
   `storage::TraceRepository::list_provider_usage_rollups`, a read-only derived
   query over `trace_turns` grouped by UTC day, agent key, route profile, and route
   model. It sums input/output/cache tokens and any `cost_estimate_usd` values
-  already provided by the provider response path.
-- **Cost tracking**: profiles declare cost/1M tokens; aggregator computes spend and
-  emits `provider.cost_threshold` hooks. Planned; slice 127 only sums existing
-  `cost_estimate_usd` values and does not compute pricing from config.
+  recorded by the provider response path.
+- **Cost tracking**: profiles declare cost/1M tokens via
+  `profiles.<name>.pricing.{input,output,cache_creation,cache_read}_per_million_usd`.
+  **Status (slice 129):** `agent::Loop` computes a missing
+  `Usage::cost_estimate` from the selected route target's pricing before hooks,
+  total usage aggregation, and trace writes. Provider-supplied cost estimates
+  remain authoritative when present. Budget thresholds and
+  `provider.cost_threshold` hooks remain planned.
 - **Hooks**: `provider_request` / `provider_response` / `provider_error` /
   `provider_fallback` (see `permissions-and-hooks.md`). **Status (slice 126):**
   shipped as advisory `agent::Loop` publishes around each provider await. The
@@ -515,11 +524,12 @@ ordinary binary prompts. Slices 121-124 add the HTTP SSE transport, provider
 streaming decoders, and CLI streaming sink; slice 126 adds metadata-only
 provider lifecycle hooks from `agent::Loop` while keeping `oran-provider`
 hook-free. Slice 127 adds storage-owned provider usage rollup reads over existing
-trace rows; profile cost fields remain planned until the typed config parser
-accepts them. Slices 107-108 add offline request-body
+trace rows; slice 129 adds profile cost fields to typed config and computes
+missing response cost estimates from resolved route pricing. Slices 107-108 add
+offline request-body
 serialization and response-body decoding for Anthropic Messages and OpenAI
 Responses before that transport step.
-Custom headers, context windows, thinking policy, and cost fields remain planned
+Custom headers, context windows, and thinking policy remain planned
 provider-schema fields until the typed parser accepts them.
 
 ## Error Categories

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
@@ -229,6 +230,17 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
   }
   if (*parsed <= 0) {
     return std::unexpected(config_error("expected positive integer", std::string{path}));
+  }
+  return parsed;
+}
+
+[[nodiscard]] Result<double> non_negative_number_value(const json& value, std::string_view path) {
+  if (!value.is_number()) {
+    return std::unexpected(config_error("expected number", std::string{path}));
+  }
+  const auto parsed = value.get<double>();
+  if (!std::isfinite(parsed) || parsed < 0.0) {
+    return std::unexpected(config_error("expected non-negative finite number", std::string{path}));
   }
   return parsed;
 }
@@ -483,6 +495,55 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
   return hooks;
 }
 
+[[nodiscard]] Result<void>
+parse_optional_price(const json& object, std::string_view key, std::string_view path, std::optional<double>& out) {
+  const auto it = object.find(key);
+  if (it == object.end()) {
+    return {};
+  }
+  auto parsed = non_negative_number_value(*it, child_path(path, key));
+  if (!parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+  out = *parsed;
+  return {};
+}
+
+[[nodiscard]] Result<ProviderPricingConfig> parse_profile_pricing(const json& profile, std::string_view profile_path) {
+  auto pricing = ProviderPricingConfig{};
+  const auto it = profile.find("pricing");
+  if (it == profile.end()) {
+    return pricing;
+  }
+  auto object = require_object(*it, child_path(profile_path, "pricing"));
+  if (!object) {
+    return std::unexpected(std::move(object.error()));
+  }
+
+  const auto pricing_path = child_path(profile_path, "pricing");
+  if (auto parsed = parse_optional_price(*it, "input_per_million_usd", pricing_path, pricing.input_per_million_usd);
+      !parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+  if (auto parsed = parse_optional_price(*it, "output_per_million_usd", pricing_path, pricing.output_per_million_usd);
+      !parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+  if (auto parsed = parse_optional_price(*it,
+                                         "cache_creation_per_million_usd",
+                                         pricing_path,
+                                         pricing.cache_creation_per_million_usd);
+      !parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+  if (auto parsed =
+          parse_optional_price(*it, "cache_read_per_million_usd", pricing_path, pricing.cache_read_per_million_usd);
+      !parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+  return pricing;
+}
+
 [[nodiscard]] Result<std::vector<ProfileConfig>> parse_profiles(const json& root) {
   auto profiles = std::vector<ProfileConfig>{};
   const auto it = root.find("profiles");
@@ -528,6 +589,10 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
     if (!api_key_env) {
       return std::unexpected(std::move(api_key_env.error()));
     }
+    auto pricing = parse_profile_pricing(value, profile_path);
+    if (!pricing) {
+      return std::unexpected(std::move(pricing.error()));
+    }
 
     profiles.push_back(ProfileConfig{
         .name = name,
@@ -536,6 +601,7 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
         .model = std::move(*model),
         .base_url = std::move(*base_url),
         .api_key_env = std::move(*api_key_env),
+        .pricing = *pricing,
     });
   }
 

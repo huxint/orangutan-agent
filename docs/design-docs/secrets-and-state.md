@@ -43,8 +43,8 @@ Current implementation status:
   `prompt.active_tools`), top-level `trace` policy
   (`enabled`, `store_raw_bodies`, `retention_days`), top-level hook timeout
   policy (`hooks.timeout_ms`, default 2000), `profiles` (including optional
-  per-profile `protocol`), `routes`, `session`, `web`, `permissions`, and
-  `agents.<name>.permissions`.
+  per-profile `protocol` and `pricing`), `routes`, `session`, `web`,
+  `permissions`, and `agents.<name>.permissions`.
 - `runtime.prompt.active_tools` accepts `"defaults"` or an explicit string
   array. The loader preserves the authored array order, accepts an empty
   explicit allowlist, rejects empty tool names, and leaves registry-name
@@ -55,6 +55,10 @@ Current implementation status:
   require `provider`, `model`, `base_url`, and `api_key_env`; profile entries may
   include `protocol`, which is validated as a non-empty string by `oran-config` and
   parsed as an exact `provider::ProtocolKind` spelling by `oran-provider`.
+  Profile entries may also include `pricing` with optional non-negative finite
+  USD-per-million-token numbers:
+  `input_per_million_usd`, `output_per_million_usd`,
+  `cache_creation_per_million_usd`, and `cache_read_per_million_usd`.
   Route entries require `primary` and may include `fallbacks`.
 - `api_key_env` is still an environment-variable name in config. It is read only
   when a caller explicitly invokes `provider::resolve_adapter_credentials(plan)`

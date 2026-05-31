@@ -158,6 +158,9 @@ through that runner. `/help` is handled locally by `oran-cli` and never reaches
 preflight catches bad profile references,
 provider labels, explicit profile-protocol spellings, missing endpoint
 metadata, and unsupported endpoint schemes before credentials are read.
+Resolved route targets also carry optional non-secret provider pricing from
+`profiles.<name>.pricing`; `agent::Loop` uses it to compute a missing provider
+usage cost estimate before lifecycle hooks and trace rows observe the turn.
 `HttpProviderBackend::build` then crosses the credential and
 adapter-construction boundary: it resolves the configured API-key environment
 variables, owns an `http::Client`, adapts it to
@@ -185,4 +188,3 @@ permission-decision and `hook_publish` rows are readable in the same output.
 
 - Bind configured hook sinks to the assembly-owned bus once the hook sink models land.
 - Add CLI line editor/history on top of the interactive REPL handoff.
-- Add provider profile-cost calculation.

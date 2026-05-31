@@ -96,7 +96,13 @@ constexpr auto kMinimalConfig = R"json(
       "protocol": "openai_responses",
       "model": "gpt-5.5",
       "base_url": "https://api.openai.com/v1",
-      "api_key_env": "OPENAI_API_KEY"
+      "api_key_env": "OPENAI_API_KEY",
+      "pricing": {
+        "input_per_million_usd": 1.25,
+        "output_per_million_usd": 10.0,
+        "cache_creation_per_million_usd": 1.5,
+        "cache_read_per_million_usd": 0.125
+      }
     }
   },
   "routes": {
@@ -160,6 +166,10 @@ TEST_CASE("Config::parse returns typed config values", "[unit][config]") {
   REQUIRE(result->profiles()[0].model == "gpt-5.5");
   REQUIRE(result->profiles()[0].base_url == "https://api.openai.com/v1");
   REQUIRE(result->profiles()[0].api_key_env == "OPENAI_API_KEY");
+  REQUIRE(result->profiles()[0].pricing.input_per_million_usd == std::optional<double>{1.25});
+  REQUIRE(result->profiles()[0].pricing.output_per_million_usd == std::optional<double>{10.0});
+  REQUIRE(result->profiles()[0].pricing.cache_creation_per_million_usd == std::optional<double>{1.5});
+  REQUIRE(result->profiles()[0].pricing.cache_read_per_million_usd == std::optional<double>{0.125});
 
   REQUIRE(result->routes().size() == 1);
   REQUIRE(result->routes()[0].name == "default");
@@ -271,6 +281,10 @@ TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][con
   REQUIRE(result->profiles()[0].name == "default");
   REQUIRE(result->profiles()[0].model == "claude-3-5-sonnet-latest");
   REQUIRE(result->profiles()[0].protocol == std::optional<std::string>{"anthropic_messages"});
+  REQUIRE(result->profiles()[0].pricing.input_per_million_usd == std::optional<double>{3.0});
+  REQUIRE(result->profiles()[0].pricing.output_per_million_usd == std::optional<double>{15.0});
+  REQUIRE(result->profiles()[0].pricing.cache_creation_per_million_usd == std::optional<double>{3.75});
+  REQUIRE(result->profiles()[0].pricing.cache_read_per_million_usd == std::optional<double>{0.3});
   REQUIRE(result->routes().size() == 1);
   REQUIRE(result->web().port == 8787);
   REQUIRE(result->runtime().tool_output.max_text_bytes == 262144);
@@ -291,6 +305,44 @@ TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][con
   REQUIRE(result->agents().size() == 1);
   REQUIRE(result->agents()[0].name == "researcher");
   REQUIRE(result->agents()[0].permissions.rules.size() == 1);
+}
+
+TEST_CASE("Config::parse validates optional provider profile pricing", "[unit][config][profiles]") {
+  SECTION("non-object pricing") {
+    auto result = config::Config::parse(R"json({
+  "profiles": {
+    "default": {
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "base_url": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "pricing": true
+    }
+  }
+})json");
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("negative price") {
+    auto result = config::Config::parse(R"json({
+  "profiles": {
+    "default": {
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "base_url": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "pricing": {
+        "input_per_million_usd": -1.0
+      }
+    }
+  }
+})json");
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
 }
 
 TEST_CASE("Config::parse validates optional provider profile protocol field", "[unit][config][profiles]") {

@@ -249,10 +249,12 @@ implicitly via the capability list.
 
 ## Scope (v2)
 
-- **Cost-aware scheduling.** When `ProviderRoute` cost metadata lands
-  (cross-ref [`../design-docs/agent-platform.md`](../design-docs/agent-platform.md)
-  "Provider Cost Awareness"), the scheduler can preempt a low-priority
-  batch when a budget threshold trips.
+- **Cost-aware scheduling.** Slice 129 lands provider profile pricing metadata
+  and loop-side cost-estimate calculation. A future scheduler/cost subsystem can
+  consume those usage costs (cross-ref
+  [`../design-docs/agent-platform.md`](../design-docs/agent-platform.md)
+  "Provider Cost Awareness") to preempt a low-priority batch when a budget
+  threshold trips.
 - **Inter-agent fairness.** When orchestration (spec 0004) spawns workers
   that share the process, the scheduler ranks ready batches by agent
   identity + priority. Today's single-agent process gets FIFO.

@@ -210,6 +210,24 @@ void add_usage(provider::Usage& total, const provider::Usage& next) {
   return it == route.fallbacks.end() ? route.primary : *it;
 }
 
+[[nodiscard]] double token_cost(std::uint64_t tokens, double per_million_usd) noexcept {
+  return (static_cast<double>(tokens) * per_million_usd) / 1'000'000.0;
+}
+
+void apply_profile_cost_if_missing(provider::Usage& usage, const provider::ModelTarget& target) {
+  if (usage.cost_estimate.has_value() || target.pricing.empty()) {
+    return;
+  }
+
+  const auto input_price = target.pricing.input_per_million_usd.value_or(0.0);
+  const auto output_price = target.pricing.output_per_million_usd.value_or(input_price);
+  const auto cache_creation_price = target.pricing.cache_creation_per_million_usd.value_or(input_price);
+  const auto cache_read_price = target.pricing.cache_read_per_million_usd.value_or(input_price);
+  usage.cost_estimate = token_cost(usage.input_tokens, input_price) + token_cost(usage.output_tokens, output_price) +
+                        token_cost(usage.cache_creation_tokens, cache_creation_price) +
+                        token_cost(usage.cache_read_tokens, cache_read_price);
+}
+
 [[nodiscard]] hook::ProviderResponsePayload make_provider_response_payload(const RunTurnInputs& inputs,
                                                                            const provider::Response& response,
                                                                            const provider::Route& route,
@@ -716,6 +734,8 @@ public:
         co_return std::unexpected(std::move(error));
       }
 
+      const auto served_profile_for_cost = response->route_profile_used.value_or(route_.primary.profile);
+      apply_profile_cost_if_missing(response->usage, served_target_for(route_, served_profile_for_cost));
       co_await publish_provider_response(inputs,
                                          *response,
                                          route_,

@@ -23,8 +23,9 @@ with persistent session history and a CLI surface. The first deliverable is "I c
   - When config declares routes, bootstrap preflights the `default` provider route
     through `provider::resolve_route_profiles` and
     `provider::make_adapter_construction_plan`, reports the resolved
-    primary/fallback summary, preserves the profile endpoint metadata needed by the
-    adapter factory, and fails fast on bad profile references, provider
+    primary/fallback summary, preserves the profile endpoint metadata and
+    optional profile pricing needed by downstream runtime owners, and fails fast
+    on bad profile references, provider
     spellings, explicit profile protocol spellings, missing endpoint metadata, or
     unsupported endpoint schemes. Built-in empty defaults still run without a
     provider route.
@@ -50,7 +51,10 @@ with persistent session history and a CLI surface. The first deliverable is "I c
   - Bootstrap exports `AgentPromptRunner` for tests and provider owners: callers
     can supply a provider backend and resolved route to drive `agent::Loop` with the
     runtime assembly's workspace/audit/broker/hook/trace services. The ordinary
-    binary now uses that same runner for configured-route prompts.
+    binary now uses that same runner for configured-route prompts. When
+    `profiles.<name>.pricing` is configured, the loop computes missing provider
+    cost estimates from input/output/cache token counts before hooks and trace
+    rows consume usage.
 - One agent runtime per process (multiplexing comes in spec 0004).
 - Anthropic Messages **and** OpenAI Chat Completions providers (one of the two
   configured + working end-to-end is acceptance; the other is built and bench-only).

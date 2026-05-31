@@ -336,9 +336,12 @@ makes the existing audit rows joinable. Nothing else.
 6. **Token / cost rollup.** A turn whose provider response carries
    `Usage = { input_tokens: 1500, output_tokens: 200,
    cache_read_tokens: 4096, cost_estimate: 0.012 }` writes the
-   same values into `trace_turns`. **Status (slice 127):** shipped for the
+   same values into `trace_turns`. **Status (slice 129):** shipped for the
    loop writer and storage rollup reader. Agent tests pin per-turn writes for
-   terminal, cancelled, error, and iteration-cap rows; storage tests pin
+   terminal, cancelled, error, iteration-cap, and profile-priced cost rows; the
+   loop now computes a missing `cost_estimate` from the selected
+   `ModelTarget::pricing` before trace rows are written, while preserving a
+   provider-supplied cost when present. Storage tests pin
    `TraceRepository::list_provider_usage_rollups`, which sums input/output/cache
    tokens and existing `cost_estimate_usd` values by UTC day, agent key, route
    profile, and route model.

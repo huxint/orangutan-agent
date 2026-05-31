@@ -311,12 +311,16 @@ Skills come from `<workspace>/.orangutan/skills/`. The runtime watches that dire
 
 ### Provider Cost Awareness
 
-Each `ProviderRoute` declares cost-per-1M-tokens. Slice 126 gives the agent loop
+Each provider profile can declare USD cost-per-1M-token pricing for input,
+output, cache-creation, and cache-read tokens. Slice 126 gives the agent loop
 metadata-only provider request/response/error/fallback hooks, including
 identity, route, usage, and timing fields, without moving hook knowledge into
-`oran-provider`. A later cost subsystem can consume those events or the audit
-stream to accumulate spend per `agent_key` and emit threshold events. Built-in
-thresholds + budget-exhausted fallback to a cheaper model remain planned.
+`oran-provider`. Slice 129 carries profile pricing through route resolution and
+lets `agent::Loop` compute missing `Usage::cost_estimate` values before hooks
+and trace writes observe the response. A later cost subsystem can consume those
+events or the audit stream to accumulate spend per `agent_key` and emit threshold
+events. Built-in thresholds + budget-exhausted fallback to a cheaper model remain
+planned.
 
 ### Tool Capability Discovery
 

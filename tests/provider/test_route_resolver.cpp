@@ -24,7 +24,13 @@ constexpr auto kRoutingConfig = R"json(
       "provider": "anthropic",
       "model": "claude-sonnet",
       "base_url": "https://api.anthropic.com",
-      "api_key_env": "ANTHROPIC_API_KEY"
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "pricing": {
+        "input_per_million_usd": 3.0,
+        "output_per_million_usd": 15.0,
+        "cache_creation_per_million_usd": 3.75,
+        "cache_read_per_million_usd": 0.3
+      }
     },
     "openai-main": {
       "provider": "openai",
@@ -91,11 +97,16 @@ TEST_CASE("resolve_route maps configured primary and fallback profiles", "[unit]
   REQUIRE(route->primary.protocol == provider::ProtocolKind::anthropic_messages);
   REQUIRE_FALSE(route->primary.thinking_budget.has_value());
   REQUIRE_FALSE(route->primary.cache.has_value());
+  REQUIRE(route->primary.pricing.input_per_million_usd == std::optional<double>{3.0});
+  REQUIRE(route->primary.pricing.output_per_million_usd == std::optional<double>{15.0});
+  REQUIRE(route->primary.pricing.cache_creation_per_million_usd == std::optional<double>{3.75});
+  REQUIRE(route->primary.pricing.cache_read_per_million_usd == std::optional<double>{0.3});
 
   REQUIRE(route->fallbacks.size() == 2);
   REQUIRE(route->fallbacks[0].profile == "openai-main");
   REQUIRE(route->fallbacks[0].model == "gpt-main");
   REQUIRE(route->fallbacks[0].protocol == provider::ProtocolKind::openai_chat_completions);
+  REQUIRE(route->fallbacks[0].pricing.empty());
   REQUIRE(route->fallbacks[1].profile == "local-main");
   REQUIRE(route->fallbacks[1].model == "deepseek-coder");
   REQUIRE(route->fallbacks[1].protocol == provider::ProtocolKind::custom_openai_compatible);
@@ -114,6 +125,10 @@ TEST_CASE("resolve_route_profiles preserves endpoint metadata for adapter factor
   REQUIRE(resolution->primary.provider == "anthropic");
   REQUIRE(resolution->primary.base_url == "https://api.anthropic.com");
   REQUIRE(resolution->primary.api_key_env == "ANTHROPIC_API_KEY");
+  REQUIRE(resolution->primary.target.pricing.input_per_million_usd == std::optional<double>{3.0});
+  REQUIRE(resolution->primary.target.pricing.output_per_million_usd == std::optional<double>{15.0});
+  REQUIRE(resolution->primary.target.pricing.cache_creation_per_million_usd == std::optional<double>{3.75});
+  REQUIRE(resolution->primary.target.pricing.cache_read_per_million_usd == std::optional<double>{0.3});
 
   REQUIRE(resolution->fallbacks.size() == 2);
   REQUIRE(resolution->fallbacks[0].target.profile == "openai-main");

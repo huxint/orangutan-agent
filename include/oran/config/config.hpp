@@ -54,6 +54,24 @@ struct PromptRuntimeConfig {
   friend bool operator==(const PromptRuntimeConfig&, const PromptRuntimeConfig&) = default;
 };
 
+/// Provider pricing in USD per one million tokens. Input and output prices are
+/// separate because hosted models commonly price the two streams differently;
+/// cache token prices are optional and default to the input token price when a
+/// cost calculation consumes them.
+struct ProviderPricingConfig {
+  std::optional<double> input_per_million_usd{};
+  std::optional<double> output_per_million_usd{};
+  std::optional<double> cache_creation_per_million_usd{};
+  std::optional<double> cache_read_per_million_usd{};
+
+  [[nodiscard]] bool empty() const noexcept {
+    return !input_per_million_usd.has_value() && !output_per_million_usd.has_value() &&
+           !cache_creation_per_million_usd.has_value() && !cache_read_per_million_usd.has_value();
+  }
+
+  friend bool operator==(const ProviderPricingConfig&, const ProviderPricingConfig&) = default;
+};
+
 struct RuntimeConfig {
   std::int64_t workers{4};
   std::int64_t request_timeout_ms{600000};
@@ -75,6 +93,7 @@ struct ProfileConfig {
   std::string model;
   std::string base_url;
   std::string api_key_env;
+  ProviderPricingConfig pricing;
 };
 
 struct RouteConfig {

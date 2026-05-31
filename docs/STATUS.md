@@ -7,9 +7,9 @@
 
 ## Snapshot
 
-- **Slice:** 128 (`xmake run orangutan` reports slice 128)
+- **Slice:** 129 (`xmake run orangutan` reports slice 129)
 - **Last completed history:**
-  [`histories/2026-06/20260601-0339-cli-repl-slash-commands.md`](histories/2026-06/20260601-0339-cli-repl-slash-commands.md)
+  [`histories/2026-06/20260601-0412-provider-profile-costs.md`](histories/2026-06/20260601-0412-provider-profile-costs.md)
 - **Active exec-plan:** none — the provider-SSE-streaming arc (slices 121–123)
   is complete and moved to
   [`exec-plans/completed/2026-05-30-provider-sse-streaming.md`](exec-plans/completed/2026-05-30-provider-sse-streaming.md);
@@ -17,22 +17,29 @@
   active plan.
 - **Next intended slice:** no committed plan. The next runtime piece should be
   selected from the routing index (likely memory ownership on the configured-route
-  loop path, provider profile-cost calculation, or CLI line editing / slash
-  commands).
-  Slice 128 adds slash-command handling to the CLI REPL paths: `/help` prints a
-  short command list, `/exit` and `/quit` stop the REPL without dispatching to
-  the prompt runner, and both scripted and interactive REPL input trim leading
-  and trailing ASCII whitespace before command recognition. `run` and
-  `run_async` keep non-command prompts flowing to the existing runner or
-  deterministic shell paths. Focused result: `test-cli` **26 / 205** (+3 cases,
-  +29 assertions). Slice 127 adds the first provider usage rollup read over
-  trace storage: `TraceRepository::list_provider_usage_rollups` groups existing
-  `trace_turns` usage by UTC day, agent key, route profile, and route model,
-  sums input/output/cache tokens plus already-recorded `cost_estimate_usd`, and
-  supports optional agent/profile/model filters. This is trace-derived
-  aggregation only; profile-priced cost calculation still waits for typed config
-  cost fields. Focused result: `test-storage` **73 / 938** (+1 case, +39
-  assertions). Slice 126 publishes the first provider lifecycle hooks from
+  loop path or CLI line editing / slash commands).
+  Slice 129 adds provider profile-priced cost calculation: `config::ProfileConfig`
+  now carries optional `pricing` fields for per-million input, output, cache
+  creation, and cache read tokens; route resolution preserves those values on the
+  loop-facing `provider::ModelTarget`; and `agent::Loop` now fills
+  `provider::Usage::cost_estimate` from the selected target when a provider
+  response leaves it unset. Existing provider-supplied costs still win. Focused
+  result: `test-config` **37 cases / 270 assertions**, `test-provider`
+  **86 / 652**, and `test-agent` **52 / 10 705**. Slice 128 adds slash-command
+  handling to the CLI REPL paths: `/help` prints a short command list,
+  `/exit` and `/quit` stop the REPL without dispatching to the prompt runner,
+  and both scripted and interactive REPL input trim leading and trailing ASCII
+  whitespace before command recognition. `run` and `run_async` keep non-command
+  prompts flowing to the existing runner or deterministic shell paths. Focused
+  result: `test-cli` **26 / 205** (+3 cases, +29 assertions). Slice 127 adds
+  the first provider usage rollup read over trace storage: `TraceRepository::list_provider_usage_rollups`
+  groups existing `trace_turns` usage by UTC day, agent key, route profile, and
+  route model, sums input/output/cache tokens plus already-recorded
+  `cost_estimate_usd`, and supports optional agent/profile/model filters. This is
+  trace-derived aggregation only; slice 129 then adds profile-priced cost
+  calculation on top of those recorded rows. Focused result: `test-storage`
+  **73 / 938** (+1 case, +39 assertions). Slice 126 publishes the first
+  provider lifecycle hooks from
   `agent::Loop`.
   `RunTurnInputs` now accepts the process `hook::Bus` plus
   scope/agent/identity/origin metadata, and the loop emits advisory
@@ -594,8 +601,8 @@
   provider work from that point was provider request/response hooks,
   usage/cost rollups, real Anthropic/OpenAI adapters, and binary construction
   of a concrete provider backend for the bootstrap runner; later slices have
-  since shipped the concrete backend, lifecycle hooks, and trace-derived usage
-  rollup reads, leaving profile-priced cost calculation and remaining protocol
+  since shipped the concrete backend, lifecycle hooks, trace-derived usage
+  rollup reads, and profile-priced cost calculation, leaving remaining protocol
   families as follow-ups. Slice 103 adds
   `provider::resolve_route_profiles` as the adapter-factory-ready companion to
   `resolve_route`: it preserves `provider`, `base_url`, and `api_key_env` for

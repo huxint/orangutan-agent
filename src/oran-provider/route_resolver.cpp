@@ -87,6 +87,15 @@ resolve_protocol(const config::ProfileConfig& profile, std::string_view route_na
   return *protocol;
 }
 
+[[nodiscard]] ProviderPricing pricing_for(const config::ProviderPricingConfig& pricing) noexcept {
+  return ProviderPricing{
+      .input_per_million_usd = pricing.input_per_million_usd,
+      .output_per_million_usd = pricing.output_per_million_usd,
+      .cache_creation_per_million_usd = pricing.cache_creation_per_million_usd,
+      .cache_read_per_million_usd = pricing.cache_read_per_million_usd,
+  };
+}
+
 [[nodiscard]] const config::RouteConfig* find_route(const config::Config& config, std::string_view route_name) {
   const auto routes = config.routes();
   const auto it = std::ranges::find(routes, route_name, &config::RouteConfig::name);
@@ -124,6 +133,7 @@ resolve_protocol(const config::ProfileConfig& profile, std::string_view route_na
               .protocol = *protocol,
               .thinking_budget = std::nullopt,
               .cache = std::nullopt,
+              .pricing = pricing_for(profile->pricing),
           },
       .provider = profile->provider,
       .base_url = profile->base_url,
