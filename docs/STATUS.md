@@ -10,14 +10,17 @@
 - **Slice:** 129 (`xmake run orangutan` reports slice 129)
 - **Last completed history:**
   [`histories/2026-06/20260601-0412-provider-profile-costs.md`](histories/2026-06/20260601-0412-provider-profile-costs.md)
-- **Active exec-plan:** none — the provider-SSE-streaming arc (slices 121–123)
-  is complete and moved to
-  [`exec-plans/completed/2026-05-30-provider-sse-streaming.md`](exec-plans/completed/2026-05-30-provider-sse-streaming.md);
-  Slices 124-128 were single-slice follow-ups and did not require a new
-  active plan.
-- **Next intended slice:** no committed plan. The next runtime piece should be
-  selected from the routing index (likely memory ownership on the configured-route
-  loop path or CLI line editing / slash commands).
+- **Active exec-plan:**
+  [`exec-plans/active/2026-06-01-memory-runtime-v1.md`](exec-plans/active/2026-06-01-memory-runtime-v1.md)
+  — session memory is the next runtime arc. It starts by adding
+  `oran-memory::session::Store` over the existing `storage::SessionRepository`,
+  then assembles a separate `sessions.db` in bootstrap, then wires
+  configured-route `AgentPromptRunner` to load/append conversation history.
+- **Next intended slice:** implement the first plan milestone:
+  add the `oran-memory` library skeleton plus typed session-store wrapper,
+  private `core::Message` JSON serialization, tests for ordered round-trips and
+  malformed rows, and minimal bench parity. Long-term FTS5, MEMORY.md mirror,
+  memory tools, and CLI session commands stay out of scope for that first slice.
   Slice 129 adds provider profile-priced cost calculation: `config::ProfileConfig`
   now carries optional `pricing` fields for per-million input, output, cache
   creation, and cache read tokens; route resolution preserves those values on the
