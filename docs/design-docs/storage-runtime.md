@@ -30,7 +30,10 @@ does not expose `sqlite3.h` from public headers.
 > hook-publish audit rows can join back to trace rows. Slice 80 adds the first agent-loop writer:
 > terminal-success fake-provider turns can append one body-free `trace_turns`
 > row through `TraceRepository` before returning to the caller. Backups and the
-> memory / automation repositories are future slices.
+> memory / automation repositories are future slices. Slice 127 adds
+> trace-derived provider usage rollups grouped by UTC day, agent, route profile,
+> and route model; these sum the usage/cost fields already stored on
+> `trace_turns` and do not yet compute cost from profile pricing.
 
 ## Public Surface
 
@@ -663,6 +666,8 @@ class TraceRepository {
   get_turn(TraceId turn_id);
   async::Awaitable<core::Result<std::vector<TraceTurnRecord>>>
   list_turns(ListTraceTurnsOptions);
+  async::Awaitable<core::Result<std::vector<ProviderUsageRollup>>>
+  list_provider_usage_rollups(ListProviderUsageRollupsOptions);
   async::Awaitable<core::Result<std::int64_t>> count_turns();
 };
 
@@ -684,6 +689,10 @@ The repository validates non-zero ids, non-empty required text fields,
 positive `iteration_count` / `schema_version`, non-negative counters, and
 `finished_at_ns >= started_at_ns` before touching SQLite. It does not parse
 `context_json`; the agent/trace writer owns redaction and JSON shape.
+`list_provider_usage_rollups` is a read-only derived query over the same
+`trace_turns` rows. It groups by `strftime('%Y-%m-%d', started_at_ns, 'unixepoch')`,
+`agent_key`, `route_profile`, and `route_model`, returns newest days first, and
+supports optional agent/profile/model filters plus a positive `limit`.
 
 Slice 78 deliberately stopped at the storage primitive. Slice 79 threads a typed
 turn id through `agent::Loop`, `tool::DispatchContext`, and the permission audit
@@ -691,5 +700,7 @@ sink so tool audit rows can join against `trace_turns` rows. Slice 80 adds the
 first consumer: `agent::Loop` appends one row for terminal-success turns when
 callers supply `RunTurnInputs::trace.repository` and a turn id. Slice 85 lets the
 loop generate that turn id when a trace writer is configured and callers leave
-it unset. Iteration-cap rows, trace retention/config, and the CLI inspector
-remain downstream.
+it unset. Slices 86-93 add iteration-cap rows, trace config/runtime wiring, the
+CLI inspector, and hook-publish audit rows. Slice 127 adds the first trace-derived
+provider usage rollup read; retention enforcement and profile-priced cost
+calculation remain downstream.

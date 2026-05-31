@@ -7,18 +7,27 @@
 
 ## Snapshot
 
-- **Slice:** 126 (`xmake run orangutan` reports slice 126)
+- **Slice:** 127 (`xmake run orangutan` reports slice 127)
 - **Last completed history:**
-  [`histories/2026-06/20260601-0240-provider-lifecycle-hooks.md`](histories/2026-06/20260601-0240-provider-lifecycle-hooks.md)
+  [`histories/2026-06/20260601-0309-provider-usage-rollups.md`](histories/2026-06/20260601-0309-provider-usage-rollups.md)
 - **Active exec-plan:** none — the provider-SSE-streaming arc (slices 121–123)
   is complete and moved to
   [`exec-plans/completed/2026-05-30-provider-sse-streaming.md`](exec-plans/completed/2026-05-30-provider-sse-streaming.md);
-  Slices 124-126 were single-slice follow-ups and did not require a new
+  Slices 124-127 were single-slice follow-ups and did not require a new
   active plan.
 - **Next intended slice:** no committed plan. The next runtime piece should be
   selected from the routing index (likely memory ownership on the configured-route
-  loop path, provider usage/cost rollups, or CLI line editing / slash commands).
-  Slice 126 publishes the first provider lifecycle hooks from `agent::Loop`.
+  loop path, provider profile-cost calculation, or CLI line editing / slash
+  commands).
+  Slice 127 adds the first provider usage rollup read over trace storage:
+  `TraceRepository::list_provider_usage_rollups` groups existing `trace_turns`
+  usage by UTC day, agent key, route profile, and route model, sums
+  input/output/cache tokens plus already-recorded `cost_estimate_usd`, and
+  supports optional agent/profile/model filters. This is trace-derived
+  aggregation only; profile-priced cost calculation still waits for typed config
+  cost fields. Focused result: `test-storage` **73 / 938** (+1 case, +39
+  assertions). Slice 126 publishes the first provider lifecycle hooks from
+  `agent::Loop`.
   `RunTurnInputs` now accepts the process `hook::Bus` plus
   scope/agent/identity/origin metadata, and the loop emits advisory
   `provider_request`, `provider_response`, `provider_error`, and
@@ -576,9 +585,12 @@
   `oran-prompt` path, and `<oran/provider.hpp>` re-exports the resolver.
   Focused result through slice 102: `test-provider` 26 cases / 181 assertions.
   Remaining
-  provider work: provider request/response hooks, usage/cost rollups, real
-  Anthropic/OpenAI adapters, and binary construction of a concrete provider
-  backend for the bootstrap runner. Slice 103 adds
+  provider work from that point was provider request/response hooks,
+  usage/cost rollups, real Anthropic/OpenAI adapters, and binary construction
+  of a concrete provider backend for the bootstrap runner; later slices have
+  since shipped the concrete backend, lifecycle hooks, and trace-derived usage
+  rollup reads, leaving profile-priced cost calculation and remaining protocol
+  families as follow-ups. Slice 103 adds
   `provider::resolve_route_profiles` as the adapter-factory-ready companion to
   `resolve_route`: it preserves `provider`, `base_url`, and `api_key_env` for
   the primary/fallback profiles while deriving the same loop-facing `Route`

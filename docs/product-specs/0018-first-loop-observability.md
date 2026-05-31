@@ -97,7 +97,10 @@ makes the existing audit rows joinable. Nothing else.
   now threads the assembly repository into `RunTurnInputs::trace` for
   caller-supplied provider backends; slice 112 wires the same runner into
   ordinary configured-route `bootstrap::run`, so trace rows are written from
-  the binary path as soon as a `default` provider route is declared.
+  the binary path as soon as a `default` provider route is declared. Slice 127
+  adds `TraceRepository::list_provider_usage_rollups`, a read-only derived query
+  that groups recorded provider usage by UTC day, agent key, route profile, and
+  route model without adding new trace columns.
   ```sql
   CREATE TABLE trace_turns (
     turn_id           BLOB PRIMARY KEY,             -- 16-byte UUID
@@ -333,8 +336,12 @@ makes the existing audit rows joinable. Nothing else.
 6. **Token / cost rollup.** A turn whose provider response carries
    `Usage = { input_tokens: 1500, output_tokens: 200,
    cache_read_tokens: 4096, cost_estimate: 0.012 }` writes the
-   same values into `trace_turns`. Pinned by a fake-provider
-   plan.
+   same values into `trace_turns`. **Status (slice 127):** shipped for the
+   loop writer and storage rollup reader. Agent tests pin per-turn writes for
+   terminal, cancelled, error, and iteration-cap rows; storage tests pin
+   `TraceRepository::list_provider_usage_rollups`, which sums input/output/cache
+   tokens and existing `cost_estimate_usd` values by UTC day, agent key, route
+   profile, and route model.
 7. **Cache-version visibility.** Bumping
    `prompt::CacheSection::cache_version` (spec 0016) on a section
    changes `prompt_prefix_hash` in the next turn's row. The

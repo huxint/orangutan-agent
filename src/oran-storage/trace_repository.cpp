@@ -56,6 +56,20 @@ WHERE turn_id = ?
 
 constexpr std::string_view kCountTurnsSql = "SELECT COUNT(*) FROM trace_turns";
 
+constexpr std::string_view kProviderUsageRollupColumnsSql = R"sql(
+SELECT strftime('%Y-%m-%d', CAST(started_at_ns / 1000000000 AS INTEGER), 'unixepoch') AS day_utc,
+  agent_key,
+  route_profile,
+  route_model,
+  COUNT(*) AS turn_count,
+  SUM(cache_creation_tokens) AS cache_creation_tokens,
+  SUM(cache_read_tokens) AS cache_read_tokens,
+  SUM(input_tokens) AS input_tokens,
+  SUM(output_tokens) AS output_tokens,
+  SUM(cost_estimate_usd) AS cost_estimate_usd
+FROM trace_turns
+)sql";
+
 [[nodiscard]] core::Error invalid_field(std::string field) {
   return core::Error::invalid_argument("trace repository field is invalid").with("field", std::move(field));
 }
@@ -378,6 +392,80 @@ constexpr std::string_view kCountTurnsSql = "SELECT COUNT(*) FROM trace_turns";
   return sql;
 }
 
+[[nodiscard]] std::string build_provider_usage_rollups_sql(const ListProviderUsageRollupsOptions& options) {
+  std::string sql{kProviderUsageRollupColumnsSql};
+  bool has_where = false;
+  if (!options.agent_key.empty()) {
+    sql += " WHERE agent_key = ?";
+    has_where = true;
+  }
+  if (!options.route_profile.empty()) {
+    sql += has_where ? " AND route_profile = ?" : " WHERE route_profile = ?";
+    has_where = true;
+  }
+  if (!options.route_model.empty()) {
+    sql += has_where ? " AND route_model = ?" : " WHERE route_model = ?";
+  }
+  sql += " GROUP BY day_utc, agent_key, route_profile, route_model"
+         " ORDER BY day_utc DESC, agent_key ASC, route_profile ASC, route_model ASC LIMIT ?";
+  return sql;
+}
+
+[[nodiscard]] core::Result<ProviderUsageRollup> read_provider_usage_rollup_row(Statement& statement) {
+  auto day_utc = required_text(statement, 0, "day_utc");
+  if (!day_utc) {
+    return std::unexpected(day_utc.error());
+  }
+  auto agent_key = required_text(statement, 1, "agent_key");
+  if (!agent_key) {
+    return std::unexpected(agent_key.error());
+  }
+  auto route_profile = required_text(statement, 2, "route_profile");
+  if (!route_profile) {
+    return std::unexpected(route_profile.error());
+  }
+  auto route_model = required_text(statement, 3, "route_model");
+  if (!route_model) {
+    return std::unexpected(route_model.error());
+  }
+  auto turn_count = statement.column_int64(4);
+  if (!turn_count) {
+    return std::unexpected(turn_count.error().with("field", "turn_count"));
+  }
+  auto cache_creation_tokens = statement.column_int64(5);
+  if (!cache_creation_tokens) {
+    return std::unexpected(cache_creation_tokens.error().with("field", "cache_creation_tokens"));
+  }
+  auto cache_read_tokens = statement.column_int64(6);
+  if (!cache_read_tokens) {
+    return std::unexpected(cache_read_tokens.error().with("field", "cache_read_tokens"));
+  }
+  auto input_tokens = statement.column_int64(7);
+  if (!input_tokens) {
+    return std::unexpected(input_tokens.error().with("field", "input_tokens"));
+  }
+  auto output_tokens = statement.column_int64(8);
+  if (!output_tokens) {
+    return std::unexpected(output_tokens.error().with("field", "output_tokens"));
+  }
+  auto cost_estimate_usd = statement.column_double(9);
+  if (!cost_estimate_usd) {
+    return std::unexpected(cost_estimate_usd.error().with("field", "cost_estimate_usd"));
+  }
+  return ProviderUsageRollup{
+      .day_utc = std::move(*day_utc),
+      .agent_key = std::move(*agent_key),
+      .route_profile = std::move(*route_profile),
+      .route_model = std::move(*route_model),
+      .turn_count = *turn_count,
+      .cache_creation_tokens = *cache_creation_tokens,
+      .cache_read_tokens = *cache_read_tokens,
+      .input_tokens = *input_tokens,
+      .output_tokens = *output_tokens,
+      .cost_estimate_usd = *cost_estimate_usd,
+  };
+}
+
 [[nodiscard]] core::Result<void> bind_trace_id(Statement& statement, int index, const TraceId& id) {
   return statement.bind_blob(index, as_span(id));
 }
@@ -602,6 +690,64 @@ TraceRepository::list_turns(ListTraceTurnsOptions options) {
       break;
     }
     auto record = read_turn_row(statement);
+    if (!record) {
+      co_return std::unexpected(record.error());
+    }
+    rows.push_back(std::move(*record));
+  }
+
+  co_return rows;
+}
+
+async::Awaitable<core::Result<std::vector<ProviderUsageRollup>>>
+TraceRepository::list_provider_usage_rollups(ListProviderUsageRollupsOptions options) {
+  auto limit = checked_limit(options.limit);
+  if (!limit) {
+    co_return std::unexpected(limit.error());
+  }
+
+  auto reader = co_await pool_->acquire_reader();
+  if (!reader) {
+    co_return std::unexpected(reader.error());
+  }
+
+  const auto sql = build_provider_usage_rollups_sql(options);
+  auto cached = reader->statement_cache().acquire(reader->connection(), sql);
+  if (!cached) {
+    co_return std::unexpected(cached.error());
+  }
+  auto& statement = cached->statement();
+
+  int index = 1;
+  if (!options.agent_key.empty()) {
+    if (auto bound = statement.bind_text(index++, options.agent_key); !bound) {
+      co_return std::unexpected(bound.error());
+    }
+  }
+  if (!options.route_profile.empty()) {
+    if (auto bound = statement.bind_text(index++, options.route_profile); !bound) {
+      co_return std::unexpected(bound.error());
+    }
+  }
+  if (!options.route_model.empty()) {
+    if (auto bound = statement.bind_text(index++, options.route_model); !bound) {
+      co_return std::unexpected(bound.error());
+    }
+  }
+  if (auto bound = statement.bind_int64(index, *limit); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+
+  std::vector<ProviderUsageRollup> rows;
+  while (true) {
+    auto step = statement.step();
+    if (!step) {
+      co_return std::unexpected(step.error());
+    }
+    if (*step == StepResult::done) {
+      break;
+    }
+    auto record = read_provider_usage_rollup_row(statement);
     if (!record) {
       co_return std::unexpected(record.error());
     }

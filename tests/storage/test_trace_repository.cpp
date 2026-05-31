@@ -304,6 +304,98 @@ TEST_CASE("TraceRepository list_turns orders newest first and applies filters", 
   });
 }
 
+TEST_CASE("TraceRepository list_provider_usage_rollups groups usage by day and route",
+          "[unit][storage][trace_repository]") {
+  TempDb db{"oran-trace-repo-usage-rollups"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::TraceRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+
+    constexpr std::int64_t kOneDayNs = 86'400'000'000'000;
+    auto session = id_with(0x80);
+
+    auto first = make_request(id_with(0x01), session, 10);
+    first.input_tokens = 10;
+    first.output_tokens = 5;
+    first.cache_creation_tokens = 2;
+    first.cache_read_tokens = 3;
+    first.cost_estimate_usd = 0.5;
+    REQUIRE((co_await repo.append_turn(std::move(first))).has_value());
+
+    auto second = make_request(id_with(0x02), session, 20);
+    second.input_tokens = 7;
+    second.output_tokens = 8;
+    second.cache_creation_tokens = 4;
+    second.cache_read_tokens = 1;
+    second.cost_estimate_usd = 0.25;
+    REQUIRE((co_await repo.append_turn(std::move(second))).has_value());
+
+    auto next_day = make_request(id_with(0x03), session, kOneDayNs);
+    next_day.route_model = "fake-model-v2";
+    next_day.input_tokens = 3;
+    next_day.output_tokens = 2;
+    next_day.cache_creation_tokens = 1;
+    next_day.cache_read_tokens = 6;
+    next_day.cost_estimate_usd = 0.125;
+    REQUIRE((co_await repo.append_turn(std::move(next_day))).has_value());
+
+    auto reviewer = make_request(id_with(0x04), session, 30);
+    reviewer.agent_key = "reviewer";
+    reviewer.route_profile = "fallback";
+    reviewer.route_model = "fallback-model";
+    reviewer.input_tokens = 11;
+    reviewer.output_tokens = 1;
+    reviewer.cache_creation_tokens = 0;
+    reviewer.cache_read_tokens = 2;
+    reviewer.cost_estimate_usd = 0.0625;
+    REQUIRE((co_await repo.append_turn(std::move(reviewer))).has_value());
+
+    auto all = co_await repo.list_provider_usage_rollups(storage::ListProviderUsageRollupsOptions{.limit = 10});
+    REQUIRE(all.has_value());
+    REQUIRE(all->size() == 3);
+
+    REQUIRE((*all)[0].day_utc == "1970-01-02");
+    REQUIRE((*all)[0].agent_key == "coder");
+    REQUIRE((*all)[0].route_profile == "fake-main");
+    REQUIRE((*all)[0].route_model == "fake-model-v2");
+    REQUIRE((*all)[0].turn_count == 1);
+    REQUIRE((*all)[0].input_tokens == 3);
+    REQUIRE((*all)[0].output_tokens == 2);
+    REQUIRE((*all)[0].cache_creation_tokens == 1);
+    REQUIRE((*all)[0].cache_read_tokens == 6);
+    REQUIRE((*all)[0].cost_estimate_usd == 0.125);
+
+    REQUIRE((*all)[1].day_utc == "1970-01-01");
+    REQUIRE((*all)[1].agent_key == "coder");
+    REQUIRE((*all)[1].route_profile == "fake-main");
+    REQUIRE((*all)[1].route_model == "fake-model");
+    REQUIRE((*all)[1].turn_count == 2);
+    REQUIRE((*all)[1].input_tokens == 17);
+    REQUIRE((*all)[1].output_tokens == 13);
+    REQUIRE((*all)[1].cache_creation_tokens == 6);
+    REQUIRE((*all)[1].cache_read_tokens == 4);
+    REQUIRE((*all)[1].cost_estimate_usd == 0.75);
+
+    auto only_coder = co_await repo.list_provider_usage_rollups(
+        storage::ListProviderUsageRollupsOptions{.agent_key = "coder", .route_profile = "fake-main", .limit = 10});
+    REQUIRE(only_coder.has_value());
+    REQUIRE(only_coder->size() == 2);
+
+    auto only_model = co_await repo.list_provider_usage_rollups(
+        storage::ListProviderUsageRollupsOptions{.route_model = "fake-model", .limit = 10});
+    REQUIRE(only_model.has_value());
+    REQUIRE(only_model->size() == 1);
+    REQUIRE((*only_model)[0].turn_count == 2);
+
+    auto limited = co_await repo.list_provider_usage_rollups(storage::ListProviderUsageRollupsOptions{.limit = 1});
+    REQUIRE(limited.has_value());
+    REQUIRE(limited->size() == 1);
+    REQUIRE((*limited)[0].day_utc == "1970-01-02");
+  });
+}
+
 TEST_CASE("TraceRepository returns nullopt for missing turns", "[unit][storage][trace_repository]") {
   TempDb db{"oran-trace-repo-missing"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
@@ -344,6 +436,11 @@ TEST_CASE("TraceRepository validates required fields before SQLite", "[unit][sto
     auto zero_limit = co_await repo.list_turns(storage::ListTraceTurnsOptions{.limit = 0});
     REQUIRE_FALSE(zero_limit.has_value());
     REQUIRE(zero_limit.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto zero_rollup_limit =
+        co_await repo.list_provider_usage_rollups(storage::ListProviderUsageRollupsOptions{.limit = 0});
+    REQUIRE_FALSE(zero_rollup_limit.has_value());
+    REQUIRE(zero_rollup_limit.error().kind() == core::ErrorKind::invalid_argument);
 
     auto zero_get = co_await repo.get_turn(storage::TraceId{});
     REQUIRE_FALSE(zero_get.has_value());

@@ -83,6 +83,26 @@ struct ListTraceTurnsOptions {
   std::size_t limit{50};
 };
 
+struct ProviderUsageRollup {
+  std::string day_utc;
+  std::string agent_key;
+  std::string route_profile;
+  std::string route_model;
+  std::int64_t turn_count{};
+  std::int64_t cache_creation_tokens{};
+  std::int64_t cache_read_tokens{};
+  std::int64_t input_tokens{};
+  std::int64_t output_tokens{};
+  double cost_estimate_usd{};
+};
+
+struct ListProviderUsageRollupsOptions {
+  std::string agent_key{};
+  std::string route_profile{};
+  std::string route_model{};
+  std::size_t limit{50};
+};
+
 struct TraceRepositoryOptions {
   std::string migrations_directory;
 };
@@ -98,6 +118,9 @@ public:
   [[nodiscard]] async::Awaitable<core::Result<std::optional<TraceTurnRecord>>> get_turn(TraceId turn_id);
 
   [[nodiscard]] async::Awaitable<core::Result<std::vector<TraceTurnRecord>>> list_turns(ListTraceTurnsOptions options);
+
+  [[nodiscard]] async::Awaitable<core::Result<std::vector<ProviderUsageRollup>>>
+  list_provider_usage_rollups(ListProviderUsageRollupsOptions options);
 
   [[nodiscard]] async::Awaitable<core::Result<std::int64_t>> count_turns();
 
