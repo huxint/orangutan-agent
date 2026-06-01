@@ -2,6 +2,7 @@
 
 #include <oran/bootstrap/prompt_runner.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <exception>
@@ -102,6 +103,42 @@ materialize_runner_rules(const config::Config& cfg, permission::Mode mode, std::
   return permission::materialize(mode, cfg.permissions(), match->permissions);
 }
 
+[[nodiscard]] Result<std::optional<std::vector<std::string>>> agent_config_skills_enabled(const config::Config& cfg,
+                                                                                          std::string_view agent_name) {
+  if (agent_name.empty()) {
+    return std::nullopt;
+  }
+
+  const auto agents = cfg.agents();
+  const auto match = std::ranges::find(agents, agent_name, &config::AgentConfig::name);
+  if (match == agents.end()) {
+    return std::unexpected(
+        Error::not_found("agent prompt runner agent config not found").with("agent", std::string{agent_name}));
+  }
+  return match->skills_enabled;
+}
+
+[[nodiscard]] bool skill_enabled_for_agent(const skill::SkillDocument& document,
+                                           const std::optional<std::vector<std::string>>& skills_enabled) {
+  if (!skills_enabled.has_value()) {
+    return true;
+  }
+  return std::ranges::contains(*skills_enabled, document.metadata.name);
+}
+
+[[nodiscard]] std::vector<skill::SkillDocument>
+filter_skill_documents(std::span<const skill::SkillDocument> documents,
+                       const std::optional<std::vector<std::string>>& skills_enabled) {
+  auto filtered = std::vector<skill::SkillDocument>{};
+  filtered.reserve(documents.size());
+  for (const auto& document : documents) {
+    if (skill_enabled_for_agent(document, skills_enabled)) {
+      filtered.push_back(document);
+    }
+  }
+  return filtered;
+}
+
 [[nodiscard]] Result<tool::OutputCapOptions> output_caps_from(const config::Config& cfg) {
   const auto max_text = checked_cap(cfg.runtime().tool_output.max_text_bytes, "runtime.tool_output.max_text_bytes");
   if (!max_text) {
@@ -200,6 +237,7 @@ public:
        config::PromptActiveToolsConfig active_tools,
        tool::OutputCapOptions output_caps,
        agent::ToolSchedulerOptions scheduler_options,
+       std::optional<std::vector<std::string>> skills_enabled,
        core::TurnId session_id)
       : executor_{std::move(options.executor)}, assembly_{options.assembly}, execution_runtime_{*options.provider},
         loop_{execution_runtime_, std::move(options.route)}, registry_{std::move(registry)},
@@ -209,6 +247,7 @@ public:
         agent_key_{std::move(options.agent_key)}, identity_{std::move(options.identity)},
         origin_{std::move(options.origin)}, system_preamble_{make_system_preamble(std::move(options.system_preamble))},
         skills_catalog_{skill::RenderedCatalog{.section_text = std::move(options.skills_catalog)}},
+        skills_enabled_{std::move(skills_enabled)},
         memory_framing_{memory::Framing{.section_text = std::move(options.memory_framing)}},
         per_agent_overlay_{std::move(options.per_agent_overlay)},
         trace_context_json_{std::move(options.trace_context_json)}, tool_choice_{std::move(options.tool_choice)},
@@ -392,8 +431,14 @@ private:
     if (!refreshed) {
       co_return std::unexpected(std::move(refreshed).error());
     }
-    skill_documents_ = skill_snapshot_->documents();
-    skills_catalog_.replace(skill_snapshot_->catalog());
+    skill_documents_ =
+        filter_skill_documents(std::span<const skill::SkillDocument>{skill_snapshot_->documents()}, skills_enabled_);
+    auto entries = skill::catalog_entries_from(std::span<const skill::SkillDocument>{skill_documents_});
+    auto catalog = skill::render_catalog(entries);
+    if (!catalog) {
+      co_return std::unexpected(std::move(catalog).error());
+    }
+    skills_catalog_.replace(std::move(*catalog));
     skill_catalog_loads_ = static_cast<std::size_t>(skill_snapshot_->stats().loads);
     co_return Result<void>{};
   }
@@ -507,6 +552,7 @@ private:
   std::string origin_;
   agent::SystemPreambleOwner system_preamble_;
   skill::CatalogOwner skills_catalog_;
+  std::optional<std::vector<std::string>> skills_enabled_;
   std::optional<skill::WorkspaceSkillSnapshot> skill_snapshot_;
   std::vector<skill::SkillDocument> skill_documents_;
   memory::FramingOwner memory_framing_;
@@ -550,6 +596,12 @@ core::Result<std::unique_ptr<AgentPromptRunner>> AgentPromptRunner::create(Agent
   if (!scheduler_options) {
     return std::unexpected(std::move(scheduler_options).error());
   }
+  const auto skill_agent_name = options.agent_config_name.empty() ? std::string_view{options.permission_agent_name}
+                                                                  : std::string_view{options.agent_config_name};
+  auto skills_enabled = agent_config_skills_enabled(*options.config, skill_agent_name);
+  if (!skills_enabled) {
+    return std::unexpected(std::move(skills_enabled.error()));
+  }
 
   auto session_id = options.session_id;
   if (core::is_zero_turn_id(session_id)) {
@@ -567,6 +619,7 @@ core::Result<std::unique_ptr<AgentPromptRunner>> AgentPromptRunner::create(Agent
                                      std::move(active_tools),
                                      *output_caps,
                                      *scheduler_options,
+                                     std::move(*skills_enabled),
                                      session_id);
   return std::make_unique<AgentPromptRunner>(std::move(impl), AgentPromptRunner::PrivateTag{});
 }

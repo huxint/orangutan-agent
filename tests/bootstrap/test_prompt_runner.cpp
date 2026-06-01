@@ -738,6 +738,148 @@ TEST_CASE("AgentPromptRunner invokes loaded skill bodies through the tool path",
   });
 }
 
+TEST_CASE("AgentPromptRunner filters workspace skills by selected agent allowlist",
+          "[unit][bootstrap][prompt_runner][skill]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-agent-skills"};
+  const auto skills_dir = temp.path() / ".orangutan" / "skills";
+  write_file(skills_dir / "release-note.md",
+             "---\n"
+             "name: release-note\n"
+             "description: Draft release notes from completed changes.\n"
+             "triggers: release notes\n"
+             "---\n"
+             "Release note body.\n");
+  write_file(skills_dir / "review-pr.md",
+             "---\n"
+             "name: review-pr\n"
+             "description: Review a pull request.\n"
+             "triggers: code review\n"
+             "---\n"
+             "Review body.\n");
+  auto cfg = parse_config(R"json(
+{
+  "permissions": {
+    "allow": [
+      {"tool_pattern": "skill.invoke"}
+    ]
+  },
+  "agents": {
+    "writer": {
+      "skills_enabled": ["release-note"]
+    }
+  }
+}
+)json");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    auto assembly = build_assembly(temp.path(), io, false);
+    RecordingProvider recording{{
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "skill-filtered",
+                .name = "skill.invoke",
+                .input_json = R"({"name":"review-pr"})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        },
+        text_response("filtered done"),
+    }};
+
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.mode = permission::Mode::strict;
+    options.agent_config_name = "writer";
+    options.skills_directory = skills_dir.string();
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto result =
+        co_await (*runner)->run_prompt(cli::PromptRunRequest{.prompt = "use skill", .mode = cli::CliMode::single_shot});
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "filtered done");
+
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 2);
+    REQUIRE(requests[0].system_prompt.has_value());
+    REQUIRE(requests[0].system_prompt->contains("Skill: release-note"));
+    REQUIRE_FALSE(requests[0].system_prompt->contains("Skill: review-pr"));
+    const auto output = tool_result_output_in(requests[1], "skill-filtered");
+    REQUIRE(output.contains("tool error: skill.invoke: skill is not loaded"));
+    REQUIRE(output.contains("skill: review-pr"));
+    REQUIRE(output.contains("reason: skill_not_loaded"));
+    REQUIRE((*runner)->skill_catalog_loads() == 1);
+  });
+}
+
+TEST_CASE("AgentPromptRunner treats an empty agent skill allowlist as no skills",
+          "[unit][bootstrap][prompt_runner][skill]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-empty-agent-skills"};
+  const auto skills_dir = temp.path() / ".orangutan" / "skills";
+  write_file(skills_dir / "release-note.md",
+             "---\n"
+             "name: release-note\n"
+             "description: Draft release notes from completed changes.\n"
+             "triggers: release notes\n"
+             "---\n"
+             "Release note body.\n");
+  auto cfg = parse_config(R"json(
+{
+  "permissions": {
+    "allow": [
+      {"tool_pattern": "skill.invoke"}
+    ]
+  },
+  "agents": {
+    "writer": {
+      "skills_enabled": []
+    }
+  }
+}
+)json");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    auto assembly = build_assembly(temp.path(), io, false);
+    RecordingProvider recording{{
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "skill-empty-allowlist",
+                .name = "skill.invoke",
+                .input_json = R"({"name":"release-note"})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        },
+        text_response("empty allowlist done"),
+    }};
+
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.mode = permission::Mode::strict;
+    options.permission_agent_name = "writer";
+    options.skills_directory = skills_dir.string();
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto result =
+        co_await (*runner)->run_prompt(cli::PromptRunRequest{.prompt = "use skill", .mode = cli::CliMode::single_shot});
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "empty allowlist done");
+
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 2);
+    REQUIRE(requests[0].system_prompt.has_value());
+    REQUIRE_FALSE(requests[0].system_prompt->contains("Skill: release-note"));
+    const auto output = tool_result_output_in(requests[1], "skill-empty-allowlist");
+    REQUIRE(output.contains("tool error: skill.invoke: skill is not loaded"));
+    REQUIRE(output.contains("skill: release-note"));
+    REQUIRE(output.contains("reason: skill_not_loaded"));
+    REQUIRE((*runner)->skill_catalog_loads() == 1);
+  });
+}
+
 #if defined(__linux__)
 TEST_CASE("AgentPromptRunner refreshes workspace skill snapshots before the next prompt",
           "[unit][bootstrap][prompt_runner][skill][watch]") {

@@ -9,7 +9,7 @@ activate them on demand without bloating the system prompt.
 ## Scope (v1)
 
 - `oran-skill::Loader` reading skills from `<workspace>/.orangutan/skills/<name>.md`.
-  **Status (slices 136-138, 2026-06-01):** the loader snapshots existing
+  **Status (slices 136-139, 2026-06-01):** the loader snapshots existing
   `<workspace>/.orangutan/skills/*.md` files through `oran-io`, parses
   single-line YAML-style frontmatter metadata, enforces a 4 KiB default body
   cap plus a separate frontmatter cap, treats a missing skills directory as an
@@ -43,13 +43,24 @@ activate them on demand without bloating the system prompt.
   configured-route `AgentPromptRunner` instances with a `skills_directory`.
   Exact pre-rendered catalog bytes still bypass filesystem loading for tests and
   embedders.
+- Per-agent skill enablement through `agents.<name>.skills_enabled`. **Status
+  (slice 139, 2026-06-01):** `oran-config` parses the optional non-empty string
+  array on each agent config, and `AgentPromptRunner` can select an
+  `agents.<name>` entry via `AgentPromptRunnerOptions::agent_config_name` (or
+  fall back to `permission_agent_name`). When the field is absent, all loaded
+  workspace skills remain visible. When it is present, the runner filters both
+  the compact section-4 catalog and the `skill.invoke` document snapshot to
+  that allowlist before each prompt-boundary snapshot replacement. A
+  disallowed skill name therefore behaves like any other unloaded skill at
+  invocation time. Ordinary binary startup still constructs the default CLI
+  runner; a user-facing runtime agent selector is a later slice.
 
 ## Scope (v1.1)
 
 - Skill chaining: a skill can declare follow-up skills it expects to be invoked.
 - Skill-specific tool subset: a skill can restrict which tools may be used while it's
   active.
-- Per-agent skill enablement (skills listed in `agent.<name>.skills_enabled`).
+- Persistent skill activation state across turns.
 
 ## Scope (v2)
 

@@ -7,14 +7,26 @@
 
 ## Snapshot
 
-- **Slice:** 138 (`xmake run orangutan` reports slice 138)
+- **Slice:** 139 (`xmake run orangutan` reports slice 139)
 - **Last completed history:**
-  [`histories/2026-06/20260601-2124-skill-hot-reload.md`](histories/2026-06/20260601-2124-skill-hot-reload.md)
+  [`histories/2026-06/20260601-2214-per-agent-skill-enable.md`](histories/2026-06/20260601-2214-per-agent-skill-enable.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** continue the prompt-runtime arc after skill
-  watcher/hot-reload, keeping catalog snapshots compact and skill bodies
-  outside the system preamble. Slice 138 adds `skill::WorkspaceSkillSnapshot`,
+- **Next intended slice:** continue the prompt-runtime arc after runner-level
+  per-agent skill enablement, keeping catalog snapshots compact and skill
+  bodies outside the system preamble. Slice 139 adds optional
+  `agents.<name>.skills_enabled` parsing to `oran-config` and lets
+  `AgentPromptRunner` select an `agents.<name>` entry through
+  `AgentPromptRunnerOptions::agent_config_name` (falling back to
+  `permission_agent_name` for current selected-agent callers). The runner
+  filters the workspace skill snapshot through that allowlist before replacing
+  section 4 and before serving `skill.invoke`; absent allowlists keep all
+  loaded skills visible, present empty arrays enable none, and filtered-out
+  skill names use the existing model-repairable `skill_not_loaded` path.
+  Ordinary binary startup still constructs the default CLI runner, so a
+  user-facing runtime agent selector remains downstream. Focused result:
+  `test-config` **37 cases / 274 assertions** and `test-bootstrap`
+  **90 cases / 566 assertions**. Slice 138 adds `skill::WorkspaceSkillSnapshot`,
   a prompt-boundary workspace skill refresh owner that watches
   `<workspace>/.orangutan/skills` with Linux inotify when available, keeps a
   bounded content-aware directory signature so unchanged prompts avoid reloads,
@@ -1299,7 +1311,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-http`: 3 cases / 21 assertions.
 - `oran-io`: 49 cases / 286 assertions.
 - `oran-storage`: 73 cases / 938 assertions.
-- `oran-config`: 37 cases / 270 assertions.
+- `oran-config`: 37 cases / 274 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 30 cases / 207 assertions.
 - `oran-memory`: 8 cases / 559 assertions.
@@ -1308,7 +1320,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 87 cases / 518 assertions.
+- `oran-bootstrap`: 90 cases / 566 assertions.
 
 ## Open Tech-Debt Rows
 

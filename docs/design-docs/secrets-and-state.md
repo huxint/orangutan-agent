@@ -44,7 +44,8 @@ Current implementation status:
   (`enabled`, `store_raw_bodies`, `retention_days`), top-level hook timeout
   policy (`hooks.timeout_ms`, default 2000), `profiles` (including optional
   per-profile `protocol` and `pricing`), `routes`, `session`, `web`,
-  `permissions`, and `agents.<name>.permissions`.
+  `permissions`, and `agents.<name>.permissions` plus optional
+  `agents.<name>.skills_enabled` skill allowlists.
 - `runtime.prompt.active_tools` accepts `"defaults"` or an explicit string
   array. The loader preserves the authored array order, accepts an empty
   explicit allowlist, rejects empty tool names, and leaves registry-name
@@ -71,6 +72,12 @@ Current implementation status:
 - `teams`, `channels`, `memory`, and `automation` are recognized root fields but do
   not have typed models yet. The `hooks` root has the v1 typed timeout field; sink
   and binding arrays remain recognized-but-untyped until external hook sinks land.
+- `agents.<name>.skills_enabled` accepts an explicit array of non-empty skill
+  names. The parser preserves author order and does not resolve names against
+  the filesystem; bootstrap applies the allowlist to the loaded workspace skill
+  snapshot for callers that select that agent config. An absent allowlist keeps
+  all loaded skills visible, while a present empty array means no skills are
+  enabled for that agent.
 
 ### Schema Validation
 

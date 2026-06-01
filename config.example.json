@@ -68,6 +68,7 @@
   },
   "agents": {
     "researcher": {
+      "skills_enabled": ["release-note", "review-pr"],
       "permissions": {
         "allow": [
           {"tool_pattern": "*", "capability": "egress_http"}

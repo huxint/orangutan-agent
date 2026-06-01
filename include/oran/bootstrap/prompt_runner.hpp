@@ -33,6 +33,10 @@ struct AgentPromptRunnerOptions {
   provider::System* provider{nullptr};
   provider::Route route{};
   permission::Mode mode{permission::Mode::default_};
+  /// Optional `agents.<name>` entry for per-agent prompt/runtime config such
+  /// as `skills_enabled`. Empty falls back to `permission_agent_name` so
+  /// current selected-agent tests keep one selector.
+  std::string agent_config_name{};
   std::string permission_agent_name{};
   std::string scope_key{"default"};
   std::string agent_key{"default"};

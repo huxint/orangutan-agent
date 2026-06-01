@@ -50,8 +50,9 @@ constexpr auto kRecognizedRootFields = std::array<std::string_view, 14>{
     "session",
 };
 
-constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
+constexpr auto kRecognizedAgentFields = std::array<std::string_view, 2>{
     "permissions",
+    "skills_enabled",
 };
 
 [[nodiscard]] Error config_error(std::string message, std::string path) {
@@ -351,6 +352,24 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 1>{
   config.use_defaults = false;
   config.tool_names = std::move(*parsed);
   return config;
+}
+
+[[nodiscard]] Result<std::vector<std::string>>
+parse_non_empty_string_array(const json& value, std::string_view path, std::string_view item_name) {
+  auto parsed = string_array(value, path);
+  if (!parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+
+  auto index = std::size_t{0};
+  for (const auto& name : *parsed) {
+    if (name.empty()) {
+      return std::unexpected(
+          config_error(std::string{item_name}.append(" must be non-empty"), element_path(path, index)));
+    }
+    ++index;
+  }
+  return parsed;
 }
 
 [[nodiscard]] Result<PromptRuntimeConfig> parse_prompt_runtime(const json& runtime) {
@@ -978,6 +997,15 @@ parse_agents(const json& root, bool strict, std::vector<ConfigWarning>& warnings
       permissions = std::move(*parsed);
     }
 
+    auto skills_enabled = std::optional<std::vector<std::string>>{};
+    if (const auto skills_it = value.find("skills_enabled"); skills_it != value.end()) {
+      auto parsed = parse_non_empty_string_array(*skills_it, child_path(agent_path, "skills_enabled"), "skill name");
+      if (!parsed) {
+        return std::unexpected(std::move(parsed.error()));
+      }
+      skills_enabled = std::move(*parsed);
+    }
+
     for (const auto& [key, _] : value.items()) {
       if (is_recognized_agent_field(key)) {
         continue;
@@ -995,6 +1023,7 @@ parse_agents(const json& root, bool strict, std::vector<ConfigWarning>& warnings
     agents.push_back(AgentConfig{
         .name = name,
         .permissions = std::move(permissions),
+        .skills_enabled = std::move(skills_enabled),
     });
   }
 
