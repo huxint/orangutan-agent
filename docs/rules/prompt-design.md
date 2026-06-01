@@ -95,7 +95,11 @@ The prompt is assembled in this order, oldest-stable to newest-dynamic:
    metadata on demand; session promotion moves selected tools into the next
    turn's full-schema catalog.
 4. **Skills catalog** — compact listing of activated skills. Adding /
-   removing a skill is a cache-break by design.
+   removing a skill is a cache-break by design. Activation, deactivation, and
+   expiration policy also lives here: policy inputs are resolved before prompt
+   rendering, active markers are deterministic metadata-only rows, and any
+   changed marker set intentionally changes section-4 bytes for the next
+   prompt. Skill bodies still stay out of sections (1)-(6).
 5. **Memory framing** — working-memory + session-memory summary. The
    summary text must be a function of memory state alone; do *not*
    thread "current time" or "request id" through it.
@@ -128,6 +132,13 @@ These are review-blocking violations.
 - **Skill bodies live in their own section, not inline in the system
   preamble.** Activating a skill must shift section (4), not rewrite
   section (1).
+- **Skill activation policy is prompt-boundary state.** Activation,
+  deactivation, and expiration rules must produce the same section-4 bytes for
+  the same loaded/allowed skill snapshot, transcript/policy state, and explicit
+  policy inputs. A policy result may change section (4) only before the next
+  prompt. If the rule for rendering or interpreting markers changes, bump the
+  section's cache-version; if only the active marker set changes, the content
+  hash and prefix hash provide the cache break.
 - **No "you have already done X" status text** glued into the preamble.
   That's conversation history; it lives in section (7).
 - **Minimum cacheable block size.** Anthropic caches blocks of ≥ 1024

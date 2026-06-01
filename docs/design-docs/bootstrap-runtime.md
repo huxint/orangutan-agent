@@ -128,7 +128,14 @@ the current `skill::ActivationPolicy`. That policy currently derives markers
 from the already-loaded conversation transcript, considers only successful
 `skill.invoke` tool-results carrying the versioned activation `data_json`, and
 filters through the current loaded/allowed catalog entries so removed or
-disallowed skills do not remain active in the next prompt.
+disallowed skills do not remain active in the next prompt. Automatic policy
+resolution runs only when the runner owns the workspace skill snapshot; exact
+`AgentPromptRunnerOptions::skills_catalog` bytes are treated as authoritative
+pre-rendered section-4 text for tests/embedders and bypass loader refresh plus
+activation-policy rendering. Policy output is applied before `agent::Loop`
+starts, never mid-turn, so multi-iteration provider/tool loops reuse one
+section-4 prefix while skill bodies continue to arrive only as conversation-tail
+tool-result text.
 When the caller
 selects an `AgentPromptRunnerOptions::agent_config_name` (or leaves it empty
 and selects `permission_agent_name`), the runner reads that `agents.<name>`

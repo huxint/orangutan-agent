@@ -474,6 +474,14 @@ cache key is replaced by a tuple `(section_id, content_hash, version)`.
 `prompt::Builder` includes each section version in `prefix_hash`, so a version
 bump invalidates the cached prefix even when content bytes are unchanged.
 
+Skill activation state normally invalidates through section-4 content, not a
+version bump: the same loaded/allowed skill snapshot plus the same
+`skill::ActivationPolicy` inputs must render the same `skills_catalog` bytes, while
+a changed active-marker set, explicit deactivation, or expiry changes that section's
+content hash for the next prompt. Bump `SectionVersions::skills_catalog` only when
+the rendering or interpretation rule changes. Invoked skill bodies remain section-7
+conversation-tail tool-result text and are excluded from prompt-cache hints.
+
 ## Configuration Shape
 
 ```jsonc

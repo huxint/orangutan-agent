@@ -35,6 +35,18 @@ activate them on demand without bloating the system prompt.
   versioned `skill.invoke` metadata in the session transcript and filters them
   through the current loaded/allowed catalog entries before section 4 is
   rendered for the next prompt.
+- Section-4 cache semantics for activation policy.
+  **Status (doc slice, 2026-06-02):** activation policy is now specified as
+  prompt-boundary state. For the same loaded/allowed skill snapshot, transcript
+  state, and explicit policy inputs, section 4 must render byte-identical text.
+  A changed active-marker set is an intentional cached-prefix invalidation for
+  the next prompt only; it does not rewrite section 1 and does not move skill
+  bodies into sections 1-6. Expiration and explicit deactivation must extend
+  `skill::ActivationPolicy` or a successor `oran-skill` policy value, and must
+  either use explicit caller-provided times/events or durable runtime state. The
+  renderer must not read hidden clocks. Exact
+  `AgentPromptRunnerOptions::skills_catalog` bytes remain an embedder/test
+  bypass of automatic loader and policy handling.
 - `skill.invoke(name, inputs)` tool runs a loaded skill. **Status (slices
   137 and 142, 2026-06-02):** the built-in is registered in the default active
   catalog with `Capability::invoke_skill`, parses only `name` plus optional
@@ -70,8 +82,9 @@ activate them on demand without bloating the system prompt.
 - Skill-specific tool subset: a skill can restrict which tools may be used while it's
   active.
 - Durable skill activation policy beyond the explicit transcript-derived
-  `skill::ActivationPolicy` (expiration, explicit deactivation, or cross-runtime
-  state) remains downstream.
+  `skill::ActivationPolicy` remains downstream. Expiration, explicit
+  deactivation, or cross-runtime state must preserve the section-4 cache
+  semantics above.
 
 ## Scope (v2)
 
@@ -97,7 +110,13 @@ activate them on demand without bloating the system prompt.
    `tool_name = "skill.invoke"`, and the next prompt marks successful
    transcript-backed invocations as active in section 4 while the active turn's
    cached prefix remains unchanged.
-5. `tests/skill/` ≥ 80% coverage. Slices 142-143 add activation metadata,
+5. Activation policy changes affect section 4 only at prompt boundaries. Given
+   identical loaded/allowed skills and identical policy inputs, repeated renders
+   produce byte-identical section-4 text. A changed active marker, deactivation,
+   or expiry changes the section-4 content hash and cached prefix only for the
+   next prompt, while invoked skill bodies remain conversation-tail tool-result
+   text.
+6. `tests/skill/` ≥ 80% coverage. Slices 142-143 add activation metadata,
    active-marker, and explicit activation-policy coverage; `tests/bootstrap`
    covers runner integration.
 
