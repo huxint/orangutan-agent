@@ -7,14 +7,20 @@
 
 ## Snapshot
 
-- **Slice:** 134 (`xmake run orangutan` reports slice 134)
+- **Slice:** 135 (`xmake run orangutan` reports slice 135)
 - **Last completed history:**
-  [`histories/2026-06/20260601-0709-stable-system-preamble.md`](histories/2026-06/20260601-0709-stable-system-preamble.md)
+  [`histories/2026-06/20260601-0745-skill-catalog-renderer.md`](histories/2026-06/20260601-0745-skill-catalog-renderer.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** continue the prompt-runtime arc with the real skill
-  catalog renderer / section-4 owner, keeping skill bodies out of the system
-  preamble and preserving the section-1 grep gate.
+- **Next intended slice:** continue the prompt-runtime arc with the skill
+  loader, catalog watcher, and `skill.invoke` execution path, keeping the
+  catalog snapshot compact and the skill body outside the system preamble.
+  Slice 135 adds `oran-skill` with a deterministic section-4 catalog renderer
+  plus `skill::CatalogOwner`; `AgentPromptRunner` now renders that catalog once
+  before loop entry, and bootstrap passes the pre-rendered section through the
+  existing prompt builder boundary. Focused result: `test-skill` **5 cases / 19
+  assertions**, `bench-skill` the deterministic renderer vs. a local
+  order-trusting baseline, `test-bootstrap` **85 cases / 491 assertions**.
   Slice 134 adds `agent::SystemPreamble` / `agent::SystemPreambleOwner` and the
   repository default section-1 preamble. `agent::Loop` uses its owned default
   when callers leave `RunTurnInputs::system_preamble` empty, and

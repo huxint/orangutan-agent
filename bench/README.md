@@ -17,6 +17,7 @@ bench/
 ├── permission/
 ├── tool/
 ├── memory/
+├── skill/
 ├── provider/
 ├── prompt/
 ├── agent/
@@ -36,6 +37,8 @@ bench/
   - `bench/<lib>/README.md` — describes what scenarios exist and what they compare.
 - Each meaningful design tradeoff ships an **A-vs-B** comparison.
 - Output: machine-readable JSON to stdout when `--json` flag is set.
+- The live buckets include `bench/skill/` for the section-4 skill catalog
+  renderer and owner.
 - See [`../docs/rules/testing-and-bench.md`](../docs/rules/testing-and-bench.md) and
   [`../docs/product-specs/0010-benchmark-harness.md`](../docs/product-specs/0010-benchmark-harness.md).
 
@@ -65,6 +68,7 @@ xmake run orangutan-bench --json > all.json
 | `config`           | in-memory JSON parse           | checked-in config file load |
 | `cli`              | single-shot prompt dispatch    | empty REPL shell dispatch |
 | `bootstrap`        | missing default config fallback | explicit config file load |
+| `skill`            | order-trusting metadata concat | deterministic catalog render |
 | `prompt`           | default active-tool set        | explicit active-tool subset |
 | `agent`            | no promoted tools              | after `tool.search` promotion |
 | `memory`           | raw `SessionRepository` append/load | typed `memory::session::Store` append/load |
@@ -78,7 +82,7 @@ Each table row corresponds to at least one scenario file in the bucket.
 ## Status
 
 `bench/core/`, `bench/async/`, `bench/http/`, `bench/io/`, `bench/storage/`, `bench/config/`,
-`bench/permission/`, `bench/hook/`, `bench/memory/`, `bench/tool/`,
+`bench/permission/`, `bench/hook/`, `bench/memory/`, `bench/skill/`, `bench/tool/`,
 `bench/prompt/`, `bench/provider/`, `bench/agent/`, `bench/cli/`, and
 `bench/bootstrap/` are live.
 Additional buckets land with their owning libraries.

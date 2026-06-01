@@ -41,6 +41,8 @@ struct AgentPromptRunnerOptions {
   /// Optional section-1 override. Empty uses the loop-owned default system
   /// preamble from `oran-agent`.
   std::string system_preamble{};
+  /// Optional pre-rendered section-4 skill catalog. Empty means no activated
+  /// skills are listed; skill bodies remain outside this runner option.
   std::string skills_catalog{};
   std::string memory_framing{};
   std::string per_agent_overlay{};
@@ -101,6 +103,9 @@ public:
   /// Count of stable section-1 renders performed by the runner. A multi-iteration
   /// turn increments this once, before `agent::Loop`.
   [[nodiscard]] std::size_t system_preamble_renders() const noexcept;
+  /// Count of skill-catalog section renders performed by the runner boundary.
+  /// A multi-iteration turn increments this once, before `agent::Loop`.
+  [[nodiscard]] std::size_t skill_catalog_renders() const noexcept;
   [[nodiscard]] const provider::Route& route() const noexcept;
 
   class Impl;

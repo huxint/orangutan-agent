@@ -9,6 +9,9 @@ activate them on demand without bloating the system prompt.
 ## Scope (v1)
 
 - `oran-skill::Loader` reading skills from `<workspace>/.orangutan/skills/<name>.md`.
+  **Status (slice 135, 2026-06-01):** the current library ships the catalog
+  renderer + section-4 owner only. Loader, watcher, and `skill.invoke` remain
+  planned.
 - Skill metadata in YAML frontmatter:
   - `name`, `description`, `triggers` (semantic intents), `inputs` (schema), `model_hint`.
 - Skill catalog rendered into the system prompt (compact listing).
@@ -64,6 +67,7 @@ activate them on demand without bloating the system prompt.
 ## Validation
 
 ```sh
-xmake build oran-skill
-xmake test test-misc-services
+xmake build test-skill bench-skill
+xmake run test-skill
+xmake run bench-skill
 ```

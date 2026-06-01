@@ -225,16 +225,17 @@ oran_lib("config", { "oran-core", "oran-storage" }, { "nlohmann_json", "re2" })
 oran_lib("permission", { "oran-core", "oran-config", "oran-storage", "oran-async" }, { "re2", "libsodium" })
 oran_lib("hook", { "oran-core", "oran-async" }, {})
 oran_lib("memory", { "oran-core", "oran-async", "oran-storage" }, { "nlohmann_json" })
+oran_lib("skill", { "oran-core" }, {})
 oran_lib("tool", { "oran-core", "oran-async", "oran-io", "oran-permission", "oran-hook" }, { "nlohmann_json" })
 oran_lib("prompt", { "oran-core", "oran-async", "oran-config", "oran-tool" }, {})
 oran_lib("provider", { "oran-core", "oran-async", "oran-config", "oran-prompt" }, { "nlohmann_json" })
 oran_lib("agent", { "oran-core", "oran-async", "oran-storage", "oran-prompt", "oran-tool", "oran-provider", "oran-hook" }, { "nlohmann_json" })
 oran_lib("cli", { "oran-core", "oran-async", "oran-hook", "oran-provider" }, {})
-oran_lib("bootstrap", { "oran-core", "oran-async", "oran-http", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-memory", "oran-tool", "oran-provider", "oran-agent", "oran-cli" }, {})
+oran_lib("bootstrap", { "oran-core", "oran-async", "oran-http", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-memory", "oran-skill", "oran-tool", "oran-provider", "oran-agent", "oran-cli" }, {})
 
 target("orangutan")
     set_kind("binary")
-    add_deps("oran-core", "oran-async", "oran-http", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-memory", "oran-tool", "oran-provider", "oran-agent", "oran-cli", "oran-bootstrap")
+    add_deps("oran-core", "oran-async", "oran-http", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-memory", "oran-skill", "oran-tool", "oran-provider", "oran-agent", "oran-cli", "oran-bootstrap")
     add_files(path.join(root, "src/main.cpp"))
     set_rundir(root)
 ```
@@ -245,6 +246,10 @@ blocking executor, so production bootstrap can use `async::Runtime::cpu_executor
 instead of blocking the main coroutine executor. Slice 111 makes `oran-bootstrap`
 depend on `oran-http` for the explicit `HttpProviderBackend` construction seam;
 slices 121-123 add the SSE parser/client path used by provider streaming.
+
+`oran-skill` is the section-4 prompt catalog renderer and owner. It depends only
+on `oran-core` for the error/result contract; loader, watcher, and invoke remain
+planned and will add `oran-io` later.
 
 `oran-provider` is currently the provider-domain + fake-provider +
 execution-runtime + route-resolution + protocol-mapping library. It depends on
@@ -268,7 +273,9 @@ depend on `oran-memory` as the composition root for the separate
 `<workspace>/.orangutan/sessions.db` pool/repository/store; the agent runner
 persistence slice consumes that owner next.
 
-`oran-bootstrap` depends on `oran-provider` so process startup can preflight the
+`oran-bootstrap` depends on `oran-skill` so the runner can own the pre-rendered
+section-4 catalog outside the stable system preamble. It also depends on
+`oran-provider` so process startup can preflight the
 configured default provider route before handing prompts to `oran-cli`. It also
 depends on `oran-agent` for slice 101's `AgentPromptRunner`, the bootstrap-owned
 `cli::PromptRunner` implementation that wraps a caller-supplied provider backend in

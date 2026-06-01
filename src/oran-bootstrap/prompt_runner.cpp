@@ -31,6 +31,7 @@
 #include <oran/memory.hpp>
 #include <oran/permission.hpp>
 #include <oran/provider.hpp>
+#include <oran/skill.hpp>
 #include <oran/storage.hpp>
 #include <oran/tool.hpp>
 
@@ -194,7 +195,7 @@ public:
         session_id_text_{format_session_id(session_id_)}, mode_{options.mode}, scope_key_{std::move(options.scope_key)},
         agent_key_{std::move(options.agent_key)}, identity_{std::move(options.identity)},
         origin_{std::move(options.origin)}, system_preamble_{make_system_preamble(std::move(options.system_preamble))},
-        skills_catalog_{std::move(options.skills_catalog)},
+        skills_catalog_{skill::RenderedCatalog{.section_text = std::move(options.skills_catalog)}},
         memory_framing_{memory::Framing{.section_text = std::move(options.memory_framing)}},
         per_agent_overlay_{std::move(options.per_agent_overlay)},
         trace_context_json_{std::move(options.trace_context_json)}, tool_choice_{std::move(options.tool_choice)},
@@ -238,6 +239,7 @@ public:
     const auto prev_transcript_size = conversation_tail.size();
     conversation_tail.push_back(core::Message::user_text(std::move(request.prompt)));
     const auto system_preamble = std::string{system_preamble_.render_once()};
+    const auto skills_catalog = std::string{skills_catalog_.render_once()};
     const auto memory_framing = std::string{memory_framing_.render_once()};
 
     auto promotion_snapshot = session_state_.promotion_snapshot(core::time::now_utc());
@@ -261,7 +263,7 @@ public:
         .tool_catalog = std::span<const core::ToolDef>{catalog},
         .active_tools = active_tools_,
         .promoted_tools = std::span<const std::string>{promotion_snapshot.tool_names},
-        .skills_catalog = skills_catalog_,
+        .skills_catalog = skills_catalog,
         .memory_framing = memory_framing,
         .per_agent_overlay = per_agent_overlay_,
         .conversation_tail = std::span<const core::Message>{conversation_tail},
@@ -344,6 +346,10 @@ public:
 
   [[nodiscard]] std::size_t system_preamble_renders() const noexcept {
     return system_preamble_.stats().renders;
+  }
+
+  [[nodiscard]] std::size_t skill_catalog_renders() const noexcept {
+    return skills_catalog_.stats().renders;
   }
 
   [[nodiscard]] const provider::Route& route() const noexcept {
@@ -436,7 +442,7 @@ private:
   std::string identity_;
   std::string origin_;
   agent::SystemPreambleOwner system_preamble_;
-  std::string skills_catalog_;
+  skill::CatalogOwner skills_catalog_;
   memory::FramingOwner memory_framing_;
   std::string per_agent_overlay_;
   std::string trace_context_json_;
@@ -524,6 +530,10 @@ std::size_t AgentPromptRunner::memory_framing_renders() const noexcept {
 
 std::size_t AgentPromptRunner::system_preamble_renders() const noexcept {
   return impl_->system_preamble_renders();
+}
+
+std::size_t AgentPromptRunner::skill_catalog_renders() const noexcept {
+  return impl_->skill_catalog_renders();
 }
 
 const provider::Route& AgentPromptRunner::route() const noexcept {

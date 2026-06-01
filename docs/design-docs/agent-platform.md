@@ -154,7 +154,9 @@ The agent loop owns:
   description listing; full schema arrives via `tool.search`. See
   [`tool-runtime.md`](tool-runtime.md) "Deferred Tools".
 - **Skills catalog renderer** — section (4). Compact listing only;
-  activated skill bodies shift this section, never section (1). See
+  activated skill bodies shift this section, never section (1). Slice 135 adds
+  `oran-skill` with the first deterministic section-4 catalog renderer and a
+  section-4 owner in bootstrap; see
   [`../product-specs/0009-skills.md`](../product-specs/0009-skills.md).
 - **Memory framing renderer** — section (5). Pure function of memory state;
   no per-iteration mutation. Slice 133 adds `memory::FramingOwner` in
@@ -211,6 +213,9 @@ system-preamble surface: it adopts the stable multi-part prompt separation and
 tool-catalog-outside-section-1 pattern, but rejects copying Claude Code's large
 Claude-specific system prompt because Orangutan's section 1 is a minimal runtime
 contract and sections 2-7 own tools, memory, skills, overlays, and tail state.
+Slice 135 applies the same section-separation logic to skills: it adds a
+compact section-4 catalog renderer and keeps skill bodies out of the stable
+prompt surface entirely.
 
 ## Cross-Cutting Concerns
 
@@ -322,7 +327,9 @@ renders it.
 ### Skill Hot-Reload
 
 Skills come from `<workspace>/.orangutan/skills/`. The runtime watches that directory
-(asio + inotify on Linux) and re-renders the catalog without restart.
+(asio + inotify on Linux) and re-renders the catalog without restart. Slice 135
+landed the first deterministic section-4 catalog renderer and owner boundary;
+loader/watcher/invoke still remain for later slices.
 
 ### Provider Cost Awareness
 

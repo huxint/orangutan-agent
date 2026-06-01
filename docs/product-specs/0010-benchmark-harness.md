@@ -53,6 +53,7 @@ one A-vs-B scenario:
 | `oran-config`   | in-memory JSON parse             | checked-in config file load |
 | `oran-cli`      | single-shot prompt dispatch      | empty REPL shell dispatch |
 | `oran-bootstrap` | missing default config fallback | explicit config file load |
+| `oran-skill`    | order-trusting metadata concat   | deterministic catalog render |
 | `oran-tool`     | hashmap lookup                 | static dispatch (stretch)  |
 | `oran-memory`   | raw `SessionRepository` append/load | typed `memory::session::Store` append/load; FTS5 vs sqlite-vec returns with long-term memory |
 | `oran-provider` | cache hints enabled            | cache hints disabled       |

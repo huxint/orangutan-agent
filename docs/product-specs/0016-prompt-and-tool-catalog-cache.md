@@ -43,8 +43,9 @@ promotion side effect that the first agent loop will reuse.
     `test-prompt`, and `bench-prompt`. It depends on `oran-core` (messages /
     tool definitions / explicit `Time` inputs), `oran-async` (awaitable
     contract), `oran-config` (active-tool selector), and `oran-tool` (catalog
-    bytes via `CatalogRenderer`). Memory and skill renderers are still plain
-    section inputs until their libraries land.
+    bytes via `CatalogRenderer`). Memory and skill section inputs now have
+    their own owners outside `oran-prompt`; `BuilderInputs` still accepts the
+    pre-rendered strings.
 - **`prompt::CacheSection`**:
   ```cpp
   struct CacheSection {
@@ -214,8 +215,14 @@ promotion side effect that the first agent loop will reuse.
   stable `BuilderInputs::memory_framing` string. Future long-term recall can
   fill `memory::Framing` without changing the builder or re-querying inside
   provider/tool iterations.
-- **Skill catalog renderer** populates section 4. Activating a skill
-  shifts section 4, never section 1.
+- **Skill catalog renderer** populates section 4.
+  **Status (slice 135, 2026-06-01):** `oran-skill` now ships the first
+  deterministic section-4 catalog renderer plus a section-4 owner for
+  bootstrap. `AgentPromptRunner` renders the pre-materialized catalog once
+  before loop entry, and `prompt::Builder` still consumes the stable
+  `BuilderInputs::skills_catalog` string. Skill bodies remain outside the
+  system preamble; loader, watcher, and `skill.invoke` remain downstream.
+  Activating a skill shifts section 4, never section 1.
 - **Active-set hot reload**. `runtime.prompt.active_tools` honours
   config reload without restart; the promotion set survives the
   reload; the cache invalidates by bumping `cache_version` for the

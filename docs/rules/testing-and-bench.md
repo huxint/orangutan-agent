@@ -45,6 +45,7 @@ bench/
 ├── permission/
 ├── tool/
 ├── memory/
+├── skill/
 ├── provider/
 ├── prompt/
 ├── agent/
@@ -248,6 +249,7 @@ list, stop when the bench is satisfied. Going straight to tier 4
 | Search backend | memory | FTS5 vs. sqlite-vec vs. external HTTP API |
 | Dispatch overhead | tool | static lookup vs. hashmap |
 | Permission eval | permission | rule-tree vs. linear scan |
+| Skill catalog renderer | skill | order-trusting metadata concat vs. deterministic catalog render |
 | Mailbox throughput | orchestration | bounded channel vs. asio::channel native |
 | Strategy cost | orchestration | leader-worker vs. vote |
 | Coroutine handoff | async | direct coroutine post loop vs. bounded `Channel<T>` |

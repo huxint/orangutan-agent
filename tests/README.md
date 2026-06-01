@@ -43,6 +43,8 @@ tests/
 - Catch2 v3. `[unit]` / `[integration]` / `[property]` tags.
 - One file per scenario / feature; small. Don't create monoliths.
 - Use `test-helpers/` for shared setup; do not duplicate fixtures.
+- The live buckets include `tests/skill/` for the section-4 skill catalog
+  renderer and owner.
 - See [`../docs/rules/testing-and-bench.md`](../docs/rules/testing-and-bench.md) for
   the full convention.
 
@@ -58,7 +60,7 @@ xmake run test-agent "specific test name"
 ## Status
 
 `tests/core/`, `tests/async/`, `tests/http/`, `tests/io/`, `tests/storage/`, `tests/config/`,
-`tests/permission/`, `tests/hook/`, `tests/memory/`, `tests/tool/`,
+`tests/permission/`, `tests/hook/`, `tests/memory/`, `tests/skill/`, `tests/tool/`,
 `tests/prompt/`, `tests/provider/`, `tests/agent/`, `tests/cli/`, and
 `tests/bootstrap/` are live and registered with `xmake test`.
 Additional buckets land with their owning libraries.
