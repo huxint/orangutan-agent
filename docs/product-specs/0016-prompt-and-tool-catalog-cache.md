@@ -229,9 +229,9 @@ promotion side effect that the first agent loop will reuse.
   skill changes intentionally break section-4 cache bytes on the next prompt,
   not in the middle of an active turn. Activating a future persistent skill
   section shifts section 4, never section 1.
-  **Status (doc slice + slice 144, 2026-06-02):** section-4 activation
+  **Status (doc slice + slices 144-145, 2026-06-02):** section-4 activation
   policy cache semantics are explicit, and `skill::ActivationPolicy` now has
-  the first explicit deactivation input. The skills section is a pure render of
+  explicit deactivation and expiration inputs. The skills section is a pure render of
   the loaded/allowed skill metadata snapshot plus explicit policy inputs and
   transcript/durable activation state. Given identical inputs, repeated renders
   must be byte-identical. A changed active marker, deactivation event, or expiry

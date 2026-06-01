@@ -115,6 +115,41 @@ validate_deactivated_skill_names(std::span<const std::string> names) {
   return ordered;
 }
 
+[[nodiscard]] core::Result<std::vector<std::string_view>> expired_skill_names(const ActivationPolicy& policy) {
+  std::vector<std::string_view> ordered;
+  ordered.reserve(policy.expirations.size());
+  for (const auto& expiration : policy.expirations) {
+    if (auto valid = validate_active_skill(ActiveSkill{.name = expiration.name}); !valid) {
+      return std::unexpected(std::move(valid).error());
+    }
+    ordered.emplace_back(expiration.name);
+  }
+  std::ranges::sort(ordered);
+  for (std::size_t i = 1; i < ordered.size(); ++i) {
+    if (ordered[i - 1] == ordered[i]) {
+      return std::unexpected(core::Error::invalid_argument("skill expiration names must be unique")
+                                 .with("skill", std::string{ordered[i]}));
+    }
+  }
+
+  if (!policy.expirations.empty() && !policy.evaluation_time.has_value()) {
+    return std::unexpected(
+        core::Error::invalid_argument("skill expiration policy requires an explicit evaluation time"));
+  }
+
+  std::vector<std::string_view> expired;
+  expired.reserve(policy.expirations.size());
+  if (!policy.evaluation_time.has_value()) {
+    return expired;
+  }
+  for (const auto& expiration : policy.expirations) {
+    if (expiration.expires_at <= *policy.evaluation_time) {
+      expired.emplace_back(expiration.name);
+    }
+  }
+  return expired;
+}
+
 [[nodiscard]] std::string join_strings(std::span<const std::string> values, std::string_view separator) {
   std::size_t bytes = 0;
   for (const auto& value : values) {
@@ -378,6 +413,10 @@ core::Result<std::vector<ActiveSkill>> resolve_active_skills(ActivationPolicy po
   if (!deactivated_names) {
     return std::unexpected(std::move(deactivated_names).error());
   }
+  auto expired_names = expired_skill_names(policy);
+  if (!expired_names) {
+    return std::unexpected(std::move(expired_names).error());
+  }
 
   std::vector<const CatalogEntry*> ordered_entries;
   ordered_entries.reserve(available_entries.size());
@@ -400,11 +439,12 @@ core::Result<std::vector<ActiveSkill>> resolve_active_skills(ActivationPolicy po
   }
 
   auto active_skills = active_skills_from_transcript(transcript);
-  std::erase_if(active_skills, [&ordered_entries, &deactivated_names](const ActiveSkill& active) {
+  std::erase_if(active_skills, [&ordered_entries, &deactivated_names, &expired_names](const ActiveSkill& active) {
     const auto name = std::string_view{active.name};
-    return !std::ranges::contains(ordered_entries, name, [](const CatalogEntry* entry) -> std::string_view {
-      return entry->name;
-    }) || std::ranges::contains(*deactivated_names, name);
+    return !std::ranges::contains(ordered_entries,
+                                  name,
+                                  [](const CatalogEntry* entry) -> std::string_view { return entry->name; }) ||
+           std::ranges::contains(*deactivated_names, name) || std::ranges::contains(*expired_names, name);
   });
   return active_skills;
 }

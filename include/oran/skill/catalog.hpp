@@ -16,6 +16,7 @@
 #include <vector>
 
 #include <oran/core/result.hpp>
+#include <oran/core/time.hpp>
 
 namespace orangutan::core {
 struct Message;
@@ -38,14 +39,23 @@ struct ActiveSkill {
   friend bool operator==(const ActiveSkill&, const ActiveSkill&) = default;
 };
 
+struct SkillExpiration {
+  std::string name;
+  core::Time expires_at{};
+
+  friend bool operator==(const SkillExpiration&, const SkillExpiration&) = default;
+};
+
 struct ActivationPolicy {
   /// Current v1 policy: successful `skill.invoke` tool results in the session
   /// transcript mark the skill active on the next prompt. Explicit
   /// deactivations subtract from that derived set at the same prompt boundary;
-  /// future expiration rules should extend this value instead of parsing
-  /// transcript state at bootstrap call sites.
+  /// expirations subtract only when callers also supply an explicit evaluation
+  /// time. The renderer never reads a hidden clock.
   bool transcript_markers_enabled{true};
   std::vector<std::string> deactivated_skill_names{};
+  std::optional<core::Time> evaluation_time{};
+  std::vector<SkillExpiration> expirations{};
 
   friend bool operator==(const ActivationPolicy&, const ActivationPolicy&) = default;
 };

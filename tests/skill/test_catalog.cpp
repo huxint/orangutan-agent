@@ -1,5 +1,6 @@
 // tests/skill/test_catalog.cpp - skill catalog renderer coverage.
 
+#include <chrono>
 #include <optional>
 #include <span>
 #include <string>
@@ -378,6 +379,142 @@ TEST_CASE("ActivationPolicy rejects invalid explicit deactivations", "[unit][ski
   const auto blank = skill::resolve_active_skills(
       skill::ActivationPolicy{
           .deactivated_skill_names = {" "},
+      },
+      std::span<const core::Message>{},
+      std::span<const skill::CatalogEntry>{available});
+  REQUIRE_FALSE(blank.has_value());
+  REQUIRE(blank.error().kind() == core::ErrorKind::invalid_argument);
+}
+
+TEST_CASE("ActivationPolicy expires transcript-derived active markers at explicit evaluation time",
+          "[unit][skill][catalog]") {
+  auto release_activation = skill::render_activation_data_json("release-note");
+  auto review_activation = skill::render_activation_data_json("review-pr");
+  REQUIRE(release_activation.has_value());
+  REQUIRE(review_activation.has_value());
+  const std::vector<core::Message> transcript{
+      core::Message{
+          .role = core::Role::assistant,
+          .blocks =
+              {
+                  core::ToolUseContent{
+                      .id = "skill-1",
+                      .name = "skill.invoke",
+                      .input_json = R"({"name":"release-note"})",
+                  },
+                  core::ToolUseContent{
+                      .id = "skill-2",
+                      .name = "skill.invoke",
+                      .input_json = R"({"name":"review-pr"})",
+                  },
+              },
+          .created_at = std::nullopt,
+      },
+      core::Message{
+          .role = core::Role::tool,
+          .blocks =
+              {
+                  core::ToolResultContent{
+                      .tool_use_id = "skill-1",
+                      .output = "release body",
+                      .data_json = *release_activation,
+                      .is_error = false,
+                  },
+                  core::ToolResultContent{
+                      .tool_use_id = "skill-2",
+                      .output = "review body",
+                      .data_json = *review_activation,
+                      .is_error = false,
+                  },
+              },
+          .created_at = std::nullopt,
+      },
+  };
+  const std::vector<skill::CatalogEntry> available{
+      skill::CatalogEntry{
+          .name = "release-note",
+          .description = "Draft release notes.",
+          .triggers = {},
+          .model_hint = std::nullopt,
+      },
+      skill::CatalogEntry{
+          .name = "review-pr",
+          .description = "Review code changes.",
+          .triggers = {},
+          .model_hint = std::nullopt,
+      },
+  };
+  const auto now = core::Time{core::Time::time_point{std::chrono::seconds{10}}};
+  const auto past = core::Time{core::Time::time_point{std::chrono::seconds{5}}};
+  const auto future = core::Time{core::Time::time_point{std::chrono::seconds{15}}};
+
+  const auto active = skill::resolve_active_skills(
+      skill::ActivationPolicy{
+          .evaluation_time = now,
+          .expirations =
+              {
+                  skill::SkillExpiration{.name = "release-note", .expires_at = past},
+                  skill::SkillExpiration{.name = "review-pr", .expires_at = future},
+              },
+      },
+      std::span<const core::Message>{transcript},
+      std::span<const skill::CatalogEntry>{available});
+  const auto repeated = skill::resolve_active_skills(
+      skill::ActivationPolicy{
+          .evaluation_time = now,
+          .expirations =
+              {
+                  skill::SkillExpiration{.name = "release-note", .expires_at = past},
+                  skill::SkillExpiration{.name = "review-pr", .expires_at = future},
+              },
+      },
+      std::span<const core::Message>{transcript},
+      std::span<const skill::CatalogEntry>{available});
+
+  REQUIRE(active.has_value());
+  REQUIRE(repeated.has_value());
+  REQUIRE(*active == std::vector<skill::ActiveSkill>{skill::ActiveSkill{.name = "review-pr"}});
+  REQUIRE(*active == *repeated);
+}
+
+TEST_CASE("ActivationPolicy rejects invalid explicit expirations", "[unit][skill][catalog]") {
+  const std::vector<skill::CatalogEntry> available{
+      skill::CatalogEntry{
+          .name = "release-note",
+          .description = "Draft release notes.",
+          .triggers = {},
+          .model_hint = std::nullopt,
+      },
+  };
+  const auto now = core::Time{core::Time::time_point{std::chrono::seconds{10}}};
+
+  const auto missing_time = skill::resolve_active_skills(
+      skill::ActivationPolicy{
+          .expirations = {skill::SkillExpiration{.name = "release-note", .expires_at = now}},
+      },
+      std::span<const core::Message>{},
+      std::span<const skill::CatalogEntry>{available});
+  REQUIRE_FALSE(missing_time.has_value());
+  REQUIRE(missing_time.error().kind() == core::ErrorKind::invalid_argument);
+
+  const auto duplicate = skill::resolve_active_skills(
+      skill::ActivationPolicy{
+          .evaluation_time = now,
+          .expirations =
+              {
+                  skill::SkillExpiration{.name = "release-note", .expires_at = now},
+                  skill::SkillExpiration{.name = "release-note", .expires_at = now},
+              },
+      },
+      std::span<const core::Message>{},
+      std::span<const skill::CatalogEntry>{available});
+  REQUIRE_FALSE(duplicate.has_value());
+  REQUIRE(duplicate.error().kind() == core::ErrorKind::invalid_argument);
+
+  const auto blank = skill::resolve_active_skills(
+      skill::ActivationPolicy{
+          .evaluation_time = now,
+          .expirations = {skill::SkillExpiration{.name = " ", .expires_at = now}},
       },
       std::span<const core::Message>{},
       std::span<const skill::CatalogEntry>{available});

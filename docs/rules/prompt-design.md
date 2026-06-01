@@ -214,17 +214,19 @@ When a slice introduces a new prompt-bearing artifact:
 - [`../product-specs/0009-skills.md`](../product-specs/0009-skills.md)
   — skill body shape and per-skill body size cap.
 
-Slices 135-144 land the first deterministic section-4 owner, loader snapshot,
+Slices 135-145 land the first deterministic section-4 owner, loader snapshot,
 one-shot `skill.invoke` dispatch path, prompt-boundary hot-reload,
 runner-selected per-agent filtering, and transcript-derived active skill
 markers plus an explicit `skill::ActivationPolicy` resolver with
-caller-supplied deactivation names in `oran-skill`, `oran-tool`, and bootstrap.
+caller-supplied deactivation names and expiration inputs in `oran-skill`,
+`oran-tool`, and bootstrap.
 That owner keeps skill bodies out of section 1 and renders a compact
 metadata-only catalog before loop entry; `skill.invoke` returns body text as an
 ordinary conversation-tail tool result, so it does not mutate cached sections
 (1)-(6) during an active turn. Watcher / signature refresh, per-agent allowlist
-filtering, successful activation metadata, and explicit deactivation policy
-inputs replace section-4 bytes before the next prompt when skill files, selected
-agent config, loaded transcript state, or policy state change.
+filtering, successful activation metadata, explicit deactivation policy inputs,
+and explicit expiration policy inputs replace section-4 bytes before the next
+prompt when skill files, selected agent config, loaded transcript state, or
+policy state change.
 - [`../product-specs/0010-benchmark-harness.md`](../product-specs/0010-benchmark-harness.md)
   — where the cache-hit-rate bench will live.

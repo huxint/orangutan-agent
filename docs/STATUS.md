@@ -7,16 +7,24 @@
 
 ## Snapshot
 
-- **Slice:** 144 (`xmake run orangutan` reports slice 144)
+- **Slice:** 145 (`xmake run orangutan` reports slice 145)
 - **Last completed history:**
-  [`histories/2026-06/20260602-0224-skill-deactivation-policy.md`](histories/2026-06/20260602-0224-skill-deactivation-policy.md)
+  [`histories/2026-06/20260602-0253-skill-expiration-policy.md`](histories/2026-06/20260602-0253-skill-expiration-policy.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** add the next explicit policy input for skill
-  expiration or a runtime-owned source of deactivation events. Do not add hidden
-  clocks to the renderer: expiration needs caller-provided time/durable state,
-  and deactivation events need an owner outside section rendering.
-  Slice 144 extends `skill::ActivationPolicy` with
+- **Next intended slice:** add a runtime-owned source of skill deactivation or
+  expiration policy inputs. Do not add hidden clocks to the renderer:
+  expiration needs caller-provided time/durable state, and deactivation events
+  need an owner outside section rendering. Slice 145 extends
+  `skill::ActivationPolicy` with explicit `SkillExpiration` rows plus optional
+  `evaluation_time`, validates expiration names as unique single-line skill
+  names, requires that evaluation time when expirations are supplied, and has
+  `skill::resolve_active_skills(...)` subtract expired names from
+  transcript-derived active markers after loaded/allowed catalog filtering. The
+  default bootstrap runner still supplies no expiration rows or evaluation time,
+  so configured-route behavior is unchanged until a future runtime source
+  provides explicit expiration state. Focused result: `test-skill`
+  **21 cases / 133 assertions**. Slice 144 extends `skill::ActivationPolicy` with
   `deactivated_skill_names`, validates that policy input as unique single-line
   skill names, and has `skill::resolve_active_skills(...)` subtract those names
   from transcript-derived active markers after loaded/allowed catalog

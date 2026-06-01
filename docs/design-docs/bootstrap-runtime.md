@@ -129,9 +129,10 @@ from the already-loaded conversation transcript, considers only successful
 `skill.invoke` tool-results carrying the versioned activation `data_json`, and
 filters through the current loaded/allowed catalog entries so removed or
 disallowed skills do not remain active in the next prompt. The policy surface
-also accepts explicit deactivated skill names, but the configured-route runner
-currently supplies an empty deactivation set until a runtime event source owns
-those inputs. Automatic policy resolution runs only when the runner owns the
+also accepts explicit deactivated skill names plus explicit expiration rows
+with caller-supplied evaluation time, but the configured-route runner currently
+supplies an empty deactivation set and no expiration rows until a runtime event
+source owns those inputs. Automatic policy resolution runs only when the runner owns the
 workspace skill snapshot; exact
 `AgentPromptRunnerOptions::skills_catalog` bytes are treated as authoritative
 pre-rendered section-4 text for tests/embedders and bypass loader refresh plus

@@ -29,7 +29,7 @@ activate them on demand without bloating the system prompt.
   Catalog rendering and skill-body placement follow the cache-section
   ordering in [`docs/rules/prompt-design.md`](../rules/prompt-design.md) —
   activated skill bodies shift the skills section, never the system
-  preamble. **Status (slices 142-144, 2026-06-02):** `oran-skill` can render
+  preamble. **Status (slices 142-145, 2026-06-02):** `oran-skill` can render
   deterministic `Active Skill: <name>` markers ahead of the ordinary compact
   skill entries. The current `skill::ActivationPolicy` derives markers from
   versioned `skill.invoke` metadata in the session transcript and filters them
@@ -37,18 +37,21 @@ activate them on demand without bloating the system prompt.
   rendered for the next prompt. Slice 144 adds explicit
   `deactivated_skill_names` policy input, validated as unique single-line names,
   so prompt-boundary deactivation subtracts from the transcript-derived active
-  marker set without hidden clocks or bootstrap-local parsing.
+  marker set without hidden clocks or bootstrap-local parsing. Slice 145 adds
+  explicit `SkillExpiration` rows plus optional `evaluation_time`; expiration
+  subtracts from the active marker set only when callers supply that evaluation
+  time, keeping the renderer free of hidden wall-clock reads.
 - Section-4 cache semantics for activation policy.
   **Status (doc slice, 2026-06-02):** activation policy is now specified as
   prompt-boundary state. For the same loaded/allowed skill snapshot, transcript
   state, and explicit policy inputs, section 4 must render byte-identical text.
   A changed active-marker set is an intentional cached-prefix invalidation for
   the next prompt only; it does not rewrite section 1 and does not move skill
-  bodies into sections 1-6. Slice 144 implements the first explicit
-  deactivation input on `skill::ActivationPolicy`. Expiration and durable
-  runtime deactivation sources must either use explicit caller-provided
-  times/events or durable runtime state; the renderer must not read hidden
-  clocks. Exact
+  bodies into sections 1-6. Slices 144-145 implement the first explicit
+  deactivation and expiration inputs on `skill::ActivationPolicy`. Expiration
+  and durable runtime deactivation sources must either use explicit
+  caller-provided times/events or durable runtime state; the renderer must not
+  read hidden clocks. Exact
   `AgentPromptRunnerOptions::skills_catalog` bytes remain an embedder/test
   bypass of automatic loader and policy handling.
 - `skill.invoke(name, inputs)` tool runs a loaded skill. **Status (slices
@@ -86,7 +89,7 @@ activate them on demand without bloating the system prompt.
 - Skill-specific tool subset: a skill can restrict which tools may be used while it's
   active.
 - Durable skill activation policy beyond explicit `skill::ActivationPolicy`
-  inputs remains downstream. Expiration, runtime-owned deactivation events, or
+  inputs remains downstream. Runtime-owned expiration/deactivation events or
   cross-runtime state must preserve the section-4 cache semantics above.
 
 ## Scope (v2)
@@ -119,9 +122,10 @@ activate them on demand without bloating the system prompt.
    or expiry changes the section-4 content hash and cached prefix only for the
    next prompt, while invoked skill bodies remain conversation-tail tool-result
    text.
-6. `tests/skill/` ≥ 80% coverage. Slices 142-144 add activation metadata,
-   active-marker, explicit activation-policy, and explicit deactivation-policy
-   coverage; `tests/bootstrap` covers runner integration.
+6. `tests/skill/` ≥ 80% coverage. Slices 142-145 add activation metadata,
+   active-marker, explicit activation-policy, explicit deactivation-policy, and
+   explicit expiration-policy coverage; `tests/bootstrap` covers runner
+   integration.
 
 ## Design Doc Cross-References
 

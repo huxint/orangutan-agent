@@ -181,7 +181,10 @@ The agent loop owns:
   expiration or deactivation rules extend the section-4 owner instead of
   adding ad hoc transcript parsing in bootstrap. Slice 144 adds explicit
   `ActivationPolicy::deactivated_skill_names` so caller-provided deactivation
-  events subtract from transcript-derived active markers at the same boundary.
+  events subtract from transcript-derived active markers at the same boundary,
+  and slice 145 adds explicit `SkillExpiration` rows plus caller-supplied
+  `ActivationPolicy::evaluation_time` so expiration is deterministic policy
+  input rather than a renderer-owned clock read.
   The policy is resolved only at prompt boundaries: identical loaded/allowed
   snapshots plus identical policy inputs render byte-identical section-4 bytes,
   while changed activation, deactivation, or expiry state intentionally changes
