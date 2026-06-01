@@ -38,6 +38,16 @@ struct ActiveSkill {
   friend bool operator==(const ActiveSkill&, const ActiveSkill&) = default;
 };
 
+struct ActivationPolicy {
+  /// Current v1 policy: successful `skill.invoke` tool results in the session
+  /// transcript mark the skill active on the next prompt. Future expiration or
+  /// explicit deactivation rules should extend this value instead of parsing
+  /// transcript state at bootstrap call sites.
+  bool transcript_markers_enabled{true};
+
+  friend bool operator==(const ActivationPolicy&, const ActivationPolicy&) = default;
+};
+
 struct RenderedCatalog {
   std::string section_text;
 
@@ -67,6 +77,10 @@ public:
 [[nodiscard]] core::Result<std::string> render_activation_data_json(std::string_view skill_name);
 [[nodiscard]] std::optional<ActiveSkill> active_skill_from_data_json(std::string_view data_json);
 [[nodiscard]] std::vector<ActiveSkill> active_skills_from_transcript(std::span<const core::Message> transcript);
+[[nodiscard]] core::Result<std::vector<ActiveSkill>>
+resolve_active_skills(ActivationPolicy policy,
+                      std::span<const core::Message> transcript,
+                      std::span<const CatalogEntry> available_entries);
 
 /// Owner for section-4 prompt skill-catalog bytes.
 ///

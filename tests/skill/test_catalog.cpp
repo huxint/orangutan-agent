@@ -178,6 +178,131 @@ TEST_CASE("Skill activation metadata round-trips through transcripts", "[unit][s
       skill::active_skill_from_data_json(R"({"kind":"other","version":1,"name":"release-note"})").has_value());
 }
 
+TEST_CASE("ActivationPolicy resolves active markers against available skills", "[unit][skill][catalog]") {
+  auto release_activation = skill::render_activation_data_json("release-note");
+  auto missing_activation = skill::render_activation_data_json("removed-skill");
+  REQUIRE(release_activation.has_value());
+  REQUIRE(missing_activation.has_value());
+  const std::vector<core::Message> transcript{
+      core::Message{
+          .role = core::Role::assistant,
+          .blocks =
+              {
+                  core::ToolUseContent{
+                      .id = "skill-1",
+                      .name = "skill.invoke",
+                      .input_json = R"({"name":"release-note"})",
+                  },
+                  core::ToolUseContent{
+                      .id = "skill-2",
+                      .name = "skill.invoke",
+                      .input_json = R"({"name":"removed-skill"})",
+                  },
+              },
+          .created_at = std::nullopt,
+      },
+      core::Message{
+          .role = core::Role::tool,
+          .blocks =
+              {
+                  core::ToolResultContent{
+                      .tool_use_id = "skill-1",
+                      .output = "release body",
+                      .data_json = *release_activation,
+                      .is_error = false,
+                  },
+                  core::ToolResultContent{
+                      .tool_use_id = "skill-2",
+                      .output = "removed body",
+                      .data_json = *missing_activation,
+                      .is_error = false,
+                  },
+              },
+          .created_at = std::nullopt,
+      },
+  };
+  const std::vector<skill::CatalogEntry> available{
+      skill::CatalogEntry{
+          .name = "release-note",
+          .description = "Draft release notes.",
+          .triggers = {},
+          .model_hint = std::nullopt,
+      },
+  };
+
+  const auto active = skill::resolve_active_skills(skill::ActivationPolicy{},
+                                                   std::span<const core::Message>{transcript},
+                                                   std::span<const skill::CatalogEntry>{available});
+
+  REQUIRE(active.has_value());
+  REQUIRE(*active == std::vector<skill::ActiveSkill>{skill::ActiveSkill{.name = "release-note"}});
+}
+
+TEST_CASE("ActivationPolicy can disable transcript-derived active markers", "[unit][skill][catalog]") {
+  auto activation = skill::render_activation_data_json("release-note");
+  REQUIRE(activation.has_value());
+  const std::vector<core::Message> transcript{
+      core::Message{
+          .role = core::Role::assistant,
+          .blocks = {core::ToolUseContent{
+              .id = "skill-1",
+              .name = "skill.invoke",
+              .input_json = R"({"name":"release-note"})",
+          }},
+          .created_at = std::nullopt,
+      },
+      core::Message{
+          .role = core::Role::tool,
+          .blocks = {core::ToolResultContent{
+              .tool_use_id = "skill-1",
+              .output = "release body",
+              .data_json = *activation,
+              .is_error = false,
+          }},
+          .created_at = std::nullopt,
+      },
+  };
+  const std::vector<skill::CatalogEntry> available{
+      skill::CatalogEntry{
+          .name = "release-note",
+          .description = "Draft release notes.",
+          .triggers = {},
+          .model_hint = std::nullopt,
+      },
+  };
+
+  const auto active = skill::resolve_active_skills(skill::ActivationPolicy{.transcript_markers_enabled = false},
+                                                   std::span<const core::Message>{transcript},
+                                                   std::span<const skill::CatalogEntry>{available});
+
+  REQUIRE(active.has_value());
+  REQUIRE(active->empty());
+}
+
+TEST_CASE("ActivationPolicy rejects duplicate available skill entries", "[unit][skill][catalog]") {
+  const std::vector<skill::CatalogEntry> available{
+      skill::CatalogEntry{
+          .name = "release-note",
+          .description = "Draft release notes.",
+          .triggers = {},
+          .model_hint = std::nullopt,
+      },
+      skill::CatalogEntry{
+          .name = "release-note",
+          .description = "Draft another note.",
+          .triggers = {},
+          .model_hint = std::nullopt,
+      },
+  };
+
+  const auto active = skill::resolve_active_skills(skill::ActivationPolicy{},
+                                                   std::span<const core::Message>{},
+                                                   std::span<const skill::CatalogEntry>{available});
+
+  REQUIRE_FALSE(active.has_value());
+  REQUIRE(active.error().kind() == core::ErrorKind::invalid_argument);
+}
+
 TEST_CASE("CatalogOwner renders, replaces, and clears section state", "[unit][skill][catalog]") {
   skill::CatalogOwner owner{skill::RenderedCatalog{.section_text = "Skill: old"}};
 

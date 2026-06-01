@@ -29,11 +29,12 @@ activate them on demand without bloating the system prompt.
   Catalog rendering and skill-body placement follow the cache-section
   ordering in [`docs/rules/prompt-design.md`](../rules/prompt-design.md) —
   activated skill bodies shift the skills section, never the system
-  preamble. **Status (slice 142, 2026-06-02):** `oran-skill` can render
+  preamble. **Status (slices 142-143, 2026-06-02):** `oran-skill` can render
   deterministic `Active Skill: <name>` markers ahead of the ordinary compact
-  skill entries. The markers are derived from versioned `skill.invoke`
-  metadata in the session transcript and filtered through the current loaded
-  document snapshot before section 4 is rendered for the next prompt.
+  skill entries. The current `skill::ActivationPolicy` derives markers from
+  versioned `skill.invoke` metadata in the session transcript and filters them
+  through the current loaded/allowed catalog entries before section 4 is
+  rendered for the next prompt.
 - `skill.invoke(name, inputs)` tool runs a loaded skill. **Status (slices
   137 and 142, 2026-06-02):** the built-in is registered in the default active
   catalog with `Capability::invoke_skill`, parses only `name` plus optional
@@ -68,8 +69,9 @@ activate them on demand without bloating the system prompt.
 - Skill chaining: a skill can declare follow-up skills it expects to be invoked.
 - Skill-specific tool subset: a skill can restrict which tools may be used while it's
   active.
-- Durable skill activation policy beyond transcript-derived markers (expiration,
-  explicit deactivation, or cross-runtime state) remains downstream.
+- Durable skill activation policy beyond the explicit transcript-derived
+  `skill::ActivationPolicy` (expiration, explicit deactivation, or cross-runtime
+  state) remains downstream.
 
 ## Scope (v2)
 
@@ -95,8 +97,9 @@ activate them on demand without bloating the system prompt.
    `tool_name = "skill.invoke"`, and the next prompt marks successful
    transcript-backed invocations as active in section 4 while the active turn's
    cached prefix remains unchanged.
-5. `tests/skill/` ≥ 80% coverage. Slice 142 adds activation metadata and
-   active-marker coverage; `tests/bootstrap` covers runner integration.
+5. `tests/skill/` ≥ 80% coverage. Slices 142-143 add activation metadata,
+   active-marker, and explicit activation-policy coverage; `tests/bootstrap`
+   covers runner integration.
 
 ## Design Doc Cross-References
 

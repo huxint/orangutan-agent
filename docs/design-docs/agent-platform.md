@@ -176,7 +176,10 @@ The agent loop owns:
   skill body only as conversation-tail tool-result text, while the next prompt
   can render deterministic `Active Skill: <name>` rows in section 4 from
   successful transcript tool results that are still present in the current
-  loaded/allowed snapshot; see
+  loaded/allowed snapshot. Slice 143 makes that current policy explicit as
+  `skill::ActivationPolicy` / `skill::resolve_active_skills(...)`, so future
+  expiration or deactivation rules extend the section-4 owner instead of
+  adding ad hoc transcript parsing in bootstrap; see
   [`../product-specs/0009-skills.md`](../product-specs/0009-skills.md).
 - **Memory framing renderer** — section (5). Pure function of memory state;
   no per-iteration mutation. Slice 133 adds `memory::FramingOwner` in

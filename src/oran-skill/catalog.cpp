@@ -350,6 +350,38 @@ std::vector<ActiveSkill> active_skills_from_transcript(std::span<const core::Mes
   return active_skills;
 }
 
+core::Result<std::vector<ActiveSkill>> resolve_active_skills(ActivationPolicy policy,
+                                                             std::span<const core::Message> transcript,
+                                                             std::span<const CatalogEntry> available_entries) {
+  std::vector<const CatalogEntry*> ordered_entries;
+  ordered_entries.reserve(available_entries.size());
+  for (const auto& entry : available_entries) {
+    if (auto valid = validate_entry(entry); !valid) {
+      return std::unexpected(std::move(valid).error());
+    }
+    ordered_entries.push_back(&entry);
+  }
+  std::ranges::sort(ordered_entries, {}, [](const CatalogEntry* entry) { return std::string_view{entry->name}; });
+  for (std::size_t i = 1; i < ordered_entries.size(); ++i) {
+    if (ordered_entries[i - 1]->name == ordered_entries[i]->name) {
+      return std::unexpected(core::Error::invalid_argument("skill catalog entry names must be unique")
+                                 .with("skill", ordered_entries[i]->name));
+    }
+  }
+
+  if (!policy.transcript_markers_enabled) {
+    return std::vector<ActiveSkill>{};
+  }
+
+  auto active_skills = active_skills_from_transcript(transcript);
+  std::erase_if(active_skills, [&ordered_entries](const ActiveSkill& active) {
+    return !std::ranges::contains(ordered_entries,
+                                  std::string_view{active.name},
+                                  [](const CatalogEntry* entry) -> std::string_view { return entry->name; });
+  });
+  return active_skills;
+}
+
 CatalogOwner::CatalogOwner(RenderedCatalog catalog) : catalog_{std::move(catalog)} {}
 
 std::string_view CatalogOwner::render_once() {

@@ -7,14 +7,22 @@
 
 ## Snapshot
 
-- **Slice:** 142 (`xmake run orangutan` reports slice 142)
+- **Slice:** 143 (`xmake run orangutan` reports slice 143)
 - **Last completed history:**
-  [`histories/2026-06/20260602-0055-skill-active-markers.md`](histories/2026-06/20260602-0055-skill-active-markers.md)
+  [`histories/2026-06/20260602-0139-skill-activation-policy.md`](histories/2026-06/20260602-0139-skill-activation-policy.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** continue the prompt-runtime arc after
-  transcript-derived active skill markers, keeping skill activation policy
-  explicit before adding expiration/deactivation rules. Slice 142 adds
+- **Next intended slice:** continue the prompt-runtime arc after the explicit
+  transcript-derived skill activation policy, adding expiration/deactivation
+  only once its section-4 cache semantics are spelled out. Slice 143 adds
+  `skill::ActivationPolicy` plus `skill::resolve_active_skills(...)`, making
+  the current transcript-derived active-marker policy an `oran-skill` public
+  concept before future expiration/deactivation rules land. `AgentPromptRunner`
+  now asks that policy resolver to filter activation markers against the
+  current loaded/allowed skill catalog before rendering section 4, while the
+  active turn still receives skill bodies only as conversation-tail tool-result
+  text. Focused result: `test-skill` **17 cases / 111 assertions** and
+  `test-bootstrap` **95 cases / 617 assertions**. Slice 142 adds
   `skill::ActiveSkill` metadata plus versioned `skill.invoke` activation
   `data_json`, has `oran-skill` derive active markers from successful
   session transcript tool results, and has `AgentPromptRunner` render

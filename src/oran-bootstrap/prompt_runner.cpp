@@ -139,24 +139,6 @@ filter_skill_documents(std::span<const skill::SkillDocument> documents,
   return filtered;
 }
 
-[[nodiscard]] bool skill_document_exists(std::span<const skill::SkillDocument> documents, std::string_view name) {
-  return std::ranges::contains(documents, name, [](const skill::SkillDocument& document) -> std::string_view {
-    return document.metadata.name;
-  });
-}
-
-[[nodiscard]] std::vector<skill::ActiveSkill> filter_active_skills(std::span<const skill::ActiveSkill> active_skills,
-                                                                   std::span<const skill::SkillDocument> documents) {
-  auto filtered = std::vector<skill::ActiveSkill>{};
-  filtered.reserve(active_skills.size());
-  for (const auto& active : active_skills) {
-    if (skill_document_exists(documents, active.name)) {
-      filtered.push_back(active);
-    }
-  }
-  return filtered;
-}
-
 [[nodiscard]] Result<tool::OutputCapOptions> output_caps_from(const config::Config& cfg) {
   const auto max_text = checked_cap(cfg.runtime().tool_output.max_text_bytes, "runtime.tool_output.max_text_bytes");
   if (!max_text) {
@@ -452,11 +434,14 @@ private:
     }
     skill_documents_ =
         filter_skill_documents(std::span<const skill::SkillDocument>{skill_snapshot_->documents()}, skills_enabled_);
-    auto active_skills = skill::active_skills_from_transcript(conversation_tail);
-    auto filtered_active_skills = filter_active_skills(std::span<const skill::ActiveSkill>{active_skills},
-                                                       std::span<const skill::SkillDocument>{skill_documents_});
     auto entries = skill::catalog_entries_from(std::span<const skill::SkillDocument>{skill_documents_});
-    auto catalog = skill::render_catalog(entries, filtered_active_skills);
+    auto active_skills = skill::resolve_active_skills(skill::ActivationPolicy{},
+                                                      conversation_tail,
+                                                      std::span<const skill::CatalogEntry>{entries});
+    if (!active_skills) {
+      co_return std::unexpected(std::move(active_skills).error());
+    }
+    auto catalog = skill::render_catalog(entries, *active_skills);
     if (!catalog) {
       co_return std::unexpected(std::move(catalog).error());
     }
