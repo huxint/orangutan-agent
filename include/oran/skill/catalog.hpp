@@ -1,9 +1,10 @@
 // include/oran/skill/catalog.hpp - compact prompt-facing skill catalog.
 //
 // `oran-skill` owns the prompt section-4 bytes. Callers provide, or load, a
-// metadata snapshot and receive compact, deterministic catalog text. Skill
-// bodies are intentionally absent from this renderer; loader/invoke work
-// snapshots bodies without moving them into the stable system preamble.
+// metadata snapshot plus optional active-skill markers and receive compact,
+// deterministic catalog text. Skill bodies are intentionally absent from this
+// renderer; loader/invoke work snapshots bodies without moving them into the
+// stable system preamble.
 
 #pragma once
 
@@ -16,6 +17,10 @@
 
 #include <oran/core/result.hpp>
 
+namespace orangutan::core {
+struct Message;
+}  // namespace orangutan::core
+
 namespace orangutan::skill {
 
 struct CatalogEntry {
@@ -25,6 +30,12 @@ struct CatalogEntry {
   std::optional<std::string> model_hint;
 
   friend bool operator==(const CatalogEntry&, const CatalogEntry&) = default;
+};
+
+struct ActiveSkill {
+  std::string name;
+
+  friend bool operator==(const ActiveSkill&, const ActiveSkill&) = default;
 };
 
 struct RenderedCatalog {
@@ -42,9 +53,20 @@ struct CatalogStats {
 class CatalogRenderer {
 public:
   [[nodiscard]] core::Result<RenderedCatalog> render(std::span<const CatalogEntry> entries) const;
+  [[nodiscard]] core::Result<RenderedCatalog> render(std::span<const CatalogEntry> entries,
+                                                     std::span<const ActiveSkill> active_skills) const;
 };
 
 [[nodiscard]] core::Result<RenderedCatalog> render_catalog(std::span<const CatalogEntry> entries);
+[[nodiscard]] core::Result<RenderedCatalog> render_catalog(std::span<const CatalogEntry> entries,
+                                                           std::span<const ActiveSkill> active_skills);
+
+/// Versioned structured metadata emitted by `skill.invoke` on successful
+/// dispatch. It is small enough to travel in `ToolResultContent::data_json`;
+/// the text body remains the model-visible skill template.
+[[nodiscard]] core::Result<std::string> render_activation_data_json(std::string_view skill_name);
+[[nodiscard]] std::optional<ActiveSkill> active_skill_from_data_json(std::string_view data_json);
+[[nodiscard]] std::vector<ActiveSkill> active_skills_from_transcript(std::span<const core::Message> transcript);
 
 /// Owner for section-4 prompt skill-catalog bytes.
 ///

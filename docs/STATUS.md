@@ -7,14 +7,25 @@
 
 ## Snapshot
 
-- **Slice:** 141 (`xmake run orangutan` reports slice 141)
+- **Slice:** 142 (`xmake run orangutan` reports slice 142)
 - **Last completed history:**
-  [`histories/2026-06/20260601-2327-agent-prompt-overlay.md`](histories/2026-06/20260601-2327-agent-prompt-overlay.md)
+  [`histories/2026-06/20260602-0055-skill-active-markers.md`](histories/2026-06/20260602-0055-skill-active-markers.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** continue the prompt-runtime arc after typed
-  per-agent section-6 overlays, keeping catalog snapshots compact and skill
-  bodies outside the system preamble. Slice 141 adds
+- **Next intended slice:** continue the prompt-runtime arc after
+  transcript-derived active skill markers, keeping skill activation policy
+  explicit before adding expiration/deactivation rules. Slice 142 adds
+  `skill::ActiveSkill` metadata plus versioned `skill.invoke` activation
+  `data_json`, has `oran-skill` derive active markers from successful
+  session transcript tool results, and has `AgentPromptRunner` render
+  deterministic `Active Skill: <name>` rows in section 4 before the next
+  prompt when the skill is still loaded and allowed. The invoked skill body
+  still arrives only as conversation-tail tool-result text, so the active
+  turn's cached prefix stays unchanged. Focused result: `test-skill`
+  **14 cases / 102 assertions** and `test-bootstrap`
+  **95 cases / 617 assertions** (rerun through the localhost-safe path after
+  the expected sandbox `open: Operation not permitted` false negative). Slice
+  141 adds
   `agents.<name>.prompt_overlay` to `oran-config` and has
   `AgentPromptRunner` copy the selected agent's stable section-6 prompt text
   into `RunTurnInputs::per_agent_overlay` when callers did not supply exact

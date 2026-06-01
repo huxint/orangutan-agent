@@ -29,15 +29,22 @@ activate them on demand without bloating the system prompt.
   Catalog rendering and skill-body placement follow the cache-section
   ordering in [`docs/rules/prompt-design.md`](../rules/prompt-design.md) —
   activated skill bodies shift the skills section, never the system
-  preamble.
-- `skill.invoke(name, inputs)` tool runs a loaded skill. **Status (slice 137,
-  2026-06-01):** the built-in is registered in the default active catalog with
-  `Capability::invoke_skill`, parses only `name` plus optional raw JSON
-  `inputs`, delegates lookup through `DispatchContext::skill_invoke`, and
-  returns the matched markdown body as ordinary `tool_result` text for the next
-  provider iteration. The tool layer owns parsing, permissions, audit, hooks,
-  scheduler dispatch, and output caps; bootstrap owns the snapshot lookup so
-  `oran-tool` does not depend on `oran-skill`.
+  preamble. **Status (slice 142, 2026-06-02):** `oran-skill` can render
+  deterministic `Active Skill: <name>` markers ahead of the ordinary compact
+  skill entries. The markers are derived from versioned `skill.invoke`
+  metadata in the session transcript and filtered through the current loaded
+  document snapshot before section 4 is rendered for the next prompt.
+- `skill.invoke(name, inputs)` tool runs a loaded skill. **Status (slices
+  137 and 142, 2026-06-02):** the built-in is registered in the default active
+  catalog with `Capability::invoke_skill`, parses only `name` plus optional
+  raw JSON `inputs`, delegates lookup through `DispatchContext::skill_invoke`,
+  and returns the matched markdown body as ordinary `tool_result` text for the
+  next provider iteration. The successful output now also carries a small
+  `data_json` activation record (`kind=skill_activation`, `version=1`, `name`)
+  so the next prompt can mark that skill active in section 4 without parsing
+  model-visible body text. The tool layer owns parsing, permissions, audit,
+  hooks, scheduler dispatch, and output caps; bootstrap owns the snapshot
+  lookup so `oran-tool` does not depend on `oran-skill`.
 - Hot-reload via filesystem watcher (`asio` + inotify on Linux). **Status
   (slice 138, 2026-06-01):** prompt-boundary hot reload is implemented for
   configured-route `AgentPromptRunner` instances with a `skills_directory`.
@@ -61,7 +68,8 @@ activate them on demand without bloating the system prompt.
 - Skill chaining: a skill can declare follow-up skills it expects to be invoked.
 - Skill-specific tool subset: a skill can restrict which tools may be used while it's
   active.
-- Persistent skill activation state across turns.
+- Durable skill activation policy beyond transcript-derived markers (expiration,
+  explicit deactivation, or cross-runtime state) remains downstream.
 
 ## Scope (v2)
 
@@ -84,9 +92,11 @@ activate them on demand without bloating the system prompt.
 3. Removing the skill file from disk removes it from the next prompt's catalog
    without restart, while any already-running turn keeps its coherent snapshot.
 4. Skill activation is observable via the `tool_after` hook with
-   `tool_name = "skill.invoke"`.
-5. `tests/skill/` ≥ 80% coverage. Slice 138 adds watcher/snapshot refresh
-   coverage; `tests/bootstrap` covers runner integration.
+   `tool_name = "skill.invoke"`, and the next prompt marks successful
+   transcript-backed invocations as active in section 4 while the active turn's
+   cached prefix remains unchanged.
+5. `tests/skill/` ≥ 80% coverage. Slice 142 adds activation metadata and
+   active-marker coverage; `tests/bootstrap` covers runner integration.
 
 ## Design Doc Cross-References
 

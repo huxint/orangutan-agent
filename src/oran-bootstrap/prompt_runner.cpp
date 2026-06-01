@@ -139,6 +139,24 @@ filter_skill_documents(std::span<const skill::SkillDocument> documents,
   return filtered;
 }
 
+[[nodiscard]] bool skill_document_exists(std::span<const skill::SkillDocument> documents, std::string_view name) {
+  return std::ranges::contains(documents, name, [](const skill::SkillDocument& document) -> std::string_view {
+    return document.metadata.name;
+  });
+}
+
+[[nodiscard]] std::vector<skill::ActiveSkill> filter_active_skills(std::span<const skill::ActiveSkill> active_skills,
+                                                                   std::span<const skill::SkillDocument> documents) {
+  auto filtered = std::vector<skill::ActiveSkill>{};
+  filtered.reserve(active_skills.size());
+  for (const auto& active : active_skills) {
+    if (skill_document_exists(documents, active.name)) {
+      filtered.push_back(active);
+    }
+  }
+  return filtered;
+}
+
 [[nodiscard]] Result<tool::OutputCapOptions> output_caps_from(const config::Config& cfg) {
   const auto max_text = checked_cap(cfg.runtime().tool_output.max_text_bytes, "runtime.tool_output.max_text_bytes");
   if (!max_text) {
@@ -277,11 +295,6 @@ public:
   Impl& operator=(Impl&&) = delete;
 
   [[nodiscard]] async::Awaitable<Result<cli::PromptRunResult>> run_prompt(cli::PromptRunRequest request) {
-    auto refreshed_catalog = co_await refresh_skill_catalog_snapshot();
-    if (!refreshed_catalog) {
-      co_return std::unexpected(std::move(refreshed_catalog).error());
-    }
-
     auto catalog = registry_.catalog();
     auto conversation_tail = std::vector<core::Message>{};
     memory::session::Store* session_store = assembly_->session_store();
@@ -294,6 +307,11 @@ public:
       conversation_tail = std::move(*loaded);
     } else {
       conversation_tail = transcript_;
+    }
+
+    auto refreshed_catalog = co_await refresh_skill_catalog_snapshot(std::span<const core::Message>{conversation_tail});
+    if (!refreshed_catalog) {
+      co_return std::unexpected(std::move(refreshed_catalog).error());
     }
 
     const auto prev_transcript_size = conversation_tail.size();
@@ -423,7 +441,8 @@ public:
   }
 
 private:
-  [[nodiscard]] async::Awaitable<Result<void>> refresh_skill_catalog_snapshot() {
+  [[nodiscard]] async::Awaitable<Result<void>>
+  refresh_skill_catalog_snapshot(std::span<const core::Message> conversation_tail) {
     if (!skill_snapshot_.has_value()) {
       co_return Result<void>{};
     }
@@ -433,8 +452,11 @@ private:
     }
     skill_documents_ =
         filter_skill_documents(std::span<const skill::SkillDocument>{skill_snapshot_->documents()}, skills_enabled_);
+    auto active_skills = skill::active_skills_from_transcript(conversation_tail);
+    auto filtered_active_skills = filter_active_skills(std::span<const skill::ActiveSkill>{active_skills},
+                                                       std::span<const skill::SkillDocument>{skill_documents_});
     auto entries = skill::catalog_entries_from(std::span<const skill::SkillDocument>{skill_documents_});
-    auto catalog = skill::render_catalog(entries);
+    auto catalog = skill::render_catalog(entries, filtered_active_skills);
     if (!catalog) {
       co_return std::unexpected(std::move(catalog).error());
     }
@@ -454,9 +476,13 @@ private:
                                  .with("skill", std::string{skill_name})
                                  .with("reason", "skill_not_loaded"));
     }
+    auto data_json = skill::render_activation_data_json(match->metadata.name);
+    if (!data_json) {
+      return std::unexpected(std::move(data_json).error());
+    }
     return tool::Output{
         .text = render_skill_invocation_text(*match, inputs_json),
-        .data_json = std::nullopt,
+        .data_json = std::move(*data_json),
         .attachments = {},
         .usage =
             tool::ToolUsage{

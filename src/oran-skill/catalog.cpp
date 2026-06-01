@@ -5,18 +5,33 @@
 #include <algorithm>
 #include <cstddef>
 #include <expected>
+#include <optional>
+#include <ranges>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
+#include <variant>
 #include <vector>
 
+#include <oran/core/content.hpp>
 #include <oran/core/error.hpp>
+#include <oran/core/message.hpp>
+#include <oran/core/role.hpp>
 
 namespace orangutan::skill {
 namespace {
 
+constexpr std::string_view kSkillInvokeName{"skill.invoke"};
+constexpr std::string_view kActivationPrefix{R"({"kind":"skill_activation","version":1,"name":")"};
+constexpr std::string_view kActivationSuffix{R"("})"};
+
 [[nodiscard]] bool contains_line_break(std::string_view value) noexcept {
   return value.find('\n') != std::string_view::npos || value.find('\r') != std::string_view::npos;
+}
+
+[[nodiscard]] bool contains_control_char(std::string_view value) noexcept {
+  return std::ranges::any_of(value, [](char c) { return static_cast<unsigned char>(c) < 0x20U; });
 }
 
 [[nodiscard]] bool is_blank(std::string_view value) noexcept {
@@ -69,6 +84,17 @@ validate_single_line(std::string_view field, std::string_view value, std::string
   return {};
 }
 
+[[nodiscard]] core::Result<void> validate_active_skill(const ActiveSkill& skill) {
+  if (is_blank(skill.name)) {
+    return std::unexpected(core::Error::invalid_argument("active skill name must not be empty"));
+  }
+  if (contains_control_char(skill.name)) {
+    return std::unexpected(core::Error::invalid_argument("active skill name must not contain control characters")
+                               .with("skill", skill.name));
+  }
+  return validate_single_line("name", skill.name, skill.name);
+}
+
 [[nodiscard]] std::string join_strings(std::span<const std::string> values, std::string_view separator) {
   std::size_t bytes = 0;
   for (const auto& value : values) {
@@ -106,9 +132,98 @@ void append_entry(std::string& output, const CatalogEntry& entry) {
   }
 }
 
+void append_active_skill(std::string& output, const ActiveSkill& skill) {
+  if (!output.empty()) {
+    output.append("\n\n");
+  }
+  output.append("Active Skill: ").append(skill.name).append("\n");
+  output.append("Status: active for this session");
+}
+
+void append_json_escaped(std::string& output, std::string_view value) {
+  for (const auto ch : value) {
+    switch (ch) {
+      case '"':
+        output.append(R"(\")");
+        break;
+      case '\\':
+        output.append(R"(\\)");
+        break;
+      case '\b':
+        output.append(R"(\b)");
+        break;
+      case '\f':
+        output.append(R"(\f)");
+        break;
+      case '\n':
+        output.append(R"(\n)");
+        break;
+      case '\r':
+        output.append(R"(\r)");
+        break;
+      case '\t':
+        output.append(R"(\t)");
+        break;
+      default:
+        output.push_back(ch);
+        break;
+    }
+  }
+}
+
+[[nodiscard]] std::optional<std::string> unescape_json_string(std::string_view value) {
+  std::string output;
+  output.reserve(value.size());
+  for (std::size_t i = 0; i < value.size(); ++i) {
+    const auto ch = value[i];
+    if (ch != '\\') {
+      output.push_back(ch);
+      continue;
+    }
+    ++i;
+    if (i == value.size()) {
+      return std::nullopt;
+    }
+    switch (value[i]) {
+      case '"':
+        output.push_back('"');
+        break;
+      case '\\':
+        output.push_back('\\');
+        break;
+      case '/':
+        output.push_back('/');
+        break;
+      case 'b':
+        output.push_back('\b');
+        break;
+      case 'f':
+        output.push_back('\f');
+        break;
+      case 'n':
+        output.push_back('\n');
+        break;
+      case 'r':
+        output.push_back('\r');
+        break;
+      case 't':
+        output.push_back('\t');
+        break;
+      default:
+        return std::nullopt;
+    }
+  }
+  return output;
+}
+
 }  // namespace
 
 core::Result<RenderedCatalog> CatalogRenderer::render(std::span<const CatalogEntry> entries) const {
+  return render(entries, std::span<const ActiveSkill>{});
+}
+
+core::Result<RenderedCatalog> CatalogRenderer::render(std::span<const CatalogEntry> entries,
+                                                      std::span<const ActiveSkill> active_skills) const {
   std::vector<const CatalogEntry*> ordered;
   ordered.reserve(entries.size());
   for (const auto& entry : entries) {
@@ -126,7 +241,27 @@ core::Result<RenderedCatalog> CatalogRenderer::render(std::span<const CatalogEnt
     }
   }
 
+  std::vector<const ActiveSkill*> ordered_active;
+  ordered_active.reserve(active_skills.size());
+  for (const auto& skill : active_skills) {
+    if (auto valid = validate_active_skill(skill); !valid) {
+      return std::unexpected(std::move(valid).error());
+    }
+    ordered_active.push_back(&skill);
+  }
+  std::ranges::sort(ordered_active, {}, [](const ActiveSkill* skill) { return std::string_view{skill->name}; });
+  for (std::size_t i = 1; i < ordered_active.size(); ++i) {
+    if (ordered_active[i - 1]->name == ordered_active[i]->name) {
+      return std::unexpected(
+          core::Error::invalid_argument("active skill names must be unique").with("skill", ordered_active[i]->name));
+    }
+  }
+
   std::string section_text;
+  for (const auto* skill : ordered_active) {
+    section_text.reserve(section_text.size() + skill->name.size() + 64);
+    append_active_skill(section_text, *skill);
+  }
   for (const auto* entry : ordered) {
     section_text.reserve(section_text.size() + entry->name.size() + entry->description.size() + 96);
     append_entry(section_text, *entry);
@@ -137,6 +272,82 @@ core::Result<RenderedCatalog> CatalogRenderer::render(std::span<const CatalogEnt
 
 core::Result<RenderedCatalog> render_catalog(std::span<const CatalogEntry> entries) {
   return CatalogRenderer{}.render(entries);
+}
+
+core::Result<RenderedCatalog> render_catalog(std::span<const CatalogEntry> entries,
+                                             std::span<const ActiveSkill> active_skills) {
+  return CatalogRenderer{}.render(entries, active_skills);
+}
+
+core::Result<std::string> render_activation_data_json(std::string_view skill_name) {
+  const auto active = ActiveSkill{.name = std::string{skill_name}};
+  if (auto valid = validate_active_skill(active); !valid) {
+    return std::unexpected(std::move(valid).error());
+  }
+
+  std::string output;
+  output.reserve(kActivationPrefix.size() + skill_name.size() + kActivationSuffix.size());
+  output.append(kActivationPrefix);
+  append_json_escaped(output, skill_name);
+  output.append(kActivationSuffix);
+  return output;
+}
+
+std::optional<ActiveSkill> active_skill_from_data_json(std::string_view data_json) {
+  if (!data_json.starts_with(kActivationPrefix) || !data_json.ends_with(kActivationSuffix)) {
+    return std::nullopt;
+  }
+  data_json.remove_prefix(kActivationPrefix.size());
+  data_json.remove_suffix(kActivationSuffix.size());
+  auto name = unescape_json_string(data_json);
+  if (!name.has_value()) {
+    return std::nullopt;
+  }
+  auto active = ActiveSkill{.name = std::move(*name)};
+  if (!validate_active_skill(active).has_value()) {
+    return std::nullopt;
+  }
+  return active;
+}
+
+std::vector<ActiveSkill> active_skills_from_transcript(std::span<const core::Message> transcript) {
+  std::unordered_map<std::string_view, std::string_view> tool_use_names;
+  for (const auto& message : transcript) {
+    if (message.role != core::Role::assistant) {
+      continue;
+    }
+    for (const auto& block : message.blocks) {
+      const auto* use = std::get_if<core::ToolUseContent>(&block);
+      if (use != nullptr) {
+        tool_use_names.emplace(use->id, use->name);
+      }
+    }
+  }
+
+  std::vector<ActiveSkill> active_skills;
+  for (const auto& message : transcript) {
+    if (message.role != core::Role::tool) {
+      continue;
+    }
+    for (const auto& block : message.blocks) {
+      const auto* result = std::get_if<core::ToolResultContent>(&block);
+      if (result == nullptr || result->is_error || !result->data_json.has_value()) {
+        continue;
+      }
+      const auto name = tool_use_names.find(result->tool_use_id);
+      if (name == tool_use_names.end() || name->second != kSkillInvokeName) {
+        continue;
+      }
+      auto active = active_skill_from_data_json(*result->data_json);
+      if (active.has_value() &&
+          !std::ranges::contains(active_skills, active->name, [](const ActiveSkill& skill) -> std::string_view {
+            return skill.name;
+          })) {
+        active_skills.push_back(std::move(*active));
+      }
+    }
+  }
+  return active_skills;
 }
 
 CatalogOwner::CatalogOwner(RenderedCatalog catalog) : catalog_{std::move(catalog)} {}

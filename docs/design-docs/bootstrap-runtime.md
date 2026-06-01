@@ -122,7 +122,13 @@ point `skills_directory` at `<workspace>/.orangutan/skills` so the runner owns a
 refreshes at later prompt boundaries after watcher/signature changes, replacing
 the rendered catalog and loaded `SkillDocument` vector together. Missing skills
 directories produce an empty catalog, loader errors fail before the loop, and
-`skill_catalog_loads()` exposes the number of snapshot reloads. When the caller
+`skill_catalog_loads()` exposes the number of snapshot reloads. Before rendering
+section 4, the runner also asks `oran-skill` to derive active skill markers from
+the already-loaded conversation transcript. Only successful `skill.invoke`
+tool-results carrying the versioned activation `data_json` are considered, and
+the markers are filtered through the current loaded/allowed skill document
+vector so removed or disallowed skills do not remain active in the next prompt.
+When the caller
 selects an `AgentPromptRunnerOptions::agent_config_name` (or leaves it empty
 and selects `permission_agent_name`), the runner reads that `agents.<name>`
 entry's optional `prompt_overlay` and `skills_enabled` fields before prompt
@@ -139,7 +145,10 @@ The same filtered document vector is the immutable source for the
 `skill.invoke` built-in during that runner's current turn: bootstrap installs a
 `DispatchContext::skill_invoke` callback, and the tool dispatch path returns the
 matched markdown body as ordinary tool-result text for the next provider
-iteration without re-reading disk mid-turn.
+iteration without re-reading disk mid-turn. Successful invokes also return a
+small structured activation record through `Output::data_json`; the next prompt
+boundary uses that record to mark the skill active in section 4 without parsing
+model-visible body text.
 Empty `AgentPromptRunnerOptions::system_preamble` selects
 `agent::default_system_preamble()`; explicit text is treated as an override for
 tests and embedders. Multi-iteration provider/tool turns therefore reuse stable

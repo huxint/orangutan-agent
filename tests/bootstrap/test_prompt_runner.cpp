@@ -122,6 +122,18 @@ std::string tool_result_output_in(const provider::Request& request, std::string_
   return {};
 }
 
+std::optional<std::string> tool_result_data_json_in(const provider::Request& request, std::string_view tool_use_id) {
+  for (const auto& message : request.messages) {
+    for (const auto& block : message.blocks) {
+      const auto* result = std::get_if<core::ToolResultContent>(&block);
+      if (result != nullptr && result->tool_use_id == tool_use_id) {
+        return result->data_json;
+      }
+    }
+  }
+  return std::nullopt;
+}
+
 cli::CliOptions cli_options(std::vector<std::string_view>& args) {
   return cli::CliOptions{
       .args = std::span<const std::string_view>{args},
@@ -735,6 +747,77 @@ TEST_CASE("AgentPromptRunner invokes loaded skill bodies through the tool path",
     REQUIRE(output.contains(R"("since":"slice-136")"));
     REQUIRE(output.contains("Use concise bullets for the shipped changes."));
     REQUIRE((*runner)->skill_catalog_loads() == 1);
+  });
+}
+
+TEST_CASE("AgentPromptRunner marks invoked skills active on the next prompt",
+          "[unit][bootstrap][prompt_runner][skill]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-active-skill"};
+  write_file(temp.path() / ".orangutan" / "skills" / "release-note.md",
+             "---\n"
+             "name: release-note\n"
+             "description: Draft release notes from completed changes.\n"
+             "triggers: release notes, changelog\n"
+             "---\n"
+             "Use concise bullets for the shipped changes.\n");
+  auto cfg = parse_config(R"json(
+{
+  "permissions": {
+    "allow": [
+      {"tool_pattern": "skill.invoke"}
+    ]
+  }
+}
+)json");
+
+  test::run_async([&temp, &cfg](asio::io_context& io) -> async::Awaitable<void> {
+    auto assembly = build_assembly(temp.path(), io, false);
+    RecordingProvider recording{{
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "skill-1",
+                .name = "skill.invoke",
+                .input_json = R"({"name":"release-note","inputs":{"since":"slice-142"}})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        },
+        text_response("first done"),
+        text_response("second done"),
+    }};
+
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.mode = permission::Mode::strict;
+    options.skills_directory = (temp.path() / ".orangutan" / "skills").string();
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto first = co_await (*runner)->run_prompt(
+        cli::PromptRunRequest{.prompt = "draft notes", .mode = cli::CliMode::single_shot});
+    REQUIRE(first.has_value());
+    REQUIRE(first->text == "first done");
+
+    auto second = co_await (*runner)->run_prompt(
+        cli::PromptRunRequest{.prompt = "continue notes", .mode = cli::CliMode::single_shot});
+    REQUIRE(second.has_value());
+    REQUIRE(second->text == "second done");
+
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 3);
+    REQUIRE(requests[0].system_prompt.has_value());
+    REQUIRE(requests[1].system_prompt.has_value());
+    REQUIRE(requests[2].system_prompt.has_value());
+    REQUIRE_FALSE(requests[0].system_prompt->contains("Active Skill: release-note"));
+    REQUIRE_FALSE(requests[1].system_prompt->contains("Active Skill: release-note"));
+    REQUIRE(requests[2].system_prompt->contains("Active Skill: release-note"));
+    REQUIRE(requests[2].system_prompt->contains("Status: active for this session"));
+    REQUIRE(requests[2].system_prompt->contains("Skill: release-note"));
+    const auto data_json = tool_result_data_json_in(requests[1], "skill-1");
+    REQUIRE(data_json.has_value());
+    REQUIRE(*data_json == R"({"kind":"skill_activation","version":1,"name":"release-note"})");
+    REQUIRE((*runner)->skill_catalog_renders() == 2);
   });
 }
 

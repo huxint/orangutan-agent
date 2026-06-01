@@ -170,8 +170,13 @@ The agent loop owns:
   serving `skill.invoke`; slice 140 maps the configured-route binary
   `--agent <name>` selector into that runner-owned agent selection. Slice 141
   adds `agents.<name>.prompt_overlay` as the config-owned source for stable
-  section-6 overlay bytes when callers have not supplied exact
-  `RunTurnInputs::per_agent_overlay` text; see
+  section-6 overlay bytes when callers have not supplied exact section text.
+  Slice 142 adds `skill::ActiveSkill` markers and the versioned
+  `skill.invoke` activation metadata path: the active turn still receives the
+  skill body only as conversation-tail tool-result text, while the next prompt
+  can render deterministic `Active Skill: <name>` rows in section 4 from
+  successful transcript tool results that are still present in the current
+  loaded/allowed snapshot; see
   [`../product-specs/0009-skills.md`](../product-specs/0009-skills.md).
 - **Memory framing renderer** — section (5). Pure function of memory state;
   no per-iteration mutation. Slice 133 adds `memory::FramingOwner` in
