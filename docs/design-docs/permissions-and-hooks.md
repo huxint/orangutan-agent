@@ -225,7 +225,11 @@ loop via `orangutan --explain-rules`. The CLI accepts `--mode
 <strict|default|permissive|sandboxed>` (baseline selection) and
 `--agent <name>` (per-agent overlay selection); both are optional and
 the unflagged invocation prints the design-doc default mode with no
-overlay applied. The bootstrap layer exposes the same selectors as
+overlay applied. When config declares a provider route, those same flags
+select the configured-route runner's permission baseline and per-agent
+overlay before prompt execution; the no-provider deterministic shell rejects
+selector flags unless `--explain-rules` is active. The bootstrap layer exposes
+the same selectors as
 `bootstrap::parse_explain_rules_selector` and
 `bootstrap::materialize_rules` so tests and future tooling can build a
 merged `RuleSet` programmatically.

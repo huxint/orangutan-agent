@@ -167,7 +167,8 @@ The agent loop owns:
   the active turn still uses one coherent catalog/body snapshot. Slice 139 lets
   bootstrap callers select an `agents.<name>.skills_enabled` allowlist so the
   runner filters the workspace snapshot before rendering section 4 and before
-  serving `skill.invoke`; see
+  serving `skill.invoke`; slice 140 maps the configured-route binary
+  `--agent <name>` selector into that runner-owned agent selection; see
   [`../product-specs/0009-skills.md`](../product-specs/0009-skills.md).
 - **Memory framing renderer** — section (5). Pure function of memory state;
   no per-iteration mutation. Slice 133 adds `memory::FramingOwner` in

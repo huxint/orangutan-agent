@@ -43,13 +43,15 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice139";
+constexpr std::string_view kVersion = "2.0.0-slice140";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 
 struct ParsedArgs {
   bool help{false};
   bool explain_rules{false};
+  bool selector_mode_supplied{false};
+  bool selector_agent_supplied{false};
   bool audit_init{false};
   bool has_audit_init_path{false};
   std::string audit_init_path{};
@@ -126,6 +128,7 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
         return std::unexpected(arg_error("--mode does not match a known permission mode").with("value", *value));
       }
       parsed.explain_selector.mode = *mode;
+      parsed.selector_mode_supplied = true;
       continue;
     }
 
@@ -135,6 +138,7 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
         return std::unexpected(std::move(value.error()));
       }
       parsed.explain_selector.agent_name = std::move(*value);
+      parsed.selector_agent_supplied = true;
       continue;
     }
 
@@ -264,14 +268,15 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
 
 void print_usage() {
   std::println("orangutan v{}", kVersion);
-  std::println("usage: orangutan [--config <path>] [--explain-rules [--mode <m>] [--agent <name>]]");
+  std::println("usage: orangutan [--config <path>] [--mode <m>] [--agent <name>] [--explain-rules]");
   std::println("                  [--audit-init [<path>]] [--trace <turn-id>] [--prompt <text>] [--help]");
   std::println();
   std::println(
       "The current bootstrap slice loads config, builds configured provider backends, then hands prompts to oran-cli.");
   std::println("--explain-rules prints the materialized permission rule set and exits;");
   std::println("                --mode picks the baseline (strict|default|permissive|sandboxed),");
-  std::println("                --agent picks an `agents.<name>.permissions` overlay.");
+  std::println("                --agent picks an `agents.<name>` overlay.");
+  std::println("--mode/--agent also select configured provider-route prompt runs.");
   std::println("--audit-init applies the audit.db schema (defaults to <workspace>/.orangutan/audit.db) and exits.");
   std::println("--trace prints the trace_turns row and joined audit rows, including hook_publish, for <turn-id>");
   std::println("        (32 lowercase hex characters); reads <workspace>/.orangutan/audit.db.");
@@ -770,6 +775,9 @@ core::Result<int> run(BootstrapOptions options) {
     print_provider_route_summary(**provider_route);
   } else {
     std::println("provider route: none configured");
+    if (parsed->selector_mode_supplied || parsed->selector_agent_supplied) {
+      return std::unexpected(arg_error("--mode/--agent require --explain-rules or a configured provider route"));
+    }
   }
 
   // The runtime assembly composes the per-process permission infrastructure
@@ -831,8 +839,12 @@ core::Result<int> run(BootstrapOptions options) {
       .config = &loaded->value,
       .provider = &provider_backend->system(),
       .route = provider_backend->route(),
+      .mode = parsed->explain_selector.mode,
+      .agent_config_name = parsed->explain_selector.agent_name,
+      .permission_agent_name = parsed->explain_selector.agent_name,
       .scope_key = "cli",
-      .agent_key = "default",
+      .agent_key =
+          parsed->explain_selector.agent_name.empty() ? std::string{"default"} : parsed->explain_selector.agent_name,
       .identity = "terminal",
       .origin = "cli",
       .skills_directory = default_skills_directory(options.workspace),

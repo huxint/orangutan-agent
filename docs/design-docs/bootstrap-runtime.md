@@ -128,12 +128,15 @@ and selects `permission_agent_name`), the runner reads that `agents.<name>`
 entry's optional `skills_enabled` allowlist before prompt execution. An absent
 allowlist keeps all loaded skills visible; a present allowlist, including an
 empty array, filters both the section-4 catalog and the invocation document
-vector after each workspace snapshot refresh. The same filtered document vector
-is the immutable source for the `skill.invoke` built-in during that runner's
-current turn: bootstrap installs a `DispatchContext::skill_invoke` callback,
-and the tool dispatch path returns the matched markdown body as ordinary
-tool-result text for the next provider iteration without re-reading disk
-mid-turn.
+vector after each workspace snapshot refresh. Ordinary configured-route binary
+startup now maps `--agent <name>` into both `agent_config_name` and
+`permission_agent_name`, so the same operator selector controls permission
+overlay, skill allowlist, audit/session agent key, and provider hook metadata.
+The same filtered document vector is the immutable source for the
+`skill.invoke` built-in during that runner's current turn: bootstrap installs a
+`DispatchContext::skill_invoke` callback, and the tool dispatch path returns the
+matched markdown body as ordinary tool-result text for the next provider
+iteration without re-reading disk mid-turn.
 Empty `AgentPromptRunnerOptions::system_preamble` selects
 `agent::default_system_preamble()`; explicit text is treated as an override for
 tests and embedders. Multi-iteration provider/tool turns therefore reuse stable
@@ -194,7 +197,12 @@ When config declares routes, bootstrap resolves the `default` route through
 `provider::resolve_route_profiles`, builds
 `provider::make_adapter_construction_plan`, constructs `HttpProviderBackend`,
 creates `AgentPromptRunner`, and runs the remaining CLI args through
-`cli::run_async`. No-prompt configured-route runs set
+`cli::run_async`. The existing `--mode
+<strict|default|permissive|sandboxed>` selector chooses the runner's permission
+baseline, and `--agent <name>` selects the matching `agents.<name>` entry for
+permission overlays, skill allowlists, and runtime agent identity. Unknown
+agent names fail before prompt execution through the runner's existing
+not-found validation. No-prompt configured-route runs set
 `CliOptions::interactive_repl`, so `oran-cli` reads terminal prompts until an
 empty line, `/exit`, `/quit`, or EOF and dispatches each non-command prompt
 through that runner. `/help` is handled locally by `oran-cli` and never reaches
@@ -218,11 +226,13 @@ fallback hooks are published for configured-route prompts without making
 `oran-provider` depend on the hook subsystem.
 The built-in empty-defaults path still reports `provider route: none configured`
 and uses the deterministic no-runner `cli::run` shell so fresh checkouts remain
-runnable without provider credentials or a sessions DB. The runtime assembly opens
-the audit DB when audit is enabled so migrations, trace repository ownership, and
-audit sinks are available before configured-route prompt execution. Configured
-provider routes additionally open and migrate the separate sessions DB and expose
-the typed `memory::session::Store` for the runner persistence slice.
+runnable without provider credentials or a sessions DB; selector flags
+(`--mode` / `--agent`) are rejected on that path unless `--explain-rules` is
+active. The runtime assembly opens the audit DB when audit is enabled so
+migrations, trace repository ownership, and audit sinks are available before
+configured-route prompt execution. Configured provider routes additionally open
+and migrate the separate sessions DB and expose the typed
+`memory::session::Store` for the runner persistence slice.
 
 `orangutan --trace <turn-id>` is a bootstrap-owned one-shot inspector. It
 opens the workspace audit DB, runs the idempotent audit migration, loads the

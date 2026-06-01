@@ -44,16 +44,17 @@ activate them on demand without bloating the system prompt.
   Exact pre-rendered catalog bytes still bypass filesystem loading for tests and
   embedders.
 - Per-agent skill enablement through `agents.<name>.skills_enabled`. **Status
-  (slice 139, 2026-06-01):** `oran-config` parses the optional non-empty string
-  array on each agent config, and `AgentPromptRunner` can select an
+  (slices 139-140, 2026-06-01):** `oran-config` parses the optional non-empty
+  string array on each agent config, and `AgentPromptRunner` can select an
   `agents.<name>` entry via `AgentPromptRunnerOptions::agent_config_name` (or
   fall back to `permission_agent_name`). When the field is absent, all loaded
   workspace skills remain visible. When it is present, the runner filters both
   the compact section-4 catalog and the `skill.invoke` document snapshot to
   that allowlist before each prompt-boundary snapshot replacement. A
   disallowed skill name therefore behaves like any other unloaded skill at
-  invocation time. Ordinary binary startup still constructs the default CLI
-  runner; a user-facing runtime agent selector is a later slice.
+  invocation time. Configured-route binary startup maps `--agent <name>` into
+  the same agent selection, so operator-chosen agents now get their own skill
+  allowlist on ordinary prompt and REPL runs.
 
 ## Scope (v1.1)
 

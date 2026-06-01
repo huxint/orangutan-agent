@@ -25,6 +25,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <nlohmann/json.hpp>
+
 #include <unistd.h>
 
 #include <oran/async.hpp>
@@ -197,7 +199,10 @@ private:
 
 class OneShotHttpServer {
 public:
-  explicit OneShotHttpServer(std::string response) : response_{std::move(response)} {
+  explicit OneShotHttpServer(std::string response) : OneShotHttpServer{std::vector<std::string>{std::move(response)}} {}
+
+  explicit OneShotHttpServer(std::vector<std::string> responses) : responses_{std::move(responses)} {
+    REQUIRE_FALSE(responses_.empty());
     tcp::endpoint endpoint{asio::ip::make_address("127.0.0.1"), 0};
     acceptor_.open(endpoint.protocol());
     acceptor_.set_option(tcp::acceptor::reuse_address(true));
@@ -209,11 +214,15 @@ public:
 
   ~OneShotHttpServer() {
     std::error_code ignored;
-    if (!served_.load() && port_ != 0) {
+    const auto remaining = responses_.size() - std::min(served_count_.load(), responses_.size());
+    for (std::size_t attempt = 0; attempt < remaining && port_ != 0; ++attempt) {
       asio::io_context poke_io;
       tcp::socket poke{poke_io};
       poke.connect(tcp::endpoint{asio::ip::make_address("127.0.0.1"), port_}, ignored);
       poke.close(ignored);
+      if (ignored) {
+        break;
+      }
     }
     acceptor_.close(ignored);
   }
@@ -223,11 +232,18 @@ public:
   }
 
   [[nodiscard]] std::string request_text() const {
-    return request_;
+    if (requests_.empty()) {
+      return {};
+    }
+    return requests_.front();
+  }
+
+  [[nodiscard]] std::vector<std::string> requests() const {
+    return requests_;
   }
 
   [[nodiscard]] bool served() const noexcept {
-    return served_.load();
+    return served_count_.load() >= responses_.size();
   }
 
 private:
@@ -269,36 +285,43 @@ private:
   }
 
   void serve() {
-    std::error_code ec;
-    auto socket = acceptor_.accept(ec);
-    if (ec) {
-      return;
-    }
-
-    std::array<char, 4096> buffer{};
-    while (!request_complete(request_)) {
-      const auto read = socket.read_some(asio::buffer(buffer), ec);
-      if (ec && ec != asio::error::eof) {
+    for (std::size_t index = 0; index < responses_.size(); ++index) {
+      std::error_code ec;
+      auto socket = acceptor_.accept(ec);
+      if (ec) {
         return;
       }
-      if (read > 0) {
-        request_.append(buffer.data(), read);
-      }
-      if (ec == asio::error::eof) {
-        break;
-      }
-    }
 
-    asio::write(socket, asio::buffer(response_), ec);
-    served_ = !ec;
+      auto request = std::string{};
+      std::array<char, 4096> buffer{};
+      while (!request_complete(request)) {
+        const auto read = socket.read_some(asio::buffer(buffer), ec);
+        if (ec && ec != asio::error::eof) {
+          return;
+        }
+        if (read > 0) {
+          request.append(buffer.data(), read);
+        }
+        if (ec == asio::error::eof) {
+          break;
+        }
+      }
+
+      asio::write(socket, asio::buffer(responses_[index]), ec);
+      requests_.push_back(std::move(request));
+      if (ec) {
+        return;
+      }
+      served_count_ = index + 1;
+    }
   }
 
   asio::io_context io_;
   tcp::acceptor acceptor_{io_};
   std::uint16_t port_{0};
-  std::string response_;
-  std::string request_;
-  std::atomic_bool served_{false};
+  std::vector<std::string> responses_;
+  std::vector<std::string> requests_;
+  std::atomic_size_t served_count_{0};
   std::jthread worker_;
 };
 
@@ -336,6 +359,45 @@ std::string anthropic_sse_response(std::string_view text = "binary ok") {
          "\r\n\r\n";
 }
 
+std::string
+anthropic_sse_tool_use_response(std::string_view tool_use_id, std::string_view tool_name, std::string_view input_json) {
+  auto start =
+      std::string{R"(data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":")"};
+  start.append(tool_use_id);
+  start.append(R"(","name":")");
+  start.append(tool_name);
+  start.append(R"(","input":{}}})");
+
+  auto delta = std::string{
+      R"(data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":)"};
+  delta.append(nlohmann::ordered_json{std::string{input_json}}.dump());
+  delta.append(R"(}})");
+
+  return "HTTP/1.1 200 OK\r\n"
+         "Content-Type: text/event-stream\r\n"
+         "Connection: close\r\n"
+         "\r\n"
+         "event: message_start\r\n"
+         R"(data: {"type":"message_start","message":{"id":"msg_tool","type":"message","role":"assistant",)"
+         R"("model":"claude-test","content":[],"stop_reason":null,"usage":{"input_tokens":4,"output_tokens":1}}})"
+         "\r\n\r\n"
+         "event: content_block_start\r\n" +
+         start +
+         "\r\n\r\n"
+         "event: content_block_delta\r\n" +
+         delta +
+         "\r\n\r\n"
+         "event: content_block_stop\r\n"
+         R"(data: {"type":"content_block_stop","index":0})"
+         "\r\n\r\n"
+         "event: message_delta\r\n"
+         R"(data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":2}})"
+         "\r\n\r\n"
+         "event: message_stop\r\n"
+         R"(data: {"type":"message_stop"})"
+         "\r\n\r\n";
+}
+
 std::string provider_config_text(std::string_view base_url) {
   auto text = std::string{R"json(
 {
@@ -358,6 +420,40 @@ std::string provider_config_text(std::string_view base_url) {
     "default": {
       "primary": "default",
       "fallbacks": []
+    }
+  }
+}
+)json");
+  return text;
+}
+
+std::string provider_config_with_agent_skills_text(std::string_view base_url) {
+  auto text = std::string{R"json(
+{
+  "runtime": {
+    "workers": 1,
+    "request_timeout_ms": 2000
+  },
+  "profiles": {
+    "default": {
+      "provider": "anthropic",
+      "protocol": "anthropic_messages",
+      "model": "claude-test",
+      "base_url": ")json"};
+  text.append(base_url);
+  text.append(R"json(",
+      "api_key_env": "ORAN_BOOTSTRAP_RUN_PROVIDER_KEY"
+    }
+  },
+  "routes": {
+    "default": {
+      "primary": "default",
+      "fallbacks": []
+    }
+  },
+  "agents": {
+    "writer": {
+      "skills_enabled": ["release-note"]
     }
   }
 }
@@ -508,6 +604,17 @@ TEST_CASE("run hands CLI arguments to oran-cli after config load", "[unit][boots
   REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan" / "sessions.db"));
 }
 
+TEST_CASE("run rejects selectors when no provider route is configured", "[unit][bootstrap][provider]") {
+  TempDir temp{"oran-bootstrap-selector-no-route"};
+  auto args = std::vector<std::string_view>{"--agent", "writer", "--prompt", "hello"};
+
+  auto result = bootstrap::run(options(args, temp.path()));
+
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan"));
+}
+
 TEST_CASE("run hands configured provider prompts to AgentPromptRunner", "[unit][bootstrap][provider]") {
   ScopedEnv api_key{"ORAN_BOOTSTRAP_RUN_PROVIDER_KEY", "test-secret"};
   ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
@@ -534,6 +641,68 @@ TEST_CASE("run hands configured provider prompts to AgentPromptRunner", "[unit][
   const auto sessions_db = temp.path() / ".orangutan" / "sessions.db";
   REQUIRE(std::filesystem::exists(sessions_db));
   REQUIRE(table_exists(sessions_db, "sessions"));
+}
+
+TEST_CASE("run applies --agent to configured provider prompt selection", "[unit][bootstrap][provider][skill]") {
+  ScopedEnv api_key{"ORAN_BOOTSTRAP_RUN_PROVIDER_KEY", "test-secret"};
+  ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
+  ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
+  OneShotHttpServer server{anthropic_sse_response("agent selected")};
+  TempDir temp{"oran-bootstrap-provider-agent-selector"};
+  write_file(temp.path() / ".orangutan" / "skills" / "release-note.md",
+             "---\n"
+             "name: release-note\n"
+             "description: Draft release notes from completed changes.\n"
+             "triggers: release notes\n"
+             "---\n"
+             "Release note body.\n");
+  write_file(temp.path() / ".orangutan" / "skills" / "review-pr.md",
+             "---\n"
+             "name: review-pr\n"
+             "description: Review a pull request.\n"
+             "triggers: code review\n"
+             "---\n"
+             "Review body.\n");
+  const auto config_path = temp.path() / "config.json";
+  write_file(config_path, provider_config_with_agent_skills_text(server.base_url()));
+  auto config_arg = config_path.string();
+  auto args = std::vector<std::string_view>{"--config", config_arg, "--agent", "writer", "--prompt", "hello"};
+
+  auto result = bootstrap::run(options(args, temp.path()));
+
+  REQUIRE(result.has_value());
+  REQUIRE(*result == 0);
+  REQUIRE(server.served());
+  REQUIRE(server.request_text().contains("Skill: release-note"));
+  REQUIRE_FALSE(server.request_text().contains("Skill: review-pr"));
+}
+
+TEST_CASE("run applies --mode to configured provider tool permissions", "[unit][bootstrap][provider]") {
+  ScopedEnv api_key{"ORAN_BOOTSTRAP_RUN_PROVIDER_KEY", "test-secret"};
+  ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
+  ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
+  OneShotHttpServer server{std::vector<std::string>{
+      anthropic_sse_tool_use_response("toolu_read", "file.read", R"({"path":"readable.txt"})"),
+      anthropic_sse_response("strict handled"),
+  }};
+  TempDir temp{"oran-bootstrap-provider-mode-selector"};
+  write_file(temp.path() / "readable.txt", "strict mode must not read this");
+  const auto config_path = temp.path() / "config.json";
+  write_file(config_path, provider_config_text(server.base_url()));
+  auto config_arg = config_path.string();
+  auto args = std::vector<std::string_view>{"--config", config_arg, "--mode", "strict", "--prompt", "read file"};
+
+  auto result = bootstrap::run(options(args, temp.path()));
+
+  REQUIRE(result.has_value());
+  REQUIRE(*result == 0);
+  REQUIRE(server.served());
+  const auto requests = server.requests();
+  REQUIRE(requests.size() == 2);
+  REQUIRE(requests[1].contains(R"json("tool_use_id":"toolu_read")json"));
+  REQUIRE(requests[1].contains("tool error: tool denied by permission rules"));
+  REQUIRE(requests[1].contains("reason: default by mode=strict"));
+  REQUIRE_FALSE(requests[1].contains("strict mode must not read this"));
 }
 
 TEST_CASE("run hands configured provider REPL prompts to AgentPromptRunner", "[unit][bootstrap][provider]") {

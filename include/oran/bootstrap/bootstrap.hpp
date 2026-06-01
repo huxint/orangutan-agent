@@ -32,11 +32,12 @@ struct LoadedConfig {
   std::string path{};
 };
 
-/// Selection inputs the `--explain-rules` mode consumes after parsing CLI
-/// args. `mode` defaults to `permission::Mode::default_` (the diagnostic-
-/// friendly baseline the original `--explain-rules` slice shipped); an
-/// empty `agent_name` means "no per-agent overlay applied", matching the
-/// previous behavior of passing `config::PermissionsConfig{}`.
+/// Selection inputs consumed by `--explain-rules` and by configured-route
+/// prompt startup after parsing CLI args. `mode` defaults to
+/// `permission::Mode::default_` (the diagnostic-friendly baseline the
+/// original `--explain-rules` slice shipped); an empty `agent_name` means
+/// "no per-agent overlay applied" for diagnostics and "default runtime
+/// agent" for configured-route prompt runs.
 struct ExplainRulesSelector {
   permission::Mode mode{permission::Mode::default_};
   std::string agent_name{};
@@ -47,10 +48,10 @@ struct ExplainRulesSelector {
 
 /// Parse `--mode <name>` and `--agent <name>` (and their `=`-form variants)
 /// out of `args`, leaving every other token alone. The returned selector
-/// drives `materialize_rules` below. Invalid mode spellings and empty
-/// values surface as `core::ErrorKind::invalid_argument` with the offending
-/// flag attached, so tests can pin the rejection paths without invoking
-/// the full bootstrap.
+/// drives `materialize_rules` below and configured-route prompt-runner
+/// selection. Invalid mode spellings and empty values surface as
+/// `core::ErrorKind::invalid_argument` with the offending flag attached, so
+/// tests can pin the rejection paths without invoking the full bootstrap.
 [[nodiscard]] core::Result<ExplainRulesSelector> parse_explain_rules_selector(std::span<const std::string_view> args);
 
 /// Build the materialized rule set described by `selector` against `cfg`.

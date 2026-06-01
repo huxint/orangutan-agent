@@ -7,14 +7,21 @@
 
 ## Snapshot
 
-- **Slice:** 139 (`xmake run orangutan` reports slice 139)
+- **Slice:** 140 (`xmake run orangutan` reports slice 140)
 - **Last completed history:**
-  [`histories/2026-06/20260601-2214-per-agent-skill-enable.md`](histories/2026-06/20260601-2214-per-agent-skill-enable.md)
+  [`histories/2026-06/20260601-2250-runtime-agent-selector.md`](histories/2026-06/20260601-2250-runtime-agent-selector.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** continue the prompt-runtime arc after runner-level
-  per-agent skill enablement, keeping catalog snapshots compact and skill
-  bodies outside the system preamble. Slice 139 adds optional
+- **Next intended slice:** continue the prompt-runtime arc after binary-level
+  agent selection, keeping catalog snapshots compact and skill bodies outside
+  the system preamble. Slice 140 wires the existing `--mode` / `--agent`
+  bootstrap selectors into configured-route `bootstrap::run`: `--mode` selects
+  the permission baseline passed to `AgentPromptRunner`, `--agent <name>`
+  selects the runtime `agents.<name>` permission overlay, skill allowlist, and
+  session/audit agent key, and the no-provider deterministic shell rejects
+  selector flags unless `--explain-rules` is active. The diagnostic
+  `--explain-rules` path keeps the same selector semantics. Focused result:
+  `test-bootstrap` **93 cases / 586 assertions**. Slice 139 adds optional
   `agents.<name>.skills_enabled` parsing to `oran-config` and lets
   `AgentPromptRunner` select an `agents.<name>` entry through
   `AgentPromptRunnerOptions::agent_config_name` (falling back to
@@ -23,9 +30,7 @@
   section 4 and before serving `skill.invoke`; absent allowlists keep all
   loaded skills visible, present empty arrays enable none, and filtered-out
   skill names use the existing model-repairable `skill_not_loaded` path.
-  Ordinary binary startup still constructs the default CLI runner, so a
-  user-facing runtime agent selector remains downstream. Focused result:
-  `test-config` **37 cases / 274 assertions** and `test-bootstrap`
+  Focused result: `test-config` **37 cases / 274 assertions** and `test-bootstrap`
   **90 cases / 566 assertions**. Slice 138 adds `skill::WorkspaceSkillSnapshot`,
   a prompt-boundary workspace skill refresh owner that watches
   `<workspace>/.orangutan/skills` with Linux inotify when available, keeps a

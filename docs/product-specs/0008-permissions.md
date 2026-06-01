@@ -173,4 +173,8 @@ The `--mode <strict|default|permissive|sandboxed>` flag selects the baseline
 layer the rule materializer starts from; `--agent <name>` overlays the
 matching `agents.<name>.permissions` block from the loaded config. Unknown
 spellings surface as `Error::invalid_argument` and `Error::not_found`
-respectively, both with the offending value attached.
+respectively, both with the offending value attached. When config declares a
+provider route, the same selectors also feed the runtime `AgentPromptRunner`:
+`--mode` selects the permission baseline, and `--agent` selects the per-agent
+permission overlay plus runtime agent identity. Without a provider route,
+selector flags remain valid only with `--explain-rules`.
