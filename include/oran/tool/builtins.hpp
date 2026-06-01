@@ -37,6 +37,9 @@ inline constexpr std::string_view kFileDeleteName{"file.delete"};
 /// Stable wire name for the catalog metadata lookup built-in.
 inline constexpr std::string_view kToolSearchName{"tool.search"};
 
+/// Stable wire name for the markdown skill invocation built-in.
+inline constexpr std::string_view kSkillInvokeName{"skill.invoke"};
+
 /// Register the `file.read` tool. Reads UTF-8 content using `oran-io`'s
 /// coroutine helper; when `DispatchContext::workspace` is set, the input path
 /// is first resolved through `tool::Workspace`. Capability `read_file` is
@@ -148,10 +151,19 @@ inline constexpr std::string_view kToolSearchName{"tool.search"};
 /// deferred flag, and category.
 [[nodiscard]] core::Result<void> register_tool_search(Registry& registry);
 
+/// Register the `skill.invoke` tool. Runs a markdown skill from the runtime's
+/// current skill snapshot; capability `invoke_skill` is required. Input shape:
+/// `{"name": <string>, "inputs"?: <JSON value>}`. The concrete skill lookup
+/// lives behind `DispatchContext::skill_invoke`, so this built-in remains an
+/// ordinary permissioned/audited registry dispatch without making `oran-tool`
+/// depend on `oran-skill`.
+[[nodiscard]] core::Result<void> register_skill_invoke(Registry& registry);
+
 /// Register every built-in this repository ships. Currently wires `file.read`,
 /// `file.write`, `file.edit`, `file.search`, `directory.list`, then
-/// `file.delete`, then `tool.search`; future slices append additional tools
-/// so production callers can stay on this single entry point.
+/// `file.delete`, then `tool.search`, then `skill.invoke`; future slices
+/// append additional tools so production callers can stay on this single
+/// entry point.
 [[nodiscard]] core::Result<void> register_builtins(Registry& registry);
 
 }  // namespace orangutan::tool

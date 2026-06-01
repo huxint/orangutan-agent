@@ -159,7 +159,9 @@ The agent loop owns:
   section-4 owner in bootstrap. Slice 136 adds `skill::Loader` and has
   configured-route bootstrap snapshot `<workspace>/.orangutan/skills/*.md` into
   that catalog once before the first prompt while keeping skill bodies out of
-  the prompt; see
+  the prompt. Slice 137 wires `skill.invoke` through the ordinary tool
+  dispatch path, returning the matched snapshot body as conversation-tail tool
+  result text rather than changing the stable prompt prefix; see
   [`../product-specs/0009-skills.md`](../product-specs/0009-skills.md).
 - **Memory framing renderer** — section (5). Pure function of memory state;
   no per-iteration mutation. Slice 133 adds `memory::FramingOwner` in
@@ -333,7 +335,8 @@ Skills come from `<workspace>/.orangutan/skills/`. The runtime watches that dire
 (asio + inotify on Linux) and re-renders the catalog without restart. Slice 135
 landed the first deterministic section-4 catalog renderer and owner boundary;
 slice 136 adds the first one-shot loader snapshot consumed by configured-route
-prompts. Watcher/invoke still remain for later slices.
+prompts, and slice 137 uses that snapshot for one-shot `skill.invoke` tool
+calls. Watcher hot-reload still remains for a later slice.
 
 ### Provider Cost Awareness
 

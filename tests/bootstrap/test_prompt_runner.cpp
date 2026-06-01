@@ -110,6 +110,18 @@ provider::Response text_response(std::string text) {
   };
 }
 
+std::string tool_result_output_in(const provider::Request& request, std::string_view tool_use_id) {
+  for (const auto& message : request.messages) {
+    for (const auto& block : message.blocks) {
+      const auto* result = std::get_if<core::ToolResultContent>(&block);
+      if (result != nullptr && result->tool_use_id == tool_use_id) {
+        return result->output;
+      }
+    }
+  }
+  return {};
+}
+
 cli::CliOptions cli_options(std::vector<std::string_view>& args) {
   return cli::CliOptions{
       .args = std::span<const std::string_view>{args},
@@ -661,6 +673,68 @@ TEST_CASE("AgentPromptRunner loads skill catalog from the workspace skills direc
     REQUIRE(*requests[0].system_prompt == *requests[1].system_prompt);
     REQUIRE((*runner)->skill_catalog_loads() == 1);
     REQUIRE((*runner)->skill_catalog_renders() == 1);
+  });
+}
+
+TEST_CASE("AgentPromptRunner invokes loaded skill bodies through the tool path",
+          "[unit][bootstrap][prompt_runner][skill]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-skill-invoke"};
+  write_file(temp.path() / ".orangutan" / "skills" / "release-note.md",
+             "---\n"
+             "name: release-note\n"
+             "description: Draft release notes from completed changes.\n"
+             "triggers: release notes, changelog\n"
+             "---\n"
+             "Use concise bullets for the shipped changes.\n");
+  auto cfg = parse_config(R"json(
+{
+  "permissions": {
+    "allow": [
+      {"tool_pattern": "skill.invoke"}
+    ]
+  }
+}
+)json");
+
+  test::run_async([&temp, &cfg](asio::io_context& io) -> async::Awaitable<void> {
+    auto assembly = build_assembly(temp.path(), io, false);
+    RecordingProvider recording{{
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "skill-1",
+                .name = "skill.invoke",
+                .input_json = R"({"name":"release-note","inputs":{"since":"slice-136"}})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        },
+        text_response("release note done"),
+    }};
+
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.mode = permission::Mode::strict;
+    options.skills_directory = (temp.path() / ".orangutan" / "skills").string();
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto result = co_await (*runner)->run_prompt(
+        cli::PromptRunRequest{.prompt = "draft notes", .mode = cli::CliMode::single_shot});
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "release note done");
+
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 2);
+    REQUIRE(requests[0].system_prompt.has_value());
+    REQUIRE(requests[0].system_prompt->contains("Skill: release-note"));
+    REQUIRE_FALSE(requests[0].system_prompt->contains("Use concise bullets"));
+    const auto output = tool_result_output_in(requests[1], "skill-1");
+    REQUIRE(output.contains("skill.invoke: release-note"));
+    REQUIRE(output.contains(R"("since":"slice-136")"));
+    REQUIRE(output.contains("Use concise bullets for the shipped changes."));
+    REQUIRE((*runner)->skill_catalog_loads() == 1);
   });
 }
 

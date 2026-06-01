@@ -9,14 +9,15 @@ activate them on demand without bloating the system prompt.
 ## Scope (v1)
 
 - `oran-skill::Loader` reading skills from `<workspace>/.orangutan/skills/<name>.md`.
-  **Status (slice 136, 2026-06-01):** the loader snapshots existing
+  **Status (slices 136-137, 2026-06-01):** the loader snapshots existing
   `<workspace>/.orangutan/skills/*.md` files through `oran-io`, parses
   single-line YAML-style frontmatter metadata, enforces a 4 KiB default body
   cap plus a separate frontmatter cap, treats a missing skills directory as an
   empty snapshot, and can render the resulting compact catalog. Bootstrap
   configured-route prompts load that directory once before the first prompt
-  unless the caller supplied exact `skills_catalog` bytes. Watcher hot-reload
-  and `skill.invoke` remain planned.
+  unless the caller supplied exact `skills_catalog` bytes. Slice 137 keeps the
+  loaded documents as the immutable invocation snapshot for that runner.
+  Watcher hot-reload remains planned.
 - Skill metadata in YAML frontmatter:
   - `name`, `description`, `triggers` (semantic intents), `inputs` (schema), `model_hint`.
 - Skill catalog rendered into the system prompt (compact listing).
@@ -24,8 +25,14 @@ activate them on demand without bloating the system prompt.
   ordering in [`docs/rules/prompt-design.md`](../rules/prompt-design.md) —
   activated skill bodies shift the skills section, never the system
   preamble.
-- `skill.invoke(name, inputs)` tool runs a skill; its body is appended to the
-  prompt for the next iteration.
+- `skill.invoke(name, inputs)` tool runs a loaded skill. **Status (slice 137,
+  2026-06-01):** the built-in is registered in the default active catalog with
+  `Capability::invoke_skill`, parses only `name` plus optional raw JSON
+  `inputs`, delegates lookup through `DispatchContext::skill_invoke`, and
+  returns the matched markdown body as ordinary `tool_result` text for the next
+  provider iteration. The tool layer owns parsing, permissions, audit, hooks,
+  scheduler dispatch, and output caps; bootstrap owns the snapshot lookup so
+  `oran-tool` does not depend on `oran-skill`.
 - Hot-reload via filesystem watcher (`asio` + inotify on Linux).
 
 ## Scope (v1.1)

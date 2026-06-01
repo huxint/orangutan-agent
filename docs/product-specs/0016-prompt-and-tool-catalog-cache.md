@@ -216,15 +216,17 @@ promotion side effect that the first agent loop will reuse.
   fill `memory::Framing` without changing the builder or re-querying inside
   provider/tool iterations.
 - **Skill catalog renderer** populates section 4.
-  **Status (slice 136, 2026-06-01):** `oran-skill` now ships the
+  **Status (slice 137, 2026-06-01):** `oran-skill` now ships the
   deterministic section-4 catalog renderer, the section-4 owner, and the first
   markdown loader snapshot. `AgentPromptRunner` loads the workspace skills
   directory once before the first prompt when configured and then renders the
   materialized catalog once before loop entry; `prompt::Builder` still consumes
   the stable `BuilderInputs::skills_catalog` string. Skill bodies remain outside
-  the system preamble and outside the catalog; watcher hot-reload and
-  `skill.invoke` remain downstream. Activating a skill shifts section 4, never
-  section 1.
+  the system preamble and outside the catalog. `skill.invoke` now returns a
+  loaded snapshot body through the ordinary conversation-tail tool-result path,
+  so it does not change the cached prefix. Watcher hot-reload remains
+  downstream. Activating a future persistent skill section shifts section 4,
+  never section 1.
 - **Active-set hot reload**. `runtime.prompt.active_tools` honours
   config reload without restart; the promotion set survives the
   reload; the cache invalidates by bumping `cache_version` for the

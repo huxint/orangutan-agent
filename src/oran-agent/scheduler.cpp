@@ -99,6 +99,7 @@ constexpr std::chrono::milliseconds kCancellationGrace{100};
       .now = core::time::now_utc(),
       .bus = prototype.bus,
       .registry = nullptr,
+      .skill_invoke = prototype.skill_invoke,
       .workspace = prototype.workspace,
       .resolved_path = std::nullopt,
       .output_caps = prototype.output_caps,

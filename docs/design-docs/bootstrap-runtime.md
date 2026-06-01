@@ -120,7 +120,12 @@ It also owns the section-4 `skill::CatalogOwner`: callers can provide exact
 point `skills_directory` at `<workspace>/.orangutan/skills` so the runner loads a
 bounded `skill::Loader` snapshot once before the first prompt. Missing skills
 directories produce an empty catalog, loader errors fail before the loop, and
-`skill_catalog_loads()` exposes whether a directory snapshot was taken.
+`skill_catalog_loads()` exposes whether a directory snapshot was taken. The same
+loaded `SkillDocument` vector is also the immutable source for the
+`skill.invoke` built-in during that runner's turns: bootstrap installs a
+`DispatchContext::skill_invoke` callback, and the tool dispatch path returns the
+matched markdown body as ordinary tool-result text for the next provider
+iteration without re-reading disk mid-turn.
 Empty `AgentPromptRunnerOptions::system_preamble` selects
 `agent::default_system_preamble()`; explicit text is treated as an override for
 tests and embedders. Multi-iteration provider/tool turns therefore reuse stable
@@ -219,6 +224,6 @@ permission-decision and `hook_publish` rows are readable in the same output.
 
 ## Next Steps
 
-- Add the skill catalog watcher and `skill.invoke` execution path.
+- Add the skill catalog watcher / hot-reload execution path.
 - Bind configured hook sinks to the assembly-owned bus once the hook sink models land.
 - Add CLI line editor/history on top of the interactive REPL handoff.

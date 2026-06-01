@@ -140,6 +140,19 @@ materialize_runner_rules(const config::Config& cfg, permission::Mode mode, std::
   return agent::SystemPreamble{.section_text = std::move(text)};
 }
 
+[[nodiscard]] std::string render_skill_invocation_text(const skill::SkillDocument& document,
+                                                       std::string_view inputs_json) {
+  std::string text;
+  text.reserve(document.metadata.name.size() + document.body.size() + inputs_json.size() + 64U);
+  text.append("skill.invoke: ");
+  text.append(document.metadata.name);
+  text.append("\ninputs: ");
+  text.append(inputs_json);
+  text.append("\nbody:\n");
+  text.append(document.body);
+  return text;
+}
+
 [[nodiscard]] Result<void> validate_options(const AgentPromptRunnerOptions& options) {
   if (options.assembly == nullptr) {
     return std::unexpected(option_error("agent prompt runner requires a runtime assembly"));
@@ -258,6 +271,8 @@ public:
         .approval_broker = &assembly_->approval_broker(),
         .now = core::time::now_utc(),
         .bus = &assembly_->hook_bus(),
+        .skill_invoke = [this](std::string_view skill_name, std::string_view inputs_json, tool::DispatchContext& ctx)
+            -> async::Awaitable<Result<tool::Output>> { co_return invoke_skill(skill_name, inputs_json, ctx); },
         .workspace = &assembly_->workspace(),
         .output_caps = output_caps_,
         .scope_key = scope_key_,
@@ -378,14 +393,43 @@ private:
     }
 
     auto loader = skill::Loader{executor_};
-    auto catalog = co_await loader.load_catalog(skills_directory_);
+    auto documents = co_await loader.load_directory(skills_directory_);
+    if (!documents) {
+      co_return std::unexpected(std::move(documents).error());
+    }
+    auto entries = skill::catalog_entries_from(std::span<const skill::SkillDocument>{*documents});
+    auto catalog = skill::render_catalog(entries);
     if (!catalog) {
       co_return std::unexpected(std::move(catalog).error());
     }
+    skill_documents_ = std::move(*documents);
     skills_catalog_.replace(std::move(*catalog));
     skills_catalog_loaded_ = true;
     ++skill_catalog_loads_;
     co_return Result<void>{};
+  }
+
+  [[nodiscard]] Result<tool::Output>
+  invoke_skill(std::string_view skill_name, std::string_view inputs_json, tool::DispatchContext& ctx) const {
+    static_cast<void>(ctx);
+    const auto match = std::ranges::find_if(skill_documents_, [skill_name](const skill::SkillDocument& document) {
+      return document.metadata.name == skill_name;
+    });
+    if (match == skill_documents_.end()) {
+      return std::unexpected(Error::not_found("skill.invoke: skill is not loaded")
+                                 .with("skill", std::string{skill_name})
+                                 .with("reason", "skill_not_loaded"));
+    }
+    return tool::Output{
+        .text = render_skill_invocation_text(*match, inputs_json),
+        .data_json = std::nullopt,
+        .attachments = {},
+        .usage =
+            tool::ToolUsage{
+                .bytes_read = match->body.size(),
+            },
+        .is_error = false,
+    };
   }
 
   [[nodiscard]] async::Awaitable<Result<void>> append_transcript_suffix(memory::session::Store& store,
@@ -474,6 +518,7 @@ private:
   std::string origin_;
   agent::SystemPreambleOwner system_preamble_;
   skill::CatalogOwner skills_catalog_;
+  std::vector<skill::SkillDocument> skill_documents_;
   std::string skills_directory_;
   bool skills_catalog_loaded_{true};
   memory::FramingOwner memory_framing_;

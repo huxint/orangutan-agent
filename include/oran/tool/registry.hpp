@@ -90,6 +90,15 @@ namespace orangutan::tool {
 
 class Registry;
 class Workspace;
+struct DispatchContext;
+
+/// Runtime callback consumed by the `skill.invoke` built-in. The tool layer
+/// owns JSON parsing, permissions, audit, hooks, and output caps; bootstrap
+/// supplies the already-loaded skill snapshot through this callback so
+/// `oran-tool` does not depend on `oran-skill`.
+using SkillInvokeHandler = std::function<async::Awaitable<core::Result<Output>>(std::string_view skill_name,
+                                                                                std::string_view inputs_json,
+                                                                                DispatchContext& ctx)>;
 
 /// Registry-pre-resolved filesystem target for a built-in tool call.
 /// `absolute_path` is the path handlers pass to `oran-io`; the rest is
@@ -170,6 +179,11 @@ struct DispatchContext {
   /// live catalog without capturing a self-reference inside a movable
   /// `Registry`.
   const Registry* registry{nullptr};
+  /// Optional skill invocation service. When set, `skill.invoke` calls it with
+  /// the requested skill name plus the raw `inputs` JSON value and returns the
+  /// produced tool output through the ordinary dispatch path. When unset,
+  /// `skill.invoke` reports a model-repairable missing-runtime error.
+  SkillInvokeHandler skill_invoke{};
   /// Optional workspace resolver for file built-ins. The pointer is
   /// non-owning; bootstrap/agent runtime owns the workspace value and keeps it
   /// alive for the dispatch. Dispatch pre-resolves current filesystem

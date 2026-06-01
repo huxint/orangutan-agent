@@ -2,8 +2,9 @@
 //
 // Skills are repository-local markdown templates with a small frontmatter
 // metadata block. The loader owns the first filesystem snapshot shape for
-// `<workspace>/.orangutan/skills/*.md`; hot-reload and `skill.invoke` are
-// later consumers of the same `SkillDocument` body snapshot.
+// `<workspace>/.orangutan/skills/*.md`; bootstrap's `skill.invoke` callback
+// consumes the same `SkillDocument` body snapshot. Hot-reload remains a later
+// consumer.
 
 #pragma once
 

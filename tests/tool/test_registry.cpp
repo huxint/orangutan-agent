@@ -537,11 +537,26 @@ TEST_CASE("register_tool_search advertises a capability-free runtime lookup", "[
   REQUIRE(def->input_schema_json.contains("\"capability\""));
 }
 
+TEST_CASE("register_skill_invoke advertises invoke_skill and name inputs", "[unit][tool][skill_invoke]") {
+  tool::Registry registry;
+  REQUIRE(tool::register_skill_invoke(registry).has_value());
+  REQUIRE(registry.size() == 1);
+  const auto* def = registry.find(tool::kSkillInvokeName);
+  REQUIRE(def != nullptr);
+  REQUIRE(def->required_capabilities.size() == 1);
+  REQUIRE(def->required_capabilities[0] == core::Capability::invoke_skill);
+  REQUIRE_FALSE(def->deferred);
+  REQUIRE(def->category.has_value());
+  REQUIRE(*def->category == "skill");
+  REQUIRE(def->input_schema_json.contains("\"name\""));
+  REQUIRE(def->input_schema_json.contains("\"inputs\""));
+}
+
 TEST_CASE("register_builtins seeds the file tool catalog", "[unit][tool][builtins]") {
   tool::Registry registry;
   REQUIRE(tool::register_builtins(registry).has_value());
   const auto catalog = registry.catalog();
-  REQUIRE(catalog.size() == 7);
+  REQUIRE(catalog.size() == 8);
   REQUIRE(catalog[0].name == tool::kFileReadName);
   REQUIRE(catalog[1].name == tool::kFileWriteName);
   REQUIRE(catalog[2].name == tool::kFileEditName);
@@ -549,6 +564,7 @@ TEST_CASE("register_builtins seeds the file tool catalog", "[unit][tool][builtin
   REQUIRE(catalog[4].name == tool::kDirectoryListName);
   REQUIRE(catalog[5].name == tool::kFileDeleteName);
   REQUIRE(catalog[6].name == tool::kToolSearchName);
+  REQUIRE(catalog[7].name == tool::kSkillInvokeName);
 }
 
 TEST_CASE("tool.search returns structured tool metadata by exact name", "[unit][tool][tool_search]") {
@@ -679,6 +695,64 @@ TEST_CASE("tool.search rejects malformed selectors as invalid_argument", "[unit]
     REQUIRE(context_has(unknown_capability.error(), "capability", "warp_drive"));
 
     REQUIRE(sink.events().size() == 5);
+  });
+}
+
+TEST_CASE("skill.invoke delegates parsed name and inputs through DispatchContext", "[unit][tool][skill_invoke]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_skill_invoke(registry).has_value());
+
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kSkillInvokeName},
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    std::string seen_name;
+    std::string seen_inputs;
+    ctx.skill_invoke = [&seen_name,
+                        &seen_inputs](std::string_view skill_name,
+                                      std::string_view inputs_json,
+                                      tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
+      seen_name = skill_name;
+      seen_inputs = inputs_json;
+      co_return tool::Output::text_only("invoked skill body");
+    };
+
+    auto result = co_await registry.dispatch(tool::kSkillInvokeName,
+                                             R"({"name":"release-note","inputs":{"topic":"slice"}})",
+                                             ctx);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "invoked skill body");
+    REQUIRE(seen_name == "release-note");
+    REQUIRE(seen_inputs == R"({"topic":"slice"})");
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
+  });
+}
+
+TEST_CASE("skill.invoke reports missing runtime service as a model-repairable error", "[unit][tool][skill_invoke]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_skill_invoke(registry).has_value());
+
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kSkillInvokeName},
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    auto result = co_await registry.dispatch(tool::kSkillInvokeName, R"({"name":"release-note"})", ctx);
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(context_has(result.error(), "reason", "skill_runtime_unavailable"));
+    REQUIRE(context_has(result.error(), "skill", "release-note"));
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
   });
 }
 

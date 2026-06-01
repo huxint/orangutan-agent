@@ -7,14 +7,26 @@
 
 ## Snapshot
 
-- **Slice:** 136 (`xmake run orangutan` reports slice 136)
+- **Slice:** 137 (`xmake run orangutan` reports slice 137)
 - **Last completed history:**
-  [`histories/2026-06/20260601-1946-skill-loader-snapshot.md`](histories/2026-06/20260601-1946-skill-loader-snapshot.md)
+  [`histories/2026-06/20260601-2034-skill-invoke.md`](histories/2026-06/20260601-2034-skill-invoke.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
 - **Next intended slice:** continue the prompt-runtime arc with the catalog
-  watcher and `skill.invoke` execution path, keeping catalog snapshots compact
-  and skill bodies outside the system preamble. Slice 136 adds
+  watcher/hot-reload path, keeping catalog snapshots compact and skill bodies
+  outside the system preamble. Slice 137 adds the permissioned
+  `skill.invoke` built-in to the default active catalog and has
+  `AgentPromptRunner` serve it from the immutable workspace skill snapshot
+  loaded before loop entry. The built-in parses only `{"name": <string>,
+  "inputs"?: <json>}`, delegates execution through `DispatchContext`, and
+  returns the skill body as ordinary model-visible tool-result text for the
+  next provider iteration; missing runtime services or unknown loaded skills
+  remain model-repairable tool errors. Skill bodies still stay out of section 1
+  and section 4. Focused result: `test-tool` **188 cases / 1893 assertions**,
+  `test-bootstrap` **87 cases / 518 assertions** (rerun outside the localhost
+  socket sandbox after the expected `open: Operation not permitted` false
+  negative), `test-prompt` **10 / 98**, and `test-agent`
+  **56 / 10 744**. Slice 136 adds
   `skill::Loader`, a bounded markdown/frontmatter snapshot reader for
   `<workspace>/.orangutan/skills/*.md`, and has configured-route
   `AgentPromptRunner` load the workspace skills directory once before the first
@@ -1266,8 +1278,8 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 | ----- | ----- |
 | **A** | *(none yet — pre-v1)* |
 | **B** | Architecture docs, Build system, Async model, Security defaults, Supply chain |
-| **C** | Compile-time discipline, Tests, Benches, IO, Storage, Config, Bootstrap, Provider system, Tool registry, Prompt builder, Memory tiers, Permissions, Hooks, Channels, Orchestration, Automation, Web UI, CLI, Static analysis |
-| **D** | Skills, Observability |
+| **C** | Compile-time discipline, Tests, Benches, IO, Storage, Config, Bootstrap, Provider system, Tool registry, Prompt builder, Memory tiers, Permissions, Hooks, Channels, Orchestration, Automation, Web UI, CLI, Skills, Static analysis |
+| **D** | Observability |
 
 ## Latest Library Surfaces
 
@@ -1280,12 +1292,12 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 30 cases / 207 assertions.
 - `oran-memory`: 8 cases / 559 assertions.
-- `oran-tool`: 178 cases / 1838 assertions.
+- `oran-tool`: 188 cases / 1893 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 86 cases / 652 assertions.
-- `oran-agent`: 56 cases / 10744 assertions.
+- `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 84 cases / 477 assertions.
+- `oran-bootstrap`: 87 cases / 518 assertions.
 
 ## Open Tech-Debt Rows
 
