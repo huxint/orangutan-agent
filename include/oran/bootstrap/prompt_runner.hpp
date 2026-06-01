@@ -34,8 +34,8 @@ struct AgentPromptRunnerOptions {
   provider::Route route{};
   permission::Mode mode{permission::Mode::default_};
   /// Optional `agents.<name>` entry for per-agent prompt/runtime config such
-  /// as `skills_enabled`. Empty falls back to `permission_agent_name` so
-  /// current selected-agent tests keep one selector.
+  /// as `prompt_overlay` and `skills_enabled`. Empty falls back to
+  /// `permission_agent_name` so current selected-agent callers keep one selector.
   std::string agent_config_name{};
   std::string permission_agent_name{};
   std::string scope_key{"default"};
@@ -53,6 +53,8 @@ struct AgentPromptRunnerOptions {
   /// path is ignored so tests and embedders can provide exact section bytes.
   std::string skills_directory{};
   std::string memory_framing{};
+  /// Optional exact section-6 overlay bytes. Empty lets the selected
+  /// `agents.<name>.prompt_overlay` value fill the section.
   std::string per_agent_overlay{};
   std::string trace_context_json{"{}"};
   std::optional<std::string> tool_choice{std::string{"auto"}};

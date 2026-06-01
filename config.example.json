@@ -68,6 +68,7 @@
   },
   "agents": {
     "researcher": {
+      "prompt_overlay": "Prefer concise, source-backed answers and call out uncertain evidence.",
       "skills_enabled": ["release-note", "review-pr"],
       "permissions": {
         "allow": [

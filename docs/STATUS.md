@@ -7,14 +7,23 @@
 
 ## Snapshot
 
-- **Slice:** 140 (`xmake run orangutan` reports slice 140)
+- **Slice:** 141 (`xmake run orangutan` reports slice 141)
 - **Last completed history:**
-  [`histories/2026-06/20260601-2250-runtime-agent-selector.md`](histories/2026-06/20260601-2250-runtime-agent-selector.md)
+  [`histories/2026-06/20260601-2327-agent-prompt-overlay.md`](histories/2026-06/20260601-2327-agent-prompt-overlay.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** continue the prompt-runtime arc after binary-level
-  agent selection, keeping catalog snapshots compact and skill bodies outside
-  the system preamble. Slice 140 wires the existing `--mode` / `--agent`
+- **Next intended slice:** continue the prompt-runtime arc after typed
+  per-agent section-6 overlays, keeping catalog snapshots compact and skill
+  bodies outside the system preamble. Slice 141 adds
+  `agents.<name>.prompt_overlay` to `oran-config` and has
+  `AgentPromptRunner` copy the selected agent's stable section-6 prompt text
+  into `RunTurnInputs::per_agent_overlay` when callers did not supply exact
+  overlay bytes. The same selected `agents.<name>` lookup now feeds both
+  `prompt_overlay` and `skills_enabled`, while permission materialization keeps
+  using the existing `permission_agent_name` path. Focused result:
+  `test-config` **37 cases / 278 assertions** and `test-bootstrap`
+  **94 cases / 597 assertions**. Slice
+  140 wires the existing `--mode` / `--agent`
   bootstrap selectors into configured-route `bootstrap::run`: `--mode` selects
   the permission baseline passed to `AgentPromptRunner`, `--agent <name>`
   selects the runtime `agents.<name>` permission overlay, skill allowlist, and
@@ -1316,7 +1325,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-http`: 3 cases / 21 assertions.
 - `oran-io`: 49 cases / 286 assertions.
 - `oran-storage`: 73 cases / 938 assertions.
-- `oran-config`: 37 cases / 274 assertions.
+- `oran-config`: 37 cases / 278 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 30 cases / 207 assertions.
 - `oran-memory`: 8 cases / 559 assertions.
@@ -1325,7 +1334,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 90 cases / 566 assertions.
+- `oran-bootstrap`: 94 cases / 597 assertions.
 
 ## Open Tech-Debt Rows
 

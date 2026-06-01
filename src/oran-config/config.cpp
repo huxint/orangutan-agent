@@ -50,8 +50,9 @@ constexpr auto kRecognizedRootFields = std::array<std::string_view, 14>{
     "session",
 };
 
-constexpr auto kRecognizedAgentFields = std::array<std::string_view, 2>{
+constexpr auto kRecognizedAgentFields = std::array<std::string_view, 3>{
     "permissions",
+    "prompt_overlay",
     "skills_enabled",
 };
 
@@ -1006,6 +1007,15 @@ parse_agents(const json& root, bool strict, std::vector<ConfigWarning>& warnings
       skills_enabled = std::move(*parsed);
     }
 
+    auto prompt_overlay = std::string{};
+    if (const auto overlay_it = value.find("prompt_overlay"); overlay_it != value.end()) {
+      const auto overlay_path = child_path(agent_path, "prompt_overlay");
+      if (!overlay_it->is_string()) {
+        return std::unexpected(config_error("expected string", overlay_path));
+      }
+      prompt_overlay = overlay_it->get<std::string>();
+    }
+
     for (const auto& [key, _] : value.items()) {
       if (is_recognized_agent_field(key)) {
         continue;
@@ -1023,6 +1033,7 @@ parse_agents(const json& root, bool strict, std::vector<ConfigWarning>& warnings
     agents.push_back(AgentConfig{
         .name = name,
         .permissions = std::move(permissions),
+        .prompt_overlay = std::move(prompt_overlay),
         .skills_enabled = std::move(skills_enabled),
     });
   }

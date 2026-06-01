@@ -191,11 +191,12 @@ struct PermissionsConfig {
 
 /// A single entry inside `agents.<name>`. The name field is the object key
 /// (set by the parser, not authored). Future slices add provider/model
-/// overrides, prompt templates, hook bindings, etc.; the typed surface now
-/// exposes per-agent permissions plus an optional skill allowlist.
+/// overrides, hook bindings, etc.; the typed surface now exposes per-agent
+/// permissions, stable prompt overlay bytes, and an optional skill allowlist.
 struct AgentConfig {
   std::string name;
   PermissionsConfig permissions;
+  std::string prompt_overlay;
   std::optional<std::vector<std::string>> skills_enabled;
 
   friend bool operator==(const AgentConfig&, const AgentConfig&) = default;

@@ -125,13 +125,16 @@ directories produce an empty catalog, loader errors fail before the loop, and
 `skill_catalog_loads()` exposes the number of snapshot reloads. When the caller
 selects an `AgentPromptRunnerOptions::agent_config_name` (or leaves it empty
 and selects `permission_agent_name`), the runner reads that `agents.<name>`
-entry's optional `skills_enabled` allowlist before prompt execution. An absent
-allowlist keeps all loaded skills visible; a present allowlist, including an
-empty array, filters both the section-4 catalog and the invocation document
-vector after each workspace snapshot refresh. Ordinary configured-route binary
-startup now maps `--agent <name>` into both `agent_config_name` and
-`permission_agent_name`, so the same operator selector controls permission
-overlay, skill allowlist, audit/session agent key, and provider hook metadata.
+entry's optional `prompt_overlay` and `skills_enabled` fields before prompt
+execution. `prompt_overlay` fills stable prompt section 6 when callers did not
+provide exact `AgentPromptRunnerOptions::per_agent_overlay` bytes. An absent
+skill allowlist keeps all loaded skills visible; a present allowlist,
+including an empty array, filters both the section-4 catalog and the invocation
+document vector after each workspace snapshot refresh. Ordinary
+configured-route binary startup now maps `--agent <name>` into both
+`agent_config_name` and `permission_agent_name`, so the same operator selector
+controls permission overlay, prompt overlay, skill allowlist, audit/session
+agent key, and provider hook metadata.
 The same filtered document vector is the immutable source for the
 `skill.invoke` built-in during that runner's current turn: bootstrap installs a
 `DispatchContext::skill_invoke` callback, and the tool dispatch path returns the

@@ -692,6 +692,7 @@ TEST_CASE("Config::parse extracts agents.<name>.permissions overlays", "[unit][c
 {
   "agents": {
     "researcher": {
+      "prompt_overlay": "Prefer concise, source-backed answers.",
       "skills_enabled": ["release-note", "review-pr"],
       "permissions": {
         "allow": [{"tool_pattern": "*", "capability": "egress_http"}]
@@ -709,10 +710,12 @@ TEST_CASE("Config::parse extracts agents.<name>.permissions overlays", "[unit][c
   REQUIRE(result.has_value());
   REQUIRE(result->agents().size() == 2);
   REQUIRE(result->agents()[0].name == "researcher");
+  REQUIRE(result->agents()[0].prompt_overlay == "Prefer concise, source-backed answers.");
   REQUIRE(result->agents()[0].skills_enabled == std::vector<std::string>{"release-note", "review-pr"});
   REQUIRE(result->agents()[0].permissions.rules.size() == 1);
   REQUIRE(result->agents()[0].permissions.rules[0].capability == core::Capability::egress_http);
   REQUIRE(result->agents()[1].name == "auditor");
+  REQUIRE(result->agents()[1].prompt_overlay.empty());
   REQUIRE_FALSE(result->agents()[1].skills_enabled.has_value());
   REQUIRE(result->agents()[1].permissions.rules[0].verdict == config::PermissionVerdict::deny);
   REQUIRE(result->agents()[1].permissions.rules[0].capability == core::Capability::write_file);
@@ -866,6 +869,12 @@ TEST_CASE("Config::parse handles unknown verdict / rule / agent keys per mode", 
 
   SECTION("malformed agent skills_enabled fails") {
     auto result = config::Config::parse(R"json({"agents": {"a": {"skills_enabled": ["release-note", ""]}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("malformed agent prompt_overlay fails") {
+    auto result = config::Config::parse(R"json({"agents": {"a": {"prompt_overlay": ["not", "a string"]}}})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }

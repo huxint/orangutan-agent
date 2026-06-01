@@ -103,10 +103,10 @@ materialize_runner_rules(const config::Config& cfg, permission::Mode mode, std::
   return permission::materialize(mode, cfg.permissions(), match->permissions);
 }
 
-[[nodiscard]] Result<std::optional<std::vector<std::string>>> agent_config_skills_enabled(const config::Config& cfg,
-                                                                                          std::string_view agent_name) {
+[[nodiscard]] Result<const config::AgentConfig*> selected_agent_config(const config::Config& cfg,
+                                                                       std::string_view agent_name) {
   if (agent_name.empty()) {
-    return std::nullopt;
+    return nullptr;
   }
 
   const auto agents = cfg.agents();
@@ -115,7 +115,7 @@ materialize_runner_rules(const config::Config& cfg, permission::Mode mode, std::
     return std::unexpected(
         Error::not_found("agent prompt runner agent config not found").with("agent", std::string{agent_name}));
   }
-  return match->skills_enabled;
+  return &*match;
 }
 
 [[nodiscard]] bool skill_enabled_for_agent(const skill::SkillDocument& document,
@@ -598,9 +598,16 @@ core::Result<std::unique_ptr<AgentPromptRunner>> AgentPromptRunner::create(Agent
   }
   const auto skill_agent_name = options.agent_config_name.empty() ? std::string_view{options.permission_agent_name}
                                                                   : std::string_view{options.agent_config_name};
-  auto skills_enabled = agent_config_skills_enabled(*options.config, skill_agent_name);
-  if (!skills_enabled) {
-    return std::unexpected(std::move(skills_enabled.error()));
+  auto agent_config = selected_agent_config(*options.config, skill_agent_name);
+  if (!agent_config) {
+    return std::unexpected(std::move(agent_config.error()));
+  }
+  auto skills_enabled = std::optional<std::vector<std::string>>{};
+  if (*agent_config != nullptr) {
+    skills_enabled = (*agent_config)->skills_enabled;
+    if (options.per_agent_overlay.empty()) {
+      options.per_agent_overlay = (*agent_config)->prompt_overlay;
+    }
   }
 
   auto session_id = options.session_id;
@@ -619,7 +626,7 @@ core::Result<std::unique_ptr<AgentPromptRunner>> AgentPromptRunner::create(Agent
                                      std::move(active_tools),
                                      *output_caps,
                                      *scheduler_options,
-                                     std::move(*skills_enabled),
+                                     std::move(skills_enabled),
                                      session_id);
   return std::make_unique<AgentPromptRunner>(std::move(impl), AgentPromptRunner::PrivateTag{});
 }

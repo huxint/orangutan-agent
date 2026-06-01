@@ -44,7 +44,8 @@ Current implementation status:
   (`enabled`, `store_raw_bodies`, `retention_days`), top-level hook timeout
   policy (`hooks.timeout_ms`, default 2000), `profiles` (including optional
   per-profile `protocol` and `pricing`), `routes`, `session`, `web`,
-  `permissions`, and `agents.<name>.permissions` plus optional
+  `permissions`, and `agents.<name>.permissions`, optional
+  `agents.<name>.prompt_overlay` stable section-6 prompt text, plus optional
   `agents.<name>.skills_enabled` skill allowlists.
 - `runtime.prompt.active_tools` accepts `"defaults"` or an explicit string
   array. The loader preserves the authored array order, accepts an empty
@@ -78,6 +79,11 @@ Current implementation status:
   snapshot for callers that select that agent config. An absent allowlist keeps
   all loaded skills visible, while a present empty array means no skills are
   enabled for that agent.
+- `agents.<name>.prompt_overlay` accepts a string. Bootstrap copies it into
+  prompt section 6 for callers that select that agent config, unless the caller
+  supplied exact `AgentPromptRunnerOptions::per_agent_overlay` bytes. The
+  overlay is stable prompt-prefix text, not a permission rule block; permission
+  rules remain under `agents.<name>.permissions`.
 
 ### Schema Validation
 

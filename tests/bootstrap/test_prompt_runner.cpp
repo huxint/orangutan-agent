@@ -1011,6 +1011,58 @@ TEST_CASE("AgentPromptRunner renders default system preamble once per prompt bef
   });
 }
 
+TEST_CASE("AgentPromptRunner renders selected agent prompt overlay in the stable prefix",
+          "[unit][bootstrap][prompt_runner][prompt]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-agent-overlay"};
+  auto cfg = parse_config(R"json(
+{
+  "agents": {
+    "writer": {
+      "prompt_overlay": "Agent overlay: prefer concise, source-backed answers."
+    }
+  }
+}
+)json");
+
+  test::run_async([&temp, &cfg](asio::io_context& io) -> async::Awaitable<void> {
+    auto assembly = build_assembly(temp.path(), io, false);
+    write_file(temp.path() / "note.txt", "agent overlay fixture\n");
+
+    RecordingProvider recording{{
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "read-1",
+                .name = "file.read",
+                .input_json = R"({"path":"note.txt"})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        },
+        text_response("done"),
+    }};
+
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.agent_config_name = "writer";
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto result =
+        co_await (*runner)->run_prompt(cli::PromptRunRequest{.prompt = "read", .mode = cli::CliMode::single_shot});
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "done");
+
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 2);
+    REQUIRE(requests[0].system_prompt.has_value());
+    REQUIRE(requests[1].system_prompt.has_value());
+    REQUIRE(requests[0].system_prompt->contains("Agent overlay: prefer concise, source-backed answers."));
+    REQUIRE(*requests[0].system_prompt == *requests[1].system_prompt);
+  });
+}
+
 TEST_CASE("AgentPromptRunner binds the CLI approval sink for builtin tool dispatch",
           "[unit][bootstrap][prompt_runner][approval]") {
   TempDir temp{"oran-bootstrap-prompt-runner-approval"};
