@@ -229,17 +229,18 @@ promotion side effect that the first agent loop will reuse.
   skill changes intentionally break section-4 cache bytes on the next prompt,
   not in the middle of an active turn. Activating a future persistent skill
   section shifts section 4, never section 1.
-  **Status (doc slice, 2026-06-02):** section-4 activation policy cache
-  semantics are explicit before expiration/deactivation code lands. The
-  skills section is a pure render of the loaded/allowed skill metadata snapshot
-  plus explicit policy inputs and transcript/durable activation state. Given
-  identical inputs, repeated renders must be byte-identical. A changed active
-  marker, deactivation event, or expiry is an intentional section-4 content
-  change for the next prompt and therefore invalidates the cached prefix through
-  the section content hash. A change to the marker interpretation or rendering
-  rule requires a `SectionVersions::skills_catalog` bump. Skill bodies remain
-  conversation-tail tool results and exact caller-supplied `skills_catalog`
-  bytes bypass automatic snapshot/policy handling.
+  **Status (doc slice + slice 144, 2026-06-02):** section-4 activation
+  policy cache semantics are explicit, and `skill::ActivationPolicy` now has
+  the first explicit deactivation input. The skills section is a pure render of
+  the loaded/allowed skill metadata snapshot plus explicit policy inputs and
+  transcript/durable activation state. Given identical inputs, repeated renders
+  must be byte-identical. A changed active marker, deactivation event, or expiry
+  is an intentional section-4 content change for the next prompt and therefore
+  invalidates the cached prefix through the section content hash. A change to
+  the marker interpretation or rendering rule requires a
+  `SectionVersions::skills_catalog` bump. Skill bodies remain conversation-tail
+  tool results and exact caller-supplied `skills_catalog` bytes bypass
+  automatic snapshot/policy handling.
 - **Active-set hot reload**. `runtime.prompt.active_tools` honours
   config reload without restart; the promotion set survives the
   reload; the cache invalidates by bumping `cache_version` for the

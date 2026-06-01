@@ -40,10 +40,12 @@ struct ActiveSkill {
 
 struct ActivationPolicy {
   /// Current v1 policy: successful `skill.invoke` tool results in the session
-  /// transcript mark the skill active on the next prompt. Future expiration or
-  /// explicit deactivation rules should extend this value instead of parsing
+  /// transcript mark the skill active on the next prompt. Explicit
+  /// deactivations subtract from that derived set at the same prompt boundary;
+  /// future expiration rules should extend this value instead of parsing
   /// transcript state at bootstrap call sites.
   bool transcript_markers_enabled{true};
+  std::vector<std::string> deactivated_skill_names{};
 
   friend bool operator==(const ActivationPolicy&, const ActivationPolicy&) = default;
 };

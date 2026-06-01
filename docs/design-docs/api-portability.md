@@ -478,9 +478,11 @@ Skill activation state normally invalidates through section-4 content, not a
 version bump: the same loaded/allowed skill snapshot plus the same
 `skill::ActivationPolicy` inputs must render the same `skills_catalog` bytes, while
 a changed active-marker set, explicit deactivation, or expiry changes that section's
-content hash for the next prompt. Bump `SectionVersions::skills_catalog` only when
-the rendering or interpretation rule changes. Invoked skill bodies remain section-7
-conversation-tail tool-result text and are excluded from prompt-cache hints.
+content hash for the next prompt. Slice 144's `deactivated_skill_names` policy
+field follows that rule: it is explicit caller state and subtracts from the active
+marker set before section 4 is rendered. Bump `SectionVersions::skills_catalog`
+only when the rendering or interpretation rule changes. Invoked skill bodies remain
+section-7 conversation-tail tool-result text and are excluded from prompt-cache hints.
 
 ## Configuration Shape
 

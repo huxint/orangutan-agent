@@ -95,6 +95,26 @@ validate_single_line(std::string_view field, std::string_view value, std::string
   return validate_single_line("name", skill.name, skill.name);
 }
 
+[[nodiscard]] core::Result<std::vector<std::string_view>>
+validate_deactivated_skill_names(std::span<const std::string> names) {
+  std::vector<std::string_view> ordered;
+  ordered.reserve(names.size());
+  for (const auto& name : names) {
+    if (auto valid = validate_active_skill(ActiveSkill{.name = name}); !valid) {
+      return std::unexpected(std::move(valid).error());
+    }
+    ordered.emplace_back(name);
+  }
+  std::ranges::sort(ordered);
+  for (std::size_t i = 1; i < ordered.size(); ++i) {
+    if (ordered[i - 1] == ordered[i]) {
+      return std::unexpected(core::Error::invalid_argument("deactivated skill names must be unique")
+                                 .with("skill", std::string{ordered[i]}));
+    }
+  }
+  return ordered;
+}
+
 [[nodiscard]] std::string join_strings(std::span<const std::string> values, std::string_view separator) {
   std::size_t bytes = 0;
   for (const auto& value : values) {
@@ -353,6 +373,12 @@ std::vector<ActiveSkill> active_skills_from_transcript(std::span<const core::Mes
 core::Result<std::vector<ActiveSkill>> resolve_active_skills(ActivationPolicy policy,
                                                              std::span<const core::Message> transcript,
                                                              std::span<const CatalogEntry> available_entries) {
+  auto deactivated_names =
+      validate_deactivated_skill_names(std::span<const std::string>{policy.deactivated_skill_names});
+  if (!deactivated_names) {
+    return std::unexpected(std::move(deactivated_names).error());
+  }
+
   std::vector<const CatalogEntry*> ordered_entries;
   ordered_entries.reserve(available_entries.size());
   for (const auto& entry : available_entries) {
@@ -374,10 +400,11 @@ core::Result<std::vector<ActiveSkill>> resolve_active_skills(ActivationPolicy po
   }
 
   auto active_skills = active_skills_from_transcript(transcript);
-  std::erase_if(active_skills, [&ordered_entries](const ActiveSkill& active) {
-    return !std::ranges::contains(ordered_entries,
-                                  std::string_view{active.name},
-                                  [](const CatalogEntry* entry) -> std::string_view { return entry->name; });
+  std::erase_if(active_skills, [&ordered_entries, &deactivated_names](const ActiveSkill& active) {
+    const auto name = std::string_view{active.name};
+    return !std::ranges::contains(ordered_entries, name, [](const CatalogEntry* entry) -> std::string_view {
+      return entry->name;
+    }) || std::ranges::contains(*deactivated_names, name);
   });
   return active_skills;
 }

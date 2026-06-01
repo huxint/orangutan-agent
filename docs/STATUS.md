@@ -7,22 +7,24 @@
 
 ## Snapshot
 
-- **Slice:** 143 (`xmake run orangutan` still reports slice 143; the latest
-  history is a doc-only prompt cache semantics slice)
+- **Slice:** 144 (`xmake run orangutan` reports slice 144)
 - **Last completed history:**
-  [`histories/2026-06/20260602-0200-skill-section4-cache-semantics.md`](histories/2026-06/20260602-0200-skill-section4-cache-semantics.md)
+  [`histories/2026-06/20260602-0224-skill-deactivation-policy.md`](histories/2026-06/20260602-0224-skill-deactivation-policy.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** implement the first narrow
-  `skill::ActivationPolicy` extension now that section-4 cache semantics are
-  documented. The documented contract is: activation, deactivation, and
-  expiration can change only the section-4 skill catalog at prompt boundaries;
-  identical loaded/allowed skill snapshots plus identical policy inputs must
-  render byte-identical section-4 text; changed active-marker state is an
-  intentional cached-prefix invalidation; skill bodies still travel only as
-  conversation-tail tool-result text; and exact caller-supplied
-  `skills_catalog` bytes bypass automatic loader/policy handling. This doc-only
-  slice changes no C++ tests or binary version. Slice 143 adds
+- **Next intended slice:** add the next explicit policy input for skill
+  expiration or a runtime-owned source of deactivation events. Do not add hidden
+  clocks to the renderer: expiration needs caller-provided time/durable state,
+  and deactivation events need an owner outside section rendering.
+  Slice 144 extends `skill::ActivationPolicy` with
+  `deactivated_skill_names`, validates that policy input as unique single-line
+  skill names, and has `skill::resolve_active_skills(...)` subtract those names
+  from transcript-derived active markers after loaded/allowed catalog
+  filtering. The default bootstrap runner still supplies an empty deactivation
+  set, so configured-route behavior is unchanged until a future runtime source
+  provides explicit deactivation events. Focused result: `test-skill`
+  **19 cases / 121 assertions**. The previous doc-only slice specified the
+  section-4 cache semantics future policy extensions must preserve. Slice 143 adds
   `skill::ActivationPolicy` plus `skill::resolve_active_skills(...)`, making
   the current transcript-derived active-marker policy an `oran-skill` public
   concept before future expiration/deactivation rules land. `AgentPromptRunner`

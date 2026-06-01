@@ -179,12 +179,15 @@ The agent loop owns:
   loaded/allowed snapshot. Slice 143 makes that current policy explicit as
   `skill::ActivationPolicy` / `skill::resolve_active_skills(...)`, so future
   expiration or deactivation rules extend the section-4 owner instead of
-  adding ad hoc transcript parsing in bootstrap. The policy is resolved only at
-  prompt boundaries: identical loaded/allowed snapshots plus identical policy
-  inputs render byte-identical section-4 bytes, while changed activation,
-  deactivation, or expiry state intentionally changes section 4 for the next
-  prompt and therefore breaks the cached prefix through the section content hash.
-  Skill bodies still arrive only as section-7 tool-result text; see
+  adding ad hoc transcript parsing in bootstrap. Slice 144 adds explicit
+  `ActivationPolicy::deactivated_skill_names` so caller-provided deactivation
+  events subtract from transcript-derived active markers at the same boundary.
+  The policy is resolved only at prompt boundaries: identical loaded/allowed
+  snapshots plus identical policy inputs render byte-identical section-4 bytes,
+  while changed activation, deactivation, or expiry state intentionally changes
+  section 4 for the next prompt and therefore breaks the cached prefix through
+  the section content hash. Skill bodies still arrive only as section-7
+  tool-result text; see
   [`../product-specs/0009-skills.md`](../product-specs/0009-skills.md).
 - **Memory framing renderer** — section (5). Pure function of memory state;
   no per-iteration mutation. Slice 133 adds `memory::FramingOwner` in
