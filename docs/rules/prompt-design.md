@@ -203,11 +203,13 @@ When a slice introduces a new prompt-bearing artifact:
 - [`../product-specs/0009-skills.md`](../product-specs/0009-skills.md)
   — skill body shape and per-skill body size cap.
 
-Slices 135-137 land the first deterministic section-4 owner, loader snapshot,
-and one-shot `skill.invoke` dispatch path in `oran-skill`, `oran-tool`, and
-bootstrap. That owner keeps skill bodies out of section 1 and renders a compact
-metadata-only catalog before loop entry; `skill.invoke` returns body text as an
-ordinary conversation-tail tool result, so it does not mutate cached sections
-(1)-(6). Watcher hot-reload remains under `0009-skills.md`.
+Slices 135-138 land the first deterministic section-4 owner, loader snapshot,
+one-shot `skill.invoke` dispatch path, and prompt-boundary hot-reload in
+`oran-skill`, `oran-tool`, and bootstrap. That owner keeps skill bodies out of
+section 1 and renders a compact metadata-only catalog before loop entry;
+`skill.invoke` returns body text as an ordinary conversation-tail tool result,
+so it does not mutate cached sections (1)-(6) during an active turn. Watcher /
+signature refresh replaces section-4 bytes before the next prompt when skill
+files change.
 - [`../product-specs/0010-benchmark-harness.md`](../product-specs/0010-benchmark-harness.md)
   — where the cache-hit-rate bench will live.

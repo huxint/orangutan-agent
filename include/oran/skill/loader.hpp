@@ -1,15 +1,16 @@
 // include/oran/skill/loader.hpp - markdown skill loader snapshot API.
 //
 // Skills are repository-local markdown templates with a small frontmatter
-// metadata block. The loader owns the first filesystem snapshot shape for
+// metadata block. The loader owns filesystem snapshots for
 // `<workspace>/.orangutan/skills/*.md`; bootstrap's `skill.invoke` callback
-// consumes the same `SkillDocument` body snapshot. Hot-reload remains a later
-// consumer.
+// consumes the same `SkillDocument` body snapshot. The workspace snapshot owner
+// adds watcher-backed refresh without moving skill bodies into prompt bytes.
 
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -52,6 +53,16 @@ struct LoaderOptions {
   friend bool operator==(const LoaderOptions&, const LoaderOptions&) = default;
 };
 
+struct WorkspaceSkillSnapshotStats {
+  std::uint64_t loads{0};
+  std::uint64_t watcher_events{0};
+  std::uint64_t watcher_invalidations{0};
+  bool loaded{false};
+  bool watcher_active{false};
+
+  friend bool operator==(const WorkspaceSkillSnapshotStats&, const WorkspaceSkillSnapshotStats&) = default;
+};
+
 [[nodiscard]] CatalogEntry catalog_entry_from(const SkillDocument& document);
 [[nodiscard]] std::vector<CatalogEntry> catalog_entries_from(std::span<const SkillDocument> documents);
 
@@ -66,6 +77,32 @@ public:
 private:
   asio::any_io_executor executor_{};
   LoaderOptions options_{};
+};
+
+/// Workspace skill snapshot with watcher-backed refresh.
+///
+/// `refresh()` loads the directory on first use, then drains any pending
+/// filesystem watcher events and reloads the rendered catalog plus invocation
+/// document snapshot before the caller starts the next prompt turn. The
+/// document vector and catalog therefore remain coherent for a whole turn.
+class WorkspaceSkillSnapshot {
+public:
+  explicit WorkspaceSkillSnapshot(asio::any_io_executor executor, std::string directory, LoaderOptions options = {});
+  ~WorkspaceSkillSnapshot();
+
+  WorkspaceSkillSnapshot(const WorkspaceSkillSnapshot&) = delete;
+  WorkspaceSkillSnapshot& operator=(const WorkspaceSkillSnapshot&) = delete;
+  WorkspaceSkillSnapshot(WorkspaceSkillSnapshot&&) noexcept;
+  WorkspaceSkillSnapshot& operator=(WorkspaceSkillSnapshot&&) noexcept;
+
+  [[nodiscard]] async::Awaitable<core::Result<void>> refresh();
+  [[nodiscard]] const std::vector<SkillDocument>& documents() const noexcept;
+  [[nodiscard]] const RenderedCatalog& catalog() const noexcept;
+  [[nodiscard]] WorkspaceSkillSnapshotStats stats() const noexcept;
+
+private:
+  class Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 }  // namespace orangutan::skill

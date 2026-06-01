@@ -738,6 +738,92 @@ TEST_CASE("AgentPromptRunner invokes loaded skill bodies through the tool path",
   });
 }
 
+#if defined(__linux__)
+TEST_CASE("AgentPromptRunner refreshes workspace skill snapshots before the next prompt",
+          "[unit][bootstrap][prompt_runner][skill][watch]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-skill-watch"};
+  const auto skills_dir = temp.path() / ".orangutan" / "skills";
+  write_file(skills_dir / "release-note.md",
+             "---\n"
+             "name: release-note\n"
+             "description: Draft initial release notes.\n"
+             "triggers: release notes\n"
+             "---\n"
+             "Initial skill body.\n");
+  auto cfg = parse_config(R"json(
+{
+  "permissions": {
+    "allow": [
+      {"tool_pattern": "skill.invoke"}
+    ]
+  }
+}
+)json");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    auto assembly = build_assembly(temp.path(), io, false);
+    RecordingProvider recording{{
+        text_response("first prompt"),
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "skill-2",
+                .name = "skill.invoke",
+                .input_json = R"({"name":"release-note","inputs":{"since":"slice-138"}})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        },
+        text_response("second prompt"),
+    }};
+
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.mode = permission::Mode::strict;
+    options.skills_directory = skills_dir.string();
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto first =
+        co_await (*runner)->run_prompt(cli::PromptRunRequest{.prompt = "first", .mode = cli::CliMode::single_shot});
+    REQUIRE(first.has_value());
+    REQUIRE(first->text == "first prompt");
+
+    write_file(skills_dir / "release-note.md",
+               "---\n"
+               "name: release-note\n"
+               "description: Draft updated release notes.\n"
+               "triggers: release notes\n"
+               "---\n"
+               "Updated skill body.\n");
+    auto waited = co_await async::sleep_for(io.get_executor(), std::chrono::milliseconds{10});
+    REQUIRE(waited.has_value());
+
+    auto second =
+        co_await (*runner)->run_prompt(cli::PromptRunRequest{.prompt = "second", .mode = cli::CliMode::single_shot});
+    REQUIRE(second.has_value());
+    REQUIRE(second->text == "second prompt");
+
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 3);
+    REQUIRE(requests[0].system_prompt.has_value());
+    REQUIRE(requests[0].system_prompt->contains("Draft initial release notes."));
+    REQUIRE_FALSE(requests[0].system_prompt->contains("Updated skill body."));
+
+    REQUIRE(requests[1].system_prompt.has_value());
+    REQUIRE(requests[1].system_prompt->contains("Draft updated release notes."));
+    REQUIRE_FALSE(requests[1].system_prompt->contains("Updated skill body."));
+    REQUIRE(*requests[1].system_prompt == *requests[2].system_prompt);
+
+    const auto output = tool_result_output_in(requests[2], "skill-2");
+    REQUIRE(output.contains("Updated skill body."));
+    REQUIRE_FALSE(output.contains("Initial skill body."));
+    REQUIRE((*runner)->skill_catalog_loads() == 2);
+    REQUIRE((*runner)->skill_catalog_renders() == 2);
+  });
+}
+#endif
+
 TEST_CASE("AgentPromptRunner renders default system preamble once per prompt before loop iterations",
           "[unit][bootstrap][prompt_runner][prompt]") {
   TempDir temp{"oran-bootstrap-prompt-runner-system-preamble"};

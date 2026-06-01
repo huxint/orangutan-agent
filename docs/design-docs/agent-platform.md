@@ -161,7 +161,10 @@ The agent loop owns:
   that catalog once before the first prompt while keeping skill bodies out of
   the prompt. Slice 137 wires `skill.invoke` through the ordinary tool
   dispatch path, returning the matched snapshot body as conversation-tail tool
-  result text rather than changing the stable prompt prefix; see
+  result text rather than changing the stable prompt prefix. Slice 138 replaces
+  the one-shot directory load with a prompt-boundary `skill::WorkspaceSkillSnapshot`
+  refresh so add/update/remove changes are visible before the next prompt while
+  the active turn still uses one coherent catalog/body snapshot; see
   [`../product-specs/0009-skills.md`](../product-specs/0009-skills.md).
 - **Memory framing renderer** — section (5). Pure function of memory state;
   no per-iteration mutation. Slice 133 adds `memory::FramingOwner` in
@@ -336,7 +339,10 @@ Skills come from `<workspace>/.orangutan/skills/`. The runtime watches that dire
 landed the first deterministic section-4 catalog renderer and owner boundary;
 slice 136 adds the first one-shot loader snapshot consumed by configured-route
 prompts, and slice 137 uses that snapshot for one-shot `skill.invoke` tool
-calls. Watcher hot-reload still remains for a later slice.
+calls. Slice 138 lands the prompt-boundary hot-reload path: `oran-skill` owns a
+watcher/signature-backed workspace snapshot, and `AgentPromptRunner` refreshes it
+before each prompt so the next turn sees add/update/remove changes while the
+current turn's prompt and `skill.invoke` body lookup stay consistent.
 
 ### Provider Cost Awareness
 

@@ -211,3 +211,95 @@ TEST_CASE("Loader treats a missing skills directory as an empty snapshot", "[uni
     REQUIRE(documents->empty());
   });
 }
+
+TEST_CASE("WorkspaceSkillSnapshot loads a missing directory then refreshes after creation",
+          "[unit][skill][loader][watch]") {
+  TempDir temp{"oran-skill-snapshot-missing-then-created"};
+  const auto dir = temp.path() / "skills";
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    auto snapshot = skill::WorkspaceSkillSnapshot{io.get_executor(), dir.string()};
+
+    auto first = co_await snapshot.refresh();
+    REQUIRE(first.has_value());
+    REQUIRE(snapshot.documents().empty());
+    REQUIRE(snapshot.catalog().section_text.empty());
+    REQUIRE(snapshot.stats().loads == 1);
+
+    auto unchanged = co_await snapshot.refresh();
+    REQUIRE(unchanged.has_value());
+    REQUIRE(snapshot.documents().empty());
+    REQUIRE(snapshot.catalog().section_text.empty());
+    REQUIRE(snapshot.stats().loads == 1);
+
+    write_file(dir / "release-note.md",
+               "---\n"
+               "name: release-note\n"
+               "description: Draft release notes.\n"
+               "---\n"
+               "Body text.\n");
+
+    auto second = co_await snapshot.refresh();
+    REQUIRE(second.has_value());
+    REQUIRE(snapshot.documents().size() == 1);
+    REQUIRE(snapshot.documents()[0].metadata.name == "release-note");
+    REQUIRE(snapshot.catalog().section_text.contains("Skill: release-note"));
+    REQUIRE(snapshot.stats().loads == 2);
+  });
+}
+
+#if defined(__linux__)
+TEST_CASE("WorkspaceSkillSnapshot refreshes catalog and bodies after skill file events",
+          "[unit][skill][loader][watch]") {
+  TempDir temp{"oran-skill-snapshot-watch"};
+  const auto dir = temp.path() / "skills";
+  write_file(dir / "release-note.md",
+             "---\n"
+             "name: release-note\n"
+             "description: Draft release notes.\n"
+             "triggers: release notes\n"
+             "---\n"
+             "Initial body.\n");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    auto snapshot = skill::WorkspaceSkillSnapshot{io.get_executor(), dir.string()};
+
+    auto first = co_await snapshot.refresh();
+    REQUIRE(first.has_value());
+    REQUIRE(snapshot.documents().size() == 1);
+    REQUIRE(snapshot.documents()[0].body.contains("Initial body"));
+    REQUIRE(snapshot.catalog().section_text.contains("Skill: release-note"));
+    REQUIRE(snapshot.stats().loads == 1);
+    REQUIRE(snapshot.stats().watcher_active);
+
+    write_file(dir / "release-note.md",
+               "---\n"
+               "name: release-note\n"
+               "description: Draft updated release notes.\n"
+               "triggers: release notes\n"
+               "---\n"
+               "Updated body.\n");
+    auto update_wait = co_await async::sleep_for(io.get_executor(), std::chrono::milliseconds{10});
+    REQUIRE(update_wait.has_value());
+
+    auto updated = co_await snapshot.refresh();
+    REQUIRE(updated.has_value());
+    REQUIRE(snapshot.documents().size() == 1);
+    REQUIRE(snapshot.documents()[0].body.contains("Updated body"));
+    REQUIRE(snapshot.catalog().section_text.contains("Draft updated release notes."));
+    REQUIRE(snapshot.stats().loads == 2);
+    REQUIRE(snapshot.stats().watcher_events >= 1);
+    REQUIRE(snapshot.stats().watcher_invalidations >= 1);
+
+    std::filesystem::remove(dir / "release-note.md");
+    auto remove_wait = co_await async::sleep_for(io.get_executor(), std::chrono::milliseconds{10});
+    REQUIRE(remove_wait.has_value());
+
+    auto removed = co_await snapshot.refresh();
+    REQUIRE(removed.has_value());
+    REQUIRE(snapshot.documents().empty());
+    REQUIRE(snapshot.catalog().section_text.empty());
+    REQUIRE(snapshot.stats().loads == 3);
+  });
+}
+#endif

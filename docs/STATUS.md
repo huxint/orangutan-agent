@@ -7,14 +7,25 @@
 
 ## Snapshot
 
-- **Slice:** 137 (`xmake run orangutan` reports slice 137)
+- **Slice:** 138 (`xmake run orangutan` reports slice 138)
 - **Last completed history:**
-  [`histories/2026-06/20260601-2034-skill-invoke.md`](histories/2026-06/20260601-2034-skill-invoke.md)
+  [`histories/2026-06/20260601-2124-skill-hot-reload.md`](histories/2026-06/20260601-2124-skill-hot-reload.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** continue the prompt-runtime arc with the catalog
-  watcher/hot-reload path, keeping catalog snapshots compact and skill bodies
-  outside the system preamble. Slice 137 adds the permissioned
+- **Next intended slice:** continue the prompt-runtime arc after skill
+  watcher/hot-reload, keeping catalog snapshots compact and skill bodies
+  outside the system preamble. Slice 138 adds `skill::WorkspaceSkillSnapshot`,
+  a prompt-boundary workspace skill refresh owner that watches
+  `<workspace>/.orangutan/skills` with Linux inotify when available, keeps a
+  bounded content-aware directory signature so unchanged prompts avoid reloads,
+  invalidates `oran-io` file-view cache entries before re-reading changed skill
+  markdown, and has `AgentPromptRunner` refresh the section-4 catalog plus the
+  `skill.invoke` document snapshot before each prompt when callers supplied a
+  `skills_directory`. Exact `skills_catalog` bytes still bypass directory
+  loading for tests/embedders, missing directories remain empty snapshots, and
+  each active turn sees one coherent catalog/body snapshot. Focused result:
+  `test-skill` **11 cases / 89 assertions** and `test-bootstrap`
+  **88 cases / 539 assertions**. Slice 137 adds the permissioned
   `skill.invoke` built-in to the default active catalog and has
   `AgentPromptRunner` serve it from the immutable workspace skill snapshot
   loaded before loop entry. The built-in parses only `{"name": <string>,

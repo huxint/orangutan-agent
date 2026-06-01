@@ -216,17 +216,19 @@ promotion side effect that the first agent loop will reuse.
   fill `memory::Framing` without changing the builder or re-querying inside
   provider/tool iterations.
 - **Skill catalog renderer** populates section 4.
-  **Status (slice 137, 2026-06-01):** `oran-skill` now ships the
+  **Status (slice 138, 2026-06-01):** `oran-skill` now ships the
   deterministic section-4 catalog renderer, the section-4 owner, and the first
   markdown loader snapshot. `AgentPromptRunner` loads the workspace skills
-  directory once before the first prompt when configured and then renders the
-  materialized catalog once before loop entry; `prompt::Builder` still consumes
-  the stable `BuilderInputs::skills_catalog` string. Skill bodies remain outside
-  the system preamble and outside the catalog. `skill.invoke` now returns a
-  loaded snapshot body through the ordinary conversation-tail tool-result path,
-  so it does not change the cached prefix. Watcher hot-reload remains
-  downstream. Activating a future persistent skill section shifts section 4,
-  never section 1.
+  directory before the first prompt when configured, then refreshes the
+  workspace skill snapshot at later prompt boundaries when watcher/signature
+  changes are visible; `prompt::Builder` still consumes the stable
+  `BuilderInputs::skills_catalog` string for the current turn. Skill bodies
+  remain outside the system preamble and outside the catalog. `skill.invoke`
+  returns the matched loaded snapshot body through the ordinary conversation-tail
+  tool-result path, so it does not change the cached prefix. Add/update/remove
+  skill changes intentionally break section-4 cache bytes on the next prompt,
+  not in the middle of an active turn. Activating a future persistent skill
+  section shifts section 4, never section 1.
 - **Active-set hot reload**. `runtime.prompt.active_tools` honours
   config reload without restart; the promotion set survives the
   reload; the cache invalidates by bumping `cache_version` for the
@@ -365,8 +367,9 @@ promotion side effect that the first agent loop will reuse.
   `prompt::PromotionState` because prompt assembly needs sorted live names and
   promotion-vs-refresh stats.
 - [`0009-skills.md`](0009-skills.md) — section 4 (skills catalog)
-  consumes the skill loader's initial catalog snapshot; watcher/invoke complete
-  the rest of Skills v1.
+  consumes the skill loader/snapshot owner; `skill.invoke` returns body text as
+  a tool result, and watcher/signature refresh updates section 4 before the next
+  prompt.
 - [`0010-benchmark-harness.md`](0010-benchmark-harness.md) — the
   prompt-cache-hit-rate fixture shape lives here once the bench
   scenario is authored.

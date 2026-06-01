@@ -250,7 +250,10 @@ slices 121-123 add the SSE parser/client path used by provider streaming.
 `oran-skill` is the section-4 prompt catalog renderer, owner, and markdown
 snapshot loader. It depends on `oran-core` for the error/result contract,
 `oran-async` for awaitable loader calls, and `oran-io` for policy-free
-read/list helpers. Watcher hot-reload and invoke remain planned.
+read/list helpers plus file-view cache invalidation when watcher/signature
+refresh reloads changed skill markdown. Slice 138 adds
+`skill::WorkspaceSkillSnapshot`, which uses Linux inotify when available and a
+bounded content-aware directory signature before prompt-boundary reloads.
 
 `oran-provider` is currently the provider-domain + fake-provider +
 execution-runtime + route-resolution + protocol-mapping library. It depends on

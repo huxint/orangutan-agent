@@ -209,7 +209,6 @@ public:
         agent_key_{std::move(options.agent_key)}, identity_{std::move(options.identity)},
         origin_{std::move(options.origin)}, system_preamble_{make_system_preamble(std::move(options.system_preamble))},
         skills_catalog_{skill::RenderedCatalog{.section_text = std::move(options.skills_catalog)}},
-        skills_directory_{std::move(options.skills_directory)},
         memory_framing_{memory::Framing{.section_text = std::move(options.memory_framing)}},
         per_agent_overlay_{std::move(options.per_agent_overlay)},
         trace_context_json_{std::move(options.trace_context_json)}, tool_choice_{std::move(options.tool_choice)},
@@ -221,7 +220,9 @@ public:
             .scripted_answers = std::move(options.approval_answers),
             .quiet = options.quiet,
         }} {
-    skills_catalog_loaded_ = skills_directory_.empty() || !skills_catalog_.catalog().section_text.empty();
+    if (!options.skills_directory.empty() && skills_catalog_.catalog().section_text.empty()) {
+      skill_snapshot_.emplace(executor_, std::move(options.skills_directory));
+    }
     assembly_->hook_bus().bind(operator_sink_, {hook::Event::permission_ask_rendered});
   }
 
@@ -237,9 +238,9 @@ public:
   Impl& operator=(Impl&&) = delete;
 
   [[nodiscard]] async::Awaitable<Result<cli::PromptRunResult>> run_prompt(cli::PromptRunRequest request) {
-    auto loaded_catalog = co_await ensure_skill_catalog_loaded();
-    if (!loaded_catalog) {
-      co_return std::unexpected(std::move(loaded_catalog).error());
+    auto refreshed_catalog = co_await refresh_skill_catalog_snapshot();
+    if (!refreshed_catalog) {
+      co_return std::unexpected(std::move(refreshed_catalog).error());
     }
 
     auto catalog = registry_.catalog();
@@ -383,29 +384,17 @@ public:
   }
 
 private:
-  [[nodiscard]] async::Awaitable<Result<void>> ensure_skill_catalog_loaded() {
-    if (skills_catalog_loaded_) {
+  [[nodiscard]] async::Awaitable<Result<void>> refresh_skill_catalog_snapshot() {
+    if (!skill_snapshot_.has_value()) {
       co_return Result<void>{};
     }
-    if (skills_directory_.empty()) {
-      skills_catalog_loaded_ = true;
-      co_return Result<void>{};
+    auto refreshed = co_await skill_snapshot_->refresh();
+    if (!refreshed) {
+      co_return std::unexpected(std::move(refreshed).error());
     }
-
-    auto loader = skill::Loader{executor_};
-    auto documents = co_await loader.load_directory(skills_directory_);
-    if (!documents) {
-      co_return std::unexpected(std::move(documents).error());
-    }
-    auto entries = skill::catalog_entries_from(std::span<const skill::SkillDocument>{*documents});
-    auto catalog = skill::render_catalog(entries);
-    if (!catalog) {
-      co_return std::unexpected(std::move(catalog).error());
-    }
-    skill_documents_ = std::move(*documents);
-    skills_catalog_.replace(std::move(*catalog));
-    skills_catalog_loaded_ = true;
-    ++skill_catalog_loads_;
+    skill_documents_ = skill_snapshot_->documents();
+    skills_catalog_.replace(skill_snapshot_->catalog());
+    skill_catalog_loads_ = static_cast<std::size_t>(skill_snapshot_->stats().loads);
     co_return Result<void>{};
   }
 
@@ -518,9 +507,8 @@ private:
   std::string origin_;
   agent::SystemPreambleOwner system_preamble_;
   skill::CatalogOwner skills_catalog_;
+  std::optional<skill::WorkspaceSkillSnapshot> skill_snapshot_;
   std::vector<skill::SkillDocument> skill_documents_;
-  std::string skills_directory_;
-  bool skills_catalog_loaded_{true};
   memory::FramingOwner memory_framing_;
   std::string per_agent_overlay_;
   std::string trace_context_json_;

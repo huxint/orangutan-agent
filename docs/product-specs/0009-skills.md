@@ -9,15 +9,20 @@ activate them on demand without bloating the system prompt.
 ## Scope (v1)
 
 - `oran-skill::Loader` reading skills from `<workspace>/.orangutan/skills/<name>.md`.
-  **Status (slices 136-137, 2026-06-01):** the loader snapshots existing
+  **Status (slices 136-138, 2026-06-01):** the loader snapshots existing
   `<workspace>/.orangutan/skills/*.md` files through `oran-io`, parses
   single-line YAML-style frontmatter metadata, enforces a 4 KiB default body
   cap plus a separate frontmatter cap, treats a missing skills directory as an
   empty snapshot, and can render the resulting compact catalog. Bootstrap
-  configured-route prompts load that directory once before the first prompt
-  unless the caller supplied exact `skills_catalog` bytes. Slice 137 keeps the
-  loaded documents as the immutable invocation snapshot for that runner.
-  Watcher hot-reload remains planned.
+  configured-route prompts now keep a `skill::WorkspaceSkillSnapshot` for that
+  directory unless the caller supplied exact `skills_catalog` bytes. The
+  snapshot loads before the first prompt, drains Linux inotify events when
+  available, compares a bounded content-aware `*.md` directory signature before
+  each later prompt, invalidates matching `oran-io` file-view cache entries
+  before re-reading changed skill files, and replaces both the compact catalog
+  and the invocation document snapshot together. A turn therefore sees one
+  coherent catalog/body snapshot; file changes are visible to the next prompt
+  without restart.
 - Skill metadata in YAML frontmatter:
   - `name`, `description`, `triggers` (semantic intents), `inputs` (schema), `model_hint`.
 - Skill catalog rendered into the system prompt (compact listing).
@@ -33,7 +38,11 @@ activate them on demand without bloating the system prompt.
   provider iteration. The tool layer owns parsing, permissions, audit, hooks,
   scheduler dispatch, and output caps; bootstrap owns the snapshot lookup so
   `oran-tool` does not depend on `oran-skill`.
-- Hot-reload via filesystem watcher (`asio` + inotify on Linux).
+- Hot-reload via filesystem watcher (`asio` + inotify on Linux). **Status
+  (slice 138, 2026-06-01):** prompt-boundary hot reload is implemented for
+  configured-route `AgentPromptRunner` instances with a `skills_directory`.
+  Exact pre-rendered catalog bytes still bypass filesystem loading for tests and
+  embedders.
 
 ## Scope (v1.1)
 
@@ -55,15 +64,17 @@ activate them on demand without bloating the system prompt.
 ## Acceptance Criteria
 
 1. A skill placed under `<workspace>/.orangutan/skills/release-note.md` appears in the
-   agent's initial skill catalog snapshot. The 1 s hot-reload guarantee still
-   belongs to the watcher slice.
+   agent's initial skill catalog snapshot. Add/update/remove changes are
+   reflected on the next prompt after the filesystem event is visible; no
+   restart is required.
 2. `skill.invoke("release-note", { since: "v1.2", ... })` runs the skill and the
    agent produces output consistent with the skill template.
-3. Removing the skill file from disk removes it from the catalog within 1 s (no
-   restart). This remains watcher-scoped work.
+3. Removing the skill file from disk removes it from the next prompt's catalog
+   without restart, while any already-running turn keeps its coherent snapshot.
 4. Skill activation is observable via the `tool_after` hook with
    `tool_name = "skill.invoke"`.
-5. `tests/skill/` ≥ 80% coverage.
+5. `tests/skill/` ≥ 80% coverage. Slice 138 adds watcher/snapshot refresh
+   coverage; `tests/bootstrap` covers runner integration.
 
 ## Design Doc Cross-References
 

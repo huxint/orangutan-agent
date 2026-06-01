@@ -214,14 +214,15 @@ agent::Loop::run(std::string prompt) {
 
   for (std::size_t i = 0; i < max_iterations_; ++i) {
     // Per-iteration: use working_.rendered_memory_section as cached input.
-    auto request = prompt_builder.build(working_, /* skills_section_refresh */ true);
+    auto request = prompt_builder.build(working_);
     // ...
   }
 }
 ```
 
-Skills section *is* re-rendered each iteration (intentional, so newly activated skills
-surface mid-turn). Memory section is not.
+The memory section is rendered once before the loop. The skills catalog is also
+rendered from a prompt-boundary snapshot in the configured-route runner: skill file
+changes surface on the next prompt, not midway through an active turn.
 
 ## Retention Policy
 
