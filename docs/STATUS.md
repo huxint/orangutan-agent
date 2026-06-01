@@ -7,15 +7,23 @@
 
 ## Snapshot
 
-- **Slice:** 135 (`xmake run orangutan` reports slice 135)
+- **Slice:** 136 (`xmake run orangutan` reports slice 136)
 - **Last completed history:**
-  [`histories/2026-06/20260601-0745-skill-catalog-renderer.md`](histories/2026-06/20260601-0745-skill-catalog-renderer.md)
+  [`histories/2026-06/20260601-1946-skill-loader-snapshot.md`](histories/2026-06/20260601-1946-skill-loader-snapshot.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** continue the prompt-runtime arc with the skill
-  loader, catalog watcher, and `skill.invoke` execution path, keeping the
-  catalog snapshot compact and the skill body outside the system preamble.
-  Slice 135 adds `oran-skill` with a deterministic section-4 catalog renderer
+- **Next intended slice:** continue the prompt-runtime arc with the catalog
+  watcher and `skill.invoke` execution path, keeping catalog snapshots compact
+  and skill bodies outside the system preamble. Slice 136 adds
+  `skill::Loader`, a bounded markdown/frontmatter snapshot reader for
+  `<workspace>/.orangutan/skills/*.md`, and has configured-route
+  `AgentPromptRunner` load the workspace skills directory once before the first
+  prompt unless callers supplied exact `skills_catalog` bytes. Missing skills
+  directories produce an empty catalog, malformed frontmatter or oversized
+  bodies fail before the loop, and the body text stays out of section 4.
+  Focused result: `test-skill` **9 cases / 55 assertions** and
+  `test-bootstrap` **86 cases / 504 assertions**. Slice 135 adds `oran-skill`
+  with a deterministic section-4 catalog renderer
   plus `skill::CatalogOwner`; `AgentPromptRunner` now renders that catalog once
   before loop entry, and bootstrap passes the pre-rendered section through the
   existing prompt builder boundary. Focused result: `test-skill` **5 cases / 19

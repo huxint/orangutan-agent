@@ -196,6 +196,7 @@ public:
         agent_key_{std::move(options.agent_key)}, identity_{std::move(options.identity)},
         origin_{std::move(options.origin)}, system_preamble_{make_system_preamble(std::move(options.system_preamble))},
         skills_catalog_{skill::RenderedCatalog{.section_text = std::move(options.skills_catalog)}},
+        skills_directory_{std::move(options.skills_directory)},
         memory_framing_{memory::Framing{.section_text = std::move(options.memory_framing)}},
         per_agent_overlay_{std::move(options.per_agent_overlay)},
         trace_context_json_{std::move(options.trace_context_json)}, tool_choice_{std::move(options.tool_choice)},
@@ -207,6 +208,7 @@ public:
             .scripted_answers = std::move(options.approval_answers),
             .quiet = options.quiet,
         }} {
+    skills_catalog_loaded_ = skills_directory_.empty() || !skills_catalog_.catalog().section_text.empty();
     assembly_->hook_bus().bind(operator_sink_, {hook::Event::permission_ask_rendered});
   }
 
@@ -222,6 +224,11 @@ public:
   Impl& operator=(Impl&&) = delete;
 
   [[nodiscard]] async::Awaitable<Result<cli::PromptRunResult>> run_prompt(cli::PromptRunRequest request) {
+    auto loaded_catalog = co_await ensure_skill_catalog_loaded();
+    if (!loaded_catalog) {
+      co_return std::unexpected(std::move(loaded_catalog).error());
+    }
+
     auto catalog = registry_.catalog();
     auto conversation_tail = std::vector<core::Message>{};
     memory::session::Store* session_store = assembly_->session_store();
@@ -352,11 +359,35 @@ public:
     return skills_catalog_.stats().renders;
   }
 
+  [[nodiscard]] std::size_t skill_catalog_loads() const noexcept {
+    return skill_catalog_loads_;
+  }
+
   [[nodiscard]] const provider::Route& route() const noexcept {
     return loop_.route();
   }
 
 private:
+  [[nodiscard]] async::Awaitable<Result<void>> ensure_skill_catalog_loaded() {
+    if (skills_catalog_loaded_) {
+      co_return Result<void>{};
+    }
+    if (skills_directory_.empty()) {
+      skills_catalog_loaded_ = true;
+      co_return Result<void>{};
+    }
+
+    auto loader = skill::Loader{executor_};
+    auto catalog = co_await loader.load_catalog(skills_directory_);
+    if (!catalog) {
+      co_return std::unexpected(std::move(catalog).error());
+    }
+    skills_catalog_.replace(std::move(*catalog));
+    skills_catalog_loaded_ = true;
+    ++skill_catalog_loads_;
+    co_return Result<void>{};
+  }
+
   [[nodiscard]] async::Awaitable<Result<void>> append_transcript_suffix(memory::session::Store& store,
                                                                         const std::vector<core::Message>& transcript,
                                                                         std::size_t start_index) const {
@@ -443,6 +474,8 @@ private:
   std::string origin_;
   agent::SystemPreambleOwner system_preamble_;
   skill::CatalogOwner skills_catalog_;
+  std::string skills_directory_;
+  bool skills_catalog_loaded_{true};
   memory::FramingOwner memory_framing_;
   std::string per_agent_overlay_;
   std::string trace_context_json_;
@@ -457,6 +490,7 @@ private:
   std::vector<core::Message> transcript_;
   std::size_t prompts_processed_{0};
   std::size_t tool_search_observations_{0};
+  std::size_t skill_catalog_loads_{0};
 };
 
 core::Result<std::unique_ptr<AgentPromptRunner>> AgentPromptRunner::create(AgentPromptRunnerOptions options) {
@@ -534,6 +568,10 @@ std::size_t AgentPromptRunner::system_preamble_renders() const noexcept {
 
 std::size_t AgentPromptRunner::skill_catalog_renders() const noexcept {
   return impl_->skill_catalog_renders();
+}
+
+std::size_t AgentPromptRunner::skill_catalog_loads() const noexcept {
+  return impl_->skill_catalog_loads();
 }
 
 const provider::Route& AgentPromptRunner::route() const noexcept {

@@ -43,8 +43,9 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice135";
+constexpr std::string_view kVersion = "2.0.0-slice136";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
+constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 
 struct ParsedArgs {
   bool help{false};
@@ -242,6 +243,12 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
 [[nodiscard]] std::string default_audit_path(std::string_view workspace) {
   auto path = std::filesystem::path{std::string{workspace}};
   path /= kAuditDatabaseRelative;
+  return path.string();
+}
+
+[[nodiscard]] std::string default_skills_directory(std::string_view workspace) {
+  auto path = std::filesystem::path{std::string{workspace}};
+  path /= kSkillsDirectoryRelative;
   return path.string();
 }
 
@@ -828,6 +835,7 @@ core::Result<int> run(BootstrapOptions options) {
       .agent_key = "default",
       .identity = "terminal",
       .origin = "cli",
+      .skills_directory = default_skills_directory(options.workspace),
       .max_tokens = 1024,
   });
   if (!runner) {

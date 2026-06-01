@@ -9,9 +9,14 @@ activate them on demand without bloating the system prompt.
 ## Scope (v1)
 
 - `oran-skill::Loader` reading skills from `<workspace>/.orangutan/skills/<name>.md`.
-  **Status (slice 135, 2026-06-01):** the current library ships the catalog
-  renderer + section-4 owner only. Loader, watcher, and `skill.invoke` remain
-  planned.
+  **Status (slice 136, 2026-06-01):** the loader snapshots existing
+  `<workspace>/.orangutan/skills/*.md` files through `oran-io`, parses
+  single-line YAML-style frontmatter metadata, enforces a 4 KiB default body
+  cap plus a separate frontmatter cap, treats a missing skills directory as an
+  empty snapshot, and can render the resulting compact catalog. Bootstrap
+  configured-route prompts load that directory once before the first prompt
+  unless the caller supplied exact `skills_catalog` bytes. Watcher hot-reload
+  and `skill.invoke` remain planned.
 - Skill metadata in YAML frontmatter:
   - `name`, `description`, `triggers` (semantic intents), `inputs` (schema), `model_hint`.
 - Skill catalog rendered into the system prompt (compact listing).
@@ -43,11 +48,12 @@ activate them on demand without bloating the system prompt.
 ## Acceptance Criteria
 
 1. A skill placed under `<workspace>/.orangutan/skills/release-note.md` appears in the
-   agent's skill catalog within 1 s.
+   agent's initial skill catalog snapshot. The 1 s hot-reload guarantee still
+   belongs to the watcher slice.
 2. `skill.invoke("release-note", { since: "v1.2", ... })` runs the skill and the
    agent produces output consistent with the skill template.
 3. Removing the skill file from disk removes it from the catalog within 1 s (no
-   restart).
+   restart). This remains watcher-scoped work.
 4. Skill activation is observable via the `tool_after` hook with
    `tool_name = "skill.invoke"`.
 5. `tests/skill/` ≥ 80% coverage.
@@ -70,4 +76,5 @@ activate them on demand without bloating the system prompt.
 xmake build test-skill bench-skill
 xmake run test-skill
 xmake run bench-skill
+xmake run test-bootstrap
 ```

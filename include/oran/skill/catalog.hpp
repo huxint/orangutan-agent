@@ -1,10 +1,9 @@
 // include/oran/skill/catalog.hpp - compact prompt-facing skill catalog.
 //
-// `oran-skill` owns the prompt section-4 bytes. The current slice keeps the
-// surface deliberately small: callers provide a metadata snapshot and receive
-// compact, deterministic catalog text. Skill bodies are intentionally absent
-// from this API; future loader/invoke work can snapshot bodies without moving
-// them into the stable system preamble.
+// `oran-skill` owns the prompt section-4 bytes. Callers provide, or load, a
+// metadata snapshot and receive compact, deterministic catalog text. Skill
+// bodies are intentionally absent from this renderer; loader/invoke work
+// snapshots bodies without moving them into the stable system preamble.
 
 #pragma once
 
@@ -51,8 +50,8 @@ public:
 ///
 /// It owns already-rendered section text so bootstrap can render the prompt
 /// section exactly once before a multi-iteration agent loop. Loader, watcher,
-/// and `skill.invoke` slices can replace the catalog snapshot without changing
-/// the loop or prompt-builder boundary.
+/// and `skill.invoke` consumers can replace the catalog snapshot without
+/// changing the loop or prompt-builder boundary.
 class CatalogOwner {
 public:
   explicit CatalogOwner(RenderedCatalog catalog = {});

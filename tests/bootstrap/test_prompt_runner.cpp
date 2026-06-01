@@ -610,6 +610,60 @@ TEST_CASE("AgentPromptRunner renders skill catalog once per prompt before loop i
   });
 }
 
+TEST_CASE("AgentPromptRunner loads skill catalog from the workspace skills directory once",
+          "[unit][bootstrap][prompt_runner][skill]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-skill-loader"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false);
+    write_file(temp.path() / "note.txt", "skill loader fixture\n");
+    write_file(temp.path() / ".orangutan" / "skills" / "release-note.md",
+               "---\n"
+               "name: release-note\n"
+               "description: Draft release notes from completed changes.\n"
+               "triggers: release notes, changelog\n"
+               "model_hint: keep output concise\n"
+               "---\n"
+               "Body text that must stay out of the catalog.\n");
+
+    RecordingProvider recording{{
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "read-1",
+                .name = "file.read",
+                .input_json = R"({"path":"note.txt"})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        },
+        text_response("done"),
+    }};
+
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.skills_directory = (temp.path() / ".orangutan" / "skills").string();
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto result =
+        co_await (*runner)->run_prompt(cli::PromptRunRequest{.prompt = "read", .mode = cli::CliMode::single_shot});
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "done");
+
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 2);
+    REQUIRE(requests[0].system_prompt.has_value());
+    REQUIRE(requests[0].system_prompt->contains("Skill: release-note"));
+    REQUIRE(requests[0].system_prompt->contains("Model Hint: keep output concise"));
+    REQUIRE_FALSE(requests[0].system_prompt->contains("Body text"));
+    REQUIRE(*requests[0].system_prompt == *requests[1].system_prompt);
+    REQUIRE((*runner)->skill_catalog_loads() == 1);
+    REQUIRE((*runner)->skill_catalog_renders() == 1);
+  });
+}
+
 TEST_CASE("AgentPromptRunner renders default system preamble once per prompt before loop iterations",
           "[unit][bootstrap][prompt_runner][prompt]") {
   TempDir temp{"oran-bootstrap-prompt-runner-system-preamble"};

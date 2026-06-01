@@ -225,7 +225,7 @@ oran_lib("config", { "oran-core", "oran-storage" }, { "nlohmann_json", "re2" })
 oran_lib("permission", { "oran-core", "oran-config", "oran-storage", "oran-async" }, { "re2", "libsodium" })
 oran_lib("hook", { "oran-core", "oran-async" }, {})
 oran_lib("memory", { "oran-core", "oran-async", "oran-storage" }, { "nlohmann_json" })
-oran_lib("skill", { "oran-core" }, {})
+oran_lib("skill", { "oran-core", "oran-async", "oran-io" }, {})
 oran_lib("tool", { "oran-core", "oran-async", "oran-io", "oran-permission", "oran-hook" }, { "nlohmann_json" })
 oran_lib("prompt", { "oran-core", "oran-async", "oran-config", "oran-tool" }, {})
 oran_lib("provider", { "oran-core", "oran-async", "oran-config", "oran-prompt" }, { "nlohmann_json" })
@@ -247,9 +247,10 @@ instead of blocking the main coroutine executor. Slice 111 makes `oran-bootstrap
 depend on `oran-http` for the explicit `HttpProviderBackend` construction seam;
 slices 121-123 add the SSE parser/client path used by provider streaming.
 
-`oran-skill` is the section-4 prompt catalog renderer and owner. It depends only
-on `oran-core` for the error/result contract; loader, watcher, and invoke remain
-planned and will add `oran-io` later.
+`oran-skill` is the section-4 prompt catalog renderer, owner, and markdown
+snapshot loader. It depends on `oran-core` for the error/result contract,
+`oran-async` for awaitable loader calls, and `oran-io` for policy-free
+read/list helpers. Watcher hot-reload and invoke remain planned.
 
 `oran-provider` is currently the provider-domain + fake-provider +
 execution-runtime + route-resolution + protocol-mapping library. It depends on

@@ -3,3 +3,4 @@
 #pragma once
 
 #include <oran/skill/catalog.hpp>
+#include <oran/skill/loader.hpp>

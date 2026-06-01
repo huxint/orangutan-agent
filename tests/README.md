@@ -44,7 +44,7 @@ tests/
 - One file per scenario / feature; small. Don't create monoliths.
 - Use `test-helpers/` for shared setup; do not duplicate fixtures.
 - The live buckets include `tests/skill/` for the section-4 skill catalog
-  renderer and owner.
+  renderer/owner and the markdown loader snapshot.
 - See [`../docs/rules/testing-and-bench.md`](../docs/rules/testing-and-bench.md) for
   the full convention.
 

@@ -44,6 +44,10 @@ struct AgentPromptRunnerOptions {
   /// Optional pre-rendered section-4 skill catalog. Empty means no activated
   /// skills are listed; skill bodies remain outside this runner option.
   std::string skills_catalog{};
+  /// Optional skills directory to snapshot before the first prompt. Missing
+  /// directory means an empty catalog; when `skills_catalog` is non-empty this
+  /// path is ignored so tests and embedders can provide exact section bytes.
+  std::string skills_directory{};
   std::string memory_framing{};
   std::string per_agent_overlay{};
   std::string trace_context_json{"{}"};
@@ -106,6 +110,9 @@ public:
   /// Count of skill-catalog section renders performed by the runner boundary.
   /// A multi-iteration turn increments this once, before `agent::Loop`.
   [[nodiscard]] std::size_t skill_catalog_renders() const noexcept;
+  /// Count of directory snapshots the runner loaded through `oran-skill`.
+  /// This stays at zero when callers provide `skills_catalog` directly.
+  [[nodiscard]] std::size_t skill_catalog_loads() const noexcept;
   [[nodiscard]] const provider::Route& route() const noexcept;
 
   class Impl;

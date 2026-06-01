@@ -156,7 +156,10 @@ The agent loop owns:
 - **Skills catalog renderer** — section (4). Compact listing only;
   activated skill bodies shift this section, never section (1). Slice 135 adds
   `oran-skill` with the first deterministic section-4 catalog renderer and a
-  section-4 owner in bootstrap; see
+  section-4 owner in bootstrap. Slice 136 adds `skill::Loader` and has
+  configured-route bootstrap snapshot `<workspace>/.orangutan/skills/*.md` into
+  that catalog once before the first prompt while keeping skill bodies out of
+  the prompt; see
   [`../product-specs/0009-skills.md`](../product-specs/0009-skills.md).
 - **Memory framing renderer** — section (5). Pure function of memory state;
   no per-iteration mutation. Slice 133 adds `memory::FramingOwner` in
@@ -329,7 +332,8 @@ renders it.
 Skills come from `<workspace>/.orangutan/skills/`. The runtime watches that directory
 (asio + inotify on Linux) and re-renders the catalog without restart. Slice 135
 landed the first deterministic section-4 catalog renderer and owner boundary;
-loader/watcher/invoke still remain for later slices.
+slice 136 adds the first one-shot loader snapshot consumed by configured-route
+prompts. Watcher/invoke still remain for later slices.
 
 ### Provider Cost Awareness
 

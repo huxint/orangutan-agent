@@ -115,6 +115,12 @@ successful transcript suffix afterward. The in-process transcript cache remains 
 fallback when session memory is disabled. The runner also owns an
 `agent::SystemPreambleOwner` for prompt section 1 and a `memory::FramingOwner`
 for prompt section 5, rendering both exactly once before calling `agent::Loop`.
+It also owns the section-4 `skill::CatalogOwner`: callers can provide exact
+`AgentPromptRunnerOptions::skills_catalog` bytes, or configured-route startup can
+point `skills_directory` at `<workspace>/.orangutan/skills` so the runner loads a
+bounded `skill::Loader` snapshot once before the first prompt. Missing skills
+directories produce an empty catalog, loader errors fail before the loop, and
+`skill_catalog_loads()` exposes whether a directory snapshot was taken.
 Empty `AgentPromptRunnerOptions::system_preamble` selects
 `agent::default_system_preamble()`; explicit text is treated as an override for
 tests and embedders. Multi-iteration provider/tool turns therefore reuse stable
@@ -213,6 +219,6 @@ permission-decision and `hook_publish` rows are readable in the same output.
 
 ## Next Steps
 
-- Add the real skill catalog renderer / section-4 owner.
+- Add the skill catalog watcher and `skill.invoke` execution path.
 - Bind configured hook sinks to the assembly-owned bus once the hook sink models land.
 - Add CLI line editor/history on top of the interactive REPL handoff.

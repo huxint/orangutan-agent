@@ -203,9 +203,9 @@ When a slice introduces a new prompt-bearing artifact:
 - [`../product-specs/0009-skills.md`](../product-specs/0009-skills.md)
   — skill body shape and per-skill body size cap.
 
-Slice 135 lands the first deterministic section-4 owner in `oran-skill` and
-bootstrap. That owner keeps skill bodies out of section 1 and renders a compact
-metadata-only catalog before loop entry; loader and invoke behavior remain under
-`0009-skills.md`.
+Slices 135-136 land the first deterministic section-4 owner and loader snapshot
+in `oran-skill` and bootstrap. That owner keeps skill bodies out of section 1
+and renders a compact metadata-only catalog before loop entry; watcher and
+invoke behavior remain under `0009-skills.md`.
 - [`../product-specs/0010-benchmark-harness.md`](../product-specs/0010-benchmark-harness.md)
   — where the cache-hit-rate bench will live.
