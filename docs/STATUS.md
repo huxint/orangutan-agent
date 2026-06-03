@@ -7,46 +7,19 @@
 
 ## Snapshot
 
-- **Slice:** 148 (`xmake run orangutan` reports slice 148)
+- **Slice:** 145 (`xmake run orangutan` reports slice 145)
 - **Last completed history:**
-  [`histories/2026-06/20260603-1938-session-skill-activations.md`](histories/2026-06/20260603-1938-session-skill-activations.md)
+  [`histories/2026-06/20260603-2108-supply-chain-ci.md`](histories/2026-06/20260603-2108-supply-chain-ci.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** slice 148 makes skill activation state durable in
-  session memory: `sessions.db` adds `session_skill_activations` keyed by
-  `(session_id, agent_key, skill_name)`, `storage::SessionRepository` and
-  `memory::session::Store` expose typed upsert/load APIs, and
-  `skill::ActivationPolicy::session_skill_activations` overlays the
-  transcript-derived `skill.invoke` / `skill.deactivate` state before config
-  deactivation and expiration subtract from it. `AgentPromptRunner` loads those
-  durable rows before section-4 rendering and records successful activation /
-  deactivation updates after successful transcript persistence, so transcript
-  compaction or pruning cannot resurrect a skill whose latest durable state is
-  inactive. The old transcript scan remains the fallback and compatibility path
-  when session memory is disabled. Focused result: `test-skill`
-  **26 cases / 163 assertions**, `test-storage` **75 / 968**, `test-memory`
-  **9 / 576**, and `test-bootstrap` **100 / 699**. Slice 147 adds the
-  permissioned `skill.deactivate` built-in (capability `deactivate_skill`): a
-  successful call records a versioned `skill_deactivation` result in the session
-  transcript, `skill::active_skills_from_transcript` nets `skill.invoke`
-  activations against `skill.deactivate` deactivations in transcript order (most
-  recent event wins), bootstrap installs the `DispatchContext::skill_deactivate`
-  callback, and the tool joins the default active catalog. Transcripts without a
-  deactivation behave exactly as before. Focused result: `test-skill`
-  **24 cases / 155 assertions**, `test-tool` **191 / 1919**, `test-core`
-  **71 / 459**, and `test-bootstrap` **99 / 667**. Slice 146 adds the first runtime-owned source for
-  the slice-143/144/145 `skill::ActivationPolicy` inputs: `oran-config` parses
-  optional `agents.<name>.skills_deactivated` (unique non-empty names) and
-  `agents.<name>.skills_expirations` (`{name, expires_at}` rows with strict UTC
-  ISO-8601 `expires_at`), and `AgentPromptRunner` builds a non-empty
-  `skill::ActivationPolicy` from the selected agent config — mapping
-  `config::SkillExpirationConfig` to `skill::SkillExpiration` and supplying
-  `evaluation_time = core::time::now_utc()` at the prompt boundary only when
-  expirations are present — so configured-route section 4 now drops deactivated
-  and expired active markers while the renderer stays clock-free.
-  Default/no-agent callers still pass an empty policy, so unchanged configs
-  behave exactly as before. Focused result: `test-config` **39 cases / 299
-  assertions** and `test-bootstrap` **98 cases / 646 assertions**. Slice 145 extends
+- **Next intended slice:** CI-only follow-up 20260603-2108 fixed the
+  supply-chain workflow by making Dependency Review an explicit
+  `ENABLE_DEPENDENCY_REVIEW=true` opt-in for repositories where GitHub supports
+  it and by pinning OSV scanner to a valid v2.3.8 upstream commit. The next product slice
+  remains: add a runtime-owned source of skill deactivation or expiration
+  policy inputs. Do not add hidden clocks to the renderer:
+  expiration needs caller-provided time/durable state, and deactivation events
+  need an owner outside section rendering. Slice 145 extends
   `skill::ActivationPolicy` with explicit `SkillExpiration` rows plus optional
   `evaluation_time`, validates expiration names as unique single-line skill
   names, requires that evaluation time when expirations are supplied, and has
@@ -1388,22 +1361,21 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 ## Latest Library Surfaces
 
-- `oran-core`: 71 cases / 459 assertions.
+- `oran-core`: 71 cases / 455 assertions.
 - `oran-async`: 9 cases / 43 assertions.
 - `oran-http`: 3 cases / 21 assertions.
 - `oran-io`: 49 cases / 286 assertions.
 - `oran-storage`: 73 cases / 938 assertions.
-- `oran-config`: 39 cases / 299 assertions.
+- `oran-config`: 37 cases / 278 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 30 cases / 207 assertions.
 - `oran-memory`: 8 cases / 559 assertions.
-- `oran-skill`: 24 cases / 155 assertions.
-- `oran-tool`: 191 cases / 1919 assertions.
+- `oran-tool`: 188 cases / 1893 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 99 cases / 667 assertions.
+- `oran-bootstrap`: 94 cases / 597 assertions.
 
 ## Open Tech-Debt Rows
 

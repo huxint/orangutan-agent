@@ -7,10 +7,13 @@ that ships native binaries.
 
 - **Dependency pinning**: `xmake/packages.lua` pins requested package versions
   and `docs/rules/libraries.md` documents every approved dependency.
-- **Dependency review**: enabled via `actions/dependency-review-action` on PRs.
+- **Dependency review**: available via `actions/dependency-review-action`, but opt-in
+  through `ENABLE_DEPENDENCY_REVIEW=true` because GitHub rejects the action before it
+  can inspect the PR when repository-level dependency graph / Advanced Security support
+  is unavailable or disabled.
 - **Vulnerability scanning**: `google/osv-scanner-action` on PRs, scheduled runs, and
-  manual dispatch. It scans checked-in manifests; `xmake-requires.lock` is
-  ignored until CI owns a stable refresh/check flow.
+  manual dispatch, pinned to an immutable upstream commit. It scans checked-in
+  manifests; `xmake-requires.lock` is ignored until CI owns a stable refresh/check flow.
 - **SBOM**: `anchore/sbom-action` produces an SPDX SBOM for release artifacts.
 - **Provenance**: `actions/attest-build-provenance` generates a signed attestation
   for each release.
@@ -28,8 +31,10 @@ that ships native binaries.
 
 ## Limits And Assumptions
 
-- Dependency Review is fully available on public repositories; private repositories
-  need GitHub Advanced Security.
+- Dependency Review needs GitHub's dependency graph support for this repository. Set
+  `ENABLE_DEPENDENCY_REVIEW=true` only after the repository's Security Analysis page
+  reports that Dependency Review is available; otherwise the workflow skips that job
+  instead of reporting a false red status.
 - OSV coverage depends on checked-in package declarations and system-package
   manifests; for sources we vendor directly (rare), the manifest is encoded in
   `docs/generated/vendored-deps.json`.

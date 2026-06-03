@@ -10,8 +10,10 @@ GitHub Actions jobs.
   + (once C++ exists) `xmake build` + `xmake test`.
 - `.github/workflows/release.yml` — placeholder release pipeline; replace once a real
   binary exists.
-- `.github/workflows/supply-chain-security.yml` — dependency review + OSV scan +
-  SBOM generation.
+- `.github/workflows/supply-chain-security.yml` — opt-in dependency review + OSV
+  scan. Dependency Review requires GitHub's dependency graph support for this
+  repository and only runs when `ENABLE_DEPENDENCY_REVIEW=true`; OSV runs by
+  default.
 
 ## Design Principle
 
@@ -51,6 +53,15 @@ npx markdownlint-cli2@0.22.0 "**/*.md" "!docs/generated/**"
 3. **Replace** `scripts/release-package.sh` with real packaging once binaries exist.
 4. **Add** environment-specific deployment jobs once a runtime target exists.
 5. **Keep** artifact provenance + SBOM generation in place.
+
+## Supply Chain Gates
+
+`supply-chain-security.yml` keeps the PR-time supply-chain checks separate from the
+base repository gate. The Dependency Review job is explicitly opt-in through the
+repository or organization variable `ENABLE_DEPENDENCY_REVIEW=true`; GitHub otherwise
+returns "Dependency review is not supported" on repositories where dependency graph /
+Advanced Security support is unavailable or disabled. The OSV scanner remains always-on
+for PRs, scheduled runs, and manual dispatch, using a SHA-pinned upstream action.
 
 ## CI Matrix
 

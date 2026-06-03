@@ -8,11 +8,14 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   dependency-review:
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    if: >-
+      github.event_name == 'pull_request' &&
+      vars.ENABLE_DEPENDENCY_REVIEW == 'true'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -27,7 +30,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - uses: google/osv-scanner-action/osv-scanner-action@e08b1bfeac8e72ad7f4ce95c5e1ddf8d28b91414 # v2.0.0
+      - uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
         with:
           scan-args: |-
             --recursive
