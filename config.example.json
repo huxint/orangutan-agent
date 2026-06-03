@@ -70,6 +70,10 @@
     "researcher": {
       "prompt_overlay": "Prefer concise, source-backed answers and call out uncertain evidence.",
       "skills_enabled": ["release-note", "review-pr"],
+      "skills_deactivated": ["review-pr"],
+      "skills_expirations": [
+        {"name": "release-note", "expires_at": "2026-12-31T23:59:59Z"}
+      ],
       "permissions": {
         "allow": [
           {"tool_pattern": "*", "capability": "egress_http"}

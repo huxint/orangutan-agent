@@ -130,10 +130,16 @@ from the already-loaded conversation transcript, considers only successful
 filters through the current loaded/allowed catalog entries so removed or
 disallowed skills do not remain active in the next prompt. The policy surface
 also accepts explicit deactivated skill names plus explicit expiration rows
-with caller-supplied evaluation time, but the configured-route runner currently
-supplies an empty deactivation set and no expiration rows until a runtime event
-source owns those inputs. Automatic policy resolution runs only when the runner owns the
-workspace skill snapshot; exact
+with caller-supplied evaluation time. The configured-route runner now sources
+those from the selected agent config: it reads
+`agents.<name>.skills_deactivated` into `ActivationPolicy::deactivated_skill_names`,
+maps each `agents.<name>.skills_expirations` `config::SkillExpirationConfig`
+entry to a `skill::SkillExpiration`, and supplies
+`evaluation_time = core::time::now_utc()` at the prompt boundary only when
+expirations are present, so the section-4 renderer never reads a clock.
+Default and no-agent callers still resolve an empty policy, so unchanged
+configurations behave exactly as before. Automatic policy resolution runs only
+when the runner owns the workspace skill snapshot; exact
 `AgentPromptRunnerOptions::skills_catalog` bytes are treated as authoritative
 pre-rendered section-4 text for tests/embedders and bypass loader refresh plus
 activation-policy rendering. Policy output is applied before `agent::Loop`

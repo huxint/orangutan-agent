@@ -7,15 +7,30 @@
 
 ## Snapshot
 
-- **Slice:** 145 (`xmake run orangutan` reports slice 145)
+- **Slice:** 146 (`xmake run orangutan` reports slice 146)
 - **Last completed history:**
-  [`histories/2026-06/20260602-0253-skill-expiration-policy.md`](histories/2026-06/20260602-0253-skill-expiration-policy.md)
+  [`histories/2026-06/20260603-1035-config-skill-activation-policy.md`](histories/2026-06/20260603-1035-config-skill-activation-policy.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** add a runtime-owned source of skill deactivation or
-  expiration policy inputs. Do not add hidden clocks to the renderer:
-  expiration needs caller-provided time/durable state, and deactivation events
-  need an owner outside section rendering. Slice 145 extends
+- **Next intended slice:** the per-agent config source now feeds explicit
+  deactivation/expiration into `skill::ActivationPolicy`; the remaining v1.1
+  skill-activation work is a durable or event-driven source (for example a
+  permissioned `skill.deactivate` built-in or session-store-backed activation
+  records) so activation state can change mid-session without a config edit,
+  still resolved only at prompt boundaries with caller-supplied evaluation time
+  and never a renderer clock. Slice 146 adds the first runtime-owned source for
+  the slice-143/144/145 `skill::ActivationPolicy` inputs: `oran-config` parses
+  optional `agents.<name>.skills_deactivated` (unique non-empty names) and
+  `agents.<name>.skills_expirations` (`{name, expires_at}` rows with strict UTC
+  ISO-8601 `expires_at`), and `AgentPromptRunner` builds a non-empty
+  `skill::ActivationPolicy` from the selected agent config — mapping
+  `config::SkillExpirationConfig` to `skill::SkillExpiration` and supplying
+  `evaluation_time = core::time::now_utc()` at the prompt boundary only when
+  expirations are present — so configured-route section 4 now drops deactivated
+  and expired active markers while the renderer stays clock-free.
+  Default/no-agent callers still pass an empty policy, so unchanged configs
+  behave exactly as before. Focused result: `test-config` **39 cases / 299
+  assertions** and `test-bootstrap` **98 cases / 646 assertions**. Slice 145 extends
   `skill::ActivationPolicy` with explicit `SkillExpiration` rows plus optional
   `evaluation_time`, validates expiration names as unique single-line skill
   names, requires that evaluation time when expirations are supplied, and has
@@ -1362,7 +1377,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-http`: 3 cases / 21 assertions.
 - `oran-io`: 49 cases / 286 assertions.
 - `oran-storage`: 73 cases / 938 assertions.
-- `oran-config`: 37 cases / 278 assertions.
+- `oran-config`: 39 cases / 299 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 30 cases / 207 assertions.
 - `oran-memory`: 8 cases / 559 assertions.
@@ -1371,7 +1386,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 94 cases / 597 assertions.
+- `oran-bootstrap`: 98 cases / 646 assertions.
 
 ## Open Tech-Debt Rows
 

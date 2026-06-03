@@ -40,7 +40,11 @@ activate them on demand without bloating the system prompt.
   marker set without hidden clocks or bootstrap-local parsing. Slice 145 adds
   explicit `SkillExpiration` rows plus optional `evaluation_time`; expiration
   subtracts from the active marker set only when callers supply that evaluation
-  time, keeping the renderer free of hidden wall-clock reads.
+  time, keeping the renderer free of hidden wall-clock reads. Slice 146 wires
+  the first runtime-owned source for these inputs: per-agent
+  `agents.<name>.skills_deactivated` and `agents.<name>.skills_expirations`
+  config, with bootstrap supplying the prompt-boundary evaluation time so the
+  configured-route renderer stays clock-free.
 - Section-4 cache semantics for activation policy.
   **Status (doc slice, 2026-06-02):** activation policy is now specified as
   prompt-boundary state. For the same loaded/allowed skill snapshot, transcript
@@ -88,9 +92,13 @@ activate them on demand without bloating the system prompt.
 - Skill chaining: a skill can declare follow-up skills it expects to be invoked.
 - Skill-specific tool subset: a skill can restrict which tools may be used while it's
   active.
-- Durable skill activation policy beyond explicit `skill::ActivationPolicy`
-  inputs remains downstream. Runtime-owned expiration/deactivation events or
-  cross-runtime state must preserve the section-4 cache semantics above.
+- Durable skill activation policy beyond per-agent config inputs remains
+  downstream. Slice 146 ships per-agent `skills_deactivated` /
+  `skills_expirations` config as the first runtime-owned source; a durable or
+  event-driven source (for example a `skill.deactivate` built-in or
+  session-store-backed activation records) for mid-session changes without a
+  config edit remains downstream and must preserve the section-4 cache
+  semantics above.
 
 ## Scope (v2)
 
@@ -122,10 +130,10 @@ activate them on demand without bloating the system prompt.
    or expiry changes the section-4 content hash and cached prefix only for the
    next prompt, while invoked skill bodies remain conversation-tail tool-result
    text.
-6. `tests/skill/` ≥ 80% coverage. Slices 142-145 add activation metadata,
-   active-marker, explicit activation-policy, explicit deactivation-policy, and
-   explicit expiration-policy coverage; `tests/bootstrap` covers runner
-   integration.
+6. `tests/skill/` ≥ 80% coverage. Slices 142-146 add activation metadata,
+   active-marker, and explicit activation/deactivation/expiration policy
+   coverage, plus config-sourced deactivation/expiration; `tests/config` and
+   `tests/bootstrap` cover the config source and runner integration.
 
 ## Design Doc Cross-References
 

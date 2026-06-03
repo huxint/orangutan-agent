@@ -184,7 +184,12 @@ The agent loop owns:
   events subtract from transcript-derived active markers at the same boundary,
   and slice 145 adds explicit `SkillExpiration` rows plus caller-supplied
   `ActivationPolicy::evaluation_time` so expiration is deterministic policy
-  input rather than a renderer-owned clock read.
+  input rather than a renderer-owned clock read. Slice 146 adds the first
+  runtime-owned source for those inputs: bootstrap reads
+  `agents.<name>.skills_deactivated` and `agents.<name>.skills_expirations`
+  from config and supplies the prompt-boundary `evaluation_time` from the
+  runner clock, so configured-route section 4 drops deactivated and expired
+  markers while the renderer stays clock-free.
   The policy is resolved only at prompt boundaries: identical loaded/allowed
   snapshots plus identical policy inputs render byte-identical section-4 bytes,
   while changed activation, deactivation, or expiry state intentionally changes

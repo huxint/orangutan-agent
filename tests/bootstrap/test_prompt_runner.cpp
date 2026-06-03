@@ -821,6 +821,204 @@ TEST_CASE("AgentPromptRunner marks invoked skills active on the next prompt",
   });
 }
 
+TEST_CASE("AgentPromptRunner suppresses active markers for config-deactivated skills",
+          "[unit][bootstrap][prompt_runner][skill]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-skill-deactivated"};
+  write_file(temp.path() / ".orangutan" / "skills" / "release-note.md",
+             "---\n"
+             "name: release-note\n"
+             "description: Draft release notes from completed changes.\n"
+             "triggers: release notes, changelog\n"
+             "---\n"
+             "Use concise bullets for the shipped changes.\n");
+  auto cfg = parse_config(R"json(
+{
+  "permissions": {
+    "allow": [
+      {"tool_pattern": "skill.invoke"}
+    ]
+  },
+  "agents": {
+    "ephemeral": {
+      "skills_deactivated": ["release-note"]
+    }
+  }
+}
+)json");
+
+  test::run_async([&temp, &cfg](asio::io_context& io) -> async::Awaitable<void> {
+    auto assembly = build_assembly(temp.path(), io, false);
+    RecordingProvider recording{{
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "skill-1",
+                .name = "skill.invoke",
+                .input_json = R"({"name":"release-note","inputs":{"since":"slice-146"}})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        },
+        text_response("first done"),
+        text_response("second done"),
+    }};
+
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.mode = permission::Mode::strict;
+    options.agent_config_name = "ephemeral";
+    options.skills_directory = (temp.path() / ".orangutan" / "skills").string();
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto first = co_await (*runner)->run_prompt(
+        cli::PromptRunRequest{.prompt = "draft notes", .mode = cli::CliMode::single_shot});
+    REQUIRE(first.has_value());
+    auto second = co_await (*runner)->run_prompt(
+        cli::PromptRunRequest{.prompt = "continue notes", .mode = cli::CliMode::single_shot});
+    REQUIRE(second.has_value());
+
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 3);
+    REQUIRE(requests[2].system_prompt.has_value());
+    REQUIRE(requests[2].system_prompt->contains("Skill: release-note"));
+    REQUIRE_FALSE(requests[2].system_prompt->contains("Active Skill: release-note"));
+  });
+}
+
+TEST_CASE("AgentPromptRunner drops active markers for expired config skills",
+          "[unit][bootstrap][prompt_runner][skill]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-skill-expired"};
+  write_file(temp.path() / ".orangutan" / "skills" / "release-note.md",
+             "---\n"
+             "name: release-note\n"
+             "description: Draft release notes from completed changes.\n"
+             "triggers: release notes, changelog\n"
+             "---\n"
+             "Use concise bullets for the shipped changes.\n");
+  auto cfg = parse_config(R"json(
+{
+  "permissions": {
+    "allow": [
+      {"tool_pattern": "skill.invoke"}
+    ]
+  },
+  "agents": {
+    "ephemeral": {
+      "skills_expirations": [
+        {"name": "release-note", "expires_at": "2000-01-01T00:00:00Z"}
+      ]
+    }
+  }
+}
+)json");
+
+  test::run_async([&temp, &cfg](asio::io_context& io) -> async::Awaitable<void> {
+    auto assembly = build_assembly(temp.path(), io, false);
+    RecordingProvider recording{{
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "skill-1",
+                .name = "skill.invoke",
+                .input_json = R"({"name":"release-note","inputs":{"since":"slice-146"}})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        },
+        text_response("first done"),
+        text_response("second done"),
+    }};
+
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.mode = permission::Mode::strict;
+    options.agent_config_name = "ephemeral";
+    options.skills_directory = (temp.path() / ".orangutan" / "skills").string();
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto first = co_await (*runner)->run_prompt(
+        cli::PromptRunRequest{.prompt = "draft notes", .mode = cli::CliMode::single_shot});
+    REQUIRE(first.has_value());
+    auto second = co_await (*runner)->run_prompt(
+        cli::PromptRunRequest{.prompt = "continue notes", .mode = cli::CliMode::single_shot});
+    REQUIRE(second.has_value());
+
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 3);
+    REQUIRE(requests[2].system_prompt.has_value());
+    REQUIRE(requests[2].system_prompt->contains("Skill: release-note"));
+    REQUIRE_FALSE(requests[2].system_prompt->contains("Active Skill: release-note"));
+  });
+}
+
+TEST_CASE("AgentPromptRunner keeps active markers for not-yet-expired config skills",
+          "[unit][bootstrap][prompt_runner][skill]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-skill-unexpired"};
+  write_file(temp.path() / ".orangutan" / "skills" / "release-note.md",
+             "---\n"
+             "name: release-note\n"
+             "description: Draft release notes from completed changes.\n"
+             "triggers: release notes, changelog\n"
+             "---\n"
+             "Use concise bullets for the shipped changes.\n");
+  auto cfg = parse_config(R"json(
+{
+  "permissions": {
+    "allow": [
+      {"tool_pattern": "skill.invoke"}
+    ]
+  },
+  "agents": {
+    "ephemeral": {
+      "skills_expirations": [
+        {"name": "release-note", "expires_at": "2100-01-01T00:00:00Z"}
+      ]
+    }
+  }
+}
+)json");
+
+  test::run_async([&temp, &cfg](asio::io_context& io) -> async::Awaitable<void> {
+    auto assembly = build_assembly(temp.path(), io, false);
+    RecordingProvider recording{{
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "skill-1",
+                .name = "skill.invoke",
+                .input_json = R"({"name":"release-note","inputs":{"since":"slice-146"}})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        },
+        text_response("first done"),
+        text_response("second done"),
+    }};
+
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.mode = permission::Mode::strict;
+    options.agent_config_name = "ephemeral";
+    options.skills_directory = (temp.path() / ".orangutan" / "skills").string();
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto first = co_await (*runner)->run_prompt(
+        cli::PromptRunRequest{.prompt = "draft notes", .mode = cli::CliMode::single_shot});
+    REQUIRE(first.has_value());
+    auto second = co_await (*runner)->run_prompt(
+        cli::PromptRunRequest{.prompt = "continue notes", .mode = cli::CliMode::single_shot});
+    REQUIRE(second.has_value());
+
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 3);
+    REQUIRE(requests[2].system_prompt.has_value());
+    REQUIRE(requests[2].system_prompt->contains("Active Skill: release-note"));
+  });
+}
+
 TEST_CASE("AgentPromptRunner filters workspace skills by selected agent allowlist",
           "[unit][bootstrap][prompt_runner][skill]") {
   TempDir temp{"oran-bootstrap-prompt-runner-agent-skills"};

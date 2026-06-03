@@ -14,6 +14,7 @@
 #include <oran/config.hpp>
 #include <oran/core/capability.hpp>
 #include <oran/core/error.hpp>
+#include <oran/core/time.hpp>
 
 namespace config = orangutan::config;
 namespace core = orangutan::core;
@@ -721,6 +722,41 @@ TEST_CASE("Config::parse extracts agents.<name>.permissions overlays", "[unit][c
   REQUIRE(result->agents()[1].permissions.rules[0].capability == core::Capability::write_file);
 }
 
+TEST_CASE("Config::parse extracts agents.<name> skill deactivation and expiration inputs", "[unit][config][skill]") {
+  auto result = config::Config::parse(R"json(
+{
+  "agents": {
+    "ephemeral": {
+      "skills_deactivated": ["stale-skill"],
+      "skills_expirations": [
+        {"name": "release-note", "expires_at": "2026-07-01T00:00:00Z"},
+        {"name": "review-pr", "expires_at": "2026-08-15T12:30:00.250Z"}
+      ]
+    }
+  }
+}
+)json");
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->agents().size() == 1);
+  const auto& agent = result->agents()[0];
+  REQUIRE(agent.name == "ephemeral");
+  REQUIRE(agent.skills_deactivated == std::vector<std::string>{"stale-skill"});
+  REQUIRE(agent.skills_expirations.size() == 2);
+  REQUIRE(agent.skills_expirations[0].name == "release-note");
+  REQUIRE(core::time::format_iso8601_utc(agent.skills_expirations[0].expires_at) == "2026-07-01T00:00:00.000Z");
+  REQUIRE(agent.skills_expirations[1].name == "review-pr");
+  REQUIRE(core::time::format_iso8601_utc(agent.skills_expirations[1].expires_at) == "2026-08-15T12:30:00.250Z");
+}
+
+TEST_CASE("Config::parse defaults agents.<name> skill policy inputs to empty", "[unit][config][skill]") {
+  auto result = config::Config::parse(R"json({"agents": {"plain": {"prompt_overlay": "x"}}})json");
+  REQUIRE(result.has_value());
+  REQUIRE(result->agents().size() == 1);
+  REQUIRE(result->agents()[0].skills_deactivated.empty());
+  REQUIRE(result->agents()[0].skills_expirations.empty());
+}
+
 TEST_CASE("Config::parse env-substitutes inside permission rules", "[unit][config][permissions]") {
   ScopedEnv pattern{"ORAN_CONFIG_TEST_PATTERN", "file.*"};
 
@@ -875,6 +911,32 @@ TEST_CASE("Config::parse handles unknown verdict / rule / agent keys per mode", 
 
   SECTION("malformed agent prompt_overlay fails") {
     auto result = config::Config::parse(R"json({"agents": {"a": {"prompt_overlay": ["not", "a string"]}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("malformed agent skills_deactivated fails") {
+    auto result = config::Config::parse(R"json({"agents": {"a": {"skills_deactivated": ["ok", ""]}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("agent skills_expirations with invalid timestamp fails") {
+    auto result = config::Config::parse(
+        R"json({"agents": {"a": {"skills_expirations": [{"name": "x", "expires_at": "not-a-time"}]}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("agent skills_expirations missing name fails") {
+    auto result = config::Config::parse(
+        R"json({"agents": {"a": {"skills_expirations": [{"expires_at": "2026-07-01T00:00:00Z"}]}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("agent skills_expirations that is not an array fails") {
+    auto result = config::Config::parse(R"json({"agents": {"a": {"skills_expirations": {}}}})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }

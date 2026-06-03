@@ -25,6 +25,7 @@
 #include <oran/core/capability.hpp>
 #include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
+#include <oran/core/time.hpp>
 
 namespace orangutan::config {
 namespace {
@@ -50,10 +51,12 @@ constexpr auto kRecognizedRootFields = std::array<std::string_view, 14>{
     "session",
 };
 
-constexpr auto kRecognizedAgentFields = std::array<std::string_view, 3>{
+constexpr auto kRecognizedAgentFields = std::array<std::string_view, 5>{
     "permissions",
     "prompt_overlay",
     "skills_enabled",
+    "skills_deactivated",
+    "skills_expirations",
 };
 
 [[nodiscard]] Error config_error(std::string message, std::string path) {
@@ -371,6 +374,47 @@ parse_non_empty_string_array(const json& value, std::string_view path, std::stri
     ++index;
   }
   return parsed;
+}
+
+[[nodiscard]] Result<std::vector<SkillExpirationConfig>> parse_skill_expirations(const json& value,
+                                                                                 std::string_view path) {
+  if (!value.is_array()) {
+    return std::unexpected(config_error("expected array of skill expirations", std::string{path}));
+  }
+
+  auto expirations = std::vector<SkillExpirationConfig>{};
+  expirations.reserve(value.size());
+  auto index = std::size_t{0};
+  for (const auto& element : value) {
+    const auto entry_path = element_path(path, index);
+    ++index;
+    if (!element.is_object()) {
+      return std::unexpected(config_error("skill expiration must be an object", entry_path));
+    }
+
+    const auto name_it = element.find("name");
+    if (name_it == element.end() || !name_it->is_string()) {
+      return std::unexpected(config_error("skill expiration requires a string `name`", child_path(entry_path, "name")));
+    }
+    auto name = name_it->get<std::string>();
+    if (name.empty()) {
+      return std::unexpected(config_error("skill expiration name must be non-empty", child_path(entry_path, "name")));
+    }
+
+    const auto expires_it = element.find("expires_at");
+    if (expires_it == element.end() || !expires_it->is_string()) {
+      return std::unexpected(
+          config_error("skill expiration requires a string `expires_at`", child_path(entry_path, "expires_at")));
+    }
+    auto expires_at = core::time::parse_iso8601_utc(expires_it->get<std::string>());
+    if (!expires_at) {
+      return std::unexpected(config_error("skill expiration `expires_at` must be a UTC ISO-8601 timestamp",
+                                          child_path(entry_path, "expires_at")));
+    }
+
+    expirations.push_back(SkillExpirationConfig{.name = std::move(name), .expires_at = *expires_at});
+  }
+  return expirations;
 }
 
 [[nodiscard]] Result<PromptRuntimeConfig> parse_prompt_runtime(const json& runtime) {
@@ -1007,6 +1051,25 @@ parse_agents(const json& root, bool strict, std::vector<ConfigWarning>& warnings
       skills_enabled = std::move(*parsed);
     }
 
+    auto skills_deactivated = std::vector<std::string>{};
+    if (const auto deactivated_it = value.find("skills_deactivated"); deactivated_it != value.end()) {
+      auto parsed =
+          parse_non_empty_string_array(*deactivated_it, child_path(agent_path, "skills_deactivated"), "skill name");
+      if (!parsed) {
+        return std::unexpected(std::move(parsed.error()));
+      }
+      skills_deactivated = std::move(*parsed);
+    }
+
+    auto skills_expirations = std::vector<SkillExpirationConfig>{};
+    if (const auto expirations_it = value.find("skills_expirations"); expirations_it != value.end()) {
+      auto parsed = parse_skill_expirations(*expirations_it, child_path(agent_path, "skills_expirations"));
+      if (!parsed) {
+        return std::unexpected(std::move(parsed.error()));
+      }
+      skills_expirations = std::move(*parsed);
+    }
+
     auto prompt_overlay = std::string{};
     if (const auto overlay_it = value.find("prompt_overlay"); overlay_it != value.end()) {
       const auto overlay_path = child_path(agent_path, "prompt_overlay");
@@ -1035,6 +1098,8 @@ parse_agents(const json& root, bool strict, std::vector<ConfigWarning>& warnings
         .permissions = std::move(permissions),
         .prompt_overlay = std::move(prompt_overlay),
         .skills_enabled = std::move(skills_enabled),
+        .skills_deactivated = std::move(skills_deactivated),
+        .skills_expirations = std::move(skills_expirations),
     });
   }
 

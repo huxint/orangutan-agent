@@ -238,6 +238,8 @@ public:
        tool::OutputCapOptions output_caps,
        agent::ToolSchedulerOptions scheduler_options,
        std::optional<std::vector<std::string>> skills_enabled,
+       std::vector<std::string> skills_deactivated,
+       std::vector<skill::SkillExpiration> skills_expirations,
        core::TurnId session_id)
       : executor_{std::move(options.executor)}, assembly_{options.assembly}, execution_runtime_{*options.provider},
         loop_{execution_runtime_, std::move(options.route)}, registry_{std::move(registry)},
@@ -247,7 +249,8 @@ public:
         agent_key_{std::move(options.agent_key)}, identity_{std::move(options.identity)},
         origin_{std::move(options.origin)}, system_preamble_{make_system_preamble(std::move(options.system_preamble))},
         skills_catalog_{skill::RenderedCatalog{.section_text = std::move(options.skills_catalog)}},
-        skills_enabled_{std::move(skills_enabled)},
+        skills_enabled_{std::move(skills_enabled)}, skills_deactivated_{std::move(skills_deactivated)},
+        skills_expirations_{std::move(skills_expirations)},
         memory_framing_{memory::Framing{.section_text = std::move(options.memory_framing)}},
         per_agent_overlay_{std::move(options.per_agent_overlay)},
         trace_context_json_{std::move(options.trace_context_json)}, tool_choice_{std::move(options.tool_choice)},
@@ -435,7 +438,13 @@ private:
     skill_documents_ =
         filter_skill_documents(std::span<const skill::SkillDocument>{skill_snapshot_->documents()}, skills_enabled_);
     auto entries = skill::catalog_entries_from(std::span<const skill::SkillDocument>{skill_documents_});
-    auto active_skills = skill::resolve_active_skills(skill::ActivationPolicy{},
+    auto policy = skill::ActivationPolicy{};
+    policy.deactivated_skill_names = skills_deactivated_;
+    policy.expirations = skills_expirations_;
+    if (!policy.expirations.empty()) {
+      policy.evaluation_time = core::time::now_utc();
+    }
+    auto active_skills = skill::resolve_active_skills(std::move(policy),
                                                       conversation_tail,
                                                       std::span<const skill::CatalogEntry>{entries});
     if (!active_skills) {
@@ -564,6 +573,8 @@ private:
   agent::SystemPreambleOwner system_preamble_;
   skill::CatalogOwner skills_catalog_;
   std::optional<std::vector<std::string>> skills_enabled_;
+  std::vector<std::string> skills_deactivated_;
+  std::vector<skill::SkillExpiration> skills_expirations_;
   std::optional<skill::WorkspaceSkillSnapshot> skill_snapshot_;
   std::vector<skill::SkillDocument> skill_documents_;
   memory::FramingOwner memory_framing_;
@@ -614,10 +625,18 @@ core::Result<std::unique_ptr<AgentPromptRunner>> AgentPromptRunner::create(Agent
     return std::unexpected(std::move(agent_config.error()));
   }
   auto skills_enabled = std::optional<std::vector<std::string>>{};
+  auto skills_deactivated = std::vector<std::string>{};
+  auto skills_expirations = std::vector<skill::SkillExpiration>{};
   if (*agent_config != nullptr) {
     skills_enabled = (*agent_config)->skills_enabled;
     if (options.per_agent_overlay.empty()) {
       options.per_agent_overlay = (*agent_config)->prompt_overlay;
+    }
+    skills_deactivated = (*agent_config)->skills_deactivated;
+    skills_expirations.reserve((*agent_config)->skills_expirations.size());
+    for (const auto& expiration : (*agent_config)->skills_expirations) {
+      skills_expirations.push_back(
+          skill::SkillExpiration{.name = expiration.name, .expires_at = expiration.expires_at});
     }
   }
 
@@ -638,6 +657,8 @@ core::Result<std::unique_ptr<AgentPromptRunner>> AgentPromptRunner::create(Agent
                                      *output_caps,
                                      *scheduler_options,
                                      std::move(skills_enabled),
+                                     std::move(skills_deactivated),
+                                     std::move(skills_expirations),
                                      session_id);
   return std::make_unique<AgentPromptRunner>(std::move(impl), AgentPromptRunner::PrivateTag{});
 }
