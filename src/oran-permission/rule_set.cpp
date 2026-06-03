@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <format>
+#include <iterator>
 #include <span>
 #include <string>
 #include <string_view>
@@ -37,14 +38,15 @@ namespace {
 
 [[nodiscard]] std::string format_reason(std::size_t index, const Rule& rule) {
   const auto verdict_name = core::enum_name(rule.verdict);
-  std::string out = std::format("rule #{} ({}: {}", index, verdict_name, rule.tool_pattern);
+  std::string out;
+  std::format_to(std::back_inserter(out), "rule #{} ({}: {}", index, verdict_name, rule.tool_pattern);
   if (rule.capability.has_value()) {
-    out += std::format(" capability={}", core::enum_name(*rule.capability));
+    std::format_to(std::back_inserter(out), " capability={}", core::enum_name(*rule.capability));
   }
   if (rule.input_pattern.has_value()) {
-    out += std::format(" input=~\"{}\"", rule.input_pattern->pattern());
+    std::format_to(std::back_inserter(out), " input=~\"{}\"", rule.input_pattern->pattern());
   }
-  out += ')';
+  out.push_back(')');
   return out;
 }
 

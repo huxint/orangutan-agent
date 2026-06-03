@@ -853,8 +853,8 @@ TEST_CASE("file.read returns text fallback and structured metadata", "[unit][too
     const auto body = std::string_view{result->text}.substr(newline + 1);
     REQUIRE(body == "hello, slice 17");
     REQUIRE(header.starts_with(file.string() + ":1-1 fingerprint=v1:"));
-    REQUIRE(header.find("bytes=15") != std::string_view::npos);
-    REQUIRE(header.find(" truncated") == std::string_view::npos);
+    REQUIRE(header.contains("bytes=15"));
+    REQUIRE_FALSE(header.contains(" truncated"));
     REQUIRE(result->data_json.has_value());
     const auto data = nlohmann::json::parse(*result->data_json);
     REQUIRE(data["kind"] == "file_read");
@@ -966,7 +966,7 @@ TEST_CASE("file.read line range returns only the requested span", "[unit][tool][
     auto result = co_await registry.dispatch(tool::kFileReadName, input, ctx);
     REQUIRE(result.has_value());
     auto [header, body] = split_file_read_envelope(result->text);
-    REQUIRE(header.find(":2-3 ") != std::string_view::npos);
+    REQUIRE(header.contains(":2-3 "));
     REQUIRE(body == "beta\ngamma\n");
     REQUIRE(result->data_json.has_value());
     const auto data = nlohmann::json::parse(*result->data_json);
@@ -1000,7 +1000,7 @@ TEST_CASE("file.read byte range returns the requested byte span", "[unit][tool][
     auto result = co_await registry.dispatch(tool::kFileReadName, input, ctx);
     REQUIRE(result.has_value());
     auto [header, body] = split_file_read_envelope(result->text);
-    REQUIRE(header.find("bytes=5") != std::string_view::npos);
+    REQUIRE(header.contains("bytes=5"));
     // `offset_bytes` is the byte skip count from the start of the file — the
     // first read byte sits at zero-based index `offset_bytes`.
     REQUIRE(body == "34567");
@@ -1033,7 +1033,7 @@ TEST_CASE("file.read max_bytes reports truncation in data_json and usage", "[uni
     auto result = co_await registry.dispatch(tool::kFileReadName, input, ctx);
     REQUIRE(result.has_value());
     auto [header, body] = split_file_read_envelope(result->text);
-    REQUIRE(header.find("bytes=4 truncated") != std::string_view::npos);
+    REQUIRE(header.contains("bytes=4 truncated"));
     REQUIRE(body == "0123");
     REQUIRE(result->data_json.has_value());
     const auto data = nlohmann::json::parse(*result->data_json);

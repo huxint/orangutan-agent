@@ -29,7 +29,7 @@ constexpr std::string_view kDeactivationPrefix{R"({"kind":"skill_deactivation","
 constexpr std::string_view kActivationSuffix{R"("})"};
 
 [[nodiscard]] bool contains_line_break(std::string_view value) noexcept {
-  return value.find('\n') != std::string_view::npos || value.find('\r') != std::string_view::npos;
+  return value.contains('\n') || value.contains('\r');
 }
 
 [[nodiscard]] bool contains_control_char(std::string_view value) noexcept {
