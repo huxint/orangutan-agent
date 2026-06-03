@@ -125,8 +125,9 @@ directories produce an empty catalog, loader errors fail before the loop, and
 `skill_catalog_loads()` exposes the number of snapshot reloads. Before rendering
 section 4, the runner asks `oran-skill` to resolve active skill markers through
 the current `skill::ActivationPolicy`. That policy currently derives markers
-from the already-loaded conversation transcript, considers only successful
-`skill.invoke` tool-results carrying the versioned activation `data_json`, and
+from the already-loaded conversation transcript, nets successful `skill.invoke`
+activation and `skill.deactivate` deactivation tool-results that carry the
+versioned `data_json` records in transcript order (most recent event wins), and
 filters through the current loaded/allowed catalog entries so removed or
 disallowed skills do not remain active in the next prompt. The policy surface
 also accepts explicit deactivated skill names plus explicit expiration rows
@@ -167,6 +168,12 @@ iteration without re-reading disk mid-turn. Successful invokes also return a
 small structured activation record through `Output::data_json`; the next prompt
 boundary feeds that record through `skill::resolve_active_skills(...)` to mark
 the skill active in section 4 without parsing model-visible body text.
+Slice 147 installs a parallel `DispatchContext::skill_deactivate` callback over
+the same filtered document vector: `skill.deactivate` returns a versioned
+`skill_deactivation` record in `Output::data_json`, and the next prompt boundary
+nets it against prior activations through the same transcript scan so a
+mid-session deactivation clears the section-4 marker without a config edit or a
+renderer clock.
 Empty `AgentPromptRunnerOptions::system_preamble` selects
 `agent::default_system_preamble()`; explicit text is treated as an override for
 tests and embedders. Multi-iteration provider/tool turns therefore reuse stable

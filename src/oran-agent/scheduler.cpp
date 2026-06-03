@@ -100,6 +100,7 @@ constexpr std::chrono::milliseconds kCancellationGrace{100};
       .bus = prototype.bus,
       .registry = nullptr,
       .skill_invoke = prototype.skill_invoke,
+      .skill_deactivate = prototype.skill_deactivate,
       .workspace = prototype.workspace,
       .resolved_path = std::nullopt,
       .output_caps = prototype.output_caps,

@@ -190,6 +190,15 @@ filter_skill_documents(std::span<const skill::SkillDocument> documents,
   return text;
 }
 
+[[nodiscard]] std::string render_skill_deactivation_text(std::string_view skill_name) {
+  std::string text;
+  text.reserve(skill_name.size() + 48U);
+  text.append("skill.deactivate: ");
+  text.append(skill_name);
+  text.append("\nstatus: deactivated for this session");
+  return text;
+}
+
 [[nodiscard]] Result<void> validate_options(const AgentPromptRunnerOptions& options) {
   if (options.assembly == nullptr) {
     return std::unexpected(option_error("agent prompt runner requires a runtime assembly"));
@@ -316,6 +325,8 @@ public:
         .bus = &assembly_->hook_bus(),
         .skill_invoke = [this](std::string_view skill_name, std::string_view inputs_json, tool::DispatchContext& ctx)
             -> async::Awaitable<Result<tool::Output>> { co_return invoke_skill(skill_name, inputs_json, ctx); },
+        .skill_deactivate = [this](std::string_view skill_name, tool::DispatchContext& ctx)
+            -> async::Awaitable<Result<tool::Output>> { co_return deactivate_skill(skill_name, ctx); },
         .workspace = &assembly_->workspace(),
         .output_caps = output_caps_,
         .scope_key = scope_key_,
@@ -482,6 +493,29 @@ private:
             tool::ToolUsage{
                 .bytes_read = match->body.size(),
             },
+        .is_error = false,
+    };
+  }
+
+  [[nodiscard]] Result<tool::Output> deactivate_skill(std::string_view skill_name, tool::DispatchContext& ctx) const {
+    static_cast<void>(ctx);
+    const auto match = std::ranges::find_if(skill_documents_, [skill_name](const skill::SkillDocument& document) {
+      return document.metadata.name == skill_name;
+    });
+    if (match == skill_documents_.end()) {
+      return std::unexpected(Error::not_found("skill.deactivate: skill is not loaded")
+                                 .with("skill", std::string{skill_name})
+                                 .with("reason", "skill_not_loaded"));
+    }
+    auto data_json = skill::render_deactivation_data_json(match->metadata.name);
+    if (!data_json) {
+      return std::unexpected(std::move(data_json).error());
+    }
+    return tool::Output{
+        .text = render_skill_deactivation_text(match->metadata.name),
+        .data_json = std::move(*data_json),
+        .attachments = {},
+        .usage = {},
         .is_error = false,
     };
   }

@@ -48,10 +48,12 @@ struct SkillExpiration {
 
 struct ActivationPolicy {
   /// Current v1 policy: successful `skill.invoke` tool results in the session
-  /// transcript mark the skill active on the next prompt. Explicit
-  /// deactivations subtract from that derived set at the same prompt boundary;
-  /// expirations subtract only when callers also supply an explicit evaluation
-  /// time. The renderer never reads a hidden clock.
+  /// transcript mark the skill active on the next prompt, and successful
+  /// `skill.deactivate` tool results clear it again — the most recent
+  /// transcript event for a skill wins. Explicit `deactivated_skill_names`
+  /// subtract from that derived set at the same prompt boundary; expirations
+  /// subtract only when callers also supply an explicit evaluation time. The
+  /// renderer never reads a hidden clock.
   bool transcript_markers_enabled{true};
   std::vector<std::string> deactivated_skill_names{};
   std::optional<core::Time> evaluation_time{};
@@ -83,11 +85,17 @@ public:
 [[nodiscard]] core::Result<RenderedCatalog> render_catalog(std::span<const CatalogEntry> entries,
                                                            std::span<const ActiveSkill> active_skills);
 
-/// Versioned structured metadata emitted by `skill.invoke` on successful
-/// dispatch. It is small enough to travel in `ToolResultContent::data_json`;
-/// the text body remains the model-visible skill template.
+/// Versioned structured metadata emitted by `skill.invoke` (`skill_activation`)
+/// and `skill.deactivate` (`skill_deactivation`) on successful dispatch. Each
+/// record is small enough to travel in `ToolResultContent::data_json`; the text
+/// body remains the model-visible confirmation.
 [[nodiscard]] core::Result<std::string> render_activation_data_json(std::string_view skill_name);
 [[nodiscard]] std::optional<ActiveSkill> active_skill_from_data_json(std::string_view data_json);
+[[nodiscard]] core::Result<std::string> render_deactivation_data_json(std::string_view skill_name);
+[[nodiscard]] std::optional<std::string> deactivated_skill_from_data_json(std::string_view data_json);
+/// Net transcript-derived active markers: successful `skill.invoke` results add
+/// a skill and successful `skill.deactivate` results remove it, in transcript
+/// order, so the most recent event for a skill decides whether it stays active.
 [[nodiscard]] std::vector<ActiveSkill> active_skills_from_transcript(std::span<const core::Message> transcript);
 [[nodiscard]] core::Result<std::vector<ActiveSkill>>
 resolve_active_skills(ActivationPolicy policy,

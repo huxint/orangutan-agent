@@ -39,7 +39,7 @@
 namespace orangutan::agent {
 namespace {
 
-constexpr auto kDefaultActiveTools = std::array<std::string_view, 7>{
+constexpr auto kDefaultActiveTools = std::array<std::string_view, 8>{
     "file.read",
     "file.write",
     "file.edit",
@@ -47,6 +47,7 @@ constexpr auto kDefaultActiveTools = std::array<std::string_view, 7>{
     "directory.list",
     "tool.search",
     "skill.invoke",
+    "skill.deactivate",
 };
 
 [[nodiscard]] std::string_view system_preamble_for(const RunTurnInputs& inputs, SystemPreambleOwner& default_preamble) {

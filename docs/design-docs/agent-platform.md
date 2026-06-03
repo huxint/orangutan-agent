@@ -190,6 +190,12 @@ The agent loop owns:
   from config and supplies the prompt-boundary `evaluation_time` from the
   runner clock, so configured-route section 4 drops deactivated and expired
   markers while the renderer stays clock-free.
+  Slice 147 adds the first event-driven source: the permissioned
+  `skill.deactivate` built-in records a versioned `skill_deactivation`
+  transcript result, and `skill::active_skills_from_transcript` nets it against
+  prior `skill.invoke` activations in transcript order (most recent event wins),
+  so the agent can drop an active skill mid-session without a config edit while
+  the section-4 owner stays clock-free.
   The policy is resolved only at prompt boundaries: identical loaded/allowed
   snapshots plus identical policy inputs render byte-identical section-4 bytes,
   while changed activation, deactivation, or expiry state intentionally changes

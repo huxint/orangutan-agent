@@ -69,6 +69,19 @@ activate them on demand without bloating the system prompt.
   model-visible body text. The tool layer owns parsing, permissions, audit,
   hooks, scheduler dispatch, and output caps; bootstrap owns the snapshot
   lookup so `oran-tool` does not depend on `oran-skill`.
+- `skill.deactivate(name)` tool clears a loaded skill's active marker. **Status
+  (slice 147, 2026-06-03):** the built-in is registered in the default active
+  catalog with `Capability::deactivate_skill`, parses only `{"name": <string>}`,
+  delegates through `DispatchContext::skill_deactivate`, and returns a short
+  confirmation plus a versioned `data_json` deactivation record
+  (`kind=skill_deactivation`, `version=1`, `name`). The prompt-boundary
+  `skill::active_skills_from_transcript` scan nets `skill.invoke` activations
+  against `skill.deactivate` deactivations in transcript order, so the most
+  recent transcript event for a skill decides whether it stays active; the
+  record stays out of sections (1)-(6) and travels only as a section-7
+  tool-result `data_json`. The tool layer owns parsing, permissions, audit,
+  hooks, scheduler dispatch, and output caps; bootstrap owns the snapshot lookup
+  so `oran-tool` does not depend on `oran-skill`.
 - Hot-reload via filesystem watcher (`asio` + inotify on Linux). **Status
   (slice 138, 2026-06-01):** prompt-boundary hot reload is implemented for
   configured-route `AgentPromptRunner` instances with a `skills_directory`.
@@ -92,13 +105,18 @@ activate them on demand without bloating the system prompt.
 - Skill chaining: a skill can declare follow-up skills it expects to be invoked.
 - Skill-specific tool subset: a skill can restrict which tools may be used while it's
   active.
-- Durable skill activation policy beyond per-agent config inputs remains
-  downstream. Slice 146 ships per-agent `skills_deactivated` /
-  `skills_expirations` config as the first runtime-owned source; a durable or
-  event-driven source (for example a `skill.deactivate` built-in or
-  session-store-backed activation records) for mid-session changes without a
-  config edit remains downstream and must preserve the section-4 cache
-  semantics above.
+- Durable skill activation policy beyond per-agent config inputs is now
+  partially shipped. Slice 146 added per-agent `skills_deactivated` /
+  `skills_expirations` config (the first runtime-owned source), and slice 147
+  adds the permissioned `skill.deactivate` built-in (capability
+  `deactivate_skill`): a successful call records a versioned `skill_deactivation`
+  transcript result so the agent can drop an active skill mid-session without a
+  config edit. `skill::active_skills_from_transcript` nets that result against
+  prior `skill.invoke` activations in transcript order (most recent event wins),
+  so the change lands at the next prompt boundary only. A session-store-backed
+  activation record remains the downstream option for state that must outlive
+  transcript compaction; both sources preserve the section-4 cache semantics
+  above.
 
 ## Scope (v2)
 
@@ -132,8 +150,10 @@ activate them on demand without bloating the system prompt.
    text.
 6. `tests/skill/` ≥ 80% coverage. Slices 142-146 add activation metadata,
    active-marker, and explicit activation/deactivation/expiration policy
-   coverage, plus config-sourced deactivation/expiration; `tests/config` and
-   `tests/bootstrap` cover the config source and runner integration.
+   coverage, plus config-sourced deactivation/expiration; slice 147 adds
+   transcript-event `skill.deactivate` coverage (`tests/skill`, `tests/tool`,
+   `tests/core`); `tests/config` and `tests/bootstrap` cover the config source,
+   the deactivate built-in, and runner integration.
 
 ## Design Doc Cross-References
 

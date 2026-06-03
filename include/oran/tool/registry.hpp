@@ -100,6 +100,14 @@ using SkillInvokeHandler = std::function<async::Awaitable<core::Result<Output>>(
                                                                                 std::string_view inputs_json,
                                                                                 DispatchContext& ctx)>;
 
+/// Runtime callback consumed by the `skill.deactivate` built-in. Like
+/// `SkillInvokeHandler`, the tool layer owns JSON parsing, permissions, audit,
+/// hooks, and output caps; bootstrap supplies the already-loaded skill snapshot
+/// through this callback so `oran-tool` does not depend on `oran-skill`.
+/// Deactivation carries no `inputs`, so the signature is the skill name only.
+using SkillDeactivateHandler =
+    std::function<async::Awaitable<core::Result<Output>>(std::string_view skill_name, DispatchContext& ctx)>;
+
 /// Registry-pre-resolved filesystem target for a built-in tool call.
 /// `absolute_path` is the path handlers pass to `oran-io`; the rest is
 /// audit/display metadata. Raw input paths are not stored here.
@@ -184,6 +192,13 @@ struct DispatchContext {
   /// produced tool output through the ordinary dispatch path. When unset,
   /// `skill.invoke` reports a model-repairable missing-runtime error.
   SkillInvokeHandler skill_invoke{};
+  /// Optional skill deactivation service. When set, `skill.deactivate` calls it
+  /// with the requested skill name and returns the produced tool output through
+  /// the ordinary dispatch path; the runner records a versioned deactivation
+  /// record in the result `data_json` so the next prompt boundary clears the
+  /// active marker. When unset, `skill.deactivate` reports a model-repairable
+  /// missing-runtime error.
+  SkillDeactivateHandler skill_deactivate{};
   /// Optional workspace resolver for file built-ins. The pointer is
   /// non-owning; bootstrap/agent runtime owns the workspace value and keeps it
   /// alive for the dispatch. Dispatch pre-resolves current filesystem

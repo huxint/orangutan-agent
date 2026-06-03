@@ -179,6 +179,122 @@ TEST_CASE("Skill activation metadata round-trips through transcripts", "[unit][s
       skill::active_skill_from_data_json(R"({"kind":"other","version":1,"name":"release-note"})").has_value());
 }
 
+TEST_CASE("Skill deactivation metadata round-trips and stays distinct from activation", "[unit][skill][catalog]") {
+  auto deactivation = skill::render_deactivation_data_json("release-note");
+  REQUIRE(deactivation.has_value());
+  REQUIRE(*deactivation == R"({"kind":"skill_deactivation","version":1,"name":"release-note"})");
+  REQUIRE(skill::deactivated_skill_from_data_json(*deactivation) == std::optional<std::string>{"release-note"});
+
+  auto activation = skill::render_activation_data_json("release-note");
+  REQUIRE(activation.has_value());
+  // The two record kinds never parse as each other.
+  REQUIRE_FALSE(skill::deactivated_skill_from_data_json(*activation).has_value());
+  REQUIRE_FALSE(skill::active_skill_from_data_json(*deactivation).has_value());
+  // Blank or multiline names are rejected at render time.
+  REQUIRE_FALSE(skill::render_deactivation_data_json(" ").has_value());
+  REQUIRE_FALSE(skill::render_deactivation_data_json("release\nnote").has_value());
+}
+
+namespace {
+
+[[nodiscard]] core::Message skill_tool_use(std::string_view id, std::string_view tool_name) {
+  return core::Message{
+      .role = core::Role::assistant,
+      .blocks = {core::ToolUseContent{.id = std::string{id}, .name = std::string{tool_name}, .input_json = "{}"}},
+      .created_at = std::nullopt,
+  };
+}
+
+[[nodiscard]] core::Message skill_tool_result(std::string_view id, std::string_view data_json) {
+  return core::Message{
+      .role = core::Role::tool,
+      .blocks = {core::ToolResultContent{.tool_use_id = std::string{id},
+                                         .output = "ok",
+                                         .data_json = std::string{data_json},
+                                         .is_error = false}},
+      .created_at = std::nullopt,
+  };
+}
+
+}  // namespace
+
+TEST_CASE("active_skills_from_transcript nets skill.deactivate against skill.invoke", "[unit][skill][catalog]") {
+  auto activation = skill::render_activation_data_json("release-note");
+  auto deactivation = skill::render_deactivation_data_json("release-note");
+  REQUIRE(activation.has_value());
+  REQUIRE(deactivation.has_value());
+
+  SECTION("invoke then deactivate leaves the skill inactive") {
+    const std::vector<core::Message> transcript{
+        skill_tool_use("s1", "skill.invoke"),
+        skill_tool_result("s1", *activation),
+        skill_tool_use("s2", "skill.deactivate"),
+        skill_tool_result("s2", *deactivation),
+    };
+    REQUIRE(skill::active_skills_from_transcript(transcript).empty());
+  }
+
+  SECTION("a later invoke reactivates the skill (most recent event wins)") {
+    const std::vector<core::Message> transcript{
+        skill_tool_use("s1", "skill.invoke"),
+        skill_tool_result("s1", *activation),
+        skill_tool_use("s2", "skill.deactivate"),
+        skill_tool_result("s2", *deactivation),
+        skill_tool_use("s3", "skill.invoke"),
+        skill_tool_result("s3", *activation),
+    };
+    REQUIRE(skill::active_skills_from_transcript(transcript) ==
+            std::vector<skill::ActiveSkill>{skill::ActiveSkill{.name = "release-note"}});
+  }
+
+  SECTION("deactivating a never-invoked skill is a harmless no-op") {
+    const std::vector<core::Message> transcript{
+        skill_tool_use("s1", "skill.deactivate"),
+        skill_tool_result("s1", *deactivation),
+    };
+    REQUIRE(skill::active_skills_from_transcript(transcript).empty());
+  }
+}
+
+TEST_CASE("resolve_active_skills honours transcript skill.deactivate", "[unit][skill][catalog]") {
+  auto release_activation = skill::render_activation_data_json("release-note");
+  auto review_activation = skill::render_activation_data_json("review-pr");
+  auto release_deactivation = skill::render_deactivation_data_json("release-note");
+  REQUIRE(release_activation.has_value());
+  REQUIRE(review_activation.has_value());
+  REQUIRE(release_deactivation.has_value());
+
+  const std::vector<core::Message> transcript{
+      skill_tool_use("s1", "skill.invoke"),
+      skill_tool_result("s1", *release_activation),
+      skill_tool_use("s2", "skill.invoke"),
+      skill_tool_result("s2", *review_activation),
+      skill_tool_use("s3", "skill.deactivate"),
+      skill_tool_result("s3", *release_deactivation),
+  };
+  const std::vector<skill::CatalogEntry> available{
+      skill::CatalogEntry{
+          .name = "release-note",
+          .description = "Draft release notes.",
+          .triggers = {},
+          .model_hint = std::nullopt,
+      },
+      skill::CatalogEntry{
+          .name = "review-pr",
+          .description = "Review code changes.",
+          .triggers = {},
+          .model_hint = std::nullopt,
+      },
+  };
+
+  const auto active = skill::resolve_active_skills(skill::ActivationPolicy{},
+                                                   std::span<const core::Message>{transcript},
+                                                   std::span<const skill::CatalogEntry>{available});
+
+  REQUIRE(active.has_value());
+  REQUIRE(*active == std::vector<skill::ActiveSkill>{skill::ActiveSkill{.name = "review-pr"}});
+}
+
 TEST_CASE("ActivationPolicy resolves active markers against available skills", "[unit][skill][catalog]") {
   auto release_activation = skill::render_activation_data_json("release-note");
   auto missing_activation = skill::render_activation_data_json("removed-skill");

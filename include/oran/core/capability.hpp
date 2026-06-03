@@ -48,6 +48,7 @@ enum class Capability : std::uint8_t {
   run_job_now,
   // skills
   invoke_skill,
+  deactivate_skill,
   // misc
   external_mcp,
   runtime_loader,

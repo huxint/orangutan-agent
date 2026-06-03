@@ -309,6 +309,13 @@ deny:
 
 This is more expressive than "match by tool name" and survives tool renames.
 
+Skill-management tools are capability-gated too: `invoke_skill` runs a loaded
+skill (`skill.invoke`) and `deactivate_skill` clears its active marker
+(`skill.deactivate`, slice 147), so an operator can allow or deny each
+independently. Neither carries an explicit `Defaults::for_mode` rule, so both
+inherit the per-mode catch-all (`ask` in `default`, `deny` in
+`strict`/`sandboxed`, `allow` in `permissive`).
+
 ### Runtime vs. Compile-Time Regex
 
 Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:

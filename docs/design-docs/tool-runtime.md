@@ -46,6 +46,7 @@ enum class Capability {
   schedule_job, modify_job, run_job_now,
   // skills
   invoke_skill,
+  deactivate_skill,
   // misc
   external_mcp, runtime_loader,
 };
@@ -306,6 +307,15 @@ enum class Capability {
 > with the permission verdict but return before handlers run or ask-approval
 > replay is spent. Handlers keep their in-handler fallback for callers that
 > dispatch without a workspace.
+> Slice 147 (2026-06-03) adds the second `oran-tool-skill` built-in,
+> `skill.deactivate` (capability `deactivate_skill`, input `{"name": <string>}`,
+> non-deferred). Like `skill.invoke` it delegates the concrete lookup through a
+> `DispatchContext::skill_deactivate` callback so `oran-tool` stays independent
+> of `oran-skill`; bootstrap returns a versioned `skill_deactivation` record in
+> `Output::data_json` that the next prompt boundary nets against prior
+> activations. `deactivate_skill` carries no explicit `Defaults::for_mode` rule,
+> so it inherits the same per-mode catch-all as `invoke_skill` (`ask` in
+> `default`, `deny` in `strict`/`sandboxed`, `allow` in `permissive`).
 
 A tool's `required_capabilities` list is **inspected at registration**. The permission
 engine knows the universe of capabilities a tool might use; the tool cannot smuggle in
@@ -453,7 +463,7 @@ Each category is a small library that calls `Registry::add` from a single
 | `oran-tool-orchestration`     | `agent.spawn`, `agent.stop`, `agent.send_message`, …    |
 | `oran-tool-automation`        | `automation.schedule`, `automation.list`, …             |
 | `oran-tool-mcp`               | external MCP client (one tool per external MCP server)  |
-| `oran-tool-skill`             | `skill.invoke`                                          |
+| `oran-tool-skill`             | `skill.invoke`, `skill.deactivate`                      |
 | `oran-tool-background`        | async job orchestration                                  |
 | `oran-tool-attachments`       | message attachment management                           |
 | `oran-tool-runtime-loader`    | dynamic tool reloading                                  |

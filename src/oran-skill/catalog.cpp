@@ -23,7 +23,9 @@ namespace orangutan::skill {
 namespace {
 
 constexpr std::string_view kSkillInvokeName{"skill.invoke"};
+constexpr std::string_view kSkillDeactivateName{"skill.deactivate"};
 constexpr std::string_view kActivationPrefix{R"({"kind":"skill_activation","version":1,"name":")"};
+constexpr std::string_view kDeactivationPrefix{R"({"kind":"skill_deactivation","version":1,"name":")"};
 constexpr std::string_view kActivationSuffix{R"("})"};
 
 [[nodiscard]] bool contains_line_break(std::string_view value) noexcept {
@@ -365,6 +367,33 @@ std::optional<ActiveSkill> active_skill_from_data_json(std::string_view data_jso
   return active;
 }
 
+core::Result<std::string> render_deactivation_data_json(std::string_view skill_name) {
+  const auto skill = ActiveSkill{.name = std::string{skill_name}};
+  if (auto valid = validate_active_skill(skill); !valid) {
+    return std::unexpected(std::move(valid).error());
+  }
+
+  std::string output;
+  output.reserve(kDeactivationPrefix.size() + skill_name.size() + kActivationSuffix.size());
+  output.append(kDeactivationPrefix);
+  append_json_escaped(output, skill_name);
+  output.append(kActivationSuffix);
+  return output;
+}
+
+std::optional<std::string> deactivated_skill_from_data_json(std::string_view data_json) {
+  if (!data_json.starts_with(kDeactivationPrefix) || !data_json.ends_with(kActivationSuffix)) {
+    return std::nullopt;
+  }
+  data_json.remove_prefix(kDeactivationPrefix.size());
+  data_json.remove_suffix(kActivationSuffix.size());
+  auto name = unescape_json_string(data_json);
+  if (!name.has_value() || !validate_active_skill(ActiveSkill{.name = *name}).has_value()) {
+    return std::nullopt;
+  }
+  return name;
+}
+
 std::vector<ActiveSkill> active_skills_from_transcript(std::span<const core::Message> transcript) {
   std::unordered_map<std::string_view, std::string_view> tool_use_names;
   for (const auto& message : transcript) {
@@ -380,6 +409,11 @@ std::vector<ActiveSkill> active_skills_from_transcript(std::span<const core::Mes
   }
 
   std::vector<ActiveSkill> active_skills;
+  const auto contains_active = [&active_skills](std::string_view skill_name) {
+    return std::ranges::contains(active_skills, skill_name, [](const ActiveSkill& skill) -> std::string_view {
+      return skill.name;
+    });
+  };
   for (const auto& message : transcript) {
     if (message.role != core::Role::tool) {
       continue;
@@ -390,15 +424,18 @@ std::vector<ActiveSkill> active_skills_from_transcript(std::span<const core::Mes
         continue;
       }
       const auto name = tool_use_names.find(result->tool_use_id);
-      if (name == tool_use_names.end() || name->second != kSkillInvokeName) {
+      if (name == tool_use_names.end()) {
         continue;
       }
-      auto active = active_skill_from_data_json(*result->data_json);
-      if (active.has_value() &&
-          !std::ranges::contains(active_skills, active->name, [](const ActiveSkill& skill) -> std::string_view {
-            return skill.name;
-          })) {
-        active_skills.push_back(std::move(*active));
+      if (name->second == kSkillInvokeName) {
+        if (auto active = active_skill_from_data_json(*result->data_json);
+            active.has_value() && !contains_active(active->name)) {
+          active_skills.push_back(std::move(*active));
+        }
+      } else if (name->second == kSkillDeactivateName) {
+        if (auto deactivated = deactivated_skill_from_data_json(*result->data_json); deactivated.has_value()) {
+          std::erase_if(active_skills, [&deactivated](const ActiveSkill& skill) { return skill.name == *deactivated; });
+        }
       }
     }
   }

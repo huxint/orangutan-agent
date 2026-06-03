@@ -214,14 +214,18 @@ When a slice introduces a new prompt-bearing artifact:
 - [`../product-specs/0009-skills.md`](../product-specs/0009-skills.md)
   — skill body shape and per-skill body size cap.
 
-Slices 135-146 land the first deterministic section-4 owner, loader snapshot,
-one-shot `skill.invoke` dispatch path, prompt-boundary hot-reload,
+Slices 135-147 land the first deterministic section-4 owner, loader snapshot,
+the `skill.invoke` and slice-147 `skill.deactivate` dispatch paths,
+prompt-boundary hot-reload,
 runner-selected per-agent filtering, and transcript-derived active skill
 markers plus an explicit `skill::ActivationPolicy` resolver with
 caller-supplied deactivation names and expiration inputs in `oran-skill`,
 `oran-tool`, and bootstrap, now sourced from per-agent
 `agents.<name>.skills_deactivated` / `skills_expirations` config with a
-runner-supplied prompt-boundary evaluation time.
+runner-supplied prompt-boundary evaluation time, plus a transcript-event
+`skill.deactivate` built-in (capability `deactivate_skill`) whose
+`skill_deactivation` records net against `skill.invoke` activations at the next
+prompt boundary.
 That owner keeps skill bodies out of section 1 and renders a compact
 metadata-only catalog before loop entry; `skill.invoke` returns body text as an
 ordinary conversation-tail tool result, so it does not mutate cached sections

@@ -7,18 +7,25 @@
 
 ## Snapshot
 
-- **Slice:** 146 (`xmake run orangutan` reports slice 146)
+- **Slice:** 147 (`xmake run orangutan` reports slice 147)
 - **Last completed history:**
-  [`histories/2026-06/20260603-1035-config-skill-activation-policy.md`](histories/2026-06/20260603-1035-config-skill-activation-policy.md)
+  [`histories/2026-06/20260603-1526-skill-deactivate.md`](histories/2026-06/20260603-1526-skill-deactivate.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** the per-agent config source now feeds explicit
-  deactivation/expiration into `skill::ActivationPolicy`; the remaining v1.1
-  skill-activation work is a durable or event-driven source (for example a
-  permissioned `skill.deactivate` built-in or session-store-backed activation
-  records) so activation state can change mid-session without a config edit,
-  still resolved only at prompt boundaries with caller-supplied evaluation time
-  and never a renderer clock. Slice 146 adds the first runtime-owned source for
+- **Next intended slice:** slice 147 shipped the first event-driven
+  skill-activation source (`skill.deactivate`); the remaining v1.1
+  skill-activation work is a session-store-backed activation record so
+  activation state can survive transcript compaction or pruning, still resolved
+  only at prompt boundaries and never from a renderer clock. Slice 147 adds the
+  permissioned `skill.deactivate` built-in (capability `deactivate_skill`): a
+  successful call records a versioned `skill_deactivation` result in the session
+  transcript, `skill::active_skills_from_transcript` nets `skill.invoke`
+  activations against `skill.deactivate` deactivations in transcript order (most
+  recent event wins), bootstrap installs the `DispatchContext::skill_deactivate`
+  callback, and the tool joins the default active catalog. Transcripts without a
+  deactivation behave exactly as before. Focused result: `test-skill`
+  **24 cases / 155 assertions**, `test-tool` **191 / 1919**, `test-core`
+  **71 / 459**, and `test-bootstrap` **99 / 667**. Slice 146 adds the first runtime-owned source for
   the slice-143/144/145 `skill::ActivationPolicy` inputs: `oran-config` parses
   optional `agents.<name>.skills_deactivated` (unique non-empty names) and
   `agents.<name>.skills_expirations` (`{name, expires_at}` rows with strict UTC
@@ -1372,7 +1379,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 ## Latest Library Surfaces
 
-- `oran-core`: 71 cases / 455 assertions.
+- `oran-core`: 71 cases / 459 assertions.
 - `oran-async`: 9 cases / 43 assertions.
 - `oran-http`: 3 cases / 21 assertions.
 - `oran-io`: 49 cases / 286 assertions.
@@ -1381,12 +1388,13 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 30 cases / 207 assertions.
 - `oran-memory`: 8 cases / 559 assertions.
-- `oran-tool`: 188 cases / 1893 assertions.
+- `oran-skill`: 24 cases / 155 assertions.
+- `oran-tool`: 191 cases / 1919 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 98 cases / 646 assertions.
+- `oran-bootstrap`: 99 cases / 667 assertions.
 
 ## Open Tech-Debt Rows
 

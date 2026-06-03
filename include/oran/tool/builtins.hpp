@@ -40,6 +40,9 @@ inline constexpr std::string_view kToolSearchName{"tool.search"};
 /// Stable wire name for the markdown skill invocation built-in.
 inline constexpr std::string_view kSkillInvokeName{"skill.invoke"};
 
+/// Stable wire name for the markdown skill deactivation built-in.
+inline constexpr std::string_view kSkillDeactivateName{"skill.deactivate"};
+
 /// Register the `file.read` tool. Reads UTF-8 content using `oran-io`'s
 /// coroutine helper; when `DispatchContext::workspace` is set, the input path
 /// is first resolved through `tool::Workspace`. Capability `read_file` is
@@ -159,11 +162,22 @@ inline constexpr std::string_view kSkillInvokeName{"skill.invoke"};
 /// depend on `oran-skill`.
 [[nodiscard]] core::Result<void> register_skill_invoke(Registry& registry);
 
+/// Register the `skill.deactivate` tool. Clears a loaded skill's active marker
+/// from the next prompt's section 4 catalog; capability `deactivate_skill` is
+/// required. Input shape: `{"name": <string>}`. The concrete skill lookup lives
+/// behind `DispatchContext::skill_deactivate`, so this built-in stays an
+/// ordinary permissioned/audited registry dispatch without making `oran-tool`
+/// depend on `oran-skill`. A successful deactivation returns a short
+/// confirmation text plus a versioned `skill_deactivation` record in
+/// `Output::data_json`; the next prompt boundary nets it against any prior
+/// `skill.invoke` activation so the skill stops appearing as active.
+[[nodiscard]] core::Result<void> register_skill_deactivate(Registry& registry);
+
 /// Register every built-in this repository ships. Currently wires `file.read`,
 /// `file.write`, `file.edit`, `file.search`, `directory.list`, then
-/// `file.delete`, then `tool.search`, then `skill.invoke`; future slices
-/// append additional tools so production callers can stay on this single
-/// entry point.
+/// `file.delete`, then `tool.search`, then `skill.invoke`, then
+/// `skill.deactivate`; future slices append additional tools so production
+/// callers can stay on this single entry point.
 [[nodiscard]] core::Result<void> register_builtins(Registry& registry);
 
 }  // namespace orangutan::tool

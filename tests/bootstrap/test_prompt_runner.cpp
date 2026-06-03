@@ -821,6 +821,97 @@ TEST_CASE("AgentPromptRunner marks invoked skills active on the next prompt",
   });
 }
 
+TEST_CASE("AgentPromptRunner clears active markers after skill.deactivate", "[unit][bootstrap][prompt_runner][skill]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-skill-deactivate"};
+  write_file(temp.path() / ".orangutan" / "skills" / "release-note.md",
+             "---\n"
+             "name: release-note\n"
+             "description: Draft release notes from completed changes.\n"
+             "triggers: release notes, changelog\n"
+             "---\n"
+             "Use concise bullets for the shipped changes.\n");
+  auto cfg = parse_config(R"json(
+{
+  "permissions": {
+    "allow": [
+      {"tool_pattern": "skill.invoke"},
+      {"tool_pattern": "skill.deactivate"}
+    ]
+  }
+}
+)json");
+
+  test::run_async([&temp, &cfg](asio::io_context& io) -> async::Awaitable<void> {
+    auto assembly = build_assembly(temp.path(), io, false);
+    RecordingProvider recording{{
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "skill-1",
+                .name = "skill.invoke",
+                .input_json = R"({"name":"release-note","inputs":{"since":"slice-147"}})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        },
+        text_response("first done"),
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "skill-2",
+                .name = "skill.deactivate",
+                .input_json = R"({"name":"release-note"})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        },
+        text_response("second done"),
+        text_response("third done"),
+    }};
+
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.mode = permission::Mode::strict;
+    options.skills_directory = (temp.path() / ".orangutan" / "skills").string();
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto first = co_await (*runner)->run_prompt(
+        cli::PromptRunRequest{.prompt = "draft notes", .mode = cli::CliMode::single_shot});
+    REQUIRE(first.has_value());
+    REQUIRE(first->text == "first done");
+
+    auto second = co_await (*runner)->run_prompt(
+        cli::PromptRunRequest{.prompt = "stop using that skill", .mode = cli::CliMode::single_shot});
+    REQUIRE(second.has_value());
+    REQUIRE(second->text == "second done");
+
+    auto third =
+        co_await (*runner)->run_prompt(cli::PromptRunRequest{.prompt = "continue", .mode = cli::CliMode::single_shot});
+    REQUIRE(third.has_value());
+    REQUIRE(third->text == "third done");
+
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 5);
+    // Prompt 1 renders before the invoke takes effect: not yet active.
+    REQUIRE(requests[0].system_prompt.has_value());
+    REQUIRE_FALSE(requests[0].system_prompt->contains("Active Skill: release-note"));
+    // Prompt 2 sees the transcript skill.invoke -> active going in.
+    REQUIRE(requests[2].system_prompt.has_value());
+    REQUIRE(requests[2].system_prompt->contains("Active Skill: release-note"));
+    // The skill.deactivate tool result carries the versioned deactivation record.
+    const auto data_json = tool_result_data_json_in(requests[3], "skill-2");
+    REQUIRE(data_json.has_value());
+    REQUIRE(*data_json == R"({"kind":"skill_deactivation","version":1,"name":"release-note"})");
+    REQUIRE(tool_result_output_in(requests[3], "skill-2").contains("skill.deactivate: release-note"));
+    // Prompt 3 sees invoke then deactivate -> no longer active, but still catalogued.
+    REQUIRE(requests[4].system_prompt.has_value());
+    REQUIRE_FALSE(requests[4].system_prompt->contains("Active Skill: release-note"));
+    REQUIRE(requests[4].system_prompt->contains("Skill: release-note"));
+  });
+}
+
 TEST_CASE("AgentPromptRunner suppresses active markers for config-deactivated skills",
           "[unit][bootstrap][prompt_runner][skill]") {
   TempDir temp{"oran-bootstrap-prompt-runner-skill-deactivated"};

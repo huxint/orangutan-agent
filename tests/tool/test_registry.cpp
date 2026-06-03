@@ -552,11 +552,26 @@ TEST_CASE("register_skill_invoke advertises invoke_skill and name inputs", "[uni
   REQUIRE(def->input_schema_json.contains("\"inputs\""));
 }
 
+TEST_CASE("register_skill_deactivate advertises deactivate_skill and name inputs", "[unit][tool][skill_deactivate]") {
+  tool::Registry registry;
+  REQUIRE(tool::register_skill_deactivate(registry).has_value());
+  REQUIRE(registry.size() == 1);
+  const auto* def = registry.find(tool::kSkillDeactivateName);
+  REQUIRE(def != nullptr);
+  REQUIRE(def->required_capabilities.size() == 1);
+  REQUIRE(def->required_capabilities[0] == core::Capability::deactivate_skill);
+  REQUIRE_FALSE(def->deferred);
+  REQUIRE(def->category.has_value());
+  REQUIRE(*def->category == "skill");
+  REQUIRE(def->input_schema_json.contains("\"name\""));
+  REQUIRE_FALSE(def->input_schema_json.contains("\"inputs\""));
+}
+
 TEST_CASE("register_builtins seeds the file tool catalog", "[unit][tool][builtins]") {
   tool::Registry registry;
   REQUIRE(tool::register_builtins(registry).has_value());
   const auto catalog = registry.catalog();
-  REQUIRE(catalog.size() == 8);
+  REQUIRE(catalog.size() == 9);
   REQUIRE(catalog[0].name == tool::kFileReadName);
   REQUIRE(catalog[1].name == tool::kFileWriteName);
   REQUIRE(catalog[2].name == tool::kFileEditName);
@@ -565,6 +580,7 @@ TEST_CASE("register_builtins seeds the file tool catalog", "[unit][tool][builtin
   REQUIRE(catalog[5].name == tool::kFileDeleteName);
   REQUIRE(catalog[6].name == tool::kToolSearchName);
   REQUIRE(catalog[7].name == tool::kSkillInvokeName);
+  REQUIRE(catalog[8].name == tool::kSkillDeactivateName);
 }
 
 TEST_CASE("tool.search returns structured tool metadata by exact name", "[unit][tool][tool_search]") {
@@ -746,6 +762,58 @@ TEST_CASE("skill.invoke reports missing runtime service as a model-repairable er
     auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
 
     auto result = co_await registry.dispatch(tool::kSkillInvokeName, R"({"name":"release-note"})", ctx);
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(context_has(result.error(), "reason", "skill_runtime_unavailable"));
+    REQUIRE(context_has(result.error(), "skill", "release-note"));
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
+  });
+}
+
+TEST_CASE("skill.deactivate delegates the parsed name through DispatchContext", "[unit][tool][skill_deactivate]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_skill_deactivate(registry).has_value());
+
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kSkillDeactivateName},
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    std::string seen_name;
+    ctx.skill_deactivate = [&seen_name](std::string_view skill_name,
+                                        tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
+      seen_name = skill_name;
+      co_return tool::Output::text_only("deactivated release-note");
+    };
+
+    auto result = co_await registry.dispatch(tool::kSkillDeactivateName, R"({"name":"release-note"})", ctx);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "deactivated release-note");
+    REQUIRE(seen_name == "release-note");
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
+  });
+}
+
+TEST_CASE("skill.deactivate reports missing runtime service as a model-repairable error",
+          "[unit][tool][skill_deactivate]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_skill_deactivate(registry).has_value());
+
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kSkillDeactivateName},
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    auto result = co_await registry.dispatch(tool::kSkillDeactivateName, R"({"name":"release-note"})", ctx);
 
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
