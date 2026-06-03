@@ -109,13 +109,13 @@ TEST_CASE("SessionRepository::migrate applies the sessions schema once", "[unit]
     auto first = co_await repo.migrate();
     REQUIRE(first.has_value());
     REQUIRE(first->previous_version == 0);
-    REQUIRE(first->current_version == 1);
-    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1});
+    REQUIRE(first->current_version == 2);
+    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2});
 
     auto second = co_await repo.migrate();
     REQUIRE(second.has_value());
-    REQUIRE(second->previous_version == 1);
-    REQUIRE(second->current_version == 1);
+    REQUIRE(second->previous_version == 2);
+    REQUIRE(second->current_version == 2);
     REQUIRE(second->applied_versions.empty());
   });
 }
@@ -193,6 +193,94 @@ TEST_CASE("SessionRepository append_message and load_messages round-trip ordered
     REQUIRE((*session)->agent_key == "coder");
     REQUIRE((*session)->message_count == 2);
     REQUIRE((*session)->metadata_json == "{}");
+  });
+}
+
+TEST_CASE("SessionRepository upserts and loads durable skill activation state", "[unit][storage][session_repository]") {
+  TempDb db{"oran-session-repo-skill-activation"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::SessionRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+
+    auto activated = co_await repo.upsert_skill_activation(storage::UpsertSessionSkillActivationRequest{
+        .session_id = "s-1",
+        .agent_key = "coder",
+        .skill_name = "release-note",
+        .active = true,
+    });
+    REQUIRE(activated.has_value());
+    REQUIRE(activated->session_id == "s-1");
+    REQUIRE(activated->agent_key == "coder");
+    REQUIRE(activated->skill_name == "release-note");
+    REQUIRE(activated->active);
+    REQUIRE_FALSE(activated->created_at.empty());
+    REQUIRE_FALSE(activated->updated_at.empty());
+
+    auto deactivated = co_await repo.upsert_skill_activation(storage::UpsertSessionSkillActivationRequest{
+        .session_id = "s-1",
+        .agent_key = "coder",
+        .skill_name = "release-note",
+        .active = false,
+    });
+    REQUIRE(deactivated.has_value());
+    REQUIRE_FALSE(deactivated->active);
+    REQUIRE(deactivated->created_at == activated->created_at);
+
+    auto review = co_await repo.upsert_skill_activation(storage::UpsertSessionSkillActivationRequest{
+        .session_id = "s-1",
+        .agent_key = "coder",
+        .skill_name = "review-pr",
+        .active = true,
+    });
+    REQUIRE(review.has_value());
+    auto researcher = co_await repo.upsert_skill_activation(storage::UpsertSessionSkillActivationRequest{
+        .session_id = "s-1",
+        .agent_key = "researcher",
+        .skill_name = "release-note",
+        .active = true,
+    });
+    REQUIRE(researcher.has_value());
+
+    auto loaded = co_await repo.load_skill_activations(storage::SessionKey{.session_id = "s-1", .agent_key = "coder"});
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->size() == 2);
+    REQUIRE((*loaded)[0].skill_name == "release-note");
+    REQUIRE_FALSE((*loaded)[0].active);
+    REQUIRE((*loaded)[1].skill_name == "review-pr");
+    REQUIRE((*loaded)[1].active);
+
+    auto session = co_await repo.get_session(storage::SessionKey{.session_id = "s-1", .agent_key = "coder"});
+    REQUIRE(session.has_value());
+    REQUIRE(session->has_value());
+    REQUIRE((*session)->message_count == 0);
+  });
+}
+
+TEST_CASE("SessionRepository validates skill activation fields", "[unit][storage][session_repository]") {
+  TempDb db{"oran-session-repo-skill-activation-invalid"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::SessionRepository repo{pool};
+
+    auto missing_session = co_await repo.upsert_skill_activation(storage::UpsertSessionSkillActivationRequest{
+        .session_id = "",
+        .agent_key = "coder",
+        .skill_name = "release-note",
+        .active = true,
+    });
+    REQUIRE_FALSE(missing_session.has_value());
+    REQUIRE(missing_session.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto missing_skill = co_await repo.upsert_skill_activation(storage::UpsertSessionSkillActivationRequest{
+        .session_id = "s-1",
+        .agent_key = "coder",
+        .skill_name = "",
+        .active = true,
+    });
+    REQUIRE_FALSE(missing_skill.has_value());
+    REQUIRE(missing_skill.error().kind() == core::ErrorKind::invalid_argument);
   });
 }
 

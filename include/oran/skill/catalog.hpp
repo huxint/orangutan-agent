@@ -46,15 +46,25 @@ struct SkillExpiration {
   friend bool operator==(const SkillExpiration&, const SkillExpiration&) = default;
 };
 
+struct SessionSkillActivation {
+  std::string name;
+  bool active{true};
+
+  friend bool operator==(const SessionSkillActivation&, const SessionSkillActivation&) = default;
+};
+
 struct ActivationPolicy {
   /// Current v1 policy: successful `skill.invoke` tool results in the session
   /// transcript mark the skill active on the next prompt, and successful
   /// `skill.deactivate` tool results clear it again — the most recent
-  /// transcript event for a skill wins. Explicit `deactivated_skill_names`
-  /// subtract from that derived set at the same prompt boundary; expirations
-  /// subtract only when callers also supply an explicit evaluation time. The
-  /// renderer never reads a hidden clock.
+  /// transcript event for a skill wins. Durable session-store activation rows
+  /// overlay that transcript-derived set so compaction/pruning cannot lose the
+  /// latest state for a skill. Explicit `deactivated_skill_names` subtract from
+  /// that derived set at the same prompt boundary; expirations subtract only
+  /// when callers also supply an explicit evaluation time. The renderer never
+  /// reads a hidden clock.
   bool transcript_markers_enabled{true};
+  std::vector<SessionSkillActivation> session_skill_activations{};
   std::vector<std::string> deactivated_skill_names{};
   std::optional<core::Time> evaluation_time{};
   std::vector<SkillExpiration> expirations{};

@@ -66,22 +66,24 @@ Storage foundation status: `oran-storage::SessionRepository` implements the
 `content_json` and `metadata_json` as opaque strings but types `role` as
 `core::Role` at the API boundary.
 
-Memory wrapper status (slice 130+133): `oran-memory::session::Store` is now the
+Memory wrapper status (slice 130+148): `oran-memory::session::Store` is now the
 typed memory-layer owner over `SessionRepository`, and `RuntimeAssembly` now owns
 the configured-route sessions DB pool/repository/store. The wrapper serializes
 `core::Message` / `core::Content` privately in `src/oran-memory/session.cpp`,
 using versioned JSON for text, thinking, tool-use, and tool-result blocks while
 keeping `oran-storage` unaware of message shape. It validates non-empty
-session/agent ids, maps repository summaries into typed session summaries, and
-returns parsing errors for malformed stored rows. `RuntimeAssembly` opens and
-migrates `<workspace>/.orangutan/sessions.db` separately from `audit.db`,
-exposes `session_store()`, and lets built-in no-route startup disable the store so
-fresh deterministic CLI runs do not create session state. `AgentPromptRunner`
-now loads persisted history before each prompt and appends the successful
-transcript suffix back through that owner when session memory is enabled; the
-in-process transcript remains the fallback when it is not. `memory::FramingOwner`
-separately owns prompt section 5 and is rendered once by `AgentPromptRunner`
-before each loop turn.
+session/agent ids, maps repository summaries into typed session summaries, wraps
+durable skill activation updates/records, and returns parsing errors for malformed
+stored rows. `RuntimeAssembly` opens and migrates
+`<workspace>/.orangutan/sessions.db` separately from `audit.db`, exposes
+`session_store()`, and lets built-in no-route startup disable the store so fresh
+deterministic CLI runs do not create session state. `AgentPromptRunner` now loads
+persisted history and durable skill activation rows before each prompt, then appends
+the successful transcript suffix and records successful `skill.invoke` /
+`skill.deactivate` activation updates through that owner when session memory is
+enabled; the in-process transcript remains the fallback when it is not.
+`memory::FramingOwner` separately owns prompt section 5 and is rendered once by
+`AgentPromptRunner` before each loop turn.
 
 ```cpp
 // include/oran/memory/session.hpp
@@ -98,6 +100,18 @@ struct SessionSummary {
   std::string updated_at;
 };
 
+struct SkillActivationUpdate {
+  std::string name;
+  bool active;
+};
+
+struct SkillActivationRecord {
+  std::string name;
+  bool active;
+  std::string created_at;
+  std::string updated_at;
+};
+
 class Store {
  public:
   explicit Store(storage::SessionRepository&);
@@ -107,6 +121,12 @@ class Store {
 
   async::Awaitable<core::Result<std::vector<core::Message>>>
   load(SessionId, AgentKey);
+
+  async::Awaitable<core::Result<void>>
+  record_skill_activation(SessionId, AgentKey, SkillActivationUpdate);
+
+  async::Awaitable<core::Result<std::vector<SkillActivationRecord>>>
+  load_skill_activations(SessionId, AgentKey);
 
   async::Awaitable<core::Result<std::vector<SessionSummary>>>
   list(ListSessionsOptions);

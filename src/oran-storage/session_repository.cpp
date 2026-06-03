@@ -45,6 +45,28 @@ WHERE session_id = ? AND agent_key = ?
 ORDER BY sequence ASC
 )sql";
 
+constexpr std::string_view kTouchSessionSql = R"sql(
+INSERT INTO sessions(session_id, agent_key, created_at, updated_at)
+VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+ON CONFLICT(session_id, agent_key) DO UPDATE SET updated_at = excluded.updated_at
+)sql";
+
+constexpr std::string_view kUpsertSkillActivationSql = R"sql(
+INSERT INTO session_skill_activations(session_id, agent_key, skill_name, active, created_at, updated_at)
+VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+ON CONFLICT(session_id, agent_key, skill_name) DO UPDATE SET
+  active = excluded.active,
+  updated_at = excluded.updated_at
+RETURNING session_id, agent_key, skill_name, active, created_at, updated_at
+)sql";
+
+constexpr std::string_view kLoadSkillActivationsSql = R"sql(
+SELECT session_id, agent_key, skill_name, active, created_at, updated_at
+FROM session_skill_activations
+WHERE session_id = ? AND agent_key = ?
+ORDER BY skill_name ASC
+)sql";
+
 constexpr std::string_view kGetSessionSql = R"sql(
 SELECT s.session_id,
        s.agent_key,
@@ -100,6 +122,16 @@ LIMIT ?
   }
   if (request.metadata_json.empty()) {
     return std::unexpected(invalid_field("metadata_json"));
+  }
+  return {};
+}
+
+[[nodiscard]] core::Result<void> validate_skill_activation_request(const UpsertSessionSkillActivationRequest& request) {
+  if (auto valid = validate_key(SessionKey{.session_id = request.session_id, .agent_key = request.agent_key}); !valid) {
+    return std::unexpected(valid.error());
+  }
+  if (request.skill_name.empty()) {
+    return std::unexpected(invalid_field("skill_name"));
   }
   return {};
 }
@@ -192,6 +224,46 @@ LIMIT ?
       .content_json = std::move(*content_json),
       .metadata_json = std::move(*metadata_json),
       .created_at = std::move(*created_at),
+  };
+}
+
+[[nodiscard]] core::Result<SessionSkillActivationRecord> read_skill_activation_row(Statement& statement) {
+  auto session_id = required_text(statement, 0, "session_id");
+  if (!session_id) {
+    return std::unexpected(session_id.error());
+  }
+  auto agent_key = required_text(statement, 1, "agent_key");
+  if (!agent_key) {
+    return std::unexpected(agent_key.error());
+  }
+  auto skill_name = required_text(statement, 2, "skill_name");
+  if (!skill_name) {
+    return std::unexpected(skill_name.error());
+  }
+  auto active = statement.column_int64(3);
+  if (!active) {
+    return std::unexpected(active.error().with("field", "active"));
+  }
+  if (*active != 0 && *active != 1) {
+    return std::unexpected(core::Error::storage("session skill activation row has invalid active value")
+                               .with("active", std::to_string(*active)));
+  }
+  auto created_at = required_text(statement, 4, "created_at");
+  if (!created_at) {
+    return std::unexpected(created_at.error());
+  }
+  auto updated_at = required_text(statement, 5, "updated_at");
+  if (!updated_at) {
+    return std::unexpected(updated_at.error());
+  }
+
+  return SessionSkillActivationRecord{
+      .session_id = std::move(*session_id),
+      .agent_key = std::move(*agent_key),
+      .skill_name = std::move(*skill_name),
+      .active = *active == 1,
+      .created_at = std::move(*created_at),
+      .updated_at = std::move(*updated_at),
   };
 }
 
@@ -371,6 +443,112 @@ async::Awaitable<core::Result<std::vector<SessionMessageRecord>>> SessionReposit
   }
 
   co_return messages;
+}
+
+async::Awaitable<core::Result<SessionSkillActivationRecord>>
+SessionRepository::upsert_skill_activation(UpsertSessionSkillActivationRequest request) {
+  if (auto valid = validate_skill_activation_request(request); !valid) {
+    co_return std::unexpected(valid.error());
+  }
+
+  auto writer = co_await pool_->acquire_writer();
+  if (!writer) {
+    co_return std::unexpected(writer.error());
+  }
+
+  {
+    auto cached = writer->statement_cache().acquire(writer->connection(), kTouchSessionSql);
+    if (!cached) {
+      co_return std::unexpected(cached.error());
+    }
+    auto& statement = cached->statement();
+    if (auto bound = statement.bind_text(1, request.session_id); !bound) {
+      co_return std::unexpected(bound.error());
+    }
+    if (auto bound = statement.bind_text(2, request.agent_key); !bound) {
+      co_return std::unexpected(bound.error());
+    }
+    if (auto done = expect_done(statement, "touch_session_for_skill_activation"); !done) {
+      co_return std::unexpected(done.error());
+    }
+  }
+
+  auto cached = writer->statement_cache().acquire(writer->connection(), kUpsertSkillActivationSql);
+  if (!cached) {
+    co_return std::unexpected(cached.error());
+  }
+  auto& statement = cached->statement();
+  if (auto bound = statement.bind_text(1, request.session_id); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(2, request.agent_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(3, request.skill_name); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_int64(4, request.active ? 1 : 0); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+
+  auto step = statement.step();
+  if (!step) {
+    co_return std::unexpected(step.error());
+  }
+  if (*step != StepResult::row) {
+    co_return std::unexpected(core::Error::storage("session skill activation upsert returned no row"));
+  }
+
+  auto record = read_skill_activation_row(statement);
+  if (!record) {
+    co_return std::unexpected(record.error());
+  }
+  if (auto done = expect_done(statement, "upsert_skill_activation"); !done) {
+    co_return std::unexpected(done.error());
+  }
+  co_return std::move(*record);
+}
+
+async::Awaitable<core::Result<std::vector<SessionSkillActivationRecord>>>
+SessionRepository::load_skill_activations(SessionKey key) {
+  if (auto valid = validate_key(key); !valid) {
+    co_return std::unexpected(valid.error());
+  }
+
+  auto reader = co_await pool_->acquire_reader();
+  if (!reader) {
+    co_return std::unexpected(reader.error());
+  }
+
+  auto cached = reader->statement_cache().acquire(reader->connection(), kLoadSkillActivationsSql);
+  if (!cached) {
+    co_return std::unexpected(cached.error());
+  }
+  auto& statement = cached->statement();
+  if (auto bound = statement.bind_text(1, key.session_id); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(2, key.agent_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+
+  std::vector<SessionSkillActivationRecord> records;
+  while (true) {
+    auto step = statement.step();
+    if (!step) {
+      co_return std::unexpected(step.error());
+    }
+    if (*step == StepResult::done) {
+      break;
+    }
+    auto record = read_skill_activation_row(statement);
+    if (!record) {
+      co_return std::unexpected(record.error());
+    }
+    records.push_back(std::move(*record));
+  }
+
+  co_return records;
 }
 
 async::Awaitable<core::Result<std::optional<SessionRecord>>> SessionRepository::get_session(SessionKey key) {

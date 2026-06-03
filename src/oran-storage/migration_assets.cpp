@@ -35,6 +35,10 @@ constexpr unsigned char kSessionsInitialBytes[] = {
 #embed "migrations/sessions/0001-sessions-initial.sql"
 };
 
+constexpr unsigned char kSessionSkillActivationsBytes[] = {
+#embed "migrations/sessions/0002-session-skill-activations.sql"
+};
+
 constexpr unsigned char kTraceInitialBytes[] = {
 #embed "migrations/audit/0002-trace-turns-initial.sql"
 };
@@ -81,11 +85,18 @@ std::span<const Migration> built_in_audit_migrations() {
 }
 
 std::span<const Migration> built_in_session_migrations() {
-  static const std::array<Migration, 1> kMigrations{Migration{
-      .version = 1,
-      .name = "sessions-initial",
-      .sql = to_sql_string(kSessionsInitialBytes),
-  }};
+  static const std::array<Migration, 2> kMigrations{
+      Migration{
+          .version = 1,
+          .name = "sessions-initial",
+          .sql = to_sql_string(kSessionsInitialBytes),
+      },
+      Migration{
+          .version = 2,
+          .name = "session-skill-activations",
+          .sql = to_sql_string(kSessionSkillActivationsBytes),
+      },
+  };
   return kMigrations;
 }
 

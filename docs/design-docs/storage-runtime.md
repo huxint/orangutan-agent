@@ -401,13 +401,15 @@ boundary.
 ## Session Repository
 
 `SessionRepository` is the first storage domain repository. It stores session
-message rows in `sessions.db` using the cached pool surface. It is deliberately
-payload-oriented: `content_json` and `metadata_json` are opaque strings at this
-layer; slice 130's `oran-memory::session::Store` owns typed `core::Message`
-serialization above it. `role` is typed at the API boundary: requests
-take and records expose `core::Role`, and the row's text column is parsed back
-into the enum on read (rows with unknown role text surface a storage error
-rather than being silently coerced).
+message rows and per-session skill activation rows in `sessions.db` using the
+cached pool surface. It is deliberately payload-oriented: `content_json` and
+`metadata_json` are opaque strings at this layer; slice 130's
+`oran-memory::session::Store` owns typed `core::Message` serialization above it,
+and slice 148's memory wrapper owns the semantic skill activation update/record
+shapes above the raw table. `role` is typed at the API boundary: requests take
+and records expose `core::Role`, and the row's text column is parsed back into
+the enum on read (rows with unknown role text surface a storage error rather than
+being silently coerced).
 
 ```cpp
 namespace orangutan::storage {
@@ -433,6 +435,22 @@ struct SessionMessageRecord {
   std::string  content_json;
   std::string  metadata_json;
   std::string  created_at;
+};
+
+struct UpsertSessionSkillActivationRequest {
+  std::string session_id;
+  std::string agent_key;
+  std::string skill_name;
+  bool active;
+};
+
+struct SessionSkillActivationRecord {
+  std::string session_id;
+  std::string agent_key;
+  std::string skill_name;
+  bool active;
+  std::string created_at;
+  std::string updated_at;
 };
 
 struct SessionRecord {
@@ -463,6 +481,10 @@ class SessionRepository {
   append_message(AppendSessionMessageRequest);
   async::Awaitable<core::Result<std::vector<SessionMessageRecord>>>
   load_messages(SessionKey);
+  async::Awaitable<core::Result<SessionSkillActivationRecord>>
+  upsert_skill_activation(UpsertSessionSkillActivationRequest);
+  async::Awaitable<core::Result<std::vector<SessionSkillActivationRecord>>>
+  load_skill_activations(SessionKey);
   async::Awaitable<core::Result<std::optional<SessionRecord>>>
   get_session(SessionKey);
   async::Awaitable<core::Result<std::vector<SessionRecord>>>
@@ -485,11 +507,22 @@ Migration `1 / sessions-initial` lives at
 - `trg_session_messages_touch_session`, an insert trigger that creates or
   touches the owning `sessions` row after every message append.
 
+Migration `2 / session-skill-activations` lives at
+`src/oran-storage/migrations/sessions/0002-session-skill-activations.sql` and
+creates `session_skill_activations(session_id, agent_key, skill_name, active,
+created_at, updated_at)`, primary-keyed by `(session_id, agent_key, skill_name)`,
+plus an index on `(session_id, agent_key, active, skill_name)`. The row stores
+the latest activation decision for one skill in one session/agent scope; `active`
+is constrained to `0` or `1`.
+
 `append_message` is the hot path. It acquires a writer lease, uses
 `lease.statement_cache()` for the insert SQL, computes `sequence` as
 `MAX(sequence)+1` for the `(session_id, agent_key)` pair, and returns the stored
-sequence + timestamp. `load_messages`, `get_session`, and `list_sessions`
-acquire reader leases and use the reader slot's statement cache.
+sequence + timestamp. `upsert_skill_activation` uses a writer lease and SQLite
+UPSERT to replace only the latest active/inactive decision for a skill while
+preserving the original `created_at`; `load_skill_activations`, `load_messages`,
+`get_session`, and `list_sessions` acquire reader leases and use the reader
+slot's statement cache.
 
 `migrate()` acquires a writer lease and calls
 `run_migrations_from_directory`. With default options it looks for
@@ -500,9 +533,9 @@ overrides that lookup for future bootstrap/install packaging.
 
 ### Error Model
 
-Empty `session_id`, `agent_key`, `role`, `content_json`, and `metadata_json`
-return `core::ErrorKind::invalid_argument` before touching SQLite. SQLite
-failures bubble through the existing storage error context. Migration file
+Empty `session_id`, `agent_key`, `skill_name`, `role`, `content_json`, and
+`metadata_json` return `core::ErrorKind::invalid_argument` before touching SQLite.
+SQLite failures bubble through the existing storage error context. Migration file
 lookup failures return the same `load_migrations_from_directory` errors, with
 `not_found`, `invalid_argument`, or `io` kinds depending on the failure.
 

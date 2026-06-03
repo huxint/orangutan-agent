@@ -117,6 +117,33 @@ validate_deactivated_skill_names(std::span<const std::string> names) {
   return ordered;
 }
 
+[[nodiscard]] bool contains_active_skill(std::span<const ActiveSkill> active_skills,
+                                         std::string_view skill_name) noexcept {
+  return std::ranges::contains(active_skills, skill_name, [](const ActiveSkill& skill) -> std::string_view {
+    return skill.name;
+  });
+}
+
+[[nodiscard]] core::Result<std::vector<const SessionSkillActivation*>>
+validate_session_skill_activations(std::span<const SessionSkillActivation> records) {
+  std::vector<const SessionSkillActivation*> ordered;
+  ordered.reserve(records.size());
+  for (const auto& record : records) {
+    if (auto valid = validate_active_skill(ActiveSkill{.name = record.name}); !valid) {
+      return std::unexpected(std::move(valid).error());
+    }
+    ordered.push_back(&record);
+  }
+  std::ranges::sort(ordered, {}, [](const SessionSkillActivation* record) { return std::string_view{record->name}; });
+  for (std::size_t i = 1; i < ordered.size(); ++i) {
+    if (ordered[i - 1]->name == ordered[i]->name) {
+      return std::unexpected(core::Error::invalid_argument("session skill activation names must be unique")
+                                 .with("skill", ordered[i]->name));
+    }
+  }
+  return ordered;
+}
+
 [[nodiscard]] core::Result<std::vector<std::string_view>> expired_skill_names(const ActivationPolicy& policy) {
   std::vector<std::string_view> ordered;
   ordered.reserve(policy.expirations.size());
@@ -409,11 +436,6 @@ std::vector<ActiveSkill> active_skills_from_transcript(std::span<const core::Mes
   }
 
   std::vector<ActiveSkill> active_skills;
-  const auto contains_active = [&active_skills](std::string_view skill_name) {
-    return std::ranges::contains(active_skills, skill_name, [](const ActiveSkill& skill) -> std::string_view {
-      return skill.name;
-    });
-  };
   for (const auto& message : transcript) {
     if (message.role != core::Role::tool) {
       continue;
@@ -429,7 +451,7 @@ std::vector<ActiveSkill> active_skills_from_transcript(std::span<const core::Mes
       }
       if (name->second == kSkillInvokeName) {
         if (auto active = active_skill_from_data_json(*result->data_json);
-            active.has_value() && !contains_active(active->name)) {
+            active.has_value() && !contains_active_skill(std::span<const ActiveSkill>{active_skills}, active->name)) {
           active_skills.push_back(std::move(*active));
         }
       } else if (name->second == kSkillDeactivateName) {
@@ -445,6 +467,11 @@ std::vector<ActiveSkill> active_skills_from_transcript(std::span<const core::Mes
 core::Result<std::vector<ActiveSkill>> resolve_active_skills(ActivationPolicy policy,
                                                              std::span<const core::Message> transcript,
                                                              std::span<const CatalogEntry> available_entries) {
+  auto session_records =
+      validate_session_skill_activations(std::span<const SessionSkillActivation>{policy.session_skill_activations});
+  if (!session_records) {
+    return std::unexpected(std::move(session_records).error());
+  }
   auto deactivated_names =
       validate_deactivated_skill_names(std::span<const std::string>{policy.deactivated_skill_names});
   if (!deactivated_names) {
@@ -471,11 +498,18 @@ core::Result<std::vector<ActiveSkill>> resolve_active_skills(ActivationPolicy po
     }
   }
 
-  if (!policy.transcript_markers_enabled) {
-    return std::vector<ActiveSkill>{};
+  auto active_skills =
+      policy.transcript_markers_enabled ? active_skills_from_transcript(transcript) : std::vector<ActiveSkill>{};
+  for (const auto* record : *session_records) {
+    if (record->active) {
+      if (!contains_active_skill(std::span<const ActiveSkill>{active_skills}, record->name)) {
+        active_skills.push_back(ActiveSkill{.name = record->name});
+      }
+    } else {
+      std::erase_if(active_skills, [record](const ActiveSkill& skill) { return skill.name == record->name; });
+    }
   }
 
-  auto active_skills = active_skills_from_transcript(transcript);
   std::erase_if(active_skills, [&ordered_entries, &deactivated_names, &expired_names](const ActiveSkill& active) {
     const auto name = std::string_view{active.name};
     return !std::ranges::contains(ordered_entries,

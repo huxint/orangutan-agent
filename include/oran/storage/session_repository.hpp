@@ -40,6 +40,22 @@ struct SessionMessageRecord {
   std::string created_at;
 };
 
+struct UpsertSessionSkillActivationRequest {
+  std::string session_id;
+  std::string agent_key;
+  std::string skill_name;
+  bool active{true};
+};
+
+struct SessionSkillActivationRecord {
+  std::string session_id;
+  std::string agent_key;
+  std::string skill_name;
+  bool active{true};
+  std::string created_at;
+  std::string updated_at;
+};
+
 struct SessionRecord {
   std::string session_id;
   std::string agent_key;
@@ -69,6 +85,12 @@ public:
   append_message(AppendSessionMessageRequest request);
 
   [[nodiscard]] async::Awaitable<core::Result<std::vector<SessionMessageRecord>>> load_messages(SessionKey key);
+
+  [[nodiscard]] async::Awaitable<core::Result<SessionSkillActivationRecord>>
+  upsert_skill_activation(UpsertSessionSkillActivationRequest request);
+
+  [[nodiscard]] async::Awaitable<core::Result<std::vector<SessionSkillActivationRecord>>>
+  load_skill_activations(SessionKey key);
 
   [[nodiscard]] async::Awaitable<core::Result<std::optional<SessionRecord>>> get_session(SessionKey key);
 

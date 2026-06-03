@@ -7,16 +7,25 @@
 
 ## Snapshot
 
-- **Slice:** 147 (`xmake run orangutan` reports slice 147)
+- **Slice:** 148 (`xmake run orangutan` reports slice 148)
 - **Last completed history:**
-  [`histories/2026-06/20260603-1526-skill-deactivate.md`](histories/2026-06/20260603-1526-skill-deactivate.md)
+  [`histories/2026-06/20260603-1938-session-skill-activations.md`](histories/2026-06/20260603-1938-session-skill-activations.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** slice 147 shipped the first event-driven
-  skill-activation source (`skill.deactivate`); the remaining v1.1
-  skill-activation work is a session-store-backed activation record so
-  activation state can survive transcript compaction or pruning, still resolved
-  only at prompt boundaries and never from a renderer clock. Slice 147 adds the
+- **Next intended slice:** slice 148 makes skill activation state durable in
+  session memory: `sessions.db` adds `session_skill_activations` keyed by
+  `(session_id, agent_key, skill_name)`, `storage::SessionRepository` and
+  `memory::session::Store` expose typed upsert/load APIs, and
+  `skill::ActivationPolicy::session_skill_activations` overlays the
+  transcript-derived `skill.invoke` / `skill.deactivate` state before config
+  deactivation and expiration subtract from it. `AgentPromptRunner` loads those
+  durable rows before section-4 rendering and records successful activation /
+  deactivation updates after successful transcript persistence, so transcript
+  compaction or pruning cannot resurrect a skill whose latest durable state is
+  inactive. The old transcript scan remains the fallback and compatibility path
+  when session memory is disabled. Focused result: `test-skill`
+  **26 cases / 163 assertions**, `test-storage` **75 / 968**, `test-memory`
+  **9 / 576**, and `test-bootstrap` **100 / 699**. Slice 147 adds the
   permissioned `skill.deactivate` built-in (capability `deactivate_skill`): a
   successful call records a versioned `skill_deactivation` result in the session
   transcript, `skill::active_skills_from_transcript` nets `skill.invoke`

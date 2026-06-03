@@ -40,6 +40,36 @@ using json = nlohmann::ordered_json;
   return {};
 }
 
+[[nodiscard]] bool is_blank(std::string_view value) noexcept {
+  for (const auto ch : value) {
+    if (ch != ' ' && ch != '\t' && ch != '\n' && ch != '\r') {
+      return false;
+    }
+  }
+  return true;
+}
+
+[[nodiscard]] bool contains_control_char(std::string_view value) noexcept {
+  for (const auto ch : value) {
+    if (static_cast<unsigned char>(ch) < 0x20U) {
+      return true;
+    }
+  }
+  return false;
+}
+
+[[nodiscard]] core::Result<void> validate_skill_activation_update(const SkillActivationUpdate& update) {
+  if (is_blank(update.name)) {
+    return std::unexpected(invalid_field("skill_name"));
+  }
+  if (contains_control_char(update.name)) {
+    return std::unexpected(
+        core::Error::invalid_argument("memory session skill activation name must not contain control characters")
+            .with("skill", update.name));
+  }
+  return {};
+}
+
 [[nodiscard]] core::Error message_parse_error(std::string reason) {
   return core::Error::parsing("memory session message JSON is malformed").with("reason", std::move(reason));
 }
@@ -301,6 +331,51 @@ async::Awaitable<core::Result<std::vector<core::Message>>> Store::load(SessionId
       co_return std::unexpected(std::move(message).error());
     }
     out.push_back(std::move(*message));
+  }
+  co_return out;
+}
+
+async::Awaitable<core::Result<void>>
+Store::record_skill_activation(SessionId session_id, AgentKey agent_key, SkillActivationUpdate update) {
+  if (auto valid = validate_key(session_id.value, agent_key.value); !valid) {
+    co_return std::unexpected(std::move(valid).error());
+  }
+  if (auto valid = validate_skill_activation_update(update); !valid) {
+    co_return std::unexpected(std::move(valid).error());
+  }
+
+  auto recorded = co_await repository_->upsert_skill_activation(storage::UpsertSessionSkillActivationRequest{
+      .session_id = std::move(session_id.value),
+      .agent_key = std::move(agent_key.value),
+      .skill_name = std::move(update.name),
+      .active = update.active,
+  });
+  if (!recorded) {
+    co_return std::unexpected(std::move(recorded).error());
+  }
+  co_return core::Result<void>{};
+}
+
+async::Awaitable<core::Result<std::vector<SkillActivationRecord>>> Store::load_skill_activations(SessionId session_id,
+                                                                                                 AgentKey agent_key) {
+  if (auto valid = validate_key(session_id.value, agent_key.value); !valid) {
+    co_return std::unexpected(std::move(valid).error());
+  }
+
+  auto rows = co_await repository_->load_skill_activations(key_from(std::move(session_id), std::move(agent_key)));
+  if (!rows) {
+    co_return std::unexpected(std::move(rows).error());
+  }
+
+  auto out = std::vector<SkillActivationRecord>{};
+  out.reserve(rows->size());
+  for (auto& row : *rows) {
+    out.push_back(SkillActivationRecord{
+        .name = std::move(row.skill_name),
+        .active = row.active,
+        .created_at = std::move(row.created_at),
+        .updated_at = std::move(row.updated_at),
+    });
   }
   co_return out;
 }

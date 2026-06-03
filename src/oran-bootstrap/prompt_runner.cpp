@@ -199,6 +199,64 @@ filter_skill_documents(std::span<const skill::SkillDocument> documents,
   return text;
 }
 
+[[nodiscard]] std::vector<skill::SessionSkillActivation>
+skill_policy_records_from(std::span<const memory::session::SkillActivationRecord> records) {
+  auto out = std::vector<skill::SessionSkillActivation>{};
+  out.reserve(records.size());
+  for (const auto& record : records) {
+    out.push_back(skill::SessionSkillActivation{.name = record.name, .active = record.active});
+  }
+  return out;
+}
+
+[[nodiscard]] std::vector<memory::session::SkillActivationUpdate>
+skill_activation_updates_from_transcript(std::span<const core::Message> transcript, std::size_t start_index) {
+  if (start_index > transcript.size()) {
+    return {};
+  }
+
+  std::unordered_map<std::string_view, std::string_view> tool_use_names;
+  for (std::size_t i = start_index; i < transcript.size(); ++i) {
+    const auto& message = transcript[i];
+    if (message.role != core::Role::assistant) {
+      continue;
+    }
+    for (const auto& block : message.blocks) {
+      if (const auto* use = std::get_if<core::ToolUseContent>(&block); use != nullptr) {
+        tool_use_names.emplace(use->id, use->name);
+      }
+    }
+  }
+
+  auto updates = std::vector<memory::session::SkillActivationUpdate>{};
+  for (std::size_t i = start_index; i < transcript.size(); ++i) {
+    const auto& message = transcript[i];
+    if (message.role != core::Role::tool) {
+      continue;
+    }
+    for (const auto& block : message.blocks) {
+      const auto* result = std::get_if<core::ToolResultContent>(&block);
+      if (result == nullptr || result->is_error || !result->data_json.has_value()) {
+        continue;
+      }
+      const auto name_it = tool_use_names.find(result->tool_use_id);
+      if (name_it == tool_use_names.end()) {
+        continue;
+      }
+      if (name_it->second == "skill.invoke") {
+        if (auto active = skill::active_skill_from_data_json(*result->data_json); active.has_value()) {
+          updates.push_back(memory::session::SkillActivationUpdate{.name = std::move(active->name), .active = true});
+        }
+      } else if (name_it->second == "skill.deactivate") {
+        if (auto deactivated = skill::deactivated_skill_from_data_json(*result->data_json); deactivated.has_value()) {
+          updates.push_back(memory::session::SkillActivationUpdate{.name = std::move(*deactivated), .active = false});
+        }
+      }
+    }
+  }
+  return updates;
+}
+
 [[nodiscard]] Result<void> validate_options(const AgentPromptRunnerOptions& options) {
   if (options.assembly == nullptr) {
     return std::unexpected(option_error("agent prompt runner requires a runtime assembly"));
@@ -291,6 +349,7 @@ public:
   [[nodiscard]] async::Awaitable<Result<cli::PromptRunResult>> run_prompt(cli::PromptRunRequest request) {
     auto catalog = registry_.catalog();
     auto conversation_tail = std::vector<core::Message>{};
+    auto session_skill_activations = std::vector<memory::session::SkillActivationRecord>{};
     memory::session::Store* session_store = assembly_->session_store();
     if (session_store != nullptr) {
       auto loaded = co_await session_store->load(memory::session::SessionId{.value = session_id_text_},
@@ -299,11 +358,20 @@ public:
         co_return std::unexpected(std::move(loaded).error());
       }
       conversation_tail = std::move(*loaded);
+      auto loaded_skill_activations =
+          co_await session_store->load_skill_activations(memory::session::SessionId{.value = session_id_text_},
+                                                         memory::session::AgentKey{.value = agent_key_});
+      if (!loaded_skill_activations) {
+        co_return std::unexpected(std::move(loaded_skill_activations).error());
+      }
+      session_skill_activations = std::move(*loaded_skill_activations);
     } else {
       conversation_tail = transcript_;
     }
 
-    auto refreshed_catalog = co_await refresh_skill_catalog_snapshot(std::span<const core::Message>{conversation_tail});
+    auto refreshed_catalog = co_await refresh_skill_catalog_snapshot(
+        std::span<const core::Message>{conversation_tail},
+        std::span<const memory::session::SkillActivationRecord>{session_skill_activations});
     if (!refreshed_catalog) {
       co_return std::unexpected(std::move(refreshed_catalog).error());
     }
@@ -384,11 +452,20 @@ public:
     }
 
     observe_turn_results(result->transcript, prev_transcript_size);
+    auto skill_activation_updates =
+        skill_activation_updates_from_transcript(std::span<const core::Message>{result->transcript},
+                                                 prev_transcript_size);
 
     if (session_store != nullptr) {
       auto persisted = co_await append_transcript_suffix(*session_store, result->transcript, prev_transcript_size);
       if (!persisted) {
         co_return std::unexpected(std::move(persisted).error());
+      }
+      auto skill_activations = co_await persist_skill_activation_updates(
+          *session_store,
+          std::span<const memory::session::SkillActivationUpdate>{skill_activation_updates});
+      if (!skill_activations) {
+        co_return std::unexpected(std::move(skill_activations).error());
       }
     }
 
@@ -438,7 +515,8 @@ public:
 
 private:
   [[nodiscard]] async::Awaitable<Result<void>>
-  refresh_skill_catalog_snapshot(std::span<const core::Message> conversation_tail) {
+  refresh_skill_catalog_snapshot(std::span<const core::Message> conversation_tail,
+                                 std::span<const memory::session::SkillActivationRecord> session_skill_activations) {
     if (!skill_snapshot_.has_value()) {
       co_return Result<void>{};
     }
@@ -450,6 +528,7 @@ private:
         filter_skill_documents(std::span<const skill::SkillDocument>{skill_snapshot_->documents()}, skills_enabled_);
     auto entries = skill::catalog_entries_from(std::span<const skill::SkillDocument>{skill_documents_});
     auto policy = skill::ActivationPolicy{};
+    policy.session_skill_activations = skill_policy_records_from(session_skill_activations);
     policy.deactivated_skill_names = skills_deactivated_;
     policy.expirations = skills_expirations_;
     if (!policy.expirations.empty()) {
@@ -529,6 +608,20 @@ private:
                                             transcript[i]);
       if (!appended) {
         co_return std::unexpected(std::move(appended).error());
+      }
+    }
+    co_return Result<void>{};
+  }
+
+  [[nodiscard]] async::Awaitable<Result<void>>
+  persist_skill_activation_updates(memory::session::Store& store,
+                                   std::span<const memory::session::SkillActivationUpdate> updates) const {
+    for (const auto& update : updates) {
+      auto recorded = co_await store.record_skill_activation(memory::session::SessionId{.value = session_id_text_},
+                                                             memory::session::AgentKey{.value = agent_key_},
+                                                             update);
+      if (!recorded) {
+        co_return std::unexpected(std::move(recorded).error());
       }
     }
     co_return Result<void>{};

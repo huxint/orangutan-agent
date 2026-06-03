@@ -396,6 +396,87 @@ TEST_CASE("ActivationPolicy can disable transcript-derived active markers", "[un
   REQUIRE(active->empty());
 }
 
+TEST_CASE("ActivationPolicy overlays session-store activation records", "[unit][skill][catalog]") {
+  auto release_activation = skill::render_activation_data_json("release-note");
+  auto review_activation = skill::render_activation_data_json("review-pr");
+  REQUIRE(release_activation.has_value());
+  REQUIRE(review_activation.has_value());
+  const std::vector<core::Message> transcript{
+      skill_tool_use("s1", "skill.invoke"),
+      skill_tool_result("s1", *release_activation),
+      skill_tool_use("s2", "skill.invoke"),
+      skill_tool_result("s2", *review_activation),
+  };
+  const std::vector<skill::CatalogEntry> available{
+      skill::CatalogEntry{
+          .name = "release-note",
+          .description = "Draft release notes.",
+          .triggers = {},
+          .model_hint = std::nullopt,
+      },
+      skill::CatalogEntry{
+          .name = "review-pr",
+          .description = "Review code changes.",
+          .triggers = {},
+          .model_hint = std::nullopt,
+      },
+      skill::CatalogEntry{
+          .name = "summarize-doc",
+          .description = "Summarize a document.",
+          .triggers = {},
+          .model_hint = std::nullopt,
+      },
+  };
+
+  const auto active = skill::resolve_active_skills(
+      skill::ActivationPolicy{
+          .session_skill_activations =
+              {
+                  skill::SessionSkillActivation{.name = "release-note", .active = false},
+                  skill::SessionSkillActivation{.name = "summarize-doc", .active = true},
+              },
+      },
+      std::span<const core::Message>{transcript},
+      std::span<const skill::CatalogEntry>{available});
+
+  REQUIRE(active.has_value());
+  REQUIRE(*active == std::vector<skill::ActiveSkill>{skill::ActiveSkill{.name = "review-pr"},
+                                                     skill::ActiveSkill{.name = "summarize-doc"}});
+}
+
+TEST_CASE("ActivationPolicy validates session-store activation records", "[unit][skill][catalog]") {
+  const std::vector<skill::CatalogEntry> available{
+      skill::CatalogEntry{
+          .name = "release-note",
+          .description = "Draft release notes.",
+          .triggers = {},
+          .model_hint = std::nullopt,
+      },
+  };
+
+  const auto duplicate = skill::resolve_active_skills(
+      skill::ActivationPolicy{
+          .session_skill_activations =
+              {
+                  skill::SessionSkillActivation{.name = "release-note", .active = true},
+                  skill::SessionSkillActivation{.name = "release-note", .active = false},
+              },
+      },
+      std::span<const core::Message>{},
+      std::span<const skill::CatalogEntry>{available});
+  REQUIRE_FALSE(duplicate.has_value());
+  REQUIRE(duplicate.error().kind() == core::ErrorKind::invalid_argument);
+
+  const auto blank = skill::resolve_active_skills(
+      skill::ActivationPolicy{
+          .session_skill_activations = {skill::SessionSkillActivation{.name = " ", .active = true}},
+      },
+      std::span<const core::Message>{},
+      std::span<const skill::CatalogEntry>{available});
+  REQUIRE_FALSE(blank.has_value());
+  REQUIRE(blank.error().kind() == core::ErrorKind::invalid_argument);
+}
+
 TEST_CASE("ActivationPolicy deactivates transcript-derived active markers", "[unit][skill][catalog]") {
   auto release_activation = skill::render_activation_data_json("release-note");
   auto review_activation = skill::render_activation_data_json("review-pr");

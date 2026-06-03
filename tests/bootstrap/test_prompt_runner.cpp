@@ -43,6 +43,7 @@ namespace memory = orangutan::memory;
 namespace permission = orangutan::permission;
 namespace provider = orangutan::provider;
 namespace skill = orangutan::skill;
+namespace storage = orangutan::storage;
 namespace test = orangutan::tests;
 
 namespace {
@@ -771,7 +772,9 @@ TEST_CASE("AgentPromptRunner marks invoked skills active on the next prompt",
 )json");
 
   test::run_async([&temp, &cfg](asio::io_context& io) -> async::Awaitable<void> {
-    auto assembly = build_assembly(temp.path(), io, false);
+    auto assembly = build_assembly(temp.path(), io, false, true);
+    core::TurnId session_id{};
+    session_id.back() = std::byte{0x49};
     RecordingProvider recording{{
         provider::Response{
             .blocks = {core::ToolUseContent{
@@ -790,6 +793,7 @@ TEST_CASE("AgentPromptRunner marks invoked skills active on the next prompt",
 
     auto options = base_runner_options(io, assembly, cfg, recording);
     options.mode = permission::Mode::strict;
+    options.session_id = session_id;
     options.skills_directory = (temp.path() / ".orangutan" / "skills").string();
     auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
     REQUIRE(runner.has_value());
@@ -821,6 +825,91 @@ TEST_CASE("AgentPromptRunner marks invoked skills active on the next prompt",
   });
 }
 
+TEST_CASE("AgentPromptRunner restores active skills from session records after transcript pruning",
+          "[unit][bootstrap][prompt_runner][skill][memory]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-skill-session-record"};
+  write_file(temp.path() / ".orangutan" / "skills" / "release-note.md",
+             "---\n"
+             "name: release-note\n"
+             "description: Draft release notes from completed changes.\n"
+             "triggers: release notes, changelog\n"
+             "---\n"
+             "Use concise bullets for the shipped changes.\n");
+  auto cfg = parse_config(R"json(
+{
+  "permissions": {
+    "allow": [
+      {"tool_pattern": "skill.invoke"}
+    ]
+  }
+}
+)json");
+
+  test::run_async([&temp, &cfg](asio::io_context& io) -> async::Awaitable<void> {
+    auto assembly = build_assembly(temp.path(), io, false, true);
+    core::TurnId session_id{};
+    session_id.back() = std::byte{0x48};
+
+    {
+      RecordingProvider recording{{
+          provider::Response{
+              .blocks = {core::ToolUseContent{
+                  .id = "skill-1",
+                  .name = "skill.invoke",
+                  .input_json = R"({"name":"release-note","inputs":{"since":"slice-148"}})",
+              }},
+              .stop_reason = core::StopReason::tool_use,
+              .usage = {},
+              .model_used = std::string{"fake-1"},
+              .route_profile_used = std::nullopt,
+          },
+          text_response("first done"),
+      }};
+
+      auto options = base_runner_options(io, assembly, cfg, recording);
+      options.mode = permission::Mode::strict;
+      options.session_id = session_id;
+      options.skills_directory = (temp.path() / ".orangutan" / "skills").string();
+      auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+      REQUIRE(runner.has_value());
+
+      auto first = co_await (*runner)->run_prompt(
+          cli::PromptRunRequest{.prompt = "draft notes", .mode = cli::CliMode::single_shot});
+      REQUIRE(first.has_value());
+      REQUIRE(first->text == "first done");
+    }
+
+    auto connection = storage::Connection::open(storage::ConnectionOptions{
+        .path = (temp.path() / ".orangutan" / "sessions.db").string(),
+    });
+    REQUIRE(connection.has_value());
+    auto pruned = connection->execute("DELETE FROM session_messages");
+    REQUIRE(pruned.has_value());
+
+    RecordingProvider recording{{text_response("second done")}};
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.mode = permission::Mode::strict;
+    options.session_id = session_id;
+    options.skills_directory = (temp.path() / ".orangutan" / "skills").string();
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto second = co_await (*runner)->run_prompt(
+        cli::PromptRunRequest{.prompt = "continue notes", .mode = cli::CliMode::single_shot});
+    REQUIRE(second.has_value());
+    REQUIRE(second->text == "second done");
+
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 1);
+    REQUIRE(requests[0].system_prompt.has_value());
+    REQUIRE(requests[0].system_prompt->contains("Active Skill: release-note"));
+    REQUIRE(requests[0].system_prompt->contains("Status: active for this session"));
+    REQUIRE(requests[0].system_prompt->contains("Skill: release-note"));
+    REQUIRE(requests[0].messages.size() == 1);
+    REQUIRE(requests[0].messages[0].blocks == core::Message::user_text("continue notes").blocks);
+  });
+}
+
 TEST_CASE("AgentPromptRunner clears active markers after skill.deactivate", "[unit][bootstrap][prompt_runner][skill]") {
   TempDir temp{"oran-bootstrap-prompt-runner-skill-deactivate"};
   write_file(temp.path() / ".orangutan" / "skills" / "release-note.md",
@@ -842,7 +931,9 @@ TEST_CASE("AgentPromptRunner clears active markers after skill.deactivate", "[un
 )json");
 
   test::run_async([&temp, &cfg](asio::io_context& io) -> async::Awaitable<void> {
-    auto assembly = build_assembly(temp.path(), io, false);
+    auto assembly = build_assembly(temp.path(), io, false, true);
+    core::TurnId session_id{};
+    session_id.back() = std::byte{0x49};
     RecordingProvider recording{{
         provider::Response{
             .blocks = {core::ToolUseContent{
@@ -873,6 +964,7 @@ TEST_CASE("AgentPromptRunner clears active markers after skill.deactivate", "[un
 
     auto options = base_runner_options(io, assembly, cfg, recording);
     options.mode = permission::Mode::strict;
+    options.session_id = session_id;
     options.skills_directory = (temp.path() / ".orangutan" / "skills").string();
     auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
     REQUIRE(runner.has_value());
@@ -886,6 +978,14 @@ TEST_CASE("AgentPromptRunner clears active markers after skill.deactivate", "[un
         cli::PromptRunRequest{.prompt = "stop using that skill", .mode = cli::CliMode::single_shot});
     REQUIRE(second.has_value());
     REQUIRE(second->text == "second done");
+
+    auto persisted = co_await assembly.session_store()->load_skill_activations(
+        memory::session::SessionId{.value = "00000000000000000000000000000049"},
+        memory::session::AgentKey{.value = "coder"});
+    REQUIRE(persisted.has_value());
+    REQUIRE(persisted->size() == 1);
+    REQUIRE((*persisted)[0].name == "release-note");
+    REQUIRE_FALSE((*persisted)[0].active);
 
     auto third =
         co_await (*runner)->run_prompt(cli::PromptRunRequest{.prompt = "continue", .mode = cli::CliMode::single_shot});

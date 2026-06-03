@@ -152,6 +152,57 @@ TEST_CASE("session::Store keeps agents scoped apart", "[unit][memory][session]")
   });
 }
 
+TEST_CASE("session::Store records durable skill activation state", "[unit][memory][session]") {
+  TempDb db{"oran-memory-session-skill-activation"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::SessionRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+    memory::session::Store store{repo};
+
+    auto activated = co_await store.record_skill_activation(memory::session::SessionId{.value = "s-1"},
+                                                            memory::session::AgentKey{.value = "coder"},
+                                                            memory::session::SkillActivationUpdate{
+                                                                .name = "release-note",
+                                                                .active = true,
+                                                            });
+    REQUIRE(activated.has_value());
+    auto deactivated = co_await store.record_skill_activation(memory::session::SessionId{.value = "s-1"},
+                                                              memory::session::AgentKey{.value = "coder"},
+                                                              memory::session::SkillActivationUpdate{
+                                                                  .name = "release-note",
+                                                                  .active = false,
+                                                              });
+    REQUIRE(deactivated.has_value());
+    auto review = co_await store.record_skill_activation(memory::session::SessionId{.value = "s-1"},
+                                                         memory::session::AgentKey{.value = "coder"},
+                                                         memory::session::SkillActivationUpdate{
+                                                             .name = "review-pr",
+                                                             .active = true,
+                                                         });
+    REQUIRE(review.has_value());
+    auto researcher = co_await store.record_skill_activation(memory::session::SessionId{.value = "s-1"},
+                                                             memory::session::AgentKey{.value = "researcher"},
+                                                             memory::session::SkillActivationUpdate{
+                                                                 .name = "release-note",
+                                                                 .active = true,
+                                                             });
+    REQUIRE(researcher.has_value());
+
+    auto loaded = co_await store.load_skill_activations(memory::session::SessionId{.value = "s-1"},
+                                                        memory::session::AgentKey{.value = "coder"});
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->size() == 2);
+    REQUIRE((*loaded)[0].name == "release-note");
+    REQUIRE_FALSE((*loaded)[0].active);
+    REQUIRE_FALSE((*loaded)[0].created_at.empty());
+    REQUIRE_FALSE((*loaded)[0].updated_at.empty());
+    REQUIRE((*loaded)[1].name == "review-pr");
+    REQUIRE((*loaded)[1].active);
+  });
+}
+
 TEST_CASE("session::Store round-trips 500 messages", "[unit][memory][session]") {
   TempDb db{"oran-memory-session-500"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
@@ -224,5 +275,14 @@ TEST_CASE("session::Store validates required ids", "[unit][memory][session]") {
     });
     REQUIRE_FALSE(list.has_value());
     REQUIRE(list.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto skill = co_await store.record_skill_activation(memory::session::SessionId{.value = "s-1"},
+                                                        memory::session::AgentKey{.value = "coder"},
+                                                        memory::session::SkillActivationUpdate{
+                                                            .name = "release\nnote",
+                                                            .active = true,
+                                                        });
+    REQUIRE_FALSE(skill.has_value());
+    REQUIRE(skill.error().kind() == core::ErrorKind::invalid_argument);
   });
 }

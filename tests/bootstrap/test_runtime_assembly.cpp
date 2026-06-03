@@ -176,6 +176,7 @@ TEST_CASE("RuntimeAssembly::build provisions sessions.db at the workspace defaul
     REQUIRE(std::filesystem::exists(sessions_db));
     REQUIRE(table_exists(sessions_db, "sessions"));
     REQUIRE(table_exists(sessions_db, "session_messages"));
+    REQUIRE(table_exists(sessions_db, "session_skill_activations"));
 
     auto appended = co_await built->session_store()->append(memory::session::SessionId{.value = "s-1"},
                                                             memory::session::AgentKey{.value = "coder"},
@@ -216,6 +217,7 @@ TEST_CASE("RuntimeAssembly::build honors an explicit sessions DB path", "[unit][
   REQUIRE(built->sessions_path() == explicit_path);
   REQUIRE(std::filesystem::exists(explicit_path));
   REQUIRE(table_exists(explicit_path, "sessions"));
+  REQUIRE(table_exists(explicit_path, "session_skill_activations"));
 }
 
 TEST_CASE("RuntimeAssembly::build can disable session memory", "[unit][bootstrap][runtime_assembly][memory]") {

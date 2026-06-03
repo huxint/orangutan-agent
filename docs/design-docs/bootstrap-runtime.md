@@ -110,9 +110,11 @@ permission rules from config plus an optional agent overlay; wraps the backend i
 assembly-owned `permission_ask_rendered` bus; and drives `agent::Loop` with workspace,
 audit, broker, hook, output-cap, trace, and session-memory services from the assembly.
 When the assembly exposes `session_store()`, the runner loads the persisted history for
-the current `session_id` + `agent_key` before each prompt and appends only the new
-successful transcript suffix afterward. The in-process transcript cache remains the
-fallback when session memory is disabled. The runner also owns an
+the current `session_id` + `agent_key` plus the durable skill activation rows for
+that same key before each prompt, then appends only the new successful transcript
+suffix and records successful skill activation/deactivation updates afterward. The
+in-process transcript cache remains the fallback when session memory is disabled. The
+runner also owns an
 `agent::SystemPreambleOwner` for prompt section 1 and a `memory::FramingOwner`
 for prompt section 5, rendering both exactly once before calling `agent::Loop`.
 It also owns the section-4 `skill::CatalogOwner`: callers can provide exact
@@ -127,12 +129,12 @@ section 4, the runner asks `oran-skill` to resolve active skill markers through
 the current `skill::ActivationPolicy`. That policy currently derives markers
 from the already-loaded conversation transcript, nets successful `skill.invoke`
 activation and `skill.deactivate` deactivation tool-results that carry the
-versioned `data_json` records in transcript order (most recent event wins), and
-filters through the current loaded/allowed catalog entries so removed or
-disallowed skills do not remain active in the next prompt. The policy surface
-also accepts explicit deactivated skill names plus explicit expiration rows
-with caller-supplied evaluation time. The configured-route runner now sources
-those from the selected agent config: it reads
+versioned `data_json` records in transcript order (most recent event wins), overlays
+durable session activation rows loaded from `memory::session::Store`, and filters
+through the current loaded/allowed catalog entries so removed or disallowed skills do
+not remain active in the next prompt. The policy surface also accepts explicit
+deactivated skill names plus explicit expiration rows with caller-supplied evaluation
+time. The configured-route runner now sources those from the selected agent config: it reads
 `agents.<name>.skills_deactivated` into `ActivationPolicy::deactivated_skill_names`,
 maps each `agents.<name>.skills_expirations` `config::SkillExpirationConfig`
 entry to a `skill::SkillExpiration`, and supplies
@@ -173,7 +175,10 @@ the same filtered document vector: `skill.deactivate` returns a versioned
 `skill_deactivation` record in `Output::data_json`, and the next prompt boundary
 nets it against prior activations through the same transcript scan so a
 mid-session deactivation clears the section-4 marker without a config edit or a
-renderer clock.
+renderer clock. Slice 148 persists successful `skill.invoke` / `skill.deactivate`
+results as per-session activation rows after the turn succeeds. Those rows overlay
+the transcript-derived set on later prompts, so pruning old transcript tool results
+cannot lose the latest active/inactive decision.
 Empty `AgentPromptRunnerOptions::system_preamble` selects
 `agent::default_system_preamble()`; explicit text is treated as an override for
 tests and embedders. Multi-iteration provider/tool turns therefore reuse stable
