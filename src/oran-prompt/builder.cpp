@@ -99,29 +99,25 @@ constexpr auto kDefaultActiveTools = std::array<std::string_view, 8>{
   return selected;
 }
 
-void append_line(std::string& out, std::string_view label, std::string_view value) {
-  std::format_to(std::back_inserter(out), "{}{}\n", label, value);
-}
-
 void append_content(std::string& out, const core::Content& content) {
   std::visit(
       [&](const auto& block) {
         using T = std::decay_t<decltype(block)>;
         if constexpr (std::same_as<T, core::TextContent>) {
-          append_line(out, "text: ", block.text);
+          std::format_to(std::back_inserter(out), "text: {}\n", block.text);
         } else if constexpr (std::same_as<T, core::ThinkingContent>) {
-          append_line(out, "thinking: ", block.thinking);
+          std::format_to(std::back_inserter(out), "thinking: {}\n", block.thinking);
           if (block.signature.has_value()) {
-            append_line(out, "thinking_signature: ", *block.signature);
+            std::format_to(std::back_inserter(out), "thinking_signature: {}\n", *block.signature);
           }
         } else if constexpr (std::same_as<T, core::ToolUseContent>) {
-          append_line(out, "tool_use_id: ", block.id);
-          append_line(out, "tool_use_name: ", block.name);
-          append_line(out, "tool_use_input: ", block.input_json);
+          std::format_to(std::back_inserter(out), "tool_use_id: {}\n", block.id);
+          std::format_to(std::back_inserter(out), "tool_use_name: {}\n", block.name);
+          std::format_to(std::back_inserter(out), "tool_use_input: {}\n", block.input_json);
         } else if constexpr (std::same_as<T, core::ToolResultContent>) {
-          append_line(out, "tool_result_id: ", block.tool_use_id);
-          append_line(out, "tool_result_status: ", block.is_error ? "error" : "ok");
-          append_line(out, "tool_result_output: ", block.output);
+          std::format_to(std::back_inserter(out), "tool_result_id: {}\n", block.tool_use_id);
+          std::format_to(std::back_inserter(out), "tool_result_status: {}\n", block.is_error ? "error" : "ok");
+          std::format_to(std::back_inserter(out), "tool_result_output: {}\n", block.output);
         }
       },
       content);
@@ -133,7 +129,7 @@ void append_content(std::string& out, const core::Content& content) {
     if (i != 0) {
       out.push_back('\n');
     }
-    append_line(out, "role: ", core::enum_name(messages[i].role));
+    std::format_to(std::back_inserter(out), "role: {}\n", core::enum_name(messages[i].role));
     for (const auto& block : messages[i].blocks) {
       append_content(out, block);
     }
