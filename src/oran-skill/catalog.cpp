@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <expected>
+#include <format>
+#include <iterator>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -180,39 +182,21 @@ validate_session_skill_activations(std::span<const SessionSkillActivation> recor
 }
 
 [[nodiscard]] std::string join_strings(std::span<const std::string> values, std::string_view separator) {
-  std::size_t bytes = 0;
-  for (const auto& value : values) {
-    bytes += value.size() + separator.size();
-  }
-  if (!values.empty()) {
-    bytes -= separator.size();
-  }
-
-  std::string output;
-  output.reserve(bytes);
-  for (std::size_t i = 0; i < values.size(); ++i) {
-    if (i != 0) {
-      output.append(separator);
-    }
-    output.append(values[i]);
-  }
-  return output;
+  return values | std::views::join_with(separator) | std::ranges::to<std::string>();
 }
 
 void append_entry(std::string& output, const CatalogEntry& entry) {
   if (!output.empty()) {
     output.append("\n\n");
   }
-  output.append("Skill: ").append(entry.name).append("\n");
-  output.append("Description: ").append(entry.description).append("\n");
-  output.append("Triggers: ");
+  std::format_to(std::back_inserter(output), "Skill: {}\nDescription: {}\nTriggers: ", entry.name, entry.description);
   if (entry.triggers.empty()) {
     output.append("none");
   } else {
     output.append(join_strings(std::span<const std::string>{entry.triggers}, ", "));
   }
   if (entry.model_hint.has_value()) {
-    output.append("\nModel Hint: ").append(*entry.model_hint);
+    std::format_to(std::back_inserter(output), "\nModel Hint: {}", *entry.model_hint);
   }
 }
 
@@ -220,8 +204,7 @@ void append_active_skill(std::string& output, const ActiveSkill& skill) {
   if (!output.empty()) {
     output.append("\n\n");
   }
-  output.append("Active Skill: ").append(skill.name).append("\n");
-  output.append("Status: active for this session");
+  std::format_to(std::back_inserter(output), "Active Skill: {}\nStatus: active for this session", skill.name);
 }
 
 void append_json_escaped(std::string& output, std::string_view value) {

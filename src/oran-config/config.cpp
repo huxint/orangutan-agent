@@ -11,6 +11,7 @@
 #include <exception>
 #include <expected>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -65,13 +66,13 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 5>{
 
 [[nodiscard]] std::string child_path(std::string_view base, std::string_view child) {
   if (base.empty() || base == "$") {
-    return std::string{"$."}.append(child);
+    return std::format("$.{}", child);
   }
-  return std::string{base}.append(".").append(child);
+  return std::format("{}.{}", base, child);
 }
 
 [[nodiscard]] std::string element_path(std::string_view base, std::size_t index) {
-  return std::string{base}.append("[").append(std::to_string(index)).append("]");
+  return std::format("{}[{}]", base, index);
 }
 
 [[nodiscard]] bool is_recognized_root(std::string_view name) {

@@ -4,6 +4,7 @@
 
 #include <expected>
 #include <filesystem>
+#include <format>
 #include <optional>
 #include <span>
 #include <string>
@@ -77,7 +78,7 @@ filesystem_error(std::string message, const std::filesystem::path& path, const s
   std::vector<std::string> out;
   out.reserve(roots.size());
   for (std::size_t index = 0; index < roots.size(); ++index) {
-    auto field = std::string{field_name}.append("[").append(std::to_string(index)).append("]");
+    auto field = std::format("{}[{}]", field_name, index);
     auto canonical = canonical_directory(roots[index], field);
     if (!canonical) {
       return std::unexpected(std::move(canonical).error());

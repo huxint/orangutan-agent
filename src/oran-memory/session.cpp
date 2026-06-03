@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <format>
 #include <limits>
 #include <optional>
 #include <string>
@@ -138,7 +139,7 @@ void put_if_present(json& object, std::string_view key, const std::optional<std:
 required_string(const json& object, std::string_view key, std::string_view context) {
   const auto it = object.find(key);
   if (it == object.end() || !it->is_string()) {
-    return std::unexpected(message_parse_error(std::string{context}.append(": expected string ").append(key)));
+    return std::unexpected(message_parse_error(std::format("{}: expected string {}", context, key)));
   }
   return it->get<std::string>();
 }
@@ -150,7 +151,7 @@ optional_string(const json& object, std::string_view key, std::string_view conte
     return std::optional<std::string>{};
   }
   if (!it->is_string()) {
-    return std::unexpected(message_parse_error(std::string{context}.append(": expected string ").append(key)));
+    return std::unexpected(message_parse_error(std::format("{}: expected string {}", context, key)));
   }
   return std::optional<std::string>{it->get<std::string>()};
 }
@@ -158,7 +159,7 @@ optional_string(const json& object, std::string_view key, std::string_view conte
 [[nodiscard]] core::Result<bool> required_bool(const json& object, std::string_view key, std::string_view context) {
   const auto it = object.find(key);
   if (it == object.end() || !it->is_boolean()) {
-    return std::unexpected(message_parse_error(std::string{context}.append(": expected boolean ").append(key)));
+    return std::unexpected(message_parse_error(std::format("{}: expected boolean {}", context, key)));
   }
   return it->get<bool>();
 }
@@ -168,7 +169,7 @@ optional_string(const json& object, std::string_view key, std::string_view conte
     return std::unexpected(message_parse_error("content block is not an object").with("index", std::to_string(index)));
   }
 
-  const auto context = std::string{"content["}.append(std::to_string(index)).append("]");
+  const auto context = std::format("content[{}]", index);
   auto type = required_string(value, "type", context);
   if (!type) {
     return std::unexpected(std::move(type).error());

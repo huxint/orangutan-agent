@@ -10,6 +10,8 @@
 #include <exception>
 #include <expected>
 #include <format>
+#include <iterator>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -49,22 +51,7 @@ constexpr std::string_view kHashSeparator = "\x1F";
 }
 
 [[nodiscard]] std::string join_lines(const std::vector<std::string>& rows, std::string_view separator) {
-  std::string output;
-  std::size_t bytes = 0;
-  for (const auto& row : rows) {
-    bytes += row.size() + separator.size();
-  }
-  if (!rows.empty()) {
-    bytes -= separator.size();
-  }
-  output.reserve(bytes);
-  for (std::size_t i = 0; i < rows.size(); ++i) {
-    if (i != 0) {
-      output.append(separator);
-    }
-    output.append(rows[i]);
-  }
-  return output;
+  return rows | std::views::join_with(separator) | std::ranges::to<std::string>();
 }
 
 [[nodiscard]] std::vector<std::string_view> sorted_capability_names(const std::vector<core::Capability>& capabilities) {
@@ -78,15 +65,8 @@ constexpr std::string_view kHashSeparator = "\x1F";
 }
 
 [[nodiscard]] std::string render_capabilities(const std::vector<core::Capability>& capabilities) {
-  const auto names = sorted_capability_names(capabilities);
-  std::string output;
-  for (std::size_t i = 0; i < names.size(); ++i) {
-    if (i != 0) {
-      output.append(", ");
-    }
-    output.append(names[i]);
-  }
-  return output;
+  return sorted_capability_names(capabilities) | std::views::join_with(std::string_view{", "}) |
+         std::ranges::to<std::string>();
 }
 
 [[nodiscard]] core::Result<std::string> canonical_schema(std::string_view tool_name, std::string_view schema_json) {
@@ -119,10 +99,9 @@ constexpr std::string_view kHashSeparator = "\x1F";
 [[nodiscard]] std::string render_uncached_block(const core::ToolDef& def, std::string canonical_schema_json) {
   std::string block;
   block.reserve(def.name.size() + def.description.size() + canonical_schema_json.size() + 128);
-  block.append("Tool: ").append(def.name).append("\n");
-  block.append("Description: ").append(def.description).append("\n");
+  std::format_to(std::back_inserter(block), "Tool: {}\nDescription: {}\n", def.name, def.description);
   if (def.category.has_value() && !def.category->empty()) {
-    block.append("Category: ").append(*def.category).append("\n");
+    std::format_to(std::back_inserter(block), "Category: {}\n", *def.category);
   }
   block.append("Capabilities: ");
   if (def.required_capabilities.empty()) {
