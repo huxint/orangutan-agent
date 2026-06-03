@@ -2,10 +2,12 @@
 
 #include <oran/provider/fake.hpp>
 
+#include <concepts>
 #include <cstddef>
 #include <expected>
 #include <mutex>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
@@ -101,17 +103,17 @@ public:
       std::visit(
           [&](const auto& concrete) {
             using T = std::decay_t<decltype(concrete)>;
-            if constexpr (std::is_same_v<T, TextDelta>) {
+            if constexpr (std::same_as<T, TextDelta>) {
               if (sink != nullptr) {
                 sink->on_text_delta(concrete.text);
               }
               accumulate_text(response, concrete.text);
-            } else if constexpr (std::is_same_v<T, ThinkingDelta>) {
+            } else if constexpr (std::same_as<T, ThinkingDelta>) {
               if (sink != nullptr) {
                 sink->on_thinking_delta(concrete.text);
               }
               accumulate_thinking(response, concrete.text);
-            } else if constexpr (std::is_same_v<T, ToolStart>) {
+            } else if constexpr (std::same_as<T, ToolStart>) {
               if (sink != nullptr) {
                 sink->on_tool_start(concrete.id, concrete.name);
               }
@@ -120,12 +122,12 @@ public:
                   .name = concrete.name,
                   .input_json = {},
               });
-            } else if constexpr (std::is_same_v<T, ToolInputDelta>) {
+            } else if constexpr (std::same_as<T, ToolInputDelta>) {
               if (sink != nullptr) {
                 sink->on_tool_delta(concrete.id, concrete.input_delta);
               }
               static_cast<void>(accumulate_tool_input(response, concrete.id, concrete.input_delta));
-            } else if constexpr (std::is_same_v<T, StreamEnd>) {
+            } else if constexpr (std::same_as<T, StreamEnd>) {
               response.stop_reason = concrete.stop_reason;
               if (concrete.usage.has_value()) {
                 response.usage = *concrete.usage;

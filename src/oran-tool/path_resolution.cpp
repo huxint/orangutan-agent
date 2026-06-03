@@ -64,19 +64,6 @@ struct PathRequest {
   return it->get<std::string>();
 }
 
-[[nodiscard]] std::optional<WriteDisposition> write_disposition_from_text(std::string_view mode) {
-  if (mode == "truncate") {
-    return WriteDisposition::truncate;
-  }
-  if (mode == "append") {
-    return WriteDisposition::append;
-  }
-  if (mode == "fail_if_exists") {
-    return WriteDisposition::fail_if_exists;
-  }
-  return std::nullopt;
-}
-
 [[nodiscard]] std::optional<PathRequest> path_request(std::string_view tool_name, const nlohmann::json& parsed) {
   auto path = string_field(parsed, "path");
   if (!path.has_value()) {
@@ -108,7 +95,7 @@ struct PathRequest {
       if (!it->is_string()) {
         return std::nullopt;
       }
-      auto parsed_mode = write_disposition_from_text(it->get<std::string>());
+      auto parsed_mode = core::parse_enum<WriteDisposition>(it->get<std::string>());
       if (!parsed_mode.has_value()) {
         return std::nullopt;
       }

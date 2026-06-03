@@ -655,7 +655,7 @@ TEST_CASE("file.search uses DispatchContext workspace for relative searches and 
     auto found =
         co_await registry.dispatch(tool::kFileSearchName, R"({"path":"nested/note.txt","pattern":"needle"})", ctx);
     REQUIRE(found.has_value());
-    REQUIRE(found->text.find("needle here") != std::string::npos);
+    REQUIRE(found->text.contains("needle here"));
 
     std::error_code ec;
     const auto outside_relative_path = std::filesystem::relative(outside.path() / "secret.txt", root.path(), ec);
@@ -712,7 +712,7 @@ TEST_CASE("file.search honors extra_read_roots through the workspace seam", "[un
         std::format(R"({{"path":"{}","pattern":"needle"}})", (readable.path() / "audit.log").string());
     auto found = co_await registry.dispatch(tool::kFileSearchName, override_input, ctx);
     REQUIRE(found.has_value());
-    REQUIRE(found->text.find("needle in the override root") != std::string::npos);
+    REQUIRE(found->text.contains("needle in the override root"));
   });
 }
 
@@ -735,8 +735,8 @@ TEST_CASE("directory.list uses DispatchContext workspace for relative listings a
 
     auto listed = co_await registry.dispatch(tool::kDirectoryListName, R"({"path":"nested"})", ctx);
     REQUIRE(listed.has_value());
-    REQUIRE(listed->text.find("a.txt") != std::string::npos);
-    REQUIRE(listed->text.find("b.txt") != std::string::npos);
+    REQUIRE(listed->text.contains("a.txt"));
+    REQUIRE(listed->text.contains("b.txt"));
 
     std::error_code ec;
     const auto outside_relative_path = std::filesystem::relative(outside.path(), root.path(), ec);

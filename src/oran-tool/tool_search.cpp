@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <expected>
+#include <format>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -169,19 +171,17 @@ read_string_selector(const json& input, std::string_view field, std::optional<st
     return "tool.search: no matches";
   }
 
-  std::string text = "tool.search: " + std::to_string(matches.size()) + " match";
-  if (matches.size() != 1) {
-    text.append("es");
-  }
+  std::string text;
+  std::format_to(std::back_inserter(text), "tool.search: {} match{}", matches.size(), matches.size() == 1 ? "" : "es");
   for (const auto& def : matches) {
-    text.append("\n- ").append(def.name);
+    std::format_to(std::back_inserter(text), "\n- {}", def.name);
     if (def.category.has_value()) {
-      text.append(" [").append(*def.category).append("]");
+      std::format_to(std::back_inserter(text), " [{}]", *def.category);
     }
     if (def.deferred) {
       text.append(" [deferred]");
     }
-    text.append(": ").append(def.description);
+    std::format_to(std::back_inserter(text), ": {}", def.description);
   }
   return text;
 }

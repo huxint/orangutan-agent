@@ -19,6 +19,8 @@ enum class ConfigSource : std::uint8_t {
   explicit_file,
 };
 
+/// User-facing source spelling uses dashes (`built-in-defaults`), so this
+/// remains a hand-written switch instead of `core::enum_name`.
 [[nodiscard]] std::string_view to_string_view(ConfigSource source) noexcept;
 
 struct BootstrapOptions {

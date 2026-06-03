@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <concepts>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -3245,16 +3246,16 @@ private:
     std::visit(
         [&](auto& alt) {
           using T = std::decay_t<decltype(alt)>;
-          if constexpr (std::is_same_v<T, orangutan::hook::ToolBeforePayload>) {
+          if constexpr (std::same_as<T, orangutan::hook::ToolBeforePayload>) {
             row.tool_name = alt.tool_name;
             row.input_json = alt.input_json;
             row.identity = alt.who.identity;
-          } else if constexpr (std::is_same_v<T, orangutan::hook::ToolDispatchedPayload>) {
+          } else if constexpr (std::same_as<T, orangutan::hook::ToolDispatchedPayload>) {
             row.tool_name = alt.tool_name;
             row.input_json = alt.input_json;
             row.identity = alt.who.identity;
             row.verdict = alt.verdict;
-          } else if constexpr (std::is_same_v<T, orangutan::hook::ToolAfterPayload>) {
+          } else if constexpr (std::same_as<T, orangutan::hook::ToolAfterPayload>) {
             row.tool_name = alt.tool_name;
             row.input_json = alt.input_json;
             row.identity = alt.who.identity;
@@ -3264,13 +3265,13 @@ private:
             row.usage = alt.usage;
             row.error_kind = alt.error_kind;
             row.error_message = alt.error_message;
-          } else if constexpr (std::is_same_v<T, orangutan::hook::ToolErrorPayload>) {
+          } else if constexpr (std::same_as<T, orangutan::hook::ToolErrorPayload>) {
             row.tool_name = alt.tool_name;
             row.input_json = alt.input_json;
             row.identity = alt.who.identity;
             row.error_kind = alt.error_kind;
             row.error_message = alt.error_message;
-          } else if constexpr (std::is_same_v<T, orangutan::hook::PermissionAskRenderedPayload>) {
+          } else if constexpr (std::same_as<T, orangutan::hook::PermissionAskRenderedPayload>) {
             row.tool_name = alt.tool_name;
             row.input_json = alt.input_json;
             row.identity = alt.who.identity;

@@ -14,6 +14,7 @@
 
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/core/capability.hpp>
+#include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/tool_def.hpp>
 #include <oran/io/file.hpp>
@@ -39,21 +40,6 @@ constexpr std::string_view kFileWriteSchema =
 /// `io::ReadTextOptions::max_bytes` default so write/edit tools cannot create
 /// files larger than the read side is willing to ingest in a later turn.
 constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
-
-[[nodiscard]] core::Result<io::WriteMode> parse_write_mode(std::string_view text) {
-  if (text == "truncate") {
-    return io::WriteMode::truncate;
-  }
-  if (text == "append") {
-    return io::WriteMode::append;
-  }
-  if (text == "fail_if_exists") {
-    return io::WriteMode::fail_if_exists;
-  }
-  return std::unexpected(
-      core::Error::invalid_argument("file.write: `mode` must be one of truncate|append|fail_if_exists")
-          .with("value", std::string{text}));
-}
 
 [[nodiscard]] WriteDisposition to_write_disposition(io::WriteMode mode) noexcept {
   switch (mode) {
@@ -123,9 +109,12 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
     if (!(*parsed)["mode"].is_string()) {
       co_return std::unexpected(core::Error::invalid_argument("file.write: `mode` must be a string"));
     }
-    auto mode = parse_write_mode((*parsed)["mode"].get<std::string>());
-    if (!mode) {
-      co_return std::unexpected(std::move(mode).error());
+    const auto mode_text = (*parsed)["mode"].get<std::string>();
+    auto mode = core::parse_enum<io::WriteMode>(mode_text);
+    if (!mode.has_value()) {
+      co_return std::unexpected(
+          core::Error::invalid_argument("file.write: `mode` must be one of truncate|append|fail_if_exists")
+              .with("value", mode_text));
     }
     options.mode = *mode;
   }

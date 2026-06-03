@@ -7,6 +7,7 @@
 #include <utility>
 
 #include <oran/config/config.hpp>
+#include <oran/core/enum_names.hpp>
 #include <oran/core/result.hpp>
 #include <oran/permission/defaults.hpp>
 #include <oran/permission/input_pattern.hpp>
@@ -15,18 +16,6 @@
 namespace orangutan::permission {
 
 namespace {
-
-[[nodiscard]] Verdict to_verdict(config::PermissionVerdict v) noexcept {
-  switch (v) {
-    case config::PermissionVerdict::allow:
-      return Verdict::allow;
-    case config::PermissionVerdict::deny:
-      return Verdict::deny;
-    case config::PermissionVerdict::ask:
-      return Verdict::ask;
-  }
-  return Verdict::deny;
-}
 
 [[nodiscard]] core::Result<void> append_layer(RuleSet& rs, const config::PermissionsConfig& layer) {
   for (const auto& rule : layer.rules) {
@@ -43,8 +32,9 @@ namespace {
       }
       input_pattern = std::move(*compiled);
     }
+    const auto verdict = core::parse_enum<Verdict>(core::enum_name(rule.verdict)).value_or(Verdict::deny);
     Rule runtime_rule{
-        .verdict = to_verdict(rule.verdict),
+        .verdict = verdict,
         .tool_pattern = rule.tool_pattern,
         .capability = rule.capability,
         .input_pattern = std::move(input_pattern),

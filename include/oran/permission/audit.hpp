@@ -185,15 +185,7 @@ private:
 /// `AuditOutcome::ask`. Approval-flow callsites overwrite `outcome` to
 /// `approved` or `rejected` after the broker finishes.
 [[nodiscard]] constexpr AuditOutcome verdict_to_outcome(Verdict verdict) noexcept {
-  switch (verdict) {
-    case Verdict::allow:
-      return AuditOutcome::allow;
-    case Verdict::deny:
-      return AuditOutcome::deny;
-    case Verdict::ask:
-      return AuditOutcome::ask;
-  }
-  return AuditOutcome::deny;
+  return core::parse_enum<AuditOutcome>(core::enum_name(verdict)).value_or(AuditOutcome::deny);
 }
 
 /// Build a partial `AuditEvent` from a `Decision`. Fills `verdict`,

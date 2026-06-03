@@ -27,6 +27,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <format>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -106,14 +108,10 @@ struct ParsedInput {
     if (!out.empty()) {
       out.push_back('\n');
     }
-    out.append(entry.path);
-    out.push_back(':');
-    out.append(core::enum_name(entry.kind));
-    out.push_back(':');
     if (entry.size_bytes.has_value()) {
-      out.append(std::to_string(*entry.size_bytes));
+      std::format_to(std::back_inserter(out), "{}:{}:{}", entry.path, core::enum_name(entry.kind), *entry.size_bytes);
     } else {
-      out.push_back('-');
+      std::format_to(std::back_inserter(out), "{}:{}:-", entry.path, core::enum_name(entry.kind));
     }
   }
   return out;

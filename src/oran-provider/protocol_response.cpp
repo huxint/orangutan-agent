@@ -130,19 +130,7 @@ required_array(const json& object, std::string_view key, std::string field, cons
 }
 
 [[nodiscard]] core::StopReason anthropic_stop_reason(std::string_view reason) noexcept {
-  if (reason == "end_turn") {
-    return core::StopReason::end_turn;
-  }
-  if (reason == "max_tokens") {
-    return core::StopReason::max_tokens;
-  }
-  if (reason == "tool_use") {
-    return core::StopReason::tool_use;
-  }
-  if (reason == "stop_sequence") {
-    return core::StopReason::stop_sequence;
-  }
-  return core::StopReason::error;
+  return core::parse_enum<core::StopReason>(reason).value_or(core::StopReason::error);
 }
 
 [[nodiscard]] core::Result<core::Content>

@@ -1026,8 +1026,8 @@ TEST_CASE("ToolScheduler: identical concurrent calls each enrich their own audit
           REQUIRE(event.event_kind == "permission_decision");
           REQUIRE(event.parent_turn_id == turn);
           REQUIRE(event.metadata_json != "{}");
-          REQUIRE(event.metadata_json.find("\"usage\"") != std::string::npos);
-          REQUIRE(event.metadata_json.find("bytes_read") != std::string::npos);
+          REQUIRE(event.metadata_json.contains("\"usage\""));
+          REQUIRE(event.metadata_json.contains("bytes_read"));
         }
       },
       5s);
@@ -1195,7 +1195,7 @@ TEST_CASE("ToolScheduler: a cancellation-ignoring tool is named as cancellation_
   REQUIRE_FALSE(cancelaware_named);
   // The row carries the `error_kind=cancellation_lag` marker spec 0012 AC5 names.
   const auto marked = std::ranges::any_of(audit.events(), [](const permission::AuditEvent& e) {
-    return e.event_kind == "cancellation_lag" && e.metadata_json.find("cancellation_lag") != std::string::npos;
+    return e.event_kind == "cancellation_lag" && e.metadata_json.contains("cancellation_lag");
   });
   REQUIRE(marked);
 }

@@ -1,5 +1,6 @@
 // tests/hook/test_bus.cpp — `hook::Bus` subscribe/publish coverage.
 
+#include <concepts>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -40,25 +41,25 @@ struct Capture {
   return std::visit(
       [](const auto& alt) -> std::string {
         using T = std::decay_t<decltype(alt)>;
-        if constexpr (std::is_same_v<T, std::monostate>) {
+        if constexpr (std::same_as<T, std::monostate>) {
           return "monostate";
-        } else if constexpr (std::is_same_v<T, hook::ToolBeforePayload>) {
+        } else if constexpr (std::same_as<T, hook::ToolBeforePayload>) {
           return "before";
-        } else if constexpr (std::is_same_v<T, hook::ToolDispatchedPayload>) {
+        } else if constexpr (std::same_as<T, hook::ToolDispatchedPayload>) {
           return "dispatched";
-        } else if constexpr (std::is_same_v<T, hook::ToolAfterPayload>) {
+        } else if constexpr (std::same_as<T, hook::ToolAfterPayload>) {
           return "after";
-        } else if constexpr (std::is_same_v<T, hook::ToolErrorPayload>) {
+        } else if constexpr (std::same_as<T, hook::ToolErrorPayload>) {
           return "error";
-        } else if constexpr (std::is_same_v<T, hook::PermissionAskRenderedPayload>) {
+        } else if constexpr (std::same_as<T, hook::PermissionAskRenderedPayload>) {
           return "ask";
-        } else if constexpr (std::is_same_v<T, hook::ProviderRequestPayload>) {
+        } else if constexpr (std::same_as<T, hook::ProviderRequestPayload>) {
           return "provider_request";
-        } else if constexpr (std::is_same_v<T, hook::ProviderResponsePayload>) {
+        } else if constexpr (std::same_as<T, hook::ProviderResponsePayload>) {
           return "provider_response";
-        } else if constexpr (std::is_same_v<T, hook::ProviderErrorPayload>) {
+        } else if constexpr (std::same_as<T, hook::ProviderErrorPayload>) {
           return "provider_error";
-        } else if constexpr (std::is_same_v<T, hook::ProviderFallbackPayload>) {
+        } else if constexpr (std::same_as<T, hook::ProviderFallbackPayload>) {
           return "provider_fallback";
         }
       },

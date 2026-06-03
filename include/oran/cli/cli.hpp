@@ -19,6 +19,8 @@ enum class CliMode : std::uint8_t {
   single_shot,
 };
 
+/// User-facing CLI spelling. `single_shot` renders as `single-shot`, so this
+/// cannot use the identifier-style reflection helper directly.
 [[nodiscard]] std::string_view to_string_view(CliMode mode) noexcept;
 
 struct CliOptions {

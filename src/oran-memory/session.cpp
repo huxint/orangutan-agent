@@ -2,6 +2,7 @@
 
 #include <oran/memory/session.hpp>
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -97,13 +98,13 @@ void put_if_present(json& object, std::string_view key, const std::optional<std:
   return std::visit(
       [](const auto& block) -> json {
         using T = std::decay_t<decltype(block)>;
-        if constexpr (std::is_same_v<T, core::TextContent>) {
+        if constexpr (std::same_as<T, core::TextContent>) {
           return json{{"type", "text"}, {"text", block.text}};
-        } else if constexpr (std::is_same_v<T, core::ThinkingContent>) {
+        } else if constexpr (std::same_as<T, core::ThinkingContent>) {
           auto out = json{{"type", "thinking"}, {"thinking", block.thinking}};
           put_if_present(out, "signature", block.signature);
           return out;
-        } else if constexpr (std::is_same_v<T, core::ToolUseContent>) {
+        } else if constexpr (std::same_as<T, core::ToolUseContent>) {
           return json{{"type", "tool_use"}, {"id", block.id}, {"name", block.name}, {"input_json", block.input_json}};
         } else {
           auto out = json{{"type", "tool_result"},

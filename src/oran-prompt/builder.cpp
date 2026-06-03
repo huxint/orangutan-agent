@@ -4,9 +4,12 @@
 
 #include <algorithm>
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <format>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -97,27 +100,25 @@ constexpr auto kDefaultActiveTools = std::array<std::string_view, 8>{
 }
 
 void append_line(std::string& out, std::string_view label, std::string_view value) {
-  out.append(label);
-  out.append(value);
-  out.push_back('\n');
+  std::format_to(std::back_inserter(out), "{}{}\n", label, value);
 }
 
 void append_content(std::string& out, const core::Content& content) {
   std::visit(
       [&](const auto& block) {
         using T = std::decay_t<decltype(block)>;
-        if constexpr (std::is_same_v<T, core::TextContent>) {
+        if constexpr (std::same_as<T, core::TextContent>) {
           append_line(out, "text: ", block.text);
-        } else if constexpr (std::is_same_v<T, core::ThinkingContent>) {
+        } else if constexpr (std::same_as<T, core::ThinkingContent>) {
           append_line(out, "thinking: ", block.thinking);
           if (block.signature.has_value()) {
             append_line(out, "thinking_signature: ", *block.signature);
           }
-        } else if constexpr (std::is_same_v<T, core::ToolUseContent>) {
+        } else if constexpr (std::same_as<T, core::ToolUseContent>) {
           append_line(out, "tool_use_id: ", block.id);
           append_line(out, "tool_use_name: ", block.name);
           append_line(out, "tool_use_input: ", block.input_json);
-        } else if constexpr (std::is_same_v<T, core::ToolResultContent>) {
+        } else if constexpr (std::same_as<T, core::ToolResultContent>) {
           append_line(out, "tool_result_id: ", block.tool_use_id);
           append_line(out, "tool_result_status: ", block.is_error ? "error" : "ok");
           append_line(out, "tool_result_output: ", block.output);

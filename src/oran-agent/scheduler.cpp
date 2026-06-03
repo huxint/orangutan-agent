@@ -187,13 +187,13 @@ classify_lock_mode(const std::vector<core::Capability>& capabilities) {
     // (`file.search`, `directory.list`). The workspace's resolve_list shape
     // is permissive enough to accept both filenames and directory targets,
     // so use it for the listing capability.
-    const bool list_intent = std::ranges::find(capabilities, core::Capability::list_directory) != capabilities.end();
+    const bool list_intent = std::ranges::contains(capabilities, core::Capability::list_directory);
     resolved = list_intent ? workspace->resolve_list(raw_path) : workspace->resolve_read(raw_path);
   } else {
     // Exclusive: delete vs. write/edit. delete_path implies `file.delete`;
     // otherwise resolve through `resolve_write` (covers `file.write` and
     // `file.edit`, both of which dispatch own re-resolution internally).
-    const bool delete_intent = std::ranges::find(capabilities, core::Capability::delete_path) != capabilities.end();
+    const bool delete_intent = std::ranges::contains(capabilities, core::Capability::delete_path);
     resolved =
         delete_intent ? workspace->resolve_delete(raw_path) : workspace->resolve_write(raw_path, tool::WriteIntent{});
   }
