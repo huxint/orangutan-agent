@@ -47,6 +47,7 @@
 #include <oran/core/bounded_cache.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/time.hpp>
+#include <oran/io/blocking.hpp>
 #include <oran/io/fingerprint.hpp>
 
 namespace orangutan::io {
@@ -1638,26 +1639,11 @@ write_text_file_blocking(const std::string& path, const std::string& contents, W
   }
 }
 
-template <typename ResultT, typename Fn>
-[[nodiscard]] async::Awaitable<ResultT> run_blocking(asio::any_io_executor executor, Fn fn) {
-  auto cancellation = co_await asio::this_coro::cancellation_state;
-  if (is_cancelled(cancellation)) {
-    co_return std::unexpected(core::Error::cancelled());
-  }
-
-  co_await asio::post(std::move(executor), asio::use_awaitable);
-  if (is_cancelled(cancellation)) {
-    co_return std::unexpected(core::Error::cancelled());
-  }
-
-  co_return fn();
-}
-
 [[nodiscard]] async::Awaitable<core::Result<PreparedReadTextFile>>
 prepare_read_text_file_async(asio::any_io_executor executor, std::string path, ReadTextOptions options) {
-  co_return co_await run_blocking<core::Result<PreparedReadTextFile>>(
-      std::move(executor),
-      [path = std::move(path), options] { return prepare_read_text_file_blocking(path, options); });
+  co_return co_await run_blocking(std::move(executor), [path = std::move(path), options] {
+    return prepare_read_text_file_blocking(path, options);
+  });
 }
 
 [[nodiscard]] async::Awaitable<core::Result<ReadTextResult>> read_text_file_cold_async(asio::any_io_executor executor,
@@ -1665,7 +1651,7 @@ prepare_read_text_file_async(asio::any_io_executor executor, std::string path, R
                                                                                        ReadTextOptions options,
                                                                                        FileFingerprint fingerprint,
                                                                                        FileViewCacheKey cache_key) {
-  co_return co_await run_blocking<core::Result<ReadTextResult>>(
+  co_return co_await run_blocking(
       std::move(executor),
       [path = std::move(path), options, fingerprint = std::move(fingerprint), cache_key = std::move(cache_key)] {
         return read_text_file_cold_blocking(path, options, fingerprint, cache_key);
@@ -1859,23 +1845,20 @@ ReadTextSingleflightStats read_text_file_ranged_singleflight_stats() {
 
 async::Awaitable<core::Result<void>>
 write_text_file(asio::any_io_executor executor, std::string path, std::string contents, WriteTextOptions options) {
-  co_return co_await run_blocking<core::Result<void>>(
-      std::move(executor),
-      [path = std::move(path), contents = std::move(contents), options] {
-        return write_text_file_blocking(path, contents, options);
-      });
+  co_return co_await run_blocking(std::move(executor),
+                                  [path = std::move(path), contents = std::move(contents), options] {
+                                    return write_text_file_blocking(path, contents, options);
+                                  });
 }
 
 async::Awaitable<core::Result<std::vector<DirectoryEntry>>>
 list_directory(asio::any_io_executor executor, std::string path, ListDirectoryOptions options) {
-  co_return co_await run_blocking<core::Result<std::vector<DirectoryEntry>>>(
-      std::move(executor),
-      [path = std::move(path), options] { return list_directory_blocking(path, options); });
+  co_return co_await run_blocking(std::move(executor),
+                                  [path = std::move(path), options] { return list_directory_blocking(path, options); });
 }
 
 async::Awaitable<core::Result<void>> delete_file(asio::any_io_executor executor, std::string path) {
-  co_return co_await run_blocking<core::Result<void>>(std::move(executor),
-                                                      [path = std::move(path)] { return delete_file_blocking(path); });
+  co_return co_await run_blocking(std::move(executor), [path = std::move(path)] { return delete_file_blocking(path); });
 }
 
 }  // namespace orangutan::io

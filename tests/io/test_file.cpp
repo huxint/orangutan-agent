@@ -225,6 +225,54 @@ TEST_CASE("read_text_file observes cancellation before blocking work", "[unit][i
   REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
 }
 
+TEST_CASE("run_blocking returns the callable result", "[unit][io][blocking]") {
+  test::run_async([](asio::io_context& context) -> async::Awaitable<void> {
+    bool invoked = false;
+
+    auto result = co_await io::run_blocking(context.get_executor(), [&] {
+      invoked = true;
+      return core::Result<int>{42};
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(*result == 42);
+    REQUIRE(invoked);
+  });
+}
+
+TEST_CASE("run_blocking observes cancellation before invoking callable", "[unit][io][blocking]") {
+  asio::io_context context;
+  asio::cancellation_signal signal;
+  bool invoked = false;
+  std::optional<core::Result<int>> result;
+  std::exception_ptr failure;
+
+  asio::co_spawn(
+      context,
+      [&]() -> async::Awaitable<core::Result<int>> {
+        co_return co_await io::run_blocking(context.get_executor(), [&] {
+          invoked = true;
+          return core::Result<int>{42};
+        });
+      },
+      asio::bind_cancellation_slot(signal.slot(), [&](std::exception_ptr ep, core::Result<int> r) {
+        failure = ep;
+        result = std::move(r);
+        context.stop();
+      }));
+
+  asio::post(context, [&] { signal.emit(asio::cancellation_type::terminal); });
+  context.run();
+
+  if (failure) {
+    std::rethrow_exception(failure);
+  }
+  REQUIRE(result.has_value());
+  REQUIRE_FALSE(result->has_value());
+  REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
+  REQUIRE_FALSE(invoked);
+}
+
 TEST_CASE("delete_file removes the file at path", "[unit][io][file]") {
   TempDir temp{"oran-io-delete"};
   const auto file = temp.path() / "removable.txt";

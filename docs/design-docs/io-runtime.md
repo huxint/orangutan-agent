@@ -220,6 +220,10 @@ ReadTextFileCacheStats read_text_file_ranged_cache_stats();
 
 ReadTextSingleflightStats read_text_file_ranged_singleflight_stats();
 
+template <typename Fn>
+async::Awaitable<std::invoke_result_t<Fn&>>
+run_blocking(asio::any_io_executor executor, Fn fn);
+
 async::Awaitable<core::Result<void>>
 write_text_file(asio::any_io_executor executor,
                 std::string path,
@@ -325,9 +329,14 @@ surface for effectful agent actions.
   `compute_hash=true` (SHA-256 in
   `FileFingerprint::sha256`) for high-trust paths. Text-only callers keep
   the legacy `read_text_file` wrapper that drops the metadata.
-- **`io::run_blocking` / "already on blocking executor" helper** —
-  exported as a public utility so `oran-tool` (and any future caller)
-  stops duplicating `<fstream>` logic for capped scans.
+- **Public blocking boundary** — slice 154 exports
+  `<oran/io/blocking.hpp>` with `io::run_blocking(executor, fn)`.
+  The helper posts a nullary callable returning `core::Result<T>` onto
+  the supplied executor, checks cancellation before and after the post,
+  and returns `Error::cancelled` without invoking the callable when the
+  parent coroutine is already cancelled. The existing file/directory
+  helpers consume the public template; future short blocking IO callers
+  should reuse it rather than duplicating coroutine-posting glue.
 
 ## Atomic Writes
 

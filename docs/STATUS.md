@@ -7,12 +7,19 @@
 
 ## Snapshot
 
-- **Slice:** 153 (`xmake run orangutan` reports slice 153)
+- **Slice:** 154 (`xmake run orangutan` reports slice 154)
 - **Last completed history:**
-  [`histories/2026-06/20260604-1344-io-atomic-durability.md`](histories/2026-06/20260604-1344-io-atomic-durability.md)
+  [`histories/2026-06/20260604-1412-io-run-blocking.md`](histories/2026-06/20260604-1412-io-run-blocking.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** slice 153 closes the atomic-write durability item from
+- **Next intended slice:** slice 154 closes the public `io::run_blocking`
+  utility item from the deep-review tracker: `<oran/io/blocking.hpp>` now
+  exports the same cancel-before/cancel-after-post boundary the file helpers
+  used privately, restricted to nullary callables returning `core::Result<T>`.
+  `oran-io`'s own file/directory helpers consume that public template, keeping
+  future short blocking IO callers on the same cancellation contract instead of
+  copying coroutine-posting glue. Focused result: `test-io`
+  **54 cases / 311 assertions**. Slice 153 closes the atomic-write durability item from
   the deep-review tracker: `io::WriteTextOptions` now carries
   `WriteTextDurability { rename_only, fsync_file, fsync_file_and_parent }`.
   The default `rename_only` keeps the slice-32 temp-then-rename behavior,
@@ -1447,7 +1454,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-core`: 71 cases / 459 assertions.
 - `oran-async`: 9 cases / 43 assertions.
 - `oran-http`: 3 cases / 21 assertions.
-- `oran-io`: 52 cases / 303 assertions.
+- `oran-io`: 54 cases / 311 assertions.
 - `oran-storage`: 76 cases / 986 assertions.
 - `oran-config`: 40 cases / 322 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
@@ -1489,8 +1496,9 @@ Closed entries do *not* live here — the tracker is canonical.
   deleted after its actionable findings were absorbed into the tracker and
   specs 0011-0018. Slices 31-36 closed the rank-0 items plus the P0
   follow-ups, slice 60 closed the P2 `tool::Output` envelope item, and
-  slice 115 closed the P1 `tool::parse_input<T>` helper item; remaining
-  follow-ups are grouped P1/P2/P3 in the tracker.
+  slice 115 closed the P1 `tool::parse_input<T>` helper item; slice 154
+  closed the P2 public `io::run_blocking` utility item. Remaining follow-ups
+  are grouped P1/P2/P3 in the tracker.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on
   the documented reference hardware (8-core / NVMe / native Linux);
