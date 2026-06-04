@@ -210,49 +210,11 @@ skill_policy_records_from(std::span<const memory::session::SkillActivationRecord
 }
 
 [[nodiscard]] std::vector<memory::session::SkillActivationUpdate>
-skill_activation_updates_from_transcript(std::span<const core::Message> transcript, std::size_t start_index) {
-  if (start_index > transcript.size()) {
-    return {};
-  }
-
-  std::unordered_map<std::string_view, std::string_view> tool_use_names;
-  for (std::size_t i = start_index; i < transcript.size(); ++i) {
-    const auto& message = transcript[i];
-    if (message.role != core::Role::assistant) {
-      continue;
-    }
-    for (const auto& block : message.blocks) {
-      if (const auto* use = std::get_if<core::ToolUseContent>(&block); use != nullptr) {
-        tool_use_names.emplace(use->id, use->name);
-      }
-    }
-  }
-
+skill_activation_updates_from_events(std::span<const skill::SkillActivationEvent> events) {
   auto updates = std::vector<memory::session::SkillActivationUpdate>{};
-  for (std::size_t i = start_index; i < transcript.size(); ++i) {
-    const auto& message = transcript[i];
-    if (message.role != core::Role::tool) {
-      continue;
-    }
-    for (const auto& block : message.blocks) {
-      const auto* result = std::get_if<core::ToolResultContent>(&block);
-      if (result == nullptr || result->is_error || !result->data_json.has_value()) {
-        continue;
-      }
-      const auto name_it = tool_use_names.find(result->tool_use_id);
-      if (name_it == tool_use_names.end()) {
-        continue;
-      }
-      if (name_it->second == "skill.invoke") {
-        if (auto active = skill::active_skill_from_data_json(*result->data_json); active.has_value()) {
-          updates.push_back(memory::session::SkillActivationUpdate{.name = std::move(active->name), .active = true});
-        }
-      } else if (name_it->second == "skill.deactivate") {
-        if (auto deactivated = skill::deactivated_skill_from_data_json(*result->data_json); deactivated.has_value()) {
-          updates.push_back(memory::session::SkillActivationUpdate{.name = std::move(*deactivated), .active = false});
-        }
-      }
-    }
+  updates.reserve(events.size());
+  for (const auto& event : events) {
+    updates.push_back(memory::session::SkillActivationUpdate{.name = event.name, .active = event.active});
   }
   return updates;
 }
@@ -452,9 +414,11 @@ public:
     }
 
     observe_turn_results(result->transcript, prev_transcript_size);
+    const auto skill_activation_events =
+        skill::skill_activation_events_from_transcript(std::span<const core::Message>{result->transcript},
+                                                       prev_transcript_size);
     auto skill_activation_updates =
-        skill_activation_updates_from_transcript(std::span<const core::Message>{result->transcript},
-                                                 prev_transcript_size);
+        skill_activation_updates_from_events(std::span<const skill::SkillActivationEvent>{skill_activation_events});
 
     if (session_store != nullptr) {
       auto persisted = co_await append_transcript_suffix(*session_store, result->transcript, prev_transcript_size);

@@ -404,9 +404,15 @@ std::optional<std::string> deactivated_skill_from_data_json(std::string_view dat
   return name;
 }
 
-std::vector<ActiveSkill> active_skills_from_transcript(std::span<const core::Message> transcript) {
+std::vector<SkillActivationEvent> skill_activation_events_from_transcript(std::span<const core::Message> transcript,
+                                                                          std::size_t start_index) {
+  if (start_index > transcript.size()) {
+    return {};
+  }
+
   std::unordered_map<std::string_view, std::string_view> tool_use_names;
-  for (const auto& message : transcript) {
+  for (std::size_t i = start_index; i < transcript.size(); ++i) {
+    const auto& message = transcript[i];
     if (message.role != core::Role::assistant) {
       continue;
     }
@@ -418,8 +424,9 @@ std::vector<ActiveSkill> active_skills_from_transcript(std::span<const core::Mes
     }
   }
 
-  std::vector<ActiveSkill> active_skills;
-  for (const auto& message : transcript) {
+  std::vector<SkillActivationEvent> events;
+  for (std::size_t i = start_index; i < transcript.size(); ++i) {
+    const auto& message = transcript[i];
     if (message.role != core::Role::tool) {
       continue;
     }
@@ -433,15 +440,29 @@ std::vector<ActiveSkill> active_skills_from_transcript(std::span<const core::Mes
         continue;
       }
       if (name->second == kSkillInvokeName) {
-        if (auto active = active_skill_from_data_json(*result->data_json);
-            active.has_value() && !contains_active_skill(std::span<const ActiveSkill>{active_skills}, active->name)) {
-          active_skills.push_back(std::move(*active));
+        if (auto active = active_skill_from_data_json(*result->data_json); active.has_value()) {
+          events.push_back(SkillActivationEvent{.name = std::move(active->name), .active = true});
         }
       } else if (name->second == kSkillDeactivateName) {
         if (auto deactivated = deactivated_skill_from_data_json(*result->data_json); deactivated.has_value()) {
-          std::erase_if(active_skills, [&deactivated](const ActiveSkill& skill) { return skill.name == *deactivated; });
+          events.push_back(SkillActivationEvent{.name = std::move(*deactivated), .active = false});
         }
       }
+    }
+  }
+  return events;
+}
+
+std::vector<ActiveSkill> active_skills_from_transcript(std::span<const core::Message> transcript) {
+  auto active_skills = std::vector<ActiveSkill>{};
+  auto events = skill_activation_events_from_transcript(transcript);
+  for (auto& event : events) {
+    if (event.active) {
+      if (!contains_active_skill(std::span<const ActiveSkill>{active_skills}, event.name)) {
+        active_skills.push_back(ActiveSkill{.name = std::move(event.name)});
+      }
+    } else {
+      std::erase_if(active_skills, [&event](const ActiveSkill& skill) { return skill.name == event.name; });
     }
   }
   return active_skills;

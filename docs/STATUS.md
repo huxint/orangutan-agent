@@ -7,19 +7,28 @@
 
 ## Snapshot
 
-- **Slice:** 148 (`xmake run orangutan` reports slice 148)
+- **Slice:** 149 (`xmake run orangutan` reports slice 149)
 - **Last completed history:**
-  [`histories/2026-06/20260603-2108-supply-chain-ci.md`](histories/2026-06/20260603-2108-supply-chain-ci.md)
+  [`histories/2026-06/20260604-1039-skill-activation-events.md`](histories/2026-06/20260604-1039-skill-activation-events.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** CI-only follow-up 20260603-2108 sits on top of
-  slice 148 and fixed the supply-chain workflow by making Dependency Review an
-  explicit `ENABLE_DEPENDENCY_REVIEW=true` opt-in for repositories where GitHub
-  supports it and by pinning OSV scanner to a valid v2.3.8 upstream commit. The
-  current product slice remains slice 148: skill activation state is durable in
-  session memory. `sessions.db` adds `session_skill_activations` keyed by
-  `(session_id, agent_key, skill_name)`, `storage::SessionRepository` and
-  `memory::session::Store` expose typed upsert/load APIs, and
+- **Next intended slice:** slice 149 promotes the transcript
+  activation/deactivation scan to the `oran-skill` public API. The new
+  `skill::SkillActivationEvent` and
+  `skill::skill_activation_events_from_transcript(...)` primitive returns
+  ordered semantic events from successful `skill.invoke` / `skill.deactivate`
+  tool results, optionally starting at a transcript suffix boundary.
+  `skill::active_skills_from_transcript(...)` now nets those events, and
+  `AgentPromptRunner` maps the same shared event stream into
+  `memory::session::SkillActivationUpdate` rows for session persistence instead
+  of owning a second skill-result parser. This keeps section-4 rendering and
+  `oran-prompt` unchanged while future CLI/web/channel/automation runtime
+  owners can persist or replay the same events. Focused result: `test-skill`
+  **27 cases / 168 assertions** and `test-bootstrap` **100 / 699**. Slice 148
+  makes skill activation state durable in session memory: `sessions.db` adds
+  `session_skill_activations` keyed by `(session_id, agent_key, skill_name)`,
+  `storage::SessionRepository` and `memory::session::Store` expose typed
+  upsert/load APIs, and
   `skill::ActivationPolicy::session_skill_activations` overlays the
   transcript-derived `skill.invoke` / `skill.deactivate` state before config
   deactivation and expiration subtract from it. `AgentPromptRunner` loads those
@@ -51,8 +60,8 @@
   and expired active markers while the renderer stays clock-free.
   Default/no-agent callers still pass an empty policy, so unchanged configs
   behave exactly as before. Focused result: `test-config` **39 cases / 299
-  assertions** and `test-bootstrap` **98 cases / 646 assertions**. The next
-  product slice remains cross-runtime skill policy ownership without changing
+  assertions** and `test-bootstrap` **98 cases / 646 assertions**. The broader
+  product path remains cross-runtime skill policy ownership without changing
   the prompt-builder boundary. Slice 145 extends
   `skill::ActivationPolicy` with explicit `SkillExpiration` rows plus optional
   `evaluation_time`, validates expiration names as unique single-line skill
@@ -1404,7 +1413,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 30 cases / 207 assertions.
 - `oran-memory`: 9 cases / 576 assertions.
-- `oran-skill`: 26 cases / 163 assertions.
+- `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 191 cases / 1919 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 86 cases / 652 assertions.

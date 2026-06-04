@@ -29,7 +29,7 @@ activate them on demand without bloating the system prompt.
   Catalog rendering and skill-body placement follow the cache-section
   ordering in [`docs/rules/prompt-design.md`](../rules/prompt-design.md) —
   activated skill bodies shift the skills section, never the system
-  preamble. **Status (slices 142-148, 2026-06-03):** `oran-skill` can render
+  preamble. **Status (slices 142-149, 2026-06-04):** `oran-skill` can render
   deterministic `Active Skill: <name>` markers ahead of the ordinary compact
   skill entries. The current `skill::ActivationPolicy` derives markers from
   versioned `skill.invoke` metadata in the session transcript and filters them
@@ -47,7 +47,12 @@ activate them on demand without bloating the system prompt.
   the first runtime-owned source for these inputs: per-agent
   `agents.<name>.skills_deactivated` and `agents.<name>.skills_expirations`
   config, with bootstrap supplying the prompt-boundary evaluation time so the
-  configured-route renderer stays clock-free.
+  configured-route renderer stays clock-free. Slice 149 exposes
+  `skill::SkillActivationEvent` plus
+  `skill::skill_activation_events_from_transcript(...)`, making the
+  transcript `skill.invoke` / `skill.deactivate` event scan a reusable
+  `oran-skill` public primitive for future CLI/web/channel/automation runtime
+  owners instead of bootstrap-local parsing.
 - Section-4 cache semantics for activation policy.
   **Status (doc slice, 2026-06-02):** activation policy is now specified as
   prompt-boundary state. For the same loaded/allowed skill snapshot, transcript
@@ -63,20 +68,23 @@ activate them on demand without bloating the system prompt.
   `AgentPromptRunnerOptions::skills_catalog` bytes remain an embedder/test
   bypass of automatic loader and policy handling.
 - `skill.invoke(name, inputs)` tool runs a loaded skill. **Status (slices
-  137, 142, and 148, 2026-06-03):** the built-in is registered in the default active
+  137, 142, 148, and 149, 2026-06-04):** the built-in is registered in the default active
   catalog with `Capability::invoke_skill`, parses only `name` plus optional
   raw JSON `inputs`, delegates lookup through `DispatchContext::skill_invoke`,
   and returns the matched markdown body as ordinary `tool_result` text for the
   next provider iteration. The successful output now also carries a small
   `data_json` activation record (`kind=skill_activation`, `version=1`, `name`)
   so the next prompt can mark that skill active in section 4 without parsing
-  model-visible body text. When session memory is enabled, bootstrap also
-  persists that successful activation as the latest durable session row after
-  the turn succeeds. The tool layer owns parsing, permissions, audit, hooks,
+  model-visible body text. `oran-skill` now also exposes the transcript event
+  extractor that turns successful activation/deactivation tool results into
+  semantic `SkillActivationEvent` rows for any runtime owner that needs to
+  persist or replay the latest state. When session memory is enabled,
+  bootstrap persists those events as the latest durable session row after the
+  turn succeeds. The tool layer owns parsing, permissions, audit, hooks,
   scheduler dispatch, and output caps; bootstrap owns the snapshot lookup so
   `oran-tool` does not depend on `oran-skill`.
 - `skill.deactivate(name)` tool clears a loaded skill's active marker. **Status
-  (slices 147-148, 2026-06-03):** the built-in is registered in the default active
+  (slices 147-149, 2026-06-04):** the built-in is registered in the default active
   catalog with `Capability::deactivate_skill`, parses only `{"name": <string>}`,
   delegates through `DispatchContext::skill_deactivate`, and returns a short
   confirmation plus a versioned `data_json` deactivation record
@@ -87,9 +95,10 @@ activate them on demand without bloating the system prompt.
   record stays out of sections (1)-(6) and travels only as a section-7
   tool-result `data_json`. When session memory is enabled, bootstrap persists
   the successful deactivation as the latest durable inactive row after the turn
-  succeeds. The tool layer owns parsing, permissions, audit, hooks, scheduler
-  dispatch, and output caps; bootstrap owns the snapshot lookup so `oran-tool`
-  does not depend on `oran-skill`.
+  succeeds by consuming the shared `SkillActivationEvent` extractor. The tool
+  layer owns parsing, permissions, audit, hooks, scheduler dispatch, and output
+  caps; bootstrap owns the snapshot lookup so `oran-tool` does not depend on
+  `oran-skill`.
 - Hot-reload via filesystem watcher (`asio` + inotify on Linux). **Status
   (slice 138, 2026-06-01):** prompt-boundary hot reload is implemented for
   configured-route `AgentPromptRunner` instances with a `skills_directory`.
@@ -123,8 +132,10 @@ activate them on demand without bloating the system prompt.
   prior `skill.invoke` activations in transcript order (most recent event wins),
   so the change lands at the next prompt boundary only. Slice 148 adds a
   session-store-backed activation record that overlays transcript-derived state
-  and survives transcript compaction/pruning; both sources preserve the
-  section-4 cache semantics above.
+  and survives transcript compaction/pruning; slice 149 promotes the
+  transcript event extraction to `oran-skill` so non-bootstrap runtime owners
+  can persist the same event stream without copying parser logic. All sources
+  preserve the section-4 cache semantics above.
 
 ## Scope (v2)
 
@@ -160,8 +171,9 @@ activate them on demand without bloating the system prompt.
    active-marker, and explicit activation/deactivation/expiration policy
    coverage, plus config-sourced deactivation/expiration; slice 147 adds
    transcript-event `skill.deactivate` coverage (`tests/skill`, `tests/tool`,
-   `tests/core`); slice 148 adds durable session activation overlay coverage
-   (`tests/skill`, `tests/storage`, `tests/memory`, `tests/bootstrap`).
+  `tests/core`); slice 148 adds durable session activation overlay coverage
+  (`tests/skill`, `tests/storage`, `tests/memory`, `tests/bootstrap`), and
+  slice 149 adds public activation-event extractor coverage in `tests/skill`.
    `tests/config` and `tests/bootstrap` cover the config source, the deactivate
    built-in, and runner integration.
 

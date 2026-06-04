@@ -216,7 +216,48 @@ namespace {
   };
 }
 
+[[nodiscard]] core::Message skill_tool_error_result(std::string_view id, std::string_view data_json) {
+  return core::Message{
+      .role = core::Role::tool,
+      .blocks = {core::ToolResultContent{.tool_use_id = std::string{id},
+                                         .output = "error",
+                                         .data_json = std::string{data_json},
+                                         .is_error = true}},
+      .created_at = std::nullopt,
+  };
+}
+
 }  // namespace
+
+TEST_CASE("skill_activation_events_from_transcript extracts suffix activation updates", "[unit][skill][catalog]") {
+  auto old_activation = skill::render_activation_data_json("old-skill");
+  auto activation = skill::render_activation_data_json("release-note");
+  auto deactivation = skill::render_deactivation_data_json("release-note");
+  REQUIRE(old_activation.has_value());
+  REQUIRE(activation.has_value());
+  REQUIRE(deactivation.has_value());
+
+  const std::vector<core::Message> transcript{
+      skill_tool_use("old-1", "skill.invoke"),
+      skill_tool_result("old-1", *old_activation),
+      skill_tool_use("s1", "skill.invoke"),
+      skill_tool_result("s1", *activation),
+      skill_tool_use("s2", "file.read"),
+      skill_tool_result("s2", *activation),
+      skill_tool_use("s3", "skill.invoke"),
+      skill_tool_error_result("s3", *activation),
+      skill_tool_use("s4", "skill.deactivate"),
+      skill_tool_result("s4", *deactivation),
+  };
+
+  const auto events = skill::skill_activation_events_from_transcript(transcript, 2);
+
+  REQUIRE(events == std::vector<skill::SkillActivationEvent>{
+                        skill::SkillActivationEvent{.name = "release-note", .active = true},
+                        skill::SkillActivationEvent{.name = "release-note", .active = false},
+                    });
+  REQUIRE(skill::skill_activation_events_from_transcript(transcript, transcript.size() + 1).empty());
+}
 
 TEST_CASE("active_skills_from_transcript nets skill.deactivate against skill.invoke", "[unit][skill][catalog]") {
   auto activation = skill::render_activation_data_json("release-note");

@@ -4,10 +4,12 @@
 // metadata snapshot plus optional active-skill markers and receive compact,
 // deterministic catalog text. Skill bodies are intentionally absent from this
 // renderer; loader/invoke work snapshots bodies without moving them into the
-// stable system preamble.
+// stable system preamble. The same library owns versioned activation-event
+// parsing so runtime entry points do not duplicate transcript scans.
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -51,6 +53,13 @@ struct SessionSkillActivation {
   bool active{true};
 
   friend bool operator==(const SessionSkillActivation&, const SessionSkillActivation&) = default;
+};
+
+struct SkillActivationEvent {
+  std::string name;
+  bool active{true};
+
+  friend bool operator==(const SkillActivationEvent&, const SkillActivationEvent&) = default;
 };
 
 struct ActivationPolicy {
@@ -106,6 +115,8 @@ public:
 /// Net transcript-derived active markers: successful `skill.invoke` results add
 /// a skill and successful `skill.deactivate` results remove it, in transcript
 /// order, so the most recent event for a skill decides whether it stays active.
+[[nodiscard]] std::vector<SkillActivationEvent>
+skill_activation_events_from_transcript(std::span<const core::Message> transcript, std::size_t start_index = 0);
 [[nodiscard]] std::vector<ActiveSkill> active_skills_from_transcript(std::span<const core::Message> transcript);
 [[nodiscard]] core::Result<std::vector<ActiveSkill>>
 resolve_active_skills(ActivationPolicy policy,

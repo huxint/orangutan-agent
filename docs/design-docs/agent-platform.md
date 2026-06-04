@@ -196,6 +196,10 @@ The agent loop owns:
   prior `skill.invoke` activations in transcript order (most recent event wins),
   so the agent can drop an active skill mid-session without a config edit while
   the section-4 owner stays clock-free.
+  Slice 149 exposes `skill::SkillActivationEvent` plus
+  `skill::skill_activation_events_from_transcript(...)`; bootstrap consumes that
+  shared event stream for session-store persistence, and future runtime entry
+  points can do the same instead of duplicating transcript parser logic.
   The policy is resolved only at prompt boundaries: identical loaded/allowed
   snapshots plus identical policy inputs render byte-identical section-4 bytes,
   while changed activation, deactivation, or expiry state intentionally changes

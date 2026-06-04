@@ -178,7 +178,13 @@ mid-session deactivation clears the section-4 marker without a config edit or a
 renderer clock. Slice 148 persists successful `skill.invoke` / `skill.deactivate`
 results as per-session activation rows after the turn succeeds. Those rows overlay
 the transcript-derived set on later prompts, so pruning old transcript tool results
-cannot lose the latest active/inactive decision.
+cannot lose the latest active/inactive decision. Slice 149 moves the transcript
+activation/deactivation event scan behind
+`skill::skill_activation_events_from_transcript(...)`; bootstrap now maps those
+semantic `skill::SkillActivationEvent` rows into
+`memory::session::SkillActivationUpdate` instead of owning another
+skill-result parser. Other runtime entry points can therefore persist the same
+event stream without changing the prompt-builder boundary.
 Empty `AgentPromptRunnerOptions::system_preamble` selects
 `agent::default_system_preamble()`; explicit text is treated as an override for
 tests and embedders. Multi-iteration provider/tool turns therefore reuse stable
