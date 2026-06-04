@@ -4,7 +4,7 @@
 
 - Agent: `Codex`
 - Base model: `GPT-5`
-- Runtime: `Codex CLI, /home/huxint/projects/orangutan-refactor`
+- Runtime: `Codex CLI in local repository checkout`
 - Linked plan: none; small workflow/tooling change
 
 ### User Query

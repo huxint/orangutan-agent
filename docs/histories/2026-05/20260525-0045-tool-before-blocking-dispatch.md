@@ -4,7 +4,7 @@
 
 - Agent: `Codex`
 - Base model: `GPT-5`
-- Runtime: `/home/huxint/projects/orangutan-refactor`
+- Runtime: `local repository checkout`
 - Linked plan: none — this stayed within the existing spec-0015 sequencing.
 
 ### User Query

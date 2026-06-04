@@ -4,7 +4,7 @@
 
 - Agent: `Codex`
 - Base model: `GPT-5`
-- Runtime: `/home/huxint/projects/orangutan-refactor`
+- Runtime: `local repository checkout`
 - Linked plan: none — focused spec-0018 config-policy slice after the first terminal trace writer.
 
 ### User Query

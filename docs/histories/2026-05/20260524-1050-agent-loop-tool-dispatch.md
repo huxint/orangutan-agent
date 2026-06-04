@@ -4,7 +4,7 @@
 
 - Agent: `Codex`
 - Base model: `GPT-5`
-- Runtime: `/home/huxint/projects/orangutan-refactor`
+- Runtime: `local repository checkout`
 - Linked plan: none — this is a focused spec-0017 continuation under the fake-provider-first sequencing contract.
 
 ### User Query
