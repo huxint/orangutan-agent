@@ -1,194 +1,310 @@
 #!/usr/bin/env bash
-# .claude/hooks/expand-xmake-build.sh
+# Claude Code PreToolUse hook for Bash.
 #
-# Claude Code PreToolUse hook for Bash. `xmake build` only accepts one target
-# per invocation, so we rewrite `xmake build a b ...` into chained
-# single-target builds.
+# xmake build accepts a single positional target. This hook rewrites pure
+# multi-target build segments:
 #
-# Composed commands: we split on top-level `&&` and `;` (respecting single /
-# double quotes and backslash escapes) and expand each segment independently.
-# A segment is rewritten only when it is a pure `xmake build <t1> <t2> ...`
-# (≥ 2 positional targets, no flags, no pipes / redirects / parens /
-# background). Any other segment passes through verbatim, so e.g.
-# `xmake build a b 2>&1 | tail -5 && echo done` is left alone (the first
-# segment has `|` / `>` — operator stays in control of redirect / pipe scope).
+#   xmake build -r test-core test-tool
 #
-# Whole-command bail-outs: we cannot reason about backticks or `$(...)`
-# without a real shell tokenizer, so the command passes through unchanged if
-# either appears.
+# into:
 #
-# Input: hook JSON on stdin with `.tool_input.command`.
-# Output (only when at least one segment was expanded): PreToolUse JSON on
-# stdout with `hookSpecificOutput.updatedInput.command` set to the rewrite.
+#   xmake build -r test-core && xmake build -r test-tool
+#
+# It intentionally leaves segments with pipes, redirects, parens, backgrounding,
+# or command substitution untouched because changing those can alter shell scope.
 
 set -euo pipefail
 
 input=$(cat)
-command=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
+HOOK_INPUT="$input" python3 - "$@" <<'PY'
+import json
+import os
+import shlex
+import sys
 
-if [[ -z "$command" ]]; then
-  exit 0
-fi
-
-# Subshell / command-substitution: we can't track boundaries through the
-# split-on-&&/; pass, so bail entirely.
-if [[ "$command" == *'`'* ]] || [[ "$command" == *'$('* ]]; then
-  exit 0
-fi
-
-# Split $1 on top-level `&&` and `;`, respecting single / double quotes and
-# backslash escapes. Populates the `segments` and `seps` arrays (len(seps) =
-# len(segments) - 1; seps[i] is the operator between segments[i] and
-# segments[i+1]).
-split_top_level() {
-  local s="$1"
-  local n=${#s}
-  local i=0
-  local in_single=0 in_double=0
-  local cur=""
-  segments=()
-  seps=()
-  while ((i < n)); do
-    local c="${s:i:1}"
-    if ((in_single)); then
-      cur+="$c"
-      [[ "$c" == "'" ]] && in_single=0
-      i=$((i + 1))
-      continue
-    fi
-    if ((in_double)); then
-      if [[ "$c" == "\\" ]] && ((i + 1 < n)); then
-        cur+="${s:i:2}"
-        i=$((i + 2))
-        continue
-      fi
-      cur+="$c"
-      [[ "$c" == '"' ]] && in_double=0
-      i=$((i + 1))
-      continue
-    fi
-    case "$c" in
-    "'")
-      in_single=1
-      cur+="$c"
-      i=$((i + 1))
-      ;;
-    '"')
-      in_double=1
-      cur+="$c"
-      i=$((i + 1))
-      ;;
-    "\\")
-      if ((i + 1 < n)); then
-        cur+="${s:i:2}"
-        i=$((i + 2))
-      else
-        cur+="$c"
-        i=$((i + 1))
-      fi
-      ;;
-    '&')
-      if [[ "${s:i+1:1}" == '&' ]]; then
-        segments+=("$cur")
-        seps+=("&&")
-        cur=""
-        i=$((i + 2))
-      else
-        # Bare `&` (background or stray). Keep verbatim — the per-segment
-        # guard will refuse to expand any segment containing it.
-        cur+="$c"
-        i=$((i + 1))
-      fi
-      ;;
-    ';')
-      segments+=("$cur")
-      seps+=(";")
-      cur=""
-      i=$((i + 1))
-      ;;
-    *)
-      cur+="$c"
-      i=$((i + 1))
-      ;;
-    esac
-  done
-  segments+=("$cur")
+OPTION_VALUE_FLAGS = {
+    "-F",
+    "--file",
+    "-P",
+    "--project",
+    "--confirm",
+    "-j",
+    "--jobs",
+    "--linkjobs",
+    "-g",
+    "--group",
+    "--files",
 }
 
-# Print the (possibly rewritten) form of $1. When unchanged, prints the
-# segment verbatim; when rewritten, prints the chained form without the
-# segment's original surrounding whitespace (bash doesn't care, and it keeps
-# the diff clean).
-expand_segment() {
-  local seg="$1"
-  local trimmed="${seg#"${seg%%[![:space:]]*}"}"
-  trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
-  if [[ -z "$trimmed" ]]; then
-    printf '%s' "$seg"
-    return
-  fi
-  # Any shell metachar means this segment isn't a pure build — leave it.
-  if [[ "$trimmed" =~ [\&\|\>\<\(\)] ]]; then
-    printf '%s' "$seg"
-    return
-  fi
-  local body="$trimmed"
-  if [[ "$body" != "xmake build "* ]]; then
-    printf '%s' "$seg"
-    return
-  fi
-  local args_str="${body#xmake build }"
-  local tokens=()
-  read -ra tokens <<<"$args_str"
-  for tok in "${tokens[@]}"; do
-    if [[ "$tok" == -* ]]; then
-      printf '%s' "$seg"
-      return
-    fi
-  done
-  if ((${#tokens[@]} < 2)); then
-    printf '%s' "$seg"
-    return
-  fi
-  local chained=""
-  for tgt in "${tokens[@]}"; do
-    local segment_cmd="xmake build ${tgt}"
-    if [[ -z "$chained" ]]; then
-      chained="$segment_cmd"
-    else
-      chained="$chained && $segment_cmd"
-    fi
-  done
-  printf '%s' "$chained"
-}
+OPTION_VALUE_PREFIXES = (
+    "--file=",
+    "--project=",
+    "--confirm=",
+    "--jobs=",
+    "--linkjobs=",
+    "--group=",
+    "--files=",
+)
 
-split_top_level "$command"
 
-any_expanded=0
-out=""
-for idx in "${!segments[@]}"; do
-  seg="${segments[$idx]}"
-  exp=$(expand_segment "$seg")
-  if [[ "$exp" != "$seg" ]]; then
-    any_expanded=1
-  fi
-  if ((idx == 0)); then
-    out="$exp"
-  else
-    sep="${seps[$((idx - 1))]}"
-    out="$out $sep $exp"
-  fi
-done
+def split_top_level(command):
+    segments = []
+    seps = []
+    current = []
+    in_single = False
+    in_double = False
+    i = 0
+    while i < len(command):
+        char = command[i]
+        if in_single:
+            current.append(char)
+            if char == "'":
+                in_single = False
+            i += 1
+            continue
+        if in_double:
+            if char == "\\" and i + 1 < len(command):
+                current.append(command[i : i + 2])
+                i += 2
+                continue
+            current.append(char)
+            if char == '"':
+                in_double = False
+            i += 1
+            continue
+        if char == "'":
+            in_single = True
+            current.append(char)
+            i += 1
+            continue
+        if char == '"':
+            in_double = True
+            current.append(char)
+            i += 1
+            continue
+        if char == "\\" and i + 1 < len(command):
+            current.append(command[i : i + 2])
+            i += 2
+            continue
+        if char == "&" and i + 1 < len(command) and command[i + 1] == "&":
+            segments.append("".join(current))
+            seps.append("&&")
+            current = []
+            i += 2
+            continue
+        if char == ";":
+            segments.append("".join(current))
+            seps.append(";")
+            current = []
+            i += 1
+            continue
+        current.append(char)
+        i += 1
+    segments.append("".join(current))
+    return segments, seps
 
-if ((!any_expanded)); then
-  exit 0
-fi
 
-jq -n --arg cmd "$out" --arg orig "$command" '{
-  hookSpecificOutput: {
-    hookEventName: "PreToolUse",
-    updatedInput: { command: $cmd },
-    additionalContext: "xmake build only accepts one target per invocation; multi-target segments were auto-expanded into chained single-target builds."
-  },
-  systemMessage: ("xmake build auto-expanded: " + $orig + " -> " + $cmd)
-}'
+def has_unquoted_shell_meta(segment):
+    in_single = False
+    in_double = False
+    i = 0
+    while i < len(segment):
+        char = segment[i]
+        if in_single:
+            if char == "'":
+                in_single = False
+            i += 1
+            continue
+        if in_double:
+            if char == "\\" and i + 1 < len(segment):
+                i += 2
+                continue
+            if char == '"':
+                in_double = False
+            i += 1
+            continue
+        if char == "'":
+            in_single = True
+            i += 1
+            continue
+        if char == '"':
+            in_double = True
+            i += 1
+            continue
+        if char in "&|<>()":
+            return True
+        if char == "\\" and i + 1 < len(segment):
+            i += 2
+            continue
+        i += 1
+    return False
+
+
+def option_has_inline_value(token):
+    return token.startswith(OPTION_VALUE_PREFIXES) or (
+        len(token) > 2 and (token.startswith("-j") or token.startswith("-g"))
+    )
+
+
+def parse_build_args(tokens):
+    options = []
+    targets = []
+    i = 2
+    while i < len(tokens):
+        token = tokens[i]
+        if token in {"-a", "--all"}:
+            return None
+        if token == "--":
+            targets.extend(tokens[i + 1 :])
+            break
+        if token.startswith("-"):
+            options.append(token)
+            if token in OPTION_VALUE_FLAGS and not option_has_inline_value(token):
+                if i + 1 >= len(tokens):
+                    return None
+                options.append(tokens[i + 1])
+                i += 2
+                continue
+            i += 1
+            continue
+        targets.append(token)
+        i += 1
+    return options, targets
+
+
+def expand_segment(segment):
+    stripped = segment.strip()
+    if not stripped or has_unquoted_shell_meta(stripped):
+        return segment
+    try:
+        tokens = shlex.split(stripped, posix=True, comments=False)
+    except ValueError:
+        return segment
+    if len(tokens) < 3 or tokens[0] != "xmake" or tokens[1] not in {"build", "b"}:
+        return segment
+    parsed = parse_build_args(tokens)
+    if parsed is None:
+        return segment
+    options, targets = parsed
+    if len(targets) < 2:
+        return segment
+    prefix = ["xmake", "build", *options]
+    return " && ".join(shlex.join([*prefix, target]) for target in targets)
+
+
+def expand_command(command):
+    if not command or "`" in command or "$(" in command:
+        return command, False
+    segments, seps = split_top_level(command)
+    rewritten = []
+    changed = False
+    for segment in segments:
+        expanded = expand_segment(segment)
+        rewritten.append(expanded)
+        changed = changed or expanded != segment
+    if not changed:
+        return command, False
+    output = rewritten[0].strip()
+    for index, sep in enumerate(seps):
+        output = f"{output} {sep} {rewritten[index + 1].strip()}"
+    return output, True
+
+
+def get_path(data, path):
+    value = data
+    for key in path:
+        if not isinstance(value, dict) or key not in value:
+            return None
+        value = value[key]
+    return value if isinstance(value, str) else None
+
+
+def extract_command(data):
+    candidates = [
+        ("command", ("tool_input", "command")),
+        ("cmd", ("tool_input", "cmd")),
+        ("command", ("tool_input", "arguments", "command")),
+        ("cmd", ("tool_input", "arguments", "cmd")),
+        ("command", ("tool_input", "args", "command")),
+        ("cmd", ("tool_input", "args", "cmd")),
+        ("command", ("command",)),
+        ("cmd", ("cmd",)),
+    ]
+    for key, path in candidates:
+        value = get_path(data, path)
+        if value:
+            return value, key
+    return "", "command"
+
+
+def hook_payload(original, rewritten, key):
+    message = (
+        "xmake build only accepts one target per invocation; "
+        "multi-target build segments were expanded into chained single-target builds."
+    )
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "updatedInput": {key: rewritten},
+            "additionalContext": message,
+        },
+        "systemMessage": f"xmake build auto-expanded: {original} -> {rewritten}",
+    }
+
+
+def run(input_text):
+    if not input_text.strip():
+        return 0
+    try:
+        data = json.loads(input_text)
+    except json.JSONDecodeError:
+        return 0
+    command, key = extract_command(data)
+    rewritten, changed = expand_command(command)
+    if not changed:
+        return 0
+    print(json.dumps(hook_payload(command, rewritten, key), separators=(",", ":")))
+    return 0
+
+
+def self_test():
+    cases = {
+        "xmake build test-core test-tool": "xmake build test-core && xmake build test-tool",
+        " xmake build -r test-core test-tool ": "xmake build -r test-core && xmake build -r test-tool",
+        "xmake build -j 8 test-core test-tool": "xmake build -j 8 test-core && xmake build -j 8 test-tool",
+        "xmake build --jobs=8 test-core test-tool": "xmake build --jobs=8 test-core && xmake build --jobs=8 test-tool",
+        "xmake b test-core test-tool": "xmake build test-core && xmake build test-tool",
+        "xmake build test-core test-tool && xmake run test-core": (
+            "xmake build test-core && xmake build test-tool && xmake run test-core"
+        ),
+        "xmake build test-core test-tool; xmake run test-tool": (
+            "xmake build test-core && xmake build test-tool ; xmake run test-tool"
+        ),
+        "xmake build test-core": "xmake build test-core",
+        "xmake build -a test-core test-tool": "xmake build -a test-core test-tool",
+        "xmake build test-core test-tool 2>&1 | tail -5": (
+            "xmake build test-core test-tool 2>&1 | tail -5"
+        ),
+        "xmake build -j$(nproc) test-core test-tool": (
+            "xmake build -j$(nproc) test-core test-tool"
+        ),
+    }
+    for source, expected in cases.items():
+        actual, _ = expand_command(source)
+        if actual != expected:
+            raise AssertionError(f"{source!r}: expected {expected!r}, got {actual!r}")
+    payload_input = json.dumps({"tool_input": {"command": "xmake build a b"}})
+    data = json.loads(payload_input)
+    command, key = extract_command(data)
+    rewritten, changed = expand_command(command)
+    assert changed
+    payload = hook_payload(command, rewritten, key)
+    assert payload["hookSpecificOutput"]["updatedInput"]["command"] == "xmake build a && xmake build b"
+
+
+if "--self-test" in sys.argv:
+    self_test()
+    sys.exit(0)
+
+sys.exit(run(os.environ.get("HOOK_INPUT", "")))
+PY
