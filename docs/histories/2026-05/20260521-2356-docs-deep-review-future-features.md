@@ -9,7 +9,7 @@
 
 ### User Query
 
-> 深度了解项目架构，然后根据 /tmp/orangutan-refactor-agent-tool-review-2026-05-21.md
+> 深度了解项目架构，然后根据 <tmp-deep-review-artifact>
 > 把一些未来的特性和功能说明清楚，整理好写入提示词框架, 方便以后逐步实现.
 
 ### Changes Overview

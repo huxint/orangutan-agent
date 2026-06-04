@@ -4,7 +4,7 @@
 
 - Agent: `Claude Code`
 - Base model: `Claude Opus 4.7`
-- Runtime: `Claude Code, orangutan-refactor`
+- Runtime: `Claude Code in local repository checkout`
 - Linked plan: none — three-commit slice that lands the audit
   pipeline end-to-end and closes `docs/product-specs/0008-permissions.md`
   criterion 1 ("a tool call whose input matches a `deny` rule

@@ -4,7 +4,7 @@
 
 - Agent: `Claude Code`
 - Base model: `Claude Opus 4.7`
-- Runtime: `Claude Code, orangutan-refactor`
+- Runtime: `Claude Code in local repository checkout`
 - Linked plan: none — three-commit push that closes
   `docs/product-specs/0008-permissions.md` criterion 5
   ("Approval signing key is rotated when the runtime restarts;

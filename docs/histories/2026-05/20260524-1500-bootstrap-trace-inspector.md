@@ -4,7 +4,7 @@
 
 - Agent: `Claude`
 - Base model: `Opus 4.7`
-- Runtime: `orangutan-refactor` local workspace
+- Runtime: `local repository checkout`
 - Linked plan: none — focused continuation of spec 0018 acceptance criterion 10.
 
 ### User Query

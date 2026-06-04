@@ -4,7 +4,7 @@
 
 - Agent: `Claude Code`
 - Base model: `Claude Opus 4.7`
-- Runtime: `Claude Code, orangutan-refactor`
+- Runtime: `Claude Code in local repository checkout`
 - Linked plan: none — docs-only rule sweep, single session, one history.
   Per the rewritten [`PLANS_GUIDE.md`](../../PLANS_GUIDE.md) "When NOT
   To Create A Plan", a doc-only sweep that fits inside one history is
@@ -150,7 +150,7 @@ review-time, like `prompt-design.md`'s current enforcement layer.
 - `AGENTS.md` — "Conventions At A Glance" gained "C vs C++ idioms",
   "Investigation", and "Bench discipline" rows.
 - `docs/STATUS.md` — `Last completed history` repointed to this file.
-- `~/.claude/projects/-home-huxint-projects-orangutan-refactor/memory/prefer-modern-cxx-and-ranges.md`
+- `<local-agent-memory>/prefer-modern-cxx-and-ranges.md`
   — extended with the no-C-idioms emphasis.
 - `~/.../memory/investigation-methodology.md` — new memory.
 - `~/.../memory/bench-criterion-and-optimization-order.md` — new memory.

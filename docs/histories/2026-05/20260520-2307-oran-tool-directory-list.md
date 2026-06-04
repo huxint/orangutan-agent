@@ -4,7 +4,7 @@
 
 - Agent: `Claude Code`
 - Base model: `Claude Opus 4.7`
-- Runtime: `Claude Code, orangutan-refactor`
+- Runtime: `Claude Code in local repository checkout`
 - Linked plan: none — single-session slice that extends the slice-17/18/19/20
   file-tool catalog with a thin wrapper over the existing
   `oran-io::list_directory` helper. Fits inside `PLANS_GUIDE.md`'s "When

@@ -4,7 +4,7 @@
 
 - Agent: `Claude Code`
 - Base model: `Claude Opus 4.7`
-- Runtime: `Claude Code, orangutan-refactor`
+- Runtime: `Claude Code in local repository checkout`
 - Linked plan: none — single-session slice that fits the
   tech-debt entry's "~50 LoC implementation + ~50 LoC tests + bench A/B"
   envelope and matches `PLANS_GUIDE.md` "When NOT To Create A Plan".

@@ -4,7 +4,7 @@
 
 - Agent: `Claude Code`
 - Base model: `Claude Opus 4.7`
-- Runtime: `Claude Code, orangutan-refactor`
+- Runtime: `Claude Code in local repository checkout`
 - Linked plan: none — three-commit push (plus a one-line
   `.clangd` tooling chore) that closes
   `docs/product-specs/0008-permissions.md` criterion 2 ("on

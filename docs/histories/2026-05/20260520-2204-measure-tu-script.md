@@ -4,7 +4,7 @@
 
 - Agent: `Claude Code`
 - Base model: `Claude Opus 4.7`
-- Runtime: `Claude Code, orangutan-refactor`
+- Runtime: `Claude Code in local repository checkout`
 - Linked plan: none — single-session slice that ships a ~170-LoC bash
   script and a paired history entry, fits inside `PLANS_GUIDE.md`'s
   "When NOT To Create A Plan" envelope. The `Next intended slice`

@@ -9,7 +9,7 @@
 
 ### User Query
 
-> 先提交你当前的框架文档, 然后继续根据 /tmp/orangutan-agent-loop-foundation-2026-05-21.md
+> 先提交你当前的框架文档, 然后继续根据 <tmp-agent-loop-foundation-artifact>
 > 进行更新提示词框架, 一样的把特性和功能整理好写入提示词框架. 最后检查, 确保提示词框架
 > 逻辑闭环. 然后再提交和push. 当然, 有些过时的老文档或者重复冗余的文档可以更新或者删除.
 
@@ -22,7 +22,7 @@ as `57be783`.
   `orangutan-deep-review.md`, CLAUDE.md routing, STATUS.md.
 - Key actions:
   - Drafted five new product specs covering every non-scheduler concern
-    of `/tmp/orangutan-agent-loop-foundation-2026-05-21.md`. (§1 of the
+    of `<tmp-agent-loop-foundation-artifact>`. (§1 of the
     foundation doc was already covered by spec 0012; this slice extended
     0012 with the foundation doc's classify-by-resource detail and the
     cross-refs into 0014/0015/0017/0018.)
@@ -130,8 +130,8 @@ forward-looking and gated on future slices.
 ### Closed-Loop Verification
 
 Every recommendation from
-`/tmp/orangutan-refactor-agent-tool-review-2026-05-21.md` and
-`/tmp/orangutan-agent-loop-foundation-2026-05-21.md` terminates at a
+`<tmp-deep-review-artifact>` and
+`<tmp-agent-loop-foundation-artifact>` terminates at a
 spec / design-doc / rule / tracker row. Every spec's `Design Doc
 Cross-References` block resolves to an existing file. The build order
 in `STATUS.md` is a valid dependency DAG: 0013 has no spec deps; 0011

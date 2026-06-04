@@ -18,8 +18,8 @@ Two failure modes have already shown up in this repo:
    a version stamp and never got deleted on absorption.
 2. **`/tmp/...` paths cited as live sources.** `docs/STATUS.md` and
    `docs/exec-plans/tech-debt-tracker.md` referenced
-   `/tmp/orangutan-refactor-agent-tool-review-2026-05-21.md` and
-   `/tmp/orangutan-agent-loop-foundation-2026-05-21.md` as the home of
+   `<tmp-deep-review-artifact>` and
+   `<tmp-agent-loop-foundation-artifact>` as the home of
    actionable backlog. Those files only ever existed on one machine — a
    future agent on a fresh checkout cannot read them.
 

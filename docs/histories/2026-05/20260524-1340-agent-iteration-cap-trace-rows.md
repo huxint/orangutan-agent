@@ -4,7 +4,7 @@
 
 - Agent: `Claude`
 - Base model: `Opus 4.7`
-- Runtime: `orangutan-refactor` local workspace
+- Runtime: `local repository checkout`
 - Linked plan: none — focused continuation of specs 0017/0018.
 
 ### User Query

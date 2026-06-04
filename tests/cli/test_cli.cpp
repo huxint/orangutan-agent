@@ -110,7 +110,7 @@ hook::PermissionAskRenderedPayload sample_ask_payload() {
   return hook::PermissionAskRenderedPayload{
       .tool_name = "file.write",
       .input_json = R"({"path":"notes.txt","content":"hello"})",
-      .who = hook::Identity{.scope_key = "scope-A", .agent_key = "coder", .identity = "huxint"},
+      .who = hook::Identity{.scope_key = "scope-A", .agent_key = "coder", .identity = "operator-1"},
       .decision_reason = "rule #2 (ask: file.write)",
       .replay_max = 3,
       .approval_ttl = std::chrono::seconds{120},
@@ -122,7 +122,7 @@ hook::ToolBeforePayload sample_before_payload() {
   return hook::ToolBeforePayload{
       .tool_name = "file.write",
       .input_json = R"({"path":"notes.txt","content":"hello"})",
-      .who = hook::Identity{.scope_key = "scope-A", .agent_key = "coder", .identity = "huxint"},
+      .who = hook::Identity{.scope_key = "scope-A", .agent_key = "coder", .identity = "operator-1"},
       .started_at = core::Time::epoch(),
   };
 }
@@ -489,7 +489,7 @@ TEST_CASE("OperatorPromptSink approves permission ask prompts from scripted yes 
     REQUIRE(decision->trace.size() == 1);
     REQUIRE(decision->trace[0].sink_id == "terminal-approval");
     REQUIRE(decision->trace[0].kind == hook::HookDecisionKind::proceed);
-    REQUIRE(decision->trace[0].reason == "operator_approved:huxint");
+    REQUIRE(decision->trace[0].reason == "operator_approved:operator-1");
     REQUIRE(sink.prompts_rendered() == 1);
     REQUIRE(sink.answers_consumed() == 1);
   });
@@ -508,10 +508,10 @@ TEST_CASE("OperatorPromptSink vetoes permission ask prompts from scripted no ans
 
     REQUIRE(decision.has_value());
     REQUIRE(decision->kind == hook::HookDecisionKind::veto);
-    REQUIRE(decision->reason == "operator_denied:huxint");
+    REQUIRE(decision->reason == "operator_denied:operator-1");
     REQUIRE(decision->trace.size() == 1);
     REQUIRE(decision->trace[0].kind == hook::HookDecisionKind::veto);
-    REQUIRE(decision->trace[0].reason == "operator_denied:huxint");
+    REQUIRE(decision->trace[0].reason == "operator_denied:operator-1");
   });
 }
 

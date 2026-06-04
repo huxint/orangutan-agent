@@ -4,7 +4,7 @@
 
 - Agent: `Claude Code`
 - Base model: `Claude Opus 4.7`
-- Runtime: `Claude Code, orangutan-refactor`
+- Runtime: `Claude Code in local repository checkout`
 - Linked plan: none — docs-only process sweep. The work fits inside a
   single session and a single history entry; per the rewritten
   [`PLANS_GUIDE.md`](../../PLANS_GUIDE.md) "When NOT To Create A Plan"

@@ -226,7 +226,7 @@ Each fix is local and well-scoped. The three most impactful are:
 - Tech-debt entries: `review/deep-2026-05-26` is contracted but still
   open — a dedicated singleflight regression test scaffold (deterministic
   cross-executor interleavings) remains a follow-up. The `/tmp/`
-  provenance artifact stays at `/tmp/orangutan-deep-review-2026-05-26.md`
+  provenance artifact stays at `<tmp-deep-review-artifact>`
   and is delete-on-close per `rules/deep-review.md` when the singleflight
   test lands.
 - Issues opened: none.

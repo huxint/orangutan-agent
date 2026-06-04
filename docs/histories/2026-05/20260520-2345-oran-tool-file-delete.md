@@ -4,7 +4,7 @@
 
 - Agent: `Claude Code`
 - Base model: `Claude Opus 4.7`
-- Runtime: `Claude Code, orangutan-refactor`
+- Runtime: `Claude Code in local repository checkout`
 - Linked plan: none — single-session slice that adds the
   symmetric write-side counterpart to `file.read` / `file.write` /
   `file.edit`. Fits inside `PLANS_GUIDE.md`'s "When NOT To Create A

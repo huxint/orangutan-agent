@@ -276,7 +276,7 @@ blocking hook waits for v1.1.
    rule matches, the dispatch pipeline publishes
    `permission_ask_rendered` *blocking*; the sink's `HookDecision`
    carries the operator's response identity in `reason` (e.g.
-   `reason=operator_approved:huxint`); the broker accepts the
+   `reason=operator_approved:operator-1`); the broker accepts the
    resulting `ApprovalToken` and resumes dispatch. A
    `kind=veto` decision aborts with `outcome=rejected,
    reason=operator_denied`. **Status (slice 94):** shipped for direct

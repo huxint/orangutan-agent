@@ -4,7 +4,7 @@
 
 - Agent: `Claude`
 - Base model: `Opus 4.7`
-- Runtime: `orangutan-refactor` local workspace
+- Runtime: `local repository checkout`
 - Linked plan: none — focused continuation of the spec-dependency-graph item
   (`0013 → 0011 + 0012 → 0014 → 0016 → 0017 → 0015 → 0018`) that unblocks
   spec 0018 AC5 (hook publish rows) once the dispatch consumer lands.

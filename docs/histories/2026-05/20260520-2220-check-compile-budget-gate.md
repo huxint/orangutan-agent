@@ -4,7 +4,7 @@
 
 - Agent: `Claude Code`
 - Base model: `Claude Opus 4.7`
-- Runtime: `Claude Code, orangutan-refactor`
+- Runtime: `Claude Code in local repository checkout`
 - Linked plan: none — single-session slice that ships a ~60-line
   versioned baseline file + a ~150-LoC bash regression gate, both
   immediately consumable by the slice-27 `scripts/measure-tu.sh`
