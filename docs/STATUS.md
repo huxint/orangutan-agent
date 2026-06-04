@@ -7,12 +7,23 @@
 
 ## Snapshot
 
-- **Slice:** 152 (`xmake run orangutan` reports slice 152)
+- **Slice:** 153 (`xmake run orangutan` reports slice 153)
 - **Last completed history:**
-  [`histories/2026-06/20260604-1207-hook-mutation-input-redaction.md`](histories/2026-06/20260604-1207-hook-mutation-input-redaction.md)
+  [`histories/2026-06/20260604-1344-io-atomic-durability.md`](histories/2026-06/20260604-1344-io-atomic-durability.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** slice 152 closes the sensitive mutation-input hook
+- **Next intended slice:** slice 153 closes the atomic-write durability item from
+  the deep-review tracker: `io::WriteTextOptions` now carries
+  `WriteTextDurability { rename_only, fsync_file, fsync_file_and_parent }`.
+  The default `rename_only` keeps the slice-32 temp-then-rename behavior,
+  while the fsync modes sync the staged file and, for
+  `fsync_file_and_parent`, the parent directory after a successful rename.
+  Non-default durability rejects unless `atomic=true`, atomic temp leaves now
+  use `.<name>.orangutan.tmp.<pid>.<random>` with exclusive create/retry
+  instead of a process-local counter, and `oran-io` invalidates file-view
+  caches immediately after the rename even if a later parent fsync reports
+  failure. Focused result: `test-io` **52 cases / 303 assertions**. Slice 152
+  closes the sensitive mutation-input hook
   redaction item from the deep-review tracker: tool and approval hook payloads
   that carry `input_json` now also carry optional `redacted_input_json`, and
   `hook::Bus` substitutes that sanitized view for every sink whose kind is not
@@ -1436,7 +1447,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-core`: 71 cases / 459 assertions.
 - `oran-async`: 9 cases / 43 assertions.
 - `oran-http`: 3 cases / 21 assertions.
-- `oran-io`: 49 cases / 286 assertions.
+- `oran-io`: 52 cases / 303 assertions.
 - `oran-storage`: 76 cases / 986 assertions.
 - `oran-config`: 40 cases / 322 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
@@ -1469,10 +1480,11 @@ Closed entries do *not* live here — the tracker is canonical.
   observability consumer should be aware).
 - 2026-05-21 — Second deep-review follow-up
   `review/deep-2026-05-21-followup`: slice 151 closed the config strictness
-  sweep for typed nested provider/route/hook sections. Remaining: CI xmake/test
-  wiring after reference hardware is provisioned; atomic-write durability
-  (`fsync_file` / parent fsync plus cross-process-unique temp leaves);
-  redacted default hook payloads for `file.write` / `file.edit`.
+  sweep for typed nested provider/route/hook sections, slice 152 closed
+  redacted default hook payloads for `file.write` / `file.edit`, and slice 153
+  closed atomic-write durability (`fsync_file` / parent fsync plus
+  cross-process-unique temp leaves). Remaining: CI xmake/test wiring after
+  reference hardware is provisioned.
 - 2026-05-21 — Deep-review backlog: the stale root review artifact was
   deleted after its actionable findings were absorbed into the tracker and
   specs 0011-0018. Slices 31-36 closed the rank-0 items plus the P0

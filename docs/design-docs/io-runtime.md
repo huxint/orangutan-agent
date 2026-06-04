@@ -30,6 +30,17 @@ performs the requested operation and returns `core::Result<T>`.
 > the atomic path whenever `mode == truncate`; the deep-review BUG-4.1.1
 > data-loss footgun is closed.
 >
+> **Slice-153 status (2026-06-04):** atomic writes now expose an explicit
+> `WriteTextDurability` policy. The default `rename_only` preserves the
+> existing fast temp-then-rename behavior; `fsync_file` fsyncs the staged temp
+> file before rename, and `fsync_file_and_parent` also fsyncs the parent
+> directory after a successful rename. Durability modes reject unless
+> `atomic=true`, and cache invalidation is tied to successful rename so a
+> post-rename parent fsync failure cannot leave stale in-process file views.
+> Atomic temp leaves now use `.<name>.orangutan.tmp.<pid>.<random>` plus
+> exclusive create/retry instead of a process-local counter, avoiding
+> cross-process temp collisions.
+>
 > **Slice-43 status (2026-05-22):** `oran-io` adds the range-aware
 > `read_text_file_ranged(executor, path, options)` returning
 > `ReadTextResult { text, fingerprint, start_line, end_line,
@@ -163,12 +174,19 @@ struct ReadTextSingleflightStats {
   std::size_t current_waiters{0};
 };
 
+enum class WriteTextDurability {
+  rename_only,
+  fsync_file,
+  fsync_file_and_parent,
+};
+
 struct WriteTextOptions {
   WriteMode mode{WriteMode::truncate};
   bool create_parent_directories{false};
   // Commit via a sibling temp file + rename — atomic on POSIX same-filesystem.
   // Only valid when `mode == WriteMode::truncate`.
   bool atomic{false};
+  WriteTextDurability durability{WriteTextDurability::rename_only};
 };
 
 enum class DirectoryEntryKind { regular_file, directory, symlink, other };
@@ -307,13 +325,6 @@ surface for effectful agent actions.
   `compute_hash=true` (SHA-256 in
   `FileFingerprint::sha256`) for high-trust paths. Text-only callers keep
   the legacy `read_text_file` wrapper that drops the metadata.
-- **Atomic-write durability mode** — `WriteTextOptions::durability`
-  enum {`rename_only` (default), `fsync_file`, `fsync_file_and_parent`}.
-  `rename_only` keeps current behaviour (atomic replacement, no fsync);
-  the fsync modes pay the durability cost for high-value writes only.
-  Cross-process-unique temp leaf names (PID + random suffix) replace the
-  process-local atomic counter so two `orangutan` processes writing to the
-  same final path cannot collide on the temp.
 - **`io::run_blocking` / "already on blocking executor" helper** —
   exported as a public utility so `oran-tool` (and any future caller)
   stops duplicating `<fstream>` logic for capped scans.
@@ -322,20 +333,28 @@ surface for effectful agent actions.
 
 `WriteTextOptions::atomic` selects a temp-then-rename commit path:
 
-1. Compute a sibling temp leaf `.<basename>.orangutan.tmp.<seq>` under the
+1. Compute a sibling temp leaf `.<basename>.orangutan.tmp.<pid>.<random>` under the
    target's parent directory. The leading `.` keeps the temp out of LLM-facing
-   directory listings (which hide dotfiles by default); the sequence number is
-   drawn from a process-local `std::atomic<uint64_t>` so concurrent writers to
-   the same final path never share a temp leaf.
-2. Open the temp with `truncate | binary`, write `contents`, explicit flush +
-   close.
-3. `std::filesystem::rename(temp, target)` — atomic on POSIX when temp and
+   directory listings (which hide dotfiles by default). The implementation
+   opens the candidate with exclusive creation and retries on the unlikely
+   collision, so separate `orangutan` processes cannot overwrite each other's
+   temp files.
+2. Open the temp with exclusive create, write `contents`, and close it. When
+   `WriteTextOptions::durability` is `fsync_file` or
+   `fsync_file_and_parent`, fsync the temp file before close.
+3. `std::filesystem::rename(temp, target)` - atomic on POSIX when temp and
    target sit on the same filesystem, which is always true because the temp
    lives in the target's parent.
-4. Any error on (2) or (3) is followed by a best-effort
+4. When durability is `fsync_file_and_parent`, fsync the target's parent
+   directory after the rename so the directory entry is durable. The file-view
+   caches are invalidated immediately after a successful rename, before the
+   parent fsync, because the target bytes have already changed.
+5. Any error before or during rename is followed by a best-effort
    `std::filesystem::remove(temp)` so a failed commit never leaves the
    `.orangutan.tmp` leftover behind.
 
 `mode = append` and `mode = fail_if_exists` are incompatible with this pattern
 and reject as `invalid_argument` before any I/O — surfacing the contract
 mismatch up-front beats silently overwriting whichever side wins the race.
+Non-default durability also rejects unless `atomic=true`; ordinary truncate /
+append / fail-if-exists writes keep their existing no-fsync behavior.

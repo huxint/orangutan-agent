@@ -320,6 +320,74 @@ TEST_CASE("write_text_file atomic mode commits via rename and leaves no temp beh
   });
 }
 
+TEST_CASE("write_text_file atomic mode does not reuse process-local counter temp names", "[unit][io][file][atomic]") {
+  TempDir temp{"oran-io-atomic-temp-name"};
+  const auto file = temp.path() / "data.txt";
+  const auto legacy_temp = temp.path() / ".data.txt.orangutan.tmp.0";
+  write_direct(file, "old contents");
+  write_direct(legacy_temp, "legacy marker");
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto result = co_await io::write_text_file(context.get_executor(),
+                                               file.string(),
+                                               "new contents",
+                                               io::WriteTextOptions{.atomic = true});
+    REQUIRE(result.has_value());
+
+    auto read_back = co_await io::read_text_file(context.get_executor(), file.string());
+    REQUIRE(read_back.has_value());
+    REQUIRE(*read_back == "new contents");
+
+    auto marker = co_await io::read_text_file(context.get_executor(), legacy_temp.string());
+    REQUIRE(marker.has_value());
+    REQUIRE(*marker == "legacy marker");
+  });
+}
+
+TEST_CASE("write_text_file atomic durability modes commit successfully", "[unit][io][file][atomic]") {
+  TempDir temp{"oran-io-atomic-durable"};
+  const auto file_only = temp.path() / "file-only.txt";
+  const auto file_and_parent = temp.path() / "file-and-parent.txt";
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto synced_file = co_await io::write_text_file(
+        context.get_executor(),
+        file_only.string(),
+        "file durable",
+        io::WriteTextOptions{.atomic = true, .durability = io::WriteTextDurability::fsync_file});
+    REQUIRE(synced_file.has_value());
+
+    auto synced_parent = co_await io::write_text_file(
+        context.get_executor(),
+        file_and_parent.string(),
+        "parent durable",
+        io::WriteTextOptions{.atomic = true, .durability = io::WriteTextDurability::fsync_file_and_parent});
+    REQUIRE(synced_parent.has_value());
+
+    auto read_file = co_await io::read_text_file(context.get_executor(), file_only.string());
+    auto read_parent = co_await io::read_text_file(context.get_executor(), file_and_parent.string());
+    REQUIRE(read_file.has_value());
+    REQUIRE(read_parent.has_value());
+    REQUIRE(*read_file == "file durable");
+    REQUIRE(*read_parent == "parent durable");
+  });
+}
+
+TEST_CASE("write_text_file durability rejects non-atomic writes before I/O", "[unit][io][file][atomic]") {
+  TempDir temp{"oran-io-atomic-durable-reject"};
+  const auto file = temp.path() / "data.txt";
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto result = co_await io::write_text_file(context.get_executor(),
+                                               file.string(),
+                                               "contents",
+                                               io::WriteTextOptions{.durability = io::WriteTextDurability::fsync_file});
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE_FALSE(std::filesystem::exists(file));
+  });
+}
+
 TEST_CASE("write_text_file atomic mode rejects append and fail_if_exists", "[unit][io][file][atomic]") {
   TempDir temp{"oran-io-atomic-bad-mode"};
   const auto file = temp.path() / "data.txt";

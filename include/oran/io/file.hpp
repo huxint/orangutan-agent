@@ -23,6 +23,12 @@ enum class WriteMode : std::uint8_t {
   fail_if_exists,
 };
 
+enum class WriteTextDurability : std::uint8_t {
+  rename_only,
+  fsync_file,
+  fsync_file_and_parent,
+};
+
 struct ReadTextOptions {
   std::uintmax_t max_bytes{16U * 1024U * 1024U};
   /// Optional line- or byte-range request. When unset the helper returns
@@ -97,6 +103,12 @@ struct WriteTextOptions {
   /// incompatible with the temp-then-rename pattern and return
   /// `invalid_argument`.
   bool atomic{false};
+  /// Durability policy for atomic writes. `rename_only` preserves the fast
+  /// temp-then-rename behavior. `fsync_file` fsyncs the staged file before the
+  /// rename; `fsync_file_and_parent` also fsyncs the parent directory after a
+  /// successful rename so the directory entry is durable. Non-default
+  /// durability requires `atomic == true`.
+  WriteTextDurability durability{WriteTextDurability::rename_only};
 };
 
 enum class DirectoryEntryKind : std::uint8_t {
