@@ -56,6 +56,12 @@ WHERE turn_id = ?
 
 constexpr std::string_view kCountTurnsSql = "SELECT COUNT(*) FROM trace_turns";
 
+constexpr std::string_view kPurgeTurnsStartedBeforeSql = R"sql(
+DELETE FROM trace_turns
+WHERE started_at_ns < ?
+RETURNING turn_id
+)sql";
+
 constexpr std::string_view kProviderUsageRollupColumnsSql = R"sql(
 SELECT strftime('%Y-%m-%d', CAST(started_at_ns / 1000000000 AS INTEGER), 'unixepoch') AS day_utc,
   agent_key,
@@ -755,6 +761,41 @@ TraceRepository::list_provider_usage_rollups(ListProviderUsageRollupsOptions opt
   }
 
   co_return rows;
+}
+
+async::Awaitable<core::Result<std::int64_t>>
+TraceRepository::purge_turns_started_before(std::int64_t started_before_ns) {
+  if (auto valid = validate_non_negative(started_before_ns, "started_before_ns"); !valid) {
+    co_return std::unexpected(valid.error());
+  }
+
+  auto writer = co_await pool_->acquire_writer();
+  if (!writer) {
+    co_return std::unexpected(writer.error());
+  }
+
+  auto cached = writer->statement_cache().acquire(writer->connection(), kPurgeTurnsStartedBeforeSql);
+  if (!cached) {
+    co_return std::unexpected(cached.error());
+  }
+  auto& statement = cached->statement();
+  if (auto bound = statement.bind_int64(1, started_before_ns); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+
+  auto deleted = std::int64_t{0};
+  while (true) {
+    auto step = statement.step();
+    if (!step) {
+      co_return std::unexpected(step.error());
+    }
+    if (*step == StepResult::done) {
+      break;
+    }
+    ++deleted;
+  }
+
+  co_return deleted;
 }
 
 async::Awaitable<core::Result<std::int64_t>> TraceRepository::count_turns() {

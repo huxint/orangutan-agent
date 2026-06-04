@@ -27,7 +27,9 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -85,6 +87,12 @@ struct RuntimeAssemblyOptions {
   /// Mirrors the default in `config::TraceConfig` so callers that do not
   /// surface trace policy still get the spec-0018 v1 behaviour.
   bool trace_enabled{true};
+  /// Optional explicit retention cutoff for trace rows. When set and tracing
+  /// is enabled, `build()` purges `trace_turns` rows whose `started_at_ns` is
+  /// older than this Unix-nanosecond timestamp before opening the long-lived
+  /// trace repository. The assembly does not read a clock; bootstrap derives
+  /// this value from `config.trace.retention_days`.
+  std::optional<std::int64_t> trace_retention_started_before_ns{};
   /// Per-sink timeout for blocking hook publishes. Parsed from
   /// `config.hooks.timeout_ms` by bootstrap and applied to the
   /// assembly-owned hook bus.

@@ -304,6 +304,43 @@ TEST_CASE("TraceRepository list_turns orders newest first and applies filters", 
   });
 }
 
+TEST_CASE("TraceRepository purges turns older than an explicit cutoff", "[unit][storage][trace_repository]") {
+  TempDb db{"oran-trace-repo-purge"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::TraceRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+
+    auto session = id_with(0x80);
+    REQUIRE((co_await repo.append_turn(make_request(id_with(0x01), session, 100))).has_value());
+    REQUIRE((co_await repo.append_turn(make_request(id_with(0x02), session, 200))).has_value());
+    REQUIRE((co_await repo.append_turn(make_request(id_with(0x03), session, 300))).has_value());
+
+    auto deleted = co_await repo.purge_turns_started_before(200);
+    REQUIRE(deleted.has_value());
+    REQUIRE(*deleted == 1);
+
+    auto all = co_await repo.list_turns(storage::ListTraceTurnsOptions{.limit = 10});
+    REQUIRE(all.has_value());
+    REQUIRE(all->size() == 2);
+    REQUIRE((*all)[0].turn_id == id_with(0x03));
+    REQUIRE((*all)[1].turn_id == id_with(0x02));
+
+    auto old = co_await repo.get_turn(id_with(0x01));
+    REQUIRE(old.has_value());
+    REQUIRE_FALSE(old->has_value());
+
+    auto at_cutoff = co_await repo.get_turn(id_with(0x02));
+    REQUIRE(at_cutoff.has_value());
+    REQUIRE(at_cutoff->has_value());
+
+    auto invalid = co_await repo.purge_turns_started_before(-1);
+    REQUIRE_FALSE(invalid.has_value());
+    REQUIRE(invalid.error().kind() == core::ErrorKind::invalid_argument);
+  });
+}
+
 TEST_CASE("TraceRepository list_provider_usage_rollups groups usage by day and route",
           "[unit][storage][trace_repository]") {
   TempDb db{"oran-trace-repo-usage-rollups"};

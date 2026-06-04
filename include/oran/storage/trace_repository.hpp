@@ -122,6 +122,8 @@ public:
   [[nodiscard]] async::Awaitable<core::Result<std::vector<ProviderUsageRollup>>>
   list_provider_usage_rollups(ListProviderUsageRollupsOptions options);
 
+  [[nodiscard]] async::Awaitable<core::Result<std::int64_t>> purge_turns_started_before(std::int64_t started_before_ns);
+
   [[nodiscard]] async::Awaitable<core::Result<std::int64_t>> count_turns();
 
 private:

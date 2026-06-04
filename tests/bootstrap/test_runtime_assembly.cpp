@@ -1,6 +1,7 @@
 // tests/bootstrap/test_runtime_assembly.cpp — per-process permission + audit assembly coverage.
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -97,6 +98,29 @@ permission::AuditEvent make_event(std::string scope, std::string tool, permissio
 [[nodiscard]] core::Time fixed_now() noexcept {
   using namespace std::chrono;
   return core::Time{sys_days{year{2026} / January / day{1}}};
+}
+
+storage::TraceId trace_id_with(unsigned char seed) {
+  storage::TraceId id{};
+  for (std::size_t i = 0; i < id.size(); ++i) {
+    id[i] = static_cast<std::byte>(seed + i);
+  }
+  return id;
+}
+
+storage::AppendTraceTurnRequest
+make_trace_turn(storage::TraceId turn_id, storage::TraceId session_id, std::int64_t started_at_ns) {
+  return storage::AppendTraceTurnRequest{
+      .turn_id = turn_id,
+      .session_id = session_id,
+      .agent_key = "coder",
+      .origin = "bootstrap",
+      .route_profile = "fake-main",
+      .route_model = "fake-model",
+      .started_at_ns = started_at_ns,
+      .finished_at_ns = started_at_ns + 25,
+      .stop_reason = "end_turn",
+  };
 }
 
 bool table_exists(const std::filesystem::path& db_path, std::string_view table) {
@@ -441,6 +465,42 @@ TEST_CASE("RuntimeAssembly::build defaults to a live TraceRepository when audit 
     auto count = co_await built->trace_repository()->count_turns();
     REQUIRE(count.has_value());
     REQUIRE(*count == 1);
+  });
+}
+
+TEST_CASE("RuntimeAssembly::build applies trace retention before exposing the repository",
+          "[unit][bootstrap][runtime_assembly][trace]") {
+  TempDir temp{"oran-assembly-trace-retention"};
+  const auto audit_db = temp.path() / ".orangutan" / "audit.db";
+  std::filesystem::create_directories(audit_db.parent_path());
+
+  test::run_async([&temp, &audit_db](asio::io_context& io) -> async::Awaitable<void> {
+    {
+      auto pool = storage::Pool::open(
+          io.get_executor(),
+          storage::PoolOptions{.path = audit_db.string(), .reader_count = 1, .statement_cache_capacity = 4});
+      REQUIRE(pool.has_value());
+      storage::TraceRepository trace_repo{*pool};
+      auto migrated = co_await trace_repo.migrate();
+      REQUIRE(migrated.has_value());
+
+      const auto session = trace_id_with(0x80);
+      REQUIRE((co_await trace_repo.append_turn(make_trace_turn(trace_id_with(0x01), session, 100))).has_value());
+      REQUIRE((co_await trace_repo.append_turn(make_trace_turn(trace_id_with(0x02), session, 200))).has_value());
+      REQUIRE((co_await trace_repo.append_turn(make_trace_turn(trace_id_with(0x03), session, 300))).has_value());
+    }
+
+    auto options = bootstrap::RuntimeAssemblyOptions{};
+    options.trace_retention_started_before_ns = 200;
+    auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
+    REQUIRE(built.has_value());
+    REQUIRE(built->trace_repository() != nullptr);
+
+    auto turns = co_await built->trace_repository()->list_turns(storage::ListTraceTurnsOptions{.limit = 10});
+    REQUIRE(turns.has_value());
+    REQUIRE(turns->size() == 2);
+    REQUIRE((*turns)[0].turn_id == trace_id_with(0x03));
+    REQUIRE((*turns)[1].turn_id == trace_id_with(0x02));
   });
 }
 

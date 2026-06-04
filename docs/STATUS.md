@@ -7,12 +7,22 @@
 
 ## Snapshot
 
-- **Slice:** 149 (`xmake run orangutan` reports slice 149)
+- **Slice:** 150 (`xmake run orangutan` reports slice 150)
 - **Last completed history:**
-  [`histories/2026-06/20260604-1039-skill-activation-events.md`](histories/2026-06/20260604-1039-skill-activation-events.md)
+  [`histories/2026-06/20260604-1123-trace-retention-enforcement.md`](histories/2026-06/20260604-1123-trace-retention-enforcement.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** slice 149 promotes the transcript
+- **Next intended slice:** slice 150 consumes the already parsed
+  `trace.retention_days` policy at bootstrap/runtime assembly time:
+  `storage::TraceRepository` now exposes
+  `purge_turns_started_before(started_before_ns)`, which deletes only
+  `trace_turns` rows older than an explicit Unix-nanosecond cutoff and leaves
+  `audit_events` untouched, and `bootstrap::run` derives that cutoff from the
+  configured retention window before `RuntimeAssembly::build` exposes the
+  long-lived trace repository. This closes the trace-retention runtime wiring
+  gap while keeping storage clock-free and audit retention separate. Focused
+  result: `test-storage` **76 cases / 986 assertions** and `test-bootstrap`
+  **101 / 711**. Slice 149 promotes the transcript
   activation/deactivation scan to the `oran-skill` public API. The new
   `skill::SkillActivationEvent` and
   `skill::skill_activation_events_from_transcript(...)` primitive returns
@@ -1408,7 +1418,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-async`: 9 cases / 43 assertions.
 - `oran-http`: 3 cases / 21 assertions.
 - `oran-io`: 49 cases / 286 assertions.
-- `oran-storage`: 75 cases / 968 assertions.
+- `oran-storage`: 76 cases / 986 assertions.
 - `oran-config`: 39 cases / 299 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 30 cases / 207 assertions.
@@ -1419,7 +1429,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 100 cases / 699 assertions.
+- `oran-bootstrap`: 101 cases / 711 assertions.
 
 ## Open Tech-Debt Rows
 

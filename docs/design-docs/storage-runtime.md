@@ -701,6 +701,8 @@ class TraceRepository {
   list_turns(ListTraceTurnsOptions);
   async::Awaitable<core::Result<std::vector<ProviderUsageRollup>>>
   list_provider_usage_rollups(ListProviderUsageRollupsOptions);
+  async::Awaitable<core::Result<std::int64_t>>
+  purge_turns_started_before(std::int64_t started_before_ns);
   async::Awaitable<core::Result<std::int64_t>> count_turns();
 };
 
@@ -726,6 +728,11 @@ positive `iteration_count` / `schema_version`, non-negative counters, and
 `trace_turns` rows. It groups by `strftime('%Y-%m-%d', started_at_ns, 'unixepoch')`,
 `agent_key`, `route_profile`, and `route_model`, returns newest days first, and
 supports optional agent/profile/model filters plus a positive `limit`.
+`purge_turns_started_before` deletes only `trace_turns` rows whose
+`started_at_ns` is strictly older than an explicit Unix-nanosecond cutoff and
+returns the number deleted. It validates the cutoff as non-negative, acquires a
+writer lease, and does not touch `audit_events`; audit retention remains a
+separate policy.
 
 Slice 78 deliberately stopped at the storage primitive. Slice 79 threads a typed
 turn id through `agent::Loop`, `tool::DispatchContext`, and the permission audit
@@ -734,6 +741,7 @@ first consumer: `agent::Loop` appends one row for terminal-success turns when
 callers supply `RunTurnInputs::trace.repository` and a turn id. Slice 85 lets the
 loop generate that turn id when a trace writer is configured and callers leave
 it unset. Slices 86-93 add iteration-cap rows, trace config/runtime wiring, the
-CLI inspector, and hook-publish audit rows. Slice 127 adds the first trace-derived
-provider usage rollup read; retention enforcement and profile-priced cost
-calculation remain downstream.
+CLI inspector, and hook-publish audit rows. Slice 127 adds the first
+trace-derived provider usage rollup read, slice 129 adds profile-priced cost
+calculation before trace rows are written, and slice 150 adds explicit-cutoff
+trace row retention.

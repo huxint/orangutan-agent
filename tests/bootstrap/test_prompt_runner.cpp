@@ -485,49 +485,51 @@ TEST_CASE("AgentPromptRunner publishes provider hooks through RuntimeAssembly",
 TEST_CASE("AgentPromptRunner feeds tool.search results back into per-session state",
           "[unit][bootstrap][prompt_runner][session_state]") {
   TempDir temp{"oran-bootstrap-prompt-runner-observe"};
-  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
-    auto cfg = config::Config{};
-    auto assembly = build_assembly(temp.path(), io, false);
-    std::vector<provider::ScriptedTurn> plan;
-    plan.push_back(provider::ScriptedTurn{
-        .response =
-            provider::Response{
-                .blocks = {core::ToolUseContent{
-                    .id = "search-1",
-                    .name = "tool.search",
-                    .input_json = R"({"name":"file.read"})",
-                }},
-                .stop_reason = core::StopReason::tool_use,
-                .usage = provider::Usage{.input_tokens = 1,
-                                         .output_tokens = 1,
-                                         .cache_creation_tokens = 0,
-                                         .cache_read_tokens = 0,
-                                         .cost_estimate = std::nullopt},
-                .model_used = std::string{"fake-1"},
-                .route_profile_used = std::nullopt,
-            },
-        .deltas = {},
-        .error = std::nullopt,
-        .latency = {},
-    });
-    plan.push_back(provider::ScriptedTurn{
-        .response = text_response("searched"),
-        .deltas = {},
-        .error = std::nullopt,
-        .latency = {},
-    });
-    provider::FakeProvider fake{std::move(plan)};
+  test::run_async(
+      [&temp](asio::io_context& io) -> async::Awaitable<void> {
+        auto cfg = config::Config{};
+        auto assembly = build_assembly(temp.path(), io, false);
+        std::vector<provider::ScriptedTurn> plan;
+        plan.push_back(provider::ScriptedTurn{
+            .response =
+                provider::Response{
+                    .blocks = {core::ToolUseContent{
+                        .id = "search-1",
+                        .name = "tool.search",
+                        .input_json = R"({"name":"file.read"})",
+                    }},
+                    .stop_reason = core::StopReason::tool_use,
+                    .usage = provider::Usage{.input_tokens = 1,
+                                             .output_tokens = 1,
+                                             .cache_creation_tokens = 0,
+                                             .cache_read_tokens = 0,
+                                             .cost_estimate = std::nullopt},
+                    .model_used = std::string{"fake-1"},
+                    .route_profile_used = std::nullopt,
+                },
+            .deltas = {},
+            .error = std::nullopt,
+            .latency = {},
+        });
+        plan.push_back(provider::ScriptedTurn{
+            .response = text_response("searched"),
+            .deltas = {},
+            .error = std::nullopt,
+            .latency = {},
+        });
+        provider::FakeProvider fake{std::move(plan)};
 
-    auto runner = bootstrap::AgentPromptRunner::create(base_runner_options(io, assembly, cfg, fake));
-    REQUIRE(runner.has_value());
-    auto prompt = cli::PromptRunRequest{.prompt = "search", .mode = cli::CliMode::single_shot};
-    auto result = co_await (*runner)->run_prompt(std::move(prompt));
+        auto runner = bootstrap::AgentPromptRunner::create(base_runner_options(io, assembly, cfg, fake));
+        REQUIRE(runner.has_value());
+        auto prompt = cli::PromptRunRequest{.prompt = "search", .mode = cli::CliMode::single_shot};
+        auto result = co_await (*runner)->run_prompt(std::move(prompt));
 
-    REQUIRE(result.has_value());
-    REQUIRE(result->text == "searched");
-    REQUIRE(fake.turns_consumed() == 2);
-    REQUIRE((*runner)->tool_search_observations_recorded() == 1);
-  });
+        REQUIRE(result.has_value());
+        REQUIRE(result->text == "searched");
+        REQUIRE(fake.turns_consumed() == 2);
+        REQUIRE((*runner)->tool_search_observations_recorded() == 1);
+      },
+      std::chrono::seconds{3});
 }
 
 TEST_CASE("AgentPromptRunner renders memory framing once per prompt before loop iterations",

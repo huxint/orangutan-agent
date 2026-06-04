@@ -47,6 +47,12 @@ Current implementation status:
   `permissions`, and `agents.<name>.permissions`, optional
   `agents.<name>.prompt_overlay` stable section-6 prompt text, plus optional
   `agents.<name>.skills_enabled` skill allowlists.
+- `bootstrap::run` now consumes `trace.retention_days` by deriving an explicit
+  Unix-nanosecond cutoff and passing it to `RuntimeAssembly`, which purges
+  matching old `trace_turns` rows before exposing the long-lived trace
+  repository. The purge leaves `audit_events` untouched; audit retention is a
+  separate policy. `trace.store_raw_bodies` remains parsed but not consumed by
+  the runtime.
 - `runtime.prompt.active_tools` accepts `"defaults"` or an explicit string
   array. The loader preserves the authored array order, accepts an empty
   explicit allowlist, rejects empty tool names, and leaves registry-name

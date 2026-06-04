@@ -3,6 +3,7 @@
 #include <oran/bootstrap/runtime_assembly.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <memory>
@@ -98,6 +99,47 @@ resolve_database_path(std::string_view workspace, std::string_view override_path
     return std::unexpected(std::move(*migrate_error));
   }
   return report;
+}
+
+/// Run trace retention against the migrated audit DB before the long-lived pool
+/// starts serving runtime trace writes.
+[[nodiscard]] Result<std::int64_t> run_trace_retention_inline(const std::string& audit_path,
+                                                              std::size_t reader_count,
+                                                              std::size_t statement_cache_capacity,
+                                                              std::int64_t started_before_ns) {
+  asio::io_context io;
+  auto temp_pool_result = storage::Pool::open(io.get_executor(),
+                                              storage::PoolOptions{
+                                                  .path = audit_path,
+                                                  .reader_count = reader_count,
+                                                  .statement_cache_capacity = statement_cache_capacity,
+                                              });
+  if (!temp_pool_result) {
+    return std::unexpected(std::move(temp_pool_result).error());
+  }
+  auto temp_pool = std::move(*temp_pool_result);
+  storage::TraceRepository repo{temp_pool};
+
+  auto deleted = std::int64_t{0};
+  auto purge_error = std::optional<Error>{};
+  asio::co_spawn(
+      io,
+      [&]() -> async::Awaitable<void> {
+        auto purged = co_await repo.purge_turns_started_before(started_before_ns);
+        if (!purged) {
+          purge_error = std::move(purged).error();
+          co_return;
+        }
+        deleted = *purged;
+        co_return;
+      },
+      asio::detached);
+  io.run();
+
+  if (purge_error) {
+    return std::unexpected(std::move(*purge_error));
+  }
+  return deleted;
 }
 
 /// Drive the session repository migration to completion before the long-lived
@@ -298,6 +340,15 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
       run_audit_migration_inline(impl->audit_path, options.audit_reader_count, options.audit_statement_cache_capacity);
   if (!migration) {
     return std::unexpected(std::move(migration).error());
+  }
+  if (options.trace_enabled && options.trace_retention_started_before_ns.has_value()) {
+    auto retained = run_trace_retention_inline(impl->audit_path,
+                                               options.audit_reader_count,
+                                               options.audit_statement_cache_capacity,
+                                               *options.trace_retention_started_before_ns);
+    if (!retained) {
+      return std::unexpected(std::move(retained).error());
+    }
   }
 
   auto long_lived_pool = storage::Pool::open(std::move(runtime_executor),

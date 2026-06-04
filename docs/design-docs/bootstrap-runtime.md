@@ -61,6 +61,7 @@ struct RuntimeAssemblyOptions {
   std::size_t audit_statement_cache_capacity{4};
   tool::WorkspaceOptions workspace_options;
   bool trace_enabled = true;
+  std::optional<std::int64_t> trace_retention_started_before_ns{};
   std::chrono::milliseconds hook_blocking_timeout{2000};
   std::string sessions_db_path{};
   bool session_memory_enabled = true;
@@ -94,9 +95,14 @@ optional trace repository, process hook bus, and optional session-memory store.
 Session memory uses a separate `storage::Pool` and `storage::SessionRepository` over
 `<workspace>/.orangutan/sessions.db` by default; it never shares the audit/trace
 `audit.db` pool. `bootstrap::run` threads `config.trace().enabled` into
-`trace_enabled`, `config.hooks().timeout_ms` into `hook_blocking_timeout`, and enables
-session memory only when a provider route is configured. The built-in empty-defaults
-path disables session memory so a fresh checkout can run the deterministic CLI shell
+`trace_enabled`, converts `config.trace().retention_days` into an explicit
+Unix-nanosecond cutoff for `trace_retention_started_before_ns`,
+`config.hooks().timeout_ms` into `hook_blocking_timeout`, and enables session
+memory only when a provider route is configured. When that cutoff is present and
+tracing is enabled, `RuntimeAssembly::build` purges old `trace_turns` rows after
+the audit migration and before the long-lived trace repository is exposed; audit
+rows are not deleted by trace retention. The built-in empty-defaults path
+disables session memory so a fresh checkout can run the deterministic CLI shell
 without opening `sessions.db`. The startup banner prints
 `trace=<enabled|disabled>`, `sessions=<enabled|disabled> (<path|disabled>)`, and
 `hook-timeout=<ms>`.

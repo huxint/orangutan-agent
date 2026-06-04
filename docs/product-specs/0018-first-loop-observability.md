@@ -100,7 +100,10 @@ makes the existing audit rows joinable. Nothing else.
   the binary path as soon as a `default` provider route is declared. Slice 127
   adds `TraceRepository::list_provider_usage_rollups`, a read-only derived query
   that groups recorded provider usage by UTC day, agent key, route profile, and
-  route model without adding new trace columns.
+  route model without adding new trace columns. Slice 150 adds
+  `TraceRepository::purge_turns_started_before(...)` so retention can delete
+  only `trace_turns` rows older than an explicit `started_at_ns` cutoff while
+  leaving durable audit rows intact.
   ```sql
   CREATE TABLE trace_turns (
     turn_id           BLOB PRIMARY KEY,             -- 16-byte UUID
@@ -210,7 +213,7 @@ makes the existing audit rows joinable. Nothing else.
   "trace": {
     "enabled": true,            // default true; identical bytes-on-the-wire when false
     "store_raw_bodies": false,  // default false; true requires explicit operator confirmation
-    "retention_days": 30        // SQLite VACUUM cadence; existing 'retention_days' pattern
+    "retention_days": 30        // trace-row purge window; existing 'retention_days' pattern
   }
   ```
   `enabled=false` skips the SQLite insert entirely (still emits
@@ -226,8 +229,12 @@ makes the existing audit rows joinable. Nothing else.
   both audit and trace are enabled (`RuntimeAssembly::trace_repository()`
   exposes the pointer consumed by slice 101's `AgentPromptRunner` when a caller
   supplies a provider backend; audit-disabled forces the trace repository to
-  stay null). `store_raw_bodies` and `retention_days` still wait for the trace
-  runtime that will consume them.
+  stay null). Slice 150 has `bootstrap::run` convert
+  `config.trace().retention_days` into an explicit Unix-nanosecond cutoff
+  before assembly build; when tracing is enabled, the assembly applies that
+  cutoff through `TraceRepository::purge_turns_started_before(...)` after the
+  schema migration and before exposing the long-lived trace repository.
+  `store_raw_bodies` still waits for the trace runtime that will consume it.
 - **CLI surface**. `orangutan --trace <turn_id>` prints the row
   plus every joined audit row (`WHERE parent_turn_id = ?`) in the
   same `--explain-rules`-style table format that already exists for

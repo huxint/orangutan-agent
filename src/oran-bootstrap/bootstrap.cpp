@@ -30,6 +30,7 @@
 #include <oran/cli.hpp>
 #include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
+#include <oran/core/time.hpp>
 #include <oran/core/turn_id.hpp>
 #include <oran/hook.hpp>
 #include <oran/permission.hpp>
@@ -43,9 +44,10 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice149";
+constexpr std::string_view kVersion = "2.0.0-slice150";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
+constexpr std::int64_t kNanosecondsPerDay = 86'400'000'000'000;
 
 struct ParsedArgs {
   bool help{false};
@@ -65,6 +67,16 @@ struct ParsedArgs {
 
 [[nodiscard]] Error arg_error(std::string message) {
   return Error::invalid_argument(std::move(message));
+}
+
+[[nodiscard]] std::int64_t retention_started_before_ns(std::int64_t retention_days) noexcept {
+  using namespace std::chrono;
+  const auto now_ns =
+      duration_cast<nanoseconds>(core::time::now_utc().to_system_time_point().time_since_epoch()).count();
+  if (retention_days <= 0 || retention_days > now_ns / kNanosecondsPerDay) {
+    return 0;
+  }
+  return now_ns - (retention_days * kNanosecondsPerDay);
 }
 
 /// Pull the value following a long flag — supports both `--flag value` and
@@ -797,6 +809,8 @@ core::Result<int> run(BootstrapOptions options) {
       .extra_write_roots = loaded->value.permissions().workspace.extra_write_roots,
   };
   assembly_options.trace_enabled = loaded->value.trace().enabled;
+  assembly_options.trace_retention_started_before_ns =
+      retention_started_before_ns(loaded->value.trace().retention_days);
   assembly_options.hook_blocking_timeout = std::chrono::milliseconds{loaded->value.hooks().timeout_ms};
   assembly_options.session_memory_enabled = provider_route->has_value();
   auto assembly = RuntimeAssembly::build(options.workspace, runtime.executor(), std::move(assembly_options));
