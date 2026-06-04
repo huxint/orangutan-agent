@@ -127,13 +127,14 @@ void register_tool_hooks(ankerl::nanobench::Bench& bench) {
   hook::Bus busy_bus;
   std::size_t before_count = 0;
   std::size_t after_count = 0;
-  hook::InProcessSink before_sink{"bench-before",
-                                  [&before_count](hook::Event, hook::Payload) -> async::Awaitable<core::Result<void>> {
-                                    ++before_count;
-                                    co_return core::Result<void>{};
-                                  }};
+  hook::InProcessSink before_sink{
+      "bench-before",
+      [&before_count](hook::Event, hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
+        ++before_count;
+        co_return core::Result<void>{};
+      }};
   hook::InProcessSink after_sink{"bench-after",
-                                 [&after_count](hook::Event, hook::Payload) -> async::Awaitable<core::Result<void>> {
+                                 [&after_count](hook::Event, hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
                                    ++after_count;
                                    co_return core::Result<void>{};
                                  }};

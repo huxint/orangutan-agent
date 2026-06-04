@@ -15,7 +15,7 @@
 
 namespace orangutan::hook {
 
-async::Awaitable<core::Result<HookDecision>> Sink::handle_blocking(Event /*event*/, Payload /*payload*/) {
+async::Awaitable<core::Result<HookDecision>> Sink::handle_blocking(Event /*event*/, PayloadPtr /*payload*/) {
   co_return HookDecision{};
 }
 

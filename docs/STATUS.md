@@ -7,17 +7,32 @@
 
 ## Snapshot
 
-- **Slice:** 157 (`xmake run orangutan` reports slice 157)
+- **Slice:** 158 (`xmake run orangutan` reports slice 158)
 - **Last completed history:**
-  [`histories/2026-06/20260604-1619-storage-pool-contention-bench.md`](histories/2026-06/20260604-1619-storage-pool-contention-bench.md)
+  [`histories/2026-06/20260604-2136-hook-payload-sharing.md`](histories/2026-06/20260604-2136-hook-payload-sharing.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** slice 157 closes the P3 storage `Pool` mutex-contention
-  measurement item from the deep-review tracker: `bench-storage` now includes an
-  acquire-only reader-pool pair that compares 32 sequential uncontended
-  `Pool::acquire_reader` leases with a single-slot FIFO waiter-drain batch where
-  every waiter queues behind a held lease. Local result:
-  `storage.pool_reader_uncontended_acquire_batch` ~6.71 us and
+- **Latest completed slice:** slice 158 closes the P3 hook multi-sink payload
+  sharing item from the deep-review tracker: `hook::PayloadPtr` is now the
+  shared immutable sink-delivery handle, `hook::Bus` builds at most one raw
+  payload snapshot and one default/redacted snapshot per advisory or blocking
+  publish, and default sinks share the redacted view while `trusted_local`
+  sinks share the raw view. This preserves the slice-152 trust boundary without
+  cloning large structured hook bytes once per sink. Focused results:
+  `test-hook` **34 cases / 243 assertions** and `bench-hook`
+  (`publish_no_sinks` ~309 ns, `publish_one_sink` ~1.57 µs,
+  `publish_three_sinks` ~3.77 µs, large redacted 1/3 default sinks
+  ~4.05 µs / ~6.58 µs on this local run).
+- **Next intended slice:** no active plan; pick a small remaining tracker item
+  after re-orienting, likely the P3 `Runtime::Impl::run()` clarification/refactor
+  or the vector backend trait / `sqlite-vec` adapter prework.
+
+Slice 157 closes the P3 storage
+  `Pool` mutex-contention measurement item from the deep-review tracker:
+  `bench-storage` now includes an acquire-only reader-pool pair that compares
+  32 sequential uncontended `Pool::acquire_reader` leases with a single-slot
+  FIFO waiter-drain batch where every waiter queues behind a held lease. Local
+  result: `storage.pool_reader_uncontended_acquire_batch` ~6.71 us and
   `storage.pool_reader_contended_fifo_acquire_batch` ~18.96 us per 32-acquire
   batch on a noisy local nanobench run. Slice 156 closes the parallel advisory
   hook fan-out
@@ -1487,7 +1502,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-storage`: 76 cases / 986 assertions.
 - `oran-config`: 40 cases / 322 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
-- `oran-hook`: 33 cases / 231 assertions.
+- `oran-hook`: 34 cases / 243 assertions.
 - `oran-memory`: 9 cases / 576 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 197 cases / 2049 assertions.
@@ -1527,10 +1542,10 @@ Closed entries do *not* live here — the tracker is canonical.
   follow-ups, slice 60 closed the P2 `tool::Output` envelope item, slice 115
   closed the P1 `tool::parse_input<T>` helper item, slice 154 closed the P2
   public `io::run_blocking` utility item, slice 155 closed the P2
-  `DispatchContext::for_now()` factory item, and slice 156 closed the P2
-  parallel `publish_advisory` fan-out item, and slice 157 closed the P3
-  storage `Pool` contention bench item. Remaining follow-ups are grouped P1/P2/P3
-  in the tracker.
+  `DispatchContext::for_now()` factory item, slice 156 closed the P2 parallel
+  `publish_advisory` fan-out item, slice 157 closed the P3 storage `Pool`
+  contention bench item, and slice 158 closed the P3 hook payload-sharing
+  item. Remaining follow-ups are grouped P1/P2/P3 in the tracker.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on
   the documented reference hardware (8-core / NVMe / native Linux);

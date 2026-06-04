@@ -45,7 +45,7 @@ in what order.
 
 ## Scope (v1)
 
-> **Status (slice 96, 2026-05-25):** the bus surface, the
+> **Status (slice 158, 2026-06-04):** the bus surface, the
 > `tool_before` dispatch consumer, the configured blocking-timeout
 > policy, and traced direct-dispatch `hook_publish` audit rows are
 > shipped.
@@ -60,11 +60,17 @@ in what order.
 > empty primary `EventTraits<E>` template plus explicit specialisations
 > for the v1 whitelist (`tool_before`, `permission_ask_rendered`,
 > `memory_write_before`) and the `HasBlockingDecision<E>` concept that
-> constrains `Bus::publish_blocking<E>`. `hook::Sink` grows a virtual
-> `handle_blocking(Event, Payload) -> Awaitable<Result<HookDecision>>`
+> constrains `Bus::publish_blocking<E>`. `hook::PayloadPtr` is the
+> shared immutable `std::shared_ptr<const Payload>` delivery handle used by
+> both advisory and blocking sinks, and `hook::Sink` grows a virtual
+> `handle_blocking(Event, PayloadPtr) -> Awaitable<Result<HookDecision>>`
 > whose default body returns `proceed`; `hook::InProcessSink` adds an
 > optional `BlockingCallback` via `set_blocking_handler` so tests and
-> in-tree sinks can opt in without breaking existing constructors.
+> in-tree sinks can opt in without breaking existing constructors. Slice 158
+> keeps `Bus::publish_advisory(Event, Payload)` and
+> `Bus::publish_blocking<E>(Payload)` as by-value producer entry points, but
+> shares at most one raw payload snapshot and one default/redacted snapshot
+> across subscribed sinks for the publish.
 > `Bus::publish_blocking<E>` walks subscribed sinks in subscription
 > order, applies the same per-sink redaction the advisory path uses,
 > short-circuits at the first non-`proceed` decision, and converts sink
@@ -74,7 +80,7 @@ in what order.
 > `config.hooks.timeout_ms`) and races each blocking sink against
 > `async::sleep_for`; a timeout synthesizes a veto with
 > `reason="hook_timeout"` and fills `HookDecisionTrace::elapsed`.
-> `test-hook` now reports 30 cases / 207 assertions. Slice 91 adds the
+> `test-hook` now reports 34 cases / 243 assertions. Slice 91 adds the
 > `HookDecisionTrace`
 > vector so dispatch can serialize every consulted sink decision into
 > audit metadata; `Registry::dispatch` now calls
@@ -113,7 +119,9 @@ in what order.
 > blocking publishes too: `file.write` / `file.edit` `tool_before` and
 > `permission_ask_rendered` payloads deliver a hash-and-byte-count
 > `input_json` summary to default sinks, while `SinkKind::trusted_local` sinks
-> receive the original input.
+> receive the original input. Slice 158 keeps that trust boundary while sharing
+> the redacted default snapshot across default sinks and the raw snapshot across
+> trusted-local sinks.
 
 The MVP is the *minimum* surface needed by the agent loop's approval
 render flow — the first real consumer. Everything else that wants a
@@ -215,6 +223,11 @@ blocking hook waits for v1.1.
   This remains outside the blocking-decision contract: advisory sinks still
   cannot veto, but `publish_advisory` now starts subscribed sinks as sibling
   child coroutines and gathers subscription-ordered `PublishOutcome` rows.
+- **Shipped in slice 158:** shared immutable sink payload snapshots. Advisory
+  and blocking publishes now deliver `PayloadPtr` to sinks and reuse one raw
+  snapshot plus one default/redacted snapshot per publish, preserving the
+  trust-boundary redaction rules without cloning large structured payloads for
+  every subscribed sink.
 
 ## Scope (v2)
 

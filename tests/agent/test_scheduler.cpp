@@ -932,7 +932,7 @@ TEST_CASE("ToolScheduler: a batch records exactly N audit rows and N tool_after 
         auto after_publishes = std::make_shared<std::atomic<int>>(0);
         hook::InProcessSink after_sink{
             "after-counter",
-            [after_publishes](hook::Event, hook::Payload) -> async::Awaitable<core::Result<void>> {
+            [after_publishes](hook::Event, hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
               after_publishes->fetch_add(1, std::memory_order_relaxed);
               co_return core::Result<void>{};
             }};

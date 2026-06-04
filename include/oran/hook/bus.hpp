@@ -11,9 +11,12 @@
 // captured in the returned `PublishOutcome`, and no sink can veto that
 // advisory publish. Slice 156 changed advisory delivery from sequential
 // awaits to concurrent fan-out while preserving subscription-ordered
-// outcome rows. Slice 90 added `publish_blocking<E>` for the spec-0015
-// whitelist, slice 91 made `tool_before` the first dispatch consumer, and
-// slice 92 added the configured blocking timeout policy.
+// outcome rows. Slice 158 switched sink delivery to shared immutable payload
+// snapshots so multi-sink publishes reuse one raw and one redacted view
+// instead of cloning structured payload bytes per receiver. Slice 90 added
+// `publish_blocking<E>` for the spec-0015 whitelist, slice 91 made
+// `tool_before` the first dispatch consumer, and slice 92 added the
+// configured blocking timeout policy.
 //
 // Concurrency. The bus is not thread-safe; the runtime owns one per strand.
 // Subscribers (`Sink&`) are non-owning — the caller keeps them alive for the

@@ -324,8 +324,8 @@ agent::RunTurnInputs base_inputs(const std::vector<core::ToolDef>& catalog, cons
 hook::InProcessSink provider_capture_sink(std::vector<ProviderHookCapture>& captures) {
   return hook::InProcessSink{
       "provider-capture",
-      [&captures](hook::Event event, hook::Payload payload) -> async::Awaitable<core::Result<void>> {
-        captures.push_back(ProviderHookCapture{.event = event, .payload = std::move(payload)});
+      [&captures](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
+        captures.push_back(ProviderHookCapture{.event = event, .payload = *payload});
         co_return core::Result<void>{};
       }};
 }
@@ -1227,13 +1227,13 @@ TEST_CASE("Loop refreshes dispatch time for blocking permission approvals", "[un
     std::vector<hook::PermissionAskRenderedPayload> prompts;
     hook::InProcessSink prompt{
         "agent-approval",
-        [](hook::Event /*event*/, hook::Payload /*payload*/) -> async::Awaitable<core::Result<void>> {
+        [](hook::Event /*event*/, hook::PayloadPtr /*payload*/) -> async::Awaitable<core::Result<void>> {
           co_return core::Result<void>{};
         }};
     prompt.set_blocking_handler(
-        [&prompts](hook::Event event, hook::Payload payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
+        [&prompts](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
           REQUIRE(event == hook::Event::permission_ask_rendered);
-          const auto* ask = std::get_if<hook::PermissionAskRenderedPayload>(&payload);
+          const auto* ask = std::get_if<hook::PermissionAskRenderedPayload>(payload.get());
           REQUIRE(ask != nullptr);
           prompts.push_back(*ask);
 

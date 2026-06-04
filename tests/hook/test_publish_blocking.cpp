@@ -68,12 +68,12 @@ public:
   }
 
   [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/,
-                                                             hook::Payload /*payload*/) override {
+                                                             hook::PayloadPtr /*payload*/) override {
     co_return core::Result<void>{};
   }
 
-  [[nodiscard]] async::Awaitable<core::Result<hook::HookDecision>> handle_blocking(hook::Event /*event*/,
-                                                                                   hook::Payload /*payload*/) override {
+  [[nodiscard]] async::Awaitable<core::Result<hook::HookDecision>>
+  handle_blocking(hook::Event /*event*/, hook::PayloadPtr /*payload*/) override {
     ++calls_;
     co_return decision_;
   }
@@ -98,12 +98,12 @@ public:
   }
 
   [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/,
-                                                             hook::Payload /*payload*/) override {
+                                                             hook::PayloadPtr /*payload*/) override {
     co_return core::Result<void>{};
   }
 
-  [[nodiscard]] async::Awaitable<core::Result<hook::HookDecision>> handle_blocking(hook::Event /*event*/,
-                                                                                   hook::Payload /*payload*/) override {
+  [[nodiscard]] async::Awaitable<core::Result<hook::HookDecision>>
+  handle_blocking(hook::Event /*event*/, hook::PayloadPtr /*payload*/) override {
     co_return std::unexpected(core::Error::internal(reason_));
   }
 
@@ -124,12 +124,12 @@ public:
   }
 
   [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/,
-                                                             hook::Payload /*payload*/) override {
+                                                             hook::PayloadPtr /*payload*/) override {
     co_return core::Result<void>{};
   }
 
-  [[nodiscard]] async::Awaitable<core::Result<hook::HookDecision>> handle_blocking(hook::Event /*event*/,
-                                                                                   hook::Payload /*payload*/) override {
+  [[nodiscard]] async::Awaitable<core::Result<hook::HookDecision>>
+  handle_blocking(hook::Event /*event*/, hook::PayloadPtr /*payload*/) override {
     ++calls_;
     const auto executor = co_await asio::this_coro::executor;
     auto slept = co_await async::sleep_for(executor, delay_);
@@ -161,12 +161,12 @@ public:
   }
 
   [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/,
-                                                             hook::Payload /*payload*/) override {
+                                                             hook::PayloadPtr /*payload*/) override {
     co_return core::Result<void>{};
   }
 
-  [[nodiscard]] async::Awaitable<core::Result<hook::HookDecision>> handle_blocking(hook::Event /*event*/,
-                                                                                   hook::Payload /*payload*/) override {
+  [[nodiscard]] async::Awaitable<core::Result<hook::HookDecision>>
+  handle_blocking(hook::Event /*event*/, hook::PayloadPtr /*payload*/) override {
     throw std::runtime_error{reason_};
     co_return hook::HookDecision{};
   }
@@ -196,7 +196,7 @@ TEST_CASE("Sink default handle_blocking returns proceed", "[hook][bus][blocking]
   // Sink::handle_blocking, which yields HookDecision{} (proceed).
   hook::InProcessSink sink{
       "default-sink",
-      [](hook::Event /*event*/, hook::Payload /*payload*/) -> async::Awaitable<core::Result<void>> {
+      [](hook::Event /*event*/, hook::PayloadPtr /*payload*/) -> async::Awaitable<core::Result<void>> {
         co_return core::Result<void>{};
       }};
   bus.bind(sink, {hook::Event::tool_before});
@@ -424,11 +424,11 @@ TEST_CASE("InProcessSink blocking handler drives the decision", "[hook][bus][blo
   hook::Bus bus;
   hook::InProcessSink sink{
       "in-process",
-      [](hook::Event /*event*/, hook::Payload /*payload*/) -> async::Awaitable<core::Result<void>> {
+      [](hook::Event /*event*/, hook::PayloadPtr /*payload*/) -> async::Awaitable<core::Result<void>> {
         co_return core::Result<void>{};
       }};
   sink.set_blocking_handler(
-      [](hook::Event /*event*/, hook::Payload /*payload*/) -> async::Awaitable<core::Result<hook::HookDecision>> {
+      [](hook::Event /*event*/, hook::PayloadPtr /*payload*/) -> async::Awaitable<core::Result<hook::HookDecision>> {
         hook::HookDecision decision{};
         decision.kind = hook::HookDecisionKind::rewrite;
         decision.reason = "narrowed";
@@ -453,25 +453,25 @@ TEST_CASE("publish_blocking redacts input_json when a sanitized view is present"
   std::string trusted_input;
   hook::InProcessSink default_sink{
       "default",
-      [](hook::Event /*event*/, hook::Payload /*payload*/) -> async::Awaitable<core::Result<void>> {
+      [](hook::Event /*event*/, hook::PayloadPtr /*payload*/) -> async::Awaitable<core::Result<void>> {
         co_return core::Result<void>{};
       }};
   default_sink.set_blocking_handler(
-      [&](hook::Event /*event*/, hook::Payload payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
-        const auto* before = std::get_if<hook::ToolBeforePayload>(&payload);
+      [&](hook::Event /*event*/, hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
+        const auto* before = std::get_if<hook::ToolBeforePayload>(payload.get());
         REQUIRE(before != nullptr);
         default_input = before->input_json;
         co_return hook::HookDecision{};
       });
   hook::InProcessSink trusted_sink{
       "trusted",
-      [](hook::Event /*event*/, hook::Payload /*payload*/) -> async::Awaitable<core::Result<void>> {
+      [](hook::Event /*event*/, hook::PayloadPtr /*payload*/) -> async::Awaitable<core::Result<void>> {
         co_return core::Result<void>{};
       },
       hook::SinkKind::trusted_local};
   trusted_sink.set_blocking_handler(
-      [&](hook::Event /*event*/, hook::Payload payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
-        const auto* before = std::get_if<hook::ToolBeforePayload>(&payload);
+      [&](hook::Event /*event*/, hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
+        const auto* before = std::get_if<hook::ToolBeforePayload>(payload.get());
         REQUIRE(before != nullptr);
         trusted_input = before->input_json;
         co_return hook::HookDecision{};

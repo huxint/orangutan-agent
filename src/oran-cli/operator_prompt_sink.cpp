@@ -163,17 +163,17 @@ std::string_view OperatorPromptSink::id() const noexcept {
   return options_.sink_id;
 }
 
-async::Awaitable<core::Result<void>> OperatorPromptSink::receive(hook::Event /*event*/, hook::Payload /*payload*/) {
+async::Awaitable<core::Result<void>> OperatorPromptSink::receive(hook::Event /*event*/, hook::PayloadPtr /*payload*/) {
   co_return core::Result<void>{};
 }
 
 async::Awaitable<core::Result<hook::HookDecision>> OperatorPromptSink::handle_blocking(hook::Event event,
-                                                                                       hook::Payload payload) {
+                                                                                       hook::PayloadPtr payload) {
   if (event != hook::Event::permission_ask_rendered) {
     co_return hook::HookDecision{};
   }
 
-  const auto* ask = std::get_if<hook::PermissionAskRenderedPayload>(&payload);
+  const auto* ask = std::get_if<hook::PermissionAskRenderedPayload>(payload.get());
   if (ask == nullptr) {
     co_return std::unexpected(invalid_payload_error(event));
   }

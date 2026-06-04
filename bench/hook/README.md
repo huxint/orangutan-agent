@@ -23,6 +23,13 @@ A-vs-B-vs-C comparisons:
   all-clear fan-out for blocking hooks.
 - `publish_blocking_short_circuit_second`: second sink vetoes — confirms the
   bus stops before later sinks and returns the decision trace collected so far.
+- `publish_one_default_sink_large_redacted_payload`: one default sink receives a
+  large `tool_after` payload whose raw `data_json` and mutation input must be
+  redacted before delivery.
+- `publish_three_default_sinks_large_redacted_payload`: the same large payload
+  with three default sinks. This pins slice 158's shared immutable redacted
+  payload snapshot; the third-sink case should add fan-out/gather work, not
+  three copies of the large structured bytes.
 
 The (publish_one_sink − publish_no_sinks) delta is the cost the agent loop
 pays per sink it subscribes; the (publish_three_sinks − publish_one_sink) /

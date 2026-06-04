@@ -3285,14 +3285,14 @@ public:
   }
 
   [[nodiscard]] async::Awaitable<core::Result<void>> receive(orangutan::hook::Event event,
-                                                             orangutan::hook::Payload payload) override {
-    capture(event, payload);
+                                                             orangutan::hook::PayloadPtr payload) override {
+    capture(event, *payload);
     co_return core::Result<void>{};
   }
 
   [[nodiscard]] async::Awaitable<core::Result<orangutan::hook::HookDecision>>
-  handle_blocking(orangutan::hook::Event event, orangutan::hook::Payload payload) override {
-    capture(event, payload);
+  handle_blocking(orangutan::hook::Event event, orangutan::hook::PayloadPtr payload) override {
+    capture(event, *payload);
     co_return blocking_decision_;
   }
 
@@ -3360,7 +3360,7 @@ public:
   }
 
   [[nodiscard]] async::Awaitable<core::Result<void>> receive(orangutan::hook::Event,
-                                                             orangutan::hook::Payload) override {
+                                                             orangutan::hook::PayloadPtr) override {
     co_return std::unexpected(core::Error::internal("sink rejected").with("sink", id_));
   }
 
@@ -3377,12 +3377,12 @@ public:
   }
 
   [[nodiscard]] async::Awaitable<core::Result<void>> receive(orangutan::hook::Event,
-                                                             orangutan::hook::Payload) override {
+                                                             orangutan::hook::PayloadPtr) override {
     co_return core::Result<void>{};
   }
 
   [[nodiscard]] async::Awaitable<core::Result<orangutan::hook::HookDecision>>
-  handle_blocking(orangutan::hook::Event, orangutan::hook::Payload) override {
+  handle_blocking(orangutan::hook::Event, orangutan::hook::PayloadPtr) override {
     if (throws_) {
       throw std::runtime_error{"blocking sink threw"};
     }
@@ -3403,12 +3403,12 @@ public:
   }
 
   [[nodiscard]] async::Awaitable<core::Result<void>> receive(orangutan::hook::Event,
-                                                             orangutan::hook::Payload) override {
+                                                             orangutan::hook::PayloadPtr) override {
     co_return core::Result<void>{};
   }
 
   [[nodiscard]] async::Awaitable<core::Result<orangutan::hook::HookDecision>>
-  handle_blocking(orangutan::hook::Event, orangutan::hook::Payload) override {
+  handle_blocking(orangutan::hook::Event, orangutan::hook::PayloadPtr) override {
     ++calls_;
     const auto executor = co_await asio::this_coro::executor;
     auto slept = co_await async::sleep_for(executor, delay_);

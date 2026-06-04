@@ -6,6 +6,9 @@
 // rather than a sequential await loop.
 // Slice 91 — matching `publish_blocking<Event::tool_before>` overhead so
 // spec 0015 can compare the blocking path against the advisory baseline.
+// Slice 158 — large redacted `tool_after` scenarios pin the shared immutable
+// payload snapshots that keep multi-sink fan-out from cloning structured bytes
+// once per subscribed default sink.
 //
 // A/B/C scenarios:
 //
@@ -45,12 +48,13 @@ namespace hook = orangutan::hook;
 
 namespace {
 
-[[gnu::noinline]] std::size_t drive_publish(asio::io_context& io, hook::Bus& bus, hook::ToolBeforePayload& payload) {
+[[gnu::noinline]] std::size_t
+drive_publish(asio::io_context& io, hook::Bus& bus, hook::Event event, hook::Payload& payload) {
   std::size_t counter = 0;
   asio::co_spawn(
       io,
       [&]() -> async::Awaitable<void> {
-        auto outcome = co_await bus.publish_advisory(hook::Event::tool_before, payload);
+        auto outcome = co_await bus.publish_advisory(event, payload);
         counter += outcome.sinks.size();
         co_return;
       },
@@ -60,8 +64,7 @@ namespace {
   return counter;
 }
 
-[[gnu::noinline]] std::size_t
-drive_blocking_publish(asio::io_context& io, hook::Bus& bus, hook::ToolBeforePayload& payload) {
+[[gnu::noinline]] std::size_t drive_blocking_publish(asio::io_context& io, hook::Bus& bus, hook::Payload& payload) {
   std::size_t counter = 0;
   asio::co_spawn(
       io,
@@ -81,7 +84,7 @@ drive_blocking_publish(asio::io_context& io, hook::Bus& bus, hook::ToolBeforePay
 
 hook::InProcessSink make_noop_sink(std::string id, std::size_t& counter) {
   return hook::InProcessSink{std::move(id),
-                             [&counter](hook::Event, hook::Payload) -> async::Awaitable<core::Result<void>> {
+                             [&counter](hook::Event, hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
                                counter++;
                                co_return core::Result<void>{};
                              }};
@@ -96,12 +99,12 @@ public:
     return id_;
   }
 
-  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event, hook::Payload) override {
+  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event, hook::PayloadPtr) override {
     co_return core::Result<void>{};
   }
 
   [[nodiscard]] async::Awaitable<core::Result<hook::HookDecision>> handle_blocking(hook::Event,
-                                                                                   hook::Payload) override {
+                                                                                   hook::PayloadPtr) override {
     ++(*counter_);
     co_return decision_;
   }
@@ -112,13 +115,29 @@ private:
   hook::HookDecision decision_;
 };
 
-hook::ToolBeforePayload sample_payload() {
-  return hook::ToolBeforePayload{
+hook::Payload sample_payload() {
+  return hook::Payload{hook::ToolBeforePayload{
       .tool_name = "noop",
       .input_json = "{}",
       .who = hook::Identity{.scope_key = "scope", .agent_key = "agent", .identity = "operator"},
       .started_at = core::Time::epoch(),
-  };
+  }};
+}
+
+hook::Payload large_redacted_after_payload() {
+  return hook::Payload{hook::ToolAfterPayload{
+      .tool_name = "file.write",
+      .input_json = std::string(16 * 1024, 'i'),
+      .redacted_input_json = R"({"kind":"redacted_tool_input","input_hash":"bench","content_bytes":16384})",
+      .who = hook::Identity{.scope_key = "scope", .agent_key = "agent", .identity = "operator"},
+      .succeeded = true,
+      .output_text = std::string(8 * 1024, 'o'),
+      .data_json = std::string(64 * 1024, 'd'),
+      .error_kind = "",
+      .error_message = "",
+      .started_at = core::Time::epoch(),
+      .finished_at = core::Time::epoch(),
+  }};
 }
 
 }  // namespace
@@ -131,7 +150,7 @@ void register_hook_bus(ankerl::nanobench::Bench& bench) {
 
   hook::Bus bus_a;
   bench.run("publish_no_sinks", [&] {
-    const auto value = drive_publish(io, bus_a, payload_a);
+    const auto value = drive_publish(io, bus_a, hook::Event::tool_before, payload_a);
     ankerl::nanobench::doNotOptimizeAway(value);
   });
 
@@ -140,7 +159,7 @@ void register_hook_bus(ankerl::nanobench::Bench& bench) {
   auto sink_b = make_noop_sink("sink-b", counter_b);
   bus_b.bind(sink_b, {hook::Event::tool_before});
   bench.run("publish_one_sink", [&] {
-    const auto value = drive_publish(io, bus_b, payload_b);
+    const auto value = drive_publish(io, bus_b, hook::Event::tool_before, payload_b);
     ankerl::nanobench::doNotOptimizeAway(value);
   });
   ankerl::nanobench::doNotOptimizeAway(counter_b);
@@ -156,7 +175,7 @@ void register_hook_bus(ankerl::nanobench::Bench& bench) {
   bus_c.bind(sink_c2, {hook::Event::tool_before});
   bus_c.bind(sink_c3, {hook::Event::tool_before});
   bench.run("publish_three_sinks", [&] {
-    const auto value = drive_publish(io, bus_c, payload_c);
+    const auto value = drive_publish(io, bus_c, hook::Event::tool_before, payload_c);
     ankerl::nanobench::doNotOptimizeAway(value);
   });
   ankerl::nanobench::doNotOptimizeAway(counter_c1);
@@ -221,6 +240,36 @@ void register_hook_bus(ankerl::nanobench::Bench& bench) {
   ankerl::nanobench::doNotOptimizeAway(counter_g1);
   ankerl::nanobench::doNotOptimizeAway(counter_g2);
   ankerl::nanobench::doNotOptimizeAway(counter_g3);
+
+  auto payload_h = large_redacted_after_payload();
+  hook::Bus bus_h;
+  std::size_t counter_h = 0;
+  auto sink_h = make_noop_sink("sink-h", counter_h);
+  bus_h.bind(sink_h, {hook::Event::tool_after});
+  bench.run("publish_one_default_sink_large_redacted_payload", [&] {
+    const auto value = drive_publish(io, bus_h, hook::Event::tool_after, payload_h);
+    ankerl::nanobench::doNotOptimizeAway(value);
+  });
+  ankerl::nanobench::doNotOptimizeAway(counter_h);
+
+  auto payload_i = large_redacted_after_payload();
+  hook::Bus bus_i;
+  std::size_t counter_i1 = 0;
+  std::size_t counter_i2 = 0;
+  std::size_t counter_i3 = 0;
+  auto sink_i1 = make_noop_sink("sink-i1", counter_i1);
+  auto sink_i2 = make_noop_sink("sink-i2", counter_i2);
+  auto sink_i3 = make_noop_sink("sink-i3", counter_i3);
+  bus_i.bind(sink_i1, {hook::Event::tool_after});
+  bus_i.bind(sink_i2, {hook::Event::tool_after});
+  bus_i.bind(sink_i3, {hook::Event::tool_after});
+  bench.run("publish_three_default_sinks_large_redacted_payload", [&] {
+    const auto value = drive_publish(io, bus_i, hook::Event::tool_after, payload_i);
+    ankerl::nanobench::doNotOptimizeAway(value);
+  });
+  ankerl::nanobench::doNotOptimizeAway(counter_i1);
+  ankerl::nanobench::doNotOptimizeAway(counter_i2);
+  ankerl::nanobench::doNotOptimizeAway(counter_i3);
 }
 
 }  // namespace orangutan::bench

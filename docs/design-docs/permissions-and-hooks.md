@@ -328,7 +328,7 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 
 ## Hook Bus
 
-> **Bus status (2026-06-04, slice 156):** the foundation
+> **Bus status (2026-06-04, slice 158):** the foundation
 > ships as `oran-hook`. `hook::Event` enumerates the 41
 > lifecycle events listed below; `hook::Mode { advisory,
 > blocking }` plus `default_mode(Event)` annotates each
@@ -341,7 +341,7 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > receive raw structured tool output and unredacted sensitive
 > mutation inputs. `hook::InProcessSink`
 > is the first concrete implementation (a `std::function<
-> async::Awaitable<Result<void>>(Event, Payload)>`
+> async::Awaitable<Result<void>>(Event, PayloadPtr)>`
 > callback) and can be constructed with either sink kind.
 > `hook::Bus` exposes `bind(Sink&, events)` /
 > `unbind(Sink&)`, the advisory
@@ -350,7 +350,8 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > `publish_blocking<E>(Payload) -> Awaitable<
 > Result<HookDecision>>` method. Advisory publishing starts
 > every subscribed sink as a sibling child coroutine, builds
-> per-sink payload copies before fan-out, gathers each sink's
+> at most one raw shared immutable payload snapshot and one
+> default/redacted snapshot per publish, gathers each sink's
 > `Result<void>` in subscription-ordered
 > `PublishOutcome::SinkResult` rows, and never aborts
 > the publish on a sink error (advisory contract). Parent
@@ -360,11 +361,16 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > `PublishOutcome` lets the caller surface sink failures
 > into logs or audit without coupling the publish to a
 > single error policy. `hook::Payload` is a `std::variant`
-> that today covers `std::monostate` (placeholder for
+> and `hook::PayloadPtr` is `std::shared_ptr<const Payload>`;
+> sinks receive the shared pointer so payload lifetime is safe
+> across suspension points without cloning the same structured
+> bytes once per subscribed sink. `hook::Payload`
+> today covers `std::monostate` (placeholder for
 > events whose typed shape lands with the producing
 > subsystem) plus `ToolBeforePayload`,
-> `ToolDispatchedPayload`, `ToolAfterPayload`, `ToolErrorPayload`, and
-> slice 94's `PermissionAskRenderedPayload`. Slice 60 adds the `ToolUsage`
+> `ToolDispatchedPayload`, `ToolAfterPayload`, `ToolErrorPayload`, slice
+> 94's `PermissionAskRenderedPayload`, and slice 126's provider lifecycle
+> payloads. Slice 60 adds the `ToolUsage`
 > metrics copied from `tool::Output::usage` onto successful
 > `ToolAfterPayload`s without making `oran-hook` depend on
 > `oran-tool`; slice 65 adds optional
@@ -459,7 +465,7 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > `Decision = HookDecision`, and the
 > `HasBlockingDecision<E>` concept that constrains
 > `Bus::publish_blocking<E>`. `hook::Sink` grows a
-> virtual `handle_blocking(Event, Payload) ->
+> virtual `handle_blocking(Event, PayloadPtr) ->
 > Awaitable<Result<HookDecision>>` defaulting to
 > `proceed` (the coroutine body lives in
 > `src/oran-hook/sink.cpp` to keep public-header
@@ -469,8 +475,8 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > change. `hook::Bus::publish_blocking<E>(Payload) ->
 > Awaitable<Result<HookDecision>>` walks subscribed
 > sinks in subscription order, awaits each one's
-> `handle_blocking`, applies the same
-> `ToolAfterPayload::data_json` redaction the advisory
+> `handle_blocking(Event, PayloadPtr)`, applies the same
+> shared raw/default-redacted payload snapshots the advisory
 > path uses, short-circuits at the first non-`proceed`
 > decision, and converts sink `core::Result` errors
 > and thrown exceptions into a veto with
@@ -557,13 +563,12 @@ enum class Event {
 
 class Bus {
  public:
-  // Subscription returns a typed handle whose destruction unsubscribes.
-  template <Event E>
-  [[nodiscard]] Subscription subscribe(Sink&);
-  Subscription subscribe(std::initializer_list<Event>, Sink&);
+  void bind(Sink& sink, std::span<const Event> events);
+  void bind(Sink& sink, std::initializer_list<Event> events);
+  std::size_t unbind(Sink& sink);
 
-  // Publish; the bus dispatches to all sinks subscribed to the event.
-  async::Awaitable<core::Result<DispatchOutcome>> publish(Event, Payload);
+  // Advisory publish; the bus dispatches to all sinks subscribed to the event.
+  async::Awaitable<PublishOutcome> publish_advisory(Event, Payload);
 
   // Slice-90 blocking publish (spec 0015 v1). Constrained at the call site
   // by `EventTraits<E>::Decision`; only the v1 whitelist
@@ -571,7 +576,7 @@ class Bus {
   // satisfies `HasBlockingDecision<E>`.
   template <Event E>
     requires HasBlockingDecision<E>
-  async::Awaitable<core::Result<HookDecision>> publish_blocking(Payload);
+  async::Awaitable<core::Result<HookDecision>> publish_blocking(Payload payload);
 };
 
 }  // namespace orangutan::hook
@@ -591,8 +596,9 @@ enum class SinkKind {
 `Sink::kind()` defaults to `SinkKind::default_`. A sink may return
 `SinkKind::trusted_local` only when it is a same-process observer whose
 operator intentionally allowed raw tool-result data to stay in process.
-`Bus::publish_advisory` enforces this for `ToolAfterPayload` before fan-out:
-it delivers
+`Bus::publish_advisory` and `Bus::publish_blocking` enforce this before
+delivery by building shared immutable raw/default-redacted payload snapshots:
+they deliver
 `output_text`, timing, error fields, and `usage` to every sink, but clears
 `ToolAfterPayload::data_json` for all non-trusted-local sinks. The registry
 may publish raw serialized `tool::Output::data_json` once; redaction remains a

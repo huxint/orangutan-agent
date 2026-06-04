@@ -1,6 +1,7 @@
 // tests/hook/test_in_process_sink.cpp — `hook::InProcessSink` behavior.
 
 #include <expected>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -35,7 +36,7 @@ hook::ToolBeforePayload sample_before() {
 }  // namespace
 
 TEST_CASE("InProcessSink reports its construction id", "[hook][in-process-sink]") {
-  hook::InProcessSink sink{"recorder", [](hook::Event, hook::Payload) -> async::Awaitable<core::Result<void>> {
+  hook::InProcessSink sink{"recorder", [](hook::Event, hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
                              co_return core::Result<void>{};
                            }};
   REQUIRE(sink.id() == "recorder");
@@ -45,7 +46,7 @@ TEST_CASE("InProcessSink reports its construction id", "[hook][in-process-sink]"
 TEST_CASE("InProcessSink may opt into trusted-local delivery", "[hook][in-process-sink]") {
   hook::InProcessSink sink{
       "trusted",
-      [](hook::Event, hook::Payload) -> async::Awaitable<core::Result<void>> { co_return core::Result<void>{}; },
+      [](hook::Event, hook::PayloadPtr) -> async::Awaitable<core::Result<void>> { co_return core::Result<void>{}; },
       hook::SinkKind::trusted_local};
   REQUIRE(sink.id() == "trusted");
   REQUIRE(sink.kind() == hook::SinkKind::trusted_local);
@@ -55,16 +56,17 @@ TEST_CASE("InProcessSink forwards event + payload to the callback", "[hook][in-p
   hook::Event captured_event{};
   std::string captured_tool;
   hook::InProcessSink sink{"recorder",
-                           [&](hook::Event event, hook::Payload payload) -> async::Awaitable<core::Result<void>> {
+                           [&](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
                              captured_event = event;
-                             if (auto* before = std::get_if<hook::ToolBeforePayload>(&payload); before != nullptr) {
+                             if (auto* before = std::get_if<hook::ToolBeforePayload>(payload.get());
+                                 before != nullptr) {
                                captured_tool = before->tool_name;
                              }
                              co_return core::Result<void>{};
                            }};
 
   test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    auto result = co_await sink.receive(hook::Event::tool_before, sample_before());
+    auto result = co_await sink.receive(hook::Event::tool_before, std::make_shared<hook::Payload>(sample_before()));
     REQUIRE(result.has_value());
     co_return;
   });
@@ -74,13 +76,13 @@ TEST_CASE("InProcessSink forwards event + payload to the callback", "[hook][in-p
 }
 
 TEST_CASE("InProcessSink propagates a callback error verbatim", "[hook][in-process-sink]") {
-  hook::InProcessSink sink{"failing", [](hook::Event, hook::Payload) -> async::Awaitable<core::Result<void>> {
+  hook::InProcessSink sink{"failing", [](hook::Event, hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
                              co_return std::unexpected(
                                  core::Error::internal("callback rejected").with("sink", "failing"));
                            }};
 
   test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    auto result = co_await sink.receive(hook::Event::tool_before, sample_before());
+    auto result = co_await sink.receive(hook::Event::tool_before, std::make_shared<hook::Payload>(sample_before()));
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().message() == "callback rejected");
     co_return;
@@ -91,7 +93,7 @@ TEST_CASE("InProcessSink with an empty callback returns invalid_argument", "[hoo
   hook::InProcessSink sink{"empty", hook::InProcessSink::Callback{}};
 
   test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    auto result = co_await sink.receive(hook::Event::tool_before, sample_before());
+    auto result = co_await sink.receive(hook::Event::tool_before, std::make_shared<hook::Payload>(sample_before()));
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
     co_return;

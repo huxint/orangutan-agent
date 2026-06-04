@@ -58,26 +58,53 @@ struct AdvisoryFanoutState {
   std::size_t total_sinks{};
 };
 
-[[nodiscard]] Payload payload_for_sink(const Sink& sink, const Payload& payload) {
-  auto delivered = payload;
-  if (sink.kind() != SinkKind::trusted_local) {
-    std::visit(
-        [](auto& alt) {
-          if constexpr (requires {
-                          alt.input_json;
-                          alt.redacted_input_json;
-                        }) {
-            if (alt.redacted_input_json.has_value()) {
-              alt.input_json = *alt.redacted_input_json;
-            }
+[[nodiscard]] Payload redact_payload(Payload payload) {
+  std::visit(
+      [](auto& alt) {
+        if constexpr (requires {
+                        alt.input_json;
+                        alt.redacted_input_json;
+                      }) {
+          if (alt.redacted_input_json.has_value()) {
+            alt.input_json = *alt.redacted_input_json;
           }
-          if constexpr (std::same_as<std::decay_t<decltype(alt)>, ToolAfterPayload>) {
-            alt.data_json.reset();
-          }
-        },
-        delivered);
+        }
+        if constexpr (std::same_as<std::decay_t<decltype(alt)>, ToolAfterPayload>) {
+          alt.data_json.reset();
+        }
+      },
+      payload);
+  return payload;
+}
+
+struct SharedPayloads {
+  PayloadPtr trusted;
+  PayloadPtr default_;
+};
+
+[[nodiscard]] SharedPayloads make_shared_payloads(std::span<Sink* const> sinks, Payload payload) {
+  const bool needs_trusted =
+      std::ranges::any_of(sinks, [](const Sink* sink) { return sink->kind() == SinkKind::trusted_local; });
+  const bool needs_default =
+      std::ranges::any_of(sinks, [](const Sink* sink) { return sink->kind() != SinkKind::trusted_local; });
+
+  SharedPayloads shared;
+  if (needs_trusted) {
+    shared.trusted = std::make_shared<Payload>(std::move(payload));
+    if (needs_default) {
+      shared.default_ = std::make_shared<Payload>(redact_payload(*shared.trusted));
+    }
+  } else if (needs_default) {
+    shared.default_ = std::make_shared<Payload>(redact_payload(std::move(payload)));
   }
-  return delivered;
+  return shared;
+}
+
+[[nodiscard]] PayloadPtr payload_for_sink(const Sink& sink, const SharedPayloads& payloads) noexcept {
+  if (sink.kind() == SinkKind::trusted_local) {
+    return payloads.trusted;
+  }
+  return payloads.default_;
 }
 
 [[nodiscard]] HookDecision veto_from_error(const core::Error& error, std::string_view sink_id) {
@@ -115,7 +142,7 @@ struct AdvisoryFanoutState {
   return decision;
 }
 
-[[nodiscard]] async::Awaitable<SinkDecision> call_blocking_sink(Sink& sink, Event event, Payload payload) {
+[[nodiscard]] async::Awaitable<SinkDecision> call_blocking_sink(Sink& sink, Event event, PayloadPtr payload) {
   try {
     auto result = co_await sink.handle_blocking(event, std::move(payload));
     if (!result) {
@@ -132,7 +159,7 @@ struct AdvisoryFanoutState {
 [[nodiscard]] async::Awaitable<void> run_advisory_sink(std::shared_ptr<AdvisoryFanoutState> state,
                                                        Sink* sink,
                                                        Event event,
-                                                       Payload payload,
+                                                       PayloadPtr payload,
                                                        std::size_t index) {
   PublishOutcome::SinkResult row{.sink_id = std::string{sink->id()}, .error = std::nullopt};
   // Advisory contract: a misbehaving sink must not abort the publish for
@@ -163,7 +190,7 @@ struct AdvisoryFanoutState {
 }
 
 [[nodiscard]] async::Awaitable<core::Result<SinkDecision>>
-call_blocking_sink_with_timeout(Sink& sink, Event event, Payload payload, std::chrono::milliseconds timeout) {
+call_blocking_sink_with_timeout(Sink& sink, Event event, PayloadPtr payload, std::chrono::milliseconds timeout) {
   if (timeout <= 0ms) {
     co_return co_await call_blocking_sink(sink, event, std::move(payload));
   }
@@ -231,11 +258,12 @@ async::Awaitable<PublishOutcome> Bus::publish_advisory(Event event, Payload payl
   auto rows = std::vector<std::optional<PublishOutcome::SinkResult>>(subscribers.size());
   auto executor = co_await asio::this_coro::executor;
   auto state = std::make_shared<AdvisoryFanoutState>(executor, subscribers.size());
+  const auto payloads = make_shared_payloads(std::span<Sink* const>{subscribers}, std::move(payload));
 
   for (std::size_t i = 0; i < subscribers.size(); ++i) {
     auto* sink = subscribers[i];
     asio::co_spawn(executor,
-                   run_advisory_sink(state, sink, event, payload_for_sink(*sink, payload), i),
+                   run_advisory_sink(state, sink, event, payload_for_sink(*sink, payloads), i),
                    asio::bind_cancellation_slot(state->child_cancels[i].slot(), asio::detached));
   }
 
@@ -273,12 +301,13 @@ async::Awaitable<core::Result<HookDecision>> Bus::publish_blocking_impl(Event ev
   if (it == bindings_.end()) {
     co_return HookDecision{};
   }
+  const auto payloads = make_shared_payloads(std::span<Sink* const>{it->second}, std::move(payload));
   std::vector<HookDecisionTrace> trace;
   trace.reserve(it->second.size());
   for (auto* sink : it->second) {
     auto sink_result = co_await call_blocking_sink_with_timeout(*sink,
                                                                 event,
-                                                                payload_for_sink(*sink, payload),
+                                                                payload_for_sink(*sink, payloads),
                                                                 options_.blocking_timeout);
     if (!sink_result) {
       co_return std::unexpected(std::move(sink_result).error());

@@ -40,9 +40,9 @@ public:
   explicit OperatorPromptSink(OperatorPromptSinkOptions options = {});
 
   [[nodiscard]] std::string_view id() const noexcept override;
-  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event event, hook::Payload payload) override;
+  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event event, hook::PayloadPtr payload) override;
   [[nodiscard]] async::Awaitable<core::Result<hook::HookDecision>> handle_blocking(hook::Event event,
-                                                                                   hook::Payload payload) override;
+                                                                                   hook::PayloadPtr payload) override;
 
   [[nodiscard]] std::size_t prompts_rendered() const noexcept {
     return prompts_rendered_;

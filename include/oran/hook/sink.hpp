@@ -1,7 +1,7 @@
 // include/oran/hook/sink.hpp — abstract hook sink.
 //
-// A sink receives one (`Event`, `Payload`) at a time and reports success or
-// failure. Sinks are non-owning from the bus's point of view; the caller
+// A sink receives one (`Event`, `PayloadPtr`) at a time and reports success
+// or failure. Sinks are non-owning from the bus's point of view; the caller
 // owns them (typically the bootstrap layer) and the bus keeps raw pointers.
 //
 // Concurrency. Sinks are not thread-safe. The bus dispatches on the agent's
@@ -59,8 +59,10 @@ public:
   /// Receive one event. The bus calls this once per published event the
   /// sink is subscribed to. Returning an error is captured in the
   /// publish outcome but does not abort the publish for other sinks
-  /// (advisory contract).
-  [[nodiscard]] virtual async::Awaitable<core::Result<void>> receive(Event event, Payload payload) = 0;
+  /// (advisory contract). The shared payload is immutable and remains
+  /// alive across suspension points; sinks copy out only the fields they
+  /// need to retain after returning.
+  [[nodiscard]] virtual async::Awaitable<core::Result<void>> receive(Event event, PayloadPtr payload) = 0;
 
   /// Decide how to handle a blocking event (`tool_before`,
   /// `permission_ask_rendered`, `memory_write_before` per spec 0015 v1).
@@ -76,7 +78,7 @@ public:
   /// way. `tool::Registry::dispatch` is the first consumer for
   /// `tool_before`; `cli::OperatorPromptSink` is the first concrete
   /// terminal consumer for `permission_ask_rendered`.
-  [[nodiscard]] virtual async::Awaitable<core::Result<HookDecision>> handle_blocking(Event event, Payload payload);
+  [[nodiscard]] virtual async::Awaitable<core::Result<HookDecision>> handle_blocking(Event event, PayloadPtr payload);
 };
 
 }  // namespace orangutan::hook

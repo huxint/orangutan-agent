@@ -26,10 +26,10 @@ namespace orangutan::hook {
 
 class InProcessSink final : public Sink {
 public:
-  using Callback = std::function<async::Awaitable<core::Result<void>>(Event, Payload)>;
+  using Callback = std::function<async::Awaitable<core::Result<void>>(Event, PayloadPtr)>;
   /// Optional blocking handler. Returning a non-`proceed` decision short-
   /// circuits the bus's per-event walk.
-  using BlockingCallback = std::function<async::Awaitable<core::Result<HookDecision>>(Event, Payload)>;
+  using BlockingCallback = std::function<async::Awaitable<core::Result<HookDecision>>(Event, PayloadPtr)>;
 
   /// `id` is the stable sink identifier (see `Sink::id`); `callback` is
   /// invoked once per received event. The callback may return an error;
@@ -52,9 +52,9 @@ public:
     return kind_;
   }
 
-  [[nodiscard]] async::Awaitable<core::Result<void>> receive(Event event, Payload payload) override;
+  [[nodiscard]] async::Awaitable<core::Result<void>> receive(Event event, PayloadPtr payload) override;
 
-  [[nodiscard]] async::Awaitable<core::Result<HookDecision>> handle_blocking(Event event, Payload payload) override;
+  [[nodiscard]] async::Awaitable<core::Result<HookDecision>> handle_blocking(Event event, PayloadPtr payload) override;
 
 private:
   std::string id_;

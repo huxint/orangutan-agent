@@ -181,8 +181,8 @@ bootstrap::AgentPromptRunnerOptions base_runner_options(asio::io_context& io,
 hook::InProcessSink provider_capture_sink(std::vector<ProviderHookCapture>& captures) {
   return hook::InProcessSink{
       "provider-capture",
-      [&captures](hook::Event event, hook::Payload payload) -> async::Awaitable<core::Result<void>> {
-        captures.push_back(ProviderHookCapture{.event = event, .payload = std::move(payload)});
+      [&captures](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
+        captures.push_back(ProviderHookCapture{.event = event, .payload = *payload});
         co_return core::Result<void>{};
       }};
 }

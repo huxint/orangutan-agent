@@ -67,7 +67,7 @@ class OperatorPromptSink final : public hook::Sink {
   explicit OperatorPromptSink(OperatorPromptSinkOptions options = {});
 
   async::Awaitable<core::Result<hook::HookDecision>>
-  handle_blocking(hook::Event event, hook::Payload payload) override;
+  handle_blocking(hook::Event event, hook::PayloadPtr payload) override;
 
   std::size_t prompts_rendered() const noexcept;
   std::size_t answers_consumed() const noexcept;

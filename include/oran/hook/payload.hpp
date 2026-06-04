@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <variant>
@@ -260,5 +261,11 @@ using Payload = std::variant<std::monostate,
                              ProviderResponsePayload,
                              ProviderErrorPayload,
                              ProviderFallbackPayload>;
+
+/// Shared immutable payload delivered to sinks. `Bus` builds at most one raw
+/// payload and one redacted payload per publish, then shares those snapshots
+/// across subscribed sinks so multi-sink fan-out does not clone the same
+/// structured payload for every receiver.
+using PayloadPtr = std::shared_ptr<const Payload>;
 
 }  // namespace orangutan::hook

@@ -171,13 +171,14 @@ handlers can adopt without churning every callsite at once.
   slice 25) now has a `usage` field carrying the same metrics and, as of
   slice 65, optional `data_json` carrying the raw serialized structured output
   bytes from successful tool dispatch. The payload's `output_text` stays the
-  truncated rendering used today. `hook::Bus` builds per-sink payload copies
-  and clears `data_json` unless the consuming sink's `kind()` returns
+  truncated rendering used today. `hook::Bus` builds at most one raw payload
+  snapshot and one default/redacted snapshot per publish, clearing `data_json`
+  in the default view unless the consuming sink's `kind()` returns
   `SinkKind::trusted_local`, matching the deep-review §Hook/audit redaction
   recommendation. Slice 152 extends that same trust boundary to sensitive
   mutation inputs: `file.write` / `file.edit` lifecycle payloads carry a
-  `redacted_input_json` summary, and `hook::Bus` substitutes it for
-  non-trusted sinks while trusted-local sinks keep the raw input.
+  `redacted_input_json` summary, and `hook::Bus` substitutes it in the shared
+  default view while trusted-local sinks keep the raw input.
 - **Byte caps**. Two caps, independent:
   - `runtime.tool_output.max_text_bytes` (default 256 KiB) — applies to
     `text`. Exceeding it truncates and sets `is_error=false` with a

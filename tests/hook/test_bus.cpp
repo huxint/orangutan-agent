@@ -86,7 +86,7 @@ public:
     return kind_;
   }
 
-  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event event, hook::Payload payload) override {
+  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event event, hook::PayloadPtr payload) override {
     std::string input_json;
     std::optional<std::string> data_json;
     std::visit(
@@ -95,12 +95,12 @@ public:
             input_json = alt.input_json;
           }
         },
-        payload);
-    if (const auto* after = std::get_if<hook::ToolAfterPayload>(&payload); after != nullptr) {
+        *payload);
+    if (const auto* after = std::get_if<hook::ToolAfterPayload>(payload.get()); after != nullptr) {
       data_json = after->data_json;
     }
     captures_.push_back({.event = event,
-                         .payload_kind = payload_kind(payload),
+                         .payload_kind = payload_kind(*payload),
                          .input_json = std::move(input_json),
                          .data_json = std::move(data_json)});
     co_return core::Result<void>{};
@@ -125,7 +125,7 @@ public:
   }
 
   [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/,
-                                                             hook::Payload /*payload*/) override {
+                                                             hook::PayloadPtr /*payload*/) override {
     co_return std::unexpected(core::Error::internal(reason_).with("sink", id_));
   }
 
@@ -148,7 +148,7 @@ public:
   }
 
   [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/,
-                                                             hook::Payload /*payload*/) override {
+                                                             hook::PayloadPtr /*payload*/) override {
     ++(*active_);
     *peak_active_ = std::max(*peak_active_, *active_);
     const auto executor = co_await asio::this_coro::executor;
@@ -182,7 +182,7 @@ public:
   }
 
   [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/,
-                                                             hook::Payload /*payload*/) override {
+                                                             hook::PayloadPtr /*payload*/) override {
     throw std::runtime_error{reason_};
     co_return core::Result<void>{};
   }
@@ -190,6 +190,41 @@ public:
 private:
   std::string id_;
   std::string reason_;
+};
+
+class PayloadPointerSink final : public hook::Sink {
+public:
+  PayloadPointerSink(std::string id,
+                     std::vector<const hook::Payload*>& payloads,
+                     std::vector<std::string>& inputs,
+                     hook::SinkKind kind = hook::SinkKind::default_)
+      : id_(std::move(id)), payloads_(&payloads), inputs_(&inputs), kind_(kind) {}
+
+  [[nodiscard]] std::string_view id() const noexcept override {
+    return id_;
+  }
+
+  [[nodiscard]] hook::SinkKind kind() const noexcept override {
+    return kind_;
+  }
+
+  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/, hook::PayloadPtr payload) override {
+    payloads_->push_back(payload.get());
+    std::visit(
+        [&](const auto& alt) {
+          if constexpr (requires { alt.input_json; }) {
+            inputs_->push_back(alt.input_json);
+          }
+        },
+        *payload);
+    co_return core::Result<void>{};
+  }
+
+private:
+  std::string id_;
+  std::vector<const hook::Payload*>* payloads_;
+  std::vector<std::string>* inputs_;
+  hook::SinkKind kind_{hook::SinkKind::default_};
 };
 
 hook::ToolBeforePayload sample_before() {
@@ -389,6 +424,37 @@ TEST_CASE("publish_advisory redacts input_json when a sanitized view is present"
 
   REQUIRE(trusted_sink.captures().size() == 1);
   REQUIRE(trusted_sink.captures()[0].input_json == R"({"path":"notes.md","content":"secret"})");
+}
+
+TEST_CASE("publish_advisory shares redacted payload snapshots across default sinks", "[hook][bus][redaction]") {
+  hook::Bus bus;
+  std::vector<const hook::Payload*> default_payloads;
+  std::vector<const hook::Payload*> trusted_payloads;
+  std::vector<std::string> default_inputs;
+  std::vector<std::string> trusted_inputs;
+  PayloadPointerSink first_default{"default-1", default_payloads, default_inputs};
+  PayloadPointerSink second_default{"default-2", default_payloads, default_inputs};
+  PayloadPointerSink trusted{"trusted", trusted_payloads, trusted_inputs, hook::SinkKind::trusted_local};
+  bus.bind(first_default, {hook::Event::tool_after});
+  bus.bind(second_default, {hook::Event::tool_after});
+  bus.bind(trusted, {hook::Event::tool_after});
+
+  test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
+    auto outcome = co_await bus.publish_advisory(hook::Event::tool_after, sample_after_with_redacted_input());
+    REQUIRE(outcome.sinks.size() == 3);
+    REQUIRE(outcome.all_succeeded());
+    co_return;
+  });
+
+  REQUIRE(default_payloads.size() == 2);
+  REQUIRE(default_payloads[0] == default_payloads[1]);
+  REQUIRE(trusted_payloads.size() == 1);
+  REQUIRE(default_payloads[0] != trusted_payloads[0]);
+  REQUIRE(default_inputs.size() == 2);
+  REQUIRE(default_inputs[0] == R"({"kind":"redacted_tool_input","input_hash":"abc","content_bytes":6})");
+  REQUIRE(default_inputs[1] == default_inputs[0]);
+  REQUIRE(trusted_inputs.size() == 1);
+  REQUIRE(trusted_inputs[0] == R"({"path":"notes.md","content":"secret"})");
 }
 
 TEST_CASE("bind is idempotent — duplicate pair does not double-fire", "[hook][bus]") {
