@@ -313,6 +313,47 @@ require_approval_decision(permission::Decision decision, const hook::HookDecisio
 
 }  // namespace
 
+DispatchContext DispatchContext::for_now(asio::any_io_executor executor,
+                                         permission::RuleSet& rules,
+                                         permission::AuditSink& audit,
+                                         std::string scope_key,
+                                         std::string agent_key,
+                                         std::string identity) {
+  return DispatchContext{
+      .executor = std::move(executor),
+      .rules = rules,
+      .audit = audit,
+      .now = core::time::now_utc(),
+      .scope_key = std::move(scope_key),
+      .agent_key = std::move(agent_key),
+      .identity = std::move(identity),
+  };
+}
+
+DispatchContext DispatchContext::for_now(const DispatchContext& prototype, bool thread_approval_token_output) {
+  return DispatchContext{
+      .executor = prototype.executor,
+      .mode = prototype.mode,
+      .rules = prototype.rules,
+      .audit = prototype.audit,
+      .approval_broker = prototype.approval_broker,
+      .approval_token = prototype.approval_token,
+      .approval_token_output = thread_approval_token_output ? prototype.approval_token_output : nullptr,
+      .now = core::time::now_utc(),
+      .bus = prototype.bus,
+      .registry = nullptr,
+      .skill_invoke = prototype.skill_invoke,
+      .skill_deactivate = prototype.skill_deactivate,
+      .workspace = prototype.workspace,
+      .resolved_path = std::nullopt,
+      .output_caps = prototype.output_caps,
+      .parent_turn_id = prototype.parent_turn_id,
+      .scope_key = prototype.scope_key,
+      .agent_key = prototype.agent_key,
+      .identity = prototype.identity,
+  };
+}
+
 core::Result<void> Registry::add(core::ToolDef def, Handler handler) {
   if (def.name.empty()) {
     return std::unexpected(core::Error::invalid_argument("tool definition must have a non-empty name"));

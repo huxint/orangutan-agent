@@ -190,6 +190,67 @@ TEST_CASE("Registry::add rejects malformed JSON Schema keywords", "[unit][tool][
   REQUIRE(registry.size() == 0);
 }
 
+TEST_CASE("DispatchContext::for_now creates a fresh wall-clock context", "[unit][tool][registry][context]") {
+  asio::io_context io;
+  auto rules = single_rule(permission::Rule{
+      .verdict = permission::Verdict::allow,
+      .tool_pattern = "*",
+      .capability = std::nullopt,
+  });
+  permission::NullAuditSink audit;
+
+  auto ctx = tool::DispatchContext::for_now(io.get_executor(), rules, audit, "scope-A", "coder", "operator-1");
+
+  REQUIRE(ctx.executor == io.get_executor());
+  REQUIRE(ctx.mode == permission::Mode::default_);
+  REQUIRE(ctx.now > core::Time::epoch());
+  REQUIRE(ctx.scope_key == "scope-A");
+  REQUIRE(ctx.agent_key == "coder");
+  REQUIRE(ctx.identity == "operator-1");
+  REQUIRE(ctx.registry == nullptr);
+  REQUIRE_FALSE(ctx.resolved_path.has_value());
+}
+
+TEST_CASE("DispatchContext::for_now clones a prototype and clears dispatch-local fields",
+          "[unit][tool][registry][context]") {
+  asio::io_context io;
+  auto rules = single_rule(permission::Rule{
+      .verdict = permission::Verdict::allow,
+      .tool_pattern = "*",
+      .capability = std::nullopt,
+  });
+  permission::NullAuditSink audit;
+  tool::Registry registry;
+  permission::ApprovalToken token_output;
+
+  auto prototype = make_ctx(io, rules, audit, permission::Mode::strict);
+  prototype.registry = &registry;
+  prototype.resolved_path = tool::ResolvedToolPath{
+      .absolute_path = "/tmp/a",
+      .relative_path = "a",
+      .input_path_hash = "input-hash",
+      .workspace_root_hash = "root-hash",
+  };
+  prototype.approval_token_output = &token_output;
+  prototype.parent_turn_id = turn_id_with(7);
+  prototype.now = core::Time::epoch();
+
+  auto threaded = tool::DispatchContext::for_now(prototype, /*thread_approval_token_output=*/true);
+  auto dropped = tool::DispatchContext::for_now(prototype, /*thread_approval_token_output=*/false);
+
+  REQUIRE(threaded.mode == permission::Mode::strict);
+  REQUIRE(threaded.approval_token_output == &token_output);
+  REQUIRE(threaded.parent_turn_id == prototype.parent_turn_id);
+  REQUIRE(threaded.now > core::Time::epoch());
+  REQUIRE(threaded.registry == nullptr);
+  REQUIRE_FALSE(threaded.resolved_path.has_value());
+
+  REQUIRE(dropped.approval_token_output == nullptr);
+  REQUIRE(dropped.scope_key == prototype.scope_key);
+  REQUIRE(dropped.agent_key == prototype.agent_key);
+  REQUIRE(dropped.identity == prototype.identity);
+}
+
 TEST_CASE("Registry::add rejects duplicates", "[unit][tool][registry]") {
   tool::Registry registry;
   REQUIRE(registry.add(core::ToolDef::with_no_input("noop", "noop"), make_echo_handler()).has_value());

@@ -345,24 +345,22 @@ public:
     const auto memory_framing = std::string{memory_framing_.render_once()};
 
     auto promotion_snapshot = session_state_.promotion_snapshot(core::time::now_utc());
-    auto dispatch_context = tool::DispatchContext{
-        .executor = executor_,
-        .mode = mode_,
-        .rules = rules_,
-        .audit = assembly_->audit_sink(),
-        .approval_broker = &assembly_->approval_broker(),
-        .now = core::time::now_utc(),
-        .bus = &assembly_->hook_bus(),
-        .skill_invoke = [this](std::string_view skill_name, std::string_view inputs_json, tool::DispatchContext& ctx)
-            -> async::Awaitable<Result<tool::Output>> { co_return invoke_skill(skill_name, inputs_json, ctx); },
-        .skill_deactivate = [this](std::string_view skill_name, tool::DispatchContext& ctx)
-            -> async::Awaitable<Result<tool::Output>> { co_return deactivate_skill(skill_name, ctx); },
-        .workspace = &assembly_->workspace(),
-        .output_caps = output_caps_,
-        .scope_key = scope_key_,
-        .agent_key = agent_key_,
-        .identity = identity_,
+    auto dispatch_context =
+        tool::DispatchContext::for_now(executor_, rules_, assembly_->audit_sink(), scope_key_, agent_key_, identity_);
+    dispatch_context.mode = mode_;
+    dispatch_context.approval_broker = &assembly_->approval_broker();
+    dispatch_context.bus = &assembly_->hook_bus();
+    dispatch_context.skill_invoke = [this](std::string_view skill_name,
+                                           std::string_view inputs_json,
+                                           tool::DispatchContext& ctx) -> async::Awaitable<Result<tool::Output>> {
+      co_return invoke_skill(skill_name, inputs_json, ctx);
     };
+    dispatch_context.skill_deactivate = [this](std::string_view skill_name,
+                                               tool::DispatchContext& ctx) -> async::Awaitable<Result<tool::Output>> {
+      co_return deactivate_skill(skill_name, ctx);
+    };
+    dispatch_context.workspace = &assembly_->workspace();
+    dispatch_context.output_caps = output_caps_;
 
     auto inputs = agent::RunTurnInputs{
         .system_preamble = system_preamble,

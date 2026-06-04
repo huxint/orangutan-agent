@@ -9,7 +9,11 @@
 > bounded path-lock table with TTL reap (AC10), and the
 > `bench/agent/scheduler_overhead` dispatch-overhead bench (AC12); the scheduler
 > matrix coverage clears AC11's ≥ 90% bar. AC8/AC9 (`core::BoundedCache`
-> invariants + stats) shipped earlier via slice 44. `agent::Loop` routes every
+> invariants + stats) shipped earlier via slice 44. Slice 155 moves the
+> scheduler's per-call context clone/refresh onto
+> `tool::DispatchContext::for_now(prototype, thread_approval_token_output)`,
+> keeping concurrent calls off the caller's mutable prototype fields while
+> preserving the current-clock approval contract. `agent::Loop` routes every
 > production tool batch through `ToolScheduler::run_batch`, and
 > `bootstrap::AgentPromptRunner` owns the scheduler built from
 > `runtime.tool_scheduler.*` config. The v1.1 items below (dispatch

@@ -131,6 +131,23 @@ struct ResolvedToolPath {
 /// The struct is non-copyable / non-movable (it holds references); the caller
 /// brace-initialises one on the stack per `dispatch` invocation.
 struct DispatchContext {
+  /// Create a fresh context for the current wall clock. This is the
+  /// production default for callers that do not need a pinned broker clock;
+  /// tests that need deterministic approval TTL behavior can still aggregate
+  /// initialise the struct and set `now` explicitly.
+  [[nodiscard]] static DispatchContext for_now(asio::any_io_executor executor,
+                                               permission::RuleSet& rules,
+                                               permission::AuditSink& audit,
+                                               std::string scope_key = {},
+                                               std::string agent_key = {},
+                                               std::string identity = {});
+
+  /// Clone a caller-owned prototype for one dispatch, refreshing `now` and
+  /// clearing fields that `Registry::dispatch` mutates. `approval_token_output`
+  /// is copied only when the caller can guarantee the output slot is not
+  /// shared by concurrent dispatches.
+  [[nodiscard]] static DispatchContext for_now(const DispatchContext& prototype, bool thread_approval_token_output);
+
   asio::any_io_executor executor;
   permission::Mode mode{permission::Mode::default_};
   permission::RuleSet& rules;

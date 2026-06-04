@@ -140,11 +140,11 @@ public:
   /// the references/pointers to the long-lived dispatch services
   /// (`permission::RuleSet`, `permission::AuditSink`, optional broker / hook
   /// bus / workspace, scope/agent/identity strings, output caps, and the
-  /// optional `parent_turn_id`). The scheduler brace-initialises a fresh
-  /// `tool::DispatchContext` per call, rebinding those references and
-  /// refreshing `now` from `core::time::now_utc()` so broker TTL and approval
-  /// TTL checks see the real per-call clock. Returns the ordered result
-  /// vector even when execution finishes out of order; an empty batch
+  /// optional `parent_turn_id`). The scheduler creates a fresh per-call
+  /// context with `tool::DispatchContext::for_now(prototype, ...)`, rebinding
+  /// those references and refreshing `now` so broker TTL and approval TTL
+  /// checks see the real per-call clock. Returns the ordered result vector
+  /// even when execution finishes out of order; an empty batch
   /// returns an empty vector without touching the registry.
   ///
   /// Parent cancellation: the caller may bind a cancellation slot to this

@@ -7,12 +7,23 @@
 
 ## Snapshot
 
-- **Slice:** 154 (`xmake run orangutan` reports slice 154)
+- **Slice:** 155 (`xmake run orangutan` reports slice 155)
 - **Last completed history:**
-  [`histories/2026-06/20260604-1412-io-run-blocking.md`](histories/2026-06/20260604-1412-io-run-blocking.md)
+  [`histories/2026-06/20260604-1522-tool-dispatch-context-for-now.md`](histories/2026-06/20260604-1522-tool-dispatch-context-for-now.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** slice 154 closes the public `io::run_blocking`
+- **Next intended slice:** slice 155 closes the public
+  `tool::DispatchContext::for_now()` cleanup item from the deep-review tracker:
+  `DispatchContext::for_now(executor, rules, audit, scope_key, agent_key,
+  identity)` creates a fresh current-clock context, and
+  `DispatchContext::for_now(prototype, thread_approval_token_output)` clones
+  long-lived dispatch services while refreshing `now` and clearing
+  dispatch-local `registry` / `resolved_path` fields. `agent::ToolScheduler`
+  now uses the prototype overload for per-call contexts, and
+  `bootstrap::AgentPromptRunner` uses the fresh overload for configured-route
+  dispatch setup; aggregate initialization remains available for fixed-clock
+  tests. Focused results: `test-tool` **197 cases / 2049 assertions**,
+  `test-agent` **56 / 10 744**, and `test-bootstrap` **101 / 711**. Slice 154 closes the public `io::run_blocking`
   utility item from the deep-review tracker: `<oran/io/blocking.hpp>` now
   exports the same cancel-before/cancel-after-post boundary the file helpers
   used privately, restricted to nullary callables returning `core::Result<T>`.
@@ -1461,7 +1472,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-hook`: 32 cases / 222 assertions.
 - `oran-memory`: 9 cases / 576 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
-- `oran-tool`: 195 cases / 2031 assertions.
+- `oran-tool`: 197 cases / 2049 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
@@ -1495,10 +1506,11 @@ Closed entries do *not* live here — the tracker is canonical.
 - 2026-05-21 — Deep-review backlog: the stale root review artifact was
   deleted after its actionable findings were absorbed into the tracker and
   specs 0011-0018. Slices 31-36 closed the rank-0 items plus the P0
-  follow-ups, slice 60 closed the P2 `tool::Output` envelope item, and
-  slice 115 closed the P1 `tool::parse_input<T>` helper item; slice 154
-  closed the P2 public `io::run_blocking` utility item. Remaining follow-ups
-  are grouped P1/P2/P3 in the tracker.
+  follow-ups, slice 60 closed the P2 `tool::Output` envelope item, slice 115
+  closed the P1 `tool::parse_input<T>` helper item, slice 154 closed the P2
+  public `io::run_blocking` utility item, and slice 155 closed the P2
+  `DispatchContext::for_now()` factory item. Remaining follow-ups are grouped
+  P1/P2/P3 in the tracker.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on
   the documented reference hardware (8-core / NVMe / native Linux);

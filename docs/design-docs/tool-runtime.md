@@ -411,7 +411,9 @@ interim `DispatchContext` service bundle once the agent runtime exists.
 The current `DispatchContext` bundle carries the audit identity
 (`scope_key`, `agent_key`, `identity`), permission services, optional hook
 bus, transient registry/workspace state, output caps, and the optional
-`parent_turn_id` used by spec 0018 cause-chain joins.
+`parent_turn_id` used by spec 0018 cause-chain joins. Current-clock callers
+use `DispatchContext::for_now(...)`; fixed-clock tests may still initialise the
+context directly with aggregate syntax.
 Tools run on the agent's strand by default; CPU-heavy tools hop through the
 runtime's CPU executor.
 
@@ -692,9 +694,10 @@ dispatch time.
 >   final completion message,
 > - ordered results via indexed `std::vector<std::optional<ToolBatchResult>>`
 >   collated into the return vector after every child has completed,
-> - per-call `tool::DispatchContext` brace-initialised from the caller's
->   prototype so concurrent dispatches do not race on the prototype's
->   `registry`, `resolved_path`, `approval_token_output`, or `now` fields.
+> - per-call `tool::DispatchContext` built from the caller's prototype with
+>   `DispatchContext::for_now(prototype, thread_approval_token_output)` so
+>   concurrent dispatches do not race on the prototype's `registry`,
+>   `resolved_path`, `approval_token_output`, or `now` fields.
 >   `Registry::dispatch` stays `const` and the `entries_` map is read-only
 >   after boot, so concurrent dispatch is safe; long-lived services
 >   referenced by the prototype (audit, hook bus, broker) remain
@@ -702,7 +705,17 @@ dispatch time.
 >   (`StorageAuditSink` already serialises writes through the SQLite
 >   `Pool` writer).
 >
-> The scheduler is **not** wired through `agent::Loop` yet.
+> Slice 155 promotes that clone-and-refresh pattern to the public
+> `tool::DispatchContext` surface: `DispatchContext::for_now(executor, rules,
+> audit, scope_key, agent_key, identity)` creates a fresh current-clock base
+> context, and `DispatchContext::for_now(prototype,
+> thread_approval_token_output)` copies long-lived services while clearing the
+> dispatch-local `registry` / `resolved_path` fields and refreshing `now`.
+> Tests can still aggregate-initialise the struct when they need a pinned
+> approval clock.
+>
+> The scheduler is wired through `agent::Loop` for every production tool batch
+> as of slice 120.
 >
 > **Status (slice 117, 2026-05-28):** the per-canonical-path read/write lock
 > table now lives in

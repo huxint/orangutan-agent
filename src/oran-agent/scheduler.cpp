@@ -77,40 +77,6 @@ constexpr std::chrono::milliseconds kCancellationGrace{100};
   return metadata.dump();
 }
 
-/// Per-call dispatch context built from the prototype + per-call mutable
-/// state. Each spawned dispatch builds its own; the prototype's references
-/// rebind to the same long-lived services. `now` is refreshed per call so
-/// broker / approval TTL checks see the real clock; `registry` and
-/// `resolved_path` are reset because `Registry::dispatch` writes them itself.
-/// `approval_token_output` is threaded only when `thread_token_output` is set
-/// (a single-call batch): a blocking ask-approval stores its freshly issued
-/// token there for caller replay. For a parallel batch the slot is dropped —
-/// one output pointer cannot disambiguate N concurrently issued tokens, and two
-/// approvals writing it at once would race.
-[[nodiscard]] tool::DispatchContext make_per_call_context(tool::DispatchContext& prototype, bool thread_token_output) {
-  return tool::DispatchContext{
-      .executor = prototype.executor,
-      .mode = prototype.mode,
-      .rules = prototype.rules,
-      .audit = prototype.audit,
-      .approval_broker = prototype.approval_broker,
-      .approval_token = prototype.approval_token,
-      .approval_token_output = thread_token_output ? prototype.approval_token_output : nullptr,
-      .now = core::time::now_utc(),
-      .bus = prototype.bus,
-      .registry = nullptr,
-      .skill_invoke = prototype.skill_invoke,
-      .skill_deactivate = prototype.skill_deactivate,
-      .workspace = prototype.workspace,
-      .resolved_path = std::nullopt,
-      .output_caps = prototype.output_caps,
-      .parent_turn_id = prototype.parent_turn_id,
-      .scope_key = prototype.scope_key,
-      .agent_key = prototype.agent_key,
-      .identity = prototype.identity,
-  };
-}
-
 /// Classify a tool's lock requirement from its declared capabilities. The
 /// classification is deterministic per `core::ToolDef`: a tool that touches
 /// the filesystem via `Capability::write_file` / `edit_file` / `delete_path`
@@ -403,7 +369,7 @@ private:
       }
     }
 
-    auto per_call_ctx = make_per_call_context(prototype, state->thread_approval_token_output);
+    auto per_call_ctx = tool::DispatchContext::for_now(prototype, state->thread_approval_token_output);
 
     core::Result<tool::Output> output =
         std::unexpected(core::Error::internal("scheduler: race did not produce a result"));
