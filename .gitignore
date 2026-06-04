@@ -74,3 +74,6 @@ coverage/
 # running the binary from a checkout otherwise litters the tree with per-machine
 # state.
 .orangutan/
+
+.codegraph/
+.mcp.json
