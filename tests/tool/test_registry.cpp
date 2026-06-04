@@ -3433,6 +3433,12 @@ async::Awaitable<core::Result<tool::Output>> noop_error_handler(std::string_view
   };
 }
 
+[[nodiscard]] core::ToolDef named_noop_tool_def(std::string_view name) {
+  auto def = noop_tool_def();
+  def.name = std::string{name};
+  return def;
+}
+
 tool::DispatchContext make_hooked_ctx(asio::io_context& io,
                                       permission::RuleSet& rules,
                                       permission::AuditSink& sink,
@@ -3452,6 +3458,34 @@ tool::DispatchContext make_hooked_ctx(asio::io_context& io,
 
 [[nodiscard]] std::string input_hash_hex(std::string_view input) {
   return permission::to_hex(permission::ApprovalAuthority::input_hash(input));
+}
+
+void require_redacted_file_write_input(const std::string& redacted_input,
+                                       const std::string& original_input,
+                                       std::string_view content) {
+  const auto redacted = nlohmann::json::parse(redacted_input);
+  REQUIRE(redacted["kind"] == "redacted_tool_input");
+  REQUIRE(redacted["tool_name"] == std::string{tool::kFileWriteName});
+  REQUIRE(redacted["input_hash"] == input_hash_hex(original_input));
+  REQUIRE(redacted["input_bytes"] == original_input.size());
+  REQUIRE(redacted["redacted_fields"] == nlohmann::json::array({"content"}));
+  REQUIRE(redacted["content_bytes"] == content.size());
+  REQUIRE(redacted["redaction_status"] == "ok");
+}
+
+void require_redacted_file_edit_input(const std::string& redacted_input,
+                                      const std::string& original_input,
+                                      std::string_view old_string,
+                                      std::string_view new_string) {
+  const auto redacted = nlohmann::json::parse(redacted_input);
+  REQUIRE(redacted["kind"] == "redacted_tool_input");
+  REQUIRE(redacted["tool_name"] == std::string{tool::kFileEditName});
+  REQUIRE(redacted["input_hash"] == input_hash_hex(original_input));
+  REQUIRE(redacted["input_bytes"] == original_input.size());
+  REQUIRE(redacted["redacted_fields"] == nlohmann::json::array({"old_string", "new_string"}));
+  REQUIRE(redacted["old_string_bytes"] == old_string.size());
+  REQUIRE(redacted["new_string_bytes"] == new_string.size());
+  REQUIRE(redacted["redaction_status"] == "ok");
 }
 
 }  // namespace
@@ -4017,6 +4051,161 @@ TEST_CASE("dispatch redacts structured output from untrusted tool_after sinks", 
     REQUIRE(trusted_sink.captures()[0].output_text == "noop-data");
     REQUIRE(trusted_sink.captures()[0].data_json == R"({"kind":"noop","raw":true})");
     REQUIRE(trusted_sink.captures()[0].usage.files_touched == 1);
+  });
+}
+
+TEST_CASE("dispatch redacts file.write input for non-trusted hook sinks", "[unit][tool][hook][redaction]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(named_noop_tool_def(tool::kFileWriteName), &noop_ok_handler).has_value());
+
+    auto rules = allow_rule_set(std::string{tool::kFileWriteName});
+    permission::RecordingAuditSink audit;
+
+    orangutan::hook::Bus bus;
+    CaptureSink default_sink{"capture-default"};
+    CaptureSink trusted_sink{"capture-trusted", orangutan::hook::SinkKind::trusted_local};
+    bus.bind(default_sink,
+             {orangutan::hook::Event::tool_before,
+              orangutan::hook::Event::tool_dispatched,
+              orangutan::hook::Event::tool_after});
+    bus.bind(trusted_sink,
+             {orangutan::hook::Event::tool_before,
+              orangutan::hook::Event::tool_dispatched,
+              orangutan::hook::Event::tool_after});
+
+    const std::string input = R"({"path":"notes.md","content":"top-secret"})";
+    auto ctx = make_hooked_ctx(io, rules, audit, &bus);
+    auto result = co_await registry.dispatch(tool::kFileWriteName, input, ctx);
+    REQUIRE(result.has_value());
+
+    REQUIRE(default_sink.captures().size() == 3);
+    for (const auto& capture : default_sink.captures()) {
+      REQUIRE_FALSE(capture.input_json.contains("notes.md"));
+      REQUIRE_FALSE(capture.input_json.contains("top-secret"));
+      require_redacted_file_write_input(capture.input_json, input, "top-secret");
+    }
+
+    REQUIRE(trusted_sink.captures().size() == 3);
+    for (const auto& capture : trusted_sink.captures()) {
+      REQUIRE(capture.input_json == input);
+    }
+  });
+}
+
+TEST_CASE("dispatch redacts file.edit input for non-trusted hook sinks", "[unit][tool][hook][redaction]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(named_noop_tool_def(tool::kFileEditName), &noop_ok_handler).has_value());
+
+    auto rules = allow_rule_set(std::string{tool::kFileEditName});
+    permission::RecordingAuditSink audit;
+
+    orangutan::hook::Bus bus;
+    CaptureSink default_sink{"capture-default"};
+    CaptureSink trusted_sink{"capture-trusted", orangutan::hook::SinkKind::trusted_local};
+    bus.bind(default_sink,
+             {orangutan::hook::Event::tool_before,
+              orangutan::hook::Event::tool_dispatched,
+              orangutan::hook::Event::tool_after});
+    bus.bind(trusted_sink,
+             {orangutan::hook::Event::tool_before,
+              orangutan::hook::Event::tool_dispatched,
+              orangutan::hook::Event::tool_after});
+
+    const std::string input =
+        R"({"path":"notes.md","old_string":"old-secret","new_string":"new-secret","replace_all":true})";
+    auto ctx = make_hooked_ctx(io, rules, audit, &bus);
+    auto result = co_await registry.dispatch(tool::kFileEditName, input, ctx);
+    REQUIRE(result.has_value());
+
+    REQUIRE(default_sink.captures().size() == 3);
+    for (const auto& capture : default_sink.captures()) {
+      REQUIRE_FALSE(capture.input_json.contains("notes.md"));
+      REQUIRE_FALSE(capture.input_json.contains("old-secret"));
+      REQUIRE_FALSE(capture.input_json.contains("new-secret"));
+      require_redacted_file_edit_input(capture.input_json, input, "old-secret", "new-secret");
+    }
+
+    REQUIRE(trusted_sink.captures().size() == 3);
+    for (const auto& capture : trusted_sink.captures()) {
+      REQUIRE(capture.input_json == input);
+    }
+  });
+}
+
+TEST_CASE("dispatch redacts file.write input on tool_error for non-trusted hook sinks",
+          "[unit][tool][hook][redaction]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(named_noop_tool_def(tool::kFileWriteName), &noop_error_handler).has_value());
+
+    auto rules = allow_rule_set(std::string{tool::kFileWriteName});
+    permission::RecordingAuditSink audit;
+
+    orangutan::hook::Bus bus;
+    CaptureSink default_sink{"capture-default"};
+    CaptureSink trusted_sink{"capture-trusted", orangutan::hook::SinkKind::trusted_local};
+    bus.bind(default_sink, {orangutan::hook::Event::tool_error});
+    bus.bind(trusted_sink, {orangutan::hook::Event::tool_error});
+
+    const std::string input = R"({"path":"notes.md","content":"top-secret"})";
+    auto ctx = make_hooked_ctx(io, rules, audit, &bus);
+    auto result = co_await registry.dispatch(tool::kFileWriteName, input, ctx);
+    REQUIRE_FALSE(result.has_value());
+
+    REQUIRE(default_sink.captures().size() == 1);
+    REQUIRE(default_sink.captures()[0].event == orangutan::hook::Event::tool_error);
+    REQUIRE(default_sink.captures()[0].error_kind == "internal");
+    REQUIRE_FALSE(default_sink.captures()[0].input_json.contains("notes.md"));
+    REQUIRE_FALSE(default_sink.captures()[0].input_json.contains("top-secret"));
+    require_redacted_file_write_input(default_sink.captures()[0].input_json, input, "top-secret");
+
+    REQUIRE(trusted_sink.captures().size() == 1);
+    REQUIRE(trusted_sink.captures()[0].input_json == input);
+  });
+}
+
+TEST_CASE("dispatch redacts file.write input in permission ask payloads for non-trusted hook sinks",
+          "[unit][tool][hook][redaction][approval]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(named_noop_tool_def(tool::kFileWriteName), make_echo_handler()).has_value());
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::ask,
+        .tool_pattern = std::string{tool::kFileWriteName},
+    });
+    permission::RecordingAuditSink audit;
+    auto broker = make_broker();
+
+    orangutan::hook::HookDecision approved{};
+    approved.reason = "operator_approved:operator-1";
+
+    orangutan::hook::Bus bus;
+    CaptureSink default_prompt{"default-prompt"};
+    default_prompt.set_blocking_decision(approved);
+    CaptureSink trusted_prompt{"trusted-prompt", orangutan::hook::SinkKind::trusted_local};
+    trusted_prompt.set_blocking_decision(approved);
+    bus.bind(default_prompt, {orangutan::hook::Event::permission_ask_rendered});
+    bus.bind(trusted_prompt, {orangutan::hook::Event::permission_ask_rendered});
+
+    const std::string input = R"({"path":"notes.md","content":"top-secret"})";
+    auto ctx = make_approval_ctx(io, rules, audit, &broker, /*token=*/nullptr, fixed_now());
+    ctx.bus = &bus;
+
+    auto result = co_await registry.dispatch(tool::kFileWriteName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == input);
+
+    REQUIRE(default_prompt.captures().size() == 1);
+    REQUIRE(default_prompt.captures()[0].event == orangutan::hook::Event::permission_ask_rendered);
+    REQUIRE_FALSE(default_prompt.captures()[0].input_json.contains("notes.md"));
+    REQUIRE_FALSE(default_prompt.captures()[0].input_json.contains("top-secret"));
+    require_redacted_file_write_input(default_prompt.captures()[0].input_json, input, "top-secret");
+
+    REQUIRE(trusted_prompt.captures().size() == 1);
+    REQUIRE(trusted_prompt.captures()[0].event == orangutan::hook::Event::permission_ask_rendered);
+    REQUIRE(trusted_prompt.captures()[0].input_json == input);
   });
 }
 

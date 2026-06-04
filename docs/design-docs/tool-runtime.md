@@ -574,6 +574,12 @@ Tool lifecycle hooks:
 - `tool.after(name, input, output, identity, duration)` — always.
 - `tool.error(name, input, error, identity)` — if handler returned an error.
 
+For `file.write` and `file.edit`, default/non-trusted hook sinks receive a
+sanitized `input_json` view instead of the raw mutation input. The sanitized
+view carries `kind=redacted_tool_input`, `tool_name`, the full input SHA-256,
+the input byte count, and the redacted string byte counts; sinks whose
+`Sink::kind()` is `trusted_local` receive the original input.
+
 See `permissions-and-hooks.md` for sink kinds.
 
 ## Anti-Patterns
@@ -941,6 +947,13 @@ Current and future policy:
   the field only to sinks whose `Sink::kind()` returns
   `SinkKind::trusted_local`; default sinks receive the text fallback and usage
   metrics with `data_json` cleared.
+- Raw mutation-input hook redaction shipped in slice 152: the
+  `file.write` / `file.edit` dispatch path fills
+  `redacted_input_json` with a hash-and-byte-count summary, and `hook::Bus`
+  substitutes that value for every non-trusted sink across
+  `tool_before`, `tool_dispatched`, `tool_after`, `tool_error`, and
+  `permission_ask_rendered`. Trusted-local sinks still receive the original
+  `input_json`.
 - Slice 66 applies output caps at the direct dispatch boundary via
   `DispatchContext::output_caps` before `Registry::dispatch` returns the
   output or publishes `tool_after`. The future scheduler owns those options

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <concepts>
 #include <cstddef>
 #include <exception>
 #include <expected>
@@ -11,6 +12,7 @@
 #include <ranges>
 #include <span>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -39,9 +41,21 @@ struct SinkDecision {
 [[nodiscard]] Payload payload_for_sink(const Sink& sink, const Payload& payload) {
   auto delivered = payload;
   if (sink.kind() != SinkKind::trusted_local) {
-    if (auto* after = std::get_if<ToolAfterPayload>(&delivered); after != nullptr) {
-      after->data_json.reset();
-    }
+    std::visit(
+        [](auto& alt) {
+          if constexpr (requires {
+                          alt.input_json;
+                          alt.redacted_input_json;
+                        }) {
+            if (alt.redacted_input_json.has_value()) {
+              alt.input_json = *alt.redacted_input_json;
+            }
+          }
+          if constexpr (std::same_as<std::decay_t<decltype(alt)>, ToolAfterPayload>) {
+            alt.data_json.reset();
+          }
+        },
+        delivered);
   }
   return delivered;
 }

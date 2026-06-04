@@ -28,12 +28,14 @@
 //      carries `replay_max` / `approval_ttl_seconds` / `decision_reason`
 //      context entries so the agent loop can approve without re-evaluating
 //      the rule set.
-//   5. The slice-22+25+91 hook-bus tap: when the caller supplies a
+//   5. The slice-22+25+91+152 hook-bus tap: when the caller supplies a
 //      `hook::Bus*` on the context, dispatch first publishes blocking
 //      `hook::Event::tool_before`, consuming veto / rewrite /
 //      require_approval decisions before permission evaluation. It then
 //      publishes advisory `tool_dispatched` on paths where the handler will
 //      run, `tool_error` on error exits, and `tool_after` at every exit.
+//      Sensitive `file.write` / `file.edit` payloads carry redacted
+//      hash-and-byte-count input views for non-trusted hook sinks.
 //      Sinks subscribed to other events (provider, memory, …) are unaffected.
 //   6. The slice-55 workspace pre-resolution boundary: when a caller
 //      supplies `DispatchContext::workspace`, dispatch resolves known

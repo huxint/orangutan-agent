@@ -34,6 +34,7 @@ namespace {
 struct Capture {
   hook::Event event;
   std::string payload_kind;  // "before", "dispatched", "after", "error", "ask", provider*, "monostate"
+  std::string input_json;
   std::optional<std::string> data_json;
 };
 
@@ -80,11 +81,22 @@ public:
   }
 
   [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event event, hook::Payload payload) override {
+    std::string input_json;
     std::optional<std::string> data_json;
+    std::visit(
+        [&](const auto& alt) {
+          if constexpr (requires { alt.input_json; }) {
+            input_json = alt.input_json;
+          }
+        },
+        payload);
     if (const auto* after = std::get_if<hook::ToolAfterPayload>(&payload); after != nullptr) {
       data_json = after->data_json;
     }
-    captures_.push_back({.event = event, .payload_kind = payload_kind(payload), .data_json = std::move(data_json)});
+    captures_.push_back({.event = event,
+                         .payload_kind = payload_kind(payload),
+                         .input_json = std::move(input_json),
+                         .data_json = std::move(data_json)});
     co_return core::Result<void>{};
   }
 
@@ -156,6 +168,21 @@ hook::ToolAfterPayload sample_after_with_data() {
       .succeeded = true,
       .output_text = "ok",
       .data_json = std::string{R"({"kind":"sample","raw":true})"},
+      .error_kind = "",
+      .error_message = "",
+      .started_at = core::Time::epoch(),
+      .finished_at = core::Time::epoch(),
+  };
+}
+
+hook::ToolAfterPayload sample_after_with_redacted_input() {
+  return hook::ToolAfterPayload{
+      .tool_name = "file.write",
+      .input_json = R"({"path":"notes.md","content":"secret"})",
+      .redacted_input_json = R"({"kind":"redacted_tool_input","input_hash":"abc","content_bytes":6})",
+      .who = hook::Identity{.scope_key = "scope", .agent_key = "agent", .identity = "operator"},
+      .succeeded = true,
+      .output_text = "ok",
       .error_kind = "",
       .error_message = "",
       .started_at = core::Time::epoch(),
@@ -272,6 +299,28 @@ TEST_CASE("publish_advisory redacts tool_after data_json unless sink is trusted-
   REQUIRE(trusted_sink.captures().size() == 1);
   REQUIRE(trusted_sink.captures()[0].payload_kind == "after");
   REQUIRE(trusted_sink.captures()[0].data_json == R"({"kind":"sample","raw":true})");
+}
+
+TEST_CASE("publish_advisory redacts input_json when a sanitized view is present", "[hook][bus][redaction]") {
+  hook::Bus bus;
+  RecordingSink default_sink{"default"};
+  RecordingSink trusted_sink{"trusted", hook::SinkKind::trusted_local};
+  bus.bind(default_sink, {hook::Event::tool_after});
+  bus.bind(trusted_sink, {hook::Event::tool_after});
+
+  test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
+    auto outcome = co_await bus.publish_advisory(hook::Event::tool_after, sample_after_with_redacted_input());
+    REQUIRE(outcome.sinks.size() == 2);
+    REQUIRE(outcome.all_succeeded());
+    co_return;
+  });
+
+  REQUIRE(default_sink.captures().size() == 1);
+  REQUIRE(default_sink.captures()[0].input_json ==
+          R"({"kind":"redacted_tool_input","input_hash":"abc","content_bytes":6})");
+
+  REQUIRE(trusted_sink.captures().size() == 1);
+  REQUIRE(trusted_sink.captures()[0].input_json == R"({"path":"notes.md","content":"secret"})");
 }
 
 TEST_CASE("bind is idempotent — duplicate pair does not double-fire", "[hook][bus]") {

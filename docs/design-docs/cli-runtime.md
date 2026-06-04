@@ -117,9 +117,12 @@ Duplicate or empty prompt values are `invalid_argument` errors.
 `cli::OperatorPromptSink` is a concrete `hook::Sink` for
 `hook::Event::permission_ask_rendered`. It expects a
 `hook::PermissionAskRenderedPayload`, renders the tool name, caller identity, matched
-decision reason, replay/TTL policy, request timestamp, and raw input JSON, then asks the
-operator for a yes/no answer. Approval answers (`y`, `yes`, `approve`, `approved`,
-`proceed`) return `HookDecisionKind::proceed` with
+decision reason, replay/TTL policy, request timestamp, and the bus-delivered input JSON,
+then asks the operator for a yes/no answer. For sensitive mutation tools such as
+`file.write` / `file.edit`, the prompt sink uses the default hook sink kind and therefore
+receives the redacted summary unless a future caller installs an explicitly trusted-local
+approval sink. Approval answers (`y`, `yes`, `approve`, `approved`, `proceed`) return
+`HookDecisionKind::proceed` with
 `reason=operator_approved:<identity>`. Denial answers (`n`, `no`, `deny`, `denied`,
 `reject`, or an empty answer) return `HookDecisionKind::veto` with
 `reason=operator_denied:<identity>`.

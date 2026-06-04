@@ -174,7 +174,10 @@ handlers can adopt without churning every callsite at once.
   truncated rendering used today. `hook::Bus` builds per-sink payload copies
   and clears `data_json` unless the consuming sink's `kind()` returns
   `SinkKind::trusted_local`, matching the deep-review §Hook/audit redaction
-  recommendation.
+  recommendation. Slice 152 extends that same trust boundary to sensitive
+  mutation inputs: `file.write` / `file.edit` lifecycle payloads carry a
+  `redacted_input_json` summary, and `hook::Bus` substitutes it for
+  non-trusted sinks while trusted-local sinks keep the raw input.
 - **Byte caps**. Two caps, independent:
   - `runtime.tool_output.max_text_bytes` (default 256 KiB) — applies to
     `text`. Exceeding it truncates and sets `is_error=false` with a
@@ -287,12 +290,15 @@ handlers can adopt without churning every callsite at once.
    bytes of serialised `data_json` produces an output whose `text` is intact,
    `data_json == std::nullopt`, and `usage.data_dropped = true`. The
    future provider-adapter call still succeeds (with the text fallback).
-6. **Hook redaction.** Shipped in slice 65. A structured-output handler's
+6. **Hook redaction.** Shipped in slice 65 for structured output and slice
+   152 for sensitive mutation inputs. A structured-output handler's
    `ToolAfterPayload` delivered to a default sink contains the text fallback
    and byte/count metrics in `usage` but no raw `data_json`; the same payload
    delivered to a sink whose `kind()` returns `SinkKind::trusted_local`
-   contains the raw `data_json` field. Pinned by hook-bus and registry
-   two-sink tests.
+   contains the raw `data_json` field. For `file.write` / `file.edit`,
+   default sinks receive a redacted `input_json` summary containing the full
+   input hash plus byte counts, while trusted-local sinks receive the original
+   mutation input. Pinned by hook-bus and registry two-sink tests.
 7. **Adapter mapping.** Slice 107 ships the first request-side mapping
    coverage: Anthropic Messages and OpenAI Responses tests prove that
    text-only tool results use the plain fallback and structured

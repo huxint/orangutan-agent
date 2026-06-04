@@ -3,10 +3,11 @@
 // Slices 22 + 25 ship typed shapes for the four tool-lifecycle events
 // (`tool_before`, `tool_dispatched`, `tool_after`, `tool_error`). Slice 94
 // adds the first permission ask-flow shape (`permission_ask_rendered`) so UI
-// sinks can render an approval prompt and return a blocking decision. Events
-// without a typed shape yet carry `std::monostate` so sinks subscribed to them
-// can observe occurrence without payload content; typed shapes land with the
-// producing subsystem.
+// sinks can render an approval prompt and return a blocking decision. Slice
+// 152 adds optional per-sink redacted input views for sensitive mutation
+// payloads. Events without a typed shape yet carry `std::monostate` so sinks
+// subscribed to them can observe occurrence without payload content; typed
+// shapes land with the producing subsystem.
 
 #pragma once
 
@@ -37,6 +38,11 @@ struct Identity {
 struct ToolBeforePayload {
   std::string tool_name;
   std::string input_json;
+  /// Optional sanitized input view. When present, `Bus` delivers this value
+  /// as `input_json` to sinks whose `Sink::kind()` is not
+  /// `SinkKind::trusted_local`; trusted-local sinks receive the original
+  /// `input_json`.
+  std::optional<std::string> redacted_input_json{};
   Identity who;
   /// Wall-clock instant the dispatch started — sinks correlate
   /// `tool_before` with `tool_after` via this field plus tool_name.
@@ -54,6 +60,9 @@ struct ToolBeforePayload {
 struct ToolDispatchedPayload {
   std::string tool_name;
   std::string input_json;
+  /// Optional sanitized input view for non-trusted sinks. See
+  /// `ToolBeforePayload::redacted_input_json`.
+  std::optional<std::string> redacted_input_json{};
   Identity who;
   core::Time started_at{};
   std::string verdict;
@@ -81,6 +90,9 @@ struct ToolUsage {
 struct ToolAfterPayload {
   std::string tool_name;
   std::string input_json;
+  /// Optional sanitized input view for non-trusted sinks. See
+  /// `ToolBeforePayload::redacted_input_json`.
+  std::optional<std::string> redacted_input_json{};
   Identity who;
   bool succeeded{false};
   /// Verbatim `Output::text` on success; empty string on failure.
@@ -112,6 +124,9 @@ struct ToolAfterPayload {
 struct ToolErrorPayload {
   std::string tool_name;
   std::string input_json;
+  /// Optional sanitized input view for non-trusted sinks. See
+  /// `ToolBeforePayload::redacted_input_json`.
+  std::optional<std::string> redacted_input_json{};
   Identity who;
   /// `core::Error::kind` enumerator wire spelling
   /// (e.g. `permission_denied`, `not_found`, `internal`).
@@ -129,6 +144,9 @@ struct ToolErrorPayload {
 struct PermissionAskRenderedPayload {
   std::string tool_name;
   std::string input_json;
+  /// Optional sanitized input view for non-trusted sinks. See
+  /// `ToolBeforePayload::redacted_input_json`.
+  std::optional<std::string> redacted_input_json{};
   Identity who;
   /// Human-readable rule/hook reason that caused the ask.
   std::string decision_reason;

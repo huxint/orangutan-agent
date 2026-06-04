@@ -26,6 +26,7 @@
 #include <oran/permission/rule_set.hpp>
 
 #include "_impl/audit_metadata.hpp"
+#include "_impl/input_redaction.hpp"
 #include "_impl/path_resolution.hpp"
 #include "_impl/schema_validation.hpp"
 
@@ -215,6 +216,7 @@ require_approval_decision(permission::Decision decision, const hook::HookDecisio
   return hook::ToolBeforePayload{
       .tool_name = std::string{name},
       .input_json = std::string{input_json},
+      .redacted_input_json = detail::redacted_hook_input_json(name, input_json),
       .who = make_hook_identity(ctx),
       .started_at = started_at,
   };
@@ -242,6 +244,7 @@ require_approval_decision(permission::Decision decision, const hook::HookDecisio
   hook::ToolAfterPayload payload{
       .tool_name = std::string{name},
       .input_json = std::string{input_json},
+      .redacted_input_json = detail::redacted_hook_input_json(name, input_json),
       .who = make_hook_identity(ctx),
       .succeeded = result.has_value(),
       .output_text = result.has_value() ? result->text : std::string{},
@@ -265,6 +268,7 @@ require_approval_decision(permission::Decision decision, const hook::HookDecisio
   return hook::ToolDispatchedPayload{
       .tool_name = std::string{name},
       .input_json = std::string{input_json},
+      .redacted_input_json = detail::redacted_hook_input_json(name, input_json),
       .who = make_hook_identity(ctx),
       .started_at = started_at,
       .verdict = std::string{core::enum_name(verdict)},
@@ -278,6 +282,7 @@ require_approval_decision(permission::Decision decision, const hook::HookDecisio
   return hook::PermissionAskRenderedPayload{
       .tool_name = std::string{name},
       .input_json = std::string{input_json},
+      .redacted_input_json = detail::redacted_hook_input_json(name, input_json),
       .who = make_hook_identity(ctx),
       .decision_reason = decision.reason,
       .replay_max = decision.replay_max,
@@ -295,6 +300,7 @@ require_approval_decision(permission::Decision decision, const hook::HookDecisio
   return hook::ToolErrorPayload{
       .tool_name = std::string{name},
       .input_json = std::string{input_json},
+      .redacted_input_json = detail::redacted_hook_input_json(name, input_json),
       .who = make_hook_identity(ctx),
       .error_kind = error_kind_label(error),
       .error_message = std::string{error.message()},

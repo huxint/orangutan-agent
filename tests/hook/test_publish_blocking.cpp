@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 #include <asio/io_context.hpp>
 #include <asio/this_coro.hpp>
@@ -39,6 +40,17 @@ using namespace std::chrono_literals;
   return hook::ToolBeforePayload{
       .tool_name = "noop",
       .input_json = "{}",
+      .who = hook::Identity{.scope_key = "scope", .agent_key = "agent", .identity = "operator"},
+      .started_at = core::Time::epoch(),
+  };
+}
+
+[[nodiscard]] hook::ToolBeforePayload sample_before_with_redacted_input() {
+  return hook::ToolBeforePayload{
+      .tool_name = "file.edit",
+      .input_json = R"({"path":"notes.md","old_string":"secret","new_string":"public"})",
+      .redacted_input_json =
+          R"({"kind":"redacted_tool_input","input_hash":"abc","old_string_bytes":6,"new_string_bytes":6})",
       .who = hook::Identity{.scope_key = "scope", .agent_key = "agent", .identity = "operator"},
       .started_at = core::Time::epoch(),
   };
@@ -433,6 +445,51 @@ TEST_CASE("InProcessSink blocking handler drives the decision", "[hook][bus][blo
     REQUIRE(result->rewritten_input_json == R"({"path":"src/x"})");
     co_return;
   });
+}
+
+TEST_CASE("publish_blocking redacts input_json when a sanitized view is present", "[hook][bus][blocking][redaction]") {
+  hook::Bus bus;
+  std::string default_input;
+  std::string trusted_input;
+  hook::InProcessSink default_sink{
+      "default",
+      [](hook::Event /*event*/, hook::Payload /*payload*/) -> async::Awaitable<core::Result<void>> {
+        co_return core::Result<void>{};
+      }};
+  default_sink.set_blocking_handler(
+      [&](hook::Event /*event*/, hook::Payload payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
+        const auto* before = std::get_if<hook::ToolBeforePayload>(&payload);
+        REQUIRE(before != nullptr);
+        default_input = before->input_json;
+        co_return hook::HookDecision{};
+      });
+  hook::InProcessSink trusted_sink{
+      "trusted",
+      [](hook::Event /*event*/, hook::Payload /*payload*/) -> async::Awaitable<core::Result<void>> {
+        co_return core::Result<void>{};
+      },
+      hook::SinkKind::trusted_local};
+  trusted_sink.set_blocking_handler(
+      [&](hook::Event /*event*/, hook::Payload payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
+        const auto* before = std::get_if<hook::ToolBeforePayload>(&payload);
+        REQUIRE(before != nullptr);
+        trusted_input = before->input_json;
+        co_return hook::HookDecision{};
+      });
+  bus.bind(default_sink, {hook::Event::tool_before});
+  bus.bind(trusted_sink, {hook::Event::tool_before});
+
+  test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
+    auto result = co_await bus.publish_blocking<hook::Event::tool_before>(sample_before_with_redacted_input());
+    REQUIRE(result.has_value());
+    REQUIRE(result->kind == hook::HookDecisionKind::proceed);
+    REQUIRE(result->trace.size() == 2);
+    co_return;
+  });
+
+  REQUIRE(default_input ==
+          R"({"kind":"redacted_tool_input","input_hash":"abc","old_string_bytes":6,"new_string_bytes":6})");
+  REQUIRE(trusted_input == R"({"path":"notes.md","old_string":"secret","new_string":"public"})");
 }
 
 TEST_CASE("EventTraits encodes the v1 blocking whitelist", "[hook][event][blocking]") {

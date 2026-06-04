@@ -109,6 +109,11 @@ in what order.
 > `permission::ApprovalBroker` plus a blocking `permission_ask_rendered` sink,
 > records `metadata_json.permission_ask_decisions[]`, returns the approved tool
 > result to the provider, and verifies the issued token against the prompt time.
+> Slice 152 applies the hook trust boundary to sensitive mutation inputs on
+> blocking publishes too: `file.write` / `file.edit` `tool_before` and
+> `permission_ask_rendered` payloads deliver a hash-and-byte-count
+> `input_json` summary to default sinks, while `SinkKind::trusted_local` sinks
+> receive the original input.
 
 The MVP is the *minimum* surface needed by the agent loop's approval
 render flow — the first real consumer. Everything else that wants a

@@ -7,12 +7,23 @@
 
 ## Snapshot
 
-- **Slice:** 151 (`xmake run orangutan` reports slice 151)
+- **Slice:** 152 (`xmake run orangutan` reports slice 152)
 - **Last completed history:**
-  [`histories/2026-06/20260604-1141-config-nested-strictness.md`](histories/2026-06/20260604-1141-config-nested-strictness.md)
+  [`histories/2026-06/20260604-1207-hook-mutation-input-redaction.md`](histories/2026-06/20260604-1207-hook-mutation-input-redaction.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** slice 151 closes the nested config strictness gap
+- **Next intended slice:** slice 152 closes the sensitive mutation-input hook
+  redaction item from the deep-review tracker: tool and approval hook payloads
+  that carry `input_json` now also carry optional `redacted_input_json`, and
+  `hook::Bus` substitutes that sanitized view for every sink whose kind is not
+  `SinkKind::trusted_local` across both advisory and blocking publishes.
+  `Registry::dispatch` fills the sanitized view for `file.write` and
+  `file.edit` with a deterministic `redacted_tool_input` JSON object carrying
+  the full input SHA-256, input byte count, redacted field names, and string
+  byte counts; malformed JSON still receives a hash-only summary. Trusted-local
+  sinks continue to receive the original mutation input. Focused result:
+  `test-hook` **32 cases / 222 assertions** and `test-tool`
+  **195 cases / 2031 assertions**. Slice 151 closes the nested config strictness gap
   from the deep-review tracker: loose config loads now emit `ConfigWarning`
   rows for unknown fields inside typed provider profiles, provider pricing,
   routes, and hooks, while `strict_config=true` or
@@ -1429,10 +1440,10 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-storage`: 76 cases / 986 assertions.
 - `oran-config`: 40 cases / 322 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
-- `oran-hook`: 30 cases / 207 assertions.
+- `oran-hook`: 32 cases / 222 assertions.
 - `oran-memory`: 9 cases / 576 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
-- `oran-tool`: 191 cases / 1919 assertions.
+- `oran-tool`: 195 cases / 2031 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.

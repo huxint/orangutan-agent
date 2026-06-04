@@ -338,7 +338,8 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > abstract base and exposes `kind()`, which defaults to
 > `SinkKind::default_`; `SinkKind::trusted_local` is the
 > explicit opt-in for same-process observers that may
-> receive raw structured tool output. `hook::InProcessSink`
+> receive raw structured tool output and unredacted sensitive
+> mutation inputs. `hook::InProcessSink`
 > is the first concrete implementation (a `std::function<
 > async::Awaitable<Result<void>>(Event, Payload)>`
 > callback) and can be constructed with either sink kind.
@@ -367,7 +368,19 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > output bytes. `publish_advisory` redacts that field for
 > every sink whose `kind()` is not `SinkKind::trusted_local`,
 > so default sinks receive the existing text + usage view and
-> trusted-local sinks receive the raw data. Typed shapes for
+> trusted-local sinks receive the raw data. Slice 152 adds the
+> same per-sink redaction channel for tool inputs: lifecycle
+> payloads that carry `input_json` also carry an optional
+> `redacted_input_json`, and both advisory and blocking bus
+> publishes substitute that sanitized view for non-trusted
+> sinks. `Registry::dispatch` fills the field for `file.write`
+> and `file.edit` with a compact JSON object containing
+> `kind=redacted_tool_input`, `tool_name`, the full
+> SHA-256 `input_hash`, `input_bytes`, and the redacted string
+> byte counts (`content_bytes` or `old_string_bytes` /
+> `new_string_bytes`). Malformed JSON still receives a hash-only
+> redacted view; trusted-local sinks receive the original input.
+> Typed shapes for
 > the remaining non-tool
 > events ship with their producers (provider request /
 > response payloads now live with the agent/provider lifecycle path;
