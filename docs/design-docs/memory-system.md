@@ -142,22 +142,41 @@ patterns). The legacy implementation: SQLite + FTS5 + a single mutex + an option
 MEMORY.md mirror. v2 keeps that core and adds:
 
 - **Connection pool** for reads; one writer connection on a strand.
-- **Vector backend slot** (interface, optional): `LongTerm::Backend` is a trait;
-  default is the FTS5 backend; an optional `vector_backend` can be plugged in (sqlite-vec,
-  HNSW, etc.).
+- **Vector backend slot** (interface, optional): `longterm::Backend` owns the
+  lexical/record store seam, and `longterm::VectorBackend` owns the embedding
+  index seam that an optional sqlite-vec / HNSW / external adapter can implement.
 - **Typed kinds** match the legacy ones (user, feedback, project, reference) and gain a
   fifth: `team` (mirrors of shared-tier records for cross-tier search convenience).
 - **Decay policy**: `memory-age` style decay is actually wired into the search pipeline
   this time; expired records receive lower BM25 weight before potentially being pruned.
 
+Status (slice 160): `include/oran/memory/longterm.hpp` now ships the public
+record/query/write shapes, reflection-backed `RecordKind`, `Backend` and
+`VectorBackend` traits, plus validation helpers for record keys, search limits,
+record metadata, and vector embeddings. It does **not** yet ship
+`longterm::Runtime`, the SQLite FTS5 repository, the gated sqlite-vec adapter,
+or recall-backed prompt framing.
+
 ```cpp
 // include/oran/memory/longterm.hpp
 namespace orangutan::memory::longterm {
 
-struct Record {
+enum class RecordKind : std::uint8_t {
+  user,
+  feedback,
+  project,
+  reference,
+  team,
+};
+
+struct RecordKey {
   std::string id;
   std::string scope_key;        // agent identity scope
-  std::string kind;             // user, feedback, project, reference, team
+};
+
+struct Record {
+  RecordKey   key;
+  RecordKind  kind;
   std::string title;
   std::string body;
   core::Time   created_at;
@@ -165,19 +184,22 @@ struct Record {
   core::Time   last_read_at;
   double       importance = 0.0; // 0..1
   std::vector<std::string> tags;
-  std::vector<std::string> linked;  // ids of [[linked]] records
+  std::vector<std::string> linked_record_ids;
+  bool         shadow = false;
 };
 
-class Runtime {
- public:
-  Runtime(Backend&, retention::Policy, hook::Bus&);
+struct Query {
+  std::string scope_key;
+  std::string text;
+  std::vector<RecordKind> kinds;
+  bool include_shadow = false;
+};
 
-  async::Awaitable<core::Result<Record>>          get(std::string_view id) const;
-  async::Awaitable<core::Result<std::vector<Record>>>
-                                                  search(Query, std::size_t limit) const;
-  async::Awaitable<core::Result<Record>>          write(WriteRequest) const;
-  async::Awaitable<core::Result<void>>            forget(std::string_view id) const;
-  async::Awaitable<core::Result<DecaySummary>>    run_decay() const;
+struct SearchHit {
+  Record record;
+  double score = 0.0;
+  std::optional<double> lexical_score;
+  std::optional<double> vector_score;
 };
 
 }  // namespace orangutan::memory::longterm
@@ -189,20 +211,31 @@ class Runtime {
 class Backend {
  public:
   virtual ~Backend() = default;
-  virtual async::Awaitable<core::Result<Record>>             get(std::string_view id) = 0;
-  virtual async::Awaitable<core::Result<std::vector<Record>>> search(Query, std::size_t)= 0;
-  virtual async::Awaitable<core::Result<Record>>             upsert(Record)            = 0;
-  virtual async::Awaitable<core::Result<void>>               remove(std::string_view id)= 0;
+  virtual async::Awaitable<core::Result<Record>> get(RecordKey key) = 0;
+  virtual async::Awaitable<core::Result<std::vector<SearchHit>>>
+    search(Query query, std::size_t limit) = 0;
+  virtual async::Awaitable<core::Result<Record>> upsert(WriteRequest request) = 0;
+  virtual async::Awaitable<core::Result<void>> remove(RecordKey key) = 0;
+};
+
+class VectorBackend {
+ public:
+  virtual ~VectorBackend() = default;
+  virtual async::Awaitable<core::Result<void>> upsert(VectorUpsert request) = 0;
+  virtual async::Awaitable<core::Result<std::vector<VectorHit>>>
+    search(VectorSearchQuery query, std::size_t limit) = 0;
+  virtual async::Awaitable<core::Result<void>> remove(VectorRemoveRequest request) = 0;
 };
 ```
 
-Built-in backends:
+Planned built-in backends:
 
 - `Fts5Backend` — SQLite FTS5; default.
-- `VectorBackend` — optional; uses sqlite-vec or an external embedding store
-  via `oran-http::Client` (configurable). Search hybrid: FTS5 score + cosine.
+- sqlite-vec adapter — optional under `--vector_memory=y`; future search hybrid
+  combines FTS5 score + vector cosine.
+- external vector adapter — optional embedding store via `oran-http::Client`.
 
-`bench/oran-memory/` (see `docs/product-specs/0010-benchmark-harness.md`) compares
+`bench/oran-memory/` (see `docs/product-specs/0010-benchmark-harness.md`) will compare
 backends on a synthetic 10k-record corpus.
 
 ## Shared Memory (Team)
