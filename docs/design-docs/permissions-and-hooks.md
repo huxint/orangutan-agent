@@ -328,7 +328,7 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 
 ## Hook Bus
 
-> **Bus status (2026-05-25, slice 96):** the foundation
+> **Bus status (2026-06-04, slice 156):** the foundation
 > ships as `oran-hook`. `hook::Event` enumerates the 41
 > lifecycle events listed below; `hook::Mode { advisory,
 > blocking }` plus `default_mode(Event)` annotates each
@@ -348,11 +348,15 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > `publish_advisory(Event, Payload) -> Awaitable<
 > PublishOutcome>` method, and the constrained blocking
 > `publish_blocking<E>(Payload) -> Awaitable<
-> Result<HookDecision>>` method. Advisory publishing iterates
-> subscribed sinks in subscription order, builds per-sink
-> payload copies, captures each sink's `Result<void>`
-> in a `PublishOutcome::SinkResult` row, and never aborts
-> the publish on a sink error (advisory contract). The
+> Result<HookDecision>>` method. Advisory publishing starts
+> every subscribed sink as a sibling child coroutine, builds
+> per-sink payload copies before fan-out, gathers each sink's
+> `Result<void>` in subscription-ordered
+> `PublishOutcome::SinkResult` rows, and never aborts
+> the publish on a sink error (advisory contract). Parent
+> cancellation emits child cancellation signals and then drains
+> completions so the caller can safely destroy the borrowed sinks
+> after `publish_advisory` returns. The
 > `PublishOutcome` lets the caller surface sink failures
 > into logs or audit without coupling the publish to a
 > single error policy. `hook::Payload` is a `std::variant`
@@ -428,11 +432,13 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > per-sink deadline, synthesizes a veto with
 > `reason=hook_timeout` on expiry, and records
 > `HookDecisionTrace::elapsed` so direct dispatch serializes
-> `metadata_json.hook_decisions[].elapsed_ms`. Bench (`bench-hook`
-> + `bench-tool`): `publish_no_sinks` ~242 ns vs.
-> `publish_one_sink` ~446 ns vs. `publish_three_sinks`
-> ~698 ns (~204 ns first-sink dispatch, ~126 ns per
-> additional sink); `dispatch_allow_no_hooks` ~2.1 µs
+> `metadata_json.hook_decisions[].elapsed_ms`. Slice 156 switches
+> advisory publishes from sequential awaits to concurrent fan-out
+> while preserving subscription-ordered outcome rows; `bench-hook`
+> now measures no-op fan-out/gather overhead at roughly
+> `publish_no_sinks` ~325 ns, `publish_one_sink` ~1.63 µs, and
+> `publish_three_sinks` ~4.07 µs on the local slice machine.
+> `bench-tool` remains `dispatch_allow_no_hooks` ~2.1 µs
 > vs. `dispatch_allow_with_empty_bus` ~2.4 µs vs.
 > `dispatch_allow_with_two_sinks` ~3.0 µs (~346 ns "bus
 > attached, nothing listens" tax, ~914 ns "bus attached
@@ -585,7 +591,8 @@ enum class SinkKind {
 `Sink::kind()` defaults to `SinkKind::default_`. A sink may return
 `SinkKind::trusted_local` only when it is a same-process observer whose
 operator intentionally allowed raw tool-result data to stay in process.
-`Bus::publish_advisory` enforces this for `ToolAfterPayload`: it delivers
+`Bus::publish_advisory` enforces this for `ToolAfterPayload` before fan-out:
+it delivers
 `output_text`, timing, error fields, and `usage` to every sink, but clears
 `ToolAfterPayload::data_json` for all non-trusted-local sinks. The registry
 may publish raw serialized `tool::Output::data_json` once; redaction remains a
@@ -614,8 +621,9 @@ Each event is annotated `blocking` or `advisory`:
 - **Blocking** (e.g., `tool_before`, `memory_write_before`, `permission_ask_rendered`):
   the bus awaits all sinks. A sink may return a `Decision` that vetoes / rewrites /
   proceeds.
-- **Advisory** (e.g., `tool_after`, `iteration_end`): the bus fires-and-forgets. Sinks
-  cannot veto.
+- **Advisory** (e.g., `tool_after`, `iteration_end`): the bus starts subscribed sinks
+  as sibling child coroutines, waits for every completion to build
+  `PublishOutcome`, and preserves subscription-ordered result rows. Sinks cannot veto.
 
 Provider lifecycle events are advisory in slice 126. `provider_request` observes
 the request boundary but cannot rewrite payloads yet; blocking provider rewrites

@@ -7,12 +7,22 @@
 
 ## Snapshot
 
-- **Slice:** 155 (`xmake run orangutan` reports slice 155)
+- **Slice:** 156 (`xmake run orangutan` reports slice 156)
 - **Last completed history:**
-  [`histories/2026-06/20260604-1522-tool-dispatch-context-for-now.md`](histories/2026-06/20260604-1522-tool-dispatch-context-for-now.md)
+  [`histories/2026-06/20260604-1553-hook-advisory-fanout.md`](histories/2026-06/20260604-1553-hook-advisory-fanout.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** slice 155 closes the public
+- **Next intended slice:** slice 156 closes the parallel advisory hook fan-out
+  cleanup item from the deep-review tracker: `hook::Bus::publish_advisory`
+  now starts every subscribed sink as a sibling child coroutine, gathers
+  completions through the existing bounded `async::Channel`, preserves
+  subscription-ordered `PublishOutcome` rows, keeps per-sink redaction before
+  delivery, and propagates parent cancellation to children before draining
+  completion rows. Blocking hook publishes intentionally remain sequential
+  because their first non-`proceed` decision short-circuits. Focused results:
+  `test-hook` **33 cases / 231 assertions** and `bench-hook`
+  (`publish_no_sinks` ~325 ns, `publish_one_sink` ~1.63 µs,
+  `publish_three_sinks` ~4.07 µs on this local run). Slice 155 closes the public
   `tool::DispatchContext::for_now()` cleanup item from the deep-review tracker:
   `DispatchContext::for_now(executor, rules, audit, scope_key, agent_key,
   identity)` creates a fresh current-clock context, and
@@ -1469,7 +1479,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-storage`: 76 cases / 986 assertions.
 - `oran-config`: 40 cases / 322 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
-- `oran-hook`: 32 cases / 222 assertions.
+- `oran-hook`: 33 cases / 231 assertions.
 - `oran-memory`: 9 cases / 576 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 197 cases / 2049 assertions.
@@ -1508,8 +1518,9 @@ Closed entries do *not* live here — the tracker is canonical.
   specs 0011-0018. Slices 31-36 closed the rank-0 items plus the P0
   follow-ups, slice 60 closed the P2 `tool::Output` envelope item, slice 115
   closed the P1 `tool::parse_input<T>` helper item, slice 154 closed the P2
-  public `io::run_blocking` utility item, and slice 155 closed the P2
-  `DispatchContext::for_now()` factory item. Remaining follow-ups are grouped
+  public `io::run_blocking` utility item, slice 155 closed the P2
+  `DispatchContext::for_now()` factory item, and slice 156 closed the P2
+  parallel `publish_advisory` fan-out item. Remaining follow-ups are grouped
   P1/P2/P3 in the tracker.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on

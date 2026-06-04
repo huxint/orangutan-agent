@@ -211,9 +211,10 @@ blocking hook waits for v1.1.
   `{ may_block, may_rewrite, may_require_approval }`. The bus rejects
   subscription to a blocking event when the sink does not declare
   `may_block`.
-- Parallel sink fan-out for advisory publishes (tracked separately in
-  the deep-review backlog, but this spec depends on it not being a
-  prerequisite — advisory publishes stay sequential in v1).
+- **Shipped in slice 156:** parallel sink fan-out for advisory publishes.
+  This remains outside the blocking-decision contract: advisory sinks still
+  cannot veto, but `publish_advisory` now starts subscribed sinks as sibling
+  child coroutines and gathers subscription-ordered `PublishOutcome` rows.
 
 ## Scope (v2)
 
@@ -337,12 +338,14 @@ blocking hook waits for v1.1.
 8. **Advisory unchanged.** Existing advisory publishes
    (`tool_after`, `iteration_end`, etc.) maintain their
    `publish_advisory` contract — sinks observe, no decision is
-   honoured, no dispatch flow change. Regression-test asserts that
-   `publish_advisory` bytes-on-the-wire equal pre-spec.
-   **Status (slice 91):** shipped. `publish_advisory` remains advisory
+   honoured, no dispatch flow change.
+   **Status (slice 156):** shipped. `publish_advisory` remains advisory
    for advisory events; `tool_before` moved to the blocking path inside
    `Registry::dispatch`, while `tool_dispatched` / `tool_error` /
-   `tool_after` keep the previous advisory contract.
+   `tool_after` keep the no-veto advisory contract. Slice 156 changes
+   only delivery mechanics: subscribed advisory sinks are fanned out as
+   sibling child coroutines, with the returned `PublishOutcome` still ordered
+   by subscription.
 9. **Type safety.** `publish_blocking<Event::tool_after>` fails to
    compile (no `EventTraits<tool_after>::Decision`). Pinned by a
    compile-fail test under the existing `tests/compile-fail` harness
@@ -364,12 +367,15 @@ blocking hook waits for v1.1.
     `blocked_by_hook` audit row plus `elapsed_ms`.
 11. **`bench/oran-hook/publish_blocking_overhead`** reports a
     single-sink blocking publish cost ≤ 2× the single-sink advisory
-    publish baseline (~446 ns per `bench-hook/publish_one_sink`), and
-    a no-sink blocking publish ≤ 1.5× the no-sink advisory baseline.
-    **Status (slice 91):** shipped as additional `bench-hook`
-    scenarios: `publish_blocking_no_sinks`, `publish_blocking_one_sink`,
-    `publish_blocking_three_sinks_all_proceed`, and
-    `publish_blocking_short_circuit_second`.
+    publish baseline, and a no-sink blocking publish ≤ 1.5× the no-sink
+    advisory baseline.
+    **Status (slice 156):** shipped as additional `bench-hook`
+    scenarios and refreshed after advisory fan-out changed the advisory
+    baseline: `publish_no_sinks` ~325 ns,
+    `publish_one_sink` ~1.63 µs, `publish_blocking_no_sinks` ~348 ns,
+    `publish_blocking_one_sink` ~2.88 µs,
+    `publish_blocking_three_sinks_all_proceed` ~7.66 µs, and
+    `publish_blocking_short_circuit_second` ~5.32 µs.
 
 ## Design Doc Cross-References
 

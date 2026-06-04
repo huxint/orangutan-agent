@@ -5,7 +5,9 @@
 // owns them (typically the bootstrap layer) and the bus keeps raw pointers.
 //
 // Concurrency. Sinks are not thread-safe. The bus dispatches on the agent's
-// strand; sinks that need to publish elsewhere wrap themselves in an
+// strand; advisory publishes may run different subscribed sinks as sibling
+// child coroutines, but one sink receives at most one callback for a single
+// event publish. Sinks that need to publish elsewhere wrap themselves in an
 // `asio::strand`.
 
 #pragma once

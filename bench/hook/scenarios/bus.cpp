@@ -1,6 +1,9 @@
 // bench/hook/scenarios/bus.cpp
 //
 // Slice 22 — `hook::Bus::publish_advisory` overhead at varying fan-out.
+// Slice 156 — advisory publishes start subscribed sinks as sibling
+// coroutines, so the no-op scenarios now measure fan-out/gather overhead
+// rather than a sequential await loop.
 // Slice 91 — matching `publish_blocking<Event::tool_before>` overhead so
 // spec 0015 can compare the blocking path against the advisory baseline.
 //

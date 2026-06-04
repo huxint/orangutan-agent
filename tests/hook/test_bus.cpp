@@ -1,6 +1,9 @@
 // tests/hook/test_bus.cpp — `hook::Bus` subscribe/publish coverage.
 
+#include <algorithm>
+#include <chrono>
 #include <concepts>
+#include <cstddef>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -12,6 +15,7 @@
 #include <vector>
 
 #include <asio/io_context.hpp>
+#include <asio/this_coro.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -28,6 +32,8 @@ namespace hook = orangutan::hook;
 namespace test = orangutan::tests;
 
 namespace {
+
+using namespace std::chrono_literals;
 
 /// Recording sink — captures every (event, payload, payload_kind) tuple. The
 /// `payload_kind` is a stable string the test can match against.
@@ -126,6 +132,41 @@ public:
 private:
   std::string id_;
   std::string reason_;
+};
+
+class DelayedSink final : public hook::Sink {
+public:
+  DelayedSink(std::string id,
+              std::chrono::milliseconds delay,
+              std::size_t& active,
+              std::size_t& peak_active,
+              std::vector<std::string>& completions)
+      : id_(std::move(id)), delay_(delay), active_(&active), peak_active_(&peak_active), completions_(&completions) {}
+
+  [[nodiscard]] std::string_view id() const noexcept override {
+    return id_;
+  }
+
+  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/,
+                                                             hook::Payload /*payload*/) override {
+    ++(*active_);
+    *peak_active_ = std::max(*peak_active_, *active_);
+    const auto executor = co_await asio::this_coro::executor;
+    auto slept = co_await async::sleep_for(executor, delay_);
+    --(*active_);
+    if (!slept) {
+      co_return std::unexpected(std::move(slept).error());
+    }
+    completions_->push_back(id_);
+    co_return core::Result<void>{};
+  }
+
+private:
+  std::string id_;
+  std::chrono::milliseconds delay_;
+  std::size_t* active_;
+  std::size_t* peak_active_;
+  std::vector<std::string>* completions_;
 };
 
 /// Sink that throws from its awaitable. Required to verify the advisory
@@ -276,6 +317,33 @@ TEST_CASE("multiple sinks subscribed to same event run in subscription order", "
   REQUIRE(first.captures().size() == 1);
   REQUIRE(second.captures().size() == 1);
   REQUIRE(third.captures().size() == 1);
+}
+
+TEST_CASE("publish_advisory fans out async sinks while preserving outcome order", "[hook][bus]") {
+  hook::Bus bus;
+  std::size_t active = 0;
+  std::size_t peak_active = 0;
+  std::vector<std::string> completions;
+  DelayedSink first{"first", 40ms, active, peak_active, completions};
+  DelayedSink second{"second", 10ms, active, peak_active, completions};
+  DelayedSink third{"third", 20ms, active, peak_active, completions};
+  bus.bind(first, {hook::Event::tool_before});
+  bus.bind(second, {hook::Event::tool_before});
+  bus.bind(third, {hook::Event::tool_before});
+
+  test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
+    auto outcome = co_await bus.publish_advisory(hook::Event::tool_before, sample_before());
+    REQUIRE(outcome.sinks.size() == 3);
+    REQUIRE(outcome.sinks[0].sink_id == "first");
+    REQUIRE(outcome.sinks[1].sink_id == "second");
+    REQUIRE(outcome.sinks[2].sink_id == "third");
+    REQUIRE(outcome.all_succeeded());
+    co_return;
+  });
+
+  REQUIRE(peak_active == 3);
+  REQUIRE(completions.size() == 3);
+  REQUIRE(completions.front() == "second");
 }
 
 TEST_CASE("publish_advisory redacts tool_after data_json unless sink is trusted-local", "[hook][bus][redaction]") {

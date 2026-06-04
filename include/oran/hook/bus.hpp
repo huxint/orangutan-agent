@@ -9,7 +9,9 @@
 // Slice 22 shipped advisory publish: every sink subscribed to an event
 // receives the (event, payload) pair, each sink's success/failure is
 // captured in the returned `PublishOutcome`, and no sink can veto that
-// advisory publish. Slice 90 added `publish_blocking<E>` for the spec-0015
+// advisory publish. Slice 156 changed advisory delivery from sequential
+// awaits to concurrent fan-out while preserving subscription-ordered
+// outcome rows. Slice 90 added `publish_blocking<E>` for the spec-0015
 // whitelist, slice 91 made `tool_before` the first dispatch consumer, and
 // slice 92 added the configured blocking timeout policy.
 //
@@ -87,10 +89,11 @@ public:
   /// bindings that were removed; zero when the sink was not subscribed.
   std::size_t unbind(Sink& sink);
 
-  /// Publish `event` + `payload` to every sink subscribed to `event`,
-  /// awaiting each sink in subscription order. Sink failures are
+  /// Publish `event` + `payload` to every sink subscribed to `event`.
+  /// Sinks are started as concurrent child coroutines; the returned
+  /// outcome rows remain in subscription order. Sink failures are
   /// captured in the returned outcome but do not abort the publish for
-  /// subsequent sinks (advisory semantics — see file header).
+  /// sibling sinks (advisory semantics — see file header).
   [[nodiscard]] async::Awaitable<PublishOutcome> publish_advisory(Event event, Payload payload);
 
   /// Publish `event` + `payload` as a blocking call (spec 0015 v1).
