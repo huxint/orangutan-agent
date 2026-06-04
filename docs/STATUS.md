@@ -7,12 +7,24 @@
 
 ## Snapshot
 
-- **Slice:** 158 (`xmake run orangutan` reports slice 158)
+- **Slice:** 159 (`xmake run orangutan` reports slice 159)
 - **Last completed history:**
-  [`histories/2026-06/20260604-2136-hook-payload-sharing.md`](histories/2026-06/20260604-2136-hook-payload-sharing.md)
+  [`histories/2026-06/20260604-2200-async-runtime-run-state.md`](histories/2026-06/20260604-2200-async-runtime-run-state.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 158 closes the P3 hook multi-sink payload
+- **Latest completed slice:** slice 159 closes the P3 async
+  `Runtime::Impl::run()` clarification item from the deep-review tracker:
+  the private runtime lifecycle is now a single `idle/running/stopped` state,
+  `Runtime::run()` explicitly rejects reuse after stop with
+  `ErrorKind::conflict`, and exceptions escaping `io_context.run()` handlers are
+  contained inside the IO worker, stop the runtime, and return from `run()` as a
+  structured `ErrorKind::internal` failure instead of escaping a worker thread.
+  Focused result: `test-async` **11 cases / 51 assertions**.
+- **Next intended slice:** no active plan; pick a small remaining tracker item
+  after re-orienting, likely vector backend trait / `sqlite-vec` adapter
+  prework or another small tracked follow-up.
+
+Slice 158 closes the P3 hook multi-sink payload
   sharing item from the deep-review tracker: `hook::PayloadPtr` is now the
   shared immutable sink-delivery handle, `hook::Bus` builds at most one raw
   payload snapshot and one default/redacted snapshot per advisory or blocking
@@ -22,12 +34,7 @@
   `test-hook` **34 cases / 243 assertions** and `bench-hook`
   (`publish_no_sinks` ~309 ns, `publish_one_sink` ~1.57 µs,
   `publish_three_sinks` ~3.77 µs, large redacted 1/3 default sinks
-  ~4.05 µs / ~6.58 µs on this local run).
-- **Next intended slice:** no active plan; pick a small remaining tracker item
-  after re-orienting, likely the P3 `Runtime::Impl::run()` clarification/refactor
-  or the vector backend trait / `sqlite-vec` adapter prework.
-
-Slice 157 closes the P3 storage
+  ~4.05 µs / ~6.58 µs on this local run). Slice 157 closes the P3 storage
   `Pool` mutex-contention measurement item from the deep-review tracker:
   `bench-storage` now includes an acquire-only reader-pool pair that compares
   32 sequential uncontended `Pool::acquire_reader` leases with a single-slot
@@ -1496,7 +1503,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 ## Latest Library Surfaces
 
 - `oran-core`: 71 cases / 459 assertions.
-- `oran-async`: 9 cases / 43 assertions.
+- `oran-async`: 11 cases / 51 assertions.
 - `oran-http`: 3 cases / 21 assertions.
 - `oran-io`: 54 cases / 311 assertions.
 - `oran-storage`: 76 cases / 986 assertions.
@@ -1544,8 +1551,9 @@ Closed entries do *not* live here — the tracker is canonical.
   public `io::run_blocking` utility item, slice 155 closed the P2
   `DispatchContext::for_now()` factory item, slice 156 closed the P2 parallel
   `publish_advisory` fan-out item, slice 157 closed the P3 storage `Pool`
-  contention bench item, and slice 158 closed the P3 hook payload-sharing
-  item. Remaining follow-ups are grouped P1/P2/P3 in the tracker.
+  contention bench item, slice 158 closed the P3 hook payload-sharing item, and
+  slice 159 closed the P3 `Runtime::Impl::run()` clarification item. Remaining
+  follow-ups are grouped P1/P2/P3 in the tracker.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on
   the documented reference hardware (8-core / NVMe / native Linux);

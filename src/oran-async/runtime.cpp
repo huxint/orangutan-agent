@@ -4,7 +4,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <exception>
 #include <expected>
+#include <mutex>
+#include <optional>
+#include <string>
 
 #include <asio/executor_work_guard.hpp>
 #include <asio/io_context.hpp>
@@ -23,6 +27,12 @@ namespace {
   return config;
 }
 
+enum class RunState {
+  idle,
+  running,
+  stopped,
+};
+
 }  // namespace
 
 struct Runtime::Impl {
@@ -39,31 +49,62 @@ struct Runtime::Impl {
   asio::executor_work_guard<asio::io_context::executor_type> work_guard;
   asio::thread_pool io_workers;
   asio::thread_pool cpu_workers;
-  std::atomic_bool running{false};
-  std::atomic_bool stopped{false};
+  std::atomic<RunState> state{RunState::idle};
+  std::mutex run_error_mutex;
+  std::optional<core::Error> run_error;
 
   [[nodiscard]] core::Result<void> run() {
-    if (running.exchange(true)) {
-      return std::unexpected(core::Error{core::ErrorKind::conflict, "runtime is already running"});
+    auto expected = RunState::idle;
+    if (!state.compare_exchange_strong(expected, RunState::running)) {
+      const auto message = expected == RunState::running ? "runtime is already running" : "runtime has already stopped";
+      return std::unexpected(core::Error{core::ErrorKind::conflict, message});
     }
 
     for (std::size_t i = 0; i < config.io_workers; ++i) {
-      asio::post(io_workers, [this] { io_context.run(); });
+      asio::post(io_workers, [this] { run_io_context_worker(); });
     }
 
     io_workers.join();
     cpu_workers.stop();
     cpu_workers.join();
+    if (auto error = take_run_error(); error) {
+      return std::unexpected(std::move(*error));
+    }
     return {};
   }
 
   void stop() noexcept {
-    if (stopped.exchange(true)) {
+    if (state.exchange(RunState::stopped) == RunState::stopped) {
       return;
     }
     work_guard.reset();
     io_context.stop();
     cpu_workers.stop();
+  }
+
+private:
+  void run_io_context_worker() {
+    try {
+      io_context.run();
+    } catch (const std::exception& error) {
+      record_run_error(core::Error::internal("runtime io worker failed").with("reason", error.what()));
+      stop();
+    } catch (...) {
+      record_run_error(core::Error::internal("runtime io worker failed").with("reason", "unknown"));
+      stop();
+    }
+  }
+
+  void record_run_error(core::Error error) {
+    const std::scoped_lock lock{run_error_mutex};
+    if (!run_error) {
+      run_error = std::move(error);
+    }
+  }
+
+  [[nodiscard]] std::optional<core::Error> take_run_error() {
+    const std::scoped_lock lock{run_error_mutex};
+    return std::move(run_error);
   }
 };
 

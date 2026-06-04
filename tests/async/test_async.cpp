@@ -1,10 +1,12 @@
 // tests/async/test_async.cpp — Runtime, sleep_for, and Channel coverage.
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <exception>
 #include <expected>
 #include <optional>
+#include <stdexcept>
 #include <vector>
 
 #include <asio/bind_cancellation_slot.hpp>
@@ -45,6 +47,33 @@ TEST_CASE("Runtime runs work on its executor until stopped", "[unit][async][runt
   auto result = runtime.run();
   REQUIRE(result.has_value());
   REQUIRE(ran.load());
+}
+
+TEST_CASE("Runtime rejects a second run after stop", "[unit][async][runtime]") {
+  async::Runtime runtime{async::RuntimeConfig{.io_workers = 1, .cpu_workers = 1}};
+
+  asio::post(runtime.executor(), [&] { runtime.stop(); });
+
+  auto first = runtime.run();
+  REQUIRE(first.has_value());
+
+  auto second = runtime.run();
+  REQUIRE_FALSE(second.has_value());
+  REQUIRE(second.error().kind() == core::ErrorKind::conflict);
+  REQUIRE(second.error().message() == "runtime has already stopped");
+}
+
+TEST_CASE("Runtime reports executor handler exceptions", "[unit][async][runtime]") {
+  async::Runtime runtime{async::RuntimeConfig{.io_workers = 2, .cpu_workers = 1}};
+
+  asio::post(runtime.executor(), [] { throw std::runtime_error{"boom"}; });
+
+  auto result = runtime.run();
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(result.error().kind() == core::ErrorKind::internal);
+  REQUIRE(result.error().message() == "runtime io worker failed");
+  REQUIRE(std::ranges::any_of(result.error().context(),
+                              [](const auto& entry) { return entry.first == "reason" && entry.second == "boom"; }));
 }
 
 TEST_CASE("sleep_for completes on timer expiry", "[unit][async][sleep]") {

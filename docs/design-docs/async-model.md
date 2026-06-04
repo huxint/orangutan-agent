@@ -63,7 +63,7 @@ class Runtime {
   asio::any_io_executor executor() const noexcept;
   asio::any_io_executor cpu_executor() const noexcept;
 
-  // Run until stop() is called or signal received.
+  // Run the runtime once, until stop() is called or signal received.
   core::Result<void> run();
   void stop() noexcept;
 
@@ -79,9 +79,14 @@ class Runtime {
 ```
 
 The Runtime is owned by `oran-bootstrap`. Nothing else creates one.
-Slice 1 normalizes zero worker counts to one. The later config/bootstrap slice decides
-the production default (for example `min(8, hardware_concurrency)`) without making
-`oran-async` include `<thread>`.
+Slice 1 normalizes zero worker counts to one. Slice 159 makes the `run()` lifecycle
+explicit: a runtime may be run once, `stop()` transitions it to the stopped state,
+and a later `run()` returns `ErrorKind::conflict` instead of trying to reuse an
+already-stopped `asio::io_context`. Exceptions escaping an executor handler are
+contained inside the IO worker, the runtime stops, and `run()` returns the first
+failure as `ErrorKind::internal` with the thrown reason in structured context. The
+later config/bootstrap slice decides the production default (for example
+`min(8, hardware_concurrency)`) without making `oran-async` include `<thread>`.
 
 ## Awaitable Alias
 
