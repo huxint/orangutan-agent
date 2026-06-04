@@ -17,6 +17,8 @@
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
+#include <asio/post.hpp>
+#include <asio/use_awaitable.hpp>
 
 #include <oran/async.hpp>
 #include <oran/storage.hpp>
@@ -27,6 +29,7 @@ namespace {
 
 constexpr std::size_t kReaderCount = 4;
 constexpr int kBatchQueries = 16;
+constexpr std::size_t kContentionAcquireCount = 32;
 
 std::string make_temp_path(std::string_view tag) {
   auto path = std::filesystem::temp_directory_path() /
@@ -87,6 +90,79 @@ void seed(const std::string& path) {
   return accum;
 }
 
+[[gnu::noinline]] std::uint64_t run_pool_reader_uncontended_batch(asio::io_context& io, storage::Pool& pool) {
+  std::uint64_t checksum = 0;
+  asio::co_spawn(
+      io,
+      [&]() -> async::Awaitable<void> {
+        for (std::size_t i = 0; i < kContentionAcquireCount; ++i) {
+          auto lease = co_await pool.acquire_reader();
+          if (!lease) {
+            std::abort();
+          }
+          checksum += static_cast<std::uint64_t>(lease->slot() + 1U);
+          lease->release();
+        }
+        co_return;
+      },
+      asio::detached);
+  io.restart();
+  io.run();
+  return checksum;
+}
+
+[[gnu::noinline]] std::uint64_t run_pool_reader_contended_batch(asio::io_context& io, storage::Pool& pool) {
+  std::uint64_t checksum = 0;
+  std::size_t started = 0;
+  std::size_t completed = 0;
+
+  asio::co_spawn(
+      io,
+      [&]() -> async::Awaitable<void> {
+        auto held = co_await pool.acquire_reader();
+        if (!held) {
+          std::abort();
+        }
+
+        for (std::size_t i = 0; i < kContentionAcquireCount; ++i) {
+          asio::co_spawn(
+              io,
+              [&, i]() -> async::Awaitable<void> {
+                ++started;
+                auto lease = co_await pool.acquire_reader();
+                if (!lease) {
+                  std::abort();
+                }
+                checksum += static_cast<std::uint64_t>(i + 1U) * static_cast<std::uint64_t>(lease->slot() + 1U);
+                ++completed;
+                lease->release();
+                co_return;
+              },
+              asio::detached);
+        }
+
+        while (started < kContentionAcquireCount) {
+          co_await asio::post(io, asio::use_awaitable);
+        }
+
+        held->release();
+
+        while (completed < kContentionAcquireCount) {
+          co_await asio::post(io, asio::use_awaitable);
+        }
+
+        co_return;
+      },
+      asio::detached);
+
+  io.restart();
+  io.run();
+  if (completed != kContentionAcquireCount) {
+    std::abort();
+  }
+  return checksum;
+}
+
 class TempDb {
 public:
   explicit TempDb(std::string_view tag) : path_{make_temp_path(tag)} {}
@@ -137,6 +213,21 @@ void register_pool_acquire(ankerl::nanobench::Bench& bench) {
   });
   bench.run("storage.pool_acquire_query", [&] {
     auto result = run_pool(io, *pool);
+    ankerl::nanobench::doNotOptimizeAway(result);
+  });
+
+  auto contention_pool =
+      storage::Pool::open(io.get_executor(), storage::PoolOptions{.path = db.path(), .reader_count = 1});
+  if (!contention_pool) {
+    std::abort();
+  }
+
+  bench.run("storage.pool_reader_uncontended_acquire_batch", [&] {
+    auto result = run_pool_reader_uncontended_batch(io, *contention_pool);
+    ankerl::nanobench::doNotOptimizeAway(result);
+  });
+  bench.run("storage.pool_reader_contended_fifo_acquire_batch", [&] {
+    auto result = run_pool_reader_contended_batch(io, *contention_pool);
     ankerl::nanobench::doNotOptimizeAway(result);
   });
 }

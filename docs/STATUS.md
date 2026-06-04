@@ -7,12 +7,20 @@
 
 ## Snapshot
 
-- **Slice:** 156 (`xmake run orangutan` reports slice 156)
+- **Slice:** 157 (`xmake run orangutan` reports slice 157)
 - **Last completed history:**
-  [`histories/2026-06/20260604-1553-hook-advisory-fanout.md`](histories/2026-06/20260604-1553-hook-advisory-fanout.md)
+  [`histories/2026-06/20260604-1619-storage-pool-contention-bench.md`](histories/2026-06/20260604-1619-storage-pool-contention-bench.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** slice 156 closes the parallel advisory hook fan-out
+- **Next intended slice:** slice 157 closes the P3 storage `Pool` mutex-contention
+  measurement item from the deep-review tracker: `bench-storage` now includes an
+  acquire-only reader-pool pair that compares 32 sequential uncontended
+  `Pool::acquire_reader` leases with a single-slot FIFO waiter-drain batch where
+  every waiter queues behind a held lease. Local result:
+  `storage.pool_reader_uncontended_acquire_batch` ~6.71 us and
+  `storage.pool_reader_contended_fifo_acquire_batch` ~18.96 us per 32-acquire
+  batch on a noisy local nanobench run. Slice 156 closes the parallel advisory
+  hook fan-out
   cleanup item from the deep-review tracker: `hook::Bus::publish_advisory`
   now starts every subscribed sink as a sibling child coroutine, gathers
   completions through the existing bounded `async::Channel`, preserves
@@ -1520,8 +1528,9 @@ Closed entries do *not* live here — the tracker is canonical.
   closed the P1 `tool::parse_input<T>` helper item, slice 154 closed the P2
   public `io::run_blocking` utility item, slice 155 closed the P2
   `DispatchContext::for_now()` factory item, and slice 156 closed the P2
-  parallel `publish_advisory` fan-out item. Remaining follow-ups are grouped
-  P1/P2/P3 in the tracker.
+  parallel `publish_advisory` fan-out item, and slice 157 closed the P3
+  storage `Pool` contention bench item. Remaining follow-ups are grouped P1/P2/P3
+  in the tracker.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on
   the documented reference hardware (8-core / NVMe / native Linux);

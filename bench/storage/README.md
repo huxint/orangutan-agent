@@ -14,7 +14,7 @@ repository wrappers.
 | --- | --- |
 | [`scenarios/migrations.cpp`](scenarios/migrations.cpp) | Compiled-span cold/no-op migration runs *vs.* SQL-file load+run cold/no-op migration runs. |
 | [`scenarios/sqlite_insert.cpp`](scenarios/sqlite_insert.cpp) | Literal `Connection::execute` inserts *vs.* prepared `Statement` binding. |
-| [`scenarios/pool_acquire.cpp`](scenarios/pool_acquire.cpp) | Direct `Connection` re-use *vs.* `Pool::acquire_reader` + `query` for the same SELECT batch. |
+| [`scenarios/pool_acquire.cpp`](scenarios/pool_acquire.cpp) | Direct `Connection` re-use *vs.* `Pool::acquire_reader` + `query` for the same SELECT batch, plus uncontended reader acquire batches *vs.* single-slot FIFO waiter-drain contention. |
 | [`scenarios/statement_cache.cpp`](scenarios/statement_cache.cpp) | Fresh prepare *vs.* standalone `StatementCache` prepare reuse. |
 | [`scenarios/pool_statement_cache.cpp`](scenarios/pool_statement_cache.cpp) | Pool writer fresh prepare *vs.* pool writer slot `StatementCache` reuse. |
 | [`scenarios/session_repository.cpp`](scenarios/session_repository.cpp) | Raw pool + cache SQL append/load *vs.* `SessionRepository` append/load. |
