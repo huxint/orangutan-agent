@@ -7,12 +7,20 @@
 
 ## Snapshot
 
-- **Slice:** 150 (`xmake run orangutan` reports slice 150)
+- **Slice:** 151 (`xmake run orangutan` reports slice 151)
 - **Last completed history:**
-  [`histories/2026-06/20260604-1123-trace-retention-enforcement.md`](histories/2026-06/20260604-1123-trace-retention-enforcement.md)
+  [`histories/2026-06/20260604-1141-config-nested-strictness.md`](histories/2026-06/20260604-1141-config-nested-strictness.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Next intended slice:** slice 150 consumes the already parsed
+- **Next intended slice:** slice 151 closes the nested config strictness gap
+  from the deep-review tracker: loose config loads now emit `ConfigWarning`
+  rows for unknown fields inside typed provider profiles, provider pricing,
+  routes, and hooks, while `strict_config=true` or
+  `LoadOptions::strict_unknown_fields=true` turns those same fields into
+  `ErrorKind::config` failures. Reserved but untyped `hooks.sinks` /
+  `hooks.bindings` still remain accepted placeholders until external hook sink
+  models land. Focused result: `test-config` **40 cases / 322 assertions**.
+  Slice 150 consumes the already parsed
   `trace.retention_days` policy at bootstrap/runtime assembly time:
   `storage::TraceRepository` now exposes
   `purge_turns_started_before(started_before_ns)`, which deletes only
@@ -1419,7 +1427,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-http`: 3 cases / 21 assertions.
 - `oran-io`: 49 cases / 286 assertions.
 - `oran-storage`: 76 cases / 986 assertions.
-- `oran-config`: 39 cases / 299 assertions.
+- `oran-config`: 40 cases / 322 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 30 cases / 207 assertions.
 - `oran-memory`: 9 cases / 576 assertions.
@@ -1448,6 +1456,12 @@ Closed entries do *not* live here — the tracker is canonical.
   `evictions_lru` after invalidations now that those evictions move to
   `EvictionReason::invalidated` (no callers do today, but a future
   observability consumer should be aware).
+- 2026-05-21 — Second deep-review follow-up
+  `review/deep-2026-05-21-followup`: slice 151 closed the config strictness
+  sweep for typed nested provider/route/hook sections. Remaining: CI xmake/test
+  wiring after reference hardware is provisioned; atomic-write durability
+  (`fsync_file` / parent fsync plus cross-process-unique temp leaves);
+  redacted default hook payloads for `file.write` / `file.edit`.
 - 2026-05-21 — Deep-review backlog: the stale root review artifact was
   deleted after its actionable findings were absorbed into the tracker and
   specs 0011-0018. Slices 31-36 closed the rank-0 items plus the P0

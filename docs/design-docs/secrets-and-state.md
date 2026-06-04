@@ -45,8 +45,10 @@ Current implementation status:
   policy (`hooks.timeout_ms`, default 2000), `profiles` (including optional
   per-profile `protocol` and `pricing`), `routes`, `session`, `web`,
   `permissions`, and `agents.<name>.permissions`, optional
-  `agents.<name>.prompt_overlay` stable section-6 prompt text, plus optional
-  `agents.<name>.skills_enabled` skill allowlists.
+  `agents.<name>.prompt_overlay` stable section-6 prompt text, optional
+  `agents.<name>.skills_enabled` skill allowlists, and optional
+  `agents.<name>.skills_deactivated` / `skills_expirations` skill
+  activation-policy inputs.
 - `bootstrap::run` now consumes `trace.retention_days` by deriving an explicit
   Unix-nanosecond cutoff and passing it to `RuntimeAssembly`, which purges
   matching old `trace_turns` rows before exposing the long-lived trace
@@ -77,8 +79,8 @@ Current implementation status:
   hook payloads, or error context. Regular `bootstrap::run` does not call either
   boundary yet.
 - `teams`, `channels`, `memory`, and `automation` are recognized root fields but do
-  not have typed models yet. The `hooks` root has the v1 typed timeout field; sink
-  and binding arrays remain recognized-but-untyped until external hook sinks land.
+  not have typed models yet. The `hooks` root has the v1 typed timeout field; `sinks`
+  and `bindings` remain recognized-but-untyped until external hook sinks land.
 - `agents.<name>.skills_enabled` accepts an explicit array of non-empty skill
   names. The parser preserves author order and does not resolve names against
   the filesystem; bootstrap applies the allowlist to the loaded workspace skill
@@ -94,9 +96,13 @@ Current implementation status:
 ### Schema Validation
 
 The current loader performs local type checks for the typed fields above. Missing
-optional fields take defaults; unknown root fields trigger a warning unless
+optional fields take defaults. Unknown fields trigger a warning unless
 `strict_config=true` or `LoadOptions::strict_unknown_fields=true` is set, in which
-case they are an error.
+case they are an error. This applies at the root and inside typed nested sections:
+`profiles.<name>`, `profiles.<name>.pricing`, `routes.<name>`, `hooks`, permission
+blocks, workspace permission blocks, and `agents.<name>`. Recognized-but-untyped root
+fields (`teams`, `channels`, `memory`, `automation`) and reserved hook `sinks` /
+`bindings` remain forward-compatible placeholders until their typed models land.
 
 Generated **JSON Schema** in `docs/generated/config.schema.json` remains a future
 slice. It will be generated from C++ types once the broader channel/team/hook/memory

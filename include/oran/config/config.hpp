@@ -220,6 +220,10 @@ struct AgentConfig {
 };
 
 struct LoadOptions {
+  /// When enabled, unknown fields are rejected at the root plus typed nested
+  /// config sections that already have a model (`profiles`, `pricing`,
+  /// `routes`, `hooks`, `permissions`, `workspace`, and `agents`). Loose mode
+  /// preserves them as `ConfigWarning` rows and otherwise ignores them.
   bool strict_unknown_fields{false};
 
   /// Hard cap on `load_file` size. The loader rejects files larger than this

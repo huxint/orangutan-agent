@@ -271,6 +271,128 @@ TEST_CASE("Config::parse warns or fails on unknown root fields", "[unit][config]
   REQUIRE(strict_by_config.error().kind() == core::ErrorKind::config);
 }
 
+TEST_CASE("Config::parse warns or fails on unknown nested provider and hook fields", "[unit][config]") {
+  SECTION("unknown profile field warns in loose mode") {
+    auto result = config::Config::parse(R"json({
+  "profiles": {
+    "default": {
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "base_url": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "notes": "operator-only"
+    }
+  }
+})json");
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->warnings().size() == 1);
+    REQUIRE(result->warnings()[0].path == "$.profiles.default.notes");
+    REQUIRE(result->warnings()[0].message == "unknown provider profile field");
+  }
+
+  SECTION("unknown pricing field warns in loose mode") {
+    auto result = config::Config::parse(R"json({
+  "profiles": {
+    "default": {
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "base_url": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "pricing": {
+        "input_per_million_usd": 1.25,
+        "discount_code": "future"
+      }
+    }
+  }
+})json");
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->warnings().size() == 1);
+    REQUIRE(result->warnings()[0].path == "$.profiles.default.pricing.discount_code");
+    REQUIRE(result->warnings()[0].message == "unknown provider pricing field");
+  }
+
+  SECTION("unknown route field warns in loose mode") {
+    auto result = config::Config::parse(R"json({
+  "routes": {
+    "default": {
+      "primary": "main",
+      "fallbacks": [],
+      "sticky": true
+    }
+  }
+})json");
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->warnings().size() == 1);
+    REQUIRE(result->warnings()[0].path == "$.routes.default.sticky");
+    REQUIRE(result->warnings()[0].message == "unknown route field");
+  }
+
+  SECTION("unknown hook field warns in loose mode") {
+    auto result = config::Config::parse(R"json({
+  "hooks": {
+    "timeout_ms": 75,
+    "sink_scripts": []
+  }
+})json");
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->warnings().size() == 1);
+    REQUIRE(result->warnings()[0].path == "$.hooks.sink_scripts");
+    REQUIRE(result->warnings()[0].message == "unknown hook field");
+  }
+
+  SECTION("reserved hook sink and binding fields stay accepted until typed models land") {
+    auto result = config::Config::parse(R"json({
+  "hooks": {
+    "timeout_ms": 75,
+    "sinks": [{"name": "local"}],
+    "bindings": [{"event": "tool_before"}]
+  }
+})json");
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->warnings().empty());
+    REQUIRE(result->hooks().timeout_ms == 75);
+  }
+
+  SECTION("unknown nested field fails under strict_config") {
+    auto result = config::Config::parse(R"json({
+  "strict_config": true,
+  "profiles": {
+    "default": {
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "base_url": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "notes": "operator-only"
+    }
+  }
+})json");
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("unknown nested field fails under strict load option") {
+    auto result = config::Config::parse(R"json({
+  "routes": {
+    "default": {
+      "primary": "main",
+      "fallbacks": [],
+      "sticky": true
+    }
+  }
+})json",
+                                        config::LoadOptions{.strict_unknown_fields = true});
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+}
+
 TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][config]") {
   ScopedUnsetEnv default_model{"ORAN_DEFAULT_MODEL"};
   const auto path = example_config_path();

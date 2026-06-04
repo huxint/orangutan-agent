@@ -60,6 +60,33 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 5>{
     "skills_expirations",
 };
 
+constexpr auto kRecognizedHookFields = std::array<std::string_view, 3>{
+    "timeout_ms",
+    "sinks",
+    "bindings",
+};
+
+constexpr auto kRecognizedProfileFields = std::array<std::string_view, 6>{
+    "provider",
+    "protocol",
+    "model",
+    "base_url",
+    "api_key_env",
+    "pricing",
+};
+
+constexpr auto kRecognizedProviderPricingFields = std::array<std::string_view, 4>{
+    "input_per_million_usd",
+    "output_per_million_usd",
+    "cache_creation_per_million_usd",
+    "cache_read_per_million_usd",
+};
+
+constexpr auto kRecognizedRouteFields = std::array<std::string_view, 2>{
+    "primary",
+    "fallbacks",
+};
+
 [[nodiscard]] Error config_error(std::string message, std::string path) {
   return Error::config(std::move(message)).with("path", std::move(path));
 }
@@ -81,6 +108,29 @@ constexpr auto kRecognizedAgentFields = std::array<std::string_view, 5>{
 
 [[nodiscard]] bool is_recognized_agent_field(std::string_view name) {
   return std::ranges::contains(kRecognizedAgentFields, name);
+}
+
+template <std::size_t N>
+[[nodiscard]] Result<void> collect_unknown_object_fields(const json& object,
+                                                         std::string_view path,
+                                                         const std::array<std::string_view, N>& known_keys,
+                                                         std::string_view message,
+                                                         bool strict,
+                                                         std::vector<ConfigWarning>& warnings) {
+  for (const auto& [key, _] : object.items()) {
+    if (std::ranges::contains(known_keys, key)) {
+      continue;
+    }
+    const auto field_path = child_path(path, key);
+    if (strict) {
+      return std::unexpected(config_error(std::string{message}, field_path));
+    }
+    warnings.push_back(ConfigWarning{
+        .path = field_path,
+        .message = std::string{message},
+    });
+  }
+  return {};
 }
 
 [[nodiscard]] bool valid_env_name(std::string_view name) {
@@ -538,7 +588,7 @@ parse_non_empty_string_array(const json& value, std::string_view path, std::stri
   return trace;
 }
 
-[[nodiscard]] Result<HooksConfig> parse_hooks(const json& root) {
+[[nodiscard]] Result<HooksConfig> parse_hooks(const json& root, bool strict, std::vector<ConfigWarning>& warnings) {
   auto hooks = HooksConfig{};
   const auto it = root.find("hooks");
   if (it == root.end()) {
@@ -555,6 +605,12 @@ parse_non_empty_string_array(const json& value, std::string_view path, std::stri
       return std::unexpected(std::move(parsed.error()));
     }
     hooks.timeout_ms = *parsed;
+  }
+
+  auto unknowns =
+      collect_unknown_object_fields(*it, "$.hooks", kRecognizedHookFields, "unknown hook field", strict, warnings);
+  if (!unknowns) {
+    return std::unexpected(std::move(unknowns.error()));
   }
 
   return hooks;
@@ -574,7 +630,10 @@ parse_optional_price(const json& object, std::string_view key, std::string_view 
   return {};
 }
 
-[[nodiscard]] Result<ProviderPricingConfig> parse_profile_pricing(const json& profile, std::string_view profile_path) {
+[[nodiscard]] Result<ProviderPricingConfig> parse_profile_pricing(const json& profile,
+                                                                  std::string_view profile_path,
+                                                                  bool strict,
+                                                                  std::vector<ConfigWarning>& warnings) {
   auto pricing = ProviderPricingConfig{};
   const auto it = profile.find("pricing");
   if (it == profile.end()) {
@@ -606,10 +665,20 @@ parse_optional_price(const json& object, std::string_view key, std::string_view 
       !parsed) {
     return std::unexpected(std::move(parsed.error()));
   }
+  auto unknowns = collect_unknown_object_fields(*it,
+                                                pricing_path,
+                                                kRecognizedProviderPricingFields,
+                                                "unknown provider pricing field",
+                                                strict,
+                                                warnings);
+  if (!unknowns) {
+    return std::unexpected(std::move(unknowns.error()));
+  }
   return pricing;
 }
 
-[[nodiscard]] Result<std::vector<ProfileConfig>> parse_profiles(const json& root) {
+[[nodiscard]] Result<std::vector<ProfileConfig>>
+parse_profiles(const json& root, bool strict, std::vector<ConfigWarning>& warnings) {
   auto profiles = std::vector<ProfileConfig>{};
   const auto it = root.find("profiles");
   if (it == root.end()) {
@@ -654,9 +723,18 @@ parse_optional_price(const json& object, std::string_view key, std::string_view 
     if (!api_key_env) {
       return std::unexpected(std::move(api_key_env.error()));
     }
-    auto pricing = parse_profile_pricing(value, profile_path);
+    auto pricing = parse_profile_pricing(value, profile_path, strict, warnings);
     if (!pricing) {
       return std::unexpected(std::move(pricing.error()));
+    }
+    auto unknowns = collect_unknown_object_fields(value,
+                                                  profile_path,
+                                                  kRecognizedProfileFields,
+                                                  "unknown provider profile field",
+                                                  strict,
+                                                  warnings);
+    if (!unknowns) {
+      return std::unexpected(std::move(unknowns.error()));
     }
 
     profiles.push_back(ProfileConfig{
@@ -673,7 +751,8 @@ parse_optional_price(const json& object, std::string_view key, std::string_view 
   return profiles;
 }
 
-[[nodiscard]] Result<std::vector<RouteConfig>> parse_routes(const json& root) {
+[[nodiscard]] Result<std::vector<RouteConfig>>
+parse_routes(const json& root, bool strict, std::vector<ConfigWarning>& warnings) {
   auto routes = std::vector<RouteConfig>{};
   const auto it = root.find("routes");
   if (it == root.end()) {
@@ -704,6 +783,16 @@ parse_optional_price(const json& object, std::string_view key, std::string_view 
         return std::unexpected(std::move(parsed.error()));
       }
       fallbacks = std::move(*parsed);
+    }
+
+    auto unknowns = collect_unknown_object_fields(value,
+                                                  route_path,
+                                                  kRecognizedRouteFields,
+                                                  "unknown route field",
+                                                  strict,
+                                                  warnings);
+    if (!unknowns) {
+      return std::unexpected(std::move(unknowns.error()));
     }
 
     routes.push_back(RouteConfig{
@@ -1137,11 +1226,11 @@ core::Result<Config> Config::parse(std::string_view contents, LoadOptions option
     if (!runtime) {
       return std::unexpected(std::move(runtime.error()));
     }
-    auto profiles = parse_profiles(root);
+    auto profiles = parse_profiles(root, strict_effective, warnings);
     if (!profiles) {
       return std::unexpected(std::move(profiles.error()));
     }
-    auto routes = parse_routes(root);
+    auto routes = parse_routes(root, strict_effective, warnings);
     if (!routes) {
       return std::unexpected(std::move(routes.error()));
     }
@@ -1157,7 +1246,7 @@ core::Result<Config> Config::parse(std::string_view contents, LoadOptions option
     if (!trace) {
       return std::unexpected(std::move(trace.error()));
     }
-    auto hooks = parse_hooks(root);
+    auto hooks = parse_hooks(root, strict_effective, warnings);
     if (!hooks) {
       return std::unexpected(std::move(hooks.error()));
     }
