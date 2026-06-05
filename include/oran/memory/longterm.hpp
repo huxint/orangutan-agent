@@ -14,6 +14,11 @@
 #include <oran/core/enum_names.hpp>
 #include <oran/core/result.hpp>
 #include <oran/core/time.hpp>
+#include <oran/storage/migrations.hpp>
+
+namespace orangutan::storage {
+class Pool;
+}  // namespace orangutan::storage
 
 namespace orangutan::memory::longterm {
 
@@ -143,6 +148,34 @@ public:
   [[nodiscard]] virtual async::Awaitable<core::Result<std::vector<VectorHit>>> search(VectorSearchQuery query,
                                                                                       std::size_t limit) = 0;
   [[nodiscard]] virtual async::Awaitable<core::Result<void>> remove(VectorRemoveRequest request) = 0;
+};
+
+struct Fts5BackendOptions {
+  std::string migrations_directory;
+
+  friend bool operator==(const Fts5BackendOptions&, const Fts5BackendOptions&) = default;
+};
+
+/// Default lexical long-term memory backend.
+///
+/// `Fts5Backend` owns the built-in SQLite FTS5 schema for `memory.db` and
+/// implements the lexical `Backend` contract. It remains intentionally separate
+/// from `VectorBackend`; future sqlite-vec or external-vector adapters combine
+/// with this backend at a runtime/search-composition layer.
+class Fts5Backend final : public Backend {
+public:
+  explicit Fts5Backend(storage::Pool& pool, Fts5BackendOptions options = {}) noexcept;
+
+  [[nodiscard]] async::Awaitable<core::Result<storage::MigrationReport>> migrate();
+
+  [[nodiscard]] async::Awaitable<core::Result<Record>> get(RecordKey key) override;
+  [[nodiscard]] async::Awaitable<core::Result<std::vector<SearchHit>>> search(Query query, std::size_t limit) override;
+  [[nodiscard]] async::Awaitable<core::Result<Record>> upsert(WriteRequest request) override;
+  [[nodiscard]] async::Awaitable<core::Result<void>> remove(RecordKey key) override;
+
+private:
+  storage::Pool* pool_{};
+  Fts5BackendOptions options_;
 };
 
 [[nodiscard]] core::Result<void> validate_key(const RecordKey& key);

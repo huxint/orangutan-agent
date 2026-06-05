@@ -1,6 +1,8 @@
 // tests/memory/test_longterm.cpp — long-term memory contract coverage.
 
 #include <chrono>
+#include <cstdint>
+#include <filesystem>
 #include <limits>
 #include <string>
 #include <utility>
@@ -13,17 +15,52 @@
 #include <oran/async.hpp>
 #include <oran/core/enum_names.hpp>
 #include <oran/memory.hpp>
+#include <oran/storage.hpp>
 
 #include "../test-helpers/run_async.hpp"
 
 namespace async = orangutan::async;
 namespace core = orangutan::core;
 namespace memory = orangutan::memory;
+namespace storage = orangutan::storage;
 namespace test = orangutan::tests;
 
 namespace {
 
 using namespace std::chrono_literals;
+
+class TempDb {
+public:
+  explicit TempDb(std::string name)
+      : path_(std::filesystem::temp_directory_path() /
+              (std::move(name) + "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
+               ".db")) {}
+
+  ~TempDb() {
+    std::error_code ec;
+    std::filesystem::remove(path_, ec);
+    std::filesystem::remove(path_.string() + "-wal", ec);
+    std::filesystem::remove(path_.string() + "-shm", ec);
+  }
+
+  TempDb(const TempDb&) = delete;
+  TempDb& operator=(const TempDb&) = delete;
+
+  [[nodiscard]] std::string string() const {
+    return path_.string();
+  }
+
+private:
+  std::filesystem::path path_;
+};
+
+storage::Pool open_pool(asio::io_context& io, TempDb& db) {
+  auto pool =
+      storage::Pool::open(io.get_executor(),
+                          storage::PoolOptions{.path = db.string(), .reader_count = 2, .statement_cache_capacity = 16});
+  REQUIRE(pool.has_value());
+  return std::move(*pool);
+}
 
 memory::longterm::Record make_record() {
   const auto created = core::Time{core::Time::time_point{1s}};
@@ -40,6 +77,22 @@ memory::longterm::Record make_record() {
       .tags = {"repo", "workflow"},
       .linked_record_ids = {"rec-0"},
   };
+}
+
+memory::longterm::Record make_record(std::string id,
+                                     std::string scope_key,
+                                     memory::longterm::RecordKind kind,
+                                     std::string title,
+                                     std::string body) {
+  auto record = make_record();
+  record.key.id = std::move(id);
+  record.key.scope_key = std::move(scope_key);
+  record.kind = kind;
+  record.title = std::move(title);
+  record.body = std::move(body);
+  record.tags = {};
+  record.linked_record_ids = {};
+  return record;
 }
 
 memory::longterm::VectorEmbedding make_embedding() {
@@ -275,5 +328,203 @@ TEST_CASE("longterm vector backend interface composes through async contracts", 
         .key = memory::longterm::RecordKey{.id = "rec-1", .scope_key = "agent:coder"},
     });
     REQUIRE(removed.has_value());
+  });
+}
+
+TEST_CASE("longterm::Fts5Backend migrates the lexical memory schema", "[unit][memory][longterm][fts5]") {
+  TempDb db{"oran-memory-longterm-migrate"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    memory::longterm::Fts5Backend backend{pool};
+
+    auto first = co_await backend.migrate();
+    REQUIRE(first.has_value());
+    REQUIRE(first->previous_version == 0);
+    REQUIRE(first->current_version == 1);
+    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1});
+
+    auto second = co_await backend.migrate();
+    REQUIRE(second.has_value());
+    REQUIRE(second->previous_version == 1);
+    REQUIRE(second->current_version == 1);
+    REQUIRE(second->applied_versions.empty());
+  });
+}
+
+TEST_CASE("longterm::Fts5Backend upserts, gets, and searches scoped records", "[unit][memory][longterm][fts5]") {
+  TempDb db{"oran-memory-longterm-search"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    memory::longterm::Fts5Backend backend{pool};
+    auto migrated = co_await backend.migrate();
+    REQUIRE(migrated.has_value());
+
+    auto coder = make_record("rec-coder",
+                             "agent:coder",
+                             memory::longterm::RecordKind::project,
+                             "Scoped slices",
+                             "Orangutan keeps implementation slices small and documented.");
+    coder.tags = {"workflow", "orangutan"};
+    coder.linked_record_ids = {"rec-prev"};
+    auto researcher = make_record("rec-researcher",
+                                  "agent:researcher",
+                                  memory::longterm::RecordKind::project,
+                                  "Scoped slices",
+                                  "Researcher notes also mention Orangutan slices.");
+
+    auto inserted_coder = co_await backend.upsert(memory::longterm::WriteRequest{.record = coder});
+    REQUIRE(inserted_coder.has_value());
+    auto inserted_researcher = co_await backend.upsert(memory::longterm::WriteRequest{.record = researcher});
+    REQUIRE(inserted_researcher.has_value());
+
+    auto fetched = co_await backend.get(memory::longterm::RecordKey{.id = "rec-coder", .scope_key = "agent:coder"});
+    REQUIRE(fetched.has_value());
+    REQUIRE(fetched->title == "Scoped slices");
+    REQUIRE(fetched->tags == std::vector<std::string>{"workflow", "orangutan"});
+    REQUIRE(fetched->linked_record_ids == std::vector<std::string>{"rec-prev"});
+
+    auto hits = co_await backend.search(
+        memory::longterm::Query{
+            .scope_key = "agent:coder",
+            .text = "orangutan",
+            .kinds = {},
+        },
+        10);
+    REQUIRE(hits.has_value());
+    REQUIRE(hits->size() == 1);
+    REQUIRE((*hits)[0].record.key.id == "rec-coder");
+    REQUIRE((*hits)[0].lexical_score.has_value());
+    REQUIRE_FALSE((*hits)[0].vector_score.has_value());
+
+    auto other_scope = co_await backend.search(
+        memory::longterm::Query{
+            .scope_key = "agent:researcher",
+            .text = "orangutan",
+            .kinds = {},
+        },
+        10);
+    REQUIRE(other_scope.has_value());
+    REQUIRE(other_scope->size() == 1);
+    REQUIRE((*other_scope)[0].record.key.id == "rec-researcher");
+  });
+}
+
+TEST_CASE("longterm::Fts5Backend applies kind and shadow filters", "[unit][memory][longterm][fts5]") {
+  TempDb db{"oran-memory-longterm-filters"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    memory::longterm::Fts5Backend backend{pool};
+    auto migrated = co_await backend.migrate();
+    REQUIRE(migrated.has_value());
+
+    auto visible_project = make_record("project-visible",
+                                       "agent:coder",
+                                       memory::longterm::RecordKind::project,
+                                       "Plan",
+                                       "FTS5 lexical search should find this banana marker.");
+    auto visible_user = make_record("user-visible",
+                                    "agent:coder",
+                                    memory::longterm::RecordKind::user,
+                                    "Preference",
+                                    "The user also wrote a banana marker.");
+    auto shadow_project = make_record("project-shadow",
+                                      "agent:coder",
+                                      memory::longterm::RecordKind::project,
+                                      "Old plan",
+                                      "A shadow banana marker should stay hidden by default.");
+    shadow_project.shadow = true;
+
+    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = visible_project})).has_value());
+    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = visible_user})).has_value());
+    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = shadow_project})).has_value());
+
+    auto project_hits = co_await backend.search(
+        memory::longterm::Query{
+            .scope_key = "agent:coder",
+            .text = "banana",
+            .kinds = {memory::longterm::RecordKind::project},
+        },
+        10);
+    REQUIRE(project_hits.has_value());
+    REQUIRE(project_hits->size() == 1);
+    REQUIRE((*project_hits)[0].record.key.id == "project-visible");
+
+    auto including_shadow = co_await backend.search(
+        memory::longterm::Query{
+            .scope_key = "agent:coder",
+            .text = "banana",
+            .kinds = {memory::longterm::RecordKind::project},
+            .include_shadow = true,
+        },
+        10);
+    REQUIRE(including_shadow.has_value());
+    REQUIRE(including_shadow->size() == 2);
+  });
+}
+
+TEST_CASE("longterm::Fts5Backend updates and removes indexed rows", "[unit][memory][longterm][fts5]") {
+  TempDb db{"oran-memory-longterm-update-remove"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    memory::longterm::Fts5Backend backend{pool};
+    auto migrated = co_await backend.migrate();
+    REQUIRE(migrated.has_value());
+
+    auto record = make_record("rec-1",
+                              "agent:coder",
+                              memory::longterm::RecordKind::reference,
+                              "Original",
+                              "The original indexed word is kumquat.");
+    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = record})).has_value());
+
+    auto old_hits = co_await backend.search(
+        memory::longterm::Query{
+            .scope_key = "agent:coder",
+            .text = "kumquat",
+            .kinds = {},
+        },
+        10);
+    REQUIRE(old_hits.has_value());
+    REQUIRE(old_hits->size() == 1);
+
+    record.title = "Updated";
+    record.body = "The replacement indexed word is persimmon.";
+    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = record})).has_value());
+
+    auto stale_hits = co_await backend.search(
+        memory::longterm::Query{
+            .scope_key = "agent:coder",
+            .text = "kumquat",
+            .kinds = {},
+        },
+        10);
+    REQUIRE(stale_hits.has_value());
+    REQUIRE(stale_hits->empty());
+
+    auto fresh_hits = co_await backend.search(
+        memory::longterm::Query{
+            .scope_key = "agent:coder",
+            .text = "persimmon",
+            .kinds = {},
+        },
+        10);
+    REQUIRE(fresh_hits.has_value());
+    REQUIRE(fresh_hits->size() == 1);
+    REQUIRE((*fresh_hits)[0].record.title == "Updated");
+
+    auto removed = co_await backend.remove(memory::longterm::RecordKey{.id = "rec-1", .scope_key = "agent:coder"});
+    REQUIRE(removed.has_value());
+    auto fetched = co_await backend.get(memory::longterm::RecordKey{.id = "rec-1", .scope_key = "agent:coder"});
+    REQUIRE_FALSE(fetched.has_value());
+    REQUIRE(fetched.error().kind() == core::ErrorKind::not_found);
+    auto after_remove = co_await backend.search(
+        memory::longterm::Query{
+            .scope_key = "agent:coder",
+            .text = "persimmon",
+            .kinds = {},
+        },
+        10);
+    REQUIRE(after_remove.has_value());
+    REQUIRE(after_remove->empty());
   });
 }

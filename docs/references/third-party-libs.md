@@ -26,7 +26,9 @@ rules file is the *approval list*; this file is *guidance + traps*.
 - WAL mode: `PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL`.
 - One writer connection per DB (on a strand); pool of readers.
 - Prepared-statement cache per connection.
-- Migrations are SQL files under `src/oran-storage/migrations/<db>/`.
+- DB-owning libraries keep their migrations beside their implementation:
+  storage-owned DBs under `src/oran-storage/migrations/<db>/`, and long-term
+  memory under `src/oran-memory/migrations/longterm/`.
 
 ## libsodium
 

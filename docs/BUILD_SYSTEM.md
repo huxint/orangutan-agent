@@ -178,7 +178,7 @@ add_requires("libsodium 1.0.21")
 add_requires("nanobench 4.3.11")
 add_requires("nlohmann_json 3.12.0")
 add_requires("re2 2025.11.05")
-add_requires("sqlite3 3.51.0+0")
+add_requires("sqlite3 3.51.0+0", { configs = { cflags = "-DSQLITE_ENABLE_FTS5" } })
 ```
 
 Packages land with the library that first consumes them. The full approval list
@@ -187,6 +187,8 @@ and planned versions live in [`rules/libraries.md`](rules/libraries.md).
 provider, and `nlohmann_json` is consumed privately by JSON-owning implementation
 files in `oran-config`, `oran-tool`, `oran-provider`, `oran-agent`, and
 `oran-memory`; public headers still expose bytes and stdlib value types only.
+The SQLite package is built with `SQLITE_ENABLE_FTS5` because
+`memory::longterm::Fts5Backend` is the default lexical long-term memory backend.
 
 **Notable removals vs. legacy:**
 

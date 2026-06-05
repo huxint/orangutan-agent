@@ -34,8 +34,14 @@ operators can reason about retention, scope, and visibility.
   `memory::longterm::RecordKind` (`user`, `feedback`, `project`, `reference`,
   reserved `team`), `RecordKey`, `Record`, `Query`, `SearchHit`,
   `WriteRequest`, `Backend`, `VectorBackend`, and validation helpers now exist
-  in `<oran/memory/longterm.hpp>`. `longterm::Runtime`, the SQLite FTS5
-  repository, and recall-backed framing remain downstream.
+  in `<oran/memory/longterm.hpp>`.
+- SQLite FTS5 long-term backend shipped in slice 161:
+  `memory::longterm::Fts5Backend` owns the default lexical schema under
+  `src/oran-memory/migrations/longterm/`, migrates it through `storage::Pool`,
+  implements scoped `get` / `search` / `upsert` / idempotent `remove`, filters
+  by kind and shadow state, and returns lexical scores from SQLite BM25.
+  `longterm::Runtime`, vector search, hybrid ranking, and recall-backed framing
+  remain downstream.
 - Decay policy applied by a periodic job (`oran-automation`).
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
 - Hook events on read / write / forget / decay.
@@ -66,18 +72,19 @@ operators can reason about retention, scope, and visibility.
    the runtime assembly owner, and slice 132 wires the bootstrap runner
    persistence path.
 2. `longterm::Runtime::search("react agent loop", limit=10)` returns within 50 ms on
-   a 10 k-record corpus. **Status:** open; slice 160 only ships the backend
-   contracts and input validation that the FTS5/sqlite-vec implementations will
-   satisfy.
+   a 10 k-record corpus. **Status:** open; slice 161 ships the default FTS5
+   lexical `Backend`, but the runtime composition layer and 10 k-record bench
+   are still downstream.
 3. The MEMORY.md mirror, when enabled, reflects all kinds + records within 1 s of the
    underlying DB write.
 4. Decay marks records older than `policy.forget_after_unused` as shadow; they no
    longer surface in default search.
 5. A `memory.write.before` hook can veto a write; the runtime returns
    `Error::HookVeto` to the caller.
-6. `tests/memory/` ≥ 85% coverage. **Status:** `test-memory` currently reports
-   16 cases / 623 assertions, including long-term contract validation and fake
-   async backend interface coverage.
+6. `tests/memory/` >= 85% coverage. **Status:** `test-memory` currently reports
+   20 cases / 678 assertions, including long-term contract validation, fake
+   async backend interface coverage, and public `Fts5Backend` migration /
+   scoped search / filtering / update / delete coverage.
 7. `bench/memory/search-fts5-vs-vector` (v2): reports the FTS5 baseline + vector
    results in machine-readable JSON.
 

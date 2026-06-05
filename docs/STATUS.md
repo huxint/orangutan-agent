@@ -7,23 +7,30 @@
 
 ## Snapshot
 
-- **Slice:** 160 (`xmake run orangutan` reports slice 160)
+- **Slice:** 161 (`xmake run orangutan` reports slice 161)
 - **Last completed history:**
-  [`histories/2026-06/20260604-2226-memory-longterm-backend-contract.md`](histories/2026-06/20260604-2226-memory-longterm-backend-contract.md)
+  [`histories/2026-06/20260604-2308-memory-longterm-fts5-backend.md`](histories/2026-06/20260604-2308-memory-longterm-fts5-backend.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 160 lands the first long-term memory
-  backend-contract prework from the deep-review tracker: `<oran/memory.hpp>` now
-  exports `memory::longterm::RecordKind`, `RecordKey`, `Record`, `Query`,
-  `SearchHit`, `WriteRequest`, the lexical `Backend`, the vector
-  `VectorBackend`, vector request/result shapes, and validation helpers for
-  record/search/vector inputs. This pins the seam future FTS5 and gated
-  sqlite-vec implementations must satisfy without adding a dependency or
-  runtime wiring yet. Focused result: `test-memory` **16 cases / 623
-  assertions**.
+- **Latest completed slice:** slice 161 lands the default long-term memory
+  lexical backend: `memory::longterm::Fts5Backend` owns the SQLite FTS5 schema
+  under `src/oran-memory/migrations/longterm/`, applies its embedded migration
+  through `storage::Pool`, and implements scoped `get` / `search` / `upsert` /
+  idempotent `remove` with kind/shadow filters and lexical scores. The xmake
+  SQLite package is now built with `SQLITE_ENABLE_FTS5`. Focused result:
+  `test-memory` **20 cases / 678 assertions**.
 - **Next intended slice:** no active plan; pick a small remaining tracker item
-  after re-orienting, likely the gated `sqlite-vec` adapter / FTS5 repository
-  follow-up or another small tracked item.
+  after re-orienting, likely runtime recall composition on top of
+  `Fts5Backend`, the gated `sqlite-vec` adapter, or another small tracked item.
+
+Slice 160 landed the first long-term memory backend-contract prework from the
+  deep-review tracker: `<oran/memory.hpp>` exports
+  `memory::longterm::RecordKind`, `RecordKey`, `Record`, `Query`, `SearchHit`,
+  `WriteRequest`, the lexical `Backend`, the vector `VectorBackend`, vector
+  request/result shapes, and validation helpers for record/search/vector
+  inputs. This pinned the seam the FTS5 and gated sqlite-vec implementations
+  must satisfy without runtime wiring yet. Focused result: `test-memory`
+  **16 cases / 623 assertions**.
 
 Slice 159 closes the P3 async `Runtime::Impl::run()` clarification item from
   the deep-review tracker: the private runtime lifecycle is now a single
@@ -1519,7 +1526,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 40 cases / 322 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 34 cases / 243 assertions.
-- `oran-memory`: 16 cases / 623 assertions.
+- `oran-memory`: 20 cases / 678 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 197 cases / 2049 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
@@ -1561,8 +1568,9 @@ Closed entries do *not* live here — the tracker is canonical.
   `DispatchContext::for_now()` factory item, slice 156 closed the P2 parallel
   `publish_advisory` fan-out item, slice 157 closed the P3 storage `Pool`
   contention bench item, slice 158 closed the P3 hook payload-sharing item,
-  slice 159 closed the P3 `Runtime::Impl::run()` clarification item, and slice
-  160 closed the vector backend trait half of the P3 memory follow-up.
+  slice 159 closed the P3 `Runtime::Impl::run()` clarification item, slice 160
+  closed the vector backend trait half of the P3 memory follow-up, and slice
+  161 closed the default FTS5 lexical backend half.
   Remaining follow-ups are grouped P1/P2/P3 in the tracker.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on

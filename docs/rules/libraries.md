@@ -39,7 +39,7 @@ Each entry contains:
 
 | Lib | Version | Used by | Purpose | Cost | License | Boundary |
 | --- | --- | --- | --- | --- | --- | --- |
-| `sqlite3` | 3.51.0+0 | storage; memory and automation consume it through storage repositories | embedded SQL | med | public domain | `oran-storage` only |
+| `sqlite3` | 3.51.0+0 | storage; memory uses FTS5 through `storage::Pool` | embedded SQL and lexical memory search (`SQLITE_ENABLE_FTS5`) | med | public domain | direct SQLite API stays in `oran-storage`; memory owns SQL schema above the pool |
 | `libsodium` | 1.0.21 | config, permission | AEAD + KDF for secret-at-rest (config); HMAC-SHA-256 + CSPRNG for approval signing (permission) | low-med | ISC | `oran-config` and `oran-permission` only |
 
 ### CLI / UX

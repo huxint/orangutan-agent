@@ -150,12 +150,16 @@ MEMORY.md mirror. v2 keeps that core and adds:
 - **Decay policy**: `memory-age` style decay is actually wired into the search pipeline
   this time; expired records receive lower BM25 weight before potentially being pruned.
 
-Status (slice 160): `include/oran/memory/longterm.hpp` now ships the public
+Status (slice 161): `include/oran/memory/longterm.hpp` now ships the public
 record/query/write shapes, reflection-backed `RecordKind`, `Backend` and
-`VectorBackend` traits, plus validation helpers for record keys, search limits,
-record metadata, and vector embeddings. It does **not** yet ship
-`longterm::Runtime`, the SQLite FTS5 repository, the gated sqlite-vec adapter,
-or recall-backed prompt framing.
+`VectorBackend` traits, validation helpers for record keys, search limits,
+record metadata, and vector embeddings, plus `Fts5Backend` as the default
+SQLite FTS5 lexical backend. `Fts5Backend` owns the long-term memory schema in
+`src/oran-memory/migrations/longterm/`, applies its built-in migration through
+the shared `storage::Pool` writer, returns `ErrorKind::not_found` for missing
+`get(...)` rows, and treats `remove(...)` as idempotent. It does **not** yet
+ship `longterm::Runtime`, the gated sqlite-vec adapter, hybrid ranking, or
+recall-backed prompt framing.
 
 ```cpp
 // include/oran/memory/longterm.hpp
@@ -228,9 +232,16 @@ class VectorBackend {
 };
 ```
 
-Planned built-in backends:
+The shipped lexical backend is:
 
-- `Fts5Backend` — SQLite FTS5; default.
+- `Fts5Backend` — SQLite FTS5; default lexical `Backend`, backed by
+  `longterm_records` plus `longterm_records_fts`. The FTS table indexes title,
+  body, and tags, while scope, id, kind, and shadow remain structured filters.
+  `Fts5BackendOptions::migrations_directory` exists for tests/operators that
+  need to load migrations from disk; the default path uses the embedded SQL.
+
+Planned optional backends:
+
 - sqlite-vec adapter — optional under `--vector_memory=y`; future search hybrid
   combines FTS5 score + vector cosine.
 - external vector adapter — optional embedding store via `oran-http::Client`.
@@ -343,8 +354,11 @@ Separate files (the audit identified single-DB contention):
 Migrations:
 
 - One `migrations/` dir per DB, numbered `0001-<slug>.sql`, `0002-<slug>.sql`, …
-- Loaded by `oran-storage::load_migrations_from_directory`, applied at startup,
-  and recorded in a `schema_versions` table per DB.
+- Default shipped migrations are embedded into the library that owns the schema
+  with C++26 `#embed`; filesystem migration loading remains available for
+  tests/operator overrides.
+- Applied through `oran-storage`'s migration runner and recorded in a
+  `schema_versions` table per DB.
 
 ## Anti-Goals
 
