@@ -57,8 +57,11 @@ operators can reason about retention, scope, and visibility.
 - Config-driven prompt-boundary recall shipped in slice 165:
   `memory.longterm.recall.enabled` / `limit` parse through `oran-config`, stay
   disabled by default, and ordinary configured-route `bootstrap::run` maps them
-  into `AgentPromptRunnerOptions::longterm_recall`. Memory tools, vector search,
-  and hybrid ranking remain downstream.
+  into `AgentPromptRunnerOptions::longterm_recall`. Slice 166 adds optional
+  `memory.longterm.recall.kinds`, a non-empty unique array of `RecordKind`
+  spellings that constrains the prompt-boundary query while omission preserves
+  all-kind recall. Memory tools, vector search, and hybrid ranking remain
+  downstream.
 - Decay policy applied by a periodic job (`oran-automation`).
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
 - Hook events on read / write / forget / decay.
@@ -92,9 +95,10 @@ operators can reason about retention, scope, and visibility.
    a 10 k-record corpus. **Status:** open; slice 162 ships the runtime search
    seam over the default FTS5 lexical `Backend`, slice 163 gives configured
    bootstrap runs an owned `memory.db` backend/runtime, slice 164 lets
-   prompt-runner callers opt into one prompt-boundary recall, and slice 165 lets
-   ordinary configured-route startup enable that recall through config. The
-   10 k-record bench remains downstream.
+   prompt-runner callers opt into one prompt-boundary recall, slice 165 lets
+   ordinary configured-route startup enable that recall through config, and
+   slice 166 lets that config constrain recall to selected record kinds. The 10
+   k-record bench remains downstream.
 3. The MEMORY.md mirror, when enabled, reflects all kinds + records within 1 s of the
    underlying DB write.
 4. Decay marks records older than `policy.forget_after_unused` as shadow; they no
@@ -106,9 +110,9 @@ operators can reason about retention, scope, and visibility.
    async backend interface coverage, public `Fts5Backend` migration / scoped
    search / filtering / update / delete coverage, and `longterm::Runtime`
    validation / deterministic recall-framing coverage. `test-config` reports
-   43 cases / 348 assertions for the recall policy parser, and `test-bootstrap`
-   reports 108 cases / 795 assertions for the assembly, prompt-runner, and
-   configured-route recall consumers.
+   43 cases / 358 assertions for the recall policy parser, and `test-bootstrap`
+   reports 110 cases / 811 assertions for the assembly, prompt-runner, and
+   configured-route recall consumers, including slice-166 kind-filter coverage.
 7. `bench/memory/search-fts5-vs-vector` (v2): reports the FTS5 baseline + vector
    results in machine-readable JSON.
 

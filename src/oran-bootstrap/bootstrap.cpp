@@ -34,6 +34,7 @@
 #include <oran/core/time.hpp>
 #include <oran/core/turn_id.hpp>
 #include <oran/hook.hpp>
+#include <oran/memory/longterm.hpp>
 #include <oran/permission.hpp>
 #include <oran/provider.hpp>
 #include <oran/storage.hpp>
@@ -45,7 +46,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice165";
+constexpr std::string_view kVersion = "2.0.0-slice166";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 constexpr std::int64_t kNanosecondsPerDay = 86'400'000'000'000;
@@ -80,6 +81,26 @@ struct ParsedArgs {
   return now_ns - (retention_days * kNanosecondsPerDay);
 }
 
+[[nodiscard]] Result<void> validate_longterm_recall_kinds(const std::vector<std::string>& names) {
+  auto seen = std::vector<memory::longterm::RecordKind>{};
+  seen.reserve(names.size());
+  for (const auto& name : names) {
+    auto parsed = core::parse_enum<memory::longterm::RecordKind>(name);
+    if (!parsed) {
+      return std::unexpected(Error::config("unknown long-term memory recall kind")
+                                 .with("path", "$.memory.longterm.recall.kinds")
+                                 .with("value", name));
+    }
+    if (std::ranges::contains(seen, *parsed)) {
+      return std::unexpected(Error::config("duplicate long-term memory recall kind")
+                                 .with("path", "$.memory.longterm.recall.kinds")
+                                 .with("value", name));
+    }
+    seen.push_back(*parsed);
+  }
+  return {};
+}
+
 [[nodiscard]] Result<LongtermRecallOptions> longterm_recall_options_from(const config::Config& cfg) {
   const auto& recall = cfg.memory().longterm.recall;
   if (static_cast<std::uint64_t>(recall.limit) > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
@@ -87,9 +108,13 @@ struct ParsedArgs {
                                .with("path", "$.memory.longterm.recall.limit")
                                .with("value", std::to_string(recall.limit)));
   }
+  if (auto valid = validate_longterm_recall_kinds(recall.kinds); !valid) {
+    return std::unexpected(std::move(valid.error()));
+  }
   return LongtermRecallOptions{
       .enabled = recall.enabled,
       .limit = static_cast<std::size_t>(recall.limit),
+      .kinds = recall.kinds,
   };
 }
 

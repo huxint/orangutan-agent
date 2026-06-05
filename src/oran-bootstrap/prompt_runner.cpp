@@ -25,6 +25,7 @@
 #include <oran/cli/streaming_prompt_sink.hpp>
 #include <oran/config.hpp>
 #include <oran/core/content.hpp>
+#include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/message.hpp>
 #include <oran/core/time.hpp>
@@ -44,6 +45,24 @@ using ::orangutan::core::Result;
 
 [[nodiscard]] Error option_error(std::string message) {
   return Error::invalid_argument(std::move(message));
+}
+
+[[nodiscard]] Result<std::vector<memory::longterm::RecordKind>>
+parse_longterm_recall_kinds(std::span<const std::string> names) {
+  auto kinds = std::vector<memory::longterm::RecordKind>{};
+  kinds.reserve(names.size());
+  for (const auto& name : names) {
+    auto parsed = core::parse_enum<memory::longterm::RecordKind>(name);
+    if (!parsed) {
+      return std::unexpected(option_error("agent prompt runner long-term recall kind is unknown").with("kind", name));
+    }
+    if (std::ranges::contains(kinds, *parsed)) {
+      return std::unexpected(
+          option_error("agent prompt runner long-term recall kind must be unique").with("kind", name));
+    }
+    kinds.push_back(*parsed);
+  }
+  return kinds;
 }
 
 [[nodiscard]] Result<std::size_t> checked_cap(std::int64_t value, std::string field) {
@@ -281,6 +300,7 @@ public:
        std::optional<std::vector<std::string>> skills_enabled,
        std::vector<std::string> skills_deactivated,
        std::vector<skill::SkillExpiration> skills_expirations,
+       std::vector<memory::longterm::RecordKind> longterm_recall_kinds,
        core::TurnId session_id)
       : executor_{std::move(options.executor)}, assembly_{options.assembly}, execution_runtime_{*options.provider},
         loop_{execution_runtime_, std::move(options.route)}, registry_{std::move(registry)},
@@ -292,6 +312,7 @@ public:
         skills_catalog_{skill::RenderedCatalog{.section_text = std::move(options.skills_catalog)}},
         skills_enabled_{std::move(skills_enabled)}, skills_deactivated_{std::move(skills_deactivated)},
         skills_expirations_{std::move(skills_expirations)}, longterm_recall_{options.longterm_recall},
+        longterm_recall_kinds_{std::move(longterm_recall_kinds)},
         memory_framing_{memory::Framing{.section_text = std::move(options.memory_framing)}},
         per_agent_overlay_{std::move(options.per_agent_overlay)},
         trace_context_json_{std::move(options.trace_context_json)}, tool_choice_{std::move(options.tool_choice)},
@@ -506,7 +527,7 @@ private:
             memory::longterm::Query{
                 .scope_key = scope_key_,
                 .text = std::string{prompt},
-                .kinds = {},
+                .kinds = longterm_recall_kinds_,
                 .include_shadow = false,
             },
         .limit = longterm_recall_.limit,
@@ -709,6 +730,7 @@ private:
   std::optional<skill::WorkspaceSkillSnapshot> skill_snapshot_;
   std::vector<skill::SkillDocument> skill_documents_;
   LongtermRecallOptions longterm_recall_{};
+  std::vector<memory::longterm::RecordKind> longterm_recall_kinds_;
   memory::FramingOwner memory_framing_;
   std::string per_agent_overlay_;
   std::string trace_context_json_;
@@ -729,6 +751,10 @@ private:
 core::Result<std::unique_ptr<AgentPromptRunner>> AgentPromptRunner::create(AgentPromptRunnerOptions options) {
   if (auto valid = validate_options(options); !valid) {
     return std::unexpected(std::move(valid).error());
+  }
+  auto longterm_recall_kinds = parse_longterm_recall_kinds(options.longterm_recall.kinds);
+  if (!longterm_recall_kinds) {
+    return std::unexpected(std::move(longterm_recall_kinds.error()));
   }
 
   auto registry = tool::Registry{};
@@ -791,6 +817,7 @@ core::Result<std::unique_ptr<AgentPromptRunner>> AgentPromptRunner::create(Agent
                                      std::move(skills_enabled),
                                      std::move(skills_deactivated),
                                      std::move(skills_expirations),
+                                     std::move(*longterm_recall_kinds),
                                      session_id);
   return std::make_unique<AgentPromptRunner>(std::move(impl), AgentPromptRunner::PrivateTag{});
 }

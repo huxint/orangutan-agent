@@ -74,9 +74,10 @@ constexpr auto kRecognizedLongtermMemoryFields = std::array<std::string_view, 1>
     "recall",
 };
 
-constexpr auto kRecognizedLongtermRecallFields = std::array<std::string_view, 2>{
+constexpr auto kRecognizedLongtermRecallFields = std::array<std::string_view, 3>{
     "enabled",
     "limit",
+    "kinds",
 };
 
 constexpr auto kRecognizedProfileFields = std::array<std::string_view, 6>{
@@ -654,6 +655,28 @@ parse_longterm_recall(const json& longterm, bool strict, std::vector<ConfigWarni
       return std::unexpected(std::move(parsed.error()));
     }
     recall.limit = *parsed;
+  }
+
+  if (const auto kinds = it->find("kinds"); kinds != it->end()) {
+    auto parsed = parse_non_empty_string_array(*kinds, "$.memory.longterm.recall.kinds", "memory kind");
+    if (!parsed) {
+      return std::unexpected(std::move(parsed.error()));
+    }
+    if (parsed->empty()) {
+      return std::unexpected(
+          config_error("long-term memory recall kinds must not be empty", "$.memory.longterm.recall.kinds"));
+    }
+    auto seen = std::vector<std::string>{};
+    seen.reserve(parsed->size());
+    for (std::size_t i = 0; i < parsed->size(); ++i) {
+      const auto& name = (*parsed)[i];
+      if (std::ranges::contains(seen, name)) {
+        return std::unexpected(config_error("long-term memory recall kind must be unique",
+                                            element_path("$.memory.longterm.recall.kinds", i)));
+      }
+      seen.push_back(name);
+    }
+    recall.kinds = std::move(*parsed);
   }
 
   auto unknowns = collect_unknown_object_fields(*it,

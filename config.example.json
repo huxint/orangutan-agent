@@ -90,7 +90,8 @@
     "longterm": {
       "recall": {
         "enabled": false,
-        "limit": 5
+        "limit": 5,
+        "kinds": ["user", "feedback", "project", "reference", "team"]
       }
     }
   },

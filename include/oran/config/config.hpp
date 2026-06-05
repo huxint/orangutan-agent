@@ -131,6 +131,7 @@ struct HooksConfig {
 struct LongtermMemoryRecallConfig {
   bool enabled{false};
   std::int64_t limit{5};
+  std::vector<std::string> kinds{};
 
   friend bool operator==(const LongtermMemoryRecallConfig&, const LongtermMemoryRecallConfig&) = default;
 };

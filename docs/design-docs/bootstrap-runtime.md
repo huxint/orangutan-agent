@@ -179,7 +179,10 @@ loops reuse those same bytes for the turn. Slice 165 adds the ordinary
 configured-route policy source: `memory.longterm.recall.enabled` and
 `memory.longterm.recall.limit` parse through `oran-config`, default to disabled
 and `5`, and `bootstrap::run` maps them into the runner option after building
-the provider-backed runtime assembly.
+the provider-backed runtime assembly. Slice 166 extends the same policy with
+optional `memory.longterm.recall.kinds`; bootstrap validates those strings
+against `memory::longterm::RecordKind` and passes the parsed filter to the
+prompt-boundary query. Omitting `kinds` preserves all-kind recall.
 When the caller
 selects an `AgentPromptRunnerOptions::agent_config_name` (or leaves it empty
 and selects `permission_agent_name`), the runner reads that `agents.<name>`

@@ -463,7 +463,7 @@ std::string provider_config_with_agent_skills_text(std::string_view base_url) {
   return text;
 }
 
-std::string provider_config_with_longterm_recall_text(std::string_view base_url) {
+std::string provider_config_with_longterm_recall_text(std::string_view base_url, std::string_view kinds_json = {}) {
   auto text = std::string{R"json(
 {
   "runtime": {
@@ -474,7 +474,13 @@ std::string provider_config_with_longterm_recall_text(std::string_view base_url)
     "longterm": {
       "recall": {
         "enabled": true,
-        "limit": 5
+        "limit": 5)json"};
+  if (!kinds_json.empty()) {
+    text.append(R"json(,
+        "kinds": )json");
+    text.append(kinds_json);
+  }
+  text.append(R"json(
       }
     }
   },
@@ -483,7 +489,7 @@ std::string provider_config_with_longterm_recall_text(std::string_view base_url)
       "provider": "anthropic",
       "protocol": "anthropic_messages",
       "model": "claude-test",
-      "base_url": ")json"};
+      "base_url": ")json");
   text.append(base_url);
   text.append(R"json(",
       "api_key_env": "ORAN_BOOTSTRAP_RUN_PROVIDER_KEY"
@@ -523,6 +529,20 @@ void seed_longterm_memory(const std::filesystem::path& workspace) {
             },
     });
     REQUIRE(upserted.has_value());
+
+    auto user_record = co_await assembly->longterm_memory_backend()->upsert(memory::longterm::WriteRequest{
+        .record =
+            memory::longterm::Record{
+                .key = memory::longterm::RecordKey{.id = "bootstrap-recall-user", .scope_key = "cli"},
+                .kind = memory::longterm::RecordKind::user,
+                .title = "Filtered user recall fixture",
+                .body = "Filtered user bootstrap recall should not reach a project-only prompt.",
+                .importance = 0.4,
+                .tags = {"bootstrap", "recall", "user"},
+                .linked_record_ids = {},
+            },
+    });
+    REQUIRE(user_record.has_value());
     co_return;
   });
 }
@@ -733,6 +753,45 @@ TEST_CASE("run maps memory recall config into configured provider prompts", "[un
   REQUIRE(server.request_text().contains("Long-term memory:"));
   REQUIRE(server.request_text().contains("Config-enabled bootstrap recall reaches the provider prompt."));
   REQUIRE(server.request_text().contains("tags: bootstrap, recall"));
+}
+
+TEST_CASE("run filters configured memory recall by kind", "[unit][bootstrap][provider][memory]") {
+  ScopedEnv api_key{"ORAN_BOOTSTRAP_RUN_PROVIDER_KEY", "test-secret"};
+  ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
+  ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
+  OneShotHttpServer server{anthropic_sse_response("recall ok")};
+  TempDir temp{"oran-bootstrap-provider-longterm-recall-kinds"};
+  seed_longterm_memory(temp.path());
+  const auto config_path = temp.path() / "config.json";
+  write_file(config_path, provider_config_with_longterm_recall_text(server.base_url(), R"json(["project"])json"));
+  auto config_arg = config_path.string();
+  auto args = std::vector<std::string_view>{"--config", config_arg, "--prompt", "bootstrap recall"};
+
+  auto result = bootstrap::run(options(args, temp.path()));
+
+  REQUIRE(result.has_value());
+  REQUIRE(*result == 0);
+  REQUIRE(server.served());
+  REQUIRE(server.request_text().contains("Config-enabled bootstrap recall reaches the provider prompt."));
+  REQUIRE_FALSE(server.request_text().contains("Filtered user bootstrap recall should not reach"));
+}
+
+TEST_CASE("run rejects unknown memory recall kinds", "[unit][bootstrap][provider][memory]") {
+  ScopedEnv api_key{"ORAN_BOOTSTRAP_RUN_PROVIDER_KEY", "test-secret"};
+  ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
+  ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
+  OneShotHttpServer server{anthropic_sse_response("unused")};
+  TempDir temp{"oran-bootstrap-provider-longterm-recall-bad-kind"};
+  const auto config_path = temp.path() / "config.json";
+  write_file(config_path, provider_config_with_longterm_recall_text(server.base_url(), R"json(["unknown"])json"));
+  auto config_arg = config_path.string();
+  auto args = std::vector<std::string_view>{"--config", config_arg, "--prompt", "bootstrap recall"};
+
+  auto result = bootstrap::run(options(args, temp.path()));
+
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(result.error().kind() == core::ErrorKind::config);
+  REQUIRE_FALSE(server.served());
 }
 
 TEST_CASE("run applies --agent to configured provider prompt selection", "[unit][bootstrap][provider][skill]") {

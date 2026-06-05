@@ -30,6 +30,9 @@ class RuntimeAssembly;
 struct LongtermRecallOptions {
   bool enabled{false};
   std::size_t limit{5};
+  /// Optional `memory::longterm::RecordKind` spellings to include. Empty means
+  /// the runtime searches every non-shadow kind.
+  std::vector<std::string> kinds{};
 
   friend bool operator==(const LongtermRecallOptions&, const LongtermRecallOptions&) = default;
 };

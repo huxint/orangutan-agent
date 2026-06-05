@@ -33,8 +33,9 @@ renders it at the runner boundary once per prompt. Exact callers may still
 supply already-materialized text; slice 164 adds an opt-in
 `AgentPromptRunnerOptions::longterm_recall` path that populates the same value
 from recalled long-term records before the loop starts, and slice 165 maps
-configured-route `memory.longterm.recall` policy into that option. `AgentPromptRunner`
-copies that rendered string into `RunTurnInputs::memory_framing`, so
+configured-route `memory.longterm.recall` policy into that option. Slice 166
+extends that policy with optional `kinds` filters over `RecordKind` spellings.
+`AgentPromptRunner` copies that rendered string into `RunTurnInputs::memory_framing`, so
 `agent::Loop` may rebuild `prompt::Builder` sections across provider/tool
 iterations without re-querying memory.
 
@@ -152,7 +153,7 @@ MEMORY.md mirror. v2 keeps that core and adds:
 - **Decay policy**: `memory-age` style decay is actually wired into the search pipeline
   this time; expired records receive lower BM25 weight before potentially being pruned.
 
-Status (slice 165): `include/oran/memory/longterm.hpp` now ships the public
+Status (slice 166): `include/oran/memory/longterm.hpp` now ships the public
 record/query/write shapes, reflection-backed `RecordKind`, `Backend` and
 `VectorBackend` traits, validation helpers for record keys, search limits,
 record metadata, and vector embeddings, plus `Fts5Backend` as the default
@@ -172,8 +173,12 @@ at the prompt boundary and feeds the resulting deterministic framing into sectio
 5 before `agent::Loop`. Slice 165 adds the first config policy:
 `memory.longterm.recall.enabled` defaults false, `memory.longterm.recall.limit`
 defaults 5, and ordinary configured-route `bootstrap::run` maps those fields
-into `AgentPromptRunnerOptions::longterm_recall`. It does **not** yet ship the
-gated sqlite-vec adapter, memory tools, or hybrid ranking.
+into `AgentPromptRunnerOptions::longterm_recall`. Slice 166 adds optional
+`memory.longterm.recall.kinds`, a non-empty unique array of `RecordKind`
+spellings (`user`, `feedback`, `project`, `reference`, `team`) that constrains
+the prompt-boundary query; omitting it keeps the previous all-kind search. It
+does **not** yet ship the gated sqlite-vec adapter, memory tools, or hybrid
+ranking.
 
 ```cpp
 // include/oran/memory/longterm.hpp

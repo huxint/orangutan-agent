@@ -766,7 +766,8 @@ TEST_CASE("Config::parse extracts memory recall policy", "[unit][config][memory]
     "longterm": {
       "recall": {
         "enabled": true,
-        "limit": 7
+        "limit": 7,
+        "kinds": ["project", "reference"]
       }
     }
   }
@@ -775,6 +776,7 @@ TEST_CASE("Config::parse extracts memory recall policy", "[unit][config][memory]
   REQUIRE(result.has_value());
   REQUIRE(result->memory().longterm.recall.enabled);
   REQUIRE(result->memory().longterm.recall.limit == 7);
+  REQUIRE(result->memory().longterm.recall.kinds == std::vector<std::string>{"project", "reference"});
 }
 
 TEST_CASE("Config::parse defaults memory recall policy when absent", "[unit][config][memory]") {
@@ -783,6 +785,7 @@ TEST_CASE("Config::parse defaults memory recall policy when absent", "[unit][con
   REQUIRE(result.has_value());
   REQUIRE_FALSE(result->memory().longterm.recall.enabled);
   REQUIRE(result->memory().longterm.recall.limit == 5);
+  REQUIRE(result->memory().longterm.recall.kinds.empty());
 }
 
 TEST_CASE("Config::parse rejects malformed memory recall policy", "[unit][config][memory]") {
@@ -812,6 +815,31 @@ TEST_CASE("Config::parse rejects malformed memory recall policy", "[unit][config
 
   SECTION("zero limit") {
     auto result = config::Config::parse(R"json({"memory": {"longterm": {"recall": {"limit": 0}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-array kinds") {
+    auto result = config::Config::parse(R"json({"memory": {"longterm": {"recall": {"kinds": "project"}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("empty kinds") {
+    auto result = config::Config::parse(R"json({"memory": {"longterm": {"recall": {"kinds": []}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("empty kind name") {
+    auto result = config::Config::parse(R"json({"memory": {"longterm": {"recall": {"kinds": [""]}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("duplicate kind name") {
+    auto result =
+        config::Config::parse(R"json({"memory": {"longterm": {"recall": {"kinds": ["project", "project"]}}}})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }

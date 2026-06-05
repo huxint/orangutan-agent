@@ -7,12 +7,26 @@
 
 ## Snapshot
 
-- **Slice:** 165 (`xmake run orangutan` reports slice 165)
+- **Slice:** 166 (`xmake run orangutan` reports slice 166)
 - **Last completed history:**
-  [`histories/2026-06/20260605-1127-memory-longterm-config-recall.md`](histories/2026-06/20260605-1127-memory-longterm-config-recall.md)
+  [`histories/2026-06/20260605-1233-memory-longterm-recall-kinds.md`](histories/2026-06/20260605-1233-memory-longterm-recall-kinds.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 165 gives ordinary configured-route startup
+- **Latest completed slice:** slice 166 adds optional long-term recall kind
+  filters to the configured-route policy: `oran-config` parses
+  `memory.longterm.recall.kinds` as a non-empty unique array of `RecordKind`
+  spellings, `bootstrap::run` validates those spellings against
+  `memory::longterm::RecordKind`, and `AgentPromptRunner` maps the parsed filter
+  into `memory::longterm::Query::kinds` before the same once-per-prompt recall.
+  Omitting `kinds` preserves all-kind non-shadow recall, and defaults still keep
+  recall disabled. Focused results: `test-config`
+  **43 cases / 358 assertions** and `test-bootstrap`
+  **110 cases / 811 assertions**.
+- **Next intended slice:** no active plan; pick a small remaining tracker item
+  after re-orienting, likely the gated `sqlite-vec` adapter, memory tools,
+  richer recall query-derivation/ranking policy, or another small tracked item.
+
+Slice 165 gives ordinary configured-route startup
   a typed long-term recall policy: `oran-config` parses
   `memory.longterm.recall.enabled` plus positive `limit`, warns or fails on
   unknown nested memory fields through the existing strict-config path, and
@@ -22,9 +36,6 @@
   runner's prompt+scope query derivation when enabled. Focused results:
   `test-config` **43 cases / 348 assertions** and `test-bootstrap`
   **108 cases / 795 assertions**.
-- **Next intended slice:** no active plan; pick a small remaining tracker item
-  after re-orienting, likely the gated `sqlite-vec` adapter, memory tools,
-  richer recall query/ranking policy, or another small tracked item.
 
 Slice 164 wires opt-in long-term recall into
   `AgentPromptRunner`: `AgentPromptRunnerOptions::longterm_recall` defaults
@@ -1557,7 +1568,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-http`: 3 cases / 21 assertions.
 - `oran-io`: 54 cases / 311 assertions.
 - `oran-storage`: 76 cases / 986 assertions.
-- `oran-config`: 43 cases / 348 assertions.
+- `oran-config`: 43 cases / 358 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 34 cases / 243 assertions.
 - `oran-memory`: 25 cases / 705 assertions.
@@ -1567,7 +1578,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 108 cases / 795 assertions.
+- `oran-bootstrap`: 110 cases / 811 assertions.
 
 ## Open Tech-Debt Rows
 
@@ -1608,7 +1619,8 @@ Closed entries do *not* live here — the tracker is canonical.
   long-term runtime recall composition half, slice 163 closed bootstrap
   assembly ownership for the default long-term memory DB/backend/runtime,
   slice 164 closed the opt-in prompt-boundary recall rendering path, and
-  slice 165 closed the configured-route recall policy mapping.
+  slice 165 closed the configured-route recall policy mapping, and slice 166
+  closed the first recall kind-filter policy slice.
   Remaining follow-ups are grouped P1/P2/P3 in the tracker.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on

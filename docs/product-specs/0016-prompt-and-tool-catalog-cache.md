@@ -218,7 +218,10 @@ promotion side effect that the first agent loop will reuse.
   the prompt boundary without changing the builder or re-querying inside
   provider/tool iterations. Slice 165 maps
   `memory.longterm.recall.enabled` / `limit` into that option for ordinary
-  configured-route startup, with recall still disabled by default.
+  configured-route startup, with recall still disabled by default. Slice 166
+  adds optional `memory.longterm.recall.kinds` filters; the query still runs
+  once at the prompt boundary and the builder still receives only stable
+  section-5 bytes.
 - **Skill catalog renderer** populates section 4.
   **Status (slice 138, 2026-06-01):** `oran-skill` now ships the
   deterministic section-4 catalog renderer, the section-4 owner, and the first
