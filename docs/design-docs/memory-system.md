@@ -150,7 +150,7 @@ MEMORY.md mirror. v2 keeps that core and adds:
 - **Decay policy**: `memory-age` style decay is actually wired into the search pipeline
   this time; expired records receive lower BM25 weight before potentially being pruned.
 
-Status (slice 162): `include/oran/memory/longterm.hpp` now ships the public
+Status (slice 163): `include/oran/memory/longterm.hpp` now ships the public
 record/query/write shapes, reflection-backed `RecordKind`, `Backend` and
 `VectorBackend` traits, validation helpers for record keys, search limits,
 record metadata, and vector embeddings, plus `Fts5Backend` as the default
@@ -161,8 +161,12 @@ the shared `storage::Pool` writer, returns `ErrorKind::not_found` for missing
 `longterm::Runtime`, a prompt-boundary composition layer that delegates search
 to a `Backend`, validates recall requests before dispatch, and renders stable
 `memory::Framing` bytes from returned hits with `render_recall_framing(...)`.
-It does **not** yet wire runtime recall into bootstrap/config, ship the gated
-sqlite-vec adapter, or perform hybrid ranking.
+Slice 163 wires `RuntimeAssembly` to own a separate
+`<workspace>/.orangutan/memory.db` pool, migrate `Fts5Backend`, expose
+`longterm_memory_backend()` / `longterm_memory_runtime()`, and enable that state
+only for configured-route bootstrap startup. It does **not** yet add config
+policy for recall queries, render recalled records into `AgentPromptRunner`, ship
+the gated sqlite-vec adapter, or perform hybrid ranking.
 
 ```cpp
 // include/oran/memory/longterm.hpp

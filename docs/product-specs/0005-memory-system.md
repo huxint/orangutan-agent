@@ -44,8 +44,13 @@ operators can reason about retention, scope, and visibility.
   `memory::longterm::Runtime` wraps a `Backend`, validates runtime search/recall
   requests before backend dispatch, and returns `RecallResult { hits, framing }`
   with deterministic `memory::Framing` bytes rendered from the returned records.
-  Bootstrap/config wiring, memory tools, vector search, and hybrid ranking
-  remain downstream.
+- Bootstrap long-term ownership shipped in slice 163:
+  configured-route `RuntimeAssembly` opens and migrates a separate
+  `<workspace>/.orangutan/memory.db`, owns the default `Fts5Backend` plus
+  `longterm::Runtime`, and leaves the built-in no-provider route disabled so
+  fresh deterministic CLI runs do not create long-term memory state. Config
+  recall policy, prompt-boundary recall rendering in `AgentPromptRunner`, memory
+  tools, vector search, and hybrid ranking remain downstream.
 - Decay policy applied by a periodic job (`oran-automation`).
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
 - Hook events on read / write / forget / decay.
@@ -77,8 +82,9 @@ operators can reason about retention, scope, and visibility.
    persistence path.
 2. `longterm::Runtime::search("react agent loop", limit=10)` returns within 50 ms on
    a 10 k-record corpus. **Status:** open; slice 162 ships the runtime search
-   seam over the default FTS5 lexical `Backend`, but the 10 k-record bench and
-   bootstrap/config recall source are still downstream.
+   seam over the default FTS5 lexical `Backend`, and slice 163 gives configured
+   bootstrap runs an owned `memory.db` backend/runtime, but the 10 k-record bench
+   plus config/query policy and prompt recall source are still downstream.
 3. The MEMORY.md mirror, when enabled, reflects all kinds + records within 1 s of the
    underlying DB write.
 4. Decay marks records older than `policy.forget_after_unused` as shadow; they no

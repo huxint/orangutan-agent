@@ -123,6 +123,23 @@ make_trace_turn(storage::TraceId turn_id, storage::TraceId session_id, std::int6
   };
 }
 
+memory::longterm::Record make_longterm_record() {
+  const auto created = core::Time{core::Time::time_point{1s}};
+  const auto updated = core::Time{core::Time::time_point{2s}};
+  return memory::longterm::Record{
+      .key = memory::longterm::RecordKey{.id = "lt-1", .scope_key = "cli"},
+      .kind = memory::longterm::RecordKind::project,
+      .title = "Runtime assembly memory",
+      .body = "Long-term memory is owned by RuntimeAssembly.",
+      .created_at = created,
+      .updated_at = updated,
+      .last_read_at = updated,
+      .importance = 0.5,
+      .tags = {"bootstrap", "memory"},
+      .linked_record_ids = {},
+  };
+}
+
 bool table_exists(const std::filesystem::path& db_path, std::string_view table) {
   auto connection = storage::Connection::open(storage::ConnectionOptions{
       .path = db_path.string(),
@@ -214,6 +231,43 @@ TEST_CASE("RuntimeAssembly::build provisions sessions.db at the workspace defaul
   });
 }
 
+TEST_CASE("RuntimeAssembly::build provisions memory.db at the workspace default path",
+          "[unit][bootstrap][runtime_assembly][memory]") {
+  TempDir temp{"oran-assembly-longterm-default"};
+
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor());
+    REQUIRE(built.has_value());
+    REQUIRE(built->longterm_memory_enabled());
+    REQUIRE(built->longterm_memory_backend() != nullptr);
+    REQUIRE(built->longterm_memory_runtime() != nullptr);
+    REQUIRE(built->longterm_memory_path() == (temp.path() / ".orangutan" / "memory.db").string());
+
+    const auto memory_db = temp.path() / ".orangutan" / "memory.db";
+    REQUIRE(std::filesystem::exists(memory_db));
+    REQUIRE(table_exists(memory_db, "longterm_records"));
+    REQUIRE(table_exists(memory_db, "longterm_records_fts"));
+
+    auto record = make_longterm_record();
+    auto upserted = co_await built->longterm_memory_backend()->upsert(memory::longterm::WriteRequest{.record = record});
+    REQUIRE(upserted.has_value());
+
+    auto recalled = co_await built->longterm_memory_runtime()->recall(memory::longterm::RecallRequest{
+        .query =
+            memory::longterm::Query{
+                .scope_key = "cli",
+                .text = "assembly",
+                .kinds = {memory::longterm::RecordKind::project},
+            },
+        .limit = 5,
+    });
+    REQUIRE(recalled.has_value());
+    REQUIRE(recalled->hits.size() == 1);
+    REQUIRE(recalled->hits[0].record.key.id == "lt-1");
+    REQUIRE(recalled->framing.section_text.contains("Runtime assembly memory"));
+  });
+}
+
 TEST_CASE("RuntimeAssembly::build honors an explicit audit DB path", "[unit][bootstrap][runtime_assembly]") {
   TempDir temp{"oran-assembly-explicit-path"};
   const auto explicit_path = (temp.path() / "nested" / "audit.db").string();
@@ -244,6 +298,23 @@ TEST_CASE("RuntimeAssembly::build honors an explicit sessions DB path", "[unit][
   REQUIRE(table_exists(explicit_path, "session_skill_activations"));
 }
 
+TEST_CASE("RuntimeAssembly::build honors an explicit long-term memory DB path",
+          "[unit][bootstrap][runtime_assembly][memory]") {
+  TempDir temp{"oran-assembly-explicit-memory-path"};
+  const auto explicit_path = (temp.path() / "nested" / "memory.db").string();
+  asio::io_context io;
+
+  auto options = bootstrap::RuntimeAssemblyOptions{};
+  options.longterm_memory_db_path = explicit_path;
+  auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
+
+  REQUIRE(built.has_value());
+  REQUIRE(built->longterm_memory_enabled());
+  REQUIRE(built->longterm_memory_path() == explicit_path);
+  REQUIRE(std::filesystem::exists(explicit_path));
+  REQUIRE(table_exists(explicit_path, "longterm_records"));
+}
+
 TEST_CASE("RuntimeAssembly::build can disable session memory", "[unit][bootstrap][runtime_assembly][memory]") {
   TempDir temp{"oran-assembly-sessions-disabled"};
   asio::io_context io;
@@ -259,6 +330,22 @@ TEST_CASE("RuntimeAssembly::build can disable session memory", "[unit][bootstrap
   REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan" / "sessions.db"));
 }
 
+TEST_CASE("RuntimeAssembly::build can disable long-term memory", "[unit][bootstrap][runtime_assembly][memory]") {
+  TempDir temp{"oran-assembly-longterm-disabled"};
+  asio::io_context io;
+
+  auto options = bootstrap::RuntimeAssemblyOptions{};
+  options.longterm_memory_enabled = false;
+  auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
+
+  REQUIRE(built.has_value());
+  REQUIRE_FALSE(built->longterm_memory_enabled());
+  REQUIRE(built->longterm_memory_backend() == nullptr);
+  REQUIRE(built->longterm_memory_runtime() == nullptr);
+  REQUIRE(built->longterm_memory_path().empty());
+  REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan" / "memory.db"));
+}
+
 TEST_CASE("RuntimeAssembly::build is idempotent on re-run", "[unit][bootstrap][runtime_assembly]") {
   TempDir temp{"oran-assembly-idempotent"};
   asio::io_context io;
@@ -271,6 +358,7 @@ TEST_CASE("RuntimeAssembly::build is idempotent on re-run", "[unit][bootstrap][r
   REQUIRE(second.has_value());
   REQUIRE(std::filesystem::exists(temp.path() / ".orangutan" / "audit.db"));
   REQUIRE(std::filesystem::exists(temp.path() / ".orangutan" / "sessions.db"));
+  REQUIRE(std::filesystem::exists(temp.path() / ".orangutan" / "memory.db"));
 }
 
 TEST_CASE("RuntimeAssembly::build rejects an empty workspace", "[unit][bootstrap][runtime_assembly]") {

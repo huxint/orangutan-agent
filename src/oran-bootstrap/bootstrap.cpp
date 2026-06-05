@@ -44,7 +44,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice162";
+constexpr std::string_view kVersion = "2.0.0-slice163";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 constexpr std::int64_t kNanosecondsPerDay = 86'400'000'000'000;
@@ -813,19 +813,22 @@ core::Result<int> run(BootstrapOptions options) {
       retention_started_before_ns(loaded->value.trace().retention_days);
   assembly_options.hook_blocking_timeout = std::chrono::milliseconds{loaded->value.hooks().timeout_ms};
   assembly_options.session_memory_enabled = provider_route->has_value();
+  assembly_options.longterm_memory_enabled = provider_route->has_value();
   auto assembly = RuntimeAssembly::build(options.workspace, runtime.executor(), std::move(assembly_options));
   if (!assembly) {
     return std::unexpected(std::move(assembly).error());
   }
   std::println(
       "runtime assembly ready: audit={} ({}), approval-broker=fresh, workspace={}, trace={}, sessions={} ({}), "
-      "hook-timeout={}ms",
+      "longterm-memory={} ({}), hook-timeout={}ms",
       assembly->audit_enabled() ? "enabled" : "disabled",
       assembly->audit_enabled() ? assembly->audit_path() : std::string_view{"<null sink>"},
       assembly->workspace().root(),
       assembly->trace_enabled() ? "enabled" : "disabled",
       assembly->session_memory_enabled() ? "enabled" : "disabled",
       assembly->session_memory_enabled() ? assembly->sessions_path() : std::string_view{"<disabled>"},
+      assembly->longterm_memory_enabled() ? "enabled" : "disabled",
+      assembly->longterm_memory_enabled() ? assembly->longterm_memory_path() : std::string_view{"<disabled>"},
       assembly->hook_bus().options().blocking_timeout.count());
 
   if (!provider_route->has_value()) {

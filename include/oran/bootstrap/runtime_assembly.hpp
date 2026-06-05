@@ -6,7 +6,8 @@
 // per `0008-permissions.md` criterion 5) plus the active
 // `permission::AuditSink` (storage-backed by default, `NullAuditSink`
 // when audit is disabled), the workspace resolver, hook bus, optional trace
-// repository, and optional session-memory store.
+// repository, optional session-memory store, and optional long-term memory
+// runtime.
 //
 // The assembly intentionally does *not* own the `async::Runtime`. The
 // caller (bootstrap today, the agent loop tomorrow) builds the
@@ -47,6 +48,11 @@ class Bus;
 namespace orangutan::memory::session {
 class Store;
 }  // namespace orangutan::memory::session
+
+namespace orangutan::memory::longterm {
+class Backend;
+class Runtime;
+}  // namespace orangutan::memory::longterm
 
 namespace orangutan::storage {
 class TraceRepository;
@@ -109,6 +115,19 @@ struct RuntimeAssemblyOptions {
   std::size_t session_reader_count{2};
   /// Per-slot statement cache size for the sessions `Pool`.
   std::size_t session_statement_cache_capacity{8};
+  /// When non-empty, overrides the default long-term memory DB path. The
+  /// default is `<workspace>/.orangutan/memory.db`, intentionally separate
+  /// from audit and session state.
+  std::string longterm_memory_db_path{};
+  /// When `false`, the assembly does not open or migrate the long-term memory
+  /// DB and `longterm_memory_runtime()` returns `nullptr`. Bootstrap disables
+  /// this on the built-in no-provider route so fresh CLI runs do not create
+  /// persistent memory state.
+  bool longterm_memory_enabled{true};
+  /// Reader-pool size handed to the long-term memory `Pool`.
+  std::size_t longterm_memory_reader_count{2};
+  /// Per-slot statement cache size for the long-term memory `Pool`.
+  std::size_t longterm_memory_statement_cache_capacity{16};
 };
 
 /// Per-process runtime infrastructure. Move-only; only
@@ -118,10 +137,10 @@ public:
   /// Build the assembly. `workspace` is the workspace root used to
   /// derive the default database paths (same convention as
   /// `--audit-init`). `runtime_executor` is the executor the long-lived
-  /// audit and sessions `Pool`s will dispatch onto; for the agent loop
-  /// this is `async::Runtime::executor()`. When both `audit_enabled` and
-  /// `session_memory_enabled` are `false` the executor is unused and may
-  /// be default-constructed.
+  /// audit, sessions, and long-term memory `Pool`s will dispatch onto; for the
+  /// agent loop this is `async::Runtime::executor()`. When `audit_enabled`,
+  /// `session_memory_enabled`, and `longterm_memory_enabled` are all `false`
+  /// the executor is unused and may be default-constructed.
   ///
   /// Failure modes (the function returns `Error` instead of throwing):
   ///
@@ -203,6 +222,25 @@ public:
   /// Filesystem path the sessions DB lives at. Empty when session memory
   /// is disabled; the resolved absolute path otherwise.
   [[nodiscard]] std::string_view sessions_path() const noexcept;
+
+  /// Pointer to the assembly-owned long-term memory backend. Non-null iff
+  /// `options.longterm_memory_enabled` was `true` at build time. The backend
+  /// wraps a separate `storage::Pool` over `<workspace>/.orangutan/memory.db`
+  /// by default.
+  [[nodiscard]] memory::longterm::Backend* longterm_memory_backend() noexcept;
+
+  /// Pointer to the assembly-owned long-term memory runtime. Non-null iff the
+  /// backend exists. Future prompt runners use this at the prompt boundary to
+  /// recall section-5 memory before `agent::Loop` starts.
+  [[nodiscard]] memory::longterm::Runtime* longterm_memory_runtime() noexcept;
+
+  /// `true` iff the long-term memory DB pool/backend/runtime were constructed
+  /// at build time.
+  [[nodiscard]] bool longterm_memory_enabled() const noexcept;
+
+  /// Filesystem path the long-term memory DB lives at. Empty when long-term
+  /// memory is disabled; the resolved absolute path otherwise.
+  [[nodiscard]] std::string_view longterm_memory_path() const noexcept;
 
 private:
   struct Impl;

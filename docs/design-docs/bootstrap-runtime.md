@@ -67,6 +67,10 @@ struct RuntimeAssemblyOptions {
   bool session_memory_enabled = true;
   std::size_t session_reader_count{2};
   std::size_t session_statement_cache_capacity{8};
+  std::string longterm_memory_db_path{};
+  bool longterm_memory_enabled = true;
+  std::size_t longterm_memory_reader_count{2};
+  std::size_t longterm_memory_statement_cache_capacity{16};
 };
 
 class RuntimeAssembly {
@@ -85,27 +89,36 @@ class RuntimeAssembly {
   memory::session::Store* session_store() noexcept;
   bool session_memory_enabled() const noexcept;
   std::string_view sessions_path() const noexcept;
+  memory::longterm::Backend* longterm_memory_backend() noexcept;
+  memory::longterm::Runtime* longterm_memory_runtime() noexcept;
+  bool longterm_memory_enabled() const noexcept;
+  std::string_view longterm_memory_path() const noexcept;
 };
 
 }  // namespace orangutan::bootstrap
 ```
 
 The assembly owns the approval broker, audit sink/repository pool, workspace resolver,
-optional trace repository, process hook bus, and optional session-memory store.
+optional trace repository, process hook bus, optional session-memory store, and
+optional long-term memory backend/runtime.
 Session memory uses a separate `storage::Pool` and `storage::SessionRepository` over
 `<workspace>/.orangutan/sessions.db` by default; it never shares the audit/trace
-`audit.db` pool. `bootstrap::run` threads `config.trace().enabled` into
-`trace_enabled`, converts `config.trace().retention_days` into an explicit
-Unix-nanosecond cutoff for `trace_retention_started_before_ns`,
-`config.hooks().timeout_ms` into `hook_blocking_timeout`, and enables session
-memory only when a provider route is configured. When that cutoff is present and
-tracing is enabled, `RuntimeAssembly::build` purges old `trace_turns` rows after
-the audit migration and before the long-lived trace repository is exposed; audit
-rows are not deleted by trace retention. The built-in empty-defaults path
-disables session memory so a fresh checkout can run the deterministic CLI shell
-without opening `sessions.db`. The startup banner prints
-`trace=<enabled|disabled>`, `sessions=<enabled|disabled> (<path|disabled>)`, and
-`hook-timeout=<ms>`.
+`audit.db` pool. Long-term memory uses a separate `storage::Pool` over
+`<workspace>/.orangutan/memory.db`, migrates the `memory::longterm::Fts5Backend`
+schema before opening the long-lived pool, and exposes both the backend and
+`memory::longterm::Runtime` for future prompt-boundary recall and memory tools.
+`bootstrap::run` threads `config.trace().enabled` into `trace_enabled`, converts
+`config.trace().retention_days` into an explicit Unix-nanosecond cutoff for
+`trace_retention_started_before_ns`, `config.hooks().timeout_ms` into
+`hook_blocking_timeout`, and enables session plus long-term memory only when a
+provider route is configured. When that cutoff is present and tracing is enabled,
+`RuntimeAssembly::build` purges old `trace_turns` rows after the audit migration
+and before the long-lived trace repository is exposed; audit rows are not deleted
+by trace retention. The built-in empty-defaults path disables session and
+long-term memory so a fresh checkout can run the deterministic CLI shell without
+opening `sessions.db` or `memory.db`. The startup banner prints
+`trace=<enabled|disabled>`, `sessions=<enabled|disabled> (<path|disabled>)`,
+`longterm-memory=<enabled|disabled> (<path|disabled>)`, and `hook-timeout=<ms>`.
 
 `<oran/bootstrap/prompt_runner.hpp>` exposes the bootstrap-owned CLI runner used by
 tests and the ordinary binary handoff for configured routes. `AgentPromptRunner::create`

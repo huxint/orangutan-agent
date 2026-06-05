@@ -34,6 +34,7 @@ using ::orangutan::core::Result;
 
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSessionsDatabaseRelative = ".orangutan/sessions.db";
+constexpr std::string_view kMemoryDatabaseRelative = ".orangutan/memory.db";
 
 [[nodiscard]] std::string
 resolve_database_path(std::string_view workspace, std::string_view override_path, std::string_view relative_path) {
@@ -182,12 +183,54 @@ resolve_database_path(std::string_view workspace, std::string_view override_path
   return report;
 }
 
+/// Drive the long-term memory migration to completion before the long-lived
+/// memory pool is opened on the caller-supplied executor.
+[[nodiscard]] Result<storage::MigrationReport>
+run_longterm_memory_migration_inline(const std::string& memory_path,
+                                     std::size_t reader_count,
+                                     std::size_t statement_cache_capacity) {
+  asio::io_context io;
+  auto temp_pool_result = storage::Pool::open(io.get_executor(),
+                                              storage::PoolOptions{
+                                                  .path = memory_path,
+                                                  .reader_count = reader_count,
+                                                  .statement_cache_capacity = statement_cache_capacity,
+                                              });
+  if (!temp_pool_result) {
+    return std::unexpected(std::move(temp_pool_result).error());
+  }
+  auto temp_pool = std::move(*temp_pool_result);
+  memory::longterm::Fts5Backend backend{temp_pool};
+
+  auto report = storage::MigrationReport{};
+  auto migrate_error = std::optional<Error>{};
+  asio::co_spawn(
+      io,
+      [&]() -> async::Awaitable<void> {
+        auto migrated = co_await backend.migrate();
+        if (!migrated) {
+          migrate_error = std::move(migrated).error();
+          co_return;
+        }
+        report = std::move(*migrated);
+        co_return;
+      },
+      asio::detached);
+  io.run();
+
+  if (migrate_error) {
+    return std::unexpected(std::move(*migrate_error));
+  }
+  return report;
+}
+
 }  // namespace
 
 struct RuntimeAssembly::Impl {
   bool audit_enabled{false};
   std::string audit_path;
   std::string sessions_path;
+  std::string longterm_memory_path;
   // The members below are non-default-constructible in their final
   // shape and capture pointers into each other (`AuditRepository`
   // refers to `audit_pool`, `audit_sink` refers to `audit_repository`).
@@ -200,6 +243,9 @@ struct RuntimeAssembly::Impl {
   std::unique_ptr<storage::Pool> sessions_pool;
   std::unique_ptr<storage::SessionRepository> session_repository;
   std::unique_ptr<memory::session::Store> session_store;
+  std::unique_ptr<storage::Pool> longterm_memory_pool;
+  std::unique_ptr<memory::longterm::Fts5Backend> longterm_memory_backend;
+  std::unique_ptr<memory::longterm::Runtime> longterm_memory_runtime;
   std::unique_ptr<permission::AuditSink> audit_sink;
   std::unique_ptr<permission::ApprovalBroker> approval_broker;
   std::unique_ptr<tool::Workspace> workspace;
@@ -266,6 +312,22 @@ std::string_view RuntimeAssembly::sessions_path() const noexcept {
   return impl_->sessions_path;
 }
 
+memory::longterm::Backend* RuntimeAssembly::longterm_memory_backend() noexcept {
+  return impl_->longterm_memory_backend.get();
+}
+
+memory::longterm::Runtime* RuntimeAssembly::longterm_memory_runtime() noexcept {
+  return impl_->longterm_memory_runtime.get();
+}
+
+bool RuntimeAssembly::longterm_memory_enabled() const noexcept {
+  return impl_->longterm_memory_runtime != nullptr;
+}
+
+std::string_view RuntimeAssembly::longterm_memory_path() const noexcept {
+  return impl_->longterm_memory_path;
+}
+
 Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
                                                asio::any_io_executor runtime_executor,
                                                RuntimeAssemblyOptions options) {
@@ -324,6 +386,36 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
     impl->sessions_pool = std::make_unique<storage::Pool>(std::move(*sessions_pool));
     impl->session_repository = std::make_unique<storage::SessionRepository>(*impl->sessions_pool);
     impl->session_store = std::make_unique<memory::session::Store>(*impl->session_repository);
+  }
+
+  if (options.longterm_memory_enabled) {
+    impl->longterm_memory_path =
+        resolve_database_path(workspace, options.longterm_memory_db_path, kMemoryDatabaseRelative);
+    if (auto parent_ok = ensure_parent_directory(std::filesystem::path{impl->longterm_memory_path}, "memory");
+        !parent_ok) {
+      return std::unexpected(std::move(parent_ok).error());
+    }
+
+    auto longterm_migration = run_longterm_memory_migration_inline(impl->longterm_memory_path,
+                                                                   options.longterm_memory_reader_count,
+                                                                   options.longterm_memory_statement_cache_capacity);
+    if (!longterm_migration) {
+      return std::unexpected(std::move(longterm_migration).error());
+    }
+
+    auto memory_pool =
+        storage::Pool::open(runtime_executor,
+                            storage::PoolOptions{
+                                .path = impl->longterm_memory_path,
+                                .reader_count = options.longterm_memory_reader_count,
+                                .statement_cache_capacity = options.longterm_memory_statement_cache_capacity,
+                            });
+    if (!memory_pool) {
+      return std::unexpected(std::move(memory_pool).error());
+    }
+    impl->longterm_memory_pool = std::make_unique<storage::Pool>(std::move(*memory_pool));
+    impl->longterm_memory_backend = std::make_unique<memory::longterm::Fts5Backend>(*impl->longterm_memory_pool);
+    impl->longterm_memory_runtime = std::make_unique<memory::longterm::Runtime>(*impl->longterm_memory_backend);
   }
 
   if (!options.audit_enabled) {

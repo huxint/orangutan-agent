@@ -602,6 +602,7 @@ TEST_CASE("run hands CLI arguments to oran-cli after config load", "[unit][boots
   REQUIRE(result.has_value());
   REQUIRE(*result == 0);
   REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan" / "sessions.db"));
+  REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan" / "memory.db"));
 }
 
 TEST_CASE("run rejects selectors when no provider route is configured", "[unit][bootstrap][provider]") {
@@ -641,6 +642,9 @@ TEST_CASE("run hands configured provider prompts to AgentPromptRunner", "[unit][
   const auto sessions_db = temp.path() / ".orangutan" / "sessions.db";
   REQUIRE(std::filesystem::exists(sessions_db));
   REQUIRE(table_exists(sessions_db, "sessions"));
+  const auto memory_db = temp.path() / ".orangutan" / "memory.db";
+  REQUIRE(std::filesystem::exists(memory_db));
+  REQUIRE(table_exists(memory_db, "longterm_records"));
 }
 
 TEST_CASE("run applies --agent to configured provider prompt selection", "[unit][bootstrap][provider][skill]") {

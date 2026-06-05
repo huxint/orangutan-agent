@@ -7,21 +7,29 @@
 
 ## Snapshot
 
-- **Slice:** 162 (`xmake run orangutan` reports slice 162)
+- **Slice:** 163 (`xmake run orangutan` reports slice 163)
 - **Last completed history:**
-  [`histories/2026-06/20260605-0931-memory-longterm-runtime-recall.md`](histories/2026-06/20260605-0931-memory-longterm-runtime-recall.md)
+  [`histories/2026-06/20260605-0948-memory-longterm-assembly.md`](histories/2026-06/20260605-0948-memory-longterm-assembly.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 162 lands the first long-term memory
+- **Latest completed slice:** slice 163 wires long-term memory into
+  `RuntimeAssembly`: configured-route startup now opens and migrates a separate
+  `<workspace>/.orangutan/memory.db`, owns `memory::longterm::Fts5Backend` plus
+  `memory::longterm::Runtime`, exposes `longterm_memory_backend()` /
+  `longterm_memory_runtime()` / path/status accessors, and keeps built-in
+  no-provider startup disabled so fresh CLI runs do not create memory state.
+  Focused result: `test-bootstrap` **104 cases / 756 assertions**.
+- **Next intended slice:** no active plan; pick a small remaining tracker item
+  after re-orienting, likely config policy + prompt-boundary recall wiring on
+  top of the assembly-owned `longterm::Runtime`, the gated `sqlite-vec` adapter,
+  or another small tracked item.
+
+Slice 162 lands the first long-term memory
   runtime composition layer: `memory::longterm::Runtime` wraps a lexical
   `Backend`, validates search/recall requests before dispatch, returns
   `RecallResult { hits, framing }`, and renders deterministic section-5
   `memory::Framing` bytes from recalled records via `render_recall_framing(...)`.
   Focused result: `test-memory` **25 cases / 705 assertions**.
-- **Next intended slice:** no active plan; pick a small remaining tracker item
-  after re-orienting, likely bootstrap/config recall wiring on top of
-  `longterm::Runtime`, the gated `sqlite-vec` adapter, or another small tracked
-  item.
 
 Slice 161 landed the default long-term memory
   lexical backend: `memory::longterm::Fts5Backend` owns the SQLite FTS5 schema
@@ -1578,8 +1586,9 @@ Closed entries do *not* live here — the tracker is canonical.
   contention bench item, slice 158 closed the P3 hook payload-sharing item,
   slice 159 closed the P3 `Runtime::Impl::run()` clarification item, slice 160
   closed the vector backend trait half of the P3 memory follow-up, slice 161
-  closed the default FTS5 lexical backend half, and slice 162 closed the first
-  long-term runtime recall composition half.
+  closed the default FTS5 lexical backend half, slice 162 closed the first
+  long-term runtime recall composition half, and slice 163 closed bootstrap
+  assembly ownership for the default long-term memory DB/backend/runtime.
   Remaining follow-ups are grouped P1/P2/P3 in the tracker.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on
