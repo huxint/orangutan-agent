@@ -430,6 +430,16 @@ TEST_CASE("longterm remember data_json carries saved record metadata", "[unit][m
   REQUIRE_FALSE(data_json.contains(R"("score")"));
 }
 
+TEST_CASE("longterm forget data_json carries scoped removed key", "[unit][memory][longterm][runtime]") {
+  const auto key = memory::longterm::RecordKey{.id = "rec-1", .scope_key = "agent:coder"};
+
+  const auto data_json = memory::longterm::render_forget_data_json(key);
+  REQUIRE(data_json.contains(R"("kind":"memory_forget")"));
+  REQUIRE(data_json.contains(R"("id":"rec-1")"));
+  REQUIRE(data_json.contains(R"("scope_key":"agent:coder")"));
+  REQUIRE_FALSE(data_json.contains(R"("title")"));
+}
+
 TEST_CASE("longterm::Runtime returns empty framing for empty recall", "[unit][memory][longterm][runtime]") {
   test::run_async([](asio::io_context&) -> async::Awaitable<void> {
     FakeBackend backend{std::vector<memory::longterm::SearchHit>{}};

@@ -330,6 +330,10 @@ filter_skill_documents(std::span<const skill::SkillDocument> documents,
   return text;
 }
 
+[[nodiscard]] std::string render_memory_forget_tool_text(const memory::longterm::RecordKey& key) {
+  return std::format("memory.forget: removed record {}", key.id);
+}
+
 [[nodiscard]] std::vector<skill::SessionSkillActivation>
 skill_policy_records_from(std::span<const memory::session::SkillActivationRecord> records) {
   auto out = std::vector<skill::SessionSkillActivation>{};
@@ -516,6 +520,10 @@ public:
     dispatch_context.memory_remember = [this](tool::MemoryRememberRequest request,
                                               tool::DispatchContext& ctx) -> async::Awaitable<Result<tool::Output>> {
       co_return co_await remember_memory(std::move(request), ctx);
+    };
+    dispatch_context.memory_forget = [this](tool::MemoryForgetRequest request,
+                                            tool::DispatchContext& ctx) -> async::Awaitable<Result<tool::Output>> {
+      co_return co_await forget_memory(std::move(request), ctx);
     };
     dispatch_context.workspace = &assembly_->workspace();
     dispatch_context.output_caps = output_caps_;
@@ -824,6 +832,33 @@ private:
         .usage =
             tool::ToolUsage{
                 .bytes_written = memory_record_payload_bytes(*stored),
+            },
+        .is_error = false,
+    };
+  }
+
+  [[nodiscard]] async::Awaitable<Result<tool::Output>> forget_memory(tool::MemoryForgetRequest request,
+                                                                     tool::DispatchContext& ctx) const {
+    static_cast<void>(ctx);
+    auto* backend = assembly_->longterm_memory_backend();
+    if (backend == nullptr) {
+      co_return std::unexpected(Error::invalid_argument("memory.forget: runtime service is not available")
+                                    .with("reason", "memory_runtime_unavailable"));
+    }
+
+    auto key = memory::longterm::RecordKey{.id = std::move(request.id), .scope_key = scope_key_};
+    auto removed = co_await backend->remove(key);
+    if (!removed) {
+      co_return std::unexpected(std::move(removed).error());
+    }
+    auto data_json = memory::longterm::render_forget_data_json(key);
+    co_return tool::Output{
+        .text = render_memory_forget_tool_text(key),
+        .data_json = std::move(data_json),
+        .attachments = {},
+        .usage =
+            tool::ToolUsage{
+                .bytes_written = 0,
             },
         .is_error = false,
     };

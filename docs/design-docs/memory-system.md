@@ -156,7 +156,7 @@ MEMORY.md mirror. v2 keeps that core and adds:
 - **Decay policy**: `memory-age` style decay is actually wired into the search pipeline
   this time; expired records receive lower BM25 weight before potentially being pruned.
 
-Status (slice 169): `include/oran/memory/longterm.hpp` now ships the public
+Status (slice 170): `include/oran/memory/longterm.hpp` now ships the public
 record/query/write shapes, reflection-backed `RecordKind`, `Backend` and
 `VectorBackend` traits, validation helpers for record keys, search limits,
 record metadata, and vector embeddings, plus `Fts5Backend` as the default
@@ -191,8 +191,12 @@ permission/audit/hook/output-cap pipeline. Slice 169 adds
 write-side `memory.remember` tool path, which reaches the same assembly-owned
 long-term `Backend` through `DispatchContext::memory_remember`; bootstrap
 stamps the runner's stable scope key plus dispatch-time timestamps before
-upserting. It does **not** yet ship the gated sqlite-vec adapter,
-`memory.forget`, or hybrid ranking.
+upserting. Slice 170 adds `render_forget_data_json(...)` for scoped removed-key
+metadata and the delete-side `memory.forget` tool path, which reaches the same
+assembly-owned long-term `Backend` through `DispatchContext::memory_forget`;
+bootstrap derives the runner's stable scope key before calling the backend's
+idempotent `remove(...)`. It does **not** yet ship the gated sqlite-vec adapter
+or hybrid ranking.
 
 ```cpp
 // include/oran/memory/longterm.hpp
@@ -295,7 +299,8 @@ returns an empty `memory::Framing`, so callers can keep section 5 absent when no
 long-term memory matches. `render_recall_data_json(...)` serializes the same
 returned hits as `{kind:"memory_recall", match_count, records[]}` for tool
 results, including record ids, scope keys, kind spellings, timestamps, scores,
-tags, linked ids, and shadow flags.
+tags, linked ids, and shadow flags. `render_forget_data_json(...)` serializes
+scoped deletes as `{kind:"memory_forget", record:{id, scope_key}}`.
 
 The shipped lexical backend is:
 

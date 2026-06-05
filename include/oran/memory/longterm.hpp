@@ -213,6 +213,7 @@ private:
 [[nodiscard]] Framing render_recall_framing(std::span<const SearchHit> hits);
 [[nodiscard]] std::string render_recall_data_json(std::span<const SearchHit> hits);
 [[nodiscard]] std::string render_remember_data_json(const Record& record);
+[[nodiscard]] std::string render_forget_data_json(const RecordKey& key);
 
 [[nodiscard]] core::Result<void> validate_key(const RecordKey& key);
 [[nodiscard]] core::Result<void> validate_record(const Record& record);

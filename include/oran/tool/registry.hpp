@@ -131,6 +131,12 @@ struct MemoryRememberRequest {
   friend bool operator==(const MemoryRememberRequest&, const MemoryRememberRequest&) = default;
 };
 
+struct MemoryForgetRequest {
+  std::string id;
+
+  friend bool operator==(const MemoryForgetRequest&, const MemoryForgetRequest&) = default;
+};
+
 /// Runtime callback consumed by the `memory.recall` built-in. The tool layer
 /// owns JSON parsing, permissions, audit, hooks, and output caps; bootstrap
 /// supplies the concrete long-term memory runtime through this callback so
@@ -144,6 +150,13 @@ using MemoryRecallHandler =
 /// `oran-tool` does not take a sibling dependency on `oran-memory`.
 using MemoryRememberHandler =
     std::function<async::Awaitable<core::Result<Output>>(MemoryRememberRequest request, DispatchContext& ctx)>;
+
+/// Runtime callback consumed by the `memory.forget` built-in. The tool layer
+/// owns JSON parsing, permissions, audit, hooks, and output caps; bootstrap
+/// supplies the concrete long-term memory backend through this callback so
+/// `oran-tool` does not take a sibling dependency on `oran-memory`.
+using MemoryForgetHandler =
+    std::function<async::Awaitable<core::Result<Output>>(MemoryForgetRequest request, DispatchContext& ctx)>;
 
 /// Registry-pre-resolved filesystem target for a built-in tool call.
 /// `absolute_path` is the path handlers pass to `oran-io`; the rest is
@@ -263,6 +276,11 @@ struct DispatchContext {
   /// ordinary dispatch path. When unset, `memory.remember` reports a
   /// model-repairable missing-runtime error.
   MemoryRememberHandler memory_remember{};
+  /// Optional long-term memory delete service. When set, `memory.forget` calls
+  /// it with the parsed record id and returns the produced output through the
+  /// ordinary dispatch path. When unset, `memory.forget` reports a
+  /// model-repairable missing-runtime error.
+  MemoryForgetHandler memory_forget{};
   /// Optional workspace resolver for file built-ins. The pointer is
   /// non-owning; bootstrap/agent runtime owns the workspace value and keeps it
   /// alive for the dispatch. Dispatch pre-resolves current filesystem

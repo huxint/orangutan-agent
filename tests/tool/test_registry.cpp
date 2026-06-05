@@ -664,11 +664,26 @@ TEST_CASE("register_memory_remember advertises write_memory and deferred memory 
   REQUIRE(def->input_schema_json.contains("\"importance\""));
 }
 
+TEST_CASE("register_memory_forget advertises write_memory and deferred memory metadata",
+          "[unit][tool][memory_forget]") {
+  tool::Registry registry;
+  REQUIRE(tool::register_memory_forget(registry).has_value());
+  REQUIRE(registry.size() == 1);
+  const auto* def = registry.find(tool::kMemoryForgetName);
+  REQUIRE(def != nullptr);
+  REQUIRE(def->required_capabilities.size() == 1);
+  REQUIRE(def->required_capabilities[0] == core::Capability::write_memory);
+  REQUIRE(def->deferred);
+  REQUIRE(def->category.has_value());
+  REQUIRE(*def->category == "memory");
+  REQUIRE(def->input_schema_json.contains("\"id\""));
+}
+
 TEST_CASE("register_builtins seeds the file tool catalog", "[unit][tool][builtins]") {
   tool::Registry registry;
   REQUIRE(tool::register_builtins(registry).has_value());
   const auto catalog = registry.catalog();
-  REQUIRE(catalog.size() == 11);
+  REQUIRE(catalog.size() == 12);
   REQUIRE(catalog[0].name == tool::kFileReadName);
   REQUIRE(catalog[1].name == tool::kFileWriteName);
   REQUIRE(catalog[2].name == tool::kFileEditName);
@@ -680,6 +695,7 @@ TEST_CASE("register_builtins seeds the file tool catalog", "[unit][tool][builtin
   REQUIRE(catalog[8].name == tool::kSkillDeactivateName);
   REQUIRE(catalog[9].name == tool::kMemoryRecallName);
   REQUIRE(catalog[10].name == tool::kMemoryRememberName);
+  REQUIRE(catalog[11].name == tool::kMemoryForgetName);
 }
 
 TEST_CASE("tool.search returns structured tool metadata by exact name", "[unit][tool][tool_search]") {
@@ -1087,6 +1103,96 @@ TEST_CASE("memory.remember rejects malformed input as invalid_argument", "[unit]
 
     for (const auto input_json : malformed) {
       auto result = co_await registry.dispatch(tool::kMemoryRememberName, input_json, ctx);
+      REQUIRE_FALSE(result.has_value());
+      REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+    }
+    REQUIRE(sink.events().size() == malformed.size());
+  });
+}
+
+TEST_CASE("memory.forget delegates parsed id through DispatchContext", "[unit][tool][memory_forget]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_memory_forget(registry).has_value());
+
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kMemoryForgetName},
+        .capability = core::Capability::write_memory,
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto seen = tool::MemoryForgetRequest{};
+    ctx.memory_forget = [&seen](tool::MemoryForgetRequest request,
+                                tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
+      seen = std::move(request);
+      co_return tool::Output{
+          .text = "memory.forget: delegated",
+          .data_json = R"({"kind":"memory_forget","record":{"id":"rec-1"}})",
+          .usage = tool::ToolUsage{.bytes_written = 0},
+      };
+    };
+
+    auto result = co_await registry.dispatch(tool::kMemoryForgetName, R"({"id":"rec-1"})", ctx);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "memory.forget: delegated");
+    REQUIRE(result->data_json.has_value());
+    REQUIRE(result->usage.bytes_written.has_value());
+    REQUIRE(*result->usage.bytes_written == 0);
+    REQUIRE(seen.id == "rec-1");
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
+  });
+}
+
+TEST_CASE("memory.forget reports missing runtime service as a model-repairable error", "[unit][tool][memory_forget]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_memory_forget(registry).has_value());
+
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kMemoryForgetName},
+        .capability = core::Capability::write_memory,
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    auto result = co_await registry.dispatch(tool::kMemoryForgetName, R"({"id":"rec-1"})", ctx);
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(context_has(result.error(), "reason", "memory_runtime_unavailable"));
+    REQUIRE(context_has(result.error(), "id", "rec-1"));
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
+  });
+}
+
+TEST_CASE("memory.forget rejects malformed input as invalid_argument", "[unit][tool][memory_forget]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_memory_forget(registry).has_value());
+
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kMemoryForgetName},
+        .capability = core::Capability::write_memory,
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto malformed = std::vector<std::string_view>{
+        "{",
+        "[]",
+        R"({})",
+        R"({"id":7})",
+        R"({"id":""})",
+    };
+
+    for (const auto input_json : malformed) {
+      auto result = co_await registry.dispatch(tool::kMemoryForgetName, input_json, ctx);
       REQUIRE_FALSE(result.has_value());
       REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
     }

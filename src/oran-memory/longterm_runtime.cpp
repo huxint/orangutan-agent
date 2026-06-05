@@ -165,4 +165,16 @@ std::string render_remember_data_json(const Record& record) {
       .dump();
 }
 
+std::string render_forget_data_json(const RecordKey& key) {
+  return nlohmann::json{
+      {"kind", "memory_forget"},
+      {"record",
+       nlohmann::json{
+           {"id", key.id},
+           {"scope_key", key.scope_key},
+       }},
+  }
+      .dump();
+}
+
 }  // namespace orangutan::memory::longterm

@@ -91,7 +91,7 @@ observe — so the future agent loop can call them safely on day one.
   `memory.recall`.
 - **Mutating tools** (serialise per canonical resource):
   `file.write`, `file.edit`, `file.modify` (future), `file.delete`,
-  `memory.remember`, and future `memory.forget`.
+  `memory.remember`, and `memory.forget`.
 - **Globally serialised tools** (compete for a process-wide slot
   until they ship a per-resource lock):
   `shell.exec` (future — workspace lock until it gains per-cwd

@@ -785,6 +785,62 @@ TEST_CASE("AgentPromptRunner dispatches memory.remember through long-term backen
   });
 }
 
+TEST_CASE("AgentPromptRunner dispatches memory.forget through long-term backend",
+          "[unit][bootstrap][prompt_runner][memory]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-memory-forget-tool"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false);
+    REQUIRE(assembly.longterm_memory_backend() != nullptr);
+    auto upserted = co_await assembly.longterm_memory_backend()->upsert(memory::longterm::WriteRequest{
+        .record = make_longterm_record("lt-tool-forget", "Memory forget should remove forgetanchor."),
+    });
+    REQUIRE(upserted.has_value());
+
+    RecordingProvider recording{{
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "memory-forget-1",
+                .name = "memory.forget",
+                .input_json = R"({"id":"lt-tool-forget"})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        },
+        text_response("done"),
+    }};
+
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.mode = permission::Mode::permissive;
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto result = co_await (*runner)->run_prompt(
+        cli::PromptRunRequest{.prompt = "forget memory", .mode = cli::CliMode::single_shot});
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "done");
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 2);
+    const auto output = tool_result_output_in(requests[1], "memory-forget-1");
+    REQUIRE(output.contains("memory.forget: removed record lt-tool-forget"));
+    const auto data_json = tool_result_data_json_in(requests[1], "memory-forget-1");
+    REQUIRE(data_json.has_value());
+    REQUIRE(data_json->contains(R"("kind":"memory_forget")"));
+    REQUIRE(data_json->contains(R"("id":"lt-tool-forget")"));
+    REQUIRE(data_json->contains(R"("scope_key":"scope-A")"));
+
+    auto stored = co_await assembly.longterm_memory_backend()->get(memory::longterm::RecordKey{
+        .id = "lt-tool-forget",
+        .scope_key = "scope-A",
+    });
+    REQUIRE_FALSE(stored.has_value());
+    REQUIRE(stored.error().kind() == core::ErrorKind::not_found);
+  });
+}
+
 TEST_CASE("AgentPromptRunner can derive recall query from the last user message",
           "[unit][bootstrap][prompt_runner][memory]") {
   TempDir temp{"oran-bootstrap-prompt-runner-longterm-last-user"};

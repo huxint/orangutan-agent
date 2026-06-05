@@ -87,10 +87,14 @@ handlers can adopt without churning every callsite at once.
 > Slice 169 adds `memory.remember`, which fills `data_json` with
 > `{kind:"memory_remember", record:{...}}` plus `usage.bytes_written`, while
 > keeping a compact confirmation text as the provider fallback.
-> With slice 169 the shipped built-in side of spec 0014's structured-output
+> Slice 170 adds `memory.forget`, which fills `data_json` with
+> `{kind:"memory_forget", record:{id, scope_key}}` plus
+> `usage.bytes_written = 0`, while keeping compact confirmation text as the
+> provider fallback.
+> With slice 170 the shipped built-in side of spec 0014's structured-output
 > migration is current: every shipped filesystem built-in fills usage counters,
 > every shipped read-side built-in fills `data_json`, and the shipped
-> write-side memory built-in follows the same structured envelope. `bench-tool`
+> memory mutation built-ins follow the same structured envelope. `bench-tool`
 > has `output.text_only` vs. `output.with_data_16kib` plus
 > `output.apply_caps` coverage. Slice 107 closes the first provider-facing
 > mapping step: `core::ToolResultContent` now preserves optional
@@ -231,6 +235,10 @@ handlers can adopt without churning every callsite at once.
      fallback (`memory.remember: saved <kind> record <id>`), fills `data_json`
      with `{kind:"memory_remember", record:{...}}`, and fills
      `usage.bytes_written` from the saved record payload.
+  7. `memory.forget` — shipped in slice 170: keeps a compact confirmation
+     fallback (`memory.forget: removed record <id>`), fills `data_json` with
+     `{kind:"memory_forget", record:{id, scope_key}}`, and fills
+     `usage.bytes_written = 0`.
   All built-ins shipped to date have completed their v1 migration to the
   structured envelope; new built-ins ship with usage counters and
   `data_json` from the start.

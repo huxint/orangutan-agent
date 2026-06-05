@@ -41,6 +41,9 @@ core::Result<void> register_builtins(Registry& registry) {
   if (auto r = register_memory_remember(registry); !r) {
     return r;
   }
+  if (auto r = register_memory_forget(registry); !r) {
+    return r;
+  }
   return {};
 }
 

@@ -7,12 +7,28 @@
 
 ## Snapshot
 
-- **Slice:** 169 (`xmake run orangutan` reports slice 169)
+- **Slice:** 170 (`xmake run orangutan` reports slice 170)
 - **Last completed history:**
-  [`histories/2026-06/20260605-1521-memory-remember-tool.md`](histories/2026-06/20260605-1521-memory-remember-tool.md)
+  [`histories/2026-06/20260605-1604-memory-forget-tool.md`](histories/2026-06/20260605-1604-memory-forget-tool.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 169 adds the first write-side long-term
+- **Latest completed slice:** slice 170 adds the delete-side long-term memory
+  tool. `oran-tool` registers deferred `memory.forget` with `write_memory`
+  capability, parses `{id}`, and delegates through
+  `DispatchContext::memory_forget` so the tool library stays independent of
+  `oran-memory`. `oran-memory` now renders structured `memory_forget`
+  `data_json` for the scoped removed key, and `AgentPromptRunner` binds the
+  callback to the assembly-owned `memory::longterm::Backend`, deriving the
+  stable scope key before calling the backend's idempotent `remove(...)` through
+  the normal permission/audit/hook/output-cap path. Focused results:
+  `test-tool` **208 cases / 2181 assertions**, `test-memory`
+  **28 cases / 727 assertions**, and `test-bootstrap`
+  **114 cases / 874 assertions**.
+- **Next intended slice:** no active plan; pick a small remaining tracker item
+  after re-orienting, likely the gated `sqlite-vec` adapter, hybrid/vector
+  ranking/composition, or another small tracked item.
+
+Slice 169 adds the first write-side long-term
   memory tool. `oran-tool` registers deferred `memory.remember` with
   `write_memory` capability, parses record fields
   `{id, kind, title, body, importance?, tags?, linked_record_ids?, shadow?}`,
@@ -25,9 +41,6 @@
   `test-tool` **204 cases / 2140 assertions**, `test-memory`
   **27 cases / 723 assertions**, and `test-bootstrap`
   **113 cases / 859 assertions**.
-- **Next intended slice:** no active plan; pick a small remaining tracker item
-  after re-orienting, likely `memory.forget`, the gated `sqlite-vec` adapter,
-  hybrid/vector ranking/composition, or another small tracked item.
 
 Slice 168 adds the first long-term memory tool.
   `oran-tool` registers deferred `memory.recall` with `read_memory` capability,
@@ -1659,10 +1672,12 @@ Closed entries do *not* live here — the tracker is canonical.
   slice 164 closed the opt-in prompt-boundary recall rendering path, slice 165
   closed the configured-route recall policy mapping, slice 166 closed the first
   recall kind-filter policy slice, and slice 167 closed the first recall
-  query-derivation selector, slice 168 closed the first read-only long-term
+  query-derivation selector. Slice 168 closed the first read-only long-term
   memory tool by wiring deferred `memory.recall` through the existing
-  permissioned tool dispatch path, and slice 169 closed the first write-side
-  memory tool by wiring deferred `memory.remember` through that same path.
+  permissioned tool dispatch path. Slice 169 closed the first write-side memory
+  tool by wiring deferred `memory.remember` through that same path. Slice 170
+  closed the delete-side long-term memory tool by wiring deferred
+  `memory.forget` through the same permissioned dispatch path.
   Remaining follow-ups are grouped P1/P2/P3 in the tracker.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on

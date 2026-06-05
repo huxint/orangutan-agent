@@ -49,6 +49,9 @@ inline constexpr std::string_view kMemoryRecallName{"memory.recall"};
 /// Stable wire name for the long-term memory write built-in.
 inline constexpr std::string_view kMemoryRememberName{"memory.remember"};
 
+/// Stable wire name for the long-term memory delete built-in.
+inline constexpr std::string_view kMemoryForgetName{"memory.forget"};
+
 /// Register the `file.read` tool. Reads UTF-8 content using `oran-io`'s
 /// coroutine helper; when `DispatchContext::workspace` is set, the input path
 /// is first resolved through `tool::Workspace`. Capability `read_file` is
@@ -202,12 +205,22 @@ inline constexpr std::string_view kMemoryRememberName{"memory.remember"};
 /// confirmation text plus structured `data_json` with saved record metadata.
 [[nodiscard]] core::Result<void> register_memory_remember(Registry& registry);
 
+/// Register the `memory.forget` tool. Removes one long-term memory record in
+/// the current agent scope through the runtime supplied on
+/// `DispatchContext::memory_forget`; capability `write_memory` is required.
+/// Input shape: `{"id": <string>}`. The concrete memory backend lives outside
+/// `oran-tool`, so this built-in remains an ordinary permissioned/audited
+/// registry dispatch without making the tool library depend on `oran-memory`.
+/// Successful calls are idempotent and return a short confirmation text plus
+/// structured `data_json` with the scoped removed key.
+[[nodiscard]] core::Result<void> register_memory_forget(Registry& registry);
+
 /// Register every built-in this repository ships. Currently wires `file.read`,
 /// `file.write`, `file.edit`, `file.search`, `directory.list`, then
 /// `file.delete`, then `tool.search`, then `skill.invoke`, then
-/// `skill.deactivate`, then `memory.recall`, then `memory.remember`; future
-/// slices append additional tools so production callers can stay on this
-/// single entry point.
+/// `skill.deactivate`, then `memory.recall`, then `memory.remember`, then
+/// `memory.forget`; future slices append additional tools so production callers
+/// can stay on this single entry point.
 [[nodiscard]] core::Result<void> register_builtins(Registry& registry);
 
 }  // namespace orangutan::tool

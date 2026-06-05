@@ -112,6 +112,13 @@ enum class Capability {
 > `oran-memory`; successful output carries confirmation text,
 > `data_json.kind = "memory_remember"`, saved record metadata, and
 > `usage.bytes_written`.
+> Slice 170 adds the delete-side memory built-in: `memory.forget`
+> (`Capability::write_memory`, deferred, category `memory`). Input `{id}`
+> removes one scoped long-term memory record through
+> `DispatchContext::memory_forget`, keeping `oran-tool` independent of
+> `oran-memory`; successful output carries confirmation text,
+> `data_json.kind = "memory_forget"`, scoped removed-key metadata, and
+> `usage.bytes_written = 0`.
 > Slice 21 (2026-05-17) wired `permission::ApprovalBroker` through
 > `Registry::dispatch` so a `Verdict::ask` decision can be mediated
 > rather than short-circuited: `DispatchContext` grew optional
