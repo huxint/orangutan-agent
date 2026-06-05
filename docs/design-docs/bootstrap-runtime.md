@@ -168,6 +168,15 @@ activation-policy rendering. Policy output is applied before `agent::Loop`
 starts, never mid-turn, so multi-iteration provider/tool loops reuse one
 section-4 prefix while skill bodies continue to arrive only as conversation-tail
 tool-result text.
+Slice 164 adds the equivalent opt-in path for long-term memory recall:
+`AgentPromptRunnerOptions::longterm_recall` defaults disabled, and when enabled
+requires an assembly-owned `memory::longterm::Runtime`, a positive limit, and no
+exact `AgentPromptRunnerOptions::memory_framing` override. The runner derives a
+`longterm::Query` from the current prompt plus its stable `scope_key`, calls
+`Runtime::recall(...)` once before the user prompt enters the conversation tail,
+then renders section 5 from the returned records. Multi-iteration provider/tool
+loops reuse those same bytes for the turn. Ordinary `bootstrap::run` does not
+enable this option yet; config policy remains downstream.
 When the caller
 selects an `AgentPromptRunnerOptions::agent_config_name` (or leaves it empty
 and selects `permission_agent_name`), the runner reads that `agents.<name>`

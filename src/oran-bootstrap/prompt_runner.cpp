@@ -253,6 +253,18 @@ skill_activation_updates_from_events(std::span<const skill::SkillActivationEvent
   if (options.trace_context_json.empty()) {
     return std::unexpected(option_error("agent prompt runner trace context JSON must not be empty"));
   }
+  if (options.longterm_recall.enabled) {
+    if (options.longterm_recall.limit == 0) {
+      return std::unexpected(option_error("agent prompt runner long-term recall limit must be positive"));
+    }
+    if (!options.memory_framing.empty()) {
+      return std::unexpected(
+          option_error("agent prompt runner long-term recall cannot be combined with exact memory framing"));
+    }
+    if (options.assembly->longterm_memory_runtime() == nullptr) {
+      return std::unexpected(option_error("agent prompt runner long-term recall requires long-term memory runtime"));
+    }
+  }
   return {};
 }
 
@@ -279,7 +291,7 @@ public:
         origin_{std::move(options.origin)}, system_preamble_{make_system_preamble(std::move(options.system_preamble))},
         skills_catalog_{skill::RenderedCatalog{.section_text = std::move(options.skills_catalog)}},
         skills_enabled_{std::move(skills_enabled)}, skills_deactivated_{std::move(skills_deactivated)},
-        skills_expirations_{std::move(skills_expirations)},
+        skills_expirations_{std::move(skills_expirations)}, longterm_recall_{options.longterm_recall},
         memory_framing_{memory::Framing{.section_text = std::move(options.memory_framing)}},
         per_agent_overlay_{std::move(options.per_agent_overlay)},
         trace_context_json_{std::move(options.trace_context_json)}, tool_choice_{std::move(options.tool_choice)},
@@ -339,10 +351,14 @@ public:
     }
 
     const auto prev_transcript_size = conversation_tail.size();
-    conversation_tail.push_back(core::Message::user_text(std::move(request.prompt)));
+    auto prompt_text = std::move(request.prompt);
     const auto system_preamble = std::string{system_preamble_.render_once()};
     const auto skills_catalog = std::string{skills_catalog_.render_once()};
-    const auto memory_framing = std::string{memory_framing_.render_once()};
+    auto memory_framing = co_await render_memory_framing_for_prompt(prompt_text);
+    if (!memory_framing) {
+      co_return std::unexpected(std::move(memory_framing).error());
+    }
+    conversation_tail.push_back(core::Message::user_text(std::move(prompt_text)));
 
     auto promotion_snapshot = session_state_.promotion_snapshot(core::time::now_utc());
     auto dispatch_context =
@@ -368,7 +384,7 @@ public:
         .active_tools = active_tools_,
         .promoted_tools = std::span<const std::string>{promotion_snapshot.tool_names},
         .skills_catalog = skills_catalog,
-        .memory_framing = memory_framing,
+        .memory_framing = *memory_framing,
         .per_agent_overlay = per_agent_overlay_,
         .conversation_tail = std::span<const core::Message>{conversation_tail},
         .tool_choice = tool_choice_,
@@ -476,6 +492,32 @@ public:
   }
 
 private:
+  [[nodiscard]] async::Awaitable<Result<std::string>> render_memory_framing_for_prompt(std::string_view prompt) {
+    if (!longterm_recall_.enabled) {
+      co_return std::string{memory_framing_.render_once()};
+    }
+
+    auto* runtime = assembly_->longterm_memory_runtime();
+    if (runtime == nullptr) {
+      co_return std::unexpected(option_error("agent prompt runner long-term recall runtime is unavailable"));
+    }
+    auto recalled = co_await runtime->recall(memory::longterm::RecallRequest{
+        .query =
+            memory::longterm::Query{
+                .scope_key = scope_key_,
+                .text = std::string{prompt},
+                .kinds = {},
+                .include_shadow = false,
+            },
+        .limit = longterm_recall_.limit,
+    });
+    if (!recalled) {
+      co_return std::unexpected(std::move(recalled).error());
+    }
+    memory_framing_.replace(std::move(recalled->framing));
+    co_return std::string{memory_framing_.render_once()};
+  }
+
   [[nodiscard]] async::Awaitable<Result<void>>
   refresh_skill_catalog_snapshot(std::span<const core::Message> conversation_tail,
                                  std::span<const memory::session::SkillActivationRecord> session_skill_activations) {
@@ -666,6 +708,7 @@ private:
   std::vector<skill::SkillExpiration> skills_expirations_;
   std::optional<skill::WorkspaceSkillSnapshot> skill_snapshot_;
   std::vector<skill::SkillDocument> skill_documents_;
+  LongtermRecallOptions longterm_recall_{};
   memory::FramingOwner memory_framing_;
   std::string per_agent_overlay_;
   std::string trace_context_json_;

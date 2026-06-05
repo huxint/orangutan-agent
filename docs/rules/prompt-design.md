@@ -100,9 +100,11 @@ The prompt is assembled in this order, oldest-stable to newest-dynamic:
    rendering, active markers are deterministic metadata-only rows, and any
    changed marker set intentionally changes section-4 bytes for the next
    prompt. Skill bodies still stay out of sections (1)-(6).
-5. **Memory framing** — working-memory + session-memory summary. The
-   summary text must be a function of memory state alone; do *not*
-   thread "current time" or "request id" through it.
+5. **Memory framing** — working-memory, session-memory summary, and optional
+   long-term recall. A recall query may be derived once at the prompt boundary
+   from the current user prompt, but rendered section bytes must be a function
+   of the returned memory records. Do *not* thread "current time", request ids,
+   trace ids, scores, or per-call counters through it.
 6. **Per-agent overlay** — agent-specific instructions from
    `config.agents.<name>.*`. Stable within an agent's run.
 7. **Conversation tail** — past turns + the new user turn. This is the
@@ -141,6 +143,10 @@ These are review-blocking violations.
   hash and prefix hash provide the cache break.
 - **No "you have already done X" status text** glued into the preamble.
   That's conversation history; it lives in section (7).
+- **Memory recall is prompt-boundary state, not loop state.** If long-term
+  recall is enabled, perform the search once before `agent::Loop` starts and
+  render section (5) from the returned records. Multi-iteration provider/tool
+  loops reuse those same bytes for the whole turn.
 - **Minimum cacheable block size.** Anthropic caches blocks of ≥ 1024
   tokens (Sonnet/Opus tier) or ≥ 2048 tokens (Haiku tier). Sections
   smaller than the floor should be merged with an adjacent stable

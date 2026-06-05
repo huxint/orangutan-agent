@@ -151,13 +151,32 @@ config::Config parse_config(std::string_view json) {
 bootstrap::RuntimeAssembly build_assembly(const std::filesystem::path& workspace,
                                           asio::io_context& io,
                                           bool audit_enabled,
-                                          bool session_memory_enabled = false) {
+                                          bool session_memory_enabled = false,
+                                          bool longterm_memory_enabled = true) {
   auto options = bootstrap::RuntimeAssemblyOptions{};
   options.audit_enabled = audit_enabled;
   options.session_memory_enabled = session_memory_enabled;
+  options.longterm_memory_enabled = longterm_memory_enabled;
   auto assembly = bootstrap::RuntimeAssembly::build(workspace.string(), io.get_executor(), std::move(options));
   REQUIRE(assembly.has_value());
   return std::move(*assembly);
+}
+
+memory::longterm::Record make_longterm_record(std::string id, std::string body) {
+  const auto created = core::Time{core::Time::time_point{std::chrono::seconds{1}}};
+  const auto updated = core::Time{core::Time::time_point{std::chrono::seconds{2}}};
+  return memory::longterm::Record{
+      .key = memory::longterm::RecordKey{.id = std::move(id), .scope_key = "scope-A"},
+      .kind = memory::longterm::RecordKind::project,
+      .title = "Recall note",
+      .body = std::move(body),
+      .created_at = created,
+      .updated_at = updated,
+      .last_read_at = updated,
+      .importance = 0.8,
+      .tags = {"recall"},
+      .linked_record_ids = {},
+  };
 }
 
 bootstrap::AgentPromptRunnerOptions base_runner_options(asio::io_context& io,
@@ -579,6 +598,99 @@ TEST_CASE("AgentPromptRunner renders memory framing once per prompt before loop 
     REQUIRE(*requests[0].system_prompt == *requests[1].system_prompt);
     REQUIRE((*runner)->memory_framing_renders() == 1);
   });
+}
+
+TEST_CASE("AgentPromptRunner leaves long-term recall disabled by default", "[unit][bootstrap][prompt_runner][memory]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-longterm-default-off"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false);
+    REQUIRE(assembly.longterm_memory_backend() != nullptr);
+    auto upserted = co_await assembly.longterm_memory_backend()->upsert(memory::longterm::WriteRequest{
+        .record = make_longterm_record("lt-default-off", "Recall should stay out unless explicitly enabled."),
+    });
+    REQUIRE(upserted.has_value());
+
+    RecordingProvider recording{{text_response("done")}};
+    auto runner = bootstrap::AgentPromptRunner::create(base_runner_options(io, assembly, cfg, recording));
+    REQUIRE(runner.has_value());
+
+    auto result =
+        co_await (*runner)->run_prompt(cli::PromptRunRequest{.prompt = "recall", .mode = cli::CliMode::single_shot});
+
+    REQUIRE(result.has_value());
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 1);
+    REQUIRE(requests[0].system_prompt.has_value());
+    REQUIRE_FALSE(requests[0].system_prompt->contains("Long-term memory:"));
+    REQUIRE((*runner)->memory_framing_renders() == 1);
+  });
+}
+
+TEST_CASE("AgentPromptRunner recalls long-term memory once before loop iterations",
+          "[unit][bootstrap][prompt_runner][memory]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-longterm-recall"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false);
+    REQUIRE(assembly.longterm_memory_backend() != nullptr);
+    auto upserted = co_await assembly.longterm_memory_backend()->upsert(memory::longterm::WriteRequest{
+        .record = make_longterm_record("lt-recall-1", "Recall plumbing reaches the prompt boundary."),
+    });
+    REQUIRE(upserted.has_value());
+    write_file(temp.path() / "note.txt", "long-term recall fixture\n");
+
+    RecordingProvider recording{{
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "read-1",
+                .name = "file.read",
+                .input_json = R"({"path":"note.txt"})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        },
+        text_response("done"),
+    }};
+
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.longterm_recall = bootstrap::LongtermRecallOptions{.enabled = true, .limit = 5};
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto result = co_await (*runner)->run_prompt(
+        cli::PromptRunRequest{.prompt = "recall plumbing", .mode = cli::CliMode::single_shot});
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "done");
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 2);
+    REQUIRE(requests[0].system_prompt.has_value());
+    REQUIRE(requests[1].system_prompt.has_value());
+    REQUIRE(requests[0].system_prompt->contains("Long-term memory:"));
+    REQUIRE(requests[0].system_prompt->contains("Recall plumbing reaches the prompt boundary."));
+    REQUIRE(requests[0].system_prompt->contains("tags: recall"));
+    REQUIRE(*requests[0].system_prompt == *requests[1].system_prompt);
+    REQUIRE((*runner)->memory_framing_renders() == 1);
+  });
+}
+
+TEST_CASE("AgentPromptRunner rejects long-term recall without assembly runtime",
+          "[unit][bootstrap][prompt_runner][memory]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-longterm-no-runtime"};
+  asio::io_context io;
+  auto cfg = config::Config{};
+  auto assembly = build_assembly(temp.path(), io, false, false, false);
+  RecordingProvider recording{{text_response("unused")}};
+
+  auto options = base_runner_options(io, assembly, cfg, recording);
+  options.longterm_recall = bootstrap::LongtermRecallOptions{.enabled = true, .limit = 5};
+  auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+
+  REQUIRE_FALSE(runner.has_value());
+  REQUIRE(runner.error().kind() == core::ErrorKind::invalid_argument);
 }
 
 TEST_CASE("AgentPromptRunner renders skill catalog once per prompt before loop iterations",

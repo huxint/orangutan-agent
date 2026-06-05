@@ -28,8 +28,8 @@ operators can reason about retention, scope, and visibility.
   disabled.
 - Prompt memory framing shipped in slice 133: `memory::FramingOwner` owns the
   section-5 memory framing value and `AgentPromptRunner` renders it once before
-  `agent::Loop`, leaving long-term recall/search out of v1 while preserving the
-  once-per-turn boundary.
+  `agent::Loop`, preserving the once-per-turn boundary for future recall
+  plumbing.
 - Long-term backend contract prework shipped in slice 160:
   `memory::longterm::RecordKind` (`user`, `feedback`, `project`, `reference`,
   reserved `team`), `RecordKey`, `Record`, `Query`, `SearchHit`,
@@ -48,9 +48,14 @@ operators can reason about retention, scope, and visibility.
   configured-route `RuntimeAssembly` opens and migrates a separate
   `<workspace>/.orangutan/memory.db`, owns the default `Fts5Backend` plus
   `longterm::Runtime`, and leaves the built-in no-provider route disabled so
-  fresh deterministic CLI runs do not create long-term memory state. Config
-  recall policy, prompt-boundary recall rendering in `AgentPromptRunner`, memory
-  tools, vector search, and hybrid ranking remain downstream.
+  fresh deterministic CLI runs do not create long-term memory state.
+- Prompt-boundary long-term recall shipped in slice 164:
+  `AgentPromptRunnerOptions::longterm_recall` is an explicit opt-in that queries
+  the assembly-owned `longterm::Runtime` once from the current prompt and stable
+  scope key, rejects exact `memory_framing` overrides, and feeds deterministic
+  record-only recall framing into section 5 before `agent::Loop`. Config recall
+  policy, ordinary `bootstrap::run` enablement, memory tools, vector search, and
+  hybrid ranking remain downstream.
 - Decay policy applied by a periodic job (`oran-automation`).
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
 - Hook events on read / write / forget / decay.
@@ -82,9 +87,10 @@ operators can reason about retention, scope, and visibility.
    persistence path.
 2. `longterm::Runtime::search("react agent loop", limit=10)` returns within 50 ms on
    a 10 k-record corpus. **Status:** open; slice 162 ships the runtime search
-   seam over the default FTS5 lexical `Backend`, and slice 163 gives configured
-   bootstrap runs an owned `memory.db` backend/runtime, but the 10 k-record bench
-   plus config/query policy and prompt recall source are still downstream.
+   seam over the default FTS5 lexical `Backend`, slice 163 gives configured
+   bootstrap runs an owned `memory.db` backend/runtime, and slice 164 lets
+   prompt-runner callers opt into one prompt-boundary recall. The 10 k-record
+   bench plus config/query policy remain downstream.
 3. The MEMORY.md mirror, when enabled, reflects all kinds + records within 1 s of the
    underlying DB write.
 4. Decay marks records older than `policy.forget_after_unused` as shadow; they no
@@ -95,7 +101,8 @@ operators can reason about retention, scope, and visibility.
    25 cases / 705 assertions, including long-term contract validation, fake
    async backend interface coverage, public `Fts5Backend` migration / scoped
    search / filtering / update / delete coverage, and `longterm::Runtime`
-   validation / deterministic recall-framing coverage.
+   validation / deterministic recall-framing coverage. `test-bootstrap` reports
+   107 cases / 784 assertions for the assembly and prompt-runner consumers.
 7. `bench/memory/search-fts5-vs-vector` (v2): reports the FTS5 baseline + vector
    results in machine-readable JSON.
 

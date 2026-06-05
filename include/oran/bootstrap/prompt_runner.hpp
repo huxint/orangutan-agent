@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <iosfwd>
 #include <memory>
@@ -25,6 +26,13 @@ class Config;
 namespace orangutan::bootstrap {
 
 class RuntimeAssembly;
+
+struct LongtermRecallOptions {
+  bool enabled{false};
+  std::size_t limit{5};
+
+  friend bool operator==(const LongtermRecallOptions&, const LongtermRecallOptions&) = default;
+};
 
 struct AgentPromptRunnerOptions {
   asio::any_io_executor executor{};
@@ -52,6 +60,9 @@ struct AgentPromptRunnerOptions {
   /// directory means an empty catalog; when `skills_catalog` is non-empty this
   /// path is ignored so tests and embedders can provide exact section bytes.
   std::string skills_directory{};
+  /// Optional prompt-boundary long-term memory recall. Disabled by default so
+  /// embedders/config can opt in explicitly after choosing query policy.
+  LongtermRecallOptions longterm_recall{};
   std::string memory_framing{};
   /// Optional exact section-6 overlay bytes. Empty lets the selected
   /// `agents.<name>.prompt_overlay` value fill the section.

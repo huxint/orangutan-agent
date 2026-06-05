@@ -29,12 +29,13 @@ No SQLite involvement.
 
 The section-5 prompt memory bytes have a small public owner in `oran-memory`:
 `memory::FramingOwner` holds a `memory::Framing { section_text }` value and
-renders it at the runner boundary once per prompt. Today the value is supplied
-as already-materialized text; future long-term recall can populate the same
-value before the loop starts. `AgentPromptRunner` copies that rendered string
-into `RunTurnInputs::memory_framing`, so `agent::Loop` may rebuild
-`prompt::Builder` sections across provider/tool iterations without re-querying
-memory.
+renders it at the runner boundary once per prompt. Exact callers may still
+supply already-materialized text; slice 164 adds an opt-in
+`AgentPromptRunnerOptions::longterm_recall` path that populates the same value
+from recalled long-term records before the loop starts. `AgentPromptRunner`
+copies that rendered string into `RunTurnInputs::memory_framing`, so
+`agent::Loop` may rebuild `prompt::Builder` sections across provider/tool
+iterations without re-querying memory.
 
 Loop-local working state remains private to `agent::Loop`:
 
@@ -150,7 +151,7 @@ MEMORY.md mirror. v2 keeps that core and adds:
 - **Decay policy**: `memory-age` style decay is actually wired into the search pipeline
   this time; expired records receive lower BM25 weight before potentially being pruned.
 
-Status (slice 163): `include/oran/memory/longterm.hpp` now ships the public
+Status (slice 164): `include/oran/memory/longterm.hpp` now ships the public
 record/query/write shapes, reflection-backed `RecordKind`, `Backend` and
 `VectorBackend` traits, validation helpers for record keys, search limits,
 record metadata, and vector embeddings, plus `Fts5Backend` as the default
@@ -164,9 +165,12 @@ to a `Backend`, validates recall requests before dispatch, and renders stable
 Slice 163 wires `RuntimeAssembly` to own a separate
 `<workspace>/.orangutan/memory.db` pool, migrate `Fts5Backend`, expose
 `longterm_memory_backend()` / `longterm_memory_runtime()`, and enable that state
-only for configured-route bootstrap startup. It does **not** yet add config
-policy for recall queries, render recalled records into `AgentPromptRunner`, ship
-the gated sqlite-vec adapter, or perform hybrid ranking.
+only for configured-route bootstrap startup. Slice 164 adds an explicit
+`AgentPromptRunnerOptions::longterm_recall` opt-in that queries that runtime once
+at the prompt boundary and feeds the resulting deterministic framing into section
+5 before `agent::Loop`. It does **not** yet add config policy for recall queries,
+enable recall from ordinary `bootstrap::run`, ship the gated sqlite-vec adapter,
+or perform hybrid ranking.
 
 ```cpp
 // include/oran/memory/longterm.hpp

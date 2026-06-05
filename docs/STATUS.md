@@ -7,22 +7,32 @@
 
 ## Snapshot
 
-- **Slice:** 163 (`xmake run orangutan` reports slice 163)
+- **Slice:** 164 (`xmake run orangutan` reports slice 164)
 - **Last completed history:**
-  [`histories/2026-06/20260605-0948-memory-longterm-assembly.md`](histories/2026-06/20260605-0948-memory-longterm-assembly.md)
+  [`histories/2026-06/20260605-1003-memory-longterm-prompt-recall.md`](histories/2026-06/20260605-1003-memory-longterm-prompt-recall.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 163 wires long-term memory into
+- **Latest completed slice:** slice 164 wires opt-in long-term recall into
+  `AgentPromptRunner`: `AgentPromptRunnerOptions::longterm_recall` defaults
+  disabled, requires a positive limit plus an assembly-owned
+  `memory::longterm::Runtime`, rejects exact `memory_framing` overrides, derives
+  a prompt-boundary query from the current user prompt and stable scope key, and
+  renders section 5 once from returned record-only `memory::Framing` bytes before
+  `agent::Loop`. Ordinary `bootstrap::run` does not enable recall yet, so
+  configured-route production prompts remain unchanged until config policy maps
+  into the option. Focused result: `test-bootstrap` **107 cases / 784 assertions**.
+- **Next intended slice:** no active plan; pick a small remaining tracker item
+  after re-orienting, likely config/query policy that maps into
+  `longterm_recall`, the gated `sqlite-vec` adapter, memory tools, or another
+  small tracked item.
+
+Slice 163 wires long-term memory into
   `RuntimeAssembly`: configured-route startup now opens and migrates a separate
   `<workspace>/.orangutan/memory.db`, owns `memory::longterm::Fts5Backend` plus
   `memory::longterm::Runtime`, exposes `longterm_memory_backend()` /
   `longterm_memory_runtime()` / path/status accessors, and keeps built-in
   no-provider startup disabled so fresh CLI runs do not create memory state.
   Focused result: `test-bootstrap` **104 cases / 756 assertions**.
-- **Next intended slice:** no active plan; pick a small remaining tracker item
-  after re-orienting, likely config policy + prompt-boundary recall wiring on
-  top of the assembly-owned `longterm::Runtime`, the gated `sqlite-vec` adapter,
-  or another small tracked item.
 
 Slice 162 lands the first long-term memory
   runtime composition layer: `memory::longterm::Runtime` wraps a lexical
@@ -303,11 +313,11 @@ Slice 158 closes the P3 hook multi-sink payload
   / 477 assertions**.
   Slice 133 finished the memory runtime v1 plan by adding
   `memory::FramingOwner` as the minimal once-per-turn section-5 owner. It keeps
-  `prompt::Builder` unchanged, lets future long-term recall fill the same
-  `memory::Framing` value, and has `AgentPromptRunner` render the memory slot
-  once before `agent::Loop` even when the provider/tool path needs multiple
-  iterations. Focused result: `test-memory` **8 cases / 559 assertions** and
-  `test-bootstrap` **83 cases / 464 assertions**.
+  `prompt::Builder` unchanged, and slice 164 now uses the same `memory::Framing`
+  value from an opt-in `AgentPromptRunnerOptions::longterm_recall` path at the
+  prompt boundary before `agent::Loop` starts, even when the provider/tool path
+  needs multiple iterations. Focused result: `test-memory` **8 cases / 559
+  assertions** and `test-bootstrap` **83 cases / 464 assertions**.
   Slice 132 landed `AgentPromptRunner` load/append persistence through
   `RuntimeAssembly::session_store()` before each prompt and kept the previous
   in-process transcript behavior as the fallback when session memory is
@@ -1587,8 +1597,9 @@ Closed entries do *not* live here — the tracker is canonical.
   slice 159 closed the P3 `Runtime::Impl::run()` clarification item, slice 160
   closed the vector backend trait half of the P3 memory follow-up, slice 161
   closed the default FTS5 lexical backend half, slice 162 closed the first
-  long-term runtime recall composition half, and slice 163 closed bootstrap
-  assembly ownership for the default long-term memory DB/backend/runtime.
+  long-term runtime recall composition half, slice 163 closed bootstrap
+  assembly ownership for the default long-term memory DB/backend/runtime, and
+  slice 164 closed the opt-in prompt-boundary recall rendering path.
   Remaining follow-ups are grouped P1/P2/P3 in the tracker.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on
