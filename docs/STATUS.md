@@ -7,24 +7,32 @@
 
 ## Snapshot
 
-- **Slice:** 164 (`xmake run orangutan` reports slice 164)
+- **Slice:** 165 (`xmake run orangutan` reports slice 165)
 - **Last completed history:**
-  [`histories/2026-06/20260605-1003-memory-longterm-prompt-recall.md`](histories/2026-06/20260605-1003-memory-longterm-prompt-recall.md)
+  [`histories/2026-06/20260605-1127-memory-longterm-config-recall.md`](histories/2026-06/20260605-1127-memory-longterm-config-recall.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 164 wires opt-in long-term recall into
+- **Latest completed slice:** slice 165 gives ordinary configured-route startup
+  a typed long-term recall policy: `oran-config` parses
+  `memory.longterm.recall.enabled` plus positive `limit`, warns or fails on
+  unknown nested memory fields through the existing strict-config path, and
+  `bootstrap::run` maps that policy into
+  `AgentPromptRunnerOptions::longterm_recall` after building the provider-backed
+  runtime assembly. Defaults keep recall disabled and the binary still uses the
+  runner's prompt+scope query derivation when enabled. Focused results:
+  `test-config` **43 cases / 348 assertions** and `test-bootstrap`
+  **108 cases / 795 assertions**.
+- **Next intended slice:** no active plan; pick a small remaining tracker item
+  after re-orienting, likely the gated `sqlite-vec` adapter, memory tools,
+  richer recall query/ranking policy, or another small tracked item.
+
+Slice 164 wires opt-in long-term recall into
   `AgentPromptRunner`: `AgentPromptRunnerOptions::longterm_recall` defaults
   disabled, requires a positive limit plus an assembly-owned
   `memory::longterm::Runtime`, rejects exact `memory_framing` overrides, derives
   a prompt-boundary query from the current user prompt and stable scope key, and
   renders section 5 once from returned record-only `memory::Framing` bytes before
-  `agent::Loop`. Ordinary `bootstrap::run` does not enable recall yet, so
-  configured-route production prompts remain unchanged until config policy maps
-  into the option. Focused result: `test-bootstrap` **107 cases / 784 assertions**.
-- **Next intended slice:** no active plan; pick a small remaining tracker item
-  after re-orienting, likely config/query policy that maps into
-  `longterm_recall`, the gated `sqlite-vec` adapter, memory tools, or another
-  small tracked item.
+  `agent::Loop`. Focused result: `test-bootstrap` **107 cases / 784 assertions**.
 
 Slice 163 wires long-term memory into
   `RuntimeAssembly`: configured-route startup now opens and migrates a separate
@@ -1549,7 +1557,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-http`: 3 cases / 21 assertions.
 - `oran-io`: 54 cases / 311 assertions.
 - `oran-storage`: 76 cases / 986 assertions.
-- `oran-config`: 40 cases / 322 assertions.
+- `oran-config`: 43 cases / 348 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 34 cases / 243 assertions.
 - `oran-memory`: 25 cases / 705 assertions.
@@ -1559,7 +1567,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 101 cases / 711 assertions.
+- `oran-bootstrap`: 108 cases / 795 assertions.
 
 ## Open Tech-Debt Rows
 
@@ -1598,8 +1606,9 @@ Closed entries do *not* live here — the tracker is canonical.
   closed the vector backend trait half of the P3 memory follow-up, slice 161
   closed the default FTS5 lexical backend half, slice 162 closed the first
   long-term runtime recall composition half, slice 163 closed bootstrap
-  assembly ownership for the default long-term memory DB/backend/runtime, and
-  slice 164 closed the opt-in prompt-boundary recall rendering path.
+  assembly ownership for the default long-term memory DB/backend/runtime,
+  slice 164 closed the opt-in prompt-boundary recall rendering path, and
+  slice 165 closed the configured-route recall policy mapping.
   Remaining follow-ups are grouped P1/P2/P3 in the tracker.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on

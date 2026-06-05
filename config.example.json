@@ -86,7 +86,14 @@
   "hooks": {
     "timeout_ms": 2000
   },
-  "memory": {},
+  "memory": {
+    "longterm": {
+      "recall": {
+        "enabled": false,
+        "limit": 5
+      }
+    }
+  },
   "automation": {},
   "web": {
     "enabled": false,

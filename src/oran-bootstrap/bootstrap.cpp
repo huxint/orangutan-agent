@@ -9,6 +9,7 @@
 #include <exception>
 #include <expected>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <print>
@@ -44,7 +45,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice164";
+constexpr std::string_view kVersion = "2.0.0-slice165";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 constexpr std::int64_t kNanosecondsPerDay = 86'400'000'000'000;
@@ -77,6 +78,19 @@ struct ParsedArgs {
     return 0;
   }
   return now_ns - (retention_days * kNanosecondsPerDay);
+}
+
+[[nodiscard]] Result<LongtermRecallOptions> longterm_recall_options_from(const config::Config& cfg) {
+  const auto& recall = cfg.memory().longterm.recall;
+  if (static_cast<std::uint64_t>(recall.limit) > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+    return std::unexpected(Error::config("memory.longterm.recall.limit exceeds platform size range")
+                               .with("path", "$.memory.longterm.recall.limit")
+                               .with("value", std::to_string(recall.limit)));
+  }
+  return LongtermRecallOptions{
+      .enabled = recall.enabled,
+      .limit = static_cast<std::size_t>(recall.limit),
+  };
 }
 
 /// Pull the value following a long flag — supports both `--flag value` and
@@ -850,6 +864,11 @@ core::Result<int> run(BootstrapOptions options) {
     return std::unexpected(std::move(provider_backend).error());
   }
 
+  auto longterm_recall = longterm_recall_options_from(loaded->value);
+  if (!longterm_recall) {
+    return std::unexpected(std::move(longterm_recall.error()));
+  }
+
   auto runner = AgentPromptRunner::create(AgentPromptRunnerOptions{
       .executor = runtime.executor(),
       .assembly = &*assembly,
@@ -865,6 +884,7 @@ core::Result<int> run(BootstrapOptions options) {
       .identity = "terminal",
       .origin = "cli",
       .skills_directory = default_skills_directory(options.workspace),
+      .longterm_recall = *longterm_recall,
       .max_tokens = 1024,
   });
   if (!runner) {

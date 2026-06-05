@@ -128,6 +128,25 @@ struct HooksConfig {
   friend bool operator==(const HooksConfig&, const HooksConfig&) = default;
 };
 
+struct LongtermMemoryRecallConfig {
+  bool enabled{false};
+  std::int64_t limit{5};
+
+  friend bool operator==(const LongtermMemoryRecallConfig&, const LongtermMemoryRecallConfig&) = default;
+};
+
+struct LongtermMemoryConfig {
+  LongtermMemoryRecallConfig recall{};
+
+  friend bool operator==(const LongtermMemoryConfig&, const LongtermMemoryConfig&) = default;
+};
+
+struct MemoryConfig {
+  LongtermMemoryConfig longterm{};
+
+  friend bool operator==(const MemoryConfig&, const MemoryConfig&) = default;
+};
+
 /// Verdict spelling that appears in `config.permissions.{allow,deny,ask}`.
 /// Mirrors `permission::Verdict` but stays inside `oran-config` because the
 /// dependency direction (config below permission) forbids importing the
@@ -222,8 +241,9 @@ struct AgentConfig {
 struct LoadOptions {
   /// When enabled, unknown fields are rejected at the root plus typed nested
   /// config sections that already have a model (`profiles`, `pricing`,
-  /// `routes`, `hooks`, `permissions`, `workspace`, and `agents`). Loose mode
-  /// preserves them as `ConfigWarning` rows and otherwise ignores them.
+  /// `routes`, `hooks`, `memory`, `permissions`, `workspace`, and `agents`).
+  /// Loose mode preserves them as `ConfigWarning` rows and otherwise ignores
+  /// them.
   bool strict_unknown_fields{false};
 
   /// Hard cap on `load_file` size. The loader rejects files larger than this
@@ -263,6 +283,9 @@ public:
   [[nodiscard]] const HooksConfig& hooks() const noexcept {
     return hooks_;
   }
+  [[nodiscard]] const MemoryConfig& memory() const noexcept {
+    return memory_;
+  }
   [[nodiscard]] const PermissionsConfig& permissions() const noexcept {
     return permissions_;
   }
@@ -282,6 +305,7 @@ private:
   WebConfig web_{};
   TraceConfig trace_{};
   HooksConfig hooks_{};
+  MemoryConfig memory_{};
   PermissionsConfig permissions_{};
   std::vector<AgentConfig> agents_{};
   std::vector<ConfigWarning> warnings_{};

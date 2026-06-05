@@ -66,6 +66,19 @@ constexpr auto kRecognizedHookFields = std::array<std::string_view, 3>{
     "bindings",
 };
 
+constexpr auto kRecognizedMemoryFields = std::array<std::string_view, 1>{
+    "longterm",
+};
+
+constexpr auto kRecognizedLongtermMemoryFields = std::array<std::string_view, 1>{
+    "recall",
+};
+
+constexpr auto kRecognizedLongtermRecallFields = std::array<std::string_view, 2>{
+    "enabled",
+    "limit",
+};
+
 constexpr auto kRecognizedProfileFields = std::array<std::string_view, 6>{
     "provider",
     "protocol",
@@ -614,6 +627,103 @@ parse_non_empty_string_array(const json& value, std::string_view path, std::stri
   }
 
   return hooks;
+}
+
+[[nodiscard]] Result<LongtermMemoryRecallConfig>
+parse_longterm_recall(const json& longterm, bool strict, std::vector<ConfigWarning>& warnings) {
+  auto recall = LongtermMemoryRecallConfig{};
+  const auto it = longterm.find("recall");
+  if (it == longterm.end()) {
+    return recall;
+  }
+  auto object = require_object(*it, "$.memory.longterm.recall");
+  if (!object) {
+    return std::unexpected(std::move(object.error()));
+  }
+
+  if (const auto enabled = it->find("enabled"); enabled != it->end()) {
+    if (!enabled->is_boolean()) {
+      return std::unexpected(config_error("expected boolean", "$.memory.longterm.recall.enabled"));
+    }
+    recall.enabled = enabled->get<bool>();
+  }
+
+  if (const auto limit = it->find("limit"); limit != it->end()) {
+    auto parsed = positive_integer_value(*limit, "$.memory.longterm.recall.limit");
+    if (!parsed) {
+      return std::unexpected(std::move(parsed.error()));
+    }
+    recall.limit = *parsed;
+  }
+
+  auto unknowns = collect_unknown_object_fields(*it,
+                                                "$.memory.longterm.recall",
+                                                kRecognizedLongtermRecallFields,
+                                                "unknown long-term memory recall field",
+                                                strict,
+                                                warnings);
+  if (!unknowns) {
+    return std::unexpected(std::move(unknowns.error()));
+  }
+
+  return recall;
+}
+
+[[nodiscard]] Result<LongtermMemoryConfig>
+parse_longterm_memory(const json& memory, bool strict, std::vector<ConfigWarning>& warnings) {
+  auto longterm = LongtermMemoryConfig{};
+  const auto it = memory.find("longterm");
+  if (it == memory.end()) {
+    return longterm;
+  }
+  auto object = require_object(*it, "$.memory.longterm");
+  if (!object) {
+    return std::unexpected(std::move(object.error()));
+  }
+
+  auto recall = parse_longterm_recall(*it, strict, warnings);
+  if (!recall) {
+    return std::unexpected(std::move(recall.error()));
+  }
+  longterm.recall = *recall;
+
+  auto unknowns = collect_unknown_object_fields(*it,
+                                                "$.memory.longterm",
+                                                kRecognizedLongtermMemoryFields,
+                                                "unknown long-term memory field",
+                                                strict,
+                                                warnings);
+  if (!unknowns) {
+    return std::unexpected(std::move(unknowns.error()));
+  }
+
+  return longterm;
+}
+
+[[nodiscard]] Result<MemoryConfig> parse_memory(const json& root, bool strict, std::vector<ConfigWarning>& warnings) {
+  auto memory = MemoryConfig{};
+  const auto it = root.find("memory");
+  if (it == root.end()) {
+    return memory;
+  }
+  auto object = require_object(*it, "$.memory");
+  if (!object) {
+    return std::unexpected(std::move(object.error()));
+  }
+
+  auto longterm = parse_longterm_memory(*it, strict, warnings);
+  if (!longterm) {
+    return std::unexpected(std::move(longterm.error()));
+  }
+  memory.longterm = *longterm;
+
+  auto unknowns =
+      collect_unknown_object_fields(*it, "$.memory", kRecognizedMemoryFields, "unknown memory field", strict, warnings);
+  if (!unknowns) {
+    return std::unexpected(std::move(unknowns.error()));
+  }
+
+  return memory;
 }
 
 [[nodiscard]] Result<void>
@@ -1250,6 +1360,10 @@ core::Result<Config> Config::parse(std::string_view contents, LoadOptions option
     if (!hooks) {
       return std::unexpected(std::move(hooks.error()));
     }
+    auto memory = parse_memory(root, strict_effective, warnings);
+    if (!memory) {
+      return std::unexpected(std::move(memory.error()));
+    }
     auto permissions = parse_root_permissions(root, strict_effective, warnings);
     if (!permissions) {
       return std::unexpected(std::move(permissions.error()));
@@ -1268,6 +1382,7 @@ core::Result<Config> Config::parse(std::string_view contents, LoadOptions option
     config.web_ = std::move(*web);
     config.trace_ = std::move(*trace);
     config.hooks_ = std::move(*hooks);
+    config.memory_ = *memory;
     config.permissions_ = std::move(*permissions);
     config.agents_ = std::move(*agents);
     config.warnings_ = std::move(warnings);

@@ -175,8 +175,11 @@ exact `AgentPromptRunnerOptions::memory_framing` override. The runner derives a
 `longterm::Query` from the current prompt plus its stable `scope_key`, calls
 `Runtime::recall(...)` once before the user prompt enters the conversation tail,
 then renders section 5 from the returned records. Multi-iteration provider/tool
-loops reuse those same bytes for the turn. Ordinary `bootstrap::run` does not
-enable this option yet; config policy remains downstream.
+loops reuse those same bytes for the turn. Slice 165 adds the ordinary
+configured-route policy source: `memory.longterm.recall.enabled` and
+`memory.longterm.recall.limit` parse through `oran-config`, default to disabled
+and `5`, and `bootstrap::run` maps them into the runner option after building
+the provider-backed runtime assembly.
 When the caller
 selects an `AgentPromptRunnerOptions::agent_config_name` (or leaves it empty
 and selects `permission_agent_name`), the runner reads that `agents.<name>`

@@ -91,6 +91,14 @@ constexpr auto kMinimalConfig = R"json(
   "hooks": {
     "timeout_ms": 1234
   },
+  "memory": {
+    "longterm": {
+      "recall": {
+        "enabled": true,
+        "limit": 3
+      }
+    }
+  },
   "profiles": {
     "default": {
       "provider": "openai",
@@ -159,6 +167,8 @@ TEST_CASE("Config::parse returns typed config values", "[unit][config]") {
   REQUIRE(result->trace().store_raw_bodies);
   REQUIRE(result->trace().retention_days == 14);
   REQUIRE(result->hooks().timeout_ms == 1234);
+  REQUIRE(result->memory().longterm.recall.enabled);
+  REQUIRE(result->memory().longterm.recall.limit == 3);
 
   REQUIRE(result->profiles().size() == 1);
   REQUIRE(result->profiles()[0].name == "default");
@@ -344,6 +354,24 @@ TEST_CASE("Config::parse warns or fails on unknown nested provider and hook fiel
     REQUIRE(result->warnings()[0].message == "unknown hook field");
   }
 
+  SECTION("unknown memory recall field warns in loose mode") {
+    auto result = config::Config::parse(R"json({
+  "memory": {
+    "longterm": {
+      "recall": {
+        "enabled": true,
+        "query_strategy": "prompt_text"
+      }
+    }
+  }
+})json");
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->warnings().size() == 1);
+    REQUIRE(result->warnings()[0].path == "$.memory.longterm.recall.query_strategy");
+    REQUIRE(result->warnings()[0].message == "unknown long-term memory recall field");
+  }
+
   SECTION("reserved hook sink and binding fields stay accepted until typed models land") {
     auto result = config::Config::parse(R"json({
   "hooks": {
@@ -391,6 +419,23 @@ TEST_CASE("Config::parse warns or fails on unknown nested provider and hook fiel
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }
+
+  SECTION("unknown memory field fails under strict load option") {
+    auto result = config::Config::parse(R"json({
+  "memory": {
+    "longterm": {
+      "recall": {
+        "enabled": true,
+        "query_strategy": "prompt_text"
+      }
+    }
+  }
+})json",
+                                        config::LoadOptions{.strict_unknown_fields = true});
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
 }
 
 TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][config]") {
@@ -421,6 +466,8 @@ TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][con
   REQUIRE_FALSE(result->trace().store_raw_bodies);
   REQUIRE(result->trace().retention_days == 30);
   REQUIRE(result->hooks().timeout_ms == 2000);
+  REQUIRE_FALSE(result->memory().longterm.recall.enabled);
+  REQUIRE(result->memory().longterm.recall.limit == 5);
 
   // The example config now carries a non-empty permissions block + one
   // example agent overlay so the file documents the new schema.
@@ -711,6 +758,63 @@ TEST_CASE("Config::parse extracts hook policy", "[unit][config][hooks]") {
 
   REQUIRE(result.has_value());
   REQUIRE(result->hooks().timeout_ms == 75);
+}
+
+TEST_CASE("Config::parse extracts memory recall policy", "[unit][config][memory]") {
+  auto result = config::Config::parse(R"json({
+  "memory": {
+    "longterm": {
+      "recall": {
+        "enabled": true,
+        "limit": 7
+      }
+    }
+  }
+})json");
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->memory().longterm.recall.enabled);
+  REQUIRE(result->memory().longterm.recall.limit == 7);
+}
+
+TEST_CASE("Config::parse defaults memory recall policy when absent", "[unit][config][memory]") {
+  auto result = config::Config::parse(R"json({"memory": {}})json");
+
+  REQUIRE(result.has_value());
+  REQUIRE_FALSE(result->memory().longterm.recall.enabled);
+  REQUIRE(result->memory().longterm.recall.limit == 5);
+}
+
+TEST_CASE("Config::parse rejects malformed memory recall policy", "[unit][config][memory]") {
+  SECTION("non-object memory block") {
+    auto result = config::Config::parse(R"json({"memory": []})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-object longterm block") {
+    auto result = config::Config::parse(R"json({"memory": {"longterm": []}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-object recall block") {
+    auto result = config::Config::parse(R"json({"memory": {"longterm": {"recall": []}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-boolean enabled") {
+    auto result = config::Config::parse(R"json({"memory": {"longterm": {"recall": {"enabled": "yes"}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("zero limit") {
+    auto result = config::Config::parse(R"json({"memory": {"longterm": {"recall": {"limit": 0}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
 }
 
 TEST_CASE("Config::parse rejects malformed hook policy", "[unit][config][hooks]") {
