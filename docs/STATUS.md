@@ -7,24 +7,35 @@
 
 ## Snapshot
 
-- **Slice:** 171 (`xmake run orangutan` reports slice 171)
+- **Slice:** 172 (`xmake run orangutan` reports slice 172)
 - **Last completed history:**
-  [`histories/2026-06/20260605-1718-longterm-fts5-bench.md`](histories/2026-06/20260605-1718-longterm-fts5-bench.md)
+  [`histories/2026-06/20260605-2027-longterm-hybrid-runtime.md`](histories/2026-06/20260605-2027-longterm-hybrid-runtime.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 171 adds the first 10k-record long-term
-  memory search baseline. `bench-memory` now seeds a synthetic FTS5 corpus once
-  and measures `memory::longterm::Runtime::search("react agent loop", limit=10)`
-  through the default `Fts5Backend`, with scenario-local nanobench settings so
-  the expensive search path stays practical to run. Local focused result:
+- **Latest completed slice:** slice 172 adds the first long-term hybrid search
+  composition contract. `<oran/memory/longterm.hpp>` now exposes
+  `HybridSearchRequest` plus `HybridRuntime`, which validates one lexical
+  `Query`, one `VectorEmbedding`, per-backend limits, a result limit, and
+  non-negative weights; searches a lexical `Backend` and `VectorBackend`;
+  hydrates vector-only keys through `Backend::get`; ignores stale vector rows
+  whose records are missing; and returns deterministic weighted `SearchHit`
+  rows with populated lexical/vector score components. `HybridRuntime::recall`
+  reuses the existing deterministic recall framing renderer. Focused result:
+  `test-memory` **31 cases / 756 assertions**.
+- **Next intended slice:** no active plan; the library-local hybrid contract is
+  in place, so the next small memory slice can start the gated `sqlite-vec`
+  adapter under `--vector_memory=y` or add the first vector-vs-FTS5 corpus
+  comparison that calls `HybridRuntime`.
+
+Slice 171 adds the first 10k-record long-term memory search baseline.
+  `bench-memory` now seeds a synthetic FTS5 corpus once and measures
+  `memory::longterm::Runtime::search("react agent loop", limit=10)` through the
+  default `Fts5Backend`, with scenario-local nanobench settings so the
+  expensive search path stays practical to run. Local focused result:
   `memory.longterm_fts5_search_10k_limit10` **~15.08 ms / batch** after
   `xmake build bench-memory && xmake run bench-memory`; the session memory
   comparison in the same run reported **~887.2 us** raw repository append/load
   vs. **~1041.3 us** typed store append/load.
-- **Next intended slice:** no active plan; the measured FTS5 baseline is in
-  place, so the next small memory slice can start the gated `sqlite-vec`
-  adapter under `--vector_memory=y` or the first hybrid/vector composition
-  contract.
 
 Slice 170 adds the delete-side long-term memory
   tool. `oran-tool` registers deferred `memory.forget` with `write_memory`
@@ -1690,8 +1701,9 @@ Closed entries do *not* live here — the tracker is canonical.
   closed the delete-side long-term memory tool by wiring deferred
   `memory.forget` through the same permissioned dispatch path. Slice 171 added
   the 10k-record FTS5 `longterm::Runtime::search` bench baseline for the P3
-  measure-first memory path. Remaining follow-ups are grouped P1/P2/P3 in the
-  tracker.
+  measure-first memory path. Slice 172 closed the first hybrid/vector
+  composition contract by adding `memory::longterm::HybridRuntime`; remaining
+  follow-ups are grouped P1/P2/P3 in the tracker.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on
   the documented reference hardware (8-core / NVMe / native Linux);

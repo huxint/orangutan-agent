@@ -76,6 +76,14 @@ template <typename T>
   return {};
 }
 
+[[nodiscard]] core::Result<void> validate_weight(double weight, std::string field) {
+  if (!std::isfinite(weight) || weight < 0.0) {
+    return std::unexpected(
+        invalid_field(std::move(field), "long-term memory hybrid search weights must be finite and non-negative"));
+  }
+  return {};
+}
+
 }  // namespace
 
 core::Result<void> validate_key(const RecordKey& key) {
@@ -172,6 +180,31 @@ core::Result<void> validate_vector_search_query(const VectorSearchQuery& query, 
 
 core::Result<void> validate_vector_remove(const VectorRemoveRequest& request) {
   return validate_key(request.key);
+}
+
+core::Result<void> validate_hybrid_search_request(const HybridSearchRequest& request) {
+  if (auto valid = validate_query(request.query, request.lexical_limit); !valid) {
+    return valid;
+  }
+  if (auto valid = validate_embedding(request.embedding); !valid) {
+    return valid;
+  }
+  if (auto valid = validate_limit(request.vector_limit); !valid) {
+    return valid;
+  }
+  if (auto valid = validate_limit(request.result_limit); !valid) {
+    return valid;
+  }
+  if (auto valid = validate_weight(request.lexical_weight, "lexical_weight"); !valid) {
+    return valid;
+  }
+  if (auto valid = validate_weight(request.vector_weight, "vector_weight"); !valid) {
+    return valid;
+  }
+  if (request.lexical_weight == 0.0 && request.vector_weight == 0.0) {
+    return std::unexpected(invalid_field("weights", "long-term memory hybrid search requires a non-zero weight"));
+  }
+  return {};
 }
 
 }  // namespace orangutan::memory::longterm

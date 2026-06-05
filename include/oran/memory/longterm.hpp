@@ -133,6 +133,18 @@ struct VectorRemoveRequest {
   friend bool operator==(const VectorRemoveRequest&, const VectorRemoveRequest&) = default;
 };
 
+struct HybridSearchRequest {
+  Query query;
+  VectorEmbedding embedding;
+  std::size_t lexical_limit{0};
+  std::size_t vector_limit{0};
+  std::size_t result_limit{0};
+  double lexical_weight{1.0};
+  double vector_weight{1.0};
+
+  friend bool operator==(const HybridSearchRequest&, const HybridSearchRequest&) = default;
+};
+
 class Backend {
 public:
   Backend() = default;
@@ -210,6 +222,26 @@ private:
   Backend* backend_{};
 };
 
+/// Long-term memory hybrid search composition.
+///
+/// `HybridRuntime` is the first runtime contract for combining the default
+/// lexical record store with an optional vector index. It does not own either
+/// backend: vector-only hits are hydrated through the lexical `Backend::get`
+/// path, stale vector rows with no record are ignored, and returned
+/// `SearchHit::score` is the deterministic weighted sum of present lexical and
+/// vector scores.
+class HybridRuntime {
+public:
+  HybridRuntime(Backend& lexical_backend, VectorBackend& vector_backend) noexcept;
+
+  [[nodiscard]] async::Awaitable<core::Result<std::vector<SearchHit>>> search(HybridSearchRequest request);
+  [[nodiscard]] async::Awaitable<core::Result<RecallResult>> recall(HybridSearchRequest request);
+
+private:
+  Backend* lexical_backend_{};
+  VectorBackend* vector_backend_{};
+};
+
 [[nodiscard]] Framing render_recall_framing(std::span<const SearchHit> hits);
 [[nodiscard]] std::string render_recall_data_json(std::span<const SearchHit> hits);
 [[nodiscard]] std::string render_remember_data_json(const Record& record);
@@ -223,6 +255,7 @@ private:
 [[nodiscard]] core::Result<void> validate_vector_upsert(const VectorUpsert& request);
 [[nodiscard]] core::Result<void> validate_vector_search_query(const VectorSearchQuery& query, std::size_t limit);
 [[nodiscard]] core::Result<void> validate_vector_remove(const VectorRemoveRequest& request);
+[[nodiscard]] core::Result<void> validate_hybrid_search_request(const HybridSearchRequest& request);
 
 }  // namespace orangutan::memory::longterm
 

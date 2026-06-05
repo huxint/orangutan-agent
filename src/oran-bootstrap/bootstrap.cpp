@@ -46,7 +46,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice171";
+constexpr std::string_view kVersion = "2.0.0-slice172";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 constexpr std::int64_t kNanosecondsPerDay = 86'400'000'000'000;

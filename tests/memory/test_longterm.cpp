@@ -1,5 +1,6 @@
 // tests/memory/test_longterm.cpp — long-term memory contract coverage.
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -103,25 +104,44 @@ memory::longterm::VectorEmbedding make_embedding() {
   };
 }
 
+[[nodiscard]] bool same_key(const memory::longterm::RecordKey& lhs, const memory::longterm::RecordKey& rhs) noexcept {
+  return lhs.id == rhs.id && lhs.scope_key == rhs.scope_key;
+}
+
 class FakeBackend final : public memory::longterm::Backend {
 public:
   explicit FakeBackend(memory::longterm::Record record)
-      : record_{std::move(record)}, hits_{memory::longterm::SearchHit{
-                                        .record = record_,
-                                        .score = 0.9,
-                                        .lexical_score = 0.8,
-                                        .vector_score = 0.7,
-                                    }} {}
+      : FakeBackend{std::vector<memory::longterm::SearchHit>{memory::longterm::SearchHit{
+            .record = record,
+            .score = 0.9,
+            .lexical_score = 0.8,
+            .vector_score = 0.7,
+        }}} {}
 
-  explicit FakeBackend(std::vector<memory::longterm::SearchHit> hits) : hits_{std::move(hits)} {
-    if (!hits_.empty()) {
-      record_ = hits_.front().record;
+  explicit FakeBackend(std::vector<memory::longterm::SearchHit> hits) : FakeBackend{std::move(hits), {}} {}
+
+  FakeBackend(std::vector<memory::longterm::SearchHit> hits, std::vector<memory::longterm::Record> records)
+      : hits_{std::move(hits)}, records_{std::move(records)} {
+    for (const auto& hit : hits_) {
+      auto existing = std::ranges::find_if(records_, [&hit](const memory::longterm::Record& record) {
+        return same_key(record.key, hit.record.key);
+      });
+      if (existing == records_.end()) {
+        records_.push_back(hit.record);
+      }
     }
   }
 
   [[nodiscard]] async::Awaitable<core::Result<memory::longterm::Record>> get(memory::longterm::RecordKey key) override {
+    ++get_calls;
     last_key = std::move(key);
-    co_return record_;
+    auto record = std::ranges::find_if(records_, [this](const memory::longterm::Record& candidate) {
+      return same_key(candidate.key, last_key);
+    });
+    if (record == records_.end()) {
+      co_return std::unexpected(core::Error::not_found("record not found"));
+    }
+    co_return *record;
   }
 
   [[nodiscard]] async::Awaitable<core::Result<std::vector<memory::longterm::SearchHit>>>
@@ -134,14 +154,22 @@ public:
 
   [[nodiscard]] async::Awaitable<core::Result<memory::longterm::Record>>
   upsert(memory::longterm::WriteRequest request) override {
-    record_ = std::move(request.record);
+    auto record = request.record;
+    auto existing = std::ranges::find_if(records_, [&record](const memory::longterm::Record& candidate) {
+      return same_key(candidate.key, record.key);
+    });
+    if (existing == records_.end()) {
+      records_.push_back(record);
+    } else {
+      *existing = record;
+    }
     hits_ = {memory::longterm::SearchHit{
-        .record = record_,
+        .record = record,
         .score = 0.9,
         .lexical_score = 0.8,
         .vector_score = std::nullopt,
     }};
-    co_return record_;
+    co_return record;
   }
 
   [[nodiscard]] async::Awaitable<core::Result<void>> remove(memory::longterm::RecordKey key) override {
@@ -153,14 +181,23 @@ public:
   memory::longterm::Query last_query;
   std::size_t last_limit{};
   std::size_t search_calls{};
+  std::size_t get_calls{};
 
 private:
-  memory::longterm::Record record_;
   std::vector<memory::longterm::SearchHit> hits_;
+  std::vector<memory::longterm::Record> records_;
 };
 
 class FakeVectorBackend final : public memory::longterm::VectorBackend {
 public:
+  FakeVectorBackend()
+      : hits_{memory::longterm::VectorHit{
+            .key = memory::longterm::RecordKey{.id = "rec-1", .scope_key = "agent:coder"},
+            .score = 0.95,
+        }} {}
+
+  explicit FakeVectorBackend(std::vector<memory::longterm::VectorHit> hits) : hits_{std::move(hits)} {}
+
   [[nodiscard]] async::Awaitable<core::Result<void>> upsert(memory::longterm::VectorUpsert request) override {
     last_key = std::move(request.key);
     co_return core::Result<void>{};
@@ -168,12 +205,11 @@ public:
 
   [[nodiscard]] async::Awaitable<core::Result<std::vector<memory::longterm::VectorHit>>>
   search(memory::longterm::VectorSearchQuery query, std::size_t limit) override {
+    ++search_calls;
+    last_query = query;
     last_scope_key = std::move(query.scope_key);
     last_limit = limit;
-    co_return std::vector<memory::longterm::VectorHit>{memory::longterm::VectorHit{
-        .key = memory::longterm::RecordKey{.id = "rec-1", .scope_key = last_scope_key},
-        .score = 0.95,
-    }};
+    co_return hits_;
   }
 
   [[nodiscard]] async::Awaitable<core::Result<void>> remove(memory::longterm::VectorRemoveRequest request) override {
@@ -182,8 +218,13 @@ public:
   }
 
   memory::longterm::RecordKey last_key;
+  memory::longterm::VectorSearchQuery last_query;
   std::string last_scope_key;
   std::size_t last_limit{};
+  std::size_t search_calls{};
+
+private:
+  std::vector<memory::longterm::VectorHit> hits_;
 };
 
 }  // namespace
@@ -487,6 +528,151 @@ TEST_CASE("longterm vector backend interface composes through async contracts", 
         .key = memory::longterm::RecordKey{.id = "rec-1", .scope_key = "agent:coder"},
     });
     REQUIRE(removed.has_value());
+  });
+}
+
+TEST_CASE("longterm::HybridRuntime merges lexical and vector hits deterministically",
+          "[unit][memory][longterm][runtime]") {
+  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    auto lexical_record = make_record("rec-lexical",
+                                      "agent:coder",
+                                      memory::longterm::RecordKind::project,
+                                      "Lexical plan",
+                                      "The lexical backend matched the project plan.");
+    auto vector_record = make_record("rec-vector",
+                                     "agent:coder",
+                                     memory::longterm::RecordKind::project,
+                                     "Vector plan",
+                                     "The vector backend found a semantically close plan.");
+    auto stale_record = memory::longterm::RecordKey{.id = "rec-stale", .scope_key = "agent:coder"};
+
+    FakeBackend lexical{
+        std::vector<memory::longterm::SearchHit>{memory::longterm::SearchHit{
+            .record = lexical_record,
+            .score = 0.5,
+            .lexical_score = 0.5,
+            .vector_score = std::nullopt,
+        }},
+        std::vector<memory::longterm::Record>{vector_record},
+    };
+    FakeVectorBackend vector{
+        std::vector<memory::longterm::VectorHit>{
+            memory::longterm::VectorHit{.key = lexical_record.key, .score = 0.75},
+            memory::longterm::VectorHit{.key = vector_record.key, .score = 0.875},
+            memory::longterm::VectorHit{.key = stale_record, .score = 1.0},
+        },
+    };
+    memory::longterm::HybridRuntime runtime{lexical, vector};
+
+    auto hits = co_await runtime.search(memory::longterm::HybridSearchRequest{
+        .query =
+            memory::longterm::Query{
+                .scope_key = "agent:coder",
+                .text = "project plan",
+                .kinds = {memory::longterm::RecordKind::project},
+            },
+        .embedding = make_embedding(),
+        .lexical_limit = 2,
+        .vector_limit = 3,
+        .result_limit = 2,
+        .lexical_weight = 1.0,
+        .vector_weight = 2.0,
+    });
+
+    REQUIRE(hits.has_value());
+    REQUIRE(hits->size() == 2);
+    REQUIRE((*hits)[0].record.key.id == "rec-lexical");
+    REQUIRE((*hits)[0].lexical_score == 0.5);
+    REQUIRE((*hits)[0].vector_score == 0.75);
+    REQUIRE((*hits)[0].score == 2.0);
+    REQUIRE((*hits)[1].record.key.id == "rec-vector");
+    REQUIRE_FALSE((*hits)[1].lexical_score.has_value());
+    REQUIRE((*hits)[1].vector_score == 0.875);
+    REQUIRE((*hits)[1].score == 1.75);
+    REQUIRE(lexical.search_calls == 1);
+    REQUIRE(lexical.get_calls == 2);
+    REQUIRE(vector.search_calls == 1);
+    REQUIRE(vector.last_query.scope_key == "agent:coder");
+    REQUIRE(vector.last_query.kinds ==
+            std::vector<memory::longterm::RecordKind>{memory::longterm::RecordKind::project});
+    REQUIRE(vector.last_limit == 3);
+  });
+}
+
+TEST_CASE("longterm::HybridRuntime recalls with merged hybrid hits", "[unit][memory][longterm][runtime]") {
+  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    auto record = make_record("rec-vector",
+                              "agent:coder",
+                              memory::longterm::RecordKind::reference,
+                              "Hybrid recall",
+                              "Hybrid recall can render a vector-only record.");
+    FakeBackend lexical{std::vector<memory::longterm::SearchHit>{}, std::vector<memory::longterm::Record>{record}};
+    FakeVectorBackend vector{std::vector<memory::longterm::VectorHit>{
+        memory::longterm::VectorHit{.key = record.key, .score = 0.95},
+    }};
+    memory::longterm::HybridRuntime runtime{lexical, vector};
+
+    auto recalled = co_await runtime.recall(memory::longterm::HybridSearchRequest{
+        .query =
+            memory::longterm::Query{
+                .scope_key = "agent:coder",
+                .text = "semantic recall",
+                .kinds = {memory::longterm::RecordKind::reference},
+            },
+        .embedding = make_embedding(),
+        .lexical_limit = 1,
+        .vector_limit = 1,
+        .result_limit = 1,
+    });
+
+    REQUIRE(recalled.has_value());
+    REQUIRE(recalled->hits.size() == 1);
+    REQUIRE(recalled->hits[0].record.key.id == "rec-vector");
+    REQUIRE(recalled->framing.section_text.contains("Hybrid recall"));
+  });
+}
+
+TEST_CASE("longterm::HybridRuntime rejects invalid requests before backend dispatch",
+          "[unit][memory][longterm][runtime]") {
+  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    FakeBackend lexical{make_record()};
+    FakeVectorBackend vector;
+    memory::longterm::HybridRuntime runtime{lexical, vector};
+
+    auto result = co_await runtime.search(memory::longterm::HybridSearchRequest{
+        .query =
+            memory::longterm::Query{
+                .scope_key = "agent:coder",
+                .text = "",
+                .kinds = {},
+            },
+        .embedding = make_embedding(),
+        .lexical_limit = 1,
+        .vector_limit = 1,
+        .result_limit = 1,
+    });
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(lexical.search_calls == 0);
+    REQUIRE(vector.search_calls == 0);
+
+    auto bad_weight = memory::longterm::validate_hybrid_search_request(memory::longterm::HybridSearchRequest{
+        .query =
+            memory::longterm::Query{
+                .scope_key = "agent:coder",
+                .text = "project plan",
+                .kinds = {},
+            },
+        .embedding = make_embedding(),
+        .lexical_limit = 1,
+        .vector_limit = 1,
+        .result_limit = 1,
+        .lexical_weight = 0.0,
+        .vector_weight = 0.0,
+    });
+    REQUIRE_FALSE(bad_weight.has_value());
+    REQUIRE(bad_weight.error().kind() == core::ErrorKind::invalid_argument);
   });
 }
 

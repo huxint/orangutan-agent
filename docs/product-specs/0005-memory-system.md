@@ -89,6 +89,15 @@ operators can reason about retention, scope, and visibility.
   limit=10)` through the default `Fts5Backend`. The local slice run reported
   **~15.08 ms / batch**, below the 50 ms acceptance budget and ready for
   sqlite-vec / hybrid comparisons.
+- Hybrid search composition contract shipped in slice 172:
+  `memory::longterm::HybridSearchRequest` and `HybridRuntime` compose the
+  lexical `Backend` with any `VectorBackend` without adding an optional
+  dependency. The runtime validates text query, embedding, limits, and
+  non-negative weights; searches both backends; hydrates vector-only hits
+  through `Backend::get`; ignores stale vector rows with missing records; and
+  returns deterministic weighted `SearchHit` rows. `HybridRuntime::recall`
+  reuses the shipped recall framing renderer. The gated sqlite-vec adapter,
+  bootstrap/config wiring, and corpus benchmark comparison remain downstream.
 - Decay policy applied by a periodic job (`oran-automation`).
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
 - Hook events on read / write / forget / decay.
@@ -103,7 +112,8 @@ operators can reason about retention, scope, and visibility.
 
 - Gated sqlite-vec adapter under `--vector_memory=y` implementing the shipped
   `memory::longterm::VectorBackend` contract.
-- Hybrid search (FTS5 score + cosine).
+- Hybrid search policy/benching on top of the shipped `HybridRuntime`
+  composition contract.
 - Externalized embedding store via `oran-http::Client`.
 
 ## Out Of Scope
@@ -129,7 +139,9 @@ operators can reason about retention, scope, and visibility.
    read-only recall through the permissioned `memory.recall` tool. Slice 171
    adds the 10k-record FTS5 bench over `longterm::Runtime::search`, with a
    local result of **~15.08 ms / batch** for `limit=10`; keep the criterion open
-   until the gated vector/hybrid path reports the same corpus.
+   until the gated vector/hybrid path reports the same corpus. Slice 172 adds
+   the library-local `HybridRuntime` composition contract, but does not yet add
+   the gated vector backend or corpus comparison.
 3. The MEMORY.md mirror, when enabled, reflects all kinds + records within 1 s of the
    underlying DB write.
 4. Decay marks records older than `policy.forget_after_unused` as shadow; they no
@@ -137,11 +149,13 @@ operators can reason about retention, scope, and visibility.
 5. A `memory.write.before` hook can veto a write; the runtime returns
    `Error::HookVeto` to the caller.
 6. `tests/memory/` >= 85% coverage. **Status:** `test-memory` currently reports
-   28 cases / 727 assertions, including long-term contract validation, fake
+   31 cases / 756 assertions, including long-term contract validation, fake
    async backend interface coverage, public `Fts5Backend` migration / scoped
    search / filtering / update / delete coverage, and `longterm::Runtime`
    validation / deterministic recall-framing plus recall/remember/forget
-   `data_json` coverage.
+   `data_json` coverage. Slice 172 adds hybrid-runtime validation,
+   lexical/vector merge ordering, vector-only hydration, stale vector-row skip,
+   and recall-framing coverage.
    `test-config` reports
    44 cases / 369 assertions for the recall policy parser, and `test-bootstrap`
    reports 114 cases / 874 assertions for the assembly, prompt-runner, and
@@ -151,7 +165,8 @@ operators can reason about retention, scope, and visibility.
 7. `bench/memory/search-fts5-vs-vector` (v2): reports the FTS5 baseline + vector
    results in machine-readable JSON. **Status:** partially open; slice 171 adds
    the FTS5 baseline scenario under `bench/memory/scenarios/longterm_fts5.cpp`,
-   while sqlite-vec/vector and baseline JSON reporting remain downstream.
+   and slice 172 adds the hybrid composition contract the vector scenario will
+   call, while sqlite-vec/vector and baseline JSON reporting remain downstream.
 
 ## Design Doc Cross-References
 

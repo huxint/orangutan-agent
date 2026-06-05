@@ -156,7 +156,7 @@ MEMORY.md mirror. v2 keeps that core and adds:
 - **Decay policy**: `memory-age` style decay is actually wired into the search pipeline
   this time; expired records receive lower BM25 weight before potentially being pruned.
 
-Status (slice 171): `include/oran/memory/longterm.hpp` now ships the public
+Status (slice 172): `include/oran/memory/longterm.hpp` now ships the public
 record/query/write shapes, reflection-backed `RecordKind`, `Backend` and
 `VectorBackend` traits, validation helpers for record keys, search limits,
 record metadata, and vector embeddings, plus `Fts5Backend` as the default
@@ -199,7 +199,16 @@ idempotent `remove(...)`. Slice 171 adds the first 10k-record FTS5 search bench:
 `bench/memory/scenarios/longterm_fts5.cpp` seeds the default backend once and
 measures `longterm::Runtime::search("react agent loop", limit=10)` as the
 baseline future sqlite-vec and hybrid-ranking work must compare against. It does
-**not** yet ship the gated sqlite-vec adapter or hybrid ranking.
+**not** ship the gated sqlite-vec adapter. Slice 172 adds the first
+`longterm::HybridRuntime` composition contract: callers provide one lexical
+`Query`, one `VectorEmbedding`, per-backend limits, a result limit, and
+non-negative lexical/vector weights; the runtime validates the request, searches
+the lexical `Backend` and vector `VectorBackend`, hydrates vector-only keys
+through `Backend::get`, ignores stale vector rows whose records are missing,
+and returns deterministically sorted `SearchHit` rows with weighted combined
+scores plus populated lexical/vector score components. `HybridRuntime::recall`
+reuses the same stable recall framing renderer. Hybrid ranking policy and
+bootstrap/config wiring remain downstream.
 
 ```cpp
 // include/oran/memory/longterm.hpp
@@ -294,6 +303,30 @@ class Runtime {
 };
 ```
 
+`HybridRuntime` composes lexical records with a vector index without making
+`Fts5Backend` know about embeddings:
+
+```cpp
+struct HybridSearchRequest {
+  Query query;
+  VectorEmbedding embedding;
+  std::size_t lexical_limit;
+  std::size_t vector_limit;
+  std::size_t result_limit;
+  double lexical_weight = 1.0;
+  double vector_weight = 1.0;
+};
+
+class HybridRuntime {
+ public:
+  HybridRuntime(Backend& lexical_backend, VectorBackend& vector_backend);
+  async::Awaitable<core::Result<std::vector<SearchHit>>>
+    search(HybridSearchRequest request);
+  async::Awaitable<core::Result<RecallResult>>
+    recall(HybridSearchRequest request);
+};
+```
+
 Recall framing is deterministic prompt text. It contains no clocks, request ids,
 trace ids, or scores; it is a function of the returned memory records only. The
 current renderer emits one compact section headed `Long-term memory:` with
@@ -315,8 +348,9 @@ The shipped lexical backend is:
 
 Planned optional backends:
 
-- sqlite-vec adapter — optional under `--vector_memory=y`; future search hybrid
-  combines FTS5 score + vector cosine.
+- sqlite-vec adapter — optional under `--vector_memory=y`; it will implement
+  `VectorBackend` and feed `HybridRuntime` while keeping default builds free of
+  the optional dependency.
 - external vector adapter — optional embedding store via `oran-http::Client`.
 
 `bench/memory/` (see `docs/product-specs/0010-benchmark-harness.md`) now records the

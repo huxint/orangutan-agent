@@ -2,6 +2,7 @@
 
 #include <oran/memory/longterm.hpp>
 
+#include <algorithm>
 #include <expected>
 #include <format>
 #include <iterator>
@@ -14,6 +15,7 @@
 #include <nlohmann/json.hpp>
 
 #include <oran/core/enum_names.hpp>
+#include <oran/core/error.hpp>
 #include <oran/core/time.hpp>
 
 namespace orangutan::memory::longterm {
@@ -95,6 +97,46 @@ void append_string_list(std::string& out, std::string_view label, std::span<cons
   return out;
 }
 
+[[nodiscard]] bool same_key(const RecordKey& lhs, const RecordKey& rhs) noexcept {
+  return lhs.id == rhs.id && lhs.scope_key == rhs.scope_key;
+}
+
+[[nodiscard]] bool record_matches_query(const Record& record, const Query& query) {
+  if (record.key.scope_key != query.scope_key) {
+    return false;
+  }
+  if (record.shadow && !query.include_shadow) {
+    return false;
+  }
+  return query.kinds.empty() || std::ranges::contains(query.kinds, record.kind);
+}
+
+void recompute_hybrid_score(SearchHit& hit, double lexical_weight, double vector_weight) noexcept {
+  auto score = 0.0;
+  if (hit.lexical_score.has_value()) {
+    score += lexical_weight * *hit.lexical_score;
+  }
+  if (hit.vector_score.has_value()) {
+    score += vector_weight * *hit.vector_score;
+  }
+  hit.score = score;
+}
+
+void sort_and_cap_hits(std::vector<SearchHit>& hits, std::size_t limit) {
+  std::ranges::sort(hits, [](const SearchHit& lhs, const SearchHit& rhs) {
+    if (lhs.score != rhs.score) {
+      return lhs.score > rhs.score;
+    }
+    if (lhs.record.updated_at != rhs.record.updated_at) {
+      return lhs.record.updated_at > rhs.record.updated_at;
+    }
+    return lhs.record.key.id < rhs.record.key.id;
+  });
+  if (hits.size() > limit) {
+    hits.resize(limit);
+  }
+}
+
 }  // namespace
 
 Runtime::Runtime(Backend& backend) noexcept : backend_{&backend} {}
@@ -112,6 +154,89 @@ async::Awaitable<core::Result<std::vector<SearchHit>>> Runtime::search(Query que
 
 async::Awaitable<core::Result<RecallResult>> Runtime::recall(RecallRequest request) {
   auto hits = co_await search(std::move(request.query), request.limit);
+  if (!hits) {
+    co_return std::unexpected(std::move(hits).error());
+  }
+  auto framing = render_recall_framing(*hits);
+  co_return RecallResult{
+      .hits = std::move(*hits),
+      .framing = std::move(framing),
+  };
+}
+
+HybridRuntime::HybridRuntime(Backend& lexical_backend, VectorBackend& vector_backend) noexcept
+    : lexical_backend_{&lexical_backend}, vector_backend_{&vector_backend} {}
+
+async::Awaitable<core::Result<std::vector<SearchHit>>> HybridRuntime::search(HybridSearchRequest request) {
+  if (auto valid = validate_hybrid_search_request(request); !valid) {
+    co_return std::unexpected(std::move(valid).error());
+  }
+
+  auto lexical_hits = co_await lexical_backend_->search(request.query, request.lexical_limit);
+  if (!lexical_hits) {
+    co_return std::unexpected(std::move(lexical_hits).error());
+  }
+
+  auto vector_hits = co_await vector_backend_->search(
+      VectorSearchQuery{
+          .scope_key = request.query.scope_key,
+          .embedding = request.embedding,
+          .kinds = request.query.kinds,
+          .include_shadow = request.query.include_shadow,
+      },
+      request.vector_limit);
+  if (!vector_hits) {
+    co_return std::unexpected(std::move(vector_hits).error());
+  }
+
+  std::vector<SearchHit> combined;
+  combined.reserve(lexical_hits->size() + vector_hits->size());
+  for (auto hit : *lexical_hits) {
+    if (!hit.lexical_score.has_value()) {
+      hit.lexical_score = hit.score;
+    }
+    hit.vector_score = std::nullopt;
+    recompute_hybrid_score(hit, request.lexical_weight, request.vector_weight);
+    combined.push_back(std::move(hit));
+  }
+
+  for (const auto& vector_hit : *vector_hits) {
+    auto existing = std::ranges::find_if(combined, [&vector_hit](const SearchHit& hit) {
+      return same_key(hit.record.key, vector_hit.key);
+    });
+    if (existing != combined.end()) {
+      existing->vector_score = vector_hit.score;
+      recompute_hybrid_score(*existing, request.lexical_weight, request.vector_weight);
+      continue;
+    }
+
+    auto record = co_await lexical_backend_->get(vector_hit.key);
+    if (!record) {
+      if (record.error().kind() == core::ErrorKind::not_found) {
+        continue;
+      }
+      co_return std::unexpected(std::move(record).error());
+    }
+    if (!record_matches_query(*record, request.query)) {
+      continue;
+    }
+
+    auto hit = SearchHit{
+        .record = std::move(*record),
+        .score = 0.0,
+        .lexical_score = std::nullopt,
+        .vector_score = vector_hit.score,
+    };
+    recompute_hybrid_score(hit, request.lexical_weight, request.vector_weight);
+    combined.push_back(std::move(hit));
+  }
+
+  sort_and_cap_hits(combined, request.result_limit);
+  co_return combined;
+}
+
+async::Awaitable<core::Result<RecallResult>> HybridRuntime::recall(HybridSearchRequest request) {
+  auto hits = co_await search(std::move(request));
   if (!hits) {
     co_return std::unexpected(std::move(hits).error());
   }
