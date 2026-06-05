@@ -207,8 +207,12 @@ the lexical `Backend` and vector `VectorBackend`, hydrates vector-only keys
 through `Backend::get`, ignores stale vector rows whose records are missing,
 and returns deterministically sorted `SearchHit` rows with weighted combined
 scores plus populated lexical/vector score components. `HybridRuntime::recall`
-reuses the same stable recall framing renderer. Hybrid ranking policy and
-bootstrap/config wiring remain downstream.
+reuses the same stable recall framing renderer. Slice 174 adds the
+operator-facing config contract for downstream hybrid wiring:
+`memory.longterm.hybrid_search.enabled`, positive `lexical_limit`,
+`vector_limit`, and `result_limit`, and non-negative finite `lexical_weight` /
+`vector_weight` with at least one non-zero weight. Bootstrap still uses lexical
+prompt-boundary recall until an embedding/vector backend owner lands.
 
 ```cpp
 // include/oran/memory/longterm.hpp
@@ -358,6 +362,8 @@ FTS5 10k-record search baseline and, since slice 173, the
 FTS5-vs-vector-vs-hybrid comparison (`scenarios/search_fts5_vs_vector.cpp`) over a
 brute-force cosine reference `VectorBackend`; the gated `--vector_memory=y`
 sqlite-vec adapter will satisfy the same contract and re-run that scenario.
+The validated `memory.longterm.hybrid_search` config block is parser-only until
+that adapter and bootstrap embedding wiring exist.
 
 ## Shared Memory (Team)
 

@@ -372,6 +372,24 @@ TEST_CASE("Config::parse warns or fails on unknown nested provider and hook fiel
     REQUIRE(result->warnings()[0].message == "unknown long-term memory recall field");
   }
 
+  SECTION("unknown memory hybrid search field warns in loose mode") {
+    auto result = config::Config::parse(R"json({
+  "memory": {
+    "longterm": {
+      "hybrid_search": {
+        "enabled": true,
+        "ranking_strategy": "rrf"
+      }
+    }
+  }
+})json");
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->warnings().size() == 1);
+    REQUIRE(result->warnings()[0].path == "$.memory.longterm.hybrid_search.ranking_strategy");
+    REQUIRE(result->warnings()[0].message == "unknown long-term memory hybrid search field");
+  }
+
   SECTION("reserved hook sink and binding fields stay accepted until typed models land") {
     auto result = config::Config::parse(R"json({
   "hooks": {
@@ -427,6 +445,23 @@ TEST_CASE("Config::parse warns or fails on unknown nested provider and hook fiel
       "recall": {
         "enabled": true,
         "ranking_strategy": "lexical"
+      }
+    }
+  }
+})json",
+                                        config::LoadOptions{.strict_unknown_fields = true});
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("unknown memory hybrid search field fails under strict load option") {
+    auto result = config::Config::parse(R"json({
+  "memory": {
+    "longterm": {
+      "hybrid_search": {
+        "enabled": true,
+        "ranking_strategy": "rrf"
       }
     }
   }
@@ -782,6 +817,31 @@ TEST_CASE("Config::parse extracts memory recall policy", "[unit][config][memory]
   REQUIRE(result->memory().longterm.recall.kinds == std::vector<std::string>{"project", "reference"});
 }
 
+TEST_CASE("Config::parse extracts memory hybrid search policy", "[unit][config][memory]") {
+  auto result = config::Config::parse(R"json({
+  "memory": {
+    "longterm": {
+      "hybrid_search": {
+        "enabled": true,
+        "lexical_limit": 8,
+        "vector_limit": 12,
+        "result_limit": 6,
+        "lexical_weight": 0.75,
+        "vector_weight": 1.25
+      }
+    }
+  }
+})json");
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->memory().longterm.hybrid_search.enabled);
+  REQUIRE(result->memory().longterm.hybrid_search.lexical_limit == 8);
+  REQUIRE(result->memory().longterm.hybrid_search.vector_limit == 12);
+  REQUIRE(result->memory().longterm.hybrid_search.result_limit == 6);
+  REQUIRE(result->memory().longterm.hybrid_search.lexical_weight == 0.75);
+  REQUIRE(result->memory().longterm.hybrid_search.vector_weight == 1.25);
+}
+
 TEST_CASE("Config::parse defaults memory recall policy when absent", "[unit][config][memory]") {
   auto result = config::Config::parse(R"json({"memory": {}})json");
 
@@ -790,6 +850,12 @@ TEST_CASE("Config::parse defaults memory recall policy when absent", "[unit][con
   REQUIRE(result->memory().longterm.recall.limit == 5);
   REQUIRE(result->memory().longterm.recall.query_strategy == config::LongtermMemoryRecallQueryStrategy::prompt_text);
   REQUIRE(result->memory().longterm.recall.kinds.empty());
+  REQUIRE_FALSE(result->memory().longterm.hybrid_search.enabled);
+  REQUIRE(result->memory().longterm.hybrid_search.lexical_limit == 10);
+  REQUIRE(result->memory().longterm.hybrid_search.vector_limit == 10);
+  REQUIRE(result->memory().longterm.hybrid_search.result_limit == 10);
+  REQUIRE(result->memory().longterm.hybrid_search.lexical_weight == 1.0);
+  REQUIRE(result->memory().longterm.hybrid_search.vector_weight == 1.0);
 }
 
 TEST_CASE("Config::parse rejects malformed memory recall policy", "[unit][config][memory]") {
@@ -857,6 +923,54 @@ TEST_CASE("Config::parse rejects malformed memory recall policy", "[unit][config
   SECTION("duplicate kind name") {
     auto result =
         config::Config::parse(R"json({"memory": {"longterm": {"recall": {"kinds": ["project", "project"]}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+}
+
+TEST_CASE("Config::parse rejects malformed memory hybrid search policy", "[unit][config][memory]") {
+  SECTION("non-object hybrid search block") {
+    auto result = config::Config::parse(R"json({"memory": {"longterm": {"hybrid_search": []}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-boolean enabled") {
+    auto result = config::Config::parse(R"json({"memory": {"longterm": {"hybrid_search": {"enabled": "yes"}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("zero lexical limit") {
+    auto result = config::Config::parse(R"json({"memory": {"longterm": {"hybrid_search": {"lexical_limit": 0}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-integer vector limit") {
+    auto result =
+        config::Config::parse(R"json({"memory": {"longterm": {"hybrid_search": {"vector_limit": 1.5}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("negative lexical weight") {
+    auto result =
+        config::Config::parse(R"json({"memory": {"longterm": {"hybrid_search": {"lexical_weight": -0.1}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-number vector weight") {
+    auto result =
+        config::Config::parse(R"json({"memory": {"longterm": {"hybrid_search": {"vector_weight": "high"}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("both weights zero") {
+    auto result = config::Config::parse(
+        R"json({"memory": {"longterm": {"hybrid_search": {"lexical_weight": 0, "vector_weight": 0}}}})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }

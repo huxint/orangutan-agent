@@ -51,10 +51,14 @@ Current implementation status:
   activation-policy inputs. The `memory` root is typed for
   `memory.longterm.recall.enabled`, `memory.longterm.recall.limit`,
   `memory.longterm.recall.query_strategy`, and optional
-  `memory.longterm.recall.kinds` `RecordKind` spellings; ordinary
-  configured-route bootstrap maps that policy into prompt-boundary long-term
-  recall while the defaults keep recall disabled and the default strategy
-  searches the current prompt text.
+  `memory.longterm.recall.kinds` `RecordKind` spellings, plus
+  `memory.longterm.hybrid_search.enabled`, positive
+  `lexical_limit` / `vector_limit` / `result_limit`, and non-negative finite
+  `lexical_weight` / `vector_weight` with at least one non-zero weight.
+  Ordinary configured-route bootstrap maps only the recall policy into
+  prompt-boundary long-term recall today; the hybrid-search block is validated
+  config prework for downstream vector-backend/bootstrap wiring and defaults
+  disabled.
 - `bootstrap::run` now consumes `trace.retention_days` by deriving an explicit
   Unix-nanosecond cutoff and passing it to `RuntimeAssembly`, which purges
   matching old `trace_turns` rows before exposing the long-lived trace
@@ -106,10 +110,11 @@ optional fields take defaults. Unknown fields trigger a warning unless
 `strict_config=true` or `LoadOptions::strict_unknown_fields=true` is set, in which
 case they are an error. This applies at the root and inside typed nested sections:
 `profiles.<name>`, `profiles.<name>.pricing`, `routes.<name>`, `hooks`,
-`memory.longterm.recall`, permission blocks, workspace permission blocks, and
-`agents.<name>`. Recognized-but-untyped root fields (`teams`, `channels`,
-`automation`) and reserved hook `sinks` / `bindings` remain forward-compatible
-placeholders until their typed models land.
+`memory.longterm.recall`, `memory.longterm.hybrid_search`, permission blocks,
+workspace permission blocks, and `agents.<name>`. Recognized-but-untyped root
+fields (`teams`, `channels`, `automation`) and reserved hook `sinks` /
+`bindings` remain forward-compatible placeholders until their typed models
+land.
 
 Generated **JSON Schema** in `docs/generated/config.schema.json` remains a future
 slice. It will be generated from C++ types once the broader channel/team/hook/memory

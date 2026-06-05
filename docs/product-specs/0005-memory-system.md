@@ -106,6 +106,13 @@ operators can reason about retention, scope, and visibility.
   the lexical scan dominates at 10k records, so hybrid ≈ FTS5 + ~5%. The cosine
   backend is an in-process reference until the gated `--vector_memory=y` sqlite-vec
   adapter satisfies the same `VectorBackend`.
+- Hybrid-search config contract shipped in slice 174:
+  `oran-config` now parses `memory.longterm.hybrid_search.enabled`, positive
+  `lexical_limit` / `vector_limit` / `result_limit`, and non-negative finite
+  `lexical_weight` / `vector_weight`, rejecting the all-zero weight case so the
+  policy matches `HybridRuntime` validation before bootstrap consumes it. The
+  block defaults disabled and is parser-only until embedding and vector-backend
+  ownership land.
 - Decay policy applied by a periodic job (`oran-automation`).
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
 - Hook events on read / write / forget / decay.
@@ -120,10 +127,10 @@ operators can reason about retention, scope, and visibility.
 
 - Gated sqlite-vec adapter under `--vector_memory=y` implementing the shipped
   `memory::longterm::VectorBackend` contract.
-- Hybrid search ranking policy and config wiring on top of the shipped
-  `HybridRuntime` composition contract (slice 173 landed the
-  FTS5-vs-vector-vs-hybrid bench; ranking policy and bootstrap/config wiring
-  remain).
+- Bootstrap/embedding wiring that consumes the shipped
+  `memory.longterm.hybrid_search` policy on top of the shipped `HybridRuntime`
+  composition contract (slice 173 landed the FTS5-vs-vector-vs-hybrid bench;
+  slice 174 landed parser-level policy validation).
 - Externalized embedding store via `oran-http::Client`.
 
 ## Out Of Scope
@@ -169,7 +176,7 @@ operators can reason about retention, scope, and visibility.
    lexical/vector merge ordering, vector-only hydration, stale vector-row skip,
    and recall-framing coverage.
    `test-config` reports
-   44 cases / 369 assertions for the recall policy parser, and `test-bootstrap`
+   46 cases / 402 assertions for the recall and hybrid-search policy parsers, and `test-bootstrap`
    reports 114 cases / 874 assertions for the assembly, prompt-runner, and
    configured-route recall consumers, including slice-167 query-strategy
    coverage, slice-168 `memory.recall` tool binding, and slice-169

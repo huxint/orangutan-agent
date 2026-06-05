@@ -142,8 +142,23 @@ struct LongtermMemoryRecallConfig {
   friend bool operator==(const LongtermMemoryRecallConfig&, const LongtermMemoryRecallConfig&) = default;
 };
 
+/// Config-side hybrid-search policy. This is parser/runtime-contract prework:
+/// bootstrap keeps using lexical recall until an embedding/vector backend owner
+/// lands, but the operator-facing knobs are validated here first.
+struct LongtermMemoryHybridSearchConfig {
+  bool enabled{false};
+  std::int64_t lexical_limit{10};
+  std::int64_t vector_limit{10};
+  std::int64_t result_limit{10};
+  double lexical_weight{1.0};
+  double vector_weight{1.0};
+
+  friend bool operator==(const LongtermMemoryHybridSearchConfig&, const LongtermMemoryHybridSearchConfig&) = default;
+};
+
 struct LongtermMemoryConfig {
   LongtermMemoryRecallConfig recall{};
+  LongtermMemoryHybridSearchConfig hybrid_search{};
 
   friend bool operator==(const LongtermMemoryConfig&, const LongtermMemoryConfig&) = default;
 };

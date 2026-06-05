@@ -7,14 +7,28 @@
 
 ## Snapshot
 
-- **Slice:** 173 (`xmake run orangutan` reports slice 173)
+- **Slice:** 174 (`xmake run orangutan` reports slice 174)
 - **Last completed history:**
-  [`histories/2026-06/20260605-2136-longterm-search-fts5-vs-vector-bench.md`](histories/2026-06/20260605-2136-longterm-search-fts5-vs-vector-bench.md)
+  [`histories/2026-06/20260605-2349-longterm-hybrid-config.md`](histories/2026-06/20260605-2349-longterm-hybrid-config.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 173 adds the first long-term search
-  comparison bench. `bench/memory/scenarios/search_fts5_vs_vector.cpp` seeds one
-  shared 10k-record corpus and times three searches at `limit=10`: FTS5-only
+- **Latest completed slice:** slice 174 adds the config-side hybrid-search
+  policy contract for long-term memory. `oran-config` now parses
+  `memory.longterm.hybrid_search.enabled`, positive `lexical_limit`,
+  `vector_limit`, and `result_limit`, and non-negative finite
+  `lexical_weight` / `vector_weight`, rejecting the all-zero weight case so the
+  policy matches `HybridRuntime` validation before bootstrap consumes it. The
+  block defaults disabled and is parser-only until embedding/vector backend
+  ownership lands. Focused result: `test-config` **46 cases / 402 assertions**.
+- **Next intended slice:** no active plan; with the FTS5/vector/hybrid bench
+  baseline and typed hybrid-search config policy in place, the next memory slice
+  can start the gated `sqlite-vec` adapter under `--vector_memory=y`
+  (implementing `memory::longterm::VectorBackend` and re-running the comparison)
+  or wire bootstrap/embedding ownership to consume `memory.longterm.hybrid_search`.
+
+Slice 173 adds the first long-term search comparison bench.
+  `bench/memory/scenarios/search_fts5_vs_vector.cpp` seeds one shared 10k-record
+  corpus and times three searches at `limit=10`: FTS5-only
   `memory::longterm::Runtime::search`, an in-bench brute-force cosine
   `VectorBackend`, and the slice-172 `memory::longterm::HybridRuntime::search`
   over both. The cosine backend is a reference implementation (deterministic
@@ -24,11 +38,6 @@
   **~675.6 µs/batch**, hybrid **~16.18 ms/batch** — at 10k records the lexical
   scan dominates, so hybrid ≈ FTS5 + ~5%. Bench-only; `test-memory` unchanged at
   **31 cases / 756 assertions**.
-- **Next intended slice:** no active plan; with the FTS5/vector/hybrid bench
-  baseline in place, the next memory slice can start the gated `sqlite-vec`
-  adapter under `--vector_memory=y` (implementing `memory::longterm::VectorBackend`
-  and re-running this comparison) or add hybrid ranking policy/config wiring on
-  top of `HybridRuntime`.
 
 Slice 172 adds the first long-term hybrid search composition contract.
   `<oran/memory/longterm.hpp>` exposes `HybridSearchRequest` plus `HybridRuntime`,

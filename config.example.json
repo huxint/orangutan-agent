@@ -93,6 +93,14 @@
         "limit": 5,
         "query_strategy": "prompt_text",
         "kinds": ["user", "feedback", "project", "reference", "team"]
+      },
+      "hybrid_search": {
+        "enabled": false,
+        "lexical_limit": 10,
+        "vector_limit": 10,
+        "result_limit": 10,
+        "lexical_weight": 1.0,
+        "vector_weight": 1.0
       }
     }
   },

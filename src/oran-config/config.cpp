@@ -70,8 +70,9 @@ constexpr auto kRecognizedMemoryFields = std::array<std::string_view, 1>{
     "longterm",
 };
 
-constexpr auto kRecognizedLongtermMemoryFields = std::array<std::string_view, 1>{
+constexpr auto kRecognizedLongtermMemoryFields = std::array<std::string_view, 2>{
     "recall",
+    "hybrid_search",
 };
 
 constexpr auto kRecognizedLongtermRecallFields = std::array<std::string_view, 4>{
@@ -79,6 +80,15 @@ constexpr auto kRecognizedLongtermRecallFields = std::array<std::string_view, 4>
     "limit",
     "query_strategy",
     "kinds",
+};
+
+constexpr auto kRecognizedLongtermHybridSearchFields = std::array<std::string_view, 6>{
+    "enabled",
+    "lexical_limit",
+    "vector_limit",
+    "result_limit",
+    "lexical_weight",
+    "vector_weight",
 };
 
 constexpr auto kRecognizedProfileFields = std::array<std::string_view, 6>{
@@ -707,6 +717,87 @@ parse_longterm_recall(const json& longterm, bool strict, std::vector<ConfigWarni
   return recall;
 }
 
+[[nodiscard]] Result<void>
+parse_optional_positive_integer(const json& object, std::string_view key, std::string_view path, std::int64_t& out) {
+  const auto it = object.find(key);
+  if (it == object.end()) {
+    return {};
+  }
+  auto parsed = positive_integer_value(*it, child_path(path, key));
+  if (!parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+  out = *parsed;
+  return {};
+}
+
+[[nodiscard]] Result<void>
+parse_optional_non_negative_number(const json& object, std::string_view key, std::string_view path, double& out) {
+  const auto it = object.find(key);
+  if (it == object.end()) {
+    return {};
+  }
+  auto parsed = non_negative_number_value(*it, child_path(path, key));
+  if (!parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+  out = *parsed;
+  return {};
+}
+
+[[nodiscard]] Result<LongtermMemoryHybridSearchConfig>
+parse_longterm_hybrid_search(const json& longterm, bool strict, std::vector<ConfigWarning>& warnings) {
+  auto hybrid = LongtermMemoryHybridSearchConfig{};
+  const auto it = longterm.find("hybrid_search");
+  if (it == longterm.end()) {
+    return hybrid;
+  }
+  constexpr std::string_view kPath = "$.memory.longterm.hybrid_search";
+  auto object = require_object(*it, kPath);
+  if (!object) {
+    return std::unexpected(std::move(object.error()));
+  }
+
+  if (const auto enabled = it->find("enabled"); enabled != it->end()) {
+    if (!enabled->is_boolean()) {
+      return std::unexpected(config_error("expected boolean", child_path(kPath, "enabled")));
+    }
+    hybrid.enabled = enabled->get<bool>();
+  }
+
+  if (auto parsed = parse_optional_positive_integer(*it, "lexical_limit", kPath, hybrid.lexical_limit); !parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+  if (auto parsed = parse_optional_positive_integer(*it, "vector_limit", kPath, hybrid.vector_limit); !parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+  if (auto parsed = parse_optional_positive_integer(*it, "result_limit", kPath, hybrid.result_limit); !parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+  if (auto parsed = parse_optional_non_negative_number(*it, "lexical_weight", kPath, hybrid.lexical_weight); !parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+  if (auto parsed = parse_optional_non_negative_number(*it, "vector_weight", kPath, hybrid.vector_weight); !parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+  if (hybrid.lexical_weight == 0.0 && hybrid.vector_weight == 0.0) {
+    return std::unexpected(
+        config_error("long-term memory hybrid search requires a non-zero weight", child_path(kPath, "weights")));
+  }
+
+  auto unknowns = collect_unknown_object_fields(*it,
+                                                kPath,
+                                                kRecognizedLongtermHybridSearchFields,
+                                                "unknown long-term memory hybrid search field",
+                                                strict,
+                                                warnings);
+  if (!unknowns) {
+    return std::unexpected(std::move(unknowns.error()));
+  }
+
+  return hybrid;
+}
+
 [[nodiscard]] Result<LongtermMemoryConfig>
 parse_longterm_memory(const json& memory, bool strict, std::vector<ConfigWarning>& warnings) {
   auto longterm = LongtermMemoryConfig{};
@@ -724,6 +815,12 @@ parse_longterm_memory(const json& memory, bool strict, std::vector<ConfigWarning
     return std::unexpected(std::move(recall.error()));
   }
   longterm.recall = *recall;
+
+  auto hybrid = parse_longterm_hybrid_search(*it, strict, warnings);
+  if (!hybrid) {
+    return std::unexpected(std::move(hybrid.error()));
+  }
+  longterm.hybrid_search = *hybrid;
 
   auto unknowns = collect_unknown_object_fields(*it,
                                                 "$.memory.longterm",
