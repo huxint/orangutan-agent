@@ -7,12 +7,28 @@
 
 ## Snapshot
 
-- **Slice:** 167 (`xmake run orangutan` reports slice 167)
+- **Slice:** 168 (`xmake run orangutan` reports slice 168)
 - **Last completed history:**
-  [`histories/2026-06/20260605-1305-memory-longterm-recall-query-strategy.md`](histories/2026-06/20260605-1305-memory-longterm-recall-query-strategy.md)
+  [`histories/2026-06/20260605-1400-memory-recall-tool.md`](histories/2026-06/20260605-1400-memory-recall-tool.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 167 adds the first configured long-term
+- **Latest completed slice:** slice 168 adds the first long-term memory tool.
+  `oran-tool` registers deferred `memory.recall` with `read_memory` capability,
+  parses `{"query", "limit"?, "kinds"?}`, and delegates through a new
+  `DispatchContext::memory_recall` callback so the tool library stays
+  independent of `oran-memory`. `oran-memory` now renders structured
+  `memory_recall` `data_json` from recall hits, and `AgentPromptRunner` binds
+  the callback to the assembly-owned `memory::longterm::Runtime`, returning
+  deterministic recall text plus record metadata through the normal
+  permission/audit/hook/output-cap path. Focused results: `test-tool`
+  **200 cases / 2080 assertions**, `test-memory` **26 cases / 714 assertions**,
+  and `test-bootstrap` **112 cases / 838 assertions**.
+- **Next intended slice:** no active plan; pick a small remaining tracker item
+  after re-orienting, likely `memory.remember` / `memory.forget`, the gated
+  `sqlite-vec` adapter, hybrid/vector ranking/composition, or another small
+  tracked item.
+
+Slice 167 adds the first configured long-term
   recall query-derivation selector. `oran-config` parses
   `memory.longterm.recall.query_strategy` as `prompt_text` (default/current
   behavior) or `last_user_message`; `bootstrap::run` maps that policy into
@@ -23,9 +39,6 @@
   deterministic section-5 rendering remain unchanged. Focused results:
   `test-config` **44 cases / 369 assertions** and `test-bootstrap`
   **111 cases / 824 assertions**.
-- **Next intended slice:** no active plan; pick a small remaining tracker item
-  after re-orienting, likely the gated `sqlite-vec` adapter, memory tools,
-  hybrid/vector ranking/composition, or another small tracked item.
 
 Slice 166 adds optional long-term recall kind
   filters to the configured-route policy: `oran-config` parses
@@ -1633,7 +1646,9 @@ Closed entries do *not* live here — the tracker is canonical.
   slice 164 closed the opt-in prompt-boundary recall rendering path, slice 165
   closed the configured-route recall policy mapping, slice 166 closed the first
   recall kind-filter policy slice, and slice 167 closed the first recall
-  query-derivation selector.
+  query-derivation selector. Slice 168 closed the first read-only long-term
+  memory tool by wiring deferred `memory.recall` through the existing
+  permissioned tool dispatch path.
   Remaining follow-ups are grouped P1/P2/P3 in the tracker.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on

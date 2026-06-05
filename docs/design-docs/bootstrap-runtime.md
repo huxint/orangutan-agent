@@ -106,7 +106,8 @@ Session memory uses a separate `storage::Pool` and `storage::SessionRepository` 
 `audit.db` pool. Long-term memory uses a separate `storage::Pool` over
 `<workspace>/.orangutan/memory.db`, migrates the `memory::longterm::Fts5Backend`
 schema before opening the long-lived pool, and exposes both the backend and
-`memory::longterm::Runtime` for future prompt-boundary recall and memory tools.
+`memory::longterm::Runtime` for prompt-boundary recall and the read-only
+`memory.recall` tool; write-side memory tools remain downstream.
 `bootstrap::run` threads `config.trace().enabled` into `trace_enabled`, converts
 `config.trace().retention_days` into an explicit Unix-nanosecond cutoff for
 `trace_retention_started_before_ns`, `config.hooks().timeout_ms` into
@@ -187,6 +188,13 @@ prompt-boundary query. Omitting `kinds` preserves all-kind recall. Slice 167 add
 `memory.longterm.recall.query_strategy`: `prompt_text` preserves the current
 prompt text query, while `last_user_message` uses the latest prior user text
 when one exists so follow-up prompts can recall from session context.
+Slice 168 also installs `DispatchContext::memory_recall` for the runner-owned
+tool registry. The `memory.recall` built-in parses and gates the call in
+`oran-tool`, then bootstrap adapts the request to the assembly-owned
+`memory::longterm::Runtime` with the runner's stable `scope_key`; successful
+tool results return deterministic recall text, structured `memory_recall`
+record metadata, and `usage.match_count` through the normal provider re-entry
+path.
 When the caller
 selects an `AgentPromptRunnerOptions::agent_config_name` (or leaves it empty
 and selects `permission_agent_name`), the runner reads that `agents.<name>`

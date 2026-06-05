@@ -35,6 +35,9 @@ core::Result<void> register_builtins(Registry& registry) {
   if (auto r = register_skill_deactivate(registry); !r) {
     return r;
   }
+  if (auto r = register_memory_recall(registry); !r) {
+    return r;
+  }
   return {};
 }
 

@@ -386,6 +386,34 @@ TEST_CASE("longterm::Runtime renders deterministic recall framing", "[unit][memo
   });
 }
 
+TEST_CASE("longterm recall data_json carries recalled record metadata", "[unit][memory][longterm][runtime]") {
+  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    FakeBackend backend{make_record()};
+    memory::longterm::Runtime runtime{backend};
+
+    auto result = co_await runtime.recall(memory::longterm::RecallRequest{
+        .query =
+            memory::longterm::Query{
+                .scope_key = "agent:coder",
+                .text = "workflow",
+                .kinds = {},
+            },
+        .limit = 5,
+    });
+
+    REQUIRE(result.has_value());
+    auto data_json =
+        memory::longterm::render_recall_data_json(std::span<const memory::longterm::SearchHit>{result->hits});
+    REQUIRE(data_json.contains(R"("kind":"memory_recall")"));
+    REQUIRE(data_json.contains(R"("match_count":1)"));
+    REQUIRE(data_json.contains(R"("id":"rec-1")"));
+    REQUIRE(data_json.contains(R"("scope_key":"agent:coder")"));
+    REQUIRE(data_json.contains(R"("created_at":"1970-01-01T00:00:01.000Z")"));
+    REQUIRE(data_json.contains(R"("lexical_score":0.8)"));
+    REQUIRE(data_json.contains(R"("vector_score":0.7)"));
+  });
+}
+
 TEST_CASE("longterm::Runtime returns empty framing for empty recall", "[unit][memory][longterm][runtime]") {
   test::run_async([](asio::io_context&) -> async::Awaitable<void> {
     FakeBackend backend{std::vector<memory::longterm::SearchHit>{}};

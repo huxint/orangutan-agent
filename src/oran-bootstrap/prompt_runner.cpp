@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <exception>
 #include <expected>
+#include <format>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <random>
@@ -59,6 +61,23 @@ parse_longterm_recall_kinds(std::span<const std::string> names) {
     if (std::ranges::contains(kinds, *parsed)) {
       return std::unexpected(
           option_error("agent prompt runner long-term recall kind must be unique").with("kind", name));
+    }
+    kinds.push_back(*parsed);
+  }
+  return kinds;
+}
+
+[[nodiscard]] Result<std::vector<memory::longterm::RecordKind>>
+parse_memory_tool_recall_kinds(std::span<const std::string> names) {
+  auto kinds = std::vector<memory::longterm::RecordKind>{};
+  kinds.reserve(names.size());
+  for (const auto& name : names) {
+    auto parsed = core::parse_enum<memory::longterm::RecordKind>(name);
+    if (!parsed) {
+      return std::unexpected(Error::invalid_argument("memory.recall: unknown kind").with("kind", name));
+    }
+    if (std::ranges::contains(kinds, *parsed)) {
+      return std::unexpected(Error::invalid_argument("memory.recall: kind filters must be unique").with("kind", name));
     }
     kinds.push_back(*parsed);
   }
@@ -264,6 +283,20 @@ filter_skill_documents(std::span<const skill::SkillDocument> documents,
   return text;
 }
 
+[[nodiscard]] std::string render_memory_recall_tool_text(const memory::longterm::RecallResult& recalled) {
+  if (recalled.hits.empty()) {
+    return "memory.recall: no matches";
+  }
+
+  std::string text;
+  std::format_to(std::back_inserter(text),
+                 "memory.recall: {} match{}\n",
+                 recalled.hits.size(),
+                 recalled.hits.size() == 1 ? "" : "es");
+  text.append(recalled.framing.section_text);
+  return text;
+}
+
 [[nodiscard]] std::vector<skill::SessionSkillActivation>
 skill_policy_records_from(std::span<const memory::session::SkillActivationRecord> records) {
   auto out = std::vector<skill::SessionSkillActivation>{};
@@ -442,6 +475,10 @@ public:
     dispatch_context.skill_deactivate = [this](std::string_view skill_name,
                                                tool::DispatchContext& ctx) -> async::Awaitable<Result<tool::Output>> {
       co_return deactivate_skill(skill_name, ctx);
+    };
+    dispatch_context.memory_recall = [this](tool::MemoryRecallRequest request,
+                                            tool::DispatchContext& ctx) -> async::Awaitable<Result<tool::Output>> {
+      co_return co_await recall_memory(std::move(request), ctx);
     };
     dispatch_context.workspace = &assembly_->workspace();
     dispatch_context.output_caps = output_caps_;
@@ -668,6 +705,45 @@ private:
         .data_json = std::move(*data_json),
         .attachments = {},
         .usage = {},
+        .is_error = false,
+    };
+  }
+
+  [[nodiscard]] async::Awaitable<Result<tool::Output>> recall_memory(tool::MemoryRecallRequest request,
+                                                                     tool::DispatchContext& ctx) const {
+    static_cast<void>(ctx);
+    auto* runtime = assembly_->longterm_memory_runtime();
+    if (runtime == nullptr) {
+      co_return std::unexpected(Error::invalid_argument("memory.recall: runtime service is not available")
+                                    .with("reason", "memory_runtime_unavailable"));
+    }
+    auto kinds = parse_memory_tool_recall_kinds(std::span<const std::string>{request.kinds});
+    if (!kinds) {
+      co_return std::unexpected(std::move(kinds).error());
+    }
+    auto recalled = co_await runtime->recall(memory::longterm::RecallRequest{
+        .query =
+            memory::longterm::Query{
+                .scope_key = scope_key_,
+                .text = std::move(request.query),
+                .kinds = std::move(*kinds),
+                .include_shadow = false,
+            },
+        .limit = request.limit,
+    });
+    if (!recalled) {
+      co_return std::unexpected(std::move(recalled).error());
+    }
+    auto data_json =
+        memory::longterm::render_recall_data_json(std::span<const memory::longterm::SearchHit>{recalled->hits});
+    co_return tool::Output{
+        .text = render_memory_recall_tool_text(*recalled),
+        .data_json = std::move(data_json),
+        .attachments = {},
+        .usage =
+            tool::ToolUsage{
+                .match_count = static_cast<std::uint64_t>(recalled->hits.size()),
+            },
         .is_error = false,
     };
   }

@@ -11,7 +11,10 @@
 #include <utility>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include <oran/core/enum_names.hpp>
+#include <oran/core/time.hpp>
 
 namespace orangutan::memory::longterm {
 namespace {
@@ -50,6 +53,42 @@ void append_string_list(std::string& out, std::string_view label, std::span<cons
     std::format_to(std::back_inserter(out), "{}", values[i]);
   }
   std::format_to(std::back_inserter(out), "\n");
+}
+
+[[nodiscard]] nlohmann::json optional_double_json(std::optional<double> value) {
+  if (!value.has_value()) {
+    return nullptr;
+  }
+  return *value;
+}
+
+[[nodiscard]] nlohmann::json string_list_json(std::span<const std::string> values) {
+  auto out = nlohmann::json::array();
+  for (const auto& value : values) {
+    out.push_back(value);
+  }
+  return out;
+}
+
+[[nodiscard]] nlohmann::json record_json(const SearchHit& hit) {
+  const auto& record = hit.record;
+  return nlohmann::json{
+      {"id", record.key.id},
+      {"scope_key", record.key.scope_key},
+      {"kind", std::string{core::enum_name(record.kind)}},
+      {"title", record.title},
+      {"body", record.body},
+      {"created_at", core::time::format_iso8601_utc(record.created_at)},
+      {"updated_at", core::time::format_iso8601_utc(record.updated_at)},
+      {"last_read_at", core::time::format_iso8601_utc(record.last_read_at)},
+      {"importance", record.importance},
+      {"tags", string_list_json(record.tags)},
+      {"linked_record_ids", string_list_json(record.linked_record_ids)},
+      {"shadow", record.shadow},
+      {"score", hit.score},
+      {"lexical_score", optional_double_json(hit.lexical_score)},
+      {"vector_score", optional_double_json(hit.vector_score)},
+  };
 }
 
 }  // namespace
@@ -99,6 +138,19 @@ Framing render_recall_framing(std::span<const SearchHit> hits) {
     append_string_list(text, "linked", record.linked_record_ids);
   }
   return Framing{.section_text = std::move(text)};
+}
+
+std::string render_recall_data_json(std::span<const SearchHit> hits) {
+  auto records = nlohmann::json::array();
+  for (const auto& hit : hits) {
+    records.push_back(record_json(hit));
+  }
+  return nlohmann::json{
+      {"kind", "memory_recall"},
+      {"match_count", hits.size()},
+      {"records", std::move(records)},
+  }
+      .dump();
 }
 
 }  // namespace orangutan::memory::longterm

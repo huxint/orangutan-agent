@@ -96,6 +96,13 @@ enum class Capability {
 > mmap / extension-binary-skip / parallel-walk optimisations are deferred
 > to follow-up slices tracked in
 > [`exec-plans/tech-debt-tracker.md`](../exec-plans/tech-debt-tracker.md)).
+> Slice 168 adds the first memory built-in: `memory.recall`
+> (`Capability::read_memory`, deferred, category `memory`). Input
+> `{query, limit?, kinds?}` recalls long-term records through
+> `DispatchContext::memory_recall`, keeping `oran-tool` independent of
+> `oran-memory`; successful output carries deterministic recall text,
+> `data_json.kind = "memory_recall"`, recalled record metadata, and
+> `usage.match_count`.
 > Slice 21 (2026-05-17) wired `permission::ApprovalBroker` through
 > `Registry::dispatch` so a `Verdict::ask` decision can be mediated
 > rather than short-circuited: `DispatchContext` grew optional

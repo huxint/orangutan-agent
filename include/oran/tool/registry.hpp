@@ -110,6 +110,21 @@ using SkillInvokeHandler = std::function<async::Awaitable<core::Result<Output>>(
 using SkillDeactivateHandler =
     std::function<async::Awaitable<core::Result<Output>>(std::string_view skill_name, DispatchContext& ctx)>;
 
+struct MemoryRecallRequest {
+  std::string query;
+  std::size_t limit{5};
+  std::vector<std::string> kinds;
+
+  friend bool operator==(const MemoryRecallRequest&, const MemoryRecallRequest&) = default;
+};
+
+/// Runtime callback consumed by the `memory.recall` built-in. The tool layer
+/// owns JSON parsing, permissions, audit, hooks, and output caps; bootstrap
+/// supplies the concrete long-term memory runtime through this callback so
+/// `oran-tool` does not take a sibling dependency on `oran-memory`.
+using MemoryRecallHandler =
+    std::function<async::Awaitable<core::Result<Output>>(MemoryRecallRequest request, DispatchContext& ctx)>;
+
 /// Registry-pre-resolved filesystem target for a built-in tool call.
 /// `absolute_path` is the path handlers pass to `oran-io`; the rest is
 /// audit/display metadata. Raw input paths are not stored here.
@@ -218,6 +233,11 @@ struct DispatchContext {
   /// active marker. When unset, `skill.deactivate` reports a model-repairable
   /// missing-runtime error.
   SkillDeactivateHandler skill_deactivate{};
+  /// Optional long-term memory recall service. When set, `memory.recall` calls
+  /// it with the parsed query, limit, and kind spellings, and returns the
+  /// produced output through the ordinary dispatch path. When unset,
+  /// `memory.recall` reports a model-repairable missing-runtime error.
+  MemoryRecallHandler memory_recall{};
   /// Optional workspace resolver for file built-ins. The pointer is
   /// non-owning; bootstrap/agent runtime owns the workspace value and keeps it
   /// alive for the dispatch. Dispatch pre-resolves current filesystem

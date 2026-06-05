@@ -156,7 +156,7 @@ MEMORY.md mirror. v2 keeps that core and adds:
 - **Decay policy**: `memory-age` style decay is actually wired into the search pipeline
   this time; expired records receive lower BM25 weight before potentially being pruned.
 
-Status (slice 167): `include/oran/memory/longterm.hpp` now ships the public
+Status (slice 168): `include/oran/memory/longterm.hpp` now ships the public
 record/query/write shapes, reflection-backed `RecordKind`, `Backend` and
 `VectorBackend` traits, validation helpers for record keys, search limits,
 record metadata, and vector embeddings, plus `Fts5Backend` as the default
@@ -182,8 +182,12 @@ spellings (`user`, `feedback`, `project`, `reference`, `team`) that constrains
 the prompt-boundary query; omitting it keeps the previous all-kind search. Slice
 167 adds `memory.longterm.recall.query_strategy`, with `prompt_text` preserving
 the current-prompt query and `last_user_message` deriving the single recall
-query from the most recent previous user text when one exists. It does **not**
-yet ship the gated sqlite-vec adapter, memory tools, or hybrid ranking.
+query from the most recent previous user text when one exists. Slice 168 adds
+`render_recall_data_json(...)` for structured recall record metadata and the
+read-only `memory.recall` tool path, which reaches the same runtime through
+bootstrap's `DispatchContext::memory_recall` callback and the ordinary
+permission/audit/hook/output-cap pipeline. It does **not** yet ship the gated
+sqlite-vec adapter, `memory.remember` / `memory.forget`, or hybrid ranking.
 
 ```cpp
 // include/oran/memory/longterm.hpp
@@ -283,7 +287,10 @@ trace ids, or scores; it is a function of the returned memory records only. The
 current renderer emits one compact section headed `Long-term memory:` with
 record kind, title, id, normalized body text, tags, and linked ids. Empty recall
 returns an empty `memory::Framing`, so callers can keep section 5 absent when no
-long-term memory matches.
+long-term memory matches. `render_recall_data_json(...)` serializes the same
+returned hits as `{kind:"memory_recall", match_count, records[]}` for tool
+results, including record ids, scope keys, kind spellings, timestamps, scores,
+tags, linked ids, and shadow flags.
 
 The shipped lexical backend is:
 
@@ -356,7 +363,9 @@ struct Policy {
 
 A periodic job (registered with `oran-automation`) runs decay according to the policy.
 Decayed records are not immediately deleted; they enter a "shadow" state where they
-are excluded from default search but visible via `memory.recall("...", include_shadow=true)`.
+are excluded from default search but visible to runtime callers that set
+`Query::include_shadow=true`. The shipped `memory.recall` tool keeps
+`include_shadow=false`.
 
 Forgetting is final (DELETE), with an audit row in `audit.db`.
 

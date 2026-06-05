@@ -21,8 +21,9 @@ flatten structured facts into prose:
   needs to return a structured symbol tree — converting it to markdown in
   the handler then reparsing it in the agent is a downstream-of-the-LLM
   anti-pattern.
-- `memory.recall` will need to distinguish *the records retrieved* from
-  *the summary surfaced to the model*; today that is one text blob.
+- `memory.recall` distinguishes *the records retrieved* from *the summary
+  surfaced to the model* by returning model-facing recall text plus serialized
+  `data_json` record metadata.
 
 The cost is paid at four call sites:
 
@@ -79,9 +80,14 @@ handlers can adopt without churning every callsite at once.
 > `directory.list` fills serialized `data_json` with
 > `{kind:"directory_list", path, include_hidden, max_entries, entry_count,
 > entries[]}` plus usage `files_touched=1` and `match_count=entry_count`.
-> With slice 64 the built-in side of spec 0014's structured-output migration
-> is complete — every shipped filesystem built-in fills usage counters and
-> every read-side built-in also fills `data_json`. `bench-tool`
+> Slice 168 adds `memory.recall`, which fills `data_json` with
+> `{kind:"memory_recall", match_count, records[]}` plus
+> `usage.match_count`, while keeping deterministic recall text as the
+> provider fallback.
+> With slice 168 the shipped built-in side of spec 0014's structured-output
+> migration is current: every shipped filesystem built-in fills usage counters,
+> every shipped read-side built-in fills `data_json`, and new built-ins must
+> follow the envelope when they land. `bench-tool`
 > has `output.text_only` vs. `output.with_data_16kib` plus
 > `output.apply_caps` coverage. Slice 107 closes the first provider-facing
 > mapping step: `core::ToolResultContent` now preserves optional
@@ -214,6 +220,10 @@ handlers can adopt without churning every callsite at once.
      `file.edit` fills `bytes_read`, `bytes_written`, `files_touched`,
      and `match_count`; `file.delete` fills `bytes_written=0` and
      `files_touched=1`; `data_json` stays `nullopt` for v1.
+  5. `memory.recall` — shipped in slice 168: keeps a deterministic text
+     fallback (`memory.recall: <n> match(es)` plus recall framing), fills
+     `data_json` with `{kind:"memory_recall", match_count, records[]}`, and
+     fills `usage.match_count`.
   All built-ins shipped to date have completed their v1 migration to the
   structured envelope; new built-ins ship with usage counters and
   `data_json` from the start.

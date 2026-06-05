@@ -629,11 +629,27 @@ TEST_CASE("register_skill_deactivate advertises deactivate_skill and name inputs
   REQUIRE_FALSE(def->input_schema_json.contains("\"inputs\""));
 }
 
+TEST_CASE("register_memory_recall advertises read_memory and deferred memory metadata", "[unit][tool][memory_recall]") {
+  tool::Registry registry;
+  REQUIRE(tool::register_memory_recall(registry).has_value());
+  REQUIRE(registry.size() == 1);
+  const auto* def = registry.find(tool::kMemoryRecallName);
+  REQUIRE(def != nullptr);
+  REQUIRE(def->required_capabilities.size() == 1);
+  REQUIRE(def->required_capabilities[0] == core::Capability::read_memory);
+  REQUIRE(def->deferred);
+  REQUIRE(def->category.has_value());
+  REQUIRE(*def->category == "memory");
+  REQUIRE(def->input_schema_json.contains("\"query\""));
+  REQUIRE(def->input_schema_json.contains("\"limit\""));
+  REQUIRE(def->input_schema_json.contains("\"kinds\""));
+}
+
 TEST_CASE("register_builtins seeds the file tool catalog", "[unit][tool][builtins]") {
   tool::Registry registry;
   REQUIRE(tool::register_builtins(registry).has_value());
   const auto catalog = registry.catalog();
-  REQUIRE(catalog.size() == 9);
+  REQUIRE(catalog.size() == 10);
   REQUIRE(catalog[0].name == tool::kFileReadName);
   REQUIRE(catalog[1].name == tool::kFileWriteName);
   REQUIRE(catalog[2].name == tool::kFileEditName);
@@ -643,6 +659,7 @@ TEST_CASE("register_builtins seeds the file tool catalog", "[unit][tool][builtin
   REQUIRE(catalog[6].name == tool::kToolSearchName);
   REQUIRE(catalog[7].name == tool::kSkillInvokeName);
   REQUIRE(catalog[8].name == tool::kSkillDeactivateName);
+  REQUIRE(catalog[9].name == tool::kMemoryRecallName);
 }
 
 TEST_CASE("tool.search returns structured tool metadata by exact name", "[unit][tool][tool_search]") {
@@ -881,6 +898,69 @@ TEST_CASE("skill.deactivate reports missing runtime service as a model-repairabl
     REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
     REQUIRE(context_has(result.error(), "reason", "skill_runtime_unavailable"));
     REQUIRE(context_has(result.error(), "skill", "release-note"));
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
+  });
+}
+
+TEST_CASE("memory.recall delegates parsed query through DispatchContext", "[unit][tool][memory_recall]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_memory_recall(registry).has_value());
+
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kMemoryRecallName},
+        .capability = core::Capability::read_memory,
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto seen = tool::MemoryRecallRequest{};
+    ctx.memory_recall = [&seen](tool::MemoryRecallRequest request,
+                                tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
+      seen = std::move(request);
+      co_return tool::Output{
+          .text = "memory.recall: delegated",
+          .data_json = R"({"kind":"memory_recall","match_count":1,"records":[]})",
+          .usage = tool::ToolUsage{.match_count = 1},
+      };
+    };
+
+    auto result = co_await registry.dispatch(tool::kMemoryRecallName,
+                                             R"({"query":"scoped slices","limit":7,"kinds":["project","reference"]})",
+                                             ctx);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "memory.recall: delegated");
+    REQUIRE(result->data_json.has_value());
+    REQUIRE(result->usage.match_count.has_value());
+    REQUIRE(*result->usage.match_count == 1);
+    REQUIRE(seen.query == "scoped slices");
+    REQUIRE(seen.limit == 7);
+    REQUIRE(seen.kinds == std::vector<std::string>{"project", "reference"});
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
+  });
+}
+
+TEST_CASE("memory.recall reports missing runtime service as a model-repairable error", "[unit][tool][memory_recall]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_memory_recall(registry).has_value());
+
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kMemoryRecallName},
+        .capability = core::Capability::read_memory,
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    auto result = co_await registry.dispatch(tool::kMemoryRecallName, R"({"query":"scoped slices"})", ctx);
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(context_has(result.error(), "reason", "memory_runtime_unavailable"));
     REQUIRE(sink.events().size() == 1);
     REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
   });

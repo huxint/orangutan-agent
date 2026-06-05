@@ -19,6 +19,11 @@ the surface where these capabilities are presented, gated, observed, and extende
 - Output redaction via runtime regex from config.
 - Hook lifecycle wired (tool_before / tool_dispatched / tool_after / tool_error).
 
+> **Status (slice 168):** the current built-in catalog ships the filesystem
+> set, `tool.search`, `skill.invoke`, `skill.deactivate`, and deferred
+> `memory.recall`. The remaining memory mutation tools, `memory.remember` and
+> `memory.forget`, stay downstream.
+
 ## Scope (v1.1)
 
 - `oran-tool-orchestration` — once spec 0004 lands.
