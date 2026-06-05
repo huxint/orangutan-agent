@@ -7,12 +7,26 @@
 
 ## Snapshot
 
-- **Slice:** 170 (`xmake run orangutan` reports slice 170)
+- **Slice:** 171 (`xmake run orangutan` reports slice 171)
 - **Last completed history:**
-  [`histories/2026-06/20260605-1604-memory-forget-tool.md`](histories/2026-06/20260605-1604-memory-forget-tool.md)
+  [`histories/2026-06/20260605-1718-longterm-fts5-bench.md`](histories/2026-06/20260605-1718-longterm-fts5-bench.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 170 adds the delete-side long-term memory
+- **Latest completed slice:** slice 171 adds the first 10k-record long-term
+  memory search baseline. `bench-memory` now seeds a synthetic FTS5 corpus once
+  and measures `memory::longterm::Runtime::search("react agent loop", limit=10)`
+  through the default `Fts5Backend`, with scenario-local nanobench settings so
+  the expensive search path stays practical to run. Local focused result:
+  `memory.longterm_fts5_search_10k_limit10` **~15.08 ms / batch** after
+  `xmake build bench-memory && xmake run bench-memory`; the session memory
+  comparison in the same run reported **~887.2 us** raw repository append/load
+  vs. **~1041.3 us** typed store append/load.
+- **Next intended slice:** no active plan; the measured FTS5 baseline is in
+  place, so the next small memory slice can start the gated `sqlite-vec`
+  adapter under `--vector_memory=y` or the first hybrid/vector composition
+  contract.
+
+Slice 170 adds the delete-side long-term memory
   tool. `oran-tool` registers deferred `memory.forget` with `write_memory`
   capability, parses `{id}`, and delegates through
   `DispatchContext::memory_forget` so the tool library stays independent of
@@ -24,9 +38,6 @@
   `test-tool` **208 cases / 2181 assertions**, `test-memory`
   **28 cases / 727 assertions**, and `test-bootstrap`
   **114 cases / 874 assertions**.
-- **Next intended slice:** no active plan; pick a small remaining tracker item
-  after re-orienting, likely the gated `sqlite-vec` adapter, hybrid/vector
-  ranking/composition, or another small tracked item.
 
 Slice 169 adds the first write-side long-term
   memory tool. `oran-tool` registers deferred `memory.remember` with
@@ -1622,14 +1633,14 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-config`: 44 cases / 369 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 34 cases / 243 assertions.
-- `oran-memory`: 25 cases / 705 assertions.
+- `oran-memory`: 28 cases / 727 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
-- `oran-tool`: 197 cases / 2049 assertions.
+- `oran-tool`: 208 cases / 2181 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 111 cases / 824 assertions.
+- `oran-bootstrap`: 114 cases / 874 assertions.
 
 ## Open Tech-Debt Rows
 
@@ -1677,8 +1688,10 @@ Closed entries do *not* live here — the tracker is canonical.
   permissioned tool dispatch path. Slice 169 closed the first write-side memory
   tool by wiring deferred `memory.remember` through that same path. Slice 170
   closed the delete-side long-term memory tool by wiring deferred
-  `memory.forget` through the same permissioned dispatch path.
-  Remaining follow-ups are grouped P1/P2/P3 in the tracker.
+  `memory.forget` through the same permissioned dispatch path. Slice 171 added
+  the 10k-record FTS5 `longterm::Runtime::search` bench baseline for the P3
+  measure-first memory path. Remaining follow-ups are grouped P1/P2/P3 in the
+  tracker.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on
   the documented reference hardware (8-core / NVMe / native Linux);

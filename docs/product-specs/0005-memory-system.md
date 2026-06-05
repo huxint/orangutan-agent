@@ -83,6 +83,12 @@ operators can reason about retention, scope, and visibility.
   long-term `Backend` to remove the scoped record idempotently, returning
   confirmation text plus structured `memory_forget` removed-key metadata.
   Vector search and hybrid ranking remain downstream.
+- Long-term FTS5 search baseline shipped in slice 171:
+  `bench/memory/scenarios/longterm_fts5.cpp` seeds a synthetic 10k-record corpus
+  once and measures `memory::longterm::Runtime::search("react agent loop",
+  limit=10)` through the default `Fts5Backend`. The local slice run reported
+  **~15.08 ms / batch**, below the 50 ms acceptance budget and ready for
+  sqlite-vec / hybrid comparisons.
 - Decay policy applied by a periodic job (`oran-automation`).
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
 - Hook events on read / write / forget / decay.
@@ -120,8 +126,10 @@ operators can reason about retention, scope, and visibility.
    ordinary configured-route startup enable that recall through config, and
    slice 166 lets that config constrain recall to selected record kinds; slice
    167 adds the first selectable query-derivation policy, and slice 168 exposes
-   read-only recall through the permissioned `memory.recall` tool. The 10
-   k-record bench remains downstream.
+   read-only recall through the permissioned `memory.recall` tool. Slice 171
+   adds the 10k-record FTS5 bench over `longterm::Runtime::search`, with a
+   local result of **~15.08 ms / batch** for `limit=10`; keep the criterion open
+   until the gated vector/hybrid path reports the same corpus.
 3. The MEMORY.md mirror, when enabled, reflects all kinds + records within 1 s of the
    underlying DB write.
 4. Decay marks records older than `policy.forget_after_unused` as shadow; they no
@@ -141,7 +149,9 @@ operators can reason about retention, scope, and visibility.
    coverage, slice-168 `memory.recall` tool binding, and slice-169
    `memory.remember` plus slice-170 `memory.forget` tool bindings.
 7. `bench/memory/search-fts5-vs-vector` (v2): reports the FTS5 baseline + vector
-   results in machine-readable JSON.
+   results in machine-readable JSON. **Status:** partially open; slice 171 adds
+   the FTS5 baseline scenario under `bench/memory/scenarios/longterm_fts5.cpp`,
+   while sqlite-vec/vector and baseline JSON reporting remain downstream.
 
 ## Design Doc Cross-References
 

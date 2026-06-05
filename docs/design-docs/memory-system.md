@@ -156,7 +156,7 @@ MEMORY.md mirror. v2 keeps that core and adds:
 - **Decay policy**: `memory-age` style decay is actually wired into the search pipeline
   this time; expired records receive lower BM25 weight before potentially being pruned.
 
-Status (slice 170): `include/oran/memory/longterm.hpp` now ships the public
+Status (slice 171): `include/oran/memory/longterm.hpp` now ships the public
 record/query/write shapes, reflection-backed `RecordKind`, `Backend` and
 `VectorBackend` traits, validation helpers for record keys, search limits,
 record metadata, and vector embeddings, plus `Fts5Backend` as the default
@@ -195,8 +195,11 @@ upserting. Slice 170 adds `render_forget_data_json(...)` for scoped removed-key
 metadata and the delete-side `memory.forget` tool path, which reaches the same
 assembly-owned long-term `Backend` through `DispatchContext::memory_forget`;
 bootstrap derives the runner's stable scope key before calling the backend's
-idempotent `remove(...)`. It does **not** yet ship the gated sqlite-vec adapter
-or hybrid ranking.
+idempotent `remove(...)`. Slice 171 adds the first 10k-record FTS5 search bench:
+`bench/memory/scenarios/longterm_fts5.cpp` seeds the default backend once and
+measures `longterm::Runtime::search("react agent loop", limit=10)` as the
+baseline future sqlite-vec and hybrid-ranking work must compare against. It does
+**not** yet ship the gated sqlite-vec adapter or hybrid ranking.
 
 ```cpp
 // include/oran/memory/longterm.hpp
@@ -316,8 +319,9 @@ Planned optional backends:
   combines FTS5 score + vector cosine.
 - external vector adapter — optional embedding store via `oran-http::Client`.
 
-`bench/oran-memory/` (see `docs/product-specs/0010-benchmark-harness.md`) will compare
-backends on a synthetic 10k-record corpus.
+`bench/memory/` (see `docs/product-specs/0010-benchmark-harness.md`) now records the
+FTS5 10k-record search baseline; future gated vector slices add sqlite-vec and
+hybrid comparisons against that scenario.
 
 ## Shared Memory (Team)
 
