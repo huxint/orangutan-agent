@@ -208,7 +208,7 @@ promotion side effect that the first agent loop will reuse.
   only; `scripts/check-prompt-preamble.sh` rejects clocks, ids, and
   cross-section prompt bytes.
 - **Memory framing renderer** populates section 5.
-  **Status (slice 165, 2026-06-05):** `oran-memory` now exports
+  **Status (slice 167, 2026-06-05):** `oran-memory` now exports
   `memory::Framing` / `memory::FramingOwner`, a minimal once-per-turn owner
   for already-materialized section-5 bytes. `AgentPromptRunner` renders it
   before entering `agent::Loop`, and `prompt::Builder` continues to consume the
@@ -221,7 +221,10 @@ promotion side effect that the first agent loop will reuse.
   configured-route startup, with recall still disabled by default. Slice 166
   adds optional `memory.longterm.recall.kinds` filters; the query still runs
   once at the prompt boundary and the builder still receives only stable
-  section-5 bytes.
+  section-5 bytes. Slice 167 adds `memory.longterm.recall.query_strategy` so
+  configured runs can preserve the default `prompt_text` query or use
+  `last_user_message` for follow-up prompts; the policy changes the single
+  pre-loop search text, not the rendered-memory determinism contract.
 - **Skill catalog renderer** populates section 4.
   **Status (slice 138, 2026-06-01):** `oran-skill` now ships the
   deterministic section-4 catalog renderer, the section-4 owner, and the first

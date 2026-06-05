@@ -128,9 +128,15 @@ struct HooksConfig {
   friend bool operator==(const HooksConfig&, const HooksConfig&) = default;
 };
 
+enum class LongtermMemoryRecallQueryStrategy : std::uint8_t {
+  prompt_text,
+  last_user_message,
+};
+
 struct LongtermMemoryRecallConfig {
   bool enabled{false};
   std::int64_t limit{5};
+  LongtermMemoryRecallQueryStrategy query_strategy{LongtermMemoryRecallQueryStrategy::prompt_text};
   std::vector<std::string> kinds{};
 
   friend bool operator==(const LongtermMemoryRecallConfig&, const LongtermMemoryRecallConfig&) = default;

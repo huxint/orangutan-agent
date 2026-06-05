@@ -74,9 +74,10 @@ constexpr auto kRecognizedLongtermMemoryFields = std::array<std::string_view, 1>
     "recall",
 };
 
-constexpr auto kRecognizedLongtermRecallFields = std::array<std::string_view, 3>{
+constexpr auto kRecognizedLongtermRecallFields = std::array<std::string_view, 4>{
     "enabled",
     "limit",
+    "query_strategy",
     "kinds",
 };
 
@@ -655,6 +656,20 @@ parse_longterm_recall(const json& longterm, bool strict, std::vector<ConfigWarni
       return std::unexpected(std::move(parsed.error()));
     }
     recall.limit = *parsed;
+  }
+
+  if (const auto strategy = it->find("query_strategy"); strategy != it->end()) {
+    constexpr std::string_view kPath = "$.memory.longterm.recall.query_strategy";
+    if (!strategy->is_string()) {
+      return std::unexpected(config_error("expected string", std::string{kPath}));
+    }
+    auto text = strategy->get<std::string>();
+    auto parsed = core::parse_enum<LongtermMemoryRecallQueryStrategy>(text);
+    if (!parsed) {
+      return std::unexpected(config_error("unknown long-term memory recall query strategy", std::string{kPath})
+                                 .with("value", std::move(text)));
+    }
+    recall.query_strategy = *parsed;
   }
 
   if (const auto kinds = it->find("kinds"); kinds != it->end()) {

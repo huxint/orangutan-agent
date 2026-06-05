@@ -172,17 +172,21 @@ Slice 164 adds the equivalent opt-in path for long-term memory recall:
 `AgentPromptRunnerOptions::longterm_recall` defaults disabled, and when enabled
 requires an assembly-owned `memory::longterm::Runtime`, a positive limit, and no
 exact `AgentPromptRunnerOptions::memory_framing` override. The runner derives a
-`longterm::Query` from the current prompt plus its stable `scope_key`, calls
-`Runtime::recall(...)` once before the user prompt enters the conversation tail,
-then renders section 5 from the returned records. Multi-iteration provider/tool
-loops reuse those same bytes for the turn. Slice 165 adds the ordinary
+`longterm::Query` from the configured query strategy plus its stable
+`scope_key`, calls `Runtime::recall(...)` once before the user prompt enters the
+conversation tail, then renders section 5 from the returned records.
+Multi-iteration provider/tool loops reuse those same bytes for the turn. Slice
+165 adds the ordinary
 configured-route policy source: `memory.longterm.recall.enabled` and
 `memory.longterm.recall.limit` parse through `oran-config`, default to disabled
 and `5`, and `bootstrap::run` maps them into the runner option after building
 the provider-backed runtime assembly. Slice 166 extends the same policy with
 optional `memory.longterm.recall.kinds`; bootstrap validates those strings
 against `memory::longterm::RecordKind` and passes the parsed filter to the
-prompt-boundary query. Omitting `kinds` preserves all-kind recall.
+prompt-boundary query. Omitting `kinds` preserves all-kind recall. Slice 167 adds
+`memory.longterm.recall.query_strategy`: `prompt_text` preserves the current
+prompt text query, while `last_user_message` uses the latest prior user text
+when one exists so follow-up prompts can recall from session context.
 When the caller
 selects an `AgentPromptRunnerOptions::agent_config_name` (or leaves it empty
 and selects `permission_agent_name`), the runner reads that `agents.<name>`

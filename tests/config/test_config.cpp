@@ -360,7 +360,7 @@ TEST_CASE("Config::parse warns or fails on unknown nested provider and hook fiel
     "longterm": {
       "recall": {
         "enabled": true,
-        "query_strategy": "prompt_text"
+        "ranking_strategy": "lexical"
       }
     }
   }
@@ -368,7 +368,7 @@ TEST_CASE("Config::parse warns or fails on unknown nested provider and hook fiel
 
     REQUIRE(result.has_value());
     REQUIRE(result->warnings().size() == 1);
-    REQUIRE(result->warnings()[0].path == "$.memory.longterm.recall.query_strategy");
+    REQUIRE(result->warnings()[0].path == "$.memory.longterm.recall.ranking_strategy");
     REQUIRE(result->warnings()[0].message == "unknown long-term memory recall field");
   }
 
@@ -426,7 +426,7 @@ TEST_CASE("Config::parse warns or fails on unknown nested provider and hook fiel
     "longterm": {
       "recall": {
         "enabled": true,
-        "query_strategy": "prompt_text"
+        "ranking_strategy": "lexical"
       }
     }
   }
@@ -767,6 +767,7 @@ TEST_CASE("Config::parse extracts memory recall policy", "[unit][config][memory]
       "recall": {
         "enabled": true,
         "limit": 7,
+        "query_strategy": "last_user_message",
         "kinds": ["project", "reference"]
       }
     }
@@ -776,6 +777,8 @@ TEST_CASE("Config::parse extracts memory recall policy", "[unit][config][memory]
   REQUIRE(result.has_value());
   REQUIRE(result->memory().longterm.recall.enabled);
   REQUIRE(result->memory().longterm.recall.limit == 7);
+  REQUIRE(result->memory().longterm.recall.query_strategy ==
+          config::LongtermMemoryRecallQueryStrategy::last_user_message);
   REQUIRE(result->memory().longterm.recall.kinds == std::vector<std::string>{"project", "reference"});
 }
 
@@ -785,6 +788,7 @@ TEST_CASE("Config::parse defaults memory recall policy when absent", "[unit][con
   REQUIRE(result.has_value());
   REQUIRE_FALSE(result->memory().longterm.recall.enabled);
   REQUIRE(result->memory().longterm.recall.limit == 5);
+  REQUIRE(result->memory().longterm.recall.query_strategy == config::LongtermMemoryRecallQueryStrategy::prompt_text);
   REQUIRE(result->memory().longterm.recall.kinds.empty());
 }
 
@@ -815,6 +819,19 @@ TEST_CASE("Config::parse rejects malformed memory recall policy", "[unit][config
 
   SECTION("zero limit") {
     auto result = config::Config::parse(R"json({"memory": {"longterm": {"recall": {"limit": 0}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-string query strategy") {
+    auto result = config::Config::parse(R"json({"memory": {"longterm": {"recall": {"query_strategy": true}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("unknown query strategy") {
+    auto result =
+        config::Config::parse(R"json({"memory": {"longterm": {"recall": {"query_strategy": "all_text"}}}})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }
@@ -876,6 +893,18 @@ TEST_CASE("PermissionVerdict round-trips through its stable spellings", "[unit][
   REQUIRE(parse_enum<config::PermissionVerdict>("ask") == config::PermissionVerdict::ask);
   REQUIRE_FALSE(parse_enum<config::PermissionVerdict>("approve").has_value());
   REQUIRE_FALSE(parse_enum<config::PermissionVerdict>("").has_value());
+}
+
+TEST_CASE("LongtermMemoryRecallQueryStrategy round-trips through stable spellings", "[unit][config][memory]") {
+  REQUIRE(core::enum_name(config::LongtermMemoryRecallQueryStrategy::prompt_text) == "prompt_text");
+  REQUIRE(core::enum_name(config::LongtermMemoryRecallQueryStrategy::last_user_message) == "last_user_message");
+
+  using core::parse_enum;
+  REQUIRE(parse_enum<config::LongtermMemoryRecallQueryStrategy>("prompt_text") ==
+          config::LongtermMemoryRecallQueryStrategy::prompt_text);
+  REQUIRE(parse_enum<config::LongtermMemoryRecallQueryStrategy>("last_user_message") ==
+          config::LongtermMemoryRecallQueryStrategy::last_user_message);
+  REQUIRE_FALSE(parse_enum<config::LongtermMemoryRecallQueryStrategy>("prompt").has_value());
 }
 
 TEST_CASE("Config::parse extracts a populated permissions block", "[unit][config][permissions]") {

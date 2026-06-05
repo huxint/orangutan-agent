@@ -91,6 +91,7 @@
       "recall": {
         "enabled": false,
         "limit": 5,
+        "query_strategy": "prompt_text",
         "kinds": ["user", "feedback", "project", "reference", "team"]
       }
     }

@@ -102,8 +102,9 @@ The prompt is assembled in this order, oldest-stable to newest-dynamic:
    prompt. Skill bodies still stay out of sections (1)-(6).
 5. **Memory framing** — working-memory, session-memory summary, and optional
    long-term recall. A recall query may be derived once at the prompt boundary
-   from the current user prompt, but rendered section bytes must be a function
-   of the returned memory records. Do *not* thread "current time", request ids,
+   from the current user prompt or, when configured for follow-up prompts, the
+   last previous user message, but rendered section bytes must be a function of
+   the returned memory records. Do *not* thread "current time", request ids,
    trace ids, scores, or per-call counters through it.
 6. **Per-agent overlay** — agent-specific instructions from
    `config.agents.<name>.*`. Stable within an agent's run.

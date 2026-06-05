@@ -27,9 +27,18 @@ namespace orangutan::bootstrap {
 
 class RuntimeAssembly;
 
+enum class LongtermRecallQueryStrategy : std::uint8_t {
+  prompt_text,
+  last_user_message,
+};
+
 struct LongtermRecallOptions {
   bool enabled{false};
   std::size_t limit{5};
+  /// `prompt_text` preserves the current one-query behavior. `last_user_message`
+  /// lets follow-up prompts recall from the previous user text while still
+  /// reading long-term memory once before the loop.
+  LongtermRecallQueryStrategy query_strategy{LongtermRecallQueryStrategy::prompt_text};
   /// Optional `memory::longterm::RecordKind` spellings to include. Empty means
   /// the runtime searches every non-shadow kind.
   std::vector<std::string> kinds{};

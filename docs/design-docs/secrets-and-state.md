@@ -49,10 +49,12 @@ Current implementation status:
   `agents.<name>.skills_enabled` skill allowlists, and optional
   `agents.<name>.skills_deactivated` / `skills_expirations` skill
   activation-policy inputs. The `memory` root is typed for
-  `memory.longterm.recall.enabled`, `memory.longterm.recall.limit`, and optional
+  `memory.longterm.recall.enabled`, `memory.longterm.recall.limit`,
+  `memory.longterm.recall.query_strategy`, and optional
   `memory.longterm.recall.kinds` `RecordKind` spellings; ordinary
   configured-route bootstrap maps that policy into prompt-boundary long-term
-  recall while the defaults keep recall disabled.
+  recall while the defaults keep recall disabled and the default strategy
+  searches the current prompt text.
 - `bootstrap::run` now consumes `trace.retention_days` by deriving an explicit
   Unix-nanosecond cutoff and passing it to `RuntimeAssembly`, which purges
   matching old `trace_turns` rows before exposing the long-lived trace

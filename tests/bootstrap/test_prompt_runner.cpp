@@ -677,6 +677,51 @@ TEST_CASE("AgentPromptRunner recalls long-term memory once before loop iteration
   });
 }
 
+TEST_CASE("AgentPromptRunner can derive recall query from the last user message",
+          "[unit][bootstrap][prompt_runner][memory]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-longterm-last-user"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false);
+    REQUIRE(assembly.longterm_memory_backend() != nullptr);
+
+    RecordingProvider recording{{
+        text_response("first"),
+        text_response("second"),
+    }};
+
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.longterm_recall = bootstrap::LongtermRecallOptions{
+        .enabled = true,
+        .limit = 5,
+        .query_strategy = bootstrap::LongtermRecallQueryStrategy::last_user_message,
+    };
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto first = co_await (*runner)->run_prompt(
+        cli::PromptRunRequest{.prompt = "rareprioranchor", .mode = cli::CliMode::single_shot});
+    REQUIRE(first.has_value());
+
+    auto upserted = co_await assembly.longterm_memory_backend()->upsert(memory::longterm::WriteRequest{
+        .record = make_longterm_record("lt-last-user", "Last-user strategy found rareprioranchor."),
+    });
+    REQUIRE(upserted.has_value());
+
+    auto second =
+        co_await (*runner)->run_prompt(cli::PromptRunRequest{.prompt = "continue", .mode = cli::CliMode::single_shot});
+    REQUIRE(second.has_value());
+
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 2);
+    REQUIRE(requests[0].system_prompt.has_value());
+    REQUIRE(requests[1].system_prompt.has_value());
+    REQUIRE_FALSE(requests[0].system_prompt->contains("Long-term memory:"));
+    REQUIRE(requests[1].system_prompt->contains("Long-term memory:"));
+    REQUIRE(requests[1].system_prompt->contains("Last-user strategy found rareprioranchor."));
+  });
+}
+
 TEST_CASE("AgentPromptRunner rejects long-term recall without assembly runtime",
           "[unit][bootstrap][prompt_runner][memory]") {
   TempDir temp{"oran-bootstrap-prompt-runner-longterm-no-runtime"};

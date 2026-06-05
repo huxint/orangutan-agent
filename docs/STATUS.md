@@ -7,12 +7,27 @@
 
 ## Snapshot
 
-- **Slice:** 166 (`xmake run orangutan` reports slice 166)
+- **Slice:** 167 (`xmake run orangutan` reports slice 167)
 - **Last completed history:**
-  [`histories/2026-06/20260605-1233-memory-longterm-recall-kinds.md`](histories/2026-06/20260605-1233-memory-longterm-recall-kinds.md)
+  [`histories/2026-06/20260605-1305-memory-longterm-recall-query-strategy.md`](histories/2026-06/20260605-1305-memory-longterm-recall-query-strategy.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 166 adds optional long-term recall kind
+- **Latest completed slice:** slice 167 adds the first configured long-term
+  recall query-derivation selector. `oran-config` parses
+  `memory.longterm.recall.query_strategy` as `prompt_text` (default/current
+  behavior) or `last_user_message`; `bootstrap::run` maps that policy into
+  `AgentPromptRunnerOptions::longterm_recall`; and `AgentPromptRunner` uses the
+  latest previous user text for the single prompt-boundary recall query when
+  that strategy is selected, falling back to the current prompt when no prior
+  user text exists. Kind filters, limits, disabled-by-default recall, and
+  deterministic section-5 rendering remain unchanged. Focused results:
+  `test-config` **44 cases / 369 assertions** and `test-bootstrap`
+  **111 cases / 824 assertions**.
+- **Next intended slice:** no active plan; pick a small remaining tracker item
+  after re-orienting, likely the gated `sqlite-vec` adapter, memory tools,
+  hybrid/vector ranking/composition, or another small tracked item.
+
+Slice 166 adds optional long-term recall kind
   filters to the configured-route policy: `oran-config` parses
   `memory.longterm.recall.kinds` as a non-empty unique array of `RecordKind`
   spellings, `bootstrap::run` validates those spellings against
@@ -22,9 +37,6 @@
   recall disabled. Focused results: `test-config`
   **43 cases / 358 assertions** and `test-bootstrap`
   **110 cases / 811 assertions**.
-- **Next intended slice:** no active plan; pick a small remaining tracker item
-  after re-orienting, likely the gated `sqlite-vec` adapter, memory tools,
-  richer recall query-derivation/ranking policy, or another small tracked item.
 
 Slice 165 gives ordinary configured-route startup
   a typed long-term recall policy: `oran-config` parses
@@ -1568,7 +1580,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-http`: 3 cases / 21 assertions.
 - `oran-io`: 54 cases / 311 assertions.
 - `oran-storage`: 76 cases / 986 assertions.
-- `oran-config`: 43 cases / 358 assertions.
+- `oran-config`: 44 cases / 369 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 34 cases / 243 assertions.
 - `oran-memory`: 25 cases / 705 assertions.
@@ -1578,7 +1590,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 110 cases / 811 assertions.
+- `oran-bootstrap`: 111 cases / 824 assertions.
 
 ## Open Tech-Debt Rows
 
@@ -1618,9 +1630,10 @@ Closed entries do *not* live here — the tracker is canonical.
   closed the default FTS5 lexical backend half, slice 162 closed the first
   long-term runtime recall composition half, slice 163 closed bootstrap
   assembly ownership for the default long-term memory DB/backend/runtime,
-  slice 164 closed the opt-in prompt-boundary recall rendering path, and
-  slice 165 closed the configured-route recall policy mapping, and slice 166
-  closed the first recall kind-filter policy slice.
+  slice 164 closed the opt-in prompt-boundary recall rendering path, slice 165
+  closed the configured-route recall policy mapping, slice 166 closed the first
+  recall kind-filter policy slice, and slice 167 closed the first recall
+  query-derivation selector.
   Remaining follow-ups are grouped P1/P2/P3 in the tracker.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on

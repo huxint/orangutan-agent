@@ -46,7 +46,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice166";
+constexpr std::string_view kVersion = "2.0.0-slice167";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 constexpr std::int64_t kNanosecondsPerDay = 86'400'000'000'000;
@@ -101,6 +101,17 @@ struct ParsedArgs {
   return {};
 }
 
+[[nodiscard]] LongtermRecallQueryStrategy
+longterm_recall_query_strategy_from(config::LongtermMemoryRecallQueryStrategy strategy) noexcept {
+  switch (strategy) {
+    case config::LongtermMemoryRecallQueryStrategy::prompt_text:
+      return LongtermRecallQueryStrategy::prompt_text;
+    case config::LongtermMemoryRecallQueryStrategy::last_user_message:
+      return LongtermRecallQueryStrategy::last_user_message;
+  }
+  return LongtermRecallQueryStrategy::prompt_text;
+}
+
 [[nodiscard]] Result<LongtermRecallOptions> longterm_recall_options_from(const config::Config& cfg) {
   const auto& recall = cfg.memory().longterm.recall;
   if (static_cast<std::uint64_t>(recall.limit) > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
@@ -114,6 +125,7 @@ struct ParsedArgs {
   return LongtermRecallOptions{
       .enabled = recall.enabled,
       .limit = static_cast<std::size_t>(recall.limit),
+      .query_strategy = longterm_recall_query_strategy_from(recall.query_strategy),
       .kinds = recall.kinds,
   };
 }

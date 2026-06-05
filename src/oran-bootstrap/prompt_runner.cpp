@@ -65,6 +65,52 @@ parse_longterm_recall_kinds(std::span<const std::string> names) {
   return kinds;
 }
 
+[[nodiscard]] std::string user_message_text_for_recall(const core::Message& message) {
+  if (message.role != core::Role::user) {
+    return {};
+  }
+
+  std::string text;
+  for (const auto& block : message.blocks) {
+    const auto* content = std::get_if<core::TextContent>(&block);
+    if (content == nullptr || content->text.empty()) {
+      continue;
+    }
+    if (!text.empty()) {
+      text.push_back('\n');
+    }
+    text.append(content->text);
+  }
+  return text;
+}
+
+[[nodiscard]] std::string last_user_message_text_for_recall(std::span<const core::Message> conversation_tail) {
+  for (std::size_t i = conversation_tail.size(); i > 0; --i) {
+    auto text = user_message_text_for_recall(conversation_tail[i - 1]);
+    if (!text.empty()) {
+      return text;
+    }
+  }
+  return {};
+}
+
+[[nodiscard]] std::string recall_query_text(LongtermRecallQueryStrategy strategy,
+                                            std::string_view prompt,
+                                            std::span<const core::Message> conversation_tail) {
+  switch (strategy) {
+    case LongtermRecallQueryStrategy::prompt_text:
+      return std::string{prompt};
+    case LongtermRecallQueryStrategy::last_user_message: {
+      auto text = last_user_message_text_for_recall(conversation_tail);
+      if (!text.empty()) {
+        return text;
+      }
+      return std::string{prompt};
+    }
+  }
+  return std::string{prompt};
+}
+
 [[nodiscard]] Result<std::size_t> checked_cap(std::int64_t value, std::string field) {
   if (value < 0) {
     return std::unexpected(option_error("tool output cap must not be negative").with("field", std::move(field)));
@@ -375,7 +421,8 @@ public:
     auto prompt_text = std::move(request.prompt);
     const auto system_preamble = std::string{system_preamble_.render_once()};
     const auto skills_catalog = std::string{skills_catalog_.render_once()};
-    auto memory_framing = co_await render_memory_framing_for_prompt(prompt_text);
+    auto memory_framing =
+        co_await render_memory_framing_for_prompt(prompt_text, std::span<const core::Message>{conversation_tail});
     if (!memory_framing) {
       co_return std::unexpected(std::move(memory_framing).error());
     }
@@ -513,7 +560,8 @@ public:
   }
 
 private:
-  [[nodiscard]] async::Awaitable<Result<std::string>> render_memory_framing_for_prompt(std::string_view prompt) {
+  [[nodiscard]] async::Awaitable<Result<std::string>>
+  render_memory_framing_for_prompt(std::string_view prompt, std::span<const core::Message> conversation_tail) {
     if (!longterm_recall_.enabled) {
       co_return std::string{memory_framing_.render_once()};
     }
@@ -526,7 +574,7 @@ private:
         .query =
             memory::longterm::Query{
                 .scope_key = scope_key_,
-                .text = std::string{prompt},
+                .text = recall_query_text(longterm_recall_.query_strategy, prompt, conversation_tail),
                 .kinds = longterm_recall_kinds_,
                 .include_shadow = false,
             },
