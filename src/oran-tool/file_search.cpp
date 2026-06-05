@@ -826,7 +826,7 @@ private:
 /// Build the structured `Output::data_json` payload that mirrors the rendered
 /// text but exposes match cardinality and per-walk usage to callers that no
 /// longer want to parse the trailing summary line. The shape is intentionally
-/// flat: every consumer (provider adapter, audit fan-out, web UI) reads the
+/// flat: every consumer (provider adapter, audit fan-out, desktop app) reads the
 /// same JSON object and decides how to project it.
 [[nodiscard]] std::string format_data_json(const SearchOutcome& outcome, const SearchOptions& opts) {
   nlohmann::json matches = nlohmann::json::array();

@@ -23,7 +23,7 @@ for sanity.
 | `oran-agent`                       | 1.5 s   | 3.0 s   | 3.5 s    |
 | `oran-orchestration`, `oran-automation` | 1.5 s | 3.0 s | 3.5 s   |
 | `oran-channel`, `oran-channel-*`   | 1.2 s   | 2.5 s   | 3.0 s    |
-| `oran-web`                          | 1.5 s   | 3.0 s   | 4.0 s    |
+| `oran-desktop`                      | 1.5 s   | 3.0 s   | 4.0 s    |
 | `oran-cli`                          | 1.5 s   | 3.0 s   | 4.0 s    |
 | `oran-bootstrap`                    | 2.0 s   | 4.0 s   | 5.0 s    |
 

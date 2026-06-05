@@ -373,7 +373,7 @@ All adapters support streaming when the vendor supports it. The contract:
 
 - The `Awaitable<Result<Response>>` resolves only when the stream terminates.
 - During streaming, the `EventSink` (provided by the caller) receives deltas.
-- The web UI's SSE route bridges these deltas to the client.
+- The desktop app receives these deltas in-process through the same `EventSink`.
 - The CLI REPL renders deltas to the terminal in real time.
 
 **Status (slices 121–123):** the Anthropic Messages streaming path is shipped

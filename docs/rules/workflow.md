@@ -106,7 +106,7 @@ broader repository checks than the hook.
 - `bug_report` — produce a minimal reproducer.
 - `feature_request` — link to the relevant design doc or product spec.
 - Labels: `bug`, `feature`, `perf`, `compile-time`, `docs`, `build`, `agent-runtime`,
-  `channel`, `provider`, `memory`, `automation`, `hooks`, `permissions`, `web`, `cli`.
+  `channel`, `provider`, `memory`, `automation`, `hooks`, `permissions`, `desktop`, `cli`.
 
 ## Release Cadence
 

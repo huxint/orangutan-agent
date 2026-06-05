@@ -16,7 +16,7 @@ The canonical layering is:
 ```
 ┌─────────────────────────────────────────────────────────┐
 │ Interface layer                                         │
-│   oran-cli, oran-web, oran-channel*, orangutan binary   │
+│   oran-cli, oran-desktop, oran-channel*, orangutan binary │
 ├─────────────────────────────────────────────────────────┤
 │ Agent runtime layer                                     │
 │   oran-agent, oran-orchestration, oran-automation       │
@@ -146,7 +146,7 @@ Some third-party libraries provide minimal forward-decl headers. Use them.
 | spdlog          | wrap behind our own `oran-log` shim        |
 | asio            | provide our own `<oran/async/awaitable_fwd.hpp>` |
 | sqlite3         | wrap behind `<oran/storage/handle_fwd.hpp>` |
-| cpp-httplib     | wrap behind `<oran/http/server_fwd.hpp>`   |
+| Slint           | keep generated UI types inside `oran-desktop` (private) |
 | libcurl         | hide entirely; only `oran-http::client` knows about it |
 
 If a library does not ship a forward-decl header, **our own shim is mandatory**. It
@@ -191,7 +191,7 @@ of justification in the PR description.
 | Provider / prompt / agent     | ≤ 3.0 s                                         |
 | Orchestration / automation    | ≤ 3.0 s                                         |
 | Channel adapters              | ≤ 3.0 s                                         |
-| Web / CLI / bootstrap         | ≤ 4.0 s                                         |
+| Desktop / CLI / bootstrap     | ≤ 4.0 s                                         |
 
 `scripts/measure-tu.sh` (build skeleton) wraps `xmake -v` and emits per-TU times. CI
 publishes them as artifacts and fails on regressions > 30% from baseline.
@@ -212,7 +212,7 @@ See [`../rules/module-and-pch.md`](../rules/module-and-pch.md) for the migration
 ## Anti-Patterns To Reject In Review
 
 - Any new `#include <nlohmann/json.hpp>` in `include/oran/`.
-- Any public type whose private members include a non-pimpl asio/sqlite/curl/cpp-httplib
+- Any public type whose private members include a non-pimpl asio/sqlite/curl/slint
   type.
 - Library X reaching into library Y's `src/Y/*.hpp` (only `include/oran/Y/*.hpp` is
   public).

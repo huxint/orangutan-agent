@@ -74,7 +74,7 @@ with persistent session history and a CLI surface. The first deliverable is "I c
 
 ## Out Of Scope (v1)
 
-- Web UI (spec 0007).
+- Desktop app (spec 0007).
 - Channels (spec 0003).
 - Orchestration (spec 0004).
 - Automation (spec 0006).

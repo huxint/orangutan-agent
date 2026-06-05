@@ -135,7 +135,7 @@ Subsystems that initiate cancellation:
   fine-grained `asio::cancellation_signal` once the loop's
   cancel-state plumbing lands; the scope's header docstring tracks
   the deferred refinement.
-- `oran-agent::Loop` on user `/cancel` or web "stop" button: cancels the in-flight
+- `oran-agent::Loop` on user `/cancel` or the desktop "stop" control: cancels the in-flight
   iteration.
 - `oran-agent::ToolScheduler` (slice 116) on the agent loop's parent
   cancellation: the scheduler holds one `asio::cancellation_signal` per

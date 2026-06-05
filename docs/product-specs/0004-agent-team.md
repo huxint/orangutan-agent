@@ -26,7 +26,7 @@ makes teams first-class.
 - `Vote` strategy — agents answer the same prompt independently; aggregator picks.
 - `RoundRobin` strategy.
 - `FreeForm` strategy — pure mailbox-based; leader declares termination.
-- Web UI rendering of the conversation DAG.
+- Desktop app rendering of the conversation DAG.
 
 ## Scope (v2 stretch)
 

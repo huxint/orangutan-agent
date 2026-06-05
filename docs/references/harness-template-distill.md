@@ -58,7 +58,7 @@ docs/
 ├── SECURITY.md               secure defaults
 ├── SUPPLY_CHAIN_SECURITY.md  deps / SBOM / provenance
 ├── CICD.md                   CI/CD scaffolding
-└── FRONTEND.md               UI guide
+└── DESKTOP.md                UI guide
 scripts/
 ├── ci.sh                     base CI
 ├── check-docs.sh             required-file check
@@ -99,8 +99,8 @@ The template is generic; we extend it for a C++23 agent runtime:
 
 - The harness-cli `npm` initializer — we do the initialization manually (or via our
   own simpler bootstrap script). The npm dependency wasn't justified for a C++ project.
-- Frontend-specific scaffolding in `docs/FRONTEND.md` is kept minimal until the
-  web UI shape stabilizes.
+- Desktop-app scaffolding in `docs/DESKTOP.md` is kept minimal until the
+  desktop UI shape stabilizes.
 
 ## What To Do If The Template Updates
 

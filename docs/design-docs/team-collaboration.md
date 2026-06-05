@@ -99,7 +99,7 @@ struct Edge {
 
 The DAG is **persisted** in `orchestration.db`. Post-hoc:
 
-- The web UI renders it.
+- The desktop app renders it.
 - The audit log references nodes/edges.
 - The `team-debrief` skill summarizes it.
 
@@ -194,7 +194,7 @@ prevents a research team from accidentally running shell commands via a coder me
 ## Spawning A Team — End-To-End
 
 ```text
-1. CLI / web / channel invokes orchestration tool: agent.spawn_team(team_def, prompt).
+1. CLI / desktop / channel invokes orchestration tool: agent.spawn_team(team_def, prompt).
 2. oran-orchestration::Manager:
      a. Validates team_def against the team registry (config + builtins).
      b. Creates a Conversation, persists it.
@@ -210,7 +210,7 @@ prevents a research team from accidentally running shell commands via a coder me
 
 - A leader can `agent.stop(instance_id)` a worker. The worker's loop receives
   cancellation; in-flight tools cancel; the worker's mailbox closes.
-- The CLI / web can stop a whole conversation: all member loops cancel; the
+- The CLI / desktop can stop a whole conversation: all member loops cancel; the
   conversation enters `terminated` state; `conversation.aborted` hook fires.
 - Cancellation must complete within `config.orchestration.cancel_grace_seconds`
   (default 5s) or the manager logs a warning and force-closes the mailbox.

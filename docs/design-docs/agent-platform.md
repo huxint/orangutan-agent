@@ -41,7 +41,7 @@ sites are added only by extending the assembler, never by re-implementing it.
 | Interface | Direction       | Bound to                             |
 | --------- | --------------- | ------------------------------------ |
 | CLI       | bidirectional   | stdin/stdout (REPL) or one-shot      |
-| Web UI    | bidirectional   | `oran-web` HTTP + SSE                |
+| Desktop   | bidirectional   | `oran-desktop` (Slint, in-process)   |
 | Channel   | bidirectional   | `oran-channel` (QQ, Discord, Slack, …) |
 | Automation | inbound         | `oran-automation` scheduler          |
 | Heartbeat | inbound         | internal liveness pings              |
@@ -340,9 +340,9 @@ In rough priority order:
 4. **Hook sinks v1** — shell + in-process C++ sinks. Lua sink is stretch.
 5. **Permission engine v1** — runtime patterns, replay-signed approval prompts.
 6. **Automation engine v1** — cron + periodic + triggered jobs, per-agent leases.
-7. **Web UI v1** — single-page chat, session list, admin panel, SSE streaming.
+7. **Desktop app v1** — Slint chat, session list, admin panel, live token streaming.
 8. **Bench harness v1** — `bench/<lib>/` per library with comparison runner.
-9. **Skills v1** — markdown skill loader, skill catalog in the web UI.
+9. **Skills v1** — markdown skill loader, skill catalog in the desktop app.
 10. **Provider portability v2** — Gemini adapter, custom OpenAI-compatible endpoint.
 
 Stretch (12–24 months):
@@ -370,7 +370,7 @@ voting, free-form. New strategies are added as plugin-like classes registered wi
 Multi-agent runs accumulate a directed graph of who spawned whom and who messaged whom.
 v2 stores this DAG (in `orchestration.db`) so post-hoc replay, auditing, and learning
 loops can ask structural questions ("what fraction of a research task's tool calls were
-from the worker vs. the leader?"). The DAG is also a debugging surface — the web UI
+from the worker vs. the leader?"). The DAG is also a debugging surface — the desktop app
 renders it.
 
 ### Skill Hot-Reload

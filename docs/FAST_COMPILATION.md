@@ -104,7 +104,7 @@ The legacy project's biggest header-only weights were:
 | `stdexec`         | asio + coroutines (smaller surface, smaller TU)            |
 | `ctre`            | re2 (runtime, smaller TU)                                  |
 | `nlohmann_json` in headers | forward-decl + `.cpp` includes                     |
-| `cpp-httplib`     | hide entirely behind `oran-web` and `oran-http::Client`    |
+| `slint` generated UI | keep `.slint`-generated C++ confined to `oran-desktop`      |
 | `spdlog/spdlog.h` | thin `oran-log` shim with macro-style API                  |
 
 ### 8. Disable RTTI / Exceptions Where Possible

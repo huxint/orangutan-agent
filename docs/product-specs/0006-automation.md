@@ -17,7 +17,7 @@ the payload to the research agent". The engine schedules and runs these jobs.
 - Persistence in `automation.db` (jobs, runs, last-fired, cooldown).
 - Per-category runners — built-in `heartbeat`, custom via `Category` interface.
 - Hook events: `job_scheduled`, `job_started`, `job_finished`, `job_failed`.
-- Notifier callback routes job output to cli / channel / web.
+- Notifier callback routes job output to cli / channel / desktop.
 
 ## Scope (v1.1)
 

@@ -12,7 +12,7 @@ ship*).
 | 0004 | [Agent team collaboration](0004-agent-team.md) | drafted |
 | 0005 | [Memory system](0005-memory-system.md) | drafted |
 | 0006 | [Automation engine](0006-automation.md) | drafted |
-| 0007 | [Web UI](0007-web-ui.md) | drafted |
+| 0007 | [Desktop App](0007-web-ui.md) | drafted |
 | 0008 | [Permissions engine](0008-permissions.md) | drafted |
 | 0009 | [Skills](0009-skills.md) | drafted |
 | 0010 | [Benchmark harness](0010-benchmark-harness.md) | drafted |

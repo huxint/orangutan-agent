@@ -4,7 +4,8 @@ Use this document to keep secure defaults legible to agents and operators.
 
 ## Authentication And Authorization
 
-- The web UI is gated by a single config-defined token (`web.token`).
+- The desktop app is local and in-process: no network listener, so no HTTP auth token
+  or bound port to secure.
 - Channel adapters carry their own auth model — documented per adapter under
   `docs/design-docs/channel-<name>.md` when noteworthy.
 - Multi-user runtimes are a v2 concern; v1 assumes a single trust principal.

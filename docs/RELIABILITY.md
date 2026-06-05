@@ -7,8 +7,10 @@ trust the audit log. This doc captures the operational expectations.
 
 - `orangutan` checks for a stale `<workspace>/.orangutan/lock` file on start; if the
   PID isn't live, removes it; otherwise refuses to start.
-- Health endpoint (web mode): `GET /healthz` returns `{ "status": "ok", "uptime_s":
-  N, "agents": [...] }`.
+- Health: the desktop app surfaces a status panel (uptime, active agents); the headless
+  `orangutan-server` reports liveness via structured logs plus the lock/PID file. There
+  is no HTTP health endpoint (an `orangutan-server`-only `GET /healthz` is a possible
+  future option).
 - Liveness for systemd: `Type=notify` + `sd_notify(READY=1)` once the runtime's
   executors are running.
 
@@ -23,8 +25,9 @@ trust the audit log. This doc captures the operational expectations.
 
 ## Metrics And Tracing
 
-- v1: counters exposed via `GET /metrics` in Prometheus exposition format from the web
-  layer.
+- v1: counters are surfaced in the desktop app's status panel and emitted to structured
+  logs; there is no HTTP metrics endpoint (an `orangutan-server`-only `GET /metrics` in
+  Prometheus exposition format is a possible future option).
 - v1.1: distributed tracing via OpenTelemetry (stretch — adds a dependency; gate it
   behind `--obs_otel=y`).
 

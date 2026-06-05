@@ -28,7 +28,7 @@ tests/
 ├── automation/
 ├── channel/
 ├── channel-qq/           (optional, gated by channel_qq)
-├── web/
+├── desktop/
 ├── integration/          end-to-end tests
 └── test-helpers/         shared helpers: unique paths, fake providers, mock channels
 ```
@@ -86,7 +86,7 @@ Carry over from legacy:
 | Provider / prompt / agent                  | 75% |
 | Orchestration / automation                 | 70% |
 | Channel adapters                            | 60% (network paths mocked) |
-| Web                                         | 60% |
+| Desktop                                     | 60% (UI bridge / view-models; rendering owned by Slint) |
 | CLI                                         | 50% |
 
 Coverage tracked via `xmake check coverage` (or `llvm-cov` when using Clang).
@@ -106,7 +106,7 @@ Reported in `docs/generated/coverage-YYYY-MM-DD.json`.
 `tests/integration/` exercises end-to-end paths:
 
 - Bootstrap → agent loop → mock provider → mock tool → response.
-- Bootstrap → web HTTP → SSE stream → response.
+- Bootstrap → desktop bridge → agent loop → streaming `EventSink` → response.
 - Bootstrap → automation tick → agent run.
 
 Integration tests use **mock providers** by default. Real-provider tests run in a

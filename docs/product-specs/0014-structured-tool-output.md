@@ -29,7 +29,7 @@ The cost is paid at four call sites:
 
 1. **Provider adapters** re-parse strings to derive structure they need
    for vendor tool-result blocks.
-2. **The web UI and channel adapters** lose the ability to render
+2. **The desktop app and channel adapters** lose the ability to render
    structured payloads (file diffs, symbol trees, match groups) without
    downstream parsers.
 3. **Audit and hooks** see only the rendered text — bytes-touched,
@@ -268,7 +268,7 @@ handlers can adopt without churning every callsite at once.
   [`../design-docs/api-portability.md`](../design-docs/api-portability.md).
   Closes when the agent loop's streaming path is mature enough that
   partial outputs don't break transcript ordering.
-- Multi-language attachment rendering for the web UI (spec 0007).
+- Multi-language attachment rendering for the desktop app (spec 0007).
 
 ## Out Of Scope
 

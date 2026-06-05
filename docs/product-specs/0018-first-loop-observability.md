@@ -110,7 +110,7 @@ makes the existing audit rows joinable. Nothing else.
     parent_turn_id    BLOB NULL,                    -- nested via agent.spawn (later)
     session_id        BLOB NOT NULL,
     agent_key         TEXT NOT NULL,
-    origin            TEXT NOT NULL,                -- cli, web, channel:qq, automation:cron, ...
+    origin            TEXT NOT NULL,                -- cli, desktop, channel:qq, automation:cron, ...
     route_profile     TEXT NOT NULL,                -- provider profile key
     route_model       TEXT NOT NULL,                -- vendor model id
     started_at_ns     INTEGER NOT NULL,             -- core::Time.ns
@@ -286,7 +286,7 @@ makes the existing audit rows joinable. Nothing else.
 
 ## Out Of Scope
 
-- **A trace UI**. Web UI consumption lives in spec 0007. v1 ships
+- **A trace UI**. Desktop app consumption lives in spec 0007. v1 ships
   the data model and the CLI inspector; the UI is downstream.
 - **Sampling**. Every turn produces a trace row in v1. Sampling is
   a v2 concern once volume justifies it.

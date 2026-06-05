@@ -15,7 +15,7 @@ required_files=(
   "docs/BUILD_SYSTEM.md"
   "docs/FAST_COMPILATION.md"
   "docs/CICD.md"
-  "docs/FRONTEND.md"
+  "docs/DESKTOP.md"
   "docs/HISTORY_GUIDE.md"
   "docs/PLANS_GUIDE.md"
   "docs/PRODUCT_SENSE.md"

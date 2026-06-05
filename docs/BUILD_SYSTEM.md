@@ -369,7 +369,7 @@ Things deliberately **excluded** from the PCH:
 - `<spdlog/spdlog.h>` — too heavy; `oran-log` adds it locally.
 - `<fmt/core.h>` — lands with `oran-log`.
 - `<nlohmann/json_fwd.hpp>` — lands with the first JSON-owning library.
-- `<httplib.h>` — only `oran-web` needs it.
+- `slint` generated headers — only `oran-desktop` needs them.
 - `<sqlite3.h>` — only `oran-storage` needs it.
 - `<regex>` — use `re2` behind the owning library instead.
 

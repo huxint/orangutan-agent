@@ -18,8 +18,6 @@ Examples (some land with the build skeleton, some later):
 - `compile-baseline-<date>.json` — output of `scripts/measure-tu.sh`.
 - `bench-baseline-<lib>.json` — bench reference numbers per library.
 - `pch-spec.json` — canonical PCH contents.
-- `web-types.d.ts` — TS types for the web frontend, generated from the C++ route
-  handlers.
 - `vendored-deps.json` — any vendored-in-source third-party code.
 
 A generated file does **not** belong here if:

@@ -12,7 +12,7 @@ spec can be slotted in.
 ## Mental Model
 
 Orangutan v2 is **a single binary** that hosts **N agent runtimes** behind **M interfaces**
-(CLI, web, channels, automation), backed by **shared storage and policy**. Everything is
+(CLI, desktop, channels, automation), backed by **shared storage and policy**. Everything is
 asynchronous on a single executor; everything that crosses a process boundary goes through
 a transport trait; everything observable goes through a hook surface.
 
@@ -20,7 +20,7 @@ a transport trait; everything observable goes through a hook surface.
                            ┌─────────────────────────────────────┐
   CLI REPL ────────────▶   │                                     │
   CLI single-shot ────▶    │       INTERFACE LAYER               │
-  Web (HTTP/SSE) ──────▶   │  cli  •  web  •  channel  •  cron   │
+  Desktop (Slint) ─────▶   │  cli • desktop • channel • cron     │
   Channels (QQ/…) ─────▶   │                                     │
   Automation (cron) ───▶   └─────────────────┬───────────────────┘
                                              │
@@ -483,7 +483,7 @@ own test bucket, its own bench bucket, and its own public header set under
 | `oran-channel-slack` | Slack adapter (optional, gated) | `oran-channel`, `oran-http` |
 | `oran-channel-telegram` | Telegram adapter (optional, gated) | `oran-channel`, `oran-http` |
 | `oran-channel-webhook` | generic webhook adapter | `oran-channel`, `oran-http` |
-| `oran-web`           | HTTP web UI (cpp-httplib in skeleton, asio later) | `oran-agent`, `oran-orchestration`, `oran-http` |
+| `oran-desktop`       | Native desktop app (Slint, in-process)          | `oran-agent`, `oran-orchestration`            |
 | `oran-cli`           | REPL / single-shot mode parser with deterministic no-runner shell plus slice-100 `PromptRunner` / `run_async` seam for caller-owned async prompt execution, slice-125 `CliOptions::interactive_repl` terminal stdin loop for provider-backed REPL prompts, slice-128 REPL slash-command handling (`/help`, `/exit`, `/quit`) before prompt-runner dispatch on both scripted and interactive paths, slice-95 `OperatorPromptSink` for terminal `permission_ask_rendered` approvals (scripted answers for tests/noninteractive drivers, asio stdin read for interactive answers), and (slice 123) `cli::StreamingPromptSink` — a `provider::EventSink` that renders answer/thinking deltas to an injectable `std::ostream` (default `std::cout`, flushed per delta for character-by-character output) plus a one-line `[tool: <name>]` marker per tool call, and reports `rendered_answer_text()` so the prompt runner can suppress the duplicate final-text print; planned line editor/history and additional slash-command targets once runtime command surfaces exist | currently `oran-core`, `oran-async`, `oran-hook`, `oran-provider`; planned `oran-orchestration` |
 | `oran-bootstrap`     | process entry + config loading + provider-route preflight + CLI handoff + slice-101 `AgentPromptRunner` (`cli::PromptRunner` implementation that borrows `RuntimeAssembly`, config, resolved route, executor, and a caller-supplied `provider::System`; owns builtin tool registration, permission materialization, `provider::execution::Runtime`, CLI operator-prompt sink binding, `agent::Loop`, trace context, transcript state, and slice-142 prompt-boundary skill snapshot refresh plus active-marker filtering through a slice-146 config-sourced `skill::ActivationPolicy` (per-agent `skills_deactivated` / `skills_expirations`, runner-supplied evaluation time), a slice-147 `DispatchContext::skill_deactivate` callback recording `skill_deactivation` transcript results that net against `skill.invoke` activations at the next prompt boundary, slice-148 load/persist of durable session activation rows through `memory::session::Store`, slice-164 opt-in `AgentPromptRunnerOptions::longterm_recall` prompt-boundary recall using the assembly-owned `memory::longterm::Runtime`, slice-165 configured-route mapping from `memory.longterm.recall.enabled` / `limit` into that option, slice-166 configured recall kind filters mapped to `memory::longterm::Query::kinds`, slice-167 query-strategy mapping for current-prompt versus last-user-message search text, slice-168 `DispatchContext::memory_recall` binding for the permissioned `memory.recall` tool over the assembly-owned long-term runtime, slice-169 `DispatchContext::memory_remember` binding for the permissioned `memory.remember` tool over the assembly-owned long-term backend, slice-170 `DispatchContext::memory_forget` binding for the permissioned `memory.forget` tool over the same backend, and slice-135 `skill::CatalogOwner` / slice-134 `agent::SystemPreambleOwner` / slice-133 `memory::FramingOwner` render counters) + slice-111 `HttpProviderBackend` (`HttpProviderBackend::build(config, options)` resolves route profiles, builds the adapter plan, reads configured API-key env vars at the explicit credential boundary, owns an `oran-http::Client` on the caller-provided blocking executor, adapts it to `provider::ProtocolTransport`, registers the built-in Anthropic/OpenAI protocol factories, and returns a profile-routed `provider::System` plus the resolved route for runner owners; (slice 123) that `HttpProtocolTransport` now overrides `supports_streaming()` to `true` and implements `send_streaming` over `http::Client::send_streaming`, translating each `http::SseEvent` into the provider SSE callback, and `AgentPromptRunner` constructs a `cli::StreamingPromptSink` for non-quiet streaming runs — passing it to `agent::Loop::run_turn` and clearing the assembled `PromptRunResult::text` once the answer streamed live — so configured-route `orangutan --prompt` over Anthropic renders tokens character-by-character) + `--explain-rules` (with `--mode` / `--agent` selectors) + `--audit-init` + (slice 88) `--trace <turn-id>` operator inspector (32-char lowercase hex) that opens the workspace audit DB, runs the idempotent migration, looks up the trace row through `TraceRepository::get_turn`, lists joined audit rows through `AuditRepository::list_events_for_turn`, and renders both in `--explain-rules`-style lines (returns `Error::not_found` for missing DB or unknown turn id; slice 93 prints `kind=<event_kind>` for each audit row so `hook_publish` rows are distinguishable) + per-process `RuntimeAssembly` (bundles a fresh `permission::ApprovalBroker`, the active `permission::AuditSink`, the slice-41 assembly-owned `tool::Workspace` built from `permissions.workspace.extra_{read,write}_roots`, (slice 87) an optional `storage::TraceRepository` on the shared audit `Pool` when `config.trace().enabled` is `true` so the agent loop inherits spec-0018's per-turn writer, slice 150's explicit trace-retention cutoff derived by `bootstrap::run` from `config.trace().retention_days` and applied before the long-lived trace repository is exposed, (slice 92) the process `hook::Bus` configured from `config.hooks.timeout_ms`, (slice 131) an optional `memory::session::Store` over a separate `<workspace>/.orangutan/sessions.db` pool/repository, and (slice 163) optional long-term memory over a separate `<workspace>/.orangutan/memory.db` pool with `memory::longterm::Fts5Backend` plus `memory::longterm::Runtime`; configured routes enable session and long-term memory, built-in no-route startup disables both; defaults to `audit_enabled=true`, `trace_enabled=true`, `session_memory_enabled=true`, `longterm_memory_enabled=true`, and a 2000 ms hook timeout for direct callers) + the slice-23 `SignalScope` SIGINT/SIGTERM trap (`asio::signal_set` RAII, `release()` cancel + `signum()` capture) that `--audit-init` and `--trace` adopt so Ctrl-C / `kill` interrupt the one-shot `io_context` drain promptly, with `bootstrap::run` translating the resulting `Error::cancelled` into the shell-conventional `128 + signum` exit code | currently `oran-core`, `oran-async`, `oran-http`, `oran-io`, `oran-storage`, `oran-config`, `oran-permission`, `oran-hook`, `oran-memory`, `oran-skill`, `oran-tool`, `oran-provider`, `oran-agent`, `oran-cli`; planned every public lib above |
 
@@ -491,8 +491,8 @@ own test bucket, its own bench bucket, and its own public header set under
 
 | Binary             | Description                                                  |
 | ------------------ | ------------------------------------------------------------ |
-| `orangutan`        | Default: CLI REPL or single-shot, optional `--web` and channel modes. |
-| `orangutan-server` | Daemon mode: web + channels + automation, no terminal UI.    |
+| `orangutan`        | Default: CLI REPL or single-shot, optional `--desktop` and channel modes. |
+| `orangutan-server` | Daemon mode: channels + automation, no terminal UI.    |
 | `orangutan-bench`  | Standalone runner that executes the `bench/<lib>/...` buckets and emits JSON. |
 
 ## Boundary Rules
@@ -511,7 +511,7 @@ own test bucket, its own bench bucket, and its own public header set under
 ## Data Flow (Single Turn)
 
 ```
-1.  Inbound message arrives via cli / web / channel / automation.
+1.  Inbound message arrives via cli / desktop / channel / automation.
 2.  oran-bootstrap routes it to the right Agent (per agent_key + identity).
 3.  oran-agent::run(prompt):
       a. hook bus  → AgentLifecycle::iteration_start

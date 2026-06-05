@@ -8,9 +8,9 @@ without constant prompting.
 1. **Solo developer** — wants a local coding assistant on their workstation.
    Cares about: low latency, low cost, file/shell tooling, session continuity.
 2. **Small team** — wants a single runtime that exposes the same agent through CLI,
-   web, and a chat channel.
+   desktop, and a chat channel.
    Cares about: shared memory, audit trail, permissioned tool use.
-3. **Self-hosted product team** — runs the binary on a VM, exposes web + channels,
+3. **Self-hosted product team** — runs the binary on a VM, exposes channels,
    automates recurring tasks.
    Cares about: reliability, scheduled jobs, multi-channel reach, supply-chain
    posture.
@@ -35,7 +35,7 @@ without constant prompting.
 4. **Compile time.** A core feature — see [`FAST_COMPILATION.md`](FAST_COMPILATION.md).
 5. **Runtime performance.** Important on hot paths (agent iteration overhead, tool
    dispatch); not the first priority elsewhere.
-6. **Polish.** UX touch-ups (terminal colors, web UI styling) come last in v1.
+6. **Polish.** UX touch-ups (terminal colors, desktop UI polish) come last in v1.
 
 ## Tradeoffs To Default
 

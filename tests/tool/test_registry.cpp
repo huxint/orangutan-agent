@@ -2987,7 +2987,7 @@ TEST_CASE("file.search aborts a large-file read when cancellation fires mid-walk
 // Closes the second built-in step of spec 0014's text→structured migration
 // (after slice 62's `file.read`). The text fallback is unchanged: every prior
 // `file.search` case still passes verbatim. These tests pin the new shape so
-// provider adapters, the web UI, and audit fan-out can consume matches as
+// provider adapters, the desktop app, and audit fan-out can consume matches as
 // JSON instead of re-parsing `path:line:text` lines.
 
 TEST_CASE("file.search single-file happy path fills data_json with structured matches",
@@ -5480,7 +5480,7 @@ TEST_CASE("directory.list rejects malformed input as invalid_argument", "[unit][
 // Third built-in step of spec 0014's text -> structured migration (after
 // slice 62 `file.read` and slice 63 `file.search`). The text rendering and
 // every prior `directory.list` test pass verbatim. These cases pin the new
-// JSON shape and usage so provider adapters and the web UI can render a
+// JSON shape and usage so provider adapters and the desktop app can render a
 // typed entries array without re-parsing `<path>:<kind>:<size>` lines.
 
 TEST_CASE("directory.list happy path fills data_json with structured entries",

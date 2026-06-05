@@ -32,7 +32,7 @@ tests/
 ├── automation/
 ├── channel/
 ├── channel-qq/
-├── web/
+├── desktop/
 ├── cli/
 ├── bootstrap/
 └── integration/          # end-to-end paths with mocked externals

@@ -55,7 +55,7 @@ this into ~22 libraries (see `docs/ARCHITECTURE.md`).
 | spdlog | 1.17.0 | med | kept; behind `oran-log` shim |
 | libcurl | 8.11.0 | med-high | kept |
 | sqlite3 | 3.52.0 | med | kept; FTS5 retained |
-| cpp-httplib | 0.37.2 | med | kept for v1 oran-web; v2 replacement stretch |
+| cpp-httplib | 0.37.2 | med | **removed** in v2; Web UI replaced by a Slint desktop app |
 | stdexec-gtc | gtc-2026 | **high** | **removed**; replaced by asio + coroutines |
 | rapidhash | 1.0 | low | kept |
 | replxx | 2021.11.25 | low | kept |
@@ -113,8 +113,8 @@ this into ~22 libraries (see `docs/ARCHITECTURE.md`).
     `secrets rotate` subcommand, key versioning, plaintext zeroization
     ([`../design-docs/secrets-and-state.md`](../design-docs/secrets-and-state.md)).
 
-13. **Web server single-threaded** — *~10-50 client cap.* → v2 keeps cpp-httplib for
-    v1 deliverable, plans asio-based replacement for v2 stretch
+13. **Web server single-threaded** — *~10-50 client cap.* → v2 removes the web server
+    entirely; the human GUI is a local, in-process Slint desktop app
     ([`../product-specs/0007-web-ui.md`](../product-specs/0007-web-ui.md)).
 
 14. **Skills re-rendered every iteration** — *intentional, but unbounded cost.* → v2

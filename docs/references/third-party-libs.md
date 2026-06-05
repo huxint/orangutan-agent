@@ -59,11 +59,13 @@ rules file is the *approval list*; this file is *guidance + traps*.
 - For perf-critical paths (provider request encoding), consider simdjson; bench
   before adopting.
 
-## cpp-httplib
+## Slint
 
-- Encapsulated inside `oran-web`. Public surface does not mention it.
-- Single-threaded event loop is a known limit (`docs/product-specs/0007-web-ui.md`).
-- For client-side HTTP, **do not** use cpp-httplib; route through `oran-http::Client`
+- The desktop app (`oran-desktop`) is built on Slint; `.slint` markup compiles to C++
+  that stays inside `oran-desktop`. The public surface does not expose Slint types.
+- In-process and local-only — no HTTP server (the old cpp-httplib web server is gone;
+  see `docs/product-specs/0007-web-ui.md`).
+- For client-side HTTP (providers, channels), route through `oran-http::Client`
   (libcurl).
 
 ## ctre (legacy) → re2 (v2)

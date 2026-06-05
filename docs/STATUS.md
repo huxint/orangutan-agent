@@ -1653,7 +1653,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 | ----- | ----- |
 | **A** | *(none yet — pre-v1)* |
 | **B** | Architecture docs, Build system, Async model, Security defaults, Supply chain |
-| **C** | Compile-time discipline, Tests, Benches, IO, Storage, Config, Bootstrap, Provider system, Tool registry, Prompt builder, Memory tiers, Permissions, Hooks, Channels, Orchestration, Automation, Web UI, CLI, Skills, Static analysis |
+| **C** | Compile-time discipline, Tests, Benches, IO, Storage, Config, Bootstrap, Provider system, Tool registry, Prompt builder, Memory tiers, Permissions, Hooks, Channels, Orchestration, Automation, Desktop App, CLI, Skills, Static analysis |
 | **D** | Observability |
 
 ## Latest Library Surfaces

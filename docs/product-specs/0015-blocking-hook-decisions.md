@@ -205,7 +205,7 @@ blocking hook waits for v1.1.
   downward.
 - **Consumer #1**: the agent loop's approval render flow. The first
   in-tree `permission_ask_rendered` sink is owned by `oran-cli` (and
-  later `oran-web` / `oran-channel*`) and lives behind the same
+  later `oran-desktop` / `oran-channel*`) and lives behind the same
   `tool::DispatchContext::bus` field that slice 22 wired. The agent
   loop never sees rendering details.
 
