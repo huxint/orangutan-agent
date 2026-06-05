@@ -77,3 +77,4 @@ coverage/
 
 .codegraph/
 .mcp.json
+.worktrees/
