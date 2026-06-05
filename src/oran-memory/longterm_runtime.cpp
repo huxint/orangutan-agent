@@ -70,8 +70,7 @@ void append_string_list(std::string& out, std::string_view label, std::span<cons
   return out;
 }
 
-[[nodiscard]] nlohmann::json record_json(const SearchHit& hit) {
-  const auto& record = hit.record;
+[[nodiscard]] nlohmann::json record_json(const Record& record) {
   return nlohmann::json{
       {"id", record.key.id},
       {"scope_key", record.key.scope_key},
@@ -85,10 +84,15 @@ void append_string_list(std::string& out, std::string_view label, std::span<cons
       {"tags", string_list_json(record.tags)},
       {"linked_record_ids", string_list_json(record.linked_record_ids)},
       {"shadow", record.shadow},
-      {"score", hit.score},
-      {"lexical_score", optional_double_json(hit.lexical_score)},
-      {"vector_score", optional_double_json(hit.vector_score)},
   };
+}
+
+[[nodiscard]] nlohmann::json record_json(const SearchHit& hit) {
+  auto out = record_json(hit.record);
+  out["score"] = hit.score;
+  out["lexical_score"] = optional_double_json(hit.lexical_score);
+  out["vector_score"] = optional_double_json(hit.vector_score);
+  return out;
 }
 
 }  // namespace
@@ -149,6 +153,14 @@ std::string render_recall_data_json(std::span<const SearchHit> hits) {
       {"kind", "memory_recall"},
       {"match_count", hits.size()},
       {"records", std::move(records)},
+  }
+      .dump();
+}
+
+std::string render_remember_data_json(const Record& record) {
+  return nlohmann::json{
+      {"kind", "memory_remember"},
+      {"record", record_json(record)},
   }
       .dump();
 }

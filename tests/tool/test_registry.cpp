@@ -645,11 +645,30 @@ TEST_CASE("register_memory_recall advertises read_memory and deferred memory met
   REQUIRE(def->input_schema_json.contains("\"kinds\""));
 }
 
+TEST_CASE("register_memory_remember advertises write_memory and deferred memory metadata",
+          "[unit][tool][memory_remember]") {
+  tool::Registry registry;
+  REQUIRE(tool::register_memory_remember(registry).has_value());
+  REQUIRE(registry.size() == 1);
+  const auto* def = registry.find(tool::kMemoryRememberName);
+  REQUIRE(def != nullptr);
+  REQUIRE(def->required_capabilities.size() == 1);
+  REQUIRE(def->required_capabilities[0] == core::Capability::write_memory);
+  REQUIRE(def->deferred);
+  REQUIRE(def->category.has_value());
+  REQUIRE(*def->category == "memory");
+  REQUIRE(def->input_schema_json.contains("\"id\""));
+  REQUIRE(def->input_schema_json.contains("\"kind\""));
+  REQUIRE(def->input_schema_json.contains("\"title\""));
+  REQUIRE(def->input_schema_json.contains("\"body\""));
+  REQUIRE(def->input_schema_json.contains("\"importance\""));
+}
+
 TEST_CASE("register_builtins seeds the file tool catalog", "[unit][tool][builtins]") {
   tool::Registry registry;
   REQUIRE(tool::register_builtins(registry).has_value());
   const auto catalog = registry.catalog();
-  REQUIRE(catalog.size() == 10);
+  REQUIRE(catalog.size() == 11);
   REQUIRE(catalog[0].name == tool::kFileReadName);
   REQUIRE(catalog[1].name == tool::kFileWriteName);
   REQUIRE(catalog[2].name == tool::kFileEditName);
@@ -660,6 +679,7 @@ TEST_CASE("register_builtins seeds the file tool catalog", "[unit][tool][builtin
   REQUIRE(catalog[7].name == tool::kSkillInvokeName);
   REQUIRE(catalog[8].name == tool::kSkillDeactivateName);
   REQUIRE(catalog[9].name == tool::kMemoryRecallName);
+  REQUIRE(catalog[10].name == tool::kMemoryRememberName);
 }
 
 TEST_CASE("tool.search returns structured tool metadata by exact name", "[unit][tool][tool_search]") {
@@ -963,6 +983,114 @@ TEST_CASE("memory.recall reports missing runtime service as a model-repairable e
     REQUIRE(context_has(result.error(), "reason", "memory_runtime_unavailable"));
     REQUIRE(sink.events().size() == 1);
     REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
+  });
+}
+
+TEST_CASE("memory.remember delegates parsed record fields through DispatchContext", "[unit][tool][memory_remember]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_memory_remember(registry).has_value());
+
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kMemoryRememberName},
+        .capability = core::Capability::write_memory,
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto seen = tool::MemoryRememberRequest{};
+    ctx.memory_remember = [&seen](tool::MemoryRememberRequest request,
+                                  tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
+      seen = std::move(request);
+      co_return tool::Output{
+          .text = "memory.remember: delegated",
+          .data_json = R"({"kind":"memory_remember","record":{"id":"rec-1"}})",
+          .usage = tool::ToolUsage{.bytes_written = 42},
+      };
+    };
+
+    auto result = co_await registry.dispatch(
+        tool::kMemoryRememberName,
+        R"({"id":"rec-1","kind":"project","title":"Build note","body":"Remember this.","importance":0.75,"tags":["repo","slice"],"linked_record_ids":["rec-0"],"shadow":true})",
+        ctx);
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "memory.remember: delegated");
+    REQUIRE(result->data_json.has_value());
+    REQUIRE(result->usage.bytes_written.has_value());
+    REQUIRE(*result->usage.bytes_written == 42);
+    REQUIRE(seen.id == "rec-1");
+    REQUIRE(seen.kind == "project");
+    REQUIRE(seen.title == "Build note");
+    REQUIRE(seen.body == "Remember this.");
+    REQUIRE(seen.importance == 0.75);
+    REQUIRE(seen.tags == std::vector<std::string>{"repo", "slice"});
+    REQUIRE(seen.linked_record_ids == std::vector<std::string>{"rec-0"});
+    REQUIRE(seen.shadow);
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
+  });
+}
+
+TEST_CASE("memory.remember reports missing runtime service as a model-repairable error",
+          "[unit][tool][memory_remember]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_memory_remember(registry).has_value());
+
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kMemoryRememberName},
+        .capability = core::Capability::write_memory,
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    auto result =
+        co_await registry.dispatch(tool::kMemoryRememberName,
+                                   R"({"id":"rec-1","kind":"project","title":"Build note","body":"Remember this."})",
+                                   ctx);
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(context_has(result.error(), "reason", "memory_runtime_unavailable"));
+    REQUIRE(context_has(result.error(), "id", "rec-1"));
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
+  });
+}
+
+TEST_CASE("memory.remember rejects malformed input as invalid_argument", "[unit][tool][memory_remember]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_memory_remember(registry).has_value());
+
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kMemoryRememberName},
+        .capability = core::Capability::write_memory,
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto malformed = std::vector<std::string_view>{
+        "{",
+        "[]",
+        R"({"id":"rec-1","kind":"project","title":"Build note"})",
+        R"({"id":"","kind":"project","title":"Build note","body":"Remember this."})",
+        R"({"id":"rec-1","kind":"project","title":"Build note","body":"Remember this.","importance":"high"})",
+        R"({"id":"rec-1","kind":"project","title":"Build note","body":"Remember this.","importance":1.25})",
+        R"({"id":"rec-1","kind":"project","title":"Build note","body":"Remember this.","tags":["repo","repo"]})",
+        R"({"id":"rec-1","kind":"project","title":"Build note","body":"Remember this.","linked_record_ids":[7]})",
+        R"({"id":"rec-1","kind":"project","title":"Build note","body":"Remember this.","shadow":"no"})",
+    };
+
+    for (const auto input_json : malformed) {
+      auto result = co_await registry.dispatch(tool::kMemoryRememberName, input_json, ctx);
+      REQUIRE_FALSE(result.has_value());
+      REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+    }
+    REQUIRE(sink.events().size() == malformed.size());
   });
 }
 

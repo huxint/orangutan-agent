@@ -88,10 +88,10 @@ observe — so the future agent loop can call them safely on day one.
   `max_parallel_tools`): `file.read`, `file.search`,
   `directory.list`, `directory.scan` (future), `code.outline`
   (future), `code.symbols` (future), `code.references` (future),
-  `memory.recall` (future).
+  `memory.recall`.
 - **Mutating tools** (serialise per canonical resource):
   `file.write`, `file.edit`, `file.modify` (future), `file.delete`,
-  `memory.remember` (future), `memory.forget` (future).
+  `memory.remember`, and future `memory.forget`.
 - **Globally serialised tools** (compete for a process-wide slot
   until they ship a per-resource lock):
   `shell.exec` (future — workspace lock until it gains per-cwd

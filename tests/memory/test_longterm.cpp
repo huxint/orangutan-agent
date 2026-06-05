@@ -414,6 +414,22 @@ TEST_CASE("longterm recall data_json carries recalled record metadata", "[unit][
   });
 }
 
+TEST_CASE("longterm remember data_json carries saved record metadata", "[unit][memory][longterm][runtime]") {
+  auto record = make_record();
+  record.shadow = true;
+
+  const auto data_json = memory::longterm::render_remember_data_json(record);
+  REQUIRE(data_json.contains(R"("kind":"memory_remember")"));
+  REQUIRE(data_json.contains(R"("id":"rec-1")"));
+  REQUIRE(data_json.contains(R"("scope_key":"agent:coder")"));
+  REQUIRE(data_json.contains(R"("kind":"project")"));
+  REQUIRE(data_json.contains(R"("created_at":"1970-01-01T00:00:01.000Z")"));
+  REQUIRE(data_json.contains(R"("tags":["repo","workflow"])"));
+  REQUIRE(data_json.contains(R"("linked_record_ids":["rec-0"])"));
+  REQUIRE(data_json.contains(R"("shadow":true)"));
+  REQUIRE_FALSE(data_json.contains(R"("score")"));
+}
+
 TEST_CASE("longterm::Runtime returns empty framing for empty recall", "[unit][memory][longterm][runtime]") {
   test::run_async([](asio::io_context&) -> async::Awaitable<void> {
     FakeBackend backend{std::vector<memory::longterm::SearchHit>{}};

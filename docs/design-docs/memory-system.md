@@ -156,7 +156,7 @@ MEMORY.md mirror. v2 keeps that core and adds:
 - **Decay policy**: `memory-age` style decay is actually wired into the search pipeline
   this time; expired records receive lower BM25 weight before potentially being pruned.
 
-Status (slice 168): `include/oran/memory/longterm.hpp` now ships the public
+Status (slice 169): `include/oran/memory/longterm.hpp` now ships the public
 record/query/write shapes, reflection-backed `RecordKind`, `Backend` and
 `VectorBackend` traits, validation helpers for record keys, search limits,
 record metadata, and vector embeddings, plus `Fts5Backend` as the default
@@ -186,8 +186,13 @@ query from the most recent previous user text when one exists. Slice 168 adds
 `render_recall_data_json(...)` for structured recall record metadata and the
 read-only `memory.recall` tool path, which reaches the same runtime through
 bootstrap's `DispatchContext::memory_recall` callback and the ordinary
-permission/audit/hook/output-cap pipeline. It does **not** yet ship the gated
-sqlite-vec adapter, `memory.remember` / `memory.forget`, or hybrid ranking.
+permission/audit/hook/output-cap pipeline. Slice 169 adds
+`render_remember_data_json(...)` for structured saved-record metadata and the
+write-side `memory.remember` tool path, which reaches the same assembly-owned
+long-term `Backend` through `DispatchContext::memory_remember`; bootstrap
+stamps the runner's stable scope key plus dispatch-time timestamps before
+upserting. It does **not** yet ship the gated sqlite-vec adapter,
+`memory.forget`, or hybrid ranking.
 
 ```cpp
 // include/oran/memory/longterm.hpp

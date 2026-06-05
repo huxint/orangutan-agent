@@ -69,8 +69,15 @@ operators can reason about retention, scope, and visibility.
   `{query, limit?, kinds?}`, delegates through
   `DispatchContext::memory_recall`, and uses the assembly-owned
   `longterm::Runtime` to return deterministic recall text plus structured
-  `memory_recall` record metadata. `memory.remember`, `memory.forget`, vector
-  search, and hybrid ranking remain downstream.
+  `memory_recall` record metadata.
+- Write-side long-term memory tool shipped in slice 169: `memory.remember` is a
+  deferred built-in with `Capability::write_memory`, parses
+  `{id, kind, title, body, importance?, tags?, linked_record_ids?, shadow?}`,
+  delegates through `DispatchContext::memory_remember`, and uses the
+  assembly-owned long-term `Backend` to upsert a record scoped to the runner's
+  stable scope key with dispatch-time timestamps, returning confirmation text
+  plus structured `memory_remember` saved-record metadata. `memory.forget`,
+  vector search, and hybrid ranking remain downstream.
 - Decay policy applied by a periodic job (`oran-automation`).
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
 - Hook events on read / write / forget / decay.
@@ -117,15 +124,17 @@ operators can reason about retention, scope, and visibility.
 5. A `memory.write.before` hook can veto a write; the runtime returns
    `Error::HookVeto` to the caller.
 6. `tests/memory/` >= 85% coverage. **Status:** `test-memory` currently reports
-   26 cases / 714 assertions, including long-term contract validation, fake
+   27 cases / 723 assertions, including long-term contract validation, fake
    async backend interface coverage, public `Fts5Backend` migration / scoped
    search / filtering / update / delete coverage, and `longterm::Runtime`
-   validation / deterministic recall-framing and recall `data_json` coverage.
+   validation / deterministic recall-framing plus recall/remember `data_json`
+   coverage.
    `test-config` reports
    44 cases / 369 assertions for the recall policy parser, and `test-bootstrap`
-   reports 112 cases / 838 assertions for the assembly, prompt-runner, and
+   reports 113 cases / 859 assertions for the assembly, prompt-runner, and
    configured-route recall consumers, including slice-167 query-strategy
-   coverage and slice-168 `memory.recall` tool binding.
+   coverage, slice-168 `memory.recall` tool binding, and slice-169
+   `memory.remember` tool binding.
 7. `bench/memory/search-fts5-vs-vector` (v2): reports the FTS5 baseline + vector
    results in machine-readable JSON.
 

@@ -345,6 +345,7 @@ DispatchContext DispatchContext::for_now(const DispatchContext& prototype, bool 
       .skill_invoke = prototype.skill_invoke,
       .skill_deactivate = prototype.skill_deactivate,
       .memory_recall = prototype.memory_recall,
+      .memory_remember = prototype.memory_remember,
       .workspace = prototype.workspace,
       .resolved_path = std::nullopt,
       .output_caps = prototype.output_caps,

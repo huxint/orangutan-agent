@@ -725,6 +725,66 @@ TEST_CASE("AgentPromptRunner dispatches memory.recall through long-term runtime"
   });
 }
 
+TEST_CASE("AgentPromptRunner dispatches memory.remember through long-term backend",
+          "[unit][bootstrap][prompt_runner][memory]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-memory-remember-tool"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false);
+    REQUIRE(assembly.longterm_memory_backend() != nullptr);
+
+    RecordingProvider recording{{
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "memory-write-1",
+                .name = "memory.remember",
+                .input_json =
+                    R"({"id":"lt-tool-remember","kind":"project","title":"Remembered note","body":"Memory remember wrote rememberanchor into the project.","importance":0.75,"tags":["remember","tool"],"linked_record_ids":["lt-tool-recall"]})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        },
+        text_response("done"),
+    }};
+
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.mode = permission::Mode::permissive;
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto result = co_await (*runner)->run_prompt(
+        cli::PromptRunRequest{.prompt = "write memory", .mode = cli::CliMode::single_shot});
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "done");
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 2);
+    const auto output = tool_result_output_in(requests[1], "memory-write-1");
+    REQUIRE(output.contains("memory.remember: saved project record lt-tool-remember"));
+    REQUIRE(output.contains("title: Remembered note"));
+    const auto data_json = tool_result_data_json_in(requests[1], "memory-write-1");
+    REQUIRE(data_json.has_value());
+    REQUIRE(data_json->contains(R"("kind":"memory_remember")"));
+    REQUIRE(data_json->contains(R"("id":"lt-tool-remember")"));
+    REQUIRE(data_json->contains(R"("scope_key":"scope-A")"));
+    REQUIRE(data_json->contains(R"("tags":["remember","tool"])"));
+
+    auto stored = co_await assembly.longterm_memory_backend()->get(memory::longterm::RecordKey{
+        .id = "lt-tool-remember",
+        .scope_key = "scope-A",
+    });
+    REQUIRE(stored.has_value());
+    REQUIRE(stored->kind == memory::longterm::RecordKind::project);
+    REQUIRE(stored->title == "Remembered note");
+    REQUIRE(stored->body == "Memory remember wrote rememberanchor into the project.");
+    REQUIRE(stored->importance == 0.75);
+    REQUIRE(stored->tags == std::vector<std::string>{"remember", "tool"});
+    REQUIRE(stored->linked_record_ids == std::vector<std::string>{"lt-tool-recall"});
+  });
+}
+
 TEST_CASE("AgentPromptRunner can derive recall query from the last user message",
           "[unit][bootstrap][prompt_runner][memory]") {
   TempDir temp{"oran-bootstrap-prompt-runner-longterm-last-user"};

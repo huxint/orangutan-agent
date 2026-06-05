@@ -118,12 +118,32 @@ struct MemoryRecallRequest {
   friend bool operator==(const MemoryRecallRequest&, const MemoryRecallRequest&) = default;
 };
 
+struct MemoryRememberRequest {
+  std::string id;
+  std::string kind;
+  std::string title;
+  std::string body;
+  double importance{0.5};
+  std::vector<std::string> tags;
+  std::vector<std::string> linked_record_ids;
+  bool shadow{false};
+
+  friend bool operator==(const MemoryRememberRequest&, const MemoryRememberRequest&) = default;
+};
+
 /// Runtime callback consumed by the `memory.recall` built-in. The tool layer
 /// owns JSON parsing, permissions, audit, hooks, and output caps; bootstrap
 /// supplies the concrete long-term memory runtime through this callback so
 /// `oran-tool` does not take a sibling dependency on `oran-memory`.
 using MemoryRecallHandler =
     std::function<async::Awaitable<core::Result<Output>>(MemoryRecallRequest request, DispatchContext& ctx)>;
+
+/// Runtime callback consumed by the `memory.remember` built-in. The tool layer
+/// owns JSON parsing, permissions, audit, hooks, and output caps; bootstrap
+/// supplies the concrete long-term memory backend through this callback so
+/// `oran-tool` does not take a sibling dependency on `oran-memory`.
+using MemoryRememberHandler =
+    std::function<async::Awaitable<core::Result<Output>>(MemoryRememberRequest request, DispatchContext& ctx)>;
 
 /// Registry-pre-resolved filesystem target for a built-in tool call.
 /// `absolute_path` is the path handlers pass to `oran-io`; the rest is
@@ -238,6 +258,11 @@ struct DispatchContext {
   /// produced output through the ordinary dispatch path. When unset,
   /// `memory.recall` reports a model-repairable missing-runtime error.
   MemoryRecallHandler memory_recall{};
+  /// Optional long-term memory write service. When set, `memory.remember` calls
+  /// it with parsed record fields and returns the produced output through the
+  /// ordinary dispatch path. When unset, `memory.remember` reports a
+  /// model-repairable missing-runtime error.
+  MemoryRememberHandler memory_remember{};
   /// Optional workspace resolver for file built-ins. The pointer is
   /// non-owning; bootstrap/agent runtime owns the workspace value and keeps it
   /// alive for the dispatch. Dispatch pre-resolves current filesystem

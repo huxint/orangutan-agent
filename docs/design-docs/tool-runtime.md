@@ -103,6 +103,15 @@ enum class Capability {
 > `oran-memory`; successful output carries deterministic recall text,
 > `data_json.kind = "memory_recall"`, recalled record metadata, and
 > `usage.match_count`.
+> Slice 169 adds the first write-side memory built-in: `memory.remember`
+> (`Capability::write_memory`, deferred, category `memory`). Input
+> `{id, kind, title, body, importance?, tags?, linked_record_ids?, shadow?}`
+> upserts one long-term memory record through
+> `DispatchContext::memory_remember`, with bootstrap supplying scope and
+> dispatch-time timestamps while keeping `oran-tool` independent of
+> `oran-memory`; successful output carries confirmation text,
+> `data_json.kind = "memory_remember"`, saved record metadata, and
+> `usage.bytes_written`.
 > Slice 21 (2026-05-17) wired `permission::ApprovalBroker` through
 > `Registry::dispatch` so a `Verdict::ask` decision can be mediated
 > rather than short-circuited: `DispatchContext` grew optional

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <expected>
 #include <format>
@@ -82,6 +83,14 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
     kinds.push_back(*parsed);
   }
   return kinds;
+}
+
+[[nodiscard]] Result<memory::longterm::RecordKind> parse_memory_tool_remember_kind(std::string_view name) {
+  auto parsed = core::parse_enum<memory::longterm::RecordKind>(name);
+  if (!parsed) {
+    return std::unexpected(Error::invalid_argument("memory.remember: unknown kind").with("kind", std::string{name}));
+  }
+  return *parsed;
 }
 
 [[nodiscard]] std::string user_message_text_for_recall(const core::Message& message) {
@@ -297,6 +306,30 @@ filter_skill_documents(std::span<const skill::SkillDocument> documents,
   return text;
 }
 
+[[nodiscard]] std::uintmax_t memory_record_payload_bytes(const memory::longterm::Record& record) noexcept {
+  auto bytes = static_cast<std::uintmax_t>(record.key.id.size() + record.title.size() + record.body.size());
+  for (const auto& tag : record.tags) {
+    bytes += static_cast<std::uintmax_t>(tag.size());
+  }
+  for (const auto& id : record.linked_record_ids) {
+    bytes += static_cast<std::uintmax_t>(id.size());
+  }
+  return bytes;
+}
+
+[[nodiscard]] std::string render_memory_remember_tool_text(const memory::longterm::Record& record) {
+  std::string text;
+  std::format_to(std::back_inserter(text),
+                 "memory.remember: saved {} record {}\n",
+                 core::enum_name(record.kind),
+                 record.key.id);
+  std::format_to(std::back_inserter(text), "title: {}", record.title);
+  if (record.shadow) {
+    text.append("\nstatus: shadow");
+  }
+  return text;
+}
+
 [[nodiscard]] std::vector<skill::SessionSkillActivation>
 skill_policy_records_from(std::span<const memory::session::SkillActivationRecord> records) {
   auto out = std::vector<skill::SessionSkillActivation>{};
@@ -479,6 +512,10 @@ public:
     dispatch_context.memory_recall = [this](tool::MemoryRecallRequest request,
                                             tool::DispatchContext& ctx) -> async::Awaitable<Result<tool::Output>> {
       co_return co_await recall_memory(std::move(request), ctx);
+    };
+    dispatch_context.memory_remember = [this](tool::MemoryRememberRequest request,
+                                              tool::DispatchContext& ctx) -> async::Awaitable<Result<tool::Output>> {
+      co_return co_await remember_memory(std::move(request), ctx);
     };
     dispatch_context.workspace = &assembly_->workspace();
     dispatch_context.output_caps = output_caps_;
@@ -743,6 +780,50 @@ private:
         .usage =
             tool::ToolUsage{
                 .match_count = static_cast<std::uint64_t>(recalled->hits.size()),
+            },
+        .is_error = false,
+    };
+  }
+
+  [[nodiscard]] async::Awaitable<Result<tool::Output>> remember_memory(tool::MemoryRememberRequest request,
+                                                                       tool::DispatchContext& ctx) const {
+    auto* backend = assembly_->longterm_memory_backend();
+    if (backend == nullptr) {
+      co_return std::unexpected(Error::invalid_argument("memory.remember: runtime service is not available")
+                                    .with("reason", "memory_runtime_unavailable"));
+    }
+    auto kind = parse_memory_tool_remember_kind(request.kind);
+    if (!kind) {
+      co_return std::unexpected(std::move(kind).error());
+    }
+
+    auto stored = co_await backend->upsert(memory::longterm::WriteRequest{
+        .record =
+            memory::longterm::Record{
+                .key = memory::longterm::RecordKey{.id = std::move(request.id), .scope_key = scope_key_},
+                .kind = *kind,
+                .title = std::move(request.title),
+                .body = std::move(request.body),
+                .created_at = ctx.now,
+                .updated_at = ctx.now,
+                .last_read_at = ctx.now,
+                .importance = request.importance,
+                .tags = std::move(request.tags),
+                .linked_record_ids = std::move(request.linked_record_ids),
+                .shadow = request.shadow,
+            },
+    });
+    if (!stored) {
+      co_return std::unexpected(std::move(stored).error());
+    }
+    auto data_json = memory::longterm::render_remember_data_json(*stored);
+    co_return tool::Output{
+        .text = render_memory_remember_tool_text(*stored),
+        .data_json = std::move(data_json),
+        .attachments = {},
+        .usage =
+            tool::ToolUsage{
+                .bytes_written = memory_record_payload_bytes(*stored),
             },
         .is_error = false,
     };
