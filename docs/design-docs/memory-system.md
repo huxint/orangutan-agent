@@ -353,9 +353,11 @@ Planned optional backends:
   the optional dependency.
 - external vector adapter — optional embedding store via `oran-http::Client`.
 
-`bench/memory/` (see `docs/product-specs/0010-benchmark-harness.md`) now records the
-FTS5 10k-record search baseline; future gated vector slices add sqlite-vec and
-hybrid comparisons against that scenario.
+`bench/memory/` (see `docs/product-specs/0010-benchmark-harness.md`) records the
+FTS5 10k-record search baseline and, since slice 173, the
+FTS5-vs-vector-vs-hybrid comparison (`scenarios/search_fts5_vs_vector.cpp`) over a
+brute-force cosine reference `VectorBackend`; the gated `--vector_memory=y`
+sqlite-vec adapter will satisfy the same contract and re-run that scenario.
 
 ## Shared Memory (Team)
 

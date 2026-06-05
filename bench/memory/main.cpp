@@ -8,6 +8,7 @@
 namespace orangutan::bench {
 void register_session_store(ankerl::nanobench::Bench& bench);
 void register_longterm_fts5(ankerl::nanobench::Bench& bench);
+void register_search_fts5_vs_vector(ankerl::nanobench::Bench& bench);
 }  // namespace orangutan::bench
 
 int main() {
@@ -19,6 +20,7 @@ int main() {
 
   orangutan::bench::register_session_store(bench);
   orangutan::bench::register_longterm_fts5(bench);
+  orangutan::bench::register_search_fts5_vs_vector(bench);
 
   std::println();
   return 0;
