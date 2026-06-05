@@ -1,6 +1,6 @@
 // include/oran/memory.hpp — public facade for oran-memory.
 //
-// Session storage, once-per-turn prompt framing, and long-term backend
+// Session storage, once-per-turn prompt framing, and long-term backend/runtime
 // contracts live under this umbrella.
 
 #pragma once

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <limits>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -104,7 +105,19 @@ memory::longterm::VectorEmbedding make_embedding() {
 
 class FakeBackend final : public memory::longterm::Backend {
 public:
-  explicit FakeBackend(memory::longterm::Record record) : record_{std::move(record)} {}
+  explicit FakeBackend(memory::longterm::Record record)
+      : record_{std::move(record)}, hits_{memory::longterm::SearchHit{
+                                        .record = record_,
+                                        .score = 0.9,
+                                        .lexical_score = 0.8,
+                                        .vector_score = 0.7,
+                                    }} {}
+
+  explicit FakeBackend(std::vector<memory::longterm::SearchHit> hits) : hits_{std::move(hits)} {
+    if (!hits_.empty()) {
+      record_ = hits_.front().record;
+    }
+  }
 
   [[nodiscard]] async::Awaitable<core::Result<memory::longterm::Record>> get(memory::longterm::RecordKey key) override {
     last_key = std::move(key);
@@ -113,19 +126,21 @@ public:
 
   [[nodiscard]] async::Awaitable<core::Result<std::vector<memory::longterm::SearchHit>>>
   search(memory::longterm::Query query, std::size_t limit) override {
+    ++search_calls;
     last_query = std::move(query);
     last_limit = limit;
-    co_return std::vector<memory::longterm::SearchHit>{memory::longterm::SearchHit{
-        .record = record_,
-        .score = 0.9,
-        .lexical_score = 0.8,
-        .vector_score = 0.7,
-    }};
+    co_return hits_;
   }
 
   [[nodiscard]] async::Awaitable<core::Result<memory::longterm::Record>>
   upsert(memory::longterm::WriteRequest request) override {
     record_ = std::move(request.record);
+    hits_ = {memory::longterm::SearchHit{
+        .record = record_,
+        .score = 0.9,
+        .lexical_score = 0.8,
+        .vector_score = std::nullopt,
+    }};
     co_return record_;
   }
 
@@ -137,9 +152,11 @@ public:
   memory::longterm::RecordKey last_key;
   memory::longterm::Query last_query;
   std::size_t last_limit{};
+  std::size_t search_calls{};
 
 private:
   memory::longterm::Record record_;
+  std::vector<memory::longterm::SearchHit> hits_;
 };
 
 class FakeVectorBackend final : public memory::longterm::VectorBackend {
@@ -299,6 +316,94 @@ TEST_CASE("longterm backend interfaces compose through async contracts", "[unit]
 
     auto removed = co_await backend.remove(memory::longterm::RecordKey{.id = "rec-1", .scope_key = "agent:coder"});
     REQUIRE(removed.has_value());
+  });
+}
+
+TEST_CASE("longterm::Runtime validates and delegates backend search", "[unit][memory][longterm][runtime]") {
+  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    FakeBackend backend{make_record()};
+    memory::longterm::Runtime runtime{backend};
+    auto query = memory::longterm::Query{
+        .scope_key = "agent:coder",
+        .text = "workflow",
+        .kinds = {memory::longterm::RecordKind::project},
+    };
+
+    auto hits = co_await runtime.search(query, 4);
+    REQUIRE(hits.has_value());
+    REQUIRE(hits->size() == 1);
+    REQUIRE(backend.search_calls == 1);
+    REQUIRE(backend.last_query == query);
+    REQUIRE(backend.last_limit == 4);
+  });
+}
+
+TEST_CASE("longterm::Runtime rejects invalid recall before backend dispatch", "[unit][memory][longterm][runtime]") {
+  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    FakeBackend backend{make_record()};
+    memory::longterm::Runtime runtime{backend};
+
+    auto result = co_await runtime.recall(memory::longterm::RecallRequest{
+        .query =
+            memory::longterm::Query{
+                .scope_key = "agent:coder",
+                .text = "",
+                .kinds = {},
+            },
+        .limit = 5,
+    });
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(backend.search_calls == 0);
+  });
+}
+
+TEST_CASE("longterm::Runtime renders deterministic recall framing", "[unit][memory][longterm][runtime]") {
+  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    auto record = make_record();
+    record.body = "The repository prefers scoped slices.\nDocs move with code.";
+    FakeBackend backend{record};
+    memory::longterm::Runtime runtime{backend};
+
+    auto result = co_await runtime.recall(memory::longterm::RecallRequest{
+        .query =
+            memory::longterm::Query{
+                .scope_key = "agent:coder",
+                .text = "workflow",
+                .kinds = {},
+            },
+        .limit = 5,
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->hits.size() == 1);
+    REQUIRE(result->framing.section_text == "Long-term memory:\n"
+                                            "- [project] Build notes (id: rec-1)\n"
+                                            "  The repository prefers scoped slices. Docs move with code.\n"
+                                            "  tags: repo, workflow\n"
+                                            "  linked: rec-0\n");
+  });
+}
+
+TEST_CASE("longterm::Runtime returns empty framing for empty recall", "[unit][memory][longterm][runtime]") {
+  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    FakeBackend backend{std::vector<memory::longterm::SearchHit>{}};
+    memory::longterm::Runtime runtime{backend};
+
+    auto result = co_await runtime.recall(memory::longterm::RecallRequest{
+        .query =
+            memory::longterm::Query{
+                .scope_key = "agent:coder",
+                .text = "workflow",
+                .kinds = {},
+            },
+        .limit = 5,
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->hits.empty());
+    REQUIRE(result->framing.section_text.empty());
   });
 }
 
@@ -526,5 +631,40 @@ TEST_CASE("longterm::Fts5Backend updates and removes indexed rows", "[unit][memo
         10);
     REQUIRE(after_remove.has_value());
     REQUIRE(after_remove->empty());
+  });
+}
+
+TEST_CASE("longterm::Runtime recalls through Fts5Backend", "[unit][memory][longterm][runtime][fts5]") {
+  TempDb db{"oran-memory-longterm-runtime-fts5"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    memory::longterm::Fts5Backend backend{pool};
+    auto migrated = co_await backend.migrate();
+    REQUIRE(migrated.has_value());
+    memory::longterm::Runtime runtime{backend};
+
+    auto record = make_record("runtime-rec",
+                              "agent:coder",
+                              memory::longterm::RecordKind::reference,
+                              "Runtime recall",
+                              "Runtime recall composes over the FTS5 backend.");
+    record.tags = {"runtime", "fts5"};
+    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = record})).has_value());
+
+    auto result = co_await runtime.recall(memory::longterm::RecallRequest{
+        .query =
+            memory::longterm::Query{
+                .scope_key = "agent:coder",
+                .text = "recall",
+                .kinds = {memory::longterm::RecordKind::reference},
+            },
+        .limit = 3,
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->hits.size() == 1);
+    REQUIRE(result->hits[0].record.key.id == "runtime-rec");
+    REQUIRE(result->framing.section_text.contains("Runtime recall"));
+    REQUIRE(result->framing.section_text.contains("tags: runtime, fts5"));
   });
 }

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <format>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -14,6 +15,7 @@
 #include <oran/core/enum_names.hpp>
 #include <oran/core/result.hpp>
 #include <oran/core/time.hpp>
+#include <oran/memory/framing.hpp>
 #include <oran/storage/migrations.hpp>
 
 namespace orangutan::storage {
@@ -79,6 +81,20 @@ struct WriteRequest {
   Record record;
 
   friend bool operator==(const WriteRequest&, const WriteRequest&) = default;
+};
+
+struct RecallRequest {
+  Query query;
+  std::size_t limit{0};
+
+  friend bool operator==(const RecallRequest&, const RecallRequest&) = default;
+};
+
+struct RecallResult {
+  std::vector<SearchHit> hits;
+  Framing framing;
+
+  friend bool operator==(const RecallResult&, const RecallResult&) = default;
 };
 
 struct VectorEmbedding {
@@ -177,6 +193,24 @@ private:
   storage::Pool* pool_{};
   Fts5BackendOptions options_;
 };
+
+/// Prompt-boundary long-term memory runtime.
+///
+/// `Runtime` composes a lexical `Backend` into search and recall operations. It
+/// does not own storage and does not query inside `agent::Loop`; callers render
+/// recall once before the prompt builder consumes section-5 memory framing.
+class Runtime {
+public:
+  explicit Runtime(Backend& backend) noexcept;
+
+  [[nodiscard]] async::Awaitable<core::Result<std::vector<SearchHit>>> search(Query query, std::size_t limit);
+  [[nodiscard]] async::Awaitable<core::Result<RecallResult>> recall(RecallRequest request);
+
+private:
+  Backend* backend_{};
+};
+
+[[nodiscard]] Framing render_recall_framing(std::span<const SearchHit> hits);
 
 [[nodiscard]] core::Result<void> validate_key(const RecordKey& key);
 [[nodiscard]] core::Result<void> validate_record(const Record& record);

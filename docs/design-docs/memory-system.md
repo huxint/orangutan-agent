@@ -150,16 +150,19 @@ MEMORY.md mirror. v2 keeps that core and adds:
 - **Decay policy**: `memory-age` style decay is actually wired into the search pipeline
   this time; expired records receive lower BM25 weight before potentially being pruned.
 
-Status (slice 161): `include/oran/memory/longterm.hpp` now ships the public
+Status (slice 162): `include/oran/memory/longterm.hpp` now ships the public
 record/query/write shapes, reflection-backed `RecordKind`, `Backend` and
 `VectorBackend` traits, validation helpers for record keys, search limits,
 record metadata, and vector embeddings, plus `Fts5Backend` as the default
 SQLite FTS5 lexical backend. `Fts5Backend` owns the long-term memory schema in
 `src/oran-memory/migrations/longterm/`, applies its built-in migration through
 the shared `storage::Pool` writer, returns `ErrorKind::not_found` for missing
-`get(...)` rows, and treats `remove(...)` as idempotent. It does **not** yet
-ship `longterm::Runtime`, the gated sqlite-vec adapter, hybrid ranking, or
-recall-backed prompt framing.
+`get(...)` rows, and treats `remove(...)` as idempotent. Slice 162 adds
+`longterm::Runtime`, a prompt-boundary composition layer that delegates search
+to a `Backend`, validates recall requests before dispatch, and renders stable
+`memory::Framing` bytes from returned hits with `render_recall_framing(...)`.
+It does **not** yet wire runtime recall into bootstrap/config, ship the gated
+sqlite-vec adapter, or perform hybrid ranking.
 
 ```cpp
 // include/oran/memory/longterm.hpp
@@ -231,6 +234,35 @@ class VectorBackend {
   virtual async::Awaitable<core::Result<void>> remove(VectorRemoveRequest request) = 0;
 };
 ```
+
+`Runtime` composes a backend into the prompt-boundary recall operation:
+
+```cpp
+struct RecallRequest {
+  Query query;
+  std::size_t limit;
+};
+
+struct RecallResult {
+  std::vector<SearchHit> hits;
+  memory::Framing framing;
+};
+
+class Runtime {
+ public:
+  explicit Runtime(Backend& backend);
+  async::Awaitable<core::Result<std::vector<SearchHit>>>
+    search(Query query, std::size_t limit);
+  async::Awaitable<core::Result<RecallResult>> recall(RecallRequest request);
+};
+```
+
+Recall framing is deterministic prompt text. It contains no clocks, request ids,
+trace ids, or scores; it is a function of the returned memory records only. The
+current renderer emits one compact section headed `Long-term memory:` with
+record kind, title, id, normalized body text, tags, and linked ids. Empty recall
+returns an empty `memory::Framing`, so callers can keep section 5 absent when no
+long-term memory matches.
 
 The shipped lexical backend is:
 

@@ -40,7 +40,11 @@ operators can reason about retention, scope, and visibility.
   `src/oran-memory/migrations/longterm/`, migrates it through `storage::Pool`,
   implements scoped `get` / `search` / `upsert` / idempotent `remove`, filters
   by kind and shadow state, and returns lexical scores from SQLite BM25.
-  `longterm::Runtime`, vector search, hybrid ranking, and recall-backed framing
+- Runtime recall composition shipped in slice 162:
+  `memory::longterm::Runtime` wraps a `Backend`, validates runtime search/recall
+  requests before backend dispatch, and returns `RecallResult { hits, framing }`
+  with deterministic `memory::Framing` bytes rendered from the returned records.
+  Bootstrap/config wiring, memory tools, vector search, and hybrid ranking
   remain downstream.
 - Decay policy applied by a periodic job (`oran-automation`).
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
@@ -72,9 +76,9 @@ operators can reason about retention, scope, and visibility.
    the runtime assembly owner, and slice 132 wires the bootstrap runner
    persistence path.
 2. `longterm::Runtime::search("react agent loop", limit=10)` returns within 50 ms on
-   a 10 k-record corpus. **Status:** open; slice 161 ships the default FTS5
-   lexical `Backend`, but the runtime composition layer and 10 k-record bench
-   are still downstream.
+   a 10 k-record corpus. **Status:** open; slice 162 ships the runtime search
+   seam over the default FTS5 lexical `Backend`, but the 10 k-record bench and
+   bootstrap/config recall source are still downstream.
 3. The MEMORY.md mirror, when enabled, reflects all kinds + records within 1 s of the
    underlying DB write.
 4. Decay marks records older than `policy.forget_after_unused` as shadow; they no
@@ -82,9 +86,10 @@ operators can reason about retention, scope, and visibility.
 5. A `memory.write.before` hook can veto a write; the runtime returns
    `Error::HookVeto` to the caller.
 6. `tests/memory/` >= 85% coverage. **Status:** `test-memory` currently reports
-   20 cases / 678 assertions, including long-term contract validation, fake
-   async backend interface coverage, and public `Fts5Backend` migration /
-   scoped search / filtering / update / delete coverage.
+   25 cases / 705 assertions, including long-term contract validation, fake
+   async backend interface coverage, public `Fts5Backend` migration / scoped
+   search / filtering / update / delete coverage, and `longterm::Runtime`
+   validation / deterministic recall-framing coverage.
 7. `bench/memory/search-fts5-vs-vector` (v2): reports the FTS5 baseline + vector
    results in machine-readable JSON.
 
