@@ -7,27 +7,40 @@
 
 ## Snapshot
 
-- **Slice:** 183 (`xmake run orangutan -- --help` reports slice 183)
+- **Slice:** 184 (`xmake run orangutan -- --help` reports slice 184)
 - **Last completed history:**
-  [`histories/2026-06/20260606-2239-memory-retention-config.md`](histories/2026-06/20260606-2239-memory-retention-config.md)
+  [`histories/2026-06/20260606-2314-memory-startup-retention-decay.md`](histories/2026-06/20260606-2314-memory-startup-retention-decay.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 183 adds the operator-facing long-term
+- **Latest completed slice:** slice 184 consumes the typed long-term retention
+  policy during configured-route startup. `bootstrap::run` derives one
+  `LongtermMemoryStartupDecayOptions` pass from
+  `memory.longterm.retention.forget_after_unused_days`, `importance_floor`, and
+  `max_records_per_scope` for the runner's `cli` scope; `RuntimeAssembly::build`
+  runs that bounded `Fts5Backend::decay(...)` pass after long-term memory
+  migration and before opening the long-lived memory pool, so prompt-boundary
+  recall and `memory.recall` do not see newly shadowed stale records.
+  `decay_check_interval_hours` remains reserved for a future periodic
+  `oran-automation` owner. Focused result: `test-bootstrap` **119 cases / 1002
+  assertions**.
+- **Next intended slice:** no active plan. The remaining memory work should be a
+  product capability gap, not another benchmark by default: periodic
+  automation scheduling for retention cadence, decay lifecycle hooks once
+  subscribers are attached, external/semantic embedding provider ownership, or
+  the optional `MEMORY.md` mirror are the next meaningful candidates. The
+  spec-0010 unified benchmark JSON gap still exists, but it is secondary to
+  runtime capability.
+
+Slice 183 adds the operator-facing long-term
   retention policy contract. `oran-config` now parses
   `memory.longterm.retention.forget_after_unused_days`,
   `importance_floor`, `max_records_per_scope`, and
   `decay_check_interval_hours`, defaults them to 180 days / 0.0 / 10000 / 24 h,
   rejects malformed values, and preserves strict/loose unknown-field behavior
-  for the nested retention block. The policy is not executed yet; periodic
-  scheduling, startup consumption, and decay hook publishing remain downstream.
+  for the nested retention block. Slice 184 consumes that policy for one
+  configured-route startup decay pass; periodic scheduling and decay hook
+  publishing remain downstream.
   Focused result: `test-config` **48 cases / 429 assertions**.
-- **Next intended slice:** no active plan. The remaining memory work should be a
-  product capability gap, not another benchmark by default: consuming the typed
-  retention policy in a startup or automation-owned decay runner, publishing
-  decay lifecycle hooks, external/semantic embedding provider ownership, or the
-  optional `MEMORY.md` mirror are the next meaningful candidates. The spec-0010
-  unified benchmark JSON gap still exists, but it is secondary to runtime
-  capability.
 
 Slice 182 adds the library-level long-term decay
   execution boundary. `memory::longterm` now exposes `DecayRequest`,
@@ -1780,7 +1793,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 116 cases / 969 assertions.
+- `oran-bootstrap`: 119 cases / 1002 assertions.
 
 ## Open Tech-Debt Rows
 

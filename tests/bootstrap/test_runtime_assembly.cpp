@@ -1,5 +1,6 @@
 // tests/bootstrap/test_runtime_assembly.cpp — per-process permission + audit assembly coverage.
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -266,6 +267,114 @@ TEST_CASE("RuntimeAssembly::build provisions memory.db at the workspace default 
     REQUIRE(recalled->hits[0].record.key.id == "lt-1");
     REQUIRE(recalled->framing.section_text.contains("Runtime assembly memory"));
   });
+}
+
+TEST_CASE("RuntimeAssembly::build applies long-term startup decay before exposing memory",
+          "[unit][bootstrap][runtime_assembly][memory]") {
+  TempDir temp{"oran-assembly-longterm-startup-decay"};
+
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    {
+      auto options = bootstrap::RuntimeAssemblyOptions{};
+      options.audit_enabled = false;
+      options.session_memory_enabled = false;
+      options.longterm_memory_enabled = true;
+      auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
+      REQUIRE(built.has_value());
+
+      auto stale_low = make_longterm_record();
+      stale_low.key.id = "stale-low";
+      stale_low.title = "Stale low";
+      stale_low.body = "The stale papaya startup decay fixture should be hidden.";
+      stale_low.last_read_at = core::Time{core::Time::time_point{3s}};
+      stale_low.updated_at = core::Time{core::Time::time_point{4s}};
+      stale_low.importance = 0.1;
+
+      auto fresh_low = make_longterm_record();
+      fresh_low.key.id = "fresh-low";
+      fresh_low.title = "Fresh low";
+      fresh_low.body = "The fresh papaya startup decay fixture should stay visible.";
+      fresh_low.last_read_at = core::Time{core::Time::time_point{20s}};
+      fresh_low.updated_at = core::Time{core::Time::time_point{21s}};
+      fresh_low.importance = 0.1;
+
+      REQUIRE((co_await built->longterm_memory_backend()->upsert(memory::longterm::WriteRequest{.record = stale_low}))
+                  .has_value());
+      REQUIRE((co_await built->longterm_memory_backend()->upsert(memory::longterm::WriteRequest{.record = fresh_low}))
+                  .has_value());
+    }
+
+    const auto decay_at = core::Time{core::Time::time_point{30s}};
+    auto options = bootstrap::RuntimeAssemblyOptions{};
+    options.audit_enabled = false;
+    options.session_memory_enabled = false;
+    options.longterm_memory_enabled = true;
+    options.longterm_memory_startup_decay = bootstrap::LongtermMemoryStartupDecayOptions{
+        .scope_key = "cli",
+        .unused_before = core::Time{core::Time::time_point{10s}},
+        .importance_floor = 0.5,
+        .limit = 10,
+        .decay_at = decay_at,
+    };
+    auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
+    REQUIRE(built.has_value());
+
+    auto default_hits = co_await built->longterm_memory_backend()->search(
+        memory::longterm::Query{
+            .scope_key = "cli",
+            .text = "papaya",
+            .kinds = {},
+        },
+        10);
+    REQUIRE(default_hits.has_value());
+    REQUIRE(default_hits->size() == 1);
+    REQUIRE((*default_hits)[0].record.key.id == "fresh-low");
+    REQUIRE(std::ranges::none_of(*default_hits, [](const memory::longterm::SearchHit& hit) {
+      return hit.record.key.id == "stale-low";
+    }));
+
+    auto including_shadow = co_await built->longterm_memory_backend()->search(
+        memory::longterm::Query{
+            .scope_key = "cli",
+            .text = "papaya",
+            .kinds = {},
+            .include_shadow = true,
+        },
+        10);
+    REQUIRE(including_shadow.has_value());
+    REQUIRE(including_shadow->size() == 2);
+    const auto stale_hit = std::ranges::find_if(*including_shadow, [](const memory::longterm::SearchHit& hit) {
+      return hit.record.key.id == "stale-low";
+    });
+    REQUIRE(stale_hit != including_shadow->end());
+    REQUIRE(stale_hit->record.shadow);
+    REQUIRE(stale_hit->record.updated_at == decay_at);
+  });
+}
+
+TEST_CASE("RuntimeAssembly::build rejects long-term startup decay when long-term memory is disabled",
+          "[unit][bootstrap][runtime_assembly][memory]") {
+  TempDir temp{"oran-assembly-longterm-startup-decay-disabled"};
+  asio::io_context io;
+
+  auto options = bootstrap::RuntimeAssemblyOptions{};
+  options.audit_enabled = false;
+  options.session_memory_enabled = false;
+  options.longterm_memory_enabled = false;
+  options.longterm_memory_startup_decay = bootstrap::LongtermMemoryStartupDecayOptions{
+      .scope_key = "cli",
+      .unused_before = core::Time{core::Time::time_point{10s}},
+      .importance_floor = 0.5,
+      .limit = 10,
+      .decay_at = core::Time{core::Time::time_point{30s}},
+  };
+  auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
+
+  REQUIRE_FALSE(built.has_value());
+  REQUIRE(built.error().kind() == core::ErrorKind::invalid_argument);
+  REQUIRE(std::ranges::any_of(built.error().context(), [](const auto& entry) {
+    return entry.first == "reason" && entry.second == "longterm_memory_disabled";
+  }));
 }
 
 #if defined(ORAN_ENABLE_SQLITE_VEC)

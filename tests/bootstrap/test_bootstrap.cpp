@@ -33,6 +33,7 @@
 #include <oran/bootstrap.hpp>
 #include <oran/config/config.hpp>
 #include <oran/core/error.hpp>
+#include <oran/core/time.hpp>
 #include <oran/core/turn_id.hpp>
 #include <oran/memory.hpp>
 #include <oran/permission/rule_set.hpp>
@@ -547,6 +548,49 @@ std::string provider_config_with_longterm_recall_text(std::string_view base_url,
   return text;
 }
 
+std::string provider_config_with_longterm_retention_recall_text(std::string_view base_url) {
+  auto text = std::string{R"json(
+{
+  "runtime": {
+    "workers": 1,
+    "request_timeout_ms": 2000
+  },
+  "memory": {
+    "longterm": {
+      "recall": {
+        "enabled": true,
+        "limit": 5
+      },
+      "retention": {
+        "forget_after_unused_days": 1,
+        "importance_floor": 0.5,
+        "max_records_per_scope": 10,
+        "decay_check_interval_hours": 24
+      }
+    }
+  },
+  "profiles": {
+    "default": {
+      "provider": "anthropic",
+      "protocol": "anthropic_messages",
+      "model": "claude-test",
+      "base_url": ")json"};
+  text.append(base_url);
+  text.append(R"json(",
+      "api_key_env": "ORAN_BOOTSTRAP_RUN_PROVIDER_KEY"
+    }
+  },
+  "routes": {
+    "default": {
+      "primary": "default",
+      "fallbacks": []
+    }
+  }
+}
+)json");
+  return text;
+}
+
 void seed_longterm_memory(const std::filesystem::path& workspace) {
   test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {
     auto assembly_options = bootstrap::RuntimeAssemblyOptions{};
@@ -584,6 +628,47 @@ void seed_longterm_memory(const std::filesystem::path& workspace) {
             },
     });
     REQUIRE(user_record.has_value());
+    co_return;
+  });
+}
+
+void seed_longterm_retention_memory(const std::filesystem::path& workspace) {
+  test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {
+    auto assembly_options = bootstrap::RuntimeAssemblyOptions{};
+    assembly_options.audit_enabled = false;
+    assembly_options.session_memory_enabled = false;
+    assembly_options.longterm_memory_enabled = true;
+    auto assembly = bootstrap::RuntimeAssembly::build(workspace.string(), io.get_executor(), assembly_options);
+    REQUIRE(assembly.has_value());
+    REQUIRE(assembly->longterm_memory_backend() != nullptr);
+
+    auto stale = memory::longterm::Record{
+        .key = memory::longterm::RecordKey{.id = "bootstrap-retention-stale", .scope_key = "cli"},
+        .kind = memory::longterm::RecordKind::project,
+        .title = "Stale retention fixture",
+        .body = "Stale retention bootstrap recall should not reach the provider prompt.",
+        .last_read_at = core::Time::epoch(),
+        .importance = 0.1,
+        .tags = {"bootstrap", "retention"},
+        .linked_record_ids = {},
+    };
+    auto fresh = memory::longterm::Record{
+        .key = memory::longterm::RecordKey{.id = "bootstrap-retention-fresh", .scope_key = "cli"},
+        .kind = memory::longterm::RecordKind::project,
+        .title = "Fresh retention fixture",
+        .body = "Fresh retention bootstrap recall reaches the provider prompt.",
+        .created_at = core::time::now_utc(),
+        .updated_at = core::time::now_utc(),
+        .last_read_at = core::time::now_utc(),
+        .importance = 0.1,
+        .tags = {"bootstrap", "retention"},
+        .linked_record_ids = {},
+    };
+
+    REQUIRE((co_await assembly->longterm_memory_backend()->upsert(memory::longterm::WriteRequest{.record = stale}))
+                .has_value());
+    REQUIRE((co_await assembly->longterm_memory_backend()->upsert(memory::longterm::WriteRequest{.record = fresh}))
+                .has_value());
     co_return;
   });
 }
@@ -850,6 +935,53 @@ TEST_CASE("run maps memory recall config into configured provider prompts", "[un
   REQUIRE(server.request_text().contains("Long-term memory:"));
   REQUIRE(server.request_text().contains("Config-enabled bootstrap recall reaches the provider prompt."));
   REQUIRE(server.request_text().contains("tags: bootstrap, recall"));
+}
+
+TEST_CASE("run applies configured memory retention before configured provider prompts",
+          "[unit][bootstrap][provider][memory]") {
+  ScopedEnv api_key{"ORAN_BOOTSTRAP_RUN_PROVIDER_KEY", "test-secret"};
+  ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
+  ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
+  OneShotHttpServer server{anthropic_sse_response("retention ok")};
+  TempDir temp{"oran-bootstrap-provider-longterm-retention"};
+  seed_longterm_retention_memory(temp.path());
+  const auto config_path = temp.path() / "config.json";
+  write_file(config_path, provider_config_with_longterm_retention_recall_text(server.base_url()));
+  auto config_arg = config_path.string();
+  auto args = std::vector<std::string_view>{"--config", config_arg, "--prompt", "bootstrap retention recall"};
+
+  auto result = bootstrap::run(options(args, temp.path()));
+
+  REQUIRE(result.has_value());
+  REQUIRE(*result == 0);
+  REQUIRE(server.served());
+  REQUIRE(server.request_text().contains("Fresh retention bootstrap recall reaches the provider prompt."));
+  REQUIRE_FALSE(server.request_text().contains("Stale retention bootstrap recall should not reach"));
+
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto assembly_options = bootstrap::RuntimeAssemblyOptions{};
+    assembly_options.audit_enabled = false;
+    assembly_options.session_memory_enabled = false;
+    assembly_options.longterm_memory_enabled = true;
+    auto assembly = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), assembly_options);
+    REQUIRE(assembly.has_value());
+
+    auto hits = co_await assembly->longterm_memory_backend()->search(
+        memory::longterm::Query{
+            .scope_key = "cli",
+            .text = "retention",
+            .kinds = {},
+            .include_shadow = true,
+        },
+        10);
+    REQUIRE(hits.has_value());
+    const auto stale = std::ranges::find_if(*hits, [](const memory::longterm::SearchHit& hit) {
+      return hit.record.key.id == "bootstrap-retention-stale";
+    });
+    REQUIRE(stale != hits->end());
+    REQUIRE(stale->record.shadow);
+    co_return;
+  });
 }
 
 TEST_CASE("run filters configured memory recall by kind", "[unit][bootstrap][provider][memory]") {

@@ -225,6 +225,54 @@ run_longterm_memory_migration_inline(const std::string& memory_path,
   return report;
 }
 
+/// Run one startup decay pass after long-term memory migration and before the
+/// long-lived pool starts serving prompt/tool reads.
+[[nodiscard]] Result<std::size_t>
+run_longterm_memory_startup_decay_inline(const std::string& memory_path,
+                                         std::size_t reader_count,
+                                         std::size_t statement_cache_capacity,
+                                         const LongtermMemoryStartupDecayOptions& options) {
+  asio::io_context io;
+  auto temp_pool_result = storage::Pool::open(io.get_executor(),
+                                              storage::PoolOptions{
+                                                  .path = memory_path,
+                                                  .reader_count = reader_count,
+                                                  .statement_cache_capacity = statement_cache_capacity,
+                                              });
+  if (!temp_pool_result) {
+    return std::unexpected(std::move(temp_pool_result).error());
+  }
+  auto temp_pool = std::move(*temp_pool_result);
+  memory::longterm::Fts5Backend backend{temp_pool};
+
+  auto shadowed = std::size_t{0};
+  auto decay_error = std::optional<Error>{};
+  asio::co_spawn(
+      io,
+      [&]() -> async::Awaitable<void> {
+        auto decayed = co_await backend.decay(memory::longterm::DecayRequest{
+            .scope_key = options.scope_key,
+            .unused_before = options.unused_before,
+            .importance_floor = options.importance_floor,
+            .limit = options.limit,
+            .decay_at = options.decay_at,
+        });
+        if (!decayed) {
+          decay_error = std::move(decayed).error();
+          co_return;
+        }
+        shadowed = decayed->shadowed_records.size();
+        co_return;
+      },
+      asio::detached);
+  io.run();
+
+  if (decay_error) {
+    return std::unexpected(std::move(*decay_error));
+  }
+  return shadowed;
+}
+
 /// Drive the optional vector-memory migration to completion before the
 /// long-lived vector pool is opened on the caller-supplied executor.
 [[nodiscard]] Result<void> run_longterm_vector_memory_migration_inline(const std::string& vector_path,
@@ -453,6 +501,11 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
     impl->session_store = std::make_unique<memory::session::Store>(*impl->session_repository);
   }
 
+  if (!options.longterm_memory_enabled && options.longterm_memory_startup_decay.has_value()) {
+    return std::unexpected(Error::invalid_argument("long-term startup decay requires long-term memory")
+                               .with("reason", "longterm_memory_disabled"));
+  }
+
   if (options.longterm_memory_enabled) {
     impl->longterm_memory_path =
         resolve_database_path(workspace, options.longterm_memory_db_path, kMemoryDatabaseRelative);
@@ -466,6 +519,16 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
                                                                    options.longterm_memory_statement_cache_capacity);
     if (!longterm_migration) {
       return std::unexpected(std::move(longterm_migration).error());
+    }
+
+    if (options.longterm_memory_startup_decay.has_value()) {
+      auto decayed = run_longterm_memory_startup_decay_inline(impl->longterm_memory_path,
+                                                              options.longterm_memory_reader_count,
+                                                              options.longterm_memory_statement_cache_capacity,
+                                                              *options.longterm_memory_startup_decay);
+      if (!decayed) {
+        return std::unexpected(std::move(decayed).error());
+      }
     }
 
     auto memory_pool =

@@ -37,6 +37,7 @@
 #include <asio/any_io_executor.hpp>
 
 #include <oran/core/result.hpp>
+#include <oran/core/time.hpp>
 #include <oran/permission/approval_broker.hpp>
 #include <oran/permission/audit.hpp>
 #include <oran/tool/workspace.hpp>
@@ -61,6 +62,16 @@ class TraceRepository;
 }  // namespace orangutan::storage
 
 namespace orangutan::bootstrap {
+
+struct LongtermMemoryStartupDecayOptions {
+  std::string scope_key{};
+  core::Time unused_before{core::Time::epoch()};
+  double importance_floor{0.0};
+  std::size_t limit{0};
+  core::Time decay_at{core::Time::epoch()};
+
+  friend bool operator==(const LongtermMemoryStartupDecayOptions&, const LongtermMemoryStartupDecayOptions&) = default;
+};
 
 struct RuntimeAssemblyOptions {
   /// When non-empty, overrides the default audit DB path. The default
@@ -130,6 +141,12 @@ struct RuntimeAssemblyOptions {
   std::size_t longterm_memory_reader_count{2};
   /// Per-slot statement cache size for the long-term memory `Pool`.
   std::size_t longterm_memory_statement_cache_capacity{16};
+  /// Optional startup decay pass over the long-term lexical memory DB. Bootstrap
+  /// derives this from `memory.longterm.retention` only for configured-route
+  /// runs, so the built-in no-provider CLI path still avoids opening memory
+  /// state. The pass runs after migration and before the long-lived pool is
+  /// exposed; periodic automation remains a separate owner.
+  std::optional<LongtermMemoryStartupDecayOptions> longterm_memory_startup_decay{};
   /// When `true`, the assembly also opens the optional sqlite-vec vector index
   /// over a separate DB and constructs a `memory::longterm::HybridRuntime`.
   /// Requires an xmake build configured with `--vector_memory=y`.

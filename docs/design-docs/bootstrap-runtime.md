@@ -71,6 +71,7 @@ struct RuntimeAssemblyOptions {
   bool longterm_memory_enabled = true;
   std::size_t longterm_memory_reader_count{2};
   std::size_t longterm_memory_statement_cache_capacity{16};
+  std::optional<LongtermMemoryStartupDecayOptions> longterm_memory_startup_decay{};
   bool longterm_vector_memory_enabled = false;
   std::string longterm_vector_memory_db_path{};
   std::size_t longterm_vector_memory_dimensions{64};
@@ -114,8 +115,9 @@ Session memory uses a separate `storage::Pool` and `storage::SessionRepository` 
 `<workspace>/.orangutan/sessions.db` by default; it never shares the audit/trace
 `audit.db` pool. Long-term memory uses a separate `storage::Pool` over
 `<workspace>/.orangutan/memory.db`, migrates the `memory::longterm::Fts5Backend`
-schema before opening the long-lived pool, and exposes both the backend and
-`memory::longterm::Runtime` for prompt-boundary recall and the read-only
+schema before opening the long-lived pool, optionally runs one bounded startup
+decay pass from `LongtermMemoryStartupDecayOptions`, and exposes both the backend
+and `memory::longterm::Runtime` for prompt-boundary recall and the read-only
 `memory.recall` tool plus the write-side `memory.remember` and `memory.forget`
 tools. When vector memory is enabled, the assembly opens a separate
 `<workspace>/.orangutan/memory-vectors.db` pool with sqlite-vec auto extensions,
@@ -128,9 +130,15 @@ backend and `memory::longterm::HybridRuntime`.
 provider route is configured. When that cutoff is present and tracing is enabled,
 `RuntimeAssembly::build` purges old `trace_turns` rows after the audit migration
 and before the long-lived trace repository is exposed; audit rows are not deleted
-by trace retention. The built-in empty-defaults path disables session and
-long-term memory so a fresh checkout can run the deterministic CLI shell without
-opening `sessions.db` or `memory.db`. The startup banner prints
+by trace retention. For configured-route runs, bootstrap also derives
+`longterm_memory_startup_decay` from `memory.longterm.retention` for the runner's
+stable `cli` scope. The assembly applies that one lexical-memory pass after
+long-term migration and before the long-lived memory pool is exposed, so prompt
+and tool reads see the post-decay visible set. `decay_check_interval_hours`
+remains a future `oran-automation` cadence input, not a startup-loop timer. The
+built-in empty-defaults path disables session and long-term memory so a fresh
+checkout can run the deterministic CLI shell without opening `sessions.db` or
+`memory.db`. The startup banner prints
 `trace=<enabled|disabled>`, `sessions=<enabled|disabled> (<path|disabled>)`,
 `longterm-memory=<enabled|disabled> (<path|disabled>)`,
 `vector-memory=<enabled|disabled> (<path|disabled>)`, and `hook-timeout=<ms>`.

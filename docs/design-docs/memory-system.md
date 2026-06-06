@@ -157,7 +157,7 @@ MEMORY.md mirror. v2 keeps that core and adds:
   metadata before pruning. Expired records eventually receive lower search weight
   before potentially being shadowed or deleted.
 
-Status (slice 183): `include/oran/memory/longterm.hpp` now ships the public
+Status (slice 184): `include/oran/memory/longterm.hpp` now ships the public
 record/query/write/touch/decay shapes, reflection-backed `RecordKind`,
 `Backend` and `VectorBackend` traits, validation helpers for record keys,
 search limits, record metadata, touch requests, decay requests, and vector
@@ -257,12 +257,17 @@ Slice 183 adds the operator-facing retention config contract:
 `decay_check_interval_hours` parse through `oran-config`, default to
 180 days / 0.0 / 10000 / 24 h, reject malformed values, and preserve the
 strict/loose unknown-field behavior used by the rest of the nested memory
-config surface. The policy is parsed but not executed yet.
+config surface. Slice 184 consumes that policy at configured-route startup:
+`bootstrap::run` derives a `LongtermMemoryStartupDecayOptions` pass for the
+runner's `cli` scope, and `RuntimeAssembly::build` applies that bounded
+lexical-memory decay after migration and before exposing the long-lived
+memory pool. `decay_check_interval_hours` remains reserved for future periodic
+automation scheduling.
 Default builds still reject
 `memory.longterm.hybrid_search.enabled=true` before assembly/provider side
 effects with `reason=build_option_disabled`, `option=vector_memory`. Semantic or
-external embedding providers, blocking read-before policy, startup/automation
-ownership for periodic decay, and decay hook publishing remain downstream.
+external embedding providers, blocking read-before policy, periodic decay
+ownership, and decay hook publishing remain downstream.
 
 ```cpp
 // include/oran/memory/longterm.hpp
@@ -516,16 +521,19 @@ The config spelling uses explicit units:
 `forget_after_unused_days`, `importance_floor`, `max_records_per_scope`, and
 `decay_check_interval_hours`.
 
-A periodic job (registered with `oran-automation`) runs decay according to the policy.
-Decayed records are not immediately deleted; they enter a "shadow" state where they
-are excluded from default search but visible to runtime callers that set
-`Query::include_shadow=true`. The shipped `memory.recall` tool keeps
-`include_shadow=false`. Slice 181 provides the read-touch metadata prerequisite
-(`Backend::touch` plus recall-side `last_read_at` updates), and slice 182
-provides the backend execution boundary (`Backend::decay`) that applies the
-shadow transition for a bounded scope batch. Slice 183 provides the parsed
-policy contract; the remaining work is ownership: startup or `oran-automation`
-execution plus lifecycle hook publishing.
+Configured-route startup runs one bounded decay pass from the policy before
+prompt/tool reads are exposed. A periodic job registered with `oran-automation`
+will later use `decay_check_interval_hours` for the cadence; startup does not
+loop or schedule background work. Decayed records are not immediately deleted;
+they enter a "shadow" state where they are excluded from default search but
+visible to runtime callers that set `Query::include_shadow=true`. The shipped
+`memory.recall` tool keeps `include_shadow=false`. Slice 181 provides the
+read-touch metadata prerequisite (`Backend::touch` plus recall-side
+`last_read_at` updates), slice 182 provides the backend execution boundary
+(`Backend::decay`) that applies the shadow transition for a bounded scope batch,
+slice 183 provides the parsed policy contract, and slice 184 provides the
+configured-route startup owner. Remaining ownership work is periodic
+`oran-automation` execution plus lifecycle hook publishing.
 
 Forgetting is final (DELETE), with an audit row in `audit.db`.
 

@@ -180,7 +180,14 @@ operators can reason about retention, scope, and visibility.
   (`0..1`), positive `max_records_per_scope`, and positive
   `decay_check_interval_hours`. The defaults are 180 days / 0.0 / 10000 / 24 h,
   and the block participates in the existing strict/loose unknown-field
-  handling for nested memory config. This slice does not execute decay.
+  handling for nested memory config.
+- Configured-route startup retention consumption shipped in slice 184:
+  `bootstrap::run` maps that retention policy into one
+  `LongtermMemoryStartupDecayOptions` pass for the runner's stable `cli` scope,
+  and `RuntimeAssembly::build` runs the bounded lexical decay after long-term
+  migration and before exposing the long-lived memory backend/runtime. The
+  `decay_check_interval_hours` field remains reserved for future periodic
+  automation cadence.
 - Decay policy scheduling by a periodic job (`oran-automation`) remains
   downstream.
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
@@ -240,8 +247,9 @@ operators can reason about retention, scope, and visibility.
    the default FTS5 implementation that shadows scoped, visible records matching
    the unused-before and importance-floor policy inputs, then keeps them out of
    default search. Slice 183 adds the typed `memory.longterm.retention` config
-   contract for those policy inputs. `oran-automation` scheduling, startup
-   execution, and decay hook publishing remain open.
+   contract for those policy inputs. Slice 184 closes the configured-route
+   startup owner by applying one bounded decay pass before prompt/tool reads.
+   `oran-automation` periodic scheduling and decay hook publishing remain open.
 5. A `memory.write.before` hook can veto a write. **Status:** closed for the
    bootstrap `memory.remember` tool path in slice 179. `AgentPromptRunner`
    publishes blocking `memory_write_before` after parsing/scoping the record and
@@ -265,7 +273,9 @@ operators can reason about retention, scope, and visibility.
    importance floors, already-shadow rows, batch limits, and default
    search-hidden / include-shadow-visible behavior. Slice 183 adds `oran-config`
    retention-policy coverage for defaults, explicit values, malformed values,
-   and strict/loose unknown retention fields. Slice 176 adds
+   and strict/loose unknown retention fields. Slice 184 adds bootstrap coverage
+   for configured-route startup retention consumption plus assembly-level
+   startup decay before the long-lived memory backend is exposed. Slice 176 adds
    gated sqlite-vec disabled-build coverage, plus `--vector_memory=y` coverage
    for scoped upsert/search/remove and dimension-mismatch migration rejection.
    Gated `--vector_memory=y` `test-memory` remains last reported at 36 cases /
@@ -273,7 +283,7 @@ operators can reason about retention, scope, and visibility.
    `test-config` reports
    48 cases / 429 assertions for the recall, hybrid-search, and retention policy parsers, `test-hook`
    reports 36 cases / 287 assertions for hook payload and redaction coverage, and `test-bootstrap`
-   reports 116 cases / 969 assertions by default and 120 cases / 958 assertions
+   reports 119 cases / 1002 assertions by default and 120 cases / 958 assertions
    with `--vector_memory=y` for the assembly, prompt-runner, and
    configured-route recall consumers, including slice-167 query-strategy
    coverage, slice-168 `memory.recall` tool binding, and slice-169
