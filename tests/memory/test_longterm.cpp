@@ -173,6 +173,28 @@ public:
     co_return record;
   }
 
+  [[nodiscard]] async::Awaitable<core::Result<memory::longterm::Record>>
+  touch(memory::longterm::TouchRequest request) override {
+    ++touch_calls;
+    last_touch = request;
+    last_key = request.key;
+    auto record = std::ranges::find_if(records_, [this](const memory::longterm::Record& candidate) {
+      return same_key(candidate.key, last_key);
+    });
+    if (record == records_.end()) {
+      co_return std::unexpected(core::Error::not_found("record not found"));
+    }
+    if (record->last_read_at < request.read_at) {
+      record->last_read_at = request.read_at;
+    }
+    for (auto& hit : hits_) {
+      if (same_key(hit.record.key, record->key)) {
+        hit.record = *record;
+      }
+    }
+    co_return *record;
+  }
+
   [[nodiscard]] async::Awaitable<core::Result<void>> remove(memory::longterm::RecordKey key) override {
     last_key = std::move(key);
     co_return core::Result<void>{};
@@ -180,9 +202,11 @@ public:
 
   memory::longterm::RecordKey last_key;
   memory::longterm::Query last_query;
+  memory::longterm::TouchRequest last_touch;
   std::size_t last_limit{};
   std::size_t search_calls{};
   std::size_t get_calls{};
+  std::size_t touch_calls{};
 
 private:
   std::vector<memory::longterm::SearchHit> hits_;
@@ -375,6 +399,7 @@ TEST_CASE("longterm::Runtime validates and delegates backend search", "[unit][me
     REQUIRE(hits.has_value());
     REQUIRE(hits->size() == 1);
     REQUIRE(backend.search_calls == 1);
+    REQUIRE(backend.touch_calls == 0);
     REQUIRE(backend.last_query == query);
     REQUIRE(backend.last_limit == 4);
   });
@@ -425,6 +450,32 @@ TEST_CASE("longterm::Runtime renders deterministic recall framing", "[unit][memo
                                             "  The repository prefers scoped slices. Docs move with code.\n"
                                             "  tags: repo, workflow\n"
                                             "  linked: rec-0\n");
+  });
+}
+
+TEST_CASE("longterm::Runtime touches recalled hits before returning", "[unit][memory][longterm][runtime]") {
+  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    auto record = make_record();
+    const auto previous_read_at = record.last_read_at;
+    FakeBackend backend{record};
+    memory::longterm::Runtime runtime{backend};
+
+    auto result = co_await runtime.recall(memory::longterm::RecallRequest{
+        .query =
+            memory::longterm::Query{
+                .scope_key = "agent:coder",
+                .text = "workflow",
+                .kinds = {},
+            },
+        .limit = 5,
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->hits.size() == 1);
+    REQUIRE(backend.touch_calls == 1);
+    REQUIRE(backend.last_touch.key == record.key);
+    REQUIRE(backend.last_touch.read_at > previous_read_at);
+    REQUIRE(result->hits[0].record.last_read_at == backend.last_touch.read_at);
   });
 }
 
@@ -746,6 +797,9 @@ TEST_CASE("longterm::HybridRuntime recalls with merged hybrid hits", "[unit][mem
     REQUIRE(recalled.has_value());
     REQUIRE(recalled->hits.size() == 1);
     REQUIRE(recalled->hits[0].record.key.id == "rec-vector");
+    REQUIRE(lexical.touch_calls == 1);
+    REQUIRE(lexical.last_touch.key == record.key);
+    REQUIRE(recalled->hits[0].record.last_read_at == lexical.last_touch.read_at);
     REQUIRE(recalled->framing.section_text.contains("Hybrid recall"));
   });
 }
@@ -1035,6 +1089,52 @@ TEST_CASE("longterm::Fts5Backend updates and removes indexed rows", "[unit][memo
         10);
     REQUIRE(after_remove.has_value());
     REQUIRE(after_remove->empty());
+  });
+}
+
+TEST_CASE("longterm::Fts5Backend touches last_read_at without rebuilding indexed text",
+          "[unit][memory][longterm][fts5]") {
+  TempDb db{"oran-memory-longterm-touch"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    memory::longterm::Fts5Backend backend{pool};
+    auto migrated = co_await backend.migrate();
+    REQUIRE(migrated.has_value());
+
+    auto record = make_record("rec-touch",
+                              "agent:coder",
+                              memory::longterm::RecordKind::reference,
+                              "Touch metadata",
+                              "Recall touch preserves the indexed apricot text.");
+    const auto original_read_at = record.last_read_at;
+    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = record})).has_value());
+
+    const auto touched_at = core::Time{core::Time::time_point{10s}};
+    auto touched = co_await backend.touch(memory::longterm::TouchRequest{.key = record.key, .read_at = touched_at});
+    REQUIRE(touched.has_value());
+    REQUIRE(touched->last_read_at == touched_at);
+    REQUIRE(touched->updated_at == record.updated_at);
+
+    auto fetched = co_await backend.get(record.key);
+    REQUIRE(fetched.has_value());
+    REQUIRE(fetched->last_read_at == touched_at);
+
+    auto regressed =
+        co_await backend.touch(memory::longterm::TouchRequest{.key = record.key, .read_at = original_read_at});
+    REQUIRE(regressed.has_value());
+    REQUIRE(regressed->last_read_at == touched_at);
+
+    auto hits = co_await backend.search(
+        memory::longterm::Query{
+            .scope_key = "agent:coder",
+            .text = "apricot",
+            .kinds = {},
+        },
+        10);
+    REQUIRE(hits.has_value());
+    REQUIRE(hits->size() == 1);
+    REQUIRE((*hits)[0].record.key.id == "rec-touch");
+    REQUIRE((*hits)[0].record.last_read_at == touched_at);
   });
 }
 

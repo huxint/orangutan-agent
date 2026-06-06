@@ -104,6 +104,27 @@ DELETE FROM longterm_records
 WHERE scope_key = ? AND id = ?
 )sql";
 
+constexpr std::string_view kTouchRecordSql = R"sql(
+UPDATE longterm_records
+SET last_read_at = CASE
+  WHEN last_read_at < ? THEN ?
+  ELSE last_read_at
+END
+WHERE scope_key = ? AND id = ?
+RETURNING scope_key,
+          id,
+          kind,
+          title,
+          body,
+          created_at,
+          updated_at,
+          last_read_at,
+          importance,
+          tags_json,
+          linked_record_ids_json,
+          shadow
+)sql";
+
 constexpr std::string_view kSearchSelectSql = R"sql(
 SELECT r.scope_key,
        r.id,
@@ -694,6 +715,50 @@ async::Awaitable<core::Result<Record>> Fts5Backend::upsert(WriteRequest request)
     co_return std::unexpected(rollback_error(std::move(committed).error(), connection));
   }
   co_return stored;
+}
+
+async::Awaitable<core::Result<Record>> Fts5Backend::touch(TouchRequest request) {
+  if (auto valid = validate_touch_request(request); !valid) {
+    co_return std::unexpected(std::move(valid).error());
+  }
+
+  auto writer = co_await pool_->acquire_writer();
+  if (!writer) {
+    co_return std::unexpected(std::move(writer).error());
+  }
+  auto cached = writer->statement_cache().acquire(writer->connection(), kTouchRecordSql);
+  if (!cached) {
+    co_return std::unexpected(std::move(cached).error());
+  }
+  auto& statement = cached->statement();
+  const auto read_at = core::time::format_iso8601_utc(request.read_at);
+  if (auto bound = statement.bind_text(1, read_at); !bound) {
+    co_return std::unexpected(std::move(bound).error());
+  }
+  if (auto bound = statement.bind_text(2, read_at); !bound) {
+    co_return std::unexpected(std::move(bound).error());
+  }
+  if (auto bound = bind_key(statement, 3, request.key); !bound) {
+    co_return std::unexpected(std::move(bound).error());
+  }
+
+  auto step = statement.step();
+  if (!step) {
+    co_return std::unexpected(std::move(step).error());
+  }
+  if (*step == storage::StepResult::done) {
+    co_return std::unexpected(core::Error::not_found("long-term memory record not found")
+                                  .with("scope_key", request.key.scope_key)
+                                  .with("id", request.key.id));
+  }
+  auto record = read_record_row(statement);
+  if (!record) {
+    co_return std::unexpected(std::move(record).error());
+  }
+  if (auto done = expect_done(statement, "touch_record"); !done) {
+    co_return std::unexpected(std::move(done).error());
+  }
+  co_return std::move(*record);
 }
 
 async::Awaitable<core::Result<void>> Fts5Backend::remove(RecordKey key) {

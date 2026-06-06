@@ -7,12 +7,27 @@
 
 ## Snapshot
 
-- **Slice:** 180 (`xmake run orangutan -- --help` reports slice 180)
+- **Slice:** 181 (`xmake run orangutan -- --help` reports slice 181)
 - **Last completed history:**
-  [`histories/2026-06/20260606-2126-memory-read-hooks.md`](histories/2026-06/20260606-2126-memory-read-hooks.md)
+  [`histories/2026-06/20260606-2151-memory-recall-touch.md`](histories/2026-06/20260606-2151-memory-recall-touch.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 180 wires long-term memory read-after
+- **Latest completed slice:** slice 181 adds read-touch metadata to successful
+  long-term recall. `memory::longterm` now exposes `TouchRequest` plus
+  `Backend::touch(...)`; the default `Fts5Backend` advances `last_read_at`
+  monotonically without rebuilding indexed text or changing `updated_at`, and
+  both `Runtime::recall` and `HybridRuntime::recall` touch returned hits before
+  rendering framing/data. Ordinary `search(...)` remains read-only. This gives
+  future decay policy a real "last used" signal before decay execution lands.
+  Focused result: `test-memory` **36 cases / 797 assertions**.
+- **Next intended slice:** no active plan. The remaining memory work should be a
+  product capability gap, not another benchmark by default: decay lifecycle
+  hooks/policy execution, external/semantic embedding provider ownership, or
+  the optional `MEMORY.md` mirror are the next meaningful candidates. The
+  spec-0010 unified benchmark JSON gap still exists, but it is secondary to
+  runtime capability.
+
+Slice 180 wires long-term memory read-after
   observability through the same configured-route bootstrap boundary as recall
   execution. `oran-hook` now carries typed `MemoryReadPayload` /
   `MemoryReadHitPayload` shapes for successful prompt-boundary long-term recall
@@ -23,12 +38,6 @@
   this slice; the blocking `memory_read_before` rewrite/veto consumer stays
   deferred. Focused results: `test-hook` **36 cases / 287 assertions** and
   `test-bootstrap` **116 cases / 969 assertions**.
-- **Next intended slice:** no active plan. The remaining memory work should be a
-  product capability gap, not another benchmark by default: external/semantic
-  embedding provider ownership, decay lifecycle hooks, decay policy execution,
-  or the optional `MEMORY.md` mirror are the next meaningful candidates. The
-  spec-0010 unified benchmark JSON gap still exists, but it is secondary to
-  runtime capability.
 
 Slice 179 wires long-term memory lifecycle hooks
   through the configured-route bootstrap memory-tool callbacks. `oran-hook` now

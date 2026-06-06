@@ -183,6 +183,10 @@ core::Result<void> validate_write_request(const WriteRequest& request) {
   return validate_record(request.record);
 }
 
+core::Result<void> validate_touch_request(const TouchRequest& request) {
+  return validate_key(request.key);
+}
+
 core::Result<void> validate_embedding(const VectorEmbedding& embedding) {
   if (auto valid = validate_required(embedding.model, "embedding_model"); !valid) {
     return valid;

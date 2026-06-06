@@ -137,6 +137,22 @@ void sort_and_cap_hits(std::vector<SearchHit>& hits, std::size_t limit) {
   }
 }
 
+[[nodiscard]] async::Awaitable<core::Result<void>> touch_recalled_hits(Backend& backend, std::vector<SearchHit>& hits) {
+  if (hits.empty()) {
+    co_return core::Result<void>{};
+  }
+
+  const auto read_at = core::time::now_utc();
+  for (auto& hit : hits) {
+    auto touched = co_await backend.touch(TouchRequest{.key = hit.record.key, .read_at = read_at});
+    if (!touched) {
+      co_return std::unexpected(std::move(touched).error());
+    }
+    hit.record = std::move(*touched);
+  }
+  co_return core::Result<void>{};
+}
+
 }  // namespace
 
 Runtime::Runtime(Backend& backend) noexcept : backend_{&backend} {}
@@ -156,6 +172,9 @@ async::Awaitable<core::Result<RecallResult>> Runtime::recall(RecallRequest reque
   auto hits = co_await search(std::move(request.query), request.limit);
   if (!hits) {
     co_return std::unexpected(std::move(hits).error());
+  }
+  if (auto touched = co_await touch_recalled_hits(*backend_, *hits); !touched) {
+    co_return std::unexpected(std::move(touched).error());
   }
   auto framing = render_recall_framing(*hits);
   co_return RecallResult{
@@ -239,6 +258,9 @@ async::Awaitable<core::Result<RecallResult>> HybridRuntime::recall(HybridSearchR
   auto hits = co_await search(std::move(request));
   if (!hits) {
     co_return std::unexpected(std::move(hits).error());
+  }
+  if (auto touched = co_await touch_recalled_hits(*lexical_backend_, *hits); !touched) {
+    co_return std::unexpected(std::move(touched).error());
   }
   auto framing = render_recall_framing(*hits);
   co_return RecallResult{

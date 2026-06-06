@@ -83,6 +83,13 @@ struct WriteRequest {
   friend bool operator==(const WriteRequest&, const WriteRequest&) = default;
 };
 
+struct TouchRequest {
+  RecordKey key;
+  core::Time read_at{core::Time::epoch()};
+
+  friend bool operator==(const TouchRequest&, const TouchRequest&) = default;
+};
+
 struct RecallRequest {
   Query query;
   std::size_t limit{0};
@@ -166,6 +173,7 @@ public:
   [[nodiscard]] virtual async::Awaitable<core::Result<std::vector<SearchHit>>> search(Query query,
                                                                                       std::size_t limit) = 0;
   [[nodiscard]] virtual async::Awaitable<core::Result<Record>> upsert(WriteRequest request) = 0;
+  [[nodiscard]] virtual async::Awaitable<core::Result<Record>> touch(TouchRequest request) = 0;
   [[nodiscard]] virtual async::Awaitable<core::Result<void>> remove(RecordKey key) = 0;
 };
 
@@ -212,6 +220,7 @@ public:
   [[nodiscard]] async::Awaitable<core::Result<Record>> get(RecordKey key) override;
   [[nodiscard]] async::Awaitable<core::Result<std::vector<SearchHit>>> search(Query query, std::size_t limit) override;
   [[nodiscard]] async::Awaitable<core::Result<Record>> upsert(WriteRequest request) override;
+  [[nodiscard]] async::Awaitable<core::Result<Record>> touch(TouchRequest request) override;
   [[nodiscard]] async::Awaitable<core::Result<void>> remove(RecordKey key) override;
 
 private:
@@ -292,6 +301,7 @@ private:
 [[nodiscard]] core::Result<void> validate_record(const Record& record);
 [[nodiscard]] core::Result<void> validate_query(const Query& query, std::size_t limit);
 [[nodiscard]] core::Result<void> validate_write_request(const WriteRequest& request);
+[[nodiscard]] core::Result<void> validate_touch_request(const TouchRequest& request);
 [[nodiscard]] core::Result<void> validate_embedding(const VectorEmbedding& embedding);
 [[nodiscard]] core::Result<void> validate_vector_upsert(const VectorUpsert& request);
 [[nodiscard]] core::Result<void> validate_vector_search_query(const VectorSearchQuery& query, std::size_t limit);

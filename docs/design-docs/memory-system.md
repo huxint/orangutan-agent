@@ -153,17 +153,20 @@ MEMORY.md mirror. v2 keeps that core and adds:
   index seam that an optional sqlite-vec / HNSW / external adapter can implement.
 - **Typed kinds** match the legacy ones (user, feedback, project, reference) and gain a
   fifth: `team` (mirrors of shared-tier records for cross-tier search convenience).
-- **Decay policy**: `memory-age` style decay is actually wired into the search pipeline
-  this time; expired records receive lower BM25 weight before potentially being pruned.
+- **Decay policy**: `memory-age` style decay will consume explicit read-touch
+  metadata before pruning. Expired records eventually receive lower search weight
+  before potentially being shadowed or deleted.
 
-Status (slice 172): `include/oran/memory/longterm.hpp` now ships the public
-record/query/write shapes, reflection-backed `RecordKind`, `Backend` and
+Status (slice 181): `include/oran/memory/longterm.hpp` now ships the public
+record/query/write/touch shapes, reflection-backed `RecordKind`, `Backend` and
 `VectorBackend` traits, validation helpers for record keys, search limits,
-record metadata, and vector embeddings, plus `Fts5Backend` as the default
-SQLite FTS5 lexical backend. `Fts5Backend` owns the long-term memory schema in
-`src/oran-memory/migrations/longterm/`, applies its built-in migration through
-the shared `storage::Pool` writer, returns `ErrorKind::not_found` for missing
-`get(...)` rows, and treats `remove(...)` as idempotent. Slice 162 adds
+record metadata, touch requests, and vector embeddings, plus `Fts5Backend` as
+the default SQLite FTS5 lexical backend. `Fts5Backend` owns the long-term memory
+schema in `src/oran-memory/migrations/longterm/`, applies its built-in
+migration through the shared `storage::Pool` writer, returns
+`ErrorKind::not_found` for missing `get(...)` rows, advances `last_read_at`
+monotonically through `touch(...)`, and treats `remove(...)` as idempotent.
+Slice 162 adds
 `longterm::Runtime`, a prompt-boundary composition layer that delegates search
 to a `Backend`, validates recall requests before dispatch, and renders stable
 `memory::Framing` bytes from returned hits with `render_recall_framing(...)`.
@@ -234,10 +237,16 @@ successful lexical or hybrid recall. Default hook sinks receive redacted
 memory payloads: writes omit record title/body/tags/linked ids, reads omit raw
 query text plus hit title/body/tags/linked ids while preserving byte/count
 metadata and scores. Trusted-local sinks receive the raw query and records.
+Slice 181 adds read-touch metadata: successful `Runtime::recall` and
+`HybridRuntime::recall` call `Backend::touch(...)` for each returned hit before
+rendering framing, so returned hits carry updated `last_read_at`. Ordinary
+`Runtime::search` and `HybridRuntime::search` remain read-only and do not touch
+records.
 Default builds still reject
 `memory.longterm.hybrid_search.enabled=true` before assembly/provider side
 effects with `reason=build_option_disabled`, `option=vector_memory`. Semantic or
-external embedding providers remain downstream.
+external embedding providers, blocking read-before policy, and periodic decay
+execution remain downstream.
 
 ```cpp
 // include/oran/memory/longterm.hpp
@@ -284,6 +293,11 @@ struct SearchHit {
   std::optional<double> vector_score;
 };
 
+struct TouchRequest {
+  RecordKey key;
+  core::Time read_at;
+};
+
 }  // namespace orangutan::memory::longterm
 ```
 
@@ -297,6 +311,7 @@ class Backend {
   virtual async::Awaitable<core::Result<std::vector<SearchHit>>>
     search(Query query, std::size_t limit) = 0;
   virtual async::Awaitable<core::Result<Record>> upsert(WriteRequest request) = 0;
+  virtual async::Awaitable<core::Result<Record>> touch(TouchRequest request) = 0;
   virtual async::Awaitable<core::Result<void>> remove(RecordKey key) = 0;
 };
 
@@ -375,6 +390,9 @@ returned hits as `{kind:"memory_recall", match_count, records[]}` for tool
 results, including record ids, scope keys, kind spellings, timestamps, scores,
 tags, linked ids, and shadow flags. `render_forget_data_json(...)` serializes
 scoped deletes as `{kind:"memory_forget", record:{id, scope_key}}`.
+Since slice 181, recall first touches every returned record through the lexical
+backend and the framing/data JSON reflect the updated `last_read_at`; plain
+search callers still get a side-effect-free ranked result.
 
 The shipped backends are:
 
@@ -468,7 +486,9 @@ A periodic job (registered with `oran-automation`) runs decay according to the p
 Decayed records are not immediately deleted; they enter a "shadow" state where they
 are excluded from default search but visible to runtime callers that set
 `Query::include_shadow=true`. The shipped `memory.recall` tool keeps
-`include_shadow=false`.
+`include_shadow=false`. Slice 181 provides the read-touch metadata prerequisite
+(`Backend::touch` plus recall-side `last_read_at` updates); periodic decay
+execution and lifecycle hooks are still planned.
 
 Forgetting is final (DELETE), with an audit row in `audit.db`.
 

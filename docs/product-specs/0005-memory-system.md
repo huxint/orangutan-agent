@@ -33,13 +33,14 @@ operators can reason about retention, scope, and visibility.
 - Long-term backend contract prework shipped in slice 160:
   `memory::longterm::RecordKind` (`user`, `feedback`, `project`, `reference`,
   reserved `team`), `RecordKey`, `Record`, `Query`, `SearchHit`,
-  `WriteRequest`, `Backend`, `VectorBackend`, and validation helpers now exist
-  in `<oran/memory/longterm.hpp>`.
+  `WriteRequest`, `TouchRequest`, `Backend`, `VectorBackend`, and validation
+  helpers now exist in `<oran/memory/longterm.hpp>`.
 - SQLite FTS5 long-term backend shipped in slice 161:
   `memory::longterm::Fts5Backend` owns the default lexical schema under
   `src/oran-memory/migrations/longterm/`, migrates it through `storage::Pool`,
-  implements scoped `get` / `search` / `upsert` / idempotent `remove`, filters
-  by kind and shadow state, and returns lexical scores from SQLite BM25.
+  implements scoped `get` / `search` / `upsert` / `touch` / idempotent
+  `remove`, filters by kind and shadow state, and returns lexical scores from
+  SQLite BM25.
 - Runtime recall composition shipped in slice 162:
   `memory::longterm::Runtime` wraps a `Backend`, validates runtime search/recall
   requests before backend dispatch, and returns `RecallResult { hits, framing }`
@@ -159,6 +160,13 @@ operators can reason about retention, scope, and visibility.
   `memory_write_after`, successful `memory.forget` calls publish advisory
   `memory_forget`, and successful prompt-boundary recall plus `memory.recall`
   tool reads publish advisory `memory_read_after`.
+- Recall read-touch metadata shipped in slice 181:
+  `memory::longterm::Backend` now includes `touch(TouchRequest)`. The default
+  `Fts5Backend` advances `last_read_at` monotonically without rebuilding FTS
+  text or changing `updated_at`, and `Runtime::recall` /
+  `HybridRuntime::recall` touch returned hits before rendering framing/data.
+  Plain `search(...)` remains read-only so callers can still inspect rankings
+  without mutating read metadata.
 - Decay policy applied by a periodic job (`oran-automation`).
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
 - Blocking `memory_read_before`, decay lifecycle hooks, and memory-write
@@ -209,7 +217,10 @@ operators can reason about retention, scope, and visibility.
 3. The MEMORY.md mirror, when enabled, reflects all kinds + records within 1 s of the
    underlying DB write.
 4. Decay marks records older than `policy.forget_after_unused` as shadow; they no
-   longer surface in default search.
+   longer surface in default search. **Status:** open for policy execution, but
+   slice 181 closes the recall-side read metadata prerequisite: successful
+   `Runtime::recall` and `HybridRuntime::recall` advance `last_read_at` through
+   `Backend::touch`, while plain `search(...)` remains side-effect free.
 5. A `memory.write.before` hook can veto a write. **Status:** closed for the
    bootstrap `memory.remember` tool path in slice 179. `AgentPromptRunner`
    publishes blocking `memory_write_before` after parsing/scoping the record and
@@ -219,17 +230,20 @@ operators can reason about retention, scope, and visibility.
    not persisted. `rewrite` and `require_approval` decisions remain unsupported
    for this memory-write consumer and are rejected as blocked hook decisions.
 6. `tests/memory/` >= 85% coverage. **Status:** default `test-memory` currently
-   reports 34 cases / 771 assertions, including long-term contract validation,
+   reports 36 cases / 797 assertions, including long-term contract validation,
    fake async backend interface coverage, public `Fts5Backend` migration /
-   scoped search / filtering / update / delete coverage, and `longterm::Runtime`
-   validation / deterministic recall-framing plus recall/remember/forget
-   `data_json` coverage. Slice 178 adds deterministic local text/record
-   embedding helper coverage. Slice 172 adds hybrid-runtime validation,
+   scoped search / filtering / update / touch / delete coverage, and
+   `longterm::Runtime` validation / deterministic recall-framing plus
+   recall/remember/forget `data_json` coverage. Slice 178 adds deterministic
+   local text/record embedding helper coverage. Slice 172 adds hybrid-runtime validation,
    lexical/vector merge ordering, vector-only hydration, stale vector-row skip,
-   and recall-framing coverage. Slice 176 adds gated sqlite-vec disabled-build
-   coverage, plus `--vector_memory=y` coverage for scoped upsert/search/remove
-   and dimension-mismatch migration rejection. Gated `--vector_memory=y`
-   `test-memory` reports 36 cases / 791 assertions.
+   and recall-framing coverage. Slice 181 adds default-build coverage for
+   runtime recall touches, hybrid recall touches, and FTS5 monotonic
+   `last_read_at` updates that do not rebuild indexed text. Slice 176 adds
+   gated sqlite-vec disabled-build coverage, plus `--vector_memory=y` coverage
+   for scoped upsert/search/remove and dimension-mismatch migration rejection.
+   Gated `--vector_memory=y` `test-memory` remains last reported at 36 cases /
+   791 assertions.
    `test-config` reports
    46 cases / 402 assertions for the recall and hybrid-search policy parsers, `test-hook`
    reports 36 cases / 287 assertions for hook payload and redaction coverage, and `test-bootstrap`
