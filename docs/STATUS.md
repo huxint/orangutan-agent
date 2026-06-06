@@ -7,26 +7,37 @@
 
 ## Snapshot
 
-- **Slice:** 182 (`xmake run orangutan -- --help` reports slice 182)
+- **Slice:** 183 (`xmake run orangutan -- --help` reports slice 183)
 - **Last completed history:**
-  [`histories/2026-06/20260606-2218-memory-decay-shadow.md`](histories/2026-06/20260606-2218-memory-decay-shadow.md)
+  [`histories/2026-06/20260606-2239-memory-retention-config.md`](histories/2026-06/20260606-2239-memory-retention-config.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 182 adds the library-level long-term decay
+- **Latest completed slice:** slice 183 adds the operator-facing long-term
+  retention policy contract. `oran-config` now parses
+  `memory.longterm.retention.forget_after_unused_days`,
+  `importance_floor`, `max_records_per_scope`, and
+  `decay_check_interval_hours`, defaults them to 180 days / 0.0 / 10000 / 24 h,
+  rejects malformed values, and preserves strict/loose unknown-field behavior
+  for the nested retention block. The policy is not executed yet; periodic
+  scheduling, startup consumption, and decay hook publishing remain downstream.
+  Focused result: `test-config` **48 cases / 429 assertions**.
+- **Next intended slice:** no active plan. The remaining memory work should be a
+  product capability gap, not another benchmark by default: consuming the typed
+  retention policy in a startup or automation-owned decay runner, publishing
+  decay lifecycle hooks, external/semantic embedding provider ownership, or the
+  optional `MEMORY.md` mirror are the next meaningful candidates. The spec-0010
+  unified benchmark JSON gap still exists, but it is secondary to runtime
+  capability.
+
+Slice 182 adds the library-level long-term decay
   execution boundary. `memory::longterm` now exposes `DecayRequest`,
   `DecayResult`, and `Backend::decay(...)`; the default `Fts5Backend` marks
   scoped, visible records whose `last_read_at < unused_before` and
   `importance <= importance_floor` as `shadow=true` in bounded batches, updates
   the FTS shadow metadata, returns the shadowed records, and leaves default
   search excluding those rows unless `Query::include_shadow=true`. Automation
-  scheduling, config policy parsing, and decay hook publishing remain
-  downstream. Focused result: `test-memory` **38 cases / 841 assertions**.
-- **Next intended slice:** no active plan. The remaining memory work should be a
-  product capability gap, not another benchmark by default: wiring the decay
-  operation to config/automation/hooks, external/semantic embedding provider
-  ownership, or the optional `MEMORY.md` mirror are the next meaningful
-  candidates. The spec-0010 unified benchmark JSON gap still exists, but it is
-  secondary to runtime capability.
+  scheduling and decay hook publishing remain downstream. Focused result:
+  `test-memory` **38 cases / 841 assertions**.
 
 Slice 181 adds read-touch metadata to successful
   long-term recall. `memory::longterm` now exposes `TouchRequest` plus
@@ -1758,18 +1769,18 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-async`: 11 cases / 51 assertions.
 - `oran-http`: 3 cases / 21 assertions.
 - `oran-io`: 54 cases / 311 assertions.
-- `oran-storage`: 76 cases / 986 assertions.
-- `oran-config`: 46 cases / 402 assertions.
+- `oran-storage`: 77 cases / 988 assertions.
+- `oran-config`: 48 cases / 429 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
-- `oran-hook`: 34 cases / 243 assertions.
-- `oran-memory`: 31 cases / 756 assertions.
+- `oran-hook`: 36 cases / 287 assertions.
+- `oran-memory`: 38 cases / 841 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 208 cases / 2181 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 115 cases / 883 assertions.
+- `oran-bootstrap`: 116 cases / 969 assertions.
 
 ## Open Tech-Debt Rows
 

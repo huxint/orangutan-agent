@@ -101,6 +101,12 @@
         "result_limit": 10,
         "lexical_weight": 1.0,
         "vector_weight": 1.0
+      },
+      "retention": {
+        "forget_after_unused_days": 180,
+        "importance_floor": 0.0,
+        "max_records_per_scope": 10000,
+        "decay_check_interval_hours": 24
       }
     }
   },

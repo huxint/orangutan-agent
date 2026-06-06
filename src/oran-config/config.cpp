@@ -70,9 +70,10 @@ constexpr auto kRecognizedMemoryFields = std::array<std::string_view, 1>{
     "longterm",
 };
 
-constexpr auto kRecognizedLongtermMemoryFields = std::array<std::string_view, 2>{
+constexpr auto kRecognizedLongtermMemoryFields = std::array<std::string_view, 3>{
     "recall",
     "hybrid_search",
+    "retention",
 };
 
 constexpr auto kRecognizedLongtermRecallFields = std::array<std::string_view, 4>{
@@ -89,6 +90,13 @@ constexpr auto kRecognizedLongtermHybridSearchFields = std::array<std::string_vi
     "result_limit",
     "lexical_weight",
     "vector_weight",
+};
+
+constexpr auto kRecognizedLongtermRetentionFields = std::array<std::string_view, 4>{
+    "forget_after_unused_days",
+    "importance_floor",
+    "max_records_per_scope",
+    "decay_check_interval_hours",
 };
 
 constexpr auto kRecognizedProfileFields = std::array<std::string_view, 6>{
@@ -745,6 +753,23 @@ parse_optional_non_negative_number(const json& object, std::string_view key, std
   return {};
 }
 
+[[nodiscard]] Result<void>
+parse_optional_unit_interval_number(const json& object, std::string_view key, std::string_view path, double& out) {
+  const auto it = object.find(key);
+  if (it == object.end()) {
+    return {};
+  }
+  auto parsed = non_negative_number_value(*it, child_path(path, key));
+  if (!parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+  if (*parsed > 1.0) {
+    return std::unexpected(config_error("expected finite number between 0 and 1", child_path(path, key)));
+  }
+  out = *parsed;
+  return {};
+}
+
 [[nodiscard]] Result<LongtermMemoryHybridSearchConfig>
 parse_longterm_hybrid_search(const json& longterm, bool strict, std::vector<ConfigWarning>& warnings) {
   auto hybrid = LongtermMemoryHybridSearchConfig{};
@@ -798,6 +823,54 @@ parse_longterm_hybrid_search(const json& longterm, bool strict, std::vector<Conf
   return hybrid;
 }
 
+[[nodiscard]] Result<LongtermMemoryRetentionConfig>
+parse_longterm_retention(const json& longterm, bool strict, std::vector<ConfigWarning>& warnings) {
+  auto retention = LongtermMemoryRetentionConfig{};
+  const auto it = longterm.find("retention");
+  if (it == longterm.end()) {
+    return retention;
+  }
+  constexpr std::string_view kPath = "$.memory.longterm.retention";
+  auto object = require_object(*it, kPath);
+  if (!object) {
+    return std::unexpected(std::move(object.error()));
+  }
+
+  if (auto parsed =
+          parse_optional_positive_integer(*it, "forget_after_unused_days", kPath, retention.forget_after_unused_days);
+      !parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+  if (auto parsed = parse_optional_unit_interval_number(*it, "importance_floor", kPath, retention.importance_floor);
+      !parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+  if (auto parsed =
+          parse_optional_positive_integer(*it, "max_records_per_scope", kPath, retention.max_records_per_scope);
+      !parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+  if (auto parsed = parse_optional_positive_integer(*it,
+                                                    "decay_check_interval_hours",
+                                                    kPath,
+                                                    retention.decay_check_interval_hours);
+      !parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+
+  auto unknowns = collect_unknown_object_fields(*it,
+                                                kPath,
+                                                kRecognizedLongtermRetentionFields,
+                                                "unknown long-term memory retention field",
+                                                strict,
+                                                warnings);
+  if (!unknowns) {
+    return std::unexpected(std::move(unknowns.error()));
+  }
+
+  return retention;
+}
+
 [[nodiscard]] Result<LongtermMemoryConfig>
 parse_longterm_memory(const json& memory, bool strict, std::vector<ConfigWarning>& warnings) {
   auto longterm = LongtermMemoryConfig{};
@@ -821,6 +894,12 @@ parse_longterm_memory(const json& memory, bool strict, std::vector<ConfigWarning
     return std::unexpected(std::move(hybrid.error()));
   }
   longterm.hybrid_search = *hybrid;
+
+  auto retention = parse_longterm_retention(*it, strict, warnings);
+  if (!retention) {
+    return std::unexpected(std::move(retention.error()));
+  }
+  longterm.retention = *retention;
 
   auto unknowns = collect_unknown_object_fields(*it,
                                                 "$.memory.longterm",

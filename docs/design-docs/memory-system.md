@@ -157,7 +157,7 @@ MEMORY.md mirror. v2 keeps that core and adds:
   metadata before pruning. Expired records eventually receive lower search weight
   before potentially being shadowed or deleted.
 
-Status (slice 182): `include/oran/memory/longterm.hpp` now ships the public
+Status (slice 183): `include/oran/memory/longterm.hpp` now ships the public
 record/query/write/touch/decay shapes, reflection-backed `RecordKind`,
 `Backend` and `VectorBackend` traits, validation helpers for record keys,
 search limits, record metadata, touch requests, decay requests, and vector
@@ -251,10 +251,17 @@ records with `last_read_at < unused_before` and
 monotonically to `decay_at`, syncs FTS shadow metadata, and returns the records
 it changed. Default search already excludes those rows, while
 `Query::include_shadow=true` keeps them inspectable.
+Slice 183 adds the operator-facing retention config contract:
+`memory.longterm.retention.forget_after_unused_days`,
+`importance_floor`, `max_records_per_scope`, and
+`decay_check_interval_hours` parse through `oran-config`, default to
+180 days / 0.0 / 10000 / 24 h, reject malformed values, and preserve the
+strict/loose unknown-field behavior used by the rest of the nested memory
+config surface. The policy is parsed but not executed yet.
 Default builds still reject
 `memory.longterm.hybrid_search.enabled=true` before assembly/provider side
 effects with `reason=build_option_disabled`, `option=vector_memory`. Semantic or
-external embedding providers, blocking read-before policy, automation/config
+external embedding providers, blocking read-before policy, startup/automation
 ownership for periodic decay, and decay hook publishing remain downstream.
 
 ```cpp
@@ -493,7 +500,8 @@ changes surface on the next prompt, not midway through an active turn.
 
 ## Retention Policy
 
-`retention::Policy` is a config-defined record:
+`retention::Policy` is a config-defined record parsed from
+`memory.longterm.retention`:
 
 ```cpp
 struct Policy {
@@ -504,6 +512,10 @@ struct Policy {
 };
 ```
 
+The config spelling uses explicit units:
+`forget_after_unused_days`, `importance_floor`, `max_records_per_scope`, and
+`decay_check_interval_hours`.
+
 A periodic job (registered with `oran-automation`) runs decay according to the policy.
 Decayed records are not immediately deleted; they enter a "shadow" state where they
 are excluded from default search but visible to runtime callers that set
@@ -511,9 +523,9 @@ are excluded from default search but visible to runtime callers that set
 `include_shadow=false`. Slice 181 provides the read-touch metadata prerequisite
 (`Backend::touch` plus recall-side `last_read_at` updates), and slice 182
 provides the backend execution boundary (`Backend::decay`) that applies the
-shadow transition for a bounded scope batch. The remaining work is ownership:
-config parsing, an `oran-automation` periodic job, and lifecycle hook
-publishing.
+shadow transition for a bounded scope batch. Slice 183 provides the parsed
+policy contract; the remaining work is ownership: startup or `oran-automation`
+execution plus lifecycle hook publishing.
 
 Forgetting is final (DELETE), with an audit row in `audit.db`.
 

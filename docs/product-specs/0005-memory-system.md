@@ -174,6 +174,13 @@ operators can reason about retention, scope, and visibility.
   `shadow=true` in bounded batches, advances `updated_at` monotonically to
   `decay_at`, syncs FTS shadow metadata, and returns the records it changed.
   Default search hides those rows unless callers set `Query::include_shadow`.
+- Retention config policy shipped in slice 183:
+  `oran-config` now parses `memory.longterm.retention` with explicit-unit
+  fields: positive `forget_after_unused_days`, bounded `importance_floor`
+  (`0..1`), positive `max_records_per_scope`, and positive
+  `decay_check_interval_hours`. The defaults are 180 days / 0.0 / 10000 / 24 h,
+  and the block participates in the existing strict/loose unknown-field
+  handling for nested memory config. This slice does not execute decay.
 - Decay policy scheduling by a periodic job (`oran-automation`) remains
   downstream.
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
@@ -232,8 +239,9 @@ operators can reason about retention, scope, and visibility.
    remains side-effect free. Slice 182 adds `Backend::decay(DecayRequest)` and
    the default FTS5 implementation that shadows scoped, visible records matching
    the unused-before and importance-floor policy inputs, then keeps them out of
-   default search. Config parsing, `oran-automation` scheduling, and decay hook
-   publishing remain open.
+   default search. Slice 183 adds the typed `memory.longterm.retention` config
+   contract for those policy inputs. `oran-automation` scheduling, startup
+   execution, and decay hook publishing remain open.
 5. A `memory.write.before` hook can veto a write. **Status:** closed for the
    bootstrap `memory.remember` tool path in slice 179. `AgentPromptRunner`
    publishes blocking `memory_write_before` after parsing/scoping the record and
@@ -255,13 +263,15 @@ operators can reason about retention, scope, and visibility.
    `last_read_at` updates that do not rebuild indexed text. Slice 182 adds
    default-build FTS5 decay coverage for scoped candidate selection,
    importance floors, already-shadow rows, batch limits, and default
-   search-hidden / include-shadow-visible behavior. Slice 176 adds
+   search-hidden / include-shadow-visible behavior. Slice 183 adds `oran-config`
+   retention-policy coverage for defaults, explicit values, malformed values,
+   and strict/loose unknown retention fields. Slice 176 adds
    gated sqlite-vec disabled-build coverage, plus `--vector_memory=y` coverage
    for scoped upsert/search/remove and dimension-mismatch migration rejection.
    Gated `--vector_memory=y` `test-memory` remains last reported at 36 cases /
    791 assertions.
    `test-config` reports
-   46 cases / 402 assertions for the recall and hybrid-search policy parsers, `test-hook`
+   48 cases / 429 assertions for the recall, hybrid-search, and retention policy parsers, `test-hook`
    reports 36 cases / 287 assertions for hook payload and redaction coverage, and `test-bootstrap`
    reports 116 cases / 969 assertions by default and 120 cases / 958 assertions
    with `--vector_memory=y` for the assembly, prompt-runner, and

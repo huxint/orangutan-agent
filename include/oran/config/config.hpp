@@ -156,9 +156,19 @@ struct LongtermMemoryHybridSearchConfig {
   friend bool operator==(const LongtermMemoryHybridSearchConfig&, const LongtermMemoryHybridSearchConfig&) = default;
 };
 
+struct LongtermMemoryRetentionConfig {
+  std::int64_t forget_after_unused_days{180};
+  double importance_floor{0.0};
+  std::int64_t max_records_per_scope{10000};
+  std::int64_t decay_check_interval_hours{24};
+
+  friend bool operator==(const LongtermMemoryRetentionConfig&, const LongtermMemoryRetentionConfig&) = default;
+};
+
 struct LongtermMemoryConfig {
   LongtermMemoryRecallConfig recall{};
   LongtermMemoryHybridSearchConfig hybrid_search{};
+  LongtermMemoryRetentionConfig retention{};
 
   friend bool operator==(const LongtermMemoryConfig&, const LongtermMemoryConfig&) = default;
 };

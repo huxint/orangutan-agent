@@ -54,7 +54,11 @@ Current implementation status:
   `memory.longterm.recall.kinds` `RecordKind` spellings, plus
   `memory.longterm.hybrid_search.enabled`, positive
   `lexical_limit` / `vector_limit` / `result_limit`, and non-negative finite
-  `lexical_weight` / `vector_weight` with at least one non-zero weight.
+  `lexical_weight` / `vector_weight` with at least one non-zero weight, plus
+  `memory.longterm.retention` policy fields:
+  `forget_after_unused_days`, `importance_floor`, `max_records_per_scope`, and
+  `decay_check_interval_hours`. Retention is parsed and validated but not
+  consumed by a startup or automation runner yet.
   Ordinary configured-route bootstrap maps the recall policy into
   prompt-boundary long-term recall. The hybrid-search block defaults disabled;
   when built with `--vector_memory=y`, configured-route bootstrap now enables the

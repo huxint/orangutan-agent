@@ -390,6 +390,24 @@ TEST_CASE("Config::parse warns or fails on unknown nested provider and hook fiel
     REQUIRE(result->warnings()[0].message == "unknown long-term memory hybrid search field");
   }
 
+  SECTION("unknown memory retention field warns in loose mode") {
+    auto result = config::Config::parse(R"json({
+  "memory": {
+    "longterm": {
+      "retention": {
+        "forget_after_unused_days": 180,
+        "delete_after_unused_days": 365
+      }
+    }
+  }
+})json");
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->warnings().size() == 1);
+    REQUIRE(result->warnings()[0].path == "$.memory.longterm.retention.delete_after_unused_days");
+    REQUIRE(result->warnings()[0].message == "unknown long-term memory retention field");
+  }
+
   SECTION("reserved hook sink and binding fields stay accepted until typed models land") {
     auto result = config::Config::parse(R"json({
   "hooks": {
@@ -462,6 +480,22 @@ TEST_CASE("Config::parse warns or fails on unknown nested provider and hook fiel
       "hybrid_search": {
         "enabled": true,
         "ranking_strategy": "rrf"
+      }
+    }
+  }
+})json",
+                                        config::LoadOptions{.strict_unknown_fields = true});
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("unknown memory retention field fails under strict load option") {
+    auto result = config::Config::parse(R"json({
+  "memory": {
+    "longterm": {
+      "retention": {
+        "delete_after_unused_days": 365
       }
     }
   }
@@ -842,6 +876,27 @@ TEST_CASE("Config::parse extracts memory hybrid search policy", "[unit][config][
   REQUIRE(result->memory().longterm.hybrid_search.vector_weight == 1.25);
 }
 
+TEST_CASE("Config::parse extracts memory retention policy", "[unit][config][memory]") {
+  auto result = config::Config::parse(R"json({
+  "memory": {
+    "longterm": {
+      "retention": {
+        "forget_after_unused_days": 90,
+        "importance_floor": 0.25,
+        "max_records_per_scope": 2500,
+        "decay_check_interval_hours": 12
+      }
+    }
+  }
+})json");
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->memory().longterm.retention.forget_after_unused_days == 90);
+  REQUIRE(result->memory().longterm.retention.importance_floor == 0.25);
+  REQUIRE(result->memory().longterm.retention.max_records_per_scope == 2500);
+  REQUIRE(result->memory().longterm.retention.decay_check_interval_hours == 12);
+}
+
 TEST_CASE("Config::parse defaults memory recall policy when absent", "[unit][config][memory]") {
   auto result = config::Config::parse(R"json({"memory": {}})json");
 
@@ -856,6 +911,10 @@ TEST_CASE("Config::parse defaults memory recall policy when absent", "[unit][con
   REQUIRE(result->memory().longterm.hybrid_search.result_limit == 10);
   REQUIRE(result->memory().longterm.hybrid_search.lexical_weight == 1.0);
   REQUIRE(result->memory().longterm.hybrid_search.vector_weight == 1.0);
+  REQUIRE(result->memory().longterm.retention.forget_after_unused_days == 180);
+  REQUIRE(result->memory().longterm.retention.importance_floor == 0.0);
+  REQUIRE(result->memory().longterm.retention.max_records_per_scope == 10000);
+  REQUIRE(result->memory().longterm.retention.decay_check_interval_hours == 24);
 }
 
 TEST_CASE("Config::parse rejects malformed memory recall policy", "[unit][config][memory]") {
@@ -971,6 +1030,49 @@ TEST_CASE("Config::parse rejects malformed memory hybrid search policy", "[unit]
   SECTION("both weights zero") {
     auto result = config::Config::parse(
         R"json({"memory": {"longterm": {"hybrid_search": {"lexical_weight": 0, "vector_weight": 0}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+}
+
+TEST_CASE("Config::parse rejects malformed memory retention policy", "[unit][config][memory]") {
+  SECTION("non-object retention block") {
+    auto result = config::Config::parse(R"json({"memory": {"longterm": {"retention": []}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("zero unused-days window") {
+    auto result =
+        config::Config::parse(R"json({"memory": {"longterm": {"retention": {"forget_after_unused_days": 0}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("importance floor above one") {
+    auto result =
+        config::Config::parse(R"json({"memory": {"longterm": {"retention": {"importance_floor": 1.1}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-number importance floor") {
+    auto result =
+        config::Config::parse(R"json({"memory": {"longterm": {"retention": {"importance_floor": "low"}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("zero max records") {
+    auto result =
+        config::Config::parse(R"json({"memory": {"longterm": {"retention": {"max_records_per_scope": 0}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-integer check interval") {
+    auto result = config::Config::parse(
+        R"json({"memory": {"longterm": {"retention": {"decay_check_interval_hours": 1.5}}}})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }
