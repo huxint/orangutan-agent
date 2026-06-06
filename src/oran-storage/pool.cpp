@@ -368,7 +368,8 @@ Pool::Pool(Pool&&) noexcept = default;
 
 Pool& Pool::operator=(Pool&&) noexcept = default;
 
-core::Result<Pool> Pool::open(asio::any_io_executor executor, PoolOptions options) {
+core::Result<Pool>
+Pool::open(asio::any_io_executor executor, PoolOptions options, std::span<const SqliteExtensionInit> auto_extensions) {
   if (options.path.empty()) {
     return std::unexpected(core::Error::invalid_argument("pool path must not be empty"));
   }
@@ -381,13 +382,15 @@ core::Result<Pool> Pool::open(asio::any_io_executor executor, PoolOptions option
 
   auto state = std::make_shared<State>(std::move(executor));
 
-  auto writer = Connection::open(ConnectionOptions{
-      .path = options.path,
-      .mode = OpenMode::read_write_create,
-      .busy_timeout_ms = options.busy_timeout_ms,
-      .enable_wal = options.enable_wal,
-      .enforce_foreign_keys = options.enforce_foreign_keys,
-  });
+  auto writer = Connection::open(
+      ConnectionOptions{
+          .path = options.path,
+          .mode = OpenMode::read_write_create,
+          .busy_timeout_ms = options.busy_timeout_ms,
+          .enable_wal = options.enable_wal,
+          .enforce_foreign_keys = options.enforce_foreign_keys,
+      },
+      auto_extensions);
   if (!writer) {
     return std::unexpected(std::move(writer.error()).with("pool_role", "writer"));
   }
@@ -402,13 +405,15 @@ core::Result<Pool> Pool::open(asio::any_io_executor executor, PoolOptions option
   state->readers.reserve(options.reader_count);
   state->reader_caches.reserve(options.reader_count);
   for (std::size_t i = 0; i < options.reader_count; ++i) {
-    auto reader = Connection::open(ConnectionOptions{
-        .path = options.path,
-        .mode = OpenMode::read_only,
-        .busy_timeout_ms = options.busy_timeout_ms,
-        .enable_wal = false,
-        .enforce_foreign_keys = options.enforce_foreign_keys,
-    });
+    auto reader = Connection::open(
+        ConnectionOptions{
+            .path = options.path,
+            .mode = OpenMode::read_only,
+            .busy_timeout_ms = options.busy_timeout_ms,
+            .enable_wal = false,
+            .enforce_foreign_keys = options.enforce_foreign_keys,
+        },
+        auto_extensions);
     if (!reader) {
       return std::unexpected(
           std::move(reader.error()).with("pool_role", "reader").with("pool_slot", std::to_string(i)));

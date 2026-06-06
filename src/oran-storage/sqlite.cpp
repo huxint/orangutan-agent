@@ -6,6 +6,7 @@
 #include <expected>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <string_view>
@@ -97,6 +98,17 @@ struct DbHandle {
     return "<missing>";
   }
   return *result.rows.front().values.front();
+}
+
+std::mutex& auto_extension_mutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
+void cancel_auto_extensions(std::span<const SqliteExtensionInit> extensions) noexcept {
+  for (const auto extension : extensions) {
+    sqlite3_cancel_auto_extension(extension);
+  }
 }
 
 }  // namespace
@@ -343,14 +355,39 @@ Connection::Connection(Connection&&) noexcept = default;
 
 Connection& Connection::operator=(Connection&&) noexcept = default;
 
-core::Result<Connection> Connection::open(ConnectionOptions options) {
+core::Result<Connection> Connection::open(ConnectionOptions options,
+                                          std::span<const SqliteExtensionInit> auto_extensions) {
   if (options.path.empty()) {
     return std::unexpected(core::Error::invalid_argument("sqlite path must not be empty"));
   }
 
   sqlite3* raw = nullptr;
   const auto flags = open_flags(options.mode) | SQLITE_OPEN_NOMUTEX;
-  const auto rc = sqlite3_open_v2(options.path.c_str(), &raw, flags, nullptr);
+  int rc = SQLITE_OK;
+  {
+    const std::scoped_lock lock{auto_extension_mutex()};
+    if (auto_extensions.empty()) {
+      rc = sqlite3_open_v2(options.path.c_str(), &raw, flags, nullptr);
+    } else {
+      std::vector<SqliteExtensionInit> registered_extensions;
+      registered_extensions.reserve(auto_extensions.size());
+      for (const auto extension : auto_extensions) {
+        if (extension == nullptr) {
+          cancel_auto_extensions(registered_extensions);
+          return std::unexpected(core::Error::invalid_argument("sqlite auto extension init must not be null"));
+        }
+        const auto registered = sqlite3_auto_extension(extension);
+        if (registered != SQLITE_OK) {
+          cancel_auto_extensions(registered_extensions);
+          return std::unexpected(core::Error::storage("sqlite auto extension registration failed")
+                                     .with("sqlite_code", std::to_string(registered)));
+        }
+        registered_extensions.push_back(extension);
+      }
+      rc = sqlite3_open_v2(options.path.c_str(), &raw, flags, nullptr);
+      cancel_auto_extensions(registered_extensions);
+    }
+  }
   std::shared_ptr<DbHandle> handle{std::make_shared<DbHandle>(raw)};
   if (rc != SQLITE_OK) {
     return std::unexpected(sqlite_error(raw, "sqlite open failed").with("path", options.path));

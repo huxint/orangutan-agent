@@ -179,6 +179,9 @@ add_requires("nanobench 4.3.11")
 add_requires("nlohmann_json 3.12.0")
 add_requires("re2 2025.11.05")
 add_requires("sqlite3 3.51.0+0", { configs = { cflags = "-DSQLITE_ENABLE_FTS5" } })
+if has_config("vector_memory") then
+    add_requires("sqlite-vec 0.1.9")
+end
 ```
 
 Packages land with the library that first consumes them. The full approval list
@@ -189,6 +192,9 @@ files in `oran-config`, `oran-tool`, `oran-provider`, `oran-agent`, and
 `oran-memory`; public headers still expose bytes and stdlib value types only.
 The SQLite package is built with `SQLITE_ENABLE_FTS5` because
 `memory::longterm::Fts5Backend` is the default lexical long-term memory backend.
+`--vector_memory=y` additionally pulls `sqlite-vec 0.1.9` into `oran-memory` and
+publishes `ORAN_ENABLE_SQLITE_VEC`; default builds do not resolve or link that
+optional package.
 
 **Notable removals vs. legacy:**
 

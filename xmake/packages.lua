@@ -13,3 +13,6 @@ add_requires("nanobench 4.3.11")
 add_requires("nlohmann_json 3.12.0")
 add_requires("re2 2025.11.05")
 add_requires("sqlite3 3.51.0+0", { configs = { cflags = "-DSQLITE_ENABLE_FTS5" } })
+if has_config("vector_memory") then
+    add_requires("sqlite-vec 0.1.9")
+end

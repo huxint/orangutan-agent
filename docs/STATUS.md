@@ -7,12 +7,27 @@
 
 ## Snapshot
 
-- **Slice:** 175 (`xmake run orangutan` reports slice 175)
+- **Slice:** 176 (`xmake run orangutan -- --help` reports slice 176)
 - **Last completed history:**
-  [`histories/2026-06/20260606-1112-longterm-hybrid-bootstrap-guard.md`](histories/2026-06/20260606-1112-longterm-hybrid-bootstrap-guard.md)
+  [`histories/2026-06/20260606-1243-longterm-sqlite-vec-backend.md`](histories/2026-06/20260606-1243-longterm-sqlite-vec-backend.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 175 consumes the config-side
+- **Latest completed slice:** slice 176 adds the optional sqlite-vec long-term
+  vector backend behind `--vector_memory=y`. `memory::longterm::SqliteVecBackend`
+  now implements the shipped `VectorBackend` contract, opens `sqlite-vec` through
+  `storage::Connection` / `Pool` auto-extension registration, migrates a scoped
+  `vec0` table with cosine distance, validates configured dimensions, and keeps
+  default builds dependency-free by returning a config error from vector
+  migration/operations. Focused results: default `test-memory` **32 cases / 760
+  assertions**, default `test-storage` **77 cases / 988 assertions**, and gated
+  `--vector_memory=y` `test-memory` **34 cases / 780 assertions**.
+- **Next intended slice:** no active plan; the remaining memory work is the
+  embedding/vector owner plus bootstrap consumption that replaces the slice-175
+  `hybrid_search.enabled=true` guard with real hybrid recall wiring. A follow-up
+  bench can also compare the sqlite-vec adapter against the slice-173
+  brute-force vector baseline on the shared 10k corpus.
+
+Slice 175 consumes the config-side
   `memory.longterm.hybrid_search.enabled` flag at configured-route bootstrap.
   Because no owned vector-memory backend or embedding source exists yet,
   `bootstrap::run` now rejects `enabled=true` with `ErrorKind::config`,
@@ -20,11 +35,6 @@
   `reason=vector_memory_not_available` before opening runtime assembly state or
   contacting a provider. Disabled hybrid-search config remains accepted. Focused
   result: `test-bootstrap` **115 cases / 883 assertions**.
-- **Next intended slice:** no active plan; with parser validation and the
-  bootstrap fail-fast guard in place, the next memory slice can start the gated
-  `sqlite-vec` adapter under `--vector_memory=y` (implementing
-  `memory::longterm::VectorBackend` and re-running the comparison) or add the
-  embedding/vector owner that replaces the guard with real hybrid recall wiring.
 
 Slice 174 adds the config-side hybrid-search
   policy contract for long-term memory. `oran-config` now parses
@@ -1735,7 +1745,8 @@ Closed entries do *not* live here — the tracker is canonical.
   measure-first memory path. Slice 172 closed the first hybrid/vector
   composition contract by adding `memory::longterm::HybridRuntime`, and slice 173
   added the FTS5-vs-vector-vs-hybrid comparison bench over a brute-force cosine
-  reference `VectorBackend`; the gated sqlite-vec adapter and hybrid ranking
+  reference `VectorBackend`; slice 176 closed the gated sqlite-vec adapter, while
+  sqlite-vec corpus numbers, embedding/vector ownership, and hybrid ranking
   policy/wiring remain grouped P1/P2/P3 in the tracker.
 - 2026-05-20 — `scripts/check-compile-budget.sh` exists and works (slice 28)
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on

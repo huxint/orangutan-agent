@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <span>
 #include <string>
 
 #include <asio/any_io_executor.hpp>
@@ -91,7 +92,8 @@ public:
   Pool(Pool&&) noexcept;
   Pool& operator=(Pool&&) noexcept;
 
-  [[nodiscard]] static core::Result<Pool> open(asio::any_io_executor executor, PoolOptions options);
+  [[nodiscard]] static core::Result<Pool>
+  open(asio::any_io_executor executor, PoolOptions options, std::span<const SqliteExtensionInit> auto_extensions = {});
 
   [[nodiscard]] bool valid() const noexcept;
   [[nodiscard]] std::size_t reader_count() const noexcept;

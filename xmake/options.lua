@@ -29,3 +29,8 @@ option("analyze")
     set_default(false)
     set_description("Enable GCC 16.1 -fanalyzer (see docs/rules/static-analysis.md).")
 option_end()
+
+option("vector_memory")
+    set_default(false)
+    set_description("Enable optional sqlite-vec long-term memory vector backend.")
+option_end()

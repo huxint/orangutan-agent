@@ -52,6 +52,10 @@ that ships native binaries.
 - **Bundled C dependencies** (libcurl + OpenSSL + sqlite3 + libsodium): we prefer
   system packages on production hosts; requested `xmake` source-build versions
   stay in `xmake/packages.lua` plus `docs/rules/libraries.md`.
+- **Optional native extensions**: `sqlite-vec` is resolved only when
+  `--vector_memory=y` is configured. Default builds do not download or link it;
+  gated builds must keep the package pin and license entry in sync with
+  `docs/rules/libraries.md`.
 - **Random hashing libraries**: `rapidhash` is a small inline lib; `simdutf` is a
   larger native code dep — both are listed in the SBOM.
 

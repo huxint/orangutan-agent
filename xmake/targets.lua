@@ -29,6 +29,11 @@ local function oran_lib(name, deps, private_packages, public_packages)
     target_end()
 end
 
+local memory_packages = { "nlohmann_json" }
+if has_config("vector_memory") then
+    table.insert(memory_packages, "sqlite-vec")
+end
+
 oran_lib("core", {}, {})
 oran_lib("async", { "oran-core" }, {}, { "asio" })
 oran_lib("http", { "oran-core", "oran-async" }, { "libcurl" }, { "asio" })
@@ -37,7 +42,12 @@ oran_lib("storage", { "oran-core", "oran-async" }, { "sqlite3" })
 oran_lib("config", { "oran-core", "oran-storage" }, { "nlohmann_json", "re2" })
 oran_lib("permission", { "oran-core", "oran-config", "oran-storage", "oran-async" }, { "re2", "libsodium" })
 oran_lib("hook", { "oran-core", "oran-async" }, {})
-oran_lib("memory", { "oran-core", "oran-async", "oran-storage" }, { "nlohmann_json" })
+oran_lib("memory", { "oran-core", "oran-async", "oran-storage" }, memory_packages)
+if has_config("vector_memory") then
+    target("oran-memory")
+        add_defines("ORAN_ENABLE_SQLITE_VEC", { public = true })
+    target_end()
+end
 oran_lib("skill", { "oran-core", "oran-async", "oran-io" }, {})
 oran_lib("tool", { "oran-core", "oran-async", "oran-io", "oran-permission", "oran-hook" }, { "nlohmann_json" })
 oran_lib("prompt", { "oran-core", "oran-async", "oran-config", "oran-tool" }, {})

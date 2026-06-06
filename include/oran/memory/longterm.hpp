@@ -184,6 +184,12 @@ struct Fts5BackendOptions {
   friend bool operator==(const Fts5BackendOptions&, const Fts5BackendOptions&) = default;
 };
 
+struct SqliteVecBackendOptions {
+  std::size_t dimensions{0};
+
+  friend bool operator==(const SqliteVecBackendOptions&, const SqliteVecBackendOptions&) = default;
+};
+
 /// Default lexical long-term memory backend.
 ///
 /// `Fts5Backend` owns the built-in SQLite FTS5 schema for `memory.db` and
@@ -204,6 +210,30 @@ public:
 private:
   storage::Pool* pool_{};
   Fts5BackendOptions options_;
+};
+
+/// Optional sqlite-vec long-term vector backend.
+///
+/// `SqliteVecBackend` is compiled only when xmake configures
+/// `--vector_memory=y`; default builds still expose the public type but return a
+/// config error from migration and vector operations. The backend stores one
+/// scoped vector row per `RecordKey` and satisfies the same `VectorBackend`
+/// contract consumed by `HybridRuntime`.
+class SqliteVecBackend final : public VectorBackend {
+public:
+  explicit SqliteVecBackend(storage::Pool& pool, SqliteVecBackendOptions options) noexcept;
+
+  [[nodiscard]] static std::vector<void (*)()> auto_extensions();
+  [[nodiscard]] async::Awaitable<core::Result<void>> migrate();
+
+  [[nodiscard]] async::Awaitable<core::Result<void>> upsert(VectorUpsert request) override;
+  [[nodiscard]] async::Awaitable<core::Result<std::vector<VectorHit>>> search(VectorSearchQuery query,
+                                                                              std::size_t limit) override;
+  [[nodiscard]] async::Awaitable<core::Result<void>> remove(VectorRemoveRequest request) override;
+
+private:
+  storage::Pool* pool_{};
+  SqliteVecBackendOptions options_;
 };
 
 /// Prompt-boundary long-term memory runtime.

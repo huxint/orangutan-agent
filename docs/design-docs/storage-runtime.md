@@ -4,7 +4,7 @@
 automation, audit logs, and configuration metadata. It owns the SQLite dependency and
 does not expose `sqlite3.h` from public headers.
 
-> **Storage status (2026-05-25):** `oran-storage` ships `Connection`, `Statement`,
+> **Storage status (2026-06-06):** `oran-storage` ships `Connection`, `Statement`,
 > typed binding/stepping/column readers (including BLOB bind/read for trace ids),
 > WAL + foreign-key setup, a simple `query`
 > helper, the synchronous `run_migrations` runner plus SQL-file migration
@@ -33,7 +33,9 @@ does not expose `sqlite3.h` from public headers.
 > memory / automation repositories are future slices. Slice 127 adds
 > trace-derived provider usage rollups grouped by UTC day, agent, route profile,
 > and route model; these sum the usage/cost fields already stored on
-> `trace_turns` and do not yet compute cost from profile pricing.
+> `trace_turns` and do not yet compute cost from profile pricing. Slice 176 adds
+> per-open SQLite auto-extension registration for optional adapters such as the
+> gated sqlite-vec vector backend; default opens pass no extensions.
 
 ## Public Surface
 
@@ -41,6 +43,8 @@ does not expose `sqlite3.h` from public headers.
 namespace orangutan::storage {
 
 enum class OpenMode { read_only, read_write, read_write_create };
+
+using SqliteExtensionInit = void (*)();
 
 struct ConnectionOptions {
   std::string path;
@@ -77,7 +81,9 @@ struct MigrationReport {
 
 class Connection {
  public:
-  static core::Result<Connection> open(ConnectionOptions);
+  static core::Result<Connection> open(
+      ConnectionOptions,
+      std::span<const SqliteExtensionInit> auto_extensions = {});
   core::Result<void> execute(std::string_view sql);
   core::Result<Statement> prepare(std::string_view sql);
   core::Result<QueryResult> query(std::string_view sql);
@@ -132,6 +138,12 @@ There are no throwing wrappers and no `must_ok` escape hatch.
 `Connection` and `Statement` are move-only. Internally, statements keep a shared
 handle to the SQLite connection so a statement can finish/finalize even if the
 `Connection` object that created it has been closed or moved away.
+
+SQLite's auto-extension registry is process-global. `Connection::open` accepts an
+optional span of extension init callbacks, serializes register/open/cancel under
+an internal mutex, rejects null callbacks, and cancels temporary registrations
+before returning. Callers use this only for feature-gated adapters; ordinary
+storage users pass the default empty span.
 
 ## Defaults
 
@@ -243,7 +255,10 @@ class ReaderLease {
 
 class Pool {
  public:
-  static core::Result<Pool> open(asio::any_io_executor, PoolOptions);
+  static core::Result<Pool> open(
+      asio::any_io_executor,
+      PoolOptions,
+      std::span<const SqliteExtensionInit> auto_extensions = {});
 
   std::size_t reader_count() const noexcept;
   std::size_t readers_available() const noexcept;
@@ -255,6 +270,11 @@ class Pool {
 
 }  // namespace orangutan::storage
 ```
+
+When `auto_extensions` is supplied, `Pool::open` forwards the same temporary
+extension list to the writer and every reader connection. This keeps extension
+ownership at the caller boundary while preserving one pool-wide SQLite feature
+set.
 
 ### Semantics
 

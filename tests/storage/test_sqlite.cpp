@@ -80,6 +80,19 @@ TEST_CASE("Connection rejects empty paths and empty SQL", "[unit][storage][sqlit
   REQUIRE(empty_prepare.error().kind() == core::ErrorKind::invalid_argument);
 }
 
+TEST_CASE("Connection rejects null SQLite auto extensions", "[unit][storage][sqlite]") {
+  const std::vector<storage::SqliteExtensionInit> auto_extensions{nullptr};
+  auto connection = storage::Connection::open(
+      storage::ConnectionOptions{
+          .path = ":memory:",
+          .enable_wal = false,
+      },
+      auto_extensions);
+
+  REQUIRE_FALSE(connection.has_value());
+  REQUIRE(connection.error().kind() == core::ErrorKind::invalid_argument);
+}
+
 TEST_CASE("execute and query round-trip rows as text values", "[unit][storage][sqlite]") {
   auto connection = open_memory();
   REQUIRE(connection.execute("CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT, note TEXT)").has_value());

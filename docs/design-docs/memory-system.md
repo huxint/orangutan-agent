@@ -214,11 +214,13 @@ operator-facing config contract for downstream hybrid wiring:
 `vector_weight` with at least one non-zero weight. Bootstrap still uses lexical
 prompt-boundary recall until an embedding/vector backend owner lands. Slice 175
 makes that boundary explicit at configured-route startup: if operators set
-`memory.longterm.hybrid_search.enabled=true` before vector memory exists,
-`bootstrap::run` returns a config error at
+`memory.longterm.hybrid_search.enabled=true` before vector memory is owned by
+runtime assembly, `bootstrap::run` returns a config error at
 `$.memory.longterm.hybrid_search.enabled` with
 `reason=vector_memory_not_available` before opening runtime memory state or
-contacting a provider.
+contacting a provider. Slice 176 adds the library-level sqlite-vec
+`VectorBackend` adapter behind `--vector_memory=y`; the bootstrap guard remains
+until a prompt/query embedding owner can feed that adapter.
 
 ```cpp
 // include/oran/memory/longterm.hpp
@@ -348,30 +350,36 @@ results, including record ids, scope keys, kind spellings, timestamps, scores,
 tags, linked ids, and shadow flags. `render_forget_data_json(...)` serializes
 scoped deletes as `{kind:"memory_forget", record:{id, scope_key}}`.
 
-The shipped lexical backend is:
+The shipped backends are:
 
 - `Fts5Backend` — SQLite FTS5; default lexical `Backend`, backed by
   `longterm_records` plus `longterm_records_fts`. The FTS table indexes title,
   body, and tags, while scope, id, kind, and shadow remain structured filters.
   `Fts5BackendOptions::migrations_directory` exists for tests/operators that
   need to load migrations from disk; the default path uses the embedded SQL.
+- `SqliteVecBackend` — optional sqlite-vec `VectorBackend`, compiled only when
+  xmake configures `--vector_memory=y`. Callers pass
+  `SqliteVecBackend::auto_extensions()` when opening the backing
+  `storage::Pool`; migration verifies `vec_version()`, creates a scoped `vec0`
+  table with `embedding float[N] distance_metric=cosine`, rejects dimension
+  drift if an existing table uses a different `N`, and stores one vector row per
+  scoped `RecordKey`. Default builds expose the public type but return
+  `ErrorKind::config` with `reason=build_option_disabled` from migration and
+  vector operations.
 
 Planned optional backends:
 
-- sqlite-vec adapter — optional under `--vector_memory=y`; it will implement
-  `VectorBackend` and feed `HybridRuntime` while keeping default builds free of
-  the optional dependency.
 - external vector adapter — optional embedding store via `oran-http::Client`.
 
 `bench/memory/` (see `docs/product-specs/0010-benchmark-harness.md`) records the
 FTS5 10k-record search baseline and, since slice 173, the
 FTS5-vs-vector-vs-hybrid comparison (`scenarios/search_fts5_vs_vector.cpp`) over a
 brute-force cosine reference `VectorBackend`; the gated `--vector_memory=y`
-sqlite-vec adapter will satisfy the same contract and re-run that scenario.
-The validated `memory.longterm.hybrid_search` config block is accepted only while
-disabled until that adapter and bootstrap embedding wiring exist; configured-route
-startup fails fast on `enabled=true` instead of silently falling back to lexical
-recall.
+sqlite-vec adapter now satisfies the same contract and still needs a follow-up
+bench run on the shared corpus. The validated `memory.longterm.hybrid_search`
+config block is accepted only while disabled until bootstrap embedding wiring
+exists; configured-route startup fails fast on `enabled=true` instead of silently
+falling back to lexical recall.
 
 ## Shared Memory (Team)
 

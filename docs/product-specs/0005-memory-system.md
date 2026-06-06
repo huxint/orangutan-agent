@@ -96,16 +96,18 @@ operators can reason about retention, scope, and visibility.
   non-negative weights; searches both backends; hydrates vector-only hits
   through `Backend::get`; ignores stale vector rows with missing records; and
   returns deterministic weighted `SearchHit` rows. `HybridRuntime::recall`
-  reuses the shipped recall framing renderer. The gated sqlite-vec adapter and
-  bootstrap/config wiring remain downstream.
+  reuses the shipped recall framing renderer. The gated sqlite-vec adapter ships
+  in slice 176; bootstrap/config consumption remains downstream until an
+  embedding owner exists.
 - Long-term search comparison bench shipped in slice 173:
   `bench/memory/scenarios/search_fts5_vs_vector.cpp` seeds one shared 10k-record
   corpus and times FTS5-only `Runtime::search`, an in-bench brute-force cosine
   `VectorBackend`, and `HybridRuntime::search` over both at `limit=10`. Local run
   (WSL2, release): FTS5-only ~15.42 ms, vector cosine ~675.6 µs, hybrid ~16.18 ms —
   the lexical scan dominates at 10k records, so hybrid ≈ FTS5 + ~5%. The cosine
-  backend is an in-process reference until the gated `--vector_memory=y` sqlite-vec
-  adapter satisfies the same `VectorBackend`.
+  backend is an in-process reference; slice 176 adds the gated
+  `--vector_memory=y` sqlite-vec adapter satisfying the same `VectorBackend`
+  contract, but its corpus bench numbers remain downstream.
 - Hybrid-search config contract shipped in slice 174:
   `oran-config` now parses `memory.longterm.hybrid_search.enabled`, positive
   `lexical_limit` / `vector_limit` / `result_limit`, and non-negative finite
@@ -119,7 +121,15 @@ operators can reason about retention, scope, and visibility.
   `ErrorKind::config` with `path=$.memory.longterm.hybrid_search.enabled` and
   `reason=vector_memory_not_available` before runtime assembly state is opened
   or provider traffic starts. Disabled hybrid-search config remains accepted
-  while the gated vector backend and embedding owner remain downstream.
+  while the embedding/vector owner remains downstream.
+- Gated sqlite-vec adapter shipped in slice 176:
+  `memory::longterm::SqliteVecBackend` implements the shipped `VectorBackend`
+  contract when xmake is configured with `--vector_memory=y`. It uses
+  `SqliteVecBackend::auto_extensions()` with `storage::Pool::open(...)`, migrates
+  a scoped sqlite-vec `vec0` table with cosine distance, validates configured
+  dimensions against an existing table, and supports scoped upsert/search/remove.
+  Default builds still expose the type but return `ErrorKind::config` with
+  `reason=build_option_disabled` from migration and vector operations.
 - Decay policy applied by a periodic job (`oran-automation`).
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
 - Hook events on read / write / forget / decay.
@@ -132,13 +142,12 @@ operators can reason about retention, scope, and visibility.
 
 ## Scope (v2)
 
-- Gated sqlite-vec adapter under `--vector_memory=y` implementing the shipped
-  `memory::longterm::VectorBackend` contract.
 - Bootstrap/embedding wiring that consumes the shipped
   `memory.longterm.hybrid_search` policy on top of the shipped `HybridRuntime`
   composition contract (slice 173 landed the FTS5-vs-vector-vs-hybrid bench;
   slice 174 landed parser-level policy validation; slice 175 landed the
-  configured-route fail-fast guard for `enabled=true`).
+  configured-route fail-fast guard for `enabled=true`; slice 176 landed the
+  gated sqlite-vec `VectorBackend` adapter).
 - Externalized embedding store via `oran-http::Client`.
 
 ## Out Of Scope
@@ -167,22 +176,25 @@ operators can reason about retention, scope, and visibility.
    until the gated vector/hybrid path reports the same corpus. Slice 172 adds
    the library-local `HybridRuntime` composition contract, and slice 173 adds the
    FTS5-vs-vector-vs-hybrid comparison bench over one shared 10k corpus (hybrid
-   **~16.18 ms / batch**, also within 50 ms). The gated sqlite-vec vector backend
-   remains downstream, so keep the criterion open until it reports the same corpus.
+   **~16.18 ms / batch**, also within 50 ms). Slice 176 adds the gated sqlite-vec
+   vector backend, but keep the criterion open until that adapter reports the same
+   corpus.
 3. The MEMORY.md mirror, when enabled, reflects all kinds + records within 1 s of the
    underlying DB write.
 4. Decay marks records older than `policy.forget_after_unused` as shadow; they no
    longer surface in default search.
 5. A `memory.write.before` hook can veto a write; the runtime returns
    `Error::HookVeto` to the caller.
-6. `tests/memory/` >= 85% coverage. **Status:** `test-memory` currently reports
-   31 cases / 756 assertions, including long-term contract validation, fake
-   async backend interface coverage, public `Fts5Backend` migration / scoped
-   search / filtering / update / delete coverage, and `longterm::Runtime`
+6. `tests/memory/` >= 85% coverage. **Status:** default `test-memory` currently
+   reports 32 cases / 760 assertions, including long-term contract validation,
+   fake async backend interface coverage, public `Fts5Backend` migration /
+   scoped search / filtering / update / delete coverage, and `longterm::Runtime`
    validation / deterministic recall-framing plus recall/remember/forget
    `data_json` coverage. Slice 172 adds hybrid-runtime validation,
    lexical/vector merge ordering, vector-only hydration, stale vector-row skip,
-   and recall-framing coverage.
+   and recall-framing coverage. Slice 176 adds gated sqlite-vec disabled-build
+   coverage, plus `--vector_memory=y` coverage for scoped upsert/search/remove
+   and dimension-mismatch migration rejection.
    `test-config` reports
    46 cases / 402 assertions for the recall and hybrid-search policy parsers, and `test-bootstrap`
    reports 115 cases / 883 assertions for the assembly, prompt-runner, and
@@ -197,8 +209,8 @@ operators can reason about retention, scope, and visibility.
    `bench/memory/scenarios/search_fts5_vs_vector.cpp`, which compares FTS5-only
    `Runtime::search`, an in-bench brute-force cosine `VectorBackend`, and
    `HybridRuntime::search` over one shared 10k corpus. The gated sqlite-vec
-   backend and the unified machine-readable JSON emission (spec 0010) remain
-   downstream.
+   backend ships in slice 176, but its corpus bench numbers and the unified
+   machine-readable JSON emission (spec 0010) remain downstream.
 
 ## Design Doc Cross-References
 

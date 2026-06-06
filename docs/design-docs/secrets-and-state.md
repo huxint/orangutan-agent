@@ -58,8 +58,10 @@ Current implementation status:
   Ordinary configured-route bootstrap maps only the recall policy into
   prompt-boundary long-term recall today. The hybrid-search block defaults
   disabled; configured-route bootstrap rejects `enabled=true` with
-  `reason=vector_memory_not_available` until downstream vector-backend and
-  embedding ownership lands.
+  `reason=vector_memory_not_available` until downstream embedding ownership and
+  bootstrap vector wiring land. Slice 176 adds the optional sqlite-vec
+  `VectorBackend` at the library level, but it is not yet a configured-route
+  state owner.
 - `bootstrap::run` now consumes `trace.retention_days` by deriving an explicit
   Unix-nanosecond cutoff and passing it to `RuntimeAssembly`, which purges
   matching old `trace_turns` rows before exposing the long-lived trace

@@ -531,6 +531,123 @@ TEST_CASE("longterm vector backend interface composes through async contracts", 
   });
 }
 
+TEST_CASE("longterm::SqliteVecBackend reports disabled vector builds", "[unit][memory][longterm][sqlite-vec]") {
+  TempDb db{"oran-memory-sqlite-vec-disabled"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+#if defined(ORAN_ENABLE_SQLITE_VEC)
+    auto extensions = memory::longterm::SqliteVecBackend::auto_extensions();
+    auto enabled_pool = storage::Pool::open(
+        io.get_executor(),
+        storage::PoolOptions{.path = db.string(), .reader_count = 2, .statement_cache_capacity = 16},
+        extensions);
+    REQUIRE(enabled_pool.has_value());
+    auto& pool = *enabled_pool;
+#else
+    auto pool = open_pool(io, db);
+#endif
+    memory::longterm::SqliteVecBackend backend{pool, memory::longterm::SqliteVecBackendOptions{.dimensions = 3}};
+
+    auto migrated = co_await backend.migrate();
+#if defined(ORAN_ENABLE_SQLITE_VEC)
+    REQUIRE(migrated.has_value());
+#else
+    REQUIRE_FALSE(migrated.has_value());
+    REQUIRE(migrated.error().kind() == core::ErrorKind::config);
+#endif
+  });
+}
+
+#if defined(ORAN_ENABLE_SQLITE_VEC)
+TEST_CASE("longterm::SqliteVecBackend upserts, searches, and removes scoped vectors",
+          "[unit][memory][longterm][sqlite-vec]") {
+  TempDb db{"oran-memory-sqlite-vec"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = storage::Pool::open(io.get_executor(),
+                                    storage::PoolOptions{
+                                        .path = db.string(),
+                                        .reader_count = 2,
+                                        .statement_cache_capacity = 16,
+                                    },
+                                    memory::longterm::SqliteVecBackend::auto_extensions());
+    REQUIRE(pool.has_value());
+    memory::longterm::SqliteVecBackend backend{*pool, memory::longterm::SqliteVecBackendOptions{.dimensions = 3}};
+
+    auto migrated = co_await backend.migrate();
+    REQUIRE(migrated.has_value());
+
+    REQUIRE(
+        (co_await backend.upsert(memory::longterm::VectorUpsert{
+             .key = memory::longterm::RecordKey{.id = "rec-a", .scope_key = "agent:coder"},
+             .embedding = memory::longterm::VectorEmbedding{.model = "test-embedding-v1", .values = {1.0F, 0.0F, 0.0F}},
+         }))
+            .has_value());
+    REQUIRE(
+        (co_await backend.upsert(memory::longterm::VectorUpsert{
+             .key = memory::longterm::RecordKey{.id = "rec-b", .scope_key = "agent:coder"},
+             .embedding = memory::longterm::VectorEmbedding{.model = "test-embedding-v1", .values = {0.0F, 1.0F, 0.0F}},
+         }))
+            .has_value());
+    REQUIRE(
+        (co_await backend.upsert(memory::longterm::VectorUpsert{
+             .key = memory::longterm::RecordKey{.id = "rec-other", .scope_key = "agent:researcher"},
+             .embedding = memory::longterm::VectorEmbedding{.model = "test-embedding-v1", .values = {1.0F, 0.0F, 0.0F}},
+         }))
+            .has_value());
+
+    auto hits = co_await backend.search(
+        memory::longterm::VectorSearchQuery{
+            .scope_key = "agent:coder",
+            .embedding = memory::longterm::VectorEmbedding{.model = "test-embedding-v1", .values = {1.0F, 0.0F, 0.0F}},
+            .kinds = {},
+        },
+        10);
+    REQUIRE(hits.has_value());
+    REQUIRE(hits->size() == 2);
+    REQUIRE((*hits)[0].key.id == "rec-a");
+    REQUIRE((*hits)[0].key.scope_key == "agent:coder");
+    REQUIRE((*hits)[0].score > (*hits)[1].score);
+    REQUIRE((*hits)[1].key.id == "rec-b");
+
+    REQUIRE((co_await backend.remove(memory::longterm::VectorRemoveRequest{
+                 .key = memory::longterm::RecordKey{.id = "rec-a", .scope_key = "agent:coder"},
+             }))
+                .has_value());
+    auto after_remove = co_await backend.search(
+        memory::longterm::VectorSearchQuery{
+            .scope_key = "agent:coder",
+            .embedding = memory::longterm::VectorEmbedding{.model = "test-embedding-v1", .values = {1.0F, 0.0F, 0.0F}},
+            .kinds = {},
+        },
+        10);
+    REQUIRE(after_remove.has_value());
+    REQUIRE(after_remove->size() == 1);
+    REQUIRE((*after_remove)[0].key.id == "rec-b");
+  });
+}
+
+TEST_CASE("longterm::SqliteVecBackend rejects mismatched existing vector dimensions",
+          "[unit][memory][longterm][sqlite-vec]") {
+  TempDb db{"oran-memory-sqlite-vec-dimensions"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = storage::Pool::open(io.get_executor(),
+                                    storage::PoolOptions{
+                                        .path = db.string(),
+                                        .reader_count = 2,
+                                        .statement_cache_capacity = 16,
+                                    },
+                                    memory::longterm::SqliteVecBackend::auto_extensions());
+    REQUIRE(pool.has_value());
+    memory::longterm::SqliteVecBackend backend{*pool, memory::longterm::SqliteVecBackendOptions{.dimensions = 3}};
+    REQUIRE((co_await backend.migrate()).has_value());
+
+    memory::longterm::SqliteVecBackend changed{*pool, memory::longterm::SqliteVecBackendOptions{.dimensions = 4}};
+    auto migrated = co_await changed.migrate();
+    REQUIRE_FALSE(migrated.has_value());
+    REQUIRE(migrated.error().kind() == core::ErrorKind::storage);
+  });
+}
+#endif
+
 TEST_CASE("longterm::HybridRuntime merges lexical and vector hits deterministically",
           "[unit][memory][longterm][runtime]") {
   test::run_async([](asio::io_context&) -> async::Awaitable<void> {

@@ -61,7 +61,7 @@ Each entry contains:
 | Lib | Version | Option | Used by | Purpose | Cost | License | Boundary |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `sol2` | 3.5.0 | `--hook_lua=y` | hook | Lua hook sink | med | MIT | `oran-hook` only |
-| `sqlite-vec` | 0.1.7-alpha | `--vector_memory=y` | memory | Vector search backend | low-med | MIT | `oran-memory` only |
+| `sqlite-vec` | 0.1.9 | `--vector_memory=y` | memory | Vector search backend | low-med | Apache-2.0 | `oran-memory` only |
 
 ## Removed vs. Legacy
 
