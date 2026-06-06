@@ -113,6 +113,13 @@ operators can reason about retention, scope, and visibility.
   policy matches `HybridRuntime` validation before bootstrap consumes it. The
   block defaults disabled and is parser-only until embedding and vector-backend
   ownership land.
+- Hybrid-search bootstrap guard shipped in slice 175:
+  configured-route `bootstrap::run` now consumes
+  `memory.longterm.hybrid_search.enabled` by rejecting `enabled=true` as
+  `ErrorKind::config` with `path=$.memory.longterm.hybrid_search.enabled` and
+  `reason=vector_memory_not_available` before runtime assembly state is opened
+  or provider traffic starts. Disabled hybrid-search config remains accepted
+  while the gated vector backend and embedding owner remain downstream.
 - Decay policy applied by a periodic job (`oran-automation`).
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
 - Hook events on read / write / forget / decay.
@@ -130,7 +137,8 @@ operators can reason about retention, scope, and visibility.
 - Bootstrap/embedding wiring that consumes the shipped
   `memory.longterm.hybrid_search` policy on top of the shipped `HybridRuntime`
   composition contract (slice 173 landed the FTS5-vs-vector-vs-hybrid bench;
-  slice 174 landed parser-level policy validation).
+  slice 174 landed parser-level policy validation; slice 175 landed the
+  configured-route fail-fast guard for `enabled=true`).
 - Externalized embedding store via `oran-http::Client`.
 
 ## Out Of Scope
@@ -177,10 +185,11 @@ operators can reason about retention, scope, and visibility.
    and recall-framing coverage.
    `test-config` reports
    46 cases / 402 assertions for the recall and hybrid-search policy parsers, and `test-bootstrap`
-   reports 114 cases / 874 assertions for the assembly, prompt-runner, and
+   reports 115 cases / 883 assertions for the assembly, prompt-runner, and
    configured-route recall consumers, including slice-167 query-strategy
    coverage, slice-168 `memory.recall` tool binding, and slice-169
-   `memory.remember` plus slice-170 `memory.forget` tool bindings.
+   `memory.remember` plus slice-170 `memory.forget` tool bindings and
+   slice-175 hybrid-search fail-fast coverage.
 7. `bench/memory/search-fts5-vs-vector` (v2): reports the FTS5 baseline + vector
    results in machine-readable JSON. **Status:** partially open; slice 171 adds
    the FTS5 baseline scenario under `bench/memory/scenarios/longterm_fts5.cpp`,

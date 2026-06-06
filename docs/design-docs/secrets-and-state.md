@@ -56,9 +56,10 @@ Current implementation status:
   `lexical_limit` / `vector_limit` / `result_limit`, and non-negative finite
   `lexical_weight` / `vector_weight` with at least one non-zero weight.
   Ordinary configured-route bootstrap maps only the recall policy into
-  prompt-boundary long-term recall today; the hybrid-search block is validated
-  config prework for downstream vector-backend/bootstrap wiring and defaults
-  disabled.
+  prompt-boundary long-term recall today. The hybrid-search block defaults
+  disabled; configured-route bootstrap rejects `enabled=true` with
+  `reason=vector_memory_not_available` until downstream vector-backend and
+  embedding ownership lands.
 - `bootstrap::run` now consumes `trace.retention_days` by deriving an explicit
   Unix-nanosecond cutoff and passing it to `RuntimeAssembly`, which purges
   matching old `trace_turns` rows before exposing the long-lived trace

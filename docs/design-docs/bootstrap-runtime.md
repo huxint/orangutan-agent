@@ -196,6 +196,12 @@ tool registry. The `memory.recall` built-in parses and gates the call in
 tool results return deterministic recall text, structured `memory_recall`
 record metadata, and `usage.match_count` through the normal provider re-entry
 path.
+Slice 175 adds the first configured-route consumption of
+`memory.longterm.hybrid_search.enabled`: until bootstrap owns an embedding source
+and a `memory::longterm::VectorBackend`, `enabled=true` returns
+`ErrorKind::config` with `path=$.memory.longterm.hybrid_search.enabled` and
+`reason=vector_memory_not_available` before `RuntimeAssembly::build` or provider
+construction. Disabled hybrid-search config remains a validated no-op.
 Slice 169 installs `DispatchContext::memory_remember` beside that recall
 binding. The `memory.remember` built-in parses and gates one record-shaped write
 in `oran-tool`; bootstrap adapts it to the assembly-owned

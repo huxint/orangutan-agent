@@ -429,6 +429,47 @@ std::string provider_config_text(std::string_view base_url) {
   return text;
 }
 
+std::string provider_config_with_hybrid_search_text(std::string_view base_url) {
+  auto text = std::string{R"json(
+{
+  "runtime": {
+    "workers": 1,
+    "request_timeout_ms": 2000
+  },
+  "memory": {
+    "longterm": {
+      "hybrid_search": {
+        "enabled": true,
+        "lexical_limit": 8,
+        "vector_limit": 8,
+        "result_limit": 5,
+        "lexical_weight": 0.75,
+        "vector_weight": 1.25
+      }
+    }
+  },
+  "profiles": {
+    "default": {
+      "provider": "anthropic",
+      "protocol": "anthropic_messages",
+      "model": "claude-test",
+      "base_url": ")json"};
+  text.append(base_url);
+  text.append(R"json(",
+      "api_key_env": "ORAN_BOOTSTRAP_RUN_PROVIDER_KEY"
+    }
+  },
+  "routes": {
+    "default": {
+      "primary": "default",
+      "fallbacks": []
+    }
+  }
+}
+)json");
+  return text;
+}
+
 std::string provider_config_with_agent_skills_text(std::string_view base_url) {
   auto text = std::string{R"json(
 {
@@ -731,6 +772,32 @@ TEST_CASE("run hands configured provider prompts to AgentPromptRunner", "[unit][
   const auto memory_db = temp.path() / ".orangutan" / "memory.db";
   REQUIRE(std::filesystem::exists(memory_db));
   REQUIRE(table_exists(memory_db, "longterm_records"));
+}
+
+TEST_CASE("run rejects enabled memory hybrid search before vector memory exists",
+          "[unit][bootstrap][provider][memory]") {
+  ScopedEnv api_key{"ORAN_BOOTSTRAP_RUN_PROVIDER_KEY", "test-secret"};
+  ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
+  ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
+  OneShotHttpServer server{anthropic_sse_response("unused")};
+  TempDir temp{"oran-bootstrap-provider-hybrid-search-disabled"};
+  const auto config_path = temp.path() / "config.json";
+  write_file(config_path, provider_config_with_hybrid_search_text(server.base_url()));
+  auto config_arg = config_path.string();
+  auto args = std::vector<std::string_view>{"--config", config_arg, "--prompt", "hybrid recall"};
+
+  auto result = bootstrap::run(options(args, temp.path()));
+
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(result.error().kind() == core::ErrorKind::config);
+  const auto path = context_value(result.error(), "path");
+  REQUIRE(path.has_value());
+  REQUIRE(*path == "$.memory.longterm.hybrid_search.enabled");
+  const auto reason = context_value(result.error(), "reason");
+  REQUIRE(reason.has_value());
+  REQUIRE(*reason == "vector_memory_not_available");
+  REQUIRE_FALSE(server.served());
+  REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan"));
 }
 
 TEST_CASE("run maps memory recall config into configured provider prompts", "[unit][bootstrap][provider][memory]") {

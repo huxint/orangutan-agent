@@ -46,7 +46,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice174";
+constexpr std::string_view kVersion = "2.0.0-slice175";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 constexpr std::int64_t kNanosecondsPerDay = 86'400'000'000'000;
@@ -128,6 +128,15 @@ longterm_recall_query_strategy_from(config::LongtermMemoryRecallQueryStrategy st
       .query_strategy = longterm_recall_query_strategy_from(recall.query_strategy),
       .kinds = recall.kinds,
   };
+}
+
+[[nodiscard]] Result<void> validate_longterm_hybrid_search_policy(const config::Config& cfg) {
+  if (!cfg.memory().longterm.hybrid_search.enabled) {
+    return {};
+  }
+  return std::unexpected(Error::config("memory.longterm.hybrid_search.enabled requires a vector memory backend")
+                             .with("path", "$.memory.longterm.hybrid_search.enabled")
+                             .with("reason", "vector_memory_not_available"));
 }
 
 /// Pull the value following a long flag — supports both `--flag value` and
@@ -840,6 +849,12 @@ core::Result<int> run(BootstrapOptions options) {
     std::println("provider route: none configured");
     if (parsed->selector_mode_supplied || parsed->selector_agent_supplied) {
       return std::unexpected(arg_error("--mode/--agent require --explain-rules or a configured provider route"));
+    }
+  }
+
+  if (provider_route->has_value()) {
+    if (auto hybrid_search = validate_longterm_hybrid_search_policy(loaded->value); !hybrid_search) {
+      return std::unexpected(std::move(hybrid_search.error()));
     }
   }
 

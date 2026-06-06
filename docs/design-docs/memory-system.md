@@ -212,7 +212,13 @@ operator-facing config contract for downstream hybrid wiring:
 `memory.longterm.hybrid_search.enabled`, positive `lexical_limit`,
 `vector_limit`, and `result_limit`, and non-negative finite `lexical_weight` /
 `vector_weight` with at least one non-zero weight. Bootstrap still uses lexical
-prompt-boundary recall until an embedding/vector backend owner lands.
+prompt-boundary recall until an embedding/vector backend owner lands. Slice 175
+makes that boundary explicit at configured-route startup: if operators set
+`memory.longterm.hybrid_search.enabled=true` before vector memory exists,
+`bootstrap::run` returns a config error at
+`$.memory.longterm.hybrid_search.enabled` with
+`reason=vector_memory_not_available` before opening runtime memory state or
+contacting a provider.
 
 ```cpp
 // include/oran/memory/longterm.hpp
@@ -362,8 +368,10 @@ FTS5 10k-record search baseline and, since slice 173, the
 FTS5-vs-vector-vs-hybrid comparison (`scenarios/search_fts5_vs_vector.cpp`) over a
 brute-force cosine reference `VectorBackend`; the gated `--vector_memory=y`
 sqlite-vec adapter will satisfy the same contract and re-run that scenario.
-The validated `memory.longterm.hybrid_search` config block is parser-only until
-that adapter and bootstrap embedding wiring exist.
+The validated `memory.longterm.hybrid_search` config block is accepted only while
+disabled until that adapter and bootstrap embedding wiring exist; configured-route
+startup fails fast on `enabled=true` instead of silently falling back to lexical
+recall.
 
 ## Shared Memory (Team)
 

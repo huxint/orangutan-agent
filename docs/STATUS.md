@@ -7,12 +7,26 @@
 
 ## Snapshot
 
-- **Slice:** 174 (`xmake run orangutan` reports slice 174)
+- **Slice:** 175 (`xmake run orangutan` reports slice 175)
 - **Last completed history:**
-  [`histories/2026-06/20260605-2349-longterm-hybrid-config.md`](histories/2026-06/20260605-2349-longterm-hybrid-config.md)
+  [`histories/2026-06/20260606-1112-longterm-hybrid-bootstrap-guard.md`](histories/2026-06/20260606-1112-longterm-hybrid-bootstrap-guard.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 174 adds the config-side hybrid-search
+- **Latest completed slice:** slice 175 consumes the config-side
+  `memory.longterm.hybrid_search.enabled` flag at configured-route bootstrap.
+  Because no owned vector-memory backend or embedding source exists yet,
+  `bootstrap::run` now rejects `enabled=true` with `ErrorKind::config`,
+  `path=$.memory.longterm.hybrid_search.enabled`, and
+  `reason=vector_memory_not_available` before opening runtime assembly state or
+  contacting a provider. Disabled hybrid-search config remains accepted. Focused
+  result: `test-bootstrap` **115 cases / 883 assertions**.
+- **Next intended slice:** no active plan; with parser validation and the
+  bootstrap fail-fast guard in place, the next memory slice can start the gated
+  `sqlite-vec` adapter under `--vector_memory=y` (implementing
+  `memory::longterm::VectorBackend` and re-running the comparison) or add the
+  embedding/vector owner that replaces the guard with real hybrid recall wiring.
+
+Slice 174 adds the config-side hybrid-search
   policy contract for long-term memory. `oran-config` now parses
   `memory.longterm.hybrid_search.enabled`, positive `lexical_limit`,
   `vector_limit`, and `result_limit`, and non-negative finite
@@ -20,11 +34,6 @@
   policy matches `HybridRuntime` validation before bootstrap consumes it. The
   block defaults disabled and is parser-only until embedding/vector backend
   ownership lands. Focused result: `test-config` **46 cases / 402 assertions**.
-- **Next intended slice:** no active plan; with the FTS5/vector/hybrid bench
-  baseline and typed hybrid-search config policy in place, the next memory slice
-  can start the gated `sqlite-vec` adapter under `--vector_memory=y`
-  (implementing `memory::longterm::VectorBackend` and re-running the comparison)
-  or wire bootstrap/embedding ownership to consume `memory.longterm.hybrid_search`.
 
 Slice 173 adds the first long-term search comparison bench.
   `bench/memory/scenarios/search_fts5_vs_vector.cpp` seeds one shared 10k-record
@@ -1663,17 +1672,17 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-http`: 3 cases / 21 assertions.
 - `oran-io`: 54 cases / 311 assertions.
 - `oran-storage`: 76 cases / 986 assertions.
-- `oran-config`: 44 cases / 369 assertions.
+- `oran-config`: 46 cases / 402 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 34 cases / 243 assertions.
-- `oran-memory`: 28 cases / 727 assertions.
+- `oran-memory`: 31 cases / 756 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 208 cases / 2181 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 114 cases / 874 assertions.
+- `oran-bootstrap`: 115 cases / 883 assertions.
 
 ## Open Tech-Debt Rows
 
