@@ -45,10 +45,10 @@ in what order.
 
 ## Scope (v1)
 
-> **Status (slice 158, 2026-06-04):** the bus surface, the
+> **Status (slice 179, 2026-06-06):** the bus surface, the
 > `tool_before` dispatch consumer, the configured blocking-timeout
-> policy, and traced direct-dispatch `hook_publish` audit rows are
-> shipped.
+> policy, traced direct-dispatch `hook_publish` audit rows, and the first
+> `memory_write_before` runtime consumer are shipped.
 > `<oran/hook/decision.hpp>` exports `HookDecisionKind { proceed, veto,
 > rewrite, require_approval }` and `HookDecision { kind, reason,
 > optional<string> rewritten_input_json, optional<core::Time>
@@ -80,7 +80,7 @@ in what order.
 > `config.hooks.timeout_ms`) and races each blocking sink against
 > `async::sleep_for`; a timeout synthesizes a veto with
 > `reason="hook_timeout"` and fills `HookDecisionTrace::elapsed`.
-> `test-hook` now reports 34 cases / 243 assertions. Slice 91 adds the
+> `test-hook` now reports 35 cases / 264 assertions. Slice 91 adds the
 > `HookDecisionTrace`
 > vector so dispatch can serialize every consulted sink decision into
 > audit metadata; `Registry::dispatch` now calls
@@ -121,7 +121,17 @@ in what order.
 > `input_json` summary to default sinks, while `SinkKind::trusted_local` sinks
 > receive the original input. Slice 158 keeps that trust boundary while sharing
 > the redacted default snapshot across default sinks and the raw snapshot across
-> trusted-local sinks.
+> trusted-local sinks. Slice 179 adds typed `MemoryWritePayload` /
+> `MemoryForgetPayload` and extends the trust boundary to long-term memory write
+> records: default sinks receive id/scope/kind plus byte/count metadata while
+> record title/body/tags/linked ids are cleared, and trusted-local sinks receive
+> the raw record. `AgentPromptRunner` publishes blocking
+> `memory_write_before` before `memory.remember` mutates the lexical/vector
+> backends; `veto` returns a permission-denied tool error with
+> `reason=blocked_by_hook`, while `rewrite` and `require_approval` remain
+> unsupported for this consumer. Successful `memory.remember` and
+> `memory.forget` paths publish advisory `memory_write_after` and
+> `memory_forget`.
 
 The MVP is the *minimum* surface needed by the agent loop's approval
 render flow — the first real consumer. Everything else that wants a
@@ -163,7 +173,9 @@ blocking hook waits for v1.1.
   - `tool_before` — veto / rewrite / require_approval.
   - `permission_ask_rendered` — proceed / veto (renders the prompt; the
     sink's `reason` carries the operator's response identity).
-  - `memory_write_before` — veto / proceed (rewrite deferred to v1.1).
+  - `memory_write_before` — veto / proceed. Slice 179 ships the first
+    runtime consumer for bootstrap `memory.remember`; rewrite remains deferred
+    to v1.1.
   Every other event in `hook::Event` stays advisory in v1.
 - **Sink resolution order**. Blocking sinks for the same event execute
   in subscription order. The first non-`proceed` decision short-circuits

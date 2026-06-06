@@ -72,6 +72,14 @@ struct AdvisoryFanoutState {
         if constexpr (std::same_as<std::decay_t<decltype(alt)>, ToolAfterPayload>) {
           alt.data_json.reset();
         }
+        if constexpr (std::same_as<std::decay_t<decltype(alt)>, MemoryWritePayload>) {
+          if (alt.redacted_record.has_value()) {
+            alt.record.title.clear();
+            alt.record.body.clear();
+            alt.record.tags.clear();
+            alt.record.linked_record_ids.clear();
+          }
+        }
       },
       payload);
   return payload;

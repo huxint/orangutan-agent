@@ -148,9 +148,18 @@ operators can reason about retention, scope, and visibility.
   (`oran-local-text-v1`, 64 dimensions). `memory.remember` mirrors saved records
   into vector memory, and `memory.forget` removes the matching vector row.
   Default builds keep sqlite-vec optional and fail fast on enabled hybrid search.
+- Memory lifecycle hook wiring shipped in slice 179:
+  `oran-hook` now carries typed `MemoryWritePayload` / `MemoryForgetPayload`
+  shapes, including a redacted memory-record summary for default sinks and raw
+  records only for `trusted_local` sinks. `AgentPromptRunner` publishes blocking
+  `memory_write_before` before `memory.remember` mutates lexical/vector memory;
+  a veto returns a permission-denied tool error and skips persistence. Successful
+  memory writes publish advisory `memory_write_after`, and successful
+  `memory.forget` calls publish advisory `memory_forget`.
 - Decay policy applied by a periodic job (`oran-automation`).
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
-- Hook events on read / write / forget / decay.
+- Read/decay lifecycle hooks and memory-write rewrite/annotation remain
+  downstream.
 
 ## Scope (v1.1)
 
@@ -198,8 +207,14 @@ operators can reason about retention, scope, and visibility.
    underlying DB write.
 4. Decay marks records older than `policy.forget_after_unused` as shadow; they no
    longer surface in default search.
-5. A `memory.write.before` hook can veto a write; the runtime returns
-   `Error::HookVeto` to the caller.
+5. A `memory.write.before` hook can veto a write. **Status:** closed for the
+   bootstrap `memory.remember` tool path in slice 179. `AgentPromptRunner`
+   publishes blocking `memory_write_before` after parsing/scoping the record and
+   before calling the long-term lexical/vector backends; a veto returns
+   `ErrorKind::permission_denied` with `event=memory_write_before`,
+   `reason=blocked_by_hook`, `decision_kind`, and `hook_reason`, and the record is
+   not persisted. `rewrite` and `require_approval` decisions remain unsupported
+   for this memory-write consumer and are rejected as blocked hook decisions.
 6. `tests/memory/` >= 85% coverage. **Status:** default `test-memory` currently
    reports 34 cases / 771 assertions, including long-term contract validation,
    fake async backend interface coverage, public `Fts5Backend` migration /
@@ -213,8 +228,9 @@ operators can reason about retention, scope, and visibility.
    and dimension-mismatch migration rejection. Gated `--vector_memory=y`
    `test-memory` reports 36 cases / 791 assertions.
    `test-config` reports
-   46 cases / 402 assertions for the recall and hybrid-search policy parsers, and `test-bootstrap`
-   reports 115 cases / 885 assertions by default and 120 cases / 958 assertions
+   46 cases / 402 assertions for the recall and hybrid-search policy parsers, `test-hook`
+   reports 35 cases / 264 assertions for hook payload and redaction coverage, and `test-bootstrap`
+   reports 116 cases / 929 assertions by default and 120 cases / 958 assertions
    with `--vector_memory=y` for the assembly, prompt-runner, and
    configured-route recall consumers, including slice-167 query-strategy
    coverage, slice-168 `memory.recall` tool binding, and slice-169
@@ -222,7 +238,9 @@ operators can reason about retention, scope, and visibility.
    slice-175 hybrid-search fail-fast coverage. Slice 178 adds gated coverage for
    vector-memory assembly ownership, configured-route hybrid startup, hybrid
    prompt-boundary recall, hybrid `memory.recall`, and vector mirroring for
-   `memory.remember`.
+   `memory.remember`; slice 179 adds default-build bootstrap coverage for
+   `memory_write_before` / `memory_write_after` / `memory_forget` publishing and
+   veto/no-persist behavior.
 7. `bench/memory/search-fts5-vs-vector` (v2): reports the FTS5 baseline + vector
    results in machine-readable JSON. **Status:** partially open; slice 171 adds
    the FTS5 baseline scenario under `bench/memory/scenarios/longterm_fts5.cpp`,

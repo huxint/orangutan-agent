@@ -318,6 +318,89 @@ filter_skill_documents(std::span<const skill::SkillDocument> documents,
   return bytes;
 }
 
+[[nodiscard]] std::chrono::nanoseconds duration_between(core::Time started_at, core::Time finished_at) noexcept {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(finished_at.to_system_time_point() -
+                                                              started_at.to_system_time_point());
+}
+
+[[nodiscard]] hook::Identity hook_identity(const tool::DispatchContext& ctx) {
+  return hook::Identity{
+      .scope_key = ctx.scope_key,
+      .agent_key = ctx.agent_key,
+      .identity = ctx.identity,
+  };
+}
+
+[[nodiscard]] hook::MemoryRecordPayload hook_memory_record(const memory::longterm::Record& record) {
+  return hook::MemoryRecordPayload{
+      .id = record.key.id,
+      .scope_key = record.key.scope_key,
+      .kind = std::string{core::enum_name(record.kind)},
+      .title = record.title,
+      .body = record.body,
+      .created_at = record.created_at,
+      .updated_at = record.updated_at,
+      .last_read_at = record.last_read_at,
+      .importance = record.importance,
+      .tags = record.tags,
+      .linked_record_ids = record.linked_record_ids,
+      .shadow = record.shadow,
+  };
+}
+
+[[nodiscard]] hook::RedactedMemoryRecordPayload redacted_hook_memory_record(const memory::longterm::Record& record) {
+  return hook::RedactedMemoryRecordPayload{
+      .id = record.key.id,
+      .scope_key = record.key.scope_key,
+      .kind = std::string{core::enum_name(record.kind)},
+      .title_bytes = record.title.size(),
+      .body_bytes = record.body.size(),
+      .tag_count = record.tags.size(),
+      .linked_record_count = record.linked_record_ids.size(),
+      .shadow = record.shadow,
+  };
+}
+
+[[nodiscard]] hook::MemoryWritePayload make_memory_write_payload(const memory::longterm::Record& record,
+                                                                 const tool::DispatchContext& ctx,
+                                                                 core::Time started_at,
+                                                                 core::Time finished_at) {
+  return hook::MemoryWritePayload{
+      .who = hook_identity(ctx),
+      .record = hook_memory_record(record),
+      .redacted_record = redacted_hook_memory_record(record),
+      .started_at = started_at,
+      .finished_at = finished_at,
+      .duration = duration_between(started_at, finished_at),
+  };
+}
+
+[[nodiscard]] hook::MemoryForgetPayload make_memory_forget_payload(const memory::longterm::RecordKey& key,
+                                                                   const tool::DispatchContext& ctx,
+                                                                   core::Time started_at,
+                                                                   core::Time finished_at) {
+  return hook::MemoryForgetPayload{
+      .who = hook_identity(ctx),
+      .id = key.id,
+      .scope_key = key.scope_key,
+      .started_at = started_at,
+      .finished_at = finished_at,
+      .duration = duration_between(started_at, finished_at),
+  };
+}
+
+[[nodiscard]] std::string hook_decision_reason(const hook::HookDecision& decision, std::string_view fallback) {
+  return decision.reason.empty() ? std::string{fallback} : decision.reason;
+}
+
+[[nodiscard]] Error memory_write_hook_blocked_error(const hook::HookDecision& decision, std::string_view fallback) {
+  return Error::permission_denied("memory write blocked by hook")
+      .with("event", "memory_write_before")
+      .with("reason", "blocked_by_hook")
+      .with("decision_kind", std::string{core::enum_name(decision.kind)})
+      .with("hook_reason", hook_decision_reason(decision, fallback));
+}
+
 [[nodiscard]] std::string render_memory_remember_tool_text(const memory::longterm::Record& record) {
   std::string text;
   std::format_to(std::back_inserter(text),
@@ -926,21 +1009,44 @@ private:
       co_return std::unexpected(std::move(kind).error());
     }
 
+    auto record = memory::longterm::Record{
+        .key = memory::longterm::RecordKey{.id = std::move(request.id), .scope_key = scope_key_},
+        .kind = *kind,
+        .title = std::move(request.title),
+        .body = std::move(request.body),
+        .created_at = ctx.now,
+        .updated_at = ctx.now,
+        .last_read_at = ctx.now,
+        .importance = request.importance,
+        .tags = std::move(request.tags),
+        .linked_record_ids = std::move(request.linked_record_ids),
+        .shadow = request.shadow,
+    };
+
+    const auto started_at = core::time::now_utc();
+    if (ctx.bus != nullptr) {
+      auto before = co_await ctx.bus->publish_blocking<hook::Event::memory_write_before>(
+          make_memory_write_payload(record, ctx, started_at, started_at));
+      if (!before) {
+        auto error = std::move(before).error();
+        error.with("event", "memory_write_before");
+        co_return std::unexpected(std::move(error));
+      }
+      switch (before->kind) {
+        case hook::HookDecisionKind::proceed:
+          break;
+        case hook::HookDecisionKind::veto:
+          co_return std::unexpected(memory_write_hook_blocked_error(*before, "hook veto"));
+        case hook::HookDecisionKind::rewrite:
+          co_return std::unexpected(memory_write_hook_blocked_error(*before, "memory write rewrite unsupported"));
+        case hook::HookDecisionKind::require_approval:
+          co_return std::unexpected(
+              memory_write_hook_blocked_error(*before, "memory write require_approval unsupported"));
+      }
+    }
+
     auto stored = co_await backend->upsert(memory::longterm::WriteRequest{
-        .record =
-            memory::longterm::Record{
-                .key = memory::longterm::RecordKey{.id = std::move(request.id), .scope_key = scope_key_},
-                .kind = *kind,
-                .title = std::move(request.title),
-                .body = std::move(request.body),
-                .created_at = ctx.now,
-                .updated_at = ctx.now,
-                .last_read_at = ctx.now,
-                .importance = request.importance,
-                .tags = std::move(request.tags),
-                .linked_record_ids = std::move(request.linked_record_ids),
-                .shadow = request.shadow,
-            },
+        .record = std::move(record),
     });
     if (!stored) {
       co_return std::unexpected(std::move(stored).error());
@@ -958,6 +1064,12 @@ private:
         co_return std::unexpected(std::move(vector_upserted).error());
       }
     }
+    if (ctx.bus != nullptr) {
+      const auto finished_at = core::time::now_utc();
+      [[maybe_unused]] auto after_outcome =
+          co_await ctx.bus->publish_advisory(hook::Event::memory_write_after,
+                                             make_memory_write_payload(*stored, ctx, started_at, finished_at));
+    }
     auto data_json = memory::longterm::render_remember_data_json(*stored);
     co_return tool::Output{
         .text = render_memory_remember_tool_text(*stored),
@@ -973,7 +1085,6 @@ private:
 
   [[nodiscard]] async::Awaitable<Result<tool::Output>> forget_memory(tool::MemoryForgetRequest request,
                                                                      tool::DispatchContext& ctx) const {
-    static_cast<void>(ctx);
     auto* backend = assembly_->longterm_memory_backend();
     if (backend == nullptr) {
       co_return std::unexpected(Error::invalid_argument("memory.forget: runtime service is not available")
@@ -981,6 +1092,7 @@ private:
     }
 
     auto key = memory::longterm::RecordKey{.id = std::move(request.id), .scope_key = scope_key_};
+    const auto started_at = core::time::now_utc();
     auto removed = co_await backend->remove(key);
     if (!removed) {
       co_return std::unexpected(std::move(removed).error());
@@ -990,6 +1102,12 @@ private:
       if (!vector_removed) {
         co_return std::unexpected(std::move(vector_removed).error());
       }
+    }
+    if (ctx.bus != nullptr) {
+      const auto finished_at = core::time::now_utc();
+      [[maybe_unused]] auto forget_outcome =
+          co_await ctx.bus->publish_advisory(hook::Event::memory_forget,
+                                             make_memory_forget_payload(key, ctx, started_at, finished_at));
     }
     auto data_json = memory::longterm::render_forget_data_json(key);
     co_return tool::Output{

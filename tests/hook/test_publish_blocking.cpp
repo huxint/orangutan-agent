@@ -14,6 +14,7 @@
 #include <string_view>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include <asio/io_context.hpp>
 #include <asio/this_coro.hpp>
@@ -53,6 +54,40 @@ using namespace std::chrono_literals;
           R"({"kind":"redacted_tool_input","input_hash":"abc","old_string_bytes":6,"new_string_bytes":6})",
       .who = hook::Identity{.scope_key = "scope", .agent_key = "agent", .identity = "operator"},
       .started_at = core::Time::epoch(),
+  };
+}
+
+[[nodiscard]] hook::MemoryWritePayload sample_memory_write() {
+  return hook::MemoryWritePayload{
+      .who = hook::Identity{.scope_key = "scope", .agent_key = "agent", .identity = "operator"},
+      .record =
+          hook::MemoryRecordPayload{
+              .id = "memory-1",
+              .scope_key = "scope",
+              .kind = "project",
+              .title = "Sensitive title",
+              .body = "Sensitive body",
+              .created_at = core::Time::epoch(),
+              .updated_at = core::Time::epoch(),
+              .last_read_at = core::Time::epoch(),
+              .importance = 0.75,
+              .tags = {"secret", "project"},
+              .linked_record_ids = {"linked-1"},
+              .shadow = false,
+          },
+      .redacted_record =
+          hook::RedactedMemoryRecordPayload{
+              .id = "memory-1",
+              .scope_key = "scope",
+              .kind = "project",
+              .title_bytes = std::string_view{"Sensitive title"}.size(),
+              .body_bytes = std::string_view{"Sensitive body"}.size(),
+              .tag_count = 2,
+              .linked_record_count = 1,
+              .shadow = false,
+          },
+      .started_at = core::Time::epoch(),
+      .finished_at = core::Time::epoch(),
   };
 }
 
@@ -490,6 +525,65 @@ TEST_CASE("publish_blocking redacts input_json when a sanitized view is present"
   REQUIRE(default_input ==
           R"({"kind":"redacted_tool_input","input_hash":"abc","old_string_bytes":6,"new_string_bytes":6})");
   REQUIRE(trusted_input == R"({"path":"notes.md","old_string":"secret","new_string":"public"})");
+}
+
+TEST_CASE("publish_blocking redacts memory write records for default sinks",
+          "[hook][bus][blocking][redaction][memory]") {
+  hook::Bus bus;
+  hook::MemoryWritePayload default_payload;
+  hook::MemoryWritePayload trusted_payload;
+  hook::InProcessSink default_sink{
+      "default",
+      [](hook::Event /*event*/, hook::PayloadPtr /*payload*/) -> async::Awaitable<core::Result<void>> {
+        co_return core::Result<void>{};
+      }};
+  default_sink.set_blocking_handler(
+      [&](hook::Event /*event*/, hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
+        const auto* before = std::get_if<hook::MemoryWritePayload>(payload.get());
+        REQUIRE(before != nullptr);
+        default_payload = *before;
+        co_return hook::HookDecision{};
+      });
+  hook::InProcessSink trusted_sink{
+      "trusted",
+      [](hook::Event /*event*/, hook::PayloadPtr /*payload*/) -> async::Awaitable<core::Result<void>> {
+        co_return core::Result<void>{};
+      },
+      hook::SinkKind::trusted_local};
+  trusted_sink.set_blocking_handler(
+      [&](hook::Event /*event*/, hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
+        const auto* before = std::get_if<hook::MemoryWritePayload>(payload.get());
+        REQUIRE(before != nullptr);
+        trusted_payload = *before;
+        co_return hook::HookDecision{};
+      });
+  bus.bind(default_sink, {hook::Event::memory_write_before});
+  bus.bind(trusted_sink, {hook::Event::memory_write_before});
+
+  test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
+    auto result = co_await bus.publish_blocking<hook::Event::memory_write_before>(sample_memory_write());
+    REQUIRE(result.has_value());
+    REQUIRE(result->kind == hook::HookDecisionKind::proceed);
+    REQUIRE(result->trace.size() == 2);
+    co_return;
+  });
+
+  REQUIRE(default_payload.record.id == "memory-1");
+  REQUIRE(default_payload.record.kind == "project");
+  REQUIRE(default_payload.record.title.empty());
+  REQUIRE(default_payload.record.body.empty());
+  REQUIRE(default_payload.record.tags.empty());
+  REQUIRE(default_payload.record.linked_record_ids.empty());
+  REQUIRE(default_payload.redacted_record.has_value());
+  REQUIRE(default_payload.redacted_record->title_bytes == std::string_view{"Sensitive title"}.size());
+  REQUIRE(default_payload.redacted_record->body_bytes == std::string_view{"Sensitive body"}.size());
+  REQUIRE(default_payload.redacted_record->tag_count == 2);
+  REQUIRE(default_payload.redacted_record->linked_record_count == 1);
+
+  REQUIRE(trusted_payload.record.title == "Sensitive title");
+  REQUIRE(trusted_payload.record.body == "Sensitive body");
+  REQUIRE(trusted_payload.record.tags == std::vector<std::string>{"secret", "project"});
+  REQUIRE(trusted_payload.record.linked_record_ids == std::vector<std::string>{"linked-1"});
 }
 
 TEST_CASE("EventTraits encodes the v1 blocking whitelist", "[hook][event][blocking]") {

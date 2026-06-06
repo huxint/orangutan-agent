@@ -220,7 +220,17 @@ wires the gated bootstrap owner: when the binary is built with
 constructs `HybridRuntime`, and `AgentPromptRunner` uses a deterministic local
 text embedding owner (`oran-local-text-v1`, 64 dimensions) for prompt-boundary
 recall and `memory.recall`. The same runner mirrors `memory.remember` writes and
-`memory.forget` deletes into the vector index. Default builds still reject
+`memory.forget` deletes into the vector index. Slice 179 wires the first
+long-term memory lifecycle hooks at the bootstrap callback boundary:
+`memory.remember` publishes blocking `memory_write_before` after parsing and
+scoping the record but before any lexical/vector backend mutation, then
+publishes advisory `memory_write_after` after a successful write. A veto returns
+`ErrorKind::permission_denied` with `reason=blocked_by_hook` and skips both
+backend writes; rewrite and require-approval decisions are explicitly rejected
+as unsupported for this consumer. `memory.forget` publishes advisory
+`memory_forget` after a successful scoped delete. Default hook sinks receive
+redacted write payloads that omit record title/body/tags/linked ids, while
+trusted-local sinks receive the raw record. Default builds still reject
 `memory.longterm.hybrid_search.enabled=true` before assembly/provider side
 effects with `reason=build_option_disabled`, `option=vector_memory`. Semantic or
 external embedding providers remain downstream.
@@ -468,11 +478,16 @@ this **opt-in per agent**, configured by `agent.<name>.memory.mirror`.
 
 Memory lifecycle:
 
-- `memory.read.before(scope, kind, query)` — may rewrite the query.
-- `memory.read.after(scope, kind, results)` — observability.
-- `memory.write.before(scope, record)` — may veto, rewrite, or annotate.
-- `memory.write.after(scope, record)`
-- `memory.forget(scope, id)`
+- `memory.read.before(scope, kind, query)` — planned; may rewrite the query.
+- `memory.read.after(scope, kind, results)` — planned observability.
+- `memory.write.before(scope, record)` — shipped for bootstrap
+  `memory.remember` in slice 179 as veto/proceed only. The blocking publish runs
+  before lexical/vector backend mutation; veto returns permission-denied and
+  skips persistence. Rewrite/annotation remain downstream.
+- `memory.write.after(scope, record)` — shipped in slice 179 as advisory after
+  successful bootstrap `memory.remember`.
+- `memory.forget(scope, id)` — shipped in slice 179 as advisory after
+  successful bootstrap `memory.forget`.
 - `memory.decay(scope, count)` — periodic.
 
 These hooks are why team shared memory works: the orchestration leader can install a

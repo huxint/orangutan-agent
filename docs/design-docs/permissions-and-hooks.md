@@ -328,7 +328,7 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 
 ## Hook Bus
 
-> **Bus status (2026-06-04, slice 158):** the foundation
+> **Bus status (2026-06-06, slice 179):** the foundation
 > ships as `oran-hook`. `hook::Event` enumerates the 41
 > lifecycle events listed below; `hook::Mode { advisory,
 > blocking }` plus `default_mode(Event)` annotates each
@@ -369,8 +369,9 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > events whose typed shape lands with the producing
 > subsystem) plus `ToolBeforePayload`,
 > `ToolDispatchedPayload`, `ToolAfterPayload`, `ToolErrorPayload`, slice
-> 94's `PermissionAskRenderedPayload`, and slice 126's provider lifecycle
-> payloads. Slice 60 adds the `ToolUsage`
+> 94's `PermissionAskRenderedPayload`, slice 126's provider lifecycle
+> payloads, and slice 179's `MemoryWritePayload` / `MemoryForgetPayload`
+> lifecycle payloads. Slice 60 adds the `ToolUsage`
 > metrics copied from `tool::Output::usage` onto successful
 > `ToolAfterPayload`s without making `oran-hook` depend on
 > `oran-tool`; slice 65 adds optional
@@ -390,12 +391,21 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > byte counts (`content_bytes` or `old_string_bytes` /
 > `new_string_bytes`). Malformed JSON still receives a hash-only
 > redacted view; trusted-local sinks receive the original input.
+> Slice 179 adds the same trust boundary for long-term memory writes:
+> `MemoryWritePayload` carries the raw `record` plus
+> `redacted_record` size/count metadata, and the bus clears
+> `record.title`, `record.body`, `record.tags`, and
+> `record.linked_record_ids` for sinks whose `kind()` is not
+> `SinkKind::trusted_local`. The redacted view keeps id, scope,
+> kind, shadow state, title/body byte counts, tag count, and
+> linked-record count so default sinks can audit routing without
+> receiving memory content.
 > Typed shapes for
 > the remaining non-tool
 > events ship with their producers (provider request /
 > response payloads now live with the agent/provider lifecycle path;
-> memory payloads remain planned until memory read/write hooks wire into
-> `oran-memory` callers, and so on).
+> memory read/decay payloads and channel payloads remain planned until
+> their producers wire in, and so on).
 > `Registry::dispatch` consumes the bus through the
 > optional `DispatchContext::bus` field: when non-null,
 > dispatch first publishes blocking `tool_before` through
@@ -500,7 +510,15 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > These payloads are metadata-only by construction: they include identity,
 > route/profile/model/protocol, counts, retry settings, usage, stop/error, and
 > timing fields, but no prompt text, messages, headers, credentials, or raw
-> provider bodies.
+> provider bodies. Slice 179 adds the first memory lifecycle producer at the
+> bootstrap callback boundary: `AgentPromptRunner` publishes blocking
+> `memory_write_before` for `memory.remember` after parsing/scoping the record
+> and before mutating the lexical/vector backends; `veto` returns
+> `ErrorKind::permission_denied` with `reason=blocked_by_hook`, while
+> `rewrite` and `require_approval` are rejected as unsupported for this
+> consumer. Successful writes publish advisory `memory_write_after`, and
+> successful `memory.forget` calls publish advisory `memory_forget`.
+> `test-hook` now reports 35 cases / 264 assertions.
 
 ### Surface
 
@@ -605,7 +623,11 @@ may publish raw serialized `tool::Output::data_json` once; redaction remains a
 bus responsibility so each producer does not need to duplicate the policy.
 Provider lifecycle payloads do not need per-sink body redaction because their
 public shape never contains prompt text, provider request/response bodies,
-headers, credentials, or message content.
+headers, credentials, or message content. Memory write payloads do carry raw
+record text for trusted in-process observers; default sinks receive the same
+payload shape with `record.title`, `record.body`, `record.tags`, and
+`record.linked_record_ids` cleared and `redacted_record` populated with byte
+and count metadata.
 
 Built-in implementations:
 

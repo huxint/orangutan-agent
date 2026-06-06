@@ -7,12 +7,32 @@
 
 ## Snapshot
 
-- **Slice:** 178 (`xmake run orangutan -- --help` reports slice 178)
+- **Slice:** 179 (`xmake run orangutan -- --help` reports slice 179)
 - **Last completed history:**
-  [`histories/2026-06/20260606-1830-longterm-hybrid-bootstrap-wiring.md`](histories/2026-06/20260606-1830-longterm-hybrid-bootstrap-wiring.md)
+  [`histories/2026-06/20260606-2105-memory-lifecycle-hooks.md`](histories/2026-06/20260606-2105-memory-lifecycle-hooks.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 178 wires the long-term hybrid-search
+- **Latest completed slice:** slice 179 wires long-term memory lifecycle hooks
+  through the configured-route bootstrap memory-tool callbacks. `oran-hook` now
+  carries typed `MemoryWritePayload` / `MemoryForgetPayload` shapes plus a
+  redacted record summary: default sinks keep id/scope/kind/size/count metadata
+  but do not receive memory title/body/tags/linked ids, while
+  `trusted_local` sinks receive the full record. `AgentPromptRunner` publishes
+  blocking `memory_write_before` before `memory.remember` mutates the backend,
+  rejects veto/rewrite/require_approval decisions as
+  `ErrorKind::permission_denied` with `reason=blocked_by_hook`, skips the
+  backend/vector write on veto, and publishes advisory `memory_write_after` /
+  `memory_forget` after successful write/delete paths. Focused results:
+  `test-hook` **35 cases / 264 assertions** and `test-bootstrap`
+  **116 cases / 929 assertions**.
+- **Next intended slice:** no active plan. The remaining memory work should be a
+  product capability gap, not another benchmark by default: external/semantic
+  embedding provider ownership, read/decay lifecycle hooks, decay policy
+  execution, or the optional `MEMORY.md` mirror are the next meaningful
+  candidates. The spec-0010 unified benchmark JSON gap still exists, but it is
+  secondary to runtime capability.
+
+Slice 178 wires the long-term hybrid-search
   policy into configured-route bootstrap when the binary is built with
   `--vector_memory=y`. `RuntimeAssembly` now owns a separate
   `<workspace>/.orangutan/memory-vectors.db` sqlite-vec pool/backend plus a
@@ -27,11 +47,6 @@
   assertions**, default `test-bootstrap` **115 cases / 885 assertions**, gated
   `--vector_memory=y` `test-memory` **36 cases / 791 assertions**, and gated
   `--vector_memory=y` `test-bootstrap` **120 cases / 958 assertions**.
-- **Next intended slice:** no active plan. The remaining memory work should be a
-  product capability gap, not another benchmark by default: external/semantic
-  embedding provider ownership, memory lifecycle hooks, decay, or the optional
-  `MEMORY.md` mirror are the next meaningful candidates. The spec-0010 unified
-  benchmark JSON gap still exists, but it is secondary to runtime capability.
 
 Slice 177 extends the shared 10k-record
   FTS5-vs-vector-vs-hybrid memory benchmark with gated sqlite-vec rows.

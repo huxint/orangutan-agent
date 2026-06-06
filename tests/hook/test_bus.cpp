@@ -60,6 +60,10 @@ struct Capture {
           return "error";
         } else if constexpr (std::same_as<T, hook::PermissionAskRenderedPayload>) {
           return "ask";
+        } else if constexpr (std::same_as<T, hook::MemoryWritePayload>) {
+          return "memory_write";
+        } else if constexpr (std::same_as<T, hook::MemoryForgetPayload>) {
+          return "memory_forget";
         } else if constexpr (std::same_as<T, hook::ProviderRequestPayload>) {
           return "provider_request";
         } else if constexpr (std::same_as<T, hook::ProviderResponsePayload>) {

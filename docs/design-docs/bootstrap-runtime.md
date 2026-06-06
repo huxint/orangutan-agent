@@ -224,16 +224,26 @@ Slice 169 installs `DispatchContext::memory_remember` beside that recall
 binding. The `memory.remember` built-in parses and gates one record-shaped write
 in `oran-tool`; bootstrap adapts it to the assembly-owned
 `memory::longterm::Backend`, stamps the runner's stable `scope_key` plus
-`DispatchContext::now` timestamps, and returns confirmation text, structured
+`DispatchContext::now` timestamps, publishes blocking `memory_write_before`
+before mutating the backend, and returns confirmation text, structured
 `memory_remember` saved-record metadata, and `usage.bytes_written` through the
-same provider re-entry path.
+same provider re-entry path. Slice 179 makes that pre-write hook a real runtime
+gate: `proceed` continues, `veto` returns a permission-denied tool error with
+`reason=blocked_by_hook` and skips lexical/vector writes, and
+`rewrite` / `require_approval` are rejected as unsupported for this memory
+consumer. After a successful lexical/vector write, the runner publishes
+advisory `memory_write_after` with the saved record.
 Slice 170 installs `DispatchContext::memory_forget` beside those memory
 bindings. The `memory.forget` built-in parses and gates one `{id}` delete in
 `oran-tool`; bootstrap adapts it to the assembly-owned
 `memory::longterm::Backend`, supplies the runner's stable `scope_key`, calls the
 backend's idempotent `remove(...)`, and returns confirmation text, structured
 `memory_forget` removed-key metadata, and `usage.bytes_written = 0` through the
-same provider re-entry path.
+same provider re-entry path. Slice 179 publishes advisory `memory_forget` after
+that successful scoped delete. Both memory lifecycle payloads carry runner
+identity, scope/id metadata, timing fields, and per-sink redaction: default hook
+sinks receive a redacted record summary for writes, while `trusted_local` sinks
+receive the raw long-term memory record.
 When the caller
 selects an `AgentPromptRunnerOptions::agent_config_name` (or leaves it empty
 and selects `permission_agent_name`), the runner reads that `agents.<name>`

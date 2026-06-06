@@ -5,9 +5,10 @@
 // adds the first permission ask-flow shape (`permission_ask_rendered`) so UI
 // sinks can render an approval prompt and return a blocking decision. Slice
 // 152 adds optional per-sink redacted input views for sensitive mutation
-// payloads. Events without a typed shape yet carry `std::monostate` so sinks
-// subscribed to them can observe occurrence without payload content; typed
-// shapes land with the producing subsystem.
+// payloads. Slice 179 adds the first memory lifecycle payloads. Events without
+// a typed shape yet carry `std::monostate` so sinks subscribed to them can
+// observe occurrence without payload content; typed shapes land with the
+// producing subsystem.
 
 #pragma once
 
@@ -18,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <variant>
+#include <vector>
 
 #include <oran/core/time.hpp>
 #include <oran/core/turn_id.hpp>
@@ -157,6 +159,63 @@ struct PermissionAskRenderedPayload {
   core::Time requested_at{};
 };
 
+/// Long-term memory record snapshot copied without making `oran-hook` depend
+/// on `oran-memory`. The `kind` field is the `RecordKind` wire spelling.
+struct MemoryRecordPayload {
+  std::string id;
+  std::string scope_key;
+  std::string kind;
+  std::string title;
+  std::string body;
+  core::Time created_at{};
+  core::Time updated_at{};
+  core::Time last_read_at{};
+  double importance{0.0};
+  std::vector<std::string> tags;
+  std::vector<std::string> linked_record_ids;
+  bool shadow{false};
+};
+
+/// Redacted long-term memory record snapshot delivered to non-trusted sinks.
+/// It preserves routing and sizing metadata while omitting title/body/tags and
+/// linked ids, which may carry private user or project facts.
+struct RedactedMemoryRecordPayload {
+  std::string id;
+  std::string scope_key;
+  std::string kind;
+  std::size_t title_bytes{0};
+  std::size_t body_bytes{0};
+  std::size_t tag_count{0};
+  std::size_t linked_record_count{0};
+  bool shadow{false};
+};
+
+/// Blocking pre-write memory payload. Published after the memory tool has been
+/// parsed and scoped but before the long-term backend is mutated.
+struct MemoryWritePayload {
+  Identity who;
+  MemoryRecordPayload record;
+  /// Optional sanitized metadata view. When present, `Bus` clears sensitive
+  /// text/list fields from `record` for sinks whose `Sink::kind()` is not
+  /// `SinkKind::trusted_local`; trusted-local sinks receive the original
+  /// `record`.
+  std::optional<RedactedMemoryRecordPayload> redacted_record{};
+  core::Time started_at{};
+  core::Time finished_at{};
+  std::chrono::nanoseconds duration{0};
+};
+
+/// Advisory delete memory payload. Published after a scoped long-term memory
+/// delete succeeds.
+struct MemoryForgetPayload {
+  Identity who;
+  std::string id;
+  std::string scope_key;
+  core::Time started_at{};
+  core::Time finished_at{};
+  std::chrono::nanoseconds duration{0};
+};
+
 /// Provider token/cost counters copied without making `oran-hook` depend on
 /// `oran-provider`.
 struct ProviderUsage {
@@ -257,6 +316,8 @@ using Payload = std::variant<std::monostate,
                              ToolAfterPayload,
                              ToolErrorPayload,
                              PermissionAskRenderedPayload,
+                             MemoryWritePayload,
+                             MemoryForgetPayload,
                              ProviderRequestPayload,
                              ProviderResponsePayload,
                              ProviderErrorPayload,

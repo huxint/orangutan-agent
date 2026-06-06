@@ -53,6 +53,11 @@ struct ProviderHookCapture {
   hook::Payload payload;
 };
 
+struct MemoryHookCapture {
+  hook::Event event;
+  hook::Payload payload;
+};
+
 class TempDir {
 public:
   explicit TempDir(std::string name)
@@ -245,6 +250,36 @@ private:
   mutable std::mutex mutex_;
   mutable std::vector<provider::Request> requests_;
   mutable std::deque<provider::Response> responses_;
+};
+
+class MemoryCaptureSink final : public hook::Sink {
+public:
+  explicit MemoryCaptureSink(std::vector<MemoryHookCapture>& captures,
+                             hook::HookDecision blocking_decision = hook::HookDecision{})
+      : captures_{&captures}, blocking_decision_{std::move(blocking_decision)} {}
+
+  [[nodiscard]] std::string_view id() const noexcept override {
+    return "memory-capture";
+  }
+
+  [[nodiscard]] hook::SinkKind kind() const noexcept override {
+    return hook::SinkKind::trusted_local;
+  }
+
+  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event event, hook::PayloadPtr payload) override {
+    captures_->push_back(MemoryHookCapture{.event = event, .payload = *payload});
+    co_return core::Result<void>{};
+  }
+
+  [[nodiscard]] async::Awaitable<core::Result<hook::HookDecision>> handle_blocking(hook::Event event,
+                                                                                   hook::PayloadPtr payload) override {
+    captures_->push_back(MemoryHookCapture{.event = event, .payload = *payload});
+    co_return blocking_decision_;
+  }
+
+private:
+  std::vector<MemoryHookCapture>* captures_;
+  hook::HookDecision blocking_decision_;
 };
 
 }  // namespace
@@ -846,6 +881,9 @@ TEST_CASE("AgentPromptRunner dispatches memory.remember through long-term backen
     auto cfg = config::Config{};
     auto assembly = build_assembly(temp.path(), io, false);
     REQUIRE(assembly.longterm_memory_backend() != nullptr);
+    std::vector<MemoryHookCapture> hook_captures;
+    MemoryCaptureSink sink{hook_captures};
+    assembly.hook_bus().bind(sink, {hook::Event::memory_write_before, hook::Event::memory_write_after});
 
     RecordingProvider recording{{
         provider::Response{
@@ -896,6 +934,92 @@ TEST_CASE("AgentPromptRunner dispatches memory.remember through long-term backen
     REQUIRE(stored->importance == 0.75);
     REQUIRE(stored->tags == std::vector<std::string>{"remember", "tool"});
     REQUIRE(stored->linked_record_ids == std::vector<std::string>{"lt-tool-recall"});
+
+    REQUIRE(hook_captures.size() == 2);
+    REQUIRE(hook_captures[0].event == hook::Event::memory_write_before);
+    const auto* before = std::get_if<hook::MemoryWritePayload>(&hook_captures[0].payload);
+    REQUIRE(before != nullptr);
+    REQUIRE(before->who.scope_key == "scope-A");
+    REQUIRE(before->who.agent_key == "coder");
+    REQUIRE(before->who.identity == "operator-1");
+    REQUIRE(before->record.id == "lt-tool-remember");
+    REQUIRE(before->record.scope_key == "scope-A");
+    REQUIRE(before->record.kind == "project");
+    REQUIRE(before->record.title == "Remembered note");
+    REQUIRE(before->record.body == "Memory remember wrote rememberanchor into the project.");
+    REQUIRE(before->record.tags == std::vector<std::string>{"remember", "tool"});
+    REQUIRE(before->redacted_record.has_value());
+    REQUIRE(before->redacted_record->body_bytes ==
+            std::string_view{"Memory remember wrote rememberanchor into the project."}.size());
+
+    REQUIRE(hook_captures[1].event == hook::Event::memory_write_after);
+    const auto* after = std::get_if<hook::MemoryWritePayload>(&hook_captures[1].payload);
+    REQUIRE(after != nullptr);
+    REQUIRE(after->record.id == "lt-tool-remember");
+    REQUIRE(after->record.body == "Memory remember wrote rememberanchor into the project.");
+    REQUIRE(after->finished_at >= after->started_at);
+  });
+}
+
+TEST_CASE("AgentPromptRunner lets memory.write.before veto memory.remember",
+          "[unit][bootstrap][prompt_runner][memory][hook]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-memory-write-veto"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false);
+    REQUIRE(assembly.longterm_memory_backend() != nullptr);
+    std::vector<MemoryHookCapture> hook_captures;
+    auto veto = hook::HookDecision{};
+    veto.kind = hook::HookDecisionKind::veto;
+    veto.reason = "memory policy";
+    MemoryCaptureSink sink{hook_captures, std::move(veto)};
+    assembly.hook_bus().bind(sink, {hook::Event::memory_write_before, hook::Event::memory_write_after});
+
+    RecordingProvider recording{{
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "memory-write-veto-1",
+                .name = "memory.remember",
+                .input_json =
+                    R"({"id":"lt-tool-remember-veto","kind":"project","title":"Blocked note","body":"This should not persist."})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        },
+        text_response("done"),
+    }};
+
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.mode = permission::Mode::permissive;
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto result = co_await (*runner)->run_prompt(
+        cli::PromptRunRequest{.prompt = "write blocked memory", .mode = cli::CliMode::single_shot});
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "done");
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 2);
+    const auto output = tool_result_output_in(requests[1], "memory-write-veto-1");
+    REQUIRE(output.contains("memory write blocked by hook"));
+    REQUIRE(output.contains("memory policy"));
+
+    auto stored = co_await assembly.longterm_memory_backend()->get(memory::longterm::RecordKey{
+        .id = "lt-tool-remember-veto",
+        .scope_key = "scope-A",
+    });
+    REQUIRE_FALSE(stored.has_value());
+    REQUIRE(stored.error().kind() == core::ErrorKind::not_found);
+
+    REQUIRE(hook_captures.size() == 1);
+    REQUIRE(hook_captures[0].event == hook::Event::memory_write_before);
+    const auto* before = std::get_if<hook::MemoryWritePayload>(&hook_captures[0].payload);
+    REQUIRE(before != nullptr);
+    REQUIRE(before->record.id == "lt-tool-remember-veto");
+    REQUIRE(before->record.body == "This should not persist.");
   });
 }
 
@@ -959,6 +1083,9 @@ TEST_CASE("AgentPromptRunner dispatches memory.forget through long-term backend"
     auto cfg = config::Config{};
     auto assembly = build_assembly(temp.path(), io, false);
     REQUIRE(assembly.longterm_memory_backend() != nullptr);
+    std::vector<MemoryHookCapture> hook_captures;
+    MemoryCaptureSink sink{hook_captures};
+    assembly.hook_bus().bind(sink, {hook::Event::memory_forget});
     auto upserted = co_await assembly.longterm_memory_backend()->upsert(memory::longterm::WriteRequest{
         .record = make_longterm_record("lt-tool-forget", "Memory forget should remove forgetanchor."),
     });
@@ -1005,6 +1132,17 @@ TEST_CASE("AgentPromptRunner dispatches memory.forget through long-term backend"
     });
     REQUIRE_FALSE(stored.has_value());
     REQUIRE(stored.error().kind() == core::ErrorKind::not_found);
+
+    REQUIRE(hook_captures.size() == 1);
+    REQUIRE(hook_captures[0].event == hook::Event::memory_forget);
+    const auto* forget = std::get_if<hook::MemoryForgetPayload>(&hook_captures[0].payload);
+    REQUIRE(forget != nullptr);
+    REQUIRE(forget->who.scope_key == "scope-A");
+    REQUIRE(forget->who.agent_key == "coder");
+    REQUIRE(forget->who.identity == "operator-1");
+    REQUIRE(forget->id == "lt-tool-forget");
+    REQUIRE(forget->scope_key == "scope-A");
+    REQUIRE(forget->finished_at >= forget->started_at);
   });
 }
 
