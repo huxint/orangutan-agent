@@ -125,6 +125,49 @@ RETURNING scope_key,
           shadow
 )sql";
 
+constexpr std::string_view kDecayRecordsSql = R"sql(
+WITH candidates AS (
+  SELECT scope_key, id
+  FROM longterm_records
+  WHERE scope_key = ?
+    AND shadow = 0
+    AND last_read_at < ?
+    AND importance <= ?
+  ORDER BY last_read_at ASC, importance ASC, updated_at ASC, id ASC
+  LIMIT ?
+)
+UPDATE longterm_records
+SET shadow = 1,
+    updated_at = CASE
+      WHEN updated_at < ? THEN ?
+      ELSE updated_at
+    END
+WHERE EXISTS (
+  SELECT 1
+  FROM candidates
+  WHERE candidates.scope_key = longterm_records.scope_key
+    AND candidates.id = longterm_records.id
+)
+RETURNING scope_key,
+          id,
+          kind,
+          title,
+          body,
+          created_at,
+          updated_at,
+          last_read_at,
+          importance,
+          tags_json,
+          linked_record_ids_json,
+          shadow
+)sql";
+
+constexpr std::string_view kUpdateFtsShadowSql = R"sql(
+UPDATE longterm_records_fts
+SET shadow = ?
+WHERE scope_key = ? AND record_id = ?
+)sql";
+
 constexpr std::string_view kSearchSelectSql = R"sql(
 SELECT r.scope_key,
        r.id,
@@ -519,6 +562,37 @@ delete_fts_row(storage::Connection& connection, storage::StatementCache& cache, 
   return sql;
 }
 
+void sort_decay_records(std::vector<Record>& records) {
+  std::ranges::sort(records, [](const Record& lhs, const Record& rhs) {
+    if (lhs.last_read_at != rhs.last_read_at) {
+      return lhs.last_read_at < rhs.last_read_at;
+    }
+    if (lhs.importance != rhs.importance) {
+      return lhs.importance < rhs.importance;
+    }
+    if (lhs.updated_at != rhs.updated_at) {
+      return lhs.updated_at < rhs.updated_at;
+    }
+    return lhs.key.id < rhs.key.id;
+  });
+}
+
+[[nodiscard]] core::Result<void>
+update_fts_shadow(storage::Connection& connection, storage::StatementCache& cache, const Record& record) {
+  auto cached = cache.acquire(connection, kUpdateFtsShadowSql);
+  if (!cached) {
+    return std::unexpected(std::move(cached).error());
+  }
+  auto& statement = cached->statement();
+  if (auto bound = statement.bind_int64(1, record.shadow ? 1 : 0); !bound) {
+    return bound;
+  }
+  if (auto bound = bind_key(statement, 2, record.key); !bound) {
+    return bound;
+  }
+  return step_done(statement, "update_fts_shadow");
+}
+
 }  // namespace
 
 Fts5Backend::Fts5Backend(storage::Pool& pool, Fts5BackendOptions options) noexcept
@@ -759,6 +833,83 @@ async::Awaitable<core::Result<Record>> Fts5Backend::touch(TouchRequest request) 
     co_return std::unexpected(std::move(done).error());
   }
   co_return std::move(*record);
+}
+
+async::Awaitable<core::Result<DecayResult>> Fts5Backend::decay(DecayRequest request) {
+  if (auto valid = validate_decay_request(request); !valid) {
+    co_return std::unexpected(std::move(valid).error());
+  }
+  auto limit_value = checked_limit(request.limit);
+  if (!limit_value) {
+    co_return std::unexpected(std::move(limit_value).error());
+  }
+
+  auto writer = co_await pool_->acquire_writer();
+  if (!writer) {
+    co_return std::unexpected(std::move(writer).error());
+  }
+  auto& connection = writer->connection();
+  auto& cache = writer->statement_cache();
+
+  if (auto begun = connection.execute("BEGIN IMMEDIATE"); !begun) {
+    co_return std::unexpected(std::move(begun).error());
+  }
+
+  std::vector<Record> shadowed;
+  {
+    auto cached = cache.acquire(connection, kDecayRecordsSql);
+    if (!cached) {
+      co_return std::unexpected(rollback_error(std::move(cached).error(), connection));
+    }
+    auto& statement = cached->statement();
+    const auto unused_before = core::time::format_iso8601_utc(request.unused_before);
+    const auto decay_at = core::time::format_iso8601_utc(request.decay_at);
+    if (auto bound = statement.bind_text(1, request.scope_key); !bound) {
+      co_return std::unexpected(rollback_error(std::move(bound).error(), connection));
+    }
+    if (auto bound = statement.bind_text(2, unused_before); !bound) {
+      co_return std::unexpected(rollback_error(std::move(bound).error(), connection));
+    }
+    if (auto bound = statement.bind_double(3, request.importance_floor); !bound) {
+      co_return std::unexpected(rollback_error(std::move(bound).error(), connection));
+    }
+    if (auto bound = statement.bind_int64(4, *limit_value); !bound) {
+      co_return std::unexpected(rollback_error(std::move(bound).error(), connection));
+    }
+    if (auto bound = statement.bind_text(5, decay_at); !bound) {
+      co_return std::unexpected(rollback_error(std::move(bound).error(), connection));
+    }
+    if (auto bound = statement.bind_text(6, decay_at); !bound) {
+      co_return std::unexpected(rollback_error(std::move(bound).error(), connection));
+    }
+
+    while (true) {
+      auto step = statement.step();
+      if (!step) {
+        co_return std::unexpected(rollback_error(std::move(step).error(), connection));
+      }
+      if (*step == storage::StepResult::done) {
+        break;
+      }
+      auto record = read_record_row(statement);
+      if (!record) {
+        co_return std::unexpected(rollback_error(std::move(record).error(), connection));
+      }
+      shadowed.push_back(std::move(*record));
+    }
+  }
+
+  for (const auto& record : shadowed) {
+    if (auto updated = update_fts_shadow(connection, cache, record); !updated) {
+      co_return std::unexpected(rollback_error(std::move(updated).error(), connection));
+    }
+  }
+  if (auto committed = connection.execute("COMMIT"); !committed) {
+    co_return std::unexpected(rollback_error(std::move(committed).error(), connection));
+  }
+
+  sort_decay_records(shadowed);
+  co_return DecayResult{.shadowed_records = std::move(shadowed)};
 }
 
 async::Awaitable<core::Result<void>> Fts5Backend::remove(RecordKey key) {

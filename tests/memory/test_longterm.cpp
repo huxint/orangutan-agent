@@ -195,6 +195,30 @@ public:
     co_return *record;
   }
 
+  [[nodiscard]] async::Awaitable<core::Result<memory::longterm::DecayResult>>
+  decay(memory::longterm::DecayRequest request) override {
+    ++decay_calls;
+    last_decay = request;
+    auto result = memory::longterm::DecayResult{};
+    for (auto& record : records_) {
+      if (record.key.scope_key != request.scope_key || record.shadow || record.last_read_at >= request.unused_before ||
+          record.importance > request.importance_floor || result.shadowed_records.size() >= request.limit) {
+        continue;
+      }
+      record.shadow = true;
+      if (record.updated_at < request.decay_at) {
+        record.updated_at = request.decay_at;
+      }
+      result.shadowed_records.push_back(record);
+      for (auto& hit : hits_) {
+        if (same_key(hit.record.key, record.key)) {
+          hit.record = record;
+        }
+      }
+    }
+    co_return result;
+  }
+
   [[nodiscard]] async::Awaitable<core::Result<void>> remove(memory::longterm::RecordKey key) override {
     last_key = std::move(key);
     co_return core::Result<void>{};
@@ -203,10 +227,12 @@ public:
   memory::longterm::RecordKey last_key;
   memory::longterm::Query last_query;
   memory::longterm::TouchRequest last_touch;
+  memory::longterm::DecayRequest last_decay;
   std::size_t last_limit{};
   std::size_t search_calls{};
   std::size_t get_calls{};
   std::size_t touch_calls{};
+  std::size_t decay_calls{};
 
 private:
   std::vector<memory::longterm::SearchHit> hits_;
@@ -270,6 +296,15 @@ TEST_CASE("longterm validation accepts well-shaped record and query contracts", 
   auto record = make_record();
   REQUIRE(memory::longterm::validate_record(record).has_value());
   REQUIRE(memory::longterm::validate_write_request(memory::longterm::WriteRequest{.record = record}).has_value());
+  REQUIRE(memory::longterm::validate_touch_request(memory::longterm::TouchRequest{.key = record.key}).has_value());
+  REQUIRE(memory::longterm::validate_decay_request(memory::longterm::DecayRequest{
+                                                       .scope_key = "agent:coder",
+                                                       .unused_before = core::Time{core::Time::time_point{10s}},
+                                                       .importance_floor = 0.5,
+                                                       .limit = 3,
+                                                       .decay_at = core::Time{core::Time::time_point{20s}},
+                                                   })
+              .has_value());
 
   auto query = memory::longterm::Query{
       .scope_key = "agent:coder",
@@ -331,6 +366,26 @@ TEST_CASE("longterm validation rejects malformed search contracts", "[unit][memo
   auto zero_limit = memory::longterm::validate_query(query, 0);
   REQUIRE_FALSE(zero_limit.has_value());
   REQUIRE(zero_limit.error().kind() == core::ErrorKind::invalid_argument);
+
+  auto bad_decay = memory::longterm::validate_decay_request(memory::longterm::DecayRequest{
+      .scope_key = "agent:coder",
+      .unused_before = core::Time{core::Time::time_point{10s}},
+      .importance_floor = 1.5,
+      .limit = 1,
+      .decay_at = core::Time{core::Time::time_point{20s}},
+  });
+  REQUIRE_FALSE(bad_decay.has_value());
+  REQUIRE(bad_decay.error().kind() == core::ErrorKind::invalid_argument);
+
+  bad_decay = memory::longterm::validate_decay_request(memory::longterm::DecayRequest{
+      .scope_key = "agent:coder",
+      .unused_before = core::Time{core::Time::time_point{10s}},
+      .importance_floor = 0.5,
+      .limit = 0,
+      .decay_at = core::Time{core::Time::time_point{20s}},
+  });
+  REQUIRE_FALSE(bad_decay.has_value());
+  REQUIRE(bad_decay.error().kind() == core::ErrorKind::invalid_argument);
 }
 
 TEST_CASE("longterm vector validation pins sqlite-vec adapter inputs", "[unit][memory][longterm]") {
@@ -379,6 +434,18 @@ TEST_CASE("longterm backend interfaces compose through async contracts", "[unit]
 
     auto upserted = co_await backend.upsert(memory::longterm::WriteRequest{.record = make_record()});
     REQUIRE(upserted.has_value());
+
+    auto decayed = co_await backend.decay(memory::longterm::DecayRequest{
+        .scope_key = "agent:coder",
+        .unused_before = core::Time{core::Time::time_point{10s}},
+        .importance_floor = 1.0,
+        .limit = 5,
+        .decay_at = core::Time{core::Time::time_point{11s}},
+    });
+    REQUIRE(decayed.has_value());
+    REQUIRE(decayed->shadowed_records.size() == 1);
+    REQUIRE(decayed->shadowed_records[0].shadow);
+    REQUIRE(backend.decay_calls == 1);
 
     auto removed = co_await backend.remove(memory::longterm::RecordKey{.id = "rec-1", .scope_key = "agent:coder"});
     REQUIRE(removed.has_value());
@@ -1135,6 +1202,169 @@ TEST_CASE("longterm::Fts5Backend touches last_read_at without rebuilding indexed
     REQUIRE(hits->size() == 1);
     REQUIRE((*hits)[0].record.key.id == "rec-touch");
     REQUIRE((*hits)[0].record.last_read_at == touched_at);
+  });
+}
+
+TEST_CASE("longterm::Fts5Backend decays stale low-importance records to shadow", "[unit][memory][longterm][fts5]") {
+  TempDb db{"oran-memory-longterm-decay"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    memory::longterm::Fts5Backend backend{pool};
+    auto migrated = co_await backend.migrate();
+    REQUIRE(migrated.has_value());
+
+    auto stale_low = make_record("stale-low",
+                                 "agent:coder",
+                                 memory::longterm::RecordKind::reference,
+                                 "Stale low",
+                                 "The stale visible papaya note should decay.");
+    stale_low.importance = 0.2;
+    stale_low.last_read_at = core::Time{core::Time::time_point{3s}};
+    stale_low.updated_at = core::Time{core::Time::time_point{4s}};
+
+    auto stale_high = make_record("stale-high",
+                                  "agent:coder",
+                                  memory::longterm::RecordKind::reference,
+                                  "Stale high",
+                                  "The high-importance papaya note should stay visible.");
+    stale_high.importance = 0.9;
+    stale_high.last_read_at = core::Time{core::Time::time_point{2s}};
+    stale_high.updated_at = core::Time{core::Time::time_point{5s}};
+
+    auto fresh_low = make_record("fresh-low",
+                                 "agent:coder",
+                                 memory::longterm::RecordKind::reference,
+                                 "Fresh low",
+                                 "The fresh papaya note should stay visible.");
+    fresh_low.importance = 0.1;
+    fresh_low.last_read_at = core::Time{core::Time::time_point{20s}};
+    fresh_low.updated_at = core::Time{core::Time::time_point{21s}};
+
+    auto other_scope = make_record("stale-other",
+                                   "agent:researcher",
+                                   memory::longterm::RecordKind::reference,
+                                   "Other scope",
+                                   "The other-scope papaya note should stay visible.");
+    other_scope.importance = 0.1;
+    other_scope.last_read_at = core::Time{core::Time::time_point{1s}};
+
+    auto already_shadow = make_record("already-shadow",
+                                      "agent:coder",
+                                      memory::longterm::RecordKind::reference,
+                                      "Already shadow",
+                                      "The already-shadow papaya note should not be reported again.");
+    already_shadow.importance = 0.1;
+    already_shadow.last_read_at = core::Time{core::Time::time_point{1s}};
+    already_shadow.shadow = true;
+
+    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = stale_low})).has_value());
+    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = stale_high})).has_value());
+    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = fresh_low})).has_value());
+    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = other_scope})).has_value());
+    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = already_shadow})).has_value());
+
+    const auto decay_at = core::Time{core::Time::time_point{30s}};
+    auto decayed = co_await backend.decay(memory::longterm::DecayRequest{
+        .scope_key = "agent:coder",
+        .unused_before = core::Time{core::Time::time_point{10s}},
+        .importance_floor = 0.5,
+        .limit = 10,
+        .decay_at = decay_at,
+    });
+    REQUIRE(decayed.has_value());
+    REQUIRE(decayed->shadowed_records.size() == 1);
+    REQUIRE(decayed->shadowed_records[0].key.id == "stale-low");
+    REQUIRE(decayed->shadowed_records[0].shadow);
+    REQUIRE(decayed->shadowed_records[0].updated_at == decay_at);
+    REQUIRE(decayed->shadowed_records[0].last_read_at == stale_low.last_read_at);
+
+    auto default_hits = co_await backend.search(
+        memory::longterm::Query{
+            .scope_key = "agent:coder",
+            .text = "papaya",
+            .kinds = {},
+        },
+        10);
+    REQUIRE(default_hits.has_value());
+    REQUIRE(default_hits->size() == 2);
+    REQUIRE(std::ranges::none_of(*default_hits, [](const memory::longterm::SearchHit& hit) {
+      return hit.record.key.id == "stale-low";
+    }));
+
+    auto including_shadow = co_await backend.search(
+        memory::longterm::Query{
+            .scope_key = "agent:coder",
+            .text = "papaya",
+            .kinds = {},
+            .include_shadow = true,
+        },
+        10);
+    REQUIRE(including_shadow.has_value());
+    REQUIRE(including_shadow->size() == 4);
+    auto stale_hit = std::ranges::find_if(*including_shadow, [](const memory::longterm::SearchHit& hit) {
+      return hit.record.key.id == "stale-low";
+    });
+    REQUIRE(stale_hit != including_shadow->end());
+    REQUIRE(stale_hit->record.shadow);
+
+    auto repeated = co_await backend.decay(memory::longterm::DecayRequest{
+        .scope_key = "agent:coder",
+        .unused_before = core::Time{core::Time::time_point{10s}},
+        .importance_floor = 0.5,
+        .limit = 10,
+        .decay_at = core::Time{core::Time::time_point{40s}},
+    });
+    REQUIRE(repeated.has_value());
+    REQUIRE(repeated->shadowed_records.empty());
+  });
+}
+
+TEST_CASE("longterm::Fts5Backend decay respects batch limits", "[unit][memory][longterm][fts5]") {
+  TempDb db{"oran-memory-longterm-decay-limit"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    memory::longterm::Fts5Backend backend{pool};
+    REQUIRE((co_await backend.migrate()).has_value());
+
+    auto first = make_record("first",
+                             "agent:coder",
+                             memory::longterm::RecordKind::reference,
+                             "First",
+                             "The first guava record is oldest.");
+    first.last_read_at = core::Time{core::Time::time_point{1s}};
+    first.importance = 0.1;
+    auto second = make_record("second",
+                              "agent:coder",
+                              memory::longterm::RecordKind::reference,
+                              "Second",
+                              "The second guava record is also stale.");
+    second.last_read_at = core::Time{core::Time::time_point{2s}};
+    second.importance = 0.1;
+
+    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = first})).has_value());
+    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = second})).has_value());
+
+    auto decayed = co_await backend.decay(memory::longterm::DecayRequest{
+        .scope_key = "agent:coder",
+        .unused_before = core::Time{core::Time::time_point{10s}},
+        .importance_floor = 0.5,
+        .limit = 1,
+        .decay_at = core::Time{core::Time::time_point{20s}},
+    });
+    REQUIRE(decayed.has_value());
+    REQUIRE(decayed->shadowed_records.size() == 1);
+    REQUIRE(decayed->shadowed_records[0].key.id == "first");
+
+    auto default_hits = co_await backend.search(
+        memory::longterm::Query{
+            .scope_key = "agent:coder",
+            .text = "guava",
+            .kinds = {},
+        },
+        10);
+    REQUIRE(default_hits.has_value());
+    REQUIRE(default_hits->size() == 1);
+    REQUIRE((*default_hits)[0].record.key.id == "second");
   });
 }
 

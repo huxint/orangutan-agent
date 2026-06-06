@@ -90,6 +90,22 @@ struct TouchRequest {
   friend bool operator==(const TouchRequest&, const TouchRequest&) = default;
 };
 
+struct DecayRequest {
+  std::string scope_key;
+  core::Time unused_before{core::Time::epoch()};
+  double importance_floor{0.0};
+  std::size_t limit{0};
+  core::Time decay_at{core::Time::epoch()};
+
+  friend bool operator==(const DecayRequest&, const DecayRequest&) = default;
+};
+
+struct DecayResult {
+  std::vector<Record> shadowed_records;
+
+  friend bool operator==(const DecayResult&, const DecayResult&) = default;
+};
+
 struct RecallRequest {
   Query query;
   std::size_t limit{0};
@@ -174,6 +190,7 @@ public:
                                                                                       std::size_t limit) = 0;
   [[nodiscard]] virtual async::Awaitable<core::Result<Record>> upsert(WriteRequest request) = 0;
   [[nodiscard]] virtual async::Awaitable<core::Result<Record>> touch(TouchRequest request) = 0;
+  [[nodiscard]] virtual async::Awaitable<core::Result<DecayResult>> decay(DecayRequest request) = 0;
   [[nodiscard]] virtual async::Awaitable<core::Result<void>> remove(RecordKey key) = 0;
 };
 
@@ -221,6 +238,7 @@ public:
   [[nodiscard]] async::Awaitable<core::Result<std::vector<SearchHit>>> search(Query query, std::size_t limit) override;
   [[nodiscard]] async::Awaitable<core::Result<Record>> upsert(WriteRequest request) override;
   [[nodiscard]] async::Awaitable<core::Result<Record>> touch(TouchRequest request) override;
+  [[nodiscard]] async::Awaitable<core::Result<DecayResult>> decay(DecayRequest request) override;
   [[nodiscard]] async::Awaitable<core::Result<void>> remove(RecordKey key) override;
 
 private:
@@ -302,6 +320,7 @@ private:
 [[nodiscard]] core::Result<void> validate_query(const Query& query, std::size_t limit);
 [[nodiscard]] core::Result<void> validate_write_request(const WriteRequest& request);
 [[nodiscard]] core::Result<void> validate_touch_request(const TouchRequest& request);
+[[nodiscard]] core::Result<void> validate_decay_request(const DecayRequest& request);
 [[nodiscard]] core::Result<void> validate_embedding(const VectorEmbedding& embedding);
 [[nodiscard]] core::Result<void> validate_vector_upsert(const VectorUpsert& request);
 [[nodiscard]] core::Result<void> validate_vector_search_query(const VectorSearchQuery& query, std::size_t limit);

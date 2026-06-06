@@ -187,6 +187,17 @@ core::Result<void> validate_touch_request(const TouchRequest& request) {
   return validate_key(request.key);
 }
 
+core::Result<void> validate_decay_request(const DecayRequest& request) {
+  if (auto valid = validate_required(request.scope_key, "scope_key"); !valid) {
+    return valid;
+  }
+  if (!std::isfinite(request.importance_floor) || request.importance_floor < 0.0 || request.importance_floor > 1.0) {
+    return std::unexpected(invalid_field("importance_floor",
+                                         "long-term memory decay importance_floor must be finite in the range [0, 1]"));
+  }
+  return validate_limit(request.limit);
+}
+
 core::Result<void> validate_embedding(const VectorEmbedding& embedding) {
   if (auto valid = validate_required(embedding.model, "embedding_model"); !valid) {
     return valid;

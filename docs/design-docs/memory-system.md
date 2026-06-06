@@ -157,15 +157,17 @@ MEMORY.md mirror. v2 keeps that core and adds:
   metadata before pruning. Expired records eventually receive lower search weight
   before potentially being shadowed or deleted.
 
-Status (slice 181): `include/oran/memory/longterm.hpp` now ships the public
-record/query/write/touch shapes, reflection-backed `RecordKind`, `Backend` and
-`VectorBackend` traits, validation helpers for record keys, search limits,
-record metadata, touch requests, and vector embeddings, plus `Fts5Backend` as
-the default SQLite FTS5 lexical backend. `Fts5Backend` owns the long-term memory
-schema in `src/oran-memory/migrations/longterm/`, applies its built-in
-migration through the shared `storage::Pool` writer, returns
-`ErrorKind::not_found` for missing `get(...)` rows, advances `last_read_at`
-monotonically through `touch(...)`, and treats `remove(...)` as idempotent.
+Status (slice 182): `include/oran/memory/longterm.hpp` now ships the public
+record/query/write/touch/decay shapes, reflection-backed `RecordKind`,
+`Backend` and `VectorBackend` traits, validation helpers for record keys,
+search limits, record metadata, touch requests, decay requests, and vector
+embeddings, plus `Fts5Backend` as the default SQLite FTS5 lexical backend.
+`Fts5Backend` owns the long-term memory schema in
+`src/oran-memory/migrations/longterm/`, applies its built-in migration through
+the shared `storage::Pool` writer, returns `ErrorKind::not_found` for missing
+`get(...)` rows, advances `last_read_at` monotonically through `touch(...)`,
+marks decay candidates as `shadow=true` through `decay(...)`, and treats
+`remove(...)` as idempotent.
 Slice 162 adds
 `longterm::Runtime`, a prompt-boundary composition layer that delegates search
 to a `Backend`, validates recall requests before dispatch, and renders stable
@@ -241,12 +243,19 @@ Slice 181 adds read-touch metadata: successful `Runtime::recall` and
 `HybridRuntime::recall` call `Backend::touch(...)` for each returned hit before
 rendering framing, so returned hits carry updated `last_read_at`. Ordinary
 `Runtime::search` and `HybridRuntime::search` remain read-only and do not touch
-records.
+records. Slice 182 adds the library-level decay execution boundary:
+`DecayRequest` selects one scope, `unused_before`, `importance_floor`, a
+positive batch `limit`, and `decay_at`; `Fts5Backend::decay(...)` marks visible
+records with `last_read_at < unused_before` and
+`importance <= importance_floor` as shadow, advances `updated_at`
+monotonically to `decay_at`, syncs FTS shadow metadata, and returns the records
+it changed. Default search already excludes those rows, while
+`Query::include_shadow=true` keeps them inspectable.
 Default builds still reject
 `memory.longterm.hybrid_search.enabled=true` before assembly/provider side
 effects with `reason=build_option_disabled`, `option=vector_memory`. Semantic or
-external embedding providers, blocking read-before policy, and periodic decay
-execution remain downstream.
+external embedding providers, blocking read-before policy, automation/config
+ownership for periodic decay, and decay hook publishing remain downstream.
 
 ```cpp
 // include/oran/memory/longterm.hpp
@@ -298,6 +307,18 @@ struct TouchRequest {
   core::Time read_at;
 };
 
+struct DecayRequest {
+  std::string scope_key;
+  core::Time unused_before;
+  double importance_floor = 0.0;
+  std::size_t limit = 0;
+  core::Time decay_at;
+};
+
+struct DecayResult {
+  std::vector<Record> shadowed_records;
+};
+
 }  // namespace orangutan::memory::longterm
 ```
 
@@ -312,6 +333,7 @@ class Backend {
     search(Query query, std::size_t limit) = 0;
   virtual async::Awaitable<core::Result<Record>> upsert(WriteRequest request) = 0;
   virtual async::Awaitable<core::Result<Record>> touch(TouchRequest request) = 0;
+  virtual async::Awaitable<core::Result<DecayResult>> decay(DecayRequest request) = 0;
   virtual async::Awaitable<core::Result<void>> remove(RecordKey key) = 0;
 };
 
@@ -476,7 +498,7 @@ changes surface on the next prompt, not midway through an active turn.
 ```cpp
 struct Policy {
   std::chrono::days   forget_after_unused = std::chrono::days(180);
-  double              importance_floor    = 0.0;  // 0..1; below = candidate for prune
+  double              importance_floor    = 0.0;  // 0..1; <= threshold = candidate for shadow
   std::size_t         max_records_per_scope = 10000;
   std::chrono::hours  decay_check_interval  = std::chrono::hours(24);
 };
@@ -487,8 +509,11 @@ Decayed records are not immediately deleted; they enter a "shadow" state where t
 are excluded from default search but visible to runtime callers that set
 `Query::include_shadow=true`. The shipped `memory.recall` tool keeps
 `include_shadow=false`. Slice 181 provides the read-touch metadata prerequisite
-(`Backend::touch` plus recall-side `last_read_at` updates); periodic decay
-execution and lifecycle hooks are still planned.
+(`Backend::touch` plus recall-side `last_read_at` updates), and slice 182
+provides the backend execution boundary (`Backend::decay`) that applies the
+shadow transition for a bounded scope batch. The remaining work is ownership:
+config parsing, an `oran-automation` periodic job, and lifecycle hook
+publishing.
 
 Forgetting is final (DELETE), with an audit row in `audit.db`.
 

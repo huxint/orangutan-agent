@@ -7,25 +7,35 @@
 
 ## Snapshot
 
-- **Slice:** 181 (`xmake run orangutan -- --help` reports slice 181)
+- **Slice:** 182 (`xmake run orangutan -- --help` reports slice 182)
 - **Last completed history:**
-  [`histories/2026-06/20260606-2151-memory-recall-touch.md`](histories/2026-06/20260606-2151-memory-recall-touch.md)
+  [`histories/2026-06/20260606-2218-memory-decay-shadow.md`](histories/2026-06/20260606-2218-memory-decay-shadow.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 181 adds read-touch metadata to successful
+- **Latest completed slice:** slice 182 adds the library-level long-term decay
+  execution boundary. `memory::longterm` now exposes `DecayRequest`,
+  `DecayResult`, and `Backend::decay(...)`; the default `Fts5Backend` marks
+  scoped, visible records whose `last_read_at < unused_before` and
+  `importance <= importance_floor` as `shadow=true` in bounded batches, updates
+  the FTS shadow metadata, returns the shadowed records, and leaves default
+  search excluding those rows unless `Query::include_shadow=true`. Automation
+  scheduling, config policy parsing, and decay hook publishing remain
+  downstream. Focused result: `test-memory` **38 cases / 841 assertions**.
+- **Next intended slice:** no active plan. The remaining memory work should be a
+  product capability gap, not another benchmark by default: wiring the decay
+  operation to config/automation/hooks, external/semantic embedding provider
+  ownership, or the optional `MEMORY.md` mirror are the next meaningful
+  candidates. The spec-0010 unified benchmark JSON gap still exists, but it is
+  secondary to runtime capability.
+
+Slice 181 adds read-touch metadata to successful
   long-term recall. `memory::longterm` now exposes `TouchRequest` plus
   `Backend::touch(...)`; the default `Fts5Backend` advances `last_read_at`
   monotonically without rebuilding indexed text or changing `updated_at`, and
   both `Runtime::recall` and `HybridRuntime::recall` touch returned hits before
   rendering framing/data. Ordinary `search(...)` remains read-only. This gives
-  future decay policy a real "last used" signal before decay execution lands.
-  Focused result: `test-memory` **36 cases / 797 assertions**.
-- **Next intended slice:** no active plan. The remaining memory work should be a
-  product capability gap, not another benchmark by default: decay lifecycle
-  hooks/policy execution, external/semantic embedding provider ownership, or
-  the optional `MEMORY.md` mirror are the next meaningful candidates. The
-  spec-0010 unified benchmark JSON gap still exists, but it is secondary to
-  runtime capability.
+  decay policy a real "last used" signal. Focused result: `test-memory`
+  **36 cases / 797 assertions**.
 
 Slice 180 wires long-term memory read-after
   observability through the same configured-route bootstrap boundary as recall

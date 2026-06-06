@@ -167,7 +167,15 @@ operators can reason about retention, scope, and visibility.
   `HybridRuntime::recall` touch returned hits before rendering framing/data.
   Plain `search(...)` remains read-only so callers can still inspect rankings
   without mutating read metadata.
-- Decay policy applied by a periodic job (`oran-automation`).
+- Decay shadow execution shipped in slice 182:
+  `memory::longterm::Backend` now includes `decay(DecayRequest)`. The default
+  `Fts5Backend` marks scoped, visible records whose
+  `last_read_at < unused_before` and `importance <= importance_floor` as
+  `shadow=true` in bounded batches, advances `updated_at` monotonically to
+  `decay_at`, syncs FTS shadow metadata, and returns the records it changed.
+  Default search hides those rows unless callers set `Query::include_shadow`.
+- Decay policy scheduling by a periodic job (`oran-automation`) remains
+  downstream.
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
 - Blocking `memory_read_before`, decay lifecycle hooks, and memory-write
   rewrite/annotation remain downstream.
@@ -217,10 +225,15 @@ operators can reason about retention, scope, and visibility.
 3. The MEMORY.md mirror, when enabled, reflects all kinds + records within 1 s of the
    underlying DB write.
 4. Decay marks records older than `policy.forget_after_unused` as shadow; they no
-   longer surface in default search. **Status:** open for policy execution, but
-   slice 181 closes the recall-side read metadata prerequisite: successful
-   `Runtime::recall` and `HybridRuntime::recall` advance `last_read_at` through
-   `Backend::touch`, while plain `search(...)` remains side-effect free.
+   longer surface in default search. **Status:** partially closed at the
+   backend boundary. Slice 181 closes the recall-side read metadata
+   prerequisite: successful `Runtime::recall` and `HybridRuntime::recall`
+   advance `last_read_at` through `Backend::touch`, while plain `search(...)`
+   remains side-effect free. Slice 182 adds `Backend::decay(DecayRequest)` and
+   the default FTS5 implementation that shadows scoped, visible records matching
+   the unused-before and importance-floor policy inputs, then keeps them out of
+   default search. Config parsing, `oran-automation` scheduling, and decay hook
+   publishing remain open.
 5. A `memory.write.before` hook can veto a write. **Status:** closed for the
    bootstrap `memory.remember` tool path in slice 179. `AgentPromptRunner`
    publishes blocking `memory_write_before` after parsing/scoping the record and
@@ -230,16 +243,19 @@ operators can reason about retention, scope, and visibility.
    not persisted. `rewrite` and `require_approval` decisions remain unsupported
    for this memory-write consumer and are rejected as blocked hook decisions.
 6. `tests/memory/` >= 85% coverage. **Status:** default `test-memory` currently
-   reports 36 cases / 797 assertions, including long-term contract validation,
+   reports 38 cases / 841 assertions, including long-term contract validation,
    fake async backend interface coverage, public `Fts5Backend` migration /
-   scoped search / filtering / update / touch / delete coverage, and
+   scoped search / filtering / update / touch / decay / delete coverage, and
    `longterm::Runtime` validation / deterministic recall-framing plus
    recall/remember/forget `data_json` coverage. Slice 178 adds deterministic
    local text/record embedding helper coverage. Slice 172 adds hybrid-runtime validation,
    lexical/vector merge ordering, vector-only hydration, stale vector-row skip,
    and recall-framing coverage. Slice 181 adds default-build coverage for
    runtime recall touches, hybrid recall touches, and FTS5 monotonic
-   `last_read_at` updates that do not rebuild indexed text. Slice 176 adds
+   `last_read_at` updates that do not rebuild indexed text. Slice 182 adds
+   default-build FTS5 decay coverage for scoped candidate selection,
+   importance floors, already-shadow rows, batch limits, and default
+   search-hidden / include-shadow-visible behavior. Slice 176 adds
    gated sqlite-vec disabled-build coverage, plus `--vector_memory=y` coverage
    for scoped upsert/search/remove and dimension-mismatch migration rejection.
    Gated `--vector_memory=y` `test-memory` remains last reported at 36 cases /
