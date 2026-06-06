@@ -774,6 +774,7 @@ TEST_CASE("run hands configured provider prompts to AgentPromptRunner", "[unit][
   REQUIRE(table_exists(memory_db, "longterm_records"));
 }
 
+#if !defined(ORAN_ENABLE_SQLITE_VEC)
 TEST_CASE("run rejects enabled memory hybrid search before vector memory exists",
           "[unit][bootstrap][provider][memory]") {
   ScopedEnv api_key{"ORAN_BOOTSTRAP_RUN_PROVIDER_KEY", "test-secret"};
@@ -795,10 +796,39 @@ TEST_CASE("run rejects enabled memory hybrid search before vector memory exists"
   REQUIRE(*path == "$.memory.longterm.hybrid_search.enabled");
   const auto reason = context_value(result.error(), "reason");
   REQUIRE(reason.has_value());
-  REQUIRE(*reason == "vector_memory_not_available");
+  REQUIRE(*reason == "build_option_disabled");
+  const auto option = context_value(result.error(), "option");
+  REQUIRE(option.has_value());
+  REQUIRE(*option == "vector_memory");
   REQUIRE_FALSE(server.served());
   REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan"));
 }
+#else
+TEST_CASE("run accepts enabled memory hybrid search when vector memory is built",
+          "[unit][bootstrap][provider][memory][sqlite-vec]") {
+  ScopedEnv api_key{"ORAN_BOOTSTRAP_RUN_PROVIDER_KEY", "test-secret"};
+  ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
+  ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
+  OneShotHttpServer server{anthropic_sse_response("hybrid ready")};
+  TempDir temp{"oran-bootstrap-provider-hybrid-search-enabled"};
+  const auto config_path = temp.path() / "config.json";
+  write_file(config_path, provider_config_with_hybrid_search_text(server.base_url()));
+  auto config_arg = config_path.string();
+  auto args = std::vector<std::string_view>{"--config", config_arg, "--prompt", "hybrid recall"};
+
+  auto result = bootstrap::run(options(args, temp.path()));
+
+  REQUIRE(result.has_value());
+  REQUIRE(*result == 0);
+  REQUIRE(server.served());
+  const auto memory_db = temp.path() / ".orangutan" / "memory.db";
+  REQUIRE(std::filesystem::exists(memory_db));
+  REQUIRE(table_exists(memory_db, "longterm_records"));
+  const auto vector_db = temp.path() / ".orangutan" / "memory-vectors.db";
+  REQUIRE(std::filesystem::exists(vector_db));
+  REQUIRE(table_exists(vector_db, "longterm_vectors"));
+}
+#endif
 
 TEST_CASE("run maps memory recall config into configured provider prompts", "[unit][bootstrap][provider][memory]") {
   ScopedEnv api_key{"ORAN_BOOTSTRAP_RUN_PROVIDER_KEY", "test-secret"};

@@ -211,16 +211,19 @@ reuses the same stable recall framing renderer. Slice 174 adds the
 operator-facing config contract for downstream hybrid wiring:
 `memory.longterm.hybrid_search.enabled`, positive `lexical_limit`,
 `vector_limit`, and `result_limit`, and non-negative finite `lexical_weight` /
-`vector_weight` with at least one non-zero weight. Bootstrap still uses lexical
-prompt-boundary recall until an embedding/vector backend owner lands. Slice 175
-makes that boundary explicit at configured-route startup: if operators set
-`memory.longterm.hybrid_search.enabled=true` before vector memory is owned by
-runtime assembly, `bootstrap::run` returns a config error at
-`$.memory.longterm.hybrid_search.enabled` with
-`reason=vector_memory_not_available` before opening runtime memory state or
-contacting a provider. Slice 176 adds the library-level sqlite-vec
-`VectorBackend` adapter behind `--vector_memory=y`; the bootstrap guard remains
-until a prompt/query embedding owner can feed that adapter.
+`vector_weight` with at least one non-zero weight. Slice 175 made the no-vector
+boundary explicit at configured-route startup. Slice 176 adds the library-level
+sqlite-vec `VectorBackend` adapter behind `--vector_memory=y`, and slice 178
+wires the gated bootstrap owner: when the binary is built with
+`--vector_memory=y`, `RuntimeAssembly` opens a separate
+`<workspace>/.orangutan/memory-vectors.db`, migrates `SqliteVecBackend`,
+constructs `HybridRuntime`, and `AgentPromptRunner` uses a deterministic local
+text embedding owner (`oran-local-text-v1`, 64 dimensions) for prompt-boundary
+recall and `memory.recall`. The same runner mirrors `memory.remember` writes and
+`memory.forget` deletes into the vector index. Default builds still reject
+`memory.longterm.hybrid_search.enabled=true` before assembly/provider side
+effects with `reason=build_option_disabled`, `option=vector_memory`. Semantic or
+external embedding providers remain downstream.
 
 ```cpp
 // include/oran/memory/longterm.hpp
@@ -339,6 +342,15 @@ class HybridRuntime {
 };
 ```
 
+The shipped bootstrap embedding owner is intentionally small and deterministic:
+`make_text_embedding(text, TextEmbeddingOptions{model, dimensions})` lowercases
+ASCII text, hashes token features into a fixed-width vector, and L2-normalizes
+the result. `make_record_embedding(record, options)` embeds title, body, tags,
+and linked ids for `memory.remember` vector mirroring. This owner exists to make
+the hybrid runtime path testable and dependency-free beyond sqlite-vec; it is
+not a semantic embedding model. External or provider-backed embeddings remain a
+separate runtime owner.
+
 Recall framing is deterministic prompt text. It contains no clocks, request ids,
 trace ids, or scores; it is a function of the returned memory records only. The
 current renderer emits one compact section headed `Long-term memory:` with
@@ -365,7 +377,10 @@ The shipped backends are:
   drift if an existing table uses a different `N`, and stores one vector row per
   scoped `RecordKey`. Default builds expose the public type but return
   `ErrorKind::config` with `reason=build_option_disabled` from migration and
-  vector operations.
+  vector operations. Configured-route bootstrap uses a separate
+  `.orangutan/memory-vectors.db` pool for this backend when
+  `memory.longterm.hybrid_search.enabled=true` and the binary is built with
+  `--vector_memory=y`.
 
 Planned optional backends:
 
@@ -378,10 +393,10 @@ brute-force cosine reference `VectorBackend`. Slice 177 extends that scenario
 under `--vector_memory=y` so the shipped `SqliteVecBackend` reports the same
 corpus: on the local release run, sqlite-vec vector-only search was
 **~3.03 ms / batch** and FTS5+sqlite-vec hybrid was **~18.96 ms / batch** at
-`limit=10`. The validated `memory.longterm.hybrid_search` config block is
-accepted only while disabled until bootstrap embedding wiring exists;
-configured-route startup fails fast on `enabled=true` instead of silently falling
-back to lexical recall.
+`limit=10`. Since slice 178, the validated
+`memory.longterm.hybrid_search` config block is consumed by configured-route
+bootstrap in `--vector_memory=y` builds; default builds still fail fast on
+`enabled=true` instead of silently falling back to lexical recall.
 
 ## Shared Memory (Team)
 

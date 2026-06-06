@@ -51,7 +51,9 @@ class Store;
 
 namespace orangutan::memory::longterm {
 class Backend;
+class HybridRuntime;
 class Runtime;
+class VectorBackend;
 }  // namespace orangutan::memory::longterm
 
 namespace orangutan::storage {
@@ -128,6 +130,21 @@ struct RuntimeAssemblyOptions {
   std::size_t longterm_memory_reader_count{2};
   /// Per-slot statement cache size for the long-term memory `Pool`.
   std::size_t longterm_memory_statement_cache_capacity{16};
+  /// When `true`, the assembly also opens the optional sqlite-vec vector index
+  /// over a separate DB and constructs a `memory::longterm::HybridRuntime`.
+  /// Requires an xmake build configured with `--vector_memory=y`.
+  bool longterm_vector_memory_enabled{false};
+  /// When non-empty, overrides the default vector-memory DB path. The default
+  /// is `<workspace>/.orangutan/memory-vectors.db`, kept separate from the
+  /// dependency-free lexical `memory.db`.
+  std::string longterm_vector_memory_db_path{};
+  /// Embedding width used by the bootstrap-owned deterministic text embedder
+  /// and the sqlite-vec table schema.
+  std::size_t longterm_vector_memory_dimensions{64};
+  /// Reader-pool size handed to the vector-memory `Pool`.
+  std::size_t longterm_vector_memory_reader_count{2};
+  /// Per-slot statement cache size for the vector-memory `Pool`.
+  std::size_t longterm_vector_memory_statement_cache_capacity{16};
 };
 
 /// Per-process runtime infrastructure. Move-only; only
@@ -234,13 +251,30 @@ public:
   /// recall section-5 memory before `agent::Loop` starts.
   [[nodiscard]] memory::longterm::Runtime* longterm_memory_runtime() noexcept;
 
+  /// Pointer to the optional assembly-owned long-term vector backend. Non-null
+  /// iff `options.longterm_vector_memory_enabled` was `true` and the sqlite-vec
+  /// backend was constructed successfully.
+  [[nodiscard]] memory::longterm::VectorBackend* longterm_vector_backend() noexcept;
+
+  /// Pointer to the optional hybrid runtime that composes the lexical backend
+  /// with the vector backend.
+  [[nodiscard]] memory::longterm::HybridRuntime* longterm_hybrid_runtime() noexcept;
+
   /// `true` iff the long-term memory DB pool/backend/runtime were constructed
   /// at build time.
   [[nodiscard]] bool longterm_memory_enabled() const noexcept;
 
+  /// `true` iff the vector-memory DB pool/backend/hybrid runtime were
+  /// constructed at build time.
+  [[nodiscard]] bool longterm_vector_memory_enabled() const noexcept;
+
   /// Filesystem path the long-term memory DB lives at. Empty when long-term
   /// memory is disabled; the resolved absolute path otherwise.
   [[nodiscard]] std::string_view longterm_memory_path() const noexcept;
+
+  /// Filesystem path the long-term vector-memory DB lives at. Empty when
+  /// vector memory is disabled; the resolved absolute path otherwise.
+  [[nodiscard]] std::string_view longterm_vector_memory_path() const noexcept;
 
 private:
   struct Impl;

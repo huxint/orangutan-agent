@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <expected>
 #include <string>
 #include <string_view>
@@ -80,6 +81,44 @@ template <typename T>
   if (!std::isfinite(weight) || weight < 0.0) {
     return std::unexpected(
         invalid_field(std::move(field), "long-term memory hybrid search weights must be finite and non-negative"));
+  }
+  return {};
+}
+
+[[nodiscard]] unsigned char normalize_embedding_char(char ch) noexcept {
+  auto byte = static_cast<unsigned char>(ch);
+  if (byte >= static_cast<unsigned char>('A') && byte <= static_cast<unsigned char>('Z')) {
+    byte = static_cast<unsigned char>(byte - static_cast<unsigned char>('A') + static_cast<unsigned char>('a'));
+  }
+  return byte;
+}
+
+[[nodiscard]] bool is_embedding_separator(char ch) noexcept {
+  return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == ',' || ch == ';' || ch == ':' || ch == '.' ||
+         ch == '/' || ch == '\\' || ch == '(' || ch == ')' || ch == '[' || ch == ']' || ch == '{' || ch == '}' ||
+         ch == '"' || ch == '\'';
+}
+
+[[nodiscard]] std::uint64_t fnv_mix(std::uint64_t hash, unsigned char byte) noexcept {
+  constexpr auto kPrime = std::uint64_t{1099511628211ULL};
+  hash ^= static_cast<std::uint64_t>(byte);
+  hash *= kPrime;
+  return hash;
+}
+
+void add_embedding_feature(std::vector<float>& values, std::uint64_t hash) {
+  const auto index = static_cast<std::size_t>(hash % values.size());
+  const auto sign = (hash & (std::uint64_t{1} << 63U)) == 0 ? 1.0F : -1.0F;
+  values[index] += sign;
+}
+
+[[nodiscard]] core::Result<void> validate_text_embedding_options(const TextEmbeddingOptions& options) {
+  if (auto valid = validate_required(options.model, "embedding_model"); !valid) {
+    return valid;
+  }
+  if (options.dimensions == 0) {
+    return std::unexpected(
+        invalid_field("embedding_dimensions", "long-term memory embedding dimensions must be positive"));
   }
   return {};
 }
@@ -205,6 +244,72 @@ core::Result<void> validate_hybrid_search_request(const HybridSearchRequest& req
     return std::unexpected(invalid_field("weights", "long-term memory hybrid search requires a non-zero weight"));
   }
   return {};
+}
+
+core::Result<VectorEmbedding> make_text_embedding(std::string_view text, TextEmbeddingOptions options) {
+  if (auto valid = validate_text_embedding_options(options); !valid) {
+    return std::unexpected(std::move(valid).error());
+  }
+  if (auto valid = validate_required(text, "embedding_text", true); !valid) {
+    return std::unexpected(std::move(valid).error());
+  }
+
+  constexpr auto kOffset = std::uint64_t{14695981039346656037ULL};
+  auto values = std::vector<float>(options.dimensions, 0.0F);
+  auto token_hash = kOffset;
+  auto in_token = false;
+  for (const auto ch : text) {
+    if (is_embedding_separator(ch)) {
+      if (in_token) {
+        add_embedding_feature(values, token_hash);
+        token_hash = kOffset;
+        in_token = false;
+      }
+      continue;
+    }
+    token_hash = fnv_mix(token_hash, normalize_embedding_char(ch));
+    in_token = true;
+  }
+  if (in_token) {
+    add_embedding_feature(values, token_hash);
+  }
+
+  auto squared_norm = 0.0F;
+  for (const auto value : values) {
+    squared_norm += value * value;
+  }
+  if (squared_norm == 0.0F) {
+    return std::unexpected(invalid_field("embedding_text", "long-term memory embedding text produced no features"));
+  }
+  const auto norm = std::sqrt(squared_norm);
+  for (auto& value : values) {
+    value /= norm;
+  }
+  return VectorEmbedding{
+      .model = std::move(options.model),
+      .values = std::move(values),
+  };
+}
+
+core::Result<VectorEmbedding> make_record_embedding(const Record& record, TextEmbeddingOptions options) {
+  if (auto valid = validate_record(record); !valid) {
+    return std::unexpected(std::move(valid).error());
+  }
+
+  auto text = std::string{};
+  text.reserve(record.title.size() + record.body.size() + 32U);
+  text.append(record.title);
+  text.push_back('\n');
+  text.append(record.body);
+  for (const auto& tag : record.tags) {
+    text.push_back('\n');
+    text.append(tag);
+  }
+  for (const auto& id : record.linked_record_ids) {
+    text.push_back('\n');
+    text.append(id);
+  }
+  return make_text_embedding(text, std::move(options));
 }
 
 }  // namespace orangutan::memory::longterm

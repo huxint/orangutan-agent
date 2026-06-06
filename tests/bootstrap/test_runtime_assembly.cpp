@@ -268,6 +268,59 @@ TEST_CASE("RuntimeAssembly::build provisions memory.db at the workspace default 
   });
 }
 
+#if defined(ORAN_ENABLE_SQLITE_VEC)
+TEST_CASE("RuntimeAssembly::build provisions vector memory at the workspace default path",
+          "[unit][bootstrap][runtime_assembly][memory][sqlite-vec]") {
+  TempDir temp{"oran-assembly-vector-memory-default"};
+
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto options = bootstrap::RuntimeAssemblyOptions{};
+    options.longterm_vector_memory_enabled = true;
+    auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
+    REQUIRE(built.has_value());
+    REQUIRE(built->longterm_memory_enabled());
+    REQUIRE(built->longterm_vector_memory_enabled());
+    REQUIRE(built->longterm_vector_backend() != nullptr);
+    REQUIRE(built->longterm_hybrid_runtime() != nullptr);
+    REQUIRE(built->longterm_vector_memory_path() == (temp.path() / ".orangutan" / "memory-vectors.db").string());
+
+    const auto vector_db = temp.path() / ".orangutan" / "memory-vectors.db";
+    REQUIRE(std::filesystem::exists(vector_db));
+    REQUIRE(table_exists(vector_db, "longterm_vectors"));
+
+    auto record = make_longterm_record();
+    record.body = "Vector assembly recall hydrates vector-only rows.";
+    auto upserted = co_await built->longterm_memory_backend()->upsert(memory::longterm::WriteRequest{.record = record});
+    REQUIRE(upserted.has_value());
+    auto embedding = memory::longterm::make_text_embedding("rareassemblyvector");
+    REQUIRE(embedding.has_value());
+    auto vector_upserted = co_await built->longterm_vector_backend()->upsert(memory::longterm::VectorUpsert{
+        .key = record.key,
+        .embedding = *embedding,
+    });
+    REQUIRE(vector_upserted.has_value());
+
+    auto recalled = co_await built->longterm_hybrid_runtime()->recall(memory::longterm::HybridSearchRequest{
+        .query =
+            memory::longterm::Query{
+                .scope_key = "cli",
+                .text = "rareassemblyvector",
+                .kinds = {},
+                .include_shadow = false,
+            },
+        .embedding = std::move(*embedding),
+        .lexical_limit = 5,
+        .vector_limit = 5,
+        .result_limit = 5,
+    });
+    REQUIRE(recalled.has_value());
+    REQUIRE(recalled->hits.size() == 1);
+    REQUIRE(recalled->hits[0].record.key.id == "lt-1");
+    REQUIRE(recalled->framing.section_text.contains("Vector assembly recall hydrates vector-only rows."));
+  });
+}
+#endif
+
 TEST_CASE("RuntimeAssembly::build honors an explicit audit DB path", "[unit][bootstrap][runtime_assembly]") {
   TempDir temp{"oran-assembly-explicit-path"};
   const auto explicit_path = (temp.path() / "nested" / "audit.db").string();

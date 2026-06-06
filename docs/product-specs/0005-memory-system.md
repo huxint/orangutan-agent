@@ -97,8 +97,7 @@ operators can reason about retention, scope, and visibility.
   through `Backend::get`; ignores stale vector rows with missing records; and
   returns deterministic weighted `SearchHit` rows. `HybridRuntime::recall`
   reuses the shipped recall framing renderer. The gated sqlite-vec adapter ships
-  in slice 176; bootstrap/config consumption remains downstream until an
-  embedding owner exists.
+  in slice 176, and slice 178 wires gated bootstrap/config consumption.
 - Long-term search comparison bench shipped in slice 173:
   `bench/memory/scenarios/search_fts5_vs_vector.cpp` seeds one shared 10k-record
   corpus and times FTS5-only `Runtime::search`, an in-bench brute-force cosine
@@ -113,15 +112,15 @@ operators can reason about retention, scope, and visibility.
   `lexical_limit` / `vector_limit` / `result_limit`, and non-negative finite
   `lexical_weight` / `vector_weight`, rejecting the all-zero weight case so the
   policy matches `HybridRuntime` validation before bootstrap consumes it. The
-  block defaults disabled and is parser-only until embedding and vector-backend
-  ownership land.
+  block defaults disabled; since slice 178, `--vector_memory=y` configured-route
+  startup consumes it for hybrid recall, while default builds still reject
+  enabled hybrid search.
 - Hybrid-search bootstrap guard shipped in slice 175:
-  configured-route `bootstrap::run` now consumes
-  `memory.longterm.hybrid_search.enabled` by rejecting `enabled=true` as
-  `ErrorKind::config` with `path=$.memory.longterm.hybrid_search.enabled` and
-  `reason=vector_memory_not_available` before runtime assembly state is opened
-  or provider traffic starts. Disabled hybrid-search config remains accepted
-  while the embedding/vector owner remains downstream.
+  configured-route `bootstrap::run` first consumed
+  `memory.longterm.hybrid_search.enabled` by rejecting `enabled=true` before
+  runtime assembly state or provider traffic. Slice 178 narrows that guard to
+  default builds, which now report `reason=build_option_disabled` and
+  `option=vector_memory`; vector builds consume the policy.
 - Gated sqlite-vec adapter shipped in slice 176:
   `memory::longterm::SqliteVecBackend` implements the shipped `VectorBackend`
   contract when xmake is configured with `--vector_memory=y`. It uses
@@ -138,6 +137,17 @@ operators can reason about retention, scope, and visibility.
   sqlite-vec vector-only **~3.03 ms / batch** and FTS5+sqlite-vec hybrid
   **~18.96 ms / batch** at `limit=10`; default builds still emit only the
   FTS5/brute-force/hybrid comparison rows.
+- Bootstrap hybrid recall wiring shipped in slice 178:
+  `RuntimeAssembly` can now open a separate
+  `<workspace>/.orangutan/memory-vectors.db` sqlite-vec pool/backend and expose
+  `longterm_vector_backend()` plus `longterm_hybrid_runtime()`. `bootstrap::run`
+  enables that owner when `memory.longterm.hybrid_search.enabled=true` and the
+  binary was built with `--vector_memory=y`; `AgentPromptRunner` maps the
+  configured hybrid limits/weights into enabled prompt-boundary recall and
+  `memory.recall`, using deterministic local text embeddings
+  (`oran-local-text-v1`, 64 dimensions). `memory.remember` mirrors saved records
+  into vector memory, and `memory.forget` removes the matching vector row.
+  Default builds keep sqlite-vec optional and fail fast on enabled hybrid search.
 - Decay policy applied by a periodic job (`oran-automation`).
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
 - Hook events on read / write / forget / decay.
@@ -150,14 +160,8 @@ operators can reason about retention, scope, and visibility.
 
 ## Scope (v2)
 
-- Bootstrap/embedding wiring that consumes the shipped
-  `memory.longterm.hybrid_search` policy on top of the shipped `HybridRuntime`
-  composition contract (slice 173 landed the FTS5-vs-vector-vs-hybrid bench;
-  slice 174 landed parser-level policy validation; slice 175 landed the
-  configured-route fail-fast guard for `enabled=true`; slice 176 landed the
-  gated sqlite-vec `VectorBackend` adapter; slice 177 records the sqlite-vec
-  corpus bench numbers).
-- Externalized embedding store via `oran-http::Client`.
+- Externalized/semantic embedding store via `oran-http::Client`; slice 178's
+  local deterministic embedding owner is only the bootstrap plumbing owner.
 
 ## Out Of Scope
 
@@ -188,8 +192,8 @@ operators can reason about retention, scope, and visibility.
    **~16.18 ms / batch**, also within 50 ms). Slice 176 adds the gated sqlite-vec
    vector backend, and slice 177 reports sqlite-vec vector-only
    **~3.03 ms / batch** plus FTS5+sqlite-vec hybrid **~18.96 ms / batch** on the
-   same corpus. Bootstrap embedding/vector ownership remains a separate scope-v2
-   item.
+   same corpus. Slice 178 adds gated bootstrap embedding/vector ownership for
+   configured-route hybrid recall and memory tools.
 3. The MEMORY.md mirror, when enabled, reflects all kinds + records within 1 s of the
    underlying DB write.
 4. Decay marks records older than `policy.forget_after_unused` as shadow; they no
@@ -197,22 +201,28 @@ operators can reason about retention, scope, and visibility.
 5. A `memory.write.before` hook can veto a write; the runtime returns
    `Error::HookVeto` to the caller.
 6. `tests/memory/` >= 85% coverage. **Status:** default `test-memory` currently
-   reports 32 cases / 760 assertions, including long-term contract validation,
+   reports 34 cases / 771 assertions, including long-term contract validation,
    fake async backend interface coverage, public `Fts5Backend` migration /
    scoped search / filtering / update / delete coverage, and `longterm::Runtime`
    validation / deterministic recall-framing plus recall/remember/forget
-   `data_json` coverage. Slice 172 adds hybrid-runtime validation,
+   `data_json` coverage. Slice 178 adds deterministic local text/record
+   embedding helper coverage. Slice 172 adds hybrid-runtime validation,
    lexical/vector merge ordering, vector-only hydration, stale vector-row skip,
    and recall-framing coverage. Slice 176 adds gated sqlite-vec disabled-build
    coverage, plus `--vector_memory=y` coverage for scoped upsert/search/remove
-   and dimension-mismatch migration rejection.
+   and dimension-mismatch migration rejection. Gated `--vector_memory=y`
+   `test-memory` reports 36 cases / 791 assertions.
    `test-config` reports
    46 cases / 402 assertions for the recall and hybrid-search policy parsers, and `test-bootstrap`
-   reports 115 cases / 883 assertions for the assembly, prompt-runner, and
+   reports 115 cases / 885 assertions by default and 120 cases / 958 assertions
+   with `--vector_memory=y` for the assembly, prompt-runner, and
    configured-route recall consumers, including slice-167 query-strategy
    coverage, slice-168 `memory.recall` tool binding, and slice-169
    `memory.remember` plus slice-170 `memory.forget` tool bindings and
-   slice-175 hybrid-search fail-fast coverage.
+   slice-175 hybrid-search fail-fast coverage. Slice 178 adds gated coverage for
+   vector-memory assembly ownership, configured-route hybrid startup, hybrid
+   prompt-boundary recall, hybrid `memory.recall`, and vector mirroring for
+   `memory.remember`.
 7. `bench/memory/search-fts5-vs-vector` (v2): reports the FTS5 baseline + vector
    results in machine-readable JSON. **Status:** partially open; slice 171 adds
    the FTS5 baseline scenario under `bench/memory/scenarios/longterm_fts5.cpp`,

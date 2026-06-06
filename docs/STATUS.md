@@ -7,12 +7,33 @@
 
 ## Snapshot
 
-- **Slice:** 177 (`xmake run orangutan -- --help` reports slice 177)
+- **Slice:** 178 (`xmake run orangutan -- --help` reports slice 178)
 - **Last completed history:**
-  [`histories/2026-06/20260606-1329-longterm-sqlite-vec-bench.md`](histories/2026-06/20260606-1329-longterm-sqlite-vec-bench.md)
+  [`histories/2026-06/20260606-1830-longterm-hybrid-bootstrap-wiring.md`](histories/2026-06/20260606-1830-longterm-hybrid-bootstrap-wiring.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 177 extends the shared 10k-record
+- **Latest completed slice:** slice 178 wires the long-term hybrid-search
+  policy into configured-route bootstrap when the binary is built with
+  `--vector_memory=y`. `RuntimeAssembly` now owns a separate
+  `<workspace>/.orangutan/memory-vectors.db` sqlite-vec pool/backend plus a
+  `memory::longterm::HybridRuntime`; `AgentPromptRunner` uses a deterministic
+  local text embedding owner (`oran-local-text-v1`, 64 dimensions) to route
+  prompt-boundary recall and `memory.recall` through hybrid search, and mirrors
+  `memory.remember` / `memory.forget` writes into the vector index. Default
+  builds keep the optional dependency off and still reject
+  `memory.longterm.hybrid_search.enabled=true` with
+  `reason=build_option_disabled`, `option=vector_memory` before assembly or
+  provider side effects. Focused results: default `test-memory` **34 cases / 771
+  assertions**, default `test-bootstrap` **115 cases / 885 assertions**, gated
+  `--vector_memory=y` `test-memory` **36 cases / 791 assertions**, and gated
+  `--vector_memory=y` `test-bootstrap` **120 cases / 958 assertions**.
+- **Next intended slice:** no active plan. The remaining memory work should be a
+  product capability gap, not another benchmark by default: external/semantic
+  embedding provider ownership, memory lifecycle hooks, decay, or the optional
+  `MEMORY.md` mirror are the next meaningful candidates. The spec-0010 unified
+  benchmark JSON gap still exists, but it is secondary to runtime capability.
+
+Slice 177 extends the shared 10k-record
   FTS5-vs-vector-vs-hybrid memory benchmark with gated sqlite-vec rows.
   Default `bench-memory` builds still emit only the FTS5-only, brute-force
   vector, and FTS5+brute-force hybrid comparison rows. When configured with
@@ -22,11 +43,6 @@
   search at `limit=10`. Local gated release result:
   sqlite-vec vector-only **~3.03 ms / batch** and FTS5+sqlite-vec hybrid
   **~18.96 ms / batch**.
-- **Next intended slice:** no active plan; the remaining memory work is the
-  embedding/vector owner plus bootstrap consumption that replaces the slice-175
-  `hybrid_search.enabled=true` guard with real hybrid recall wiring. A smaller
-  follow-up can also wire `bench-memory` into the unified machine-readable JSON
-  emission required by spec 0010.
 
 Slice 176 adds the optional sqlite-vec long-term
   vector backend behind `--vector_memory=y`. `memory::longterm::SqliteVecBackend`
@@ -38,14 +54,17 @@ Slice 176 adds the optional sqlite-vec long-term
   assertions**, default `test-storage` **77 cases / 988 assertions**, and gated
   `--vector_memory=y` `test-memory` **34 cases / 780 assertions**.
 
-Slice 175 consumes the config-side
-  `memory.longterm.hybrid_search.enabled` flag at configured-route bootstrap.
-  Because no owned vector-memory backend or embedding source exists yet,
-  `bootstrap::run` now rejects `enabled=true` with `ErrorKind::config`,
-  `path=$.memory.longterm.hybrid_search.enabled`, and
-  `reason=vector_memory_not_available` before opening runtime assembly state or
-  contacting a provider. Disabled hybrid-search config remains accepted. Focused
-  result: `test-bootstrap` **115 cases / 883 assertions**.
+Slice 175 first consumed the config-side
+  `memory.longterm.hybrid_search.enabled` flag at configured-route bootstrap by
+  failing fast before vector ownership existed. Slice 178 narrows that guard to
+  default builds: `enabled=true` now rejects with `ErrorKind::config`,
+  `path=$.memory.longterm.hybrid_search.enabled`,
+  `reason=build_option_disabled`, and `option=vector_memory` before opening
+  runtime assembly state or contacting a provider. Builds configured with
+  `--vector_memory=y` now consume the policy through the assembly-owned vector
+  backend and hybrid runtime. Disabled hybrid-search config remains accepted.
+  Focused result for the original guard: `test-bootstrap` **115 cases / 883
+  assertions**.
 
 Slice 174 adds the config-side hybrid-search
   policy contract for long-term memory. `oran-config` now parses
@@ -53,8 +72,9 @@ Slice 174 adds the config-side hybrid-search
   `vector_limit`, and `result_limit`, and non-negative finite
   `lexical_weight` / `vector_weight`, rejecting the all-zero weight case so the
   policy matches `HybridRuntime` validation before bootstrap consumes it. The
-  block defaults disabled and is parser-only until embedding/vector backend
-  ownership lands. Focused result: `test-config` **46 cases / 402 assertions**.
+  block defaults disabled; since slice 178, gated vector builds consume it for
+  hybrid recall while default builds still reject enabled hybrid search. Focused
+  result: `test-config` **46 cases / 402 assertions**.
 
 Slice 173 adds the first long-term search comparison bench.
   `bench/memory/scenarios/search_fts5_vs_vector.cpp` seeds one shared 10k-record

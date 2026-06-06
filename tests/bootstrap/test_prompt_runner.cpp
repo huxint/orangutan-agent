@@ -152,11 +152,13 @@ bootstrap::RuntimeAssembly build_assembly(const std::filesystem::path& workspace
                                           asio::io_context& io,
                                           bool audit_enabled,
                                           bool session_memory_enabled = false,
-                                          bool longterm_memory_enabled = true) {
+                                          bool longterm_memory_enabled = true,
+                                          bool longterm_vector_memory_enabled = false) {
   auto options = bootstrap::RuntimeAssemblyOptions{};
   options.audit_enabled = audit_enabled;
   options.session_memory_enabled = session_memory_enabled;
   options.longterm_memory_enabled = longterm_memory_enabled;
+  options.longterm_vector_memory_enabled = longterm_vector_memory_enabled;
   auto assembly = bootstrap::RuntimeAssembly::build(workspace.string(), io.get_executor(), std::move(options));
   REQUIRE(assembly.has_value());
   return std::move(*assembly);
@@ -677,6 +679,54 @@ TEST_CASE("AgentPromptRunner recalls long-term memory once before loop iteration
   });
 }
 
+#if defined(ORAN_ENABLE_SQLITE_VEC)
+TEST_CASE("AgentPromptRunner uses hybrid recall for prompt-boundary memory",
+          "[unit][bootstrap][prompt_runner][memory][sqlite-vec]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-hybrid-recall"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false, false, true, true);
+    REQUIRE(assembly.longterm_memory_backend() != nullptr);
+    REQUIRE(assembly.longterm_vector_backend() != nullptr);
+
+    auto record = make_longterm_record("lt-hybrid-vector-only", "Hybrid prompt recall hydrates vector-only rows.");
+    auto upserted = co_await assembly.longterm_memory_backend()->upsert(memory::longterm::WriteRequest{
+        .record = record,
+    });
+    REQUIRE(upserted.has_value());
+    auto embedding = memory::longterm::make_text_embedding("rarehybridanchor");
+    REQUIRE(embedding.has_value());
+    auto vector_upserted = co_await assembly.longterm_vector_backend()->upsert(memory::longterm::VectorUpsert{
+        .key = record.key,
+        .embedding = std::move(*embedding),
+    });
+    REQUIRE(vector_upserted.has_value());
+
+    RecordingProvider recording{{text_response("done")}};
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.longterm_recall = bootstrap::LongtermRecallOptions{.enabled = true, .limit = 5};
+    options.longterm_hybrid_search = bootstrap::LongtermHybridSearchOptions{
+        .enabled = true,
+        .lexical_limit = 5,
+        .vector_limit = 5,
+        .result_limit = 5,
+    };
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto result = co_await (*runner)->run_prompt(
+        cli::PromptRunRequest{.prompt = "rarehybridanchor", .mode = cli::CliMode::single_shot});
+
+    REQUIRE(result.has_value());
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 1);
+    REQUIRE(requests[0].system_prompt.has_value());
+    REQUIRE(requests[0].system_prompt->contains("Long-term memory:"));
+    REQUIRE(requests[0].system_prompt->contains("Hybrid prompt recall hydrates vector-only rows."));
+  });
+}
+#endif
+
 TEST_CASE("AgentPromptRunner dispatches memory.recall through long-term runtime",
           "[unit][bootstrap][prompt_runner][memory]") {
   TempDir temp{"oran-bootstrap-prompt-runner-memory-recall-tool"};
@@ -724,6 +774,70 @@ TEST_CASE("AgentPromptRunner dispatches memory.recall through long-term runtime"
     REQUIRE(data_json->contains(R"("match_count":1)"));
   });
 }
+
+#if defined(ORAN_ENABLE_SQLITE_VEC)
+TEST_CASE("AgentPromptRunner dispatches memory.recall through hybrid runtime",
+          "[unit][bootstrap][prompt_runner][memory][sqlite-vec]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-memory-recall-hybrid-tool"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false, false, true, true);
+    REQUIRE(assembly.longterm_memory_backend() != nullptr);
+    REQUIRE(assembly.longterm_vector_backend() != nullptr);
+
+    auto record = make_longterm_record("lt-tool-hybrid-recall", "Hybrid tool recall hydrates vector-only rows.");
+    auto upserted = co_await assembly.longterm_memory_backend()->upsert(memory::longterm::WriteRequest{
+        .record = record,
+    });
+    REQUIRE(upserted.has_value());
+    auto embedding = memory::longterm::make_text_embedding("raretoolhybridanchor");
+    REQUIRE(embedding.has_value());
+    auto vector_upserted = co_await assembly.longterm_vector_backend()->upsert(memory::longterm::VectorUpsert{
+        .key = record.key,
+        .embedding = std::move(*embedding),
+    });
+    REQUIRE(vector_upserted.has_value());
+
+    RecordingProvider recording{{
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "memory-1",
+                .name = "memory.recall",
+                .input_json = R"({"query":"raretoolhybridanchor","limit":5,"kinds":["project"]})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        },
+        text_response("done"),
+    }};
+
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.longterm_hybrid_search = bootstrap::LongtermHybridSearchOptions{
+        .enabled = true,
+        .lexical_limit = 5,
+        .vector_limit = 5,
+        .result_limit = 5,
+    };
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto result = co_await (*runner)->run_prompt(
+        cli::PromptRunRequest{.prompt = "use hybrid memory", .mode = cli::CliMode::single_shot});
+
+    REQUIRE(result.has_value());
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 2);
+    const auto output = tool_result_output_in(requests[1], "memory-1");
+    REQUIRE(output.contains("memory.recall: 1 match"));
+    REQUIRE(output.contains("Hybrid tool recall hydrates vector-only rows."));
+    const auto data_json = tool_result_data_json_in(requests[1], "memory-1");
+    REQUIRE(data_json.has_value());
+    REQUIRE(data_json->contains(R"("vector_score")"));
+  });
+}
+#endif
 
 TEST_CASE("AgentPromptRunner dispatches memory.remember through long-term backend",
           "[unit][bootstrap][prompt_runner][memory]") {
@@ -785,6 +899,59 @@ TEST_CASE("AgentPromptRunner dispatches memory.remember through long-term backen
   });
 }
 
+#if defined(ORAN_ENABLE_SQLITE_VEC)
+TEST_CASE("AgentPromptRunner mirrors memory.remember writes into vector memory",
+          "[unit][bootstrap][prompt_runner][memory][sqlite-vec]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-memory-remember-vector"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false, false, true, true);
+    REQUIRE(assembly.longterm_memory_backend() != nullptr);
+    REQUIRE(assembly.longterm_vector_backend() != nullptr);
+
+    RecordingProvider recording{{
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "memory-write-1",
+                .name = "memory.remember",
+                .input_json =
+                    R"({"id":"lt-tool-remember-vector","kind":"project","title":"Vector remembered note","body":"Memory remember mirrored rarevectorremember into sqlite-vec.","importance":0.75,"tags":["remember","vector"]})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        },
+        text_response("done"),
+    }};
+
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.mode = permission::Mode::permissive;
+    options.longterm_hybrid_search = bootstrap::LongtermHybridSearchOptions{.enabled = true};
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto result = co_await (*runner)->run_prompt(
+        cli::PromptRunRequest{.prompt = "write vector memory", .mode = cli::CliMode::single_shot});
+    REQUIRE(result.has_value());
+
+    auto embedding = memory::longterm::make_text_embedding("rarevectorremember");
+    REQUIRE(embedding.has_value());
+    auto hits = co_await assembly.longterm_vector_backend()->search(
+        memory::longterm::VectorSearchQuery{
+            .scope_key = "scope-A",
+            .embedding = std::move(*embedding),
+            .kinds = {},
+            .include_shadow = false,
+        },
+        5);
+    REQUIRE(hits.has_value());
+    REQUIRE_FALSE(hits->empty());
+    REQUIRE((*hits)[0].key.id == "lt-tool-remember-vector");
+  });
+}
+#endif
+
 TEST_CASE("AgentPromptRunner dispatches memory.forget through long-term backend",
           "[unit][bootstrap][prompt_runner][memory]") {
   TempDir temp{"oran-bootstrap-prompt-runner-memory-forget-tool"};
@@ -840,6 +1007,68 @@ TEST_CASE("AgentPromptRunner dispatches memory.forget through long-term backend"
     REQUIRE(stored.error().kind() == core::ErrorKind::not_found);
   });
 }
+
+#if defined(ORAN_ENABLE_SQLITE_VEC)
+TEST_CASE("AgentPromptRunner mirrors memory.forget deletes into vector memory",
+          "[unit][bootstrap][prompt_runner][memory][sqlite-vec]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-memory-forget-vector"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false, false, true, true);
+    REQUIRE(assembly.longterm_memory_backend() != nullptr);
+    REQUIRE(assembly.longterm_vector_backend() != nullptr);
+
+    auto record = make_longterm_record("lt-tool-forget-vector", "Memory forget removes rarevectorforget.");
+    auto upserted = co_await assembly.longterm_memory_backend()->upsert(memory::longterm::WriteRequest{
+        .record = record,
+    });
+    REQUIRE(upserted.has_value());
+    auto embedding = memory::longterm::make_text_embedding("rarevectorforget");
+    REQUIRE(embedding.has_value());
+    auto vector_upserted = co_await assembly.longterm_vector_backend()->upsert(memory::longterm::VectorUpsert{
+        .key = record.key,
+        .embedding = *embedding,
+    });
+    REQUIRE(vector_upserted.has_value());
+
+    RecordingProvider recording{{
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "memory-forget-vector-1",
+                .name = "memory.forget",
+                .input_json = R"({"id":"lt-tool-forget-vector"})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        },
+        text_response("done"),
+    }};
+
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.mode = permission::Mode::permissive;
+    options.longterm_hybrid_search = bootstrap::LongtermHybridSearchOptions{.enabled = true};
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto result = co_await (*runner)->run_prompt(
+        cli::PromptRunRequest{.prompt = "forget vector memory", .mode = cli::CliMode::single_shot});
+    REQUIRE(result.has_value());
+
+    auto hits = co_await assembly.longterm_vector_backend()->search(
+        memory::longterm::VectorSearchQuery{
+            .scope_key = "scope-A",
+            .embedding = std::move(*embedding),
+            .kinds = {},
+            .include_shadow = false,
+        },
+        5);
+    REQUIRE(hits.has_value());
+    REQUIRE(hits->empty());
+  });
+}
+#endif
 
 TEST_CASE("AgentPromptRunner can derive recall query from the last user message",
           "[unit][bootstrap][prompt_runner][memory]") {

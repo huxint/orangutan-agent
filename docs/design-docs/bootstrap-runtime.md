@@ -71,6 +71,11 @@ struct RuntimeAssemblyOptions {
   bool longterm_memory_enabled = true;
   std::size_t longterm_memory_reader_count{2};
   std::size_t longterm_memory_statement_cache_capacity{16};
+  bool longterm_vector_memory_enabled = false;
+  std::string longterm_vector_memory_db_path{};
+  std::size_t longterm_vector_memory_dimensions{64};
+  std::size_t longterm_vector_memory_reader_count{2};
+  std::size_t longterm_vector_memory_statement_cache_capacity{16};
 };
 
 class RuntimeAssembly {
@@ -91,8 +96,12 @@ class RuntimeAssembly {
   std::string_view sessions_path() const noexcept;
   memory::longterm::Backend* longterm_memory_backend() noexcept;
   memory::longterm::Runtime* longterm_memory_runtime() noexcept;
+  memory::longterm::VectorBackend* longterm_vector_backend() noexcept;
+  memory::longterm::HybridRuntime* longterm_hybrid_runtime() noexcept;
   bool longterm_memory_enabled() const noexcept;
+  bool longterm_vector_memory_enabled() const noexcept;
   std::string_view longterm_memory_path() const noexcept;
+  std::string_view longterm_vector_memory_path() const noexcept;
 };
 
 }  // namespace orangutan::bootstrap
@@ -108,7 +117,10 @@ Session memory uses a separate `storage::Pool` and `storage::SessionRepository` 
 schema before opening the long-lived pool, and exposes both the backend and
 `memory::longterm::Runtime` for prompt-boundary recall and the read-only
 `memory.recall` tool plus the write-side `memory.remember` and `memory.forget`
-tools.
+tools. When vector memory is enabled, the assembly opens a separate
+`<workspace>/.orangutan/memory-vectors.db` pool with sqlite-vec auto extensions,
+migrates `memory::longterm::SqliteVecBackend`, and exposes both the vector
+backend and `memory::longterm::HybridRuntime`.
 `bootstrap::run` threads `config.trace().enabled` into `trace_enabled`, converts
 `config.trace().retention_days` into an explicit Unix-nanosecond cutoff for
 `trace_retention_started_before_ns`, `config.hooks().timeout_ms` into
@@ -120,7 +132,8 @@ by trace retention. The built-in empty-defaults path disables session and
 long-term memory so a fresh checkout can run the deterministic CLI shell without
 opening `sessions.db` or `memory.db`. The startup banner prints
 `trace=<enabled|disabled>`, `sessions=<enabled|disabled> (<path|disabled>)`,
-`longterm-memory=<enabled|disabled> (<path|disabled>)`, and `hook-timeout=<ms>`.
+`longterm-memory=<enabled|disabled> (<path|disabled>)`,
+`vector-memory=<enabled|disabled> (<path|disabled>)`, and `hook-timeout=<ms>`.
 
 `<oran/bootstrap/prompt_runner.hpp>` exposes the bootstrap-owned CLI runner used by
 tests and the ordinary binary handoff for configured routes. `AgentPromptRunner::create`
@@ -196,15 +209,17 @@ tool registry. The `memory.recall` built-in parses and gates the call in
 tool results return deterministic recall text, structured `memory_recall`
 record metadata, and `usage.match_count` through the normal provider re-entry
 path.
-Slice 175 adds the first configured-route consumption of
-`memory.longterm.hybrid_search.enabled`: until bootstrap owns an embedding source
-and wires an owned `memory::longterm::VectorBackend`, `enabled=true` returns
-`ErrorKind::config` with `path=$.memory.longterm.hybrid_search.enabled` and
-`reason=vector_memory_not_available` before `RuntimeAssembly::build` or provider
-construction. Disabled hybrid-search config remains a validated no-op. Slice 176
-adds the library-level sqlite-vec `VectorBackend` behind `--vector_memory=y`; this
-guard remains until bootstrap also owns prompt/query embeddings and can feed that
-backend.
+Slice 178 consumes `memory.longterm.hybrid_search.enabled` in configured-route
+startup when the binary is built with `--vector_memory=y`: bootstrap enables the
+assembly-owned vector pool/backend, maps the configured hybrid limits/weights
+into `AgentPromptRunnerOptions::longterm_hybrid_search`, and the runner uses a
+deterministic local text embedding owner for prompt/query embeddings. Prompt
+boundary recall and `memory.recall` use `HybridRuntime`; `memory.remember` and
+`memory.forget` mirror vector upserts/deletes when a vector backend is present.
+Default builds still reject `enabled=true` before `RuntimeAssembly::build` or
+provider construction with `ErrorKind::config`,
+`path=$.memory.longterm.hybrid_search.enabled`,
+`reason=build_option_disabled`, and `option=vector_memory`.
 Slice 169 installs `DispatchContext::memory_remember` beside that recall
 binding. The `memory.remember` built-in parses and gates one record-shaped write
 in `oran-tool`; bootstrap adapts it to the assembly-owned

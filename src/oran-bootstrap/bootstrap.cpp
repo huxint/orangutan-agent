@@ -46,9 +46,11 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice177";
+constexpr std::string_view kVersion = "2.0.0-slice178";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
+constexpr std::string_view kLongtermTextEmbeddingModel = "oran-local-text-v1";
+constexpr std::size_t kLongtermTextEmbeddingDimensions = 64;
 constexpr std::int64_t kNanosecondsPerDay = 86'400'000'000'000;
 
 struct ParsedArgs {
@@ -134,9 +136,50 @@ longterm_recall_query_strategy_from(config::LongtermMemoryRecallQueryStrategy st
   if (!cfg.memory().longterm.hybrid_search.enabled) {
     return {};
   }
+#if defined(ORAN_ENABLE_SQLITE_VEC)
+  return {};
+#else
   return std::unexpected(Error::config("memory.longterm.hybrid_search.enabled requires a vector memory backend")
                              .with("path", "$.memory.longterm.hybrid_search.enabled")
-                             .with("reason", "vector_memory_not_available"));
+                             .with("reason", "build_option_disabled")
+                             .with("option", "vector_memory"));
+#endif
+}
+
+[[nodiscard]] Result<std::size_t> checked_memory_policy_size(std::int64_t value, std::string path) {
+  if (static_cast<std::uint64_t>(value) > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+    return std::unexpected(Error::config("memory policy value exceeds platform size range")
+                               .with("path", std::move(path))
+                               .with("value", std::to_string(value)));
+  }
+  return static_cast<std::size_t>(value);
+}
+
+[[nodiscard]] Result<LongtermHybridSearchOptions> longterm_hybrid_search_options_from(const config::Config& cfg) {
+  const auto& hybrid = cfg.memory().longterm.hybrid_search;
+  auto lexical_limit =
+      checked_memory_policy_size(hybrid.lexical_limit, "$.memory.longterm.hybrid_search.lexical_limit");
+  if (!lexical_limit) {
+    return std::unexpected(std::move(lexical_limit).error());
+  }
+  auto vector_limit = checked_memory_policy_size(hybrid.vector_limit, "$.memory.longterm.hybrid_search.vector_limit");
+  if (!vector_limit) {
+    return std::unexpected(std::move(vector_limit).error());
+  }
+  auto result_limit = checked_memory_policy_size(hybrid.result_limit, "$.memory.longterm.hybrid_search.result_limit");
+  if (!result_limit) {
+    return std::unexpected(std::move(result_limit).error());
+  }
+  return LongtermHybridSearchOptions{
+      .enabled = hybrid.enabled,
+      .lexical_limit = *lexical_limit,
+      .vector_limit = *vector_limit,
+      .result_limit = *result_limit,
+      .lexical_weight = hybrid.lexical_weight,
+      .vector_weight = hybrid.vector_weight,
+      .embedding_model = std::string{kLongtermTextEmbeddingModel},
+      .embedding_dimensions = kLongtermTextEmbeddingDimensions,
+  };
 }
 
 /// Pull the value following a long flag — supports both `--flag value` and
@@ -857,6 +900,14 @@ core::Result<int> run(BootstrapOptions options) {
       return std::unexpected(std::move(hybrid_search.error()));
     }
   }
+  auto longterm_hybrid_search = LongtermHybridSearchOptions{};
+  if (provider_route->has_value()) {
+    auto parsed_hybrid_search = longterm_hybrid_search_options_from(loaded->value);
+    if (!parsed_hybrid_search) {
+      return std::unexpected(std::move(parsed_hybrid_search.error()));
+    }
+    longterm_hybrid_search = std::move(*parsed_hybrid_search);
+  }
 
   // The runtime assembly composes the per-process permission infrastructure
   // (`ApprovalBroker`, audit/trace storage, hook bus, and optional session
@@ -880,13 +931,15 @@ core::Result<int> run(BootstrapOptions options) {
   assembly_options.hook_blocking_timeout = std::chrono::milliseconds{loaded->value.hooks().timeout_ms};
   assembly_options.session_memory_enabled = provider_route->has_value();
   assembly_options.longterm_memory_enabled = provider_route->has_value();
+  assembly_options.longterm_vector_memory_enabled = longterm_hybrid_search.enabled;
+  assembly_options.longterm_vector_memory_dimensions = longterm_hybrid_search.embedding_dimensions;
   auto assembly = RuntimeAssembly::build(options.workspace, runtime.executor(), std::move(assembly_options));
   if (!assembly) {
     return std::unexpected(std::move(assembly).error());
   }
   std::println(
       "runtime assembly ready: audit={} ({}), approval-broker=fresh, workspace={}, trace={}, sessions={} ({}), "
-      "longterm-memory={} ({}), hook-timeout={}ms",
+      "longterm-memory={} ({}), vector-memory={} ({}), hook-timeout={}ms",
       assembly->audit_enabled() ? "enabled" : "disabled",
       assembly->audit_enabled() ? assembly->audit_path() : std::string_view{"<null sink>"},
       assembly->workspace().root(),
@@ -895,6 +948,9 @@ core::Result<int> run(BootstrapOptions options) {
       assembly->session_memory_enabled() ? assembly->sessions_path() : std::string_view{"<disabled>"},
       assembly->longterm_memory_enabled() ? "enabled" : "disabled",
       assembly->longterm_memory_enabled() ? assembly->longterm_memory_path() : std::string_view{"<disabled>"},
+      assembly->longterm_vector_memory_enabled() ? "enabled" : "disabled",
+      assembly->longterm_vector_memory_enabled() ? assembly->longterm_vector_memory_path()
+                                                 : std::string_view{"<disabled>"},
       assembly->hook_bus().options().blocking_timeout.count());
 
   if (!provider_route->has_value()) {
@@ -937,6 +993,7 @@ core::Result<int> run(BootstrapOptions options) {
       .origin = "cli",
       .skills_directory = default_skills_directory(options.workspace),
       .longterm_recall = *longterm_recall,
+      .longterm_hybrid_search = longterm_hybrid_search,
       .max_tokens = 1024,
   });
   if (!runner) {

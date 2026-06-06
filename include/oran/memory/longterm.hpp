@@ -104,6 +104,13 @@ struct VectorEmbedding {
   friend bool operator==(const VectorEmbedding&, const VectorEmbedding&) = default;
 };
 
+struct TextEmbeddingOptions {
+  std::string model{"oran-local-text-v1"};
+  std::size_t dimensions{64};
+
+  friend bool operator==(const TextEmbeddingOptions&, const TextEmbeddingOptions&) = default;
+};
+
 struct VectorUpsert {
   RecordKey key;
   VectorEmbedding embedding;
@@ -276,6 +283,10 @@ private:
 [[nodiscard]] std::string render_recall_data_json(std::span<const SearchHit> hits);
 [[nodiscard]] std::string render_remember_data_json(const Record& record);
 [[nodiscard]] std::string render_forget_data_json(const RecordKey& key);
+[[nodiscard]] core::Result<VectorEmbedding> make_text_embedding(std::string_view text,
+                                                                TextEmbeddingOptions options = {});
+[[nodiscard]] core::Result<VectorEmbedding> make_record_embedding(const Record& record,
+                                                                  TextEmbeddingOptions options = {});
 
 [[nodiscard]] core::Result<void> validate_key(const RecordKey& key);
 [[nodiscard]] core::Result<void> validate_record(const Record& record);

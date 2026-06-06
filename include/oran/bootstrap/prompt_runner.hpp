@@ -46,6 +46,19 @@ struct LongtermRecallOptions {
   friend bool operator==(const LongtermRecallOptions&, const LongtermRecallOptions&) = default;
 };
 
+struct LongtermHybridSearchOptions {
+  bool enabled{false};
+  std::size_t lexical_limit{10};
+  std::size_t vector_limit{10};
+  std::size_t result_limit{10};
+  double lexical_weight{1.0};
+  double vector_weight{1.0};
+  std::string embedding_model{"oran-local-text-v1"};
+  std::size_t embedding_dimensions{64};
+
+  friend bool operator==(const LongtermHybridSearchOptions&, const LongtermHybridSearchOptions&) = default;
+};
+
 struct AgentPromptRunnerOptions {
   asio::any_io_executor executor{};
   RuntimeAssembly* assembly{nullptr};
@@ -75,6 +88,10 @@ struct AgentPromptRunnerOptions {
   /// Optional prompt-boundary long-term memory recall. Disabled by default so
   /// embedders/config can opt in explicitly after choosing query policy.
   LongtermRecallOptions longterm_recall{};
+  /// Optional hybrid long-term search policy. When enabled, prompt-boundary
+  /// recall and `memory.recall` combine lexical search with the assembly-owned
+  /// vector backend; memory writes/deletes maintain the vector index.
+  LongtermHybridSearchOptions longterm_hybrid_search{};
   std::string memory_framing{};
   /// Optional exact section-6 overlay bytes. Empty lets the selected
   /// `agents.<name>.prompt_overlay` value fill the section.

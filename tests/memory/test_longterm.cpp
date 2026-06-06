@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <limits>
@@ -791,6 +792,52 @@ TEST_CASE("longterm::HybridRuntime rejects invalid requests before backend dispa
     REQUIRE_FALSE(bad_weight.has_value());
     REQUIRE(bad_weight.error().kind() == core::ErrorKind::invalid_argument);
   });
+}
+
+TEST_CASE("longterm text embeddings are deterministic and normalized", "[unit][memory][longterm][embedding]") {
+  auto first = memory::longterm::make_text_embedding("Hybrid recall uses local text features.",
+                                                     memory::longterm::TextEmbeddingOptions{
+                                                         .model = "test-local",
+                                                         .dimensions = 8,
+                                                     });
+  auto second = memory::longterm::make_text_embedding("hybrid RECALL uses local text features",
+                                                      memory::longterm::TextEmbeddingOptions{
+                                                          .model = "test-local",
+                                                          .dimensions = 8,
+                                                      });
+  REQUIRE(first.has_value());
+  REQUIRE(second.has_value());
+  REQUIRE(first->model == "test-local");
+  REQUIRE(first->values.size() == 8);
+  REQUIRE(first->values == second->values);
+
+  auto squared_norm = 0.0F;
+  for (const auto value : first->values) {
+    squared_norm += value * value;
+  }
+  REQUIRE(std::abs(std::sqrt(squared_norm) - 1.0F) < 0.0001F);
+
+  auto blank = memory::longterm::make_text_embedding("   ", memory::longterm::TextEmbeddingOptions{.dimensions = 8});
+  REQUIRE_FALSE(blank.has_value());
+  REQUIRE(blank.error().kind() == core::ErrorKind::invalid_argument);
+}
+
+TEST_CASE("longterm record embeddings include record metadata", "[unit][memory][longterm][embedding]") {
+  auto record = make_record("rec-embed",
+                            "agent:coder",
+                            memory::longterm::RecordKind::project,
+                            "Hybrid note",
+                            "Record embeddings include title, body, and tags.");
+  record.tags = {"vector", "recall"};
+  auto embedded = memory::longterm::make_record_embedding(record,
+                                                          memory::longterm::TextEmbeddingOptions{
+                                                              .model = "test-local",
+                                                              .dimensions = 12,
+                                                          });
+
+  REQUIRE(embedded.has_value());
+  REQUIRE(embedded->model == "test-local");
+  REQUIRE(embedded->values.size() == 12);
 }
 
 TEST_CASE("longterm::Fts5Backend migrates the lexical memory schema", "[unit][memory][longterm][fts5]") {

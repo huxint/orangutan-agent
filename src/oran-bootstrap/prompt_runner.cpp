@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -400,6 +401,30 @@ skill_activation_updates_from_events(std::span<const skill::SkillActivationEvent
       return std::unexpected(option_error("agent prompt runner long-term recall requires long-term memory runtime"));
     }
   }
+  if (options.longterm_hybrid_search.enabled) {
+    if (options.longterm_hybrid_search.lexical_limit == 0 || options.longterm_hybrid_search.vector_limit == 0 ||
+        options.longterm_hybrid_search.result_limit == 0) {
+      return std::unexpected(option_error("agent prompt runner hybrid long-term recall limits must be positive"));
+    }
+    if (!std::isfinite(options.longterm_hybrid_search.lexical_weight) ||
+        !std::isfinite(options.longterm_hybrid_search.vector_weight) ||
+        options.longterm_hybrid_search.lexical_weight < 0.0 || options.longterm_hybrid_search.vector_weight < 0.0) {
+      return std::unexpected(
+          option_error("agent prompt runner hybrid long-term recall weights must be finite and non-negative"));
+    }
+    if (options.longterm_hybrid_search.lexical_weight == 0.0 && options.longterm_hybrid_search.vector_weight == 0.0) {
+      return std::unexpected(option_error("agent prompt runner hybrid long-term recall requires a non-zero weight"));
+    }
+    if (options.longterm_hybrid_search.embedding_model.empty() ||
+        options.longterm_hybrid_search.embedding_dimensions == 0) {
+      return std::unexpected(option_error("agent prompt runner hybrid long-term recall requires an embedding owner"));
+    }
+    if (options.assembly->longterm_hybrid_runtime() == nullptr ||
+        options.assembly->longterm_vector_backend() == nullptr) {
+      return std::unexpected(
+          option_error("agent prompt runner hybrid long-term recall requires long-term vector memory runtime"));
+    }
+  }
   return {};
 }
 
@@ -428,6 +453,7 @@ public:
         skills_catalog_{skill::RenderedCatalog{.section_text = std::move(options.skills_catalog)}},
         skills_enabled_{std::move(skills_enabled)}, skills_deactivated_{std::move(skills_deactivated)},
         skills_expirations_{std::move(skills_expirations)}, longterm_recall_{options.longterm_recall},
+        longterm_hybrid_search_{std::move(options.longterm_hybrid_search)},
         longterm_recall_kinds_{std::move(longterm_recall_kinds)},
         memory_framing_{memory::Framing{.section_text = std::move(options.memory_framing)}},
         per_agent_overlay_{std::move(options.per_agent_overlay)},
@@ -647,6 +673,9 @@ private:
     if (!longterm_recall_.enabled) {
       co_return std::string{memory_framing_.render_once()};
     }
+    if (longterm_hybrid_search_.enabled) {
+      co_return co_await render_hybrid_memory_framing_for_prompt(prompt, conversation_tail);
+    }
 
     auto* runtime = assembly_->longterm_memory_runtime();
     if (runtime == nullptr) {
@@ -661,6 +690,47 @@ private:
                 .include_shadow = false,
             },
         .limit = longterm_recall_.limit,
+    });
+    if (!recalled) {
+      co_return std::unexpected(std::move(recalled).error());
+    }
+    memory_framing_.replace(std::move(recalled->framing));
+    co_return std::string{memory_framing_.render_once()};
+  }
+
+  [[nodiscard]] memory::longterm::TextEmbeddingOptions embedding_options() const {
+    return memory::longterm::TextEmbeddingOptions{
+        .model = longterm_hybrid_search_.embedding_model,
+        .dimensions = longterm_hybrid_search_.embedding_dimensions,
+    };
+  }
+
+  [[nodiscard]] async::Awaitable<Result<std::string>>
+  render_hybrid_memory_framing_for_prompt(std::string_view prompt, std::span<const core::Message> conversation_tail) {
+    auto* runtime = assembly_->longterm_hybrid_runtime();
+    if (runtime == nullptr) {
+      co_return std::unexpected(option_error("agent prompt runner hybrid long-term recall runtime is unavailable"));
+    }
+    auto query_text = recall_query_text(longterm_recall_.query_strategy, prompt, conversation_tail);
+    auto embedding = memory::longterm::make_text_embedding(query_text, embedding_options());
+    if (!embedding) {
+      co_return std::unexpected(std::move(embedding).error());
+    }
+    const auto result_limit = std::min(longterm_recall_.limit, longterm_hybrid_search_.result_limit);
+    auto recalled = co_await runtime->recall(memory::longterm::HybridSearchRequest{
+        .query =
+            memory::longterm::Query{
+                .scope_key = scope_key_,
+                .text = std::move(query_text),
+                .kinds = longterm_recall_kinds_,
+                .include_shadow = false,
+            },
+        .embedding = std::move(*embedding),
+        .lexical_limit = longterm_hybrid_search_.lexical_limit,
+        .vector_limit = longterm_hybrid_search_.vector_limit,
+        .result_limit = result_limit,
+        .lexical_weight = longterm_hybrid_search_.lexical_weight,
+        .vector_weight = longterm_hybrid_search_.vector_weight,
     });
     if (!recalled) {
       co_return std::unexpected(std::move(recalled).error());
@@ -757,6 +827,10 @@ private:
   [[nodiscard]] async::Awaitable<Result<tool::Output>> recall_memory(tool::MemoryRecallRequest request,
                                                                      tool::DispatchContext& ctx) const {
     static_cast<void>(ctx);
+    if (longterm_hybrid_search_.enabled) {
+      co_return co_await recall_memory_hybrid(std::move(request));
+    }
+
     auto* runtime = assembly_->longterm_memory_runtime();
     if (runtime == nullptr) {
       co_return std::unexpected(Error::invalid_argument("memory.recall: runtime service is not available")
@@ -775,6 +849,53 @@ private:
                 .include_shadow = false,
             },
         .limit = request.limit,
+    });
+    if (!recalled) {
+      co_return std::unexpected(std::move(recalled).error());
+    }
+    auto data_json =
+        memory::longterm::render_recall_data_json(std::span<const memory::longterm::SearchHit>{recalled->hits});
+    co_return tool::Output{
+        .text = render_memory_recall_tool_text(*recalled),
+        .data_json = std::move(data_json),
+        .attachments = {},
+        .usage =
+            tool::ToolUsage{
+                .match_count = static_cast<std::uint64_t>(recalled->hits.size()),
+            },
+        .is_error = false,
+    };
+  }
+
+  [[nodiscard]] async::Awaitable<Result<tool::Output>> recall_memory_hybrid(tool::MemoryRecallRequest request) const {
+    auto* runtime = assembly_->longterm_hybrid_runtime();
+    if (runtime == nullptr) {
+      co_return std::unexpected(Error::invalid_argument("memory.recall: hybrid runtime service is not available")
+                                    .with("reason", "hybrid_memory_runtime_unavailable"));
+    }
+    auto kinds = parse_memory_tool_recall_kinds(std::span<const std::string>{request.kinds});
+    if (!kinds) {
+      co_return std::unexpected(std::move(kinds).error());
+    }
+    auto embedding = memory::longterm::make_text_embedding(request.query, embedding_options());
+    if (!embedding) {
+      co_return std::unexpected(std::move(embedding).error());
+    }
+    const auto result_limit = std::min(request.limit, longterm_hybrid_search_.result_limit);
+    auto recalled = co_await runtime->recall(memory::longterm::HybridSearchRequest{
+        .query =
+            memory::longterm::Query{
+                .scope_key = scope_key_,
+                .text = std::move(request.query),
+                .kinds = std::move(*kinds),
+                .include_shadow = false,
+            },
+        .embedding = std::move(*embedding),
+        .lexical_limit = longterm_hybrid_search_.lexical_limit,
+        .vector_limit = longterm_hybrid_search_.vector_limit,
+        .result_limit = result_limit,
+        .lexical_weight = longterm_hybrid_search_.lexical_weight,
+        .vector_weight = longterm_hybrid_search_.vector_weight,
     });
     if (!recalled) {
       co_return std::unexpected(std::move(recalled).error());
@@ -824,6 +945,19 @@ private:
     if (!stored) {
       co_return std::unexpected(std::move(stored).error());
     }
+    if (auto* vector_backend = assembly_->longterm_vector_backend(); vector_backend != nullptr) {
+      auto embedding = memory::longterm::make_record_embedding(*stored, embedding_options());
+      if (!embedding) {
+        co_return std::unexpected(std::move(embedding).error());
+      }
+      auto vector_upserted = co_await vector_backend->upsert(memory::longterm::VectorUpsert{
+          .key = stored->key,
+          .embedding = std::move(*embedding),
+      });
+      if (!vector_upserted) {
+        co_return std::unexpected(std::move(vector_upserted).error());
+      }
+    }
     auto data_json = memory::longterm::render_remember_data_json(*stored);
     co_return tool::Output{
         .text = render_memory_remember_tool_text(*stored),
@@ -850,6 +984,12 @@ private:
     auto removed = co_await backend->remove(key);
     if (!removed) {
       co_return std::unexpected(std::move(removed).error());
+    }
+    if (auto* vector_backend = assembly_->longterm_vector_backend(); vector_backend != nullptr) {
+      auto vector_removed = co_await vector_backend->remove(memory::longterm::VectorRemoveRequest{.key = key});
+      if (!vector_removed) {
+        co_return std::unexpected(std::move(vector_removed).error());
+      }
     }
     auto data_json = memory::longterm::render_forget_data_json(key);
     co_return tool::Output{
@@ -970,6 +1110,7 @@ private:
   std::optional<skill::WorkspaceSkillSnapshot> skill_snapshot_;
   std::vector<skill::SkillDocument> skill_documents_;
   LongtermRecallOptions longterm_recall_{};
+  LongtermHybridSearchOptions longterm_hybrid_search_{};
   std::vector<memory::longterm::RecordKind> longterm_recall_kinds_;
   memory::FramingOwner memory_framing_;
   std::string per_agent_overlay_;

@@ -55,13 +55,13 @@ Current implementation status:
   `memory.longterm.hybrid_search.enabled`, positive
   `lexical_limit` / `vector_limit` / `result_limit`, and non-negative finite
   `lexical_weight` / `vector_weight` with at least one non-zero weight.
-  Ordinary configured-route bootstrap maps only the recall policy into
-  prompt-boundary long-term recall today. The hybrid-search block defaults
-  disabled; configured-route bootstrap rejects `enabled=true` with
-  `reason=vector_memory_not_available` until downstream embedding ownership and
-  bootstrap vector wiring land. Slice 176 adds the optional sqlite-vec
-  `VectorBackend` at the library level, but it is not yet a configured-route
-  state owner.
+  Ordinary configured-route bootstrap maps the recall policy into
+  prompt-boundary long-term recall. The hybrid-search block defaults disabled;
+  when built with `--vector_memory=y`, configured-route bootstrap now enables the
+  assembly-owned `.orangutan/memory-vectors.db` sqlite-vec backend and routes
+  hybrid recall through the prompt runner. Default builds keep sqlite-vec off and
+  reject `enabled=true` with `reason=build_option_disabled` and
+  `option=vector_memory` before runtime assembly or provider side effects.
 - `bootstrap::run` now consumes `trace.retention_days` by deriving an explicit
   Unix-nanosecond cutoff and passing it to `RuntimeAssembly`, which purges
   matching old `trace_turns` rows before exposing the long-lived trace
