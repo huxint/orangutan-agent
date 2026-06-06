@@ -25,6 +25,7 @@
 #include "../test-helpers/run_async.hpp"
 
 namespace async = orangutan::async;
+namespace automation = orangutan::automation;
 namespace bootstrap = orangutan::bootstrap;
 namespace core = orangutan::core;
 namespace hook = orangutan::hook;
@@ -352,10 +353,26 @@ TEST_CASE("RuntimeAssembly::build applies long-term startup decay before exposin
         .limit = 10,
         .decay_at = decay_at,
     };
+    options.longterm_memory_retention_job = automation::MemoryRetentionJob{
+        .scope_key = "cli",
+        .policy =
+            automation::LongtermMemoryRetentionPolicy{
+                .forget_after_unused = std::chrono::days{1},
+                .importance_floor = 0.5,
+                .max_records_per_scope = 10,
+                .decay_check_interval = std::chrono::hours{24},
+            },
+        .first_fire_at = core::Time{decay_at.to_system_time_point() + std::chrono::hours{24}},
+    };
     auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
     REQUIRE(built.has_value());
     REQUIRE(built->longterm_memory_startup_decay_shadowed_count().has_value());
     REQUIRE(*built->longterm_memory_startup_decay_shadowed_count() == 1);
+    REQUIRE(built->longterm_memory_retention_job().has_value());
+    REQUIRE(built->longterm_memory_retention_job()->scope_key == "cli");
+    REQUIRE(built->longterm_memory_retention_job()->policy.max_records_per_scope == 10);
+    REQUIRE(built->longterm_memory_retention_job()->first_fire_at ==
+            core::Time{decay_at.to_system_time_point() + std::chrono::hours{24}});
     REQUIRE(decay_payloads.size() == 1);
     REQUIRE(decay_payloads[0].source == "startup");
     REQUIRE(decay_payloads[0].who.scope_key == "cli");
@@ -404,6 +421,41 @@ TEST_CASE("RuntimeAssembly::build applies long-term startup decay before exposin
   });
 }
 
+TEST_CASE("RuntimeAssembly::build stores long-term retention jobs without running startup decay",
+          "[unit][bootstrap][runtime_assembly][memory]") {
+  TempDir temp{"oran-assembly-longterm-retention-job"};
+  asio::io_context io;
+
+  auto options = bootstrap::RuntimeAssemblyOptions{};
+  options.audit_enabled = false;
+  options.session_memory_enabled = false;
+  options.longterm_memory_enabled = true;
+  options.longterm_memory_retention_job = automation::MemoryRetentionJob{
+      .scope_key = "cli",
+      .policy =
+          automation::LongtermMemoryRetentionPolicy{
+              .forget_after_unused = std::chrono::days{7},
+              .importance_floor = 0.25,
+              .max_records_per_scope = 42,
+              .decay_check_interval = std::chrono::hours{12},
+          },
+      .first_fire_at = fixed_now(),
+  };
+
+  auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
+
+  REQUIRE(built.has_value());
+  REQUIRE(built->longterm_memory_enabled());
+  REQUIRE_FALSE(built->longterm_memory_startup_decay_shadowed_count().has_value());
+  REQUIRE(built->longterm_memory_retention_job().has_value());
+  REQUIRE(built->longterm_memory_retention_job()->scope_key == "cli");
+  REQUIRE(built->longterm_memory_retention_job()->policy.forget_after_unused == std::chrono::days{7});
+  REQUIRE(built->longterm_memory_retention_job()->policy.importance_floor == 0.25);
+  REQUIRE(built->longterm_memory_retention_job()->policy.max_records_per_scope == 42);
+  REQUIRE(built->longterm_memory_retention_job()->policy.decay_check_interval == std::chrono::hours{12});
+  REQUIRE(built->longterm_memory_retention_job()->first_fire_at == fixed_now());
+}
+
 TEST_CASE("RuntimeAssembly::build rejects long-term startup decay when long-term memory is disabled",
           "[unit][bootstrap][runtime_assembly][memory]") {
   TempDir temp{"oran-assembly-longterm-startup-decay-disabled"};
@@ -419,6 +471,35 @@ TEST_CASE("RuntimeAssembly::build rejects long-term startup decay when long-term
       .importance_floor = 0.5,
       .limit = 10,
       .decay_at = core::Time{core::Time::time_point{30s}},
+  };
+  auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
+
+  REQUIRE_FALSE(built.has_value());
+  REQUIRE(built.error().kind() == core::ErrorKind::invalid_argument);
+  REQUIRE(std::ranges::any_of(built.error().context(), [](const auto& entry) {
+    return entry.first == "reason" && entry.second == "longterm_memory_disabled";
+  }));
+}
+
+TEST_CASE("RuntimeAssembly::build rejects long-term retention jobs when long-term memory is disabled",
+          "[unit][bootstrap][runtime_assembly][memory]") {
+  TempDir temp{"oran-assembly-longterm-retention-job-disabled"};
+  asio::io_context io;
+
+  auto options = bootstrap::RuntimeAssemblyOptions{};
+  options.audit_enabled = false;
+  options.session_memory_enabled = false;
+  options.longterm_memory_enabled = false;
+  options.longterm_memory_retention_job = automation::MemoryRetentionJob{
+      .scope_key = "cli",
+      .policy =
+          automation::LongtermMemoryRetentionPolicy{
+              .forget_after_unused = std::chrono::days{7},
+              .importance_floor = 0.25,
+              .max_records_per_scope = 42,
+              .decay_check_interval = std::chrono::hours{12},
+          },
+      .first_fire_at = fixed_now(),
   };
   auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
 

@@ -86,6 +86,7 @@ struct RuntimeAssemblyOptions {
   std::size_t longterm_memory_reader_count{2};
   std::size_t longterm_memory_statement_cache_capacity{16};
   std::optional<LongtermMemoryStartupDecayOptions> longterm_memory_startup_decay{};
+  std::optional<automation::MemoryRetentionJob> longterm_memory_retention_job{};
   bool longterm_vector_memory_enabled = false;
   std::string longterm_vector_memory_db_path{};
   std::size_t longterm_vector_memory_dimensions{64};
@@ -116,6 +117,8 @@ class RuntimeAssembly {
   bool longterm_memory_enabled() const noexcept;
   std::optional<std::size_t>
   longterm_memory_startup_decay_shadowed_count() const noexcept;
+  const std::optional<automation::MemoryRetentionJob>&
+  longterm_memory_retention_job() const noexcept;
   bool longterm_vector_memory_enabled() const noexcept;
   std::string_view longterm_memory_path() const noexcept;
   std::string_view longterm_vector_memory_path() const noexcept;
@@ -146,19 +149,24 @@ backend and `memory::longterm::HybridRuntime`.
 provider route is configured. When that cutoff is present and tracing is enabled,
 `RuntimeAssembly::build` purges old `trace_turns` rows after the audit migration
 and before the long-lived trace repository is exposed; audit rows are not deleted
-by trace retention. For configured-route runs, bootstrap also derives
-`longterm_memory_startup_decay` from `memory.longterm.retention` for the runner's
-stable `cli` scope. The assembly applies that one lexical-memory pass after
-long-term migration and before the long-lived memory pool is exposed, so prompt
-and tool reads see the post-decay visible set. After the pass succeeds, the
-assembly publishes advisory `memory_decay` with metadata for the startup source,
-scope, retention policy inputs, shadowed count, and timing; decayed record
-content is not included. It stores the pass result on the
-assembly as `longterm_memory_startup_decay_shadowed_count()`: `std::nullopt`
+by trace retention. For configured-route runs, bootstrap also maps
+`memory.longterm.retention` for the runner's stable `cli` scope into an
+automation-owned `MemoryRetentionJob` descriptor plus one
+`longterm_memory_startup_decay` pass derived from the same descriptor. The
+descriptor's `first_fire_at` is the startup decay clock plus
+`decay_check_interval_hours`, so future periodic ownership starts after the
+startup pass instead of immediately repeating it. The assembly applies the
+one-shot lexical-memory pass after long-term migration and before the long-lived
+memory pool is exposed, so prompt and tool reads see the post-decay visible set.
+After the pass succeeds, the assembly publishes advisory `memory_decay` with
+metadata for the startup source, scope, retention policy inputs, shadowed count,
+and timing; decayed record content is not included. It stores the pass result on
+the assembly as `longterm_memory_startup_decay_shadowed_count()`: `std::nullopt`
 means no startup pass was configured or run, while `0` or higher means the pass
-ran and reports how many records were shadowed. `decay_check_interval_hours`
-is now an `oran-automation` retention-planning cadence input, but bootstrap
-does not map or run periodic jobs yet; it is not a startup-loop timer.
+ran and reports how many records were shadowed. It also stores the periodic seed
+as `longterm_memory_retention_job()` for diagnostics and future scheduler
+ownership. `RuntimeAssembly::build` does not evaluate, persist, lease, or run
+that job; it is not a startup-loop timer.
 `startup_hook_bindings` are installed immediately after the bus is constructed
 and before startup producers run; null sinks are rejected with
 `reason=null_sink`, and every startup-only observer is unbound before the

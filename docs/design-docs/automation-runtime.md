@@ -1,9 +1,10 @@
 # Automation Runtime
 
-`oran-automation` owns automation scheduling decisions. The first shipped
-surface is intentionally narrow: deterministic periodic schedule evaluation and
-long-term memory retention request planning. It does not start background work,
-open `automation.db`, publish job hooks, or call an agent loop.
+`oran-automation` owns automation scheduling decisions. The shipped surface is
+still intentionally narrow: deterministic periodic schedule evaluation,
+long-term memory retention request planning, and a bootstrap-owned mapping from
+configured retention policy into that job descriptor. It does not start
+background work, open `automation.db`, publish job hooks, or call an agent loop.
 
 ## Current Status
 
@@ -19,6 +20,16 @@ The library depends only on `oran-core` and `oran-memory`. That dependency
 direction is intentional: automation may plan work against memory's public
 `memory::longterm::DecayRequest`, while `oran-memory` stays independent of
 automation and never schedules itself.
+
+Slice 188 consumes that boundary from bootstrap without turning bootstrap into a
+scheduler. `bootstrap::longterm_memory_retention_job_from(...)` maps
+`config::Config::memory().longterm.retention` into
+`automation::MemoryRetentionJob`, and `RuntimeAssemblyOptions` can carry that
+descriptor as `longterm_memory_retention_job`. Configured-route startup stores a
+job whose `first_fire_at` is the startup decay clock plus
+`decay_check_interval`, so the future periodic owner can start from the next
+candidate fire after the one-shot startup pass. `RuntimeAssembly::build` stores
+and exposes the descriptor but does not evaluate, persist, lease, or execute it.
 
 ## Public API
 
@@ -111,12 +122,10 @@ code owns those side effects after a successful run.
 
 The next automation slices can build on this boundary in this order:
 
-1. Map configured-route `memory.longterm.retention` into a
-   `MemoryRetentionJob` without starting a background loop in bootstrap.
-2. Add `automation.db` job/run/last-fired persistence.
-3. Add the async service loop, per-agent leases, and cancellation semantics.
-4. Add cron and triggered job categories.
-5. Publish job lifecycle hooks and periodic `memory_decay` metadata from the
+1. Add `automation.db` job/run/last-fired persistence.
+2. Add the async service loop, per-agent leases, and cancellation semantics.
+3. Add cron and triggered job categories.
+4. Publish job lifecycle hooks and periodic `memory_decay` metadata from the
    actual periodic producer.
 
 ## Validation
@@ -129,7 +138,9 @@ xmake build test-automation && xmake run test-automation
 xmake build bench-automation && xmake run bench-automation
 ```
 
-Slice 187 reports `test-automation` at 7 cases / 40 assertions. The local
+Slice 187 reports `test-automation` at 7 cases / 40 assertions. Slice 188 adds
+bootstrap coverage for config-to-job mapping and assembly descriptor storage,
+reported under `test-bootstrap`. The local
 `bench-automation` planning rows are:
 
 - `automation.periodic_evaluate_1024` at about 4.84 us / 1024-job batch.

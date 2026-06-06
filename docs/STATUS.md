@@ -7,32 +7,27 @@
 
 ## Snapshot
 
-- **Slice:** 187 (`xmake run orangutan -- --help` reports slice 187)
+- **Slice:** 188 (`xmake run orangutan -- --help` reports slice 188)
 - **Last completed history:**
-  [`histories/2026-06/20260607-0129-automation-retention-cadence.md`](histories/2026-06/20260607-0129-automation-retention-cadence.md)
+  [`histories/2026-06/20260607-0424-bootstrap-retention-job.md`](histories/2026-06/20260607-0424-bootstrap-retention-job.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-retention-cadence.md`](exec-plans/active/2026-06-07-automation-retention-cadence.md).
-- **Latest completed slice:** slice 187 adds the first shipped
-  `oran-automation` boundary. `<oran/automation.hpp>` now exports deterministic
-  periodic planning primitives: `PeriodicSchedule`, `PeriodicJobState`,
-  `PeriodicEvaluation`, `LongtermMemoryRetentionPolicy`,
-  `MemoryRetentionJob`, `MemoryRetentionPlan`,
-  `evaluate_periodic_schedule(...)`, and `plan_memory_retention(...)`.
-  `plan_memory_retention` validates scope and retention policy fields, uses the
-  configured interval as a caller-clocked periodic cadence, and produces a
-  `memory::longterm::DecayRequest` only when the job is due. The slice also
-  registers `oran-automation`, `test-automation`, and `bench-automation`; it
-  does not add a background service, `automation.db`, bootstrap ownership,
-  cron parsing, triggered jobs, or periodic `memory_decay` publishing. Focused
-  result: `test-automation` **7 cases / 40 assertions**. Local
-  `bench-automation` rows report `periodic_evaluate_1024` at about **4.84 us**
-  per 1024-job batch and `memory_retention_plan_1024` at about **14.84 us** per
-  1024-job batch.
+- **Latest completed slice:** slice 188 maps configured-route
+  `memory.longterm.retention` into the automation-owned
+  `MemoryRetentionJob` descriptor without starting a scheduler. Bootstrap now
+  exposes `longterm_memory_retention_job_from(...)`, derives startup decay
+  options from that same job, sets the descriptor's `first_fire_at` to startup
+  decay time plus `decay_check_interval_hours`, and passes the descriptor
+  through `RuntimeAssemblyOptions::longterm_memory_retention_job`.
+  `RuntimeAssembly` stores and exposes it through
+  `longterm_memory_retention_job()` for diagnostics and future scheduler
+  ownership, but does not evaluate, persist, lease, or run it. Focused result:
+  `test-bootstrap` **124 cases / 1054 assertions**.
 - **Next intended slice:** continue the active automation-retention cadence
   plan with a product-capability slice, not a bench-only slice. The next useful
-  boundary is to map configured retention policy into an automation-owned
-  periodic job descriptor or persist periodic job state, while still avoiding a
-  hidden bootstrap background loop until the service owner exists.
+  boundary is persistent periodic job/run state for the stored retention
+  descriptor, while still avoiding a hidden bootstrap background loop until the
+  service owner exists.
 
 Slice 183 adds the operator-facing long-term
   retention policy contract. `oran-config` now parses
@@ -47,7 +42,9 @@ Slice 183 adds the operator-facing long-term
   banner, slice 186 publishes the startup pass as advisory `memory_decay`
   metadata for build-time observers, and slice 187 gives the future periodic
   owner a pure `oran-automation` cadence/request planner for the same
-  `DecayRequest` shape.
+  `DecayRequest` shape. Slice 188 maps the configured retention policy into the
+  automation-owned periodic job descriptor and stores that scheduler seed on
+  `RuntimeAssembly`.
   Focused result: `test-config` **48 cases / 429 assertions**.
 
 Slice 182 adds the library-level long-term decay
@@ -57,9 +54,10 @@ Slice 182 adds the library-level long-term decay
   `importance <= importance_floor` as `shadow=true` in bounded batches, updates
   the FTS shadow metadata, returns the shadowed records, and leaves default
   search excluding those rows unless `Query::include_shadow=true`. Pure
-  automation cadence planning landed in slice 187; persistent periodic
-  execution and periodic decay publishing remain downstream. Startup hook
-  publishing landed in slice 186. Focused result:
+  automation cadence planning landed in slice 187, and bootstrap job-descriptor
+  mapping landed in slice 188; persistent periodic execution and periodic decay
+  publishing remain downstream. Startup hook publishing landed in slice 186.
+  Focused result:
   `test-memory` **38 cases / 841 assertions**.
 
 Slice 181 adds read-touch metadata to successful
@@ -1803,7 +1801,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 120 cases / 1024 assertions.
+- `oran-bootstrap`: 124 cases / 1054 assertions.
 
 ## Open Tech-Debt Rows
 

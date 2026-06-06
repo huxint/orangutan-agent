@@ -21,11 +21,15 @@ the payload to the research agent". The engine schedules and runs these jobs.
 
 ## Shipped Prework
 
-Slice 187 adds the first `oran-automation` library boundary, but not the full
+Slice 187 adds the first `oran-automation` library boundary, and slice 188 lets
+bootstrap seed it from configured retention policy without creating the full
 service. The current API evaluates a periodic schedule from caller-supplied
 state and maps a long-term memory retention policy into a due-only
-`memory::longterm::DecayRequest`. This gives the future service loop a tested
-cadence/request contract without hiding background work in bootstrap.
+`memory::longterm::DecayRequest`. Bootstrap now maps configured-route
+`memory.longterm.retention` into a stored `MemoryRetentionJob` descriptor whose
+first fire is after the one-shot startup decay pass. This gives the future
+service loop a tested cadence/request contract without hiding background work in
+bootstrap.
 
 Current implementation:
 
@@ -34,13 +38,20 @@ Current implementation:
 - `plan_memory_retention(MemoryRetentionJob, PeriodicJobState, now)` validates
   scope/policy fields, including finite `importance_floor`, and returns no
   request before the cadence is due.
+- `bootstrap::longterm_memory_retention_job_from(...)` maps config retention
+  values into automation-owned units while keeping `oran-automation`
+  independent of `oran-config`.
+- `RuntimeAssembly::longterm_memory_retention_job()` exposes the stored
+  descriptor for diagnostics and future scheduler ownership; it is not run by
+  `RuntimeAssembly::build`.
 - `test-automation` reports 7 cases / 40 assertions.
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 
 Still open: cron parsing, triggered jobs, `automation.db`, per-agent leases,
 queueing/backpressure, cancellation during real runs, job lifecycle hooks,
-notifier callbacks, and the scheduler tick performance criterion.
+notifier callbacks, periodic retention execution, and the scheduler tick
+performance criterion.
 
 ## Scope (v1.1)
 

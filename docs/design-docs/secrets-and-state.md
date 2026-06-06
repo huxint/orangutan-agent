@@ -62,8 +62,9 @@ Current implementation status:
   for one bounded long-term decay pass before prompt/tool reads and now reports
   the startup shadow count through runtime diagnostics. Slice 187 adds
   `oran-automation` planning that can consume the interval as a periodic
-  retention cadence, but bootstrap does not yet map config into a periodic job
-  or start a scheduler.
+  retention cadence. Slice 188 maps config into the stored
+  `MemoryRetentionJob` descriptor for future scheduler ownership, but bootstrap
+  does not start a scheduler.
   Ordinary configured-route bootstrap maps the recall policy into
   prompt-boundary long-term recall. The hybrid-search block defaults disabled;
   when built with `--vector_memory=y`, configured-route bootstrap now enables the
@@ -231,7 +232,7 @@ Four separate SQLite files (one per concern):
 
 - `<workspace>/.orangutan/sessions.db`
 - `<workspace>/.orangutan/memory.db`
-- `<workspace>/.orangutan/automation.db` (reserved; not opened by slice 187)
+- `<workspace>/.orangutan/automation.db` (reserved; not opened by slice 188)
 - `<workspace>/.orangutan/audit.db`
 
 ### Why Separate Files?

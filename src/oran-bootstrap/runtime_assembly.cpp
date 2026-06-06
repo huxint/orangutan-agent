@@ -401,6 +401,7 @@ struct RuntimeAssembly::Impl {
   std::string longterm_memory_path;
   std::string longterm_vector_memory_path;
   std::optional<std::size_t> longterm_memory_startup_decay_shadowed_count{};
+  std::optional<automation::MemoryRetentionJob> longterm_memory_retention_job{};
   // The members below are non-default-constructible in their final
   // shape and capture pointers into each other (`AuditRepository`
   // refers to `audit_pool`, `audit_sink` refers to `audit_repository`).
@@ -509,6 +510,10 @@ std::optional<std::size_t> RuntimeAssembly::longterm_memory_startup_decay_shadow
   return impl_->longterm_memory_startup_decay_shadowed_count;
 }
 
+const std::optional<automation::MemoryRetentionJob>& RuntimeAssembly::longterm_memory_retention_job() const noexcept {
+  return impl_->longterm_memory_retention_job;
+}
+
 bool RuntimeAssembly::longterm_vector_memory_enabled() const noexcept {
   return impl_->longterm_hybrid_runtime != nullptr;
 }
@@ -586,12 +591,14 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
     impl->session_store = std::make_unique<memory::session::Store>(*impl->session_repository);
   }
 
-  if (!options.longterm_memory_enabled && options.longterm_memory_startup_decay.has_value()) {
-    return std::unexpected(Error::invalid_argument("long-term startup decay requires long-term memory")
+  if (!options.longterm_memory_enabled &&
+      (options.longterm_memory_startup_decay.has_value() || options.longterm_memory_retention_job.has_value())) {
+    return std::unexpected(Error::invalid_argument("long-term retention requires long-term memory")
                                .with("reason", "longterm_memory_disabled"));
   }
 
   if (options.longterm_memory_enabled) {
+    impl->longterm_memory_retention_job = std::move(options.longterm_memory_retention_job);
     impl->longterm_memory_path =
         resolve_database_path(workspace, options.longterm_memory_db_path, kMemoryDatabaseRelative);
     if (auto parent_ok = ensure_parent_directory(std::filesystem::path{impl->longterm_memory_path}, "memory");

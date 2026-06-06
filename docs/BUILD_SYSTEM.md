@@ -240,11 +240,11 @@ oran_lib("prompt", { "oran-core", "oran-async", "oran-config", "oran-tool" }, {}
 oran_lib("provider", { "oran-core", "oran-async", "oran-config", "oran-prompt" }, { "nlohmann_json" })
 oran_lib("agent", { "oran-core", "oran-async", "oran-storage", "oran-prompt", "oran-tool", "oran-provider", "oran-hook" }, { "nlohmann_json" })
 oran_lib("cli", { "oran-core", "oran-async", "oran-hook", "oran-provider" }, {})
-oran_lib("bootstrap", { "oran-core", "oran-async", "oran-http", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-memory", "oran-skill", "oran-tool", "oran-provider", "oran-agent", "oran-cli" }, {})
+oran_lib("bootstrap", { "oran-core", "oran-async", "oran-http", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-memory", "oran-automation", "oran-skill", "oran-tool", "oran-provider", "oran-agent", "oran-cli" }, {})
 
 target("orangutan")
     set_kind("binary")
-    add_deps("oran-core", "oran-async", "oran-http", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-memory", "oran-skill", "oran-tool", "oran-provider", "oran-agent", "oran-cli", "oran-bootstrap")
+    add_deps("oran-core", "oran-async", "oran-http", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-memory", "oran-automation", "oran-skill", "oran-tool", "oran-provider", "oran-agent", "oran-cli", "oran-bootstrap")
     add_files(path.join(root, "src/main.cpp"))
     set_rundir(root)
 ```
@@ -292,10 +292,14 @@ for `Result<T>` / `Time` and on `oran-memory` for the public
 `memory::longterm::DecayRequest` contract. It does not yet depend on
 `oran-async`, `oran-storage`, or `oran-agent` because the service loop,
 `automation.db`, leases, and agent firing remain downstream. It is registered
-with `test-automation` and `bench-automation`; the main `orangutan` binary does
-not link it until bootstrap owns a real automation runtime.
+with `test-automation` and `bench-automation`. Slice 188 makes
+`oran-bootstrap` and the main `orangutan` binary link it for config-to-retention
+job descriptor mapping only; no automation service loop is started.
 
-`oran-bootstrap` depends on `oran-skill` so the runner can own the pre-rendered
+`oran-bootstrap` depends on `oran-automation` so configured-route startup can
+map `memory.longterm.retention` into an automation-owned
+`MemoryRetentionJob` descriptor while keeping automation independent of
+`oran-config`. It depends on `oran-skill` so the runner can own the pre-rendered
 section-4 catalog outside the stable system preamble. It also depends on
 `oran-provider` so process startup can preflight the
 configured default provider route before handing prompts to `oran-cli`. It also

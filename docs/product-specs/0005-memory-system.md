@@ -206,6 +206,12 @@ operators can reason about retention, scope, and visibility.
   long-term retention jobs into `memory::longterm::DecayRequest`. Bootstrap
   mapping, persistent scheduling, actual backend execution, and periodic
   `memory_decay` publishing remain downstream.
+- Bootstrap retention job mapping shipped in slice 188:
+  configured-route startup maps `memory.longterm.retention` into an
+  automation-owned `MemoryRetentionJob` descriptor and stores it on
+  `RuntimeAssembly`. The descriptor's first fire is after the one-shot startup
+  decay interval; no background loop, persistence, backend execution, or
+  periodic `memory_decay` publishing is started by this mapping.
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
 - Blocking `memory_read_before`, periodic automation decay publishing, and
   memory-write rewrite/annotation remain downstream.
@@ -270,7 +276,9 @@ operators can reason about retention, scope, and visibility.
    publishing through advisory `memory_decay` metadata and build-only startup
    hook bindings. Slice 187 adds the pure `oran-automation` retention cadence
    planner that can produce the same `DecayRequest` shape when a periodic job
-   is due.
+   is due. Slice 188 maps configured-route retention into an automation-owned
+   job descriptor and stores it on `RuntimeAssembly` for future scheduler
+   ownership.
    Persistent periodic execution and periodic decay publishing remain open.
 5. A `memory.write.before` hook can veto a write. **Status:** closed for the
    bootstrap `memory.remember` tool path in slice 179. `AgentPromptRunner`
@@ -309,7 +317,7 @@ operators can reason about retention, scope, and visibility.
    `test-config` reports
    48 cases / 429 assertions for the recall, hybrid-search, and retention policy parsers, `test-hook`
    reports 37 cases / 299 assertions for hook payload and redaction coverage, and `test-bootstrap`
-   reports 120 cases / 1024 assertions by default and 120 cases / 958 assertions
+   reports 124 cases / 1054 assertions by default and 120 cases / 958 assertions
    with `--vector_memory=y` for the assembly, prompt-runner, and
    configured-route recall consumers, including slice-167 query-strategy
    coverage, slice-168 `memory.recall` tool binding, and slice-169

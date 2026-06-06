@@ -24,6 +24,7 @@
 #include <asio/io_context.hpp>
 
 #include <oran/async.hpp>
+#include <oran/bootstrap/memory_retention.hpp>
 #include <oran/bootstrap/prompt_runner.hpp>
 #include <oran/bootstrap/provider_backend.hpp>
 #include <oran/bootstrap/runtime_assembly.hpp>
@@ -46,7 +47,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice187";
+constexpr std::string_view kVersion = "2.0.0-slice188";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 constexpr std::string_view kLongtermTextEmbeddingModel = "oran-local-text-v1";
@@ -179,27 +180,6 @@ longterm_recall_query_strategy_from(config::LongtermMemoryRecallQueryStrategy st
       .vector_weight = hybrid.vector_weight,
       .embedding_model = std::string{kLongtermTextEmbeddingModel},
       .embedding_dimensions = kLongtermTextEmbeddingDimensions,
-  };
-}
-
-[[nodiscard]] Result<LongtermMemoryStartupDecayOptions>
-longterm_startup_decay_options_from(const config::Config& cfg, std::string_view scope_key) {
-  using namespace std::chrono;
-
-  const auto& retention = cfg.memory().longterm.retention;
-  auto limit =
-      checked_memory_policy_size(retention.max_records_per_scope, "$.memory.longterm.retention.max_records_per_scope");
-  if (!limit) {
-    return std::unexpected(std::move(limit).error());
-  }
-
-  const auto now = core::time::now_utc();
-  return LongtermMemoryStartupDecayOptions{
-      .scope_key = std::string{scope_key},
-      .unused_before = core::Time{now.to_system_time_point() - days{retention.forget_after_unused_days}},
-      .importance_floor = retention.importance_floor,
-      .limit = *limit,
-      .decay_at = now,
   };
 }
 
@@ -962,11 +942,17 @@ core::Result<int> run(BootstrapOptions options) {
   assembly_options.longterm_vector_memory_enabled = longterm_hybrid_search.enabled;
   assembly_options.longterm_vector_memory_dimensions = longterm_hybrid_search.embedding_dimensions;
   if (provider_route->has_value()) {
-    auto startup_decay = longterm_startup_decay_options_from(loaded->value, "cli");
-    if (!startup_decay) {
-      return std::unexpected(std::move(startup_decay).error());
+    const auto retention_now = core::time::now_utc();
+    const auto retention_first_fire_at =
+        core::Time{retention_now.to_system_time_point() +
+                   std::chrono::hours{loaded->value.memory().longterm.retention.decay_check_interval_hours}};
+    auto retention_job = longterm_memory_retention_job_from(loaded->value, "cli", retention_first_fire_at);
+    if (!retention_job) {
+      return std::unexpected(std::move(retention_job).error());
     }
-    assembly_options.longterm_memory_startup_decay = std::move(*startup_decay);
+    assembly_options.longterm_memory_startup_decay =
+        longterm_memory_startup_decay_options_from(*retention_job, retention_now);
+    assembly_options.longterm_memory_retention_job = std::move(*retention_job);
   }
   auto assembly = RuntimeAssembly::build(options.workspace, runtime.executor(), std::move(assembly_options));
   if (!assembly) {

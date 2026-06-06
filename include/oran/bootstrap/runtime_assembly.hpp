@@ -37,6 +37,7 @@
 
 #include <asio/any_io_executor.hpp>
 
+#include <oran/automation.hpp>
 #include <oran/core/result.hpp>
 #include <oran/core/time.hpp>
 #include <oran/permission/approval_broker.hpp>
@@ -168,6 +169,11 @@ struct RuntimeAssemblyOptions {
   /// state. The pass runs after migration and before the long-lived pool is
   /// exposed; periodic automation remains a separate owner.
   std::optional<LongtermMemoryStartupDecayOptions> longterm_memory_startup_decay{};
+  /// Optional automation-owned periodic retention descriptor. RuntimeAssembly
+  /// stores it as startup diagnostics and as the future scheduler seed; build()
+  /// does not evaluate it, persist it, run a background loop, or publish
+  /// periodic `memory_decay`.
+  std::optional<automation::MemoryRetentionJob> longterm_memory_retention_job{};
   /// When `true`, the assembly also opens the optional sqlite-vec vector index
   /// over a separate DB and constructs a `memory::longterm::HybridRuntime`.
   /// Requires an xmake build configured with `--vector_memory=y`.
@@ -306,6 +312,11 @@ public:
   /// pass. `std::nullopt` means no startup pass was configured or run; `0`
   /// means the pass ran and found no matching records.
   [[nodiscard]] std::optional<std::size_t> longterm_memory_startup_decay_shadowed_count() const noexcept;
+
+  /// Automation-owned periodic retention descriptor supplied at build time.
+  /// Present only when bootstrap mapped configured long-term retention into a
+  /// future scheduler seed; the assembly does not run it.
+  [[nodiscard]] const std::optional<automation::MemoryRetentionJob>& longterm_memory_retention_job() const noexcept;
 
   /// `true` iff the vector-memory DB pool/backend/hybrid runtime were
   /// constructed at build time.

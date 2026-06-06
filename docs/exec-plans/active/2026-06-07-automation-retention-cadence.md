@@ -81,9 +81,9 @@ cron/periodic/triggered service without moving scheduling math into bootstrap or
    Produce due-only `DecayRequest` values from retention policy input and
    periodic state.
 3. **Bootstrap/runner ownership.**
-   Later slice: map configured-route `memory.longterm.retention` into an
-   automation-owned periodic job without creating a background loop in
-   `RuntimeAssembly::build`.
+   Done in slice 188: map configured-route `memory.longterm.retention` into an
+   automation-owned periodic job descriptor without creating a background loop
+   in `RuntimeAssembly::build`.
 4. **Persistent service.**
    Later slice: add `automation.db`, job/run rows, per-agent leases, and the
    async service loop.
@@ -127,10 +127,17 @@ cron/periodic/triggered service without moving scheduling math into bootstrap or
   memory docs, build/README routing, status, quality, history, and release
   notes to describe the shipped planner and keep scheduler/DB/hook producer
   work downstream.
-- [ ] Update docs that this slice invalidates in the same PR
+- [x] 2026-06-07 04:24 +0800: Added the bootstrap-owned config-to-retention-job
+  mapping helper, stored the descriptor on `RuntimeAssembly`, and derived
+  startup decay options from the same job so startup retention and future
+  periodic retention share one policy shape.
+- [x] 2026-06-07 04:24 +0800: Confirmed the slice does not start a background
+  scheduler, open `automation.db`, persist job state, or publish periodic
+  `memory_decay`; those remain service-owner work.
+- [x] Update docs that this slice invalidates in the same PR
   (`docs/rules/docs-in-sync.md`).
-- [ ] Run validation and record results.
-- [ ] Write history entry and release note.
+- [x] Run validation and record results.
+- [x] Write history entry and release note.
 
 ## Decision Log
 
@@ -141,6 +148,11 @@ cron/periodic/triggered service without moving scheduling math into bootstrap or
 - 2026-06-07: Keep periodic `memory_decay` publishing out of the first
   automation slice. Startup publishing is already real; periodic publishing
   should land only when a periodic producer actually invokes decay.
+- 2026-06-07: Let bootstrap map `memory.longterm.retention` into
+  `MemoryRetentionJob`, because bootstrap is the composition root that can see
+  both config and automation. Keep `oran-automation` independent of
+  `oran-config`, and set the configured-route job's first fire after the
+  startup decay pass so a future scheduler does not immediately repeat it.
 
 ## Linked Artifacts
 
@@ -151,5 +163,7 @@ cron/periodic/triggered service without moving scheduling math into bootstrap or
 - PRs: TBD
 - History entry:
   `docs/histories/2026-06/20260607-0129-automation-retention-cadence.md`
+  and
+  `docs/histories/2026-06/20260607-0424-bootstrap-retention-job.md`
 - Release note:
   `docs/releases/feature-release-notes.md#automation-retention-cadence`
