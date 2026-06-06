@@ -157,7 +157,8 @@ content is not included. It stores the pass result on the
 assembly as `longterm_memory_startup_decay_shadowed_count()`: `std::nullopt`
 means no startup pass was configured or run, while `0` or higher means the pass
 ran and reports how many records were shadowed. `decay_check_interval_hours`
-remains a future `oran-automation` cadence input, not a startup-loop timer.
+is now an `oran-automation` retention-planning cadence input, but bootstrap
+does not map or run periodic jobs yet; it is not a startup-loop timer.
 `startup_hook_bindings` are installed immediately after the bus is constructed
 and before startup producers run; null sinks are rejected with
 `reason=null_sink`, and every startup-only observer is unbound before the

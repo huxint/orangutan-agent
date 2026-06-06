@@ -157,7 +157,7 @@ MEMORY.md mirror. v2 keeps that core and adds:
   metadata before pruning. Expired records eventually receive lower search weight
   before potentially being shadowed or deleted.
 
-Status (slice 186): `include/oran/memory/longterm.hpp` now ships the public
+Status (slice 187): `include/oran/memory/longterm.hpp` now ships the public
 record/query/write/touch/decay shapes, reflection-backed `RecordKind`,
 `Backend` and `VectorBackend` traits, validation helpers for record keys,
 search limits, record metadata, touch requests, decay requests, and vector
@@ -167,7 +167,9 @@ embeddings, plus `Fts5Backend` as the default SQLite FTS5 lexical backend.
 the shared `storage::Pool` writer, returns `ErrorKind::not_found` for missing
 `get(...)` rows, advances `last_read_at` monotonically through `touch(...)`,
 marks decay candidates as `shadow=true` through `decay(...)`, and treats
-`remove(...)` as idempotent.
+`remove(...)` as idempotent. Slice 187 adds the `oran-automation` planner that
+can produce due-only `DecayRequest` values for future periodic retention
+producers without moving scheduling ownership into `oran-memory`.
 Slice 162 adds
 `longterm::Runtime`, a prompt-boundary composition layer that delegates search
 to a `Backend`, validates recall requests before dispatch, and renders stable
@@ -263,11 +265,14 @@ runner's `cli` scope, and `RuntimeAssembly::build` applies that bounded
 lexical-memory decay after migration and before exposing the long-lived
 memory pool. Slice 185 makes that startup pass observable by retaining the
 shadowed-record count on `RuntimeAssembly` and printing it in the startup
-banner as `startup-decay=<disabled|N>`. `decay_check_interval_hours` remains
-reserved for future periodic automation scheduling. Slice 186 publishes that
-successful startup pass as advisory `memory_decay` metadata through build-only
+banner as `startup-decay=<disabled|N>`. Slice 186 publishes that successful
+startup pass as advisory `memory_decay` metadata through build-only
 `RuntimeAssemblyOptions::startup_hook_bindings`; the payload carries source,
 scope, policy inputs, shadowed count, and timing, but no decayed record content.
+Slice 187 adds the first `oran-automation` cadence planner: it evaluates the
+retention interval from caller-supplied job state and produces a due-only
+`memory::longterm::DecayRequest`. Bootstrap mapping, periodic execution, and
+periodic hook publishing remain downstream.
 Default builds still reject
 `memory.longterm.hybrid_search.enabled=true` before assembly/provider side
 effects with `reason=build_option_disabled`, `option=vector_memory`. Semantic or
@@ -527,9 +532,10 @@ The config spelling uses explicit units:
 `decay_check_interval_hours`.
 
 Configured-route startup runs one bounded decay pass from the policy before
-prompt/tool reads are exposed. A periodic job registered with `oran-automation`
-will later use `decay_check_interval_hours` for the cadence; startup does not
-loop or schedule background work. Decayed records are not immediately deleted;
+prompt/tool reads are exposed. `oran-automation` now has a deterministic
+periodic planner that can use `decay_check_interval_hours` to decide whether a
+retention job is due and, when due, produce the matching `DecayRequest`;
+startup does not loop or schedule background work. Decayed records are not immediately deleted;
 they enter a "shadow" state where they are excluded from default search but
 visible to runtime callers that set `Query::include_shadow=true`. The shipped
 `memory.recall` tool keeps `include_shadow=false`. Slice 181 provides the
@@ -539,8 +545,10 @@ read-touch metadata prerequisite (`Backend::touch` plus recall-side
 slice 183 provides the parsed policy contract, slice 184 provides the
 configured-route startup owner, and slice 185 exposes the startup pass shadow
 count for diagnostics. Slice 186 publishes successful startup decay as advisory
-`memory_decay` metadata. Remaining ownership work is periodic `oran-automation`
-execution plus the periodic decay producer.
+`memory_decay` metadata. Slice 187 adds the pure `oran-automation` retention
+cadence/request planner. Remaining ownership work is bootstrap/config mapping
+into periodic jobs, persistent automation execution, and the periodic decay
+producer.
 
 Forgetting is final (DELETE), with an audit row in `audit.db`.
 
@@ -570,8 +578,9 @@ Memory lifecycle:
   successful bootstrap `memory.forget`.
 - `memory.decay(scope, count)` — shipped for the configured-route startup
   retention pass in slice 186 as advisory metadata (`source`, scope, policy
-  inputs, shadowed count, timing) with no record content. Periodic automation
-  decay publishing remains downstream.
+  inputs, shadowed count, timing) with no record content. `oran-automation`
+  now plans periodic retention requests, but periodic decay publishing remains
+  downstream until a periodic producer actually executes decay.
 
 These hooks are why team shared memory works: the orchestration leader can install a
 `memory.write.after` hook on the shared tier to mirror notes to a Slack channel, for

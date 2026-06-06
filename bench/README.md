@@ -38,7 +38,8 @@ bench/
 - Each meaningful design tradeoff ships an **A-vs-B** comparison.
 - Output: machine-readable JSON to stdout when `--json` flag is set.
 - The live buckets include `bench/skill/` for the section-4 skill catalog
-  renderer and owner.
+  renderer and owner, and `bench/automation/` for deterministic periodic
+  schedule and memory-retention planning.
 - See [`../docs/rules/testing-and-bench.md`](../docs/rules/testing-and-bench.md) and
   [`../docs/product-specs/0010-benchmark-harness.md`](../docs/product-specs/0010-benchmark-harness.md).
 
@@ -74,6 +75,7 @@ xmake run orangutan-bench --json > all.json
 | `memory`           | raw `SessionRepository` append/load | typed `memory::session::Store` append/load |
 | `provider`         | cache hints enabled            | cache hints disabled       |
 | `orchestration`    | leader-worker strategy         | vote strategy              |
+| `automation`       | periodic schedule evaluation   | memory-retention planning  |
 | `tool`             | hashmap registry lookup        | static dispatch (stretch)  |
 | `channel`          | bounded `Channel<T>`           | unbounded queue            |
 
@@ -82,7 +84,7 @@ Each table row corresponds to at least one scenario file in the bucket.
 ## Status
 
 `bench/core/`, `bench/async/`, `bench/http/`, `bench/io/`, `bench/storage/`, `bench/config/`,
-`bench/permission/`, `bench/hook/`, `bench/memory/`, `bench/skill/`, `bench/tool/`,
+`bench/permission/`, `bench/hook/`, `bench/memory/`, `bench/automation/`, `bench/skill/`, `bench/tool/`,
 `bench/prompt/`, `bench/provider/`, `bench/agent/`, `bench/cli/`, and
 `bench/bootstrap/` are live.
 Additional buckets land with their owning libraries.

@@ -201,8 +201,11 @@ operators can reason about retention, scope, and visibility.
   `memory_decay` metadata with source, scope, policy inputs, shadowed count, and
   timing, then unbinds those startup-only observers before returning the
   assembly. The payload contains no decayed record content.
-- Decay policy scheduling by a periodic job (`oran-automation`) remains
-  downstream.
+- Periodic retention planning shipped in slice 187:
+  `oran-automation` now evaluates periodic schedule state and maps due
+  long-term retention jobs into `memory::longterm::DecayRequest`. Bootstrap
+  mapping, persistent scheduling, actual backend execution, and periodic
+  `memory_decay` publishing remain downstream.
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
 - Blocking `memory_read_before`, periodic automation decay publishing, and
   memory-write rewrite/annotation remain downstream.
@@ -265,8 +268,10 @@ operators can reason about retention, scope, and visibility.
    Slice 185 adds an assembly/banner diagnostic for whether that startup pass
    ran and how many records it shadowed. Slice 186 adds startup decay hook
    publishing through advisory `memory_decay` metadata and build-only startup
-   hook bindings.
-   `oran-automation` periodic scheduling and periodic decay publishing remain open.
+   hook bindings. Slice 187 adds the pure `oran-automation` retention cadence
+   planner that can produce the same `DecayRequest` shape when a periodic job
+   is due.
+   Persistent periodic execution and periodic decay publishing remain open.
 5. A `memory.write.before` hook can veto a write. **Status:** closed for the
    bootstrap `memory.remember` tool path in slice 179. `AgentPromptRunner`
    publishes blocking `memory_write_before` after parsing/scoping the record and

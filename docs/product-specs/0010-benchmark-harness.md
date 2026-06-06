@@ -58,6 +58,7 @@ one A-vs-B scenario:
 | `oran-memory`   | raw `SessionRepository` append/load | typed `memory::session::Store` append/load; FTS5 vs sqlite-vec returns with long-term memory |
 | `oran-provider` | cache hints enabled            | cache hints disabled       |
 | `oran-orchestration` | leader-worker             | vote                       |
+| `oran-automation` | periodic schedule evaluation | memory-retention request planning |
 | `oran-channel`  | bounded asio channel           | unbounded queue (with backpressure metric) |
 
 ## Acceptance Criteria

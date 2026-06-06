@@ -233,6 +233,7 @@ oran_lib("config", { "oran-core", "oran-storage" }, { "nlohmann_json", "re2" })
 oran_lib("permission", { "oran-core", "oran-config", "oran-storage", "oran-async" }, { "re2", "libsodium" })
 oran_lib("hook", { "oran-core", "oran-async" }, {})
 oran_lib("memory", { "oran-core", "oran-async", "oran-storage" }, { "nlohmann_json" })
+oran_lib("automation", { "oran-core", "oran-memory" }, {})
 oran_lib("skill", { "oran-core", "oran-async", "oran-io" }, {})
 oran_lib("tool", { "oran-core", "oran-async", "oran-io", "oran-permission", "oran-hook" }, { "nlohmann_json" })
 oran_lib("prompt", { "oran-core", "oran-async", "oran-config", "oran-tool" }, {})
@@ -284,6 +285,15 @@ SQLite repository and on `oran-async` for awaitable APIs, and it consumes
 depend on `oran-memory` as the composition root for the separate
 `<workspace>/.orangutan/sessions.db` pool/repository/store; the agent runner
 persistence slice consumes that owner next.
+
+`oran-automation` currently ships deterministic periodic scheduling and
+long-term memory retention request planning. It depends downward on `oran-core`
+for `Result<T>` / `Time` and on `oran-memory` for the public
+`memory::longterm::DecayRequest` contract. It does not yet depend on
+`oran-async`, `oran-storage`, or `oran-agent` because the service loop,
+`automation.db`, leases, and agent firing remain downstream. It is registered
+with `test-automation` and `bench-automation`; the main `orangutan` binary does
+not link it until bootstrap owns a real automation runtime.
 
 `oran-bootstrap` depends on `oran-skill` so the runner can own the pre-rendered
 section-4 catalog outside the stable system preamble. It also depends on

@@ -48,6 +48,7 @@ if has_config("vector_memory") then
         add_defines("ORAN_ENABLE_SQLITE_VEC", { public = true })
     target_end()
 end
+oran_lib("automation", { "oran-core", "oran-memory" }, {})
 oran_lib("skill", { "oran-core", "oran-async", "oran-io" }, {})
 oran_lib("tool", { "oran-core", "oran-async", "oran-io", "oran-permission", "oran-hook" }, { "nlohmann_json" })
 oran_lib("prompt", { "oran-core", "oran-async", "oran-config", "oran-tool" }, {})

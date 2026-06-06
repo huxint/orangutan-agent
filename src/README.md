@@ -32,6 +32,7 @@ One subdirectory per library: `src/oran-<lib>/`. Each library:
 
 `src/oran-core/`, `src/oran-async/`, `src/oran-io/`, `src/oran-storage/`,
 `src/oran-config/`, `src/oran-permission/`, `src/oran-hook/`, `src/oran-tool/`,
-`src/oran-prompt/`, `src/oran-cli/`, and `src/oran-bootstrap/` are live. See
+`src/oran-prompt/`, `src/oran-automation/`, `src/oran-cli/`, and
+`src/oran-bootstrap/` are live. See
 [`../docs/product-specs/index.md`](../docs/product-specs/index.md) for the planned
 libraries.

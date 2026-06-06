@@ -60,8 +60,10 @@ Current implementation status:
   `decay_check_interval_hours`. Configured-route startup consumes
   `forget_after_unused_days`, `importance_floor`, and `max_records_per_scope`
   for one bounded long-term decay pass before prompt/tool reads and now reports
-  the startup shadow count through runtime diagnostics; the interval field
-  remains reserved for future `oran-automation` cadence ownership.
+  the startup shadow count through runtime diagnostics. Slice 187 adds
+  `oran-automation` planning that can consume the interval as a periodic
+  retention cadence, but bootstrap does not yet map config into a periodic job
+  or start a scheduler.
   Ordinary configured-route bootstrap maps the recall policy into
   prompt-boundary long-term recall. The hybrid-search block defaults disabled;
   when built with `--vector_memory=y`, configured-route bootstrap now enables the
@@ -98,9 +100,12 @@ Current implementation status:
   profile-routed provider backends without adding the key values to logs,
   hook payloads, or error context. Regular configured-route `bootstrap::run`
   uses this boundary when building the provider-backed prompt runner.
-- `teams`, `channels`, and `automation` are recognized root fields but do not have
-  typed models yet. The `hooks` root has the v1 typed timeout field; `sinks` and
-  `bindings` remain recognized-but-untyped until external hook sinks land.
+- `teams`, `channels`, and the config `automation` root are recognized but do
+  not have typed config models yet. The `oran-automation` C++ library exists
+  for periodic planning, but config-authored job seeds, scheduler persistence,
+  and `automation.db` writes remain unimplemented. The `hooks` root has the v1
+  typed timeout field; `sinks` and `bindings` remain recognized-but-untyped
+  until external hook sinks land.
 - `agents.<name>.skills_enabled` accepts an explicit array of non-empty skill
   names. The parser preserves author order and does not resolve names against
   the filesystem; bootstrap applies the allowlist to the loaded workspace skill
@@ -226,7 +231,7 @@ Four separate SQLite files (one per concern):
 
 - `<workspace>/.orangutan/sessions.db`
 - `<workspace>/.orangutan/memory.db`
-- `<workspace>/.orangutan/automation.db`
+- `<workspace>/.orangutan/automation.db` (reserved; not opened by slice 187)
 - `<workspace>/.orangutan/audit.db`
 
 ### Why Separate Files?

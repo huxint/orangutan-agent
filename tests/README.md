@@ -45,8 +45,9 @@ tests/
 - Use `test-helpers/` for shared setup; do not duplicate fixtures.
 - The live buckets include `tests/skill/` for the section-4 skill catalog
   renderer/owner, the markdown loader snapshot, and workspace snapshot
-  hot-reload; `tests/tool/` and `tests/bootstrap/` cover the `skill.invoke`
-  dispatch path plus runner prompt-boundary refresh.
+  hot-reload; `tests/automation/` for deterministic periodic schedule and
+  memory-retention planning; `tests/tool/` and `tests/bootstrap/` cover the
+  `skill.invoke` dispatch path plus runner prompt-boundary refresh.
 - See [`../docs/rules/testing-and-bench.md`](../docs/rules/testing-and-bench.md) for
   the full convention.
 
@@ -62,7 +63,7 @@ xmake run test-agent "specific test name"
 ## Status
 
 `tests/core/`, `tests/async/`, `tests/http/`, `tests/io/`, `tests/storage/`, `tests/config/`,
-`tests/permission/`, `tests/hook/`, `tests/memory/`, `tests/skill/`, `tests/tool/`,
+`tests/permission/`, `tests/hook/`, `tests/memory/`, `tests/automation/`, `tests/skill/`, `tests/tool/`,
 `tests/prompt/`, `tests/provider/`, `tests/agent/`, `tests/cli/`, and
 `tests/bootstrap/` are live and registered with `xmake test`.
 Additional buckets land with their owning libraries.

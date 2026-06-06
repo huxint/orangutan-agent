@@ -19,6 +19,29 @@ the payload to the research agent". The engine schedules and runs these jobs.
 - Hook events: `job_scheduled`, `job_started`, `job_finished`, `job_failed`.
 - Notifier callback routes job output to cli / channel / desktop.
 
+## Shipped Prework
+
+Slice 187 adds the first `oran-automation` library boundary, but not the full
+service. The current API evaluates a periodic schedule from caller-supplied
+state and maps a long-term memory retention policy into a due-only
+`memory::longterm::DecayRequest`. This gives the future service loop a tested
+cadence/request contract without hiding background work in bootstrap.
+
+Current implementation:
+
+- `evaluate_periodic_schedule(PeriodicSchedule, PeriodicJobState, now)` returns
+  due/not-due, the scheduled fire time, and overdue duration.
+- `plan_memory_retention(MemoryRetentionJob, PeriodicJobState, now)` validates
+  scope/policy fields, including finite `importance_floor`, and returns no
+  request before the cadence is due.
+- `test-automation` reports 7 cases / 40 assertions.
+- `bench-automation` compares periodic schedule evaluation with retention
+  request planning over a 1024-job batch.
+
+Still open: cron parsing, triggered jobs, `automation.db`, per-agent leases,
+queueing/backpressure, cancellation during real runs, job lifecycle hooks,
+notifier callbacks, and the scheduler tick performance criterion.
+
 ## Scope (v1.1)
 
 - Per-job priority (urgent / normal / background).
@@ -52,6 +75,7 @@ the payload to the research agent". The engine schedules and runs these jobs.
 
 ## Design Doc Cross-References
 
+- [`../design-docs/automation-runtime.md`](../design-docs/automation-runtime.md)
 - [`../design-docs/agent-platform.md`](../design-docs/agent-platform.md)
   (cross-cutting concerns)
 - [`../design-docs/async-model.md`](../design-docs/async-model.md)
@@ -68,6 +92,6 @@ the payload to the research agent". The engine schedules and runs these jobs.
 
 ```sh
 xmake build oran-automation
-xmake test test-automation
-scripts/bench-compare.sh automation
+xmake build test-automation && xmake run test-automation
+xmake build bench-automation && xmake run bench-automation
 ```

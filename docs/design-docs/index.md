@@ -38,6 +38,8 @@ If you are starting a non-trivial task, the rule is:
   ordering, deferred-tool discovery.
 - [`memory-system.md`](memory-system.md) — working / session / long-term / shared
   memory tiers, backends, retention.
+- [`automation-runtime.md`](automation-runtime.md) — deterministic automation cadence
+  planning, retention job request shaping, and future scheduler ownership.
 - [`api-portability.md`](api-portability.md) — provider abstraction, protocol adapters,
   capability matrix.
 - [`team-collaboration.md`](team-collaboration.md) — multi-agent coordination strategies,

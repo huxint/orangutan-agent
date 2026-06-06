@@ -63,7 +63,7 @@ Start to commit; the sections below hold the detail.
 | Secrets / config / state | `docs/design-docs/secrets-and-state.md` | — |
 | Module / TU boundaries | `docs/design-docs/module-boundaries.md` | `docs/rules/module-and-pch.md` |
 | Skills | `docs/product-specs/0009-skills.md` | — |
-| Automation (cron / periodic / triggered) | `docs/product-specs/0006-automation.md` | — |
+| Automation (cron / periodic / triggered) | `docs/design-docs/automation-runtime.md`, `docs/product-specs/0006-automation.md` | — |
 | Desktop app surface | `docs/product-specs/0007-web-ui.md`, `docs/DESKTOP.md` | — |
 | Benchmark harness | `docs/product-specs/0010-benchmark-harness.md` | `docs/rules/testing-and-bench.md` |
 | Reliability / observability | `docs/RELIABILITY.md`, `docs/product-specs/0018-first-loop-observability.md` | — |
