@@ -6,9 +6,10 @@
 // sinks can render an approval prompt and return a blocking decision. Slice
 // 152 adds optional per-sink redacted input views for sensitive mutation
 // payloads. Slice 179 adds the first memory write/delete lifecycle payloads,
-// and slice 180 adds read-after observability. Events without a typed shape yet
-// carry `std::monostate` so sinks subscribed to them can observe occurrence
-// without payload content; typed shapes land with the producing subsystem.
+// slice 180 adds read-after observability, and slice 186 adds decay
+// observability. Events without a typed shape yet carry `std::monostate` so
+// sinks subscribed to them can observe occurrence without payload content;
+// typed shapes land with the producing subsystem.
 
 #pragma once
 
@@ -250,6 +251,25 @@ struct MemoryForgetPayload {
   std::chrono::nanoseconds duration{0};
 };
 
+/// Advisory long-term memory decay payload. Published after a retention pass
+/// succeeds. It carries policy/timing/count metadata only; decayed record
+/// content stays out of the hook payload so default and trusted-local sinks see
+/// the same non-sensitive shape.
+struct MemoryDecayPayload {
+  Identity who;
+  /// Producer label such as `startup`.
+  std::string source;
+  std::string scope_key;
+  core::Time unused_before{};
+  double importance_floor{0.0};
+  std::size_t limit{0};
+  core::Time decay_at{};
+  std::size_t shadowed_count{0};
+  core::Time started_at{};
+  core::Time finished_at{};
+  std::chrono::nanoseconds duration{0};
+};
+
 /// Provider token/cost counters copied without making `oran-hook` depend on
 /// `oran-provider`.
 struct ProviderUsage {
@@ -353,6 +373,7 @@ using Payload = std::variant<std::monostate,
                              MemoryReadPayload,
                              MemoryWritePayload,
                              MemoryForgetPayload,
+                             MemoryDecayPayload,
                              ProviderRequestPayload,
                              ProviderResponsePayload,
                              ProviderErrorPayload,

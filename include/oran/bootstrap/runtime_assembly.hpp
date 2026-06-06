@@ -5,9 +5,9 @@
 // `oran-bootstrap`: a fresh `permission::ApprovalBroker` (per-process key
 // per `0008-permissions.md` criterion 5) plus the active
 // `permission::AuditSink` (storage-backed by default, `NullAuditSink`
-// when audit is disabled), the workspace resolver, hook bus, optional trace
-// repository, optional session-memory store, and optional long-term memory
-// runtime.
+// when audit is disabled), the workspace resolver, hook bus, build-only startup
+// hook bindings for startup lifecycle producers, optional trace repository,
+// optional session-memory store, and optional long-term memory runtime.
 //
 // The assembly intentionally does *not* own the `async::Runtime`. The
 // caller (bootstrap today, the agent loop tomorrow) builds the
@@ -33,6 +33,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <asio/any_io_executor.hpp>
 
@@ -44,6 +45,8 @@
 
 namespace orangutan::hook {
 class Bus;
+class Sink;
+enum class Event : std::uint8_t;
 }  // namespace orangutan::hook
 
 namespace orangutan::memory::session {
@@ -71,6 +74,17 @@ struct LongtermMemoryStartupDecayOptions {
   core::Time decay_at{core::Time::epoch()};
 
   friend bool operator==(const LongtermMemoryStartupDecayOptions&, const LongtermMemoryStartupDecayOptions&) = default;
+};
+
+struct RuntimeStartupHookBinding {
+  /// Non-owning sink pointer. The caller must keep the sink alive until
+  /// `RuntimeAssembly::build` returns; the assembly unbinds startup-only
+  /// subscriptions before returning.
+  hook::Sink* sink{nullptr};
+  /// Events the sink should observe. Empty is a no-op; a null sink is a
+  /// configuration error so startup producers never silently drop a requested
+  /// subscription.
+  std::vector<hook::Event> events{};
 };
 
 struct RuntimeAssemblyOptions {
@@ -116,6 +130,13 @@ struct RuntimeAssemblyOptions {
   /// `config.hooks.timeout_ms` by bootstrap and applied to the
   /// assembly-owned hook bus.
   std::chrono::milliseconds hook_blocking_timeout{2000};
+  /// Optional in-process hook bindings installed immediately after the
+  /// assembly-owned bus is constructed and before any startup producers run.
+  /// They are unbound before `build()` returns, so they are for startup
+  /// lifecycle events such as `memory_decay`; regular configured sinks can
+  /// still bind to `hook_bus()` after `build()` returns for prompt/tool
+  /// lifecycle events.
+  std::vector<RuntimeStartupHookBinding> startup_hook_bindings{};
   /// When non-empty, overrides the default sessions DB path. The default
   /// is `<workspace>/.orangutan/sessions.db`, intentionally separate from
   /// `audit.db`.

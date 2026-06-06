@@ -11,7 +11,7 @@
 // bumps. The events without typed payloads in `payload.hpp` carry
 // `std::monostate` for now — the typed shape lands with the producing
 // subsystem (provider lifecycle payloads now ship with the agent/provider path;
-// memory payloads land when memory hooks wire into memory callers, and so on).
+// memory read/write/delete/decay payloads ship with their producers, and so on).
 
 #pragma once
 

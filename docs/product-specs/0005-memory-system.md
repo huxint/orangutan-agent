@@ -193,11 +193,19 @@ operators can reason about retention, scope, and visibility.
   `bootstrap::run` prints the same value as `startup-decay=<disabled|N>` in the
   startup banner. Operators can tell whether startup decay was disabled, ran
   with zero candidates, or shadowed records without inspecting the memory DB.
+- Startup retention hook observability shipped in slice 186:
+  `oran-hook` now carries typed `MemoryDecayPayload`, and
+  `RuntimeAssemblyOptions::startup_hook_bindings` lets in-process observers
+  subscribe before startup producers run. After a configured-route startup
+  `Fts5Backend::decay(...)` pass succeeds, bootstrap publishes advisory
+  `memory_decay` metadata with source, scope, policy inputs, shadowed count, and
+  timing, then unbinds those startup-only observers before returning the
+  assembly. The payload contains no decayed record content.
 - Decay policy scheduling by a periodic job (`oran-automation`) remains
   downstream.
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
-- Blocking `memory_read_before`, decay lifecycle hooks, and memory-write
-  rewrite/annotation remain downstream.
+- Blocking `memory_read_before`, periodic automation decay publishing, and
+  memory-write rewrite/annotation remain downstream.
 
 ## Scope (v1.1)
 
@@ -255,8 +263,10 @@ operators can reason about retention, scope, and visibility.
    contract for those policy inputs. Slice 184 closes the configured-route
    startup owner by applying one bounded decay pass before prompt/tool reads.
    Slice 185 adds an assembly/banner diagnostic for whether that startup pass
-   ran and how many records it shadowed.
-   `oran-automation` periodic scheduling and decay hook publishing remain open.
+   ran and how many records it shadowed. Slice 186 adds startup decay hook
+   publishing through advisory `memory_decay` metadata and build-only startup
+   hook bindings.
+   `oran-automation` periodic scheduling and periodic decay publishing remain open.
 5. A `memory.write.before` hook can veto a write. **Status:** closed for the
    bootstrap `memory.remember` tool path in slice 179. `AgentPromptRunner`
    publishes blocking `memory_write_before` after parsing/scoping the record and
@@ -284,6 +294,8 @@ operators can reason about retention, scope, and visibility.
    for configured-route startup retention consumption plus assembly-level
    startup decay before the long-lived memory backend is exposed. Slice 185
    tightens bootstrap assertions for the startup decay shadow-count diagnostic.
+   Slice 186 adds bootstrap and hook coverage for startup `MemoryDecayPayload`
+   delivery, startup hook binding validation, and startup-only unbind behavior.
    Slice 176 adds
    gated sqlite-vec disabled-build coverage, plus `--vector_memory=y` coverage
    for scoped upsert/search/remove and dimension-mismatch migration rejection.
@@ -291,8 +303,8 @@ operators can reason about retention, scope, and visibility.
    791 assertions.
    `test-config` reports
    48 cases / 429 assertions for the recall, hybrid-search, and retention policy parsers, `test-hook`
-   reports 36 cases / 287 assertions for hook payload and redaction coverage, and `test-bootstrap`
-   reports 119 cases / 1006 assertions by default and 120 cases / 958 assertions
+   reports 37 cases / 299 assertions for hook payload and redaction coverage, and `test-bootstrap`
+   reports 120 cases / 1024 assertions by default and 120 cases / 958 assertions
    with `--vector_memory=y` for the assembly, prompt-runner, and
    configured-route recall consumers, including slice-167 query-strategy
    coverage, slice-168 `memory.recall` tool binding, and slice-169

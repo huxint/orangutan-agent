@@ -8,10 +8,12 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #include <asio/any_io_executor.hpp>
 #include <asio/co_spawn.hpp>
@@ -36,6 +38,13 @@ constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSessionsDatabaseRelative = ".orangutan/sessions.db";
 constexpr std::string_view kMemoryDatabaseRelative = ".orangutan/memory.db";
 constexpr std::string_view kVectorMemoryDatabaseRelative = ".orangutan/memory-vectors.db";
+
+struct StartupDecayResult {
+  std::size_t shadowed_count{0};
+  core::Time started_at{};
+  core::Time finished_at{};
+  std::chrono::nanoseconds duration{0};
+};
 
 [[nodiscard]] std::string
 resolve_database_path(std::string_view workspace, std::string_view override_path, std::string_view relative_path) {
@@ -227,7 +236,70 @@ run_longterm_memory_migration_inline(const std::string& memory_path,
 
 /// Run one startup decay pass after long-term memory migration and before the
 /// long-lived pool starts serving prompt/tool reads.
-[[nodiscard]] Result<std::size_t>
+[[nodiscard]] std::chrono::nanoseconds duration_between(core::Time started_at, core::Time finished_at) {
+  return finished_at.to_system_time_point() - started_at.to_system_time_point();
+}
+
+[[nodiscard]] hook::MemoryDecayPayload
+make_startup_memory_decay_payload(const LongtermMemoryStartupDecayOptions& options, const StartupDecayResult& result) {
+  return hook::MemoryDecayPayload{
+      .who =
+          hook::Identity{
+              .scope_key = options.scope_key,
+              .agent_key = "bootstrap",
+              .identity = "startup",
+          },
+      .source = "startup",
+      .scope_key = options.scope_key,
+      .unused_before = options.unused_before,
+      .importance_floor = options.importance_floor,
+      .limit = options.limit,
+      .decay_at = options.decay_at,
+      .shadowed_count = result.shadowed_count,
+      .started_at = result.started_at,
+      .finished_at = result.finished_at,
+      .duration = result.duration,
+  };
+}
+
+[[nodiscard]] Result<void> bind_startup_hooks(hook::Bus& bus, std::span<const RuntimeStartupHookBinding> bindings) {
+  for (const auto& binding : bindings) {
+    if (binding.sink == nullptr) {
+      return std::unexpected(Error::invalid_argument("runtime hook binding sink is null").with("reason", "null_sink"));
+    }
+    if (!binding.events.empty()) {
+      bus.bind(*binding.sink, std::span<const hook::Event>{binding.events});
+    }
+  }
+  return {};
+}
+
+void unbind_startup_hooks(hook::Bus& bus, std::span<const RuntimeStartupHookBinding> bindings) noexcept {
+  for (const auto& binding : bindings) {
+    if (binding.sink != nullptr) {
+      static_cast<void>(bus.unbind(*binding.sink));
+    }
+  }
+}
+
+[[nodiscard]] hook::PublishOutcome publish_startup_memory_decay_inline(hook::Bus& bus,
+                                                                       const LongtermMemoryStartupDecayOptions& options,
+                                                                       const StartupDecayResult& result) {
+  asio::io_context io;
+  auto outcome = hook::PublishOutcome{};
+  asio::co_spawn(
+      io,
+      [&]() -> async::Awaitable<void> {
+        outcome = co_await bus.publish_advisory(hook::Event::memory_decay,
+                                                make_startup_memory_decay_payload(options, result));
+        co_return;
+      },
+      asio::detached);
+  io.run();
+  return outcome;
+}
+
+[[nodiscard]] Result<StartupDecayResult>
 run_longterm_memory_startup_decay_inline(const std::string& memory_path,
                                          std::size_t reader_count,
                                          std::size_t statement_cache_capacity,
@@ -245,11 +317,12 @@ run_longterm_memory_startup_decay_inline(const std::string& memory_path,
   auto temp_pool = std::move(*temp_pool_result);
   memory::longterm::Fts5Backend backend{temp_pool};
 
-  auto shadowed = std::size_t{0};
+  auto result = StartupDecayResult{};
   auto decay_error = std::optional<Error>{};
   asio::co_spawn(
       io,
       [&]() -> async::Awaitable<void> {
+        result.started_at = core::time::now_utc();
         auto decayed = co_await backend.decay(memory::longterm::DecayRequest{
             .scope_key = options.scope_key,
             .unused_before = options.unused_before,
@@ -261,7 +334,9 @@ run_longterm_memory_startup_decay_inline(const std::string& memory_path,
           decay_error = std::move(decayed).error();
           co_return;
         }
-        shadowed = decayed->shadowed_records.size();
+        result.finished_at = core::time::now_utc();
+        result.duration = duration_between(result.started_at, result.finished_at);
+        result.shadowed_count = decayed->shadowed_records.size();
         co_return;
       },
       asio::detached);
@@ -270,7 +345,7 @@ run_longterm_memory_startup_decay_inline(const std::string& memory_path,
   if (decay_error) {
     return std::unexpected(std::move(*decay_error));
   }
-  return shadowed;
+  return result;
 }
 
 /// Drive the optional vector-memory migration to completion before the
@@ -478,6 +553,11 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
   impl->hook_bus = std::make_unique<hook::Bus>(hook::BusOptions{
       .blocking_timeout = options.hook_blocking_timeout,
   });
+  if (auto bound = bind_startup_hooks(*impl->hook_bus,
+                                      std::span<const RuntimeStartupHookBinding>{options.startup_hook_bindings});
+      !bound) {
+    return std::unexpected(std::move(bound).error());
+  }
 
   if (options.session_memory_enabled) {
     impl->sessions_path = resolve_database_path(workspace, options.sessions_db_path, kSessionsDatabaseRelative);
@@ -534,7 +614,9 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
       if (!decayed) {
         return std::unexpected(std::move(decayed).error());
       }
-      impl->longterm_memory_startup_decay_shadowed_count = *decayed;
+      impl->longterm_memory_startup_decay_shadowed_count = decayed->shadowed_count;
+      [[maybe_unused]] auto outcome =
+          publish_startup_memory_decay_inline(*impl->hook_bus, *options.longterm_memory_startup_decay, *decayed);
     }
 
     auto memory_pool =
@@ -598,6 +680,7 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
 
   if (!options.audit_enabled) {
     impl->audit_sink = std::make_unique<permission::NullAuditSink>();
+    unbind_startup_hooks(*impl->hook_bus, std::span<const RuntimeStartupHookBinding>{options.startup_hook_bindings});
     return RuntimeAssembly{std::move(impl)};
   }
 
@@ -643,6 +726,7 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
     impl->trace_repository = std::make_unique<storage::TraceRepository>(*impl->audit_pool);
   }
 
+  unbind_startup_hooks(*impl->hook_bus, std::span<const RuntimeStartupHookBinding>{options.startup_hook_bindings});
   return RuntimeAssembly{std::move(impl)};
 }
 

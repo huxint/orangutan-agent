@@ -157,7 +157,7 @@ MEMORY.md mirror. v2 keeps that core and adds:
   metadata before pruning. Expired records eventually receive lower search weight
   before potentially being shadowed or deleted.
 
-Status (slice 185): `include/oran/memory/longterm.hpp` now ships the public
+Status (slice 186): `include/oran/memory/longterm.hpp` now ships the public
 record/query/write/touch/decay shapes, reflection-backed `RecordKind`,
 `Backend` and `VectorBackend` traits, validation helpers for record keys,
 search limits, record metadata, touch requests, decay requests, and vector
@@ -264,12 +264,15 @@ lexical-memory decay after migration and before exposing the long-lived
 memory pool. Slice 185 makes that startup pass observable by retaining the
 shadowed-record count on `RuntimeAssembly` and printing it in the startup
 banner as `startup-decay=<disabled|N>`. `decay_check_interval_hours` remains
-reserved for future periodic automation scheduling.
+reserved for future periodic automation scheduling. Slice 186 publishes that
+successful startup pass as advisory `memory_decay` metadata through build-only
+`RuntimeAssemblyOptions::startup_hook_bindings`; the payload carries source,
+scope, policy inputs, shadowed count, and timing, but no decayed record content.
 Default builds still reject
 `memory.longterm.hybrid_search.enabled=true` before assembly/provider side
 effects with `reason=build_option_disabled`, `option=vector_memory`. Semantic or
 external embedding providers, blocking read-before policy, periodic decay
-ownership, and decay hook publishing remain downstream.
+ownership, and periodic automation decay publishing remain downstream.
 
 ```cpp
 // include/oran/memory/longterm.hpp
@@ -535,8 +538,9 @@ read-touch metadata prerequisite (`Backend::touch` plus recall-side
 (`Backend::decay`) that applies the shadow transition for a bounded scope batch,
 slice 183 provides the parsed policy contract, slice 184 provides the
 configured-route startup owner, and slice 185 exposes the startup pass shadow
-count for diagnostics. Remaining ownership work is periodic `oran-automation`
-execution plus lifecycle hook publishing.
+count for diagnostics. Slice 186 publishes successful startup decay as advisory
+`memory_decay` metadata. Remaining ownership work is periodic `oran-automation`
+execution plus the periodic decay producer.
 
 Forgetting is final (DELETE), with an audit row in `audit.db`.
 
@@ -564,7 +568,10 @@ Memory lifecycle:
   successful bootstrap `memory.remember`.
 - `memory.forget(scope, id)` — shipped in slice 179 as advisory after
   successful bootstrap `memory.forget`.
-- `memory.decay(scope, count)` — periodic.
+- `memory.decay(scope, count)` — shipped for the configured-route startup
+  retention pass in slice 186 as advisory metadata (`source`, scope, policy
+  inputs, shadowed count, timing) with no record content. Periodic automation
+  decay publishing remains downstream.
 
 These hooks are why team shared memory works: the orchestration leader can install a
 `memory.write.after` hook on the shared tier to mirror notes to a Slack channel, for

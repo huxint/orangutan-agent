@@ -27,6 +27,7 @@
 namespace async = orangutan::async;
 namespace bootstrap = orangutan::bootstrap;
 namespace core = orangutan::core;
+namespace hook = orangutan::hook;
 namespace memory = orangutan::memory;
 namespace permission = orangutan::permission;
 namespace storage = orangutan::storage;
@@ -188,6 +189,27 @@ TEST_CASE("RuntimeAssembly::build installs a hook bus with blocking timeout",
   REQUIRE(assembly->hook_bus().binding_count() == 0);
 }
 
+TEST_CASE("RuntimeAssembly::build rejects null startup hook bindings", "[unit][bootstrap][runtime_assembly][hook]") {
+  TempDir temp{"oran-assembly-hook-null-binding"};
+  asio::io_context io;
+
+  auto options = bootstrap::RuntimeAssemblyOptions{};
+  options.audit_enabled = false;
+  options.session_memory_enabled = false;
+  options.longterm_memory_enabled = false;
+  options.startup_hook_bindings.push_back(bootstrap::RuntimeStartupHookBinding{
+      .sink = nullptr,
+      .events = {hook::Event::memory_decay},
+  });
+  auto assembly = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
+
+  REQUIRE_FALSE(assembly.has_value());
+  REQUIRE(assembly.error().kind() == core::ErrorKind::invalid_argument);
+  REQUIRE(std::ranges::any_of(assembly.error().context(), [](const auto& entry) {
+    return entry.first == "reason" && entry.second == "null_sink";
+  }));
+}
+
 TEST_CASE("RuntimeAssembly::build provisions audit.db at the workspace default path",
           "[unit][bootstrap][runtime_assembly]") {
   TempDir temp{"oran-assembly-default-path"};
@@ -305,10 +327,24 @@ TEST_CASE("RuntimeAssembly::build applies long-term startup decay before exposin
     }
 
     const auto decay_at = core::Time{core::Time::time_point{30s}};
+    std::vector<hook::MemoryDecayPayload> decay_payloads;
+    hook::InProcessSink decay_sink{
+        "startup-decay-recorder",
+        [&decay_payloads](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
+          REQUIRE(event == hook::Event::memory_decay);
+          const auto* decay = std::get_if<hook::MemoryDecayPayload>(payload.get());
+          REQUIRE(decay != nullptr);
+          decay_payloads.push_back(*decay);
+          co_return core::Result<void>{};
+        }};
     auto options = bootstrap::RuntimeAssemblyOptions{};
     options.audit_enabled = false;
     options.session_memory_enabled = false;
     options.longterm_memory_enabled = true;
+    options.startup_hook_bindings.push_back(bootstrap::RuntimeStartupHookBinding{
+        .sink = &decay_sink,
+        .events = {hook::Event::memory_decay},
+    });
     options.longterm_memory_startup_decay = bootstrap::LongtermMemoryStartupDecayOptions{
         .scope_key = "cli",
         .unused_before = core::Time{core::Time::time_point{10s}},
@@ -320,6 +356,20 @@ TEST_CASE("RuntimeAssembly::build applies long-term startup decay before exposin
     REQUIRE(built.has_value());
     REQUIRE(built->longterm_memory_startup_decay_shadowed_count().has_value());
     REQUIRE(*built->longterm_memory_startup_decay_shadowed_count() == 1);
+    REQUIRE(decay_payloads.size() == 1);
+    REQUIRE(decay_payloads[0].source == "startup");
+    REQUIRE(decay_payloads[0].who.scope_key == "cli");
+    REQUIRE(decay_payloads[0].who.agent_key == "bootstrap");
+    REQUIRE(decay_payloads[0].who.identity == "startup");
+    REQUIRE(decay_payloads[0].scope_key == "cli");
+    REQUIRE(decay_payloads[0].unused_before == core::Time{core::Time::time_point{10s}});
+    REQUIRE(decay_payloads[0].importance_floor == 0.5);
+    REQUIRE(decay_payloads[0].limit == 10);
+    REQUIRE(decay_payloads[0].decay_at == decay_at);
+    REQUIRE(decay_payloads[0].shadowed_count == 1);
+    REQUIRE(decay_payloads[0].finished_at.to_system_time_point() >=
+            decay_payloads[0].started_at.to_system_time_point());
+    REQUIRE(built->hook_bus().sink_count(hook::Event::memory_decay) == 0);
 
     auto default_hits = co_await built->longterm_memory_backend()->search(
         memory::longterm::Query{

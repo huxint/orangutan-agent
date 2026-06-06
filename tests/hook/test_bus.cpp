@@ -66,6 +66,8 @@ struct Capture {
           return "memory_write";
         } else if constexpr (std::same_as<T, hook::MemoryForgetPayload>) {
           return "memory_forget";
+        } else if constexpr (std::same_as<T, hook::MemoryDecayPayload>) {
+          return "memory_decay";
         } else if constexpr (std::same_as<T, hook::ProviderRequestPayload>) {
           return "provider_request";
         } else if constexpr (std::same_as<T, hook::ProviderResponsePayload>) {
@@ -320,6 +322,22 @@ hook::MemoryReadPayload sample_memory_read() {
   };
 }
 
+hook::MemoryDecayPayload sample_memory_decay() {
+  return hook::MemoryDecayPayload{
+      .who = hook::Identity{.scope_key = "cli", .agent_key = "bootstrap", .identity = "startup"},
+      .source = "startup",
+      .scope_key = "cli",
+      .unused_before = core::Time{core::Time::time_point{10s}},
+      .importance_floor = 0.5,
+      .limit = 10,
+      .decay_at = core::Time{core::Time::time_point{30s}},
+      .shadowed_count = 3,
+      .started_at = core::Time::epoch(),
+      .finished_at = core::Time{core::Time::time_point{1ms}},
+      .duration = 1ms,
+  };
+}
+
 }  // namespace
 
 TEST_CASE("Bus is empty by default", "[hook][bus]") {
@@ -338,6 +356,35 @@ TEST_CASE("publish_advisory on empty bus succeeds with empty outcome", "[hook][b
     REQUIRE(outcome.failure_count() == 0);
     co_return;
   });
+}
+
+TEST_CASE("publish_advisory delivers memory decay metadata", "[hook][bus][memory]") {
+  hook::Bus bus;
+  hook::MemoryDecayPayload captured;
+  hook::InProcessSink sink{"decay-recorder",
+                           [&](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
+                             REQUIRE(event == hook::Event::memory_decay);
+                             const auto* decay = std::get_if<hook::MemoryDecayPayload>(payload.get());
+                             REQUIRE(decay != nullptr);
+                             captured = *decay;
+                             co_return core::Result<void>{};
+                           }};
+  bus.bind(sink, {hook::Event::memory_decay});
+
+  test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
+    auto outcome = co_await bus.publish_advisory(hook::Event::memory_decay, sample_memory_decay());
+    REQUIRE(outcome.sinks.size() == 1);
+    REQUIRE(outcome.sinks[0].sink_id == "decay-recorder");
+    REQUIRE(outcome.all_succeeded());
+    co_return;
+  });
+
+  REQUIRE(captured.source == "startup");
+  REQUIRE(captured.scope_key == "cli");
+  REQUIRE(captured.importance_floor == 0.5);
+  REQUIRE(captured.limit == 10);
+  REQUIRE(captured.shadowed_count == 3);
+  REQUIRE(captured.duration == 1ms);
 }
 
 TEST_CASE("bind connects sink to event, publish_advisory drives it", "[hook][bus]") {

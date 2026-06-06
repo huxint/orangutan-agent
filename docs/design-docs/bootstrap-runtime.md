@@ -54,6 +54,19 @@ with a bootstrap-owned `AgentPromptRunner` when config declares a provider route
 ```cpp
 namespace orangutan::bootstrap {
 
+struct LongtermMemoryStartupDecayOptions {
+  std::string scope_key{};
+  core::Time unused_before{core::Time::epoch()};
+  double importance_floor{0.0};
+  std::size_t limit{0};
+  core::Time decay_at{core::Time::epoch()};
+};
+
+struct RuntimeStartupHookBinding {
+  hook::Sink* sink{nullptr};
+  std::vector<hook::Event> events{};
+};
+
 struct RuntimeAssemblyOptions {
   std::string audit_db_path{};
   bool audit_enabled = true;
@@ -63,6 +76,7 @@ struct RuntimeAssemblyOptions {
   bool trace_enabled = true;
   std::optional<std::int64_t> trace_retention_started_before_ns{};
   std::chrono::milliseconds hook_blocking_timeout{2000};
+  std::vector<RuntimeStartupHookBinding> startup_hook_bindings{};
   std::string sessions_db_path{};
   bool session_memory_enabled = true;
   std::size_t session_reader_count{2};
@@ -111,8 +125,8 @@ class RuntimeAssembly {
 ```
 
 The assembly owns the approval broker, audit sink/repository pool, workspace resolver,
-optional trace repository, process hook bus, optional session-memory store, and
-optional long-term memory backend/runtime.
+optional trace repository, process hook bus, build-only startup hook bindings,
+optional session-memory store, and optional long-term memory backend/runtime.
 Session memory uses a separate `storage::Pool` and `storage::SessionRepository` over
 `<workspace>/.orangutan/sessions.db` by default; it never shares the audit/trace
 `audit.db` pool. Long-term memory uses a separate `storage::Pool` over
@@ -136,11 +150,20 @@ by trace retention. For configured-route runs, bootstrap also derives
 `longterm_memory_startup_decay` from `memory.longterm.retention` for the runner's
 stable `cli` scope. The assembly applies that one lexical-memory pass after
 long-term migration and before the long-lived memory pool is exposed, so prompt
-and tool reads see the post-decay visible set. It stores the pass result on the
+and tool reads see the post-decay visible set. After the pass succeeds, the
+assembly publishes advisory `memory_decay` with metadata for the startup source,
+scope, retention policy inputs, shadowed count, and timing; decayed record
+content is not included. It stores the pass result on the
 assembly as `longterm_memory_startup_decay_shadowed_count()`: `std::nullopt`
 means no startup pass was configured or run, while `0` or higher means the pass
 ran and reports how many records were shadowed. `decay_check_interval_hours`
-remains a future `oran-automation` cadence input, not a startup-loop timer. The
+remains a future `oran-automation` cadence input, not a startup-loop timer.
+`startup_hook_bindings` are installed immediately after the bus is constructed
+and before startup producers run; null sinks are rejected with
+`reason=null_sink`, and every startup-only observer is unbound before the
+assembly is returned. Regular long-lived observers still bind through
+`hook_bus()` after `build()` returns for prompt/tool/provider lifecycle events.
+The
 built-in empty-defaults path disables session and long-term memory so a fresh
 checkout can run the deterministic CLI shell without opening `sessions.db` or
 `memory.db`. The startup banner prints

@@ -328,7 +328,7 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 
 ## Hook Bus
 
-> **Bus status (2026-06-06, slice 180):** the foundation
+> **Bus status (2026-06-07, slice 186):** the foundation
 > ships as `oran-hook`. `hook::Event` enumerates the 41
 > lifecycle events listed below; `hook::Mode { advisory,
 > blocking }` plus `default_mode(Event)` annotates each
@@ -371,8 +371,8 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > `ToolDispatchedPayload`, `ToolAfterPayload`, `ToolErrorPayload`, slice
 > 94's `PermissionAskRenderedPayload`, slice 126's provider lifecycle
 > payloads, slice 179's `MemoryWritePayload` / `MemoryForgetPayload`,
-> and slice 180's `MemoryReadPayload` / `MemoryReadHitPayload`
-> lifecycle payloads. Slice 60 adds the `ToolUsage`
+> slice 180's `MemoryReadPayload` / `MemoryReadHitPayload`, and slice
+> 186's `MemoryDecayPayload` lifecycle payloads. Slice 60 adds the `ToolUsage`
 > metrics copied from `tool::Output::usage` onto successful
 > `ToolAfterPayload`s without making `oran-hook` depend on
 > `oran-tool`; slice 65 adds optional
@@ -408,12 +408,16 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > `query`, hit titles/bodies/tags, and linked ids for default sinks while
 > preserving query byte count and record byte/count metadata; trusted-local
 > sinks receive the raw query and records.
+> Slice 186 adds `MemoryDecayPayload` for successful long-term retention
+> passes. It is metadata-only by construction: source label, identity, scope,
+> retention inputs, shadowed count, and timing are present, but decayed record
+> contents are not, so default and trusted-local sinks receive the same shape.
 > Typed shapes for
 > the remaining non-tool
 > events ship with their producers (provider request /
-> response payloads now live with the agent/provider lifecycle path;
-> memory decay payloads and channel payloads remain planned until their
-> producers wire in, and so on).
+> response payloads now live with the agent/provider lifecycle path; memory
+> read/write/delete/decay payloads now live with memory producers; channel
+> payloads remain planned until their producers wire in, and so on).
 > `Registry::dispatch` consumes the bus through the
 > optional `DispatchContext::bus` field: when non-null,
 > dispatch first publishes blocking `tool_before` through
@@ -529,8 +533,14 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > adds the read-side advisory producer: prompt-boundary long-term recall and
 > the `memory.recall` tool publish `memory_read_after` after successful lexical
 > or hybrid recall, with query/hit content redacted for default sinks. Blocking
-> `memory_read_before` remains a declared event without a runtime consumer.
-> `test-hook` now reports 36 cases / 287 assertions.
+> `memory_read_before` remains a declared event without a runtime consumer. Slice
+> 186 adds the startup decay producer: configured-route startup publishes
+> advisory `memory_decay` after the optional bounded `Fts5Backend::decay(...)`
+> pass succeeds, using build-only
+> `RuntimeAssemblyOptions::startup_hook_bindings` for observers that must
+> subscribe before startup producers run. Periodic automation decay publishing
+> remains downstream.
+> `test-hook` now reports 37 cases / 299 assertions.
 
 ### Surface
 

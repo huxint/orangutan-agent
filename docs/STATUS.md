@@ -7,27 +7,28 @@
 
 ## Snapshot
 
-- **Slice:** 185 (`xmake run orangutan -- --help` reports slice 185)
+- **Slice:** 186 (`xmake run orangutan -- --help` reports slice 186)
 - **Last completed history:**
-  [`histories/2026-06/20260606-2347-memory-startup-decay-diagnostics.md`](histories/2026-06/20260606-2347-memory-startup-decay-diagnostics.md)
+  [`histories/2026-06/20260607-0039-memory-startup-decay-hooks.md`](histories/2026-06/20260607-0039-memory-startup-decay-hooks.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 185 makes the configured-route startup
-  retention pass observable. `RuntimeAssembly::build` now stores the
-  `Fts5Backend::decay(...)` shadow count from the optional startup pass and
-  exposes it through
-  `longterm_memory_startup_decay_shadowed_count()`: `nullopt` means no startup
-  pass ran, while `0` or higher means the pass ran and reports the number of
-  records shadowed. `bootstrap::run` includes the same value in the startup
-  banner as `startup-decay=<disabled|N>`, so operators can distinguish
-  "retention did not run" from "retention ran and found no candidates" without
-  opening the memory DB. Focused result: `test-bootstrap` **119 cases / 1006
-  assertions**.
+- **Latest completed slice:** slice 186 makes the configured-route startup
+  retention pass hook-observable. `oran-hook` now carries a typed
+  `MemoryDecayPayload` for `memory_decay` with source, scope, retention policy
+  inputs, shadowed count, and timing metadata. `RuntimeAssemblyOptions` adds
+  build-only `startup_hook_bindings`, installs those in-process sinks before
+  startup producers run, publishes advisory `memory_decay` after the optional
+  startup `Fts5Backend::decay(...)` pass succeeds, then unbinds those startup
+  observers before returning the assembly. The slice preserves the slice-185
+  `startup-decay=<disabled|N>` banner and
+  `longterm_memory_startup_decay_shadowed_count()` diagnostic. Focused results:
+  `test-hook` **37 cases / 299 assertions** and `test-bootstrap` **120 cases /
+  1024 assertions**.
 - **Next intended slice:** no active plan. The remaining memory work should be a
   product capability gap, not another benchmark by default: periodic
-  automation scheduling for retention cadence, decay lifecycle hooks once
-  subscribers are attached, external/semantic embedding provider ownership, or
-  the optional `MEMORY.md` mirror are the next meaningful candidates. The
+  automation scheduling for retention cadence, external/semantic embedding
+  provider ownership, or the optional `MEMORY.md` mirror are the next
+  meaningful candidates. The
   spec-0010 unified benchmark JSON gap still exists, but it is secondary to
   runtime capability.
 
@@ -38,9 +39,10 @@ Slice 183 adds the operator-facing long-term
   `decay_check_interval_hours`, defaults them to 180 days / 0.0 / 10000 / 24 h,
   rejects malformed values, and preserves strict/loose unknown-field behavior
   for the nested retention block. Slice 184 consumes that policy for one
-  configured-route startup decay pass; periodic scheduling and decay hook
-  publishing remain downstream. Slice 185 exposes the startup decay shadow
-  count on the assembly and startup banner.
+  configured-route startup decay pass; periodic scheduling remains downstream.
+  Slice 185 exposes the startup decay shadow count on the assembly and startup
+  banner, and slice 186 publishes the startup pass as advisory `memory_decay`
+  metadata for build-time observers.
   Focused result: `test-config` **48 cases / 429 assertions**.
 
 Slice 182 adds the library-level long-term decay
@@ -50,7 +52,8 @@ Slice 182 adds the library-level long-term decay
   `importance <= importance_floor` as `shadow=true` in bounded batches, updates
   the FTS shadow metadata, returns the shadowed records, and leaves default
   search excluding those rows unless `Query::include_shadow=true`. Automation
-  scheduling and decay hook publishing remain downstream. Focused result:
+  scheduling and periodic decay publishing remain downstream; startup hook
+  publishing landed in slice 186. Focused result:
   `test-memory` **38 cases / 841 assertions**.
 
 Slice 181 adds read-touch metadata to successful
@@ -1786,7 +1789,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-storage`: 77 cases / 988 assertions.
 - `oran-config`: 48 cases / 429 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
-- `oran-hook`: 36 cases / 287 assertions.
+- `oran-hook`: 37 cases / 299 assertions.
 - `oran-memory`: 38 cases / 841 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 208 cases / 2181 assertions.
@@ -1794,7 +1797,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 119 cases / 1006 assertions.
+- `oran-bootstrap`: 120 cases / 1024 assertions.
 
 ## Open Tech-Debt Rows
 
