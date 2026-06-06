@@ -281,6 +281,11 @@ public:
   /// at build time.
   [[nodiscard]] bool longterm_memory_enabled() const noexcept;
 
+  /// Count of records shadowed by the optional startup long-term retention
+  /// pass. `std::nullopt` means no startup pass was configured or run; `0`
+  /// means the pass ran and found no matching records.
+  [[nodiscard]] std::optional<std::size_t> longterm_memory_startup_decay_shadowed_count() const noexcept;
+
   /// `true` iff the vector-memory DB pool/backend/hybrid runtime were
   /// constructed at build time.
   [[nodiscard]] bool longterm_vector_memory_enabled() const noexcept;

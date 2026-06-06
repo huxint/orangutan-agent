@@ -59,8 +59,9 @@ Current implementation status:
   `forget_after_unused_days`, `importance_floor`, `max_records_per_scope`, and
   `decay_check_interval_hours`. Configured-route startup consumes
   `forget_after_unused_days`, `importance_floor`, and `max_records_per_scope`
-  for one bounded long-term decay pass before prompt/tool reads; the interval
-  field remains reserved for future `oran-automation` cadence ownership.
+  for one bounded long-term decay pass before prompt/tool reads and now reports
+  the startup shadow count through runtime diagnostics; the interval field
+  remains reserved for future `oran-automation` cadence ownership.
   Ordinary configured-route bootstrap maps the recall policy into
   prompt-boundary long-term recall. The hybrid-search block defaults disabled;
   when built with `--vector_memory=y`, configured-route bootstrap now enables the

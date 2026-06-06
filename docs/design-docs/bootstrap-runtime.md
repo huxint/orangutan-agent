@@ -100,6 +100,8 @@ class RuntimeAssembly {
   memory::longterm::VectorBackend* longterm_vector_backend() noexcept;
   memory::longterm::HybridRuntime* longterm_hybrid_runtime() noexcept;
   bool longterm_memory_enabled() const noexcept;
+  std::optional<std::size_t>
+  longterm_memory_startup_decay_shadowed_count() const noexcept;
   bool longterm_vector_memory_enabled() const noexcept;
   std::string_view longterm_memory_path() const noexcept;
   std::string_view longterm_vector_memory_path() const noexcept;
@@ -134,13 +136,17 @@ by trace retention. For configured-route runs, bootstrap also derives
 `longterm_memory_startup_decay` from `memory.longterm.retention` for the runner's
 stable `cli` scope. The assembly applies that one lexical-memory pass after
 long-term migration and before the long-lived memory pool is exposed, so prompt
-and tool reads see the post-decay visible set. `decay_check_interval_hours`
+and tool reads see the post-decay visible set. It stores the pass result on the
+assembly as `longterm_memory_startup_decay_shadowed_count()`: `std::nullopt`
+means no startup pass was configured or run, while `0` or higher means the pass
+ran and reports how many records were shadowed. `decay_check_interval_hours`
 remains a future `oran-automation` cadence input, not a startup-loop timer. The
 built-in empty-defaults path disables session and long-term memory so a fresh
 checkout can run the deterministic CLI shell without opening `sessions.db` or
 `memory.db`. The startup banner prints
 `trace=<enabled|disabled>`, `sessions=<enabled|disabled> (<path|disabled>)`,
 `longterm-memory=<enabled|disabled> (<path|disabled>)`,
+`startup-decay=<disabled|N>`,
 `vector-memory=<enabled|disabled> (<path|disabled>)`, and `hook-timeout=<ms>`.
 
 `<oran/bootstrap/prompt_runner.hpp>` exposes the bootstrap-owned CLI runner used by

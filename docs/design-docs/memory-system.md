@@ -157,7 +157,7 @@ MEMORY.md mirror. v2 keeps that core and adds:
   metadata before pruning. Expired records eventually receive lower search weight
   before potentially being shadowed or deleted.
 
-Status (slice 184): `include/oran/memory/longterm.hpp` now ships the public
+Status (slice 185): `include/oran/memory/longterm.hpp` now ships the public
 record/query/write/touch/decay shapes, reflection-backed `RecordKind`,
 `Backend` and `VectorBackend` traits, validation helpers for record keys,
 search limits, record metadata, touch requests, decay requests, and vector
@@ -261,8 +261,10 @@ config surface. Slice 184 consumes that policy at configured-route startup:
 `bootstrap::run` derives a `LongtermMemoryStartupDecayOptions` pass for the
 runner's `cli` scope, and `RuntimeAssembly::build` applies that bounded
 lexical-memory decay after migration and before exposing the long-lived
-memory pool. `decay_check_interval_hours` remains reserved for future periodic
-automation scheduling.
+memory pool. Slice 185 makes that startup pass observable by retaining the
+shadowed-record count on `RuntimeAssembly` and printing it in the startup
+banner as `startup-decay=<disabled|N>`. `decay_check_interval_hours` remains
+reserved for future periodic automation scheduling.
 Default builds still reject
 `memory.longterm.hybrid_search.enabled=true` before assembly/provider side
 effects with `reason=build_option_disabled`, `option=vector_memory`. Semantic or
@@ -531,9 +533,10 @@ visible to runtime callers that set `Query::include_shadow=true`. The shipped
 read-touch metadata prerequisite (`Backend::touch` plus recall-side
 `last_read_at` updates), slice 182 provides the backend execution boundary
 (`Backend::decay`) that applies the shadow transition for a bounded scope batch,
-slice 183 provides the parsed policy contract, and slice 184 provides the
-configured-route startup owner. Remaining ownership work is periodic
-`oran-automation` execution plus lifecycle hook publishing.
+slice 183 provides the parsed policy contract, slice 184 provides the
+configured-route startup owner, and slice 185 exposes the startup pass shadow
+count for diagnostics. Remaining ownership work is periodic `oran-automation`
+execution plus lifecycle hook publishing.
 
 Forgetting is final (DELETE), with an audit row in `audit.db`.
 

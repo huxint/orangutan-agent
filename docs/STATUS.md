@@ -7,21 +7,21 @@
 
 ## Snapshot
 
-- **Slice:** 184 (`xmake run orangutan -- --help` reports slice 184)
+- **Slice:** 185 (`xmake run orangutan -- --help` reports slice 185)
 - **Last completed history:**
-  [`histories/2026-06/20260606-2314-memory-startup-retention-decay.md`](histories/2026-06/20260606-2314-memory-startup-retention-decay.md)
+  [`histories/2026-06/20260606-2347-memory-startup-decay-diagnostics.md`](histories/2026-06/20260606-2347-memory-startup-decay-diagnostics.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 184 consumes the typed long-term retention
-  policy during configured-route startup. `bootstrap::run` derives one
-  `LongtermMemoryStartupDecayOptions` pass from
-  `memory.longterm.retention.forget_after_unused_days`, `importance_floor`, and
-  `max_records_per_scope` for the runner's `cli` scope; `RuntimeAssembly::build`
-  runs that bounded `Fts5Backend::decay(...)` pass after long-term memory
-  migration and before opening the long-lived memory pool, so prompt-boundary
-  recall and `memory.recall` do not see newly shadowed stale records.
-  `decay_check_interval_hours` remains reserved for a future periodic
-  `oran-automation` owner. Focused result: `test-bootstrap` **119 cases / 1002
+- **Latest completed slice:** slice 185 makes the configured-route startup
+  retention pass observable. `RuntimeAssembly::build` now stores the
+  `Fts5Backend::decay(...)` shadow count from the optional startup pass and
+  exposes it through
+  `longterm_memory_startup_decay_shadowed_count()`: `nullopt` means no startup
+  pass ran, while `0` or higher means the pass ran and reports the number of
+  records shadowed. `bootstrap::run` includes the same value in the startup
+  banner as `startup-decay=<disabled|N>`, so operators can distinguish
+  "retention did not run" from "retention ran and found no candidates" without
+  opening the memory DB. Focused result: `test-bootstrap` **119 cases / 1006
   assertions**.
 - **Next intended slice:** no active plan. The remaining memory work should be a
   product capability gap, not another benchmark by default: periodic
@@ -39,7 +39,8 @@ Slice 183 adds the operator-facing long-term
   rejects malformed values, and preserves strict/loose unknown-field behavior
   for the nested retention block. Slice 184 consumes that policy for one
   configured-route startup decay pass; periodic scheduling and decay hook
-  publishing remain downstream.
+  publishing remain downstream. Slice 185 exposes the startup decay shadow
+  count on the assembly and startup banner.
   Focused result: `test-config` **48 cases / 429 assertions**.
 
 Slice 182 adds the library-level long-term decay
@@ -1793,7 +1794,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 119 cases / 1002 assertions.
+- `oran-bootstrap`: 119 cases / 1006 assertions.
 
 ## Open Tech-Debt Rows
 

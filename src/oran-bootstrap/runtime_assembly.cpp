@@ -325,6 +325,7 @@ struct RuntimeAssembly::Impl {
   std::string sessions_path;
   std::string longterm_memory_path;
   std::string longterm_vector_memory_path;
+  std::optional<std::size_t> longterm_memory_startup_decay_shadowed_count{};
   // The members below are non-default-constructible in their final
   // shape and capture pointers into each other (`AuditRepository`
   // refers to `audit_pool`, `audit_sink` refers to `audit_repository`).
@@ -429,6 +430,10 @@ bool RuntimeAssembly::longterm_memory_enabled() const noexcept {
   return impl_->longterm_memory_runtime != nullptr;
 }
 
+std::optional<std::size_t> RuntimeAssembly::longterm_memory_startup_decay_shadowed_count() const noexcept {
+  return impl_->longterm_memory_startup_decay_shadowed_count;
+}
+
 bool RuntimeAssembly::longterm_vector_memory_enabled() const noexcept {
   return impl_->longterm_hybrid_runtime != nullptr;
 }
@@ -529,6 +534,7 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
       if (!decayed) {
         return std::unexpected(std::move(decayed).error());
       }
+      impl->longterm_memory_startup_decay_shadowed_count = *decayed;
     }
 
     auto memory_pool =

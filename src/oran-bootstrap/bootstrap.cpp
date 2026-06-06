@@ -46,7 +46,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice184";
+constexpr std::string_view kVersion = "2.0.0-slice185";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 constexpr std::string_view kLongtermTextEmbeddingModel = "oran-local-text-v1";
@@ -201,6 +201,13 @@ longterm_startup_decay_options_from(const config::Config& cfg, std::string_view 
       .limit = *limit,
       .decay_at = now,
   };
+}
+
+[[nodiscard]] std::string longterm_startup_decay_summary(const RuntimeAssembly& assembly) {
+  if (auto shadowed = assembly.longterm_memory_startup_decay_shadowed_count(); shadowed.has_value()) {
+    return std::to_string(*shadowed);
+  }
+  return "disabled";
 }
 
 /// Pull the value following a long flag — supports both `--flag value` and
@@ -967,7 +974,7 @@ core::Result<int> run(BootstrapOptions options) {
   }
   std::println(
       "runtime assembly ready: audit={} ({}), approval-broker=fresh, workspace={}, trace={}, sessions={} ({}), "
-      "longterm-memory={} ({}), vector-memory={} ({}), hook-timeout={}ms",
+      "longterm-memory={} ({}), startup-decay={}, vector-memory={} ({}), hook-timeout={}ms",
       assembly->audit_enabled() ? "enabled" : "disabled",
       assembly->audit_enabled() ? assembly->audit_path() : std::string_view{"<null sink>"},
       assembly->workspace().root(),
@@ -976,6 +983,7 @@ core::Result<int> run(BootstrapOptions options) {
       assembly->session_memory_enabled() ? assembly->sessions_path() : std::string_view{"<disabled>"},
       assembly->longterm_memory_enabled() ? "enabled" : "disabled",
       assembly->longterm_memory_enabled() ? assembly->longterm_memory_path() : std::string_view{"<disabled>"},
+      longterm_startup_decay_summary(*assembly),
       assembly->longterm_vector_memory_enabled() ? "enabled" : "disabled",
       assembly->longterm_vector_memory_enabled() ? assembly->longterm_vector_memory_path()
                                                  : std::string_view{"<disabled>"},

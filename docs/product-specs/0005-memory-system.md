@@ -188,6 +188,11 @@ operators can reason about retention, scope, and visibility.
   migration and before exposing the long-lived memory backend/runtime. The
   `decay_check_interval_hours` field remains reserved for future periodic
   automation cadence.
+- Startup retention diagnostics shipped in slice 185:
+  `RuntimeAssembly` now retains the optional startup pass shadow count and
+  `bootstrap::run` prints the same value as `startup-decay=<disabled|N>` in the
+  startup banner. Operators can tell whether startup decay was disabled, ran
+  with zero candidates, or shadowed records without inspecting the memory DB.
 - Decay policy scheduling by a periodic job (`oran-automation`) remains
   downstream.
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
@@ -249,6 +254,8 @@ operators can reason about retention, scope, and visibility.
    default search. Slice 183 adds the typed `memory.longterm.retention` config
    contract for those policy inputs. Slice 184 closes the configured-route
    startup owner by applying one bounded decay pass before prompt/tool reads.
+   Slice 185 adds an assembly/banner diagnostic for whether that startup pass
+   ran and how many records it shadowed.
    `oran-automation` periodic scheduling and decay hook publishing remain open.
 5. A `memory.write.before` hook can veto a write. **Status:** closed for the
    bootstrap `memory.remember` tool path in slice 179. `AgentPromptRunner`
@@ -275,7 +282,9 @@ operators can reason about retention, scope, and visibility.
    retention-policy coverage for defaults, explicit values, malformed values,
    and strict/loose unknown retention fields. Slice 184 adds bootstrap coverage
    for configured-route startup retention consumption plus assembly-level
-   startup decay before the long-lived memory backend is exposed. Slice 176 adds
+   startup decay before the long-lived memory backend is exposed. Slice 185
+   tightens bootstrap assertions for the startup decay shadow-count diagnostic.
+   Slice 176 adds
    gated sqlite-vec disabled-build coverage, plus `--vector_memory=y` coverage
    for scoped upsert/search/remove and dimension-mismatch migration rejection.
    Gated `--vector_memory=y` `test-memory` remains last reported at 36 cases /
@@ -283,7 +292,7 @@ operators can reason about retention, scope, and visibility.
    `test-config` reports
    48 cases / 429 assertions for the recall, hybrid-search, and retention policy parsers, `test-hook`
    reports 36 cases / 287 assertions for hook payload and redaction coverage, and `test-bootstrap`
-   reports 119 cases / 1002 assertions by default and 120 cases / 958 assertions
+   reports 119 cases / 1006 assertions by default and 120 cases / 958 assertions
    with `--vector_memory=y` for the assembly, prompt-runner, and
    configured-route recall consumers, including slice-167 query-strategy
    coverage, slice-168 `memory.recall` tool binding, and slice-169

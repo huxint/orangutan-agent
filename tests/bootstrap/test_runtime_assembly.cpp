@@ -318,6 +318,8 @@ TEST_CASE("RuntimeAssembly::build applies long-term startup decay before exposin
     };
     auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
     REQUIRE(built.has_value());
+    REQUIRE(built->longterm_memory_startup_decay_shadowed_count().has_value());
+    REQUIRE(*built->longterm_memory_startup_decay_shadowed_count() == 1);
 
     auto default_hits = co_await built->longterm_memory_backend()->search(
         memory::longterm::Query{
@@ -473,6 +475,7 @@ TEST_CASE("RuntimeAssembly::build honors an explicit long-term memory DB path",
   REQUIRE(built.has_value());
   REQUIRE(built->longterm_memory_enabled());
   REQUIRE(built->longterm_memory_path() == explicit_path);
+  REQUIRE_FALSE(built->longterm_memory_startup_decay_shadowed_count().has_value());
   REQUIRE(std::filesystem::exists(explicit_path));
   REQUIRE(table_exists(explicit_path, "longterm_records"));
 }
@@ -504,6 +507,7 @@ TEST_CASE("RuntimeAssembly::build can disable long-term memory", "[unit][bootstr
   REQUIRE_FALSE(built->longterm_memory_enabled());
   REQUIRE(built->longterm_memory_backend() == nullptr);
   REQUIRE(built->longterm_memory_runtime() == nullptr);
+  REQUIRE_FALSE(built->longterm_memory_startup_decay_shadowed_count().has_value());
   REQUIRE(built->longterm_memory_path().empty());
   REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan" / "memory.db"));
 }
