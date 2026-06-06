@@ -45,7 +45,7 @@ in what order.
 
 ## Scope (v1)
 
-> **Status (slice 179, 2026-06-06):** the bus surface, the
+> **Status (slice 180, 2026-06-06):** the bus surface, the
 > `tool_before` dispatch consumer, the configured blocking-timeout
 > policy, traced direct-dispatch `hook_publish` audit rows, and the first
 > `memory_write_before` runtime consumer are shipped.
@@ -80,7 +80,7 @@ in what order.
 > `config.hooks.timeout_ms`) and races each blocking sink against
 > `async::sleep_for`; a timeout synthesizes a veto with
 > `reason="hook_timeout"` and fills `HookDecisionTrace::elapsed`.
-> `test-hook` now reports 35 cases / 264 assertions. Slice 91 adds the
+> `test-hook` now reports 36 cases / 287 assertions. Slice 91 adds the
 > `HookDecisionTrace`
 > vector so dispatch can serialize every consulted sink decision into
 > audit metadata; `Registry::dispatch` now calls
@@ -131,7 +131,14 @@ in what order.
 > `reason=blocked_by_hook`, while `rewrite` and `require_approval` remain
 > unsupported for this consumer. Successful `memory.remember` and
 > `memory.forget` paths publish advisory `memory_write_after` and
-> `memory_forget`.
+> `memory_forget`. Slice 180 adds typed `MemoryReadPayload` /
+> `MemoryReadHitPayload` and applies the same trust boundary to successful
+> long-term reads: prompt-boundary recall and `memory.recall` publish advisory
+> `memory_read_after`; default sinks receive source/scope/kind/limit/match,
+> score, timing, and byte/count metadata while raw recall query text plus hit
+> title/body/tags/linked ids are cleared; trusted-local sinks receive the raw
+> query and records. The blocking whitelist is unchanged: `memory_read_before`
+> remains a declared event without a runtime consumer.
 
 The MVP is the *minimum* surface needed by the agent loop's approval
 render flow — the first real consumer. Everything else that wants a

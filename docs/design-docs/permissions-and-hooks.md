@@ -328,7 +328,7 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 
 ## Hook Bus
 
-> **Bus status (2026-06-06, slice 179):** the foundation
+> **Bus status (2026-06-06, slice 180):** the foundation
 > ships as `oran-hook`. `hook::Event` enumerates the 41
 > lifecycle events listed below; `hook::Mode { advisory,
 > blocking }` plus `default_mode(Event)` annotates each
@@ -370,7 +370,8 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > subsystem) plus `ToolBeforePayload`,
 > `ToolDispatchedPayload`, `ToolAfterPayload`, `ToolErrorPayload`, slice
 > 94's `PermissionAskRenderedPayload`, slice 126's provider lifecycle
-> payloads, and slice 179's `MemoryWritePayload` / `MemoryForgetPayload`
+> payloads, slice 179's `MemoryWritePayload` / `MemoryForgetPayload`,
+> and slice 180's `MemoryReadPayload` / `MemoryReadHitPayload`
 > lifecycle payloads. Slice 60 adds the `ToolUsage`
 > metrics copied from `tool::Output::usage` onto successful
 > `ToolAfterPayload`s without making `oran-hook` depend on
@@ -400,12 +401,19 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > kind, shadow state, title/body byte counts, tag count, and
 > linked-record count so default sinks can audit routing without
 > receiving memory content.
+> Slice 180 extends that trust boundary to long-term memory reads:
+> `MemoryReadPayload` carries the raw recall `query`, source label
+> (`prompt_boundary` or `memory.recall`), limit, kind filters, match
+> count, timing, hybrid flag, and hit scores plus records. The bus clears
+> `query`, hit titles/bodies/tags, and linked ids for default sinks while
+> preserving query byte count and record byte/count metadata; trusted-local
+> sinks receive the raw query and records.
 > Typed shapes for
 > the remaining non-tool
 > events ship with their producers (provider request /
 > response payloads now live with the agent/provider lifecycle path;
-> memory read/decay payloads and channel payloads remain planned until
-> their producers wire in, and so on).
+> memory decay payloads and channel payloads remain planned until their
+> producers wire in, and so on).
 > `Registry::dispatch` consumes the bus through the
 > optional `DispatchContext::bus` field: when non-null,
 > dispatch first publishes blocking `tool_before` through
@@ -510,15 +518,19 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > These payloads are metadata-only by construction: they include identity,
 > route/profile/model/protocol, counts, retry settings, usage, stop/error, and
 > timing fields, but no prompt text, messages, headers, credentials, or raw
-> provider bodies. Slice 179 adds the first memory lifecycle producer at the
-> bootstrap callback boundary: `AgentPromptRunner` publishes blocking
-> `memory_write_before` for `memory.remember` after parsing/scoping the record
-> and before mutating the lexical/vector backends; `veto` returns
+> provider bodies. Slice 179 adds the first memory write/delete lifecycle
+> producer at the bootstrap callback boundary: `AgentPromptRunner` publishes
+> blocking `memory_write_before` for `memory.remember` after parsing/scoping the
+> record and before mutating the lexical/vector backends; `veto` returns
 > `ErrorKind::permission_denied` with `reason=blocked_by_hook`, while
 > `rewrite` and `require_approval` are rejected as unsupported for this
 > consumer. Successful writes publish advisory `memory_write_after`, and
-> successful `memory.forget` calls publish advisory `memory_forget`.
-> `test-hook` now reports 35 cases / 264 assertions.
+> successful `memory.forget` calls publish advisory `memory_forget`. Slice 180
+> adds the read-side advisory producer: prompt-boundary long-term recall and
+> the `memory.recall` tool publish `memory_read_after` after successful lexical
+> or hybrid recall, with query/hit content redacted for default sinks. Blocking
+> `memory_read_before` remains a declared event without a runtime consumer.
+> `test-hook` now reports 36 cases / 287 assertions.
 
 ### Surface
 

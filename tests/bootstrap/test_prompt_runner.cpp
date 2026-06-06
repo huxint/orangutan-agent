@@ -675,6 +675,9 @@ TEST_CASE("AgentPromptRunner recalls long-term memory once before loop iteration
         .record = make_longterm_record("lt-recall-1", "Recall plumbing reaches the prompt boundary."),
     });
     REQUIRE(upserted.has_value());
+    std::vector<MemoryHookCapture> hook_captures;
+    MemoryCaptureSink sink{hook_captures};
+    assembly.hook_bus().bind(sink, {hook::Event::memory_read_after});
     write_file(temp.path() / "note.txt", "long-term recall fixture\n");
 
     RecordingProvider recording{{
@@ -711,6 +714,29 @@ TEST_CASE("AgentPromptRunner recalls long-term memory once before loop iteration
     REQUIRE(requests[0].system_prompt->contains("tags: recall"));
     REQUIRE(*requests[0].system_prompt == *requests[1].system_prompt);
     REQUIRE((*runner)->memory_framing_renders() == 1);
+
+    REQUIRE(hook_captures.size() == 1);
+    REQUIRE(hook_captures[0].event == hook::Event::memory_read_after);
+    const auto* read = std::get_if<hook::MemoryReadPayload>(&hook_captures[0].payload);
+    REQUIRE(read != nullptr);
+    REQUIRE(read->who.scope_key == "scope-A");
+    REQUIRE(read->who.agent_key == "coder");
+    REQUIRE(read->who.identity == "operator-1");
+    REQUIRE(read->source == "prompt_boundary");
+    REQUIRE(read->query == "recall plumbing");
+    REQUIRE(read->redacted_query_bytes == std::string_view{"recall plumbing"}.size());
+    REQUIRE(read->limit == 5);
+    REQUIRE(read->kinds.empty());
+    REQUIRE(read->match_count == 1);
+    REQUIRE(read->hits.size() == 1);
+    REQUIRE(read->hits[0].record.id == "lt-recall-1");
+    REQUIRE(read->hits[0].record.body == "Recall plumbing reaches the prompt boundary.");
+    REQUIRE(read->hits[0].record.tags == std::vector<std::string>{"recall"});
+    REQUIRE(read->hits[0].redacted_record.has_value());
+    REQUIRE(read->hits[0].redacted_record->body_bytes ==
+            std::string_view{"Recall plumbing reaches the prompt boundary."}.size());
+    REQUIRE_FALSE(read->hybrid);
+    REQUIRE(read->finished_at >= read->started_at);
   });
 }
 
@@ -773,6 +799,9 @@ TEST_CASE("AgentPromptRunner dispatches memory.recall through long-term runtime"
         .record = make_longterm_record("lt-tool-recall", "Memory tool found toolrecallanchor in the project."),
     });
     REQUIRE(upserted.has_value());
+    std::vector<MemoryHookCapture> hook_captures;
+    MemoryCaptureSink sink{hook_captures};
+    assembly.hook_bus().bind(sink, {hook::Event::memory_read_after});
 
     RecordingProvider recording{{
         provider::Response{
@@ -807,6 +836,29 @@ TEST_CASE("AgentPromptRunner dispatches memory.recall through long-term runtime"
     REQUIRE(data_json->contains(R"("kind":"memory_recall")"));
     REQUIRE(data_json->contains(R"("id":"lt-tool-recall")"));
     REQUIRE(data_json->contains(R"("match_count":1)"));
+
+    REQUIRE(hook_captures.size() == 1);
+    REQUIRE(hook_captures[0].event == hook::Event::memory_read_after);
+    const auto* read = std::get_if<hook::MemoryReadPayload>(&hook_captures[0].payload);
+    REQUIRE(read != nullptr);
+    REQUIRE(read->who.scope_key == "scope-A");
+    REQUIRE(read->who.agent_key == "coder");
+    REQUIRE(read->who.identity == "operator-1");
+    REQUIRE(read->source == "memory.recall");
+    REQUIRE(read->query == "toolrecallanchor");
+    REQUIRE(read->redacted_query_bytes == std::string_view{"toolrecallanchor"}.size());
+    REQUIRE(read->limit == 5);
+    REQUIRE(read->kinds == std::vector<std::string>{"project"});
+    REQUIRE(read->match_count == 1);
+    REQUIRE(read->hits.size() == 1);
+    REQUIRE(read->hits[0].record.id == "lt-tool-recall");
+    REQUIRE(read->hits[0].record.body == "Memory tool found toolrecallanchor in the project.");
+    REQUIRE(read->hits[0].record.tags == std::vector<std::string>{"recall"});
+    REQUIRE(read->hits[0].redacted_record.has_value());
+    REQUIRE(read->hits[0].redacted_record->body_bytes ==
+            std::string_view{"Memory tool found toolrecallanchor in the project."}.size());
+    REQUIRE_FALSE(read->hybrid);
+    REQUIRE(read->finished_at >= read->started_at);
   });
 }
 

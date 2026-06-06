@@ -39,7 +39,7 @@ using namespace std::chrono_literals;
 /// `payload_kind` is a stable string the test can match against.
 struct Capture {
   hook::Event event;
-  std::string payload_kind;  // "before", "dispatched", "after", "error", "ask", provider*, "monostate"
+  std::string payload_kind;  // "before", "dispatched", "after", "error", "ask", memory*, provider*, "monostate"
   std::string input_json;
   std::optional<std::string> data_json;
 };
@@ -60,6 +60,8 @@ struct Capture {
           return "error";
         } else if constexpr (std::same_as<T, hook::PermissionAskRenderedPayload>) {
           return "ask";
+        } else if constexpr (std::same_as<T, hook::MemoryReadPayload>) {
+          return "memory_read";
         } else if constexpr (std::same_as<T, hook::MemoryWritePayload>) {
           return "memory_write";
         } else if constexpr (std::same_as<T, hook::MemoryForgetPayload>) {
@@ -270,6 +272,54 @@ hook::ToolAfterPayload sample_after_with_redacted_input() {
   };
 }
 
+hook::MemoryReadPayload sample_memory_read() {
+  return hook::MemoryReadPayload{
+      .who = hook::Identity{.scope_key = "scope", .agent_key = "agent", .identity = "operator"},
+      .source = "memory.recall",
+      .query = "sensitive query",
+      .redacted_query_bytes = std::string_view{"sensitive query"}.size(),
+      .limit = 5,
+      .kinds = {"project"},
+      .match_count = 1,
+      .hits =
+          {
+              hook::MemoryReadHitPayload{
+                  .record =
+                      hook::MemoryRecordPayload{
+                          .id = "memory-1",
+                          .scope_key = "scope",
+                          .kind = "project",
+                          .title = "Sensitive title",
+                          .body = "Sensitive body",
+                          .created_at = core::Time::epoch(),
+                          .updated_at = core::Time::epoch(),
+                          .last_read_at = core::Time::epoch(),
+                          .importance = 0.75,
+                          .tags = {"secret", "project"},
+                          .linked_record_ids = {"linked-1"},
+                          .shadow = false,
+                      },
+                  .score = 0.9,
+                  .lexical_score = 0.8,
+                  .redacted_record =
+                      hook::RedactedMemoryRecordPayload{
+                          .id = "memory-1",
+                          .scope_key = "scope",
+                          .kind = "project",
+                          .title_bytes = std::string_view{"Sensitive title"}.size(),
+                          .body_bytes = std::string_view{"Sensitive body"}.size(),
+                          .tag_count = 2,
+                          .linked_record_count = 1,
+                          .shadow = false,
+                      },
+              },
+          },
+      .hybrid = false,
+      .started_at = core::Time::epoch(),
+      .finished_at = core::Time::epoch(),
+  };
+}
+
 }  // namespace
 
 TEST_CASE("Bus is empty by default", "[hook][bus]") {
@@ -428,6 +478,59 @@ TEST_CASE("publish_advisory redacts input_json when a sanitized view is present"
 
   REQUIRE(trusted_sink.captures().size() == 1);
   REQUIRE(trusted_sink.captures()[0].input_json == R"({"path":"notes.md","content":"secret"})");
+}
+
+TEST_CASE("publish_advisory redacts memory read query and records for default sinks",
+          "[hook][bus][redaction][memory]") {
+  hook::Bus bus;
+  hook::MemoryReadPayload default_payload;
+  hook::MemoryReadPayload trusted_payload;
+  hook::InProcessSink default_sink{
+      "default",
+      [&](hook::Event /*event*/, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
+        const auto* read = std::get_if<hook::MemoryReadPayload>(payload.get());
+        REQUIRE(read != nullptr);
+        default_payload = *read;
+        co_return core::Result<void>{};
+      }};
+  hook::InProcessSink trusted_sink{
+      "trusted",
+      [&](hook::Event /*event*/, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
+        const auto* read = std::get_if<hook::MemoryReadPayload>(payload.get());
+        REQUIRE(read != nullptr);
+        trusted_payload = *read;
+        co_return core::Result<void>{};
+      },
+      hook::SinkKind::trusted_local};
+  bus.bind(default_sink, {hook::Event::memory_read_after});
+  bus.bind(trusted_sink, {hook::Event::memory_read_after});
+
+  test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
+    auto outcome = co_await bus.publish_advisory(hook::Event::memory_read_after, sample_memory_read());
+    REQUIRE(outcome.sinks.size() == 2);
+    REQUIRE(outcome.all_succeeded());
+    co_return;
+  });
+
+  REQUIRE(default_payload.source == "memory.recall");
+  REQUIRE(default_payload.query.empty());
+  REQUIRE(default_payload.redacted_query_bytes == std::string_view{"sensitive query"}.size());
+  REQUIRE(default_payload.match_count == 1);
+  REQUIRE(default_payload.hits.size() == 1);
+  REQUIRE(default_payload.hits[0].record.id == "memory-1");
+  REQUIRE(default_payload.hits[0].record.title.empty());
+  REQUIRE(default_payload.hits[0].record.body.empty());
+  REQUIRE(default_payload.hits[0].record.tags.empty());
+  REQUIRE(default_payload.hits[0].record.linked_record_ids.empty());
+  REQUIRE(default_payload.hits[0].redacted_record.has_value());
+  REQUIRE(default_payload.hits[0].redacted_record->body_bytes == std::string_view{"Sensitive body"}.size());
+
+  REQUIRE(trusted_payload.query == "sensitive query");
+  REQUIRE(trusted_payload.hits.size() == 1);
+  REQUIRE(trusted_payload.hits[0].record.title == "Sensitive title");
+  REQUIRE(trusted_payload.hits[0].record.body == "Sensitive body");
+  REQUIRE(trusted_payload.hits[0].record.tags == std::vector<std::string>{"secret", "project"});
+  REQUIRE(trusted_payload.hits[0].record.linked_record_ids == std::vector<std::string>{"linked-1"});
 }
 
 TEST_CASE("publish_advisory shares redacted payload snapshots across default sinks", "[hook][bus][redaction]") {

@@ -220,7 +220,7 @@ wires the gated bootstrap owner: when the binary is built with
 constructs `HybridRuntime`, and `AgentPromptRunner` uses a deterministic local
 text embedding owner (`oran-local-text-v1`, 64 dimensions) for prompt-boundary
 recall and `memory.recall`. The same runner mirrors `memory.remember` writes and
-`memory.forget` deletes into the vector index. Slice 179 wires the first
+`memory.forget` deletes into the vector index. Slices 179 and 180 wire the first
 long-term memory lifecycle hooks at the bootstrap callback boundary:
 `memory.remember` publishes blocking `memory_write_before` after parsing and
 scoping the record but before any lexical/vector backend mutation, then
@@ -228,9 +228,13 @@ publishes advisory `memory_write_after` after a successful write. A veto returns
 `ErrorKind::permission_denied` with `reason=blocked_by_hook` and skips both
 backend writes; rewrite and require-approval decisions are explicitly rejected
 as unsupported for this consumer. `memory.forget` publishes advisory
-`memory_forget` after a successful scoped delete. Default hook sinks receive
-redacted write payloads that omit record title/body/tags/linked ids, while
-trusted-local sinks receive the raw record. Default builds still reject
+`memory_forget` after a successful scoped delete. Prompt-boundary long-term
+recall and the `memory.recall` tool publish advisory `memory_read_after` after
+successful lexical or hybrid recall. Default hook sinks receive redacted
+memory payloads: writes omit record title/body/tags/linked ids, reads omit raw
+query text plus hit title/body/tags/linked ids while preserving byte/count
+metadata and scores. Trusted-local sinks receive the raw query and records.
+Default builds still reject
 `memory.longterm.hybrid_search.enabled=true` before assembly/provider side
 effects with `reason=build_option_disabled`, `option=vector_memory`. Semantic or
 external embedding providers remain downstream.
@@ -479,7 +483,11 @@ this **opt-in per agent**, configured by `agent.<name>.memory.mirror`.
 Memory lifecycle:
 
 - `memory.read.before(scope, kind, query)` — planned; may rewrite the query.
-- `memory.read.after(scope, kind, results)` — planned observability.
+- `memory.read.after(scope, kind, results)` — shipped in slice 180 as advisory
+  after successful prompt-boundary long-term recall and `memory.recall` tool
+  reads. Default hook sinks receive source, scope, kind, limit, match count,
+  score, timing, hybrid flag, and byte/count metadata; trusted-local sinks also
+  receive the raw recall query and hit records.
 - `memory.write.before(scope, record)` — shipped for bootstrap
   `memory.remember` in slice 179 as veto/proceed only. The blocking publish runs
   before lexical/vector backend mutation; veto returns permission-denied and

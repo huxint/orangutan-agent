@@ -80,6 +80,19 @@ struct AdvisoryFanoutState {
             alt.record.linked_record_ids.clear();
           }
         }
+        if constexpr (std::same_as<std::decay_t<decltype(alt)>, MemoryReadPayload>) {
+          if (alt.redacted_query_bytes.has_value()) {
+            alt.query.clear();
+          }
+          for (auto& hit : alt.hits) {
+            if (hit.redacted_record.has_value()) {
+              hit.record.title.clear();
+              hit.record.body.clear();
+              hit.record.tags.clear();
+              hit.record.linked_record_ids.clear();
+            }
+          }
+        }
       },
       payload);
   return payload;

@@ -331,6 +331,15 @@ filter_skill_documents(std::span<const skill::SkillDocument> documents,
   };
 }
 
+[[nodiscard]] hook::Identity
+hook_identity(std::string_view scope_key, std::string_view agent_key, std::string_view identity) {
+  return hook::Identity{
+      .scope_key = std::string{scope_key},
+      .agent_key = std::string{agent_key},
+      .identity = std::string{identity},
+  };
+}
+
 [[nodiscard]] hook::MemoryRecordPayload hook_memory_record(const memory::longterm::Record& record) {
   return hook::MemoryRecordPayload{
       .id = record.key.id,
@@ -361,6 +370,25 @@ filter_skill_documents(std::span<const skill::SkillDocument> documents,
   };
 }
 
+[[nodiscard]] hook::MemoryReadHitPayload hook_memory_read_hit(const memory::longterm::SearchHit& hit) {
+  return hook::MemoryReadHitPayload{
+      .record = hook_memory_record(hit.record),
+      .score = hit.score,
+      .lexical_score = hit.lexical_score,
+      .vector_score = hit.vector_score,
+      .redacted_record = redacted_hook_memory_record(hit.record),
+  };
+}
+
+[[nodiscard]] std::vector<std::string> hook_memory_kinds(std::span<const memory::longterm::RecordKind> kinds) {
+  auto out = std::vector<std::string>{};
+  out.reserve(kinds.size());
+  for (const auto kind : kinds) {
+    out.push_back(std::string{core::enum_name(kind)});
+  }
+  return out;
+}
+
 [[nodiscard]] hook::MemoryWritePayload make_memory_write_payload(const memory::longterm::Record& record,
                                                                  const tool::DispatchContext& ctx,
                                                                  core::Time started_at,
@@ -369,6 +397,37 @@ filter_skill_documents(std::span<const skill::SkillDocument> documents,
       .who = hook_identity(ctx),
       .record = hook_memory_record(record),
       .redacted_record = redacted_hook_memory_record(record),
+      .started_at = started_at,
+      .finished_at = finished_at,
+      .duration = duration_between(started_at, finished_at),
+  };
+}
+
+[[nodiscard]] hook::MemoryReadPayload make_memory_read_payload(hook::Identity who,
+                                                               std::string source,
+                                                               std::string query,
+                                                               std::size_t limit,
+                                                               std::span<const memory::longterm::RecordKind> kinds,
+                                                               std::span<const memory::longterm::SearchHit> hits,
+                                                               bool hybrid,
+                                                               core::Time started_at,
+                                                               core::Time finished_at) {
+  auto payload_hits = std::vector<hook::MemoryReadHitPayload>{};
+  payload_hits.reserve(hits.size());
+  for (const auto& hit : hits) {
+    payload_hits.push_back(hook_memory_read_hit(hit));
+  }
+  const auto query_bytes = query.size();
+  return hook::MemoryReadPayload{
+      .who = std::move(who),
+      .source = std::move(source),
+      .query = std::move(query),
+      .redacted_query_bytes = query_bytes,
+      .limit = limit,
+      .kinds = hook_memory_kinds(kinds),
+      .match_count = payload_hits.size(),
+      .hits = std::move(payload_hits),
+      .hybrid = hybrid,
       .started_at = started_at,
       .finished_at = finished_at,
       .duration = duration_between(started_at, finished_at),
@@ -764,11 +823,13 @@ private:
     if (runtime == nullptr) {
       co_return std::unexpected(option_error("agent prompt runner long-term recall runtime is unavailable"));
     }
+    auto query_text = recall_query_text(longterm_recall_.query_strategy, prompt, conversation_tail);
+    const auto started_at = core::time::now_utc();
     auto recalled = co_await runtime->recall(memory::longterm::RecallRequest{
         .query =
             memory::longterm::Query{
                 .scope_key = scope_key_,
-                .text = recall_query_text(longterm_recall_.query_strategy, prompt, conversation_tail),
+                .text = query_text,
                 .kinds = longterm_recall_kinds_,
                 .include_shadow = false,
             },
@@ -777,6 +838,17 @@ private:
     if (!recalled) {
       co_return std::unexpected(std::move(recalled).error());
     }
+    const auto finished_at = core::time::now_utc();
+    co_await publish_memory_read_after(assembly_->hook_bus(),
+                                       hook_identity(scope_key_, agent_key_, identity_),
+                                       "prompt_boundary",
+                                       std::move(query_text),
+                                       longterm_recall_.limit,
+                                       std::span<const memory::longterm::RecordKind>{longterm_recall_kinds_},
+                                       std::span<const memory::longterm::SearchHit>{recalled->hits},
+                                       false,
+                                       started_at,
+                                       finished_at);
     memory_framing_.replace(std::move(recalled->framing));
     co_return std::string{memory_framing_.render_once()};
   }
@@ -786,6 +858,29 @@ private:
         .model = longterm_hybrid_search_.embedding_model,
         .dimensions = longterm_hybrid_search_.embedding_dimensions,
     };
+  }
+
+  [[nodiscard]] async::Awaitable<void> publish_memory_read_after(hook::Bus& bus,
+                                                                 hook::Identity who,
+                                                                 std::string source,
+                                                                 std::string query,
+                                                                 std::size_t limit,
+                                                                 std::span<const memory::longterm::RecordKind> kinds,
+                                                                 std::span<const memory::longterm::SearchHit> hits,
+                                                                 bool hybrid,
+                                                                 core::Time started_at,
+                                                                 core::Time finished_at) const {
+    [[maybe_unused]] auto outcome = co_await bus.publish_advisory(hook::Event::memory_read_after,
+                                                                  make_memory_read_payload(std::move(who),
+                                                                                           std::move(source),
+                                                                                           std::move(query),
+                                                                                           limit,
+                                                                                           kinds,
+                                                                                           hits,
+                                                                                           hybrid,
+                                                                                           started_at,
+                                                                                           finished_at));
+    co_return;
   }
 
   [[nodiscard]] async::Awaitable<Result<std::string>>
@@ -800,11 +895,12 @@ private:
       co_return std::unexpected(std::move(embedding).error());
     }
     const auto result_limit = std::min(longterm_recall_.limit, longterm_hybrid_search_.result_limit);
+    const auto started_at = core::time::now_utc();
     auto recalled = co_await runtime->recall(memory::longterm::HybridSearchRequest{
         .query =
             memory::longterm::Query{
                 .scope_key = scope_key_,
-                .text = std::move(query_text),
+                .text = query_text,
                 .kinds = longterm_recall_kinds_,
                 .include_shadow = false,
             },
@@ -818,6 +914,17 @@ private:
     if (!recalled) {
       co_return std::unexpected(std::move(recalled).error());
     }
+    const auto finished_at = core::time::now_utc();
+    co_await publish_memory_read_after(assembly_->hook_bus(),
+                                       hook_identity(scope_key_, agent_key_, identity_),
+                                       "prompt_boundary",
+                                       std::move(query_text),
+                                       result_limit,
+                                       std::span<const memory::longterm::RecordKind>{longterm_recall_kinds_},
+                                       std::span<const memory::longterm::SearchHit>{recalled->hits},
+                                       true,
+                                       started_at,
+                                       finished_at);
     memory_framing_.replace(std::move(recalled->framing));
     co_return std::string{memory_framing_.render_once()};
   }
@@ -909,9 +1016,8 @@ private:
 
   [[nodiscard]] async::Awaitable<Result<tool::Output>> recall_memory(tool::MemoryRecallRequest request,
                                                                      tool::DispatchContext& ctx) const {
-    static_cast<void>(ctx);
     if (longterm_hybrid_search_.enabled) {
-      co_return co_await recall_memory_hybrid(std::move(request));
+      co_return co_await recall_memory_hybrid(std::move(request), ctx);
     }
 
     auto* runtime = assembly_->longterm_memory_runtime();
@@ -923,18 +1029,33 @@ private:
     if (!kinds) {
       co_return std::unexpected(std::move(kinds).error());
     }
+    auto query_text = std::move(request.query);
+    const auto started_at = core::time::now_utc();
     auto recalled = co_await runtime->recall(memory::longterm::RecallRequest{
         .query =
             memory::longterm::Query{
                 .scope_key = scope_key_,
-                .text = std::move(request.query),
-                .kinds = std::move(*kinds),
+                .text = query_text,
+                .kinds = *kinds,
                 .include_shadow = false,
             },
         .limit = request.limit,
     });
     if (!recalled) {
       co_return std::unexpected(std::move(recalled).error());
+    }
+    if (ctx.bus != nullptr) {
+      const auto finished_at = core::time::now_utc();
+      co_await publish_memory_read_after(*ctx.bus,
+                                         hook_identity(ctx),
+                                         "memory.recall",
+                                         std::move(query_text),
+                                         request.limit,
+                                         std::span<const memory::longterm::RecordKind>{*kinds},
+                                         std::span<const memory::longterm::SearchHit>{recalled->hits},
+                                         false,
+                                         started_at,
+                                         finished_at);
     }
     auto data_json =
         memory::longterm::render_recall_data_json(std::span<const memory::longterm::SearchHit>{recalled->hits});
@@ -950,7 +1071,8 @@ private:
     };
   }
 
-  [[nodiscard]] async::Awaitable<Result<tool::Output>> recall_memory_hybrid(tool::MemoryRecallRequest request) const {
+  [[nodiscard]] async::Awaitable<Result<tool::Output>> recall_memory_hybrid(tool::MemoryRecallRequest request,
+                                                                            tool::DispatchContext& ctx) const {
     auto* runtime = assembly_->longterm_hybrid_runtime();
     if (runtime == nullptr) {
       co_return std::unexpected(Error::invalid_argument("memory.recall: hybrid runtime service is not available")
@@ -960,17 +1082,19 @@ private:
     if (!kinds) {
       co_return std::unexpected(std::move(kinds).error());
     }
-    auto embedding = memory::longterm::make_text_embedding(request.query, embedding_options());
+    auto query_text = std::move(request.query);
+    auto embedding = memory::longterm::make_text_embedding(query_text, embedding_options());
     if (!embedding) {
       co_return std::unexpected(std::move(embedding).error());
     }
     const auto result_limit = std::min(request.limit, longterm_hybrid_search_.result_limit);
+    const auto started_at = core::time::now_utc();
     auto recalled = co_await runtime->recall(memory::longterm::HybridSearchRequest{
         .query =
             memory::longterm::Query{
                 .scope_key = scope_key_,
-                .text = std::move(request.query),
-                .kinds = std::move(*kinds),
+                .text = query_text,
+                .kinds = *kinds,
                 .include_shadow = false,
             },
         .embedding = std::move(*embedding),
@@ -982,6 +1106,19 @@ private:
     });
     if (!recalled) {
       co_return std::unexpected(std::move(recalled).error());
+    }
+    if (ctx.bus != nullptr) {
+      const auto finished_at = core::time::now_utc();
+      co_await publish_memory_read_after(*ctx.bus,
+                                         hook_identity(ctx),
+                                         "memory.recall",
+                                         std::move(query_text),
+                                         result_limit,
+                                         std::span<const memory::longterm::RecordKind>{*kinds},
+                                         std::span<const memory::longterm::SearchHit>{recalled->hits},
+                                         true,
+                                         started_at,
+                                         finished_at);
     }
     auto data_json =
         memory::longterm::render_recall_data_json(std::span<const memory::longterm::SearchHit>{recalled->hits});

@@ -148,18 +148,21 @@ operators can reason about retention, scope, and visibility.
   (`oran-local-text-v1`, 64 dimensions). `memory.remember` mirrors saved records
   into vector memory, and `memory.forget` removes the matching vector row.
   Default builds keep sqlite-vec optional and fail fast on enabled hybrid search.
-- Memory lifecycle hook wiring shipped in slice 179:
+- Memory lifecycle hook wiring shipped in slices 179-180:
   `oran-hook` now carries typed `MemoryWritePayload` / `MemoryForgetPayload`
-  shapes, including a redacted memory-record summary for default sinks and raw
-  records only for `trusted_local` sinks. `AgentPromptRunner` publishes blocking
-  `memory_write_before` before `memory.remember` mutates lexical/vector memory;
-  a veto returns a permission-denied tool error and skips persistence. Successful
-  memory writes publish advisory `memory_write_after`, and successful
-  `memory.forget` calls publish advisory `memory_forget`.
+  plus `MemoryReadPayload` / `MemoryReadHitPayload` shapes. Default sinks
+  receive redacted memory metadata; `trusted_local` sinks can inspect raw write
+  records and raw recall queries/hit records. `AgentPromptRunner` publishes
+  blocking `memory_write_before` before `memory.remember` mutates
+  lexical/vector memory; a veto returns a permission-denied tool error and
+  skips persistence. Successful memory writes publish advisory
+  `memory_write_after`, successful `memory.forget` calls publish advisory
+  `memory_forget`, and successful prompt-boundary recall plus `memory.recall`
+  tool reads publish advisory `memory_read_after`.
 - Decay policy applied by a periodic job (`oran-automation`).
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
-- Read/decay lifecycle hooks and memory-write rewrite/annotation remain
-  downstream.
+- Blocking `memory_read_before`, decay lifecycle hooks, and memory-write
+  rewrite/annotation remain downstream.
 
 ## Scope (v1.1)
 
@@ -229,8 +232,8 @@ operators can reason about retention, scope, and visibility.
    `test-memory` reports 36 cases / 791 assertions.
    `test-config` reports
    46 cases / 402 assertions for the recall and hybrid-search policy parsers, `test-hook`
-   reports 35 cases / 264 assertions for hook payload and redaction coverage, and `test-bootstrap`
-   reports 116 cases / 929 assertions by default and 120 cases / 958 assertions
+   reports 36 cases / 287 assertions for hook payload and redaction coverage, and `test-bootstrap`
+   reports 116 cases / 969 assertions by default and 120 cases / 958 assertions
    with `--vector_memory=y` for the assembly, prompt-runner, and
    configured-route recall consumers, including slice-167 query-strategy
    coverage, slice-168 `memory.recall` tool binding, and slice-169
@@ -240,7 +243,9 @@ operators can reason about retention, scope, and visibility.
    prompt-boundary recall, hybrid `memory.recall`, and vector mirroring for
    `memory.remember`; slice 179 adds default-build bootstrap coverage for
    `memory_write_before` / `memory_write_after` / `memory_forget` publishing and
-   veto/no-persist behavior.
+   veto/no-persist behavior, and slice 180 adds default-build bootstrap coverage
+   for `memory_read_after` publishing after prompt-boundary recall and
+   `memory.recall`.
 7. `bench/memory/search-fts5-vs-vector` (v2): reports the FTS5 baseline + vector
    results in machine-readable JSON. **Status:** partially open; slice 171 adds
    the FTS5 baseline scenario under `bench/memory/scenarios/longterm_fts5.cpp`,

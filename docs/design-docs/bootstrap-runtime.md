@@ -240,10 +240,13 @@ bindings. The `memory.forget` built-in parses and gates one `{id}` delete in
 backend's idempotent `remove(...)`, and returns confirmation text, structured
 `memory_forget` removed-key metadata, and `usage.bytes_written = 0` through the
 same provider re-entry path. Slice 179 publishes advisory `memory_forget` after
-that successful scoped delete. Both memory lifecycle payloads carry runner
-identity, scope/id metadata, timing fields, and per-sink redaction: default hook
-sinks receive a redacted record summary for writes, while `trusted_local` sinks
-receive the raw long-term memory record.
+that successful scoped delete. Slice 180 publishes advisory `memory_read_after`
+after successful prompt-boundary long-term recall and after successful
+`memory.recall` tool reads, for both lexical and hybrid recall paths. Memory
+lifecycle payloads carry runner identity, scope/id/source metadata, timing
+fields, and per-sink redaction: default hook sinks receive redacted summaries
+for writes and reads, while `trusted_local` sinks receive raw long-term memory
+records and recall queries.
 When the caller
 selects an `AgentPromptRunnerOptions::agent_config_name` (or leaves it empty
 and selects `permission_agent_name`), the runner reads that `agents.<name>`

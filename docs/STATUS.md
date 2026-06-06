@@ -7,12 +7,30 @@
 
 ## Snapshot
 
-- **Slice:** 179 (`xmake run orangutan -- --help` reports slice 179)
+- **Slice:** 180 (`xmake run orangutan -- --help` reports slice 180)
 - **Last completed history:**
-  [`histories/2026-06/20260606-2105-memory-lifecycle-hooks.md`](histories/2026-06/20260606-2105-memory-lifecycle-hooks.md)
+  [`histories/2026-06/20260606-2126-memory-read-hooks.md`](histories/2026-06/20260606-2126-memory-read-hooks.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 179 wires long-term memory lifecycle hooks
+- **Latest completed slice:** slice 180 wires long-term memory read-after
+  observability through the same configured-route bootstrap boundary as recall
+  execution. `oran-hook` now carries typed `MemoryReadPayload` /
+  `MemoryReadHitPayload` shapes for successful prompt-boundary long-term recall
+  and `memory.recall` tool reads. Default sinks keep source, scope, kind,
+  limit, match count, score, and byte/count metadata but do not receive raw
+  recall query text or hit title/body/tags/linked ids; `trusted_local` sinks
+  receive the raw query and records. `memory_read_after` remains advisory in
+  this slice; the blocking `memory_read_before` rewrite/veto consumer stays
+  deferred. Focused results: `test-hook` **36 cases / 287 assertions** and
+  `test-bootstrap` **116 cases / 969 assertions**.
+- **Next intended slice:** no active plan. The remaining memory work should be a
+  product capability gap, not another benchmark by default: external/semantic
+  embedding provider ownership, decay lifecycle hooks, decay policy execution,
+  or the optional `MEMORY.md` mirror are the next meaningful candidates. The
+  spec-0010 unified benchmark JSON gap still exists, but it is secondary to
+  runtime capability.
+
+Slice 179 wires long-term memory lifecycle hooks
   through the configured-route bootstrap memory-tool callbacks. `oran-hook` now
   carries typed `MemoryWritePayload` / `MemoryForgetPayload` shapes plus a
   redacted record summary: default sinks keep id/scope/kind/size/count metadata
@@ -25,12 +43,6 @@
   `memory_forget` after successful write/delete paths. Focused results:
   `test-hook` **35 cases / 264 assertions** and `test-bootstrap`
   **116 cases / 929 assertions**.
-- **Next intended slice:** no active plan. The remaining memory work should be a
-  product capability gap, not another benchmark by default: external/semantic
-  embedding provider ownership, read/decay lifecycle hooks, decay policy
-  execution, or the optional `MEMORY.md` mirror are the next meaningful
-  candidates. The spec-0010 unified benchmark JSON gap still exists, but it is
-  secondary to runtime capability.
 
 Slice 178 wires the long-term hybrid-search
   policy into configured-route bootstrap when the binary is built with

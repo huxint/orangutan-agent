@@ -5,10 +5,10 @@
 // adds the first permission ask-flow shape (`permission_ask_rendered`) so UI
 // sinks can render an approval prompt and return a blocking decision. Slice
 // 152 adds optional per-sink redacted input views for sensitive mutation
-// payloads. Slice 179 adds the first memory lifecycle payloads. Events without
-// a typed shape yet carry `std::monostate` so sinks subscribed to them can
-// observe occurrence without payload content; typed shapes land with the
-// producing subsystem.
+// payloads. Slice 179 adds the first memory write/delete lifecycle payloads,
+// and slice 180 adds read-after observability. Events without a typed shape yet
+// carry `std::monostate` so sinks subscribed to them can observe occurrence
+// without payload content; typed shapes land with the producing subsystem.
 
 #pragma once
 
@@ -205,6 +205,40 @@ struct MemoryWritePayload {
   std::chrono::nanoseconds duration{0};
 };
 
+/// One recalled long-term memory hit. Scores are copied from the memory
+/// runtime without making `oran-hook` depend on `oran-memory`.
+struct MemoryReadHitPayload {
+  MemoryRecordPayload record;
+  double score{0.0};
+  std::optional<double> lexical_score{};
+  std::optional<double> vector_score{};
+  /// Optional sanitized metadata view. When present, `Bus` clears sensitive
+  /// text/list fields from `record` for sinks whose `Sink::kind()` is not
+  /// `SinkKind::trusted_local`; trusted-local sinks receive the original
+  /// `record`.
+  std::optional<RedactedMemoryRecordPayload> redacted_record{};
+};
+
+/// Advisory read memory payload. Published after a successful long-term recall
+/// at either the prompt boundary or the `memory.recall` tool boundary.
+struct MemoryReadPayload {
+  Identity who;
+  /// Producer label such as `prompt_boundary` or `memory.recall`.
+  std::string source;
+  /// Raw recall query for trusted-local sinks. If `redacted_query_bytes` is set,
+  /// `Bus` clears this field for non-trusted sinks.
+  std::string query;
+  std::optional<std::size_t> redacted_query_bytes{};
+  std::size_t limit{0};
+  std::vector<std::string> kinds;
+  std::size_t match_count{0};
+  std::vector<MemoryReadHitPayload> hits;
+  bool hybrid{false};
+  core::Time started_at{};
+  core::Time finished_at{};
+  std::chrono::nanoseconds duration{0};
+};
+
 /// Advisory delete memory payload. Published after a scoped long-term memory
 /// delete succeeds.
 struct MemoryForgetPayload {
@@ -316,6 +350,7 @@ using Payload = std::variant<std::monostate,
                              ToolAfterPayload,
                              ToolErrorPayload,
                              PermissionAskRenderedPayload,
+                             MemoryReadPayload,
                              MemoryWritePayload,
                              MemoryForgetPayload,
                              ProviderRequestPayload,
