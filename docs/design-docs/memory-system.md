@@ -374,12 +374,14 @@ Planned optional backends:
 `bench/memory/` (see `docs/product-specs/0010-benchmark-harness.md`) records the
 FTS5 10k-record search baseline and, since slice 173, the
 FTS5-vs-vector-vs-hybrid comparison (`scenarios/search_fts5_vs_vector.cpp`) over a
-brute-force cosine reference `VectorBackend`; the gated `--vector_memory=y`
-sqlite-vec adapter now satisfies the same contract and still needs a follow-up
-bench run on the shared corpus. The validated `memory.longterm.hybrid_search`
-config block is accepted only while disabled until bootstrap embedding wiring
-exists; configured-route startup fails fast on `enabled=true` instead of silently
-falling back to lexical recall.
+brute-force cosine reference `VectorBackend`. Slice 177 extends that scenario
+under `--vector_memory=y` so the shipped `SqliteVecBackend` reports the same
+corpus: on the local release run, sqlite-vec vector-only search was
+**~3.03 ms / batch** and FTS5+sqlite-vec hybrid was **~18.96 ms / batch** at
+`limit=10`. The validated `memory.longterm.hybrid_search` config block is
+accepted only while disabled until bootstrap embedding wiring exists;
+configured-route startup fails fast on `enabled=true` instead of silently falling
+back to lexical recall.
 
 ## Shared Memory (Team)
 

@@ -7,12 +7,28 @@
 
 ## Snapshot
 
-- **Slice:** 176 (`xmake run orangutan -- --help` reports slice 176)
+- **Slice:** 177 (`xmake run orangutan -- --help` reports slice 177)
 - **Last completed history:**
-  [`histories/2026-06/20260606-1243-longterm-sqlite-vec-backend.md`](histories/2026-06/20260606-1243-longterm-sqlite-vec-backend.md)
+  [`histories/2026-06/20260606-1329-longterm-sqlite-vec-bench.md`](histories/2026-06/20260606-1329-longterm-sqlite-vec-bench.md)
 - **Active exec-plan:** none — the memory runtime v1 arc completed in
   [`exec-plans/completed/2026-06-01-memory-runtime-v1.md`](exec-plans/completed/2026-06-01-memory-runtime-v1.md).
-- **Latest completed slice:** slice 176 adds the optional sqlite-vec long-term
+- **Latest completed slice:** slice 177 extends the shared 10k-record
+  FTS5-vs-vector-vs-hybrid memory benchmark with gated sqlite-vec rows.
+  Default `bench-memory` builds still emit only the FTS5-only, brute-force
+  vector, and FTS5+brute-force hybrid comparison rows. When configured with
+  `--vector_memory=y`, `bench/memory/scenarios/search_fts5_vs_vector.cpp` also
+  seeds the shipped `SqliteVecBackend` with the same deterministic keys and
+  embeddings and reports sqlite-vec vector-only plus FTS5+sqlite-vec hybrid
+  search at `limit=10`. Local gated release result:
+  sqlite-vec vector-only **~3.03 ms / batch** and FTS5+sqlite-vec hybrid
+  **~18.96 ms / batch**.
+- **Next intended slice:** no active plan; the remaining memory work is the
+  embedding/vector owner plus bootstrap consumption that replaces the slice-175
+  `hybrid_search.enabled=true` guard with real hybrid recall wiring. A smaller
+  follow-up can also wire `bench-memory` into the unified machine-readable JSON
+  emission required by spec 0010.
+
+Slice 176 adds the optional sqlite-vec long-term
   vector backend behind `--vector_memory=y`. `memory::longterm::SqliteVecBackend`
   now implements the shipped `VectorBackend` contract, opens `sqlite-vec` through
   `storage::Connection` / `Pool` auto-extension registration, migrates a scoped
@@ -21,11 +37,6 @@
   migration/operations. Focused results: default `test-memory` **32 cases / 760
   assertions**, default `test-storage` **77 cases / 988 assertions**, and gated
   `--vector_memory=y` `test-memory` **34 cases / 780 assertions**.
-- **Next intended slice:** no active plan; the remaining memory work is the
-  embedding/vector owner plus bootstrap consumption that replaces the slice-175
-  `hybrid_search.enabled=true` guard with real hybrid recall wiring. A follow-up
-  bench can also compare the sqlite-vec adapter against the slice-173
-  brute-force vector baseline on the shared 10k corpus.
 
 Slice 175 consumes the config-side
   `memory.longterm.hybrid_search.enabled` flag at configured-route bootstrap.

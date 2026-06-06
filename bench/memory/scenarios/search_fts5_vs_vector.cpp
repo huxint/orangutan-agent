@@ -1,16 +1,18 @@
 // bench/memory/scenarios/search_fts5_vs_vector.cpp
 //
-// Long-term memory search A-vs-B-vs-C on one shared 10k-record corpus:
+// Long-term memory search A-vs-B-vs-C on one shared 10k-record corpus, plus
+// optional D/E rows when xmake is configured with `--vector_memory=y`:
 //   A. FTS5 lexical baseline      — memory::longterm::Runtime::search
 //   B. brute-force cosine vectors — a bench-local VectorBackend
 //   C. hybrid composition         — memory::longterm::HybridRuntime::search
+//   D. sqlite-vec vectors         — memory::longterm::SqliteVecBackend::search
+//   E. sqlite-vec hybrid          — memory::longterm::HybridRuntime::search
 //
-// This is the first scenario that calls the slice-172 HybridRuntime and the
-// vector half of spec 0005 AC7 (`bench/memory/search-fts5-vs-vector`). The
-// cosine backend here is an in-bench reference implementation that does work
-// proportional to corpus size and dimension; the gated `--vector_memory=y`
-// sqlite-vec adapter will later implement the same VectorBackend contract and
-// compare against these numbers.
+// This scenario calls the slice-172 HybridRuntime and the vector half of spec
+// 0005 AC7 (`bench/memory/search-fts5-vs-vector`). The cosine backend here is an
+// in-bench reference implementation that does work proportional to corpus size
+// and dimension; the gated sqlite-vec adapter now satisfies the same
+// VectorBackend contract and reuses the deterministic corpus/embedding stream.
 
 #include <nanobench.h>
 
@@ -142,6 +144,17 @@ private:
   };
 }
 
+[[nodiscard]] memory::longterm::VectorUpsert make_vector_upsert(std::size_t index) {
+  return memory::longterm::VectorUpsert{
+      .key = record_key(index),
+      .embedding =
+          memory::longterm::VectorEmbedding{
+              .model = std::string{kEmbeddingModel},
+              .values = make_unit_embedding(index + 1),
+          },
+  };
+}
+
 [[nodiscard]] memory::longterm::Query make_lexical_query() {
   return memory::longterm::Query{
       .scope_key = std::string{kScopeKey},
@@ -209,7 +222,10 @@ private:
   std::vector<Entry> entries_;
 };
 
-void seed_corpus(asio::io_context& io, memory::longterm::Fts5Backend& fts5, BruteForceVectorBackend& vectors) {
+void seed_corpus(asio::io_context& io,
+                 memory::longterm::Fts5Backend& fts5,
+                 BruteForceVectorBackend& vectors,
+                 memory::longterm::SqliteVecBackend* sqlite_vectors = nullptr) {
   bool seeded = false;
   asio::co_spawn(
       io,
@@ -218,21 +234,26 @@ void seed_corpus(asio::io_context& io, memory::longterm::Fts5Backend& fts5, Brut
         if (!migrated) {
           std::abort();
         }
+        if (sqlite_vectors != nullptr) {
+          auto migrated_vectors = co_await sqlite_vectors->migrate();
+          if (!migrated_vectors) {
+            std::abort();
+          }
+        }
         for (std::size_t i = 0; i < kCorpusSize; ++i) {
           auto stored = co_await fts5.upsert(memory::longterm::WriteRequest{.record = make_record(i)});
           if (!stored) {
             std::abort();
           }
-          auto indexed = co_await vectors.upsert(memory::longterm::VectorUpsert{
-              .key = record_key(i),
-              .embedding =
-                  memory::longterm::VectorEmbedding{
-                      .model = std::string{kEmbeddingModel},
-                      .values = make_unit_embedding(i + 1),
-                  },
-          });
+          auto indexed = co_await vectors.upsert(make_vector_upsert(i));
           if (!indexed) {
             std::abort();
+          }
+          if (sqlite_vectors != nullptr) {
+            auto sqlite_indexed = co_await sqlite_vectors->upsert(make_vector_upsert(i));
+            if (!sqlite_indexed) {
+              std::abort();
+            }
           }
         }
         seeded = true;
@@ -268,7 +289,7 @@ void seed_corpus(asio::io_context& io, memory::longterm::Fts5Backend& fts5, Brut
 }
 
 [[gnu::noinline]] std::size_t run_vector_search(asio::io_context& io,
-                                                BruteForceVectorBackend& vectors,
+                                                memory::longterm::VectorBackend& vectors,
                                                 const memory::longterm::VectorEmbedding& query) {
   std::size_t rows = 0;
   asio::co_spawn(
@@ -331,6 +352,9 @@ void seed_corpus(asio::io_context& io, memory::longterm::Fts5Backend& fts5, Brut
 
 void register_search_fts5_vs_vector(ankerl::nanobench::Bench& bench) {
   TempDb db{"memory-longterm-search"};
+#if defined(ORAN_ENABLE_SQLITE_VEC)
+  TempDb sqlite_db{"memory-longterm-search-sqlite-vec"};
+#endif
 
   asio::io_context io;
   auto pool =
@@ -341,10 +365,31 @@ void register_search_fts5_vs_vector(ankerl::nanobench::Bench& bench) {
   }
   memory::longterm::Fts5Backend fts5{*pool};
   BruteForceVectorBackend vectors;
+#if defined(ORAN_ENABLE_SQLITE_VEC)
+  auto sqlite_pool = storage::Pool::open(io.get_executor(),
+                                         storage::PoolOptions{
+                                             .path = sqlite_db.path(),
+                                             .reader_count = 2,
+                                             .statement_cache_capacity = 32,
+                                         },
+                                         memory::longterm::SqliteVecBackend::auto_extensions());
+  if (!sqlite_pool) {
+    std::abort();
+  }
+  memory::longterm::SqliteVecBackend sqlite_vectors{*sqlite_pool,
+                                                    memory::longterm::SqliteVecBackendOptions{
+                                                        .dimensions = kEmbeddingDim,
+                                                    }};
+  seed_corpus(io, fts5, vectors, &sqlite_vectors);
+#else
   seed_corpus(io, fts5, vectors);
+#endif
 
   memory::longterm::Runtime lexical_runtime{fts5};
   memory::longterm::HybridRuntime hybrid_runtime{fts5, vectors};
+#if defined(ORAN_ENABLE_SQLITE_VEC)
+  memory::longterm::HybridRuntime sqlite_hybrid_runtime{fts5, sqlite_vectors};
+#endif
   const auto query_embedding = make_query_embedding();
 
   // Search is far heavier than the session-store batch, so scale epochs down to
@@ -353,10 +398,21 @@ void register_search_fts5_vs_vector(ankerl::nanobench::Bench& bench) {
 
   bench.run("memory.longterm_search_fts5_only_10k_limit10",
             [&] { ankerl::nanobench::doNotOptimizeAway(run_fts5_search(io, lexical_runtime)); });
+  bench.minEpochIterations(220);
   bench.run("memory.longterm_search_vector_cosine_10k_limit10",
             [&] { ankerl::nanobench::doNotOptimizeAway(run_vector_search(io, vectors, query_embedding)); });
+  bench.minEpochIterations(20);
   bench.run("memory.longterm_search_hybrid_fts5_vector_10k_limit10",
             [&] { ankerl::nanobench::doNotOptimizeAway(run_hybrid_search(io, hybrid_runtime, query_embedding)); });
+#if defined(ORAN_ENABLE_SQLITE_VEC)
+  bench.minEpochIterations(220);
+  bench.run("memory.longterm_search_vector_sqlite_vec_10k_limit10",
+            [&] { ankerl::nanobench::doNotOptimizeAway(run_vector_search(io, sqlite_vectors, query_embedding)); });
+  bench.minEpochIterations(20);
+  bench.run("memory.longterm_search_hybrid_fts5_sqlite_vec_10k_limit10", [&] {
+    ankerl::nanobench::doNotOptimizeAway(run_hybrid_search(io, sqlite_hybrid_runtime, query_embedding));
+  });
+#endif
 }
 
 }  // namespace orangutan::bench
