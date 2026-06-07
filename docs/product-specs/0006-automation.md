@@ -30,16 +30,18 @@ adds optional periodic `memory_decay` publishing from that tick owner, slice
 caller-started retention loop step. Slice 194 adds advisory job lifecycle
 metadata from due retention ticks, slice 195 adds repository-backed retention
 job leases plus due-run lease ownership in the loop step, and slice 196 adds a
-finite caller-owned loop policy above that leased step. The current API
-evaluates a periodic schedule from caller-supplied state, maps a long-term
-memory retention policy into a due-only `memory::longterm::DecayRequest`,
-persists the configured retention job plus run history and lease state through
-`AutomationRepository`, explicitly opens/migrates automation state through
-`AutomationRuntime::open(...)`, lets a runtime owner tick one stored job against
-a supplied long-term memory backend, publishes advisory retention metadata when
-the caller supplies a hook bus, and can wait once within a caller budget for a
-stored retention job to become due while leasing due execution or run a finite
-caller-owned loop over that step. Bootstrap maps configured-route
+finite caller-owned loop policy above that leased step. Slice 197 adds the
+first cron-category planning primitive with a POSIX 5-field UTC parser and
+deterministic next-fire evaluator. The current API evaluates periodic and cron
+schedules from caller-supplied state, maps a long-term memory retention policy
+into a due-only `memory::longterm::DecayRequest`, persists the configured
+retention job plus run history and lease state through `AutomationRepository`,
+explicitly opens/migrates automation state through `AutomationRuntime::open(...)`,
+lets a runtime owner tick one stored job against a supplied long-term memory
+backend, publishes advisory retention metadata when the caller supplies a hook
+bus, and can wait once within a caller budget for a stored retention job to
+become due while leasing due execution or run a finite caller-owned loop over
+that step. Bootstrap maps configured-route
 `memory.longterm.retention` into a stored `MemoryRetentionJob` descriptor whose
 first fire is after the one-shot startup decay pass, but bootstrap still does
 not open `automation.db` or run a background service.
@@ -94,16 +96,21 @@ Current implementation:
   no due work within the remaining wait budget. It reports iteration count,
   due-run count, total wait time, stop reason, and the last step, and can catch
   up overdue stored retention fires without owning a detached process loop.
-- `test-automation` reports 33 cases / 429 assertions.
+- `CronSchedule` plus `evaluate_cron_schedule(...)` parse POSIX 5-field UTC
+  cron expressions with `*`, lists, ranges, and steps; use `first_fire_at` as
+  the never-fired anchor; advance from `PeriodicJobState::last_fired_at`; and
+  return one next `PeriodicEvaluation` without persisting jobs or starting a
+  scheduler.
+- `test-automation` reports 41 cases / 467 assertions.
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 
-Still open: cron parsing, triggered jobs, bootstrap/service-loop startup policy
-over `AutomationRuntime`, broader per-agent/category leases for agent-facing
-jobs, queueing/backpressure, process service/timer cancellation policy,
-notifier callbacks, and the scheduler tick performance criterion. Job lifecycle
-publication exists for explicit retention ticks only; full scheduler/category
-lifecycle ownership remains downstream.
+Still open: cron persistence/config ownership, triggered jobs,
+bootstrap/service-loop startup policy over `AutomationRuntime`, broader
+per-agent/category leases for agent-facing jobs, queueing/backpressure, process
+service/timer cancellation policy, notifier callbacks, and the scheduler tick
+performance criterion. Job lifecycle publication exists for explicit retention
+ticks only; full scheduler/category lifecycle ownership remains downstream.
 
 ## Scope (v1.1)
 

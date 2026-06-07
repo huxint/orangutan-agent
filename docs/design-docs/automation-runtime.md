@@ -1,16 +1,16 @@
 # Automation Runtime
 
 `oran-automation` owns automation scheduling decisions. The shipped surface is
-still intentionally narrow: deterministic periodic schedule evaluation,
-long-term memory retention request planning, a bootstrap-owned mapping from
-configured retention policy into that job descriptor, automation-owned
-retention job/run persistence, a caller-owned runtime state handle, and a
-caller-driven retention service tick with optional advisory `memory_decay` plus
-job lifecycle metadata, plus a caller-started retention loop step that can wait
-within a caller budget for one stored job to become due and lease due
-execution, plus a finite caller-owned loop policy over that step. It does not
-start detached background work, own a process service loop, or call an agent
-loop.
+still intentionally narrow: deterministic periodic schedule and POSIX cron
+evaluation, long-term memory retention request planning, a bootstrap-owned
+mapping from configured retention policy into that job descriptor,
+automation-owned retention job/run persistence, a caller-owned runtime state
+handle, and a caller-driven retention service tick with optional advisory
+`memory_decay` plus job lifecycle metadata, plus a caller-started retention loop
+step that can wait within a caller budget for one stored job to become due and
+lease due execution, plus a finite caller-owned loop policy over that step. It
+does not start detached background work, own a process service loop, or call an
+agent loop.
 
 ## Current Status
 
@@ -130,6 +130,14 @@ stored retention backlog because every successful tick advances
 explicit awaitable owned by the caller. Bootstrap still does not open
 `automation.db`, start timers, spawn detached work, or run this loop.
 
+Slice 197 adds the first cron-category planning primitive. `CronSchedule`
+stores a POSIX 5-field UTC expression plus a `first_fire_at` anchor for
+never-fired jobs, and `evaluate_cron_schedule(...)` parses `*`, lists, ranges,
+and steps into deterministic next-fire metadata over caller-supplied
+`PeriodicJobState` and `now`. It returns the same `PeriodicEvaluation` shape as
+periodic jobs and intentionally does not persist cron jobs, open automation
+state, start timers, spawn detached work, or call agents.
+
 ## Public API
 
 ```cpp
@@ -148,6 +156,11 @@ struct PeriodicEvaluation {
   bool due;
   core::Time next_fire_at;
   std::chrono::nanoseconds overdue_by;
+};
+
+struct CronSchedule {
+  std::string expression;
+  core::Time first_fire_at;
 };
 
 struct LongtermMemoryRetentionPolicy {
@@ -170,6 +183,9 @@ struct MemoryRetentionPlan {
 
 core::Result<PeriodicEvaluation>
 evaluate_periodic_schedule(PeriodicSchedule, PeriodicJobState, core::Time now);
+
+core::Result<PeriodicEvaluation>
+evaluate_cron_schedule(CronSchedule, PeriodicJobState, core::Time now);
 
 core::Result<MemoryRetentionPlan>
 plan_memory_retention(MemoryRetentionJob, PeriodicJobState, core::Time now);
@@ -395,6 +411,42 @@ class MemoryRetentionLoop {
 The evaluator does not skip forward over multiple missed intervals. The first
 real service loop will decide whether to catch up, coalesce, or drop missed
 firings based on job policy and backpressure state.
+
+## Cron Schedule Semantics
+
+`CronSchedule` is the first cron-category primitive. Its `expression` uses the
+POSIX 5-field shape:
+
+```text
+minute hour day-of-month month day-of-week
+```
+
+All evaluation is UTC and minute-granular. Supported field syntax is `*`, comma
+lists, inclusive ranges, and `/step` suffixes. Numeric ranges are:
+
+- minute: `0..59`
+- hour: `0..23`
+- day of month: `1..31`
+- month: `1..12`
+- day of week: `0..7`, where both `0` and `7` mean Sunday.
+
+When both day-of-month and day-of-week are restricted, the evaluator uses the
+standard cron OR behavior: either matching field can make the day eligible.
+When one of those fields is `*`, the restricted field controls the day match.
+
+`CronSchedule::first_fire_at` is the earliest scheduled minute a never-fired
+job may return. If it is not already minute-aligned, evaluation starts at the
+next UTC minute. Once `PeriodicJobState::last_fired_at` exists, evaluation
+starts at the minute after that stored fire, clamped no earlier than
+`first_fire_at`. This mirrors periodic evaluation by returning one next
+scheduled fire without skipping over a backlog. Later service-loop policy owns
+catch-up, coalescing, dropping, and persistence.
+
+Malformed expressions return `ErrorKind::invalid_argument` with `field` set to
+`expression`, `minute`, `hour`, `day_of_month`, `month`, or `day_of_week` and a
+`reason` such as `field_count`, `number`, `range`, `step`, or
+`no_matching_fire`. The evaluator bounds its search window so impossible
+schedules cannot spin forever.
 
 ## Memory Retention Planning
 
@@ -623,9 +675,10 @@ those concerns into bootstrap or `oran-memory`.
 
 The next automation slices should not be picked by `STATUS.md` alone. The open
 spec 0006 boundaries now start after this explicit runtime/retention loop
-surface: process service/timer startup policy, broader per-agent/category
-leases once agent-facing jobs exist, cron and triggered categories,
-queueing/backpressure, and notifier routing for agent-facing jobs.
+surface and the cron evaluator: cron persistence/config ownership, process
+service/timer startup policy, broader per-agent/category leases once
+agent-facing jobs exist, triggered categories, queueing/backpressure, and
+notifier routing for agent-facing jobs.
 
 ## Validation
 
@@ -659,7 +712,10 @@ for retention lease migration/repository acquisition semantics, loop active-leas
 conflicts, due-run release, cancellation-while-waiting without held leases, and
 backend-failure release, plus lease input validation. Slice 196 reports
 `test-automation` at 33 cases / 429 assertions for finite loop backlog
-catch-up, no-due-work stopping, and loop-policy input validation. The local
+catch-up, no-due-work stopping, and loop-policy input validation. Slice 197
+reports `test-automation` at 41 cases / 467 assertions for cron exact/future
+fires, stored-state advancement, steps/lists/ranges, DOM/DOW OR semantics, and
+malformed-expression validation. The local
 `bench-automation` planning rows are:
 
 - `automation.periodic_evaluate_1024` at about 4.49 us / 1024-job batch.

@@ -41,6 +41,16 @@ struct PeriodicEvaluation {
   friend bool operator==(const PeriodicEvaluation&, const PeriodicEvaluation&) = default;
 };
 
+/// POSIX 5-field cron schedule (`minute hour day-of-month month day-of-week`).
+/// `first_fire_at` is the earliest scheduled minute the evaluator may return
+/// for a never-fired job.
+struct CronSchedule {
+  std::string expression;
+  core::Time first_fire_at{core::Time::epoch()};
+
+  friend bool operator==(const CronSchedule&, const CronSchedule&) = default;
+};
+
 /// Long-term memory retention policy in automation-owned units. Bootstrap can
 /// map `config::LongtermMemoryRetentionConfig` into this shape without making
 /// `oran-memory` depend upward on automation.
@@ -72,6 +82,9 @@ struct MemoryRetentionPlan {
 
 [[nodiscard]] core::Result<PeriodicEvaluation>
 evaluate_periodic_schedule(PeriodicSchedule schedule, PeriodicJobState state, core::Time now);
+
+[[nodiscard]] core::Result<PeriodicEvaluation>
+evaluate_cron_schedule(CronSchedule schedule, PeriodicJobState state, core::Time now);
 
 [[nodiscard]] core::Result<MemoryRetentionPlan>
 plan_memory_retention(MemoryRetentionJob job, PeriodicJobState state, core::Time now);

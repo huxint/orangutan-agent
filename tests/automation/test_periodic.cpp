@@ -23,6 +23,16 @@ using namespace std::chrono_literals;
   return core::Time{core::Time::time_point{value}};
 }
 
+[[nodiscard]] core::Time at_utc(std::chrono::year year,
+                                std::chrono::month month,
+                                std::chrono::day day,
+                                std::chrono::hours hour = 0h,
+                                std::chrono::minutes minute = 0min,
+                                std::chrono::seconds second = 0s) {
+  const auto value = std::chrono::sys_days{year / month / day} + hour + minute + second;
+  return core::Time{std::chrono::time_point_cast<core::Time::clock::duration>(value)};
+}
+
 [[nodiscard]] bool has_field(const core::Error& error, std::string_view field) {
   return std::ranges::any_of(error.context(),
                              [field](const auto& entry) { return entry.first == "field" && entry.second == field; });
@@ -75,6 +85,139 @@ TEST_CASE("evaluate_periodic_schedule rejects non-positive intervals", "[unit][a
   REQUIRE_FALSE(result.has_value());
   REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
   REQUIRE(has_field(result.error(), "interval"));
+}
+
+TEST_CASE("evaluate_cron_schedule fires on an exact matching UTC minute", "[unit][automation][cron]") {
+  const auto anchor = at_utc(std::chrono::year{2026}, std::chrono::January, std::chrono::day{1});
+  const auto fire = at_utc(std::chrono::year{2026}, std::chrono::January, std::chrono::day{5}, 9h);
+  auto result =
+      automation::evaluate_cron_schedule(automation::CronSchedule{.expression = "0 9 * * 1", .first_fire_at = anchor},
+                                         {},
+                                         fire);
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->due);
+  REQUIRE(result->next_fire_at == fire);
+  REQUIRE(result->overdue_by == 0ns);
+}
+
+TEST_CASE("evaluate_cron_schedule reports the next matching minute before it is due", "[unit][automation][cron]") {
+  const auto anchor = at_utc(std::chrono::year{2026}, std::chrono::January, std::chrono::day{1});
+  const auto fire = at_utc(std::chrono::year{2026}, std::chrono::January, std::chrono::day{5}, 9h);
+  auto result = automation::evaluate_cron_schedule(
+      automation::CronSchedule{.expression = "0 9 * * 1", .first_fire_at = anchor},
+      {},
+      at_utc(std::chrono::year{2026}, std::chrono::January, std::chrono::day{5}, 8h, 59min));
+
+  REQUIRE(result.has_value());
+  REQUIRE_FALSE(result->due);
+  REQUIRE(result->next_fire_at == fire);
+  REQUIRE(result->overdue_by == 0ns);
+}
+
+TEST_CASE("evaluate_cron_schedule advances from the last fired cron minute", "[unit][automation][cron]") {
+  const auto anchor = at_utc(std::chrono::year{2026}, std::chrono::January, std::chrono::day{1});
+  const auto previous = at_utc(std::chrono::year{2026}, std::chrono::January, std::chrono::day{5}, 9h);
+  const auto next = at_utc(std::chrono::year{2026}, std::chrono::January, std::chrono::day{12}, 9h);
+  auto result = automation::evaluate_cron_schedule(
+      automation::CronSchedule{.expression = "0 9 * * 1", .first_fire_at = anchor},
+      automation::PeriodicJobState{.last_fired_at = previous},
+      at_utc(std::chrono::year{2026}, std::chrono::January, std::chrono::day{12}, 9h, 3min));
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->due);
+  REQUIRE(result->next_fire_at == next);
+  REQUIRE(result->overdue_by == 3min);
+}
+
+TEST_CASE("evaluate_cron_schedule supports steps lists and ranges", "[unit][automation][cron]") {
+  const auto anchor = at_utc(std::chrono::year{2026}, std::chrono::January, std::chrono::day{5}, 10h, 43min);
+  const auto fire = at_utc(std::chrono::year{2026}, std::chrono::January, std::chrono::day{5}, 10h, 45min);
+  auto result = automation::evaluate_cron_schedule(
+      automation::CronSchedule{.expression = "*/15 9-10 * * 1,3,5", .first_fire_at = anchor},
+      {},
+      fire);
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->due);
+  REQUIRE(result->next_fire_at == fire);
+}
+
+TEST_CASE("evaluate_cron_schedule treats seven as Sunday and rounds the anchor minute", "[unit][automation][cron]") {
+  const auto anchor = at_utc(std::chrono::year{2026}, std::chrono::January, std::chrono::day{4}, 8h, 59min, 30s);
+  const auto fire = at_utc(std::chrono::year{2026}, std::chrono::January, std::chrono::day{4}, 9h);
+  auto result =
+      automation::evaluate_cron_schedule(automation::CronSchedule{.expression = "0 9 * * 7", .first_fire_at = anchor},
+                                         {},
+                                         fire);
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->due);
+  REQUIRE(result->next_fire_at == fire);
+  REQUIRE(result->overdue_by == 0ns);
+}
+
+TEST_CASE("evaluate_cron_schedule handles leap-day gaps across non-leap centuries", "[unit][automation][cron]") {
+  const auto previous = at_utc(std::chrono::year{2096}, std::chrono::February, std::chrono::day{29});
+  const auto next = at_utc(std::chrono::year{2104}, std::chrono::February, std::chrono::day{29});
+  auto result = automation::evaluate_cron_schedule(
+      automation::CronSchedule{.expression = "0 0 29 2 *", .first_fire_at = previous},
+      automation::PeriodicJobState{.last_fired_at = previous},
+      next);
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->due);
+  REQUIRE(result->next_fire_at == next);
+  REQUIRE(result->overdue_by == 0ns);
+}
+
+TEST_CASE("evaluate_cron_schedule uses OR semantics for restricted DOM and DOW", "[unit][automation][cron]") {
+  const auto anchor = at_utc(std::chrono::year{2026}, std::chrono::January, std::chrono::day{1});
+  const auto monday = at_utc(std::chrono::year{2026}, std::chrono::January, std::chrono::day{5}, 9h);
+  auto monday_result =
+      automation::evaluate_cron_schedule(automation::CronSchedule{.expression = "0 9 15 * 1", .first_fire_at = anchor},
+                                         {},
+                                         monday);
+
+  REQUIRE(monday_result.has_value());
+  REQUIRE(monday_result->due);
+  REQUIRE(monday_result->next_fire_at == monday);
+
+  const auto next_monday = at_utc(std::chrono::year{2026}, std::chrono::January, std::chrono::day{12}, 9h);
+  const auto fifteenth = at_utc(std::chrono::year{2026}, std::chrono::January, std::chrono::day{15}, 9h);
+  auto fifteenth_result =
+      automation::evaluate_cron_schedule(automation::CronSchedule{.expression = "0 9 15 * 1", .first_fire_at = anchor},
+                                         automation::PeriodicJobState{.last_fired_at = next_monday},
+                                         fifteenth);
+
+  REQUIRE(fifteenth_result.has_value());
+  REQUIRE(fifteenth_result->due);
+  REQUIRE(fifteenth_result->next_fire_at == fifteenth);
+}
+
+TEST_CASE("evaluate_cron_schedule rejects malformed cron expressions", "[unit][automation][cron]") {
+  auto result =
+      automation::evaluate_cron_schedule(automation::CronSchedule{.expression = "0 9 * *"}, {}, core::Time::epoch());
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  REQUIRE(has_field(result.error(), "expression"));
+
+  result =
+      automation::evaluate_cron_schedule(automation::CronSchedule{.expression = "60 9 * * *"}, {}, core::Time::epoch());
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(has_field(result.error(), "minute"));
+
+  result = automation::evaluate_cron_schedule(automation::CronSchedule{.expression = "*/0 9 * * *"},
+                                              {},
+                                              core::Time::epoch());
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(has_field(result.error(), "minute"));
+
+  result = automation::evaluate_cron_schedule(automation::CronSchedule{.expression = "0 12-9 * * *"},
+                                              {},
+                                              core::Time::epoch());
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(has_field(result.error(), "hour"));
 }
 
 TEST_CASE("plan_memory_retention returns no decay request before cadence is due",

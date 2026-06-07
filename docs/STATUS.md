@@ -7,29 +7,26 @@
 
 ## Snapshot
 
-- **Slice:** 196 (`xmake run orangutan -- --help` reports slice 196)
+- **Slice:** 197 (`xmake run orangutan -- --help` reports slice 197)
 - **Last completed history:**
-  [`histories/2026-06/20260607-1727-automation-retention-loop-policy.md`](histories/2026-06/20260607-1727-automation-retention-loop-policy.md)
+  [`histories/2026-06/20260607-1800-automation-cron-schedule.md`](histories/2026-06/20260607-1800-automation-cron-schedule.md)
 - **Active exec-plan:**
-  [`exec-plans/active/2026-06-07-automation-retention-cadence.md`](exec-plans/active/2026-06-07-automation-retention-cadence.md).
-- **Latest completed slice:** slice 196 adds finite caller-owned retention loop
-  policy over the explicit `AutomationRuntime` + `MemoryRetentionLoop` path.
-  `MemoryRetentionLoop::run(...)` repeatedly drives the leased
-  `run_once(...)` step for one stored job until the caller's `max_iterations`
-  limit is reached or a step reports no due work within the remaining
-  `max_total_wait` budget. The result reports iteration count, due-run count,
-  total wait time, stop reason, and the last step; overdue stored fires can be
-  caught up one scheduled fire at a time while due execution still uses the
-  slice-195 repository lease. Bootstrap still does not open or run
-  `automation.db`, start timers, spawn detached work, or fire agents. Focused
-  result: `test-automation` **33 cases / 429 assertions**.
-- **Next intended slice:** do not select a new STATUS slice without a scoped
-  plan. The active automation-retention cadence work has reached the explicit
-  runtime/loop policy boundary. The next implementation boundary should be
-  selected from the open spec-0006 scheduler/category items with a plan update
-  first: process service/timer startup policy, broader per-agent/category
-  leases, cron/triggered categories, queueing/backpressure, notifier routing,
-  or scheduler tick performance.
+  [`exec-plans/active/2026-06-07-automation-cron-category.md`](exec-plans/active/2026-06-07-automation-cron-category.md).
+- **Latest completed slice:** slice 197 adds the first cron-category planning
+  primitive without starting a scheduler. `CronSchedule` stores a POSIX
+  5-field UTC expression plus a `first_fire_at` anchor, and
+  `evaluate_cron_schedule(...)` parses `*`, lists, ranges, and steps into the
+  same `PeriodicEvaluation` shape used by periodic jobs. It advances from
+  `PeriodicJobState::last_fired_at`, uses standard cron OR semantics when both
+  day-of-month and day-of-week are restricted, and returns one next scheduled
+  fire without persisting cron jobs, opening `automation.db`, starting timers,
+  spawning detached work, or firing agents. Focused result:
+  `test-automation` **41 cases / 467 assertions**.
+- **Next intended slice:** continue the active automation cron/category plan.
+  The next useful implementation boundary is either cron job persistence/config
+  ownership or explicit process service/timer startup policy over
+  `AutomationRuntime`; do not add bootstrap-owned background automation or
+  unrelated STATUS-only slice churn.
 
 Slice 183 adds the operator-facing long-term
   retention policy contract. `oran-config` now parses
