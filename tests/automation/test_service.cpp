@@ -15,6 +15,7 @@
 #include <oran/async.hpp>
 #include <oran/automation.hpp>
 #include <oran/core/error.hpp>
+#include <oran/hook.hpp>
 #include <oran/memory/longterm.hpp>
 #include <oran/storage.hpp>
 
@@ -23,6 +24,7 @@
 namespace async = orangutan::async;
 namespace automation = orangutan::automation;
 namespace core = orangutan::core;
+namespace hook = orangutan::hook;
 namespace memory = orangutan::memory;
 namespace storage = orangutan::storage;
 namespace test = orangutan::tests;
@@ -225,6 +227,115 @@ TEST_CASE("MemoryRetentionService::tick runs due retention and advances last-fir
     REQUIRE(loaded.has_value());
     REQUIRE(loaded->has_value());
     REQUIRE((*loaded)->state.last_fired_at == at(60s + 6h));
+  });
+}
+
+TEST_CASE("MemoryRetentionService::tick publishes memory decay metadata after successful due retention",
+          "[unit][automation][service][hook]") {
+  TempDb db{"oran-automation-service-hook"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_memory_retention_job(automation::UpsertMemoryRetentionJobRequest{
+                 .job_key = "memory-retention:cli",
+                 .job = make_job(),
+             }))
+                .has_value());
+    FakeBackend backend;
+    backend.decay_result.shadowed_records = {make_record("rec-1")};
+
+    std::vector<hook::MemoryDecayPayload> captured;
+    hook::Bus bus;
+    hook::InProcessSink sink{
+        "retention-decay-recorder",
+        [&captured](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
+          REQUIRE(event == hook::Event::memory_decay);
+          const auto* decay = std::get_if<hook::MemoryDecayPayload>(payload.get());
+          REQUIRE(decay != nullptr);
+          captured.push_back(*decay);
+          co_return core::Result<void>{};
+        }};
+    bus.bind(sink, {hook::Event::memory_decay});
+
+    automation::MemoryRetentionService service{repo,
+                                               backend,
+                                               automation::MemoryRetentionServiceOptions{
+                                                   .hooks =
+                                                       automation::MemoryRetentionHookOptions{
+                                                           .bus = &bus,
+                                                           .source = "periodic",
+                                                           .agent_key = "automation-service",
+                                                           .identity = "retention-loop",
+                                                       },
+                                               }};
+
+    auto result = co_await service.tick(automation::MemoryRetentionTickRequest{
+        .job_key = "memory-retention:cli",
+        .now = at(60s),
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->ran);
+    REQUIRE(result->hook_publish.has_value());
+    REQUIRE(result->hook_publish->sink_count == 1);
+    REQUIRE(result->hook_publish->failure_count == 0);
+    REQUIRE(captured.size() == 1);
+    REQUIRE(captured[0].who.scope_key == "cli");
+    REQUIRE(captured[0].who.agent_key == "automation-service");
+    REQUIRE(captured[0].who.identity == "retention-loop");
+    REQUIRE(captured[0].source == "periodic");
+    REQUIRE(captured[0].scope_key == "cli");
+    REQUIRE(captured[0].unused_before == at(60s - std::chrono::days{3}));
+    REQUIRE(captured[0].importance_floor == 0.5);
+    REQUIRE(captured[0].limit == 7);
+    REQUIRE(captured[0].decay_at == at(60s));
+    REQUIRE(captured[0].shadowed_count == 1);
+    REQUIRE(captured[0].started_at == at(60s));
+    REQUIRE(captured[0].finished_at == at(60s));
+    REQUIRE(captured[0].duration == 0s);
+  });
+}
+
+TEST_CASE("MemoryRetentionService::tick reports advisory hook failures without failing the tick",
+          "[unit][automation][service][hook]") {
+  TempDb db{"oran-automation-service-hook-failure"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_memory_retention_job(automation::UpsertMemoryRetentionJobRequest{
+                 .job_key = "memory-retention:cli",
+                 .job = make_job(),
+             }))
+                .has_value());
+    FakeBackend backend;
+    hook::Bus bus;
+    hook::InProcessSink sink{"failing-decay-recorder",
+                             [](hook::Event, hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
+                               co_return std::unexpected(core::Error::internal("sink failed"));
+                             }};
+    bus.bind(sink, {hook::Event::memory_decay});
+    automation::MemoryRetentionService service{repo,
+                                               backend,
+                                               automation::MemoryRetentionServiceOptions{
+                                                   .hooks = automation::MemoryRetentionHookOptions{.bus = &bus},
+                                               }};
+
+    auto result = co_await service.tick(automation::MemoryRetentionTickRequest{
+        .job_key = "memory-retention:cli",
+        .now = at(60s),
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->ran);
+    REQUIRE(result->hook_publish.has_value());
+    REQUIRE(result->hook_publish->sink_count == 1);
+    REQUIRE(result->hook_publish->failure_count == 1);
+    REQUIRE(result->job.has_value());
+    REQUIRE(result->job->state.last_fired_at == at(60s));
+    REQUIRE(result->run.has_value());
+    REQUIRE(result->run->success);
   });
 }
 

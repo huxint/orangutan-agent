@@ -257,7 +257,7 @@ struct MemoryForgetPayload {
 /// the same non-sensitive shape.
 struct MemoryDecayPayload {
   Identity who;
-  /// Producer label such as `startup`.
+  /// Producer label such as `startup` or `periodic`.
   std::string source;
   std::string scope_key;
   core::Time unused_before{};

@@ -2,11 +2,15 @@
 
 #include <oran/automation/service.hpp>
 
+#include <chrono>
 #include <expected>
 #include <string>
 #include <utility>
 
 #include <oran/core/error.hpp>
+#include <oran/hook/bus.hpp>
+#include <oran/hook/event.hpp>
+#include <oran/hook/payload.hpp>
 #include <oran/memory/longterm.hpp>
 
 namespace orangutan::automation {
@@ -32,11 +36,52 @@ namespace {
   return std::string{error.message()};
 }
 
+[[nodiscard]] hook::MemoryDecayPayload make_memory_decay_payload(const MemoryRetentionHookOptions& hooks,
+                                                                 const MemoryRetentionJobRecord& job,
+                                                                 const memory::longterm::DecayRequest& request,
+                                                                 std::size_t shadowed_count) {
+  return hook::MemoryDecayPayload{
+      .who =
+          hook::Identity{
+              .scope_key = job.job.scope_key,
+              .agent_key = hooks.agent_key,
+              .identity = hooks.identity,
+          },
+      .source = hooks.source,
+      .scope_key = job.job.scope_key,
+      .unused_before = request.unused_before,
+      .importance_floor = request.importance_floor,
+      .limit = request.limit,
+      .decay_at = request.decay_at,
+      .shadowed_count = shadowed_count,
+      .started_at = request.decay_at,
+      .finished_at = request.decay_at,
+      .duration = std::chrono::nanoseconds{0},
+  };
+}
+
+[[nodiscard]] async::Awaitable<std::optional<MemoryRetentionHookPublishResult>>
+publish_memory_decay(const MemoryRetentionHookOptions& hooks,
+                     const MemoryRetentionJobRecord& job,
+                     const memory::longterm::DecayRequest& request,
+                     std::size_t shadowed_count) {
+  if (hooks.bus == nullptr) {
+    co_return std::nullopt;
+  }
+  auto outcome = co_await hooks.bus->publish_advisory(hook::Event::memory_decay,
+                                                      make_memory_decay_payload(hooks, job, request, shadowed_count));
+  co_return MemoryRetentionHookPublishResult{
+      .sink_count = outcome.sinks.size(),
+      .failure_count = outcome.failure_count(),
+  };
+}
+
 }  // namespace
 
 MemoryRetentionService::MemoryRetentionService(AutomationRepository& repository,
-                                               memory::longterm::Backend& backend) noexcept
-    : repository_{&repository}, backend_{&backend} {}
+                                               memory::longterm::Backend& backend,
+                                               MemoryRetentionServiceOptions options) noexcept
+    : repository_{&repository}, backend_{&backend}, options_{std::move(options)} {}
 
 async::Awaitable<core::Result<MemoryRetentionTickResult>>
 MemoryRetentionService::tick(MemoryRetentionTickRequest request) {
@@ -99,6 +144,8 @@ MemoryRetentionService::tick(MemoryRetentionTickRequest request) {
   if (!advanced) {
     co_return std::unexpected(std::move(advanced).error());
   }
+  auto hook_publish =
+      co_await publish_memory_decay(options_.hooks, *advanced, *plan->decay_request, decayed->shadowed_records.size());
 
   co_return MemoryRetentionTickResult{
       .job_key = job.job_key,
@@ -107,6 +154,7 @@ MemoryRetentionService::tick(MemoryRetentionTickRequest request) {
       .shadowed_count = decayed->shadowed_records.size(),
       .job = std::move(*advanced),
       .run = std::move(*recorded),
+      .hook_publish = std::move(hook_publish),
   };
 }
 

@@ -4,9 +4,9 @@
 still intentionally narrow: deterministic periodic schedule evaluation,
 long-term memory retention request planning, a bootstrap-owned mapping from
 configured retention policy into that job descriptor, automation-owned
-retention job/run persistence, and a caller-driven retention service tick. It
-does not start background work, publish job hooks, acquire leases, or call an
-agent loop.
+retention job/run persistence, and a caller-driven retention service tick with
+optional advisory `memory_decay` publishing. It does not start background work,
+publish job lifecycle hooks, acquire leases, or call an agent loop.
 
 ## Current Status
 
@@ -25,12 +25,14 @@ Slice 189 adds `<oran/automation/repository.hpp>`,
 `automation.db` schema when `migrate()` is called, and persists retention jobs,
 last-fired state, and run rows keyed by `job_key`.
 
-The library now depends on `oran-core`, `oran-async`, `oran-storage`, and
-`oran-memory`. That dependency direction is intentional: automation may plan
-work against memory's public `memory::longterm::DecayRequest` and may use the
-generic storage pool/migration primitives for its own schema, while
-`oran-memory` and `oran-storage` stay independent of automation and never
-schedule retention themselves.
+The library now depends on `oran-core`, `oran-async`, `oran-storage`,
+`oran-memory`, and `oran-hook`. That dependency direction is intentional:
+automation may plan work against memory's public
+`memory::longterm::DecayRequest`, may use the generic storage pool/migration
+primitives for its own schema, and may publish the shared advisory
+`memory_decay` hook payload when a caller explicitly supplies a hook bus.
+`oran-memory`, `oran-storage`, and `oran-hook` stay independent of automation
+and never schedule retention themselves.
 
 Slice 188 consumes that boundary from bootstrap without turning bootstrap into a
 scheduler. `bootstrap::longterm_memory_retention_job_from(...)` maps
@@ -56,9 +58,18 @@ reuses `plan_memory_retention(...)`, skips not-due work without mutation, calls
 `Backend::decay(...)` only when due, records the run outcome, and advances
 `last_fired_at` only after a successful backend run and run-row insert. Backend
 failures are persisted as failed runs and returned to the caller with
-`last_fired_at` unchanged so retry policy remains explicit. The service still
-does not open `automation.db`, own a timer, start a hidden bootstrap loop,
-publish periodic `memory_decay`, acquire leases, or call agents.
+`last_fired_at` unchanged so retry policy remains explicit.
+
+Slice 191 turns the explicit tick into the first periodic retention hook
+producer without turning it into a service loop. `MemoryRetentionServiceOptions`
+accepts optional hook settings: a non-owning `hook::Bus*`, source label, agent
+key, and identity. When a due tick succeeds and durable state has advanced, the
+service publishes advisory `memory_decay` metadata through that bus. With no
+bus, not-due ticks, or backend failures, no hook is published. Advisory sink
+failures stay advisory: the tick still succeeds, and
+`MemoryRetentionTickResult::hook_publish` reports sink/failure counts. The
+service still does not open `automation.db`, own a timer, start a hidden
+bootstrap loop, publish job lifecycle hooks, acquire leases, or call agents.
 
 ## Public API
 
@@ -169,6 +180,22 @@ struct MemoryRetentionTickRequest {
   core::Time now;
 };
 
+struct MemoryRetentionHookOptions {
+  hook::Bus* bus;
+  std::string source;
+  std::string agent_key;
+  std::string identity;
+};
+
+struct MemoryRetentionServiceOptions {
+  MemoryRetentionHookOptions hooks;
+};
+
+struct MemoryRetentionHookPublishResult {
+  std::size_t sink_count;
+  std::size_t failure_count;
+};
+
 struct MemoryRetentionTickResult {
   std::string job_key;
   PeriodicEvaluation schedule;
@@ -176,12 +203,14 @@ struct MemoryRetentionTickResult {
   std::size_t shadowed_count;
   std::optional<MemoryRetentionJobRecord> job;
   std::optional<MemoryRetentionRunRecord> run;
+  std::optional<MemoryRetentionHookPublishResult> hook_publish;
 };
 
 class MemoryRetentionService {
  public:
   MemoryRetentionService(AutomationRepository&,
-                         memory::longterm::Backend&);
+                         memory::longterm::Backend&,
+                         MemoryRetentionServiceOptions = {});
 
   async::Awaitable<core::Result<MemoryRetentionTickResult>>
   tick(MemoryRetentionTickRequest);
@@ -257,7 +286,8 @@ return `std::nullopt` on `get_memory_retention_job(...)` and
 
 `MemoryRetentionService::tick(...)` is a caller-clocked unit of work. It owns one
 attempt to evaluate and possibly execute a stored memory-retention job; it does
-not own timers, sleeps, background tasks, queueing, or hook publication.
+not own timers, sleeps, background tasks, queueing, or hook subscription
+lifetime.
 
 The tick validates non-empty `job_key`, loads the stored job through
 `AutomationRepository`, and returns `ErrorKind::not_found` if the job is absent.
@@ -276,6 +306,17 @@ successful backend result is recorded as a successful run with
 `PeriodicEvaluation::next_fire_at`. This uses the scheduled fire rather than the
 wall-clock finish time so cadence does not drift when callers tick late.
 
+If the service was constructed with `MemoryRetentionHookOptions::bus`, a
+successful due tick publishes advisory `hook::Event::memory_decay` after the
+run row is recorded and `last_fired_at` advances. The payload reuses the planned
+`DecayRequest` values (`scope_key`, `unused_before`, `importance_floor`,
+`limit`, `decay_at`), copies the configured source/identity fields, and reports
+the number of shadowed records. Because the tick remains caller-clocked and does
+not own a separate wall-clock span, the periodic payload uses `decay_at` for
+both `started_at` and `finished_at` and reports `duration=0`. Advisory sink
+errors are summarized in `MemoryRetentionTickResult::hook_publish` and do not
+roll back the durable run.
+
 If the backend returns an error, the tick records a failed run with the scheduled
 fire time, caller-supplied `now` as `finished_at`, zero shadowed records, and a
 non-empty error message. It then returns the backend error and does not advance
@@ -283,16 +324,16 @@ non-empty error message. It then returns the backend error and does not advance
 repository error is returned because the run outcome was not durably recorded.
 
 The public awaitable is composed entirely of repository/backend awaitables and
-does not add its own blocking wait or detached coroutine. Future service-loop
-ownership can add timers, leases, shutdown, and cancellation policy around this
-tick without moving those concerns into bootstrap or `oran-memory`.
+the optional advisory hook publish; it does not add its own blocking wait or
+detached coroutine. Future service-loop ownership can add timers, leases,
+shutdown, and cancellation policy around this tick without moving those concerns
+into bootstrap or `oran-memory`.
 
 ## Future Ownership
 
 The next automation slices can build on this boundary in this order:
 
-1. Publish job lifecycle hooks and periodic `memory_decay` metadata from the
-   actual periodic producer.
+1. Publish job lifecycle hooks from the actual periodic service owner.
 2. Add per-agent leases and cancellation semantics around service-loop-owned
    runs.
 3. Add cron and triggered job categories.
@@ -315,7 +356,9 @@ cases / 110 assertions for migration idempotence, job round-trips, policy/state
 updates, run recording/listing, and repository validation. Slice 190 reports
 `test-automation` at 16 cases / 169 assertions for not-due ticks, due-success
 backend execution, backend-failure run recording without advancing state, and
-invalid/missing job handling. The local
+invalid/missing job handling. Slice 191 reports `test-automation` at 18 cases /
+207 assertions for successful periodic `memory_decay` publishing and advisory
+sink-failure reporting from the explicit tick owner. The local
 `bench-automation` planning rows are:
 
 - `automation.periodic_evaluate_1024` at about 4.84 us / 1024-job batch.

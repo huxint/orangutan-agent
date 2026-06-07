@@ -565,8 +565,11 @@ at bootstrap. Slice 189 persists that descriptor and future run rows in
 `automation.db` through `AutomationRepository`. Slice 190 adds the explicit
 caller-driven automation tick owner that loads the stored job, invokes
 `Backend::decay(...)` only when due, records run outcomes, and advances
-`last_fired_at` only after success. Remaining ownership work is the periodic
-decay hook producer plus real service-loop leases/timers.
+`last_fired_at` only after success. Slice 191 lets that tick owner publish
+advisory periodic `memory_decay` metadata through a caller-supplied hook bus
+after successful due retention. Remaining ownership work is real service-loop
+leases/timers and bootstrap or daemon wiring for callers that choose to start
+that loop.
 
 Forgetting is final (DELETE), with an audit row in `audit.db`.
 

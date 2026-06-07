@@ -67,8 +67,9 @@ Current implementation status:
   adds the `oran-automation` repository that can persist that descriptor,
   `last_fired_at`, and retention run rows in `automation.db`; slice 190 adds
   the caller-driven service tick that can consume those rows and run due decay
-  through a supplied backend. Bootstrap still does not open that database or
-  start a scheduler.
+  through a supplied backend. Slice 191 adds optional advisory `memory_decay`
+  publication from that tick owner without adding persisted state or secret
+  material. Bootstrap still does not open that database or start a scheduler.
   Ordinary configured-route bootstrap maps the recall policy into
   prompt-boundary long-term recall. The hybrid-search block defaults disabled;
   when built with `--vector_memory=y`, configured-route bootstrap now enables the
@@ -109,7 +110,7 @@ Current implementation status:
   not have typed config models yet. The `oran-automation` C++ library exists
   for periodic planning plus the slice-189 retention job/run repository, but
   config-authored automation job seeds, bootstrap ownership of
-  `automation.db`, and scheduler/service execution remain unimplemented. The
+  `automation.db`, and scheduler/service-loop execution remain unimplemented. The
   `hooks` root has the v1 typed timeout field; `sinks` and `bindings` remain
   recognized-but-untyped until external hook sinks land.
 - `agents.<name>.skills_enabled` accepts an explicit array of non-empty skill

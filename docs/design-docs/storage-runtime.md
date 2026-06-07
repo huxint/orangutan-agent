@@ -32,7 +32,9 @@ does not expose `sqlite3.h` from public headers.
 > row through `TraceRepository` before returning to the caller. Memory-tier
 > schemas live above the pool in `oran-memory`; slice 189 adds the automation
 > retention job/run repository above the same pool in `oran-automation`, and
-> slice 190 adds the caller-driven service tick above that repository.
+> slice 190 adds the caller-driven service tick above that repository. Slice
+> 191 adds optional advisory hook publication above the same automation service;
+> it does not add storage-owned schema or audit rows.
 > `oran-storage` stays the generic SQLite, migration, and pooling substrate.
 > Backups remain future work. Slice 127 adds
 > trace-derived provider usage rollups grouped by UTC day, agent, route profile,

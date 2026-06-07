@@ -412,6 +412,8 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > passes. It is metadata-only by construction: source label, identity, scope,
 > retention inputs, shadowed count, and timing are present, but decayed record
 > contents are not, so default and trusted-local sinks receive the same shape.
+> Slice 191 reuses that same payload for caller-driven periodic retention ticks
+> from `oran-automation`; no new record-content surface is added.
 > Typed shapes for
 > the remaining non-tool
 > events ship with their producers (provider request /
@@ -538,8 +540,12 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > advisory `memory_decay` after the optional bounded `Fts5Backend::decay(...)`
 > pass succeeds, using build-only
 > `RuntimeAssemblyOptions::startup_hook_bindings` for observers that must
-> subscribe before startup producers run. Periodic automation decay publishing
-> remains downstream.
+> subscribe before startup producers run. Slice 191 adds the periodic
+> automation producer: `MemoryRetentionService::tick(...)` publishes advisory
+> `memory_decay` after a successful due tick records the run and advances
+> `last_fired_at`, but only when the caller supplies a `hook::Bus`. Not-due
+> ticks, backend failures, and service instances without a bus publish nothing;
+> advisory sink failures remain non-fatal and are surfaced on the tick result.
 > `test-hook` now reports 37 cases / 299 assertions.
 
 ### Surface

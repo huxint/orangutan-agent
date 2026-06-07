@@ -22,6 +22,8 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
   - Keep `decay_check_interval_hours` represented as automation cadence input.
   - Ship the first automation-owned retention repository for job/run/last-fired
     state above `storage::Pool`.
+  - Publish successful periodic retention `memory_decay` metadata from the
+    explicit tick owner when the caller supplies a hook bus.
   - Update docs, status, quality, history, and release notes per the Prime
     Directive.
 - Out of scope:
@@ -29,8 +31,8 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
     notifier callbacks, and background service loops.
   - Bootstrap ownership of the periodic runner or bootstrap opening
     `automation.db`.
-  - Periodic `memory_decay` hook publication; that lands when the periodic
-    producer actually runs decay.
+  - Job lifecycle hook publication; that lands when a service-loop owner
+    actually starts jobs.
 
 ## Context
 
@@ -50,17 +52,17 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
   - `xmake/bench.lua`
 - Constraints:
   - `oran-automation` is an agent-runtime layer library and may depend downward
-    on `oran-core`, `oran-async`, `oran-storage`, and `oran-memory`;
-    `oran-memory` and `oran-storage` must not depend upward on automation.
+    on `oran-core`, `oran-async`, `oran-storage`, `oran-memory`, and
+    `oran-hook`; those libraries must not depend upward on automation.
   - Public headers must stay third-party-free and avoid owning asio/sqlite
     types.
   - The first slice must not create a hidden background loop inside bootstrap.
-  - Periodic memory decay remains metadata-only until a producer publishes
-    `memory_decay`.
+  - Periodic memory decay metadata remains advisory and content-free when a
+    producer publishes `memory_decay`.
 - Compile-budget impact:
   - `oran-automation` uses stdlib plus public `oran-core`, `oran-async`,
-    `oran-storage`, and `oran-memory` surfaces in this plan. It should fit the
-    existing orchestration/automation budget row in
+    `oran-storage`, `oran-memory`, and `oran-hook` surfaces in this plan. It
+    should fit the existing orchestration/automation budget row in
     `docs/rules/compile-budget.md`.
 
 ## Risks
@@ -96,8 +98,9 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
    Done in slice 190: consume stored jobs, evaluate due work, call the memory
    backend, and record run outcomes without hidden bootstrap loops.
 6. **Hook producer.**
-   Later slice: publish periodic `memory_decay` metadata from the actual
-   periodic producer.
+   Done in slice 191: publish periodic `memory_decay` metadata from the
+   explicit tick owner after successful due retention when the caller supplies a
+   hook bus.
 
 ## Validation
 
@@ -115,7 +118,8 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
   - Confirm no bootstrap background loop is introduced.
   - Confirm `oran-memory` dependency direction does not change.
 - Observability checks:
-  - No new hook publish is claimed until the periodic producer exists.
+  - Confirm `memory_decay` publishes only after successful due ticks and remains
+    absent for not-due ticks, backend failures, and services without a hook bus.
 - Bench comparison:
   - First bucket only pins cadence-evaluation overhead for target parity; the
     service tick benchmark from spec 0006 remains downstream.
@@ -155,6 +159,13 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
 - [x] 2026-06-07 09:59 +0800: Kept bootstrap unopened for `automation.db` and
   kept periodic `memory_decay` publishing out of the tick slice; the next useful
   product boundary is hook production from the actual periodic execution owner.
+- [x] 2026-06-07 10:35 +0800: Added optional `memory_decay` publishing to
+  `MemoryRetentionService::tick(...)` after successful due retention. The tick
+  reuses the shared hook payload, reports advisory sink/failure counts, and
+  publishes nothing for not-due or backend-failure paths.
+- [x] 2026-06-07 10:35 +0800: Kept bootstrap unopened for `automation.db` and
+  still did not introduce timers, leases, or job lifecycle hooks; those remain
+  service-loop ownership work.
 - [x] Update docs that this slice invalidates in the same PR
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -186,6 +197,10 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
 - 2026-06-07: Keep `MemoryRetentionService` as a caller-driven tick rather than
   a hidden service loop. Timers, leases, shutdown, notifier routing, and
   periodic `memory_decay` hook publication belong to the future loop owner.
+- 2026-06-07: Let the explicit tick owner publish `memory_decay` only when the
+  caller supplies a `hook::Bus`. This reuses the already-shipped metadata-only
+  payload, keeps advisory sink failures non-fatal, and avoids bootstrap
+  starting a hidden service loop.
 
 ## Linked Artifacts
 
@@ -202,5 +217,7 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
   `docs/histories/2026-06/20260607-0508-automation-retention-state.md`
   and
   `docs/histories/2026-06/20260607-0959-automation-retention-service-tick.md`
+  and
+  `docs/histories/2026-06/20260607-1035-automation-retention-decay-hooks.md`
 - Release note:
-  `docs/releases/feature-release-notes.md#automation-retention-service-tick`
+  `docs/releases/feature-release-notes.md#automation-retention-decay-hooks`

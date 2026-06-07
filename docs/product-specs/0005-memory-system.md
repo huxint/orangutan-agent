@@ -225,10 +225,15 @@ operators can reason about retention, scope, and visibility.
   `memory::longterm::Backend::decay(...)` only when due, records
   success/failure run rows, and advances `last_fired_at` only after success.
   Backend failures are durably recorded and leave state unadvanced for explicit
-  retry policy. Bootstrap still does not open `automation.db`, run a background
-  loop, or publish periodic `memory_decay`.
+  retry policy.
+- Periodic retention hook publishing shipped in slice 191:
+  `MemoryRetentionService` can publish advisory `memory_decay` metadata through
+  a caller-supplied `hook::Bus` after successful due retention records its run
+  and advances `last_fired_at`. Not-due ticks and backend failures publish
+  nothing, advisory sink failures stay non-fatal, and bootstrap still does not
+  open `automation.db` or run a background loop.
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
-- Blocking `memory_read_before`, periodic automation decay publishing, and
+- Blocking `memory_read_before`, automation service-loop ownership, leases, and
   memory-write rewrite/annotation remain downstream.
 
 ## Scope (v1.1)
@@ -296,9 +301,10 @@ operators can reason about retention, scope, and visibility.
    ownership. Slice 189 persists that descriptor's job state and future run
    history through `AutomationRepository`. Slice 190 adds a caller-driven
    `MemoryRetentionService::tick(...)` execution boundary that runs due decay
-   through a supplied backend and records outcomes.
-   Periodic decay publishing, bootstrap service ownership, and leases remain
-   open.
+   through a supplied backend and records outcomes. Slice 191 publishes
+   periodic advisory `memory_decay` metadata from that explicit tick owner when
+   a caller supplies a hook bus.
+   Bootstrap service ownership and leases remain open.
 5. A `memory.write.before` hook can veto a write. **Status:** closed for the
    bootstrap `memory.remember` tool path in slice 179. `AgentPromptRunner`
    publishes blocking `memory_write_before` after parsing/scoping the record and
@@ -385,5 +391,6 @@ xmake run test-bootstrap
 scripts/bench-compare.sh memory
 ```
 
-Slice 190 reports `test-automation` at 16 cases / 169 assertions for the
-retention planner, repository, and service tick boundaries.
+Slice 191 reports `test-automation` at 18 cases / 207 assertions for the
+retention planner, repository, service tick, and periodic hook-publish
+boundaries.

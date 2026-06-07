@@ -43,11 +43,12 @@ The live sibling exceptions are narrow and directional: `http -> async`, `io -> 
 `storage -> async`, `config -> storage`, `tool -> permission`, `tool -> hook`,
 `prompt -> tool`, and `provider -> prompt`. `oran-skill` depends downward on
 `oran-async` and `oran-io` for loader snapshots. `oran-automation` depends
-downward on `oran-async`, `oran-storage`, and `oran-memory` for its awaitable
-retention repository plus memory-retention planning contract; those libraries
-must not depend back on automation. `oran-bootstrap` is the composition root
-above the interface layer and may wire lower libraries together, including the
-config-to-automation retention descriptor mapping.
+downward on `oran-async`, `oran-storage`, `oran-memory`, and `oran-hook` for its
+awaitable retention repository, memory-retention planning contract, and optional
+advisory `memory_decay` producer; those libraries must not depend back on
+automation. `oran-bootstrap` is the composition root above the interface layer
+and may wire lower libraries together, including the config-to-automation
+retention descriptor mapping.
 
 CI script `scripts/check-deps.sh` (in the build skeleton) walks each library's
 `xmake.lua` and rejects PRs that introduce upward or sideways deps.
