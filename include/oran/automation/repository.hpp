@@ -1,0 +1,92 @@
+// include/oran/automation/repository.hpp - automation persistence boundary.
+
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include <oran/async/awaitable_fwd.hpp>
+#include <oran/automation/periodic.hpp>
+#include <oran/core/result.hpp>
+#include <oran/core/time.hpp>
+#include <oran/storage/migrations.hpp>
+
+namespace orangutan::storage {
+class Pool;
+}  // namespace orangutan::storage
+
+namespace orangutan::automation {
+
+struct AutomationRepositoryOptions {
+  std::string migrations_directory;
+};
+
+struct UpsertMemoryRetentionJobRequest {
+  std::string job_key;
+  MemoryRetentionJob job;
+  PeriodicJobState state{};
+};
+
+struct MemoryRetentionJobRecord {
+  std::string job_key;
+  MemoryRetentionJob job;
+  PeriodicJobState state{};
+  std::string created_at;
+  std::string updated_at;
+};
+
+struct RecordMemoryRetentionRunRequest {
+  std::string job_key;
+  core::Time fired_at{core::Time::epoch()};
+  core::Time finished_at{core::Time::epoch()};
+  bool success{true};
+  std::size_t shadowed_count{0};
+  std::optional<std::string> error_message{};
+};
+
+struct MemoryRetentionRunRecord {
+  std::int64_t id{};
+  std::string job_key;
+  core::Time fired_at{core::Time::epoch()};
+  core::Time finished_at{core::Time::epoch()};
+  bool success{true};
+  std::size_t shadowed_count{0};
+  std::optional<std::string> error_message{};
+  std::string created_at;
+};
+
+struct ListMemoryRetentionRunsOptions {
+  std::string job_key;
+  std::size_t limit{50};
+};
+
+class AutomationRepository {
+public:
+  explicit AutomationRepository(storage::Pool& pool, AutomationRepositoryOptions options = {}) noexcept;
+
+  [[nodiscard]] async::Awaitable<core::Result<storage::MigrationReport>> migrate();
+
+  [[nodiscard]] async::Awaitable<core::Result<MemoryRetentionJobRecord>>
+  upsert_memory_retention_job(UpsertMemoryRetentionJobRequest request);
+
+  [[nodiscard]] async::Awaitable<core::Result<std::optional<MemoryRetentionJobRecord>>>
+  get_memory_retention_job(std::string job_key);
+
+  [[nodiscard]] async::Awaitable<core::Result<MemoryRetentionJobRecord>>
+  mark_memory_retention_fired(std::string job_key, core::Time fired_at);
+
+  [[nodiscard]] async::Awaitable<core::Result<MemoryRetentionRunRecord>>
+  record_memory_retention_run(RecordMemoryRetentionRunRequest request);
+
+  [[nodiscard]] async::Awaitable<core::Result<std::vector<MemoryRetentionRunRecord>>>
+  list_memory_retention_runs(ListMemoryRetentionRunsOptions options);
+
+private:
+  storage::Pool* pool_{};
+  AutomationRepositoryOptions options_;
+};
+
+}  // namespace orangutan::automation

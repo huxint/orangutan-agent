@@ -212,6 +212,13 @@ operators can reason about retention, scope, and visibility.
   `RuntimeAssembly`. The descriptor's first fire is after the one-shot startup
   decay interval; no background loop, persistence, backend execution, or
   periodic `memory_decay` publishing is started by this mapping.
+- Automation retention state persistence shipped in slice 189:
+  `oran-automation::AutomationRepository` owns the first `automation.db`
+  retention schema above `storage::Pool`, persists the configured job by
+  durable `job_key`, stores `last_fired_at`, records success/failure run rows,
+  and lists recent runs. Bootstrap still does not open `automation.db`, run a
+  service loop, call the memory backend periodically, or publish periodic
+  `memory_decay`.
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
 - Blocking `memory_read_before`, periodic automation decay publishing, and
   memory-write rewrite/annotation remain downstream.
@@ -278,7 +285,8 @@ operators can reason about retention, scope, and visibility.
    planner that can produce the same `DecayRequest` shape when a periodic job
    is due. Slice 188 maps configured-route retention into an automation-owned
    job descriptor and stores it on `RuntimeAssembly` for future scheduler
-   ownership.
+   ownership. Slice 189 persists that descriptor's job state and future run
+   history through `AutomationRepository`.
    Persistent periodic execution and periodic decay publishing remain open.
 5. A `memory.write.before` hook can veto a write. **Status:** closed for the
    bootstrap `memory.remember` tool path in slice 179. `AgentPromptRunner`
@@ -361,6 +369,10 @@ operators can reason about retention, scope, and visibility.
 ```sh
 xmake build oran-memory
 xmake run test-memory
+xmake build test-automation && xmake run test-automation
 xmake run test-bootstrap
 scripts/bench-compare.sh memory
 ```
+
+Slice 189 reports `test-automation` at 12 cases / 110 assertions for the
+retention state repository boundary.

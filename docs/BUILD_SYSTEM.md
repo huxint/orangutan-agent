@@ -233,7 +233,7 @@ oran_lib("config", { "oran-core", "oran-storage" }, { "nlohmann_json", "re2" })
 oran_lib("permission", { "oran-core", "oran-config", "oran-storage", "oran-async" }, { "re2", "libsodium" })
 oran_lib("hook", { "oran-core", "oran-async" }, {})
 oran_lib("memory", { "oran-core", "oran-async", "oran-storage" }, { "nlohmann_json" })
-oran_lib("automation", { "oran-core", "oran-memory" }, {})
+oran_lib("automation", { "oran-core", "oran-async", "oran-storage", "oran-memory" }, {})
 oran_lib("skill", { "oran-core", "oran-async", "oran-io" }, {})
 oran_lib("tool", { "oran-core", "oran-async", "oran-io", "oran-permission", "oran-hook" }, { "nlohmann_json" })
 oran_lib("prompt", { "oran-core", "oran-async", "oran-config", "oran-tool" }, {})
@@ -286,15 +286,18 @@ depend on `oran-memory` as the composition root for the separate
 `<workspace>/.orangutan/sessions.db` pool/repository/store; the agent runner
 persistence slice consumes that owner next.
 
-`oran-automation` currently ships deterministic periodic scheduling and
-long-term memory retention request planning. It depends downward on `oran-core`
-for `Result<T>` / `Time` and on `oran-memory` for the public
-`memory::longterm::DecayRequest` contract. It does not yet depend on
-`oran-async`, `oran-storage`, or `oran-agent` because the service loop,
-`automation.db`, leases, and agent firing remain downstream. It is registered
-with `test-automation` and `bench-automation`. Slice 188 makes
-`oran-bootstrap` and the main `orangutan` binary link it for config-to-retention
-job descriptor mapping only; no automation service loop is started.
+`oran-automation` currently ships deterministic periodic scheduling,
+long-term memory retention request planning, and the slice-189
+`AutomationRepository` persistence boundary for retention job/run state. It
+depends downward on `oran-core` for `Result<T>` / `Time`, `oran-async` for
+awaitable repository APIs, `oran-storage` for `Pool` / migrations, and
+`oran-memory` for the public `memory::longterm::DecayRequest` contract. It does
+not yet depend on `oran-agent` because the service loop, leases, and agent
+firing remain downstream. It is registered with `test-automation` and
+`bench-automation`. Slice 188 makes `oran-bootstrap` and the main `orangutan`
+binary link it for config-to-retention job descriptor mapping only; slice 189
+adds the repository without starting an automation service loop or making
+bootstrap open `automation.db`.
 
 `oran-bootstrap` depends on `oran-automation` so configured-route startup can
 map `memory.longterm.retention` into an automation-owned

@@ -7,27 +7,26 @@
 
 ## Snapshot
 
-- **Slice:** 188 (`xmake run orangutan -- --help` reports slice 188)
+- **Slice:** 189 (`xmake run orangutan -- --help` reports slice 189)
 - **Last completed history:**
-  [`histories/2026-06/20260607-0424-bootstrap-retention-job.md`](histories/2026-06/20260607-0424-bootstrap-retention-job.md)
+  [`histories/2026-06/20260607-0508-automation-retention-state.md`](histories/2026-06/20260607-0508-automation-retention-state.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-retention-cadence.md`](exec-plans/active/2026-06-07-automation-retention-cadence.md).
-- **Latest completed slice:** slice 188 maps configured-route
-  `memory.longterm.retention` into the automation-owned
-  `MemoryRetentionJob` descriptor without starting a scheduler. Bootstrap now
-  exposes `longterm_memory_retention_job_from(...)`, derives startup decay
-  options from that same job, sets the descriptor's `first_fire_at` to startup
-  decay time plus `decay_check_interval_hours`, and passes the descriptor
-  through `RuntimeAssemblyOptions::longterm_memory_retention_job`.
-  `RuntimeAssembly` stores and exposes it through
-  `longterm_memory_retention_job()` for diagnostics and future scheduler
-  ownership, but does not evaluate, persist, lease, or run it. Focused result:
-  `test-bootstrap` **124 cases / 1054 assertions**.
+- **Latest completed slice:** slice 189 adds the automation-owned persistent
+  state boundary for the stored long-term retention descriptor. `oran-automation`
+  now exports `AutomationRepository` over `storage::Pool`, ships a built-in
+  `automation.db` migration for `automation_memory_retention_jobs` and
+  `automation_memory_retention_runs`, and can upsert/load retention jobs, persist
+  `last_fired_at`, record success/failure run rows, and list recent runs by
+  `job_key`. It does not start a scheduler, acquire leases, call
+  `memory::longterm::Backend::decay`, publish periodic `memory_decay`, or wire
+  bootstrap to open `automation.db`. Focused result: `test-automation`
+  **12 cases / 110 assertions**.
 - **Next intended slice:** continue the active automation-retention cadence
   plan with a product-capability slice, not a bench-only slice. The next useful
-  boundary is persistent periodic job/run state for the stored retention
-  descriptor, while still avoiding a hidden bootstrap background loop until the
-  service owner exists.
+  boundary is a first explicit service/tick owner that consumes stored retention
+  jobs, evaluates due work, records run state, and still avoids a hidden
+  bootstrap background loop unless a caller starts it.
 
 Slice 183 adds the operator-facing long-term
   retention policy contract. `oran-config` now parses
@@ -44,7 +43,9 @@ Slice 183 adds the operator-facing long-term
   owner a pure `oran-automation` cadence/request planner for the same
   `DecayRequest` shape. Slice 188 maps the configured retention policy into the
   automation-owned periodic job descriptor and stores that scheduler seed on
-  `RuntimeAssembly`.
+  `RuntimeAssembly`. Slice 189 gives that descriptor durable automation-owned
+  job/run/last-fired state through `AutomationRepository`, while bootstrap still
+  does not open or run `automation.db`.
   Focused result: `test-config` **48 cases / 429 assertions**.
 
 Slice 182 adds the library-level long-term decay
@@ -55,8 +56,9 @@ Slice 182 adds the library-level long-term decay
   the FTS shadow metadata, returns the shadowed records, and leaves default
   search excluding those rows unless `Query::include_shadow=true`. Pure
   automation cadence planning landed in slice 187, and bootstrap job-descriptor
-  mapping landed in slice 188; persistent periodic execution and periodic decay
-  publishing remain downstream. Startup hook publishing landed in slice 186.
+  mapping landed in slice 188; durable automation retention state landed in
+  slice 189; persistent periodic execution and periodic decay publishing remain
+  downstream. Startup hook publishing landed in slice 186.
   Focused result:
   `test-memory` **38 cases / 841 assertions**.
 

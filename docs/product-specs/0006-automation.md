@@ -21,15 +21,16 @@ the payload to the research agent". The engine schedules and runs these jobs.
 
 ## Shipped Prework
 
-Slice 187 adds the first `oran-automation` library boundary, and slice 188 lets
+Slice 187 adds the first `oran-automation` library boundary, slice 188 lets
 bootstrap seed it from configured retention policy without creating the full
-service. The current API evaluates a periodic schedule from caller-supplied
-state and maps a long-term memory retention policy into a due-only
-`memory::longterm::DecayRequest`. Bootstrap now maps configured-route
+service, and slice 189 adds the automation-owned persistent state boundary. The
+current API evaluates a periodic schedule from caller-supplied state, maps a
+long-term memory retention policy into a due-only
+`memory::longterm::DecayRequest`, and persists the configured retention job plus
+run history through `AutomationRepository`. Bootstrap maps configured-route
 `memory.longterm.retention` into a stored `MemoryRetentionJob` descriptor whose
-first fire is after the one-shot startup decay pass. This gives the future
-service loop a tested cadence/request contract without hiding background work in
-bootstrap.
+first fire is after the one-shot startup decay pass, but bootstrap still does
+not open `automation.db` or run a background service.
 
 Current implementation:
 
@@ -44,14 +45,17 @@ Current implementation:
 - `RuntimeAssembly::longterm_memory_retention_job()` exposes the stored
   descriptor for diagnostics and future scheduler ownership; it is not run by
   `RuntimeAssembly::build`.
-- `test-automation` reports 7 cases / 40 assertions.
+- `AutomationRepository` runs migrations over a caller-supplied `storage::Pool`,
+  upserts and loads retention jobs by durable `job_key`, persists
+  `last_fired_at`, records success/failure run rows, and lists recent runs.
+- `test-automation` reports 12 cases / 110 assertions.
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 
-Still open: cron parsing, triggered jobs, `automation.db`, per-agent leases,
-queueing/backpressure, cancellation during real runs, job lifecycle hooks,
-notifier callbacks, periodic retention execution, and the scheduler tick
-performance criterion.
+Still open: cron parsing, triggered jobs, bootstrap/service ownership of
+`automation.db`, per-agent leases, queueing/backpressure, cancellation during
+real runs, job lifecycle hooks, notifier callbacks, periodic retention
+execution, and the scheduler tick performance criterion.
 
 ## Scope (v1.1)
 

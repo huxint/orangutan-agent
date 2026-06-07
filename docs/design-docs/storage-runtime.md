@@ -4,7 +4,7 @@
 automation, audit logs, and configuration metadata. It owns the SQLite dependency and
 does not expose `sqlite3.h` from public headers.
 
-> **Storage status (2026-06-06):** `oran-storage` ships `Connection`, `Statement`,
+> **Storage status (2026-06-07):** `oran-storage` ships `Connection`, `Statement`,
 > typed binding/stepping/column readers (including BLOB bind/read for trace ids),
 > WAL + foreign-key setup, a simple `query`
 > helper, the synchronous `run_migrations` runner plus SQL-file migration
@@ -29,8 +29,11 @@ does not expose `sqlite3.h` from public headers.
 > column and the shared `core::TurnId` / `TraceId` value shape so tool and
 > hook-publish audit rows can join back to trace rows. Slice 80 adds the first agent-loop writer:
 > terminal-success fake-provider turns can append one body-free `trace_turns`
-> row through `TraceRepository` before returning to the caller. Backups and the
-> memory / automation repositories are future slices. Slice 127 adds
+> row through `TraceRepository` before returning to the caller. Memory-tier
+> schemas live above the pool in `oran-memory`, and slice 189 adds the
+> automation retention job/run repository above the same pool in
+> `oran-automation`; `oran-storage` stays the generic SQLite, migration, and
+> pooling substrate. Backups remain future work. Slice 127 adds
 > trace-derived provider usage rollups grouped by UTC day, agent, route profile,
 > and route model; these sum the usage/cost fields already stored on
 > `trace_turns` and do not yet compute cost from profile pricing. Slice 176 adds
@@ -209,10 +212,9 @@ The loader rejects:
 
 ## Future Slices
 
-- Migration asset packaging for installed/runtime layouts outside a source
-  checkout.
-- Domain repositories for memory, automation, and audit logs.
 - Backup script integration and generated schema docs.
+- Additional domain repositories for new schemas as memory, automation, and
+  audit features grow, while keeping those schemas in their owning libraries.
 
 ## Pool
 

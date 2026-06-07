@@ -157,7 +157,7 @@ MEMORY.md mirror. v2 keeps that core and adds:
   metadata before pruning. Expired records eventually receive lower search weight
   before potentially being shadowed or deleted.
 
-Status (slice 188): `include/oran/memory/longterm.hpp` now ships the public
+Status (slice 189): `include/oran/memory/longterm.hpp` now ships the public
 record/query/write/touch/decay shapes, reflection-backed `RecordKind`,
 `Backend` and `VectorBackend` traits, validation helpers for record keys,
 search limits, record metadata, touch requests, decay requests, and vector
@@ -171,8 +171,9 @@ marks decay candidates as `shadow=true` through `decay(...)`, and treats
 can produce due-only `DecayRequest` values for future periodic retention
 producers without moving scheduling ownership into `oran-memory`. Slice 188 has
 bootstrap map configured retention policy into that automation-owned job
-descriptor and expose it from `RuntimeAssembly`; `oran-memory` still only owns
-the backend execution primitive.
+descriptor and expose it from `RuntimeAssembly`; slice 189 adds
+automation-owned job/run/last-fired persistence in `oran-automation`. The memory
+library still only owns the backend execution primitive.
 Slice 162 adds
 `longterm::Runtime`, a prompt-boundary composition layer that delegates search
 to a `Backend`, validates recall requests before dispatch, and renders stable
@@ -276,8 +277,10 @@ Slice 187 adds the first `oran-automation` cadence planner: it evaluates the
 retention interval from caller-supplied job state and produces a due-only
 `memory::longterm::DecayRequest`. Slice 188 adds bootstrap mapping from
 configured retention policy into a stored `MemoryRetentionJob` descriptor whose
-first fire is after the startup pass. Periodic execution and periodic hook
-publishing remain downstream.
+first fire is after the startup pass. Slice 189 adds
+`AutomationRepository` for durable retention job/run/last-fired state above
+`storage::Pool`, without making bootstrap open `automation.db`. Periodic
+execution and periodic hook publishing remain downstream.
 Default builds still reject
 `memory.longterm.hybrid_search.enabled=true` before assembly/provider side
 effects with `reason=build_option_disabled`, `option=vector_memory`. Semantic or
@@ -554,8 +557,9 @@ configured-route startup owner, and slice 185 exposes the startup pass shadow
 count for diagnostics. Slice 186 publishes successful startup decay as advisory
 `memory_decay` metadata. Slice 187 adds the pure `oran-automation` retention
 cadence/request planner. Slice 188 maps config into the periodic job descriptor
-at bootstrap. Remaining ownership work is persistent automation execution and
-the periodic decay producer.
+at bootstrap. Slice 189 persists that descriptor and future run rows in
+`automation.db` through `AutomationRepository`. Remaining ownership work is the
+explicit automation service/tick owner and the periodic decay producer.
 
 Forgetting is final (DELETE), with an audit row in `audit.db`.
 
@@ -614,7 +618,8 @@ Separate files (the audit identified single-DB contention):
 
 - `<workspace>/.orangutan/sessions.db`
 - `<workspace>/.orangutan/memory.db`
-- `<workspace>/.orangutan/automation.db`
+- `<workspace>/.orangutan/automation.db` (retention job/run schema owned by
+  `oran-automation`; bootstrap does not open it yet)
 - `<workspace>/.orangutan/audit.db`
 
 Migrations:

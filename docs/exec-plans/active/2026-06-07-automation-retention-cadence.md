@@ -3,11 +3,12 @@
 ## Goal
 
 Land the first real `oran-automation` runtime boundary by turning periodic
-cadence decisions into deterministic, tested code. The plan's end state is a
+cadence decisions into deterministic, tested code, then giving the stored
+retention descriptor a durable state home. The plan's current end state is a
 small automation library that can evaluate periodic jobs, derive the long-term
-memory retention decay request from a retention policy, and later grow into the
-cron/periodic/triggered service without moving scheduling math into bootstrap or
-`oran-memory`.
+memory retention decay request from a retention policy, persist retention
+job/run state, and later grow into the cron/periodic/triggered service without
+moving scheduling math or service ownership into bootstrap or `oran-memory`.
 
 ## Scope
 
@@ -19,13 +20,15 @@ cron/periodic/triggered service without moving scheduling math into bootstrap or
   - Ship a memory-retention job planner that produces a
     `memory::longterm::DecayRequest` only when the periodic cadence is due.
   - Keep `decay_check_interval_hours` represented as automation cadence input.
+  - Ship the first automation-owned retention repository for job/run/last-fired
+    state above `storage::Pool`.
   - Update docs, status, quality, history, and release notes per the Prime
     Directive.
 - Out of scope:
-  - Cron parsing, triggered jobs, persistence in `automation.db`, per-agent
-    leases, queueing/backpressure, notifier callbacks, and background service
-    loops.
-  - Bootstrap ownership of the periodic runner.
+  - Cron parsing, triggered jobs, per-agent leases, queueing/backpressure,
+    notifier callbacks, and background service loops.
+  - Bootstrap ownership of the periodic runner or bootstrap opening
+    `automation.db`.
   - Periodic `memory_decay` hook publication; that lands when the periodic
     producer actually runs decay.
 
@@ -47,17 +50,18 @@ cron/periodic/triggered service without moving scheduling math into bootstrap or
   - `xmake/bench.lua`
 - Constraints:
   - `oran-automation` is an agent-runtime layer library and may depend downward
-    on `oran-core` and `oran-memory`; `oran-memory` must not depend upward on
-    automation.
+    on `oran-core`, `oran-async`, `oran-storage`, and `oran-memory`;
+    `oran-memory` and `oran-storage` must not depend upward on automation.
   - Public headers must stay third-party-free and avoid owning asio/sqlite
     types.
   - The first slice must not create a hidden background loop inside bootstrap.
   - Periodic memory decay remains metadata-only until a producer publishes
     `memory_decay`.
 - Compile-budget impact:
-  - `oran-automation` uses only stdlib, `oran-core`, and `oran-memory` public
-    surfaces in this plan. It should fit the existing orchestration/automation
-    budget row in `docs/rules/compile-budget.md`.
+  - `oran-automation` uses stdlib plus public `oran-core`, `oran-async`,
+    `oran-storage`, and `oran-memory` surfaces in this plan. It should fit the
+    existing orchestration/automation budget row in
+    `docs/rules/compile-budget.md`.
 
 ## Risks
 
@@ -84,10 +88,15 @@ cron/periodic/triggered service without moving scheduling math into bootstrap or
    Done in slice 188: map configured-route `memory.longterm.retention` into an
    automation-owned periodic job descriptor without creating a background loop
    in `RuntimeAssembly::build`.
-4. **Persistent service.**
-   Later slice: add `automation.db`, job/run rows, per-agent leases, and the
-   async service loop.
-5. **Hook producer.**
+4. **Persistent state.**
+   Done in slice 189: add `automation.db` job/run rows and
+   `AutomationRepository` without bootstrap opening the database or starting a
+   service.
+5. **Explicit service/tick owner.**
+   Later slice: consume stored jobs, evaluate due work, call the memory backend,
+   record run outcomes, and add cancellation ownership without hidden bootstrap
+   loops.
+6. **Hook producer.**
    Later slice: publish periodic `memory_decay` metadata from the actual
    periodic producer.
 
@@ -134,6 +143,12 @@ cron/periodic/triggered service without moving scheduling math into bootstrap or
 - [x] 2026-06-07 04:24 +0800: Confirmed the slice does not start a background
   scheduler, open `automation.db`, persist job state, or publish periodic
   `memory_decay`; those remain service-owner work.
+- [x] 2026-06-07 05:08 +0800: Added `AutomationRepository` over
+  `storage::Pool` plus an embedded `automation.db` retention migration for
+  durable job, `last_fired_at`, and run-row state keyed by `job_key`.
+- [x] 2026-06-07 05:08 +0800: Kept bootstrap unopened for `automation.db`; the
+  next useful product boundary is an explicit service/tick owner that consumes
+  the stored jobs and records actual backend run outcomes.
 - [x] Update docs that this slice invalidates in the same PR
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -153,6 +168,12 @@ cron/periodic/triggered service without moving scheduling math into bootstrap or
   both config and automation. Keep `oran-automation` independent of
   `oran-config`, and set the configured-route job's first fire after the
   startup decay pass so a future scheduler does not immediately repeat it.
+- 2026-06-07: Keep automation persistence in `oran-automation`, not
+  `oran-storage`. Storage remains the generic SQLite/migration/pool substrate;
+  the retention job/run schema belongs to the automation domain.
+- 2026-06-07: Use durable `job_key` as the repository identity and keep
+  `scope_key` as the memory-decay scope inside `MemoryRetentionJob`, so future
+  automation jobs can share a memory scope without overwriting each other.
 
 ## Linked Artifacts
 
@@ -165,5 +186,7 @@ cron/periodic/triggered service without moving scheduling math into bootstrap or
   `docs/histories/2026-06/20260607-0129-automation-retention-cadence.md`
   and
   `docs/histories/2026-06/20260607-0424-bootstrap-retention-job.md`
+  and
+  `docs/histories/2026-06/20260607-0508-automation-retention-state.md`
 - Release note:
   `docs/releases/feature-release-notes.md#automation-retention-cadence`

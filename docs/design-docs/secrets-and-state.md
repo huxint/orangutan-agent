@@ -63,8 +63,10 @@ Current implementation status:
   the startup shadow count through runtime diagnostics. Slice 187 adds
   `oran-automation` planning that can consume the interval as a periodic
   retention cadence. Slice 188 maps config into the stored
-  `MemoryRetentionJob` descriptor for future scheduler ownership, but bootstrap
-  does not start a scheduler.
+  `MemoryRetentionJob` descriptor for future scheduler ownership. Slice 189
+  adds the `oran-automation` repository that can persist that descriptor,
+  `last_fired_at`, and retention run rows in `automation.db`, but bootstrap
+  still does not open that database or start a scheduler.
   Ordinary configured-route bootstrap maps the recall policy into
   prompt-boundary long-term recall. The hybrid-search block defaults disabled;
   when built with `--vector_memory=y`, configured-route bootstrap now enables the
@@ -103,10 +105,11 @@ Current implementation status:
   uses this boundary when building the provider-backed prompt runner.
 - `teams`, `channels`, and the config `automation` root are recognized but do
   not have typed config models yet. The `oran-automation` C++ library exists
-  for periodic planning, but config-authored job seeds, scheduler persistence,
-  and `automation.db` writes remain unimplemented. The `hooks` root has the v1
-  typed timeout field; `sinks` and `bindings` remain recognized-but-untyped
-  until external hook sinks land.
+  for periodic planning plus the slice-189 retention job/run repository, but
+  config-authored automation job seeds, bootstrap ownership of
+  `automation.db`, and scheduler/service execution remain unimplemented. The
+  `hooks` root has the v1 typed timeout field; `sinks` and `bindings` remain
+  recognized-but-untyped until external hook sinks land.
 - `agents.<name>.skills_enabled` accepts an explicit array of non-empty skill
   names. The parser preserves author order and does not resolve names against
   the filesystem; bootstrap applies the allowlist to the loaded workspace skill
@@ -232,7 +235,8 @@ Four separate SQLite files (one per concern):
 
 - `<workspace>/.orangutan/sessions.db`
 - `<workspace>/.orangutan/memory.db`
-- `<workspace>/.orangutan/automation.db` (reserved; not opened by slice 188)
+- `<workspace>/.orangutan/automation.db` (owned by `AutomationRepository` for
+  retention job/run state; not opened by bootstrap yet)
 - `<workspace>/.orangutan/audit.db`
 
 ### Why Separate Files?
