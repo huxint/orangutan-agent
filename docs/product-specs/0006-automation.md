@@ -25,17 +25,18 @@ Slice 187 adds the first `oran-automation` library boundary, slice 188 lets
 bootstrap seed it from configured retention policy without creating the full
 service, slice 189 adds the automation-owned persistent state boundary, slice
 190 adds the first explicit caller-driven retention tick owner, and slice 191
-adds optional periodic `memory_decay` publishing from that tick owner. The
-current API evaluates a periodic schedule from caller-supplied state, maps a
-long-term memory retention policy into a due-only
-`memory::longterm::DecayRequest`, persists the configured retention job plus
-run history through `AutomationRepository`, lets a runtime owner tick one stored
-job against a supplied long-term memory backend, and publishes advisory
-retention metadata when the caller supplies a hook bus. Bootstrap maps
-configured-route `memory.longterm.retention` into a stored
-`MemoryRetentionJob` descriptor whose first fire is after the one-shot startup
-decay pass, but bootstrap still does not open `automation.db` or run a
-background service.
+adds optional periodic `memory_decay` publishing from that tick owner. Slice
+192 adds the caller-owned automation runtime state handle. The current API
+evaluates a periodic schedule from caller-supplied state, maps a long-term
+memory retention policy into a due-only `memory::longterm::DecayRequest`,
+persists the configured retention job plus run history through
+`AutomationRepository`, explicitly opens/migrates automation state through
+`AutomationRuntime::open(...)`, lets a runtime owner tick one stored job against
+a supplied long-term memory backend, and publishes advisory retention metadata
+when the caller supplies a hook bus. Bootstrap maps configured-route
+`memory.longterm.retention` into a stored `MemoryRetentionJob` descriptor whose
+first fire is after the one-shot startup decay pass, but bootstrap still does
+not open `automation.db` or run a background service.
 
 Current implementation:
 
@@ -53,6 +54,10 @@ Current implementation:
 - `AutomationRepository` runs migrations over a caller-supplied `storage::Pool`,
   upserts and loads retention jobs by durable `job_key`, persists
   `last_fired_at`, records success/failure run rows, and lists recent runs.
+- `AutomationRuntime::open(...)` validates an explicit database path, creates
+  parent directories, opens `automation.db` through an owned `storage::Pool`,
+  runs automation migrations, exposes the migration report and repository, and
+  can construct `MemoryRetentionService` over that stable state.
 - `MemoryRetentionService::tick(...)` loads one stored job, skips not-due work
   without mutation, invokes `memory::longterm::Backend::decay(...)` only when
   due, records success/failure run rows, and advances `last_fired_at` only
@@ -62,14 +67,14 @@ Current implementation:
   source label, agent key, and identity. Successful due ticks publish advisory
   `memory_decay` metadata after durable state advances; not-due ticks and
   backend failures publish nothing, and advisory sink failures remain non-fatal.
-- `test-automation` reports 18 cases / 207 assertions.
+- `test-automation` reports 22 cases / 245 assertions.
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 
-Still open: cron parsing, triggered jobs, bootstrap/service ownership of
-`automation.db`, per-agent leases, queueing/backpressure, cancellation during
-long-running service loops, job lifecycle hooks, notifier callbacks, and the
-scheduler tick performance criterion.
+Still open: cron parsing, triggered jobs, bootstrap/service-loop startup policy
+over `AutomationRuntime`, per-agent leases, queueing/backpressure, cancellation
+during long-running service loops, job lifecycle hooks, notifier callbacks, and
+the scheduler tick performance criterion.
 
 ## Scope (v1.1)
 

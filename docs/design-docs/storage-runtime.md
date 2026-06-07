@@ -34,7 +34,9 @@ does not expose `sqlite3.h` from public headers.
 > retention job/run repository above the same pool in `oran-automation`, and
 > slice 190 adds the caller-driven service tick above that repository. Slice
 > 191 adds optional advisory hook publication above the same automation service;
-> it does not add storage-owned schema or audit rows.
+> slice 192 adds a caller-owned `AutomationRuntime` handle that opens the pool
+> and runs automation migrations above storage. None of these add storage-owned
+> automation schema or audit rows.
 > `oran-storage` stays the generic SQLite, migration, and pooling substrate.
 > Backups remain future work. Slice 127 adds
 > trace-derived provider usage rollups grouped by UTC day, agent, route profile,

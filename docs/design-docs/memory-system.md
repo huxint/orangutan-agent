@@ -157,7 +157,7 @@ MEMORY.md mirror. v2 keeps that core and adds:
   metadata before pruning. Expired records eventually receive lower search weight
   before potentially being shadowed or deleted.
 
-Status (slice 190): `include/oran/memory/longterm.hpp` now ships the public
+Status (slice 192): `include/oran/memory/longterm.hpp` now ships the public
 record/query/write/touch/decay shapes, reflection-backed `RecordKind`,
 `Backend` and `VectorBackend` traits, validation helpers for record keys,
 search limits, record metadata, touch requests, decay requests, and vector
@@ -174,8 +174,12 @@ bootstrap map configured retention policy into that automation-owned job
 descriptor and expose it from `RuntimeAssembly`; slice 189 adds
 automation-owned job/run/last-fired persistence in `oran-automation`; slice 190
 adds the caller-driven `MemoryRetentionService::tick(...)` owner that consumes
-stored jobs and calls a supplied `Backend::decay(...)` only when due. The memory
-library still only owns the backend execution primitive.
+stored jobs and calls a supplied `Backend::decay(...)` only when due; slice 191
+lets that tick publish advisory `memory_decay` metadata when callers provide a
+hook bus; and slice 192 adds the caller-owned `AutomationRuntime` handle that
+opens/migrates automation state and creates retention services without moving
+service ownership into `oran-memory`. The memory library still only owns the
+backend execution primitive.
 Slice 162 adds
 `longterm::Runtime`, a prompt-boundary composition layer that delegates search
 to a `Backend`, validates recall requests before dispatch, and renders stable
@@ -283,8 +287,11 @@ first fire is after the startup pass. Slice 189 adds
 `AutomationRepository` for durable retention job/run/last-fired state above
 `storage::Pool`, without making bootstrap open `automation.db`. Slice 190 adds
 `MemoryRetentionService::tick(...)` as the explicit caller-driven periodic
-execution boundary. Periodic hook publishing, leases, service-loop timers, and
-bootstrap opening of `automation.db` remain downstream.
+execution boundary. Slice 191 adds periodic advisory `memory_decay` publishing
+from that tick owner, and slice 192 adds the caller-owned `AutomationRuntime`
+state handle for explicit automation DB open/migrate ownership. Leases,
+service-loop timers, cancellation, job lifecycle hooks, and bootstrap or daemon
+startup policy remain downstream.
 Default builds still reject
 `memory.longterm.hybrid_search.enabled=true` before assembly/provider side
 effects with `reason=build_option_disabled`, `option=vector_memory`. Semantic or
@@ -567,9 +574,12 @@ caller-driven automation tick owner that loads the stored job, invokes
 `Backend::decay(...)` only when due, records run outcomes, and advances
 `last_fired_at` only after success. Slice 191 lets that tick owner publish
 advisory periodic `memory_decay` metadata through a caller-supplied hook bus
-after successful due retention. Remaining ownership work is real service-loop
-leases/timers and bootstrap or daemon wiring for callers that choose to start
-that loop.
+after successful due retention. Slice 192 adds the caller-owned
+`AutomationRuntime` state handle that opens/migrates `automation.db` and
+constructs retention services over stable repository ownership. Remaining
+ownership work is real service-loop leases/timers/cancellation, job lifecycle
+hooks, and bootstrap or daemon wiring for callers that choose to start that
+loop.
 
 Forgetting is final (DELETE), with an audit row in `audit.db`.
 
@@ -601,8 +611,8 @@ Memory lifecycle:
   retention pass in slice 186 as advisory metadata (`source`, scope, policy
   inputs, shadowed count, timing) with no record content. `oran-automation`
   now plans periodic retention requests, stores run state, and exposes a
-  caller-driven tick that can execute due decay, but periodic decay publishing
-  remains downstream until a producer is wired to publish from that tick.
+  caller-driven tick that can execute due decay and publish advisory periodic
+  `memory_decay` when callers supply a hook bus.
 
 These hooks are why team shared memory works: the orchestration leader can install a
 `memory.write.after` hook on the shared tier to mirror notes to a Slack channel, for
@@ -629,8 +639,8 @@ Separate files (the audit identified single-DB contention):
 - `<workspace>/.orangutan/sessions.db`
 - `<workspace>/.orangutan/memory.db`
 - `<workspace>/.orangutan/automation.db` (retention job/run schema owned by
-  `oran-automation`; `MemoryRetentionService` consumes a caller-supplied pool
-  and bootstrap does not open it yet)
+  `oran-automation`; caller-owned `AutomationRuntime` opens/migrates it and
+  bootstrap does not open it yet)
 - `<workspace>/.orangutan/audit.db`
 
 Migrations:

@@ -7,28 +7,25 @@
 
 ## Snapshot
 
-- **Slice:** 191 (`xmake run orangutan -- --help` reports slice 191)
+- **Slice:** 192 (`xmake run orangutan -- --help` reports slice 192)
 - **Last completed history:**
-  [`histories/2026-06/20260607-1035-automation-retention-decay-hooks.md`](histories/2026-06/20260607-1035-automation-retention-decay-hooks.md)
+  [`histories/2026-06/20260607-1107-automation-runtime-state-handle.md`](histories/2026-06/20260607-1107-automation-runtime-state-handle.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-retention-cadence.md`](exec-plans/active/2026-06-07-automation-retention-cadence.md).
-- **Latest completed slice:** slice 191 makes the explicit retention tick owner
-  the first periodic `memory_decay` producer. `MemoryRetentionService` now
-  accepts optional hook settings (`hook::Bus*`, source label, agent key, and
-  identity); after a successful due tick records the run and advances
-  `last_fired_at`, it publishes advisory metadata reusing the planned
-  `DecayRequest` values and reports sink/failure counts in the tick result.
-  Not-due ticks and backend failures publish nothing, and advisory sink failures
-  do not roll back the durable run. It still does not start a scheduler,
-  acquire leases, publish job lifecycle hooks, or wire bootstrap to open
-  `automation.db`. Focused result: `test-automation`
-  **18 cases / 207 assertions**.
+- **Latest completed slice:** slice 192 gives automation callers an explicit
+  runtime state handle. `AutomationRuntime::open(...)` creates parent
+  directories, opens and migrates `automation.db`, owns the `storage::Pool` plus
+  `AutomationRepository` lifetime, keeps the migration report available, exposes
+  the repository, and can create `MemoryRetentionService` instances over that
+  stable state. It still does not start timers, acquire leases, publish job
+  lifecycle hooks, call agents, or wire bootstrap to open `automation.db`.
+  Focused result: `test-automation` **22 cases / 245 assertions**.
 - **Next intended slice:** continue the active automation-retention cadence
   plan with a product-capability slice, not a bench-only slice. The next useful
-  boundary is explicit service-loop ownership around the retention tick:
-  caller-owned `automation.db` opening, lease/cancellation policy, and job
-  lifecycle hooks, while still avoiding a hidden bootstrap background loop
-  unless a caller starts it.
+  boundary is service-loop ownership around caller-started retention runs:
+  leases, cancellation, and job lifecycle hooks over the runtime state handle,
+  while still avoiding a hidden bootstrap background loop unless a caller starts
+  it.
 
 Slice 183 adds the operator-facing long-term
   retention policy contract. `oran-config` now parses
@@ -38,9 +35,10 @@ Slice 183 adds the operator-facing long-term
   rejects malformed values, and preserves strict/loose unknown-field behavior
   for the nested retention block. Slice 184 consumes that policy for one
   configured-route startup decay pass; slice 190 adds caller-driven periodic
-  execution, and slice 191 publishes periodic `memory_decay` metadata from that
-  explicit tick owner when a caller supplies a hook bus, while bootstrap
-  service-loop ownership remains downstream.
+  execution, slice 191 publishes periodic `memory_decay` metadata from that
+  explicit tick owner when a caller supplies a hook bus, and slice 192 adds the
+  caller-owned runtime state handle that opens/migrates automation state only
+  when a caller asks, while bootstrap service-loop ownership remains downstream.
   Slice 185 exposes the startup decay shadow count on the assembly and startup
   banner, slice 186 publishes the startup pass as advisory `memory_decay`
   metadata for build-time observers, and slice 187 gives the future periodic
@@ -50,9 +48,11 @@ Slice 183 adds the operator-facing long-term
   `RuntimeAssembly`. Slice 189 gives that descriptor durable automation-owned
   job/run/last-fired state through `AutomationRepository`, slice 190 adds a
   caller-driven `MemoryRetentionService::tick(...)` that consumes the stored job
-  and invokes the supplied long-term backend only when due, and slice 191 lets
-  that tick publish advisory `memory_decay` metadata after successful due
-  retention, while bootstrap still does not open or run `automation.db`.
+  and invokes the supplied long-term backend only when due, slice 191 lets that
+  tick publish advisory `memory_decay` metadata after successful due retention,
+  and slice 192 adds `AutomationRuntime::open(...)` for caller-owned
+  `automation.db` opening/migration and repository/service lifetime ownership,
+  while bootstrap still does not open or run `automation.db`.
   Focused result: `test-config` **48 cases / 429 assertions**.
 
 Slice 182 adds the library-level long-term decay
@@ -65,9 +65,11 @@ Slice 182 adds the library-level long-term decay
   automation cadence planning landed in slice 187, bootstrap job-descriptor
   mapping landed in slice 188, durable automation retention state landed in
   slice 189, caller-driven periodic execution landed in slice 190 through
-  `MemoryRetentionService`, and periodic advisory `memory_decay` publishing
-  landed in slice 191 when callers provide a hook bus. Startup hook publishing
-  landed in slice 186.
+  `MemoryRetentionService`, periodic advisory `memory_decay` publishing landed
+  in slice 191 when callers provide a hook bus, and slice 192 adds the
+  caller-owned automation runtime handle that opens/migrates `automation.db` and
+  constructs the retention service over stable repository ownership. Startup
+  hook publishing landed in slice 186.
   Focused result:
   `test-memory` **38 cases / 841 assertions**.
 

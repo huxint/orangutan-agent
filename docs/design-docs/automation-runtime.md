@@ -4,9 +4,10 @@
 still intentionally narrow: deterministic periodic schedule evaluation,
 long-term memory retention request planning, a bootstrap-owned mapping from
 configured retention policy into that job descriptor, automation-owned
-retention job/run persistence, and a caller-driven retention service tick with
-optional advisory `memory_decay` publishing. It does not start background work,
-publish job lifecycle hooks, acquire leases, or call an agent loop.
+retention job/run persistence, a caller-owned runtime state handle, and a
+caller-driven retention service tick with optional advisory `memory_decay`
+publishing. It does not start background work, publish job lifecycle hooks,
+acquire leases, or call an agent loop.
 
 ## Current Status
 
@@ -71,6 +72,16 @@ failures stay advisory: the tick still succeeds, and
 service still does not open `automation.db`, own a timer, start a hidden
 bootstrap loop, publish job lifecycle hooks, acquire leases, or call agents.
 
+Slice 192 adds the explicit state handle for runtime owners that are ready to
+open automation persistence without starting the service loop. `<oran/automation/runtime.hpp>`
+exports `AutomationRuntimeOptions` and move-only `AutomationRuntime`.
+`AutomationRuntime::open(...)` validates the database path, creates parent
+directories, opens a `storage::Pool`, runs the automation migration through the
+owned repository, stores the migration report, exposes that repository, and can
+construct `MemoryRetentionService` instances over the same stable state. It
+still does not start timers, acquire leases, publish job lifecycle hooks, wire
+bootstrap to open `automation.db`, or call agents.
+
 ## Public API
 
 ```cpp
@@ -117,6 +128,16 @@ plan_memory_retention(MemoryRetentionJob, PeriodicJobState, core::Time now);
 
 struct AutomationRepositoryOptions {
   std::string migrations_directory;
+};
+
+struct AutomationRuntimeOptions {
+  std::string database_path;
+  std::size_t reader_count;
+  std::size_t statement_cache_capacity;
+  int busy_timeout_ms;
+  bool enable_wal;
+  bool enforce_foreign_keys;
+  AutomationRepositoryOptions repository;
 };
 
 struct UpsertMemoryRetentionJobRequest {
@@ -173,6 +194,21 @@ class AutomationRepository {
   record_memory_retention_run(RecordMemoryRetentionRunRequest);
   async::Awaitable<core::Result<std::vector<MemoryRetentionRunRecord>>>
   list_memory_retention_runs(ListMemoryRetentionRunsOptions);
+};
+
+class AutomationRuntime {
+ public:
+  static async::Awaitable<core::Result<AutomationRuntime>>
+  open(asio::any_io_executor executor, AutomationRuntimeOptions);
+
+  std::string_view database_path() const noexcept;
+  const storage::MigrationReport& migration_report() const noexcept;
+  AutomationRepository& repository() noexcept;
+  const AutomationRepository& repository() const noexcept;
+
+  MemoryRetentionService memory_retention_service(
+      memory::longterm::Backend&,
+      MemoryRetentionServiceOptions = {}) noexcept;
 };
 
 struct MemoryRetentionTickRequest {
@@ -282,6 +318,34 @@ time must not precede fire time, and list limits must be positive. Missing jobs
 return `std::nullopt` on `get_memory_retention_job(...)` and
 `ErrorKind::not_found` from `mark_memory_retention_fired(...)`.
 
+## Runtime State Handle Semantics
+
+`AutomationRuntime` is the first caller-owned automation state bundle. It
+exists so a runtime owner can explicitly open and migrate `automation.db` once,
+then keep the `storage::Pool` and `AutomationRepository` lifetimes stable while
+service objects borrow them.
+
+`AutomationRuntime::open(executor, options)`:
+
+- Rejects an empty `database_path` with `ErrorKind::invalid_argument`.
+- Creates missing parent directories for the configured database file.
+- Opens `storage::Pool` with the supplied reader count, statement-cache
+  capacity, busy timeout, WAL, and foreign-key options.
+- Constructs `AutomationRepository` over the owned pool and runs its migration.
+- Stores the returned `storage::MigrationReport` for diagnostics.
+
+The handle exposes `repository()` for direct callers that seed or inspect jobs,
+and `memory_retention_service(...)` as a convenience factory for
+`MemoryRetentionService` over the owned repository plus a caller-supplied
+`memory::longterm::Backend`.
+
+The runtime handle is intentionally not a scheduler. It does not sleep, spawn
+detached coroutines, acquire process leases, own a hook bus, publish job
+lifecycle hooks, or decide whether bootstrap should open `automation.db`.
+Bootstrap still only maps the configured retention policy into a descriptor; a
+caller must explicitly call `AutomationRuntime::open(...)` before automation
+state exists.
+
 ## Tick Semantics
 
 `MemoryRetentionService::tick(...)` is a caller-clocked unit of work. It owns one
@@ -333,11 +397,12 @@ into bootstrap or `oran-memory`.
 
 The next automation slices can build on this boundary in this order:
 
-1. Publish job lifecycle hooks from the actual periodic service owner.
+1. Add service-loop ownership that starts from an explicit `AutomationRuntime`.
 2. Add per-agent leases and cancellation semantics around service-loop-owned
    runs.
-3. Add cron and triggered job categories.
-4. Add queueing/backpressure and notifier routing for agent-facing jobs.
+3. Publish job lifecycle hooks from the actual periodic service owner.
+4. Add cron and triggered job categories.
+5. Add queueing/backpressure and notifier routing for agent-facing jobs.
 
 ## Validation
 
@@ -358,7 +423,10 @@ updates, run recording/listing, and repository validation. Slice 190 reports
 backend execution, backend-failure run recording without advancing state, and
 invalid/missing job handling. Slice 191 reports `test-automation` at 18 cases /
 207 assertions for successful periodic `memory_decay` publishing and advisory
-sink-failure reporting from the explicit tick owner. The local
+sink-failure reporting from the explicit tick owner. Slice 192 reports
+`test-automation` at 22 cases / 245 assertions for runtime open/migration,
+already-migrated reopen, empty-path validation, and retention-service creation
+over the owned repository state. The local
 `bench-automation` planning rows are:
 
 - `automation.periodic_evaluate_1024` at about 4.84 us / 1024-job batch.

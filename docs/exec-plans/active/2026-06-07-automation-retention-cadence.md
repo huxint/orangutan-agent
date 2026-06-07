@@ -24,6 +24,9 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
     state above `storage::Pool`.
   - Publish successful periodic retention `memory_decay` metadata from the
     explicit tick owner when the caller supplies a hook bus.
+  - Ship a caller-owned `AutomationRuntime` state handle that opens/migrates
+    `automation.db` and keeps repository/service lifetimes stable for a future
+    loop owner.
   - Update docs, status, quality, history, and release notes per the Prime
     Directive.
 - Out of scope:
@@ -101,6 +104,12 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
    Done in slice 191: publish periodic `memory_decay` metadata from the
    explicit tick owner after successful due retention when the caller supplies a
    hook bus.
+7. **Runtime state handle.**
+   Done in slice 192: add `AutomationRuntime::open(...)` so callers can
+   explicitly create parent directories, open/migrate automation state, keep the
+   pool/repository lifetime stable, inspect the migration report, and construct
+   retention services over that state without starting timers or bootstrap
+   background work.
 
 ## Validation
 
@@ -117,6 +126,8 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
 - Manual checks:
   - Confirm no bootstrap background loop is introduced.
   - Confirm `oran-memory` dependency direction does not change.
+  - Confirm `AutomationRuntime` opens automation state only when the caller
+    explicitly asks.
 - Observability checks:
   - Confirm `memory_decay` publishes only after successful due ticks and remains
     absent for not-due ticks, backend failures, and services without a hook bus.
@@ -166,6 +177,14 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
 - [x] 2026-06-07 10:35 +0800: Kept bootstrap unopened for `automation.db` and
   still did not introduce timers, leases, or job lifecycle hooks; those remain
   service-loop ownership work.
+- [x] 2026-06-07 11:07 +0800: Added `AutomationRuntime::open(...)` as the
+  caller-owned automation state handle. It validates the path, creates parent
+  directories, opens the automation pool, runs migrations, stores the migration
+  report, exposes the repository, and constructs retention services over owned
+  state.
+- [x] 2026-06-07 11:07 +0800: Kept bootstrap unopened for `automation.db`; the
+  next useful product boundary is a caller-started service-loop owner over
+  `AutomationRuntime`, with leases, cancellation, and job lifecycle hooks.
 - [x] Update docs that this slice invalidates in the same PR
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -201,6 +220,11 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
   caller supplies a `hook::Bus`. This reuses the already-shipped metadata-only
   payload, keeps advisory sink failures non-fatal, and avoids bootstrap
   starting a hidden service loop.
+- 2026-06-07: Introduce an explicit `AutomationRuntime` state handle before a
+  service loop. Runtime opening is now a caller-owned operation that creates the
+  database directory, opens/migrates `automation.db`, and owns the
+  pool/repository lifetime; timers, leases, cancellation, agent firing, and job
+  lifecycle hooks still belong to the future loop owner.
 
 ## Linked Artifacts
 
@@ -219,5 +243,7 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
   `docs/histories/2026-06/20260607-0959-automation-retention-service-tick.md`
   and
   `docs/histories/2026-06/20260607-1035-automation-retention-decay-hooks.md`
+  and
+  `docs/histories/2026-06/20260607-1107-automation-runtime-state-handle.md`
 - Release note:
-  `docs/releases/feature-release-notes.md#automation-retention-decay-hooks`
+  `docs/releases/feature-release-notes.md#automation-runtime-state-handle`
