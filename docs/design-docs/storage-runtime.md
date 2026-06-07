@@ -30,10 +30,11 @@ does not expose `sqlite3.h` from public headers.
 > hook-publish audit rows can join back to trace rows. Slice 80 adds the first agent-loop writer:
 > terminal-success fake-provider turns can append one body-free `trace_turns`
 > row through `TraceRepository` before returning to the caller. Memory-tier
-> schemas live above the pool in `oran-memory`, and slice 189 adds the
-> automation retention job/run repository above the same pool in
-> `oran-automation`; `oran-storage` stays the generic SQLite, migration, and
-> pooling substrate. Backups remain future work. Slice 127 adds
+> schemas live above the pool in `oran-memory`; slice 189 adds the automation
+> retention job/run repository above the same pool in `oran-automation`, and
+> slice 190 adds the caller-driven service tick above that repository.
+> `oran-storage` stays the generic SQLite, migration, and pooling substrate.
+> Backups remain future work. Slice 127 adds
 > trace-derived provider usage rollups grouped by UTC day, agent, route profile,
 > and route model; these sum the usage/cost fields already stored on
 > `trace_turns` and do not yet compute cost from profile pricing. Slice 176 adds

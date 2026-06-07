@@ -1,12 +1,12 @@
 // include/oran/automation.hpp — public facade for oran-automation.
 //
-// The first automation slice ships deterministic periodic cadence and memory
-// retention planning primitives. The async service loop, cron parser,
-// triggered jobs, leases, and the service loop land behind this boundary in
-// later slices. The persistence boundary is shipped as a repository over
-// storage::Pool so the eventual service has durable job/run state to consume.
+// The current automation surface ships deterministic periodic cadence, memory
+// retention planning primitives, durable job/run state, and a caller-driven
+// retention tick owner. Cron parsing, triggered jobs, leases, background service
+// loops, and hook publication land behind this boundary in later slices.
 
 #pragma once
 
 #include <oran/automation/periodic.hpp>
 #include <oran/automation/repository.hpp>
+#include <oran/automation/service.hpp>

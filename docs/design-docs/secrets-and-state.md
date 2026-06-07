@@ -65,8 +65,10 @@ Current implementation status:
   retention cadence. Slice 188 maps config into the stored
   `MemoryRetentionJob` descriptor for future scheduler ownership. Slice 189
   adds the `oran-automation` repository that can persist that descriptor,
-  `last_fired_at`, and retention run rows in `automation.db`, but bootstrap
-  still does not open that database or start a scheduler.
+  `last_fired_at`, and retention run rows in `automation.db`; slice 190 adds
+  the caller-driven service tick that can consume those rows and run due decay
+  through a supplied backend. Bootstrap still does not open that database or
+  start a scheduler.
   Ordinary configured-route bootstrap maps the recall policy into
   prompt-boundary long-term recall. The hybrid-search block defaults disabled;
   when built with `--vector_memory=y`, configured-route bootstrap now enables the

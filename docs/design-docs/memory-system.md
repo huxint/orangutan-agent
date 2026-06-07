@@ -157,7 +157,7 @@ MEMORY.md mirror. v2 keeps that core and adds:
   metadata before pruning. Expired records eventually receive lower search weight
   before potentially being shadowed or deleted.
 
-Status (slice 189): `include/oran/memory/longterm.hpp` now ships the public
+Status (slice 190): `include/oran/memory/longterm.hpp` now ships the public
 record/query/write/touch/decay shapes, reflection-backed `RecordKind`,
 `Backend` and `VectorBackend` traits, validation helpers for record keys,
 search limits, record metadata, touch requests, decay requests, and vector
@@ -172,7 +172,9 @@ can produce due-only `DecayRequest` values for future periodic retention
 producers without moving scheduling ownership into `oran-memory`. Slice 188 has
 bootstrap map configured retention policy into that automation-owned job
 descriptor and expose it from `RuntimeAssembly`; slice 189 adds
-automation-owned job/run/last-fired persistence in `oran-automation`. The memory
+automation-owned job/run/last-fired persistence in `oran-automation`; slice 190
+adds the caller-driven `MemoryRetentionService::tick(...)` owner that consumes
+stored jobs and calls a supplied `Backend::decay(...)` only when due. The memory
 library still only owns the backend execution primitive.
 Slice 162 adds
 `longterm::Runtime`, a prompt-boundary composition layer that delegates search
@@ -279,8 +281,10 @@ retention interval from caller-supplied job state and produces a due-only
 configured retention policy into a stored `MemoryRetentionJob` descriptor whose
 first fire is after the startup pass. Slice 189 adds
 `AutomationRepository` for durable retention job/run/last-fired state above
-`storage::Pool`, without making bootstrap open `automation.db`. Periodic
-execution and periodic hook publishing remain downstream.
+`storage::Pool`, without making bootstrap open `automation.db`. Slice 190 adds
+`MemoryRetentionService::tick(...)` as the explicit caller-driven periodic
+execution boundary. Periodic hook publishing, leases, service-loop timers, and
+bootstrap opening of `automation.db` remain downstream.
 Default builds still reject
 `memory.longterm.hybrid_search.enabled=true` before assembly/provider side
 effects with `reason=build_option_disabled`, `option=vector_memory`. Semantic or
@@ -558,8 +562,11 @@ count for diagnostics. Slice 186 publishes successful startup decay as advisory
 `memory_decay` metadata. Slice 187 adds the pure `oran-automation` retention
 cadence/request planner. Slice 188 maps config into the periodic job descriptor
 at bootstrap. Slice 189 persists that descriptor and future run rows in
-`automation.db` through `AutomationRepository`. Remaining ownership work is the
-explicit automation service/tick owner and the periodic decay producer.
+`automation.db` through `AutomationRepository`. Slice 190 adds the explicit
+caller-driven automation tick owner that loads the stored job, invokes
+`Backend::decay(...)` only when due, records run outcomes, and advances
+`last_fired_at` only after success. Remaining ownership work is the periodic
+decay hook producer plus real service-loop leases/timers.
 
 Forgetting is final (DELETE), with an audit row in `audit.db`.
 
@@ -590,9 +597,9 @@ Memory lifecycle:
 - `memory.decay(scope, count)` — shipped for the configured-route startup
   retention pass in slice 186 as advisory metadata (`source`, scope, policy
   inputs, shadowed count, timing) with no record content. `oran-automation`
-  now plans periodic retention requests, and bootstrap stores the mapped job
-  descriptor, but periodic decay publishing remains downstream until a periodic
-  producer actually executes decay.
+  now plans periodic retention requests, stores run state, and exposes a
+  caller-driven tick that can execute due decay, but periodic decay publishing
+  remains downstream until a producer is wired to publish from that tick.
 
 These hooks are why team shared memory works: the orchestration leader can install a
 `memory.write.after` hook on the shared tier to mirror notes to a Slack channel, for
@@ -619,7 +626,8 @@ Separate files (the audit identified single-DB contention):
 - `<workspace>/.orangutan/sessions.db`
 - `<workspace>/.orangutan/memory.db`
 - `<workspace>/.orangutan/automation.db` (retention job/run schema owned by
-  `oran-automation`; bootstrap does not open it yet)
+  `oran-automation`; `MemoryRetentionService` consumes a caller-supplied pool
+  and bootstrap does not open it yet)
 - `<workspace>/.orangutan/audit.db`
 
 Migrations:

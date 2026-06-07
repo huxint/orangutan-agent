@@ -219,6 +219,14 @@ operators can reason about retention, scope, and visibility.
   and lists recent runs. Bootstrap still does not open `automation.db`, run a
   service loop, call the memory backend periodically, or publish periodic
   `memory_decay`.
+- Automation retention service tick shipped in slice 190:
+  `oran-automation::MemoryRetentionService` consumes a stored retention job,
+  reuses the cadence planner, calls a supplied
+  `memory::longterm::Backend::decay(...)` only when due, records
+  success/failure run rows, and advances `last_fired_at` only after success.
+  Backend failures are durably recorded and leave state unadvanced for explicit
+  retry policy. Bootstrap still does not open `automation.db`, run a background
+  loop, or publish periodic `memory_decay`.
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
 - Blocking `memory_read_before`, periodic automation decay publishing, and
   memory-write rewrite/annotation remain downstream.
@@ -286,8 +294,11 @@ operators can reason about retention, scope, and visibility.
    is due. Slice 188 maps configured-route retention into an automation-owned
    job descriptor and stores it on `RuntimeAssembly` for future scheduler
    ownership. Slice 189 persists that descriptor's job state and future run
-   history through `AutomationRepository`.
-   Persistent periodic execution and periodic decay publishing remain open.
+   history through `AutomationRepository`. Slice 190 adds a caller-driven
+   `MemoryRetentionService::tick(...)` execution boundary that runs due decay
+   through a supplied backend and records outcomes.
+   Periodic decay publishing, bootstrap service ownership, and leases remain
+   open.
 5. A `memory.write.before` hook can veto a write. **Status:** closed for the
    bootstrap `memory.remember` tool path in slice 179. `AgentPromptRunner`
    publishes blocking `memory_write_before` after parsing/scoping the record and
@@ -374,5 +385,5 @@ xmake run test-bootstrap
 scripts/bench-compare.sh memory
 ```
 
-Slice 189 reports `test-automation` at 12 cases / 110 assertions for the
-retention state repository boundary.
+Slice 190 reports `test-automation` at 16 cases / 169 assertions for the
+retention planner, repository, and service tick boundaries.

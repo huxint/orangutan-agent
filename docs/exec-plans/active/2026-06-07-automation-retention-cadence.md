@@ -93,9 +93,8 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
    `AutomationRepository` without bootstrap opening the database or starting a
    service.
 5. **Explicit service/tick owner.**
-   Later slice: consume stored jobs, evaluate due work, call the memory backend,
-   record run outcomes, and add cancellation ownership without hidden bootstrap
-   loops.
+   Done in slice 190: consume stored jobs, evaluate due work, call the memory
+   backend, and record run outcomes without hidden bootstrap loops.
 6. **Hook producer.**
    Later slice: publish periodic `memory_decay` metadata from the actual
    periodic producer.
@@ -149,6 +148,13 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
 - [x] 2026-06-07 05:08 +0800: Kept bootstrap unopened for `automation.db`; the
   next useful product boundary is an explicit service/tick owner that consumes
   the stored jobs and records actual backend run outcomes.
+- [x] 2026-06-07 09:59 +0800: Added `MemoryRetentionService::tick(...)` as the
+  explicit caller-driven owner for one stored retention job. The tick reuses
+  the planner, invokes a supplied long-term backend only when due, records
+  success/failure rows, and advances `last_fired_at` only after success.
+- [x] 2026-06-07 09:59 +0800: Kept bootstrap unopened for `automation.db` and
+  kept periodic `memory_decay` publishing out of the tick slice; the next useful
+  product boundary is hook production from the actual periodic execution owner.
 - [x] Update docs that this slice invalidates in the same PR
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -174,6 +180,12 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
 - 2026-06-07: Use durable `job_key` as the repository identity and keep
   `scope_key` as the memory-decay scope inside `MemoryRetentionJob`, so future
   automation jobs can share a memory scope without overwriting each other.
+- 2026-06-07: Advance `last_fired_at` to the scheduled fire time only after a
+  successful backend decay and run-row insert. Backend errors record a failed
+  run and leave state unadvanced so retry/catch-up policy remains explicit.
+- 2026-06-07: Keep `MemoryRetentionService` as a caller-driven tick rather than
+  a hidden service loop. Timers, leases, shutdown, notifier routing, and
+  periodic `memory_decay` hook publication belong to the future loop owner.
 
 ## Linked Artifacts
 
@@ -188,5 +200,7 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
   `docs/histories/2026-06/20260607-0424-bootstrap-retention-job.md`
   and
   `docs/histories/2026-06/20260607-0508-automation-retention-state.md`
+  and
+  `docs/histories/2026-06/20260607-0959-automation-retention-service-tick.md`
 - Release note:
-  `docs/releases/feature-release-notes.md#automation-retention-cadence`
+  `docs/releases/feature-release-notes.md#automation-retention-service-tick`

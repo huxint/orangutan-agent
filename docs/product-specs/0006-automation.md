@@ -23,14 +23,17 @@ the payload to the research agent". The engine schedules and runs these jobs.
 
 Slice 187 adds the first `oran-automation` library boundary, slice 188 lets
 bootstrap seed it from configured retention policy without creating the full
-service, and slice 189 adds the automation-owned persistent state boundary. The
+service, slice 189 adds the automation-owned persistent state boundary, and
+slice 190 adds the first explicit caller-driven retention tick owner. The
 current API evaluates a periodic schedule from caller-supplied state, maps a
 long-term memory retention policy into a due-only
-`memory::longterm::DecayRequest`, and persists the configured retention job plus
-run history through `AutomationRepository`. Bootstrap maps configured-route
-`memory.longterm.retention` into a stored `MemoryRetentionJob` descriptor whose
-first fire is after the one-shot startup decay pass, but bootstrap still does
-not open `automation.db` or run a background service.
+`memory::longterm::DecayRequest`, persists the configured retention job plus
+run history through `AutomationRepository`, and lets a runtime owner tick one
+stored job against a supplied long-term memory backend. Bootstrap maps
+configured-route `memory.longterm.retention` into a stored
+`MemoryRetentionJob` descriptor whose first fire is after the one-shot startup
+decay pass, but bootstrap still does not open `automation.db` or run a
+background service.
 
 Current implementation:
 
@@ -48,14 +51,19 @@ Current implementation:
 - `AutomationRepository` runs migrations over a caller-supplied `storage::Pool`,
   upserts and loads retention jobs by durable `job_key`, persists
   `last_fired_at`, records success/failure run rows, and lists recent runs.
-- `test-automation` reports 12 cases / 110 assertions.
+- `MemoryRetentionService::tick(...)` loads one stored job, skips not-due work
+  without mutation, invokes `memory::longterm::Backend::decay(...)` only when
+  due, records success/failure run rows, and advances `last_fired_at` only
+  after success. Backend failures record a failed run and keep state unadvanced
+  so retry policy remains explicit.
+- `test-automation` reports 16 cases / 169 assertions.
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 
 Still open: cron parsing, triggered jobs, bootstrap/service ownership of
 `automation.db`, per-agent leases, queueing/backpressure, cancellation during
-real runs, job lifecycle hooks, notifier callbacks, periodic retention
-execution, and the scheduler tick performance criterion.
+long-running service loops, job lifecycle hooks, notifier callbacks, periodic
+`memory_decay` publishing, and the scheduler tick performance criterion.
 
 ## Scope (v1.1)
 
