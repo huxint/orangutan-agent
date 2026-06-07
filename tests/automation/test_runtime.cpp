@@ -71,6 +71,11 @@ template <typename Rep, typename Period>
                              [field](const auto& entry) { return entry.first == "field" && entry.second == field; });
 }
 
+[[nodiscard]] bool has_context(const core::Error& error, std::string_view key, std::string_view value) {
+  return std::ranges::any_of(error.context(),
+                             [key, value](const auto& entry) { return entry.first == key && entry.second == value; });
+}
+
 [[nodiscard]] std::string automation_db_path(const TempWorkspace& workspace) {
   return (workspace.path() / ".orangutan" / "automation.db").string();
 }
@@ -218,6 +223,74 @@ TEST_CASE("AutomationRuntime::open rejects an empty database path", "[unit][auto
     REQUIRE_FALSE(opened.has_value());
     REQUIRE(opened.error().kind() == core::ErrorKind::invalid_argument);
     REQUIRE(has_field(opened.error(), "database_path"));
+  });
+}
+
+TEST_CASE("AutomationRuntime applies cron job seeds explicitly", "[unit][automation][runtime][cron]") {
+  TempWorkspace workspace{"oran-automation-runtime-cron-seeds"};
+  test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {
+    auto runtime = co_await automation::AutomationRuntime::open(
+        io.get_executor(),
+        automation::AutomationRuntimeOptions{.database_path = automation_db_path(workspace)});
+    REQUIRE(runtime.has_value());
+
+    auto seeds = std::vector<automation::UpsertCronJobRequest>{
+        automation::UpsertCronJobRequest{
+            .job_key = "cron:daily-summary",
+            .schedule =
+                automation::CronSchedule{
+                    .expression = "0 9 * * *",
+                    .first_fire_at = at(60s),
+                },
+        },
+        automation::UpsertCronJobRequest{
+            .job_key = "cron:hourly-ci",
+            .schedule =
+                automation::CronSchedule{
+                    .expression = "15 * * * *",
+                    .first_fire_at = at(120s),
+                },
+            .state =
+                automation::PeriodicJobState{
+                    .last_fired_at = at(300s),
+                },
+        },
+    };
+
+    auto applied = co_await runtime->apply_cron_job_seeds(seeds);
+
+    REQUIRE(applied.has_value());
+    REQUIRE(applied->requested_count == 2);
+    REQUIRE(applied->upserted_count == 2);
+    REQUIRE(applied->jobs.size() == 2);
+    REQUIRE(applied->jobs[0].job_key == "cron:daily-summary");
+    REQUIRE(applied->jobs[1].state.last_fired_at == at(300s));
+
+    seeds[0].state.last_fired_at = at(600s);
+    auto reapplied = co_await runtime->apply_cron_job_seeds(seeds);
+    REQUIRE(reapplied.has_value());
+    REQUIRE(reapplied->upserted_count == 2);
+
+    auto loaded = co_await runtime->repository().get_cron_job("cron:daily-summary");
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->has_value());
+    REQUIRE((*loaded)->state.last_fired_at == at(600s));
+
+    auto bad_seeds = std::vector<automation::UpsertCronJobRequest>{
+        automation::UpsertCronJobRequest{
+            .job_key = "cron:bad",
+            .schedule =
+                automation::CronSchedule{
+                    .expression = "not a cron",
+                    .first_fire_at = at(60s),
+                },
+        },
+    };
+    auto invalid = co_await runtime->apply_cron_job_seeds(bad_seeds);
+    REQUIRE_FALSE(invalid.has_value());
+    REQUIRE(invalid.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(has_context(invalid.error(), "seed_index", "0"));
+    REQUIRE(has_context(invalid.error(), "job_key", "cron:bad"));
   });
 }
 

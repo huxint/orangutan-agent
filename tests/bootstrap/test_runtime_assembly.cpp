@@ -486,6 +486,47 @@ TEST_CASE("RuntimeAssembly::build stores cron job seeds without opening automati
   REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan" / "automation.db"));
 }
 
+TEST_CASE("RuntimeAssembly cron seeds persist only through caller-owned automation runtime",
+          "[unit][bootstrap][runtime_assembly][automation]") {
+  TempDir temp{"oran-assembly-cron-job-seed-apply"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto options = bootstrap::RuntimeAssemblyOptions{};
+    options.audit_enabled = false;
+    options.session_memory_enabled = false;
+    options.longterm_memory_enabled = false;
+    options.cron_jobs.push_back(automation::UpsertCronJobRequest{
+        .job_key = "daily-summary",
+        .schedule =
+            automation::CronSchedule{
+                .expression = "0 9 * * *",
+                .first_fire_at = fixed_now(),
+            },
+    });
+
+    auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
+
+    REQUIRE(built.has_value());
+    REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan" / "automation.db"));
+
+    auto runtime = co_await automation::AutomationRuntime::open(
+        io.get_executor(),
+        automation::AutomationRuntimeOptions{
+            .database_path = (temp.path() / ".orangutan" / "automation.db").string(),
+        });
+    REQUIRE(runtime.has_value());
+
+    auto applied = co_await runtime->apply_cron_job_seeds(built->cron_jobs());
+
+    REQUIRE(applied.has_value());
+    REQUIRE(applied->requested_count == 1);
+    REQUIRE(applied->upserted_count == 1);
+    auto loaded = co_await runtime->repository().get_cron_job("daily-summary");
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->has_value());
+    REQUIRE((*loaded)->schedule.expression == "0 9 * * *");
+  });
+}
+
 TEST_CASE("RuntimeAssembly::build rejects long-term startup decay when long-term memory is disabled",
           "[unit][bootstrap][runtime_assembly][memory]") {
   TempDir temp{"oran-assembly-longterm-startup-decay-disabled"};

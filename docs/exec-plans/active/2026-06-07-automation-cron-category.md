@@ -23,11 +23,14 @@ firing stay in later scheduler slices.
   evaluation deterministic and caller-clocked.
 - Parse typed `automation.cron.jobs[]` config seeds and map them in bootstrap
   without making `oran-automation` depend on `oran-config`.
+- Let caller-owned automation runtimes explicitly apply mapped cron seeds into
+  `automation.db` without making bootstrap own that state.
 - Keep the slice free of agent, timer, automatic persistence, or background
   task ownership.
 - Update automation docs/status/history/release notes in the same slice.
 - Out of scope:
-- Scheduler service startup that reads config and persists/runs cron seeds.
+- Scheduler service startup that automatically reads config and applies/runs
+  cron seeds.
 - Process timers, triggered jobs, queueing/backpressure, notifier routing, and
   agent firing.
 - Bootstrap opening `automation.db`, starting timers, or spawning detached
@@ -99,8 +102,9 @@ firing stay in later scheduler slices.
    succeeds. Slice 201 adds finite caller-owned loop policy over that execution
    surface, and slice 202 adds advisory cron lifecycle metadata around handler
    execution. Slice 203 adds typed cron config seeds and bootstrap mapping into
-   repository upsert descriptors. Later: persist those seeds and add
-   service/timer startup policy without bootstrap-owned background work.
+   repository upsert descriptors, and slice 204 adds explicit caller-owned
+   runtime application for those seeds. Later: add service/timer startup policy
+   without bootstrap-owned background work.
 4. **Triggered/notifier/queue policy.**
    Later: add triggered categories, queueing/backpressure, notifier routing,
    and agent execution leases.
@@ -116,6 +120,8 @@ firing stay in later scheduler slices.
 - `xmake build test-bootstrap`
 - `xmake run test-bootstrap`
 - `xmake build test-automation`
+- `build/linux/x86_64/release/test-automation "AutomationRuntime applies cron job seeds explicitly"`
+- `build/linux/x86_64/release/test-bootstrap "RuntimeAssembly cron seeds persist only through caller-owned automation runtime"`
 - `build/linux/x86_64/release/test-automation "[repository]"`
 - `xmake run test-automation`
 - `xmake build oran-automation`
@@ -182,6 +188,11 @@ firing stay in later scheduler slices.
   validates expressions through `oran-automation` and stores
   `UpsertCronJobRequest` descriptors on `RuntimeAssembly`. Bootstrap still does
   not open `automation.db`, upsert cron rows, start timers, or execute jobs.
+- [x] 2026-06-08 00:31 +0800: Implemented
+  `AutomationRuntime::apply_cron_job_seeds(...)` as the explicit caller-owned
+  persistence handoff for mapped cron descriptors. Runtime owners can upsert
+  config-authored seeds into `automation.db` after they open automation state;
+  bootstrap still only stores descriptors and does not apply them automatically.
 - [x] **Update the docs that this slice invalidates in the same PR**
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -219,6 +230,10 @@ firing stay in later scheduler slices.
   bootstrap validates expressions through automation; deferring upsert/timer
   ownership keeps configured cron jobs from becoming a hidden daemon side
   effect.
+- 2026-06-08: Add explicit runtime seed application before service startup.
+  Applying seeds through `AutomationRuntime` lets embedders persist authored
+  cron rows after opening caller-owned state, while keeping bootstrap free of
+  automatic `automation.db` creation and keeping timer ownership downstream.
 
 ## Linked Artifacts
 
@@ -233,5 +248,6 @@ firing stay in later scheduler slices.
 - `docs/histories/2026-06/20260607-2257-automation-cron-loop-run-policy.md`
 - `docs/histories/2026-06/20260607-2324-automation-cron-lifecycle-hooks.md`
 - `docs/histories/2026-06/20260607-2356-automation-cron-config.md`
+- `docs/histories/2026-06/20260608-0031-automation-cron-seed-apply.md`
 - Release note:
 - `docs/releases/feature-release-notes.md#2026-06`

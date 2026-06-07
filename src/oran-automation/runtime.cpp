@@ -120,6 +120,33 @@ const AutomationRepository& AutomationRuntime::repository() const noexcept {
   return impl_->repository;
 }
 
+async::Awaitable<core::Result<CronSeedApplyResult>>
+AutomationRuntime::apply_cron_job_seeds(std::vector<UpsertCronJobRequest> seeds) {
+  auto result = CronSeedApplyResult{
+      .requested_count = seeds.size(),
+  };
+  result.jobs.reserve(seeds.size());
+
+  std::size_t index = 0;
+  for (auto& seed : seeds) {
+    auto job_key = seed.job_key;
+    auto upserted = co_await impl_->repository.upsert_cron_job(std::move(seed));
+    if (!upserted) {
+      auto error = std::move(upserted.error());
+      error.with("seed_index", std::to_string(index));
+      if (!job_key.empty()) {
+        error.with("job_key", std::move(job_key));
+      }
+      co_return std::unexpected(std::move(error));
+    }
+    result.jobs.push_back(std::move(*upserted));
+    ++result.upserted_count;
+    ++index;
+  }
+
+  co_return result;
+}
+
 CronService AutomationRuntime::cron_service(CronServiceOptions options) noexcept {
   return CronService{impl_->repository, std::move(options)};
 }

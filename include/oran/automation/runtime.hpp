@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <asio/any_io_executor.hpp>
 
@@ -27,11 +28,18 @@ struct AutomationRuntimeOptions {
   AutomationRepositoryOptions repository{};
 };
 
+struct CronSeedApplyResult {
+  std::size_t requested_count{0};
+  std::size_t upserted_count{0};
+  std::vector<CronJobRecord> jobs{};
+};
+
 /// Caller-owned automation state bundle.
 ///
 /// Opening the runtime creates parent directories, opens `automation.db`, runs
 /// the automation migrations, and keeps the pool/repository lifetime stable for
-/// service owners. It intentionally does not start timers, acquire leases, or
+/// service owners. It can explicitly upsert caller-supplied cron seeds into the
+/// owned repository, but intentionally does not start timers, acquire leases, or
 /// launch background jobs.
 class AutomationRuntime {
 public:
@@ -49,6 +57,9 @@ public:
   [[nodiscard]] const storage::MigrationReport& migration_report() const noexcept;
   [[nodiscard]] AutomationRepository& repository() noexcept;
   [[nodiscard]] const AutomationRepository& repository() const noexcept;
+
+  [[nodiscard]] async::Awaitable<core::Result<CronSeedApplyResult>>
+  apply_cron_job_seeds(std::vector<UpsertCronJobRequest> seeds);
 
   [[nodiscard]] CronService cron_service(CronServiceOptions options = {}) noexcept;
   [[nodiscard]] CronLoop cron_loop(CronServiceOptions options = {}) noexcept;

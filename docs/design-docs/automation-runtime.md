@@ -200,6 +200,15 @@ future runtime owners, while `RuntimeAssembly::build(...)` still does not open
 `automation.db`, upsert cron rows, start timers, enqueue work, notify channels,
 or call agents.
 
+Slice 204 adds explicit cron seed persistence on the caller-owned runtime
+handle. `AutomationRuntime::apply_cron_job_seeds(...)` takes mapped
+`automation::UpsertCronJobRequest` rows, upserts them through the owned
+repository, and returns requested/upserted counts plus the stored rows. Failures
+return the repository error with `seed_index` and, when present, `job_key`
+context. The helper is deliberately not called by bootstrap: a caller must open
+`AutomationRuntime` and invoke it explicitly before config-authored cron rows
+exist in `automation.db`.
+
 ## Public API
 
 ```cpp
@@ -480,6 +489,12 @@ class CronLoop {
   run(CronLoopRunRequest);
 };
 
+struct CronSeedApplyResult {
+  std::size_t requested_count;
+  std::size_t upserted_count;
+  std::vector<CronJobRecord> jobs;
+};
+
 class AutomationRuntime {
  public:
   static async::Awaitable<core::Result<AutomationRuntime>>
@@ -489,6 +504,9 @@ class AutomationRuntime {
   const storage::MigrationReport& migration_report() const noexcept;
   AutomationRepository& repository() noexcept;
   const AutomationRepository& repository() const noexcept;
+
+  async::Awaitable<core::Result<CronSeedApplyResult>>
+  apply_cron_job_seeds(std::vector<UpsertCronJobRequest>);
 
   CronService cron_service(CronServiceOptions = {}) noexcept;
   CronLoop cron_loop(CronServiceOptions = {}) noexcept;
@@ -716,6 +734,15 @@ enqueue work, notify channels, or call agents.
 building the assembly, even when no provider route is configured; long-term
 memory retention descriptors remain configured-route-only.
 
+`AutomationRuntime::apply_cron_job_seeds(...)` is the explicit persistence
+bridge for those descriptors. It accepts the seed vector by value, sequentially
+calls `AutomationRepository::upsert_cron_job(...)`, and returns
+`CronSeedApplyResult { requested_count, upserted_count, jobs }`. On the first
+error it returns without attempting later seeds; already-upserted rows remain
+committed because this slice does not introduce a transaction wrapper. The
+error includes `seed_index` and the seed `job_key` when available so runtime
+owners can surface the failing authored row.
+
 ## Memory Retention Planning
 
 `plan_memory_retention(...)` adapts the shipped long-term retention policy into
@@ -825,7 +852,8 @@ detached coroutines, acquire process leases, own a hook bus, or decide whether
 bootstrap should open `automation.db`.
 Bootstrap maps the configured retention policy and configured cron schedule
 seeds into descriptors only; a caller must explicitly call
-`AutomationRuntime::open(...)` before automation state exists.
+`AutomationRuntime::open(...)` and `apply_cron_job_seeds(...)` before authored
+cron rows exist in automation state.
 
 ## Loop Step Semantics
 
@@ -1051,9 +1079,9 @@ The next automation slices should not be picked by `STATUS.md` alone. The open
 spec 0006 boundaries now start after this explicit runtime/retention loop
 surface, cron evaluator, cron repository state, and caller-driven cron
 scan/wait/execute-due/run surface plus config-authored cron seeds: cron seed
-persistence into `automation.db`, process service/timer startup policy, broader
-per-agent/category leases once agent-facing jobs exist, triggered categories,
-queueing/backpressure, and notifier routing for agent-facing jobs.
+automatic persistence/service startup policy, broader per-agent/category leases
+once agent-facing jobs exist, triggered categories, queueing/backpressure, and
+notifier routing for agent-facing jobs.
 
 ## Validation
 
@@ -1106,6 +1134,10 @@ loop backlog catch-up, success-only state advancement through the loop, handler
 failure stopping without immediate retry, and cron run-policy input validation.
 Slice 202 reports `test-automation` at 56 cases / 730 assertions for advisory
 cron job lifecycle metadata on handler success and handler failure.
+Slice 204 reports `test-automation` at 57 cases / 747 assertions for explicit
+cron seed application through `AutomationRuntime`, including update and failure
+context coverage; `test-bootstrap` reports 129 cases / 1087 assertions for the
+cross-boundary assembly-to-runtime seed application path.
 
 `bench-automation` planning rows are:
 
