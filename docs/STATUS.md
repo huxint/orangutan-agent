@@ -7,28 +7,30 @@
 
 ## Snapshot
 
-- **Slice:** 209 (`xmake run orangutan -- --help` reports slice 209)
+- **Slice:** 210 (`xmake run orangutan -- --help` reports slice 210)
 - **Last completed history:**
-  [`histories/2026-06/20260608-0206-automation-cron-execution-leases.md`](histories/2026-06/20260608-0206-automation-cron-execution-leases.md)
+  [`histories/2026-06/20260608-0236-automation-cron-agent-leases.md`](histories/2026-06/20260608-0236-automation-cron-agent-leases.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-cron-category.md`](exec-plans/active/2026-06-07-automation-cron-category.md).
-- **Latest completed slice:** slice 209 adds repository-backed cron execution
-  leases without starting a scheduler. Migration v6 creates
-  `automation_cron_leases`; `AutomationRepository` exposes acquire/release APIs
-  that return `std::nullopt` on active conflicts and allow expired takeover.
-  `CronService::execute_due(...)` can explicitly lease each due job before the
-  handler runs, releases after durable run/state work, and returns
-  `ErrorKind::conflict` without calling the handler when another owner holds an
-  active lease. `CronLoop::run(...)` and runtime service cycles default to the
-  `automation-cron-loop` owner, while bare service execution remains opt-in via
-  request fields. Bootstrap still only stores cron descriptors; it does not
-  open `automation.db`, apply rows automatically, start process timers, spawn
-  detached work, enqueue work, call notifiers, or fire agents. Focused results:
-  `test-automation` **67 cases / 954 assertions** and `test-bootstrap` **129 cases / 1087 assertions**.
+- **Latest completed slice:** slice 210 adds the first agent-facing cron lease
+  policy without starting a scheduler. Cron config seeds and stored cron jobs
+  now carry `agent_key` (default `automation`); migration v7 adds
+  `automation_cron_jobs.agent_key` plus `automation_cron_agent_leases`;
+  `AutomationRepository` exposes agent-lease acquire/release APIs with active
+  conflict and expired-takeover semantics. `CronService::execute_due(...)`
+  now uses an enabled lease owner to acquire both the per-job cron lease and the
+  per-agent lease before the handler runs, releases both after durable outcome
+  work, and reports `ErrorKind::conflict` before handler execution when another
+  owner is running the same agent. Cron lifecycle hook payloads now use the
+  stored job's `agent_key`. Bootstrap still only stores cron descriptors; it
+  does not open `automation.db`, apply rows automatically, start process
+  timers, spawn detached work, enqueue work, call notifiers, or fire agents.
+  Focused results: `test-config` **51 cases / 462 assertions**,
+  `test-automation` **70 cases / 1010 assertions**, and `test-bootstrap`
+  **129 cases / 1091 assertions**.
 - **Next intended slice:** continue the active automation cron/category plan.
   The next useful implementation boundary is a small scheduler-service
-  ownership slice such as triggered/notifier/queue policy or agent-facing
-  category/agent lease policy.
+  ownership slice such as triggered category intake or notifier/queue policy.
   Do not add bootstrap-owned background automation or unrelated STATUS-only
   slice churn.
 
@@ -1821,17 +1823,18 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-http`: 3 cases / 21 assertions.
 - `oran-io`: 54 cases / 311 assertions.
 - `oran-storage`: 77 cases / 988 assertions.
-- `oran-config`: 51 cases / 458 assertions.
+- `oran-config`: 51 cases / 462 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 37 cases / 299 assertions.
 - `oran-memory`: 38 cases / 841 assertions.
+- `oran-automation`: 70 cases / 1010 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 208 cases / 2181 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 129 cases / 1087 assertions.
+- `oran-bootstrap`: 129 cases / 1091 assertions.
 
 ## Open Tech-Debt Rows
 

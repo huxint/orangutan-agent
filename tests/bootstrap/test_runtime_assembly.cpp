@@ -481,6 +481,7 @@ TEST_CASE("RuntimeAssembly::build stores cron job seeds without opening automati
   REQUIRE_FALSE(built->longterm_memory_enabled());
   REQUIRE(built->cron_jobs().size() == 1);
   REQUIRE(built->cron_jobs()[0].job_key == "daily-summary");
+  REQUIRE(built->cron_jobs()[0].agent_key == "automation");
   REQUIRE(built->cron_jobs()[0].schedule.expression == "0 9 * * *");
   REQUIRE(built->cron_jobs()[0].schedule.first_fire_at == fixed_now());
   REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan" / "automation.db"));
@@ -523,6 +524,7 @@ TEST_CASE("RuntimeAssembly cron seeds persist only through caller-owned automati
     auto loaded = co_await runtime->repository().get_cron_job("daily-summary");
     REQUIRE(loaded.has_value());
     REQUIRE(loaded->has_value());
+    REQUIRE((*loaded)->agent_key == "automation");
     REQUIRE((*loaded)->schedule.expression == "0 9 * * *");
   });
 }

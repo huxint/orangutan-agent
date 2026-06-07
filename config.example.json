@@ -115,6 +115,7 @@
       "jobs": [
         {
           "job_key": "daily-summary",
+          "agent_key": "researcher",
           "expression": "0 9 * * *",
           "first_fire_at": "2026-06-08T09:00:00Z"
         }

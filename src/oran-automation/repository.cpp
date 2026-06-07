@@ -49,22 +49,29 @@ constexpr unsigned char kAutomationCronLeasesBytes[] = {
 #embed "migrations/automation/0006-automation-cron-leases.sql"
 };
 
+constexpr unsigned char kAutomationCronAgentLeasesBytes[] = {
+#embed "migrations/automation/0007-automation-cron-agent-leases.sql"
+};
+
 constexpr std::string_view kUpsertCronJobSql = R"sql(
 INSERT INTO automation_cron_jobs(
   job_key,
+  agent_key,
   expression,
   first_fire_at,
   last_fired_at,
   created_at,
   updated_at
-) VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+) VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 ON CONFLICT(job_key) DO UPDATE SET
+  agent_key = excluded.agent_key,
   expression = excluded.expression,
   first_fire_at = excluded.first_fire_at,
   last_fired_at = excluded.last_fired_at,
   updated_at = excluded.updated_at
 RETURNING
   job_key,
+  agent_key,
   expression,
   first_fire_at,
   last_fired_at,
@@ -75,6 +82,7 @@ RETURNING
 constexpr std::string_view kGetCronJobSql = R"sql(
 SELECT
   job_key,
+  agent_key,
   expression,
   first_fire_at,
   last_fired_at,
@@ -91,6 +99,7 @@ SET last_fired_at = ?,
 WHERE job_key = ?
 RETURNING
   job_key,
+  agent_key,
   expression,
   first_fire_at,
   last_fired_at,
@@ -101,6 +110,7 @@ RETURNING
 constexpr std::string_view kListCronJobsSql = R"sql(
 SELECT
   job_key,
+  agent_key,
   expression,
   first_fire_at,
   last_fired_at,
@@ -175,6 +185,35 @@ DELETE FROM automation_cron_leases
 WHERE job_key = ? AND owner_key = ?
 RETURNING
   job_key
+)sql";
+
+constexpr std::string_view kAcquireCronAgentLeaseSql = R"sql(
+INSERT INTO automation_cron_agent_leases(
+  agent_key,
+  owner_key,
+  acquired_at,
+  expires_at,
+  updated_at
+) VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+ON CONFLICT(agent_key) DO UPDATE SET
+  owner_key = excluded.owner_key,
+  acquired_at = excluded.acquired_at,
+  expires_at = excluded.expires_at,
+  updated_at = excluded.updated_at
+WHERE automation_cron_agent_leases.expires_at <= excluded.acquired_at
+RETURNING
+  agent_key,
+  owner_key,
+  acquired_at,
+  expires_at,
+  updated_at
+)sql";
+
+constexpr std::string_view kReleaseCronAgentLeaseSql = R"sql(
+DELETE FROM automation_cron_agent_leases
+WHERE agent_key = ? AND owner_key = ?
+RETURNING
+  agent_key
 )sql";
 
 constexpr std::string_view kUpsertMemoryRetentionJobSql = R"sql(
@@ -318,7 +357,7 @@ template <std::size_t N>
 }
 
 [[nodiscard]] std::span<const storage::Migration> built_in_automation_migrations() {
-  static const std::array<storage::Migration, 6> kMigrations{
+  static const std::array<storage::Migration, 7> kMigrations{
       storage::Migration{
           .version = 1,
           .name = "automation-retention-state",
@@ -348,6 +387,11 @@ template <std::size_t N>
           .version = 6,
           .name = "automation-cron-leases",
           .sql = to_sql_string(kAutomationCronLeasesBytes),
+      },
+      storage::Migration{
+          .version = 7,
+          .name = "automation-cron-agent-leases",
+          .sql = to_sql_string(kAutomationCronAgentLeasesBytes),
       },
   };
   return kMigrations;
@@ -387,6 +431,13 @@ template <std::size_t N>
   return {};
 }
 
+[[nodiscard]] core::Result<void> validate_agent_key(std::string_view agent_key) {
+  if (agent_key.empty()) {
+    return std::unexpected(invalid_field("agent_key", "empty"));
+  }
+  return {};
+}
+
 [[nodiscard]] core::Result<void> validate_cron_schedule_for_storage(const CronSchedule& schedule) {
   auto evaluated = evaluate_cron_schedule(schedule, {}, schedule.first_fire_at);
   if (!evaluated) {
@@ -397,6 +448,9 @@ template <std::size_t N>
 
 [[nodiscard]] core::Result<void> validate_upsert_request(const UpsertCronJobRequest& request) {
   if (auto valid = validate_job_key(request.job_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  if (auto valid = validate_agent_key(request.agent_key); !valid) {
     return std::unexpected(valid.error());
   }
   if (auto valid = validate_cron_schedule_for_storage(request.schedule); !valid) {
@@ -490,8 +544,31 @@ template <std::size_t N>
   return {};
 }
 
+[[nodiscard]] core::Result<void> validate_lease_request(const AcquireCronAgentLeaseRequest& request) {
+  if (auto valid = validate_agent_key(request.agent_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  if (auto valid = validate_owner_key(request.owner_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  if (request.expires_at <= request.acquired_at) {
+    return std::unexpected(invalid_field("expires_at", "not_after_acquired_at"));
+  }
+  return {};
+}
+
 [[nodiscard]] core::Result<void> validate_release_request(const ReleaseCronLeaseRequest& request) {
   if (auto valid = validate_job_key(request.job_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  if (auto valid = validate_owner_key(request.owner_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  return {};
+}
+
+[[nodiscard]] core::Result<void> validate_release_request(const ReleaseCronAgentLeaseRequest& request) {
+  if (auto valid = validate_agent_key(request.agent_key); !valid) {
     return std::unexpected(valid.error());
   }
   if (auto valid = validate_owner_key(request.owner_key); !valid) {
@@ -686,23 +763,30 @@ read_size(storage::Statement& statement, int index, std::string_view field, bool
   if (!job_key) {
     return std::unexpected(job_key.error());
   }
-  auto expression = required_text(statement, 1, "expression");
+  auto agent_key = required_text(statement, 1, "agent_key");
+  if (!agent_key) {
+    return std::unexpected(agent_key.error());
+  }
+  if (auto valid = validate_agent_key(*agent_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  auto expression = required_text(statement, 2, "expression");
   if (!expression) {
     return std::unexpected(expression.error());
   }
-  auto first_fire_at = required_time(statement, 2, "first_fire_at");
+  auto first_fire_at = required_time(statement, 3, "first_fire_at");
   if (!first_fire_at) {
     return std::unexpected(first_fire_at.error());
   }
-  auto last_fired_at = optional_time(statement, 3);
+  auto last_fired_at = optional_time(statement, 4);
   if (!last_fired_at) {
     return std::unexpected(last_fired_at.error());
   }
-  auto created_at = required_text(statement, 4, "created_at");
+  auto created_at = required_text(statement, 5, "created_at");
   if (!created_at) {
     return std::unexpected(created_at.error());
   }
-  auto updated_at = required_text(statement, 5, "updated_at");
+  auto updated_at = required_text(statement, 6, "updated_at");
   if (!updated_at) {
     return std::unexpected(updated_at.error());
   }
@@ -717,6 +801,7 @@ read_size(storage::Statement& statement, int index, std::string_view field, bool
 
   return CronJobRecord{
       .job_key = std::move(*job_key),
+      .agent_key = std::move(*agent_key),
       .schedule = std::move(schedule),
       .state = PeriodicJobState{.last_fired_at = *last_fired_at},
       .created_at = std::move(*created_at),
@@ -865,6 +950,41 @@ template <typename LeaseRecord>
   };
 }
 
+[[nodiscard]] core::Result<CronAgentLeaseRecord> read_agent_lease_row(storage::Statement& statement) {
+  auto agent_key = required_text(statement, 0, "agent_key");
+  if (!agent_key) {
+    return std::unexpected(agent_key.error());
+  }
+  auto owner_key = required_text(statement, 1, "owner_key");
+  if (!owner_key) {
+    return std::unexpected(owner_key.error());
+  }
+  auto acquired_at = required_time(statement, 2, "acquired_at");
+  if (!acquired_at) {
+    return std::unexpected(acquired_at.error());
+  }
+  auto expires_at = required_time(statement, 3, "expires_at");
+  if (!expires_at) {
+    return std::unexpected(expires_at.error());
+  }
+  auto updated_at = required_text(statement, 4, "updated_at");
+  if (!updated_at) {
+    return std::unexpected(updated_at.error());
+  }
+  if (*expires_at <= *acquired_at) {
+    return std::unexpected(
+        core::Error::storage("automation repository row has invalid lease expiry").with("field", "expires_at"));
+  }
+
+  return CronAgentLeaseRecord{
+      .agent_key = std::move(*agent_key),
+      .owner_key = std::move(*owner_key),
+      .acquired_at = *acquired_at,
+      .expires_at = *expires_at,
+      .updated_at = std::move(*updated_at),
+  };
+}
+
 [[nodiscard]] core::Result<void>
 bind_optional_time(storage::Statement& statement, int index, std::optional<core::Time> value) {
   if (!value) {
@@ -925,13 +1045,16 @@ async::Awaitable<core::Result<CronJobRecord>> AutomationRepository::upsert_cron_
   if (auto bound = statement.bind_text(1, request.job_key); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = statement.bind_text(2, request.schedule.expression); !bound) {
+  if (auto bound = statement.bind_text(2, request.agent_key); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = statement.bind_text(3, core::time::format_iso8601_utc(request.schedule.first_fire_at)); !bound) {
+  if (auto bound = statement.bind_text(3, request.schedule.expression); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = bind_optional_time(statement, 4, request.state.last_fired_at); !bound) {
+  if (auto bound = statement.bind_text(4, core::time::format_iso8601_utc(request.schedule.first_fire_at)); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = bind_optional_time(statement, 5, request.state.last_fired_at); !bound) {
     co_return std::unexpected(bound.error());
   }
 
@@ -1501,6 +1624,88 @@ async::Awaitable<core::Result<bool>> AutomationRepository::release_cron_lease(Re
     co_return false;
   }
   if (auto done = expect_done(statement, "release_cron_lease"); !done) {
+    co_return std::unexpected(done.error());
+  }
+  co_return true;
+}
+
+async::Awaitable<core::Result<std::optional<CronAgentLeaseRecord>>>
+AutomationRepository::acquire_cron_agent_lease(AcquireCronAgentLeaseRequest request) {
+  if (auto valid = validate_lease_request(request); !valid) {
+    co_return std::unexpected(valid.error());
+  }
+
+  auto writer = co_await pool_->acquire_writer();
+  if (!writer) {
+    co_return std::unexpected(writer.error());
+  }
+
+  auto cached = writer->statement_cache().acquire(writer->connection(), kAcquireCronAgentLeaseSql);
+  if (!cached) {
+    co_return std::unexpected(cached.error());
+  }
+  auto& statement = cached->statement();
+  if (auto bound = statement.bind_text(1, request.agent_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(2, request.owner_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(3, core::time::format_iso8601_utc(request.acquired_at)); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(4, core::time::format_iso8601_utc(request.expires_at)); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+
+  auto step = statement.step();
+  if (!step) {
+    co_return std::unexpected(step.error());
+  }
+  if (*step == storage::StepResult::row) {
+    auto record = read_agent_lease_row(statement);
+    if (!record) {
+      co_return std::unexpected(record.error());
+    }
+    if (auto done = expect_done(statement, "acquire_cron_agent_lease"); !done) {
+      co_return std::unexpected(done.error());
+    }
+    co_return std::optional<CronAgentLeaseRecord>{std::move(*record)};
+  }
+  co_return std::optional<CronAgentLeaseRecord>{};
+}
+
+async::Awaitable<core::Result<bool>>
+AutomationRepository::release_cron_agent_lease(ReleaseCronAgentLeaseRequest request) {
+  if (auto valid = validate_release_request(request); !valid) {
+    co_return std::unexpected(valid.error());
+  }
+
+  auto writer = co_await pool_->acquire_writer();
+  if (!writer) {
+    co_return std::unexpected(writer.error());
+  }
+
+  auto cached = writer->statement_cache().acquire(writer->connection(), kReleaseCronAgentLeaseSql);
+  if (!cached) {
+    co_return std::unexpected(cached.error());
+  }
+  auto& statement = cached->statement();
+  if (auto bound = statement.bind_text(1, request.agent_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(2, request.owner_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+
+  auto step = statement.step();
+  if (!step) {
+    co_return std::unexpected(step.error());
+  }
+  if (*step == storage::StepResult::done) {
+    co_return false;
+  }
+  if (auto done = expect_done(statement, "release_cron_agent_lease"); !done) {
     co_return std::unexpected(done.error());
   }
   co_return true;

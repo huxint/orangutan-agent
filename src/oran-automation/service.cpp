@@ -92,9 +92,23 @@ void track_next_fire(CronTickResult& result, core::Time next_fire_at) {
       .with("owner_key", std::string{owner_key});
 }
 
+[[nodiscard]] core::Error cron_agent_lease_conflict_error(const CronDueJob& due, std::string_view owner_key) {
+  return core::Error{core::ErrorKind::conflict, "cron agent lease is already held"}
+      .with("job_key", due.job.job_key)
+      .with("agent_key", due.job.agent_key)
+      .with("owner_key", std::string{owner_key});
+}
+
 [[nodiscard]] core::Error cron_lease_release_conflict_error(const CronDueJob& due, std::string_view owner_key) {
   return core::Error{core::ErrorKind::conflict, "cron job lease was not released"}
       .with("job_key", due.job.job_key)
+      .with("owner_key", std::string{owner_key});
+}
+
+[[nodiscard]] core::Error cron_agent_lease_release_conflict_error(const CronDueJob& due, std::string_view owner_key) {
+  return core::Error{core::ErrorKind::conflict, "cron agent lease was not released"}
+      .with("job_key", due.job.job_key)
+      .with("agent_key", due.job.agent_key)
       .with("owner_key", std::string{owner_key});
 }
 
@@ -104,18 +118,45 @@ void track_next_fire(CronTickResult& result, core::Time next_fire_at) {
       .with("lease_release_error_message", std::string{release_error.message()});
 }
 
-[[nodiscard]] async::Awaitable<core::Result<void>>
-release_cron_lease(AutomationRepository& repository, const CronDueJob& due, std::string_view owner_key) {
+void remember_lease_release_error(std::optional<core::Error>& first_error, core::Error error) {
+  if (!first_error.has_value()) {
+    first_error = std::move(error);
+    return;
+  }
+  first_error->with("additional_lease_release_error_kind", std::string{core::enum_name(error.kind())})
+      .with("additional_lease_release_error_message", std::string{error.message()});
+}
+
+[[nodiscard]] async::Awaitable<core::Result<void>> release_cron_execution_leases(AutomationRepository& repository,
+                                                                                 const CronDueJob& due,
+                                                                                 std::string_view owner_key,
+                                                                                 bool release_agent_lease) {
   co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+  auto first_error = std::optional<core::Error>{};
+  if (release_agent_lease) {
+    auto released = co_await repository.release_cron_agent_lease(ReleaseCronAgentLeaseRequest{
+        .agent_key = due.job.agent_key,
+        .owner_key = std::string{owner_key},
+    });
+    if (!released) {
+      remember_lease_release_error(first_error, std::move(released).error());
+    } else if (!*released) {
+      remember_lease_release_error(first_error, cron_agent_lease_release_conflict_error(due, owner_key));
+    }
+  }
+
   auto released = co_await repository.release_cron_lease(ReleaseCronLeaseRequest{
       .job_key = due.job.job_key,
       .owner_key = std::string{owner_key},
   });
   if (!released) {
-    co_return std::unexpected(std::move(released).error());
+    remember_lease_release_error(first_error, std::move(released).error());
+  } else if (!*released) {
+    remember_lease_release_error(first_error, cron_lease_release_conflict_error(due, owner_key));
   }
-  if (!*released) {
-    co_return std::unexpected(cron_lease_release_conflict_error(due, owner_key));
+
+  if (first_error.has_value()) {
+    co_return std::unexpected(std::move(*first_error));
   }
   co_return core::Result<void>{};
 }
@@ -201,7 +242,7 @@ make_cron_job_started_payload(const CronHookOptions& hooks, const CronDueJob& du
   hook::JobLifecyclePayload payload;
   payload.who = hook::Identity{
       .scope_key = {},
-      .agent_key = hooks.agent_key,
+      .agent_key = due.job.agent_key,
       .identity = hooks.identity,
   };
   payload.source = hooks.source;
@@ -325,6 +366,7 @@ async::Awaitable<core::Result<CronExecuteResult>> CronService::execute_due(CronE
   CronExecuteResult result{.tick = std::move(*tick)};
   for (const auto& due : result.tick.due_jobs) {
     const auto lease_enabled = !request.lease_owner_key.empty();
+    auto agent_lease_acquired = false;
     if (lease_enabled) {
       auto lease = co_await repository_->acquire_cron_lease(AcquireCronLeaseRequest{
           .job_key = due.job.job_key,
@@ -338,6 +380,29 @@ async::Awaitable<core::Result<CronExecuteResult>> CronService::execute_due(CronE
       if (!lease->has_value()) {
         co_return std::unexpected(cron_lease_conflict_error(due, request.lease_owner_key));
       }
+
+      auto agent_lease = co_await repository_->acquire_cron_agent_lease(AcquireCronAgentLeaseRequest{
+          .agent_key = due.job.agent_key,
+          .owner_key = request.lease_owner_key,
+          .acquired_at = request.now,
+          .expires_at = add_steady_duration(request.now, request.lease_ttl),
+      });
+      if (!agent_lease) {
+        auto released = co_await release_cron_execution_leases(*repository_, due, request.lease_owner_key, false);
+        if (!released) {
+          co_return std::unexpected(attach_cron_lease_release_error(std::move(agent_lease).error(), released.error()));
+        }
+        co_return std::unexpected(std::move(agent_lease).error());
+      }
+      if (!agent_lease->has_value()) {
+        auto conflict = cron_agent_lease_conflict_error(due, request.lease_owner_key);
+        auto released = co_await release_cron_execution_leases(*repository_, due, request.lease_owner_key, false);
+        if (!released) {
+          co_return std::unexpected(attach_cron_lease_release_error(std::move(conflict), released.error()));
+        }
+        co_return std::unexpected(std::move(conflict));
+      }
+      agent_lease_acquired = true;
     }
 
     CronExecuteAttempt attempt{.due = due};
@@ -360,7 +425,8 @@ async::Awaitable<core::Result<CronExecuteResult>> CronService::execute_due(CronE
       });
       if (!recorded) {
         if (lease_enabled) {
-          auto released = co_await release_cron_lease(*repository_, due, request.lease_owner_key);
+          auto released =
+              co_await release_cron_execution_leases(*repository_, due, request.lease_owner_key, agent_lease_acquired);
           if (!released) {
             co_return std::unexpected(attach_cron_lease_release_error(std::move(recorded).error(), released.error()));
           }
@@ -368,7 +434,8 @@ async::Awaitable<core::Result<CronExecuteResult>> CronService::execute_due(CronE
         co_return std::unexpected(std::move(recorded).error());
       }
       if (lease_enabled) {
-        auto released = co_await release_cron_lease(*repository_, due, request.lease_owner_key);
+        auto released =
+            co_await release_cron_execution_leases(*repository_, due, request.lease_owner_key, agent_lease_acquired);
         if (!released) {
           co_return std::unexpected(std::move(released).error());
         }
@@ -390,7 +457,8 @@ async::Awaitable<core::Result<CronExecuteResult>> CronService::execute_due(CronE
     });
     if (!recorded) {
       if (lease_enabled) {
-        auto released = co_await release_cron_lease(*repository_, due, request.lease_owner_key);
+        auto released =
+            co_await release_cron_execution_leases(*repository_, due, request.lease_owner_key, agent_lease_acquired);
         if (!released) {
           co_return std::unexpected(attach_cron_lease_release_error(std::move(recorded).error(), released.error()));
         }
@@ -401,7 +469,8 @@ async::Awaitable<core::Result<CronExecuteResult>> CronService::execute_due(CronE
     auto marked = co_await repository_->mark_cron_job_fired(due.job.job_key, due.schedule.next_fire_at);
     if (!marked) {
       if (lease_enabled) {
-        auto released = co_await release_cron_lease(*repository_, due, request.lease_owner_key);
+        auto released =
+            co_await release_cron_execution_leases(*repository_, due, request.lease_owner_key, agent_lease_acquired);
         if (!released) {
           co_return std::unexpected(
               attach_cron_lease_release_error(std::move(marked).error().with("job_key", due.job.job_key),
@@ -411,7 +480,8 @@ async::Awaitable<core::Result<CronExecuteResult>> CronService::execute_due(CronE
       co_return std::unexpected(std::move(marked).error().with("job_key", due.job.job_key));
     }
     if (lease_enabled) {
-      auto released = co_await release_cron_lease(*repository_, due, request.lease_owner_key);
+      auto released =
+          co_await release_cron_execution_leases(*repository_, due, request.lease_owner_key, agent_lease_acquired);
       if (!released) {
         co_return std::unexpected(std::move(released).error());
       }

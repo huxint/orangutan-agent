@@ -177,8 +177,8 @@ TEST_CASE("AutomationRuntime::open creates parent directories and migrates state
     REQUIRE(opened->database_path() == db_path);
     REQUIRE(std::filesystem::exists(workspace.path() / ".orangutan" / "automation.db"));
     REQUIRE(opened->migration_report().previous_version == 0);
-    REQUIRE(opened->migration_report().current_version == 6);
-    REQUIRE(opened->migration_report().applied_versions == std::vector<std::int64_t>{1, 2, 3, 4, 5, 6});
+    REQUIRE(opened->migration_report().current_version == 7);
+    REQUIRE(opened->migration_report().applied_versions == std::vector<std::int64_t>{1, 2, 3, 4, 5, 6, 7});
 
     auto upserted =
         co_await opened->repository().upsert_memory_retention_job(automation::UpsertMemoryRetentionJobRequest{
@@ -203,14 +203,14 @@ TEST_CASE("AutomationRuntime::open reuses an already migrated automation databas
                                                      automation::AutomationRuntimeOptions{.database_path = db_path});
     REQUIRE(first.has_value());
     REQUIRE(first->migration_report().previous_version == 0);
-    REQUIRE(first->migration_report().current_version == 6);
+    REQUIRE(first->migration_report().current_version == 7);
 
     auto second =
         co_await automation::AutomationRuntime::open(io.get_executor(),
                                                      automation::AutomationRuntimeOptions{.database_path = db_path});
     REQUIRE(second.has_value());
-    REQUIRE(second->migration_report().previous_version == 6);
-    REQUIRE(second->migration_report().current_version == 6);
+    REQUIRE(second->migration_report().previous_version == 7);
+    REQUIRE(second->migration_report().current_version == 7);
     REQUIRE(second->migration_report().applied_versions.empty());
   });
 }
@@ -600,6 +600,52 @@ TEST_CASE("CronLoop::run uses cron execution leases before calling handlers",
     REQUIRE(handler_calls == 0);
 
     auto loaded = co_await runtime->repository().get_cron_job("cron:leased");
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->has_value());
+    REQUIRE_FALSE((*loaded)->state.last_fired_at.has_value());
+  });
+}
+
+TEST_CASE("CronLoop::run uses cron agent leases before calling handlers",
+          "[unit][automation][runtime][cron][loop][lease]") {
+  TempWorkspace workspace{"oran-automation-runtime-cron-loop-run-agent-lease"};
+  test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {
+    auto runtime = co_await automation::AutomationRuntime::open(
+        io.get_executor(),
+        automation::AutomationRuntimeOptions{.database_path = automation_db_path(workspace)});
+    REQUIRE(runtime.has_value());
+    REQUIRE((co_await runtime->repository().upsert_cron_job(automation::UpsertCronJobRequest{
+                 .job_key = "cron:research",
+                 .agent_key = "researcher",
+                 .schedule = make_cron_schedule(),
+             }))
+                .has_value());
+    auto held = co_await runtime->repository().acquire_cron_agent_lease(automation::AcquireCronAgentLeaseRequest{
+        .agent_key = "researcher",
+        .owner_key = "owner-b",
+        .acquired_at = at(100s),
+        .expires_at = at(200s),
+    });
+    REQUIRE(held.has_value());
+    REQUIRE(held->has_value());
+
+    int handler_calls{};
+    auto loop = runtime->cron_loop();
+    auto result = co_await loop.run(automation::CronLoopRunRequest{
+        .now = at(120s),
+        .max_iterations = 3,
+        .job_limit = 10,
+        .handler = [&handler_calls](automation::CronDueJob) -> async::Awaitable<core::Result<void>> {
+          ++handler_calls;
+          co_return core::Result<void>{};
+        },
+    });
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::conflict);
+    REQUIRE(handler_calls == 0);
+
+    auto loaded = co_await runtime->repository().get_cron_job("cron:research");
     REQUIRE(loaded.has_value());
     REQUIRE(loaded->has_value());
     REQUIRE_FALSE((*loaded)->state.last_fired_at.has_value());

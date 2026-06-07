@@ -924,6 +924,7 @@ TEST_CASE("Config::parse extracts automation cron jobs", "[unit][config][automat
       "jobs": [
         {
           "job_key": "daily-summary",
+          "agent_key": "researcher",
           "expression": "0 9 * * *",
           "first_fire_at": "2026-06-08T09:00:00Z"
         },
@@ -941,12 +942,14 @@ TEST_CASE("Config::parse extracts automation cron jobs", "[unit][config][automat
   REQUIRE(result.has_value());
   REQUIRE(result->automation().cron.jobs.size() == 2);
   REQUIRE(result->automation().cron.jobs[0].job_key == "daily-summary");
+  REQUIRE(result->automation().cron.jobs[0].agent_key == "researcher");
   REQUIRE(result->automation().cron.jobs[0].expression == "0 9 * * *");
   REQUIRE(core::time::format_iso8601_utc(result->automation().cron.jobs[0].first_fire_at) ==
           "2026-06-08T09:00:00.000Z");
   REQUIRE_FALSE(result->automation().cron.jobs[0].last_fired_at.has_value());
 
   REQUIRE(result->automation().cron.jobs[1].job_key == "hourly-ci");
+  REQUIRE(result->automation().cron.jobs[1].agent_key == "automation");
   REQUIRE(result->automation().cron.jobs[1].expression == "15 * * * *");
   REQUIRE(core::time::format_iso8601_utc(result->automation().cron.jobs[1].first_fire_at) ==
           "2026-06-08T00:15:00.000Z");
@@ -998,6 +1001,23 @@ TEST_CASE("Config::parse rejects malformed automation cron jobs", "[unit][config
   "automation": {
     "cron": {
       "jobs": [{"job_key": "daily", "expression": "* * * * *"}]
+    }
+  }
+})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("empty agent key") {
+    auto result = config::Config::parse(R"json({
+  "automation": {
+    "cron": {
+      "jobs": [{
+        "job_key": "daily",
+        "agent_key": "",
+        "expression": "* * * * *",
+        "first_fire_at": "2026-06-08T00:00:00Z"
+      }]
     }
   }
 })json");

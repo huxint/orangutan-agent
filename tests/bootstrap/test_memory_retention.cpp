@@ -83,6 +83,7 @@ TEST_CASE("cron_jobs_from maps automation cron config into repository seeds", "[
       "jobs": [
         {
           "job_key": "daily-summary",
+          "agent_key": "researcher",
           "expression": "0 9 * * *",
           "first_fire_at": "2026-06-08T09:00:00Z"
         },
@@ -103,11 +104,13 @@ TEST_CASE("cron_jobs_from maps automation cron config into repository seeds", "[
   REQUIRE(jobs.has_value());
   REQUIRE(jobs->size() == 2);
   REQUIRE((*jobs)[0].job_key == "daily-summary");
+  REQUIRE((*jobs)[0].agent_key == "researcher");
   REQUIRE((*jobs)[0].schedule.expression == "0 9 * * *");
   REQUIRE(core::time::format_iso8601_utc((*jobs)[0].schedule.first_fire_at) == "2026-06-08T09:00:00.000Z");
   REQUIRE_FALSE((*jobs)[0].state.last_fired_at.has_value());
 
   REQUIRE((*jobs)[1].job_key == "hourly-ci");
+  REQUIRE((*jobs)[1].agent_key == "automation");
   REQUIRE((*jobs)[1].schedule.expression == "15 * * * *");
   REQUIRE((*jobs)[1].state.last_fired_at.has_value());
 }

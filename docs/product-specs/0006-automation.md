@@ -49,19 +49,22 @@ history for explicit due-execution attempts, and slice 207 adds cooperative
 stop policy for the finite cron loop and service-cycle handoff. Slice 208
 classifies explicit cron handler run history as `success`, `failure`, or
 `aborted`, with cancelled handler errors stored as `aborted`. Slice 209 adds
-repository-backed cron execution leases for explicit cron loop owners. The current API
-evaluates periodic and cron
-schedules from caller-supplied state, maps a long-term memory retention policy
-into a due-only `memory::longterm::DecayRequest`, persists the configured
-retention job plus run history and lease state through `AutomationRepository`,
-persists cron job schedule/last-fired state through `AutomationRepository`,
+repository-backed cron execution leases for explicit cron loop owners, and
+slice 210 adds stored cron job `agent_key` plus repository-backed cron agent
+leases for the same explicit execution owner. The current API evaluates
+periodic and cron schedules from caller-supplied state, maps a long-term memory
+retention policy into a due-only `memory::longterm::DecayRequest`, persists the
+configured retention job plus run history and lease state through
+`AutomationRepository`,
+persists cron job schedule/agent/last-fired state through `AutomationRepository`,
 persists cron success/failure/aborted run history through `AutomationRepository`,
-persists cron execution lease state through `AutomationRepository`,
+persists cron execution lease and cron agent lease state through
+`AutomationRepository`,
 explicitly opens/migrates automation state through `AutomationRuntime::open(...)`,
 lets a runtime owner scan stored cron jobs for due work without mutating them,
 lets a runtime owner execute due cron jobs through a supplied handler and mark
 only handler-successful fires complete while recording one run row per handler
-attempt and optionally leasing that due handler execution,
+attempt and optionally leasing both the due job and the stored job's agent key,
 lets a runtime owner run a finite explicit cron loop that can catch up due
 fires, wait within a caller budget, or stop cooperatively between explicit
 execution iterations while defaulting to repository-backed cron execution
@@ -83,8 +86,8 @@ due while leasing due execution or run a finite caller-owned loop over that
 step. Bootstrap maps configured-route `memory.longterm.retention` into a stored
 `MemoryRetentionJob` descriptor whose first fire is after the one-shot startup
 decay pass, and maps `automation.cron.jobs[]` into
-`UpsertCronJobRequest` descriptors, but bootstrap still does not open
-`automation.db`, apply those rows, or run a background service.
+`UpsertCronJobRequest` descriptors including `agent_key`, but bootstrap still
+does not open `automation.db`, apply those rows, or run a background service.
 
 Current implementation:
 
@@ -174,12 +177,13 @@ Current implementation:
   the wait.
 - `CronService::execute_due(...)` reuses that scan result, invokes a
   caller-supplied handler for each due cron job, optionally acquires a stored
-  cron execution lease before the handler, advances `last_fired_at` only after
-  the handler succeeds, records success/failure/aborted cron run rows, records
-  `ErrorKind::cancelled` handler errors as `aborted`, reports handler errors per
-  attempt, releases held leases after durable outcome work, and leaves failed or
-  aborted handler jobs due for retry by the next explicit call. Active lease
-  conflicts return `ErrorKind::conflict` before the handler runs.
+  cron execution lease plus the stored job's cron agent lease before the handler,
+  advances `last_fired_at` only after the handler succeeds, records
+  success/failure/aborted cron run rows, records `ErrorKind::cancelled` handler
+  errors as `aborted`, reports handler errors per attempt, releases held leases
+  after durable outcome work, and leaves failed or aborted handler jobs due for
+  retry by the next explicit call. Active job or agent lease conflicts return
+  `ErrorKind::conflict` before the handler runs.
 - `CronLoop::run(...)` repeatedly calls `execute_due(...)` up to a caller
   iteration limit, waits only within `max_total_wait`, aggregates
   attempted/advanced/failed counters, stops on `no_due_work`,
@@ -187,21 +191,26 @@ Current implementation:
   predicate, defaults to `automation-cron-loop` lease ownership for due
   execution, and does not immediately retry failed handlers inside the same run.
 - `CronServiceOptions::hooks` lets callers provide a `hook::Bus`, source label,
-  agent key, and identity. Due cron execution publishes advisory `job_started`
-  before the handler, `job_failed` after a handler failure while keeping cron
-  state unadvanced, and `job_finished` only after handler success plus durable
-  `last_fired_at` advancement. Advisory sink failures remain non-fatal.
-- `test-automation` reports 67 cases / 954 assertions.
+  fallback agent key, and identity. Due cron execution publishes advisory
+  `job_started` before the handler, `job_failed` after a handler failure while
+  keeping cron state unadvanced, and `job_finished` only after handler success
+  plus durable `last_fired_at` advancement. Cron hook payloads use the stored
+  cron job `agent_key`; advisory sink failures remain non-fatal.
+- `test-automation` reports 70 cases / 1010 assertions.
+- `test-config` reports 51 cases / 462 assertions for the consuming config
+  boundary, and `test-bootstrap` reports 129 cases / 1091 assertions for mapped
+  cron seeds.
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 
 Still open: detached/background service-loop startup over `AutomationRuntime`,
-triggered jobs, agent-facing category/agent leases, queueing/backpressure,
-process service/timer shutdown policy, notifier callbacks, agent firing, and
-the scheduler tick performance criterion. Job lifecycle publication, run
-history, typed cron outcomes, and stored cron execution leases exist for
-explicit retention ticks and explicit cron due execution; full
-scheduler/category lifecycle ownership remains downstream.
+triggered jobs, queueing/backpressure, process service/timer shutdown policy,
+notifier callbacks, agent firing, queue hold/drop semantics for blocked agent
+leases, and the scheduler tick performance criterion. Job lifecycle
+publication, run history, typed cron outcomes, stored cron execution leases,
+and stored cron agent leases exist for explicit retention ticks and explicit
+cron due execution; full scheduler/category lifecycle ownership remains
+downstream.
 
 ## Scope (v1.1)
 
@@ -226,10 +235,10 @@ scheduler/category lifecycle ownership remains downstream.
 2. A periodic job (every 15 s) fires within ±100 ms of the scheduled time.
 3. A triggered job fires within 50 ms of the trigger event.
 4. Per-agent lease prevents two concurrent runs of the same agent_key; the queued
-   firing is held or dropped per policy. Current status: slice 209 prevents
-   overlapping explicit execution for the same stored cron job through
-   repository-backed cron leases; broader agent_key/category lease policy
-   remains downstream.
+   firing is held or dropped per policy. Current status: slice 210 prevents
+   overlapping explicit cron execution for the same stored `agent_key` through
+   repository-backed cron agent leases. Queue hold/drop policy, triggered
+   categories, notifier routing, and actual agent firing remain downstream.
 5. A failing job is recorded with the failure reason; the next firing happens on
    schedule. Current status: slice 206 records explicit cron handler failures
    with the failure reason and leaves stored state due for retry; broader

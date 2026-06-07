@@ -372,6 +372,55 @@ TEST_CASE("CronService::execute_due leases cron handlers and reports active conf
   });
 }
 
+TEST_CASE("CronService::execute_due blocks active cron agent leases before handlers",
+          "[unit][automation][service][cron][lease]") {
+  TempDb db{"oran-automation-service-cron-agent-lease"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
+                 .job_key = "cron:research",
+                 .agent_key = "researcher",
+                 .schedule = make_cron_schedule(),
+             }))
+                .has_value());
+    auto held = co_await repo.acquire_cron_agent_lease(automation::AcquireCronAgentLeaseRequest{
+        .agent_key = "researcher",
+        .owner_key = "owner-b",
+        .acquired_at = at(100s),
+        .expires_at = at(200s),
+    });
+    REQUIRE(held.has_value());
+    REQUIRE(held->has_value());
+
+    int handler_calls{};
+    automation::CronService service{repo};
+    auto blocked = co_await service.execute_due(automation::CronExecuteRequest{
+        .now = at(120s),
+        .job_limit = 10,
+        .handler = [&handler_calls](automation::CronDueJob) -> async::Awaitable<core::Result<void>> {
+          ++handler_calls;
+          co_return core::Result<void>{};
+        },
+        .lease_owner_key = "owner-a",
+        .lease_ttl = 60s,
+    });
+    REQUIRE_FALSE(blocked.has_value());
+    REQUIRE(blocked.error().kind() == core::ErrorKind::conflict);
+    REQUIRE(handler_calls == 0);
+
+    auto job_reacquired = co_await repo.acquire_cron_lease(automation::AcquireCronLeaseRequest{
+        .job_key = "cron:research",
+        .owner_key = "owner-c",
+        .acquired_at = at(121s),
+        .expires_at = at(240s),
+    });
+    REQUIRE(job_reacquired.has_value());
+    REQUIRE(job_reacquired->has_value());
+  });
+}
+
 TEST_CASE("CronService::execute_due skips handlers before cron jobs are due", "[unit][automation][service][cron]") {
   TempDb db{"oran-automation-service-cron-not-due"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
@@ -429,6 +478,7 @@ TEST_CASE("CronService::execute_due publishes lifecycle metadata for handler suc
     REQUIRE((co_await repo.migrate()).has_value());
     REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:succeeds",
+                 .agent_key = "researcher",
                  .schedule = make_cron_schedule(),
                  .state = automation::PeriodicJobState{.last_fired_at = at(60s)},
              }))
@@ -472,7 +522,7 @@ TEST_CASE("CronService::execute_due publishes lifecycle metadata for handler suc
 
     const auto& started = lifecycle[0].payload;
     REQUIRE(started.who.scope_key.empty());
-    REQUIRE(started.who.agent_key == "automation-service");
+    REQUIRE(started.who.agent_key == "researcher");
     REQUIRE(started.who.identity == "cron-loop");
     REQUIRE(started.source == "cron");
     REQUIRE(started.job_key == "cron:succeeds");
@@ -547,6 +597,7 @@ TEST_CASE("CronService::execute_due publishes lifecycle metadata for handler fai
     REQUIRE(lifecycle[0].event == hook::Event::job_started);
     REQUIRE(lifecycle[1].event == hook::Event::job_failed);
     REQUIRE(lifecycle[0].payload.job_key == "cron:fails");
+    REQUIRE(lifecycle[0].payload.who.agent_key == "automation");
     REQUIRE(lifecycle[0].payload.job_type == "cron");
     REQUIRE(lifecycle[0].payload.scheduled_at == at(60s));
     REQUIRE_FALSE(lifecycle[0].payload.finished_at.has_value());

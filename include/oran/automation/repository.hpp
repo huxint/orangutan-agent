@@ -26,12 +26,14 @@ struct AutomationRepositoryOptions {
 
 struct UpsertCronJobRequest {
   std::string job_key;
+  std::string agent_key{"automation"};
   CronSchedule schedule;
   PeriodicJobState state{};
 };
 
 struct CronJobRecord {
   std::string job_key;
+  std::string agent_key{"automation"};
   CronSchedule schedule;
   PeriodicJobState state{};
   std::string created_at;
@@ -89,6 +91,26 @@ struct CronLeaseRecord {
 
 struct ReleaseCronLeaseRequest {
   std::string job_key;
+  std::string owner_key;
+};
+
+struct AcquireCronAgentLeaseRequest {
+  std::string agent_key;
+  std::string owner_key;
+  core::Time acquired_at{core::Time::epoch()};
+  core::Time expires_at{core::Time::epoch()};
+};
+
+struct CronAgentLeaseRecord {
+  std::string agent_key;
+  std::string owner_key;
+  core::Time acquired_at{core::Time::epoch()};
+  core::Time expires_at{core::Time::epoch()};
+  std::string updated_at;
+};
+
+struct ReleaseCronAgentLeaseRequest {
+  std::string agent_key;
   std::string owner_key;
 };
 
@@ -175,6 +197,11 @@ public:
   acquire_cron_lease(AcquireCronLeaseRequest request);
 
   [[nodiscard]] async::Awaitable<core::Result<bool>> release_cron_lease(ReleaseCronLeaseRequest request);
+
+  [[nodiscard]] async::Awaitable<core::Result<std::optional<CronAgentLeaseRecord>>>
+  acquire_cron_agent_lease(AcquireCronAgentLeaseRequest request);
+
+  [[nodiscard]] async::Awaitable<core::Result<bool>> release_cron_agent_lease(ReleaseCronAgentLeaseRequest request);
 
   [[nodiscard]] async::Awaitable<core::Result<MemoryRetentionJobRecord>>
   upsert_memory_retention_job(UpsertMemoryRetentionJobRequest request);

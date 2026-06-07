@@ -103,13 +103,13 @@ TEST_CASE("AutomationRepository::migrate applies the automation schema once", "[
     auto first = co_await repo.migrate();
     REQUIRE(first.has_value());
     REQUIRE(first->previous_version == 0);
-    REQUIRE(first->current_version == 6);
-    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3, 4, 5, 6});
+    REQUIRE(first->current_version == 7);
+    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3, 4, 5, 6, 7});
 
     auto second = co_await repo.migrate();
     REQUIRE(second.has_value());
-    REQUIRE(second->previous_version == 6);
-    REQUIRE(second->current_version == 6);
+    REQUIRE(second->previous_version == 7);
+    REQUIRE(second->current_version == 7);
     REQUIRE(second->applied_versions.empty());
   });
 }
@@ -123,11 +123,13 @@ TEST_CASE("AutomationRepository round-trips cron jobs", "[unit][automation][repo
 
     auto upserted = co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
         .job_key = "cron:daily-summary",
+        .agent_key = "researcher",
         .schedule = make_cron_schedule(),
         .state = automation::PeriodicJobState{.last_fired_at = at(120s)},
     });
     REQUIRE(upserted.has_value());
     REQUIRE(upserted->job_key == "cron:daily-summary");
+    REQUIRE(upserted->agent_key == "researcher");
     REQUIRE(upserted->schedule == make_cron_schedule());
     REQUIRE(upserted->state.last_fired_at == at(120s));
     REQUIRE_FALSE(upserted->created_at.empty());
@@ -137,6 +139,7 @@ TEST_CASE("AutomationRepository round-trips cron jobs", "[unit][automation][repo
     REQUIRE(loaded.has_value());
     REQUIRE(loaded->has_value());
     REQUIRE((*loaded)->job_key == upserted->job_key);
+    REQUIRE((*loaded)->agent_key == upserted->agent_key);
     REQUIRE((*loaded)->schedule == upserted->schedule);
     REQUIRE((*loaded)->state == upserted->state);
 
@@ -167,10 +170,12 @@ TEST_CASE("AutomationRepository updates and lists cron job state", "[unit][autom
     changed.first_fire_at = at(180s);
     auto upserted = co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
         .job_key = "cron:daily-summary",
+        .agent_key = "coder",
         .schedule = changed,
         .state = automation::PeriodicJobState{.last_fired_at = at(240s)},
     });
     REQUIRE(upserted.has_value());
+    REQUIRE(upserted->agent_key == "coder");
     REQUIRE(upserted->schedule == changed);
     REQUIRE(upserted->state.last_fired_at == at(240s));
 
@@ -185,6 +190,7 @@ TEST_CASE("AutomationRepository updates and lists cron job state", "[unit][autom
     auto daily =
         std::ranges::find_if(*listed, [](const auto& record) { return record.job_key == "cron:daily-summary"; });
     REQUIRE(daily != listed->end());
+    REQUIRE(daily->agent_key == "coder");
     REQUIRE(daily->state.last_fired_at == at(300s));
 
     auto capped = co_await repo.list_cron_jobs(automation::ListCronJobsOptions{.limit = 1});
@@ -325,6 +331,71 @@ TEST_CASE("AutomationRepository acquires, expires, and releases cron leases",
 
     auto reacquired = co_await repo.acquire_cron_lease(automation::AcquireCronLeaseRequest{
         .job_key = "cron:daily-summary",
+        .owner_key = "owner-c",
+        .acquired_at = at(180s),
+        .expires_at = at(240s),
+    });
+    REQUIRE(reacquired.has_value());
+    REQUIRE(reacquired->has_value());
+    REQUIRE((*reacquired)->owner_key == "owner-c");
+  });
+}
+
+TEST_CASE("AutomationRepository acquires, expires, and releases cron agent leases",
+          "[unit][automation][repository][cron][lease]") {
+  TempDb db{"oran-automation-repo-cron-agent-lease"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+
+    auto first = co_await repo.acquire_cron_agent_lease(automation::AcquireCronAgentLeaseRequest{
+        .agent_key = "researcher",
+        .owner_key = "owner-a",
+        .acquired_at = at(100s),
+        .expires_at = at(160s),
+    });
+    REQUIRE(first.has_value());
+    REQUIRE(first->has_value());
+    REQUIRE((*first)->agent_key == "researcher");
+    REQUIRE((*first)->owner_key == "owner-a");
+    REQUIRE((*first)->acquired_at == at(100s));
+    REQUIRE((*first)->expires_at == at(160s));
+    REQUIRE_FALSE((*first)->updated_at.empty());
+
+    auto active_competitor = co_await repo.acquire_cron_agent_lease(automation::AcquireCronAgentLeaseRequest{
+        .agent_key = "researcher",
+        .owner_key = "owner-b",
+        .acquired_at = at(120s),
+        .expires_at = at(180s),
+    });
+    REQUIRE(active_competitor.has_value());
+    REQUIRE_FALSE(active_competitor->has_value());
+
+    auto expired_takeover = co_await repo.acquire_cron_agent_lease(automation::AcquireCronAgentLeaseRequest{
+        .agent_key = "researcher",
+        .owner_key = "owner-b",
+        .acquired_at = at(161s),
+        .expires_at = at(220s),
+    });
+    REQUIRE(expired_takeover.has_value());
+    REQUIRE(expired_takeover->has_value());
+    REQUIRE((*expired_takeover)->owner_key == "owner-b");
+    REQUIRE((*expired_takeover)->acquired_at == at(161s));
+    REQUIRE((*expired_takeover)->expires_at == at(220s));
+
+    auto wrong_owner = co_await repo.release_cron_agent_lease(
+        automation::ReleaseCronAgentLeaseRequest{.agent_key = "researcher", .owner_key = "owner-a"});
+    REQUIRE(wrong_owner.has_value());
+    REQUIRE_FALSE(*wrong_owner);
+
+    auto released = co_await repo.release_cron_agent_lease(
+        automation::ReleaseCronAgentLeaseRequest{.agent_key = "researcher", .owner_key = "owner-b"});
+    REQUIRE(released.has_value());
+    REQUIRE(*released);
+
+    auto reacquired = co_await repo.acquire_cron_agent_lease(automation::AcquireCronAgentLeaseRequest{
+        .agent_key = "researcher",
         .owner_key = "owner-c",
         .acquired_at = at(180s),
         .expires_at = at(240s),
@@ -662,6 +733,15 @@ TEST_CASE("AutomationRepository validates cron persistence inputs", "[unit][auto
     REQUIRE(invalid_expression.error().kind() == core::ErrorKind::invalid_argument);
     REQUIRE(has_field(invalid_expression.error(), "minute"));
 
+    auto invalid_agent_key = co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
+        .job_key = "cron:daily-summary",
+        .agent_key = "",
+        .schedule = make_cron_schedule(),
+    });
+    REQUIRE_FALSE(invalid_agent_key.has_value());
+    REQUIRE(invalid_agent_key.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(has_field(invalid_agent_key.error(), "agent_key"));
+
     auto bad_limit = co_await repo.list_cron_jobs(automation::ListCronJobsOptions{.limit = 0});
     REQUIRE_FALSE(bad_limit.has_value());
     REQUIRE(has_field(bad_limit.error(), "limit"));
@@ -696,5 +776,14 @@ TEST_CASE("AutomationRepository validates cron persistence inputs", "[unit][auto
     });
     REQUIRE_FALSE(missing_lease_job.has_value());
     REQUIRE(missing_lease_job.error().kind() == core::ErrorKind::not_found);
+
+    auto invalid_agent_lease_key = co_await repo.acquire_cron_agent_lease(automation::AcquireCronAgentLeaseRequest{
+        .agent_key = "",
+        .owner_key = "owner-a",
+        .acquired_at = at(20s),
+        .expires_at = at(21s),
+    });
+    REQUIRE_FALSE(invalid_agent_lease_key.has_value());
+    REQUIRE(has_field(invalid_agent_lease_key.error(), "agent_key"));
   });
 }
