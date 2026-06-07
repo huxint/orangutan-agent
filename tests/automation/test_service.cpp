@@ -1,5 +1,6 @@
 // tests/automation/test_service.cpp - automation service tick coverage.
 
+#include <algorithm>
 #include <chrono>
 #include <expected>
 #include <filesystem>
@@ -84,6 +85,13 @@ automation::MemoryRetentionJob make_job(std::string scope_key = "cli") {
   };
 }
 
+automation::CronSchedule make_cron_schedule(std::string expression = "* * * * *") {
+  return automation::CronSchedule{
+      .expression = std::move(expression),
+      .first_fire_at = at(60s),
+  };
+}
+
 memory::longterm::Record make_record(std::string id) {
   return memory::longterm::Record{
       .key = memory::longterm::RecordKey{.id = std::move(id), .scope_key = "cli"},
@@ -148,6 +156,142 @@ struct CapturedJobLifecycle {
 };
 
 }  // namespace
+
+TEST_CASE("CronService::execute_due advances only successful due cron jobs", "[unit][automation][service][cron]") {
+  TempDb db{"oran-automation-service-cron-execute"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
+                 .job_key = "cron:succeeds",
+                 .schedule = make_cron_schedule(),
+             }))
+                .has_value());
+    REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
+                 .job_key = "cron:fails",
+                 .schedule = make_cron_schedule(),
+             }))
+                .has_value());
+
+    std::vector<std::string> calls;
+    automation::CronService service{repo};
+    auto result = co_await service.execute_due(automation::CronExecuteRequest{
+        .now = at(120s),
+        .job_limit = 10,
+        .handler = [&calls](automation::CronDueJob due) -> async::Awaitable<core::Result<void>> {
+          calls.push_back(due.job.job_key);
+          if (due.job.job_key == "cron:fails") {
+            co_return std::unexpected(core::Error::upstream("cron payload failed"));
+          }
+          co_return core::Result<void>{};
+        },
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->tick.checked_count == 2);
+    REQUIRE(result->tick.due_jobs.size() == 2);
+    REQUIRE(result->attempted_count == 2);
+    REQUIRE(result->advanced_count == 1);
+    REQUIRE(result->attempts.size() == 2);
+    REQUIRE(calls.size() == 2);
+
+    const auto success = std::ranges::find_if(result->attempts, [](const auto& attempt) {
+      return attempt.due.job.job_key == "cron:succeeds";
+    });
+    REQUIRE(success != result->attempts.end());
+    REQUIRE(success->advanced);
+    REQUIRE_FALSE(success->error.has_value());
+    REQUIRE(success->marked_job.has_value());
+    REQUIRE(success->marked_job->state.last_fired_at == at(60s));
+
+    const auto failure = std::ranges::find_if(result->attempts, [](const auto& attempt) {
+      return attempt.due.job.job_key == "cron:fails";
+    });
+    REQUIRE(failure != result->attempts.end());
+    REQUIRE_FALSE(failure->advanced);
+    REQUIRE(failure->error.has_value());
+    REQUIRE(failure->error->kind() == core::ErrorKind::upstream);
+    REQUIRE_FALSE(failure->marked_job.has_value());
+
+    auto advanced = co_await repo.get_cron_job("cron:succeeds");
+    REQUIRE(advanced.has_value());
+    REQUIRE(advanced->has_value());
+    REQUIRE((*advanced)->state.last_fired_at == at(60s));
+
+    auto unchanged = co_await repo.get_cron_job("cron:fails");
+    REQUIRE(unchanged.has_value());
+    REQUIRE(unchanged->has_value());
+    REQUIRE_FALSE((*unchanged)->state.last_fired_at.has_value());
+  });
+}
+
+TEST_CASE("CronService::execute_due skips handlers before cron jobs are due", "[unit][automation][service][cron]") {
+  TempDb db{"oran-automation-service-cron-not-due"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    auto schedule = make_cron_schedule("*/5 * * * *");
+    schedule.first_fire_at = at(300s);
+    REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
+                 .job_key = "cron:five-minute",
+                 .schedule = schedule,
+             }))
+                .has_value());
+
+    int handler_calls{};
+    automation::CronService service{repo};
+    auto result = co_await service.execute_due(automation::CronExecuteRequest{
+        .now = at(0s),
+        .job_limit = 10,
+        .handler = [&handler_calls](automation::CronDueJob) -> async::Awaitable<core::Result<void>> {
+          ++handler_calls;
+          co_return core::Result<void>{};
+        },
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->tick.checked_count == 1);
+    REQUIRE(result->tick.due_jobs.empty());
+    REQUIRE(result->tick.next_fire_at == at(300s));
+    REQUIRE(result->attempted_count == 0);
+    REQUIRE(result->advanced_count == 0);
+    REQUIRE(result->attempts.empty());
+    REQUIRE(handler_calls == 0);
+
+    auto loaded = co_await repo.get_cron_job("cron:five-minute");
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->has_value());
+    REQUIRE_FALSE((*loaded)->state.last_fired_at.has_value());
+  });
+}
+
+TEST_CASE("CronService::execute_due rejects invalid execution policy", "[unit][automation][service][cron]") {
+  TempDb db{"oran-automation-service-cron-validation"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    automation::CronService service{repo};
+
+    auto missing_handler = co_await service.execute_due(automation::CronExecuteRequest{
+        .now = at(60s),
+    });
+    REQUIRE_FALSE(missing_handler.has_value());
+    REQUIRE(missing_handler.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto zero_limit = co_await service.execute_due(automation::CronExecuteRequest{
+        .now = at(60s),
+        .job_limit = 0,
+        .handler = [](automation::CronDueJob) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        },
+    });
+    REQUIRE_FALSE(zero_limit.has_value());
+    REQUIRE(zero_limit.error().kind() == core::ErrorKind::invalid_argument);
+  });
+}
 
 TEST_CASE("MemoryRetentionService::tick skips a stored job before it is due", "[unit][automation][service]") {
   TempDb db{"oran-automation-service-not-due"};

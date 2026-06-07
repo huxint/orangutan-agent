@@ -34,13 +34,16 @@ finite caller-owned loop policy above that leased step. Slice 197 adds the
 first cron-category planning primitive with a POSIX 5-field UTC parser and
 deterministic next-fire evaluator, and slice 198 adds durable cron job state
 through the same repository boundary. Slice 199 adds the first caller-driven
-cron runtime scan/wait boundary. The current API evaluates periodic and cron
+cron runtime scan/wait boundary, and slice 200 adds explicit caller-supplied due
+execution that advances stored cron state only after handler success. The current API evaluates periodic and cron
 schedules from caller-supplied state, maps a long-term memory retention policy
 into a due-only `memory::longterm::DecayRequest`, persists the configured
 retention job plus run history and lease state through `AutomationRepository`,
 persists cron job schedule/last-fired state through `AutomationRepository`,
 explicitly opens/migrates automation state through `AutomationRuntime::open(...)`,
 lets a runtime owner scan stored cron jobs for due work without mutating them,
+lets a runtime owner execute due cron jobs through a supplied handler and mark
+only handler-successful fires complete,
 lets a runtime owner tick one stored retention job against a supplied long-term
 memory backend, publishes advisory retention metadata when the caller supplies a
 hook bus, can wait once within a caller budget for the earliest stored cron fire,
@@ -117,16 +120,21 @@ Current implementation:
   `async::sleep_for(...)` only when the earliest next cron fire is within the
   caller's `max_wait`, reports cancellation while waiting, and re-ticks after
   the wait.
-- `test-automation` reports 49 cases / 568 assertions.
+- `CronService::execute_due(...)` reuses that scan result, invokes a
+  caller-supplied handler for each due cron job, advances `last_fired_at` only
+  after the handler succeeds, reports handler errors per attempt, and leaves
+  failed-handler jobs due for retry by the next explicit call.
+- `test-automation` reports 52 cases / 618 assertions.
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 
-Still open: cron config ownership, cron execution plus mark-fired policy,
-triggered jobs, bootstrap/service-loop startup policy over `AutomationRuntime`, broader
-per-agent/category leases for agent-facing jobs, queueing/backpressure, process
-service/timer cancellation policy, notifier callbacks, and the scheduler tick
-performance criterion. Job lifecycle publication exists for explicit retention
-ticks only; full scheduler/category lifecycle ownership remains downstream.
+Still open: cron config ownership, triggered jobs, bootstrap/service-loop
+startup policy over `AutomationRuntime`, broader per-agent/category leases for
+agent-facing jobs, queueing/backpressure, process service/timer cancellation
+policy, notifier callbacks, cron lifecycle hook publication, and the scheduler
+tick performance criterion. Job lifecycle publication exists for explicit
+retention ticks only; full scheduler/category lifecycle ownership remains
+downstream.
 
 ## Scope (v1.1)
 

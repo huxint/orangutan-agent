@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -70,18 +71,41 @@ struct CronTickResult {
   std::optional<core::Time> next_fire_at{};
 };
 
+using CronJobHandler = std::function<async::Awaitable<core::Result<void>>(CronDueJob)>;
+
+struct CronExecuteRequest {
+  core::Time now{core::Time::epoch()};
+  std::size_t job_limit{100};
+  CronJobHandler handler{};
+};
+
+struct CronExecuteAttempt {
+  CronDueJob due{};
+  bool advanced{false};
+  std::optional<core::Error> error{};
+  std::optional<CronJobRecord> marked_job{};
+};
+
+struct CronExecuteResult {
+  CronTickResult tick{};
+  std::size_t attempted_count{0};
+  std::size_t advanced_count{0};
+  std::vector<CronExecuteAttempt> attempts{};
+};
+
 /// One caller-driven scan for stored cron jobs.
 ///
 /// This owner evaluates repository-backed cron schedules and reports due work
-/// plus the earliest next fire. It intentionally does not mark jobs fired,
-/// publish hooks, enqueue work, call agents, or start a background loop; the
-/// caller owns the execution policy and can advance state with
-/// `AutomationRepository::mark_cron_job_fired(...)` after successful work.
+/// plus the earliest next fire. `tick(...)` intentionally does not mark jobs
+/// fired. `execute_due(...)` accepts a caller-supplied handler and advances a
+/// due cron job only after that handler returns success. The service still does
+/// not publish hooks, enqueue work, call agents, or start a background loop.
 class CronService {
 public:
   explicit CronService(AutomationRepository& repository) noexcept;
 
   [[nodiscard]] async::Awaitable<core::Result<CronTickResult>> tick(CronTickRequest request);
+  [[nodiscard]] async::Awaitable<core::Result<CronExecuteResult>> execute_due(CronExecuteRequest request);
   [[nodiscard]] AutomationRepository& repository() noexcept;
   [[nodiscard]] const AutomationRepository& repository() const noexcept;
 

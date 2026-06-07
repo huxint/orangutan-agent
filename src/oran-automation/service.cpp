@@ -29,6 +29,12 @@ namespace {
       .with("reason", std::move(reason));
 }
 
+[[nodiscard]] core::Error invalid_cron_execute_field(std::string field, std::string reason) {
+  return core::Error::invalid_argument("cron execute field is invalid")
+      .with("field", std::move(field))
+      .with("reason", std::move(reason));
+}
+
 [[nodiscard]] core::Result<void> validate_tick_request(const MemoryRetentionTickRequest& request) {
   if (request.job_key.empty()) {
     return std::unexpected(invalid_tick_field("job_key", "empty"));
@@ -39,6 +45,16 @@ namespace {
 [[nodiscard]] core::Result<void> validate_cron_tick_request(const CronTickRequest& request) {
   if (request.job_limit == 0) {
     return std::unexpected(invalid_cron_tick_field("job_limit", "zero"));
+  }
+  return {};
+}
+
+[[nodiscard]] core::Result<void> validate_cron_execute_request(const CronExecuteRequest& request) {
+  if (request.job_limit == 0) {
+    return std::unexpected(invalid_cron_execute_field("job_limit", "zero"));
+  }
+  if (!request.handler) {
+    return std::unexpected(invalid_cron_execute_field("handler", "empty"));
   }
   return {};
 }
@@ -194,6 +210,42 @@ async::Awaitable<core::Result<CronTickResult>> CronService::tick(CronTickRequest
           .schedule = *schedule,
       });
     }
+  }
+
+  co_return result;
+}
+
+async::Awaitable<core::Result<CronExecuteResult>> CronService::execute_due(CronExecuteRequest request) {
+  if (auto valid = validate_cron_execute_request(request); !valid) {
+    co_return std::unexpected(std::move(valid).error());
+  }
+
+  auto tick = co_await this->tick(CronTickRequest{.now = request.now, .job_limit = request.job_limit});
+  if (!tick) {
+    co_return std::unexpected(std::move(tick).error());
+  }
+
+  CronExecuteResult result{.tick = std::move(*tick)};
+  for (const auto& due : result.tick.due_jobs) {
+    CronExecuteAttempt attempt{.due = due};
+    ++result.attempted_count;
+
+    auto executed = co_await request.handler(due);
+    if (!executed) {
+      attempt.error = std::move(executed).error();
+      result.attempts.push_back(std::move(attempt));
+      continue;
+    }
+
+    auto marked = co_await repository_->mark_cron_job_fired(due.job.job_key, due.schedule.next_fire_at);
+    if (!marked) {
+      co_return std::unexpected(std::move(marked).error().with("job_key", due.job.job_key));
+    }
+
+    attempt.advanced = true;
+    attempt.marked_job = std::move(*marked);
+    ++result.advanced_count;
+    result.attempts.push_back(std::move(attempt));
   }
 
   co_return result;

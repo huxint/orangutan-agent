@@ -83,8 +83,10 @@ scheduler slices.
    without reading config or starting timers. Shipped in slice 198.
 3. **Scheduler/category owner.**
    In progress: slice 199 layers stored cron jobs into the explicit automation
-   runtime with a caller-driven scan/wait surface. Later: own cron config and
-   add execution plus mark-fired policy without bootstrap-owned background work.
+   runtime with a caller-driven scan/wait surface, and slice 200 adds explicit
+   due execution that advances state only after a caller-supplied handler
+   succeeds. Later: own cron config and service/timer startup policy without
+   bootstrap-owned background work.
 4. **Triggered/notifier/queue policy.**
    Later: add triggered categories, queueing/backpressure, notifier routing,
    and agent execution leases.
@@ -137,6 +139,13 @@ scheduler slices.
   the loop can wait once within a caller budget and re-tick; neither path reads
   config, marks jobs fired, publishes hooks, queues work, notifies channels, or
   calls agents.
+- [x] 2026-06-07 22:38 +0800: Implemented
+  `CronService::execute_due(...)` plus the public execute request/result shapes.
+  The service invokes a supplied handler for each due cron job and advances
+  stored cron state only after handler success. Handler failures remain
+  per-attempt results and leave `last_fired_at` unchanged for retry; no cron
+  config ownership, hooks, queues, notifiers, process timers, or agent firing
+  were added.
 - [x] **Update the docs that this slice invalidates in the same PR**
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -157,6 +166,10 @@ scheduler slices.
   execution. Repeated loops would re-see the same due fire until an execution
   owner advances `last_fired_at`, so this slice intentionally ships only
   `run_once(...)` and leaves mark-fired policy downstream.
+- 2026-06-07: Add cron due execution as a caller-supplied handler boundary, not
+  as a scheduler. The handler result is the only success signal that permits
+  `last_fired_at` advancement; handler failures leave the fire due for explicit
+  retry, and process retry/backpressure policy remains downstream.
 
 ## Linked Artifacts
 
@@ -167,5 +180,6 @@ scheduler slices.
 - `docs/histories/2026-06/20260607-1800-automation-cron-schedule.md`
 - `docs/histories/2026-06/20260607-1831-automation-cron-persistence.md`
 - `docs/histories/2026-06/20260607-2146-automation-cron-runtime-tick.md`
+- `docs/histories/2026-06/20260607-2238-automation-cron-execute-due.md`
 - Release note:
 - `docs/releases/feature-release-notes.md#2026-06`
