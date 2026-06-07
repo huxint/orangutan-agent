@@ -72,6 +72,26 @@ struct ListCronRunsOptions {
   std::size_t limit{50};
 };
 
+struct AcquireCronLeaseRequest {
+  std::string job_key;
+  std::string owner_key;
+  core::Time acquired_at{core::Time::epoch()};
+  core::Time expires_at{core::Time::epoch()};
+};
+
+struct CronLeaseRecord {
+  std::string job_key;
+  std::string owner_key;
+  core::Time acquired_at{core::Time::epoch()};
+  core::Time expires_at{core::Time::epoch()};
+  std::string updated_at;
+};
+
+struct ReleaseCronLeaseRequest {
+  std::string job_key;
+  std::string owner_key;
+};
+
 struct UpsertMemoryRetentionJobRequest {
   std::string job_key;
   MemoryRetentionJob job;
@@ -150,6 +170,11 @@ public:
   [[nodiscard]] async::Awaitable<core::Result<CronRunRecord>> record_cron_run(RecordCronRunRequest request);
 
   [[nodiscard]] async::Awaitable<core::Result<std::vector<CronRunRecord>>> list_cron_runs(ListCronRunsOptions options);
+
+  [[nodiscard]] async::Awaitable<core::Result<std::optional<CronLeaseRecord>>>
+  acquire_cron_lease(AcquireCronLeaseRequest request);
+
+  [[nodiscard]] async::Awaitable<core::Result<bool>> release_cron_lease(ReleaseCronLeaseRequest request);
 
   [[nodiscard]] async::Awaitable<core::Result<MemoryRetentionJobRecord>>
   upsert_memory_retention_job(UpsertMemoryRetentionJobRequest request);

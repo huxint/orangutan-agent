@@ -52,6 +52,12 @@ namespace {
   if (!request.handler) {
     return std::unexpected(invalid_cron_loop_field("handler", "empty"));
   }
+  if (request.lease_owner_key.empty()) {
+    return std::unexpected(invalid_cron_loop_field("lease_owner_key", "empty"));
+  }
+  if (request.lease_ttl <= std::chrono::steady_clock::duration::zero()) {
+    return std::unexpected(invalid_cron_loop_field("lease_ttl", "not_positive"));
+  }
   return {};
 }
 
@@ -267,6 +273,8 @@ async::Awaitable<core::Result<CronLoopRunResult>> CronLoop::run(CronLoopRunReque
         .now = now,
         .job_limit = request.job_limit,
         .handler = request.handler,
+        .lease_owner_key = request.lease_owner_key,
+        .lease_ttl = request.lease_ttl,
     });
     if (!execution) {
       co_return std::unexpected(std::move(execution).error());

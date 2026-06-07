@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <functional>
 #include <optional>
@@ -88,6 +89,8 @@ struct CronExecuteRequest {
   core::Time now{core::Time::epoch()};
   std::size_t job_limit{100};
   CronJobHandler handler{};
+  std::string lease_owner_key{};
+  std::chrono::steady_clock::duration lease_ttl{std::chrono::minutes{5}};
 };
 
 struct CronExecuteAttempt {

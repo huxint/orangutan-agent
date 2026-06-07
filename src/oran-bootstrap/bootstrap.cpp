@@ -48,7 +48,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice208";
+constexpr std::string_view kVersion = "2.0.0-slice209";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 constexpr std::string_view kLongtermTextEmbeddingModel = "oran-local-text-v1";

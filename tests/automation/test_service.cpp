@@ -310,6 +310,68 @@ TEST_CASE("CronService::execute_due records cancelled cron handlers as aborted",
   });
 }
 
+TEST_CASE("CronService::execute_due leases cron handlers and reports active conflicts",
+          "[unit][automation][service][cron][lease]") {
+  TempDb db{"oran-automation-service-cron-lease"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
+                 .job_key = "cron:leased",
+                 .schedule = make_cron_schedule(),
+             }))
+                .has_value());
+
+    int handler_calls{};
+    automation::CronService service{repo};
+    auto result = co_await service.execute_due(automation::CronExecuteRequest{
+        .now = at(120s),
+        .job_limit = 10,
+        .handler = [&handler_calls](automation::CronDueJob) -> async::Awaitable<core::Result<void>> {
+          ++handler_calls;
+          co_return core::Result<void>{};
+        },
+        .lease_owner_key = "owner-a",
+        .lease_ttl = 60s,
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->attempted_count == 1);
+    REQUIRE(result->advanced_count == 1);
+    REQUIRE(handler_calls == 1);
+
+    auto reacquired = co_await repo.acquire_cron_lease(automation::AcquireCronLeaseRequest{
+        .job_key = "cron:leased",
+        .owner_key = "owner-b",
+        .acquired_at = at(121s),
+        .expires_at = at(240s),
+    });
+    REQUIRE(reacquired.has_value());
+    REQUIRE(reacquired->has_value());
+    REQUIRE((*reacquired)->owner_key == "owner-b");
+
+    auto blocked = co_await service.execute_due(automation::CronExecuteRequest{
+        .now = at(180s),
+        .job_limit = 10,
+        .handler = [&handler_calls](automation::CronDueJob) -> async::Awaitable<core::Result<void>> {
+          ++handler_calls;
+          co_return core::Result<void>{};
+        },
+        .lease_owner_key = "owner-a",
+        .lease_ttl = 60s,
+    });
+    REQUIRE_FALSE(blocked.has_value());
+    REQUIRE(blocked.error().kind() == core::ErrorKind::conflict);
+    REQUIRE(handler_calls == 1);
+
+    auto loaded = co_await repo.get_cron_job("cron:leased");
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->has_value());
+    REQUIRE((*loaded)->state.last_fired_at == at(60s));
+  });
+}
+
 TEST_CASE("CronService::execute_due skips handlers before cron jobs are due", "[unit][automation][service][cron]") {
   TempDb db{"oran-automation-service-cron-not-due"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
@@ -529,6 +591,17 @@ TEST_CASE("CronService::execute_due rejects invalid execution policy", "[unit][a
     });
     REQUIRE_FALSE(zero_limit.has_value());
     REQUIRE(zero_limit.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto invalid_lease_ttl = co_await service.execute_due(automation::CronExecuteRequest{
+        .now = at(60s),
+        .handler = [](automation::CronDueJob) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        },
+        .lease_owner_key = "owner-a",
+        .lease_ttl = 0s,
+    });
+    REQUIRE_FALSE(invalid_lease_ttl.has_value());
+    REQUIRE(invalid_lease_ttl.error().kind() == core::ErrorKind::invalid_argument);
   });
 }
 

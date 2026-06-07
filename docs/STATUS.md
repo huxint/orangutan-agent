@@ -7,26 +7,28 @@
 
 ## Snapshot
 
-- **Slice:** 208 (`xmake run orangutan -- --help` reports slice 208)
+- **Slice:** 209 (`xmake run orangutan -- --help` reports slice 209)
 - **Last completed history:**
-  [`histories/2026-06/20260608-0143-automation-cron-run-outcomes.md`](histories/2026-06/20260608-0143-automation-cron-run-outcomes.md)
+  [`histories/2026-06/20260608-0206-automation-cron-execution-leases.md`](histories/2026-06/20260608-0206-automation-cron-execution-leases.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-cron-category.md`](exec-plans/active/2026-06-07-automation-cron-category.md).
-- **Latest completed slice:** slice 208 classifies explicit cron handler
-  outcomes without starting a scheduler. `CronRunOutcome` stores
-  `success`/`failure`/`aborted` in `automation_cron_runs` migration v5 while
-  preserving `CronRunRecord::success` for compatibility. `CronService::execute_due(...)`
-  records cancelled handler errors as `aborted`, other handler errors as
-  `failure`, and successful handlers as `success`; cancelled/failed jobs still
-  leave stored cron state due for retry. Bootstrap still only stores cron
-  descriptors; it does not open `automation.db`, apply rows automatically,
-  start process timers, spawn detached work, enqueue work, call notifiers, or
-  fire agents. Focused results: `test-automation` **64 cases / 893 assertions**
-  and `test-bootstrap` **129 cases / 1087 assertions**.
+- **Latest completed slice:** slice 209 adds repository-backed cron execution
+  leases without starting a scheduler. Migration v6 creates
+  `automation_cron_leases`; `AutomationRepository` exposes acquire/release APIs
+  that return `std::nullopt` on active conflicts and allow expired takeover.
+  `CronService::execute_due(...)` can explicitly lease each due job before the
+  handler runs, releases after durable run/state work, and returns
+  `ErrorKind::conflict` without calling the handler when another owner holds an
+  active lease. `CronLoop::run(...)` and runtime service cycles default to the
+  `automation-cron-loop` owner, while bare service execution remains opt-in via
+  request fields. Bootstrap still only stores cron descriptors; it does not
+  open `automation.db`, apply rows automatically, start process timers, spawn
+  detached work, enqueue work, call notifiers, or fire agents. Focused results:
+  `test-automation` **67 cases / 954 assertions** and `test-bootstrap` **129 cases / 1087 assertions**.
 - **Next intended slice:** continue the active automation cron/category plan.
   The next useful implementation boundary is a small scheduler-service
-  ownership slice such as triggered/notifier/queue policy or per-agent/category
-  lease policy.
+  ownership slice such as triggered/notifier/queue policy or agent-facing
+  category/agent lease policy.
   Do not add bootstrap-owned background automation or unrelated STATUS-only
   slice churn.
 

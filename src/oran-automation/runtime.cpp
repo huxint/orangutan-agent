@@ -41,6 +41,12 @@ namespace {
   if (!request.handler) {
     return std::unexpected(invalid_runtime_field("handler", "empty"));
   }
+  if (request.lease_owner_key.empty()) {
+    return std::unexpected(invalid_runtime_field("lease_owner_key", "empty"));
+  }
+  if (request.lease_ttl <= std::chrono::steady_clock::duration::zero()) {
+    return std::unexpected(invalid_runtime_field("lease_ttl", "not_positive"));
+  }
   return {};
 }
 
@@ -182,6 +188,8 @@ AutomationRuntime::run_cron_service_cycle(CronServiceCycleRequest request) {
       .max_iterations = request.max_iterations,
       .job_limit = request.job_limit,
       .handler = std::move(request.handler),
+      .lease_owner_key = std::move(request.lease_owner_key),
+      .lease_ttl = request.lease_ttl,
       .stop_requested = std::move(request.stop_requested),
   });
   if (!loop_result) {

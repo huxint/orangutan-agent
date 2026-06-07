@@ -78,6 +78,8 @@ struct CronLoopRunRequest {
   std::size_t max_iterations{1};
   std::size_t job_limit{100};
   CronJobHandler handler{};
+  std::string lease_owner_key{"automation-cron-loop"};
+  std::chrono::steady_clock::duration lease_ttl{std::chrono::minutes{5}};
   CronLoopStopPredicate stop_requested{};
 };
 

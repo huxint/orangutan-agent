@@ -9,9 +9,10 @@ config-authored cron schedule seeds mapped by bootstrap into stored descriptors,
 a caller-owned runtime state handle, explicit cron seed application, a
 caller-awaited cron service cycle over the existing finite cron loop, a
 caller-driven cron scan/wait/execute-due boundary plus finite caller-owned cron
-loop policy, advisory cron lifecycle metadata, and typed cron run outcome
-classification, and a caller-driven retention
-service tick with optional advisory `memory_decay` plus job lifecycle metadata,
+loop policy, advisory cron lifecycle metadata, typed cron run outcome
+classification, repository-backed cron execution leases for explicit loop
+owners, and a caller-driven retention service tick with optional advisory
+`memory_decay` plus job lifecycle metadata,
 plus a caller-started retention loop step that can wait within a caller budget
 for one stored job to become due and lease due execution, plus a finite
 caller-owned loop policy over that step. It does not start detached background
@@ -254,6 +255,18 @@ attempts still leave stored cron state unchanged for explicit retry, and the
 existing advisory `job_failed` lifecycle event remains the hook surface for a
 cancelled handler result in this slice.
 
+Slice 209 adds repository-backed cron execution leases without adding queue,
+notifier, agent, or detached scheduler ownership. Migration version 6 creates
+`automation_cron_leases`; `AutomationRepository` can acquire a lease when no
+active holder exists or the stored lease has expired, release only for the
+matching owner, and return `std::nullopt` for active conflicts.
+`CronService::execute_due(...)` enables that protection when callers provide
+`lease_owner_key` and `lease_ttl`; it acquires before invoking the handler,
+releases after durable run/state work, and returns `ErrorKind::conflict` before
+handler execution when another owner holds the lease. `CronLoop::run(...)` and
+`AutomationRuntime::run_cron_service_cycle(...)` default to the
+`automation-cron-loop` owner, while direct service execution remains opt-in.
+
 ## Public API
 
 ```cpp
@@ -368,6 +381,26 @@ struct ListCronRunsOptions {
   std::size_t limit;
 };
 
+struct AcquireCronLeaseRequest {
+  std::string job_key;
+  std::string owner_key;
+  core::Time acquired_at;
+  core::Time expires_at;
+};
+
+struct CronLeaseRecord {
+  std::string job_key;
+  std::string owner_key;
+  core::Time acquired_at;
+  core::Time expires_at;
+  std::string updated_at;
+};
+
+struct ReleaseCronLeaseRequest {
+  std::string job_key;
+  std::string owner_key;
+};
+
 struct CronTickRequest {
   core::Time now;
   std::size_t job_limit;
@@ -392,6 +425,8 @@ struct CronExecuteRequest {
   core::Time now;
   std::size_t job_limit;
   CronJobHandler handler;
+  std::string lease_owner_key;
+  std::chrono::steady_clock::duration lease_ttl;
 };
 
 struct CronExecuteAttempt {
@@ -485,6 +520,10 @@ class AutomationRepository {
   record_cron_run(RecordCronRunRequest);
   async::Awaitable<core::Result<std::vector<CronRunRecord>>>
   list_cron_runs(ListCronRunsOptions);
+  async::Awaitable<core::Result<std::optional<CronLeaseRecord>>>
+  acquire_cron_lease(AcquireCronLeaseRequest);
+  async::Awaitable<core::Result<bool>>
+  release_cron_lease(ReleaseCronLeaseRequest);
   async::Awaitable<core::Result<MemoryRetentionJobRecord>>
   upsert_memory_retention_job(UpsertMemoryRetentionJobRequest);
   async::Awaitable<core::Result<std::optional<MemoryRetentionJobRecord>>>
@@ -527,6 +566,8 @@ struct CronLoopRunRequest {
   std::size_t max_iterations;
   std::size_t job_limit;
   CronJobHandler handler;
+  std::string lease_owner_key;
+  std::chrono::steady_clock::duration lease_ttl;
   CronLoopStopPredicate stop_requested;
 };
 
@@ -587,6 +628,9 @@ struct CronServiceCycleRequest {
   std::size_t max_iterations;
   std::size_t job_limit;
   CronJobHandler handler;
+  std::string lease_owner_key;
+  std::chrono::steady_clock::duration lease_ttl;
+  CronLoopStopPredicate stop_requested;
 };
 
 struct CronServiceCycleResult {
@@ -902,6 +946,12 @@ rows from the v4 success flag. The success flag remains for compatibility, and
 repository reads reject rows whose bool success value disagrees with the typed
 outcome.
 
+Migration version 6 creates `automation_cron_leases`, keyed by durable
+`job_key`, with `owner_key`, `acquired_at`, `expires_at`, and `updated_at`.
+The lease row has a foreign key to `automation_cron_jobs(job_key)` with
+`ON DELETE CASCADE`, so deleting a future cron job row drops the matching lease
+row.
+
 `job_key` is the durable repository identity. `scope_key` remains the memory
 decay scope inside the stored job descriptor, so future different automation
 jobs or policies can share a memory scope without overwriting each other. Cron
@@ -926,6 +976,18 @@ positive-limit bounded vector ordered by most recently updated first.
 for a due handler attempt, and `list_cron_runs(...)` returns recent rows for a
 single cron job by `fired_at DESC, id DESC`. These APIs are state storage only:
 they do not evaluate due work, acquire leases, publish hooks, or call agents.
+
+`acquire_cron_lease(...)` returns:
+
+- `CronLeaseRecord` when the job exists and no active lease blocks acquisition.
+- `CronLeaseRecord` after replacing an expired lease
+  (`stored.expires_at <= request.acquired_at`).
+- `std::nullopt` when another owner still holds an active lease.
+- `ErrorKind::not_found` when the job row is missing.
+
+`release_cron_lease(...)` deletes only the row whose `job_key` and `owner_key`
+match. It returns `true` for a matching release and `false` when the lease is
+absent or held by another owner.
 
 `acquire_memory_retention_lease(...)` returns:
 
@@ -992,17 +1054,21 @@ payload and advance `last_fired_at` only after its own success policy.
 
 `CronService::execute_due(...)` is that first explicit execution owner, still
 without making automation a scheduler. It validates `job_limit > 0` and a
-non-empty `handler`, calls `tick(...)`, and invokes the handler once for each
-due job in the scan result. Successful handler returns advance the cron job's
-stored `last_fired_at` to `due.schedule.next_fire_at` through
-`AutomationRepository::mark_cron_job_fired(...)` after a successful cron run row
-has been recorded. Handler errors are recorded as failed cron run rows with the
-failure message, stored on the matching `CronExecuteAttempt`, do not stop later
-due jobs in the same call, and leave that job's stored state unchanged so the
-next explicit call can retry the same scheduled fire. Handler errors whose kind
-is `ErrorKind::cancelled` are stored with `CronRunOutcome::aborted`; other
-handler errors are stored as `CronRunOutcome::failure`. Not-due scans record no
-cron run rows.
+non-empty `handler`; when `lease_owner_key` is non-empty, it also requires a
+positive `lease_ttl`. It calls `tick(...)` and, for each due job, optionally
+acquires `automation_cron_leases` before invoking the handler. Active lease
+conflicts return `ErrorKind::conflict` before the handler is called. Successful
+handler returns advance the cron job's stored `last_fired_at` to
+`due.schedule.next_fire_at` through `AutomationRepository::mark_cron_job_fired(...)`
+after a successful cron run row has been recorded, then release the lease when
+one was acquired. Handler errors are recorded as failed cron run rows with the
+failure message, stored on the matching `CronExecuteAttempt`, release any held
+lease, do not stop later due jobs in the same call, and leave that job's stored
+state unchanged so the next explicit call can retry the same scheduled fire.
+Handler errors whose kind is `ErrorKind::cancelled` are stored with
+`CronRunOutcome::aborted`; other handler errors are stored as
+`CronRunOutcome::failure`. Not-due scans record no cron run rows and acquire no
+cron leases.
 
 When `CronServiceOptions::hooks.bus` is set, due execution also publishes
 advisory `hook::Event::job_started` before the handler. It publishes
@@ -1016,8 +1082,9 @@ producer. Sink failures stay advisory and are not reported in
 `CronExecuteResult`.
 
 `CronExecuteResult` carries the original scan result plus `attempted_count`,
-`advanced_count`, and one attempt row per due job whose handler ran. An attempt
-has `run` populated after the attempt outcome is durably recorded, and has
+`advanced_count`, and one attempt row per due job whose handler ran. Leased
+conflicts return an error before an attempt row is appended. An attempt has
+`run` populated after the attempt outcome is durably recorded, and has
 `advanced=true` plus `marked_job` populated only after durable state has
 advanced. If the repository cannot record the run or cannot mark a
 handler-successful job fired, `execute_due(...)` returns that repository error
@@ -1039,10 +1106,12 @@ does not mutate job state.
 
 `CronLoop::run(...)` is the finite caller-owned loop policy above the same
 scan/wait/execute surface. It validates `max_total_wait >= 0`,
-`max_iterations > 0`, `job_limit > 0`, and a non-empty handler, then repeatedly
-checks an optional `stop_requested` predicate and calls
-`CronService::execute_due(...)` using a logical caller clock when no stop has
-been requested. The result reports:
+`max_iterations > 0`, `job_limit > 0`, a non-empty handler, non-empty
+`lease_owner_key`, and positive `lease_ttl`, then repeatedly checks an optional
+`stop_requested` predicate and calls `CronService::execute_due(...)` using a
+logical caller clock plus the lease policy when no stop has been requested. The
+default owner is `automation-cron-loop`, so runtime loops protect due handler
+execution unless a caller supplies a different owner. The result reports:
 
 - `iterations`: successful `execute_due(...)` calls made by the loop.
 - `attempted_count`: total due handler attempts across those calls.
@@ -1071,7 +1140,8 @@ not enqueue work, notify channels, call agents, choose shutdown behavior, or
 decide whether bootstrap should open automation state. When the loop's owned
 `CronService` was constructed with hook options, each underlying
 `execute_due(...)` call emits the same advisory lifecycle metadata described
-above.
+above. Active cron execution lease conflicts propagate as `ErrorKind::conflict`
+before an underlying handler is called.
 
 If `stop_requested` returns true before an iteration starts, the loop returns
 `stop_reason=stop_requested` with zero additional work. If it returns true after
@@ -1085,10 +1155,11 @@ sleep-interruption path.
 composition for callers that already opened automation state. The request
 contains cron seed descriptors, cron hook options, the logical `now`, finite
 `max_total_wait` / `max_iterations` / `job_limit` policy, and a
-caller-supplied `CronJobHandler`, plus the optional cooperative stop predicate.
-Runtime validates the policy before writing any seeds, applies the seeds through
-`apply_cron_job_seeds(...)`, then runs `CronLoop::run(...)` with the same
-handler, budget, and stop policy. The result contains both the
+caller-supplied `CronJobHandler`, plus cron loop lease owner/TTL and the
+optional cooperative stop predicate. Runtime validates the policy before
+writing any seeds, applies the seeds through `apply_cron_job_seeds(...)`, then
+runs `CronLoop::run(...)` with the same handler, budget, lease policy, and stop
+policy. The result contains both the
 `CronSeedApplyResult` and the `CronLoopRunResult`.
 
 This helper exists so a process owner can perform a coherent startup cycle
@@ -1229,10 +1300,11 @@ those concerns into bootstrap or `oran-memory`.
 The next automation slices should not be picked by `STATUS.md` alone. The open
 spec 0006 boundaries now start after this explicit runtime/retention loop
 surface, cron evaluator, cron repository state, and caller-driven cron
-scan/wait/execute-due/run surface plus config-authored cron seeds: cron seed
-automatic persistence/service startup policy, broader per-agent/category leases
-once agent-facing jobs exist, triggered categories, queueing/backpressure, and
-notifier routing for agent-facing jobs.
+scan/wait/execute-due/run surface plus config-authored cron seeds, explicit
+seed application/service-cycle policy, run history, stop policy, typed
+outcomes, and stored cron execution leases: detached service startup policy,
+agent-facing category/agent leases, triggered categories, queueing/backpressure,
+and notifier routing for agent-facing jobs.
 
 ## Validation
 
@@ -1305,6 +1377,11 @@ outcome classification, covering migration v5, success/failure/aborted
 repository round-trips, missing aborted error validation, cancelled-handler
 classification as `aborted`, and `AutomationRuntime::open(...)` migration
 report version 5.
+Slice 209 reports `test-automation` at 67 cases / 954 assertions for cron
+execution leases, covering migration v6, repository acquire/conflict/expired
+takeover/release behavior, service-level lease conflict before handler
+execution, release after durable success, loop default lease ownership, and
+`AutomationRuntime::open(...)` migration report version 6.
 
 `bench-automation` planning rows are:
 

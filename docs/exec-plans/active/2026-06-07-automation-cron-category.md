@@ -9,9 +9,10 @@ fire for a caller-owned clock and stored state, then adds durable repository
 state for cron schedules and last-fired timestamps, then adds config-authored
 cron schedule seeds mapped by bootstrap into repository descriptors.
 Explicit seed persistence, one caller-awaited cron service cycle, durable cron
-run history, cooperative finite-loop stop policy, and typed cron run outcome
-classification now exist; detached service-loop startup, queues, notifiers, and
-agent firing stay in later scheduler slices.
+run history, cooperative finite-loop stop policy, typed cron run outcome
+classification, and repository-backed cron execution leases for explicit loop
+owners now exist; detached service-loop startup, queues, notifiers, and agent
+firing stay in later scheduler slices.
 
 ## Scope
 
@@ -39,6 +40,9 @@ agent firing stay in later scheduler slices.
 - Classify explicit cron handler run rows as `success`, `failure`, or
   `aborted`, including `ErrorKind::cancelled` handler results, without adding
   new hook events, queueing, or scheduler retry/drop policy.
+- Lease explicit cron handler execution per stored cron job so caller-owned
+  loops and service cycles do not overlap active due work for the same job,
+  without adding queueing, notifier routing, or agent execution ownership.
 - Keep the slice free of agent, detached timer, automatic bootstrap
   persistence, or background task ownership.
 - Update automation docs/status/history/release notes in the same slice.
@@ -121,9 +125,10 @@ agent firing stay in later scheduler slices.
    over seed apply plus finite cron loop execution, slice 206 records durable
    run history for due cron handler attempts, slice 207 adds cooperative stop
    policy for the finite cron loop and service-cycle handoff, and slice 208
-   classifies explicit run history as `success`, `failure`, or `aborted` for
-   cancelled handlers. Later: add detached service/timer ownership without
-   bootstrap-owned background work.
+  classifies explicit run history as `success`, `failure`, or `aborted` for
+  cancelled handlers, and slice 209 adds repository-backed cron execution
+  leases used by the finite cron loop and service-cycle handoff. Later: add
+  detached service/timer ownership without bootstrap-owned background work.
 4. **Triggered/notifier/queue policy.**
    Later: add triggered categories, queueing/backpressure, notifier routing,
    and agent execution leases.
@@ -143,6 +148,9 @@ agent firing stay in later scheduler slices.
 - `build/linux/x86_64/release/test-automation "AutomationRuntime runs a caller-awaited cron service cycle"`
 - `build/linux/x86_64/release/test-automation "AutomationRuntime validates cron service cycles before applying seeds"`
 - `build/linux/x86_64/release/test-automation "AutomationRepository records and lists cron runs"`
+- `build/linux/x86_64/release/test-automation "[unit][automation][repository][cron][lease]"`
+- `build/linux/x86_64/release/test-automation "[unit][automation][service][cron][lease]"`
+- `build/linux/x86_64/release/test-automation "[unit][automation][runtime][cron][loop][lease]"`
 - `build/linux/x86_64/release/test-automation "CronService::execute_due records cancelled cron handlers as aborted"`
 - `build/linux/x86_64/release/test-automation "CronService::execute_due advances only successful due cron jobs"`
 - `build/linux/x86_64/release/test-automation "AutomationRuntime::open creates parent directories and migrates state"`
@@ -173,6 +181,8 @@ agent firing stay in later scheduler slices.
 - Confirm cooperative stop requests prevent new work before an iteration and
   prevent catch-up/sleep after a completed execution without cancelling an
   active handler.
+- Confirm cron execution leases reject active conflicts before handler
+  execution, release after durable success, and allow expired takeover.
 - Confirm no new dependency direction crosses from automation into bootstrap,
   config, or agent.
 - Observability checks:
@@ -255,6 +265,16 @@ agent firing stay in later scheduler slices.
   `CronService::execute_due(...)` records cancelled handler errors as
   `aborted`, ordinary errors as `failure`, and successful handlers as
   `success`, while failed and aborted jobs remain due for explicit retry.
+- [x] 2026-06-08 02:06 +0800: Implemented repository-backed cron execution
+  leases through `automation_cron_leases`,
+  `AutomationRepository::acquire_cron_lease(...)`, and
+  `release_cron_lease(...)`. `CronService::execute_due(...)` can explicitly
+  lease due handlers, and `CronLoop::run(...)` /
+  `AutomationRuntime::run_cron_service_cycle(...)` default to
+  `automation-cron-loop` lease ownership. Active lease conflicts return
+  `ErrorKind::conflict` before handler execution; expired leases can be taken
+  over; no queueing, notifier routing, detached scheduler startup, or agent
+  firing was added.
 - [x] **Update the docs that this slice invalidates in the same PR**
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -312,6 +332,10 @@ agent firing stay in later scheduler slices.
   Spec 0006 requires cancelled runs to be recorded as `aborted`, and the
   existing explicit handler boundary can do that without inventing process
   retry/drop semantics or adding scheduler ownership.
+- 2026-06-08: Add cron execution leases before queue/notifier/agent firing
+  policy. Explicit loops can now avoid overlapping due work for the same stored
+  cron job, while process-wide detached scheduler ownership and agent-facing
+  lease policy remain downstream.
 
 ## Linked Artifacts
 
@@ -331,5 +355,6 @@ agent firing stay in later scheduler slices.
 - `docs/histories/2026-06/20260608-0107-automation-cron-run-history.md`
 - `docs/histories/2026-06/20260608-0122-automation-cron-loop-stop-policy.md`
 - `docs/histories/2026-06/20260608-0143-automation-cron-run-outcomes.md`
+- `docs/histories/2026-06/20260608-0206-automation-cron-execution-leases.md`
 - Release note:
 - `docs/releases/feature-release-notes.md#2026-06`

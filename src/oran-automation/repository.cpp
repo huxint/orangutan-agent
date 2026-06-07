@@ -45,6 +45,10 @@ constexpr unsigned char kAutomationCronRunOutcomesBytes[] = {
 #embed "migrations/automation/0005-automation-cron-run-outcomes.sql"
 };
 
+constexpr unsigned char kAutomationCronLeasesBytes[] = {
+#embed "migrations/automation/0006-automation-cron-leases.sql"
+};
+
 constexpr std::string_view kUpsertCronJobSql = R"sql(
 INSERT INTO automation_cron_jobs(
   job_key,
@@ -142,6 +146,35 @@ FROM automation_cron_runs
 WHERE job_key = ?
 ORDER BY fired_at DESC, id DESC
 LIMIT ?
+)sql";
+
+constexpr std::string_view kAcquireCronLeaseSql = R"sql(
+INSERT INTO automation_cron_leases(
+  job_key,
+  owner_key,
+  acquired_at,
+  expires_at,
+  updated_at
+) VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+ON CONFLICT(job_key) DO UPDATE SET
+  owner_key = excluded.owner_key,
+  acquired_at = excluded.acquired_at,
+  expires_at = excluded.expires_at,
+  updated_at = excluded.updated_at
+WHERE automation_cron_leases.expires_at <= excluded.acquired_at
+RETURNING
+  job_key,
+  owner_key,
+  acquired_at,
+  expires_at,
+  updated_at
+)sql";
+
+constexpr std::string_view kReleaseCronLeaseSql = R"sql(
+DELETE FROM automation_cron_leases
+WHERE job_key = ? AND owner_key = ?
+RETURNING
+  job_key
 )sql";
 
 constexpr std::string_view kUpsertMemoryRetentionJobSql = R"sql(
@@ -285,7 +318,7 @@ template <std::size_t N>
 }
 
 [[nodiscard]] std::span<const storage::Migration> built_in_automation_migrations() {
-  static const std::array<storage::Migration, 5> kMigrations{
+  static const std::array<storage::Migration, 6> kMigrations{
       storage::Migration{
           .version = 1,
           .name = "automation-retention-state",
@@ -310,6 +343,11 @@ template <std::size_t N>
           .version = 5,
           .name = "automation-cron-run-outcomes",
           .sql = to_sql_string(kAutomationCronRunOutcomesBytes),
+      },
+      storage::Migration{
+          .version = 6,
+          .name = "automation-cron-leases",
+          .sql = to_sql_string(kAutomationCronLeasesBytes),
       },
   };
   return kMigrations;
@@ -426,6 +464,19 @@ template <std::size_t N>
   return {};
 }
 
+[[nodiscard]] core::Result<void> validate_lease_request(const AcquireCronLeaseRequest& request) {
+  if (auto valid = validate_job_key(request.job_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  if (auto valid = validate_owner_key(request.owner_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  if (request.expires_at <= request.acquired_at) {
+    return std::unexpected(invalid_field("expires_at", "not_after_acquired_at"));
+  }
+  return {};
+}
+
 [[nodiscard]] core::Result<void> validate_lease_request(const AcquireMemoryRetentionLeaseRequest& request) {
   if (auto valid = validate_job_key(request.job_key); !valid) {
     return std::unexpected(valid.error());
@@ -435,6 +486,16 @@ template <std::size_t N>
   }
   if (request.expires_at <= request.acquired_at) {
     return std::unexpected(invalid_field("expires_at", "not_after_acquired_at"));
+  }
+  return {};
+}
+
+[[nodiscard]] core::Result<void> validate_release_request(const ReleaseCronLeaseRequest& request) {
+  if (auto valid = validate_job_key(request.job_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  if (auto valid = validate_owner_key(request.owner_key); !valid) {
+    return std::unexpected(valid.error());
   }
   return {};
 }
@@ -768,7 +829,8 @@ read_size(storage::Statement& statement, int index, std::string_view field, bool
   };
 }
 
-[[nodiscard]] core::Result<MemoryRetentionLeaseRecord> read_lease_row(storage::Statement& statement) {
+template <typename LeaseRecord>
+[[nodiscard]] core::Result<LeaseRecord> read_lease_row(storage::Statement& statement) {
   auto job_key = required_text(statement, 0, "job_key");
   if (!job_key) {
     return std::unexpected(job_key.error());
@@ -794,7 +856,7 @@ read_size(storage::Statement& statement, int index, std::string_view field, bool
         core::Error::storage("automation repository row has invalid lease expiry").with("field", "expires_at"));
   }
 
-  return MemoryRetentionLeaseRecord{
+  return LeaseRecord{
       .job_key = std::move(*job_key),
       .owner_key = std::move(*owner_key),
       .acquired_at = *acquired_at,
@@ -1344,6 +1406,106 @@ AutomationRepository::list_memory_retention_runs(ListMemoryRetentionRunsOptions 
   co_return rows;
 }
 
+async::Awaitable<core::Result<std::optional<CronLeaseRecord>>>
+AutomationRepository::acquire_cron_lease(AcquireCronLeaseRequest request) {
+  if (auto valid = validate_lease_request(request); !valid) {
+    co_return std::unexpected(valid.error());
+  }
+
+  auto writer = co_await pool_->acquire_writer();
+  if (!writer) {
+    co_return std::unexpected(writer.error());
+  }
+
+  auto job_statement = writer->statement_cache().acquire(writer->connection(), kGetCronJobSql);
+  if (!job_statement) {
+    co_return std::unexpected(job_statement.error());
+  }
+  auto& job_lookup = job_statement->statement();
+  if (auto bound = job_lookup.bind_text(1, request.job_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  auto job_step = job_lookup.step();
+  if (!job_step) {
+    co_return std::unexpected(job_step.error());
+  }
+  if (*job_step == storage::StepResult::done) {
+    co_return std::unexpected(core::Error::not_found("automation cron job not found").with("job_key", request.job_key));
+  }
+  if (auto done = expect_done(job_lookup, "lease_get_cron_job"); !done) {
+    co_return std::unexpected(done.error());
+  }
+
+  auto cached = writer->statement_cache().acquire(writer->connection(), kAcquireCronLeaseSql);
+  if (!cached) {
+    co_return std::unexpected(cached.error());
+  }
+  auto& statement = cached->statement();
+  if (auto bound = statement.bind_text(1, request.job_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(2, request.owner_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(3, core::time::format_iso8601_utc(request.acquired_at)); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(4, core::time::format_iso8601_utc(request.expires_at)); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+
+  auto step = statement.step();
+  if (!step) {
+    co_return std::unexpected(step.error());
+  }
+  if (*step == storage::StepResult::row) {
+    auto record = read_lease_row<CronLeaseRecord>(statement);
+    if (!record) {
+      co_return std::unexpected(record.error());
+    }
+    if (auto done = expect_done(statement, "acquire_cron_lease"); !done) {
+      co_return std::unexpected(done.error());
+    }
+    co_return std::optional<CronLeaseRecord>{std::move(*record)};
+  }
+  co_return std::optional<CronLeaseRecord>{};
+}
+
+async::Awaitable<core::Result<bool>> AutomationRepository::release_cron_lease(ReleaseCronLeaseRequest request) {
+  if (auto valid = validate_release_request(request); !valid) {
+    co_return std::unexpected(valid.error());
+  }
+
+  auto writer = co_await pool_->acquire_writer();
+  if (!writer) {
+    co_return std::unexpected(writer.error());
+  }
+
+  auto cached = writer->statement_cache().acquire(writer->connection(), kReleaseCronLeaseSql);
+  if (!cached) {
+    co_return std::unexpected(cached.error());
+  }
+  auto& statement = cached->statement();
+  if (auto bound = statement.bind_text(1, request.job_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(2, request.owner_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+
+  auto step = statement.step();
+  if (!step) {
+    co_return std::unexpected(step.error());
+  }
+  if (*step == storage::StepResult::done) {
+    co_return false;
+  }
+  if (auto done = expect_done(statement, "release_cron_lease"); !done) {
+    co_return std::unexpected(done.error());
+  }
+  co_return true;
+}
+
 async::Awaitable<core::Result<std::optional<MemoryRetentionLeaseRecord>>>
 AutomationRepository::acquire_memory_retention_lease(AcquireMemoryRetentionLeaseRequest request) {
   if (auto valid = validate_lease_request(request); !valid) {
@@ -1398,7 +1560,7 @@ AutomationRepository::acquire_memory_retention_lease(AcquireMemoryRetentionLease
     co_return std::unexpected(step.error());
   }
   if (*step == storage::StepResult::row) {
-    auto record = read_lease_row(statement);
+    auto record = read_lease_row<MemoryRetentionLeaseRecord>(statement);
     if (!record) {
       co_return std::unexpected(record.error());
     }
