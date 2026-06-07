@@ -38,6 +38,25 @@ namespace {
   return {};
 }
 
+[[nodiscard]] core::Result<void> validate_run_request(const MemoryRetentionLoopRunRequest& request) {
+  if (request.job_key.empty()) {
+    return std::unexpected(invalid_loop_field("job_key", "empty"));
+  }
+  if (request.max_total_wait < std::chrono::steady_clock::duration::zero()) {
+    return std::unexpected(invalid_loop_field("max_total_wait", "negative"));
+  }
+  if (request.max_iterations == 0) {
+    return std::unexpected(invalid_loop_field("max_iterations", "zero"));
+  }
+  if (request.lease_owner_key.empty()) {
+    return std::unexpected(invalid_loop_field("lease_owner_key", "empty"));
+  }
+  if (request.lease_ttl <= std::chrono::steady_clock::duration::zero()) {
+    return std::unexpected(invalid_loop_field("lease_ttl", "not_positive"));
+  }
+  return {};
+}
+
 [[nodiscard]] std::chrono::nanoseconds wait_until(core::Time now, core::Time next_fire_at) noexcept {
   if (next_fire_at <= now) {
     return std::chrono::nanoseconds{0};
@@ -52,6 +71,18 @@ namespace {
 
 [[nodiscard]] core::Time add_steady_duration(core::Time now, std::chrono::steady_clock::duration duration) noexcept {
   return core::Time{now.to_system_time_point() + std::chrono::duration_cast<core::Time::clock::duration>(duration)};
+}
+
+[[nodiscard]] MemoryRetentionLoopRunOnceRequest make_run_once_request(const MemoryRetentionLoopRunRequest& request,
+                                                                      core::Time now,
+                                                                      std::chrono::nanoseconds remaining_wait) {
+  return MemoryRetentionLoopRunOnceRequest{
+      .job_key = request.job_key,
+      .now = now,
+      .max_wait = std::chrono::duration_cast<std::chrono::steady_clock::duration>(remaining_wait),
+      .lease_owner_key = request.lease_owner_key,
+      .lease_ttl = request.lease_ttl,
+  };
 }
 
 [[nodiscard]] core::Error lease_conflict_error(const MemoryRetentionLoopRunOnceRequest& request) {
@@ -188,6 +219,47 @@ MemoryRetentionLoop::run_once(MemoryRetentionLoopRunOnceRequest request) {
       .waited_for = wait_for,
       .tick = std::move(*tick),
   };
+}
+
+async::Awaitable<core::Result<MemoryRetentionLoopRunResult>>
+MemoryRetentionLoop::run(MemoryRetentionLoopRunRequest request) {
+  if (auto valid = validate_run_request(request); !valid) {
+    co_return std::unexpected(std::move(valid).error());
+  }
+
+  MemoryRetentionLoopRunResult result{};
+  auto now = request.now;
+  auto remaining_wait = std::chrono::duration_cast<std::chrono::nanoseconds>(request.max_total_wait);
+
+  while (result.iterations < request.max_iterations) {
+    auto step = co_await run_once(make_run_once_request(request, now, remaining_wait));
+    if (!step) {
+      co_return std::unexpected(std::move(step).error());
+    }
+
+    const auto waited_for = step->waited_for;
+    if (waited_for > remaining_wait) {
+      co_return std::unexpected(
+          core::Error::internal("memory retention loop exceeded wait budget").with("job_key", request.job_key));
+    }
+
+    remaining_wait -= waited_for;
+    now = add_wait(now, waited_for);
+    ++result.iterations;
+    result.waited_for += waited_for;
+    if (step->tick.ran) {
+      ++result.due_runs;
+    }
+    result.last_step = std::move(*step);
+
+    if (!result.last_step->tick.ran) {
+      result.stop_reason = MemoryRetentionLoopRunStopReason::no_due_work;
+      co_return result;
+    }
+  }
+
+  result.stop_reason = MemoryRetentionLoopRunStopReason::iteration_limit;
+  co_return result;
 }
 
 }  // namespace orangutan::automation

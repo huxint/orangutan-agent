@@ -8,8 +8,9 @@ retention job/run persistence, a caller-owned runtime state handle, and a
 caller-driven retention service tick with optional advisory `memory_decay` plus
 job lifecycle metadata, plus a caller-started retention loop step that can wait
 within a caller budget for one stored job to become due and lease due
-execution. It does not start detached background work, run a long-lived service
-loop, or call an agent loop.
+execution, plus a finite caller-owned loop policy over that step. It does not
+start detached background work, own a process service loop, or call an agent
+loop.
 
 ## Current Status
 
@@ -117,6 +118,17 @@ waits without a lease, then acquires the stored lease immediately before due
 `MemoryRetentionService::tick(...)` execution and releases it after the tick.
 This keeps cancellation while waiting from leaving retained lease state while
 still preventing overlapping due execution for the same job.
+
+Slice 196 adds the first finite loop policy above the leased step without
+making automation a daemon. `MemoryRetentionLoop::run(...)` repeatedly calls
+`run_once(...)` for one stored job until either the caller-provided
+`max_iterations` limit is reached or the next step reports no due work within
+the remaining wait budget. The result reports iteration count, due-run count,
+total wait time, stop reason, and the last step. It can catch up an overdue
+stored retention backlog because every successful tick advances
+`last_fired_at` by exactly one scheduled fire, but it still remains one
+explicit awaitable owned by the caller. Bootstrap still does not open
+`automation.db`, start timers, spawn detached work, or run this loop.
 
 ## Public API
 
@@ -288,6 +300,28 @@ struct MemoryRetentionLoopRunOnceResult {
   MemoryRetentionTickResult tick;
 };
 
+enum class MemoryRetentionLoopRunStopReason {
+  iteration_limit,
+  no_due_work,
+};
+
+struct MemoryRetentionLoopRunRequest {
+  std::string job_key;
+  core::Time now;
+  std::chrono::steady_clock::duration max_total_wait;
+  std::size_t max_iterations;
+  std::string lease_owner_key;
+  std::chrono::steady_clock::duration lease_ttl;
+};
+
+struct MemoryRetentionLoopRunResult {
+  std::size_t iterations;
+  std::size_t due_runs;
+  std::chrono::nanoseconds waited_for;
+  MemoryRetentionLoopRunStopReason stop_reason;
+  std::optional<MemoryRetentionLoopRunOnceResult> last_step;
+};
+
 struct MemoryRetentionTickRequest {
   std::string job_key;
   core::Time now;
@@ -337,6 +371,9 @@ class MemoryRetentionLoop {
 
   async::Awaitable<core::Result<MemoryRetentionLoopRunOnceResult>>
   run_once(MemoryRetentionLoopRunOnceRequest);
+
+  async::Awaitable<core::Result<MemoryRetentionLoopRunResult>>
+  run(MemoryRetentionLoopRunRequest);
 };
 
 }  // namespace orangutan::automation
@@ -459,8 +496,8 @@ state exists.
 `MemoryRetentionLoop::run_once(...)` is a single caller-started awaitable for
 one stored retention job. It is the smallest useful owner above
 `MemoryRetentionService::tick(...)`: it can wait for the next scheduled fire,
-and it leases due execution, but it does not own a long-running loop, spawn
-detached coroutines, or decide process startup policy.
+and it leases due execution, but it does not spawn detached coroutines or
+decide process startup policy.
 
 The request validates `job_key` non-empty, `max_wait >= 0`,
 `lease_owner_key` non-empty, and `lease_ttl > 0`. Invalid inputs return
@@ -501,9 +538,34 @@ durable recording.
 
 The loop step intentionally does not skip forward over multiple missed
 intervals or catch up a backlog. It reuses the same tick semantics as direct
-callers, where `last_fired_at` advances only after successful due work. Future
-service-loop ownership can layer catch-up/coalesce/drop policy, shutdown, and
-repeated scheduling policy around this awaitable.
+callers, where `last_fired_at` advances only after successful due work.
+
+`MemoryRetentionLoop::run(...)` is the finite caller-owned loop policy above
+that step. It validates `job_key` non-empty, `max_total_wait >= 0`,
+`max_iterations > 0`, `lease_owner_key` non-empty, and `lease_ttl > 0`. The
+loop starts from caller-supplied `now`, calls `run_once(...)` with the
+remaining wait budget, advances its logical `now` only by the wait duration
+that actually occurred, and accumulates summary counters:
+
+- `iterations` counts `run_once(...)` calls attempted successfully.
+- `due_runs` counts iterations whose tick actually ran retention.
+- `waited_for` is the total time slept by loop steps.
+- `last_step` carries the final `run_once(...)` result for diagnostics.
+
+`stop_reason=iteration_limit` means the caller's `max_iterations` bound stopped
+the loop after the last successful step. `stop_reason=no_due_work` means a step
+returned `ran=false`; in normal single-owner operation that means the next fire
+is outside the remaining wait budget, and in multi-owner operation it can also
+mean another owner advanced the stored job during the wait. Errors from
+validation, repository operations, lease conflicts, backend execution, hook
+publishing, and cancellation are returned as `std::unexpected` without
+inventing a stop reason.
+
+Because `run(...)` keeps the same logical `now` across zero-wait due ticks, it
+can catch up an overdue backlog one stored fire at a time until the iteration
+limit is reached. It still does not coalesce/drop missed fires, choose a
+process shutdown policy, own a queue, spawn detached work, or decide whether
+bootstrap should open automation state.
 
 ## Tick Semantics
 
@@ -559,13 +621,11 @@ those concerns into bootstrap or `oran-memory`.
 
 ## Future Ownership
 
-The next automation slices can build on this boundary in this order:
-
-1. Add service-loop ownership that repeatedly starts loop steps under shutdown
-   and backpressure policy.
-2. Add broader per-agent/category leases once agent-facing jobs exist.
-3. Add cron and triggered job categories.
-4. Add queueing/backpressure and notifier routing for agent-facing jobs.
+The next automation slices should not be picked by `STATUS.md` alone. The open
+spec 0006 boundaries now start after this explicit runtime/retention loop
+surface: process service/timer startup policy, broader per-agent/category
+leases once agent-facing jobs exist, cron and triggered categories,
+queueing/backpressure, and notifier routing for agent-facing jobs.
 
 ## Validation
 
@@ -597,8 +657,10 @@ for retention job lifecycle publishing on not-due, due-success, and backend
 failure paths. Slice 195 reports `test-automation` at 30 cases / 390 assertions
 for retention lease migration/repository acquisition semantics, loop active-lease
 conflicts, due-run release, cancellation-while-waiting without held leases, and
-backend-failure release, plus lease input validation. The local
+backend-failure release, plus lease input validation. Slice 196 reports
+`test-automation` at 33 cases / 429 assertions for finite loop backlog
+catch-up, no-due-work stopping, and loop-policy input validation. The local
 `bench-automation` planning rows are:
 
-- `automation.periodic_evaluate_1024` at about 4.84 us / 1024-job batch.
-- `automation.memory_retention_plan_1024` at about 14.84 us / 1024-job batch.
+- `automation.periodic_evaluate_1024` at about 4.49 us / 1024-job batch.
+- `automation.memory_retention_plan_1024` at about 15.10 us / 1024-job batch.

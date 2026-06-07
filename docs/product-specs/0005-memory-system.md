@@ -257,8 +257,14 @@ operators can reason about retention, scope, and visibility.
   tick execution. Planning and waiting do not hold a lease, so cancellation
   while waiting cannot strand one; active leases return conflicts and expired
   leases can be replaced by a new owner.
+- Automation finite retention loop policy shipped in slice 196:
+  `MemoryRetentionLoop::run(...)` repeatedly drives the leased `run_once(...)`
+  step for one stored retention job until the caller's iteration limit is
+  reached or a step reports no due work within the remaining wait budget. This
+  lets an explicit runtime owner catch up overdue retention fires while memory
+  still does not own periodic execution, timers, queues, or bootstrap startup.
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
-- Blocking `memory_read_before`, automation service-loop ownership, full
+- Blocking `memory_read_before`, automation process service/timer ownership, full
   scheduler/category lifecycle ownership, and memory-write rewrite/annotation
   remain downstream.
 
@@ -336,9 +342,10 @@ operators can reason about retention, scope, and visibility.
    propagate cancellation while waiting. Slice 194 adds advisory
    `job_started`, `job_failed`, and `job_finished` metadata from due retention
    ticks after the corresponding durable state boundary. Slice 195 adds stored
-   retention job leases and loop-side due-run lease ownership.
-   Bootstrap service ownership and long-running scheduler ownership remain
-   open.
+   retention job leases and loop-side due-run lease ownership. Slice 196 adds
+   finite caller-owned loop policy over that leased step without moving timers
+   or bootstrap startup into memory. Bootstrap service ownership and process
+   scheduler ownership remain open.
 5. A `memory.write.before` hook can veto a write. **Status:** closed for the
    bootstrap `memory.remember` tool path in slice 179. `AgentPromptRunner`
    publishes blocking `memory_write_before` after parsing/scoping the record and
@@ -368,10 +375,11 @@ operators can reason about retention, scope, and visibility.
    tightens bootstrap assertions for the startup decay shadow-count diagnostic.
    Slice 186 adds bootstrap and hook coverage for startup `MemoryDecayPayload`
    delivery, startup hook binding validation, and startup-only unbind behavior.
-   Slice 195 adds `test-automation` coverage for retention lease migration,
-   active/expired/release/reacquire semantics, due-loop conflicts, and
-   cancellation-while-waiting without held leases; `test-automation` reports
-   30 cases / 390 assertions.
+   Slice 196 adds `test-automation` coverage for finite retention loop backlog
+   catch-up, no-due-work stopping, and loop-policy validation on top of the
+   slice-195 retention lease migration, active/expired/release/reacquire
+   semantics, due-loop conflicts, and cancellation-while-waiting without held
+   leases; `test-automation` reports 33 cases / 429 assertions.
    Slice 176 adds
    gated sqlite-vec disabled-build coverage, plus `--vector_memory=y` coverage
    for scoped upsert/search/remove and dimension-mismatch migration rejection.
@@ -429,7 +437,8 @@ xmake run test-bootstrap
 scripts/bench-compare.sh memory
 ```
 
-Slice 195 reports `test-automation` at 30 cases / 390 assertions for the
+Slice 196 reports `test-automation` at 33 cases / 429 assertions for the
 retention planner, repository, service tick, periodic hook-publish,
 caller-owned runtime state-handle, caller-started loop-step, retention job
-lifecycle hook boundaries, and retained job lease ownership.
+lifecycle hook boundaries, retained job lease ownership, and finite caller-owned
+loop policy.

@@ -29,6 +29,9 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
     loop owner.
   - Ship retention job leases for the explicit loop step so due work for one
     stored job cannot overlap across owners.
+  - Ship a finite caller-owned loop policy over the leased step so explicit
+    runtime owners can catch up due retention work within caller-provided wait
+    and iteration bounds.
   - Update docs, status, quality, history, and release notes per the Prime
     Directive.
 - Out of scope:
@@ -125,6 +128,11 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
    Done in slice 195: add durable retention job leases plus repository
    acquire/release APIs, and have the explicit loop step lease only due tick
    execution while planning and waiting without a held lease.
+11. **Finite loop policy.**
+   Done in slice 196: add `MemoryRetentionLoop::run(...)` so callers can
+   repeatedly drive the leased `run_once(...)` step for one stored job until an
+   explicit iteration limit or no-due-work boundary, without adding detached
+   service-loop ownership.
 
 ## Validation
 
@@ -149,6 +157,9 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
     `MemoryRetentionService::tick(...)` and released after the tick.
   - Confirm cancellation while waiting cannot leave a retained lease because
     the wait phase does not hold one.
+  - Confirm `MemoryRetentionLoop::run(...)` is finite, caller-owned, and only
+    repeats the existing leased step; it must not start detached work or make
+    bootstrap open `automation.db`.
 - Observability checks:
   - Confirm `memory_decay` publishes only after successful due ticks and remains
     absent for not-due ticks, backend failures, and services without a hook bus.
@@ -237,6 +248,15 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
   around due `MemoryRetentionService::tick(...)` execution and release it after
   the tick. Bootstrap remains unopened for `automation.db`, and no detached
   service loop was added.
+- [x] 2026-06-07 17:27 +0800: Added
+  `MemoryRetentionLoop::run(...)` as finite caller-owned policy over the leased
+  step. It reports iteration count, due-run count, total wait, stop reason, and
+  the last step, and can catch up overdue stored retention fires until the
+  caller's iteration limit.
+- [x] 2026-06-07 17:27 +0800: Kept bootstrap unopened for `automation.db`; the
+  loop policy is still one explicit awaitable and does not add cron,
+  triggered jobs, queueing/backpressure, notifier routing, or detached daemon
+  ownership.
 - [x] Update docs that this slice invalidates in the same PR
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -290,6 +310,11 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
   lease across the wait phase would let cancellation strand retained lease
   state; acquiring immediately before the due tick still prevents overlapping
   execution for the same stored job.
+- 2026-06-07: Add finite loop policy before process service-loop ownership.
+  `MemoryRetentionLoop::run(...)` deliberately repeats the already-tested
+  leased step under caller-provided wait and iteration bounds. It does not own
+  shutdown, queues, cron/triggered categories, notifier routing, or bootstrap
+  startup; those need a separate scoped plan before landing.
 
 ## Linked Artifacts
 
@@ -316,5 +341,7 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
   `docs/histories/2026-06/20260607-1330-automation-retention-job-lifecycle-hooks.md`
   and
   `docs/histories/2026-06/20260607-1500-automation-retention-leases.md`
+  and
+  `docs/histories/2026-06/20260607-1727-automation-retention-loop-policy.md`
 - Release note:
-  `docs/releases/feature-release-notes.md#automation-retention-leases`
+  `docs/releases/feature-release-notes.md#automation-retention-loop-policy`

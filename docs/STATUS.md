@@ -7,28 +7,29 @@
 
 ## Snapshot
 
-- **Slice:** 195 (`xmake run orangutan -- --help` reports slice 195)
+- **Slice:** 196 (`xmake run orangutan -- --help` reports slice 196)
 - **Last completed history:**
-  [`histories/2026-06/20260607-1500-automation-retention-leases.md`](histories/2026-06/20260607-1500-automation-retention-leases.md)
+  [`histories/2026-06/20260607-1727-automation-retention-loop-policy.md`](histories/2026-06/20260607-1727-automation-retention-loop-policy.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-retention-cadence.md`](exec-plans/active/2026-06-07-automation-retention-cadence.md).
-- **Latest completed slice:** slice 195 adds durable retention job leases to
-  `AutomationRepository` and has `MemoryRetentionLoop::run_once(...)` lease only
-  due tick execution. The repository migration creates
-  `automation_memory_retention_leases`; callers can acquire a lease when no
-  active lease exists or the stored lease has expired, release only by matching
-  owner, observe active-lease conflicts, and get `not_found` for missing jobs.
-  The loop now plans and waits without holding a lease, then acquires the stored
-  job lease immediately before due `MemoryRetentionService::tick(...)` work and
-  releases it after completion. Cancellation while waiting still returns
-  `ErrorKind::cancelled` without retaining a lease. Bootstrap still does not
-  open or run `automation.db`. Focused result: `test-automation`
-  **30 cases / 390 assertions**.
-- **Next intended slice:** continue the active automation-retention cadence
-  plan with a product-capability slice, not a bench-only slice. The next useful
-  boundary is long-running service-loop policy over the explicit
-  `AutomationRuntime` + `MemoryRetentionLoop` path, while still avoiding a
-  hidden bootstrap background loop unless a caller starts it.
+- **Latest completed slice:** slice 196 adds finite caller-owned retention loop
+  policy over the explicit `AutomationRuntime` + `MemoryRetentionLoop` path.
+  `MemoryRetentionLoop::run(...)` repeatedly drives the leased
+  `run_once(...)` step for one stored job until the caller's `max_iterations`
+  limit is reached or a step reports no due work within the remaining
+  `max_total_wait` budget. The result reports iteration count, due-run count,
+  total wait time, stop reason, and the last step; overdue stored fires can be
+  caught up one scheduled fire at a time while due execution still uses the
+  slice-195 repository lease. Bootstrap still does not open or run
+  `automation.db`, start timers, spawn detached work, or fire agents. Focused
+  result: `test-automation` **33 cases / 429 assertions**.
+- **Next intended slice:** do not select a new STATUS slice without a scoped
+  plan. The active automation-retention cadence work has reached the explicit
+  runtime/loop policy boundary. The next implementation boundary should be
+  selected from the open spec-0006 scheduler/category items with a plan update
+  first: process service/timer startup policy, broader per-agent/category
+  leases, cron/triggered categories, queueing/backpressure, notifier routing,
+  or scheduler tick performance.
 
 Slice 183 adds the operator-facing long-term
   retention policy contract. `oran-config` now parses
@@ -44,7 +45,8 @@ Slice 183 adds the operator-facing long-term
   when a caller asks, slice 193 adds a caller-started loop step that can wait up
   to a caller budget for one stored retention job to become due, slice 194 adds
   advisory lifecycle metadata from due retention ticks, and slice 195 adds the
-  stored retention job lease plus due-run loop ownership while bootstrap
+  stored retention job lease plus due-run loop ownership, and slice 196 adds
+  finite caller-owned loop policy over that leased step while bootstrap
   service-loop ownership remains downstream.
   Slice 185 exposes the startup decay shadow count on the assembly and startup
   banner, slice 186 publishes the startup pass as advisory `memory_decay`
@@ -62,7 +64,8 @@ Slice 183 adds the operator-facing long-term
   slice 193 adds the explicit budgeted loop step above that service, slice 194
   adds advisory `job_started` / `job_finished` / `job_failed` metadata from due
   retention ticks, and slice 195 adds stored retention lease acquisition around
-  due loop execution while bootstrap still does not open or run
+  due loop execution, while slice 196 adds finite caller-owned loop policy above
+  the same explicit path and bootstrap still does not open or run
   `automation.db`.
   Focused result: `test-config` **48 cases / 429 assertions**.
 
@@ -79,9 +82,10 @@ Slice 182 adds the library-level long-term decay
   `MemoryRetentionService`, periodic advisory `memory_decay` publishing landed
   in slice 191 when callers provide a hook bus, slice 192 adds the
   caller-owned automation runtime handle that opens/migrates `automation.db` and
-  constructs the retention service over stable repository ownership, and slice
-  193 adds the explicit budgeted loop step above that service. Startup hook
-  publishing landed in slice 186.
+  constructs the retention service over stable repository ownership, slice 193
+  adds the explicit budgeted loop step above that service, slice 194 adds due
+  job lifecycle metadata, slice 195 adds retained job leases, and slice 196 adds
+  finite caller-owned loop policy. Startup hook publishing landed in slice 186.
   Focused result:
   `test-memory` **38 cases / 841 assertions**.
 

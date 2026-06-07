@@ -28,8 +28,9 @@ service, slice 189 adds the automation-owned persistent state boundary, slice
 adds optional periodic `memory_decay` publishing from that tick owner, slice
 192 adds the caller-owned automation runtime state handle, and slice 193 adds a
 caller-started retention loop step. Slice 194 adds advisory job lifecycle
-metadata from due retention ticks, and slice 195 adds repository-backed
-retention job leases plus due-run lease ownership in the loop step. The current API
+metadata from due retention ticks, slice 195 adds repository-backed retention
+job leases plus due-run lease ownership in the loop step, and slice 196 adds a
+finite caller-owned loop policy above that leased step. The current API
 evaluates a periodic schedule from caller-supplied state, maps a long-term
 memory retention policy into a due-only `memory::longterm::DecayRequest`,
 persists the configured retention job plus run history and lease state through
@@ -37,7 +38,8 @@ persists the configured retention job plus run history and lease state through
 `AutomationRuntime::open(...)`, lets a runtime owner tick one stored job against
 a supplied long-term memory backend, publishes advisory retention metadata when
 the caller supplies a hook bus, and can wait once within a caller budget for a
-stored retention job to become due while leasing due execution. Bootstrap maps configured-route
+stored retention job to become due while leasing due execution or run a finite
+caller-owned loop over that step. Bootstrap maps configured-route
 `memory.longterm.retention` into a stored `MemoryRetentionJob` descriptor whose
 first fire is after the one-shot startup decay pass, but bootstrap still does
 not open `automation.db` or run a background service.
@@ -87,13 +89,18 @@ Current implementation:
   the tick, returns `ErrorKind::conflict` for active lease holders, propagates
   cancellation while waiting without holding a lease, and rejects invalid wait
   or lease budgets.
-- `test-automation` reports 30 cases / 390 assertions.
+- `MemoryRetentionLoop::run(...)` repeatedly calls the leased `run_once(...)`
+  step for one stored job until `max_iterations` is reached or a step returns
+  no due work within the remaining wait budget. It reports iteration count,
+  due-run count, total wait time, stop reason, and the last step, and can catch
+  up overdue stored retention fires without owning a detached process loop.
+- `test-automation` reports 33 cases / 429 assertions.
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 
 Still open: cron parsing, triggered jobs, bootstrap/service-loop startup policy
 over `AutomationRuntime`, broader per-agent/category leases for agent-facing
-jobs, queueing/backpressure, long-running service-loop cancellation policy,
+jobs, queueing/backpressure, process service/timer cancellation policy,
 notifier callbacks, and the scheduler tick performance criterion. Job lifecycle
 publication exists for explicit retention ticks only; full scheduler/category
 lifecycle ownership remains downstream.

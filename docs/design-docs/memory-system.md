@@ -157,7 +157,7 @@ MEMORY.md mirror. v2 keeps that core and adds:
   metadata before pruning. Expired records eventually receive lower search weight
   before potentially being shadowed or deleted.
 
-Status (slice 195): `include/oran/memory/longterm.hpp` now ships the public
+Status (slice 196): `include/oran/memory/longterm.hpp` now ships the public
 record/query/write/touch/decay shapes, reflection-backed `RecordKind`,
 `Backend` and `VectorBackend` traits, validation helpers for record keys,
 search limits, record metadata, touch requests, decay requests, and vector
@@ -182,8 +182,10 @@ a caller-started retention loop step that can wait within a caller budget for
 one stored job to become due; slice 194 publishes advisory automation job
 lifecycle metadata from due retention ticks; and slice 195 adds stored
 retention job leases plus loop-side due-run lease ownership without moving
-service ownership into `oran-memory`. The memory library still only owns the
-backend execution primitive.
+service ownership into `oran-memory`. Slice 196 adds finite caller-owned loop
+policy in `oran-automation` for catching up overdue stored retention fires
+without moving timers, queues, or bootstrap startup into memory. The memory
+library still only owns the backend execution primitive.
 Slice 162 adds
 `longterm::Runtime`, a prompt-boundary composition layer that delegates search
 to a `Backend`, validates recall requests before dispatch, and renders stable
@@ -296,8 +298,9 @@ from that tick owner, slice 192 adds the caller-owned `AutomationRuntime` state
 handle for explicit automation DB open/migrate ownership, slice 193 adds the
 caller-started retention loop step above that service, slice 194 adds advisory
 job lifecycle metadata from due retention ticks, and slice 195 adds stored
-retention job leases plus loop-side due-run lease ownership. Long-running
-service-loop timers and bootstrap or daemon startup policy remain downstream.
+retention job leases plus loop-side due-run lease ownership. Slice 196 adds
+finite caller-owned loop policy above the leased step. Process service-loop
+timers and bootstrap or daemon startup policy remain downstream.
 Default builds still reject
 `memory.longterm.hybrid_search.enabled=true` before assembly/provider side
 effects with `reason=build_option_disabled`, `option=vector_memory`. Semantic or
@@ -586,9 +589,11 @@ constructs retention services over stable repository ownership. Slice 193 adds
 the caller-started `MemoryRetentionLoop::run_once(...)` step that can wait
 within a caller budget, propagate cancellation while waiting, and then delegate
 due work back to the service. Slice 194 adds advisory `job_started`,
-`job_finished`, and `job_failed` metadata from due ticks. Remaining ownership
-work is real service-loop leases/timers and bootstrap or daemon wiring for
-callers that choose to start that loop.
+`job_finished`, and `job_failed` metadata from due ticks. Slice 195 adds stored
+retention leases around due loop execution, and slice 196 adds finite
+caller-owned `MemoryRetentionLoop::run(...)` policy for repeated leased steps.
+Remaining ownership work is process service timers, broader category leases,
+and bootstrap or daemon wiring for callers that choose to start that loop.
 
 Forgetting is final (DELETE), with an audit row in `audit.db`.
 

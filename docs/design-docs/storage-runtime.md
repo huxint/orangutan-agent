@@ -38,7 +38,8 @@ does not expose `sqlite3.h` from public headers.
 > and runs automation migrations above storage, slice 193 adds a caller-started
 > retention loop step above that runtime/service boundary, slice 194 adds
 > retention job lifecycle hook publishing above the same service, and slice 195
-> adds automation-owned retention lease rows above storage. None
+> adds automation-owned retention lease rows above storage. Slice 196 adds
+> finite caller-owned retention loop policy over that leased step. None
 > of these add storage-owned automation schema or audit rows.
 > `oran-storage` stays the generic SQLite, migration, and pooling substrate.
 > Backups remain future work. Slice 127 adds
