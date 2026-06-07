@@ -42,11 +42,17 @@ struct ListCronJobsOptions {
   std::size_t limit{50};
 };
 
+enum class CronRunOutcome : std::uint8_t {
+  success,
+  failure,
+  aborted,
+};
+
 struct RecordCronRunRequest {
   std::string job_key;
   core::Time fired_at{core::Time::epoch()};
   core::Time finished_at{core::Time::epoch()};
-  bool success{true};
+  CronRunOutcome outcome{CronRunOutcome::success};
   std::optional<std::string> error_message{};
 };
 
@@ -56,6 +62,7 @@ struct CronRunRecord {
   core::Time fired_at{core::Time::epoch()};
   core::Time finished_at{core::Time::epoch()};
   bool success{true};
+  CronRunOutcome outcome{CronRunOutcome::success};
   std::optional<std::string> error_message{};
   std::string created_at;
 };

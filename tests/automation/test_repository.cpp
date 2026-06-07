@@ -103,13 +103,13 @@ TEST_CASE("AutomationRepository::migrate applies the automation schema once", "[
     auto first = co_await repo.migrate();
     REQUIRE(first.has_value());
     REQUIRE(first->previous_version == 0);
-    REQUIRE(first->current_version == 4);
-    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3, 4});
+    REQUIRE(first->current_version == 5);
+    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3, 4, 5});
 
     auto second = co_await repo.migrate();
     REQUIRE(second.has_value());
-    REQUIRE(second->previous_version == 4);
-    REQUIRE(second->current_version == 4);
+    REQUIRE(second->previous_version == 5);
+    REQUIRE(second->current_version == 5);
     REQUIRE(second->applied_versions.empty());
   });
 }
@@ -213,32 +213,47 @@ TEST_CASE("AutomationRepository records and lists cron runs", "[unit][automation
         .job_key = "cron:daily-summary",
         .fired_at = at(120s),
         .finished_at = at(121s),
-        .success = true,
+        .outcome = automation::CronRunOutcome::success,
     });
     REQUIRE(first.has_value());
     REQUIRE(first->job_key == "cron:daily-summary");
     REQUIRE(first->success);
+    REQUIRE(first->outcome == automation::CronRunOutcome::success);
     REQUIRE_FALSE(first->error_message.has_value());
 
     auto second = co_await repo.record_cron_run(automation::RecordCronRunRequest{
         .job_key = "cron:daily-summary",
         .fired_at = at(180s),
         .finished_at = at(181s),
-        .success = false,
+        .outcome = automation::CronRunOutcome::failure,
         .error_message = "handler failed",
     });
     REQUIRE(second.has_value());
     REQUIRE_FALSE(second->success);
+    REQUIRE(second->outcome == automation::CronRunOutcome::failure);
     REQUIRE(second->error_message == "handler failed");
+
+    auto third = co_await repo.record_cron_run(automation::RecordCronRunRequest{
+        .job_key = "cron:daily-summary",
+        .fired_at = at(240s),
+        .finished_at = at(241s),
+        .outcome = automation::CronRunOutcome::aborted,
+        .error_message = "cancelled",
+    });
+    REQUIRE(third.has_value());
+    REQUIRE_FALSE(third->success);
+    REQUIRE(third->outcome == automation::CronRunOutcome::aborted);
+    REQUIRE(third->error_message == "cancelled");
 
     auto listed = co_await repo.list_cron_runs(automation::ListCronRunsOptions{
         .job_key = "cron:daily-summary",
         .limit = 10,
     });
     REQUIRE(listed.has_value());
-    REQUIRE(listed->size() == 2);
-    REQUIRE((*listed)[0].id == second->id);
-    REQUIRE((*listed)[1].id == first->id);
+    REQUIRE(listed->size() == 3);
+    REQUIRE((*listed)[0].id == third->id);
+    REQUIRE((*listed)[1].id == second->id);
+    REQUIRE((*listed)[2].id == first->id);
 
     auto capped = co_await repo.list_cron_runs(automation::ListCronRunsOptions{
         .job_key = "cron:daily-summary",
@@ -246,7 +261,7 @@ TEST_CASE("AutomationRepository records and lists cron runs", "[unit][automation
     });
     REQUIRE(capped.has_value());
     REQUIRE(capped->size() == 1);
-    REQUIRE((*capped)[0].id == second->id);
+    REQUIRE((*capped)[0].id == third->id);
   });
 }
 
@@ -486,10 +501,19 @@ TEST_CASE("AutomationRepository validates memory retention persistence inputs", 
         .job_key = "cron:daily-summary",
         .fired_at = at(10s),
         .finished_at = at(11s),
-        .success = false,
+        .outcome = automation::CronRunOutcome::failure,
     });
     REQUIRE_FALSE(missing_cron_error.has_value());
     REQUIRE(has_field(missing_cron_error.error(), "error_message"));
+
+    auto missing_cron_abort_error = co_await repo.record_cron_run(automation::RecordCronRunRequest{
+        .job_key = "cron:daily-summary",
+        .fired_at = at(10s),
+        .finished_at = at(11s),
+        .outcome = automation::CronRunOutcome::aborted,
+    });
+    REQUIRE_FALSE(missing_cron_abort_error.has_value());
+    REQUIRE(has_field(missing_cron_abort_error.error(), "error_message"));
 
     auto bad_cron_order = co_await repo.record_cron_run(automation::RecordCronRunRequest{
         .job_key = "cron:daily-summary",

@@ -73,6 +73,10 @@ void track_next_fire(CronTickResult& result, core::Time next_fire_at) {
   return std::string{error.message()};
 }
 
+[[nodiscard]] CronRunOutcome cron_run_outcome_for_error(const core::Error& error) noexcept {
+  return error.kind() == core::ErrorKind::cancelled ? CronRunOutcome::aborted : CronRunOutcome::failure;
+}
+
 [[nodiscard]] std::chrono::nanoseconds duration_between(core::Time started_at, core::Time finished_at) noexcept {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(finished_at.to_system_time_point() -
                                                               started_at.to_system_time_point());
@@ -292,7 +296,7 @@ async::Awaitable<core::Result<CronExecuteResult>> CronService::execute_due(CronE
           .job_key = due.job.job_key,
           .fired_at = due.schedule.next_fire_at,
           .finished_at = request.now,
-          .success = false,
+          .outcome = cron_run_outcome_for_error(error),
           .error_message = failure_message(error, "cron job handler failed"),
       });
       if (!recorded) {
@@ -311,7 +315,7 @@ async::Awaitable<core::Result<CronExecuteResult>> CronService::execute_due(CronE
         .job_key = due.job.job_key,
         .fired_at = due.schedule.next_fire_at,
         .finished_at = request.now,
-        .success = true,
+        .outcome = CronRunOutcome::success,
     });
     if (!recorded) {
       co_return std::unexpected(std::move(recorded).error());

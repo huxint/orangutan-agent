@@ -7,27 +7,26 @@
 
 ## Snapshot
 
-- **Slice:** 207 (`xmake run orangutan -- --help` reports slice 207)
+- **Slice:** 208 (`xmake run orangutan -- --help` reports slice 208)
 - **Last completed history:**
-  [`histories/2026-06/20260608-0122-automation-cron-loop-stop-policy.md`](histories/2026-06/20260608-0122-automation-cron-loop-stop-policy.md)
+  [`histories/2026-06/20260608-0143-automation-cron-run-outcomes.md`](histories/2026-06/20260608-0143-automation-cron-run-outcomes.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-cron-category.md`](exec-plans/active/2026-06-07-automation-cron-category.md).
-- **Latest completed slice:** slice 207 adds cooperative cron loop stop policy
-  without starting a scheduler. `CronLoopRunRequest::stop_requested` is an
-  optional caller predicate, `CronLoopRunStopReason::stop_requested` reports a
-  graceful stop, and `AutomationRuntime::run_cron_service_cycle(...)` forwards
-  the same policy into the owned loop. The loop checks the predicate before
-  starting an iteration and after each execution, so callers can stop before
-  any work or after a successful batch without recording extra run rows or
-  sleeping again. Bootstrap still only stores cron descriptors; it does not
-  open `automation.db`, apply rows automatically, start process timers, spawn
-  detached work, enqueue work, call notifiers, or fire agents. Focused results:
-  `test-automation` **63 cases / 854 assertions** and `test-bootstrap` **129
-  cases / 1087 assertions**.
+- **Latest completed slice:** slice 208 classifies explicit cron handler
+  outcomes without starting a scheduler. `CronRunOutcome` stores
+  `success`/`failure`/`aborted` in `automation_cron_runs` migration v5 while
+  preserving `CronRunRecord::success` for compatibility. `CronService::execute_due(...)`
+  records cancelled handler errors as `aborted`, other handler errors as
+  `failure`, and successful handlers as `success`; cancelled/failed jobs still
+  leave stored cron state due for retry. Bootstrap still only stores cron
+  descriptors; it does not open `automation.db`, apply rows automatically,
+  start process timers, spawn detached work, enqueue work, call notifiers, or
+  fire agents. Focused results: `test-automation` **64 cases / 893 assertions**
+  and `test-bootstrap` **129 cases / 1087 assertions**.
 - **Next intended slice:** continue the active automation cron/category plan.
   The next useful implementation boundary is a small scheduler-service
-  ownership slice such as triggered/notifier/queue policy, per-agent/category
-  lease policy, or cancellation-result classification for active job handlers.
+  ownership slice such as triggered/notifier/queue policy or per-agent/category
+  lease policy.
   Do not add bootstrap-owned background automation or unrelated STATUS-only
   slice churn.
 

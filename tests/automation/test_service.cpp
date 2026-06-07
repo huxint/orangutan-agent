@@ -206,6 +206,7 @@ TEST_CASE("CronService::execute_due advances only successful due cron jobs", "[u
     REQUIRE(success->run->job_key == "cron:succeeds");
     REQUIRE(success->run->fired_at == at(60s));
     REQUIRE(success->run->success);
+    REQUIRE(success->run->outcome == automation::CronRunOutcome::success);
     REQUIRE_FALSE(success->run->error_message.has_value());
     REQUIRE(success->marked_job.has_value());
     REQUIRE(success->marked_job->state.last_fired_at == at(60s));
@@ -220,6 +221,7 @@ TEST_CASE("CronService::execute_due advances only successful due cron jobs", "[u
     REQUIRE(failure->run.has_value());
     REQUIRE(failure->run->job_key == "cron:fails");
     REQUIRE_FALSE(failure->run->success);
+    REQUIRE(failure->run->outcome == automation::CronRunOutcome::failure);
     REQUIRE(failure->run->error_message == "cron payload failed");
     REQUIRE_FALSE(failure->marked_job.has_value());
 
@@ -240,6 +242,7 @@ TEST_CASE("CronService::execute_due advances only successful due cron jobs", "[u
     REQUIRE(success_runs.has_value());
     REQUIRE(success_runs->size() == 1);
     REQUIRE((*success_runs)[0].success);
+    REQUIRE((*success_runs)[0].outcome == automation::CronRunOutcome::success);
 
     auto failure_runs = co_await repo.list_cron_runs(automation::ListCronRunsOptions{
         .job_key = "cron:fails",
@@ -248,7 +251,62 @@ TEST_CASE("CronService::execute_due advances only successful due cron jobs", "[u
     REQUIRE(failure_runs.has_value());
     REQUIRE(failure_runs->size() == 1);
     REQUIRE_FALSE((*failure_runs)[0].success);
+    REQUIRE((*failure_runs)[0].outcome == automation::CronRunOutcome::failure);
     REQUIRE((*failure_runs)[0].error_message == "cron payload failed");
+  });
+}
+
+TEST_CASE("CronService::execute_due records cancelled cron handlers as aborted", "[unit][automation][service][cron]") {
+  TempDb db{"oran-automation-service-cron-cancelled"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
+                 .job_key = "cron:cancelled",
+                 .schedule = make_cron_schedule(),
+             }))
+                .has_value());
+
+    automation::CronService service{repo};
+    auto result = co_await service.execute_due(automation::CronExecuteRequest{
+        .now = at(120s),
+        .job_limit = 10,
+        .handler = [](automation::CronDueJob) -> async::Awaitable<core::Result<void>> {
+          co_return std::unexpected(core::Error::cancelled());
+        },
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->attempted_count == 1);
+    REQUIRE(result->advanced_count == 0);
+    REQUIRE(result->attempts.size() == 1);
+    const auto& attempt = result->attempts[0];
+    REQUIRE(attempt.due.job.job_key == "cron:cancelled");
+    REQUIRE_FALSE(attempt.advanced);
+    REQUIRE(attempt.error.has_value());
+    REQUIRE(attempt.error->kind() == core::ErrorKind::cancelled);
+    REQUIRE(attempt.run.has_value());
+    REQUIRE(attempt.run->job_key == "cron:cancelled");
+    REQUIRE_FALSE(attempt.run->success);
+    REQUIRE(attempt.run->outcome == automation::CronRunOutcome::aborted);
+    REQUIRE(attempt.run->error_message == "cancelled");
+    REQUIRE_FALSE(attempt.marked_job.has_value());
+
+    auto loaded = co_await repo.get_cron_job("cron:cancelled");
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->has_value());
+    REQUIRE_FALSE((*loaded)->state.last_fired_at.has_value());
+
+    auto runs = co_await repo.list_cron_runs(automation::ListCronRunsOptions{
+        .job_key = "cron:cancelled",
+        .limit = 10,
+    });
+    REQUIRE(runs.has_value());
+    REQUIRE(runs->size() == 1);
+    REQUIRE_FALSE((*runs)[0].success);
+    REQUIRE((*runs)[0].outcome == automation::CronRunOutcome::aborted);
+    REQUIRE((*runs)[0].error_message == "cancelled");
   });
 }
 

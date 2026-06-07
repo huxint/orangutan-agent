@@ -46,13 +46,15 @@ mapped descriptors. Slice 205 adds an explicit
 service-cycle policy, applies supplied cron seeds, and awaits the existing
 finite cron loop in one caller-owned step. Slice 206 adds durable cron run
 history for explicit due-execution attempts, and slice 207 adds cooperative
-stop policy for the finite cron loop and service-cycle handoff. The current API
+stop policy for the finite cron loop and service-cycle handoff. Slice 208
+classifies explicit cron handler run history as `success`, `failure`, or
+`aborted`, with cancelled handler errors stored as `aborted`. The current API
 evaluates periodic and cron
 schedules from caller-supplied state, maps a long-term memory retention policy
 into a due-only `memory::longterm::DecayRequest`, persists the configured
 retention job plus run history and lease state through `AutomationRepository`,
 persists cron job schedule/last-fired state through `AutomationRepository`,
-persists cron success/failure run history through `AutomationRepository`,
+persists cron success/failure/aborted run history through `AutomationRepository`,
 explicitly opens/migrates automation state through `AutomationRuntime::open(...)`,
 lets a runtime owner scan stored cron jobs for due work without mutating them,
 lets a runtime owner execute due cron jobs through a supplied handler and mark
@@ -115,8 +117,8 @@ Current implementation:
   `last_fired_at`, records success/failure run rows, lists recent runs, acquires
   retention job leases when no active lease exists or an existing lease has
   expired, releases leases only for the matching owner, and upserts/loads/lists
-  cron jobs with durable schedule plus last-fired state and success/failure run
-  history.
+  cron jobs with durable schedule plus last-fired state and
+  success/failure/aborted run history.
 - `AutomationRuntime::open(...)` validates an explicit database path, creates
   parent directories, opens `automation.db` through an owned `storage::Pool`,
   runs automation migrations, exposes the migration report and repository, can
@@ -167,9 +169,10 @@ Current implementation:
   the wait.
 - `CronService::execute_due(...)` reuses that scan result, invokes a
   caller-supplied handler for each due cron job, advances `last_fired_at` only
-  after the handler succeeds, records success/failure cron run rows, reports
-  handler errors per attempt, and leaves failed-handler jobs due for retry by
-  the next explicit call.
+  after the handler succeeds, records success/failure/aborted cron run rows,
+  records `ErrorKind::cancelled` handler errors as `aborted`, reports handler
+  errors per attempt, and leaves failed or aborted handler jobs due for retry
+  by the next explicit call.
 - `CronLoop::run(...)` repeatedly calls `execute_due(...)` up to a caller
   iteration limit, waits only within `max_total_wait`, aggregates
   attempted/advanced/failed counters, stops on `no_due_work`,
@@ -181,7 +184,7 @@ Current implementation:
   before the handler, `job_failed` after a handler failure while keeping cron
   state unadvanced, and `job_finished` only after handler success plus durable
   `last_fired_at` advancement. Advisory sink failures remain non-fatal.
-- `test-automation` reports 63 cases / 854 assertions.
+- `test-automation` reports 64 cases / 893 assertions.
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 
@@ -222,7 +225,10 @@ remains downstream.
    with the failure reason and leaves stored state due for retry; broader
    scheduler retry/drop policy remains downstream.
 6. Cancelling a job mid-run respects the executor's cancellation semantics; the run
-   is recorded as `aborted`.
+   is recorded as `aborted`. Current status: slice 208 records explicit cron
+   handler errors with `ErrorKind::cancelled` as `aborted` run rows while
+   leaving cron state due for retry; broader scheduler cancellation semantics
+   remain downstream.
 7. `tests/automation/` ≥ 80% coverage.
 8. `bench/automation/scheduler-tick` reports < 5 ms for 1 000 jobs.
 

@@ -9,7 +9,8 @@ config-authored cron schedule seeds mapped by bootstrap into stored descriptors,
 a caller-owned runtime state handle, explicit cron seed application, a
 caller-awaited cron service cycle over the existing finite cron loop, a
 caller-driven cron scan/wait/execute-due boundary plus finite caller-owned cron
-loop policy and advisory cron lifecycle metadata, and a caller-driven retention
+loop policy, advisory cron lifecycle metadata, and typed cron run outcome
+classification, and a caller-driven retention
 service tick with optional advisory `memory_decay` plus job lifecycle metadata,
 plus a caller-started retention loop step that can wait within a caller budget
 for one stored job to become due and lease due execution, plus a finite
@@ -242,6 +243,17 @@ the owned loop. This is graceful loop shutdown policy only; it does not cancel a
 handler already running, interrupt sleep without parent cancellation, start a
 timer, enqueue work, notify channels, or call agents.
 
+Slice 208 classifies explicit cron handler run history without adding queue,
+notifier, or scheduler ownership. `CronRunOutcome` stores `success`,
+`failure`, or `aborted` on `automation_cron_runs`; migration version 5 backfills
+existing rows from the legacy success flag, and `CronRunRecord::success`
+remains as a compatibility convenience. `CronService::execute_due(...)`
+records `ErrorKind::cancelled` handler errors as `aborted`, other handler
+errors as `failure`, and successful handlers as `success`. Failed and aborted
+attempts still leave stored cron state unchanged for explicit retry, and the
+existing advisory `job_failed` lifecycle event remains the hook surface for a
+cancelled handler result in this slice.
+
 ## Public API
 
 ```cpp
@@ -326,11 +338,17 @@ struct ListCronJobsOptions {
   std::size_t limit;
 };
 
+enum class CronRunOutcome {
+  success,
+  failure,
+  aborted,
+};
+
 struct RecordCronRunRequest {
   std::string job_key;
   core::Time fired_at;
   core::Time finished_at;
-  bool success;
+  CronRunOutcome outcome;
   std::optional<std::string> error_message;
 };
 
@@ -340,6 +358,7 @@ struct CronRunRecord {
   core::Time fired_at;
   core::Time finished_at;
   bool success;
+  CronRunOutcome outcome;
   std::optional<std::string> error_message;
   std::string created_at;
 };
@@ -877,6 +896,12 @@ time, finished time, success flag, optional error message, and created
 timestamp. `idx_automation_cron_runs_job_fired` lists recent runs newest-first
 for one durable cron job key.
 
+Migration version 5 adds `automation_cron_runs.outcome` with the typed
+identifier spelling `success`, `failure`, or `aborted`, backfilling existing
+rows from the v4 success flag. The success flag remains for compatibility, and
+repository reads reject rows whose bool success value disagrees with the typed
+outcome.
+
 `job_key` is the durable repository identity. `scope_key` remains the memory
 decay scope inside the stored job descriptor, so future different automation
 jobs or policies can share a memory scope without overwriting each other. Cron
@@ -887,20 +912,20 @@ Repository calls validate inputs before touching SQLite: empty job keys are
 rejected, cron schedules must pass `evaluate_cron_schedule(...)`, retention
 jobs must pass the same policy validation used by `plan_memory_retention(...)`,
 failed runs require an error message, run finish time must not precede fire
-time, list limits must be positive, lease owner keys must be non-empty, and
-lease expiry must be after acquisition time. Missing jobs return `std::nullopt`
-on `get_cron_job(...)` / `get_memory_retention_job(...)` and
-`ErrorKind::not_found` from mutation operations that require an existing job.
+time, failed or aborted cron runs require an error message, list limits must be
+positive, lease owner keys must be non-empty, and lease expiry must be after
+acquisition time. Missing jobs return `std::nullopt` on `get_cron_job(...)` /
+`get_memory_retention_job(...)` and `ErrorKind::not_found` from mutation
+operations that require an existing job.
 
 `upsert_cron_job(...)` replaces the stored schedule and last-fired state for a
 durable `job_key` while preserving `created_at`; `mark_cron_job_fired(...)`
 advances only `last_fired_at` and `updated_at`; `list_cron_jobs(...)` returns a
 positive-limit bounded vector ordered by most recently updated first.
-`record_cron_run(...)` appends one success/failure outcome for a due handler
-attempt, and `list_cron_runs(...)` returns recent rows for a single cron job by
-`fired_at DESC, id DESC`. These APIs are state storage only: they do not
-evaluate due work, acquire leases, publish
-hooks, or call agents.
+`record_cron_run(...)` appends one `success`, `failure`, or `aborted` outcome
+for a due handler attempt, and `list_cron_runs(...)` returns recent rows for a
+single cron job by `fired_at DESC, id DESC`. These APIs are state storage only:
+they do not evaluate due work, acquire leases, publish hooks, or call agents.
 
 `acquire_memory_retention_lease(...)` returns:
 
@@ -974,7 +999,9 @@ stored `last_fired_at` to `due.schedule.next_fire_at` through
 has been recorded. Handler errors are recorded as failed cron run rows with the
 failure message, stored on the matching `CronExecuteAttempt`, do not stop later
 due jobs in the same call, and leave that job's stored state unchanged so the
-next explicit call can retry the same scheduled fire. Not-due scans record no
+next explicit call can retry the same scheduled fire. Handler errors whose kind
+is `ErrorKind::cancelled` are stored with `CronRunOutcome::aborted`; other
+handler errors are stored as `CronRunOutcome::failure`. Not-due scans record no
 cron run rows.
 
 When `CronServiceOptions::hooks.bus` is set, due execution also publishes
@@ -1273,6 +1300,11 @@ Slice 207 reports `test-automation` at 63 cases / 854 assertions for
 cooperative cron loop stop policy, covering stop-before-work, stop-after-one
 successful execution, and runtime service-cycle pass-through of the same
 predicate.
+Slice 208 reports `test-automation` at 64 cases / 893 assertions for cron run
+outcome classification, covering migration v5, success/failure/aborted
+repository round-trips, missing aborted error validation, cancelled-handler
+classification as `aborted`, and `AutomationRuntime::open(...)` migration
+report version 5.
 
 `bench-automation` planning rows are:
 

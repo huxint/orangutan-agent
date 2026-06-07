@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
 #include <oran/storage/migrations.hpp>
 #include <oran/storage/pool.hpp>
@@ -38,6 +39,10 @@ constexpr unsigned char kAutomationCronJobsBytes[] = {
 
 constexpr unsigned char kAutomationCronRunsBytes[] = {
 #embed "migrations/automation/0004-automation-cron-runs.sql"
+};
+
+constexpr unsigned char kAutomationCronRunOutcomesBytes[] = {
+#embed "migrations/automation/0005-automation-cron-run-outcomes.sql"
 };
 
 constexpr std::string_view kUpsertCronJobSql = R"sql(
@@ -108,15 +113,17 @@ INSERT INTO automation_cron_runs(
   fired_at,
   finished_at,
   success,
+  outcome,
   error_message,
   created_at
-) VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+) VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 RETURNING
   id,
   job_key,
   fired_at,
   finished_at,
   success,
+  outcome,
   error_message,
   created_at
 )sql";
@@ -128,6 +135,7 @@ SELECT
   fired_at,
   finished_at,
   success,
+  outcome,
   error_message,
   created_at
 FROM automation_cron_runs
@@ -277,7 +285,7 @@ template <std::size_t N>
 }
 
 [[nodiscard]] std::span<const storage::Migration> built_in_automation_migrations() {
-  static const std::array<storage::Migration, 4> kMigrations{
+  static const std::array<storage::Migration, 5> kMigrations{
       storage::Migration{
           .version = 1,
           .name = "automation-retention-state",
@@ -297,6 +305,11 @@ template <std::size_t N>
           .version = 4,
           .name = "automation-cron-runs",
           .sql = to_sql_string(kAutomationCronRunsBytes),
+      },
+      storage::Migration{
+          .version = 5,
+          .name = "automation-cron-run-outcomes",
+          .sql = to_sql_string(kAutomationCronRunOutcomesBytes),
       },
   };
   return kMigrations;
@@ -361,7 +374,8 @@ template <std::size_t N>
   if (request.finished_at < request.fired_at) {
     return std::unexpected(invalid_field("finished_at", "before_fired_at"));
   }
-  if (!request.success && (!request.error_message.has_value() || request.error_message->empty())) {
+  if (request.outcome != CronRunOutcome::success &&
+      (!request.error_message.has_value() || request.error_message->empty())) {
     return std::unexpected(invalid_field("error_message", "missing_for_failure"));
   }
   return {};
@@ -515,6 +529,24 @@ read_size(storage::Statement& statement, int index, std::string_view field, bool
                                .with("operation", std::string{operation}));
   }
   return {};
+}
+
+[[nodiscard]] bool cron_run_success(CronRunOutcome outcome) noexcept {
+  return outcome == CronRunOutcome::success;
+}
+
+[[nodiscard]] core::Result<CronRunOutcome> read_cron_run_outcome(storage::Statement& statement, int index) {
+  auto outcome_text = required_text(statement, index, "outcome");
+  if (!outcome_text) {
+    return std::unexpected(outcome_text.error());
+  }
+  auto outcome = core::parse_enum<CronRunOutcome>(*outcome_text);
+  if (!outcome) {
+    return std::unexpected(core::Error::storage("automation repository row has invalid cron run outcome")
+                               .with("field", "outcome")
+                               .with("outcome", *outcome_text));
+  }
+  return *outcome;
 }
 
 [[nodiscard]] core::Result<MemoryRetentionJobRecord> read_job_row(storage::Statement& statement) {
@@ -706,11 +738,20 @@ read_size(storage::Statement& statement, int index, std::string_view field, bool
     return std::unexpected(core::Error::storage("automation repository row has invalid success value")
                                .with("success", std::to_string(*success)));
   }
-  auto error_message = optional_text(statement, 5);
+  auto outcome = read_cron_run_outcome(statement, 5);
+  if (!outcome) {
+    return std::unexpected(outcome.error());
+  }
+  if ((*success == 1) != cron_run_success(*outcome)) {
+    return std::unexpected(core::Error::storage("automation repository row has mismatched cron run success outcome")
+                               .with("success", std::to_string(*success))
+                               .with("outcome", std::string{core::enum_name(*outcome)}));
+  }
+  auto error_message = optional_text(statement, 6);
   if (!error_message) {
     return std::unexpected(error_message.error());
   }
-  auto created_at = required_text(statement, 6, "created_at");
+  auto created_at = required_text(statement, 7, "created_at");
   if (!created_at) {
     return std::unexpected(created_at.error());
   }
@@ -721,6 +762,7 @@ read_size(storage::Statement& statement, int index, std::string_view field, bool
       .fired_at = *fired_at,
       .finished_at = *finished_at,
       .success = *success == 1,
+      .outcome = *outcome,
       .error_message = std::move(*error_message),
       .created_at = std::move(*created_at),
   };
@@ -988,10 +1030,13 @@ async::Awaitable<core::Result<CronRunRecord>> AutomationRepository::record_cron_
   if (auto bound = statement.bind_text(3, core::time::format_iso8601_utc(request.finished_at)); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = statement.bind_int64(4, request.success ? 1 : 0); !bound) {
+  if (auto bound = statement.bind_int64(4, cron_run_success(request.outcome) ? 1 : 0); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = bind_optional_text(statement, 5, request.error_message); !bound) {
+  if (auto bound = statement.bind_text(5, core::enum_name(request.outcome)); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = bind_optional_text(statement, 6, request.error_message); !bound) {
     co_return std::unexpected(bound.error());
   }
 
