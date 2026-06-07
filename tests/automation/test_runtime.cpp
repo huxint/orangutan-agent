@@ -165,8 +165,8 @@ TEST_CASE("AutomationRuntime::open creates parent directories and migrates state
     REQUIRE(opened->database_path() == db_path);
     REQUIRE(std::filesystem::exists(workspace.path() / ".orangutan" / "automation.db"));
     REQUIRE(opened->migration_report().previous_version == 0);
-    REQUIRE(opened->migration_report().current_version == 2);
-    REQUIRE(opened->migration_report().applied_versions == std::vector<std::int64_t>{1, 2});
+    REQUIRE(opened->migration_report().current_version == 3);
+    REQUIRE(opened->migration_report().applied_versions == std::vector<std::int64_t>{1, 2, 3});
 
     auto upserted =
         co_await opened->repository().upsert_memory_retention_job(automation::UpsertMemoryRetentionJobRequest{
@@ -191,14 +191,14 @@ TEST_CASE("AutomationRuntime::open reuses an already migrated automation databas
                                                      automation::AutomationRuntimeOptions{.database_path = db_path});
     REQUIRE(first.has_value());
     REQUIRE(first->migration_report().previous_version == 0);
-    REQUIRE(first->migration_report().current_version == 2);
+    REQUIRE(first->migration_report().current_version == 3);
 
     auto second =
         co_await automation::AutomationRuntime::open(io.get_executor(),
                                                      automation::AutomationRuntimeOptions{.database_path = db_path});
     REQUIRE(second.has_value());
-    REQUIRE(second->migration_report().previous_version == 2);
-    REQUIRE(second->migration_report().current_version == 2);
+    REQUIRE(second->migration_report().previous_version == 3);
+    REQUIRE(second->migration_report().current_version == 3);
     REQUIRE(second->migration_report().applied_versions.empty());
   });
 }

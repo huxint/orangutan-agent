@@ -85,6 +85,13 @@ automation::MemoryRetentionJob make_job(std::string scope_key = "cli") {
   };
 }
 
+automation::CronSchedule make_cron_schedule(std::string expression = "0 9 * * 1-5") {
+  return automation::CronSchedule{
+      .expression = std::move(expression),
+      .first_fire_at = at(60s),
+  };
+}
+
 }  // namespace
 
 TEST_CASE("AutomationRepository::migrate applies the automation schema once", "[unit][automation][repository]") {
@@ -96,14 +103,97 @@ TEST_CASE("AutomationRepository::migrate applies the automation schema once", "[
     auto first = co_await repo.migrate();
     REQUIRE(first.has_value());
     REQUIRE(first->previous_version == 0);
-    REQUIRE(first->current_version == 2);
-    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2});
+    REQUIRE(first->current_version == 3);
+    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3});
 
     auto second = co_await repo.migrate();
     REQUIRE(second.has_value());
-    REQUIRE(second->previous_version == 2);
-    REQUIRE(second->current_version == 2);
+    REQUIRE(second->previous_version == 3);
+    REQUIRE(second->current_version == 3);
     REQUIRE(second->applied_versions.empty());
+  });
+}
+
+TEST_CASE("AutomationRepository round-trips cron jobs", "[unit][automation][repository][cron]") {
+  TempDb db{"oran-automation-repo-cron"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+
+    auto upserted = co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
+        .job_key = "cron:daily-summary",
+        .schedule = make_cron_schedule(),
+        .state = automation::PeriodicJobState{.last_fired_at = at(120s)},
+    });
+    REQUIRE(upserted.has_value());
+    REQUIRE(upserted->job_key == "cron:daily-summary");
+    REQUIRE(upserted->schedule == make_cron_schedule());
+    REQUIRE(upserted->state.last_fired_at == at(120s));
+    REQUIRE_FALSE(upserted->created_at.empty());
+    REQUIRE_FALSE(upserted->updated_at.empty());
+
+    auto loaded = co_await repo.get_cron_job("cron:daily-summary");
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->has_value());
+    REQUIRE((*loaded)->job_key == upserted->job_key);
+    REQUIRE((*loaded)->schedule == upserted->schedule);
+    REQUIRE((*loaded)->state == upserted->state);
+
+    auto missing = co_await repo.get_cron_job("cron:missing");
+    REQUIRE(missing.has_value());
+    REQUIRE_FALSE(missing->has_value());
+  });
+}
+
+TEST_CASE("AutomationRepository updates and lists cron job state", "[unit][automation][repository][cron]") {
+  TempDb db{"oran-automation-repo-cron-update"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
+                 .job_key = "cron:daily-summary",
+                 .schedule = make_cron_schedule(),
+             }))
+                .has_value());
+    REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
+                 .job_key = "cron:weekly-summary",
+                 .schedule = make_cron_schedule("30 10 * * 1"),
+             }))
+                .has_value());
+
+    auto changed = make_cron_schedule("15 8 * * 1-5");
+    changed.first_fire_at = at(180s);
+    auto upserted = co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
+        .job_key = "cron:daily-summary",
+        .schedule = changed,
+        .state = automation::PeriodicJobState{.last_fired_at = at(240s)},
+    });
+    REQUIRE(upserted.has_value());
+    REQUIRE(upserted->schedule == changed);
+    REQUIRE(upserted->state.last_fired_at == at(240s));
+
+    auto marked = co_await repo.mark_cron_job_fired("cron:daily-summary", at(300s));
+    REQUIRE(marked.has_value());
+    REQUIRE(marked->schedule == changed);
+    REQUIRE(marked->state.last_fired_at == at(300s));
+
+    auto listed = co_await repo.list_cron_jobs(automation::ListCronJobsOptions{.limit = 10});
+    REQUIRE(listed.has_value());
+    REQUIRE(listed->size() == 2);
+    auto daily =
+        std::ranges::find_if(*listed, [](const auto& record) { return record.job_key == "cron:daily-summary"; });
+    REQUIRE(daily != listed->end());
+    REQUIRE(daily->state.last_fired_at == at(300s));
+
+    auto capped = co_await repo.list_cron_jobs(automation::ListCronJobsOptions{.limit = 1});
+    REQUIRE(capped.has_value());
+    REQUIRE(capped->size() == 1);
+
+    auto missing = co_await repo.mark_cron_job_fired("cron:missing", at(360s));
+    REQUIRE_FALSE(missing.has_value());
+    REQUIRE(missing.error().kind() == core::ErrorKind::not_found);
   });
 }
 
@@ -375,5 +465,38 @@ TEST_CASE("AutomationRepository validates memory retention persistence inputs", 
         });
     REQUIRE_FALSE(missing_lease_job.has_value());
     REQUIRE(missing_lease_job.error().kind() == core::ErrorKind::not_found);
+  });
+}
+
+TEST_CASE("AutomationRepository validates cron persistence inputs", "[unit][automation][repository][cron]") {
+  TempDb db{"oran-automation-repo-cron-validation"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+
+    auto invalid_job_key = co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
+        .job_key = "",
+        .schedule = make_cron_schedule(),
+    });
+    REQUIRE_FALSE(invalid_job_key.has_value());
+    REQUIRE(invalid_job_key.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(has_field(invalid_job_key.error(), "job_key"));
+
+    auto invalid_expression = co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
+        .job_key = "cron:daily-summary",
+        .schedule = make_cron_schedule("60 9 * * *"),
+    });
+    REQUIRE_FALSE(invalid_expression.has_value());
+    REQUIRE(invalid_expression.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(has_field(invalid_expression.error(), "minute"));
+
+    auto bad_limit = co_await repo.list_cron_jobs(automation::ListCronJobsOptions{.limit = 0});
+    REQUIRE_FALSE(bad_limit.has_value());
+    REQUIRE(has_field(bad_limit.error(), "limit"));
+
+    auto missing = co_await repo.mark_cron_job_fired("cron:missing", at(120s));
+    REQUIRE_FALSE(missing.has_value());
+    REQUIRE(missing.error().kind() == core::ErrorKind::not_found);
   });
 }

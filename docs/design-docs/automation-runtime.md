@@ -4,13 +4,13 @@
 still intentionally narrow: deterministic periodic schedule and POSIX cron
 evaluation, long-term memory retention request planning, a bootstrap-owned
 mapping from configured retention policy into that job descriptor,
-automation-owned retention job/run persistence, a caller-owned runtime state
-handle, and a caller-driven retention service tick with optional advisory
-`memory_decay` plus job lifecycle metadata, plus a caller-started retention loop
-step that can wait within a caller budget for one stored job to become due and
-lease due execution, plus a finite caller-owned loop policy over that step. It
-does not start detached background work, own a process service loop, or call an
-agent loop.
+automation-owned retention job/run/lease persistence, durable cron job state, a
+caller-owned runtime state handle, and a caller-driven retention service tick
+with optional advisory `memory_decay` plus job lifecycle metadata, plus a
+caller-started retention loop step that can wait within a caller budget for one
+stored job to become due and lease due execution, plus a finite caller-owned
+loop policy over that step. It does not start detached background work, own a
+process service loop, read cron config, or call an agent loop.
 
 ## Current Status
 
@@ -138,6 +138,17 @@ and steps into deterministic next-fire metadata over caller-supplied
 periodic jobs and intentionally does not persist cron jobs, open automation
 state, start timers, spawn detached work, or call agents.
 
+Slice 198 persists cron-category job state without introducing a scheduler.
+`AutomationRepository` migration version 3 creates `automation_cron_jobs`; the
+repository can upsert, load, mark fired, and list cron jobs keyed by durable
+`job_key`. Stored rows carry `CronSchedule` (`expression`, `first_fire_at`),
+nullable `PeriodicJobState::last_fired_at`, and created/updated timestamps.
+Repository validation reuses `evaluate_cron_schedule(...)` before touching
+SQLite, enforces positive list limits, returns `std::nullopt` for missing
+`get_cron_job(...)`, and returns `ErrorKind::not_found` for mutation operations
+that require an existing cron job. It still does not read config, start timers,
+spawn detached work, publish cron lifecycle hooks, or call agents.
+
 ## Public API
 
 ```cpp
@@ -204,6 +215,24 @@ struct AutomationRuntimeOptions {
   AutomationRepositoryOptions repository;
 };
 
+struct UpsertCronJobRequest {
+  std::string job_key;
+  CronSchedule schedule;
+  PeriodicJobState state;
+};
+
+struct CronJobRecord {
+  std::string job_key;
+  CronSchedule schedule;
+  PeriodicJobState state;
+  std::string created_at;
+  std::string updated_at;
+};
+
+struct ListCronJobsOptions {
+  std::size_t limit;
+};
+
 struct UpsertMemoryRetentionJobRequest {
   std::string job_key;
   MemoryRetentionJob job;
@@ -268,6 +297,14 @@ class AutomationRepository {
   explicit AutomationRepository(storage::Pool&, AutomationRepositoryOptions = {});
 
   async::Awaitable<core::Result<storage::MigrationReport>> migrate();
+  async::Awaitable<core::Result<CronJobRecord>>
+  upsert_cron_job(UpsertCronJobRequest);
+  async::Awaitable<core::Result<std::optional<CronJobRecord>>>
+  get_cron_job(std::string job_key);
+  async::Awaitable<core::Result<CronJobRecord>>
+  mark_cron_job_fired(std::string job_key, core::Time fired_at);
+  async::Awaitable<core::Result<std::vector<CronJobRecord>>>
+  list_cron_jobs(ListCronJobsOptions = {});
   async::Awaitable<core::Result<MemoryRetentionJobRecord>>
   upsert_memory_retention_job(UpsertMemoryRetentionJobRequest);
   async::Awaitable<core::Result<std::optional<MemoryRetentionJobRecord>>>
@@ -439,8 +476,9 @@ job may return. If it is not already minute-aligned, evaluation starts at the
 next UTC minute. Once `PeriodicJobState::last_fired_at` exists, evaluation
 starts at the minute after that stored fire, clamped no earlier than
 `first_fire_at`. This mirrors periodic evaluation by returning one next
-scheduled fire without skipping over a backlog. Later service-loop policy owns
-catch-up, coalescing, dropping, and persistence.
+scheduled fire without skipping over a backlog. The repository can now persist
+that state for cron jobs, but later service-loop policy still owns catch-up,
+coalescing, dropping, and timer execution.
 
 Malformed expressions return `ErrorKind::invalid_argument` with `field` set to
 `expression`, `minute`, `hour`, `day_of_month`, `month`, or `day_of_week` and a
@@ -488,17 +526,32 @@ Migration version 2 creates `automation_memory_retention_leases`, keyed by
 lease row has a foreign key to `automation_memory_retention_jobs(job_key)` with
 `ON DELETE CASCADE`, so deleting a future job row drops the matching lease row.
 
+Migration version 3 creates `automation_cron_jobs`, keyed by durable `job_key`,
+with the cron `expression`, `first_fire_at`, nullable `last_fired_at`, and
+timestamps. `idx_automation_cron_jobs_updated` lists rows by `updated_at DESC,
+job_key ASC` for bounded scheduler scans or diagnostics.
+
 `job_key` is the durable repository identity. `scope_key` remains the memory
 decay scope inside the stored job descriptor, so future different automation
-jobs or policies can share a memory scope without overwriting each other.
+jobs or policies can share a memory scope without overwriting each other. Cron
+jobs use the same durable `job_key` identity and store the cron expression
+directly because there is not yet a higher-level config/job descriptor type.
 
 Repository calls validate inputs before touching SQLite: empty job keys are
-rejected, retention jobs must pass the same policy validation used by
-`plan_memory_retention(...)`, failed runs require an error message, run finish
-time must not precede fire time, list limits must be positive, lease owner keys
-must be non-empty, and lease expiry must be after acquisition time. Missing jobs
-return `std::nullopt` on `get_memory_retention_job(...)` and
+rejected, cron schedules must pass `evaluate_cron_schedule(...)`, retention
+jobs must pass the same policy validation used by `plan_memory_retention(...)`,
+failed runs require an error message, run finish time must not precede fire
+time, list limits must be positive, lease owner keys must be non-empty, and
+lease expiry must be after acquisition time. Missing jobs return `std::nullopt`
+on `get_cron_job(...)` / `get_memory_retention_job(...)` and
 `ErrorKind::not_found` from mutation operations that require an existing job.
+
+`upsert_cron_job(...)` replaces the stored schedule and last-fired state for a
+durable `job_key` while preserving `created_at`; `mark_cron_job_fired(...)`
+advances only `last_fired_at` and `updated_at`; `list_cron_jobs(...)` returns a
+positive-limit bounded vector ordered by most recently updated first. These APIs
+are state storage only: they do not evaluate due work, acquire leases, publish
+hooks, or call agents.
 
 `acquire_memory_retention_lease(...)` returns:
 
@@ -675,8 +728,8 @@ those concerns into bootstrap or `oran-memory`.
 
 The next automation slices should not be picked by `STATUS.md` alone. The open
 spec 0006 boundaries now start after this explicit runtime/retention loop
-surface and the cron evaluator: cron persistence/config ownership, process
-service/timer startup policy, broader per-agent/category leases once
+surface, cron evaluator, and cron repository state: cron config ownership,
+process service/timer startup policy, broader per-agent/category leases once
 agent-facing jobs exist, triggered categories, queueing/backpressure, and
 notifier routing for agent-facing jobs.
 
@@ -715,7 +768,12 @@ backend-failure release, plus lease input validation. Slice 196 reports
 catch-up, no-due-work stopping, and loop-policy input validation. Slice 197
 reports `test-automation` at 41 cases / 467 assertions for cron exact/future
 fires, stored-state advancement, steps/lists/ranges, DOM/DOW OR semantics, and
-malformed-expression validation. The local
+malformed-expression validation.
+Slice 198 reports `test-automation` at 44 cases / 515 assertions for cron
+repository migration v3, round-trip/update/list/mark-fired behavior, missing
+mutation errors, cron validation, and `AutomationRuntime::open(...)` migration
+report version 3.
+
 `bench-automation` planning rows are:
 
 - `automation.periodic_evaluate_1024` at about 4.49 us / 1024-job batch.

@@ -7,26 +7,26 @@
 
 ## Snapshot
 
-- **Slice:** 197 (`xmake run orangutan -- --help` reports slice 197)
+- **Slice:** 198 (`xmake run orangutan -- --help` reports slice 198)
 - **Last completed history:**
-  [`histories/2026-06/20260607-1800-automation-cron-schedule.md`](histories/2026-06/20260607-1800-automation-cron-schedule.md)
+  [`histories/2026-06/20260607-1831-automation-cron-persistence.md`](histories/2026-06/20260607-1831-automation-cron-persistence.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-cron-category.md`](exec-plans/active/2026-06-07-automation-cron-category.md).
-- **Latest completed slice:** slice 197 adds the first cron-category planning
-  primitive without starting a scheduler. `CronSchedule` stores a POSIX
-  5-field UTC expression plus a `first_fire_at` anchor, and
-  `evaluate_cron_schedule(...)` parses `*`, lists, ranges, and steps into the
-  same `PeriodicEvaluation` shape used by periodic jobs. It advances from
-  `PeriodicJobState::last_fired_at`, uses standard cron OR semantics when both
-  day-of-month and day-of-week are restricted, and returns one next scheduled
-  fire without persisting cron jobs, opening `automation.db`, starting timers,
-  spawning detached work, or firing agents. Focused result:
-  `test-automation` **41 cases / 467 assertions**.
+- **Latest completed slice:** slice 198 adds durable cron job state without
+  starting a scheduler. `AutomationRepository` migration v3 creates
+  `automation_cron_jobs`, and the repository can upsert, load, list, and mark
+  cron jobs fired by durable `job_key`, storing `CronSchedule` plus
+  `PeriodicJobState::last_fired_at` and timestamps. It validates cron
+  expressions through `evaluate_cron_schedule(...)`, returns `std::nullopt` for
+  missing reads, and returns `ErrorKind::not_found` for missing mark-fired
+  mutations. It still does not read cron config, start timers, spawn detached
+  work, publish cron lifecycle hooks, or fire agents. Focused result:
+  `test-automation` **44 cases / 515 assertions**.
 - **Next intended slice:** continue the active automation cron/category plan.
-  The next useful implementation boundary is either cron job persistence/config
-  ownership or explicit process service/timer startup policy over
-  `AutomationRuntime`; do not add bootstrap-owned background automation or
-  unrelated STATUS-only slice churn.
+  The next useful implementation boundary is either cron config ownership or
+  explicit process service/timer startup policy over `AutomationRuntime`; do
+  not add bootstrap-owned background automation or unrelated STATUS-only slice
+  churn.
 
 Slice 183 adds the operator-facing long-term
   retention policy contract. `oran-config` now parses

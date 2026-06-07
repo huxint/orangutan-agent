@@ -24,6 +24,24 @@ struct AutomationRepositoryOptions {
   std::string migrations_directory;
 };
 
+struct UpsertCronJobRequest {
+  std::string job_key;
+  CronSchedule schedule;
+  PeriodicJobState state{};
+};
+
+struct CronJobRecord {
+  std::string job_key;
+  CronSchedule schedule;
+  PeriodicJobState state{};
+  std::string created_at;
+  std::string updated_at;
+};
+
+struct ListCronJobsOptions {
+  std::size_t limit{50};
+};
+
 struct UpsertMemoryRetentionJobRequest {
   std::string job_key;
   MemoryRetentionJob job;
@@ -88,6 +106,16 @@ public:
   explicit AutomationRepository(storage::Pool& pool, AutomationRepositoryOptions options = {}) noexcept;
 
   [[nodiscard]] async::Awaitable<core::Result<storage::MigrationReport>> migrate();
+
+  [[nodiscard]] async::Awaitable<core::Result<CronJobRecord>> upsert_cron_job(UpsertCronJobRequest request);
+
+  [[nodiscard]] async::Awaitable<core::Result<std::optional<CronJobRecord>>> get_cron_job(std::string job_key);
+
+  [[nodiscard]] async::Awaitable<core::Result<CronJobRecord>> mark_cron_job_fired(std::string job_key,
+                                                                                  core::Time fired_at);
+
+  [[nodiscard]] async::Awaitable<core::Result<std::vector<CronJobRecord>>>
+  list_cron_jobs(ListCronJobsOptions options = {});
 
   [[nodiscard]] async::Awaitable<core::Result<MemoryRetentionJobRecord>>
   upsert_memory_retention_job(UpsertMemoryRetentionJobRequest request);
