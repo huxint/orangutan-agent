@@ -44,6 +44,12 @@ namespace {
       .with("reason", std::move(reason));
 }
 
+[[nodiscard]] core::Error invalid_triggered_execute_field(std::string field, std::string reason) {
+  return core::Error::invalid_argument("triggered execute field is invalid")
+      .with("field", std::move(field))
+      .with("reason", std::move(reason));
+}
+
 [[nodiscard]] core::Result<void> validate_tick_request(const MemoryRetentionTickRequest& request) {
   if (request.job_key.empty()) {
     return std::unexpected(invalid_tick_field("job_key", "empty"));
@@ -81,6 +87,19 @@ namespace {
   return {};
 }
 
+[[nodiscard]] core::Result<void> validate_triggered_execute_request(const TriggeredExecuteRequest& request) {
+  if (request.trigger_key.empty()) {
+    return std::unexpected(invalid_triggered_execute_field("trigger_key", "empty"));
+  }
+  if (request.job_limit == 0) {
+    return std::unexpected(invalid_triggered_execute_field("job_limit", "zero"));
+  }
+  if (!request.handler) {
+    return std::unexpected(invalid_triggered_execute_field("handler", "empty"));
+  }
+  return {};
+}
+
 void track_next_fire(CronTickResult& result, core::Time next_fire_at) {
   if (!result.next_fire_at.has_value() || next_fire_at < *result.next_fire_at) {
     result.next_fire_at = next_fire_at;
@@ -96,6 +115,10 @@ void track_next_fire(CronTickResult& result, core::Time next_fire_at) {
 
 [[nodiscard]] CronRunOutcome cron_run_outcome_for_error(const core::Error& error) noexcept {
   return error.kind() == core::ErrorKind::cancelled ? CronRunOutcome::aborted : CronRunOutcome::failure;
+}
+
+[[nodiscard]] TriggeredRunOutcome triggered_run_outcome_for_error(const core::Error& error) noexcept {
+  return error.kind() == core::ErrorKind::cancelled ? TriggeredRunOutcome::aborted : TriggeredRunOutcome::failure;
 }
 
 [[nodiscard]] core::Time add_steady_duration(core::Time now, std::chrono::steady_clock::duration duration) noexcept {
@@ -357,6 +380,70 @@ async::Awaitable<core::Result<TriggeredIntakeResult>> TriggeredService::intake(T
       .matched_count = matched_count,
       .jobs = std::move(*jobs),
   };
+}
+
+async::Awaitable<core::Result<TriggeredExecuteResult>> TriggeredService::execute(TriggeredExecuteRequest request) {
+  if (auto valid = validate_triggered_execute_request(request); !valid) {
+    co_return std::unexpected(std::move(valid).error());
+  }
+
+  auto intake = co_await this->intake(TriggeredIntakeRequest{
+      .trigger_key = request.trigger_key,
+      .received_at = request.received_at,
+      .job_limit = request.job_limit,
+  });
+  if (!intake) {
+    co_return std::unexpected(std::move(intake).error());
+  }
+
+  TriggeredExecuteResult result{.intake = std::move(*intake)};
+  for (const auto& job : result.intake.jobs) {
+    TriggeredExecutionJob execution{
+        .job = job,
+        .trigger_key = result.intake.trigger_key,
+        .received_at = result.intake.received_at,
+    };
+    TriggeredExecuteAttempt attempt{.execution = execution};
+    ++result.attempted_count;
+
+    auto executed = co_await request.handler(execution);
+    if (!executed) {
+      auto error = std::move(executed).error();
+      auto recorded = co_await repository_->record_triggered_run(RecordTriggeredRunRequest{
+          .job_key = job.job_key,
+          .trigger_key = result.intake.trigger_key,
+          .fired_at = result.intake.received_at,
+          .finished_at = result.intake.received_at,
+          .outcome = triggered_run_outcome_for_error(error),
+          .error_message = failure_message(error, "triggered job handler failed"),
+      });
+      if (!recorded) {
+        co_return std::unexpected(std::move(recorded).error());
+      }
+      attempt.error = std::move(error);
+      attempt.run = std::move(*recorded);
+      result.attempts.push_back(std::move(attempt));
+      continue;
+    }
+
+    auto recorded = co_await repository_->record_triggered_run(RecordTriggeredRunRequest{
+        .job_key = job.job_key,
+        .trigger_key = result.intake.trigger_key,
+        .fired_at = result.intake.received_at,
+        .finished_at = result.intake.received_at,
+        .outcome = TriggeredRunOutcome::success,
+    });
+    if (!recorded) {
+      co_return std::unexpected(std::move(recorded).error());
+    }
+
+    attempt.completed = true;
+    attempt.run = std::move(*recorded);
+    ++result.completed_count;
+    result.attempts.push_back(std::move(attempt));
+  }
+
+  co_return result;
 }
 
 CronService::CronService(AutomationRepository& repository, CronServiceOptions options) noexcept

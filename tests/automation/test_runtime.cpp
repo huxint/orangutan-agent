@@ -177,8 +177,8 @@ TEST_CASE("AutomationRuntime::open creates parent directories and migrates state
     REQUIRE(opened->database_path() == db_path);
     REQUIRE(std::filesystem::exists(workspace.path() / ".orangutan" / "automation.db"));
     REQUIRE(opened->migration_report().previous_version == 0);
-    REQUIRE(opened->migration_report().current_version == 8);
-    REQUIRE(opened->migration_report().applied_versions == std::vector<std::int64_t>{1, 2, 3, 4, 5, 6, 7, 8});
+    REQUIRE(opened->migration_report().current_version == 9);
+    REQUIRE(opened->migration_report().applied_versions == std::vector<std::int64_t>{1, 2, 3, 4, 5, 6, 7, 8, 9});
 
     auto upserted =
         co_await opened->repository().upsert_memory_retention_job(automation::UpsertMemoryRetentionJobRequest{
@@ -203,14 +203,14 @@ TEST_CASE("AutomationRuntime::open reuses an already migrated automation databas
                                                      automation::AutomationRuntimeOptions{.database_path = db_path});
     REQUIRE(first.has_value());
     REQUIRE(first->migration_report().previous_version == 0);
-    REQUIRE(first->migration_report().current_version == 8);
+    REQUIRE(first->migration_report().current_version == 9);
 
     auto second =
         co_await automation::AutomationRuntime::open(io.get_executor(),
                                                      automation::AutomationRuntimeOptions{.database_path = db_path});
     REQUIRE(second.has_value());
-    REQUIRE(second->migration_report().previous_version == 8);
-    REQUIRE(second->migration_report().current_version == 8);
+    REQUIRE(second->migration_report().previous_version == 9);
+    REQUIRE(second->migration_report().current_version == 9);
     REQUIRE(second->migration_report().applied_versions.empty());
   });
 }
@@ -294,7 +294,8 @@ TEST_CASE("AutomationRuntime applies cron job seeds explicitly", "[unit][automat
   });
 }
 
-TEST_CASE("AutomationRuntime constructs triggered intake over owned state", "[unit][automation][runtime][triggered]") {
+TEST_CASE("AutomationRuntime constructs triggered service execution over owned state",
+          "[unit][automation][runtime][triggered]") {
   TempWorkspace workspace{"oran-automation-runtime-triggered"};
   test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {
     auto runtime = co_await automation::AutomationRuntime::open(
@@ -320,6 +321,28 @@ TEST_CASE("AutomationRuntime constructs triggered intake over owned state", "[un
     REQUIRE(intake->jobs.size() == 1);
     REQUIRE(intake->jobs.front().job_key == "triggered:webhook-ci");
     REQUIRE(intake->jobs.front().agent_key == "researcher");
+
+    auto executed = co_await service.execute(automation::TriggeredExecuteRequest{
+        .trigger_key = "webhook:ci",
+        .received_at = at(180s),
+        .job_limit = 10,
+        .handler = [](automation::TriggeredExecutionJob execution) -> async::Awaitable<core::Result<void>> {
+          REQUIRE(execution.job.job_key == "triggered:webhook-ci");
+          REQUIRE(execution.job.agent_key == "researcher");
+          co_return core::Result<void>{};
+        },
+    });
+    REQUIRE(executed.has_value());
+    REQUIRE(executed->attempted_count == 1);
+    REQUIRE(executed->completed_count == 1);
+
+    auto runs = co_await runtime->repository().list_triggered_runs(automation::ListTriggeredRunsOptions{
+        .job_key = "triggered:webhook-ci",
+        .limit = 10,
+    });
+    REQUIRE(runs.has_value());
+    REQUIRE(runs->size() == 1);
+    REQUIRE(runs->front().outcome == automation::TriggeredRunOutcome::success);
   });
 }
 

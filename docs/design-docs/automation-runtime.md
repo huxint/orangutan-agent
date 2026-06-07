@@ -12,7 +12,8 @@ caller-driven cron scan/wait/execute-due boundary plus finite caller-owned cron
 loop policy, advisory cron lifecycle metadata, typed cron run outcome
 classification, repository-backed cron execution leases and cron agent leases
 for explicit loop owners, durable triggered job descriptors with caller-driven
-triggered intake, and a caller-driven retention service tick with optional
+triggered intake plus explicit triggered handler execution and durable
+triggered run history, and a caller-driven retention service tick with optional
 advisory `memory_decay` plus job lifecycle metadata,
 plus a caller-started retention loop step that can wait within a caller budget
 for one stored job to become due and lease due execution, plus a finite
@@ -294,6 +295,18 @@ constructs that service over caller-owned state. The boundary is descriptor
 matching only: it does not persist trigger events, enqueue work, publish hooks,
 notify channels, or call agents.
 
+Slice 212 adds explicit triggered execution/run history without adding queue,
+notifier, agent invocation, leases, or detached scheduler ownership. Migration
+version 9 creates `automation_triggered_runs`; `AutomationRepository` can record
+and newest-first list triggered run rows for one durable job key with
+`success`, `failure`, or `aborted` outcomes. `TriggeredService::execute(...)`
+reuses the caller-owned intake boundary, invokes a supplied handler once per
+matched descriptor, records one run row per attempt, stores
+`ErrorKind::cancelled` handler errors as `aborted`, stores other handler errors
+as `failure`, and continues to other matched jobs. It still does not persist a
+queue, publish hooks, notify channels, acquire triggered agent leases, call
+agents, or make bootstrap open automation state.
+
 ## Public API
 
 ```cpp
@@ -396,6 +409,38 @@ struct TriggeredJobRecord {
 
 struct ListTriggeredJobsOptions {
   std::string trigger_key;
+  std::size_t limit;
+};
+
+enum class TriggeredRunOutcome {
+  success,
+  failure,
+  aborted,
+};
+
+struct RecordTriggeredRunRequest {
+  std::string job_key;
+  std::string trigger_key;
+  core::Time fired_at;
+  core::Time finished_at;
+  TriggeredRunOutcome outcome;
+  std::optional<std::string> error_message;
+};
+
+struct TriggeredRunRecord {
+  std::int64_t id;
+  std::string job_key;
+  std::string trigger_key;
+  core::Time fired_at;
+  core::Time finished_at;
+  bool success;
+  TriggeredRunOutcome outcome;
+  std::optional<std::string> error_message;
+  std::string created_at;
+};
+
+struct ListTriggeredRunsOptions {
+  std::string job_key;
   std::size_t limit;
 };
 
@@ -590,6 +635,10 @@ class AutomationRepository {
   get_triggered_job(std::string job_key);
   async::Awaitable<core::Result<std::vector<TriggeredJobRecord>>>
   list_triggered_jobs(ListTriggeredJobsOptions);
+  async::Awaitable<core::Result<TriggeredRunRecord>>
+  record_triggered_run(RecordTriggeredRunRequest);
+  async::Awaitable<core::Result<std::vector<TriggeredRunRecord>>>
+  list_triggered_runs(ListTriggeredRunsOptions);
   async::Awaitable<core::Result<CronRunRecord>>
   record_cron_run(RecordCronRunRequest);
   async::Awaitable<core::Result<std::vector<CronRunRecord>>>
@@ -683,12 +732,44 @@ struct TriggeredIntakeResult {
   std::vector<TriggeredJobRecord> jobs;
 };
 
+struct TriggeredExecutionJob {
+  TriggeredJobRecord job;
+  std::string trigger_key;
+  core::Time received_at;
+};
+
+using TriggeredJobHandler =
+    std::function<async::Awaitable<core::Result<void>>(TriggeredExecutionJob)>;
+
+struct TriggeredExecuteRequest {
+  std::string trigger_key;
+  core::Time received_at;
+  std::size_t job_limit;
+  TriggeredJobHandler handler;
+};
+
+struct TriggeredExecuteAttempt {
+  TriggeredExecutionJob execution;
+  bool completed;
+  std::optional<core::Error> error;
+  std::optional<TriggeredRunRecord> run;
+};
+
+struct TriggeredExecuteResult {
+  TriggeredIntakeResult intake;
+  std::size_t attempted_count;
+  std::size_t completed_count;
+  std::vector<TriggeredExecuteAttempt> attempts;
+};
+
 class TriggeredService {
  public:
   explicit TriggeredService(AutomationRepository&);
 
   async::Awaitable<core::Result<TriggeredIntakeResult>>
   intake(TriggeredIntakeRequest);
+  async::Awaitable<core::Result<TriggeredExecuteResult>>
+  execute(TriggeredExecuteRequest);
   AutomationRepository& repository() noexcept;
   const AutomationRepository& repository() const noexcept;
 };
@@ -996,7 +1077,7 @@ committed because this slice does not introduce a transaction wrapper. The
 error includes `seed_index` and the seed `job_key` when available so runtime
 owners can surface the failing authored row.
 
-## Triggered Intake Semantics
+## Triggered Intake And Execution Semantics
 
 `automation_triggered_jobs` is the first triggered-category state boundary. A
 stored row has:
@@ -1017,9 +1098,24 @@ descriptors.
 rows. The caller supplies the external `trigger_key`, an intake timestamp, and
 a match limit. The service returns the matching stored descriptors and the same
 timestamp so later queue/notifier/agent-firing owners can preserve the event
-arrival time. The service deliberately does not persist trigger events, write
-run history, enqueue jobs, publish hooks, notify channels, acquire leases, or
-call agents.
+arrival time. Intake deliberately does not persist trigger events, enqueue
+jobs, publish hooks, notify channels, acquire leases, or call agents.
+
+`automation_triggered_runs` records explicit handler attempts made by
+`TriggeredService::execute(...)`. A run row has the durable `job_key`, the
+external `trigger_key`, caller-supplied fire/finish timestamps, a compatibility
+`success` flag, typed `TriggeredRunOutcome`, optional error message, and
+created timestamp. `AutomationRepository::record_triggered_run(...)` validates
+non-empty keys, finish time ordering, and failure/aborted error messages;
+`list_triggered_runs(...)` returns newest-first rows for one durable job key.
+
+`TriggeredService::execute(...)` reuses intake, then invokes the supplied
+handler once per matched descriptor. It records `success` for successful
+handlers, `failure` for ordinary handler errors, and `aborted` for
+`ErrorKind::cancelled`. Handler failures are per-attempt results and do not
+stop other matched jobs. The execution surface is still explicit caller-owned
+work: it does not persist a queue, publish hooks, notify channels, acquire
+triggered agent leases, or call agents.
 
 ## Memory Retention Planning
 
@@ -1552,6 +1648,11 @@ intake, covering migration v8, triggered descriptor round-trip/update/listing,
 repository validation, service-level intake matching and validation, runtime
 factory coverage, and `AutomationRuntime::open(...)` migration report version
 8.
+Slice 212 reports `test-automation` at 79 cases / 1178 assertions for triggered
+execution history, covering migration v9, triggered run record/list APIs,
+success/failure/aborted handler-attempt recording, invalid execution policy
+validation, runtime factory execution coverage, and `AutomationRuntime::open(...)`
+migration report version 9.
 
 `bench-automation` planning rows are:
 

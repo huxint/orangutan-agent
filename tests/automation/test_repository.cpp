@@ -103,13 +103,13 @@ TEST_CASE("AutomationRepository::migrate applies the automation schema once", "[
     auto first = co_await repo.migrate();
     REQUIRE(first.has_value());
     REQUIRE(first->previous_version == 0);
-    REQUIRE(first->current_version == 8);
-    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3, 4, 5, 6, 7, 8});
+    REQUIRE(first->current_version == 9);
+    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3, 4, 5, 6, 7, 8, 9});
 
     auto second = co_await repo.migrate();
     REQUIRE(second.has_value());
-    REQUIRE(second->previous_version == 8);
-    REQUIRE(second->current_version == 8);
+    REQUIRE(second->previous_version == 9);
+    REQUIRE(second->current_version == 9);
     REQUIRE(second->applied_versions.empty());
   });
 }
@@ -323,6 +323,79 @@ TEST_CASE("AutomationRepository round-trips triggered jobs by trigger key",
     auto missing = co_await repo.get_triggered_job("triggered:missing");
     REQUIRE(missing.has_value());
     REQUIRE_FALSE(missing->has_value());
+  });
+}
+
+TEST_CASE("AutomationRepository records and lists triggered runs", "[unit][automation][repository][triggered]") {
+  TempDb db{"oran-automation-repo-triggered-runs"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:webhook-ci",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "researcher",
+             }))
+                .has_value());
+
+    auto first = co_await repo.record_triggered_run(automation::RecordTriggeredRunRequest{
+        .job_key = "triggered:webhook-ci",
+        .trigger_key = "webhook:ci",
+        .fired_at = at(120s),
+        .finished_at = at(121s),
+        .outcome = automation::TriggeredRunOutcome::success,
+    });
+    REQUIRE(first.has_value());
+    REQUIRE(first->job_key == "triggered:webhook-ci");
+    REQUIRE(first->trigger_key == "webhook:ci");
+    REQUIRE(first->success);
+    REQUIRE(first->outcome == automation::TriggeredRunOutcome::success);
+    REQUIRE_FALSE(first->error_message.has_value());
+
+    auto second = co_await repo.record_triggered_run(automation::RecordTriggeredRunRequest{
+        .job_key = "triggered:webhook-ci",
+        .trigger_key = "webhook:ci",
+        .fired_at = at(180s),
+        .finished_at = at(181s),
+        .outcome = automation::TriggeredRunOutcome::failure,
+        .error_message = "handler failed",
+    });
+    REQUIRE(second.has_value());
+    REQUIRE_FALSE(second->success);
+    REQUIRE(second->outcome == automation::TriggeredRunOutcome::failure);
+    REQUIRE(second->error_message == "handler failed");
+
+    auto third = co_await repo.record_triggered_run(automation::RecordTriggeredRunRequest{
+        .job_key = "triggered:webhook-ci",
+        .trigger_key = "webhook:ci",
+        .fired_at = at(240s),
+        .finished_at = at(241s),
+        .outcome = automation::TriggeredRunOutcome::aborted,
+        .error_message = "cancelled",
+    });
+    REQUIRE(third.has_value());
+    REQUIRE_FALSE(third->success);
+    REQUIRE(third->outcome == automation::TriggeredRunOutcome::aborted);
+    REQUIRE(third->error_message == "cancelled");
+
+    auto listed = co_await repo.list_triggered_runs(automation::ListTriggeredRunsOptions{
+        .job_key = "triggered:webhook-ci",
+        .limit = 10,
+    });
+    REQUIRE(listed.has_value());
+    REQUIRE(listed->size() == 3);
+    REQUIRE((*listed)[0].id == third->id);
+    REQUIRE((*listed)[1].id == second->id);
+    REQUIRE((*listed)[2].id == first->id);
+
+    auto capped = co_await repo.list_triggered_runs(automation::ListTriggeredRunsOptions{
+        .job_key = "triggered:webhook-ci",
+        .limit = 1,
+    });
+    REQUIRE(capped.has_value());
+    REQUIRE(capped->size() == 1);
+    REQUIRE((*capped)[0].id == third->id);
   });
 }
 
@@ -725,6 +798,42 @@ TEST_CASE("AutomationRepository validates memory retention persistence inputs", 
     });
     REQUIRE_FALSE(bad_cron_limit.has_value());
     REQUIRE(has_field(bad_cron_limit.error(), "limit"));
+
+    auto missing_triggered_error = co_await repo.record_triggered_run(automation::RecordTriggeredRunRequest{
+        .job_key = "triggered:webhook-ci",
+        .trigger_key = "webhook:ci",
+        .fired_at = at(10s),
+        .finished_at = at(11s),
+        .outcome = automation::TriggeredRunOutcome::failure,
+    });
+    REQUIRE_FALSE(missing_triggered_error.has_value());
+    REQUIRE(has_field(missing_triggered_error.error(), "error_message"));
+
+    auto missing_triggered_abort_error = co_await repo.record_triggered_run(automation::RecordTriggeredRunRequest{
+        .job_key = "triggered:webhook-ci",
+        .trigger_key = "webhook:ci",
+        .fired_at = at(10s),
+        .finished_at = at(11s),
+        .outcome = automation::TriggeredRunOutcome::aborted,
+    });
+    REQUIRE_FALSE(missing_triggered_abort_error.has_value());
+    REQUIRE(has_field(missing_triggered_abort_error.error(), "error_message"));
+
+    auto bad_triggered_order = co_await repo.record_triggered_run(automation::RecordTriggeredRunRequest{
+        .job_key = "triggered:webhook-ci",
+        .trigger_key = "webhook:ci",
+        .fired_at = at(12s),
+        .finished_at = at(11s),
+    });
+    REQUIRE_FALSE(bad_triggered_order.has_value());
+    REQUIRE(has_field(bad_triggered_order.error(), "finished_at"));
+
+    auto bad_triggered_limit = co_await repo.list_triggered_runs(automation::ListTriggeredRunsOptions{
+        .job_key = "triggered:webhook-ci",
+        .limit = 0,
+    });
+    REQUIRE_FALSE(bad_triggered_limit.has_value());
+    REQUIRE(has_field(bad_triggered_limit.error(), "limit"));
 
     auto bad_limit = co_await repo.list_memory_retention_runs(automation::ListMemoryRetentionRunsOptions{
         .job_key = "memory-retention:cli",

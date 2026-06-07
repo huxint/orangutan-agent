@@ -57,6 +57,10 @@ constexpr unsigned char kAutomationTriggeredJobsBytes[] = {
 #embed "migrations/automation/0008-automation-triggered-jobs.sql"
 };
 
+constexpr unsigned char kAutomationTriggeredRunsBytes[] = {
+#embed "migrations/automation/0009-automation-triggered-runs.sql"
+};
+
 constexpr std::string_view kUpsertCronJobSql = R"sql(
 INSERT INTO automation_cron_jobs(
   job_key,
@@ -166,6 +170,46 @@ SELECT
 FROM automation_triggered_jobs
 WHERE trigger_key = ?
 ORDER BY updated_at DESC, job_key ASC
+LIMIT ?
+)sql";
+
+constexpr std::string_view kRecordTriggeredRunSql = R"sql(
+INSERT INTO automation_triggered_runs(
+  job_key,
+  trigger_key,
+  fired_at,
+  finished_at,
+  success,
+  outcome,
+  error_message,
+  created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+RETURNING
+  id,
+  job_key,
+  trigger_key,
+  fired_at,
+  finished_at,
+  success,
+  outcome,
+  error_message,
+  created_at
+)sql";
+
+constexpr std::string_view kListTriggeredRunsSql = R"sql(
+SELECT
+  id,
+  job_key,
+  trigger_key,
+  fired_at,
+  finished_at,
+  success,
+  outcome,
+  error_message,
+  created_at
+FROM automation_triggered_runs
+WHERE job_key = ?
+ORDER BY fired_at DESC, id DESC
 LIMIT ?
 )sql";
 
@@ -405,7 +449,7 @@ template <std::size_t N>
 }
 
 [[nodiscard]] std::span<const storage::Migration> built_in_automation_migrations() {
-  static const std::array<storage::Migration, 8> kMigrations{
+  static const std::array<storage::Migration, 9> kMigrations{
       storage::Migration{
           .version = 1,
           .name = "automation-retention-state",
@@ -445,6 +489,11 @@ template <std::size_t N>
           .version = 8,
           .name = "automation-triggered-jobs",
           .sql = to_sql_string(kAutomationTriggeredJobsBytes),
+      },
+      storage::Migration{
+          .version = 9,
+          .name = "automation-triggered-runs",
+          .sql = to_sql_string(kAutomationTriggeredRunsBytes),
       },
   };
   return kMigrations;
@@ -587,6 +636,23 @@ template <std::size_t N>
 [[nodiscard]] core::Result<void> validate_list_triggered_jobs_options(const ListTriggeredJobsOptions& options) {
   if (auto valid = validate_trigger_key(options.trigger_key); !valid) {
     return std::unexpected(valid.error());
+  }
+  return {};
+}
+
+[[nodiscard]] core::Result<void> validate_triggered_run_request(const RecordTriggeredRunRequest& request) {
+  if (auto valid = validate_job_key(request.job_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  if (auto valid = validate_trigger_key(request.trigger_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  if (request.finished_at < request.fired_at) {
+    return std::unexpected(invalid_field("finished_at", "before_fired_at"));
+  }
+  if (request.outcome != TriggeredRunOutcome::success &&
+      (!request.error_message.has_value() || request.error_message->empty())) {
+    return std::unexpected(invalid_field("error_message", "missing_for_failure"));
   }
   return {};
 }
@@ -751,6 +817,24 @@ read_size(storage::Statement& statement, int index, std::string_view field, bool
 
 [[nodiscard]] bool cron_run_success(CronRunOutcome outcome) noexcept {
   return outcome == CronRunOutcome::success;
+}
+
+[[nodiscard]] bool triggered_run_success(TriggeredRunOutcome outcome) noexcept {
+  return outcome == TriggeredRunOutcome::success;
+}
+
+[[nodiscard]] core::Result<TriggeredRunOutcome> read_triggered_run_outcome(storage::Statement& statement, int index) {
+  auto outcome_text = required_text(statement, index, "outcome");
+  if (!outcome_text) {
+    return std::unexpected(outcome_text.error());
+  }
+  auto outcome = core::parse_enum<TriggeredRunOutcome>(*outcome_text);
+  if (!outcome) {
+    return std::unexpected(core::Error::storage("automation repository row has invalid triggered run outcome")
+                               .with("field", "outcome")
+                               .with("outcome", *outcome_text));
+  }
+  return *outcome;
 }
 
 [[nodiscard]] core::Result<CronRunOutcome> read_cron_run_outcome(storage::Statement& statement, int index) {
@@ -923,6 +1007,70 @@ read_size(storage::Statement& statement, int index, std::string_view field, bool
       .agent_key = std::move(*agent_key),
       .created_at = std::move(*created_at),
       .updated_at = std::move(*updated_at),
+  };
+}
+
+[[nodiscard]] core::Result<TriggeredRunRecord> read_triggered_run_row(storage::Statement& statement) {
+  auto id = statement.column_int64(0);
+  if (!id) {
+    return std::unexpected(id.error().with("field", "id"));
+  }
+  auto job_key = required_text(statement, 1, "job_key");
+  if (!job_key) {
+    return std::unexpected(job_key.error());
+  }
+  auto trigger_key = required_text(statement, 2, "trigger_key");
+  if (!trigger_key) {
+    return std::unexpected(trigger_key.error());
+  }
+  if (auto valid = validate_trigger_key(*trigger_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  auto fired_at = required_time(statement, 3, "fired_at");
+  if (!fired_at) {
+    return std::unexpected(fired_at.error());
+  }
+  auto finished_at = required_time(statement, 4, "finished_at");
+  if (!finished_at) {
+    return std::unexpected(finished_at.error());
+  }
+  auto success = statement.column_int64(5);
+  if (!success) {
+    return std::unexpected(success.error().with("field", "success"));
+  }
+  if (*success != 0 && *success != 1) {
+    return std::unexpected(core::Error::storage("automation repository row has invalid success value")
+                               .with("success", std::to_string(*success)));
+  }
+  auto outcome = read_triggered_run_outcome(statement, 6);
+  if (!outcome) {
+    return std::unexpected(outcome.error());
+  }
+  if ((*success == 1) != triggered_run_success(*outcome)) {
+    return std::unexpected(
+        core::Error::storage("automation repository row has mismatched triggered run success outcome")
+            .with("success", std::to_string(*success))
+            .with("outcome", std::string{core::enum_name(*outcome)}));
+  }
+  auto error_message = optional_text(statement, 7);
+  if (!error_message) {
+    return std::unexpected(error_message.error());
+  }
+  auto created_at = required_text(statement, 8, "created_at");
+  if (!created_at) {
+    return std::unexpected(created_at.error());
+  }
+
+  return TriggeredRunRecord{
+      .id = *id,
+      .job_key = std::move(*job_key),
+      .trigger_key = std::move(*trigger_key),
+      .fired_at = *fired_at,
+      .finished_at = *finished_at,
+      .success = *success == 1,
+      .outcome = *outcome,
+      .error_message = std::move(*error_message),
+      .created_at = std::move(*created_at),
   };
 }
 
@@ -1426,6 +1574,106 @@ AutomationRepository::list_triggered_jobs(ListTriggeredJobsOptions options) {
       break;
     }
     auto row = read_triggered_job_row(statement);
+    if (!row) {
+      co_return std::unexpected(row.error());
+    }
+    rows.push_back(std::move(*row));
+  }
+  co_return rows;
+}
+
+async::Awaitable<core::Result<TriggeredRunRecord>>
+AutomationRepository::record_triggered_run(RecordTriggeredRunRequest request) {
+  if (auto valid = validate_triggered_run_request(request); !valid) {
+    co_return std::unexpected(valid.error());
+  }
+
+  auto writer = co_await pool_->acquire_writer();
+  if (!writer) {
+    co_return std::unexpected(writer.error());
+  }
+
+  auto cached = writer->statement_cache().acquire(writer->connection(), kRecordTriggeredRunSql);
+  if (!cached) {
+    co_return std::unexpected(cached.error());
+  }
+  auto& statement = cached->statement();
+  if (auto bound = statement.bind_text(1, request.job_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(2, request.trigger_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(3, core::time::format_iso8601_utc(request.fired_at)); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(4, core::time::format_iso8601_utc(request.finished_at)); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_int64(5, triggered_run_success(request.outcome) ? 1 : 0); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(6, core::enum_name(request.outcome)); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = bind_optional_text(statement, 7, request.error_message); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+
+  auto step = statement.step();
+  if (!step) {
+    co_return std::unexpected(step.error());
+  }
+  if (*step != storage::StepResult::row) {
+    co_return std::unexpected(core::Error::storage("automation triggered run insert returned no row"));
+  }
+  auto record = read_triggered_run_row(statement);
+  if (!record) {
+    co_return std::unexpected(record.error());
+  }
+  if (auto done = expect_done(statement, "record_triggered_run"); !done) {
+    co_return std::unexpected(done.error());
+  }
+  co_return std::move(*record);
+}
+
+async::Awaitable<core::Result<std::vector<TriggeredRunRecord>>>
+AutomationRepository::list_triggered_runs(ListTriggeredRunsOptions options) {
+  if (auto valid = validate_job_key(options.job_key); !valid) {
+    co_return std::unexpected(valid.error());
+  }
+  auto limit = checked_limit(options.limit);
+  if (!limit) {
+    co_return std::unexpected(limit.error());
+  }
+
+  auto reader = co_await pool_->acquire_reader();
+  if (!reader) {
+    co_return std::unexpected(reader.error());
+  }
+
+  auto cached = reader->statement_cache().acquire(reader->connection(), kListTriggeredRunsSql);
+  if (!cached) {
+    co_return std::unexpected(cached.error());
+  }
+  auto& statement = cached->statement();
+  if (auto bound = statement.bind_text(1, options.job_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_int64(2, *limit); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+
+  std::vector<TriggeredRunRecord> rows;
+  while (true) {
+    auto step = statement.step();
+    if (!step) {
+      co_return std::unexpected(step.error());
+    }
+    if (*step == storage::StepResult::done) {
+      break;
+    }
+    auto row = read_triggered_run_row(statement);
     if (!row) {
       co_return std::unexpected(row.error());
     }

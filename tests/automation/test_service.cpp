@@ -230,6 +230,162 @@ TEST_CASE("TriggeredService::intake rejects invalid intake policy", "[unit][auto
   });
 }
 
+TEST_CASE("TriggeredService::execute records explicit triggered handler attempts",
+          "[unit][automation][service][triggered]") {
+  TempDb db{"oran-automation-service-triggered-execute"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:succeeds",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "researcher",
+             }))
+                .has_value());
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:fails",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "coder",
+             }))
+                .has_value());
+
+    std::vector<std::string> calls;
+    automation::TriggeredService service{repo};
+    auto result = co_await service.execute(automation::TriggeredExecuteRequest{
+        .trigger_key = "webhook:ci",
+        .received_at = at(120s),
+        .job_limit = 10,
+        .handler = [&calls](automation::TriggeredExecutionJob execution) -> async::Awaitable<core::Result<void>> {
+          calls.push_back(execution.job.job_key);
+          REQUIRE(execution.trigger_key == "webhook:ci");
+          REQUIRE(execution.received_at == at(120s));
+          if (execution.job.job_key == "triggered:fails") {
+            co_return std::unexpected(core::Error::upstream("triggered payload failed"));
+          }
+          co_return core::Result<void>{};
+        },
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->intake.trigger_key == "webhook:ci");
+    REQUIRE(result->intake.matched_count == 2);
+    REQUIRE(result->attempted_count == 2);
+    REQUIRE(result->completed_count == 1);
+    REQUIRE(result->attempts.size() == 2);
+    REQUIRE(calls.size() == 2);
+
+    auto success = std::ranges::find_if(result->attempts, [](const auto& attempt) {
+      return attempt.execution.job.job_key == "triggered:succeeds";
+    });
+    REQUIRE(success != result->attempts.end());
+    REQUIRE(success->completed);
+    REQUIRE(success->run.has_value());
+    REQUIRE(success->run->outcome == automation::TriggeredRunOutcome::success);
+    REQUIRE_FALSE(success->error.has_value());
+
+    auto failure = std::ranges::find_if(result->attempts, [](const auto& attempt) {
+      return attempt.execution.job.job_key == "triggered:fails";
+    });
+    REQUIRE(failure != result->attempts.end());
+    REQUIRE_FALSE(failure->completed);
+    REQUIRE(failure->run.has_value());
+    REQUIRE(failure->run->outcome == automation::TriggeredRunOutcome::failure);
+    REQUIRE(failure->run->error_message == "triggered payload failed");
+    REQUIRE(failure->error.has_value());
+
+    auto success_runs = co_await repo.list_triggered_runs(automation::ListTriggeredRunsOptions{
+        .job_key = "triggered:succeeds",
+        .limit = 10,
+    });
+    REQUIRE(success_runs.has_value());
+    REQUIRE(success_runs->size() == 1);
+    REQUIRE(success_runs->front().trigger_key == "webhook:ci");
+    REQUIRE(success_runs->front().success);
+
+    auto failure_runs = co_await repo.list_triggered_runs(automation::ListTriggeredRunsOptions{
+        .job_key = "triggered:fails",
+        .limit = 10,
+    });
+    REQUIRE(failure_runs.has_value());
+    REQUIRE(failure_runs->size() == 1);
+    REQUIRE_FALSE(failure_runs->front().success);
+    REQUIRE(failure_runs->front().outcome == automation::TriggeredRunOutcome::failure);
+  });
+}
+
+TEST_CASE("TriggeredService::execute records cancelled triggered handlers as aborted",
+          "[unit][automation][service][triggered]") {
+  TempDb db{"oran-automation-service-triggered-aborted"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:cancelled",
+                 .trigger_key = "webhook:ci",
+             }))
+                .has_value());
+
+    automation::TriggeredService service{repo};
+    auto result = co_await service.execute(automation::TriggeredExecuteRequest{
+        .trigger_key = "webhook:ci",
+        .received_at = at(120s),
+        .job_limit = 10,
+        .handler = [](automation::TriggeredExecutionJob) -> async::Awaitable<core::Result<void>> {
+          co_return std::unexpected(core::Error::cancelled());
+        },
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->attempted_count == 1);
+    REQUIRE(result->completed_count == 0);
+    REQUIRE(result->attempts.size() == 1);
+    REQUIRE(result->attempts.front().run.has_value());
+    REQUIRE(result->attempts.front().run->outcome == automation::TriggeredRunOutcome::aborted);
+    REQUIRE(result->attempts.front().error.has_value());
+    REQUIRE(result->attempts.front().error->kind() == core::ErrorKind::cancelled);
+
+    auto runs = co_await repo.list_triggered_runs(automation::ListTriggeredRunsOptions{
+        .job_key = "triggered:cancelled",
+        .limit = 10,
+    });
+    REQUIRE(runs.has_value());
+    REQUIRE(runs->size() == 1);
+    REQUIRE(runs->front().outcome == automation::TriggeredRunOutcome::aborted);
+    REQUIRE(runs->front().error_message.has_value());
+  });
+}
+
+TEST_CASE("TriggeredService::execute rejects invalid execution policy", "[unit][automation][service][triggered]") {
+  TempDb db{"oran-automation-service-triggered-execute-validation"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+
+    automation::TriggeredService service{repo};
+    auto missing_handler = co_await service.execute(automation::TriggeredExecuteRequest{
+        .trigger_key = "webhook:ci",
+        .received_at = at(120s),
+        .job_limit = 10,
+    });
+    REQUIRE_FALSE(missing_handler.has_value());
+    REQUIRE(missing_handler.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto bad_limit = co_await service.execute(automation::TriggeredExecuteRequest{
+        .trigger_key = "webhook:ci",
+        .received_at = at(120s),
+        .job_limit = 0,
+        .handler = [](automation::TriggeredExecutionJob) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        },
+    });
+    REQUIRE_FALSE(bad_limit.has_value());
+    REQUIRE(bad_limit.error().kind() == core::ErrorKind::invalid_argument);
+  });
+}
+
 TEST_CASE("CronService::execute_due advances only successful due cron jobs", "[unit][automation][service][cron]") {
   TempDb db{"oran-automation-service-cron-execute"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {

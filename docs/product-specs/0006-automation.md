@@ -53,7 +53,9 @@ repository-backed cron execution leases for explicit cron loop owners, and
 slice 210 adds stored cron job `agent_key` plus repository-backed cron agent
 leases for the same explicit execution owner. Slice 211 adds durable triggered
 job descriptors plus caller-owned triggered intake that matches external trigger
-keys to stored jobs without queueing or agent execution. The current API evaluates
+keys to stored jobs without queueing or agent execution, and slice 212 adds
+durable triggered run history plus explicit caller-supplied triggered handler
+execution over those matched descriptors. The current API evaluates
 periodic and cron schedules from caller-supplied state, maps a long-term memory
 retention policy into a due-only `memory::longterm::DecayRequest`, persists the
 configured retention job plus run history and lease state through
@@ -62,7 +64,8 @@ persists cron job schedule/agent/last-fired state through `AutomationRepository`
 persists cron success/failure/aborted run history through `AutomationRepository`,
 persists cron execution lease and cron agent lease state through
 `AutomationRepository`,
-persists triggered job descriptor state through `AutomationRepository`,
+persists triggered job descriptor and success/failure/aborted run history state
+through `AutomationRepository`,
 explicitly opens/migrates automation state through `AutomationRuntime::open(...)`,
 lets a runtime owner scan stored cron jobs for due work without mutating them,
 lets a runtime owner execute due cron jobs through a supplied handler and mark
@@ -83,6 +86,8 @@ applies seeds and drives the finite cron loop with a supplied handler plus the
 same cooperative stop policy,
 lets a caller-owned runtime match a supplied external `trigger_key` against
 stored triggered job descriptors through `TriggeredService::intake(...)`,
+lets that same explicit triggered owner execute matched descriptors through a
+caller-supplied handler while recording one triggered run row per attempt,
 lets a runtime owner tick one stored retention job against a supplied long-term
 memory backend, publishes advisory retention metadata when the caller supplies a
 hook bus, can wait once within a caller budget for the earliest stored cron fire,
@@ -131,8 +136,9 @@ Current implementation:
   cron jobs with durable schedule plus last-fired state and
   success/failure/aborted run history. It also acquires/releases cron execution
   leases for stored cron jobs with the same active-conflict and expired-takeover
-  semantics, and upserts/loads/lists triggered job descriptors by external
-  `trigger_key`.
+  semantics, upserts/loads/lists triggered job descriptors by external
+  `trigger_key`, and records/lists triggered run rows with durable
+  `success` / `failure` / `aborted` outcomes.
 - `AutomationRuntime::open(...)` validates an explicit database path, creates
   parent directories, opens `automation.db` through an owned `storage::Pool`,
   runs automation migrations, exposes the migration report and repository, can
@@ -206,9 +212,15 @@ Current implementation:
   key and positive match limit, then returns stored triggered job descriptors
   with the intake timestamp. It does not enqueue, record runs, notify channels,
   or call agents.
+- `TriggeredService::execute(...)` reuses triggered intake, invokes a
+  caller-supplied handler for each matched descriptor, records one triggered run
+  row per handler attempt, records `ErrorKind::cancelled` handler errors as
+  `aborted`, records other handler errors as `failure`, and continues through
+  other matched jobs without queueing, notifying channels, acquiring triggered
+  agent leases, or calling agents.
 - `AutomationRuntime::triggered_service()` constructs that triggered intake
   owner over the caller-owned automation repository.
-- `test-automation` reports 75 cases / 1078 assertions.
+- `test-automation` reports 79 cases / 1178 assertions.
 - `test-config` reports 51 cases / 462 assertions for the consuming config
   boundary, and `test-bootstrap` reports 129 cases / 1091 assertions for mapped
   cron seeds.
@@ -216,8 +228,8 @@ Current implementation:
   request planning over a 1024-job batch.
 
 Still open: detached/background service-loop startup over `AutomationRuntime`,
-triggered job execution/run history, queueing/backpressure, process
-service/timer shutdown policy, notifier callbacks, agent firing, queue
+triggered queueing/backpressure, process service/timer shutdown policy,
+triggered lifecycle hooks/leases, notifier callbacks, agent firing, queue
 hold/drop semantics for blocked agent leases, and the scheduler tick
 performance criterion. Triggered descriptor intake exists, but full
 scheduler/category lifecycle ownership remains downstream.
@@ -244,9 +256,10 @@ scheduler/category lifecycle ownership remains downstream.
 1. A cron job ("`* * * * *`") fires exactly once per minute under nominal load.
 2. A periodic job (every 15 s) fires within ±100 ms of the scheduled time.
 3. A triggered job fires within 50 ms of the trigger event. Current status:
-   slice 211 can persist triggered descriptors and match a trigger event key to
-   stored jobs through caller-owned intake; queueing, notifier routing, and
-   actual agent firing latency remain downstream.
+   slice 212 can persist triggered descriptors, match a trigger event key to
+   stored jobs through caller-owned intake, and run caller-supplied handlers
+   while recording run history; queueing, notifier routing, and actual agent
+   firing latency remain downstream.
 4. Per-agent lease prevents two concurrent runs of the same agent_key; the queued
    firing is held or dropped per policy. Current status: slice 210 prevents
    overlapping explicit cron execution for the same stored `agent_key` through
@@ -254,13 +267,15 @@ scheduler/category lifecycle ownership remains downstream.
    execution, notifier routing, and actual agent firing remain downstream.
 5. A failing job is recorded with the failure reason; the next firing happens on
    schedule. Current status: slice 206 records explicit cron handler failures
-   with the failure reason and leaves stored state due for retry; broader
-   scheduler retry/drop policy remains downstream.
+   with the failure reason and leaves stored state due for retry, while slice
+   212 records explicit triggered handler failures with their failure reason;
+   broader scheduler retry/drop policy remains downstream.
 6. Cancelling a job mid-run respects the executor's cancellation semantics; the run
    is recorded as `aborted`. Current status: slice 208 records explicit cron
    handler errors with `ErrorKind::cancelled` as `aborted` run rows while
-   leaving cron state due for retry; broader scheduler cancellation semantics
-   remain downstream.
+   leaving cron state due for retry, and slice 212 records cancelled triggered
+   handler errors as `aborted` run rows; broader scheduler cancellation
+   semantics remain downstream.
 7. `tests/automation/` ≥ 80% coverage.
 8. `bench/automation/scheduler-tick` reports < 5 ms for 1 000 jobs.
 

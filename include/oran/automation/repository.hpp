@@ -63,6 +63,38 @@ struct ListTriggeredJobsOptions {
   std::size_t limit{50};
 };
 
+enum class TriggeredRunOutcome : std::uint8_t {
+  success,
+  failure,
+  aborted,
+};
+
+struct RecordTriggeredRunRequest {
+  std::string job_key;
+  std::string trigger_key;
+  core::Time fired_at{core::Time::epoch()};
+  core::Time finished_at{core::Time::epoch()};
+  TriggeredRunOutcome outcome{TriggeredRunOutcome::success};
+  std::optional<std::string> error_message{};
+};
+
+struct TriggeredRunRecord {
+  std::int64_t id{};
+  std::string job_key;
+  std::string trigger_key;
+  core::Time fired_at{core::Time::epoch()};
+  core::Time finished_at{core::Time::epoch()};
+  bool success{true};
+  TriggeredRunOutcome outcome{TriggeredRunOutcome::success};
+  std::optional<std::string> error_message{};
+  std::string created_at;
+};
+
+struct ListTriggeredRunsOptions {
+  std::string job_key;
+  std::size_t limit{50};
+};
+
 enum class CronRunOutcome : std::uint8_t {
   success,
   failure,
@@ -216,6 +248,12 @@ public:
 
   [[nodiscard]] async::Awaitable<core::Result<std::vector<TriggeredJobRecord>>>
   list_triggered_jobs(ListTriggeredJobsOptions options);
+
+  [[nodiscard]] async::Awaitable<core::Result<TriggeredRunRecord>>
+  record_triggered_run(RecordTriggeredRunRequest request);
+
+  [[nodiscard]] async::Awaitable<core::Result<std::vector<TriggeredRunRecord>>>
+  list_triggered_runs(ListTriggeredRunsOptions options);
 
   [[nodiscard]] async::Awaitable<core::Result<CronRunRecord>> record_cron_run(RecordCronRunRequest request);
 

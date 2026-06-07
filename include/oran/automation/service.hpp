@@ -121,15 +121,47 @@ struct TriggeredIntakeResult {
   std::vector<TriggeredJobRecord> jobs{};
 };
 
+struct TriggeredExecutionJob {
+  TriggeredJobRecord job{};
+  std::string trigger_key;
+  core::Time received_at{core::Time::epoch()};
+};
+
+using TriggeredJobHandler = std::function<async::Awaitable<core::Result<void>>(TriggeredExecutionJob)>;
+
+struct TriggeredExecuteRequest {
+  std::string trigger_key;
+  core::Time received_at{core::Time::epoch()};
+  std::size_t job_limit{100};
+  TriggeredJobHandler handler{};
+};
+
+struct TriggeredExecuteAttempt {
+  TriggeredExecutionJob execution{};
+  bool completed{false};
+  std::optional<core::Error> error{};
+  std::optional<TriggeredRunRecord> run{};
+};
+
+struct TriggeredExecuteResult {
+  TriggeredIntakeResult intake{};
+  std::size_t attempted_count{0};
+  std::size_t completed_count{0};
+  std::vector<TriggeredExecuteAttempt> attempts{};
+};
+
 /// One caller-driven intake step for externally triggered jobs.
 ///
 /// This owner matches a caller-supplied trigger key against stored triggered
-/// job descriptors. It does not enqueue work, publish hooks, or call agents.
+/// job descriptors. `execute(...)` accepts a caller-supplied handler and records
+/// one run row per matched descriptor. It does not enqueue work, publish hooks,
+/// or call agents.
 class TriggeredService {
 public:
   explicit TriggeredService(AutomationRepository& repository) noexcept;
 
   [[nodiscard]] async::Awaitable<core::Result<TriggeredIntakeResult>> intake(TriggeredIntakeRequest request);
+  [[nodiscard]] async::Awaitable<core::Result<TriggeredExecuteResult>> execute(TriggeredExecuteRequest request);
   [[nodiscard]] AutomationRepository& repository() noexcept;
   [[nodiscard]] const AutomationRepository& repository() const noexcept;
 
