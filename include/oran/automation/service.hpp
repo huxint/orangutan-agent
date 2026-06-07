@@ -108,6 +108,35 @@ struct CronExecuteResult {
   std::vector<CronExecuteAttempt> attempts{};
 };
 
+struct TriggeredIntakeRequest {
+  std::string trigger_key;
+  core::Time received_at{core::Time::epoch()};
+  std::size_t job_limit{100};
+};
+
+struct TriggeredIntakeResult {
+  std::string trigger_key;
+  core::Time received_at{core::Time::epoch()};
+  std::size_t matched_count{0};
+  std::vector<TriggeredJobRecord> jobs{};
+};
+
+/// One caller-driven intake step for externally triggered jobs.
+///
+/// This owner matches a caller-supplied trigger key against stored triggered
+/// job descriptors. It does not enqueue work, publish hooks, or call agents.
+class TriggeredService {
+public:
+  explicit TriggeredService(AutomationRepository& repository) noexcept;
+
+  [[nodiscard]] async::Awaitable<core::Result<TriggeredIntakeResult>> intake(TriggeredIntakeRequest request);
+  [[nodiscard]] AutomationRepository& repository() noexcept;
+  [[nodiscard]] const AutomationRepository& repository() const noexcept;
+
+private:
+  AutomationRepository* repository_{};
+};
+
 /// One caller-driven scan for stored cron jobs.
 ///
 /// This owner evaluates repository-backed cron schedules and reports due work

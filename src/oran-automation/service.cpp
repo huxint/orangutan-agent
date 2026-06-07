@@ -38,6 +38,12 @@ namespace {
       .with("reason", std::move(reason));
 }
 
+[[nodiscard]] core::Error invalid_triggered_intake_field(std::string field, std::string reason) {
+  return core::Error::invalid_argument("triggered intake field is invalid")
+      .with("field", std::move(field))
+      .with("reason", std::move(reason));
+}
+
 [[nodiscard]] core::Result<void> validate_tick_request(const MemoryRetentionTickRequest& request) {
   if (request.job_key.empty()) {
     return std::unexpected(invalid_tick_field("job_key", "empty"));
@@ -61,6 +67,16 @@ namespace {
   }
   if (!request.lease_owner_key.empty() && request.lease_ttl <= std::chrono::steady_clock::duration::zero()) {
     return std::unexpected(invalid_cron_execute_field("lease_ttl", "not_positive"));
+  }
+  return {};
+}
+
+[[nodiscard]] core::Result<void> validate_triggered_intake_request(const TriggeredIntakeRequest& request) {
+  if (request.trigger_key.empty()) {
+    return std::unexpected(invalid_triggered_intake_field("trigger_key", "empty"));
+  }
+  if (request.job_limit == 0) {
+    return std::unexpected(invalid_triggered_intake_field("job_limit", "zero"));
   }
   return {};
 }
@@ -310,6 +326,38 @@ publish_job_lifecycle(const CronHookOptions& hooks, hook::Event event, hook::Job
 }
 
 }  // namespace
+
+TriggeredService::TriggeredService(AutomationRepository& repository) noexcept : repository_{&repository} {}
+
+AutomationRepository& TriggeredService::repository() noexcept {
+  return *repository_;
+}
+
+const AutomationRepository& TriggeredService::repository() const noexcept {
+  return *repository_;
+}
+
+async::Awaitable<core::Result<TriggeredIntakeResult>> TriggeredService::intake(TriggeredIntakeRequest request) {
+  if (auto valid = validate_triggered_intake_request(request); !valid) {
+    co_return std::unexpected(std::move(valid).error());
+  }
+
+  auto jobs = co_await repository_->list_triggered_jobs(ListTriggeredJobsOptions{
+      .trigger_key = request.trigger_key,
+      .limit = request.job_limit,
+  });
+  if (!jobs) {
+    co_return std::unexpected(std::move(jobs).error());
+  }
+
+  auto matched_count = jobs->size();
+  co_return TriggeredIntakeResult{
+      .trigger_key = std::move(request.trigger_key),
+      .received_at = request.received_at,
+      .matched_count = matched_count,
+      .jobs = std::move(*jobs),
+  };
+}
 
 CronService::CronService(AutomationRepository& repository, CronServiceOptions options) noexcept
     : repository_{&repository}, options_{std::move(options)} {}

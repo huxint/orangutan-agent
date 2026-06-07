@@ -103,13 +103,13 @@ TEST_CASE("AutomationRepository::migrate applies the automation schema once", "[
     auto first = co_await repo.migrate();
     REQUIRE(first.has_value());
     REQUIRE(first->previous_version == 0);
-    REQUIRE(first->current_version == 7);
-    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3, 4, 5, 6, 7});
+    REQUIRE(first->current_version == 8);
+    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3, 4, 5, 6, 7, 8});
 
     auto second = co_await repo.migrate();
     REQUIRE(second.has_value());
-    REQUIRE(second->previous_version == 7);
-    REQUIRE(second->current_version == 7);
+    REQUIRE(second->previous_version == 8);
+    REQUIRE(second->current_version == 8);
     REQUIRE(second->applied_versions.empty());
   });
 }
@@ -268,6 +268,61 @@ TEST_CASE("AutomationRepository records and lists cron runs", "[unit][automation
     REQUIRE(capped.has_value());
     REQUIRE(capped->size() == 1);
     REQUIRE((*capped)[0].id == third->id);
+  });
+}
+
+TEST_CASE("AutomationRepository round-trips triggered jobs by trigger key",
+          "[unit][automation][repository][triggered]") {
+  TempDb db{"oran-automation-repo-triggered"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+
+    auto upserted = co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+        .job_key = "triggered:webhook-ci",
+        .trigger_key = "webhook:ci",
+        .agent_key = "researcher",
+    });
+    REQUIRE(upserted.has_value());
+    REQUIRE(upserted->job_key == "triggered:webhook-ci");
+    REQUIRE(upserted->trigger_key == "webhook:ci");
+    REQUIRE(upserted->agent_key == "researcher");
+    REQUIRE_FALSE(upserted->created_at.empty());
+    REQUIRE_FALSE(upserted->updated_at.empty());
+
+    auto loaded = co_await repo.get_triggered_job("triggered:webhook-ci");
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->has_value());
+    REQUIRE((*loaded)->job_key == upserted->job_key);
+    REQUIRE((*loaded)->trigger_key == upserted->trigger_key);
+    REQUIRE((*loaded)->agent_key == upserted->agent_key);
+
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:file-watch",
+                 .trigger_key = "file:workspace",
+                 .agent_key = "automation",
+             }))
+                .has_value());
+    auto updated = co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+        .job_key = "triggered:webhook-ci",
+        .trigger_key = "webhook:release",
+        .agent_key = "coder",
+    });
+    REQUIRE(updated.has_value());
+    REQUIRE(updated->trigger_key == "webhook:release");
+    REQUIRE(updated->agent_key == "coder");
+
+    auto release_jobs = co_await repo.list_triggered_jobs(
+        automation::ListTriggeredJobsOptions{.trigger_key = "webhook:release", .limit = 10});
+    REQUIRE(release_jobs.has_value());
+    REQUIRE(release_jobs->size() == 1);
+    REQUIRE(release_jobs->front().job_key == "triggered:webhook-ci");
+    REQUIRE(release_jobs->front().agent_key == "coder");
+
+    auto missing = co_await repo.get_triggered_job("triggered:missing");
+    REQUIRE(missing.has_value());
+    REQUIRE_FALSE(missing->has_value());
   });
 }
 
@@ -785,5 +840,53 @@ TEST_CASE("AutomationRepository validates cron persistence inputs", "[unit][auto
     });
     REQUIRE_FALSE(invalid_agent_lease_key.has_value());
     REQUIRE(has_field(invalid_agent_lease_key.error(), "agent_key"));
+  });
+}
+
+TEST_CASE("AutomationRepository validates triggered persistence inputs", "[unit][automation][repository][triggered]") {
+  TempDb db{"oran-automation-repo-triggered-validation"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+
+    auto invalid_job_key = co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+        .job_key = "",
+        .trigger_key = "webhook:ci",
+    });
+    REQUIRE_FALSE(invalid_job_key.has_value());
+    REQUIRE(invalid_job_key.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(has_field(invalid_job_key.error(), "job_key"));
+
+    auto invalid_trigger_key = co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+        .job_key = "triggered:webhook-ci",
+        .trigger_key = "",
+    });
+    REQUIRE_FALSE(invalid_trigger_key.has_value());
+    REQUIRE(invalid_trigger_key.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(has_field(invalid_trigger_key.error(), "trigger_key"));
+
+    auto invalid_agent_key = co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+        .job_key = "triggered:webhook-ci",
+        .trigger_key = "webhook:ci",
+        .agent_key = "",
+    });
+    REQUIRE_FALSE(invalid_agent_key.has_value());
+    REQUIRE(invalid_agent_key.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(has_field(invalid_agent_key.error(), "agent_key"));
+
+    auto empty_trigger = co_await repo.list_triggered_jobs(automation::ListTriggeredJobsOptions{
+        .trigger_key = "",
+        .limit = 10,
+    });
+    REQUIRE_FALSE(empty_trigger.has_value());
+    REQUIRE(has_field(empty_trigger.error(), "trigger_key"));
+
+    auto bad_limit = co_await repo.list_triggered_jobs(automation::ListTriggeredJobsOptions{
+        .trigger_key = "webhook:ci",
+        .limit = 0,
+    });
+    REQUIRE_FALSE(bad_limit.has_value());
+    REQUIRE(has_field(bad_limit.error(), "limit"));
   });
 }

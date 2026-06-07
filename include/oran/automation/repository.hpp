@@ -44,6 +44,25 @@ struct ListCronJobsOptions {
   std::size_t limit{50};
 };
 
+struct UpsertTriggeredJobRequest {
+  std::string job_key;
+  std::string trigger_key;
+  std::string agent_key{"automation"};
+};
+
+struct TriggeredJobRecord {
+  std::string job_key;
+  std::string trigger_key;
+  std::string agent_key{"automation"};
+  std::string created_at;
+  std::string updated_at;
+};
+
+struct ListTriggeredJobsOptions {
+  std::string trigger_key;
+  std::size_t limit{50};
+};
+
 enum class CronRunOutcome : std::uint8_t {
   success,
   failure,
@@ -188,6 +207,15 @@ public:
 
   [[nodiscard]] async::Awaitable<core::Result<std::vector<CronJobRecord>>>
   list_cron_jobs(ListCronJobsOptions options = {});
+
+  [[nodiscard]] async::Awaitable<core::Result<TriggeredJobRecord>>
+  upsert_triggered_job(UpsertTriggeredJobRequest request);
+
+  [[nodiscard]] async::Awaitable<core::Result<std::optional<TriggeredJobRecord>>>
+  get_triggered_job(std::string job_key);
+
+  [[nodiscard]] async::Awaitable<core::Result<std::vector<TriggeredJobRecord>>>
+  list_triggered_jobs(ListTriggeredJobsOptions options);
 
   [[nodiscard]] async::Awaitable<core::Result<CronRunRecord>> record_cron_run(RecordCronRunRequest request);
 

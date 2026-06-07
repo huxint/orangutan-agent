@@ -11,13 +11,15 @@ caller-awaited cron service cycle over the existing finite cron loop, a
 caller-driven cron scan/wait/execute-due boundary plus finite caller-owned cron
 loop policy, advisory cron lifecycle metadata, typed cron run outcome
 classification, repository-backed cron execution leases and cron agent leases
-for explicit loop owners, and a caller-driven retention service tick with
-optional advisory `memory_decay` plus job lifecycle metadata,
+for explicit loop owners, durable triggered job descriptors with caller-driven
+triggered intake, and a caller-driven retention service tick with optional
+advisory `memory_decay` plus job lifecycle metadata,
 plus a caller-started retention loop step that can wait within a caller budget
 for one stored job to become due and lease due execution, plus a finite
 caller-owned loop policy over that step. It does not start detached background
 work, own a long-running process service loop, persist configured cron seeds
-from bootstrap automatically, enqueue cron work, or call an agent loop.
+from bootstrap automatically, enqueue cron or triggered work, or call an agent
+loop.
 
 ## Current Status
 
@@ -280,6 +282,18 @@ Active conflicts on either lease return `ErrorKind::conflict` before the handler
 runs, and durable success/failure paths release both leases. Cron lifecycle hook
 payloads use the stored cron job `agent_key`.
 
+Slice 211 adds the first triggered-category intake boundary without adding
+queue, notifier, agent invocation, or detached scheduler ownership. Migration
+version 8 creates `automation_triggered_jobs`; `AutomationRepository` can
+upsert/load/list stored descriptors by durable `job_key` and external
+`trigger_key`, with a stored `agent_key` defaulting to `automation`.
+`TriggeredService::intake(...)` validates a caller-supplied `trigger_key` plus
+positive match limit and returns the matching stored descriptors with the
+caller-supplied intake timestamp. `AutomationRuntime::triggered_service()`
+constructs that service over caller-owned state. The boundary is descriptor
+matching only: it does not persist trigger events, enqueue work, publish hooks,
+notify channels, or call agents.
+
 ## Public API
 
 ```cpp
@@ -363,6 +377,25 @@ struct CronJobRecord {
 };
 
 struct ListCronJobsOptions {
+  std::size_t limit;
+};
+
+struct UpsertTriggeredJobRequest {
+  std::string job_key;
+  std::string trigger_key;
+  std::string agent_key;
+};
+
+struct TriggeredJobRecord {
+  std::string job_key;
+  std::string trigger_key;
+  std::string agent_key;
+  std::string created_at;
+  std::string updated_at;
+};
+
+struct ListTriggeredJobsOptions {
+  std::string trigger_key;
   std::size_t limit;
 };
 
@@ -551,6 +584,12 @@ class AutomationRepository {
   mark_cron_job_fired(std::string job_key, core::Time fired_at);
   async::Awaitable<core::Result<std::vector<CronJobRecord>>>
   list_cron_jobs(ListCronJobsOptions = {});
+  async::Awaitable<core::Result<TriggeredJobRecord>>
+  upsert_triggered_job(UpsertTriggeredJobRequest);
+  async::Awaitable<core::Result<std::optional<TriggeredJobRecord>>>
+  get_triggered_job(std::string job_key);
+  async::Awaitable<core::Result<std::vector<TriggeredJobRecord>>>
+  list_triggered_jobs(ListTriggeredJobsOptions);
   async::Awaitable<core::Result<CronRunRecord>>
   record_cron_run(RecordCronRunRequest);
   async::Awaitable<core::Result<std::vector<CronRunRecord>>>
@@ -631,6 +670,29 @@ struct CronServiceOptions {
   CronHookOptions hooks;
 };
 
+struct TriggeredIntakeRequest {
+  std::string trigger_key;
+  core::Time received_at;
+  std::size_t job_limit;
+};
+
+struct TriggeredIntakeResult {
+  std::string trigger_key;
+  core::Time received_at;
+  std::size_t matched_count;
+  std::vector<TriggeredJobRecord> jobs;
+};
+
+class TriggeredService {
+ public:
+  explicit TriggeredService(AutomationRepository&);
+
+  async::Awaitable<core::Result<TriggeredIntakeResult>>
+  intake(TriggeredIntakeRequest);
+  AutomationRepository& repository() noexcept;
+  const AutomationRepository& repository() const noexcept;
+};
+
 class CronService {
  public:
   explicit CronService(AutomationRepository&, CronServiceOptions = {});
@@ -695,6 +757,7 @@ class AutomationRuntime {
 
   CronService cron_service(CronServiceOptions = {}) noexcept;
   CronLoop cron_loop(CronServiceOptions = {}) noexcept;
+  TriggeredService triggered_service() noexcept;
 
   MemoryRetentionService memory_retention_service(
       memory::longterm::Backend&,
@@ -932,6 +995,31 @@ error it returns without attempting later seeds; already-upserted rows remain
 committed because this slice does not introduce a transaction wrapper. The
 error includes `seed_index` and the seed `job_key` when available so runtime
 owners can surface the failing authored row.
+
+## Triggered Intake Semantics
+
+`automation_triggered_jobs` is the first triggered-category state boundary. A
+stored row has:
+
+- `job_key`: durable non-empty repository identity.
+- `trigger_key`: external event routing key supplied by a runtime owner, such
+  as a webhook route, signal name, or file-watch topic.
+- `agent_key`: target agent execution key, defaulting to `automation`.
+- `created_at` / `updated_at`: repository timestamps.
+
+`AutomationRepository::upsert_triggered_job(...)` validates all three keys
+before touching SQLite. `get_triggered_job(...)` returns `std::nullopt` for a
+missing durable job key, and `list_triggered_jobs(...)` requires a non-empty
+`trigger_key` plus positive limit and returns newest-updated matching
+descriptors.
+
+`TriggeredService::intake(...)` is the caller-owned runtime surface over those
+rows. The caller supplies the external `trigger_key`, an intake timestamp, and
+a match limit. The service returns the matching stored descriptors and the same
+timestamp so later queue/notifier/agent-firing owners can preserve the event
+arrival time. The service deliberately does not persist trigger events, write
+run history, enqueue jobs, publish hooks, notify channels, acquire leases, or
+call agents.
 
 ## Memory Retention Planning
 
@@ -1370,9 +1458,10 @@ spec 0006 boundaries now start after this explicit runtime/retention loop
 surface, cron evaluator, cron repository state, and caller-driven cron
 scan/wait/execute-due/run surface plus config-authored cron seeds, explicit
 seed application/service-cycle policy, run history, stop policy, typed
-outcomes, stored cron execution leases, and stored cron agent leases: detached
-service startup policy, triggered categories, queueing/backpressure, notifier
-routing, and actual agent firing for agent-facing jobs.
+outcomes, stored cron execution leases, stored cron agent leases, and triggered
+descriptor intake: detached service startup policy, triggered execution/run
+history, queueing/backpressure, notifier routing, and actual agent firing for
+agent-facing jobs.
 
 ## Validation
 
@@ -1458,6 +1547,11 @@ ownership, and `AutomationRuntime::open(...)` migration report version 7.
 `test-config` reports 51 cases / 462 assertions for optional cron seed
 `agent_key` parsing, and `test-bootstrap` reports 129 cases / 1091 assertions
 for mapping it into stored cron seed descriptors.
+Slice 211 reports `test-automation` at 75 cases / 1078 assertions for triggered
+intake, covering migration v8, triggered descriptor round-trip/update/listing,
+repository validation, service-level intake matching and validation, runtime
+factory coverage, and `AutomationRuntime::open(...)` migration report version
+8.
 
 `bench-automation` planning rows are:
 

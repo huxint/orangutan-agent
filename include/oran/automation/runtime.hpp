@@ -58,9 +58,9 @@ struct CronServiceCycleResult {
 /// Opening the runtime creates parent directories, opens `automation.db`, runs
 /// the automation migrations, and keeps the pool/repository lifetime stable for
 /// service owners. It can explicitly upsert caller-supplied cron seeds or run
-/// one caller-awaited cron service cycle over the owned repository, but
-/// intentionally does not start detached timers, acquire process ownership, or
-/// launch background jobs.
+/// one caller-awaited cron service cycle over the owned repository, and it can
+/// construct a triggered-job intake service, but intentionally does not start
+/// detached timers, acquire process ownership, or launch background jobs.
 class AutomationRuntime {
 public:
   ~AutomationRuntime();
@@ -86,6 +86,7 @@ public:
 
   [[nodiscard]] CronService cron_service(CronServiceOptions options = {}) noexcept;
   [[nodiscard]] CronLoop cron_loop(CronServiceOptions options = {}) noexcept;
+  [[nodiscard]] TriggeredService triggered_service() noexcept;
 
   [[nodiscard]] MemoryRetentionService memory_retention_service(memory::longterm::Backend& backend,
                                                                 MemoryRetentionServiceOptions options = {}) noexcept;

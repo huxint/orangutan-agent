@@ -11,9 +11,9 @@ cron schedule seeds mapped by bootstrap into repository descriptors.
 Explicit seed persistence, one caller-awaited cron service cycle, durable cron
 run history, cooperative finite-loop stop policy, typed cron run outcome
 classification, repository-backed cron execution leases for explicit loop
-owners, and the first per-agent cron lease policy now exist; detached
-service-loop startup, triggered categories, queues, notifiers, and agent firing
-stay in later scheduler slices.
+owners, the first per-agent cron lease policy, and the first triggered intake
+boundary now exist; detached service-loop startup, triggered execution/run
+history, queues, notifiers, and agent firing stay in later scheduler slices.
 
 ## Scope
 
@@ -48,14 +48,17 @@ stay in later scheduler slices.
   per agent key so caller-owned loops and service cycles do not overlap active
   work for the same agent, without adding queueing, notifier routing, or agent
   execution ownership.
+- Persist triggered job descriptors and match caller-supplied external
+  `trigger_key` values through an explicit intake service without adding
+  queueing, notifier routing, or agent execution ownership.
 - Keep the slice free of agent, detached timer, automatic bootstrap
   persistence, or background task ownership.
 - Update automation docs/status/history/release notes in the same slice.
 - Out of scope:
 - Scheduler service startup that automatically reads config and applies/runs
   cron seeds.
-- Process timers, triggered jobs, queueing/backpressure, notifier routing, and
-  agent firing.
+- Process timers, triggered execution/run history, queueing/backpressure,
+  notifier routing, and agent firing.
 - Bootstrap opening `automation.db`, starting timers, or spawning detached
   automation work.
 - Scheduler tick performance work beyond focused correctness coverage.
@@ -137,8 +140,11 @@ stay in later scheduler slices.
   same explicit execution owner. Later: add detached service/timer ownership
   without bootstrap-owned background work.
 4. **Triggered/notifier/queue policy.**
-   Later: add triggered categories, queueing/backpressure, notifier routing,
-   and agent execution leases.
+   In progress: slice 211 adds durable triggered job descriptors and
+   caller-owned `TriggeredService::intake(...)` matching by external
+   `trigger_key`, without queueing, notifier routing, or agent execution.
+   Later: add triggered execution/run history, queueing/backpressure, notifier
+   routing, and agent firing.
 5. **Scheduler performance.**
    Later: measure the 1 000-job scheduler tick criterion once the scheduler
    exists.
@@ -159,6 +165,9 @@ stay in later scheduler slices.
 - `build/linux/x86_64/release/test-automation "[unit][automation][service][cron][lease]"`
 - `build/linux/x86_64/release/test-automation "[unit][automation][runtime][cron][loop][lease]"`
 - `build/linux/x86_64/release/test-automation "AutomationRepository acquires, expires, and releases cron agent leases"`
+- `build/linux/x86_64/release/test-automation "AutomationRepository round-trips triggered jobs by trigger key"`
+- `build/linux/x86_64/release/test-automation "TriggeredService::intake matches stored jobs for a trigger key"`
+- `build/linux/x86_64/release/test-automation "AutomationRuntime constructs triggered intake over owned state"`
 - `build/linux/x86_64/release/test-automation "CronService::execute_due blocks active cron agent leases before handlers"`
 - `build/linux/x86_64/release/test-automation "CronLoop::run uses cron agent leases before calling handlers"`
 - `build/linux/x86_64/release/test-automation "CronService::execute_due records cancelled cron handlers as aborted"`
@@ -196,6 +205,9 @@ stay in later scheduler slices.
 - Confirm cron agent leases reject active same-agent conflicts before handler
   execution, release after durable success/failure paths, and allow expired
   takeover.
+- Confirm triggered intake matches only stored descriptors for the supplied
+  external trigger key and does not enqueue work, notify channels, or call
+  agents.
 - Confirm no new dependency direction crosses from automation into bootstrap,
   config, or agent.
 - Observability checks:
@@ -296,6 +308,12 @@ stay in later scheduler slices.
   after durable outcome work, and returns `ErrorKind::conflict` before handler
   execution when another owner holds the same agent key. Hook payloads now use
   the stored cron job agent key.
+- [x] 2026-06-08 02:58 +0800: Implemented triggered job descriptor intake
+  through migration v8, repository upsert/load/list-by-trigger APIs,
+  `TriggeredService::intake(...)`, and `AutomationRuntime::triggered_service()`.
+  Runtime owners can match external `trigger_key` values to stored jobs without
+  queueing work, notifying channels, calling agents, or making bootstrap own
+  automation state.
 - [x] **Update the docs that this slice invalidates in the same PR**
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -361,6 +379,10 @@ stay in later scheduler slices.
   and agent firing policy. Explicit loops can now avoid overlapping due work for
   the same stored agent key, while queue hold/drop semantics and actual agent
   invocation remain downstream.
+- 2026-06-08: Add triggered descriptor intake before queue/notifier/agent
+  firing policy. Matching external trigger keys to stored jobs is the smallest
+  useful triggered-category boundary, while trigger event durability, hold/drop
+  behavior, notifier routing, and actual agent invocation remain downstream.
 
 ## Linked Artifacts
 
@@ -381,5 +403,7 @@ stay in later scheduler slices.
 - `docs/histories/2026-06/20260608-0122-automation-cron-loop-stop-policy.md`
 - `docs/histories/2026-06/20260608-0143-automation-cron-run-outcomes.md`
 - `docs/histories/2026-06/20260608-0206-automation-cron-execution-leases.md`
+- `docs/histories/2026-06/20260608-0236-automation-cron-agent-leases.md`
+- `docs/histories/2026-06/20260608-0258-automation-triggered-intake.md`
 - Release note:
 - `docs/releases/feature-release-notes.md#2026-06`

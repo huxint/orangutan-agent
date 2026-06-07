@@ -53,6 +53,10 @@ constexpr unsigned char kAutomationCronAgentLeasesBytes[] = {
 #embed "migrations/automation/0007-automation-cron-agent-leases.sql"
 };
 
+constexpr unsigned char kAutomationTriggeredJobsBytes[] = {
+#embed "migrations/automation/0008-automation-triggered-jobs.sql"
+};
+
 constexpr std::string_view kUpsertCronJobSql = R"sql(
 INSERT INTO automation_cron_jobs(
   job_key,
@@ -117,6 +121,50 @@ SELECT
   created_at,
   updated_at
 FROM automation_cron_jobs
+ORDER BY updated_at DESC, job_key ASC
+LIMIT ?
+)sql";
+
+constexpr std::string_view kUpsertTriggeredJobSql = R"sql(
+INSERT INTO automation_triggered_jobs(
+  job_key,
+  trigger_key,
+  agent_key,
+  created_at,
+  updated_at
+) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+ON CONFLICT(job_key) DO UPDATE SET
+  trigger_key = excluded.trigger_key,
+  agent_key = excluded.agent_key,
+  updated_at = excluded.updated_at
+RETURNING
+  job_key,
+  trigger_key,
+  agent_key,
+  created_at,
+  updated_at
+)sql";
+
+constexpr std::string_view kGetTriggeredJobSql = R"sql(
+SELECT
+  job_key,
+  trigger_key,
+  agent_key,
+  created_at,
+  updated_at
+FROM automation_triggered_jobs
+WHERE job_key = ?
+)sql";
+
+constexpr std::string_view kListTriggeredJobsSql = R"sql(
+SELECT
+  job_key,
+  trigger_key,
+  agent_key,
+  created_at,
+  updated_at
+FROM automation_triggered_jobs
+WHERE trigger_key = ?
 ORDER BY updated_at DESC, job_key ASC
 LIMIT ?
 )sql";
@@ -357,7 +405,7 @@ template <std::size_t N>
 }
 
 [[nodiscard]] std::span<const storage::Migration> built_in_automation_migrations() {
-  static const std::array<storage::Migration, 7> kMigrations{
+  static const std::array<storage::Migration, 8> kMigrations{
       storage::Migration{
           .version = 1,
           .name = "automation-retention-state",
@@ -392,6 +440,11 @@ template <std::size_t N>
           .version = 7,
           .name = "automation-cron-agent-leases",
           .sql = to_sql_string(kAutomationCronAgentLeasesBytes),
+      },
+      storage::Migration{
+          .version = 8,
+          .name = "automation-triggered-jobs",
+          .sql = to_sql_string(kAutomationTriggeredJobsBytes),
       },
   };
   return kMigrations;
@@ -438,6 +491,13 @@ template <std::size_t N>
   return {};
 }
 
+[[nodiscard]] core::Result<void> validate_trigger_key(std::string_view trigger_key) {
+  if (trigger_key.empty()) {
+    return std::unexpected(invalid_field("trigger_key", "empty"));
+  }
+  return {};
+}
+
 [[nodiscard]] core::Result<void> validate_cron_schedule_for_storage(const CronSchedule& schedule) {
   auto evaluated = evaluate_cron_schedule(schedule, {}, schedule.first_fire_at);
   if (!evaluated) {
@@ -454,6 +514,19 @@ template <std::size_t N>
     return std::unexpected(valid.error());
   }
   if (auto valid = validate_cron_schedule_for_storage(request.schedule); !valid) {
+    return std::unexpected(valid.error());
+  }
+  return {};
+}
+
+[[nodiscard]] core::Result<void> validate_upsert_request(const UpsertTriggeredJobRequest& request) {
+  if (auto valid = validate_job_key(request.job_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  if (auto valid = validate_trigger_key(request.trigger_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  if (auto valid = validate_agent_key(request.agent_key); !valid) {
     return std::unexpected(valid.error());
   }
   return {};
@@ -509,6 +582,13 @@ template <std::size_t N>
 
 [[nodiscard]] core::Result<std::int64_t> checked_limit(std::size_t limit) {
   return checked_positive_size(limit, "limit");
+}
+
+[[nodiscard]] core::Result<void> validate_list_triggered_jobs_options(const ListTriggeredJobsOptions& options) {
+  if (auto valid = validate_trigger_key(options.trigger_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  return {};
 }
 
 [[nodiscard]] core::Result<void> validate_owner_key(std::string_view owner_key) {
@@ -804,6 +884,43 @@ read_size(storage::Statement& statement, int index, std::string_view field, bool
       .agent_key = std::move(*agent_key),
       .schedule = std::move(schedule),
       .state = PeriodicJobState{.last_fired_at = *last_fired_at},
+      .created_at = std::move(*created_at),
+      .updated_at = std::move(*updated_at),
+  };
+}
+
+[[nodiscard]] core::Result<TriggeredJobRecord> read_triggered_job_row(storage::Statement& statement) {
+  auto job_key = required_text(statement, 0, "job_key");
+  if (!job_key) {
+    return std::unexpected(job_key.error());
+  }
+  auto trigger_key = required_text(statement, 1, "trigger_key");
+  if (!trigger_key) {
+    return std::unexpected(trigger_key.error());
+  }
+  if (auto valid = validate_trigger_key(*trigger_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  auto agent_key = required_text(statement, 2, "agent_key");
+  if (!agent_key) {
+    return std::unexpected(agent_key.error());
+  }
+  if (auto valid = validate_agent_key(*agent_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  auto created_at = required_text(statement, 3, "created_at");
+  if (!created_at) {
+    return std::unexpected(created_at.error());
+  }
+  auto updated_at = required_text(statement, 4, "updated_at");
+  if (!updated_at) {
+    return std::unexpected(updated_at.error());
+  }
+
+  return TriggeredJobRecord{
+      .job_key = std::move(*job_key),
+      .trigger_key = std::move(*trigger_key),
+      .agent_key = std::move(*agent_key),
       .created_at = std::move(*created_at),
       .updated_at = std::move(*updated_at),
   };
@@ -1183,6 +1300,132 @@ AutomationRepository::list_cron_jobs(ListCronJobsOptions options) {
       break;
     }
     auto row = read_cron_job_row(statement);
+    if (!row) {
+      co_return std::unexpected(row.error());
+    }
+    rows.push_back(std::move(*row));
+  }
+  co_return rows;
+}
+
+async::Awaitable<core::Result<TriggeredJobRecord>>
+AutomationRepository::upsert_triggered_job(UpsertTriggeredJobRequest request) {
+  if (auto valid = validate_upsert_request(request); !valid) {
+    co_return std::unexpected(valid.error());
+  }
+
+  auto writer = co_await pool_->acquire_writer();
+  if (!writer) {
+    co_return std::unexpected(writer.error());
+  }
+
+  auto cached = writer->statement_cache().acquire(writer->connection(), kUpsertTriggeredJobSql);
+  if (!cached) {
+    co_return std::unexpected(cached.error());
+  }
+  auto& statement = cached->statement();
+  if (auto bound = statement.bind_text(1, request.job_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(2, request.trigger_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(3, request.agent_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+
+  auto step = statement.step();
+  if (!step) {
+    co_return std::unexpected(step.error());
+  }
+  if (*step != storage::StepResult::row) {
+    co_return std::unexpected(core::Error::storage("automation triggered job upsert returned no row"));
+  }
+
+  auto record = read_triggered_job_row(statement);
+  if (!record) {
+    co_return std::unexpected(record.error());
+  }
+  if (auto done = expect_done(statement, "upsert_triggered_job"); !done) {
+    co_return std::unexpected(done.error());
+  }
+  co_return std::move(*record);
+}
+
+async::Awaitable<core::Result<std::optional<TriggeredJobRecord>>>
+AutomationRepository::get_triggered_job(std::string job_key) {
+  if (auto valid = validate_job_key(job_key); !valid) {
+    co_return std::unexpected(valid.error());
+  }
+
+  auto reader = co_await pool_->acquire_reader();
+  if (!reader) {
+    co_return std::unexpected(reader.error());
+  }
+
+  auto cached = reader->statement_cache().acquire(reader->connection(), kGetTriggeredJobSql);
+  if (!cached) {
+    co_return std::unexpected(cached.error());
+  }
+  auto& statement = cached->statement();
+  if (auto bound = statement.bind_text(1, job_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+
+  auto step = statement.step();
+  if (!step) {
+    co_return std::unexpected(step.error());
+  }
+  if (*step == storage::StepResult::done) {
+    co_return std::optional<TriggeredJobRecord>{};
+  }
+  auto record = read_triggered_job_row(statement);
+  if (!record) {
+    co_return std::unexpected(record.error());
+  }
+  if (auto done = expect_done(statement, "get_triggered_job"); !done) {
+    co_return std::unexpected(done.error());
+  }
+  co_return std::optional<TriggeredJobRecord>{std::move(*record)};
+}
+
+async::Awaitable<core::Result<std::vector<TriggeredJobRecord>>>
+AutomationRepository::list_triggered_jobs(ListTriggeredJobsOptions options) {
+  if (auto valid = validate_list_triggered_jobs_options(options); !valid) {
+    co_return std::unexpected(valid.error());
+  }
+  auto limit = checked_limit(options.limit);
+  if (!limit) {
+    co_return std::unexpected(limit.error());
+  }
+
+  auto reader = co_await pool_->acquire_reader();
+  if (!reader) {
+    co_return std::unexpected(reader.error());
+  }
+
+  auto cached = reader->statement_cache().acquire(reader->connection(), kListTriggeredJobsSql);
+  if (!cached) {
+    co_return std::unexpected(cached.error());
+  }
+  auto& statement = cached->statement();
+  if (auto bound = statement.bind_text(1, options.trigger_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_int64(2, *limit); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+
+  std::vector<TriggeredJobRecord> rows;
+  while (true) {
+    auto step = statement.step();
+    if (!step) {
+      co_return std::unexpected(step.error());
+    }
+    if (*step == storage::StepResult::done) {
+      break;
+    }
+    auto row = read_triggered_job_row(statement);
     if (!row) {
       co_return std::unexpected(row.error());
     }

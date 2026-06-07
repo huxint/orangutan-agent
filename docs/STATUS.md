@@ -7,30 +7,26 @@
 
 ## Snapshot
 
-- **Slice:** 210 (`xmake run orangutan -- --help` reports slice 210)
+- **Slice:** 211 (`xmake run orangutan -- --help` reports slice 211)
 - **Last completed history:**
-  [`histories/2026-06/20260608-0236-automation-cron-agent-leases.md`](histories/2026-06/20260608-0236-automation-cron-agent-leases.md)
+  [`histories/2026-06/20260608-0258-automation-triggered-intake.md`](histories/2026-06/20260608-0258-automation-triggered-intake.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-cron-category.md`](exec-plans/active/2026-06-07-automation-cron-category.md).
-- **Latest completed slice:** slice 210 adds the first agent-facing cron lease
-  policy without starting a scheduler. Cron config seeds and stored cron jobs
-  now carry `agent_key` (default `automation`); migration v7 adds
-  `automation_cron_jobs.agent_key` plus `automation_cron_agent_leases`;
-  `AutomationRepository` exposes agent-lease acquire/release APIs with active
-  conflict and expired-takeover semantics. `CronService::execute_due(...)`
-  now uses an enabled lease owner to acquire both the per-job cron lease and the
-  per-agent lease before the handler runs, releases both after durable outcome
-  work, and reports `ErrorKind::conflict` before handler execution when another
-  owner is running the same agent. Cron lifecycle hook payloads now use the
-  stored job's `agent_key`. Bootstrap still only stores cron descriptors; it
-  does not open `automation.db`, apply rows automatically, start process
-  timers, spawn detached work, enqueue work, call notifiers, or fire agents.
-  Focused results: `test-config` **51 cases / 462 assertions**,
-  `test-automation` **70 cases / 1010 assertions**, and `test-bootstrap`
-  **129 cases / 1091 assertions**.
+- **Latest completed slice:** slice 211 adds the first triggered-category
+  intake boundary without starting a scheduler. Migration v8 creates
+  `automation_triggered_jobs`, and `AutomationRepository` can upsert, load, and
+  list stored triggered job descriptors by `trigger_key` with durable
+  `job_key`, `agent_key`, and timestamps. `TriggeredService::intake(...)`
+  validates caller-supplied external trigger keys and returns the matching
+  stored jobs plus the intake timestamp; `AutomationRuntime::triggered_service()`
+  constructs that service over the caller-owned automation state. This slice
+  still does not enqueue work, record triggered run history, notify channels,
+  call agents, or make bootstrap open/apply/run `automation.db` automatically.
+  Focused result: `test-automation` **75 cases / 1078 assertions**.
 - **Next intended slice:** continue the active automation cron/category plan.
   The next useful implementation boundary is a small scheduler-service
-  ownership slice such as triggered category intake or notifier/queue policy.
+  ownership slice such as triggered queue/backpressure policy, notifier routing,
+  or agent firing.
   Do not add bootstrap-owned background automation or unrelated STATUS-only
   slice churn.
 
@@ -1827,7 +1823,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 37 cases / 299 assertions.
 - `oran-memory`: 38 cases / 841 assertions.
-- `oran-automation`: 70 cases / 1010 assertions.
+- `oran-automation`: 75 cases / 1078 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 208 cases / 2181 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.

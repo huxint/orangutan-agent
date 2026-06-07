@@ -157,6 +157,79 @@ struct CapturedJobLifecycle {
 
 }  // namespace
 
+TEST_CASE("TriggeredService::intake matches stored jobs for a trigger key", "[unit][automation][service][triggered]") {
+  TempDb db{"oran-automation-service-triggered"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:webhook-ci",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "researcher",
+             }))
+                .has_value());
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:webhook-ci-secondary",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "coder",
+             }))
+                .has_value());
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:file-watch",
+                 .trigger_key = "file:workspace",
+             }))
+                .has_value());
+
+    automation::TriggeredService service{repo};
+    auto intake = co_await service.intake(automation::TriggeredIntakeRequest{
+        .trigger_key = "webhook:ci",
+        .received_at = at(120s),
+        .job_limit = 10,
+    });
+
+    REQUIRE(intake.has_value());
+    REQUIRE(intake->trigger_key == "webhook:ci");
+    REQUIRE(intake->received_at == at(120s));
+    REQUIRE(intake->matched_count == 2);
+    REQUIRE(intake->jobs.size() == 2);
+    auto first = std::ranges::find_if(intake->jobs, [](const auto& job) {
+      return job.job_key == "triggered:webhook-ci" && job.agent_key == "researcher";
+    });
+    REQUIRE(first != intake->jobs.end());
+    auto second = std::ranges::find_if(intake->jobs, [](const auto& job) {
+      return job.job_key == "triggered:webhook-ci-secondary" && job.agent_key == "coder";
+    });
+    REQUIRE(second != intake->jobs.end());
+  });
+}
+
+TEST_CASE("TriggeredService::intake rejects invalid intake policy", "[unit][automation][service][triggered]") {
+  TempDb db{"oran-automation-service-triggered-validation"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+
+    automation::TriggeredService service{repo};
+    auto missing_trigger = co_await service.intake(automation::TriggeredIntakeRequest{
+        .trigger_key = "",
+        .received_at = at(120s),
+        .job_limit = 10,
+    });
+    REQUIRE_FALSE(missing_trigger.has_value());
+    REQUIRE(missing_trigger.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto bad_limit = co_await service.intake(automation::TriggeredIntakeRequest{
+        .trigger_key = "webhook:ci",
+        .received_at = at(120s),
+        .job_limit = 0,
+    });
+    REQUIRE_FALSE(bad_limit.has_value());
+    REQUIRE(bad_limit.error().kind() == core::ErrorKind::invalid_argument);
+  });
+}
+
 TEST_CASE("CronService::execute_due advances only successful due cron jobs", "[unit][automation][service][cron]") {
   TempDb db{"oran-automation-service-cron-execute"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {

@@ -2,12 +2,13 @@
 //
 // The current automation surface ships deterministic periodic and cron cadence,
 // memory retention planning primitives, durable retention job/run/lease state
-// plus durable cron job state, a caller-owned automation runtime handle,
-// explicit cron seed application, a caller-awaited cron service cycle,
+// plus durable cron and triggered job state, a caller-owned automation runtime
+// handle, explicit cron seed application, a caller-awaited cron service cycle,
 // caller-driven cron tick/execute owners, explicit cron wait/run loop steps,
-// retention and cron hook metadata, and caller-started leased retention loop
-// steps plus finite loop policy. Triggered jobs, queue/backpressure policy, and
-// detached background service loops land behind this boundary in later slices.
+// caller-driven triggered intake, retention and cron hook metadata, and
+// caller-started leased retention loop steps plus finite loop policy. Queue /
+// backpressure policy and detached background service loops land behind this
+// boundary in later slices.
 
 #pragma once
 
