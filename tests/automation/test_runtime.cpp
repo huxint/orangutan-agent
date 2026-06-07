@@ -130,6 +130,9 @@ public:
   decay(memory::longterm::DecayRequest request) override {
     ++decay_calls;
     last_decay = std::move(request);
+    if (decay_error) {
+      co_return std::unexpected(*decay_error);
+    }
     co_return decay_result;
   }
 
@@ -140,6 +143,7 @@ public:
   int decay_calls{};
   memory::longterm::DecayRequest last_decay{};
   memory::longterm::DecayResult decay_result{};
+  std::optional<core::Error> decay_error{};
 };
 
 }  // namespace
@@ -161,8 +165,8 @@ TEST_CASE("AutomationRuntime::open creates parent directories and migrates state
     REQUIRE(opened->database_path() == db_path);
     REQUIRE(std::filesystem::exists(workspace.path() / ".orangutan" / "automation.db"));
     REQUIRE(opened->migration_report().previous_version == 0);
-    REQUIRE(opened->migration_report().current_version == 1);
-    REQUIRE(opened->migration_report().applied_versions == std::vector<std::int64_t>{1});
+    REQUIRE(opened->migration_report().current_version == 2);
+    REQUIRE(opened->migration_report().applied_versions == std::vector<std::int64_t>{1, 2});
 
     auto upserted =
         co_await opened->repository().upsert_memory_retention_job(automation::UpsertMemoryRetentionJobRequest{
@@ -187,14 +191,14 @@ TEST_CASE("AutomationRuntime::open reuses an already migrated automation databas
                                                      automation::AutomationRuntimeOptions{.database_path = db_path});
     REQUIRE(first.has_value());
     REQUIRE(first->migration_report().previous_version == 0);
-    REQUIRE(first->migration_report().current_version == 1);
+    REQUIRE(first->migration_report().current_version == 2);
 
     auto second =
         co_await automation::AutomationRuntime::open(io.get_executor(),
                                                      automation::AutomationRuntimeOptions{.database_path = db_path});
     REQUIRE(second.has_value());
-    REQUIRE(second->migration_report().previous_version == 1);
-    REQUIRE(second->migration_report().current_version == 1);
+    REQUIRE(second->migration_report().previous_version == 2);
+    REQUIRE(second->migration_report().current_version == 2);
     REQUIRE(second->migration_report().applied_versions.empty());
   });
 }
@@ -331,6 +335,114 @@ TEST_CASE("AutomationRuntime retention loop waits within budget and runs due wor
     REQUIRE(loaded.has_value());
     REQUIRE(loaded->has_value());
     REQUIRE((*loaded)->state.last_fired_at == at(60s));
+
+    auto reacquired =
+        co_await runtime->repository().acquire_memory_retention_lease(automation::AcquireMemoryRetentionLeaseRequest{
+            .job_key = "memory-retention:cli",
+            .owner_key = "post-loop-owner",
+            .acquired_at = at(61s),
+            .expires_at = at(62s),
+        });
+    REQUIRE(reacquired.has_value());
+    REQUIRE(reacquired->has_value());
+    REQUIRE((*reacquired)->owner_key == "post-loop-owner");
+    REQUIRE(
+        (co_await runtime->repository().release_memory_retention_lease(automation::ReleaseMemoryRetentionLeaseRequest{
+             .job_key = "memory-retention:cli",
+             .owner_key = "post-loop-owner",
+         }))
+            .value());
+  });
+}
+
+TEST_CASE("MemoryRetentionLoop::run_once rejects a job with an active lease",
+          "[unit][automation][runtime][loop][lease]") {
+  TempWorkspace workspace{"oran-automation-runtime-loop-lease"};
+  test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {
+    auto runtime = co_await automation::AutomationRuntime::open(
+        io.get_executor(),
+        automation::AutomationRuntimeOptions{.database_path = automation_db_path(workspace)});
+    REQUIRE(runtime.has_value());
+    REQUIRE((co_await runtime->repository().upsert_memory_retention_job(automation::UpsertMemoryRetentionJobRequest{
+                 .job_key = "memory-retention:cli",
+                 .job = make_job(),
+             }))
+                .has_value());
+    auto held =
+        co_await runtime->repository().acquire_memory_retention_lease(automation::AcquireMemoryRetentionLeaseRequest{
+            .job_key = "memory-retention:cli",
+            .owner_key = "existing-owner",
+            .acquired_at = at(50s),
+            .expires_at = at(120s),
+        });
+    REQUIRE(held.has_value());
+    REQUIRE(held->has_value());
+
+    FakeBackend backend;
+    auto loop = runtime->memory_retention_loop(backend);
+    auto result = co_await loop.run_once(automation::MemoryRetentionLoopRunOnceRequest{
+        .job_key = "memory-retention:cli",
+        .now = at(60s),
+        .max_wait = 0ms,
+        .lease_owner_key = "loop-owner",
+        .lease_ttl = 30s,
+    });
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::conflict);
+    REQUIRE(backend.decay_calls == 0);
+
+    auto still_held =
+        co_await runtime->repository().acquire_memory_retention_lease(automation::AcquireMemoryRetentionLeaseRequest{
+            .job_key = "memory-retention:cli",
+            .owner_key = "third-owner",
+            .acquired_at = at(61s),
+            .expires_at = at(130s),
+        });
+    REQUIRE(still_held.has_value());
+    REQUIRE_FALSE(still_held->has_value());
+  });
+}
+
+TEST_CASE("MemoryRetentionLoop::run_once releases a due lease after backend failure",
+          "[unit][automation][runtime][loop][lease]") {
+  TempWorkspace workspace{"oran-automation-runtime-loop-release-on-error"};
+  test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {
+    auto runtime = co_await automation::AutomationRuntime::open(
+        io.get_executor(),
+        automation::AutomationRuntimeOptions{.database_path = automation_db_path(workspace)});
+    REQUIRE(runtime.has_value());
+    REQUIRE((co_await runtime->repository().upsert_memory_retention_job(automation::UpsertMemoryRetentionJobRequest{
+                 .job_key = "memory-retention:cli",
+                 .job = make_job(),
+             }))
+                .has_value());
+
+    FakeBackend backend;
+    backend.decay_error = core::Error::upstream("backend unavailable");
+    auto loop = runtime->memory_retention_loop(backend);
+    auto result = co_await loop.run_once(automation::MemoryRetentionLoopRunOnceRequest{
+        .job_key = "memory-retention:cli",
+        .now = at(60s),
+        .max_wait = 0ms,
+        .lease_owner_key = "loop-owner",
+        .lease_ttl = 30s,
+    });
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::upstream);
+    REQUIRE(backend.decay_calls == 1);
+
+    auto reacquired =
+        co_await runtime->repository().acquire_memory_retention_lease(automation::AcquireMemoryRetentionLeaseRequest{
+            .job_key = "memory-retention:cli",
+            .owner_key = "after-error-owner",
+            .acquired_at = at(61s),
+            .expires_at = at(90s),
+        });
+    REQUIRE(reacquired.has_value());
+    REQUIRE(reacquired->has_value());
+    REQUIRE((*reacquired)->owner_key == "after-error-owner");
   });
 }
 
@@ -392,9 +504,27 @@ TEST_CASE("MemoryRetentionLoop::run_once reports cancellation while waiting",
   REQUIRE(result.has_value());
   REQUIRE_FALSE(result->has_value());
   REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
+
+  test::run_async([&workspace](asio::io_context& check_io) -> async::Awaitable<void> {
+    auto runtime = co_await automation::AutomationRuntime::open(
+        check_io.get_executor(),
+        automation::AutomationRuntimeOptions{.database_path = automation_db_path(workspace)});
+    REQUIRE(runtime.has_value());
+
+    auto acquired =
+        co_await runtime->repository().acquire_memory_retention_lease(automation::AcquireMemoryRetentionLeaseRequest{
+            .job_key = "memory-retention:cli",
+            .owner_key = "after-cancel-owner",
+            .acquired_at = at(59s),
+            .expires_at = at(61s),
+        });
+    REQUIRE(acquired.has_value());
+    REQUIRE(acquired->has_value());
+    REQUIRE((*acquired)->owner_key == "after-cancel-owner");
+  });
 }
 
-TEST_CASE("MemoryRetentionLoop::run_once rejects negative wait budgets", "[unit][automation][runtime][loop]") {
+TEST_CASE("MemoryRetentionLoop::run_once rejects invalid wait and lease budgets", "[unit][automation][runtime][loop]") {
   TempWorkspace workspace{"oran-automation-runtime-loop-invalid"};
   test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {
     auto runtime = co_await automation::AutomationRuntime::open(
@@ -413,6 +543,19 @@ TEST_CASE("MemoryRetentionLoop::run_once rejects negative wait budgets", "[unit]
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
     REQUIRE(has_field(result.error(), "max_wait"));
+    REQUIRE(backend.decay_calls == 0);
+
+    auto invalid_ttl = co_await loop.run_once(automation::MemoryRetentionLoopRunOnceRequest{
+        .job_key = "memory-retention:cli",
+        .now = at(0s),
+        .max_wait = 10ms,
+        .lease_owner_key = "loop-owner",
+        .lease_ttl = 0ms,
+    });
+
+    REQUIRE_FALSE(invalid_ttl.has_value());
+    REQUIRE(invalid_ttl.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(has_field(invalid_ttl.error(), "lease_ttl"));
     REQUIRE(backend.decay_calls == 0);
   });
 }

@@ -7,27 +7,28 @@
 
 ## Snapshot
 
-- **Slice:** 194 (`xmake run orangutan -- --help` reports slice 194)
+- **Slice:** 195 (`xmake run orangutan -- --help` reports slice 195)
 - **Last completed history:**
-  [`histories/2026-06/20260607-1330-automation-retention-job-lifecycle-hooks.md`](histories/2026-06/20260607-1330-automation-retention-job-lifecycle-hooks.md)
+  [`histories/2026-06/20260607-1500-automation-retention-leases.md`](histories/2026-06/20260607-1500-automation-retention-leases.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-retention-cadence.md`](exec-plans/active/2026-06-07-automation-retention-cadence.md).
-- **Latest completed slice:** slice 194 gives the caller-driven retention tick
-  an advisory automation job lifecycle producer. Due
-  `MemoryRetentionService::tick(...)` calls now publish `job_started` before
-  backend decay, `job_failed` after a backend failure is durably recorded as a
-  failed run, and `job_finished` after a successful run row plus
-  `last_fired_at` advancement. Not-due ticks still publish no lifecycle events,
-  lifecycle sink failures remain advisory, and successful due ticks still
-  publish `memory_decay` after durable state advances. It is still one explicit
-  awaitable path, not a detached scheduler, bootstrap startup loop, lease owner,
-  cron parser, notifier, or agent runner. Focused results: `test-automation`
-  **27 cases / 327 assertions** and `test-hook` **37 cases / 299 assertions**.
+- **Latest completed slice:** slice 195 adds durable retention job leases to
+  `AutomationRepository` and has `MemoryRetentionLoop::run_once(...)` lease only
+  due tick execution. The repository migration creates
+  `automation_memory_retention_leases`; callers can acquire a lease when no
+  active lease exists or the stored lease has expired, release only by matching
+  owner, observe active-lease conflicts, and get `not_found` for missing jobs.
+  The loop now plans and waits without holding a lease, then acquires the stored
+  job lease immediately before due `MemoryRetentionService::tick(...)` work and
+  releases it after completion. Cancellation while waiting still returns
+  `ErrorKind::cancelled` without retaining a lease. Bootstrap still does not
+  open or run `automation.db`. Focused result: `test-automation`
+  **30 cases / 390 assertions**.
 - **Next intended slice:** continue the active automation-retention cadence
   plan with a product-capability slice, not a bench-only slice. The next useful
-  boundary is lease ownership around the explicit `AutomationRuntime` +
-  `MemoryRetentionLoop` path, then long-running service-loop policy, while
-  still avoiding a hidden bootstrap background loop unless a caller starts it.
+  boundary is long-running service-loop policy over the explicit
+  `AutomationRuntime` + `MemoryRetentionLoop` path, while still avoiding a
+  hidden bootstrap background loop unless a caller starts it.
 
 Slice 183 adds the operator-facing long-term
   retention policy contract. `oran-config` now parses
@@ -41,8 +42,9 @@ Slice 183 adds the operator-facing long-term
   explicit tick owner when a caller supplies a hook bus, slice 192 adds the
   caller-owned runtime state handle that opens/migrates automation state only
   when a caller asks, slice 193 adds a caller-started loop step that can wait up
-  to a caller budget for one stored retention job to become due, and slice 194
-  adds advisory lifecycle metadata from due retention ticks while bootstrap
+  to a caller budget for one stored retention job to become due, slice 194 adds
+  advisory lifecycle metadata from due retention ticks, and slice 195 adds the
+  stored retention job lease plus due-run loop ownership while bootstrap
   service-loop ownership remains downstream.
   Slice 185 exposes the startup decay shadow count on the assembly and startup
   banner, slice 186 publishes the startup pass as advisory `memory_decay`
@@ -57,9 +59,10 @@ Slice 183 adds the operator-facing long-term
   tick publish advisory `memory_decay` metadata after successful due retention,
   slice 192 adds `AutomationRuntime::open(...)` for caller-owned
   `automation.db` opening/migration and repository/service lifetime ownership,
-  slice 193 adds the explicit budgeted loop step above that service, and slice
-  194 adds advisory `job_started` / `job_finished` / `job_failed` metadata from
-  due retention ticks while bootstrap still does not open or run
+  slice 193 adds the explicit budgeted loop step above that service, slice 194
+  adds advisory `job_started` / `job_finished` / `job_failed` metadata from due
+  retention ticks, and slice 195 adds stored retention lease acquisition around
+  due loop execution while bootstrap still does not open or run
   `automation.db`.
   Focused result: `test-config` **48 cases / 429 assertions**.
 

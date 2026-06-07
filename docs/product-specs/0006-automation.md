@@ -28,15 +28,16 @@ service, slice 189 adds the automation-owned persistent state boundary, slice
 adds optional periodic `memory_decay` publishing from that tick owner, slice
 192 adds the caller-owned automation runtime state handle, and slice 193 adds a
 caller-started retention loop step. Slice 194 adds advisory job lifecycle
-metadata from due retention ticks. The current API
+metadata from due retention ticks, and slice 195 adds repository-backed
+retention job leases plus due-run lease ownership in the loop step. The current API
 evaluates a periodic schedule from caller-supplied state, maps a long-term
 memory retention policy into a due-only `memory::longterm::DecayRequest`,
-persists the configured retention job plus run history through
+persists the configured retention job plus run history and lease state through
 `AutomationRepository`, explicitly opens/migrates automation state through
 `AutomationRuntime::open(...)`, lets a runtime owner tick one stored job against
 a supplied long-term memory backend, publishes advisory retention metadata when
 the caller supplies a hook bus, and can wait once within a caller budget for a
-stored retention job to become due. Bootstrap maps configured-route
+stored retention job to become due while leasing due execution. Bootstrap maps configured-route
 `memory.longterm.retention` into a stored `MemoryRetentionJob` descriptor whose
 first fire is after the one-shot startup decay pass, but bootstrap still does
 not open `automation.db` or run a background service.
@@ -56,7 +57,9 @@ Current implementation:
   `RuntimeAssembly::build`.
 - `AutomationRepository` runs migrations over a caller-supplied `storage::Pool`,
   upserts and loads retention jobs by durable `job_key`, persists
-  `last_fired_at`, records success/failure run rows, and lists recent runs.
+  `last_fired_at`, records success/failure run rows, lists recent runs, acquires
+  retention job leases when no active lease exists or an existing lease has
+  expired, and releases leases only for the matching owner.
 - `AutomationRuntime::open(...)` validates an explicit database path, creates
   parent directories, opens `automation.db` through an owned `storage::Pool`,
   runs automation migrations, exposes the migration report and repository, and
@@ -78,19 +81,22 @@ Current implementation:
   successful run row plus `last_fired_at` advancement. Not-due ticks publish no
   job lifecycle events.
 - `MemoryRetentionLoop::run_once(...)` ticks a stored job immediately, returns
-  the not-due tick when the next fire is beyond `max_wait`, waits with
-  `async::sleep_for(...)` when the next fire is within budget, ticks again at
-  the scheduled fire, propagates cancellation while waiting, and rejects
-  negative wait budgets.
-- `test-automation` reports 27 cases / 327 assertions.
+  the not-due result when the next fire is beyond `max_wait`, waits with
+  `async::sleep_for(...)` when the next fire is within budget, leases only the
+  due `MemoryRetentionService::tick(...)` execution, releases the lease after
+  the tick, returns `ErrorKind::conflict` for active lease holders, propagates
+  cancellation while waiting without holding a lease, and rejects invalid wait
+  or lease budgets.
+- `test-automation` reports 30 cases / 390 assertions.
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 
 Still open: cron parsing, triggered jobs, bootstrap/service-loop startup policy
-over `AutomationRuntime`, per-agent leases, queueing/backpressure, long-running
-service-loop cancellation policy, notifier callbacks, and the scheduler tick
-performance criterion. Job lifecycle publication exists for explicit retention
-ticks only; full scheduler/category lifecycle ownership remains downstream.
+over `AutomationRuntime`, broader per-agent/category leases for agent-facing
+jobs, queueing/backpressure, long-running service-loop cancellation policy,
+notifier callbacks, and the scheduler tick performance criterion. Job lifecycle
+publication exists for explicit retention ticks only; full scheduler/category
+lifecycle ownership remains downstream.
 
 ## Scope (v1.1)
 

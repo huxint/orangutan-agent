@@ -27,15 +27,17 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
   - Ship a caller-owned `AutomationRuntime` state handle that opens/migrates
     `automation.db` and keeps repository/service lifetimes stable for a future
     loop owner.
+  - Ship retention job leases for the explicit loop step so due work for one
+    stored job cannot overlap across owners.
   - Update docs, status, quality, history, and release notes per the Prime
     Directive.
 - Out of scope:
-  - Cron parsing, triggered jobs, per-agent leases, queueing/backpressure,
-    notifier callbacks, and background service loops.
+  - Cron parsing, triggered jobs, broader per-agent/category leases for
+    agent-facing jobs, queueing/backpressure, notifier callbacks, and
+    background service loops.
   - Bootstrap ownership of the periodic runner or bootstrap opening
     `automation.db`.
-  - Job lifecycle hook publication; that lands when a service-loop owner
-    actually starts jobs.
+  - Agent firing or daemon/bootstrap ownership of a long-running scheduler.
 
 ## Context
 
@@ -119,6 +121,10 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
    Done in slice 194: publish advisory `job_started`, `job_finished`, and
    `job_failed` metadata from due `MemoryRetentionService::tick(...)` calls
    while keeping lease ownership and the long-running service loop downstream.
+10. **Retention job leases.**
+   Done in slice 195: add durable retention job leases plus repository
+   acquire/release APIs, and have the explicit loop step lease only due tick
+   execution while planning and waiting without a held lease.
 
 ## Validation
 
@@ -139,6 +145,10 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
     explicitly asks.
   - Confirm `MemoryRetentionLoop::run_once(...)` is one explicit awaitable and
     does not spawn detached work.
+  - Confirm due work is leased immediately before
+    `MemoryRetentionService::tick(...)` and released after the tick.
+  - Confirm cancellation while waiting cannot leave a retained lease because
+    the wait phase does not hold one.
 - Observability checks:
   - Confirm `memory_decay` publishes only after successful due ticks and remains
     absent for not-due ticks, backend failures, and services without a hook bus.
@@ -217,6 +227,16 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
   still did not add leases, cron, detached background work, or a long-running
   service loop; the next useful boundary is lease ownership around the explicit
   runtime/loop path.
+- [x] 2026-06-07 15:00 +0800: Added automation migration version 2 for
+  `automation_memory_retention_leases` plus repository acquire/release APIs.
+  Active leases now return a conflict boundary to callers, expired leases can
+  be replaced, missing jobs return `not_found`, and releases require the
+  matching owner key.
+- [x] 2026-06-07 15:00 +0800: Changed `MemoryRetentionLoop::run_once(...)` to
+  plan and wait without holding a lease, then acquire the stored lease only
+  around due `MemoryRetentionService::tick(...)` execution and release it after
+  the tick. Bootstrap remains unopened for `automation.db`, and no detached
+  service loop was added.
 - [x] Update docs that this slice invalidates in the same PR
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -266,6 +286,10 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
   owner before adding leases. This gives observers a durable start/success/fail
   boundary for due retention work while keeping lease state, repeated scheduling,
   and bootstrap/daemon startup ownership outside this slice.
+- 2026-06-07: Lease only due execution in the caller-started loop step. Holding a
+  lease across the wait phase would let cancellation strand retained lease
+  state; acquiring immediately before the due tick still prevents overlapping
+  execution for the same stored job.
 
 ## Linked Artifacts
 
@@ -290,5 +314,7 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
   `docs/histories/2026-06/20260607-1227-automation-retention-loop-step.md`
   and
   `docs/histories/2026-06/20260607-1330-automation-retention-job-lifecycle-hooks.md`
+  and
+  `docs/histories/2026-06/20260607-1500-automation-retention-leases.md`
 - Release note:
-  `docs/releases/feature-release-notes.md#automation-retention-job-lifecycle-hooks`
+  `docs/releases/feature-release-notes.md#automation-retention-leases`

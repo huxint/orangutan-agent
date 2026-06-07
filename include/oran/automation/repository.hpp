@@ -63,6 +63,26 @@ struct ListMemoryRetentionRunsOptions {
   std::size_t limit{50};
 };
 
+struct AcquireMemoryRetentionLeaseRequest {
+  std::string job_key;
+  std::string owner_key;
+  core::Time acquired_at{core::Time::epoch()};
+  core::Time expires_at{core::Time::epoch()};
+};
+
+struct MemoryRetentionLeaseRecord {
+  std::string job_key;
+  std::string owner_key;
+  core::Time acquired_at{core::Time::epoch()};
+  core::Time expires_at{core::Time::epoch()};
+  std::string updated_at;
+};
+
+struct ReleaseMemoryRetentionLeaseRequest {
+  std::string job_key;
+  std::string owner_key;
+};
+
 class AutomationRepository {
 public:
   explicit AutomationRepository(storage::Pool& pool, AutomationRepositoryOptions options = {}) noexcept;
@@ -83,6 +103,12 @@ public:
 
   [[nodiscard]] async::Awaitable<core::Result<std::vector<MemoryRetentionRunRecord>>>
   list_memory_retention_runs(ListMemoryRetentionRunsOptions options);
+
+  [[nodiscard]] async::Awaitable<core::Result<std::optional<MemoryRetentionLeaseRecord>>>
+  acquire_memory_retention_lease(AcquireMemoryRetentionLeaseRequest request);
+
+  [[nodiscard]] async::Awaitable<core::Result<bool>>
+  release_memory_retention_lease(ReleaseMemoryRetentionLeaseRequest request);
 
 private:
   storage::Pool* pool_{};

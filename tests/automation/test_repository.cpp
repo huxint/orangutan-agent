@@ -96,13 +96,13 @@ TEST_CASE("AutomationRepository::migrate applies the automation schema once", "[
     auto first = co_await repo.migrate();
     REQUIRE(first.has_value());
     REQUIRE(first->previous_version == 0);
-    REQUIRE(first->current_version == 1);
-    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1});
+    REQUIRE(first->current_version == 2);
+    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2});
 
     auto second = co_await repo.migrate();
     REQUIRE(second.has_value());
-    REQUIRE(second->previous_version == 1);
-    REQUIRE(second->current_version == 1);
+    REQUIRE(second->previous_version == 2);
+    REQUIRE(second->current_version == 2);
     REQUIRE(second->applied_versions.empty());
   });
 }
@@ -229,6 +229,77 @@ TEST_CASE("AutomationRepository records and lists memory retention runs", "[unit
   });
 }
 
+TEST_CASE("AutomationRepository acquires, expires, and releases memory retention leases",
+          "[unit][automation][repository][lease]") {
+  TempDb db{"oran-automation-repo-lease"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_memory_retention_job(automation::UpsertMemoryRetentionJobRequest{
+                 .job_key = "memory-retention:cli",
+                 .job = make_job(),
+             }))
+                .has_value());
+
+    auto first = co_await repo.acquire_memory_retention_lease(automation::AcquireMemoryRetentionLeaseRequest{
+        .job_key = "memory-retention:cli",
+        .owner_key = "owner-a",
+        .acquired_at = at(100s),
+        .expires_at = at(160s),
+    });
+    REQUIRE(first.has_value());
+    REQUIRE(first->has_value());
+    REQUIRE((*first)->job_key == "memory-retention:cli");
+    REQUIRE((*first)->owner_key == "owner-a");
+    REQUIRE((*first)->acquired_at == at(100s));
+    REQUIRE((*first)->expires_at == at(160s));
+    REQUIRE_FALSE((*first)->updated_at.empty());
+
+    auto active_competitor =
+        co_await repo.acquire_memory_retention_lease(automation::AcquireMemoryRetentionLeaseRequest{
+            .job_key = "memory-retention:cli",
+            .owner_key = "owner-b",
+            .acquired_at = at(120s),
+            .expires_at = at(180s),
+        });
+    REQUIRE(active_competitor.has_value());
+    REQUIRE_FALSE(active_competitor->has_value());
+
+    auto expired_takeover = co_await repo.acquire_memory_retention_lease(automation::AcquireMemoryRetentionLeaseRequest{
+        .job_key = "memory-retention:cli",
+        .owner_key = "owner-b",
+        .acquired_at = at(161s),
+        .expires_at = at(220s),
+    });
+    REQUIRE(expired_takeover.has_value());
+    REQUIRE(expired_takeover->has_value());
+    REQUIRE((*expired_takeover)->owner_key == "owner-b");
+    REQUIRE((*expired_takeover)->acquired_at == at(161s));
+    REQUIRE((*expired_takeover)->expires_at == at(220s));
+
+    auto wrong_owner = co_await repo.release_memory_retention_lease(
+        automation::ReleaseMemoryRetentionLeaseRequest{.job_key = "memory-retention:cli", .owner_key = "owner-a"});
+    REQUIRE(wrong_owner.has_value());
+    REQUIRE_FALSE(*wrong_owner);
+
+    auto released = co_await repo.release_memory_retention_lease(
+        automation::ReleaseMemoryRetentionLeaseRequest{.job_key = "memory-retention:cli", .owner_key = "owner-b"});
+    REQUIRE(released.has_value());
+    REQUIRE(*released);
+
+    auto reacquired = co_await repo.acquire_memory_retention_lease(automation::AcquireMemoryRetentionLeaseRequest{
+        .job_key = "memory-retention:cli",
+        .owner_key = "owner-c",
+        .acquired_at = at(180s),
+        .expires_at = at(240s),
+    });
+    REQUIRE(reacquired.has_value());
+    REQUIRE(reacquired->has_value());
+    REQUIRE((*reacquired)->owner_key == "owner-c");
+  });
+}
+
 TEST_CASE("AutomationRepository validates memory retention persistence inputs", "[unit][automation][repository]") {
   TempDb db{"oran-automation-repo-validation"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
@@ -274,5 +345,35 @@ TEST_CASE("AutomationRepository validates memory retention persistence inputs", 
     });
     REQUIRE_FALSE(bad_limit.has_value());
     REQUIRE(has_field(bad_limit.error(), "limit"));
+
+    auto invalid_lease_owner =
+        co_await repo.acquire_memory_retention_lease(automation::AcquireMemoryRetentionLeaseRequest{
+            .job_key = "memory-retention:cli",
+            .owner_key = "",
+            .acquired_at = at(20s),
+            .expires_at = at(21s),
+        });
+    REQUIRE_FALSE(invalid_lease_owner.has_value());
+    REQUIRE(has_field(invalid_lease_owner.error(), "owner_key"));
+
+    auto invalid_lease_expiry =
+        co_await repo.acquire_memory_retention_lease(automation::AcquireMemoryRetentionLeaseRequest{
+            .job_key = "memory-retention:cli",
+            .owner_key = "owner-a",
+            .acquired_at = at(20s),
+            .expires_at = at(20s),
+        });
+    REQUIRE_FALSE(invalid_lease_expiry.has_value());
+    REQUIRE(has_field(invalid_lease_expiry.error(), "expires_at"));
+
+    auto missing_lease_job =
+        co_await repo.acquire_memory_retention_lease(automation::AcquireMemoryRetentionLeaseRequest{
+            .job_key = "missing",
+            .owner_key = "owner-a",
+            .acquired_at = at(20s),
+            .expires_at = at(21s),
+        });
+    REQUIRE_FALSE(missing_lease_job.has_value());
+    REQUIRE(missing_lease_job.error().kind() == core::ErrorKind::not_found);
   });
 }

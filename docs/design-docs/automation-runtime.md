@@ -7,8 +7,9 @@ configured retention policy into that job descriptor, automation-owned
 retention job/run persistence, a caller-owned runtime state handle, and a
 caller-driven retention service tick with optional advisory `memory_decay` plus
 job lifecycle metadata, plus a caller-started retention loop step that can wait
-within a caller budget for one stored job to become due. It does not start
-detached background work, acquire leases, or call an agent loop.
+within a caller budget for one stored job to become due and lease due
+execution. It does not start detached background work, run a long-lived service
+loop, or call an agent loop.
 
 ## Current Status
 
@@ -49,8 +50,8 @@ and exposes the descriptor but does not evaluate, persist, lease, or execute it.
 Slice 189 persists that future owner's state without wiring bootstrap to open
 `automation.db`. The repository can upsert and load the stored retention job,
 mark `last_fired_at`, record successful or failed run rows, and list recent runs
-in newest-first order. It still does not own a service loop, lease table, memory
-backend, hook bus, queue, or cancellation policy for active jobs.
+in newest-first order. It still does not own a service loop, memory backend,
+hook bus, queue, or cancellation policy for active jobs.
 
 Slice 190 adds that first explicit execution owner without making it a process
 loop. `<oran/automation/service.hpp>` exports `MemoryRetentionService`, which
@@ -106,6 +107,16 @@ kind/message on backend failure. Not-due ticks publish no lifecycle events, and
 sink failures remain advisory so lifecycle observers cannot veto or fail the
 retention tick. Repository failures before a durable outcome still return to
 the caller without inventing an outcome event.
+
+Slice 195 adds repository-backed retention job leases and uses them from the
+explicit loop step. `AutomationRepository` migration version 2 creates
+`automation_memory_retention_leases`; callers can acquire a lease when no active
+lease exists or the stored lease has expired, release only with the matching
+owner, and receive `std::nullopt` on active-lease conflicts. The loop plans and
+waits without a lease, then acquires the stored lease immediately before due
+`MemoryRetentionService::tick(...)` execution and releases it after the tick.
+This keeps cancellation while waiting from leaving retained lease state while
+still preventing overlapping due execution for the same job.
 
 ## Public API
 
@@ -204,6 +215,26 @@ struct ListMemoryRetentionRunsOptions {
   std::size_t limit;
 };
 
+struct AcquireMemoryRetentionLeaseRequest {
+  std::string job_key;
+  std::string owner_key;
+  core::Time acquired_at;
+  core::Time expires_at;
+};
+
+struct MemoryRetentionLeaseRecord {
+  std::string job_key;
+  std::string owner_key;
+  core::Time acquired_at;
+  core::Time expires_at;
+  std::string updated_at;
+};
+
+struct ReleaseMemoryRetentionLeaseRequest {
+  std::string job_key;
+  std::string owner_key;
+};
+
 class AutomationRepository {
  public:
   explicit AutomationRepository(storage::Pool&, AutomationRepositoryOptions = {});
@@ -219,6 +250,10 @@ class AutomationRepository {
   record_memory_retention_run(RecordMemoryRetentionRunRequest);
   async::Awaitable<core::Result<std::vector<MemoryRetentionRunRecord>>>
   list_memory_retention_runs(ListMemoryRetentionRunsOptions);
+  async::Awaitable<core::Result<std::optional<MemoryRetentionLeaseRecord>>>
+  acquire_memory_retention_lease(AcquireMemoryRetentionLeaseRequest);
+  async::Awaitable<core::Result<bool>>
+  release_memory_retention_lease(ReleaseMemoryRetentionLeaseRequest);
 };
 
 class AutomationRuntime {
@@ -244,6 +279,8 @@ struct MemoryRetentionLoopRunOnceRequest {
   std::string job_key;
   core::Time now;
   std::chrono::steady_clock::duration max_wait;
+  std::string lease_owner_key;
+  std::chrono::steady_clock::duration lease_ttl;
 };
 
 struct MemoryRetentionLoopRunOnceResult {
@@ -290,6 +327,8 @@ class MemoryRetentionService {
 
   async::Awaitable<core::Result<MemoryRetentionTickResult>>
   tick(MemoryRetentionTickRequest);
+  AutomationRepository& repository() noexcept;
+  const AutomationRepository& repository() const noexcept;
 };
 
 class MemoryRetentionLoop {
@@ -346,7 +385,7 @@ code owns those side effects after a successful run.
 ## Persistence Semantics
 
 `AutomationRepository` owns the current `automation.db` domain schema above the
-generic storage pool. The first migration creates:
+generic storage pool. Migration version 1 creates:
 
 - `automation_memory_retention_jobs`, keyed by durable `job_key`, with
   `scope_key`, retention policy fields, `first_fire_at`, nullable
@@ -355,6 +394,11 @@ generic storage pool. The first migration creates:
   foreign key to `job_key`, scheduled/finished timestamps, success flag,
   shadowed count, optional error message, and newest-first listing index.
 
+Migration version 2 creates `automation_memory_retention_leases`, keyed by
+`job_key`, with `owner_key`, `acquired_at`, `expires_at`, and `updated_at`. The
+lease row has a foreign key to `automation_memory_retention_jobs(job_key)` with
+`ON DELETE CASCADE`, so deleting a future job row drops the matching lease row.
+
 `job_key` is the durable repository identity. `scope_key` remains the memory
 decay scope inside the stored job descriptor, so future different automation
 jobs or policies can share a memory scope without overwriting each other.
@@ -362,9 +406,23 @@ jobs or policies can share a memory scope without overwriting each other.
 Repository calls validate inputs before touching SQLite: empty job keys are
 rejected, retention jobs must pass the same policy validation used by
 `plan_memory_retention(...)`, failed runs require an error message, run finish
-time must not precede fire time, and list limits must be positive. Missing jobs
+time must not precede fire time, list limits must be positive, lease owner keys
+must be non-empty, and lease expiry must be after acquisition time. Missing jobs
 return `std::nullopt` on `get_memory_retention_job(...)` and
-`ErrorKind::not_found` from `mark_memory_retention_fired(...)`.
+`ErrorKind::not_found` from mutation operations that require an existing job.
+
+`acquire_memory_retention_lease(...)` returns:
+
+- `MemoryRetentionLeaseRecord` when the job exists and no active lease blocks
+  acquisition.
+- `MemoryRetentionLeaseRecord` after replacing an expired lease
+  (`stored.expires_at <= request.acquired_at`).
+- `std::nullopt` when another owner still holds an active lease.
+- `ErrorKind::not_found` when the job row is missing.
+
+`release_memory_retention_lease(...)` deletes only the row whose `job_key` and
+`owner_key` match. It returns `true` for a matching release and `false` when the
+lease is absent or held by another owner.
 
 ## Runtime State Handle Semantics
 
@@ -401,35 +459,51 @@ state exists.
 `MemoryRetentionLoop::run_once(...)` is a single caller-started awaitable for
 one stored retention job. It is the smallest useful owner above
 `MemoryRetentionService::tick(...)`: it can wait for the next scheduled fire,
-but it does not own a long-running loop, spawn detached coroutines, acquire
-leases, or decide process startup policy.
+and it leases due execution, but it does not own a long-running loop, spawn
+detached coroutines, or decide process startup policy.
 
-The request validates `max_wait >= 0`. A negative wait budget returns
-`ErrorKind::invalid_argument` with `field=max_wait` before repository or backend
-work.
+The request validates `job_key` non-empty, `max_wait >= 0`,
+`lease_owner_key` non-empty, and `lease_ttl > 0`. Invalid inputs return
+`ErrorKind::invalid_argument` with the matching `field` before repository or
+backend work.
 
-The step then calls `MemoryRetentionService::tick(...)` using the supplied
-`job_key` and `now`:
+The step first loads the stored job and calls `plan_memory_retention(...)`
+without acquiring a lease:
 
-- If that first tick runs due work, `run_once(...)` returns immediately with
-  `waited_for=0`.
-- If the first tick is not due and `schedule.next_fire_at - now` is greater
+- If the first plan is due, `run_once(...)` acquires the job lease, delegates to
+  `MemoryRetentionService::tick(...)`, releases the lease, and returns
+  immediately with `waited_for=0`.
+- If the first plan is not due and `schedule.next_fire_at - now` is greater
   than `max_wait`, `run_once(...)` returns that not-due tick with
-  `waited_for=0`.
+  `waited_for=0` and no lease acquisition.
 - If the next fire is within the caller's budget, `run_once(...)` sleeps for the
-  exact wait duration through `async::sleep_for(...)`, then ticks again using
-  `now + waited_for`.
+  exact wait duration through `async::sleep_for(...)` without holding a lease,
+  then acquires the job lease and delegates to `MemoryRetentionService::tick(...)`
+  using `now + waited_for`.
+
+Lease acquisition uses `AcquireMemoryRetentionLeaseRequest` with the request's
+`lease_owner_key`, acquisition time, and `acquisition + lease_ttl` expiry. An
+active stored lease returns `ErrorKind::conflict`; an expired lease can be
+replaced. After due tick execution, the loop releases the lease with
+`ReleaseMemoryRetentionLeaseRequest`. The release path disables further
+cancellation while it deletes the row so parent cancellation after due execution
+does not strand a lease. If the tick fails and release succeeds, the tick error
+is returned; if the tick succeeds and release fails, the release error is
+returned. If both tick execution and release fail, the tick error is returned
+with `lease_release_error_kind` and `lease_release_error_message` context so the
+caller can still see that lease cleanup may need attention.
 
 Cancellation while sleeping is surfaced as `ErrorKind::cancelled`; no second
-tick runs after that cancellation result. Repository, backend, and hook errors
-from either tick are returned unchanged, so the loop step does not hide failed
-decay or failed durable recording.
+tick runs after that cancellation result, and no lease has been acquired during
+the wait. Repository, lease, backend, and hook errors from due execution are
+returned unchanged, so the loop step does not hide failed decay or failed
+durable recording.
 
 The loop step intentionally does not skip forward over multiple missed
 intervals or catch up a backlog. It reuses the same tick semantics as direct
 callers, where `last_fired_at` advances only after successful due work. Future
-service-loop ownership can layer leases, catch-up/coalesce/drop policy,
-shutdown, and repeated scheduling policy around this awaitable.
+service-loop ownership can layer catch-up/coalesce/drop policy, shutdown, and
+repeated scheduling policy around this awaitable.
 
 ## Tick Semantics
 
@@ -479,18 +553,17 @@ repository error is returned because the run outcome was not durably recorded.
 
 The public awaitable is composed entirely of repository/backend awaitables and
 the optional advisory hook publish; it does not add its own blocking wait or
-detached coroutine. Future service-loop ownership can add timers, leases,
-shutdown, repeated scheduling, and cancellation policy around this tick without
-moving those concerns into bootstrap or `oran-memory`.
+detached coroutine. Future service-loop ownership can add timers, shutdown,
+repeated scheduling, and cancellation policy around this tick without moving
+those concerns into bootstrap or `oran-memory`.
 
 ## Future Ownership
 
 The next automation slices can build on this boundary in this order:
 
-1. Add per-agent leases around explicit `AutomationRuntime` +
-   `MemoryRetentionLoop` runs.
-2. Add service-loop ownership that repeatedly starts loop steps under shutdown
+1. Add service-loop ownership that repeatedly starts loop steps under shutdown
    and backpressure policy.
+2. Add broader per-agent/category leases once agent-facing jobs exist.
 3. Add cron and triggered job categories.
 4. Add queueing/backpressure and notifier routing for agent-facing jobs.
 
@@ -521,7 +594,10 @@ cases / 274 assertions for the caller-started loop step's wait-budget skip,
 within-budget wait/run, cancellation while waiting, and negative-budget
 validation. Slice 194 reports `test-automation` at 27 cases / 327 assertions
 for retention job lifecycle publishing on not-due, due-success, and backend
-failure paths. The local
+failure paths. Slice 195 reports `test-automation` at 30 cases / 390 assertions
+for retention lease migration/repository acquisition semantics, loop active-lease
+conflicts, due-run release, cancellation-while-waiting without held leases, and
+backend-failure release, plus lease input validation. The local
 `bench-automation` planning rows are:
 
 - `automation.periodic_evaluate_1024` at about 4.84 us / 1024-job batch.

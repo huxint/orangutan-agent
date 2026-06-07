@@ -28,6 +28,10 @@ constexpr unsigned char kAutomationRetentionStateBytes[] = {
 #embed "migrations/automation/0001-automation-retention-state.sql"
 };
 
+constexpr unsigned char kAutomationRetentionLeasesBytes[] = {
+#embed "migrations/automation/0002-automation-retention-leases.sql"
+};
+
 constexpr std::string_view kUpsertMemoryRetentionJobSql = R"sql(
 INSERT INTO automation_memory_retention_jobs(
   job_key,
@@ -134,17 +138,51 @@ ORDER BY fired_at DESC, id DESC
 LIMIT ?
 )sql";
 
+constexpr std::string_view kAcquireMemoryRetentionLeaseSql = R"sql(
+INSERT INTO automation_memory_retention_leases(
+  job_key,
+  owner_key,
+  acquired_at,
+  expires_at,
+  updated_at
+) VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+ON CONFLICT(job_key) DO UPDATE SET
+  owner_key = excluded.owner_key,
+  acquired_at = excluded.acquired_at,
+  expires_at = excluded.expires_at,
+  updated_at = excluded.updated_at
+WHERE automation_memory_retention_leases.expires_at <= excluded.acquired_at
+RETURNING
+  job_key,
+  owner_key,
+  acquired_at,
+  expires_at,
+  updated_at
+)sql";
+
+constexpr std::string_view kReleaseMemoryRetentionLeaseSql = R"sql(
+DELETE FROM automation_memory_retention_leases
+WHERE job_key = ? AND owner_key = ?
+RETURNING
+  job_key
+)sql";
+
 template <std::size_t N>
 [[nodiscard]] std::string to_sql_string(const unsigned char (&bytes)[N]) {
   return std::string{reinterpret_cast<const char*>(bytes), N};
 }
 
 [[nodiscard]] std::span<const storage::Migration> built_in_automation_migrations() {
-  static const std::array<storage::Migration, 1> kMigrations{
+  static const std::array<storage::Migration, 2> kMigrations{
       storage::Migration{
           .version = 1,
           .name = "automation-retention-state",
           .sql = to_sql_string(kAutomationRetentionStateBytes),
+      },
+      storage::Migration{
+          .version = 2,
+          .name = "automation-retention-leases",
+          .sql = to_sql_string(kAutomationRetentionLeasesBytes),
       },
   };
   return kMigrations;
@@ -220,6 +258,36 @@ template <std::size_t N>
 
 [[nodiscard]] core::Result<std::int64_t> checked_limit(std::size_t limit) {
   return checked_positive_size(limit, "limit");
+}
+
+[[nodiscard]] core::Result<void> validate_owner_key(std::string_view owner_key) {
+  if (owner_key.empty()) {
+    return std::unexpected(invalid_field("owner_key", "empty"));
+  }
+  return {};
+}
+
+[[nodiscard]] core::Result<void> validate_lease_request(const AcquireMemoryRetentionLeaseRequest& request) {
+  if (auto valid = validate_job_key(request.job_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  if (auto valid = validate_owner_key(request.owner_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  if (request.expires_at <= request.acquired_at) {
+    return std::unexpected(invalid_field("expires_at", "not_after_acquired_at"));
+  }
+  return {};
+}
+
+[[nodiscard]] core::Result<void> validate_release_request(const ReleaseMemoryRetentionLeaseRequest& request) {
+  if (auto valid = validate_job_key(request.job_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  if (auto valid = validate_owner_key(request.owner_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  return {};
 }
 
 [[nodiscard]] core::Result<std::string>
@@ -422,6 +490,41 @@ read_size(storage::Statement& statement, int index, std::string_view field, bool
       .shadowed_count = *shadowed_count,
       .error_message = std::move(*error_message),
       .created_at = std::move(*created_at),
+  };
+}
+
+[[nodiscard]] core::Result<MemoryRetentionLeaseRecord> read_lease_row(storage::Statement& statement) {
+  auto job_key = required_text(statement, 0, "job_key");
+  if (!job_key) {
+    return std::unexpected(job_key.error());
+  }
+  auto owner_key = required_text(statement, 1, "owner_key");
+  if (!owner_key) {
+    return std::unexpected(owner_key.error());
+  }
+  auto acquired_at = required_time(statement, 2, "acquired_at");
+  if (!acquired_at) {
+    return std::unexpected(acquired_at.error());
+  }
+  auto expires_at = required_time(statement, 3, "expires_at");
+  if (!expires_at) {
+    return std::unexpected(expires_at.error());
+  }
+  auto updated_at = required_text(statement, 4, "updated_at");
+  if (!updated_at) {
+    return std::unexpected(updated_at.error());
+  }
+  if (*expires_at <= *acquired_at) {
+    return std::unexpected(
+        core::Error::storage("automation repository row has invalid lease expiry").with("field", "expires_at"));
+  }
+
+  return MemoryRetentionLeaseRecord{
+      .job_key = std::move(*job_key),
+      .owner_key = std::move(*owner_key),
+      .acquired_at = *acquired_at,
+      .expires_at = *expires_at,
+      .updated_at = std::move(*updated_at),
   };
 }
 
@@ -707,6 +810,108 @@ AutomationRepository::list_memory_retention_runs(ListMemoryRetentionRunsOptions 
     rows.push_back(std::move(*row));
   }
   co_return rows;
+}
+
+async::Awaitable<core::Result<std::optional<MemoryRetentionLeaseRecord>>>
+AutomationRepository::acquire_memory_retention_lease(AcquireMemoryRetentionLeaseRequest request) {
+  if (auto valid = validate_lease_request(request); !valid) {
+    co_return std::unexpected(valid.error());
+  }
+
+  auto writer = co_await pool_->acquire_writer();
+  if (!writer) {
+    co_return std::unexpected(writer.error());
+  }
+
+  auto job_statement = writer->statement_cache().acquire(writer->connection(), kGetMemoryRetentionJobSql);
+  if (!job_statement) {
+    co_return std::unexpected(job_statement.error());
+  }
+  auto& job_lookup = job_statement->statement();
+  if (auto bound = job_lookup.bind_text(1, request.job_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  auto job_step = job_lookup.step();
+  if (!job_step) {
+    co_return std::unexpected(job_step.error());
+  }
+  if (*job_step == storage::StepResult::done) {
+    co_return std::unexpected(
+        core::Error::not_found("automation memory-retention job not found").with("job_key", request.job_key));
+  }
+  if (auto done = expect_done(job_lookup, "lease_get_memory_retention_job"); !done) {
+    co_return std::unexpected(done.error());
+  }
+
+  auto cached = writer->statement_cache().acquire(writer->connection(), kAcquireMemoryRetentionLeaseSql);
+  if (!cached) {
+    co_return std::unexpected(cached.error());
+  }
+  auto& statement = cached->statement();
+  if (auto bound = statement.bind_text(1, request.job_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(2, request.owner_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(3, core::time::format_iso8601_utc(request.acquired_at)); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(4, core::time::format_iso8601_utc(request.expires_at)); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+
+  auto step = statement.step();
+  if (!step) {
+    co_return std::unexpected(step.error());
+  }
+  if (*step == storage::StepResult::row) {
+    auto record = read_lease_row(statement);
+    if (!record) {
+      co_return std::unexpected(record.error());
+    }
+    if (auto done = expect_done(statement, "acquire_memory_retention_lease"); !done) {
+      co_return std::unexpected(done.error());
+    }
+    co_return std::optional<MemoryRetentionLeaseRecord>{std::move(*record)};
+  }
+  co_return std::optional<MemoryRetentionLeaseRecord>{};
+}
+
+async::Awaitable<core::Result<bool>>
+AutomationRepository::release_memory_retention_lease(ReleaseMemoryRetentionLeaseRequest request) {
+  if (auto valid = validate_release_request(request); !valid) {
+    co_return std::unexpected(valid.error());
+  }
+
+  auto writer = co_await pool_->acquire_writer();
+  if (!writer) {
+    co_return std::unexpected(writer.error());
+  }
+
+  auto cached = writer->statement_cache().acquire(writer->connection(), kReleaseMemoryRetentionLeaseSql);
+  if (!cached) {
+    co_return std::unexpected(cached.error());
+  }
+  auto& statement = cached->statement();
+  if (auto bound = statement.bind_text(1, request.job_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(2, request.owner_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+
+  auto step = statement.step();
+  if (!step) {
+    co_return std::unexpected(step.error());
+  }
+  if (*step == storage::StepResult::done) {
+    co_return false;
+  }
+  if (auto done = expect_done(statement, "release_memory_retention_lease"); !done) {
+    co_return std::unexpected(done.error());
+  }
+  co_return true;
 }
 
 }  // namespace orangutan::automation

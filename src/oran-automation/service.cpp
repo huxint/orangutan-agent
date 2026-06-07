@@ -144,6 +144,14 @@ MemoryRetentionService::MemoryRetentionService(AutomationRepository& repository,
                                                MemoryRetentionServiceOptions options) noexcept
     : repository_{&repository}, backend_{&backend}, options_{std::move(options)} {}
 
+AutomationRepository& MemoryRetentionService::repository() noexcept {
+  return *repository_;
+}
+
+const AutomationRepository& MemoryRetentionService::repository() const noexcept {
+  return *repository_;
+}
+
 async::Awaitable<core::Result<MemoryRetentionTickResult>>
 MemoryRetentionService::tick(MemoryRetentionTickRequest request) {
   if (auto valid = validate_tick_request(request); !valid) {

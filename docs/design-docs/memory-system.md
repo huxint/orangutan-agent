@@ -157,7 +157,7 @@ MEMORY.md mirror. v2 keeps that core and adds:
   metadata before pruning. Expired records eventually receive lower search weight
   before potentially being shadowed or deleted.
 
-Status (slice 194): `include/oran/memory/longterm.hpp` now ships the public
+Status (slice 195): `include/oran/memory/longterm.hpp` now ships the public
 record/query/write/touch/decay shapes, reflection-backed `RecordKind`,
 `Backend` and `VectorBackend` traits, validation helpers for record keys,
 search limits, record metadata, touch requests, decay requests, and vector
@@ -179,10 +179,11 @@ lets that tick publish advisory `memory_decay` metadata when callers provide a
 hook bus; slice 192 adds the caller-owned `AutomationRuntime` handle that
 opens/migrates automation state and creates retention services; slice 193 adds
 a caller-started retention loop step that can wait within a caller budget for
-one stored job to become due; and slice 194 publishes advisory automation job
-lifecycle metadata from due retention ticks without moving service ownership
-into `oran-memory`. The memory library still only owns the backend execution
-primitive.
+one stored job to become due; slice 194 publishes advisory automation job
+lifecycle metadata from due retention ticks; and slice 195 adds stored
+retention job leases plus loop-side due-run lease ownership without moving
+service ownership into `oran-memory`. The memory library still only owns the
+backend execution primitive.
 Slice 162 adds
 `longterm::Runtime`, a prompt-boundary composition layer that delegates search
 to a `Backend`, validates recall requests before dispatch, and renders stable
@@ -293,14 +294,15 @@ first fire is after the startup pass. Slice 189 adds
 execution boundary. Slice 191 adds periodic advisory `memory_decay` publishing
 from that tick owner, slice 192 adds the caller-owned `AutomationRuntime` state
 handle for explicit automation DB open/migrate ownership, slice 193 adds the
-caller-started retention loop step above that service, and slice 194 adds
-advisory job lifecycle metadata from due retention ticks. Leases, long-running
-service-loop timers, and bootstrap or daemon startup policy remain downstream.
+caller-started retention loop step above that service, slice 194 adds advisory
+job lifecycle metadata from due retention ticks, and slice 195 adds stored
+retention job leases plus loop-side due-run lease ownership. Long-running
+service-loop timers and bootstrap or daemon startup policy remain downstream.
 Default builds still reject
 `memory.longterm.hybrid_search.enabled=true` before assembly/provider side
 effects with `reason=build_option_disabled`, `option=vector_memory`. Semantic or
-external embedding providers, blocking read-before policy, periodic decay
-ownership, and periodic automation decay publishing remain downstream.
+external embedding providers, blocking read-before policy, and long-running
+periodic automation service-loop ownership remain downstream.
 
 ```cpp
 // include/oran/memory/longterm.hpp

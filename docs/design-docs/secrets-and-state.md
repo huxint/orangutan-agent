@@ -75,8 +75,10 @@ Current implementation status:
   repository/service lifetime stays stable. Slice 193 adds a caller-started
   retention loop step above that state handle. Slice 194 adds advisory
   retention job lifecycle hook metadata from due ticks without adding persisted
-  secret material, but bootstrap still does not open that database or start a
-  scheduler.
+  secret material. Slice 195 adds retention lease rows in `automation.db` and
+  has the explicit loop lease only due execution; the lease owner key is an
+  operational identifier, not a secret. Bootstrap still does not open that
+  database or start a scheduler.
   Ordinary configured-route bootstrap maps the recall policy into
   prompt-boundary long-term recall. The hybrid-search block defaults disabled;
   when built with `--vector_memory=y`, configured-route bootstrap now enables the
@@ -115,9 +117,9 @@ Current implementation status:
   uses this boundary when building the provider-backed prompt runner.
 - `teams`, `channels`, and the config `automation` root are recognized but do
   not have typed config models yet. The `oran-automation` C++ library exists
-  for periodic planning, retention job/run persistence, a caller-owned runtime
-  state handle, and a caller-started retention loop step, but config-authored
-  automation job seeds, bootstrap ownership of `automation.db`, and
+  for periodic planning, retention job/run/lease persistence, a caller-owned
+  runtime state handle, and a caller-started leased retention loop step, but
+  config-authored automation job seeds, bootstrap ownership of `automation.db`, and
   scheduler/service-loop execution remain unimplemented. The `hooks` root has
   the v1 typed timeout field; `sinks` and `bindings` remain
   recognized-but-untyped until external hook sinks land.
@@ -247,8 +249,8 @@ Four separate SQLite files (one per concern):
 - `<workspace>/.orangutan/sessions.db`
 - `<workspace>/.orangutan/memory.db`
 - `<workspace>/.orangutan/automation.db` (opened and migrated by caller-owned
-  `AutomationRuntime`; the caller-started loop step runs above it, and
-  bootstrap does not open it yet)
+  `AutomationRuntime`; the caller-started loop step runs above it and stores
+  due-run lease rows, and bootstrap does not open it yet)
 - `<workspace>/.orangutan/audit.db`
 
 ### Why Separate Files?

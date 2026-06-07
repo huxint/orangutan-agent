@@ -54,11 +54,11 @@ struct MemoryRetentionTickResult {
 
 /// One caller-driven tick for the stored long-term retention job.
 ///
-/// This owner intentionally does not start a background loop, acquire leases, or
-/// own timers. A future service loop can call `tick(...)` when it owns those
-/// process-level concerns. When constructed with a hook bus, a due tick
-/// publishes advisory job lifecycle metadata around backend work and publishes
-/// `memory_decay` metadata after successful durable state advances.
+/// This owner intentionally does not start a background loop, own timers, or
+/// acquire execution leases by itself. `MemoryRetentionLoop` can use the exposed
+/// repository to lease due tick execution. When constructed with a hook bus, a
+/// due tick publishes advisory job lifecycle metadata around backend work and
+/// publishes `memory_decay` metadata after successful durable state advances.
 class MemoryRetentionService {
 public:
   MemoryRetentionService(AutomationRepository& repository,
@@ -66,6 +66,8 @@ public:
                          MemoryRetentionServiceOptions options = {}) noexcept;
 
   [[nodiscard]] async::Awaitable<core::Result<MemoryRetentionTickResult>> tick(MemoryRetentionTickRequest request);
+  [[nodiscard]] AutomationRepository& repository() noexcept;
+  [[nodiscard]] const AutomationRepository& repository() const noexcept;
 
 private:
   AutomationRepository* repository_{};
