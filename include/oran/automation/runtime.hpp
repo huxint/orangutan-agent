@@ -50,6 +50,9 @@ public:
   [[nodiscard]] AutomationRepository& repository() noexcept;
   [[nodiscard]] const AutomationRepository& repository() const noexcept;
 
+  [[nodiscard]] CronService cron_service() noexcept;
+  [[nodiscard]] CronLoop cron_loop() noexcept;
+
   [[nodiscard]] MemoryRetentionService memory_retention_service(memory::longterm::Backend& backend,
                                                                 MemoryRetentionServiceOptions options = {}) noexcept;
   [[nodiscard]] MemoryRetentionLoop memory_retention_loop(memory::longterm::Backend& backend,

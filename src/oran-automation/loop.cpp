@@ -22,6 +22,22 @@ namespace {
       .with("reason", std::move(reason));
 }
 
+[[nodiscard]] core::Error invalid_cron_loop_field(std::string field, std::string reason) {
+  return core::Error::invalid_argument("cron loop field is invalid")
+      .with("field", std::move(field))
+      .with("reason", std::move(reason));
+}
+
+[[nodiscard]] core::Result<void> validate_cron_run_once_request(const CronLoopRunOnceRequest& request) {
+  if (request.max_wait < std::chrono::steady_clock::duration::zero()) {
+    return std::unexpected(invalid_cron_loop_field("max_wait", "negative"));
+  }
+  if (request.job_limit == 0) {
+    return std::unexpected(invalid_cron_loop_field("job_limit", "zero"));
+  }
+  return {};
+}
+
 [[nodiscard]] core::Result<void> validate_run_once_request(const MemoryRetentionLoopRunOnceRequest& request) {
   if (request.job_key.empty()) {
     return std::unexpected(invalid_loop_field("job_key", "empty"));
@@ -161,6 +177,49 @@ tick_with_lease(MemoryRetentionService& service, const MemoryRetentionLoopRunOnc
 }
 
 }  // namespace
+
+CronLoop::CronLoop(asio::any_io_executor executor, CronService service) noexcept
+    : executor_{std::move(executor)}, service_{std::move(service)} {}
+
+async::Awaitable<core::Result<CronLoopRunOnceResult>> CronLoop::run_once(CronLoopRunOnceRequest request) {
+  if (auto valid = validate_cron_run_once_request(request); !valid) {
+    co_return std::unexpected(std::move(valid).error());
+  }
+
+  auto tick = co_await service_.tick(CronTickRequest{.now = request.now, .job_limit = request.job_limit});
+  if (!tick) {
+    co_return std::unexpected(std::move(tick).error());
+  }
+  if (!tick->due_jobs.empty() || !tick->next_fire_at.has_value()) {
+    co_return CronLoopRunOnceResult{.tick = std::move(*tick)};
+  }
+
+  const auto wait_for = wait_until(request.now, *tick->next_fire_at);
+  if (wait_for > request.max_wait) {
+    co_return CronLoopRunOnceResult{
+        .waited_for = std::chrono::nanoseconds{0},
+        .tick = std::move(*tick),
+    };
+  }
+
+  auto slept = co_await async::sleep_for(executor_, wait_for);
+  if (!slept) {
+    co_return std::unexpected(std::move(slept).error());
+  }
+
+  auto due_tick = co_await service_.tick(CronTickRequest{
+      .now = add_wait(request.now, wait_for),
+      .job_limit = request.job_limit,
+  });
+  if (!due_tick) {
+    co_return std::unexpected(std::move(due_tick).error());
+  }
+
+  co_return CronLoopRunOnceResult{
+      .waited_for = wait_for,
+      .tick = std::move(*due_tick),
+  };
+}
 
 MemoryRetentionLoop::MemoryRetentionLoop(asio::any_io_executor executor, MemoryRetentionService service) noexcept
     : executor_{std::move(executor)}, service_{std::move(service)} {}

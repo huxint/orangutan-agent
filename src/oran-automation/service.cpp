@@ -23,11 +23,30 @@ namespace {
       .with("reason", std::move(reason));
 }
 
+[[nodiscard]] core::Error invalid_cron_tick_field(std::string field, std::string reason) {
+  return core::Error::invalid_argument("cron tick field is invalid")
+      .with("field", std::move(field))
+      .with("reason", std::move(reason));
+}
+
 [[nodiscard]] core::Result<void> validate_tick_request(const MemoryRetentionTickRequest& request) {
   if (request.job_key.empty()) {
     return std::unexpected(invalid_tick_field("job_key", "empty"));
   }
   return {};
+}
+
+[[nodiscard]] core::Result<void> validate_cron_tick_request(const CronTickRequest& request) {
+  if (request.job_limit == 0) {
+    return std::unexpected(invalid_cron_tick_field("job_limit", "zero"));
+  }
+  return {};
+}
+
+void track_next_fire(CronTickResult& result, core::Time next_fire_at) {
+  if (!result.next_fire_at.has_value() || next_fire_at < *result.next_fire_at) {
+    result.next_fire_at = next_fire_at;
+  }
 }
 
 [[nodiscard]] std::string failure_message(const core::Error& error) {
@@ -138,6 +157,47 @@ publish_job_lifecycle(const MemoryRetentionHookOptions& hooks, hook::Event event
 }
 
 }  // namespace
+
+CronService::CronService(AutomationRepository& repository) noexcept : repository_{&repository} {}
+
+AutomationRepository& CronService::repository() noexcept {
+  return *repository_;
+}
+
+const AutomationRepository& CronService::repository() const noexcept {
+  return *repository_;
+}
+
+async::Awaitable<core::Result<CronTickResult>> CronService::tick(CronTickRequest request) {
+  if (auto valid = validate_cron_tick_request(request); !valid) {
+    co_return std::unexpected(std::move(valid).error());
+  }
+
+  auto jobs = co_await repository_->list_cron_jobs(ListCronJobsOptions{.limit = request.job_limit});
+  if (!jobs) {
+    co_return std::unexpected(std::move(jobs).error());
+  }
+
+  CronTickResult result{
+      .now = request.now,
+      .checked_count = jobs->size(),
+  };
+  for (auto& job : *jobs) {
+    auto schedule = evaluate_cron_schedule(job.schedule, job.state, request.now);
+    if (!schedule) {
+      co_return std::unexpected(std::move(schedule).error().with("job_key", job.job_key));
+    }
+    track_next_fire(result, schedule->next_fire_at);
+    if (schedule->due) {
+      result.due_jobs.push_back(CronDueJob{
+          .job = std::move(job),
+          .schedule = *schedule,
+      });
+    }
+  }
+
+  co_return result;
+}
 
 MemoryRetentionService::MemoryRetentionService(AutomationRepository& repository,
                                                memory::longterm::Backend& backend,

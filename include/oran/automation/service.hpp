@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/automation/repository.hpp>
@@ -50,6 +51,42 @@ struct MemoryRetentionTickResult {
   std::optional<MemoryRetentionJobRecord> job{};
   std::optional<MemoryRetentionRunRecord> run{};
   std::optional<MemoryRetentionHookPublishResult> hook_publish{};
+};
+
+struct CronTickRequest {
+  core::Time now{core::Time::epoch()};
+  std::size_t job_limit{100};
+};
+
+struct CronDueJob {
+  CronJobRecord job{};
+  PeriodicEvaluation schedule{};
+};
+
+struct CronTickResult {
+  core::Time now{core::Time::epoch()};
+  std::size_t checked_count{0};
+  std::vector<CronDueJob> due_jobs{};
+  std::optional<core::Time> next_fire_at{};
+};
+
+/// One caller-driven scan for stored cron jobs.
+///
+/// This owner evaluates repository-backed cron schedules and reports due work
+/// plus the earliest next fire. It intentionally does not mark jobs fired,
+/// publish hooks, enqueue work, call agents, or start a background loop; the
+/// caller owns the execution policy and can advance state with
+/// `AutomationRepository::mark_cron_job_fired(...)` after successful work.
+class CronService {
+public:
+  explicit CronService(AutomationRepository& repository) noexcept;
+
+  [[nodiscard]] async::Awaitable<core::Result<CronTickResult>> tick(CronTickRequest request);
+  [[nodiscard]] AutomationRepository& repository() noexcept;
+  [[nodiscard]] const AutomationRepository& repository() const noexcept;
+
+private:
+  AutomationRepository* repository_{};
 };
 
 /// One caller-driven tick for the stored long-term retention job.

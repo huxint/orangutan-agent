@@ -120,6 +120,14 @@ const AutomationRepository& AutomationRuntime::repository() const noexcept {
   return impl_->repository;
 }
 
+CronService AutomationRuntime::cron_service() noexcept {
+  return CronService{impl_->repository};
+}
+
+CronLoop AutomationRuntime::cron_loop() noexcept {
+  return CronLoop{impl_->executor, cron_service()};
+}
+
 MemoryRetentionService AutomationRuntime::memory_retention_service(memory::longterm::Backend& backend,
                                                                    MemoryRetentionServiceOptions options) noexcept {
   return MemoryRetentionService{impl_->repository, backend, std::move(options)};

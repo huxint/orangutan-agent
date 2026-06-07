@@ -51,6 +51,34 @@ struct MemoryRetentionLoopRunResult {
   std::optional<MemoryRetentionLoopRunOnceResult> last_step{};
 };
 
+struct CronLoopRunOnceRequest {
+  core::Time now{core::Time::epoch()};
+  std::chrono::steady_clock::duration max_wait{std::chrono::steady_clock::duration::zero()};
+  std::size_t job_limit{100};
+};
+
+struct CronLoopRunOnceResult {
+  std::chrono::nanoseconds waited_for{0};
+  CronTickResult tick{};
+};
+
+/// Caller-started cron loop step.
+///
+/// This owner scans stored cron jobs immediately and can wait once, within the
+/// caller's budget, for the earliest next fire before scanning again. It does
+/// not mutate job state or run queued work; callers advance `last_fired_at`
+/// after their own execution policy succeeds.
+class CronLoop {
+public:
+  CronLoop(asio::any_io_executor executor, CronService service) noexcept;
+
+  [[nodiscard]] async::Awaitable<core::Result<CronLoopRunOnceResult>> run_once(CronLoopRunOnceRequest request);
+
+private:
+  asio::any_io_executor executor_;
+  CronService service_;
+};
+
 /// Caller-started retention loop step.
 ///
 /// This owner can wait until one stored retention job is due, then delegate to

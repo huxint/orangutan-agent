@@ -89,6 +89,13 @@ automation::MemoryRetentionJob make_job(std::string scope_key = "cli") {
   };
 }
 
+automation::CronSchedule make_cron_schedule(std::string expression = "* * * * *") {
+  return automation::CronSchedule{
+      .expression = std::move(expression),
+      .first_fire_at = at(60s),
+  };
+}
+
 memory::longterm::Record make_record(std::string id) {
   return memory::longterm::Record{
       .key = memory::longterm::RecordKey{.id = std::move(id), .scope_key = "cli"},
@@ -211,6 +218,112 @@ TEST_CASE("AutomationRuntime::open rejects an empty database path", "[unit][auto
     REQUIRE_FALSE(opened.has_value());
     REQUIRE(opened.error().kind() == core::ErrorKind::invalid_argument);
     REQUIRE(has_field(opened.error(), "database_path"));
+  });
+}
+
+TEST_CASE("AutomationRuntime creates cron services over owned repository state", "[unit][automation][runtime][cron]") {
+  TempWorkspace workspace{"oran-automation-runtime-cron-service"};
+  test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {
+    auto runtime = co_await automation::AutomationRuntime::open(
+        io.get_executor(),
+        automation::AutomationRuntimeOptions{.database_path = automation_db_path(workspace)});
+    REQUIRE(runtime.has_value());
+    REQUIRE((co_await runtime->repository().upsert_cron_job(automation::UpsertCronJobRequest{
+                 .job_key = "cron:every-minute",
+                 .schedule = make_cron_schedule(),
+             }))
+                .has_value());
+    auto five_minute = make_cron_schedule("*/5 * * * *");
+    five_minute.first_fire_at = at(300s);
+    REQUIRE((co_await runtime->repository().upsert_cron_job(automation::UpsertCronJobRequest{
+                 .job_key = "cron:five-minute",
+                 .schedule = five_minute,
+             }))
+                .has_value());
+
+    auto service = runtime->cron_service();
+    auto ticked = co_await service.tick(automation::CronTickRequest{
+        .now = at(120s),
+        .job_limit = 10,
+    });
+
+    REQUIRE(ticked.has_value());
+    REQUIRE(ticked->checked_count == 2);
+    REQUIRE(ticked->due_jobs.size() == 1);
+    REQUIRE(ticked->due_jobs[0].job.job_key == "cron:every-minute");
+    REQUIRE(ticked->due_jobs[0].schedule.next_fire_at == at(60s));
+    REQUIRE(ticked->due_jobs[0].schedule.overdue_by == 60s);
+    REQUIRE(ticked->next_fire_at == at(60s));
+
+    auto loaded = co_await runtime->repository().get_cron_job("cron:every-minute");
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->has_value());
+    REQUIRE_FALSE((*loaded)->state.last_fired_at.has_value());
+  });
+}
+
+TEST_CASE("CronLoop::run_once skips waits beyond the caller budget", "[unit][automation][runtime][cron][loop]") {
+  TempWorkspace workspace{"oran-automation-runtime-cron-loop-budget"};
+  test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {
+    auto runtime = co_await automation::AutomationRuntime::open(
+        io.get_executor(),
+        automation::AutomationRuntimeOptions{.database_path = automation_db_path(workspace)});
+    REQUIRE(runtime.has_value());
+    auto schedule = make_cron_schedule("*/5 * * * *");
+    schedule.first_fire_at = at(300s);
+    REQUIRE((co_await runtime->repository().upsert_cron_job(automation::UpsertCronJobRequest{
+                 .job_key = "cron:five-minute",
+                 .schedule = schedule,
+             }))
+                .has_value());
+
+    auto loop = runtime->cron_loop();
+    auto result = co_await loop.run_once(automation::CronLoopRunOnceRequest{
+        .now = at(0s),
+        .max_wait = 10ms,
+        .job_limit = 10,
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->waited_for == 0ns);
+    REQUIRE(result->tick.checked_count == 1);
+    REQUIRE(result->tick.due_jobs.empty());
+    REQUIRE(result->tick.next_fire_at == at(300s));
+  });
+}
+
+TEST_CASE("CronLoop::run_once waits within budget and reports due cron jobs",
+          "[unit][automation][runtime][cron][loop]") {
+  TempWorkspace workspace{"oran-automation-runtime-cron-loop-wait"};
+  test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {
+    auto runtime = co_await automation::AutomationRuntime::open(
+        io.get_executor(),
+        automation::AutomationRuntimeOptions{.database_path = automation_db_path(workspace)});
+    REQUIRE(runtime.has_value());
+    REQUIRE((co_await runtime->repository().upsert_cron_job(automation::UpsertCronJobRequest{
+                 .job_key = "cron:every-minute",
+                 .schedule = make_cron_schedule(),
+             }))
+                .has_value());
+
+    auto loop = runtime->cron_loop();
+    auto result = co_await loop.run_once(automation::CronLoopRunOnceRequest{
+        .now = at(59s + 990ms),
+        .max_wait = 50ms,
+        .job_limit = 10,
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->waited_for == 10ms);
+    REQUIRE(result->tick.checked_count == 1);
+    REQUIRE(result->tick.due_jobs.size() == 1);
+    REQUIRE(result->tick.due_jobs[0].job.job_key == "cron:every-minute");
+    REQUIRE(result->tick.due_jobs[0].schedule.next_fire_at == at(60s));
+
+    auto loaded = co_await runtime->repository().get_cron_job("cron:every-minute");
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->has_value());
+    REQUIRE_FALSE((*loaded)->state.last_fired_at.has_value());
   });
 }
 
@@ -607,6 +720,111 @@ TEST_CASE("MemoryRetentionLoop::run_once reports cancellation while waiting",
     REQUIRE(acquired.has_value());
     REQUIRE(acquired->has_value());
     REQUIRE((*acquired)->owner_key == "after-cancel-owner");
+  });
+}
+
+TEST_CASE("CronLoop::run_once reports cancellation while waiting",
+          "[unit][automation][runtime][cron][loop][cancellation]") {
+  TempWorkspace workspace{"oran-automation-runtime-cron-loop-cancel"};
+  asio::io_context io;
+  asio::cancellation_signal signal;
+  std::optional<core::Result<automation::CronLoopRunOnceResult>> result;
+  std::exception_ptr failure;
+
+  asio::steady_timer cancel_timer{io};
+  cancel_timer.expires_after(10ms);
+  cancel_timer.async_wait([&](const asio::error_code& ec) {
+    if (!ec) {
+      signal.emit(asio::cancellation_type::terminal);
+    }
+  });
+
+  asio::co_spawn(
+      io,
+      [&]() -> async::Awaitable<core::Result<automation::CronLoopRunOnceResult>> {
+        auto runtime = co_await automation::AutomationRuntime::open(
+            io.get_executor(),
+            automation::AutomationRuntimeOptions{.database_path = automation_db_path(workspace)});
+        if (!runtime) {
+          co_return std::unexpected(std::move(runtime).error());
+        }
+        auto upserted = co_await runtime->repository().upsert_cron_job(automation::UpsertCronJobRequest{
+            .job_key = "cron:every-minute",
+            .schedule = make_cron_schedule(),
+        });
+        if (!upserted) {
+          co_return std::unexpected(std::move(upserted).error());
+        }
+
+        auto loop = runtime->cron_loop();
+        co_return co_await loop.run_once(automation::CronLoopRunOnceRequest{
+            .now = at(59s),
+            .max_wait = 2s,
+            .job_limit = 10,
+        });
+      },
+      asio::bind_cancellation_slot(signal.slot(),
+                                   [&](std::exception_ptr ep, core::Result<automation::CronLoopRunOnceResult> r) {
+                                     failure = ep;
+                                     result = std::move(r);
+                                     cancel_timer.cancel();
+                                     io.stop();
+                                   }));
+  io.run();
+
+  if (failure) {
+    std::rethrow_exception(failure);
+  }
+  REQUIRE(result.has_value());
+  REQUIRE_FALSE(result->has_value());
+  REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
+
+  test::run_async([&workspace](asio::io_context& check_io) -> async::Awaitable<void> {
+    auto runtime = co_await automation::AutomationRuntime::open(
+        check_io.get_executor(),
+        automation::AutomationRuntimeOptions{.database_path = automation_db_path(workspace)});
+    REQUIRE(runtime.has_value());
+
+    auto loaded = co_await runtime->repository().get_cron_job("cron:every-minute");
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->has_value());
+    REQUIRE_FALSE((*loaded)->state.last_fired_at.has_value());
+  });
+}
+
+TEST_CASE("Cron service and loop reject invalid scan policy", "[unit][automation][runtime][cron][loop]") {
+  TempWorkspace workspace{"oran-automation-runtime-cron-invalid"};
+  test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {
+    auto runtime = co_await automation::AutomationRuntime::open(
+        io.get_executor(),
+        automation::AutomationRuntimeOptions{.database_path = automation_db_path(workspace)});
+    REQUIRE(runtime.has_value());
+
+    auto service = runtime->cron_service();
+    auto invalid_tick = co_await service.tick(automation::CronTickRequest{
+        .now = at(0s),
+        .job_limit = 0,
+    });
+    REQUIRE_FALSE(invalid_tick.has_value());
+    REQUIRE(invalid_tick.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(has_field(invalid_tick.error(), "job_limit"));
+
+    auto loop = runtime->cron_loop();
+    auto invalid_wait = co_await loop.run_once(automation::CronLoopRunOnceRequest{
+        .now = at(0s),
+        .max_wait = -1ms,
+    });
+    REQUIRE_FALSE(invalid_wait.has_value());
+    REQUIRE(invalid_wait.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(has_field(invalid_wait.error(), "max_wait"));
+
+    auto invalid_limit = co_await loop.run_once(automation::CronLoopRunOnceRequest{
+        .now = at(0s),
+        .job_limit = 0,
+    });
+    REQUIRE_FALSE(invalid_limit.has_value());
+    REQUIRE(invalid_limit.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(has_field(invalid_limit.error(), "job_limit"));
   });
 }
 

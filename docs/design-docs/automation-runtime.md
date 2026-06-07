@@ -5,12 +5,13 @@ still intentionally narrow: deterministic periodic schedule and POSIX cron
 evaluation, long-term memory retention request planning, a bootstrap-owned
 mapping from configured retention policy into that job descriptor,
 automation-owned retention job/run/lease persistence, durable cron job state, a
-caller-owned runtime state handle, and a caller-driven retention service tick
-with optional advisory `memory_decay` plus job lifecycle metadata, plus a
-caller-started retention loop step that can wait within a caller budget for one
-stored job to become due and lease due execution, plus a finite caller-owned
-loop policy over that step. It does not start detached background work, own a
-process service loop, read cron config, or call an agent loop.
+caller-owned runtime state handle, a caller-driven cron scan/wait boundary, and
+a caller-driven retention service tick with optional advisory `memory_decay`
+plus job lifecycle metadata, plus a caller-started retention loop step that can
+wait within a caller budget for one stored job to become due and lease due
+execution, plus a finite caller-owned loop policy over that step. It does not
+start detached background work, own a process service loop, read cron config,
+mark cron jobs fired, or call an agent loop.
 
 ## Current Status
 
@@ -149,6 +150,18 @@ SQLite, enforces positive list limits, returns `std::nullopt` for missing
 that require an existing cron job. It still does not read config, start timers,
 spawn detached work, publish cron lifecycle hooks, or call agents.
 
+Slice 199 adds the first explicit cron runtime scan/wait owner without adding a
+background scheduler. `<oran/automation/service.hpp>` exports `CronService`,
+whose `tick(...)` scans stored cron jobs up to a caller limit, evaluates each
+schedule with the stored `PeriodicJobState`, and returns due jobs plus the
+earliest next fire without mutating `last_fired_at`. `<oran/automation/loop.hpp>`
+exports `CronLoop`, whose `run_once(...)` ticks immediately, optionally waits
+within the caller's `max_wait` budget for the earliest next fire, and ticks
+again after the wait. `AutomationRuntime` constructs both over the owned
+repository/executor. This still does not read cron config, run job payloads,
+mark jobs fired, publish cron lifecycle hooks, enqueue work, notify channels, or
+call agents.
+
 ## Public API
 
 ```cpp
@@ -231,6 +244,23 @@ struct CronJobRecord {
 
 struct ListCronJobsOptions {
   std::size_t limit;
+};
+
+struct CronTickRequest {
+  core::Time now;
+  std::size_t job_limit;
+};
+
+struct CronDueJob {
+  CronJobRecord job;
+  PeriodicEvaluation schedule;
+};
+
+struct CronTickResult {
+  core::Time now;
+  std::size_t checked_count;
+  std::vector<CronDueJob> due_jobs;
+  std::optional<core::Time> next_fire_at;
 };
 
 struct UpsertMemoryRetentionJobRequest {
@@ -321,6 +351,35 @@ class AutomationRepository {
   release_memory_retention_lease(ReleaseMemoryRetentionLeaseRequest);
 };
 
+struct CronLoopRunOnceRequest {
+  core::Time now;
+  std::chrono::steady_clock::duration max_wait;
+  std::size_t job_limit;
+};
+
+struct CronLoopRunOnceResult {
+  std::chrono::nanoseconds waited_for;
+  CronTickResult tick;
+};
+
+class CronService {
+ public:
+  explicit CronService(AutomationRepository&);
+
+  async::Awaitable<core::Result<CronTickResult>>
+  tick(CronTickRequest);
+  AutomationRepository& repository() noexcept;
+  const AutomationRepository& repository() const noexcept;
+};
+
+class CronLoop {
+ public:
+  CronLoop(asio::any_io_executor, CronService);
+
+  async::Awaitable<core::Result<CronLoopRunOnceResult>>
+  run_once(CronLoopRunOnceRequest);
+};
+
 class AutomationRuntime {
  public:
   static async::Awaitable<core::Result<AutomationRuntime>>
@@ -330,6 +389,9 @@ class AutomationRuntime {
   const storage::MigrationReport& migration_report() const noexcept;
   AutomationRepository& repository() noexcept;
   const AutomationRepository& repository() const noexcept;
+
+  CronService cron_service() noexcept;
+  CronLoop cron_loop() noexcept;
 
   MemoryRetentionService memory_retention_service(
       memory::longterm::Backend&,
@@ -583,11 +645,12 @@ service objects borrow them.
 - Stores the returned `storage::MigrationReport` for diagnostics.
 
 The handle exposes `repository()` for direct callers that seed or inspect jobs,
-and `memory_retention_service(...)` as a convenience factory for
-`MemoryRetentionService` over the owned repository plus a caller-supplied
-`memory::longterm::Backend`. It also exposes `memory_retention_loop(...)` as a
-convenience factory for the caller-started loop step over the same repository,
-backend, and hook options.
+`cron_service()` / `cron_loop()` as convenience factories for the caller-driven
+cron scan/wait surface, and `memory_retention_service(...)` as a convenience
+factory for `MemoryRetentionService` over the owned repository plus a
+caller-supplied `memory::longterm::Backend`. It also exposes
+`memory_retention_loop(...)` as a convenience factory for the caller-started loop
+step over the same repository, backend, and hook options.
 
 The runtime handle is intentionally not a scheduler. It does not sleep, spawn
 detached coroutines, acquire process leases, own a hook bus, or decide whether
@@ -597,6 +660,34 @@ caller must explicitly call `AutomationRuntime::open(...)` before automation
 state exists.
 
 ## Loop Step Semantics
+
+`CronService::tick(...)` is the first cron runtime owner above durable cron job
+state. It validates `job_limit > 0`, lists at most that many stored cron jobs,
+evaluates each `CronSchedule` with its stored `PeriodicJobState`, and returns:
+
+- `checked_count` for the number of stored cron jobs inspected.
+- `due_jobs` with the stored record and `PeriodicEvaluation` for each due cron
+  job.
+- `next_fire_at` for the earliest scheduled fire among the scanned jobs, or
+  `std::nullopt` when no jobs were scanned.
+
+The tick is intentionally read-only. It does not call
+`mark_cron_job_fired(...)`, create run rows, acquire leases, publish lifecycle
+hooks, enqueue work, or call agents. A later execution owner must run the job
+payload and advance `last_fired_at` only after its own success policy.
+
+`CronLoop::run_once(...)` is a single caller-started awaitable above that tick.
+It validates `max_wait >= 0` and `job_limit > 0`, ticks immediately, and returns
+without sleeping when any due job is already present or when no stored jobs
+exist. If no job is due and the earliest next fire is outside `max_wait`, it
+returns the not-due tick with `waited_for=0`. If the earliest next fire is
+within budget, it sleeps through `async::sleep_for(...)` and then ticks again
+using `now + waited_for`.
+
+Cancellation while the cron loop is sleeping returns `ErrorKind::cancelled` and
+does not mutate job state. The loop deliberately has no finite repeated `run(...)`
+helper yet: until a caller-owned execution and mark-fired policy exists, a due
+cron job would remain due across repeated scans.
 
 `MemoryRetentionLoop::run_once(...)` is a single caller-started awaitable for
 one stored retention job. It is the smallest useful owner above
@@ -728,7 +819,8 @@ those concerns into bootstrap or `oran-memory`.
 
 The next automation slices should not be picked by `STATUS.md` alone. The open
 spec 0006 boundaries now start after this explicit runtime/retention loop
-surface, cron evaluator, and cron repository state: cron config ownership,
+surface, cron evaluator, cron repository state, and caller-driven cron
+scan/wait surface: cron config ownership, cron execution plus mark-fired policy,
 process service/timer startup policy, broader per-agent/category leases once
 agent-facing jobs exist, triggered categories, queueing/backpressure, and
 notifier routing for agent-facing jobs.
@@ -773,6 +865,9 @@ Slice 198 reports `test-automation` at 44 cases / 515 assertions for cron
 repository migration v3, round-trip/update/list/mark-fired behavior, missing
 mutation errors, cron validation, and `AutomationRuntime::open(...)` migration
 report version 3.
+Slice 199 reports `test-automation` at 49 cases / 568 assertions for
+caller-driven cron service scans, explicit cron wait steps, cancellation while
+waiting, invalid scan policy, and `AutomationRuntime` cron factories.
 
 `bench-automation` planning rows are:
 

@@ -82,8 +82,9 @@ scheduler slices.
    Add durable cron job rows and repository APIs for schedule/last-fired state
    without reading config or starting timers. Shipped in slice 198.
 3. **Scheduler/category owner.**
-   Later: own cron config and layer the stored jobs into the explicit
-   automation runtime without bootstrap-owned background work.
+   In progress: slice 199 layers stored cron jobs into the explicit automation
+   runtime with a caller-driven scan/wait surface. Later: own cron config and
+   add execution plus mark-fired policy without bootstrap-owned background work.
 4. **Triggered/notifier/queue policy.**
    Later: add triggered categories, queueing/backpressure, notifier routing,
    and agent execution leases.
@@ -130,6 +131,12 @@ scheduler slices.
   return `std::nullopt`; missing mark-fired mutations return `not_found`; no
   cron config ownership, timers, hook production, queues, notifiers, or agent
   firing were added.
+- [x] 2026-06-07 21:46 +0800: Implemented `CronService::tick(...)`,
+  `CronLoop::run_once(...)`, and `AutomationRuntime` cron factories. The cron
+  service scans stored cron jobs and reports due jobs plus earliest next fire;
+  the loop can wait once within a caller budget and re-tick; neither path reads
+  config, marks jobs fired, publishes hooks, queues work, notifies channels, or
+  calls agents.
 - [x] **Update the docs that this slice invalidates in the same PR**
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -146,6 +153,10 @@ scheduler slices.
 - 2026-06-07: Persist cron jobs at the repository boundary before adding config
   or timer ownership. This gives later runtime/service slices durable state
   while keeping bootstrap free of automatic `automation.db` opening.
+- 2026-06-07: Add a read-only cron scan/wait runtime boundary before cron job
+  execution. Repeated loops would re-see the same due fire until an execution
+  owner advances `last_fired_at`, so this slice intentionally ships only
+  `run_once(...)` and leaves mark-fired policy downstream.
 
 ## Linked Artifacts
 
@@ -155,5 +166,6 @@ scheduler slices.
 - History entry:
 - `docs/histories/2026-06/20260607-1800-automation-cron-schedule.md`
 - `docs/histories/2026-06/20260607-1831-automation-cron-persistence.md`
+- `docs/histories/2026-06/20260607-2146-automation-cron-runtime-tick.md`
 - Release note:
 - `docs/releases/feature-release-notes.md#2026-06`

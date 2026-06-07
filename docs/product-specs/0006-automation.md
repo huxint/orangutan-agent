@@ -33,20 +33,23 @@ job leases plus due-run lease ownership in the loop step, and slice 196 adds a
 finite caller-owned loop policy above that leased step. Slice 197 adds the
 first cron-category planning primitive with a POSIX 5-field UTC parser and
 deterministic next-fire evaluator, and slice 198 adds durable cron job state
-through the same repository boundary. The current API evaluates periodic and
-cron schedules from caller-supplied state, maps a long-term memory retention
-policy into a due-only `memory::longterm::DecayRequest`, persists the
-configured retention job plus run history and lease state through
-`AutomationRepository`, persists cron job schedule/last-fired state through
-`AutomationRepository`, explicitly opens/migrates automation state through
-`AutomationRuntime::open(...)`, lets a runtime owner tick one stored job
-against a supplied long-term memory backend, publishes advisory retention
-metadata when the caller supplies a hook bus, and can wait once within a caller
-budget for a stored retention job to become due while leasing due execution or
-run a finite caller-owned loop over that step. Bootstrap maps configured-route
-`memory.longterm.retention` into a stored `MemoryRetentionJob` descriptor whose
-first fire is after the one-shot startup decay pass, but bootstrap still does
-not open `automation.db` or run a background service.
+through the same repository boundary. Slice 199 adds the first caller-driven
+cron runtime scan/wait boundary. The current API evaluates periodic and cron
+schedules from caller-supplied state, maps a long-term memory retention policy
+into a due-only `memory::longterm::DecayRequest`, persists the configured
+retention job plus run history and lease state through `AutomationRepository`,
+persists cron job schedule/last-fired state through `AutomationRepository`,
+explicitly opens/migrates automation state through `AutomationRuntime::open(...)`,
+lets a runtime owner scan stored cron jobs for due work without mutating them,
+lets a runtime owner tick one stored retention job against a supplied long-term
+memory backend, publishes advisory retention metadata when the caller supplies a
+hook bus, can wait once within a caller budget for the earliest stored cron fire,
+and can wait once within a caller budget for a stored retention job to become
+due while leasing due execution or run a finite caller-owned loop over that
+step. Bootstrap maps configured-route `memory.longterm.retention` into a stored
+`MemoryRetentionJob` descriptor whose first fire is after the one-shot startup
+decay pass, but bootstrap still does not open `automation.db` or run a
+background service.
 
 Current implementation:
 
@@ -70,8 +73,8 @@ Current implementation:
 - `AutomationRuntime::open(...)` validates an explicit database path, creates
   parent directories, opens `automation.db` through an owned `storage::Pool`,
   runs automation migrations, exposes the migration report and repository, and
-  can construct `MemoryRetentionService` or `MemoryRetentionLoop` over that
-  stable state.
+  can construct `CronService`, `CronLoop`, `MemoryRetentionService`, or
+  `MemoryRetentionLoop` over that stable state.
 - `MemoryRetentionService::tick(...)` loads one stored job, skips not-due work
   without mutation, invokes `memory::longterm::Backend::decay(...)` only when
   due, records success/failure run rows, and advances `last_fired_at` only
@@ -107,12 +110,19 @@ Current implementation:
   `PeriodicJobState::last_fired_at`, return `std::nullopt` for missing reads,
   return `ErrorKind::not_found` for missing mark-fired mutations, validate cron
   expressions before SQLite writes, and list rows by newest update.
-- `test-automation` reports 44 cases / 515 assertions.
+- `CronService::tick(...)` scans stored cron jobs up to a caller limit,
+  evaluates each stored schedule, and returns checked count, due jobs, and the
+  earliest next fire without advancing `last_fired_at`.
+- `CronLoop::run_once(...)` ticks immediately, waits through
+  `async::sleep_for(...)` only when the earliest next cron fire is within the
+  caller's `max_wait`, reports cancellation while waiting, and re-ticks after
+  the wait.
+- `test-automation` reports 49 cases / 568 assertions.
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 
-Still open: cron config ownership, triggered jobs, bootstrap/service-loop
-startup policy over `AutomationRuntime`, broader
+Still open: cron config ownership, cron execution plus mark-fired policy,
+triggered jobs, bootstrap/service-loop startup policy over `AutomationRuntime`, broader
 per-agent/category leases for agent-facing jobs, queueing/backpressure, process
 service/timer cancellation policy, notifier callbacks, and the scheduler tick
 performance criterion. Job lifecycle publication exists for explicit retention
