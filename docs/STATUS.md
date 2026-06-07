@@ -7,27 +7,26 @@
 
 ## Snapshot
 
-- **Slice:** 201 (`xmake run orangutan -- --help` reports slice 201)
+- **Slice:** 202 (`xmake run orangutan -- --help` reports slice 202)
 - **Last completed history:**
-  [`histories/2026-06/20260607-2257-automation-cron-loop-run-policy.md`](histories/2026-06/20260607-2257-automation-cron-loop-run-policy.md)
+  [`histories/2026-06/20260607-2324-automation-cron-lifecycle-hooks.md`](histories/2026-06/20260607-2324-automation-cron-lifecycle-hooks.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-cron-category.md`](exec-plans/active/2026-06-07-automation-cron-category.md).
-- **Latest completed slice:** slice 201 adds a finite caller-owned cron loop
-  run policy over the slice 200 due-execution surface without starting a
-  scheduler. `CronLoop::run(...)` repeatedly calls `CronService::execute_due(...)`
-  up to a caller `max_iterations` bound, waits only within `max_total_wait` for
-  the next cron fire, aggregates attempted/advanced/failed counts, stops on
-  `no_due_work`, `iteration_limit`, or `handler_failure`, and leaves handler
-  failure details in the last execution result rather than retrying them
-  immediately. It still does not read cron config, start process timers, spawn
-  detached work, publish cron lifecycle hooks, enqueue work, call notifiers, or
-  fire agents. Focused result: `test-automation` **54 cases / 663 assertions**.
+- **Latest completed slice:** slice 202 adds advisory cron job lifecycle
+  metadata to the explicit caller-owned due-execution surface without starting a
+  scheduler. `CronServiceOptions::hooks` lets callers supply a `hook::Bus` plus
+  source/agent/identity labels; due execution publishes `job_started` before the
+  caller handler, `job_finished` only after handler success and durable
+  `last_fired_at` advancement, and `job_failed` after handler failure while
+  leaving cron state unchanged for retry. Advisory sink failures remain
+  non-fatal and cron still does not read config, start process timers, spawn
+  detached work, enqueue work, call notifiers, or fire agents. Focused result:
+  `test-automation` **56 cases / 730 assertions**.
 - **Next intended slice:** continue the active automation cron/category plan.
   The next useful implementation boundary is cron config ownership that seeds
-  stored cron jobs, cron lifecycle metadata around the caller-owned loop, or an
-  explicit process service/timer startup policy over the caller-driven cron
-  surfaces; do not add bootstrap-owned background automation or unrelated
-  STATUS-only slice churn.
+  stored cron jobs or an explicit process service/timer startup policy over the
+  caller-driven cron surfaces; do not add bootstrap-owned background automation
+  or unrelated STATUS-only slice churn.
 
 Slice 183 adds the operator-facing long-term
   retention policy contract. `oran-config` now parses

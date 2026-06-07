@@ -36,7 +36,9 @@ deterministic next-fire evaluator, and slice 198 adds durable cron job state
 through the same repository boundary. Slice 199 adds the first caller-driven
 cron runtime scan/wait boundary, and slice 200 adds explicit caller-supplied due
 execution that advances stored cron state only after handler success. Slice 201
-adds finite caller-owned cron loop policy over that execution surface. The current API evaluates periodic and cron
+adds finite caller-owned cron loop policy over that execution surface, and
+slice 202 adds advisory cron job lifecycle metadata from the same explicit
+execution owner. The current API evaluates periodic and cron
 schedules from caller-supplied state, maps a long-term memory retention policy
 into a due-only `memory::longterm::DecayRequest`, persists the configured
 retention job plus run history and lease state through `AutomationRepository`,
@@ -47,6 +49,8 @@ lets a runtime owner execute due cron jobs through a supplied handler and mark
 only handler-successful fires complete,
 lets a runtime owner run a finite explicit cron loop that can catch up due
 fires or wait within a caller budget,
+publishes advisory cron job lifecycle metadata when the caller supplies a hook
+bus,
 lets a runtime owner tick one stored retention job against a supplied long-term
 memory backend, publishes advisory retention metadata when the caller supplies a
 hook bus, can wait once within a caller budget for the earliest stored cron fire,
@@ -132,17 +136,21 @@ Current implementation:
   attempted/advanced/failed counters, stops on `no_due_work`,
   `iteration_limit`, or `handler_failure`, and does not immediately retry
   failed handlers inside the same run.
-- `test-automation` reports 54 cases / 663 assertions.
+- `CronServiceOptions::hooks` lets callers provide a `hook::Bus`, source label,
+  agent key, and identity. Due cron execution publishes advisory `job_started`
+  before the handler, `job_failed` after a handler failure while keeping cron
+  state unadvanced, and `job_finished` only after handler success plus durable
+  `last_fired_at` advancement. Advisory sink failures remain non-fatal.
+- `test-automation` reports 56 cases / 730 assertions.
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 
 Still open: cron config ownership, triggered jobs, bootstrap/service-loop
 startup policy over `AutomationRuntime`, broader per-agent/category leases for
 agent-facing jobs, queueing/backpressure, process service/timer cancellation
-policy, notifier callbacks, cron lifecycle hook publication, and the scheduler
-tick performance criterion. Job lifecycle publication exists for explicit
-retention ticks only; full scheduler/category lifecycle ownership remains
-downstream.
+policy, notifier callbacks, and the scheduler tick performance criterion. Job
+lifecycle publication exists for explicit retention ticks and explicit cron due
+execution; full scheduler/category lifecycle ownership remains downstream.
 
 ## Scope (v1.1)
 

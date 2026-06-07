@@ -418,7 +418,9 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > adds `JobLifecyclePayload` for automation start/outcome metadata. It carries
 > identity, source, durable job key/type, scope, schedule/start/finish timing,
 > success, success counts, and backend failure kind/message, but not job input
-> contents or decayed records.
+> contents or decayed records. Slice 202 reuses that payload for explicit cron
+> due execution, using `job_type=cron` and metadata-only handler outcome
+> details.
 > Typed shapes for
 > the remaining non-tool
 > events ship with their producers (provider request /
@@ -554,7 +556,12 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > after a backend error is recorded as a failed run, and finished fires after a
 > successful run row plus `last_fired_at` advancement. Not-due ticks and service
 > instances without a bus publish no lifecycle events; advisory sink failures
-> remain non-fatal.
+> remain non-fatal. Slice 202 adds the cron producer:
+> `CronService::execute_due(...)` publishes advisory `job_started` before the
+> caller handler, `job_failed` after a handler error while leaving stored cron
+> state unadvanced, and `job_finished` only after handler success plus durable
+> `last_fired_at` advancement. Cron scan-only ticks and services without a bus
+> publish no lifecycle events; advisory sink failures remain non-fatal.
 > `test-hook` now reports 37 cases / 299 assertions.
 
 ### Surface

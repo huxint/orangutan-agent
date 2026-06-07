@@ -6,13 +6,13 @@ evaluation, long-term memory retention request planning, a bootstrap-owned
 mapping from configured retention policy into that job descriptor,
 automation-owned retention job/run/lease persistence, durable cron job state, a
 caller-owned runtime state handle, a caller-driven cron scan/wait/execute-due
-boundary plus finite caller-owned cron loop policy, and a caller-driven
-retention service tick with optional advisory `memory_decay` plus job lifecycle
-metadata, plus a caller-started retention loop step that can wait within a
-caller budget for one stored job to become due and lease due execution, plus a
-finite caller-owned loop policy over that step. It does not start detached
-background work, own a process service loop, read cron config, publish cron
-lifecycle hooks, enqueue cron work, or call an agent loop.
+boundary plus finite caller-owned cron loop policy and advisory cron lifecycle
+metadata, and a caller-driven retention service tick with optional advisory
+`memory_decay` plus job lifecycle metadata, plus a caller-started retention loop
+step that can wait within a caller budget for one stored job to become due and
+lease due execution, plus a finite caller-owned loop policy over that step. It
+does not start detached background work, own a process service loop, read cron
+config, enqueue cron work, or call an agent loop.
 
 ## Current Status
 
@@ -149,7 +149,7 @@ Repository validation reuses `evaluate_cron_schedule(...)` before touching
 SQLite, enforces positive list limits, returns `std::nullopt` for missing
 `get_cron_job(...)`, and returns `ErrorKind::not_found` for mutation operations
 that require an existing cron job. It still does not read config, start timers,
-spawn detached work, publish cron lifecycle hooks, or call agents.
+spawn detached work, or call agents.
 
 Slice 199 adds the first explicit cron runtime scan/wait owner without adding a
 background scheduler. `<oran/automation/service.hpp>` exports `CronService`,
@@ -160,8 +160,7 @@ exports `CronLoop`, whose `run_once(...)` ticks immediately, optionally waits
 within the caller's `max_wait` budget for the earliest next fire, and ticks
 again after the wait. `AutomationRuntime` constructs both over the owned
 repository/executor. This still does not read cron config, run job payloads,
-mark jobs fired, publish cron lifecycle hooks, enqueue work, notify channels, or
-call agents.
+mark jobs fired, enqueue work, notify channels, or call agents.
 
 Slice 200 adds the first explicit cron due-execution owner without adding a
 background scheduler. `CronService::execute_due(...)` reuses the scan result,
@@ -169,7 +168,7 @@ calls a supplied handler for every due cron job, advances
 `last_fired_at` through `AutomationRepository::mark_cron_job_fired(...)` only
 after the handler succeeds, and reports handler failures per attempt while
 leaving failed jobs due for the next explicit call. It still does not read cron
-config, publish lifecycle hooks, enqueue work, notify channels, or call agents.
+config, enqueue work, notify channels, or call agents.
 
 Slice 201 adds finite caller-owned cron loop policy over that explicit execution
 owner. `CronLoop::run(...)` repeatedly calls `execute_due(...)` until the
@@ -178,6 +177,16 @@ remaining wait budget, or a handler failure is observed. It can catch up overdue
 cron fires one scheduled fire at a time and can wait for the next fire within
 `max_total_wait`, but it still does not start a process service, publish hooks,
 queue work, notify channels, or call agents.
+
+Slice 202 adds advisory cron job lifecycle metadata from the same explicit
+execution owner. `CronServiceOptions::hooks` accepts a non-owning `hook::Bus*`,
+source label, agent key, and identity. For each due cron job,
+`CronService::execute_due(...)` publishes `job_started` before invoking the
+caller handler, publishes `job_failed` after a handler failure while leaving
+stored cron state unchanged, and publishes `job_finished` only after the handler
+succeeds and `last_fired_at` has durably advanced. Sink failures remain advisory
+and cannot veto the handler or state advancement. Repository failures before a
+durable outcome still return to the caller without inventing an outcome event.
 
 ## Public API
 
@@ -426,9 +435,20 @@ struct CronLoopRunResult {
   std::optional<CronExecuteResult> last_execution;
 };
 
+struct CronHookOptions {
+  hook::Bus* bus;
+  std::string source;
+  std::string agent_key;
+  std::string identity;
+};
+
+struct CronServiceOptions {
+  CronHookOptions hooks;
+};
+
 class CronService {
  public:
-  explicit CronService(AutomationRepository&);
+  explicit CronService(AutomationRepository&, CronServiceOptions = {});
 
   async::Awaitable<core::Result<CronTickResult>>
   tick(CronTickRequest);
@@ -458,8 +478,8 @@ class AutomationRuntime {
   AutomationRepository& repository() noexcept;
   const AutomationRepository& repository() const noexcept;
 
-  CronService cron_service() noexcept;
-  CronLoop cron_loop() noexcept;
+  CronService cron_service(CronServiceOptions = {}) noexcept;
+  CronLoop cron_loop(CronServiceOptions = {}) noexcept;
 
   MemoryRetentionService memory_retention_service(
       memory::longterm::Backend&,
@@ -754,14 +774,26 @@ the matching `CronExecuteAttempt`, do not stop later due jobs in the same call,
 and leave that job's stored state unchanged so the next explicit call can retry
 the same scheduled fire.
 
+When `CronServiceOptions::hooks.bus` is set, due execution also publishes
+advisory `hook::Event::job_started` before the handler. It publishes
+`job_failed` after a handler failure, and publishes `job_finished` only after a
+handler succeeds and durable cron state has advanced. Payloads use
+`job_type=cron`, carry the durable `job_key`, scheduled/start/finish timing,
+configured source/agent/identity labels, and failure kind/message when
+applicable. Cron jobs do not yet have a domain scope, so
+`JobLifecyclePayload::scope_key` and `who.scope_key` are empty for this
+producer. Sink failures stay advisory and are not reported in
+`CronExecuteResult`.
+
 `CronExecuteResult` carries the original scan result plus `attempted_count`,
 `advanced_count`, and one attempt row per due job whose handler ran. An attempt
 has `advanced=true` and `marked_job` populated only after durable state has
 advanced. If the repository cannot mark a handler-successful job fired,
 `execute_due(...)` returns that repository error instead of inventing a partial
-success policy. It still does not publish cron lifecycle hooks, create run rows,
-enqueue work, notify channels, call agents, or choose retry/backpressure policy
-for a process service.
+success policy. Repository failures before a durable outcome return without a
+`job_finished` or synthetic `job_failed` outcome. It still does not create run
+rows, enqueue work, notify channels, call agents, or choose retry/backpressure
+policy for a process service.
 
 `CronLoop::run_once(...)` is a single caller-started awaitable above that tick.
 It validates `max_wait >= 0` and `job_limit > 0`, ticks immediately, and returns
@@ -801,9 +833,11 @@ If any handler attempt fails, `CronLoop::run(...)` stops with
 `stop_reason=handler_failure` and leaves the failed attempt in
 `last_execution`. It deliberately does not retry handler failures immediately
 inside the same run; process retry/backpressure policy remains downstream. The
-loop still does not publish cron lifecycle hooks, create run rows, enqueue work,
-notify channels, call agents, choose shutdown behavior, or decide whether
-bootstrap should open automation state.
+loop still does not create run rows, enqueue work, notify channels, call agents,
+choose shutdown behavior, or decide whether bootstrap should open automation
+state. When the loop's owned `CronService` was constructed with hook options,
+each underlying `execute_due(...)` call emits the same advisory lifecycle
+metadata described above.
 
 `MemoryRetentionLoop::run_once(...)` is a single caller-started awaitable for
 one stored retention job. It is the smallest useful owner above
@@ -937,9 +971,9 @@ The next automation slices should not be picked by `STATUS.md` alone. The open
 spec 0006 boundaries now start after this explicit runtime/retention loop
 surface, cron evaluator, cron repository state, and caller-driven cron
 scan/wait/execute-due/run surface: cron config ownership, process service/timer
-startup policy, cron lifecycle hook production, broader per-agent/category
-leases once agent-facing jobs exist, triggered categories, queueing/backpressure,
-and notifier routing for agent-facing jobs.
+startup policy, broader per-agent/category leases once agent-facing jobs exist,
+triggered categories, queueing/backpressure, and notifier routing for
+agent-facing jobs.
 
 ## Validation
 
@@ -990,6 +1024,8 @@ not-due handler skipping, and invalid execution policy validation.
 Slice 201 reports `test-automation` at 54 cases / 663 assertions for finite cron
 loop backlog catch-up, success-only state advancement through the loop, handler
 failure stopping without immediate retry, and cron run-policy input validation.
+Slice 202 reports `test-automation` at 56 cases / 730 assertions for advisory
+cron job lifecycle metadata on handler success and handler failure.
 
 `bench-automation` planning rows are:
 

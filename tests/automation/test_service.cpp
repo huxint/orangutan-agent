@@ -267,6 +267,154 @@ TEST_CASE("CronService::execute_due skips handlers before cron jobs are due", "[
   });
 }
 
+TEST_CASE("CronService::execute_due publishes lifecycle metadata for handler success",
+          "[unit][automation][service][cron][hook]") {
+  TempDb db{"oran-automation-service-cron-lifecycle-success"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
+                 .job_key = "cron:succeeds",
+                 .schedule = make_cron_schedule(),
+                 .state = automation::PeriodicJobState{.last_fired_at = at(60s)},
+             }))
+                .has_value());
+
+    std::vector<CapturedJobLifecycle> lifecycle;
+    hook::Bus bus;
+    hook::InProcessSink sink{
+        "cron-lifecycle-success-recorder",
+        [&lifecycle](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
+          const auto* job = std::get_if<hook::JobLifecyclePayload>(payload.get());
+          REQUIRE(job != nullptr);
+          lifecycle.push_back(CapturedJobLifecycle{.event = event, .payload = *job});
+          co_return core::Result<void>{};
+        }};
+    bus.bind(sink, {hook::Event::job_started, hook::Event::job_finished, hook::Event::job_failed});
+    automation::CronService service{repo,
+                                    automation::CronServiceOptions{
+                                        .hooks =
+                                            automation::CronHookOptions{
+                                                .bus = &bus,
+                                                .source = "cron",
+                                                .agent_key = "automation-service",
+                                                .identity = "cron-loop",
+                                            },
+                                    }};
+
+    auto result = co_await service.execute_due(automation::CronExecuteRequest{
+        .now = at(120s),
+        .job_limit = 10,
+        .handler = [](automation::CronDueJob) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        },
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->advanced_count == 1);
+    REQUIRE(lifecycle.size() == 2);
+    REQUIRE(lifecycle[0].event == hook::Event::job_started);
+    REQUIRE(lifecycle[1].event == hook::Event::job_finished);
+
+    const auto& started = lifecycle[0].payload;
+    REQUIRE(started.who.scope_key.empty());
+    REQUIRE(started.who.agent_key == "automation-service");
+    REQUIRE(started.who.identity == "cron-loop");
+    REQUIRE(started.source == "cron");
+    REQUIRE(started.job_key == "cron:succeeds");
+    REQUIRE(started.job_type == "cron");
+    REQUIRE(started.scope_key.empty());
+    REQUIRE(started.scheduled_at == at(120s));
+    REQUIRE(started.started_at == at(120s));
+    REQUIRE_FALSE(started.finished_at.has_value());
+    REQUIRE_FALSE(started.duration.has_value());
+    REQUIRE_FALSE(started.succeeded);
+    REQUIRE_FALSE(started.shadowed_count.has_value());
+    REQUIRE(started.error_kind.empty());
+    REQUIRE(started.error_message.empty());
+
+    const auto& finished = lifecycle[1].payload;
+    REQUIRE(finished.job_key == "cron:succeeds");
+    REQUIRE(finished.job_type == "cron");
+    REQUIRE(finished.scheduled_at == at(120s));
+    REQUIRE(finished.started_at == at(120s));
+    REQUIRE(finished.finished_at == at(120s));
+    REQUIRE(finished.duration == 0s);
+    REQUIRE(finished.succeeded);
+    REQUIRE_FALSE(finished.shadowed_count.has_value());
+    REQUIRE(finished.error_kind.empty());
+    REQUIRE(finished.error_message.empty());
+  });
+}
+
+TEST_CASE("CronService::execute_due publishes lifecycle metadata for handler failure",
+          "[unit][automation][service][cron][hook]") {
+  TempDb db{"oran-automation-service-cron-lifecycle-failure"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
+                 .job_key = "cron:fails",
+                 .schedule = make_cron_schedule(),
+             }))
+                .has_value());
+
+    std::vector<CapturedJobLifecycle> lifecycle;
+    hook::Bus bus;
+    hook::InProcessSink sink{
+        "cron-lifecycle-failure-recorder",
+        [&lifecycle](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
+          const auto* job = std::get_if<hook::JobLifecyclePayload>(payload.get());
+          REQUIRE(job != nullptr);
+          lifecycle.push_back(CapturedJobLifecycle{.event = event, .payload = *job});
+          co_return core::Result<void>{};
+        }};
+    bus.bind(sink, {hook::Event::job_started, hook::Event::job_finished, hook::Event::job_failed});
+    automation::CronService service{repo,
+                                    automation::CronServiceOptions{
+                                        .hooks = automation::CronHookOptions{.bus = &bus},
+                                    }};
+
+    auto result = co_await service.execute_due(automation::CronExecuteRequest{
+        .now = at(60s),
+        .job_limit = 10,
+        .handler = [](automation::CronDueJob) -> async::Awaitable<core::Result<void>> {
+          co_return std::unexpected(core::Error::upstream("cron payload failed"));
+        },
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->attempted_count == 1);
+    REQUIRE(result->advanced_count == 0);
+    REQUIRE(result->attempts.size() == 1);
+    REQUIRE(result->attempts[0].error.has_value());
+    REQUIRE(lifecycle.size() == 2);
+    REQUIRE(lifecycle[0].event == hook::Event::job_started);
+    REQUIRE(lifecycle[1].event == hook::Event::job_failed);
+    REQUIRE(lifecycle[0].payload.job_key == "cron:fails");
+    REQUIRE(lifecycle[0].payload.job_type == "cron");
+    REQUIRE(lifecycle[0].payload.scheduled_at == at(60s));
+    REQUIRE_FALSE(lifecycle[0].payload.finished_at.has_value());
+    REQUIRE(lifecycle[1].payload.job_key == "cron:fails");
+    REQUIRE(lifecycle[1].payload.job_type == "cron");
+    REQUIRE(lifecycle[1].payload.source == "cron");
+    REQUIRE(lifecycle[1].payload.scheduled_at == at(60s));
+    REQUIRE(lifecycle[1].payload.finished_at == at(60s));
+    REQUIRE(lifecycle[1].payload.duration == 0s);
+    REQUIRE_FALSE(lifecycle[1].payload.succeeded);
+    REQUIRE_FALSE(lifecycle[1].payload.shadowed_count.has_value());
+    REQUIRE(lifecycle[1].payload.error_kind == "upstream");
+    REQUIRE(lifecycle[1].payload.error_message == "cron payload failed");
+
+    auto loaded = co_await repo.get_cron_job("cron:fails");
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->has_value());
+    REQUIRE_FALSE((*loaded)->state.last_fired_at.has_value());
+  });
+}
+
 TEST_CASE("CronService::execute_due rejects invalid execution policy", "[unit][automation][service][cron]") {
   TempDb db{"oran-automation-service-cron-validation"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {

@@ -4,9 +4,9 @@
 // memory retention planning primitives, durable retention job/run/lease state
 // plus durable cron job state, a caller-owned automation runtime handle,
 // caller-driven cron tick/execute owners, explicit cron wait/run loop steps,
-// retention hook metadata, and caller-started leased retention loop steps plus
-// finite loop policy. Triggered jobs, queue/backpressure policy, and detached
-// background service loops land behind this boundary in later slices.
+// retention and cron hook metadata, and caller-started leased retention loop
+// steps plus finite loop policy. Triggered jobs, queue/backpressure policy, and
+// detached background service loops land behind this boundary in later slices.
 
 #pragma once
 

@@ -5,6 +5,7 @@
 #include <chrono>
 #include <expected>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <oran/core/enum_names.hpp>
@@ -65,9 +66,9 @@ void track_next_fire(CronTickResult& result, core::Time next_fire_at) {
   }
 }
 
-[[nodiscard]] std::string failure_message(const core::Error& error) {
+[[nodiscard]] std::string failure_message(const core::Error& error, std::string_view fallback) {
   if (error.message().empty()) {
-    return "memory retention decay failed";
+    return std::string{fallback};
   }
   return std::string{error.message()};
 }
@@ -144,7 +145,47 @@ void track_next_fire(CronTickResult& result, core::Time next_fire_at) {
   payload.finished_at = finished_at;
   payload.duration = duration_between(started_at, finished_at);
   payload.error_kind = std::string{core::enum_name(error.kind())};
-  payload.error_message = failure_message(error);
+  payload.error_message = failure_message(error, "memory retention decay failed");
+  return payload;
+}
+
+[[nodiscard]] hook::JobLifecyclePayload
+make_cron_job_started_payload(const CronHookOptions& hooks, const CronDueJob& due, core::Time started_at) {
+  hook::JobLifecyclePayload payload;
+  payload.who = hook::Identity{
+      .scope_key = {},
+      .agent_key = hooks.agent_key,
+      .identity = hooks.identity,
+  };
+  payload.source = hooks.source;
+  payload.job_key = due.job.job_key;
+  payload.job_type = "cron";
+  payload.scheduled_at = due.schedule.next_fire_at;
+  payload.started_at = started_at;
+  return payload;
+}
+
+[[nodiscard]] hook::JobLifecyclePayload make_cron_job_finished_payload(const CronHookOptions& hooks,
+                                                                       const CronDueJob& due,
+                                                                       core::Time started_at,
+                                                                       core::Time finished_at) {
+  auto payload = make_cron_job_started_payload(hooks, due, started_at);
+  payload.finished_at = finished_at;
+  payload.duration = duration_between(started_at, finished_at);
+  payload.succeeded = true;
+  return payload;
+}
+
+[[nodiscard]] hook::JobLifecyclePayload make_cron_job_failed_payload(const CronHookOptions& hooks,
+                                                                     const CronDueJob& due,
+                                                                     core::Time started_at,
+                                                                     core::Time finished_at,
+                                                                     const core::Error& error) {
+  auto payload = make_cron_job_started_payload(hooks, due, started_at);
+  payload.finished_at = finished_at;
+  payload.duration = duration_between(started_at, finished_at);
+  payload.error_kind = std::string{core::enum_name(error.kind())};
+  payload.error_message = failure_message(error, "cron job handler failed");
   return payload;
 }
 
@@ -172,9 +213,18 @@ publish_job_lifecycle(const MemoryRetentionHookOptions& hooks, hook::Event event
   [[maybe_unused]] auto outcome = co_await hooks.bus->publish_advisory(event, std::move(payload));
 }
 
+async::Awaitable<void>
+publish_job_lifecycle(const CronHookOptions& hooks, hook::Event event, hook::JobLifecyclePayload payload) {
+  if (hooks.bus == nullptr) {
+    co_return;
+  }
+  [[maybe_unused]] auto outcome = co_await hooks.bus->publish_advisory(event, std::move(payload));
+}
+
 }  // namespace
 
-CronService::CronService(AutomationRepository& repository) noexcept : repository_{&repository} {}
+CronService::CronService(AutomationRepository& repository, CronServiceOptions options) noexcept
+    : repository_{&repository}, options_{std::move(options)} {}
 
 AutomationRepository& CronService::repository() noexcept {
   return *repository_;
@@ -229,10 +279,19 @@ async::Awaitable<core::Result<CronExecuteResult>> CronService::execute_due(CronE
   for (const auto& due : result.tick.due_jobs) {
     CronExecuteAttempt attempt{.due = due};
     ++result.attempted_count;
+    const auto started_at = request.now;
+
+    co_await publish_job_lifecycle(options_.hooks,
+                                   hook::Event::job_started,
+                                   make_cron_job_started_payload(options_.hooks, due, started_at));
 
     auto executed = co_await request.handler(due);
     if (!executed) {
-      attempt.error = std::move(executed).error();
+      auto error = std::move(executed).error();
+      co_await publish_job_lifecycle(options_.hooks,
+                                     hook::Event::job_failed,
+                                     make_cron_job_failed_payload(options_.hooks, due, started_at, request.now, error));
+      attempt.error = std::move(error);
       result.attempts.push_back(std::move(attempt));
       continue;
     }
@@ -245,6 +304,9 @@ async::Awaitable<core::Result<CronExecuteResult>> CronService::execute_due(CronE
     attempt.advanced = true;
     attempt.marked_job = std::move(*marked);
     ++result.advanced_count;
+    co_await publish_job_lifecycle(options_.hooks,
+                                   hook::Event::job_finished,
+                                   make_cron_job_finished_payload(options_.hooks, due, started_at, request.now));
     result.attempts.push_back(std::move(attempt));
   }
 
@@ -307,7 +369,7 @@ MemoryRetentionService::tick(MemoryRetentionTickRequest request) {
         .finished_at = request.now,
         .success = false,
         .shadowed_count = 0,
-        .error_message = failure_message(backend_error),
+        .error_message = failure_message(backend_error, "memory retention decay failed"),
     });
     if (!recorded) {
       co_return std::unexpected(std::move(recorded).error());

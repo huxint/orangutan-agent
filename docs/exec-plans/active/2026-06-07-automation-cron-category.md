@@ -86,7 +86,8 @@ scheduler slices.
    runtime with a caller-driven scan/wait surface, and slice 200 adds explicit
    due execution that advances state only after a caller-supplied handler
    succeeds. Slice 201 adds finite caller-owned loop policy over that execution
-   surface. Later: own cron config and service/timer startup policy without
+   surface, and slice 202 adds advisory cron lifecycle metadata around handler
+   execution. Later: own cron config and service/timer startup policy without
    bootstrap-owned background work.
 4. **Triggered/notifier/queue policy.**
    Later: add triggered categories, queueing/backpressure, notifier routing,
@@ -153,6 +154,12 @@ scheduler slices.
   fire at a time, waits only within the caller's total budget, and stops on no
   due work, iteration limit, or handler failure without introducing process
   timers, queues, notifiers, hooks, or agent firing.
+- [x] 2026-06-07 23:24 +0800: Implemented optional advisory cron lifecycle
+  metadata through `CronServiceOptions::hooks`. Due execution now publishes
+  `job_started` before the caller handler, `job_failed` after handler failure,
+  and `job_finished` only after handler success plus durable cron state
+  advancement, while keeping sink failures advisory and preserving caller-owned
+  execution.
 - [x] **Update the docs that this slice invalidates in the same PR**
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -181,6 +188,10 @@ scheduler slices.
   service-loop startup. A bounded caller-owned loop is enough to prove catch-up,
   wait-budget, and failure-stop semantics while preserving the plan's rule that
   bootstrap must not gain hidden automation ownership.
+- 2026-06-07: Add cron lifecycle metadata before config/service startup. The
+  explicit handler boundary is the first place with a real start/outcome signal,
+  so hooks can observe cron work without introducing queues, timers, notifiers,
+  or agent firing.
 
 ## Linked Artifacts
 
@@ -193,5 +204,6 @@ scheduler slices.
 - `docs/histories/2026-06/20260607-2146-automation-cron-runtime-tick.md`
 - `docs/histories/2026-06/20260607-2238-automation-cron-execute-due.md`
 - `docs/histories/2026-06/20260607-2257-automation-cron-loop-run-policy.md`
+- `docs/histories/2026-06/20260607-2324-automation-cron-lifecycle-hooks.md`
 - Release note:
 - `docs/releases/feature-release-notes.md#2026-06`

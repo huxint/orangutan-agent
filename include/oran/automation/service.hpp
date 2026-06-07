@@ -34,6 +34,17 @@ struct MemoryRetentionServiceOptions {
   MemoryRetentionHookOptions hooks{};
 };
 
+struct CronHookOptions {
+  hook::Bus* bus{};
+  std::string source{"cron"};
+  std::string agent_key{"automation"};
+  std::string identity{"cron"};
+};
+
+struct CronServiceOptions {
+  CronHookOptions hooks{};
+};
+
 struct MemoryRetentionTickRequest {
   std::string job_key;
   core::Time now{core::Time::epoch()};
@@ -98,11 +109,13 @@ struct CronExecuteResult {
 /// This owner evaluates repository-backed cron schedules and reports due work
 /// plus the earliest next fire. `tick(...)` intentionally does not mark jobs
 /// fired. `execute_due(...)` accepts a caller-supplied handler and advances a
-/// due cron job only after that handler returns success. The service still does
-/// not publish hooks, enqueue work, call agents, or start a background loop.
+/// due cron job only after that handler returns success. When constructed with
+/// a hook bus, due execution publishes advisory job lifecycle metadata around
+/// handler work. The service still does not enqueue work, call agents, or start
+/// a background loop.
 class CronService {
 public:
-  explicit CronService(AutomationRepository& repository) noexcept;
+  explicit CronService(AutomationRepository& repository, CronServiceOptions options = {}) noexcept;
 
   [[nodiscard]] async::Awaitable<core::Result<CronTickResult>> tick(CronTickRequest request);
   [[nodiscard]] async::Awaitable<core::Result<CronExecuteResult>> execute_due(CronExecuteRequest request);
@@ -111,6 +124,7 @@ public:
 
 private:
   AutomationRepository* repository_{};
+  CronServiceOptions options_{};
 };
 
 /// One caller-driven tick for the stored long-term retention job.
