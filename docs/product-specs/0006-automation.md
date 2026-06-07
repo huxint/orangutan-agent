@@ -45,7 +45,8 @@ mapped descriptors. Slice 205 adds an explicit
 `AutomationRuntime::run_cron_service_cycle(...)` helper that validates a finite
 service-cycle policy, applies supplied cron seeds, and awaits the existing
 finite cron loop in one caller-owned step. Slice 206 adds durable cron run
-history for explicit due-execution attempts. The current API
+history for explicit due-execution attempts, and slice 207 adds cooperative
+stop policy for the finite cron loop and service-cycle handoff. The current API
 evaluates periodic and cron
 schedules from caller-supplied state, maps a long-term memory retention policy
 into a due-only `memory::longterm::DecayRequest`, persists the configured
@@ -58,7 +59,8 @@ lets a runtime owner execute due cron jobs through a supplied handler and mark
 only handler-successful fires complete while recording one run row per handler
 attempt,
 lets a runtime owner run a finite explicit cron loop that can catch up due
-fires or wait within a caller budget,
+fires, wait within a caller budget, or stop cooperatively between explicit
+execution iterations,
 publishes advisory cron job lifecycle metadata when the caller supplies a hook
 bus,
 parses and maps config-authored cron schedule seeds without starting a
@@ -66,7 +68,8 @@ scheduler,
 lets a caller-owned automation runtime explicitly apply those cron seeds into
 `automation.db`,
 lets a caller-owned automation runtime run one explicit cron service cycle that
-applies seeds and drives the finite cron loop with a supplied handler,
+applies seeds and drives the finite cron loop with a supplied handler plus the
+same cooperative stop policy,
 lets a runtime owner tick one stored retention job against a supplied long-term
 memory backend, publishes advisory retention metadata when the caller supplies a
 hook bus, can wait once within a caller budget for the earliest stored cron fire,
@@ -170,14 +173,15 @@ Current implementation:
 - `CronLoop::run(...)` repeatedly calls `execute_due(...)` up to a caller
   iteration limit, waits only within `max_total_wait`, aggregates
   attempted/advanced/failed counters, stops on `no_due_work`,
-  `iteration_limit`, or `handler_failure`, and does not immediately retry
-  failed handlers inside the same run.
+  `iteration_limit`, `handler_failure`, or a cooperative `stop_requested`
+  predicate, and does not immediately retry failed handlers inside the same
+  run.
 - `CronServiceOptions::hooks` lets callers provide a `hook::Bus`, source label,
   agent key, and identity. Due cron execution publishes advisory `job_started`
   before the handler, `job_failed` after a handler failure while keeping cron
   state unadvanced, and `job_finished` only after handler success plus durable
   `last_fired_at` advancement. Advisory sink failures remain non-fatal.
-- `test-automation` reports 60 cases / 810 assertions.
+- `test-automation` reports 63 cases / 854 assertions.
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 

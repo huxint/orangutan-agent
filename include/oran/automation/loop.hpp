@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -66,7 +67,10 @@ enum class CronLoopRunStopReason {
   iteration_limit,
   no_due_work,
   handler_failure,
+  stop_requested,
 };
+
+using CronLoopStopPredicate = std::function<bool()>;
 
 struct CronLoopRunRequest {
   core::Time now{core::Time::epoch()};
@@ -74,6 +78,7 @@ struct CronLoopRunRequest {
   std::size_t max_iterations{1};
   std::size_t job_limit{100};
   CronJobHandler handler{};
+  CronLoopStopPredicate stop_requested{};
 };
 
 struct CronLoopRunResult {

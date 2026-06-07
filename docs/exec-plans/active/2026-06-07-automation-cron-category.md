@@ -8,9 +8,10 @@ deterministic POSIX 5-field cron parser/evaluator that returns the next due
 fire for a caller-owned clock and stored state, then adds durable repository
 state for cron schedules and last-fired timestamps, then adds config-authored
 cron schedule seeds mapped by bootstrap into repository descriptors.
-Explicit seed persistence, one caller-awaited cron service cycle, and durable
-cron run history now exist; detached service-loop startup, queues, notifiers,
-and agent firing stay in later scheduler slices.
+Explicit seed persistence, one caller-awaited cron service cycle, durable cron
+run history, and cooperative finite-loop stop policy now exist; detached
+service-loop startup, queues, notifiers, and agent firing stay in later
+scheduler slices.
 
 ## Scope
 
@@ -32,6 +33,9 @@ and agent firing stay in later scheduler slices.
 - Record success/failure cron run rows for explicit due-execution attempts,
   including failure reasons, without treating run history as queueing,
   notification, or agent execution ownership.
+- Let caller-owned cron loops and runtime service cycles stop cooperatively
+  between explicit execution iterations without cancelling an active handler or
+  starting a detached service.
 - Keep the slice free of agent, detached timer, automatic bootstrap
   persistence, or background task ownership.
 - Update automation docs/status/history/release notes in the same slice.
@@ -111,9 +115,10 @@ and agent firing stay in later scheduler slices.
    execution. Slice 203 adds typed cron config seeds and bootstrap mapping into
    repository upsert descriptors, slice 204 adds explicit caller-owned runtime
    application for those seeds, slice 205 adds one caller-awaited service cycle
-   over seed apply plus finite cron loop execution, and slice 206 records
-   durable run history for due cron handler attempts. Later: add detached
-   service/timer ownership without bootstrap-owned background work.
+   over seed apply plus finite cron loop execution, slice 206 records durable
+   run history for due cron handler attempts, and slice 207 adds cooperative
+   stop policy for the finite cron loop and service-cycle handoff. Later: add
+   detached service/timer ownership without bootstrap-owned background work.
 4. **Triggered/notifier/queue policy.**
    Later: add triggered categories, queueing/backpressure, notifier routing,
    and agent execution leases.
@@ -135,6 +140,9 @@ and agent firing stay in later scheduler slices.
 - `build/linux/x86_64/release/test-automation "AutomationRepository records and lists cron runs"`
 - `build/linux/x86_64/release/test-automation "CronService::execute_due advances only successful due cron jobs"`
 - `build/linux/x86_64/release/test-automation "AutomationRuntime::open creates parent directories and migrates state"`
+- `build/linux/x86_64/release/test-automation "CronLoop::run honors stop requests before starting work"`
+- `build/linux/x86_64/release/test-automation "CronLoop::run stops after a successful iteration when requested"`
+- `build/linux/x86_64/release/test-automation "AutomationRuntime forwards cron service cycle stop requests"`
 - `build/linux/x86_64/release/test-bootstrap "RuntimeAssembly cron seeds persist only through caller-owned automation runtime"`
 - `build/linux/x86_64/release/test-automation "[repository]"`
 - `xmake run test-automation`
@@ -153,6 +161,9 @@ and agent firing stay in later scheduler slices.
   not-due scans record no rows.
 - Confirm failed cron handlers record the failure reason but keep stored cron
   state due for retry.
+- Confirm cooperative stop requests prevent new work before an iteration and
+  prevent catch-up/sleep after a completed execution without cancelling an
+  active handler.
 - Confirm no new dependency direction crosses from automation into bootstrap,
   config, or agent.
 - Observability checks:
@@ -224,6 +235,12 @@ and agent firing stay in later scheduler slices.
   `list_cron_runs(...)`. Explicit due execution now records success and failure
   rows, exposes the stored row on `CronExecuteAttempt::run`, leaves not-due
   scans without rows, and still advances cron state only after handler success.
+- [x] 2026-06-08 01:22 +0800: Implemented cooperative cron loop stop policy
+  through `CronLoopRunRequest::stop_requested` and
+  `CronLoopRunStopReason::stop_requested`. `CronLoop::run(...)` checks the
+  predicate before each iteration and after each execution, and
+  `AutomationRuntime::run_cron_service_cycle(...)` forwards the same policy
+  without starting timers or cancelling active handlers.
 - [x] **Update the docs that this slice invalidates in the same PR**
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -273,6 +290,10 @@ and agent firing stay in later scheduler slices.
   policy. The spec needs failure reasons to be durable, and this boundary can
   be shipped without introducing hidden scheduler ownership or broader retry
   semantics.
+- 2026-06-08: Add cooperative stop policy before detached service startup.
+  Runtime owners need a graceful way to end a finite cron service cycle between
+  executions, while active handler cancellation and retry/drop classification
+  remain separate downstream policies.
 
 ## Linked Artifacts
 
@@ -290,5 +311,6 @@ and agent firing stay in later scheduler slices.
 - `docs/histories/2026-06/20260608-0031-automation-cron-seed-apply.md`
 - `docs/histories/2026-06/20260608-0050-automation-cron-service-cycle.md`
 - `docs/histories/2026-06/20260608-0107-automation-cron-run-history.md`
+- `docs/histories/2026-06/20260608-0122-automation-cron-loop-stop-policy.md`
 - Release note:
 - `docs/releases/feature-release-notes.md#2026-06`

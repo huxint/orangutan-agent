@@ -232,6 +232,16 @@ records one run row for every due handler attempt, exposes it through
 stored cron state only after handler success. The repository writes remain
 explicit and non-transactional, matching the existing retention run path.
 
+Slice 207 adds a cooperative stop policy to the finite cron loop without
+starting scheduler ownership. `CronLoopRunRequest::stop_requested` is an
+optional synchronous predicate checked before each loop iteration and again
+after a completed execution. When it returns true, `CronLoop::run(...)` returns
+`stop_reason=stop_requested` instead of starting more work or sleeping again.
+`AutomationRuntime::run_cron_service_cycle(...)` forwards the same predicate to
+the owned loop. This is graceful loop shutdown policy only; it does not cancel a
+handler already running, interrupt sleep without parent cancellation, start a
+timer, enqueue work, notify channels, or call agents.
+
 ## Public API
 
 ```cpp
@@ -487,7 +497,10 @@ enum class CronLoopRunStopReason {
   iteration_limit,
   no_due_work,
   handler_failure,
+  stop_requested,
 };
+
+using CronLoopStopPredicate = std::function<bool()>;
 
 struct CronLoopRunRequest {
   core::Time now;
@@ -495,6 +508,7 @@ struct CronLoopRunRequest {
   std::size_t max_iterations;
   std::size_t job_limit;
   CronJobHandler handler;
+  CronLoopStopPredicate stop_requested;
 };
 
 struct CronLoopRunResult {
@@ -999,8 +1013,9 @@ does not mutate job state.
 `CronLoop::run(...)` is the finite caller-owned loop policy above the same
 scan/wait/execute surface. It validates `max_total_wait >= 0`,
 `max_iterations > 0`, `job_limit > 0`, and a non-empty handler, then repeatedly
-calls `CronService::execute_due(...)` using a logical caller clock. The result
-reports:
+checks an optional `stop_requested` predicate and calls
+`CronService::execute_due(...)` using a logical caller clock when no stop has
+been requested. The result reports:
 
 - `iterations`: successful `execute_due(...)` calls made by the loop.
 - `attempted_count`: total due handler attempts across those calls.
@@ -1008,6 +1023,7 @@ reports:
   success.
 - `failed_count`: total handler failures observed in attempt rows.
 - `waited_for`: total sleep time consumed by the loop.
+- `stop_reason`: why this finite caller-owned run stopped.
 - `last_execution`: the final `CronExecuteResult` for diagnostics.
 
 When an execution has due jobs and all handlers succeed, the loop immediately
@@ -1030,14 +1046,23 @@ decide whether bootstrap should open automation state. When the loop's owned
 `execute_due(...)` call emits the same advisory lifecycle metadata described
 above.
 
+If `stop_requested` returns true before an iteration starts, the loop returns
+`stop_reason=stop_requested` with zero additional work. If it returns true after
+an execution completes, the loop returns the execution summary already recorded
+and does not continue catch-up or enter another sleep. The predicate is
+cooperative: it is not polled inside the caller-supplied handler and does not
+wake an in-progress `async::sleep_for(...)`; parent cancellation remains the
+sleep-interruption path.
+
 `AutomationRuntime::run_cron_service_cycle(...)` is the explicit startup-cycle
 composition for callers that already opened automation state. The request
 contains cron seed descriptors, cron hook options, the logical `now`, finite
 `max_total_wait` / `max_iterations` / `job_limit` policy, and a
-caller-supplied `CronJobHandler`. Runtime validates the policy before writing
-any seeds, applies the seeds through `apply_cron_job_seeds(...)`, then runs
-`CronLoop::run(...)` with the same handler and budget. The result contains both
-the `CronSeedApplyResult` and the `CronLoopRunResult`.
+caller-supplied `CronJobHandler`, plus the optional cooperative stop predicate.
+Runtime validates the policy before writing any seeds, applies the seeds through
+`apply_cron_job_seeds(...)`, then runs `CronLoop::run(...)` with the same
+handler, budget, and stop policy. The result contains both the
+`CronSeedApplyResult` and the `CronLoopRunResult`.
 
 This helper exists so a process owner can perform a coherent startup cycle
 without duplicating seed-apply-plus-loop code. It is still one awaited call: it
@@ -1244,6 +1269,10 @@ Slice 206 reports `test-automation` at 60 cases / 810 assertions for cron run
 history, including migration v4, repository record/list validation, success and
 failure run rows from explicit due execution, not-due run suppression, and
 `AutomationRuntime::open(...)` migration report version 4.
+Slice 207 reports `test-automation` at 63 cases / 854 assertions for
+cooperative cron loop stop policy, covering stop-before-work, stop-after-one
+successful execution, and runtime service-cycle pass-through of the same
+predicate.
 
 `bench-automation` planning rows are:
 

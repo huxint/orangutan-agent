@@ -124,6 +124,10 @@ namespace {
   }));
 }
 
+[[nodiscard]] bool should_stop(const CronLoopStopPredicate& predicate) {
+  return predicate && predicate();
+}
+
 [[nodiscard]] core::Error lease_conflict_error(const MemoryRetentionLoopRunOnceRequest& request) {
   return core::Error{core::ErrorKind::conflict, "memory retention job lease is already held"}
       .with("job_key", request.job_key)
@@ -254,6 +258,11 @@ async::Awaitable<core::Result<CronLoopRunResult>> CronLoop::run(CronLoopRunReque
   auto remaining_wait = std::chrono::duration_cast<std::chrono::nanoseconds>(request.max_total_wait);
 
   while (result.iterations < request.max_iterations) {
+    if (should_stop(request.stop_requested)) {
+      result.stop_reason = CronLoopRunStopReason::stop_requested;
+      co_return result;
+    }
+
     auto execution = co_await service_.execute_due(CronExecuteRequest{
         .now = now,
         .job_limit = request.job_limit,
@@ -272,6 +281,10 @@ async::Awaitable<core::Result<CronLoopRunResult>> CronLoop::run(CronLoopRunReque
 
     if (failed_count > 0) {
       result.stop_reason = CronLoopRunStopReason::handler_failure;
+      co_return result;
+    }
+    if (should_stop(request.stop_requested)) {
+      result.stop_reason = CronLoopRunStopReason::stop_requested;
       co_return result;
     }
     if (!result.last_execution->tick.due_jobs.empty()) {

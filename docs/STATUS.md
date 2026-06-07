@@ -7,29 +7,29 @@
 
 ## Snapshot
 
-- **Slice:** 206 (`xmake run orangutan -- --help` reports slice 206)
+- **Slice:** 207 (`xmake run orangutan -- --help` reports slice 207)
 - **Last completed history:**
-  [`histories/2026-06/20260608-0107-automation-cron-run-history.md`](histories/2026-06/20260608-0107-automation-cron-run-history.md)
+  [`histories/2026-06/20260608-0122-automation-cron-loop-stop-policy.md`](histories/2026-06/20260608-0122-automation-cron-loop-stop-policy.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-cron-category.md`](exec-plans/active/2026-06-07-automation-cron-category.md).
-- **Latest completed slice:** slice 206 adds durable cron run history without
-  starting a scheduler. `automation_cron_runs` is migration version 4, and
-  `AutomationRepository::record_cron_run(...)` /
-  `list_cron_runs(...)` persist and read success/failure outcomes for due cron
-  handler attempts. `CronService::execute_due(...)` now records one run row for
-  every handler attempt, exposes it on `CronExecuteAttempt::run`, leaves not-due
-  scans run-free, and still advances `last_fired_at` only after handler success.
-  Bootstrap still only stores cron descriptors; it does not open
-  `automation.db`, apply rows automatically, start process timers, spawn
+- **Latest completed slice:** slice 207 adds cooperative cron loop stop policy
+  without starting a scheduler. `CronLoopRunRequest::stop_requested` is an
+  optional caller predicate, `CronLoopRunStopReason::stop_requested` reports a
+  graceful stop, and `AutomationRuntime::run_cron_service_cycle(...)` forwards
+  the same policy into the owned loop. The loop checks the predicate before
+  starting an iteration and after each execution, so callers can stop before
+  any work or after a successful batch without recording extra run rows or
+  sleeping again. Bootstrap still only stores cron descriptors; it does not
+  open `automation.db`, apply rows automatically, start process timers, spawn
   detached work, enqueue work, call notifiers, or fire agents. Focused results:
-  `test-automation` **60 cases / 810 assertions** and `test-bootstrap` **129
+  `test-automation` **63 cases / 854 assertions** and `test-bootstrap` **129
   cases / 1087 assertions**.
 - **Next intended slice:** continue the active automation cron/category plan.
   The next useful implementation boundary is a small scheduler-service
-  ownership slice such as explicit shutdown/cancellation policy,
-  triggered/notifier/queue policy, or per-agent/category lease policy. Do not
-  add bootstrap-owned background automation or unrelated STATUS-only slice
-  churn.
+  ownership slice such as triggered/notifier/queue policy, per-agent/category
+  lease policy, or cancellation-result classification for active job handlers.
+  Do not add bootstrap-owned background automation or unrelated STATUS-only
+  slice churn.
 
 Slice 183 adds the operator-facing long-term
   retention policy contract. `oran-config` now parses

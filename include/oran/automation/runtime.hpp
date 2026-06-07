@@ -43,6 +43,7 @@ struct CronServiceCycleRequest {
   std::size_t max_iterations{1};
   std::size_t job_limit{100};
   CronJobHandler handler{};
+  CronLoopStopPredicate stop_requested{};
 };
 
 struct CronServiceCycleResult {

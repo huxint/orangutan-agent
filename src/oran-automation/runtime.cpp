@@ -182,6 +182,7 @@ AutomationRuntime::run_cron_service_cycle(CronServiceCycleRequest request) {
       .max_iterations = request.max_iterations,
       .job_limit = request.job_limit,
       .handler = std::move(request.handler),
+      .stop_requested = std::move(request.stop_requested),
   });
   if (!loop_result) {
     co_return std::unexpected(std::move(loop_result).error());
