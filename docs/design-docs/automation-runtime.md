@@ -221,6 +221,17 @@ seed-apply errors stop before the handler runs, and loop errors propagate
 unchanged. It is still an awaited call, not a detached process timer or
 bootstrap-owned service.
 
+Slice 206 adds cron run history without turning cron execution into a queue.
+Migration version 4 creates `automation_cron_runs`, keyed by autoincrement id
+and linked to `automation_cron_jobs(job_key)`. `AutomationRepository` can record
+and newest-first list success/failure cron runs for one durable job key, and
+validates positive list limits, non-empty job keys, finish time after fire time,
+and failure rows carrying a non-empty error message. `CronService::execute_due`
+records one run row for every due handler attempt, exposes it through
+`CronExecuteAttempt::run`, records no rows for not-due scans, and still advances
+stored cron state only after handler success. The repository writes remain
+explicit and non-transactional, matching the existing retention run path.
+
 ## Public API
 
 ```cpp
@@ -305,6 +316,29 @@ struct ListCronJobsOptions {
   std::size_t limit;
 };
 
+struct RecordCronRunRequest {
+  std::string job_key;
+  core::Time fired_at;
+  core::Time finished_at;
+  bool success;
+  std::optional<std::string> error_message;
+};
+
+struct CronRunRecord {
+  std::int64_t id;
+  std::string job_key;
+  core::Time fired_at;
+  core::Time finished_at;
+  bool success;
+  std::optional<std::string> error_message;
+  std::string created_at;
+};
+
+struct ListCronRunsOptions {
+  std::string job_key;
+  std::size_t limit;
+};
+
 struct CronTickRequest {
   core::Time now;
   std::size_t job_limit;
@@ -335,6 +369,7 @@ struct CronExecuteAttempt {
   CronDueJob due;
   bool advanced;
   std::optional<core::Error> error;
+  std::optional<CronRunRecord> run;
   std::optional<CronJobRecord> marked_job;
 };
 
@@ -417,6 +452,10 @@ class AutomationRepository {
   mark_cron_job_fired(std::string job_key, core::Time fired_at);
   async::Awaitable<core::Result<std::vector<CronJobRecord>>>
   list_cron_jobs(ListCronJobsOptions = {});
+  async::Awaitable<core::Result<CronRunRecord>>
+  record_cron_run(RecordCronRunRequest);
+  async::Awaitable<core::Result<std::vector<CronRunRecord>>>
+  list_cron_runs(ListCronRunsOptions);
   async::Awaitable<core::Result<MemoryRetentionJobRecord>>
   upsert_memory_retention_job(UpsertMemoryRetentionJobRequest);
   async::Awaitable<core::Result<std::optional<MemoryRetentionJobRecord>>>
@@ -818,6 +857,12 @@ with the cron `expression`, `first_fire_at`, nullable `last_fired_at`, and
 timestamps. `idx_automation_cron_jobs_updated` lists rows by `updated_at DESC,
 job_key ASC` for bounded scheduler scans or diagnostics.
 
+Migration version 4 creates `automation_cron_runs`, keyed by autoincrement
+`id`, with a foreign key to `automation_cron_jobs(job_key)`, scheduled fire
+time, finished time, success flag, optional error message, and created
+timestamp. `idx_automation_cron_runs_job_fired` lists recent runs newest-first
+for one durable cron job key.
+
 `job_key` is the durable repository identity. `scope_key` remains the memory
 decay scope inside the stored job descriptor, so future different automation
 jobs or policies can share a memory scope without overwriting each other. Cron
@@ -836,8 +881,11 @@ on `get_cron_job(...)` / `get_memory_retention_job(...)` and
 `upsert_cron_job(...)` replaces the stored schedule and last-fired state for a
 durable `job_key` while preserving `created_at`; `mark_cron_job_fired(...)`
 advances only `last_fired_at` and `updated_at`; `list_cron_jobs(...)` returns a
-positive-limit bounded vector ordered by most recently updated first. These APIs
-are state storage only: they do not evaluate due work, acquire leases, publish
+positive-limit bounded vector ordered by most recently updated first.
+`record_cron_run(...)` appends one success/failure outcome for a due handler
+attempt, and `list_cron_runs(...)` returns recent rows for a single cron job by
+`fired_at DESC, id DESC`. These APIs are state storage only: they do not
+evaluate due work, acquire leases, publish
 hooks, or call agents.
 
 `acquire_memory_retention_lease(...)` returns:
@@ -908,10 +956,12 @@ without making automation a scheduler. It validates `job_limit > 0` and a
 non-empty `handler`, calls `tick(...)`, and invokes the handler once for each
 due job in the scan result. Successful handler returns advance the cron job's
 stored `last_fired_at` to `due.schedule.next_fire_at` through
-`AutomationRepository::mark_cron_job_fired(...)`. Handler errors are stored on
-the matching `CronExecuteAttempt`, do not stop later due jobs in the same call,
-and leave that job's stored state unchanged so the next explicit call can retry
-the same scheduled fire.
+`AutomationRepository::mark_cron_job_fired(...)` after a successful cron run row
+has been recorded. Handler errors are recorded as failed cron run rows with the
+failure message, stored on the matching `CronExecuteAttempt`, do not stop later
+due jobs in the same call, and leave that job's stored state unchanged so the
+next explicit call can retry the same scheduled fire. Not-due scans record no
+cron run rows.
 
 When `CronServiceOptions::hooks.bus` is set, due execution also publishes
 advisory `hook::Event::job_started` before the handler. It publishes
@@ -926,13 +976,14 @@ producer. Sink failures stay advisory and are not reported in
 
 `CronExecuteResult` carries the original scan result plus `attempted_count`,
 `advanced_count`, and one attempt row per due job whose handler ran. An attempt
-has `advanced=true` and `marked_job` populated only after durable state has
-advanced. If the repository cannot mark a handler-successful job fired,
-`execute_due(...)` returns that repository error instead of inventing a partial
-success policy. Repository failures before a durable outcome return without a
-`job_finished` or synthetic `job_failed` outcome. It still does not create run
-rows, enqueue work, notify channels, call agents, or choose retry/backpressure
-policy for a process service.
+has `run` populated after the attempt outcome is durably recorded, and has
+`advanced=true` plus `marked_job` populated only after durable state has
+advanced. If the repository cannot record the run or cannot mark a
+handler-successful job fired, `execute_due(...)` returns that repository error
+instead of inventing a partial success policy. Repository failures before a
+publishable durable outcome return without a `job_finished` or synthetic
+`job_failed` outcome. It still does not enqueue work, notify channels, call
+agents, or choose retry/backpressure policy for a process service.
 
 `CronLoop::run_once(...)` is a single caller-started awaitable above that tick.
 It validates `max_wait >= 0` and `job_limit > 0`, ticks immediately, and returns
@@ -972,11 +1023,12 @@ If any handler attempt fails, `CronLoop::run(...)` stops with
 `stop_reason=handler_failure` and leaves the failed attempt in
 `last_execution`. It deliberately does not retry handler failures immediately
 inside the same run; process retry/backpressure policy remains downstream. The
-loop still does not create run rows, enqueue work, notify channels, call agents,
-choose shutdown behavior, or decide whether bootstrap should open automation
-state. When the loop's owned `CronService` was constructed with hook options,
-each underlying `execute_due(...)` call emits the same advisory lifecycle
-metadata described above.
+loop records only the run rows produced by `execute_due(...)`; it still does
+not enqueue work, notify channels, call agents, choose shutdown behavior, or
+decide whether bootstrap should open automation state. When the loop's owned
+`CronService` was constructed with hook options, each underlying
+`execute_due(...)` call emits the same advisory lifecycle metadata described
+above.
 
 `AutomationRuntime::run_cron_service_cycle(...)` is the explicit startup-cycle
 composition for callers that already opened automation state. The request
@@ -989,9 +1041,10 @@ the `CronSeedApplyResult` and the `CronLoopRunResult`.
 
 This helper exists so a process owner can perform a coherent startup cycle
 without duplicating seed-apply-plus-loop code. It is still one awaited call: it
-does not spawn detached coroutines, keep a timer alive after return, create cron
-run rows, enqueue work, notify channels, call agents, or make bootstrap open
-`automation.db`.
+does not spawn detached coroutines, keep a timer alive after return, enqueue
+work, notify channels, call agents, or make bootstrap open `automation.db`.
+Any cron run rows come only from the delegated explicit `CronLoop::run(...)`
+execution path.
 
 `MemoryRetentionLoop::run_once(...)` is a single caller-started awaitable for
 one stored retention job. It is the smallest useful owner above
@@ -1187,6 +1240,10 @@ cross-boundary assembly-to-runtime seed application path.
 Slice 205 reports `test-automation` at 59 cases / 768 assertions for the
 caller-awaited cron service cycle, including seed-apply-plus-loop execution and
 validation-before-seed-apply coverage.
+Slice 206 reports `test-automation` at 60 cases / 810 assertions for cron run
+history, including migration v4, repository record/list validation, success and
+failure run rows from explicit due execution, not-due run suppression, and
+`AutomationRuntime::open(...)` migration report version 4.
 
 `bench-automation` planning rows are:
 

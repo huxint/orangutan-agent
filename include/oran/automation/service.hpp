@@ -94,6 +94,7 @@ struct CronExecuteAttempt {
   CronDueJob due{};
   bool advanced{false};
   std::optional<core::Error> error{};
+  std::optional<CronRunRecord> run{};
   std::optional<CronJobRecord> marked_job{};
 };
 

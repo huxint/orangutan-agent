@@ -8,9 +8,9 @@ deterministic POSIX 5-field cron parser/evaluator that returns the next due
 fire for a caller-owned clock and stored state, then adds durable repository
 state for cron schedules and last-fired timestamps, then adds config-authored
 cron schedule seeds mapped by bootstrap into repository descriptors.
-Explicit seed persistence and one caller-awaited cron service cycle now exist;
-detached service-loop startup, queues, notifiers, and agent firing stay in
-later scheduler slices.
+Explicit seed persistence, one caller-awaited cron service cycle, and durable
+cron run history now exist; detached service-loop startup, queues, notifiers,
+and agent firing stay in later scheduler slices.
 
 ## Scope
 
@@ -29,6 +29,9 @@ later scheduler slices.
 - Let caller-owned automation runtimes run one explicit cron service cycle that
   validates finite loop policy, applies seeds, and awaits the existing cron
   loop without making bootstrap own that state.
+- Record success/failure cron run rows for explicit due-execution attempts,
+  including failure reasons, without treating run history as queueing,
+  notification, or agent execution ownership.
 - Keep the slice free of agent, detached timer, automatic bootstrap
   persistence, or background task ownership.
 - Update automation docs/status/history/release notes in the same slice.
@@ -107,8 +110,9 @@ later scheduler slices.
    surface, and slice 202 adds advisory cron lifecycle metadata around handler
    execution. Slice 203 adds typed cron config seeds and bootstrap mapping into
    repository upsert descriptors, slice 204 adds explicit caller-owned runtime
-   application for those seeds, and slice 205 adds one caller-awaited service
-   cycle over seed apply plus finite cron loop execution. Later: add detached
+   application for those seeds, slice 205 adds one caller-awaited service cycle
+   over seed apply plus finite cron loop execution, and slice 206 records
+   durable run history for due cron handler attempts. Later: add detached
    service/timer ownership without bootstrap-owned background work.
 4. **Triggered/notifier/queue policy.**
    Later: add triggered categories, queueing/backpressure, notifier routing,
@@ -128,6 +132,9 @@ later scheduler slices.
 - `build/linux/x86_64/release/test-automation "AutomationRuntime applies cron job seeds explicitly"`
 - `build/linux/x86_64/release/test-automation "AutomationRuntime runs a caller-awaited cron service cycle"`
 - `build/linux/x86_64/release/test-automation "AutomationRuntime validates cron service cycles before applying seeds"`
+- `build/linux/x86_64/release/test-automation "AutomationRepository records and lists cron runs"`
+- `build/linux/x86_64/release/test-automation "CronService::execute_due advances only successful due cron jobs"`
+- `build/linux/x86_64/release/test-automation "AutomationRuntime::open creates parent directories and migrates state"`
 - `build/linux/x86_64/release/test-bootstrap "RuntimeAssembly cron seeds persist only through caller-owned automation runtime"`
 - `build/linux/x86_64/release/test-automation "[repository]"`
 - `xmake run test-automation`
@@ -142,6 +149,10 @@ later scheduler slices.
   durable schedule/state.
 - Confirm bootstrap still does not open or run `automation.db`.
 - Confirm invalid cron service-cycle policy fails before seed rows are written.
+- Confirm due cron handler attempts record success/failure run rows while
+  not-due scans record no rows.
+- Confirm failed cron handlers record the failure reason but keep stored cron
+  state due for retry.
 - Confirm no new dependency direction crosses from automation into bootstrap,
   config, or agent.
 - Observability checks:
@@ -208,6 +219,11 @@ later scheduler slices.
   runs the supplied handler through `CronLoop::run(...)`, and still does not
   spawn timers, enqueue work, notify channels, call agents, or let bootstrap own
   automation state.
+- [x] 2026-06-08 01:07 +0800: Implemented durable cron run history through
+  `automation_cron_runs`, `AutomationRepository::record_cron_run(...)`, and
+  `list_cron_runs(...)`. Explicit due execution now records success and failure
+  rows, exposes the stored row on `CronExecuteAttempt::run`, leaves not-due
+  scans without rows, and still advances cron state only after handler success.
 - [x] **Update the docs that this slice invalidates in the same PR**
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -253,6 +269,10 @@ later scheduler slices.
   startup. The cycle validates policy before writes, composes seed application
   with the existing finite cron loop, and gives embedders one startup handoff
   without making bootstrap or `oran-automation` own background timers.
+- 2026-06-08: Record cron run history before queue/notifier/agent firing
+  policy. The spec needs failure reasons to be durable, and this boundary can
+  be shipped without introducing hidden scheduler ownership or broader retry
+  semantics.
 
 ## Linked Artifacts
 
@@ -269,5 +289,6 @@ later scheduler slices.
 - `docs/histories/2026-06/20260607-2356-automation-cron-config.md`
 - `docs/histories/2026-06/20260608-0031-automation-cron-seed-apply.md`
 - `docs/histories/2026-06/20260608-0050-automation-cron-service-cycle.md`
+- `docs/histories/2026-06/20260608-0107-automation-cron-run-history.md`
 - Release note:
 - `docs/releases/feature-release-notes.md#2026-06`

@@ -36,6 +36,10 @@ constexpr unsigned char kAutomationCronJobsBytes[] = {
 #embed "migrations/automation/0003-automation-cron-jobs.sql"
 };
 
+constexpr unsigned char kAutomationCronRunsBytes[] = {
+#embed "migrations/automation/0004-automation-cron-runs.sql"
+};
+
 constexpr std::string_view kUpsertCronJobSql = R"sql(
 INSERT INTO automation_cron_jobs(
   job_key,
@@ -95,6 +99,40 @@ SELECT
   updated_at
 FROM automation_cron_jobs
 ORDER BY updated_at DESC, job_key ASC
+LIMIT ?
+)sql";
+
+constexpr std::string_view kRecordCronRunSql = R"sql(
+INSERT INTO automation_cron_runs(
+  job_key,
+  fired_at,
+  finished_at,
+  success,
+  error_message,
+  created_at
+) VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+RETURNING
+  id,
+  job_key,
+  fired_at,
+  finished_at,
+  success,
+  error_message,
+  created_at
+)sql";
+
+constexpr std::string_view kListCronRunsSql = R"sql(
+SELECT
+  id,
+  job_key,
+  fired_at,
+  finished_at,
+  success,
+  error_message,
+  created_at
+FROM automation_cron_runs
+WHERE job_key = ?
+ORDER BY fired_at DESC, id DESC
 LIMIT ?
 )sql";
 
@@ -239,7 +277,7 @@ template <std::size_t N>
 }
 
 [[nodiscard]] std::span<const storage::Migration> built_in_automation_migrations() {
-  static const std::array<storage::Migration, 3> kMigrations{
+  static const std::array<storage::Migration, 4> kMigrations{
       storage::Migration{
           .version = 1,
           .name = "automation-retention-state",
@@ -254,6 +292,11 @@ template <std::size_t N>
           .version = 3,
           .name = "automation-cron-jobs",
           .sql = to_sql_string(kAutomationCronJobsBytes),
+      },
+      storage::Migration{
+          .version = 4,
+          .name = "automation-cron-runs",
+          .sql = to_sql_string(kAutomationCronRunsBytes),
       },
   };
   return kMigrations;
@@ -307,6 +350,19 @@ template <std::size_t N>
   }
   if (auto valid = validate_cron_schedule_for_storage(request.schedule); !valid) {
     return std::unexpected(valid.error());
+  }
+  return {};
+}
+
+[[nodiscard]] core::Result<void> validate_cron_run_request(const RecordCronRunRequest& request) {
+  if (auto valid = validate_job_key(request.job_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  if (request.finished_at < request.fired_at) {
+    return std::unexpected(invalid_field("finished_at", "before_fired_at"));
+  }
+  if (!request.success && (!request.error_message.has_value() || request.error_message->empty())) {
+    return std::unexpected(invalid_field("error_message", "missing_for_failure"));
   }
   return {};
 }
@@ -625,6 +681,51 @@ read_size(storage::Statement& statement, int index, std::string_view field, bool
   };
 }
 
+[[nodiscard]] core::Result<CronRunRecord> read_cron_run_row(storage::Statement& statement) {
+  auto id = statement.column_int64(0);
+  if (!id) {
+    return std::unexpected(id.error().with("field", "id"));
+  }
+  auto job_key = required_text(statement, 1, "job_key");
+  if (!job_key) {
+    return std::unexpected(job_key.error());
+  }
+  auto fired_at = required_time(statement, 2, "fired_at");
+  if (!fired_at) {
+    return std::unexpected(fired_at.error());
+  }
+  auto finished_at = required_time(statement, 3, "finished_at");
+  if (!finished_at) {
+    return std::unexpected(finished_at.error());
+  }
+  auto success = statement.column_int64(4);
+  if (!success) {
+    return std::unexpected(success.error().with("field", "success"));
+  }
+  if (*success != 0 && *success != 1) {
+    return std::unexpected(core::Error::storage("automation repository row has invalid success value")
+                               .with("success", std::to_string(*success)));
+  }
+  auto error_message = optional_text(statement, 5);
+  if (!error_message) {
+    return std::unexpected(error_message.error());
+  }
+  auto created_at = required_text(statement, 6, "created_at");
+  if (!created_at) {
+    return std::unexpected(created_at.error());
+  }
+
+  return CronRunRecord{
+      .id = *id,
+      .job_key = std::move(*job_key),
+      .fired_at = *fired_at,
+      .finished_at = *finished_at,
+      .success = *success == 1,
+      .error_message = std::move(*error_message),
+      .created_at = std::move(*created_at),
+  };
+}
+
 [[nodiscard]] core::Result<MemoryRetentionLeaseRecord> read_lease_row(storage::Statement& statement) {
   auto job_key = required_text(statement, 0, "job_key");
   if (!job_key) {
@@ -855,6 +956,99 @@ AutomationRepository::list_cron_jobs(ListCronJobsOptions options) {
       break;
     }
     auto row = read_cron_job_row(statement);
+    if (!row) {
+      co_return std::unexpected(row.error());
+    }
+    rows.push_back(std::move(*row));
+  }
+  co_return rows;
+}
+
+async::Awaitable<core::Result<CronRunRecord>> AutomationRepository::record_cron_run(RecordCronRunRequest request) {
+  if (auto valid = validate_cron_run_request(request); !valid) {
+    co_return std::unexpected(valid.error());
+  }
+
+  auto writer = co_await pool_->acquire_writer();
+  if (!writer) {
+    co_return std::unexpected(writer.error());
+  }
+
+  auto cached = writer->statement_cache().acquire(writer->connection(), kRecordCronRunSql);
+  if (!cached) {
+    co_return std::unexpected(cached.error());
+  }
+  auto& statement = cached->statement();
+  if (auto bound = statement.bind_text(1, request.job_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(2, core::time::format_iso8601_utc(request.fired_at)); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(3, core::time::format_iso8601_utc(request.finished_at)); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_int64(4, request.success ? 1 : 0); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = bind_optional_text(statement, 5, request.error_message); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+
+  auto step = statement.step();
+  if (!step) {
+    co_return std::unexpected(step.error());
+  }
+  if (*step != storage::StepResult::row) {
+    co_return std::unexpected(core::Error::storage("automation cron run insert returned no row"));
+  }
+  auto record = read_cron_run_row(statement);
+  if (!record) {
+    co_return std::unexpected(record.error());
+  }
+  if (auto done = expect_done(statement, "record_cron_run"); !done) {
+    co_return std::unexpected(done.error());
+  }
+  co_return std::move(*record);
+}
+
+async::Awaitable<core::Result<std::vector<CronRunRecord>>>
+AutomationRepository::list_cron_runs(ListCronRunsOptions options) {
+  if (auto valid = validate_job_key(options.job_key); !valid) {
+    co_return std::unexpected(valid.error());
+  }
+  auto limit = checked_limit(options.limit);
+  if (!limit) {
+    co_return std::unexpected(limit.error());
+  }
+
+  auto reader = co_await pool_->acquire_reader();
+  if (!reader) {
+    co_return std::unexpected(reader.error());
+  }
+
+  auto cached = reader->statement_cache().acquire(reader->connection(), kListCronRunsSql);
+  if (!cached) {
+    co_return std::unexpected(cached.error());
+  }
+  auto& statement = cached->statement();
+  if (auto bound = statement.bind_text(1, options.job_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_int64(2, *limit); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+
+  std::vector<CronRunRecord> rows;
+  while (true) {
+    auto step = statement.step();
+    if (!step) {
+      co_return std::unexpected(step.error());
+    }
+    if (*step == storage::StepResult::done) {
+      break;
+    }
+    auto row = read_cron_run_row(statement);
     if (!row) {
       co_return std::unexpected(row.error());
     }

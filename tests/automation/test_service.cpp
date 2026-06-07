@@ -202,6 +202,11 @@ TEST_CASE("CronService::execute_due advances only successful due cron jobs", "[u
     REQUIRE(success != result->attempts.end());
     REQUIRE(success->advanced);
     REQUIRE_FALSE(success->error.has_value());
+    REQUIRE(success->run.has_value());
+    REQUIRE(success->run->job_key == "cron:succeeds");
+    REQUIRE(success->run->fired_at == at(60s));
+    REQUIRE(success->run->success);
+    REQUIRE_FALSE(success->run->error_message.has_value());
     REQUIRE(success->marked_job.has_value());
     REQUIRE(success->marked_job->state.last_fired_at == at(60s));
 
@@ -212,6 +217,10 @@ TEST_CASE("CronService::execute_due advances only successful due cron jobs", "[u
     REQUIRE_FALSE(failure->advanced);
     REQUIRE(failure->error.has_value());
     REQUIRE(failure->error->kind() == core::ErrorKind::upstream);
+    REQUIRE(failure->run.has_value());
+    REQUIRE(failure->run->job_key == "cron:fails");
+    REQUIRE_FALSE(failure->run->success);
+    REQUIRE(failure->run->error_message == "cron payload failed");
     REQUIRE_FALSE(failure->marked_job.has_value());
 
     auto advanced = co_await repo.get_cron_job("cron:succeeds");
@@ -223,6 +232,23 @@ TEST_CASE("CronService::execute_due advances only successful due cron jobs", "[u
     REQUIRE(unchanged.has_value());
     REQUIRE(unchanged->has_value());
     REQUIRE_FALSE((*unchanged)->state.last_fired_at.has_value());
+
+    auto success_runs = co_await repo.list_cron_runs(automation::ListCronRunsOptions{
+        .job_key = "cron:succeeds",
+        .limit = 10,
+    });
+    REQUIRE(success_runs.has_value());
+    REQUIRE(success_runs->size() == 1);
+    REQUIRE((*success_runs)[0].success);
+
+    auto failure_runs = co_await repo.list_cron_runs(automation::ListCronRunsOptions{
+        .job_key = "cron:fails",
+        .limit = 10,
+    });
+    REQUIRE(failure_runs.has_value());
+    REQUIRE(failure_runs->size() == 1);
+    REQUIRE_FALSE((*failure_runs)[0].success);
+    REQUIRE((*failure_runs)[0].error_message == "cron payload failed");
   });
 }
 
@@ -264,6 +290,13 @@ TEST_CASE("CronService::execute_due skips handlers before cron jobs are due", "[
     REQUIRE(loaded.has_value());
     REQUIRE(loaded->has_value());
     REQUIRE_FALSE((*loaded)->state.last_fired_at.has_value());
+
+    auto runs = co_await repo.list_cron_runs(automation::ListCronRunsOptions{
+        .job_key = "cron:five-minute",
+        .limit = 10,
+    });
+    REQUIRE(runs.has_value());
+    REQUIRE(runs->empty());
   });
 }
 

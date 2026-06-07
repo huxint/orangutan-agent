@@ -103,13 +103,13 @@ TEST_CASE("AutomationRepository::migrate applies the automation schema once", "[
     auto first = co_await repo.migrate();
     REQUIRE(first.has_value());
     REQUIRE(first->previous_version == 0);
-    REQUIRE(first->current_version == 3);
-    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3});
+    REQUIRE(first->current_version == 4);
+    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3, 4});
 
     auto second = co_await repo.migrate();
     REQUIRE(second.has_value());
-    REQUIRE(second->previous_version == 3);
-    REQUIRE(second->current_version == 3);
+    REQUIRE(second->previous_version == 4);
+    REQUIRE(second->current_version == 4);
     REQUIRE(second->applied_versions.empty());
   });
 }
@@ -194,6 +194,59 @@ TEST_CASE("AutomationRepository updates and lists cron job state", "[unit][autom
     auto missing = co_await repo.mark_cron_job_fired("cron:missing", at(360s));
     REQUIRE_FALSE(missing.has_value());
     REQUIRE(missing.error().kind() == core::ErrorKind::not_found);
+  });
+}
+
+TEST_CASE("AutomationRepository records and lists cron runs", "[unit][automation][repository][cron]") {
+  TempDb db{"oran-automation-repo-cron-runs"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
+                 .job_key = "cron:daily-summary",
+                 .schedule = make_cron_schedule(),
+             }))
+                .has_value());
+
+    auto first = co_await repo.record_cron_run(automation::RecordCronRunRequest{
+        .job_key = "cron:daily-summary",
+        .fired_at = at(120s),
+        .finished_at = at(121s),
+        .success = true,
+    });
+    REQUIRE(first.has_value());
+    REQUIRE(first->job_key == "cron:daily-summary");
+    REQUIRE(first->success);
+    REQUIRE_FALSE(first->error_message.has_value());
+
+    auto second = co_await repo.record_cron_run(automation::RecordCronRunRequest{
+        .job_key = "cron:daily-summary",
+        .fired_at = at(180s),
+        .finished_at = at(181s),
+        .success = false,
+        .error_message = "handler failed",
+    });
+    REQUIRE(second.has_value());
+    REQUIRE_FALSE(second->success);
+    REQUIRE(second->error_message == "handler failed");
+
+    auto listed = co_await repo.list_cron_runs(automation::ListCronRunsOptions{
+        .job_key = "cron:daily-summary",
+        .limit = 10,
+    });
+    REQUIRE(listed.has_value());
+    REQUIRE(listed->size() == 2);
+    REQUIRE((*listed)[0].id == second->id);
+    REQUIRE((*listed)[1].id == first->id);
+
+    auto capped = co_await repo.list_cron_runs(automation::ListCronRunsOptions{
+        .job_key = "cron:daily-summary",
+        .limit = 1,
+    });
+    REQUIRE(capped.has_value());
+    REQUIRE(capped->size() == 1);
+    REQUIRE((*capped)[0].id == second->id);
   });
 }
 
@@ -428,6 +481,30 @@ TEST_CASE("AutomationRepository validates memory retention persistence inputs", 
     });
     REQUIRE_FALSE(bad_order.has_value());
     REQUIRE(has_field(bad_order.error(), "finished_at"));
+
+    auto missing_cron_error = co_await repo.record_cron_run(automation::RecordCronRunRequest{
+        .job_key = "cron:daily-summary",
+        .fired_at = at(10s),
+        .finished_at = at(11s),
+        .success = false,
+    });
+    REQUIRE_FALSE(missing_cron_error.has_value());
+    REQUIRE(has_field(missing_cron_error.error(), "error_message"));
+
+    auto bad_cron_order = co_await repo.record_cron_run(automation::RecordCronRunRequest{
+        .job_key = "cron:daily-summary",
+        .fired_at = at(12s),
+        .finished_at = at(11s),
+    });
+    REQUIRE_FALSE(bad_cron_order.has_value());
+    REQUIRE(has_field(bad_cron_order.error(), "finished_at"));
+
+    auto bad_cron_limit = co_await repo.list_cron_runs(automation::ListCronRunsOptions{
+        .job_key = "cron:daily-summary",
+        .limit = 0,
+    });
+    REQUIRE_FALSE(bad_cron_limit.has_value());
+    REQUIRE(has_field(bad_cron_limit.error(), "limit"));
 
     auto bad_limit = co_await repo.list_memory_retention_runs(automation::ListMemoryRetentionRunsOptions{
         .job_key = "memory-retention:cli",

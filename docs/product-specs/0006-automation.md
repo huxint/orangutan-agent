@@ -44,16 +44,19 @@ explicit `AutomationRuntime::apply_cron_job_seeds(...)` persistence for those
 mapped descriptors. Slice 205 adds an explicit
 `AutomationRuntime::run_cron_service_cycle(...)` helper that validates a finite
 service-cycle policy, applies supplied cron seeds, and awaits the existing
-finite cron loop in one caller-owned step. The current API
+finite cron loop in one caller-owned step. Slice 206 adds durable cron run
+history for explicit due-execution attempts. The current API
 evaluates periodic and cron
 schedules from caller-supplied state, maps a long-term memory retention policy
 into a due-only `memory::longterm::DecayRequest`, persists the configured
 retention job plus run history and lease state through `AutomationRepository`,
 persists cron job schedule/last-fired state through `AutomationRepository`,
+persists cron success/failure run history through `AutomationRepository`,
 explicitly opens/migrates automation state through `AutomationRuntime::open(...)`,
 lets a runtime owner scan stored cron jobs for due work without mutating them,
 lets a runtime owner execute due cron jobs through a supplied handler and mark
-only handler-successful fires complete,
+only handler-successful fires complete while recording one run row per handler
+attempt,
 lets a runtime owner run a finite explicit cron loop that can catch up due
 fires or wait within a caller budget,
 publishes advisory cron job lifecycle metadata when the caller supplies a hook
@@ -109,7 +112,8 @@ Current implementation:
   `last_fired_at`, records success/failure run rows, lists recent runs, acquires
   retention job leases when no active lease exists or an existing lease has
   expired, releases leases only for the matching owner, and upserts/loads/lists
-  cron jobs with durable schedule plus last-fired state.
+  cron jobs with durable schedule plus last-fired state and success/failure run
+  history.
 - `AutomationRuntime::open(...)` validates an explicit database path, creates
   parent directories, opens `automation.db` through an owned `storage::Pool`,
   runs automation migrations, exposes the migration report and repository, can
@@ -160,8 +164,9 @@ Current implementation:
   the wait.
 - `CronService::execute_due(...)` reuses that scan result, invokes a
   caller-supplied handler for each due cron job, advances `last_fired_at` only
-  after the handler succeeds, reports handler errors per attempt, and leaves
-  failed-handler jobs due for retry by the next explicit call.
+  after the handler succeeds, records success/failure cron run rows, reports
+  handler errors per attempt, and leaves failed-handler jobs due for retry by
+  the next explicit call.
 - `CronLoop::run(...)` repeatedly calls `execute_due(...)` up to a caller
   iteration limit, waits only within `max_total_wait`, aggregates
   attempted/advanced/failed counters, stops on `no_due_work`,
@@ -172,7 +177,7 @@ Current implementation:
   before the handler, `job_failed` after a handler failure while keeping cron
   state unadvanced, and `job_finished` only after handler success plus durable
   `last_fired_at` advancement. Advisory sink failures remain non-fatal.
-- `test-automation` reports 59 cases / 768 assertions.
+- `test-automation` reports 60 cases / 810 assertions.
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 
@@ -180,8 +185,9 @@ Still open: detached/background service-loop startup over `AutomationRuntime`,
 triggered jobs, broader per-agent/category leases for agent-facing jobs,
 queueing/backpressure, process service/timer shutdown policy, notifier
 callbacks, agent firing, and the scheduler tick performance criterion. Job
-lifecycle publication exists for explicit retention ticks and explicit cron due
-execution; full scheduler/category lifecycle ownership remains downstream.
+lifecycle publication and run history exist for explicit retention ticks and
+explicit cron due execution; full scheduler/category lifecycle ownership
+remains downstream.
 
 ## Scope (v1.1)
 
@@ -208,7 +214,9 @@ execution; full scheduler/category lifecycle ownership remains downstream.
 4. Per-agent lease prevents two concurrent runs of the same agent_key; the queued
    firing is held or dropped per policy.
 5. A failing job is recorded with the failure reason; the next firing happens on
-   schedule.
+   schedule. Current status: slice 206 records explicit cron handler failures
+   with the failure reason and leaves stored state due for retry; broader
+   scheduler retry/drop policy remains downstream.
 6. Cancelling a job mid-run respects the executor's cancellation semantics; the run
    is recorded as `aborted`.
 7. `tests/automation/` ≥ 80% coverage.

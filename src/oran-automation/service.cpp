@@ -288,12 +288,33 @@ async::Awaitable<core::Result<CronExecuteResult>> CronService::execute_due(CronE
     auto executed = co_await request.handler(due);
     if (!executed) {
       auto error = std::move(executed).error();
+      auto recorded = co_await repository_->record_cron_run(RecordCronRunRequest{
+          .job_key = due.job.job_key,
+          .fired_at = due.schedule.next_fire_at,
+          .finished_at = request.now,
+          .success = false,
+          .error_message = failure_message(error, "cron job handler failed"),
+      });
+      if (!recorded) {
+        co_return std::unexpected(std::move(recorded).error());
+      }
       co_await publish_job_lifecycle(options_.hooks,
                                      hook::Event::job_failed,
                                      make_cron_job_failed_payload(options_.hooks, due, started_at, request.now, error));
       attempt.error = std::move(error);
+      attempt.run = std::move(*recorded);
       result.attempts.push_back(std::move(attempt));
       continue;
+    }
+
+    auto recorded = co_await repository_->record_cron_run(RecordCronRunRequest{
+        .job_key = due.job.job_key,
+        .fired_at = due.schedule.next_fire_at,
+        .finished_at = request.now,
+        .success = true,
+    });
+    if (!recorded) {
+      co_return std::unexpected(std::move(recorded).error());
     }
 
     auto marked = co_await repository_->mark_cron_job_fired(due.job.job_key, due.schedule.next_fire_at);
@@ -302,6 +323,7 @@ async::Awaitable<core::Result<CronExecuteResult>> CronService::execute_due(CronE
     }
 
     attempt.advanced = true;
+    attempt.run = std::move(*recorded);
     attempt.marked_job = std::move(*marked);
     ++result.advanced_count;
     co_await publish_job_lifecycle(options_.hooks,
