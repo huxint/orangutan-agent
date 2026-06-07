@@ -402,6 +402,7 @@ struct RuntimeAssembly::Impl {
   std::string longterm_vector_memory_path;
   std::optional<std::size_t> longterm_memory_startup_decay_shadowed_count{};
   std::optional<automation::MemoryRetentionJob> longterm_memory_retention_job{};
+  std::vector<automation::UpsertCronJobRequest> cron_jobs{};
   // The members below are non-default-constructible in their final
   // shape and capture pointers into each other (`AuditRepository`
   // refers to `audit_pool`, `audit_sink` refers to `audit_repository`).
@@ -514,6 +515,10 @@ const std::optional<automation::MemoryRetentionJob>& RuntimeAssembly::longterm_m
   return impl_->longterm_memory_retention_job;
 }
 
+const std::vector<automation::UpsertCronJobRequest>& RuntimeAssembly::cron_jobs() const noexcept {
+  return impl_->cron_jobs;
+}
+
 bool RuntimeAssembly::longterm_vector_memory_enabled() const noexcept {
   return impl_->longterm_hybrid_runtime != nullptr;
 }
@@ -535,6 +540,7 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
 
   auto impl = std::make_unique<Impl>();
   impl->audit_enabled = options.audit_enabled;
+  impl->cron_jobs = std::move(options.cron_jobs);
 
   // Build the workspace resolver before audit/broker. `tool::Workspace::create`
   // validates the workspace root (must exist + be a directory) and

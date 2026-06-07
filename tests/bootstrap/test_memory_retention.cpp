@@ -75,3 +75,59 @@ TEST_CASE("longterm_memory_startup_decay_options_from derives startup decay from
   REQUIRE(options.limit == 7);
   REQUIRE(options.decay_at == decay_at);
 }
+
+TEST_CASE("cron_jobs_from maps automation cron config into repository seeds", "[unit][bootstrap][automation]") {
+  auto cfg = config::Config::parse(R"json({
+  "automation": {
+    "cron": {
+      "jobs": [
+        {
+          "job_key": "daily-summary",
+          "expression": "0 9 * * *",
+          "first_fire_at": "2026-06-08T09:00:00Z"
+        },
+        {
+          "job_key": "hourly-ci",
+          "expression": "15 * * * *",
+          "first_fire_at": "2026-06-08T00:15:00Z",
+          "last_fired_at": "2026-06-08T03:15:00Z"
+        }
+      ]
+    }
+  }
+})json");
+  REQUIRE(cfg.has_value());
+
+  auto jobs = bootstrap::cron_jobs_from(*cfg);
+
+  REQUIRE(jobs.has_value());
+  REQUIRE(jobs->size() == 2);
+  REQUIRE((*jobs)[0].job_key == "daily-summary");
+  REQUIRE((*jobs)[0].schedule.expression == "0 9 * * *");
+  REQUIRE(core::time::format_iso8601_utc((*jobs)[0].schedule.first_fire_at) == "2026-06-08T09:00:00.000Z");
+  REQUIRE_FALSE((*jobs)[0].state.last_fired_at.has_value());
+
+  REQUIRE((*jobs)[1].job_key == "hourly-ci");
+  REQUIRE((*jobs)[1].schedule.expression == "15 * * * *");
+  REQUIRE((*jobs)[1].state.last_fired_at.has_value());
+}
+
+TEST_CASE("cron_jobs_from rejects invalid cron expressions at bootstrap composition", "[unit][bootstrap][automation]") {
+  auto cfg = config::Config::parse(R"json({
+  "automation": {
+    "cron": {
+      "jobs": [{
+        "job_key": "bad-cron",
+        "expression": "not a cron",
+        "first_fire_at": "2026-06-08T00:00:00Z"
+      }]
+    }
+  }
+})json");
+  REQUIRE(cfg.has_value());
+
+  auto jobs = bootstrap::cron_jobs_from(*cfg);
+
+  REQUIRE_FALSE(jobs.has_value());
+  REQUIRE(jobs.error().kind() == core::ErrorKind::config);
+}

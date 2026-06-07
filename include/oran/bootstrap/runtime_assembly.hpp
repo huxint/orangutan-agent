@@ -174,6 +174,10 @@ struct RuntimeAssemblyOptions {
   /// does not evaluate it, persist it, run a background loop, or publish
   /// periodic `memory_decay`.
   std::optional<automation::MemoryRetentionJob> longterm_memory_retention_job{};
+  /// Optional automation-owned cron schedule descriptors parsed from config.
+  /// RuntimeAssembly stores them as future repository seeds only; build() does
+  /// not open `automation.db`, upsert rows, start cron timers, or execute jobs.
+  std::vector<automation::UpsertCronJobRequest> cron_jobs{};
   /// When `true`, the assembly also opens the optional sqlite-vec vector index
   /// over a separate DB and constructs a `memory::longterm::HybridRuntime`.
   /// Requires an xmake build configured with `--vector_memory=y`.
@@ -317,6 +321,11 @@ public:
   /// Present only when bootstrap mapped configured long-term retention into a
   /// future scheduler seed; the assembly does not run it.
   [[nodiscard]] const std::optional<automation::MemoryRetentionJob>& longterm_memory_retention_job() const noexcept;
+
+  /// Automation-owned cron repository seeds supplied at build time.
+  /// These are stored only for diagnostics/future runtime owners; the assembly
+  /// does not persist or execute them.
+  [[nodiscard]] const std::vector<automation::UpsertCronJobRequest>& cron_jobs() const noexcept;
 
   /// `true` iff the vector-memory DB pool/backend/hybrid runtime were
   /// constructed at build time.

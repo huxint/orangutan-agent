@@ -5,7 +5,7 @@
 - Agent: Codex
 - Base model: GPT-5
 - Runtime: local xmake / GCC 16.1 release build
-- Linked plan: `docs/exec-plans/active/2026-06-07-automation-retention-cadence.md`
+- Linked plan: `docs/exec-plans/completed/2026-06-07-automation-retention-cadence.md`
 
 ### User Query
 
@@ -70,7 +70,7 @@ service-loop concerns.
   not move database or secret ownership.
 - `docs/QUALITY_SCORE.md` - refreshed automation test counts and next step.
 - `docs/releases/feature-release-notes.md` - added the slice 191 release note.
-- `docs/exec-plans/active/2026-06-07-automation-retention-cadence.md` - marked
+- `docs/exec-plans/completed/2026-06-07-automation-retention-cadence.md` - marked
   the hook producer milestone complete and set service-loop ownership as the
   next boundary.
 

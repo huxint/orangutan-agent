@@ -116,13 +116,18 @@ Current implementation status:
   profile-routed provider backends without adding the key values to logs,
   hook payloads, or error context. Regular configured-route `bootstrap::run`
   uses this boundary when building the provider-backed prompt runner.
-- `teams`, `channels`, and the config `automation` root are recognized but do
-  not have typed config models yet. The `oran-automation` C++ library exists
-  for periodic planning, retention job/run/lease persistence, a caller-owned
-  runtime state handle, a caller-started leased retention loop step, and finite
-  caller-owned loop policy, but config-authored automation job seeds, bootstrap
-  ownership of `automation.db`, and process scheduler/service-loop execution
-  remain unimplemented. The `hooks` root has
+- `teams` and `channels` remain recognized but untyped. The config
+  `automation.cron.jobs[]` block is typed: each job carries a non-empty
+  `job_key`, POSIX 5-field UTC `expression`, UTC `first_fire_at`, and optional
+  UTC `last_fired_at`. `oran-config` validates shape, timestamps, and unique
+  job keys; bootstrap validates cron expressions through `oran-automation` and
+  stores repository seed descriptors on `RuntimeAssembly`. Bootstrap still does
+  not open `automation.db`, upsert rows, start timers, or execute jobs. The
+  `oran-automation` C++ library exists for periodic planning, retention
+  job/run/lease persistence, a caller-owned runtime state handle, a
+  caller-started leased retention loop step, and finite caller-owned loop
+  policy, but process scheduler/service-loop execution remains unimplemented.
+  The `hooks` root has
   the v1 typed timeout field; `sinks` and `bindings` remain
   recognized-but-untyped until external hook sinks land.
 - `agents.<name>.skills_enabled` accepts an explicit array of non-empty skill
@@ -144,11 +149,11 @@ optional fields take defaults. Unknown fields trigger a warning unless
 `strict_config=true` or `LoadOptions::strict_unknown_fields=true` is set, in which
 case they are an error. This applies at the root and inside typed nested sections:
 `profiles.<name>`, `profiles.<name>.pricing`, `routes.<name>`, `hooks`,
-`memory.longterm.recall`, `memory.longterm.hybrid_search`, permission blocks,
-workspace permission blocks, and `agents.<name>`. Recognized-but-untyped root
-fields (`teams`, `channels`, `automation`) and reserved hook `sinks` /
-`bindings` remain forward-compatible placeholders until their typed models
-land.
+`memory.longterm.recall`, `memory.longterm.hybrid_search`,
+`automation.cron`, `automation.cron.jobs[]`, permission blocks, workspace
+permission blocks, and `agents.<name>`. Recognized-but-untyped root fields
+(`teams`, `channels`) and reserved hook `sinks` / `bindings` remain
+forward-compatible placeholders until their typed models land.
 
 Generated **JSON Schema** in `docs/generated/config.schema.json` remains a future
 slice. It will be generated from C++ types once the broader channel/team/hook/memory

@@ -6,7 +6,7 @@
 - Base model: GPT-5
 - Runtime: Codex CLI
 - Linked plan:
-  `docs/exec-plans/active/2026-06-07-automation-retention-cadence.md`
+  `docs/exec-plans/completed/2026-06-07-automation-retention-cadence.md`
 
 ### User Query
 
@@ -74,7 +74,7 @@ the same due retention job.
   ownership without moving periodic execution into memory.
 - `docs/product-specs/0006-automation.md` - recorded the slice 195 lease
   boundary and remaining scheduler gaps.
-- `docs/exec-plans/active/2026-06-07-automation-retention-cadence.md` - added
+- `docs/exec-plans/completed/2026-06-07-automation-retention-cadence.md` - added
   milestone/progress/decision-log entries.
 - `docs/releases/feature-release-notes.md` - added the slice 195 release note.
 

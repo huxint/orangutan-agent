@@ -6,7 +6,7 @@
 - Base model: GPT-5
 - Runtime: local xmake / GCC 16.1 release build
 - Linked plan:
-  `docs/exec-plans/active/2026-06-07-automation-retention-cadence.md`
+  `docs/exec-plans/completed/2026-06-07-automation-retention-cadence.md`
 
 ### User Query
 
@@ -69,7 +69,7 @@ stored jobs and records real run outcomes.
 - `docs/STATUS.md`, `docs/QUALITY_SCORE.md`, and
   `docs/releases/feature-release-notes.md` — move the project snapshot,
   quality counts, and release note to slice 189.
-- `docs/exec-plans/active/2026-06-07-automation-retention-cadence.md` — marks
+- `docs/exec-plans/completed/2026-06-07-automation-retention-cadence.md` — marks
   the persistent-state milestone complete and records the service/tick owner as
   the next boundary.
 

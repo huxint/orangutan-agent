@@ -99,6 +99,21 @@ constexpr auto kRecognizedLongtermRetentionFields = std::array<std::string_view,
     "decay_check_interval_hours",
 };
 
+constexpr auto kRecognizedAutomationFields = std::array<std::string_view, 1>{
+    "cron",
+};
+
+constexpr auto kRecognizedAutomationCronFields = std::array<std::string_view, 1>{
+    "jobs",
+};
+
+constexpr auto kRecognizedAutomationCronJobFields = std::array<std::string_view, 4>{
+    "job_key",
+    "expression",
+    "first_fire_at",
+    "last_fired_at",
+};
+
 constexpr auto kRecognizedProfileFields = std::array<std::string_view, 6>{
     "provider",
     "protocol",
@@ -940,6 +955,179 @@ parse_longterm_memory(const json& memory, bool strict, std::vector<ConfigWarning
   return memory;
 }
 
+[[nodiscard]] Result<core::Time>
+required_utc_time(const json& object, std::string_view key, std::string_view path, std::string_view message_prefix) {
+  const auto it = object.find(key);
+  const auto field_path = child_path(path, key);
+  if (it == object.end() || !it->is_string()) {
+    return std::unexpected(
+        config_error(std::string{message_prefix}.append(" requires a UTC ISO-8601 timestamp"), field_path));
+  }
+  auto parsed = core::time::parse_iso8601_utc(it->get<std::string>());
+  if (!parsed) {
+    return std::unexpected(
+        config_error(std::string{message_prefix}.append(" must be a UTC ISO-8601 timestamp"), field_path));
+  }
+  return *parsed;
+}
+
+[[nodiscard]] Result<std::optional<core::Time>>
+optional_utc_time(const json& object, std::string_view key, std::string_view path, std::string_view message_prefix) {
+  const auto it = object.find(key);
+  if (it == object.end()) {
+    return std::optional<core::Time>{};
+  }
+  auto parsed = required_utc_time(object, key, path, message_prefix);
+  if (!parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+  return std::optional<core::Time>{*parsed};
+}
+
+[[nodiscard]] Result<AutomationCronJobConfig>
+parse_automation_cron_job(const json& value, std::string_view path, bool strict, std::vector<ConfigWarning>& warnings) {
+  if (!value.is_object()) {
+    return std::unexpected(config_error("automation cron job must be an object", std::string{path}));
+  }
+
+  auto job_key = required_string(value, "job_key", path);
+  if (!job_key) {
+    return std::unexpected(std::move(job_key.error()));
+  }
+  if (job_key->empty()) {
+    return std::unexpected(config_error("automation cron job key must be non-empty", child_path(path, "job_key")));
+  }
+
+  auto expression = required_string(value, "expression", path);
+  if (!expression) {
+    return std::unexpected(std::move(expression.error()));
+  }
+  if (expression->empty()) {
+    return std::unexpected(
+        config_error("automation cron expression must be non-empty", child_path(path, "expression")));
+  }
+
+  auto first_fire_at = required_utc_time(value, "first_fire_at", path, "automation cron first_fire_at");
+  if (!first_fire_at) {
+    return std::unexpected(std::move(first_fire_at.error()));
+  }
+
+  auto last_fired_at = optional_utc_time(value, "last_fired_at", path, "automation cron last_fired_at");
+  if (!last_fired_at) {
+    return std::unexpected(std::move(last_fired_at.error()));
+  }
+
+  auto unknowns = collect_unknown_object_fields(value,
+                                                path,
+                                                kRecognizedAutomationCronJobFields,
+                                                "unknown automation cron job field",
+                                                strict,
+                                                warnings);
+  if (!unknowns) {
+    return std::unexpected(std::move(unknowns.error()));
+  }
+
+  return AutomationCronJobConfig{
+      .job_key = std::move(*job_key),
+      .expression = std::move(*expression),
+      .first_fire_at = *first_fire_at,
+      .last_fired_at = std::move(*last_fired_at),
+  };
+}
+
+[[nodiscard]] Result<std::vector<AutomationCronJobConfig>>
+parse_automation_cron_jobs(const json& value, bool strict, std::vector<ConfigWarning>& warnings) {
+  constexpr std::string_view kPath = "$.automation.cron.jobs";
+  if (!value.is_array()) {
+    return std::unexpected(config_error("expected array of automation cron jobs", std::string{kPath}));
+  }
+
+  auto jobs = std::vector<AutomationCronJobConfig>{};
+  auto seen_keys = std::vector<std::string>{};
+  jobs.reserve(value.size());
+  seen_keys.reserve(value.size());
+  auto index = std::size_t{0};
+  for (const auto& item : value) {
+    const auto item_path = element_path(kPath, index);
+    auto job = parse_automation_cron_job(item, item_path, strict, warnings);
+    if (!job) {
+      return std::unexpected(std::move(job.error()));
+    }
+    if (std::ranges::contains(seen_keys, job->job_key)) {
+      return std::unexpected(config_error("automation cron job_key must be unique", child_path(item_path, "job_key")));
+    }
+    seen_keys.push_back(job->job_key);
+    jobs.push_back(std::move(*job));
+    ++index;
+  }
+  return jobs;
+}
+
+[[nodiscard]] Result<AutomationCronConfig>
+parse_automation_cron(const json& automation, bool strict, std::vector<ConfigWarning>& warnings) {
+  auto cron = AutomationCronConfig{};
+  const auto it = automation.find("cron");
+  if (it == automation.end()) {
+    return cron;
+  }
+  constexpr std::string_view kPath = "$.automation.cron";
+  auto object = require_object(*it, kPath);
+  if (!object) {
+    return std::unexpected(std::move(object.error()));
+  }
+
+  if (const auto jobs = it->find("jobs"); jobs != it->end()) {
+    auto parsed = parse_automation_cron_jobs(*jobs, strict, warnings);
+    if (!parsed) {
+      return std::unexpected(std::move(parsed.error()));
+    }
+    cron.jobs = std::move(*parsed);
+  }
+
+  auto unknowns = collect_unknown_object_fields(*it,
+                                                kPath,
+                                                kRecognizedAutomationCronFields,
+                                                "unknown automation cron field",
+                                                strict,
+                                                warnings);
+  if (!unknowns) {
+    return std::unexpected(std::move(unknowns.error()));
+  }
+
+  return cron;
+}
+
+[[nodiscard]] Result<AutomationConfig>
+parse_automation(const json& root, bool strict, std::vector<ConfigWarning>& warnings) {
+  auto automation = AutomationConfig{};
+  const auto it = root.find("automation");
+  if (it == root.end()) {
+    return automation;
+  }
+  auto object = require_object(*it, "$.automation");
+  if (!object) {
+    return std::unexpected(std::move(object.error()));
+  }
+
+  auto cron = parse_automation_cron(*it, strict, warnings);
+  if (!cron) {
+    return std::unexpected(std::move(cron.error()));
+  }
+  automation.cron = std::move(*cron);
+
+  auto unknowns = collect_unknown_object_fields(*it,
+                                                "$.automation",
+                                                kRecognizedAutomationFields,
+                                                "unknown automation field",
+                                                strict,
+                                                warnings);
+  if (!unknowns) {
+    return std::unexpected(std::move(unknowns.error()));
+  }
+
+  return automation;
+}
+
 [[nodiscard]] Result<void>
 parse_optional_price(const json& object, std::string_view key, std::string_view path, std::optional<double>& out) {
   const auto it = object.find(key);
@@ -1578,6 +1766,10 @@ core::Result<Config> Config::parse(std::string_view contents, LoadOptions option
     if (!memory) {
       return std::unexpected(std::move(memory.error()));
     }
+    auto automation = parse_automation(root, strict_effective, warnings);
+    if (!automation) {
+      return std::unexpected(std::move(automation.error()));
+    }
     auto permissions = parse_root_permissions(root, strict_effective, warnings);
     if (!permissions) {
       return std::unexpected(std::move(permissions.error()));
@@ -1597,6 +1789,7 @@ core::Result<Config> Config::parse(std::string_view contents, LoadOptions option
     config.trace_ = std::move(*trace);
     config.hooks_ = std::move(*hooks);
     config.memory_ = *memory;
+    config.automation_ = std::move(*automation);
     config.permissions_ = std::move(*permissions);
     config.agents_ = std::move(*agents);
     config.warnings_ = std::move(warnings);

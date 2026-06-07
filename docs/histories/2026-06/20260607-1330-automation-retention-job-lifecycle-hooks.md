@@ -6,7 +6,7 @@
 - Base model: GPT-5
 - Runtime: Codex CLI
 - Linked plan:
-  `docs/exec-plans/active/2026-06-07-automation-retention-cadence.md`
+  `docs/exec-plans/completed/2026-06-07-automation-retention-cadence.md`
 
 ### User Query
 
@@ -67,7 +67,7 @@ active automation-retention plan.
   periodic retention ticks.
 - `docs/product-specs/0006-automation.md` - recorded slice 194 automation
   lifecycle hook behavior.
-- `docs/exec-plans/active/2026-06-07-automation-retention-cadence.md` - added
+- `docs/exec-plans/completed/2026-06-07-automation-retention-cadence.md` - added
   milestone/progress/decision-log entries.
 - `docs/releases/feature-release-notes.md` - added the slice 194 release note.
 

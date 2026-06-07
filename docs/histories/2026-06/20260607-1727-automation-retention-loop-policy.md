@@ -5,7 +5,7 @@
 - Agent: Codex
 - Base model: GPT-5
 - Runtime: Codex CLI/API
-- Linked plan: `docs/exec-plans/active/2026-06-07-automation-retention-cadence.md`
+- Linked plan: `docs/exec-plans/completed/2026-06-07-automation-retention-cadence.md`
 
 ### User Query
 
@@ -56,7 +56,7 @@ separate spec-0006 plan.
 - `docs/BUILD_SYSTEM.md` — updated the automation target ownership summary.
 - `docs/QUALITY_SCORE.md` — updated automation coverage and next-step status.
 - `docs/STATUS.md` — bumped to slice 196 and pointed at this history.
-- `docs/exec-plans/active/2026-06-07-automation-retention-cadence.md` — added
+- `docs/exec-plans/completed/2026-06-07-automation-retention-cadence.md` — added
   the finite loop-policy milestone and progress entry.
 - `docs/releases/feature-release-notes.md` — added the user-facing release note.
 

@@ -7,26 +7,30 @@
 
 ## Snapshot
 
-- **Slice:** 202 (`xmake run orangutan -- --help` reports slice 202)
+- **Slice:** 203 (`xmake run orangutan -- --help` reports slice 203)
 - **Last completed history:**
-  [`histories/2026-06/20260607-2324-automation-cron-lifecycle-hooks.md`](histories/2026-06/20260607-2324-automation-cron-lifecycle-hooks.md)
+  [`histories/2026-06/20260607-2356-automation-cron-config.md`](histories/2026-06/20260607-2356-automation-cron-config.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-cron-category.md`](exec-plans/active/2026-06-07-automation-cron-category.md).
-- **Latest completed slice:** slice 202 adds advisory cron job lifecycle
-  metadata to the explicit caller-owned due-execution surface without starting a
-  scheduler. `CronServiceOptions::hooks` lets callers supply a `hook::Bus` plus
-  source/agent/identity labels; due execution publishes `job_started` before the
-  caller handler, `job_finished` only after handler success and durable
-  `last_fired_at` advancement, and `job_failed` after handler failure while
-  leaving cron state unchanged for retry. Advisory sink failures remain
-  non-fatal and cron still does not read config, start process timers, spawn
-  detached work, enqueue work, call notifiers, or fire agents. Focused result:
-  `test-automation` **56 cases / 730 assertions**.
+- **Latest completed slice:** slice 203 adds typed cron schedule seeds without
+  starting a scheduler. `oran-config` now parses
+  `automation.cron.jobs[]` rows with non-empty `job_key`, POSIX cron
+  `expression`, UTC `first_fire_at`, optional UTC `last_fired_at`, unique job
+  keys, and strict/loose unknown-field handling. `bootstrap::cron_jobs_from(...)`
+  validates expressions through `oran-automation` and maps them into
+  `automation::UpsertCronJobRequest`; `RuntimeAssemblyOptions::cron_jobs` /
+  `RuntimeAssembly::cron_jobs()` store those descriptors for diagnostics and
+  future runtime owners, including no-provider CLI handoff startup. Bootstrap
+  still does not open `automation.db`, upsert cron rows, start process timers,
+  spawn detached work, enqueue work, call notifiers, or fire agents. Focused
+  results: `test-config` **51 cases / 458 assertions** and `test-bootstrap`
+  **128 cases / 1077 assertions**.
 - **Next intended slice:** continue the active automation cron/category plan.
-  The next useful implementation boundary is cron config ownership that seeds
-  stored cron jobs or an explicit process service/timer startup policy over the
-  caller-driven cron surfaces; do not add bootstrap-owned background automation
-  or unrelated STATUS-only slice churn.
+  The next useful implementation boundary is explicit cron seed persistence
+  from `RuntimeAssembly::cron_jobs()` into caller-owned `AutomationRuntime`
+  state, or a small process service/timer startup policy over the explicit cron
+  loop surfaces. Do not add bootstrap-owned background automation or unrelated
+  STATUS-only slice churn.
 
 Slice 183 adds the operator-facing long-term
   retention policy contract. `oran-config` now parses
@@ -1817,7 +1821,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-http`: 3 cases / 21 assertions.
 - `oran-io`: 54 cases / 311 assertions.
 - `oran-storage`: 77 cases / 988 assertions.
-- `oran-config`: 48 cases / 429 assertions.
+- `oran-config`: 51 cases / 458 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 37 cases / 299 assertions.
 - `oran-memory`: 38 cases / 841 assertions.
@@ -1827,7 +1831,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 124 cases / 1054 assertions.
+- `oran-bootstrap`: 128 cases / 1077 assertions.
 
 ## Open Tech-Debt Rows
 

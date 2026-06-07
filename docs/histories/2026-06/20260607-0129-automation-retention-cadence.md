@@ -6,7 +6,7 @@
 - Base model: GPT-5
 - Runtime: local xmake / GCC 16.1 release build
 - Linked plan:
-  `docs/exec-plans/active/2026-06-07-automation-retention-cadence.md`
+  `docs/exec-plans/completed/2026-06-07-automation-retention-cadence.md`
 
 ### User Query
 

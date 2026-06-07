@@ -6,9 +6,10 @@ Land the first cron-category planning and state boundaries for
 `oran-automation` without starting a scheduler service. The plan starts with a
 deterministic POSIX 5-field cron parser/evaluator that returns the next due
 fire for a caller-owned clock and stored state, then adds durable repository
-state for cron schedules and last-fired timestamps. Cron-authored config,
-service-loop startup, queues, notifiers, and agent firing stay in later
-scheduler slices.
+state for cron schedules and last-fired timestamps, then adds config-authored
+cron schedule seeds mapped by bootstrap into repository descriptors.
+Service-loop startup, automatic seed persistence, queues, notifiers, and agent
+firing stay in later scheduler slices.
 
 ## Scope
 
@@ -20,11 +21,13 @@ scheduler slices.
   `automation_cron_jobs` migration, with upsert/load/list/mark-fired APIs.
 - Validate stored cron expressions through the evaluator, while keeping
   evaluation deterministic and caller-clocked.
-- Keep the slice free of config, hook, agent, timer, or background task
-  ownership.
+- Parse typed `automation.cron.jobs[]` config seeds and map them in bootstrap
+  without making `oran-automation` depend on `oran-config`.
+- Keep the slice free of agent, timer, automatic persistence, or background
+  task ownership.
 - Update automation docs/status/history/release notes in the same slice.
 - Out of scope:
-- Cron-authored config fields or a scheduler service that reads config.
+- Scheduler service startup that reads config and persists/runs cron seeds.
 - Process timers, triggered jobs, queueing/backpressure, notifier routing, and
   agent firing.
 - Bootstrap opening `automation.db`, starting timers, or spawning detached
@@ -45,9 +48,17 @@ scheduler slices.
 - `include/oran/automation/repository.hpp`
 - `src/oran-automation/repository.cpp`
 - `src/oran-automation/migrations/automation/0003-automation-cron-jobs.sql`
+- `include/oran/config/config.hpp`
+- `src/oran-config/config.cpp`
+- `include/oran/bootstrap/automation_cron.hpp`
+- `src/oran-bootstrap/automation_cron.cpp`
+- `include/oran/bootstrap/runtime_assembly.hpp`
 - `tests/automation/test_periodic.cpp`
 - `tests/automation/test_repository.cpp`
 - `tests/automation/test_runtime.cpp`
+- `tests/config/test_config.cpp`
+- `tests/bootstrap/test_memory_retention.cpp`
+- `tests/bootstrap/test_runtime_assembly.cpp`
 - `include/oran/automation.hpp`
 - Constraints:
 - Keep `oran-automation` independent of `oran-config`, `oran-agent`, and
@@ -87,8 +98,9 @@ scheduler slices.
    due execution that advances state only after a caller-supplied handler
    succeeds. Slice 201 adds finite caller-owned loop policy over that execution
    surface, and slice 202 adds advisory cron lifecycle metadata around handler
-   execution. Later: own cron config and service/timer startup policy without
-   bootstrap-owned background work.
+   execution. Slice 203 adds typed cron config seeds and bootstrap mapping into
+   repository upsert descriptors. Later: persist those seeds and add
+   service/timer startup policy without bootstrap-owned background work.
 4. **Triggered/notifier/queue policy.**
    Later: add triggered categories, queueing/backpressure, notifier routing,
    and agent execution leases.
@@ -99,6 +111,10 @@ scheduler slices.
 ## Validation
 
 - Commands:
+- `xmake build test-config`
+- `xmake run test-config`
+- `xmake build test-bootstrap`
+- `xmake run test-bootstrap`
 - `xmake build test-automation`
 - `build/linux/x86_64/release/test-automation "[repository]"`
 - `xmake run test-automation`
@@ -160,6 +176,12 @@ scheduler slices.
   and `job_finished` only after handler success plus durable cron state
   advancement, while keeping sink failures advisory and preserving caller-owned
   execution.
+- [x] 2026-06-07 23:56 +0800: Implemented typed
+  `automation.cron.jobs[]` config seeds plus `bootstrap::cron_jobs_from(...)`.
+  Config owns JSON shape, UTC timestamps, and unique job keys; bootstrap
+  validates expressions through `oran-automation` and stores
+  `UpsertCronJobRequest` descriptors on `RuntimeAssembly`. Bootstrap still does
+  not open `automation.db`, upsert cron rows, start timers, or execute jobs.
 - [x] **Update the docs that this slice invalidates in the same PR**
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -192,6 +214,11 @@ scheduler slices.
   explicit handler boundary is the first place with a real start/outcome signal,
   so hooks can observe cron work without introducing queues, timers, notifiers,
   or agent firing.
+- 2026-06-07: Add config-authored cron schedule seeds before automatic
+  persistence or service startup. The parser can own shape and timestamps while
+  bootstrap validates expressions through automation; deferring upsert/timer
+  ownership keeps configured cron jobs from becoming a hidden daemon side
+  effect.
 
 ## Linked Artifacts
 
@@ -205,5 +232,6 @@ scheduler slices.
 - `docs/histories/2026-06/20260607-2238-automation-cron-execute-due.md`
 - `docs/histories/2026-06/20260607-2257-automation-cron-loop-run-policy.md`
 - `docs/histories/2026-06/20260607-2324-automation-cron-lifecycle-hooks.md`
+- `docs/histories/2026-06/20260607-2356-automation-cron-config.md`
 - Release note:
 - `docs/releases/feature-release-notes.md#2026-06`

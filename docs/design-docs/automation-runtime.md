@@ -4,15 +4,16 @@
 still intentionally narrow: deterministic periodic schedule and POSIX cron
 evaluation, long-term memory retention request planning, a bootstrap-owned
 mapping from configured retention policy into that job descriptor,
-automation-owned retention job/run/lease persistence, durable cron job state, a
-caller-owned runtime state handle, a caller-driven cron scan/wait/execute-due
+automation-owned retention job/run/lease persistence, durable cron job state,
+config-authored cron schedule seeds mapped by bootstrap into stored descriptors,
+a caller-owned runtime state handle, a caller-driven cron scan/wait/execute-due
 boundary plus finite caller-owned cron loop policy and advisory cron lifecycle
 metadata, and a caller-driven retention service tick with optional advisory
 `memory_decay` plus job lifecycle metadata, plus a caller-started retention loop
 step that can wait within a caller budget for one stored job to become due and
 lease due execution, plus a finite caller-owned loop policy over that step. It
-does not start detached background work, own a process service loop, read cron
-config, enqueue cron work, or call an agent loop.
+does not start detached background work, own a process service loop, persist
+configured cron seeds automatically, enqueue cron work, or call an agent loop.
 
 ## Current Status
 
@@ -187,6 +188,17 @@ stored cron state unchanged, and publishes `job_finished` only after the handler
 succeeds and `last_fired_at` has durably advanced. Sink failures remain advisory
 and cannot veto the handler or state advancement. Repository failures before a
 durable outcome still return to the caller without inventing an outcome event.
+
+Slice 203 adds cron config ownership without adding scheduler startup.
+`oran-config` parses `automation.cron.jobs[]` as typed schedule seeds with
+`job_key`, POSIX cron `expression`, UTC `first_fire_at`, and optional UTC
+`last_fired_at`. `bootstrap::cron_jobs_from(...)` validates those expressions
+through `evaluate_cron_schedule(...)` and maps them into
+`automation::UpsertCronJobRequest` rows. `RuntimeAssemblyOptions::cron_jobs`
+and `RuntimeAssembly::cron_jobs()` store those descriptors for diagnostics and
+future runtime owners, while `RuntimeAssembly::build(...)` still does not open
+`automation.db`, upsert cron rows, start timers, enqueue work, notify channels,
+or call agents.
 
 ## Public API
 
@@ -582,6 +594,46 @@ class MemoryRetentionLoop {
 }  // namespace orangutan::automation
 ```
 
+Config/bootstrap-facing cron seed surface:
+
+```cpp
+namespace orangutan::config {
+
+struct AutomationCronJobConfig {
+  std::string job_key;
+  std::string expression;
+  core::Time first_fire_at;
+  std::optional<core::Time> last_fired_at;
+};
+
+struct AutomationCronConfig {
+  std::vector<AutomationCronJobConfig> jobs;
+};
+
+struct AutomationConfig {
+  AutomationCronConfig cron;
+};
+
+}  // namespace orangutan::config
+
+namespace orangutan::bootstrap {
+
+core::Result<std::vector<automation::UpsertCronJobRequest>>
+cron_jobs_from(const config::Config&);
+
+struct RuntimeAssemblyOptions {
+  std::vector<automation::UpsertCronJobRequest> cron_jobs;
+};
+
+class RuntimeAssembly {
+ public:
+  const std::vector<automation::UpsertCronJobRequest>&
+  cron_jobs() const noexcept;
+};
+
+}  // namespace orangutan::bootstrap
+```
+
 ## Periodic Schedule Semantics
 
 `PeriodicSchedule::first_fire_at` anchors a never-fired job. Once a caller has a
@@ -635,6 +687,34 @@ Malformed expressions return `ErrorKind::invalid_argument` with `field` set to
 `reason` such as `field_count`, `number`, `range`, `step`, or
 `no_matching_fire`. The evaluator bounds its search window so impossible
 schedules cannot spin forever.
+
+## Cron Config Seed Semantics
+
+`automation.cron.jobs[]` is the first operator-facing cron configuration
+surface. Each row describes repository seed state only:
+
+- `job_key`: durable non-empty repository identity, unique within the authored
+  config.
+- `expression`: POSIX 5-field cron expression.
+- `first_fire_at`: UTC ISO-8601 timestamp for the never-fired schedule anchor.
+- `last_fired_at`: optional UTC ISO-8601 timestamp for a pre-seeded stored
+  state.
+
+`oran-config` validates the object shape, timestamps, non-empty strings, and
+unique keys. It deliberately does not implement cron parsing, because that
+syntax is owned by `oran-automation`. `bootstrap::cron_jobs_from(...)` is the
+composition helper that can depend on both libraries: it validates each
+expression through `evaluate_cron_schedule(...)` and maps the row into an
+`AutomationRepository::upsert_cron_job(...)` request shape.
+
+`RuntimeAssemblyOptions::cron_jobs` and `RuntimeAssembly::cron_jobs()` preserve
+those mapped seeds for diagnostics and for the future runtime owner that will
+choose when to persist them. `RuntimeAssembly::build(...)` still does not open
+`automation.db`, run migrations, upsert rows, start timers, publish hooks,
+enqueue work, notify channels, or call agents.
+`bootstrap::run(...)` performs cron seed mapping for any loaded config before
+building the assembly, even when no provider route is configured; long-term
+memory retention descriptors remain configured-route-only.
 
 ## Memory Retention Planning
 
@@ -743,9 +823,9 @@ step over the same repository, backend, and hook options.
 The runtime handle is intentionally not a scheduler. It does not sleep, spawn
 detached coroutines, acquire process leases, own a hook bus, or decide whether
 bootstrap should open `automation.db`.
-Bootstrap still only maps the configured retention policy into a descriptor; a
-caller must explicitly call `AutomationRuntime::open(...)` before automation
-state exists.
+Bootstrap maps the configured retention policy and configured cron schedule
+seeds into descriptors only; a caller must explicitly call
+`AutomationRuntime::open(...)` before automation state exists.
 
 ## Loop Step Semantics
 
@@ -970,10 +1050,10 @@ those concerns into bootstrap or `oran-memory`.
 The next automation slices should not be picked by `STATUS.md` alone. The open
 spec 0006 boundaries now start after this explicit runtime/retention loop
 surface, cron evaluator, cron repository state, and caller-driven cron
-scan/wait/execute-due/run surface: cron config ownership, process service/timer
-startup policy, broader per-agent/category leases once agent-facing jobs exist,
-triggered categories, queueing/backpressure, and notifier routing for
-agent-facing jobs.
+scan/wait/execute-due/run surface plus config-authored cron seeds: cron seed
+persistence into `automation.db`, process service/timer startup policy, broader
+per-agent/category leases once agent-facing jobs exist, triggered categories,
+queueing/backpressure, and notifier routing for agent-facing jobs.
 
 ## Validation
 

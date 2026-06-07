@@ -179,6 +179,27 @@ struct MemoryConfig {
   friend bool operator==(const MemoryConfig&, const MemoryConfig&) = default;
 };
 
+struct AutomationCronJobConfig {
+  std::string job_key;
+  std::string expression;
+  core::Time first_fire_at{core::Time::epoch()};
+  std::optional<core::Time> last_fired_at{};
+
+  friend bool operator==(const AutomationCronJobConfig&, const AutomationCronJobConfig&) = default;
+};
+
+struct AutomationCronConfig {
+  std::vector<AutomationCronJobConfig> jobs{};
+
+  friend bool operator==(const AutomationCronConfig&, const AutomationCronConfig&) = default;
+};
+
+struct AutomationConfig {
+  AutomationCronConfig cron{};
+
+  friend bool operator==(const AutomationConfig&, const AutomationConfig&) = default;
+};
+
 /// Verdict spelling that appears in `config.permissions.{allow,deny,ask}`.
 /// Mirrors `permission::Verdict` but stays inside `oran-config` because the
 /// dependency direction (config below permission) forbids importing the
@@ -318,6 +339,9 @@ public:
   [[nodiscard]] const MemoryConfig& memory() const noexcept {
     return memory_;
   }
+  [[nodiscard]] const AutomationConfig& automation() const noexcept {
+    return automation_;
+  }
   [[nodiscard]] const PermissionsConfig& permissions() const noexcept {
     return permissions_;
   }
@@ -338,6 +362,7 @@ private:
   TraceConfig trace_{};
   HooksConfig hooks_{};
   MemoryConfig memory_{};
+  AutomationConfig automation_{};
   PermissionsConfig permissions_{};
   std::vector<AgentConfig> agents_{};
   std::vector<ConfigWarning> warnings_{};

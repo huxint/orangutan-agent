@@ -110,7 +110,17 @@
       }
     }
   },
-  "automation": {},
+  "automation": {
+    "cron": {
+      "jobs": [
+        {
+          "job_key": "daily-summary",
+          "expression": "0 9 * * *",
+          "first_fire_at": "2026-06-08T09:00:00Z"
+        }
+      ]
+    }
+  },
   "web": {
     "enabled": false,
     "bind": "127.0.0.1",

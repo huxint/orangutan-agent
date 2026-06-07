@@ -36,9 +36,11 @@ deterministic next-fire evaluator, and slice 198 adds durable cron job state
 through the same repository boundary. Slice 199 adds the first caller-driven
 cron runtime scan/wait boundary, and slice 200 adds explicit caller-supplied due
 execution that advances stored cron state only after handler success. Slice 201
-adds finite caller-owned cron loop policy over that execution surface, and
-slice 202 adds advisory cron job lifecycle metadata from the same explicit
-execution owner. The current API evaluates periodic and cron
+adds finite caller-owned cron loop policy over that execution surface, slice
+202 adds advisory cron job lifecycle metadata from the same explicit execution
+owner, and slice 203 adds typed `automation.cron.jobs[]` config seeds plus
+bootstrap mapping into cron repository upsert descriptors. The current API
+evaluates periodic and cron
 schedules from caller-supplied state, maps a long-term memory retention policy
 into a due-only `memory::longterm::DecayRequest`, persists the configured
 retention job plus run history and lease state through `AutomationRepository`,
@@ -51,6 +53,8 @@ lets a runtime owner run a finite explicit cron loop that can catch up due
 fires or wait within a caller budget,
 publishes advisory cron job lifecycle metadata when the caller supplies a hook
 bus,
+parses and maps config-authored cron schedule seeds without starting a
+scheduler,
 lets a runtime owner tick one stored retention job against a supplied long-term
 memory backend, publishes advisory retention metadata when the caller supplies a
 hook bus, can wait once within a caller budget for the earliest stored cron fire,
@@ -58,8 +62,9 @@ and can wait once within a caller budget for a stored retention job to become
 due while leasing due execution or run a finite caller-owned loop over that
 step. Bootstrap maps configured-route `memory.longterm.retention` into a stored
 `MemoryRetentionJob` descriptor whose first fire is after the one-shot startup
-decay pass, but bootstrap still does not open `automation.db` or run a
-background service.
+decay pass, and maps `automation.cron.jobs[]` into
+`UpsertCronJobRequest` descriptors, but bootstrap still does not open
+`automation.db`, upsert those rows, or run a background service.
 
 Current implementation:
 
@@ -73,6 +78,14 @@ Current implementation:
   independent of `oran-config`.
 - `RuntimeAssembly::longterm_memory_retention_job()` exposes the stored
   descriptor for diagnostics and future scheduler ownership; it is not run by
+  `RuntimeAssembly::build`.
+- `config::Config::automation().cron.jobs` exposes typed cron schedule seeds
+  from `automation.cron.jobs[]`, while `bootstrap::cron_jobs_from(...)`
+  validates the cron expressions through `evaluate_cron_schedule(...)` and maps
+  them into repository upsert requests. Bootstrap performs that mapping for
+  loaded config even when no provider route is configured.
+- `RuntimeAssembly::cron_jobs()` exposes those mapped cron seeds for diagnostics
+  and future persistence ownership; it is not persisted or run by
   `RuntimeAssembly::build`.
 - `AutomationRepository` runs migrations over a caller-supplied `storage::Pool`,
   upserts and loads retention jobs by durable `job_key`, persists
@@ -145,12 +158,13 @@ Current implementation:
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 
-Still open: cron config ownership, triggered jobs, bootstrap/service-loop
-startup policy over `AutomationRuntime`, broader per-agent/category leases for
-agent-facing jobs, queueing/backpressure, process service/timer cancellation
-policy, notifier callbacks, and the scheduler tick performance criterion. Job
-lifecycle publication exists for explicit retention ticks and explicit cron due
-execution; full scheduler/category lifecycle ownership remains downstream.
+Still open: cron seed persistence from `RuntimeAssembly` into `automation.db`,
+triggered jobs, bootstrap/service-loop startup policy over `AutomationRuntime`,
+broader per-agent/category leases for agent-facing jobs, queueing/backpressure,
+process service/timer cancellation policy, notifier callbacks, and the
+scheduler tick performance criterion. Job lifecycle publication exists for
+explicit retention ticks and explicit cron due execution; full
+scheduler/category lifecycle ownership remains downstream.
 
 ## Scope (v1.1)
 

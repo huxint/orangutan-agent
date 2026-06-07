@@ -917,6 +917,141 @@ TEST_CASE("Config::parse defaults memory recall policy when absent", "[unit][con
   REQUIRE(result->memory().longterm.retention.decay_check_interval_hours == 24);
 }
 
+TEST_CASE("Config::parse extracts automation cron jobs", "[unit][config][automation]") {
+  auto result = config::Config::parse(R"json({
+  "automation": {
+    "cron": {
+      "jobs": [
+        {
+          "job_key": "daily-summary",
+          "expression": "0 9 * * *",
+          "first_fire_at": "2026-06-08T09:00:00Z"
+        },
+        {
+          "job_key": "hourly-ci",
+          "expression": "15 * * * *",
+          "first_fire_at": "2026-06-08T00:15:00Z",
+          "last_fired_at": "2026-06-08T03:15:00.250Z"
+        }
+      ]
+    }
+  }
+})json");
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->automation().cron.jobs.size() == 2);
+  REQUIRE(result->automation().cron.jobs[0].job_key == "daily-summary");
+  REQUIRE(result->automation().cron.jobs[0].expression == "0 9 * * *");
+  REQUIRE(core::time::format_iso8601_utc(result->automation().cron.jobs[0].first_fire_at) ==
+          "2026-06-08T09:00:00.000Z");
+  REQUIRE_FALSE(result->automation().cron.jobs[0].last_fired_at.has_value());
+
+  REQUIRE(result->automation().cron.jobs[1].job_key == "hourly-ci");
+  REQUIRE(result->automation().cron.jobs[1].expression == "15 * * * *");
+  REQUIRE(core::time::format_iso8601_utc(result->automation().cron.jobs[1].first_fire_at) ==
+          "2026-06-08T00:15:00.000Z");
+  REQUIRE(result->automation().cron.jobs[1].last_fired_at.has_value());
+  REQUIRE(core::time::format_iso8601_utc(*result->automation().cron.jobs[1].last_fired_at) ==
+          "2026-06-08T03:15:00.250Z");
+}
+
+TEST_CASE("Config::parse defaults automation config when absent", "[unit][config][automation]") {
+  auto result = config::Config::parse(R"json({"automation": {}})json");
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->automation().cron.jobs.empty());
+}
+
+TEST_CASE("Config::parse rejects malformed automation cron jobs", "[unit][config][automation]") {
+  SECTION("non-object automation block") {
+    auto result = config::Config::parse(R"json({"automation": []})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-object cron block") {
+    auto result = config::Config::parse(R"json({"automation": {"cron": []}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-array jobs") {
+    auto result = config::Config::parse(R"json({"automation": {"cron": {"jobs": {}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("empty job key") {
+    auto result = config::Config::parse(R"json({
+  "automation": {
+    "cron": {
+      "jobs": [{"job_key": "", "expression": "* * * * *", "first_fire_at": "2026-06-08T00:00:00Z"}]
+    }
+  }
+})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("missing first fire") {
+    auto result = config::Config::parse(R"json({
+  "automation": {
+    "cron": {
+      "jobs": [{"job_key": "daily", "expression": "* * * * *"}]
+    }
+  }
+})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("invalid last fired timestamp") {
+    auto result = config::Config::parse(R"json({
+  "automation": {
+    "cron": {
+      "jobs": [{
+        "job_key": "daily",
+        "expression": "* * * * *",
+        "first_fire_at": "2026-06-08T00:00:00Z",
+        "last_fired_at": "not-a-time"
+      }]
+    }
+  }
+})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("duplicate job key") {
+    auto result = config::Config::parse(R"json({
+  "automation": {
+    "cron": {
+      "jobs": [
+        {"job_key": "daily", "expression": "* * * * *", "first_fire_at": "2026-06-08T00:00:00Z"},
+        {"job_key": "daily", "expression": "0 9 * * *", "first_fire_at": "2026-06-08T09:00:00Z"}
+      ]
+    }
+  }
+})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("unknown automation field fails under strict config") {
+    auto result = config::Config::parse(R"json({
+  "strict_config": true,
+  "automation": {
+    "cron": {
+      "jobs": [],
+      "timezone": "UTC"
+    }
+  }
+})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+}
+
 TEST_CASE("Config::parse rejects malformed memory recall policy", "[unit][config][memory]") {
   SECTION("non-object memory block") {
     auto result = config::Config::parse(R"json({"memory": []})json");

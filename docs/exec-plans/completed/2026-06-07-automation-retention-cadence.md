@@ -1,5 +1,7 @@
 # Automation Retention Cadence
 
+> Status: completed · Completed: 2026-06-07 · Final slice: 196
+
 ## Goal
 
 Land the first real `oran-automation` runtime boundary by turning periodic

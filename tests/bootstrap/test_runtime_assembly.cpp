@@ -456,6 +456,36 @@ TEST_CASE("RuntimeAssembly::build stores long-term retention jobs without runnin
   REQUIRE(built->longterm_memory_retention_job()->first_fire_at == fixed_now());
 }
 
+TEST_CASE("RuntimeAssembly::build stores cron job seeds without opening automation state",
+          "[unit][bootstrap][runtime_assembly][automation]") {
+  TempDir temp{"oran-assembly-cron-job-seeds"};
+  asio::io_context io;
+
+  auto options = bootstrap::RuntimeAssemblyOptions{};
+  options.audit_enabled = false;
+  options.session_memory_enabled = false;
+  options.longterm_memory_enabled = false;
+  options.cron_jobs.push_back(automation::UpsertCronJobRequest{
+      .job_key = "daily-summary",
+      .schedule =
+          automation::CronSchedule{
+              .expression = "0 9 * * *",
+              .first_fire_at = fixed_now(),
+          },
+      .state = {},
+  });
+
+  auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
+
+  REQUIRE(built.has_value());
+  REQUIRE_FALSE(built->longterm_memory_enabled());
+  REQUIRE(built->cron_jobs().size() == 1);
+  REQUIRE(built->cron_jobs()[0].job_key == "daily-summary");
+  REQUIRE(built->cron_jobs()[0].schedule.expression == "0 9 * * *");
+  REQUIRE(built->cron_jobs()[0].schedule.first_fire_at == fixed_now());
+  REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan" / "automation.db"));
+}
+
 TEST_CASE("RuntimeAssembly::build rejects long-term startup decay when long-term memory is disabled",
           "[unit][bootstrap][runtime_assembly][memory]") {
   TempDir temp{"oran-assembly-longterm-startup-decay-disabled"};

@@ -24,6 +24,7 @@
 #include <asio/io_context.hpp>
 
 #include <oran/async.hpp>
+#include <oran/bootstrap/automation_cron.hpp>
 #include <oran/bootstrap/memory_retention.hpp>
 #include <oran/bootstrap/prompt_runner.hpp>
 #include <oran/bootstrap/provider_backend.hpp>
@@ -47,7 +48,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice202";
+constexpr std::string_view kVersion = "2.0.0-slice203";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 constexpr std::string_view kLongtermTextEmbeddingModel = "oran-local-text-v1";
@@ -941,6 +942,11 @@ core::Result<int> run(BootstrapOptions options) {
   assembly_options.longterm_memory_enabled = provider_route->has_value();
   assembly_options.longterm_vector_memory_enabled = longterm_hybrid_search.enabled;
   assembly_options.longterm_vector_memory_dimensions = longterm_hybrid_search.embedding_dimensions;
+  auto cron_jobs = cron_jobs_from(loaded->value);
+  if (!cron_jobs) {
+    return std::unexpected(std::move(cron_jobs.error()));
+  }
+  assembly_options.cron_jobs = std::move(*cron_jobs);
   if (provider_route->has_value()) {
     const auto retention_now = core::time::now_utc();
     const auto retention_first_fire_at =
@@ -960,7 +966,7 @@ core::Result<int> run(BootstrapOptions options) {
   }
   std::println(
       "runtime assembly ready: audit={} ({}), approval-broker=fresh, workspace={}, trace={}, sessions={} ({}), "
-      "longterm-memory={} ({}), startup-decay={}, vector-memory={} ({}), hook-timeout={}ms",
+      "longterm-memory={} ({}), startup-decay={}, vector-memory={} ({}), hook-timeout={}ms, automation-cron-jobs={}",
       assembly->audit_enabled() ? "enabled" : "disabled",
       assembly->audit_enabled() ? assembly->audit_path() : std::string_view{"<null sink>"},
       assembly->workspace().root(),
@@ -973,7 +979,8 @@ core::Result<int> run(BootstrapOptions options) {
       assembly->longterm_vector_memory_enabled() ? "enabled" : "disabled",
       assembly->longterm_vector_memory_enabled() ? assembly->longterm_vector_memory_path()
                                                  : std::string_view{"<disabled>"},
-      assembly->hook_bus().options().blocking_timeout.count());
+      assembly->hook_bus().options().blocking_timeout.count(),
+      assembly->cron_jobs().size());
 
   if (!provider_route->has_value()) {
     auto cli_result = cli::run(cli::CliOptions{.args = std::span<const std::string_view>{parsed->cli_args}});

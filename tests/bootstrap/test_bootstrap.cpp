@@ -817,6 +817,30 @@ TEST_CASE("run hands CLI arguments to oran-cli after config load", "[unit][boots
   REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan" / "memory.db"));
 }
 
+TEST_CASE("run validates automation cron seeds without provider routes", "[unit][bootstrap][automation]") {
+  TempDir temp{"oran-bootstrap-cron-no-provider"};
+  const auto config_path = temp.path() / "config.json";
+  write_file(config_path, R"json({
+  "automation": {
+    "cron": {
+      "jobs": [{
+        "job_key": "bad-cron",
+        "expression": "not a cron",
+        "first_fire_at": "2026-06-08T00:00:00Z"
+      }]
+    }
+  }
+})json");
+  auto config_arg = config_path.string();
+  auto args = std::vector<std::string_view>{"--config", config_arg, "--prompt", "hello"};
+
+  auto result = bootstrap::run(options(args, temp.path()));
+
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(result.error().kind() == core::ErrorKind::config);
+  REQUIRE(context_value(result.error(), "path") == std::optional<std::string_view>{"$.automation.cron.jobs"});
+}
+
 TEST_CASE("run rejects selectors when no provider route is configured", "[unit][bootstrap][provider]") {
   TempDir temp{"oran-bootstrap-selector-no-route"};
   auto args = std::vector<std::string_view>{"--agent", "writer", "--prompt", "hello"};

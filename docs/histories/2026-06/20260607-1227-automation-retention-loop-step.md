@@ -5,7 +5,7 @@
 - Agent: Codex
 - Base model: GPT-5
 - Runtime: local xmake / GCC 16.1 release build
-- Linked plan: `docs/exec-plans/active/2026-06-07-automation-retention-cadence.md`
+- Linked plan: `docs/exec-plans/completed/2026-06-07-automation-retention-cadence.md`
 
 ### User Query
 
@@ -75,7 +75,7 @@ need the next owner to build around this explicit loop step.
   layering.
 - `docs/QUALITY_SCORE.md` - refreshed automation test counts and next step.
 - `docs/releases/feature-release-notes.md` - added the slice 193 release note.
-- `docs/exec-plans/active/2026-06-07-automation-retention-cadence.md` - marked
+- `docs/exec-plans/completed/2026-06-07-automation-retention-cadence.md` - marked
   the retention loop-step milestone complete.
 
 ### Validation

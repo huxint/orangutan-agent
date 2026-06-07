@@ -5,7 +5,7 @@
 - Agent: Codex
 - Base model: GPT-5
 - Runtime: CLI coding session
-- Linked plan: `docs/exec-plans/active/2026-06-07-automation-retention-cadence.md`
+- Linked plan: `docs/exec-plans/completed/2026-06-07-automation-retention-cadence.md`
 
 ### User Query
 
@@ -66,7 +66,7 @@ future service-loop concerns.
   under the automation repository/tick owners.
 - `docs/QUALITY_SCORE.md` — refreshed automation and test framework counts.
 - `docs/releases/feature-release-notes.md` — added the slice 190 release note.
-- `docs/exec-plans/active/2026-06-07-automation-retention-cadence.md` — marked
+- `docs/exec-plans/completed/2026-06-07-automation-retention-cadence.md` — marked
   the service/tick milestone complete and set hook production as the next
   boundary.
 
