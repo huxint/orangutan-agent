@@ -41,7 +41,10 @@ adds finite caller-owned cron loop policy over that execution surface, slice
 owner, slice 203 adds typed `automation.cron.jobs[]` config seeds plus
 bootstrap mapping into cron repository upsert descriptors, and slice 204 adds
 explicit `AutomationRuntime::apply_cron_job_seeds(...)` persistence for those
-mapped descriptors. The current API
+mapped descriptors. Slice 205 adds an explicit
+`AutomationRuntime::run_cron_service_cycle(...)` helper that validates a finite
+service-cycle policy, applies supplied cron seeds, and awaits the existing
+finite cron loop in one caller-owned step. The current API
 evaluates periodic and cron
 schedules from caller-supplied state, maps a long-term memory retention policy
 into a due-only `memory::longterm::DecayRequest`, persists the configured
@@ -59,6 +62,8 @@ parses and maps config-authored cron schedule seeds without starting a
 scheduler,
 lets a caller-owned automation runtime explicitly apply those cron seeds into
 `automation.db`,
+lets a caller-owned automation runtime run one explicit cron service cycle that
+applies seeds and drives the finite cron loop with a supplied handler,
 lets a runtime owner tick one stored retention job against a supplied long-term
 memory backend, publishes advisory retention metadata when the caller supplies a
 hook bus, can wait once within a caller budget for the earliest stored cron fire,
@@ -95,6 +100,10 @@ Current implementation:
   handoff. It upserts mapped cron seed rows through the caller-owned runtime
   repository, returns requested/upserted counts plus stored rows, and annotates
   failures with `seed_index` / `job_key` context.
+- `AutomationRuntime::run_cron_service_cycle(...)` validates explicit
+  service-cycle policy before repository mutation, applies supplied cron seeds,
+  and delegates to `CronLoop::run(...)`. It returns both seed-apply and loop
+  summaries, while still leaving lifecycle ownership with the caller.
 - `AutomationRepository` runs migrations over a caller-supplied `storage::Pool`,
   upserts and loads retention jobs by durable `job_key`, persists
   `last_fired_at`, records success/failure run rows, lists recent runs, acquires
@@ -104,9 +113,9 @@ Current implementation:
 - `AutomationRuntime::open(...)` validates an explicit database path, creates
   parent directories, opens `automation.db` through an owned `storage::Pool`,
   runs automation migrations, exposes the migration report and repository, can
-  explicitly apply cron seed descriptors, and can construct `CronService`,
-  `CronLoop`, `MemoryRetentionService`, or `MemoryRetentionLoop` over that
-  stable state.
+  explicitly apply cron seed descriptors or run one cron service cycle, and can
+  construct `CronService`, `CronLoop`, `MemoryRetentionService`, or
+  `MemoryRetentionLoop` over that stable state.
 - `MemoryRetentionService::tick(...)` loads one stored job, skips not-due work
   without mutation, invokes `memory::longterm::Backend::decay(...)` only when
   due, records success/failure run rows, and advances `last_fired_at` only
@@ -163,17 +172,16 @@ Current implementation:
   before the handler, `job_failed` after a handler failure while keeping cron
   state unadvanced, and `job_finished` only after handler success plus durable
   `last_fired_at` advancement. Advisory sink failures remain non-fatal.
-- `test-automation` reports 57 cases / 747 assertions.
+- `test-automation` reports 59 cases / 768 assertions.
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 
-Still open: automatic cron seed application from a process service owner,
-triggered jobs, bootstrap/service-loop startup policy over `AutomationRuntime`,
-broader per-agent/category leases for agent-facing jobs, queueing/backpressure,
-process service/timer cancellation policy, notifier callbacks, and the
-scheduler tick performance criterion. Job lifecycle publication exists for
-explicit retention ticks and explicit cron due execution; full
-scheduler/category lifecycle ownership remains downstream.
+Still open: detached/background service-loop startup over `AutomationRuntime`,
+triggered jobs, broader per-agent/category leases for agent-facing jobs,
+queueing/backpressure, process service/timer shutdown policy, notifier
+callbacks, agent firing, and the scheduler tick performance criterion. Job
+lifecycle publication exists for explicit retention ticks and explicit cron due
+execution; full scheduler/category lifecycle ownership remains downstream.
 
 ## Scope (v1.1)
 

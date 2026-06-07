@@ -6,14 +6,16 @@ evaluation, long-term memory retention request planning, a bootstrap-owned
 mapping from configured retention policy into that job descriptor,
 automation-owned retention job/run/lease persistence, durable cron job state,
 config-authored cron schedule seeds mapped by bootstrap into stored descriptors,
-a caller-owned runtime state handle, a caller-driven cron scan/wait/execute-due
-boundary plus finite caller-owned cron loop policy and advisory cron lifecycle
-metadata, and a caller-driven retention service tick with optional advisory
-`memory_decay` plus job lifecycle metadata, plus a caller-started retention loop
-step that can wait within a caller budget for one stored job to become due and
-lease due execution, plus a finite caller-owned loop policy over that step. It
-does not start detached background work, own a process service loop, persist
-configured cron seeds automatically, enqueue cron work, or call an agent loop.
+a caller-owned runtime state handle, explicit cron seed application, a
+caller-awaited cron service cycle over the existing finite cron loop, a
+caller-driven cron scan/wait/execute-due boundary plus finite caller-owned cron
+loop policy and advisory cron lifecycle metadata, and a caller-driven retention
+service tick with optional advisory `memory_decay` plus job lifecycle metadata,
+plus a caller-started retention loop step that can wait within a caller budget
+for one stored job to become due and lease due execution, plus a finite
+caller-owned loop policy over that step. It does not start detached background
+work, own a long-running process service loop, persist configured cron seeds
+from bootstrap automatically, enqueue cron work, or call an agent loop.
 
 ## Current Status
 
@@ -84,9 +86,9 @@ exports `AutomationRuntimeOptions` and move-only `AutomationRuntime`.
 `AutomationRuntime::open(...)` validates the database path, creates parent
 directories, opens a `storage::Pool`, runs the automation migration through the
 owned repository, stores the migration report, exposes that repository, and can
-construct `MemoryRetentionService` and `MemoryRetentionLoop` instances over the
-same stable state. It still does not start timers, acquire leases, publish job
-lifecycle hooks itself, wire bootstrap to open `automation.db`, or call agents.
+construct cron/retention services and loops over the same stable state. It
+still does not start timers, acquire leases, publish job lifecycle hooks
+itself, wire bootstrap to open `automation.db`, or call agents.
 
 Slice 193 adds the first caller-started loop step without turning automation
 into a daemon. `<oran/automation/loop.hpp>` exports
@@ -208,6 +210,16 @@ return the repository error with `seed_index` and, when present, `job_key`
 context. The helper is deliberately not called by bootstrap: a caller must open
 `AutomationRuntime` and invoke it explicitly before config-authored cron rows
 exist in `automation.db`.
+
+Slice 205 adds a small explicit cron service-cycle policy on the same runtime
+handle. `AutomationRuntime::run_cron_service_cycle(...)` validates the supplied
+handler, wait budget, iteration limit, and job limit before repository work;
+then it applies caller-supplied cron seeds and delegates execution to the
+existing finite `CronLoop::run(...)`. The helper returns both the seed-apply
+summary and loop summary. Invalid cycle policy fails before seeds are written,
+seed-apply errors stop before the handler runs, and loop errors propagate
+unchanged. It is still an awaited call, not a detached process timer or
+bootstrap-owned service.
 
 ## Public API
 
@@ -495,6 +507,21 @@ struct CronSeedApplyResult {
   std::vector<CronJobRecord> jobs;
 };
 
+struct CronServiceCycleRequest {
+  std::vector<UpsertCronJobRequest> seeds;
+  CronServiceOptions service_options;
+  core::Time now;
+  std::chrono::steady_clock::duration max_total_wait;
+  std::size_t max_iterations;
+  std::size_t job_limit;
+  CronJobHandler handler;
+};
+
+struct CronServiceCycleResult {
+  CronSeedApplyResult seed_apply;
+  CronLoopRunResult loop;
+};
+
 class AutomationRuntime {
  public:
   static async::Awaitable<core::Result<AutomationRuntime>>
@@ -507,6 +534,9 @@ class AutomationRuntime {
 
   async::Awaitable<core::Result<CronSeedApplyResult>>
   apply_cron_job_seeds(std::vector<UpsertCronJobRequest>);
+
+  async::Awaitable<core::Result<CronServiceCycleResult>>
+  run_cron_service_cycle(CronServiceCycleRequest);
 
   CronService cron_service(CronServiceOptions = {}) noexcept;
   CronLoop cron_loop(CronServiceOptions = {}) noexcept;
@@ -852,8 +882,9 @@ detached coroutines, acquire process leases, own a hook bus, or decide whether
 bootstrap should open `automation.db`.
 Bootstrap maps the configured retention policy and configured cron schedule
 seeds into descriptors only; a caller must explicitly call
-`AutomationRuntime::open(...)` and `apply_cron_job_seeds(...)` before authored
-cron rows exist in automation state.
+`AutomationRuntime::open(...)` plus either `apply_cron_job_seeds(...)` or
+`run_cron_service_cycle(...)` before authored cron rows exist in automation
+state.
 
 ## Loop Step Semantics
 
@@ -946,6 +977,21 @@ choose shutdown behavior, or decide whether bootstrap should open automation
 state. When the loop's owned `CronService` was constructed with hook options,
 each underlying `execute_due(...)` call emits the same advisory lifecycle
 metadata described above.
+
+`AutomationRuntime::run_cron_service_cycle(...)` is the explicit startup-cycle
+composition for callers that already opened automation state. The request
+contains cron seed descriptors, cron hook options, the logical `now`, finite
+`max_total_wait` / `max_iterations` / `job_limit` policy, and a
+caller-supplied `CronJobHandler`. Runtime validates the policy before writing
+any seeds, applies the seeds through `apply_cron_job_seeds(...)`, then runs
+`CronLoop::run(...)` with the same handler and budget. The result contains both
+the `CronSeedApplyResult` and the `CronLoopRunResult`.
+
+This helper exists so a process owner can perform a coherent startup cycle
+without duplicating seed-apply-plus-loop code. It is still one awaited call: it
+does not spawn detached coroutines, keep a timer alive after return, create cron
+run rows, enqueue work, notify channels, call agents, or make bootstrap open
+`automation.db`.
 
 `MemoryRetentionLoop::run_once(...)` is a single caller-started awaitable for
 one stored retention job. It is the smallest useful owner above
@@ -1138,6 +1184,9 @@ Slice 204 reports `test-automation` at 57 cases / 747 assertions for explicit
 cron seed application through `AutomationRuntime`, including update and failure
 context coverage; `test-bootstrap` reports 129 cases / 1087 assertions for the
 cross-boundary assembly-to-runtime seed application path.
+Slice 205 reports `test-automation` at 59 cases / 768 assertions for the
+caller-awaited cron service cycle, including seed-apply-plus-loop execution and
+validation-before-seed-apply coverage.
 
 `bench-automation` planning rows are:
 

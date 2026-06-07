@@ -294,6 +294,84 @@ TEST_CASE("AutomationRuntime applies cron job seeds explicitly", "[unit][automat
   });
 }
 
+TEST_CASE("AutomationRuntime runs a caller-awaited cron service cycle", "[unit][automation][runtime][cron][service]") {
+  TempWorkspace workspace{"oran-automation-runtime-cron-service-cycle"};
+  test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {
+    auto runtime = co_await automation::AutomationRuntime::open(
+        io.get_executor(),
+        automation::AutomationRuntimeOptions{.database_path = automation_db_path(workspace)});
+    REQUIRE(runtime.has_value());
+
+    std::vector<core::Time> fired_at;
+    auto seeds = std::vector<automation::UpsertCronJobRequest>{
+        automation::UpsertCronJobRequest{
+            .job_key = "cron:every-minute",
+            .schedule = make_cron_schedule(),
+        },
+    };
+    auto result = co_await runtime->run_cron_service_cycle(automation::CronServiceCycleRequest{
+        .seeds = std::move(seeds),
+        .now = at(120s),
+        .max_iterations = 3,
+        .job_limit = 10,
+        .handler = [&fired_at](automation::CronDueJob due) -> async::Awaitable<core::Result<void>> {
+          fired_at.push_back(due.schedule.next_fire_at);
+          co_return core::Result<void>{};
+        },
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->seed_apply.requested_count == 1);
+    REQUIRE(result->seed_apply.upserted_count == 1);
+    REQUIRE(result->loop.iterations == 3);
+    REQUIRE(result->loop.attempted_count == 2);
+    REQUIRE(result->loop.advanced_count == 2);
+    REQUIRE(result->loop.failed_count == 0);
+    REQUIRE(result->loop.stop_reason == automation::CronLoopRunStopReason::no_due_work);
+    REQUIRE(fired_at == std::vector{at(60s), at(120s)});
+
+    auto loaded = co_await runtime->repository().get_cron_job("cron:every-minute");
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->has_value());
+    REQUIRE((*loaded)->state.last_fired_at == at(120s));
+  });
+}
+
+TEST_CASE("AutomationRuntime validates cron service cycles before applying seeds",
+          "[unit][automation][runtime][cron][service]") {
+  TempWorkspace workspace{"oran-automation-runtime-cron-service-cycle-invalid"};
+  test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {
+    auto runtime = co_await automation::AutomationRuntime::open(
+        io.get_executor(),
+        automation::AutomationRuntimeOptions{.database_path = automation_db_path(workspace)});
+    REQUIRE(runtime.has_value());
+
+    auto seeds = std::vector<automation::UpsertCronJobRequest>{
+        automation::UpsertCronJobRequest{
+            .job_key = "cron:never-applied",
+            .schedule = make_cron_schedule(),
+        },
+    };
+    auto result = co_await runtime->run_cron_service_cycle(automation::CronServiceCycleRequest{
+        .seeds = std::move(seeds),
+        .now = at(120s),
+        .max_iterations = 0,
+        .job_limit = 10,
+        .handler = [](automation::CronDueJob) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        },
+    });
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(has_field(result.error(), "max_iterations"));
+
+    auto loaded = co_await runtime->repository().get_cron_job("cron:never-applied");
+    REQUIRE(loaded.has_value());
+    REQUIRE_FALSE(loaded->has_value());
+  });
+}
+
 TEST_CASE("AutomationRuntime creates cron services over owned repository state", "[unit][automation][runtime][cron]") {
   TempWorkspace workspace{"oran-automation-runtime-cron-service"};
   test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {

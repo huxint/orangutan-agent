@@ -7,28 +7,27 @@
 
 ## Snapshot
 
-- **Slice:** 204 (`xmake run orangutan -- --help` reports slice 204)
+- **Slice:** 205 (`xmake run orangutan -- --help` reports slice 205)
 - **Last completed history:**
-  [`histories/2026-06/20260608-0031-automation-cron-seed-apply.md`](histories/2026-06/20260608-0031-automation-cron-seed-apply.md)
+  [`histories/2026-06/20260608-0050-automation-cron-service-cycle.md`](histories/2026-06/20260608-0050-automation-cron-service-cycle.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-cron-category.md`](exec-plans/active/2026-06-07-automation-cron-category.md).
-- **Latest completed slice:** slice 204 adds explicit cron seed persistence for
-  caller-owned automation runtimes without starting a scheduler.
-  `AutomationRuntime::apply_cron_job_seeds(...)` takes mapped
-  `automation::UpsertCronJobRequest` rows, upserts them through the owned
-  repository, returns requested/upserted counts plus stored records, and adds
-  `seed_index` / `job_key` context on failure. `RuntimeAssembly::build(...)`
-  still only stores cron descriptors; a caller must open `AutomationRuntime`
-  and invoke the apply helper before `automation.db` is created or mutated.
-  Bootstrap still does not open `automation.db`, start process timers, spawn
-  detached work, enqueue work, call notifiers, or fire agents. Focused results:
-  `test-automation` **57 cases / 747 assertions** and `test-bootstrap` **129
-  cases / 1087 assertions**.
+- **Latest completed slice:** slice 205 adds a caller-awaited cron service
+  cycle without starting a scheduler. `CronServiceCycleRequest` /
+  `CronServiceCycleResult` plus
+  `AutomationRuntime::run_cron_service_cycle(...)` validate the finite service
+  policy before repository mutation, apply caller-supplied cron seeds, then
+  delegate execution to the existing `CronLoop::run(...)` handler path. The
+  result reports both seed-apply and loop summaries. Bootstrap still only
+  stores cron descriptors; it does not open `automation.db`, run this cycle,
+  start process timers, spawn detached work, enqueue work, call notifiers, or
+  fire agents. Focused results: `test-automation` **59 cases / 768
+  assertions** and `test-bootstrap` **129 cases / 1087 assertions**.
 - **Next intended slice:** continue the active automation cron/category plan.
-  The next useful implementation boundary is a small explicit process
-  service/timer startup policy over the caller-owned cron loop surfaces. Do not
-  add bootstrap-owned background automation or unrelated STATUS-only slice
-  churn.
+  The next useful implementation boundary is a small cron scheduler-service
+  ownership slice such as explicit shutdown/cancellation policy, cron run
+  history, or triggered/notifier/queue policy. Do not add bootstrap-owned
+  background automation or unrelated STATUS-only slice churn.
 
 Slice 183 adds the operator-facing long-term
   retention policy contract. `oran-config` now parses

@@ -2,6 +2,7 @@
 
 #include <oran/automation/runtime.hpp>
 
+#include <chrono>
 #include <expected>
 #include <filesystem>
 #include <memory>
@@ -23,6 +24,22 @@ namespace {
 [[nodiscard]] core::Result<void> validate_open_options(const AutomationRuntimeOptions& options) {
   if (options.database_path.empty()) {
     return std::unexpected(invalid_runtime_field("database_path", "empty"));
+  }
+  return {};
+}
+
+[[nodiscard]] core::Result<void> validate_cron_service_cycle_request(const CronServiceCycleRequest& request) {
+  if (request.max_total_wait < std::chrono::steady_clock::duration::zero()) {
+    return std::unexpected(invalid_runtime_field("max_total_wait", "negative"));
+  }
+  if (request.max_iterations == 0) {
+    return std::unexpected(invalid_runtime_field("max_iterations", "zero"));
+  }
+  if (request.job_limit == 0) {
+    return std::unexpected(invalid_runtime_field("job_limit", "zero"));
+  }
+  if (!request.handler) {
+    return std::unexpected(invalid_runtime_field("handler", "empty"));
   }
   return {};
 }
@@ -145,6 +162,35 @@ AutomationRuntime::apply_cron_job_seeds(std::vector<UpsertCronJobRequest> seeds)
   }
 
   co_return result;
+}
+
+async::Awaitable<core::Result<CronServiceCycleResult>>
+AutomationRuntime::run_cron_service_cycle(CronServiceCycleRequest request) {
+  if (auto valid = validate_cron_service_cycle_request(request); !valid) {
+    co_return std::unexpected(std::move(valid).error());
+  }
+
+  auto applied = co_await apply_cron_job_seeds(std::move(request.seeds));
+  if (!applied) {
+    co_return std::unexpected(std::move(applied).error());
+  }
+
+  auto loop = cron_loop(std::move(request.service_options));
+  auto loop_result = co_await loop.run(CronLoopRunRequest{
+      .now = request.now,
+      .max_total_wait = request.max_total_wait,
+      .max_iterations = request.max_iterations,
+      .job_limit = request.job_limit,
+      .handler = std::move(request.handler),
+  });
+  if (!loop_result) {
+    co_return std::unexpected(std::move(loop_result).error());
+  }
+
+  co_return CronServiceCycleResult{
+      .seed_apply = std::move(*applied),
+      .loop = std::move(*loop_result),
+  };
 }
 
 CronService AutomationRuntime::cron_service(CronServiceOptions options) noexcept {
