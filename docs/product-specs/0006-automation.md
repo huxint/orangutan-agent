@@ -35,7 +35,8 @@ first cron-category planning primitive with a POSIX 5-field UTC parser and
 deterministic next-fire evaluator, and slice 198 adds durable cron job state
 through the same repository boundary. Slice 199 adds the first caller-driven
 cron runtime scan/wait boundary, and slice 200 adds explicit caller-supplied due
-execution that advances stored cron state only after handler success. The current API evaluates periodic and cron
+execution that advances stored cron state only after handler success. Slice 201
+adds finite caller-owned cron loop policy over that execution surface. The current API evaluates periodic and cron
 schedules from caller-supplied state, maps a long-term memory retention policy
 into a due-only `memory::longterm::DecayRequest`, persists the configured
 retention job plus run history and lease state through `AutomationRepository`,
@@ -44,6 +45,8 @@ explicitly opens/migrates automation state through `AutomationRuntime::open(...)
 lets a runtime owner scan stored cron jobs for due work without mutating them,
 lets a runtime owner execute due cron jobs through a supplied handler and mark
 only handler-successful fires complete,
+lets a runtime owner run a finite explicit cron loop that can catch up due
+fires or wait within a caller budget,
 lets a runtime owner tick one stored retention job against a supplied long-term
 memory backend, publishes advisory retention metadata when the caller supplies a
 hook bus, can wait once within a caller budget for the earliest stored cron fire,
@@ -124,7 +127,12 @@ Current implementation:
   caller-supplied handler for each due cron job, advances `last_fired_at` only
   after the handler succeeds, reports handler errors per attempt, and leaves
   failed-handler jobs due for retry by the next explicit call.
-- `test-automation` reports 52 cases / 618 assertions.
+- `CronLoop::run(...)` repeatedly calls `execute_due(...)` up to a caller
+  iteration limit, waits only within `max_total_wait`, aggregates
+  attempted/advanced/failed counters, stops on `no_due_work`,
+  `iteration_limit`, or `handler_failure`, and does not immediately retry
+  failed handlers inside the same run.
+- `test-automation` reports 54 cases / 663 assertions.
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 

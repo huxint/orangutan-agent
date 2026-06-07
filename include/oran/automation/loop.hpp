@@ -62,17 +62,42 @@ struct CronLoopRunOnceResult {
   CronTickResult tick{};
 };
 
+enum class CronLoopRunStopReason {
+  iteration_limit,
+  no_due_work,
+  handler_failure,
+};
+
+struct CronLoopRunRequest {
+  core::Time now{core::Time::epoch()};
+  std::chrono::steady_clock::duration max_total_wait{std::chrono::steady_clock::duration::zero()};
+  std::size_t max_iterations{1};
+  std::size_t job_limit{100};
+  CronJobHandler handler{};
+};
+
+struct CronLoopRunResult {
+  std::size_t iterations{0};
+  std::size_t attempted_count{0};
+  std::size_t advanced_count{0};
+  std::size_t failed_count{0};
+  std::chrono::nanoseconds waited_for{0};
+  CronLoopRunStopReason stop_reason{CronLoopRunStopReason::iteration_limit};
+  std::optional<CronExecuteResult> last_execution{};
+};
+
 /// Caller-started cron loop step.
 ///
 /// This owner scans stored cron jobs immediately and can wait once, within the
-/// caller's budget, for the earliest next fire before scanning again. It does
-/// not mutate job state or run queued work; callers advance `last_fired_at`
-/// after their own execution policy succeeds.
+/// caller's budget, for the earliest next fire before scanning again. It can
+/// also run a finite caller-owned execution loop through a supplied handler. It
+/// does not start timers, enqueue work, publish hooks, or call agents.
 class CronLoop {
 public:
   CronLoop(asio::any_io_executor executor, CronService service) noexcept;
 
   [[nodiscard]] async::Awaitable<core::Result<CronLoopRunOnceResult>> run_once(CronLoopRunOnceRequest request);
+  [[nodiscard]] async::Awaitable<core::Result<CronLoopRunResult>> run(CronLoopRunRequest request);
 
 private:
   asio::any_io_executor executor_;

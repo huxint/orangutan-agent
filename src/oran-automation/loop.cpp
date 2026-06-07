@@ -2,6 +2,7 @@
 
 #include <oran/automation/loop.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <expected>
 #include <string>
@@ -34,6 +35,22 @@ namespace {
   }
   if (request.job_limit == 0) {
     return std::unexpected(invalid_cron_loop_field("job_limit", "zero"));
+  }
+  return {};
+}
+
+[[nodiscard]] core::Result<void> validate_cron_run_request(const CronLoopRunRequest& request) {
+  if (request.max_total_wait < std::chrono::steady_clock::duration::zero()) {
+    return std::unexpected(invalid_cron_loop_field("max_total_wait", "negative"));
+  }
+  if (request.max_iterations == 0) {
+    return std::unexpected(invalid_cron_loop_field("max_iterations", "zero"));
+  }
+  if (request.job_limit == 0) {
+    return std::unexpected(invalid_cron_loop_field("job_limit", "zero"));
+  }
+  if (!request.handler) {
+    return std::unexpected(invalid_cron_loop_field("handler", "empty"));
   }
   return {};
 }
@@ -99,6 +116,12 @@ namespace {
       .lease_owner_key = request.lease_owner_key,
       .lease_ttl = request.lease_ttl,
   };
+}
+
+[[nodiscard]] std::size_t failed_attempt_count(const CronExecuteResult& execution) noexcept {
+  return static_cast<std::size_t>(std::ranges::count_if(execution.attempts, [](const CronExecuteAttempt& attempt) {
+    return attempt.error.has_value();
+  }));
 }
 
 [[nodiscard]] core::Error lease_conflict_error(const MemoryRetentionLoopRunOnceRequest& request) {
@@ -219,6 +242,64 @@ async::Awaitable<core::Result<CronLoopRunOnceResult>> CronLoop::run_once(CronLoo
       .waited_for = wait_for,
       .tick = std::move(*due_tick),
   };
+}
+
+async::Awaitable<core::Result<CronLoopRunResult>> CronLoop::run(CronLoopRunRequest request) {
+  if (auto valid = validate_cron_run_request(request); !valid) {
+    co_return std::unexpected(std::move(valid).error());
+  }
+
+  CronLoopRunResult result{};
+  auto now = request.now;
+  auto remaining_wait = std::chrono::duration_cast<std::chrono::nanoseconds>(request.max_total_wait);
+
+  while (result.iterations < request.max_iterations) {
+    auto execution = co_await service_.execute_due(CronExecuteRequest{
+        .now = now,
+        .job_limit = request.job_limit,
+        .handler = request.handler,
+    });
+    if (!execution) {
+      co_return std::unexpected(std::move(execution).error());
+    }
+
+    ++result.iterations;
+    result.attempted_count += execution->attempted_count;
+    result.advanced_count += execution->advanced_count;
+    const auto failed_count = failed_attempt_count(*execution);
+    result.failed_count += failed_count;
+    result.last_execution = std::move(*execution);
+
+    if (failed_count > 0) {
+      result.stop_reason = CronLoopRunStopReason::handler_failure;
+      co_return result;
+    }
+    if (!result.last_execution->tick.due_jobs.empty()) {
+      continue;
+    }
+    if (!result.last_execution->tick.next_fire_at.has_value()) {
+      result.stop_reason = CronLoopRunStopReason::no_due_work;
+      co_return result;
+    }
+
+    const auto wait_for = wait_until(now, *result.last_execution->tick.next_fire_at);
+    if (wait_for > remaining_wait) {
+      result.stop_reason = CronLoopRunStopReason::no_due_work;
+      co_return result;
+    }
+
+    auto slept = co_await async::sleep_for(executor_, wait_for);
+    if (!slept) {
+      co_return std::unexpected(std::move(slept).error());
+    }
+
+    remaining_wait -= wait_for;
+    now = add_wait(now, wait_for);
+    result.waited_for += wait_for;
+  }
+
+  result.stop_reason = CronLoopRunStopReason::iteration_limit;
+  co_return result;
 }
 
 MemoryRetentionLoop::MemoryRetentionLoop(asio::any_io_executor executor, MemoryRetentionService service) noexcept

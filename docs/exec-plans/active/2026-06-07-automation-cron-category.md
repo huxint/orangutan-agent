@@ -85,7 +85,8 @@ scheduler slices.
    In progress: slice 199 layers stored cron jobs into the explicit automation
    runtime with a caller-driven scan/wait surface, and slice 200 adds explicit
    due execution that advances state only after a caller-supplied handler
-   succeeds. Later: own cron config and service/timer startup policy without
+   succeeds. Slice 201 adds finite caller-owned loop policy over that execution
+   surface. Later: own cron config and service/timer startup policy without
    bootstrap-owned background work.
 4. **Triggered/notifier/queue policy.**
    Later: add triggered categories, queueing/backpressure, notifier routing,
@@ -146,6 +147,12 @@ scheduler slices.
   per-attempt results and leave `last_fired_at` unchanged for retry; no cron
   config ownership, hooks, queues, notifiers, process timers, or agent firing
   were added.
+- [x] 2026-06-07 22:57 +0800: Implemented `CronLoop::run(...)` plus the
+  public finite cron loop request/result/stop-reason shapes. The loop repeatedly
+  calls the explicit due-execution surface, catches up overdue fires one stored
+  fire at a time, waits only within the caller's total budget, and stops on no
+  due work, iteration limit, or handler failure without introducing process
+  timers, queues, notifiers, hooks, or agent firing.
 - [x] **Update the docs that this slice invalidates in the same PR**
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -170,6 +177,10 @@ scheduler slices.
   as a scheduler. The handler result is the only success signal that permits
   `last_fired_at` advancement; handler failures leave the fire due for explicit
   retry, and process retry/backpressure policy remains downstream.
+- 2026-06-07: Add finite cron loop policy above due execution before config or
+  service-loop startup. A bounded caller-owned loop is enough to prove catch-up,
+  wait-budget, and failure-stop semantics while preserving the plan's rule that
+  bootstrap must not gain hidden automation ownership.
 
 ## Linked Artifacts
 
@@ -181,5 +192,6 @@ scheduler slices.
 - `docs/histories/2026-06/20260607-1831-automation-cron-persistence.md`
 - `docs/histories/2026-06/20260607-2146-automation-cron-runtime-tick.md`
 - `docs/histories/2026-06/20260607-2238-automation-cron-execute-due.md`
+- `docs/histories/2026-06/20260607-2257-automation-cron-loop-run-policy.md`
 - Release note:
 - `docs/releases/feature-release-notes.md#2026-06`

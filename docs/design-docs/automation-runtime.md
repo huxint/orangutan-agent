@@ -6,12 +6,13 @@ evaluation, long-term memory retention request planning, a bootstrap-owned
 mapping from configured retention policy into that job descriptor,
 automation-owned retention job/run/lease persistence, durable cron job state, a
 caller-owned runtime state handle, a caller-driven cron scan/wait/execute-due
-boundary, and a caller-driven retention service tick with optional advisory `memory_decay`
-plus job lifecycle metadata, plus a caller-started retention loop step that can
-wait within a caller budget for one stored job to become due and lease due
-execution, plus a finite caller-owned loop policy over that step. It does not
-start detached background work, own a process service loop, read cron config,
-publish cron lifecycle hooks, enqueue cron work, or call an agent loop.
+boundary plus finite caller-owned cron loop policy, and a caller-driven
+retention service tick with optional advisory `memory_decay` plus job lifecycle
+metadata, plus a caller-started retention loop step that can wait within a
+caller budget for one stored job to become due and lease due execution, plus a
+finite caller-owned loop policy over that step. It does not start detached
+background work, own a process service loop, read cron config, publish cron
+lifecycle hooks, enqueue cron work, or call an agent loop.
 
 ## Current Status
 
@@ -169,6 +170,14 @@ calls a supplied handler for every due cron job, advances
 after the handler succeeds, and reports handler failures per attempt while
 leaving failed jobs due for the next explicit call. It still does not read cron
 config, publish lifecycle hooks, enqueue work, notify channels, or call agents.
+
+Slice 201 adds finite caller-owned cron loop policy over that explicit execution
+owner. `CronLoop::run(...)` repeatedly calls `execute_due(...)` until the
+caller-provided iteration limit is reached, no due work remains within the
+remaining wait budget, or a handler failure is observed. It can catch up overdue
+cron fires one scheduled fire at a time and can wait for the next fire within
+`max_total_wait`, but it still does not start a process service, publish hooks,
+queue work, notify channels, or call agents.
 
 ## Public API
 
@@ -393,6 +402,30 @@ struct CronLoopRunOnceResult {
   CronTickResult tick;
 };
 
+enum class CronLoopRunStopReason {
+  iteration_limit,
+  no_due_work,
+  handler_failure,
+};
+
+struct CronLoopRunRequest {
+  core::Time now;
+  std::chrono::steady_clock::duration max_total_wait;
+  std::size_t max_iterations;
+  std::size_t job_limit;
+  CronJobHandler handler;
+};
+
+struct CronLoopRunResult {
+  std::size_t iterations;
+  std::size_t attempted_count;
+  std::size_t advanced_count;
+  std::size_t failed_count;
+  std::chrono::nanoseconds waited_for;
+  CronLoopRunStopReason stop_reason;
+  std::optional<CronExecuteResult> last_execution;
+};
+
 class CronService {
  public:
   explicit CronService(AutomationRepository&);
@@ -411,6 +444,8 @@ class CronLoop {
 
   async::Awaitable<core::Result<CronLoopRunOnceResult>>
   run_once(CronLoopRunOnceRequest);
+  async::Awaitable<core::Result<CronLoopRunResult>>
+  run(CronLoopRunRequest);
 };
 
 class AutomationRuntime {
@@ -679,9 +714,9 @@ service objects borrow them.
 
 The handle exposes `repository()` for direct callers that seed or inspect jobs,
 `cron_service()` / `cron_loop()` as convenience factories for the caller-driven
-cron scan/wait/execute-due surface, and `memory_retention_service(...)` as a convenience
-factory for `MemoryRetentionService` over the owned repository plus a
-caller-supplied `memory::longterm::Backend`. It also exposes
+cron scan/wait/execute-due/run surface, and `memory_retention_service(...)` as a
+convenience factory for `MemoryRetentionService` over the owned repository plus
+a caller-supplied `memory::longterm::Backend`. It also exposes
 `memory_retention_loop(...)` as a convenience factory for the caller-started loop
 step over the same repository, backend, and hook options.
 
@@ -737,10 +772,38 @@ within budget, it sleeps through `async::sleep_for(...)` and then ticks again
 using `now + waited_for`.
 
 Cancellation while the cron loop is sleeping returns `ErrorKind::cancelled` and
-does not mutate job state. The loop deliberately has no finite repeated
-`run(...)` helper yet: `execute_due(...)` is still a caller-invoked execution
-boundary, not a process service/timer policy with queueing, shutdown, or
-backpressure semantics.
+does not mutate job state.
+
+`CronLoop::run(...)` is the finite caller-owned loop policy above the same
+scan/wait/execute surface. It validates `max_total_wait >= 0`,
+`max_iterations > 0`, `job_limit > 0`, and a non-empty handler, then repeatedly
+calls `CronService::execute_due(...)` using a logical caller clock. The result
+reports:
+
+- `iterations`: successful `execute_due(...)` calls made by the loop.
+- `attempted_count`: total due handler attempts across those calls.
+- `advanced_count`: total cron jobs whose stored state advanced after handler
+  success.
+- `failed_count`: total handler failures observed in attempt rows.
+- `waited_for`: total sleep time consumed by the loop.
+- `last_execution`: the final `CronExecuteResult` for diagnostics.
+
+When an execution has due jobs and all handlers succeed, the loop immediately
+continues with the same logical `now`. This lets one explicit run catch up an
+overdue backlog one stored fire at a time, because each successful execution
+advances `last_fired_at` to exactly the scheduled fire. When an execution finds
+no due jobs, the loop either sleeps until `next_fire_at` if it fits inside the
+remaining `max_total_wait`, or stops with `stop_reason=no_due_work`. When the
+iteration limit is reached after a successful execution, it stops with
+`stop_reason=iteration_limit`.
+
+If any handler attempt fails, `CronLoop::run(...)` stops with
+`stop_reason=handler_failure` and leaves the failed attempt in
+`last_execution`. It deliberately does not retry handler failures immediately
+inside the same run; process retry/backpressure policy remains downstream. The
+loop still does not publish cron lifecycle hooks, create run rows, enqueue work,
+notify channels, call agents, choose shutdown behavior, or decide whether
+bootstrap should open automation state.
 
 `MemoryRetentionLoop::run_once(...)` is a single caller-started awaitable for
 one stored retention job. It is the smallest useful owner above
@@ -873,7 +936,7 @@ those concerns into bootstrap or `oran-memory`.
 The next automation slices should not be picked by `STATUS.md` alone. The open
 spec 0006 boundaries now start after this explicit runtime/retention loop
 surface, cron evaluator, cron repository state, and caller-driven cron
-scan/wait/execute-due surface: cron config ownership, process service/timer
+scan/wait/execute-due/run surface: cron config ownership, process service/timer
 startup policy, cron lifecycle hook production, broader per-agent/category
 leases once agent-facing jobs exist, triggered categories, queueing/backpressure,
 and notifier routing for agent-facing jobs.
@@ -924,6 +987,9 @@ waiting, invalid scan policy, and `AutomationRuntime` cron factories.
 Slice 200 reports `test-automation` at 52 cases / 618 assertions for explicit
 cron due execution, success-only state advancement, handler failure retry state,
 not-due handler skipping, and invalid execution policy validation.
+Slice 201 reports `test-automation` at 54 cases / 663 assertions for finite cron
+loop backlog catch-up, success-only state advancement through the loop, handler
+failure stopping without immediate retry, and cron run-policy input validation.
 
 `bench-automation` planning rows are:
 
