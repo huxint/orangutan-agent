@@ -6,10 +6,11 @@
 // sinks can render an approval prompt and return a blocking decision. Slice
 // 152 adds optional per-sink redacted input views for sensitive mutation
 // payloads. Slice 179 adds the first memory write/delete lifecycle payloads,
-// slice 180 adds read-after observability, and slice 186 adds decay
-// observability. Events without a typed shape yet carry `std::monostate` so
-// sinks subscribed to them can observe occurrence without payload content;
-// typed shapes land with the producing subsystem.
+// slice 180 adds read-after observability, slice 186 adds decay observability,
+// and slice 194 adds automation job lifecycle metadata. Events without a typed
+// shape yet carry `std::monostate` so sinks subscribed to them can observe
+// occurrence without payload content; typed shapes land with the producing
+// subsystem.
 
 #pragma once
 
@@ -270,6 +271,31 @@ struct MemoryDecayPayload {
   std::chrono::nanoseconds duration{0};
 };
 
+/// Advisory automation job lifecycle metadata. Published by runtime owners that
+/// actually start automation work. It carries routing, policy, timing, and
+/// outcome metadata only; job-specific record contents stay outside the hook
+/// payload.
+struct JobLifecyclePayload {
+  Identity who;
+  /// Producer label such as `periodic`.
+  std::string source;
+  /// Durable automation job identity.
+  std::string job_key;
+  /// Stable job category such as `memory_retention`.
+  std::string job_type;
+  /// Domain scope the job is acting on, when applicable.
+  std::string scope_key;
+  core::Time scheduled_at{};
+  core::Time started_at{};
+  std::optional<core::Time> finished_at{};
+  std::optional<std::chrono::nanoseconds> duration{};
+  bool succeeded{false};
+  std::optional<std::size_t> shadowed_count{};
+  /// `core::Error::kind` wire spelling on failure; empty on success/start.
+  std::string error_kind;
+  std::string error_message;
+};
+
 /// Provider token/cost counters copied without making `oran-hook` depend on
 /// `oran-provider`.
 struct ProviderUsage {
@@ -360,10 +386,9 @@ struct ProviderFallbackPayload {
 };
 
 /// `std::monostate` is the placeholder for events whose typed payload has
-/// not landed yet — memory, channel, orchestration, automation, and session
-/// events. Sinks subscribed to those events receive the variant in its
-/// monostate alternative; they can still react to the occurrence and the
-/// event kind.
+/// not landed yet — channel, orchestration, and session events. Sinks
+/// subscribed to those events receive the variant in its monostate alternative;
+/// they can still react to the occurrence and the event kind.
 using Payload = std::variant<std::monostate,
                              ToolBeforePayload,
                              ToolDispatchedPayload,
@@ -374,6 +399,7 @@ using Payload = std::variant<std::monostate,
                              MemoryWritePayload,
                              MemoryForgetPayload,
                              MemoryDecayPayload,
+                             JobLifecyclePayload,
                              ProviderRequestPayload,
                              ProviderResponsePayload,
                              ProviderErrorPayload,

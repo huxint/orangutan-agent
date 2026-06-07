@@ -2,10 +2,10 @@
 //
 // The current automation surface ships deterministic periodic cadence, memory
 // retention planning primitives, durable job/run state, a caller-owned
-// automation runtime handle, a caller-driven retention tick owner, and a
-// caller-started retention loop step. Cron parsing, triggered jobs, leases, and
-// long-running background service loops land behind this boundary in later
-// slices.
+// automation runtime handle, a caller-driven retention tick owner with optional
+// retention hook metadata, and a caller-started retention loop step. Cron
+// parsing, triggered jobs, leases, and long-running background service loops
+// land behind this boundary in later slices.
 
 #pragma once
 

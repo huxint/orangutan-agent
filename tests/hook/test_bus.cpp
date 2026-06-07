@@ -39,7 +39,7 @@ using namespace std::chrono_literals;
 /// `payload_kind` is a stable string the test can match against.
 struct Capture {
   hook::Event event;
-  std::string payload_kind;  // "before", "dispatched", "after", "error", "ask", memory*, provider*, "monostate"
+  std::string payload_kind;  // "before", "dispatched", "after", "error", "ask", memory*, job*, provider*, "monostate"
   std::string input_json;
   std::optional<std::string> data_json;
 };
@@ -68,6 +68,8 @@ struct Capture {
           return "memory_forget";
         } else if constexpr (std::same_as<T, hook::MemoryDecayPayload>) {
           return "memory_decay";
+        } else if constexpr (std::same_as<T, hook::JobLifecyclePayload>) {
+          return "job_lifecycle";
         } else if constexpr (std::same_as<T, hook::ProviderRequestPayload>) {
           return "provider_request";
         } else if constexpr (std::same_as<T, hook::ProviderResponsePayload>) {

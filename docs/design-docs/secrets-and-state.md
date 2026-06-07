@@ -73,8 +73,10 @@ Current implementation status:
   caller-owned state handle: callers provide the database path, parent
   directories are created, the automation pool is opened, migrations run, and
   repository/service lifetime stays stable. Slice 193 adds a caller-started
-  retention loop step above that state handle, but bootstrap still does not
-  open that database or start a scheduler.
+  retention loop step above that state handle. Slice 194 adds advisory
+  retention job lifecycle hook metadata from due ticks without adding persisted
+  secret material, but bootstrap still does not open that database or start a
+  scheduler.
   Ordinary configured-route bootstrap maps the recall policy into
   prompt-boundary long-term recall. The hybrid-search block defaults disabled;
   when built with `--vector_memory=y`, configured-route bootstrap now enables the

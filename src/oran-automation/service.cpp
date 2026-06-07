@@ -7,6 +7,7 @@
 #include <string>
 #include <utility>
 
+#include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
 #include <oran/hook/bus.hpp>
 #include <oran/hook/event.hpp>
@@ -36,6 +37,11 @@ namespace {
   return std::string{error.message()};
 }
 
+[[nodiscard]] std::chrono::nanoseconds duration_between(core::Time started_at, core::Time finished_at) noexcept {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(finished_at.to_system_time_point() -
+                                                              started_at.to_system_time_point());
+}
+
 [[nodiscard]] hook::MemoryDecayPayload make_memory_decay_payload(const MemoryRetentionHookOptions& hooks,
                                                                  const MemoryRetentionJobRecord& job,
                                                                  const memory::longterm::DecayRequest& request,
@@ -60,6 +66,53 @@ namespace {
   };
 }
 
+[[nodiscard]] hook::JobLifecyclePayload make_job_started_payload(const MemoryRetentionHookOptions& hooks,
+                                                                 const MemoryRetentionJobRecord& job,
+                                                                 const PeriodicEvaluation& schedule,
+                                                                 core::Time started_at) {
+  hook::JobLifecyclePayload payload;
+  payload.who = hook::Identity{
+      .scope_key = job.job.scope_key,
+      .agent_key = hooks.agent_key,
+      .identity = hooks.identity,
+  };
+  payload.source = hooks.source;
+  payload.job_key = job.job_key;
+  payload.job_type = "memory_retention";
+  payload.scope_key = job.job.scope_key;
+  payload.scheduled_at = schedule.next_fire_at;
+  payload.started_at = started_at;
+  return payload;
+}
+
+[[nodiscard]] hook::JobLifecyclePayload make_job_finished_payload(const MemoryRetentionHookOptions& hooks,
+                                                                  const MemoryRetentionJobRecord& job,
+                                                                  const PeriodicEvaluation& schedule,
+                                                                  core::Time started_at,
+                                                                  core::Time finished_at,
+                                                                  std::size_t shadowed_count) {
+  auto payload = make_job_started_payload(hooks, job, schedule, started_at);
+  payload.finished_at = finished_at;
+  payload.duration = duration_between(started_at, finished_at);
+  payload.succeeded = true;
+  payload.shadowed_count = shadowed_count;
+  return payload;
+}
+
+[[nodiscard]] hook::JobLifecyclePayload make_job_failed_payload(const MemoryRetentionHookOptions& hooks,
+                                                                const MemoryRetentionJobRecord& job,
+                                                                const PeriodicEvaluation& schedule,
+                                                                core::Time started_at,
+                                                                core::Time finished_at,
+                                                                const core::Error& error) {
+  auto payload = make_job_started_payload(hooks, job, schedule, started_at);
+  payload.finished_at = finished_at;
+  payload.duration = duration_between(started_at, finished_at);
+  payload.error_kind = std::string{core::enum_name(error.kind())};
+  payload.error_message = failure_message(error);
+  return payload;
+}
+
 [[nodiscard]] async::Awaitable<std::optional<MemoryRetentionHookPublishResult>>
 publish_memory_decay(const MemoryRetentionHookOptions& hooks,
                      const MemoryRetentionJobRecord& job,
@@ -74,6 +127,14 @@ publish_memory_decay(const MemoryRetentionHookOptions& hooks,
       .sink_count = outcome.sinks.size(),
       .failure_count = outcome.failure_count(),
   };
+}
+
+async::Awaitable<void>
+publish_job_lifecycle(const MemoryRetentionHookOptions& hooks, hook::Event event, hook::JobLifecyclePayload payload) {
+  if (hooks.bus == nullptr) {
+    co_return;
+  }
+  [[maybe_unused]] auto outcome = co_await hooks.bus->publish_advisory(event, std::move(payload));
 }
 
 }  // namespace
@@ -112,6 +173,11 @@ MemoryRetentionService::tick(MemoryRetentionTickRequest request) {
     };
   }
 
+  const auto started_at = request.now;
+  co_await publish_job_lifecycle(options_.hooks,
+                                 hook::Event::job_started,
+                                 make_job_started_payload(options_.hooks, job, plan->schedule, started_at));
+
   auto decayed = co_await backend_->decay(*plan->decay_request);
   if (!decayed) {
     auto backend_error = std::move(decayed).error();
@@ -126,6 +192,10 @@ MemoryRetentionService::tick(MemoryRetentionTickRequest request) {
     if (!recorded) {
       co_return std::unexpected(std::move(recorded).error());
     }
+    co_await publish_job_lifecycle(
+        options_.hooks,
+        hook::Event::job_failed,
+        make_job_failed_payload(options_.hooks, job, plan->schedule, started_at, request.now, backend_error));
     co_return std::unexpected(std::move(backend_error));
   }
 
@@ -144,6 +214,14 @@ MemoryRetentionService::tick(MemoryRetentionTickRequest request) {
   if (!advanced) {
     co_return std::unexpected(std::move(advanced).error());
   }
+  co_await publish_job_lifecycle(options_.hooks,
+                                 hook::Event::job_finished,
+                                 make_job_finished_payload(options_.hooks,
+                                                           *advanced,
+                                                           plan->schedule,
+                                                           started_at,
+                                                           request.now,
+                                                           decayed->shadowed_records.size()));
   auto hook_publish =
       co_await publish_memory_decay(options_.hooks, *advanced, *plan->decay_request, decayed->shadowed_records.size());
 

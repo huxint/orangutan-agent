@@ -328,7 +328,7 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 
 ## Hook Bus
 
-> **Bus status (2026-06-07, slice 186):** the foundation
+> **Bus status (2026-06-07, slice 194):** the foundation
 > ships as `oran-hook`. `hook::Event` enumerates the 41
 > lifecycle events listed below; `hook::Mode { advisory,
 > blocking }` plus `default_mode(Event)` annotates each
@@ -371,8 +371,9 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > `ToolDispatchedPayload`, `ToolAfterPayload`, `ToolErrorPayload`, slice
 > 94's `PermissionAskRenderedPayload`, slice 126's provider lifecycle
 > payloads, slice 179's `MemoryWritePayload` / `MemoryForgetPayload`,
-> slice 180's `MemoryReadPayload` / `MemoryReadHitPayload`, and slice
-> 186's `MemoryDecayPayload` lifecycle payloads. Slice 60 adds the `ToolUsage`
+> slice 180's `MemoryReadPayload` / `MemoryReadHitPayload`, slice
+> 186's `MemoryDecayPayload`, and slice 194's `JobLifecyclePayload`
+> lifecycle payloads. Slice 60 adds the `ToolUsage`
 > metrics copied from `tool::Output::usage` onto successful
 > `ToolAfterPayload`s without making `oran-hook` depend on
 > `oran-tool`; slice 65 adds optional
@@ -413,7 +414,11 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > retention inputs, shadowed count, and timing are present, but decayed record
 > contents are not, so default and trusted-local sinks receive the same shape.
 > Slice 191 reuses that same payload for caller-driven periodic retention ticks
-> from `oran-automation`; no new record-content surface is added.
+> from `oran-automation`; no new record-content surface is added. Slice 194
+> adds `JobLifecyclePayload` for automation start/outcome metadata. It carries
+> identity, source, durable job key/type, scope, schedule/start/finish timing,
+> success, success counts, and backend failure kind/message, but not job input
+> contents or decayed records.
 > Typed shapes for
 > the remaining non-tool
 > events ship with their producers (provider request /
@@ -543,9 +548,13 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > subscribe before startup producers run. Slice 191 adds the periodic
 > automation producer: `MemoryRetentionService::tick(...)` publishes advisory
 > `memory_decay` after a successful due tick records the run and advances
-> `last_fired_at`, but only when the caller supplies a `hook::Bus`. Not-due
-> ticks, backend failures, and service instances without a bus publish nothing;
-> advisory sink failures remain non-fatal and are surfaced on the tick result.
+> `last_fired_at`, but only when the caller supplies a `hook::Bus`. Slice 194
+> adds advisory `job_started`, `job_finished`, and `job_failed` publishing from
+> that same explicit tick owner: start fires before backend decay, failed fires
+> after a backend error is recorded as a failed run, and finished fires after a
+> successful run row plus `last_fired_at` advancement. Not-due ticks and service
+> instances without a bus publish no lifecycle events; advisory sink failures
+> remain non-fatal.
 > `test-hook` now reports 37 cases / 299 assertions.
 
 ### Surface

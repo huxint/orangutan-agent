@@ -142,6 +142,11 @@ public:
   std::optional<core::Error> decay_error{};
 };
 
+struct CapturedJobLifecycle {
+  hook::Event event{};
+  hook::JobLifecyclePayload payload{};
+};
+
 }  // namespace
 
 TEST_CASE("MemoryRetentionService::tick skips a stored job before it is due", "[unit][automation][service]") {
@@ -156,7 +161,22 @@ TEST_CASE("MemoryRetentionService::tick skips a stored job before it is due", "[
              }))
                 .has_value());
     FakeBackend backend;
-    automation::MemoryRetentionService service{repo, backend};
+    std::vector<CapturedJobLifecycle> lifecycle;
+    hook::Bus bus;
+    hook::InProcessSink sink{
+        "not-due-job-lifecycle-recorder",
+        [&lifecycle](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
+          const auto* job = std::get_if<hook::JobLifecyclePayload>(payload.get());
+          REQUIRE(job != nullptr);
+          lifecycle.push_back(CapturedJobLifecycle{.event = event, .payload = *job});
+          co_return core::Result<void>{};
+        }};
+    bus.bind(sink, {hook::Event::job_started, hook::Event::job_finished, hook::Event::job_failed});
+    automation::MemoryRetentionService service{repo,
+                                               backend,
+                                               automation::MemoryRetentionServiceOptions{
+                                                   .hooks = automation::MemoryRetentionHookOptions{.bus = &bus},
+                                               }};
 
     auto result = co_await service.tick(automation::MemoryRetentionTickRequest{
         .job_key = "memory-retention:cli",
@@ -170,6 +190,7 @@ TEST_CASE("MemoryRetentionService::tick skips a stored job before it is due", "[
     REQUIRE(result->job.has_value());
     REQUIRE_FALSE(result->job->state.last_fired_at.has_value());
     REQUIRE(backend.decay_calls == 0);
+    REQUIRE(lifecycle.empty());
 
     auto runs = co_await repo.list_memory_retention_runs(automation::ListMemoryRetentionRunsOptions{
         .job_key = "memory-retention:cli",
@@ -177,6 +198,86 @@ TEST_CASE("MemoryRetentionService::tick skips a stored job before it is due", "[
     });
     REQUIRE(runs.has_value());
     REQUIRE(runs->empty());
+  });
+}
+
+TEST_CASE("MemoryRetentionService::tick publishes job lifecycle metadata for due success",
+          "[unit][automation][service][hook]") {
+  TempDb db{"oran-automation-service-job-lifecycle-success"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_memory_retention_job(automation::UpsertMemoryRetentionJobRequest{
+                 .job_key = "memory-retention:cli",
+                 .job = make_job(),
+                 .state = automation::PeriodicJobState{.last_fired_at = at(60s)},
+             }))
+                .has_value());
+    FakeBackend backend;
+    backend.decay_result.shadowed_records = {make_record("rec-1"), make_record("rec-2")};
+    std::vector<CapturedJobLifecycle> lifecycle;
+    hook::Bus bus;
+    hook::InProcessSink sink{
+        "job-lifecycle-recorder",
+        [&lifecycle](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
+          const auto* job = std::get_if<hook::JobLifecyclePayload>(payload.get());
+          REQUIRE(job != nullptr);
+          lifecycle.push_back(CapturedJobLifecycle{.event = event, .payload = *job});
+          co_return core::Result<void>{};
+        }};
+    bus.bind(sink, {hook::Event::job_started, hook::Event::job_finished, hook::Event::job_failed});
+    automation::MemoryRetentionService service{repo,
+                                               backend,
+                                               automation::MemoryRetentionServiceOptions{
+                                                   .hooks =
+                                                       automation::MemoryRetentionHookOptions{
+                                                           .bus = &bus,
+                                                           .source = "periodic",
+                                                           .agent_key = "automation-service",
+                                                           .identity = "retention-loop",
+                                                       },
+                                               }};
+
+    auto result = co_await service.tick(automation::MemoryRetentionTickRequest{
+        .job_key = "memory-retention:cli",
+        .now = at(60s + 6h + 30s),
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->ran);
+    REQUIRE(lifecycle.size() == 2);
+    REQUIRE(lifecycle[0].event == hook::Event::job_started);
+    REQUIRE(lifecycle[1].event == hook::Event::job_finished);
+
+    const auto& started = lifecycle[0].payload;
+    REQUIRE(started.who.scope_key == "cli");
+    REQUIRE(started.who.agent_key == "automation-service");
+    REQUIRE(started.who.identity == "retention-loop");
+    REQUIRE(started.source == "periodic");
+    REQUIRE(started.job_key == "memory-retention:cli");
+    REQUIRE(started.job_type == "memory_retention");
+    REQUIRE(started.scope_key == "cli");
+    REQUIRE(started.scheduled_at == at(60s + 6h));
+    REQUIRE(started.started_at == at(60s + 6h + 30s));
+    REQUIRE_FALSE(started.finished_at.has_value());
+    REQUIRE_FALSE(started.duration.has_value());
+    REQUIRE_FALSE(started.succeeded);
+    REQUIRE_FALSE(started.shadowed_count.has_value());
+    REQUIRE(started.error_kind.empty());
+    REQUIRE(started.error_message.empty());
+
+    const auto& finished = lifecycle[1].payload;
+    REQUIRE(finished.job_key == "memory-retention:cli");
+    REQUIRE(finished.job_type == "memory_retention");
+    REQUIRE(finished.scheduled_at == at(60s + 6h));
+    REQUIRE(finished.started_at == at(60s + 6h + 30s));
+    REQUIRE(finished.finished_at == at(60s + 6h + 30s));
+    REQUIRE(finished.duration == 0s);
+    REQUIRE(finished.succeeded);
+    REQUIRE(finished.shadowed_count == 2);
+    REQUIRE(finished.error_kind.empty());
+    REQUIRE(finished.error_message.empty());
   });
 }
 
@@ -353,7 +454,22 @@ TEST_CASE("MemoryRetentionService::tick records backend failures without advanci
                 .has_value());
     FakeBackend backend;
     backend.decay_error = core::Error::upstream("backend unavailable");
-    automation::MemoryRetentionService service{repo, backend};
+    std::vector<CapturedJobLifecycle> lifecycle;
+    hook::Bus bus;
+    hook::InProcessSink sink{
+        "failed-job-lifecycle-recorder",
+        [&lifecycle](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
+          const auto* job = std::get_if<hook::JobLifecyclePayload>(payload.get());
+          REQUIRE(job != nullptr);
+          lifecycle.push_back(CapturedJobLifecycle{.event = event, .payload = *job});
+          co_return core::Result<void>{};
+        }};
+    bus.bind(sink, {hook::Event::job_started, hook::Event::job_finished, hook::Event::job_failed});
+    automation::MemoryRetentionService service{repo,
+                                               backend,
+                                               automation::MemoryRetentionServiceOptions{
+                                                   .hooks = automation::MemoryRetentionHookOptions{.bus = &bus},
+                                               }};
 
     auto result = co_await service.tick(automation::MemoryRetentionTickRequest{
         .job_key = "memory-retention:cli",
@@ -363,6 +479,20 @@ TEST_CASE("MemoryRetentionService::tick records backend failures without advanci
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::upstream);
     REQUIRE(backend.decay_calls == 1);
+    REQUIRE(lifecycle.size() == 2);
+    REQUIRE(lifecycle[0].event == hook::Event::job_started);
+    REQUIRE(lifecycle[1].event == hook::Event::job_failed);
+    REQUIRE(lifecycle[0].payload.job_key == "memory-retention:cli");
+    REQUIRE(lifecycle[0].payload.scheduled_at == at(60s));
+    REQUIRE_FALSE(lifecycle[0].payload.finished_at.has_value());
+    REQUIRE(lifecycle[1].payload.job_key == "memory-retention:cli");
+    REQUIRE(lifecycle[1].payload.scheduled_at == at(60s));
+    REQUIRE(lifecycle[1].payload.finished_at == at(60s));
+    REQUIRE(lifecycle[1].payload.duration == 0s);
+    REQUIRE_FALSE(lifecycle[1].payload.succeeded);
+    REQUIRE_FALSE(lifecycle[1].payload.shadowed_count.has_value());
+    REQUIRE(lifecycle[1].payload.error_kind == "upstream");
+    REQUIRE(lifecycle[1].payload.error_message == "backend unavailable");
 
     auto loaded = co_await repo.get_memory_retention_job("memory-retention:cli");
     REQUIRE(loaded.has_value());

@@ -27,7 +27,8 @@ service, slice 189 adds the automation-owned persistent state boundary, slice
 190 adds the first explicit caller-driven retention tick owner, slice 191
 adds optional periodic `memory_decay` publishing from that tick owner, slice
 192 adds the caller-owned automation runtime state handle, and slice 193 adds a
-caller-started retention loop step. The current API
+caller-started retention loop step. Slice 194 adds advisory job lifecycle
+metadata from due retention ticks. The current API
 evaluates a periodic schedule from caller-supplied state, maps a long-term
 memory retention policy into a due-only `memory::longterm::DecayRequest`,
 persists the configured retention job plus run history through
@@ -70,19 +71,26 @@ Current implementation:
   source label, agent key, and identity. Successful due ticks publish advisory
   `memory_decay` metadata after durable state advances; not-due ticks and
   backend failures publish nothing, and advisory sink failures remain non-fatal.
+- Due `MemoryRetentionService::tick(...)` calls also publish advisory
+  `job_started`, `job_finished`, and `job_failed` metadata through the same hook
+  settings. `job_started` fires before backend decay, `job_failed` fires after a
+  backend failure is recorded as a failed run, and `job_finished` fires after a
+  successful run row plus `last_fired_at` advancement. Not-due ticks publish no
+  job lifecycle events.
 - `MemoryRetentionLoop::run_once(...)` ticks a stored job immediately, returns
   the not-due tick when the next fire is beyond `max_wait`, waits with
   `async::sleep_for(...)` when the next fire is within budget, ticks again at
   the scheduled fire, propagates cancellation while waiting, and rejects
   negative wait budgets.
-- `test-automation` reports 26 cases / 274 assertions.
+- `test-automation` reports 27 cases / 327 assertions.
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 
 Still open: cron parsing, triggered jobs, bootstrap/service-loop startup policy
 over `AutomationRuntime`, per-agent leases, queueing/backpressure, long-running
-service-loop cancellation policy, job lifecycle hooks, notifier callbacks, and
-the scheduler tick performance criterion.
+service-loop cancellation policy, notifier callbacks, and the scheduler tick
+performance criterion. Job lifecycle publication exists for explicit retention
+ticks only; full scheduler/category lifecycle ownership remains downstream.
 
 ## Scope (v1.1)
 

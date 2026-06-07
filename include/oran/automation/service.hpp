@@ -56,8 +56,9 @@ struct MemoryRetentionTickResult {
 ///
 /// This owner intentionally does not start a background loop, acquire leases, or
 /// own timers. A future service loop can call `tick(...)` when it owns those
-/// process-level concerns. When constructed with a hook bus, a successful due
-/// tick publishes advisory `memory_decay` metadata after durable state advances.
+/// process-level concerns. When constructed with a hook bus, a due tick
+/// publishes advisory job lifecycle metadata around backend work and publishes
+/// `memory_decay` metadata after successful durable state advances.
 class MemoryRetentionService {
 public:
   MemoryRetentionService(AutomationRepository& repository,

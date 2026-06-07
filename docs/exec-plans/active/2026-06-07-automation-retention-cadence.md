@@ -115,6 +115,10 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
    tick one stored retention job, wait only within an explicit budget for its
    next scheduled fire, propagate cancellation while waiting, and delegate due
    work back to the retention service without starting a detached scheduler.
+9. **Retention job lifecycle hooks.**
+   Done in slice 194: publish advisory `job_started`, `job_finished`, and
+   `job_failed` metadata from due `MemoryRetentionService::tick(...)` calls
+   while keeping lease ownership and the long-running service loop downstream.
 
 ## Validation
 
@@ -138,6 +142,9 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
 - Observability checks:
   - Confirm `memory_decay` publishes only after successful due ticks and remains
     absent for not-due ticks, backend failures, and services without a hook bus.
+  - Confirm `job_started`, `job_finished`, and `job_failed` publish only for due
+    retention ticks when the caller supplies a hook bus, and remain absent for
+    not-due ticks.
 - Bench comparison:
   - First bucket only pins cadence-evaluation overhead for target parity; the
     service tick benchmark from spec 0006 remains downstream.
@@ -199,8 +206,17 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
   `MemoryRetentionService::tick(...)`.
 - [x] 2026-06-07 12:27 +0800: Kept bootstrap unopened for `automation.db` and
   still did not add leases, cron, detached background work, or job lifecycle
-  hooks; the next useful boundary is lease/job lifecycle ownership around this
+  hooks; the next useful boundary is lease ownership around this
   explicit loop step.
+- [x] 2026-06-07 13:30 +0800: Added advisory retention job lifecycle publishing
+  to `MemoryRetentionService::tick(...)`. Due ticks now emit `job_started`
+  before backend decay, `job_failed` after a backend failure is recorded as a
+  failed run, and `job_finished` after a successful run row plus `last_fired_at`
+  advancement.
+- [x] 2026-06-07 13:30 +0800: Kept bootstrap unopened for `automation.db` and
+  still did not add leases, cron, detached background work, or a long-running
+  service loop; the next useful boundary is lease ownership around the explicit
+  runtime/loop path.
 - [x] Update docs that this slice invalidates in the same PR
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -246,6 +262,10 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
   plus one possible due run while keeping leases, catch-up/coalesce policy,
   job lifecycle hooks, and bootstrap/daemon startup ownership outside this
   slice.
+- 2026-06-07: Publish retention job lifecycle metadata from the explicit tick
+  owner before adding leases. This gives observers a durable start/success/fail
+  boundary for due retention work while keeping lease state, repeated scheduling,
+  and bootstrap/daemon startup ownership outside this slice.
 
 ## Linked Artifacts
 
@@ -268,5 +288,7 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
   `docs/histories/2026-06/20260607-1107-automation-runtime-state-handle.md`
   and
   `docs/histories/2026-06/20260607-1227-automation-retention-loop-step.md`
+  and
+  `docs/histories/2026-06/20260607-1330-automation-retention-job-lifecycle-hooks.md`
 - Release note:
-  `docs/releases/feature-release-notes.md#automation-retention-loop-step`
+  `docs/releases/feature-release-notes.md#automation-retention-job-lifecycle-hooks`

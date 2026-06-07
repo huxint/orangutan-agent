@@ -245,9 +245,16 @@ operators can reason about retention, scope, and visibility.
   next scheduled fire, delegates due work back to `MemoryRetentionService`,
   reports cancellation while waiting, and rejects negative wait budgets. It is
   still a single explicit awaitable, not memory-owned periodic execution.
+- Automation retention job lifecycle hooks shipped in slice 194:
+  due `MemoryRetentionService::tick(...)` calls publish advisory
+  `job_started`, `job_failed`, and `job_finished` metadata through the
+  caller-supplied hook bus. Outcome events are emitted only after durable
+  run/state transitions, not for not-due ticks, and the payload carries no
+  decayed record content.
 - Optional `MEMORY.md` mirror under `<workspace>/.orangutan/memory/`.
-- Blocking `memory_read_before`, automation service-loop ownership, leases, job
-  lifecycle hooks, and memory-write rewrite/annotation remain downstream.
+- Blocking `memory_read_before`, automation service-loop ownership, leases,
+  full scheduler/category lifecycle ownership, and memory-write
+  rewrite/annotation remain downstream.
 
 ## Scope (v1.1)
 
@@ -320,8 +327,11 @@ operators can reason about retention, scope, and visibility.
    `AutomationRuntime::open(...)` state handle for automation DB opening,
    migration, and repository/service lifetime ownership. Slice 193 adds the
    caller-started retention loop step that can wait within a caller budget and
-   propagate cancellation while waiting.
-   Bootstrap service ownership, leases, and job lifecycle hooks remain open.
+   propagate cancellation while waiting. Slice 194 adds advisory
+   `job_started`, `job_failed`, and `job_finished` metadata from due retention
+   ticks after the corresponding durable state boundary.
+   Bootstrap service ownership, leases, and long-running scheduler ownership
+   remain open.
 5. A `memory.write.before` hook can veto a write. **Status:** closed for the
    bootstrap `memory.remember` tool path in slice 179. `AgentPromptRunner`
    publishes blocking `memory_write_before` after parsing/scoping the record and
@@ -408,6 +418,7 @@ xmake run test-bootstrap
 scripts/bench-compare.sh memory
 ```
 
-Slice 193 reports `test-automation` at 26 cases / 274 assertions for the
+Slice 194 reports `test-automation` at 27 cases / 327 assertions for the
 retention planner, repository, service tick, periodic hook-publish,
-caller-owned runtime state-handle, and caller-started loop-step boundaries.
+caller-owned runtime state-handle, caller-started loop-step, and retention job
+lifecycle hook boundaries.
