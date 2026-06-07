@@ -11,7 +11,10 @@
 #include <utility>
 #include <vector>
 
+#include <asio/bind_cancellation_slot.hpp>
+#include <asio/cancellation_signal.hpp>
 #include <asio/io_context.hpp>
+#include <asio/steady_timer.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -56,8 +59,11 @@ private:
   std::filesystem::path path_;
 };
 
-[[nodiscard]] core::Time at(std::chrono::seconds value) {
-  return core::Time{core::Time::time_point{value}};
+template <typename Rep, typename Period>
+[[nodiscard]] core::Time at(std::chrono::duration<Rep, Period> value) {
+  return core::Time{core::Time::time_point{
+      std::chrono::duration_cast<core::Time::clock::duration>(value),
+  }};
 }
 
 [[nodiscard]] bool has_field(const core::Error& error, std::string_view field) {
@@ -258,5 +264,155 @@ TEST_CASE("AutomationRuntime creates retention services over owned repository st
     REQUIRE(loaded.has_value());
     REQUIRE(loaded->has_value());
     REQUIRE((*loaded)->state.last_fired_at == at(60s));
+  });
+}
+
+TEST_CASE("AutomationRuntime creates a retention loop that skips waits beyond budget",
+          "[unit][automation][runtime][loop]") {
+  TempWorkspace workspace{"oran-automation-runtime-loop-budget"};
+  test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {
+    auto runtime = co_await automation::AutomationRuntime::open(
+        io.get_executor(),
+        automation::AutomationRuntimeOptions{.database_path = automation_db_path(workspace)});
+    REQUIRE(runtime.has_value());
+    REQUIRE((co_await runtime->repository().upsert_memory_retention_job(automation::UpsertMemoryRetentionJobRequest{
+                 .job_key = "memory-retention:cli",
+                 .job = make_job(),
+             }))
+                .has_value());
+
+    FakeBackend backend;
+    auto loop = runtime->memory_retention_loop(backend);
+    auto result = co_await loop.run_once(automation::MemoryRetentionLoopRunOnceRequest{
+        .job_key = "memory-retention:cli",
+        .now = at(0s),
+        .max_wait = 10ms,
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE_FALSE(result->tick.ran);
+    REQUIRE(result->tick.schedule.next_fire_at == at(60s));
+    REQUIRE(result->waited_for == 0ns);
+    REQUIRE(backend.decay_calls == 0);
+  });
+}
+
+TEST_CASE("AutomationRuntime retention loop waits within budget and runs due work",
+          "[unit][automation][runtime][loop]") {
+  TempWorkspace workspace{"oran-automation-runtime-loop-wait"};
+  test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {
+    auto runtime = co_await automation::AutomationRuntime::open(
+        io.get_executor(),
+        automation::AutomationRuntimeOptions{.database_path = automation_db_path(workspace)});
+    REQUIRE(runtime.has_value());
+    REQUIRE((co_await runtime->repository().upsert_memory_retention_job(automation::UpsertMemoryRetentionJobRequest{
+                 .job_key = "memory-retention:cli",
+                 .job = make_job(),
+             }))
+                .has_value());
+
+    FakeBackend backend;
+    backend.decay_result.shadowed_records = {make_record("rec-1"), make_record("rec-2")};
+    auto loop = runtime->memory_retention_loop(backend);
+    auto result = co_await loop.run_once(automation::MemoryRetentionLoopRunOnceRequest{
+        .job_key = "memory-retention:cli",
+        .now = at(59s + 990ms),
+        .max_wait = 50ms,
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->tick.ran);
+    REQUIRE(result->waited_for == 10ms);
+    REQUIRE(result->tick.shadowed_count == 2);
+    REQUIRE(backend.decay_calls == 1);
+    REQUIRE(backend.last_decay.decay_at == at(60s));
+
+    auto loaded = co_await runtime->repository().get_memory_retention_job("memory-retention:cli");
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->has_value());
+    REQUIRE((*loaded)->state.last_fired_at == at(60s));
+  });
+}
+
+TEST_CASE("MemoryRetentionLoop::run_once reports cancellation while waiting",
+          "[unit][automation][runtime][loop][cancellation]") {
+  TempWorkspace workspace{"oran-automation-runtime-loop-cancel"};
+  asio::io_context io;
+  asio::cancellation_signal signal;
+  std::optional<core::Result<automation::MemoryRetentionLoopRunOnceResult>> result;
+  std::exception_ptr failure;
+
+  asio::steady_timer cancel_timer{io};
+  cancel_timer.expires_after(10ms);
+  cancel_timer.async_wait([&](const asio::error_code& ec) {
+    if (!ec) {
+      signal.emit(asio::cancellation_type::terminal);
+    }
+  });
+
+  asio::co_spawn(
+      io,
+      [&]() -> async::Awaitable<core::Result<automation::MemoryRetentionLoopRunOnceResult>> {
+        auto runtime = co_await automation::AutomationRuntime::open(
+            io.get_executor(),
+            automation::AutomationRuntimeOptions{.database_path = automation_db_path(workspace)});
+        if (!runtime) {
+          co_return std::unexpected(std::move(runtime).error());
+        }
+        auto upserted =
+            co_await runtime->repository().upsert_memory_retention_job(automation::UpsertMemoryRetentionJobRequest{
+                .job_key = "memory-retention:cli",
+                .job = make_job(),
+            });
+        if (!upserted) {
+          co_return std::unexpected(std::move(upserted).error());
+        }
+
+        FakeBackend backend;
+        auto loop = runtime->memory_retention_loop(backend);
+        co_return co_await loop.run_once(automation::MemoryRetentionLoopRunOnceRequest{
+            .job_key = "memory-retention:cli",
+            .now = at(59s),
+            .max_wait = 2s,
+        });
+      },
+      asio::bind_cancellation_slot(
+          signal.slot(),
+          [&](std::exception_ptr ep, core::Result<automation::MemoryRetentionLoopRunOnceResult> r) {
+            failure = ep;
+            result = std::move(r);
+            cancel_timer.cancel();
+            io.stop();
+          }));
+  io.run();
+
+  if (failure) {
+    std::rethrow_exception(failure);
+  }
+  REQUIRE(result.has_value());
+  REQUIRE_FALSE(result->has_value());
+  REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
+}
+
+TEST_CASE("MemoryRetentionLoop::run_once rejects negative wait budgets", "[unit][automation][runtime][loop]") {
+  TempWorkspace workspace{"oran-automation-runtime-loop-invalid"};
+  test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {
+    auto runtime = co_await automation::AutomationRuntime::open(
+        io.get_executor(),
+        automation::AutomationRuntimeOptions{.database_path = automation_db_path(workspace)});
+    REQUIRE(runtime.has_value());
+
+    FakeBackend backend;
+    auto loop = runtime->memory_retention_loop(backend);
+    auto result = co_await loop.run_once(automation::MemoryRetentionLoopRunOnceRequest{
+        .job_key = "memory-retention:cli",
+        .now = at(0s),
+        .max_wait = -1ms,
+    });
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(has_field(result.error(), "max_wait"));
+    REQUIRE(backend.decay_calls == 0);
   });
 }

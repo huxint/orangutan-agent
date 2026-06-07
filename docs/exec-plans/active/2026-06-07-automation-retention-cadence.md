@@ -110,6 +110,11 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
    pool/repository lifetime stable, inspect the migration report, and construct
    retention services over that state without starting timers or bootstrap
    background work.
+8. **Caller-started loop step.**
+   Done in slice 193: add `MemoryRetentionLoop::run_once(...)` so callers can
+   tick one stored retention job, wait only within an explicit budget for its
+   next scheduled fire, propagate cancellation while waiting, and delegate due
+   work back to the retention service without starting a detached scheduler.
 
 ## Validation
 
@@ -128,6 +133,8 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
   - Confirm `oran-memory` dependency direction does not change.
   - Confirm `AutomationRuntime` opens automation state only when the caller
     explicitly asks.
+  - Confirm `MemoryRetentionLoop::run_once(...)` is one explicit awaitable and
+    does not spawn detached work.
 - Observability checks:
   - Confirm `memory_decay` publishes only after successful due ticks and remains
     absent for not-due ticks, backend failures, and services without a hook bus.
@@ -185,6 +192,15 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
 - [x] 2026-06-07 11:07 +0800: Kept bootstrap unopened for `automation.db`; the
   next useful product boundary is a caller-started service-loop owner over
   `AutomationRuntime`, with leases, cancellation, and job lifecycle hooks.
+- [x] 2026-06-07 12:27 +0800: Added `MemoryRetentionLoop::run_once(...)` as the
+  caller-started loop step over `AutomationRuntime`. It ticks immediately,
+  skips waits beyond budget, waits with `async::sleep_for(...)` within budget,
+  propagates cancellation while waiting, and delegates due work back to
+  `MemoryRetentionService::tick(...)`.
+- [x] 2026-06-07 12:27 +0800: Kept bootstrap unopened for `automation.db` and
+  still did not add leases, cron, detached background work, or job lifecycle
+  hooks; the next useful boundary is lease/job lifecycle ownership around this
+  explicit loop step.
 - [x] Update docs that this slice invalidates in the same PR
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -225,6 +241,11 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
   database directory, opens/migrates `automation.db`, and owns the
   pool/repository lifetime; timers, leases, cancellation, agent firing, and job
   lifecycle hooks still belong to the future loop owner.
+- 2026-06-07: Add a caller-started loop step before a long-running scheduler.
+  `MemoryRetentionLoop::run_once(...)` gives runtime owners one budgeted wait
+  plus one possible due run while keeping leases, catch-up/coalesce policy,
+  job lifecycle hooks, and bootstrap/daemon startup ownership outside this
+  slice.
 
 ## Linked Artifacts
 
@@ -245,5 +266,7 @@ moving scheduling math or service ownership into bootstrap or `oran-memory`.
   `docs/histories/2026-06/20260607-1035-automation-retention-decay-hooks.md`
   and
   `docs/histories/2026-06/20260607-1107-automation-runtime-state-handle.md`
+  and
+  `docs/histories/2026-06/20260607-1227-automation-retention-loop-step.md`
 - Release note:
-  `docs/releases/feature-release-notes.md#automation-runtime-state-handle`
+  `docs/releases/feature-release-notes.md#automation-retention-loop-step`

@@ -46,9 +46,14 @@ namespace {
 }  // namespace
 
 struct AutomationRuntime::Impl {
-  Impl(std::string path, storage::Pool opened_pool, AutomationRepositoryOptions repository_options)
-      : database_path{std::move(path)}, pool{std::move(opened_pool)}, repository{pool, std::move(repository_options)} {}
+  Impl(asio::any_io_executor runtime_executor,
+       std::string path,
+       storage::Pool opened_pool,
+       AutomationRepositoryOptions repository_options)
+      : executor{std::move(runtime_executor)}, database_path{std::move(path)}, pool{std::move(opened_pool)},
+        repository{pool, std::move(repository_options)} {}
 
+  asio::any_io_executor executor;
   std::string database_path;
   storage::Pool pool;
   AutomationRepository repository;
@@ -72,6 +77,7 @@ async::Awaitable<core::Result<AutomationRuntime>> AutomationRuntime::open(asio::
     co_return std::unexpected(std::move(parent).error());
   }
 
+  auto runtime_executor = executor;
   auto pool = storage::Pool::open(std::move(executor),
                                   storage::PoolOptions{
                                       .path = options.database_path,
@@ -85,7 +91,10 @@ async::Awaitable<core::Result<AutomationRuntime>> AutomationRuntime::open(asio::
     co_return std::unexpected(std::move(pool).error().with("database", "automation"));
   }
 
-  auto impl = std::make_unique<Impl>(std::move(options.database_path), std::move(*pool), std::move(options.repository));
+  auto impl = std::make_unique<Impl>(std::move(runtime_executor),
+                                     std::move(options.database_path),
+                                     std::move(*pool),
+                                     std::move(options.repository));
   auto migrated = co_await impl->repository.migrate();
   if (!migrated) {
     co_return std::unexpected(std::move(migrated).error().with("database", "automation"));
@@ -114,6 +123,11 @@ const AutomationRepository& AutomationRuntime::repository() const noexcept {
 MemoryRetentionService AutomationRuntime::memory_retention_service(memory::longterm::Backend& backend,
                                                                    MemoryRetentionServiceOptions options) noexcept {
   return MemoryRetentionService{impl_->repository, backend, std::move(options)};
+}
+
+MemoryRetentionLoop AutomationRuntime::memory_retention_loop(memory::longterm::Backend& backend,
+                                                             MemoryRetentionServiceOptions options) noexcept {
+  return MemoryRetentionLoop{impl_->executor, memory_retention_service(backend, std::move(options))};
 }
 
 }  // namespace orangutan::automation

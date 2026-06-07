@@ -44,8 +44,9 @@ The live sibling exceptions are narrow and directional: `http -> async`, `io -> 
 `prompt -> tool`, and `provider -> prompt`. `oran-skill` depends downward on
 `oran-async` and `oran-io` for loader snapshots. `oran-automation` depends
 downward on `oran-async`, `oran-storage`, `oran-memory`, and `oran-hook` for its
-awaitable retention repository/runtime state handle, memory-retention planning
-contract, and optional advisory `memory_decay` producer; those libraries must
+awaitable retention repository/runtime state handle/loop step,
+memory-retention planning contract, and optional advisory `memory_decay`
+producer; those libraries must
 not depend back on automation. `oran-bootstrap` is the composition root above
 the interface layer and may wire lower libraries together, including the
 config-to-automation retention descriptor mapping.

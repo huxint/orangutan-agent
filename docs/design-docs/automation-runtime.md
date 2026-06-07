@@ -6,8 +6,10 @@ long-term memory retention request planning, a bootstrap-owned mapping from
 configured retention policy into that job descriptor, automation-owned
 retention job/run persistence, a caller-owned runtime state handle, and a
 caller-driven retention service tick with optional advisory `memory_decay`
-publishing. It does not start background work, publish job lifecycle hooks,
-acquire leases, or call an agent loop.
+publishing, plus a caller-started retention loop step that can wait within a
+caller budget for one stored job to become due. It does not start detached
+background work, publish job lifecycle hooks, acquire leases, or call an agent
+loop.
 
 ## Current Status
 
@@ -78,9 +80,21 @@ exports `AutomationRuntimeOptions` and move-only `AutomationRuntime`.
 `AutomationRuntime::open(...)` validates the database path, creates parent
 directories, opens a `storage::Pool`, runs the automation migration through the
 owned repository, stores the migration report, exposes that repository, and can
-construct `MemoryRetentionService` instances over the same stable state. It
-still does not start timers, acquire leases, publish job lifecycle hooks, wire
-bootstrap to open `automation.db`, or call agents.
+construct `MemoryRetentionService` and `MemoryRetentionLoop` instances over the
+same stable state. It still does not start timers, acquire leases, publish job
+lifecycle hooks, wire bootstrap to open `automation.db`, or call agents.
+
+Slice 193 adds the first caller-started loop step without turning automation
+into a daemon. `<oran/automation/loop.hpp>` exports
+`MemoryRetentionLoopRunOnceRequest`, `MemoryRetentionLoopRunOnceResult`, and
+`MemoryRetentionLoop`. `AutomationRuntime::memory_retention_loop(...)`
+constructs the step owner from the runtime executor and the existing retention
+service. `run_once(...)` ticks immediately, returns a not-due result when the
+next fire is outside `max_wait`, sleeps with `async::sleep_for(...)` when the
+next fire is within the caller's budget, and then ticks again at the scheduled
+fire. Parent cancellation while waiting returns `ErrorKind::cancelled`, and a
+negative `max_wait` returns `ErrorKind::invalid_argument`. It is still a single
+explicit awaitable, not a detached background loop.
 
 ## Public API
 
@@ -209,6 +223,21 @@ class AutomationRuntime {
   MemoryRetentionService memory_retention_service(
       memory::longterm::Backend&,
       MemoryRetentionServiceOptions = {}) noexcept;
+
+  MemoryRetentionLoop memory_retention_loop(
+      memory::longterm::Backend&,
+      MemoryRetentionServiceOptions = {}) noexcept;
+};
+
+struct MemoryRetentionLoopRunOnceRequest {
+  std::string job_key;
+  core::Time now;
+  std::chrono::steady_clock::duration max_wait;
+};
+
+struct MemoryRetentionLoopRunOnceResult {
+  std::chrono::nanoseconds waited_for;
+  MemoryRetentionTickResult tick;
 };
 
 struct MemoryRetentionTickRequest {
@@ -250,6 +279,14 @@ class MemoryRetentionService {
 
   async::Awaitable<core::Result<MemoryRetentionTickResult>>
   tick(MemoryRetentionTickRequest);
+};
+
+class MemoryRetentionLoop {
+ public:
+  MemoryRetentionLoop(asio::any_io_executor, MemoryRetentionService);
+
+  async::Awaitable<core::Result<MemoryRetentionLoopRunOnceResult>>
+  run_once(MemoryRetentionLoopRunOnceRequest);
 };
 
 }  // namespace orangutan::automation
@@ -337,7 +374,9 @@ service objects borrow them.
 The handle exposes `repository()` for direct callers that seed or inspect jobs,
 and `memory_retention_service(...)` as a convenience factory for
 `MemoryRetentionService` over the owned repository plus a caller-supplied
-`memory::longterm::Backend`.
+`memory::longterm::Backend`. It also exposes `memory_retention_loop(...)` as a
+convenience factory for the caller-started loop step over the same repository,
+backend, and hook options.
 
 The runtime handle is intentionally not a scheduler. It does not sleep, spawn
 detached coroutines, acquire process leases, own a hook bus, publish job
@@ -345,6 +384,41 @@ lifecycle hooks, or decide whether bootstrap should open `automation.db`.
 Bootstrap still only maps the configured retention policy into a descriptor; a
 caller must explicitly call `AutomationRuntime::open(...)` before automation
 state exists.
+
+## Loop Step Semantics
+
+`MemoryRetentionLoop::run_once(...)` is a single caller-started awaitable for
+one stored retention job. It is the smallest useful owner above
+`MemoryRetentionService::tick(...)`: it can wait for the next scheduled fire,
+but it does not own a long-running loop, spawn detached coroutines, acquire
+leases, or decide process startup policy.
+
+The request validates `max_wait >= 0`. A negative wait budget returns
+`ErrorKind::invalid_argument` with `field=max_wait` before repository or backend
+work.
+
+The step then calls `MemoryRetentionService::tick(...)` using the supplied
+`job_key` and `now`:
+
+- If that first tick runs due work, `run_once(...)` returns immediately with
+  `waited_for=0`.
+- If the first tick is not due and `schedule.next_fire_at - now` is greater
+  than `max_wait`, `run_once(...)` returns that not-due tick with
+  `waited_for=0`.
+- If the next fire is within the caller's budget, `run_once(...)` sleeps for the
+  exact wait duration through `async::sleep_for(...)`, then ticks again using
+  `now + waited_for`.
+
+Cancellation while sleeping is surfaced as `ErrorKind::cancelled`; no second
+tick runs after that cancellation result. Repository, backend, and hook errors
+from either tick are returned unchanged, so the loop step does not hide failed
+decay or failed durable recording.
+
+The loop step intentionally does not skip forward over multiple missed
+intervals or catch up a backlog. It reuses the same tick semantics as direct
+callers, where `last_fired_at` advances only after successful due work. Future
+service-loop ownership can layer leases, catch-up/coalesce/drop policy,
+shutdown, and job lifecycle hooks around this awaitable.
 
 ## Tick Semantics
 
@@ -397,12 +471,12 @@ into bootstrap or `oran-memory`.
 
 The next automation slices can build on this boundary in this order:
 
-1. Add service-loop ownership that starts from an explicit `AutomationRuntime`.
-2. Add per-agent leases and cancellation semantics around service-loop-owned
-   runs.
-3. Publish job lifecycle hooks from the actual periodic service owner.
-4. Add cron and triggered job categories.
-5. Add queueing/backpressure and notifier routing for agent-facing jobs.
+1. Add per-agent leases and job lifecycle hook publication around explicit
+   `AutomationRuntime` + `MemoryRetentionLoop` runs.
+2. Add service-loop ownership that repeatedly starts loop steps under shutdown
+   and backpressure policy.
+3. Add cron and triggered job categories.
+4. Add queueing/backpressure and notifier routing for agent-facing jobs.
 
 ## Validation
 
@@ -426,7 +500,10 @@ invalid/missing job handling. Slice 191 reports `test-automation` at 18 cases /
 sink-failure reporting from the explicit tick owner. Slice 192 reports
 `test-automation` at 22 cases / 245 assertions for runtime open/migration,
 already-migrated reopen, empty-path validation, and retention-service creation
-over the owned repository state. The local
+over the owned repository state. Slice 193 reports `test-automation` at 26
+cases / 274 assertions for the caller-started loop step's wait-budget skip,
+within-budget wait/run, cancellation while waiting, and negative-budget
+validation. The local
 `bench-automation` planning rows are:
 
 - `automation.periodic_evaluate_1024` at about 4.84 us / 1024-job batch.

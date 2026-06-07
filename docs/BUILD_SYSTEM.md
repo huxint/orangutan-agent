@@ -292,7 +292,8 @@ long-term memory retention request planning, the slice-189
 the slice-190 `MemoryRetentionService` caller-driven tick owner, the slice 191
 optional periodic `memory_decay` hook producer, and the slice-192
 `AutomationRuntime` caller-owned state handle for explicit open/migrate
-ownership. It depends
+ownership, plus the slice-193 `MemoryRetentionLoop` caller-started run-once
+step. It depends
 downward on `oran-core` for `Result<T>` / `Time`, `oran-async` for awaitable
 repository/service/runtime APIs, `oran-storage` for `Pool` / migrations, and
 `oran-memory` for the public `memory::longterm::DecayRequest` and `Backend`
@@ -301,9 +302,9 @@ the caller explicitly supplies one. It does not yet depend on `oran-agent`
 because service-loop leases, agent firing, and notifier routing remain
 downstream. It is registered with `test-automation` and `bench-automation`.
 Slice 188 makes `oran-bootstrap` and the main `orangutan` binary link it for
-config-to-retention job descriptor mapping only; slices 189-192 add
-repository/tick/hook-production/runtime-state ownership without starting an
-automation service loop or making bootstrap open `automation.db`.
+config-to-retention job descriptor mapping only; slices 189-193 add
+repository/tick/hook-production/runtime-state/loop-step ownership without
+starting an automation service loop or making bootstrap open `automation.db`.
 
 `oran-bootstrap` depends on `oran-automation` so configured-route startup can
 map `memory.longterm.retention` into an automation-owned

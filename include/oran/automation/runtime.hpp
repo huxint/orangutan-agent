@@ -10,6 +10,7 @@
 #include <asio/any_io_executor.hpp>
 
 #include <oran/async/awaitable_fwd.hpp>
+#include <oran/automation/loop.hpp>
 #include <oran/automation/service.hpp>
 #include <oran/core/result.hpp>
 #include <oran/storage/migrations.hpp>
@@ -51,6 +52,8 @@ public:
 
   [[nodiscard]] MemoryRetentionService memory_retention_service(memory::longterm::Backend& backend,
                                                                 MemoryRetentionServiceOptions options = {}) noexcept;
+  [[nodiscard]] MemoryRetentionLoop memory_retention_loop(memory::longterm::Backend& backend,
+                                                          MemoryRetentionServiceOptions options = {}) noexcept;
 
 private:
   struct Impl;
