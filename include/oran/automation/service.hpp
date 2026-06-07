@@ -46,6 +46,17 @@ struct CronServiceOptions {
   CronHookOptions hooks{};
 };
 
+struct TriggeredHookOptions {
+  hook::Bus* bus{};
+  std::string source{"triggered"};
+  std::string agent_key{"automation"};
+  std::string identity{"triggered"};
+};
+
+struct TriggeredServiceOptions {
+  TriggeredHookOptions hooks{};
+};
+
 struct MemoryRetentionTickRequest {
   std::string job_key;
   core::Time now{core::Time::epoch()};
@@ -154,11 +165,12 @@ struct TriggeredExecuteResult {
 ///
 /// This owner matches a caller-supplied trigger key against stored triggered
 /// job descriptors. `execute(...)` accepts a caller-supplied handler and records
-/// one run row per matched descriptor. It does not enqueue work, publish hooks,
-/// or call agents.
+/// one run row per matched descriptor. When constructed with a hook bus,
+/// execution publishes advisory job lifecycle metadata around handler work. It
+/// does not enqueue work or call agents.
 class TriggeredService {
 public:
-  explicit TriggeredService(AutomationRepository& repository) noexcept;
+  explicit TriggeredService(AutomationRepository& repository, TriggeredServiceOptions options = {}) noexcept;
 
   [[nodiscard]] async::Awaitable<core::Result<TriggeredIntakeResult>> intake(TriggeredIntakeRequest request);
   [[nodiscard]] async::Awaitable<core::Result<TriggeredExecuteResult>> execute(TriggeredExecuteRequest request);
@@ -167,6 +179,7 @@ public:
 
 private:
   AutomationRepository* repository_{};
+  TriggeredServiceOptions options_{};
 };
 
 /// One caller-driven scan for stored cron jobs.

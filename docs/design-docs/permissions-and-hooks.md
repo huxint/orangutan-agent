@@ -420,7 +420,9 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > success, success counts, and backend failure kind/message, but not job input
 > contents or decayed records. Slice 202 reuses that payload for explicit cron
 > due execution, using `job_type=cron` and metadata-only handler outcome
-> details.
+> details. Slice 213 reuses it for explicit triggered handler execution, using
+> `job_type=triggered`, the stored triggered job agent key, and metadata-only
+> handler outcome details.
 > Typed shapes for
 > the remaining non-tool
 > events ship with their producers (provider request /

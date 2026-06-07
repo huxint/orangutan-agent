@@ -357,6 +357,159 @@ TEST_CASE("TriggeredService::execute records cancelled triggered handlers as abo
   });
 }
 
+TEST_CASE("TriggeredService::execute publishes lifecycle metadata for handler success",
+          "[unit][automation][service][triggered][hook]") {
+  TempDb db{"oran-automation-service-triggered-lifecycle-success"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:succeeds",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "researcher",
+             }))
+                .has_value());
+
+    std::vector<CapturedJobLifecycle> lifecycle;
+    hook::Bus bus;
+    hook::InProcessSink sink{
+        "triggered-lifecycle-success-recorder",
+        [&lifecycle](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
+          const auto* job = std::get_if<hook::JobLifecyclePayload>(payload.get());
+          REQUIRE(job != nullptr);
+          lifecycle.push_back(CapturedJobLifecycle{.event = event, .payload = *job});
+          co_return core::Result<void>{};
+        }};
+    bus.bind(sink, {hook::Event::job_started, hook::Event::job_finished, hook::Event::job_failed});
+    automation::TriggeredService service{repo,
+                                         automation::TriggeredServiceOptions{
+                                             .hooks =
+                                                 automation::TriggeredHookOptions{
+                                                     .bus = &bus,
+                                                     .source = "triggered",
+                                                     .identity = "trigger-loop",
+                                                 },
+                                         }};
+
+    auto result = co_await service.execute(automation::TriggeredExecuteRequest{
+        .trigger_key = "webhook:ci",
+        .received_at = at(120s),
+        .job_limit = 10,
+        .handler = [](automation::TriggeredExecutionJob) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        },
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->completed_count == 1);
+    REQUIRE(lifecycle.size() == 2);
+    REQUIRE(lifecycle[0].event == hook::Event::job_started);
+    REQUIRE(lifecycle[1].event == hook::Event::job_finished);
+
+    const auto& started = lifecycle[0].payload;
+    REQUIRE(started.who.scope_key.empty());
+    REQUIRE(started.who.agent_key == "researcher");
+    REQUIRE(started.who.identity == "trigger-loop");
+    REQUIRE(started.source == "triggered");
+    REQUIRE(started.job_key == "triggered:succeeds");
+    REQUIRE(started.job_type == "triggered");
+    REQUIRE(started.scope_key.empty());
+    REQUIRE(started.scheduled_at == at(120s));
+    REQUIRE(started.started_at == at(120s));
+    REQUIRE_FALSE(started.finished_at.has_value());
+    REQUIRE_FALSE(started.duration.has_value());
+    REQUIRE_FALSE(started.succeeded);
+    REQUIRE_FALSE(started.shadowed_count.has_value());
+    REQUIRE(started.error_kind.empty());
+    REQUIRE(started.error_message.empty());
+
+    const auto& finished = lifecycle[1].payload;
+    REQUIRE(finished.job_key == "triggered:succeeds");
+    REQUIRE(finished.job_type == "triggered");
+    REQUIRE(finished.scheduled_at == at(120s));
+    REQUIRE(finished.started_at == at(120s));
+    REQUIRE(finished.finished_at == at(120s));
+    REQUIRE(finished.duration == 0s);
+    REQUIRE(finished.succeeded);
+    REQUIRE_FALSE(finished.shadowed_count.has_value());
+    REQUIRE(finished.error_kind.empty());
+    REQUIRE(finished.error_message.empty());
+  });
+}
+
+TEST_CASE("TriggeredService::execute publishes lifecycle metadata for handler failure",
+          "[unit][automation][service][triggered][hook]") {
+  TempDb db{"oran-automation-service-triggered-lifecycle-failure"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:fails",
+                 .trigger_key = "webhook:ci",
+             }))
+                .has_value());
+
+    std::vector<CapturedJobLifecycle> lifecycle;
+    hook::Bus bus;
+    hook::InProcessSink sink{
+        "triggered-lifecycle-failure-recorder",
+        [&lifecycle](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
+          const auto* job = std::get_if<hook::JobLifecyclePayload>(payload.get());
+          REQUIRE(job != nullptr);
+          lifecycle.push_back(CapturedJobLifecycle{.event = event, .payload = *job});
+          co_return core::Result<void>{};
+        }};
+    bus.bind(sink, {hook::Event::job_started, hook::Event::job_finished, hook::Event::job_failed});
+    automation::TriggeredService service{repo,
+                                         automation::TriggeredServiceOptions{
+                                             .hooks = automation::TriggeredHookOptions{.bus = &bus},
+                                         }};
+
+    auto result = co_await service.execute(automation::TriggeredExecuteRequest{
+        .trigger_key = "webhook:ci",
+        .received_at = at(120s),
+        .job_limit = 10,
+        .handler = [](automation::TriggeredExecutionJob) -> async::Awaitable<core::Result<void>> {
+          co_return std::unexpected(core::Error::upstream("triggered payload failed"));
+        },
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->attempted_count == 1);
+    REQUIRE(result->completed_count == 0);
+    REQUIRE(result->attempts.size() == 1);
+    REQUIRE(result->attempts[0].error.has_value());
+    REQUIRE(lifecycle.size() == 2);
+    REQUIRE(lifecycle[0].event == hook::Event::job_started);
+    REQUIRE(lifecycle[1].event == hook::Event::job_failed);
+    REQUIRE(lifecycle[0].payload.job_key == "triggered:fails");
+    REQUIRE(lifecycle[0].payload.who.agent_key == "automation");
+    REQUIRE(lifecycle[0].payload.job_type == "triggered");
+    REQUIRE(lifecycle[0].payload.scheduled_at == at(120s));
+    REQUIRE_FALSE(lifecycle[0].payload.finished_at.has_value());
+    REQUIRE(lifecycle[1].payload.job_key == "triggered:fails");
+    REQUIRE(lifecycle[1].payload.job_type == "triggered");
+    REQUIRE(lifecycle[1].payload.source == "triggered");
+    REQUIRE(lifecycle[1].payload.scheduled_at == at(120s));
+    REQUIRE(lifecycle[1].payload.finished_at == at(120s));
+    REQUIRE(lifecycle[1].payload.duration == 0s);
+    REQUIRE_FALSE(lifecycle[1].payload.succeeded);
+    REQUIRE_FALSE(lifecycle[1].payload.shadowed_count.has_value());
+    REQUIRE(lifecycle[1].payload.error_kind == "upstream");
+    REQUIRE(lifecycle[1].payload.error_message == "triggered payload failed");
+
+    auto runs = co_await repo.list_triggered_runs(automation::ListTriggeredRunsOptions{
+        .job_key = "triggered:fails",
+        .limit = 10,
+    });
+    REQUIRE(runs.has_value());
+    REQUIRE(runs->size() == 1);
+    REQUIRE(runs->front().outcome == automation::TriggeredRunOutcome::failure);
+  });
+}
+
 TEST_CASE("TriggeredService::execute rejects invalid execution policy", "[unit][automation][service][triggered]") {
   TempDb db{"oran-automation-service-triggered-execute-validation"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {

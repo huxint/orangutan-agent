@@ -13,7 +13,8 @@ loop policy, advisory cron lifecycle metadata, typed cron run outcome
 classification, repository-backed cron execution leases and cron agent leases
 for explicit loop owners, durable triggered job descriptors with caller-driven
 triggered intake plus explicit triggered handler execution and durable
-triggered run history, and a caller-driven retention service tick with optional
+triggered run history, advisory triggered lifecycle hook metadata, and a
+caller-driven retention service tick with optional
 advisory `memory_decay` plus job lifecycle metadata,
 plus a caller-started retention loop step that can wait within a caller budget
 for one stored job to become due and lease due execution, plus a finite
@@ -306,6 +307,18 @@ matched descriptor, records one run row per attempt, stores
 as `failure`, and continues to other matched jobs. It still does not persist a
 queue, publish hooks, notify channels, acquire triggered agent leases, call
 agents, or make bootstrap open automation state.
+
+Slice 213 adds advisory triggered lifecycle metadata to the same explicit
+execution owner. `TriggeredServiceOptions::hooks` accepts a non-owning
+`hook::Bus*` plus source/identity labels, and `AutomationRuntime` can pass those
+options into `triggered_service(...)`. When a bus is supplied,
+`TriggeredService::execute(...)` publishes metadata-only `job_started` before
+the caller handler, `job_failed` after a failed handler attempt has been
+durably recorded, and `job_finished` after a successful handler attempt has
+been durably recorded. The payload uses `job_type=triggered`, the stored
+triggered job `agent_key`, the durable `job_key`, and the caller-supplied
+`received_at` timestamp for scheduled/start/finish timing. Sink failures remain
+advisory and cannot veto or fail triggered execution.
 
 ## Public API
 
@@ -762,9 +775,20 @@ struct TriggeredExecuteResult {
   std::vector<TriggeredExecuteAttempt> attempts;
 };
 
+struct TriggeredHookOptions {
+  hook::Bus* bus;
+  std::string source;
+  std::string agent_key;
+  std::string identity;
+};
+
+struct TriggeredServiceOptions {
+  TriggeredHookOptions hooks;
+};
+
 class TriggeredService {
  public:
-  explicit TriggeredService(AutomationRepository&);
+  explicit TriggeredService(AutomationRepository&, TriggeredServiceOptions = {});
 
   async::Awaitable<core::Result<TriggeredIntakeResult>>
   intake(TriggeredIntakeRequest);
@@ -838,7 +862,7 @@ class AutomationRuntime {
 
   CronService cron_service(CronServiceOptions = {}) noexcept;
   CronLoop cron_loop(CronServiceOptions = {}) noexcept;
-  TriggeredService triggered_service() noexcept;
+  TriggeredService triggered_service(TriggeredServiceOptions = {}) noexcept;
 
   MemoryRetentionService memory_retention_service(
       memory::longterm::Backend&,
@@ -1114,8 +1138,19 @@ handler once per matched descriptor. It records `success` for successful
 handlers, `failure` for ordinary handler errors, and `aborted` for
 `ErrorKind::cancelled`. Handler failures are per-attempt results and do not
 stop other matched jobs. The execution surface is still explicit caller-owned
-work: it does not persist a queue, publish hooks, notify channels, acquire
-triggered agent leases, or call agents.
+work: it does not persist a queue, notify channels, acquire triggered agent
+leases, or call agents.
+
+When `TriggeredServiceOptions::hooks.bus` is set, explicit execution also
+publishes advisory `hook::Event::job_started` before each matched handler. It
+publishes `hook::Event::job_failed` after the failed triggered run row is
+recorded and `hook::Event::job_finished` after the successful triggered run row
+is recorded. Lifecycle payloads use `job_type=triggered`, carry the durable
+`job_key`, stored job `agent_key`, source/identity labels from
+`TriggeredHookOptions`, and the caller-supplied `received_at` as scheduled,
+started, and finished time for this no-hidden-clock boundary. Advisory sink
+failures are ignored by this service; observers cannot veto triggered execution
+or turn a successful handler into a failed attempt.
 
 ## Memory Retention Planning
 
@@ -1554,10 +1589,10 @@ spec 0006 boundaries now start after this explicit runtime/retention loop
 surface, cron evaluator, cron repository state, and caller-driven cron
 scan/wait/execute-due/run surface plus config-authored cron seeds, explicit
 seed application/service-cycle policy, run history, stop policy, typed
-outcomes, stored cron execution leases, stored cron agent leases, and triggered
-descriptor intake: detached service startup policy, triggered execution/run
-history, queueing/backpressure, notifier routing, and actual agent firing for
-agent-facing jobs.
+outcomes, stored cron execution leases, stored cron agent leases, triggered
+descriptor intake, triggered execution/run history, and triggered lifecycle
+hooks: detached service startup policy, queueing/backpressure, triggered
+leases, notifier routing, and actual agent firing for agent-facing jobs.
 
 ## Validation
 
@@ -1653,6 +1688,10 @@ execution history, covering migration v9, triggered run record/list APIs,
 success/failure/aborted handler-attempt recording, invalid execution policy
 validation, runtime factory execution coverage, and `AutomationRuntime::open(...)`
 migration report version 9.
+Slice 213 reports `test-automation` at 81 cases / 1246 assertions for triggered
+lifecycle hooks, covering advisory `job_started`/`job_finished` metadata on
+handler success and `job_started`/`job_failed` metadata on handler failure
+through `TriggeredService::execute(...)`.
 
 `bench-automation` planning rows are:
 

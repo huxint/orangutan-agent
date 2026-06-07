@@ -86,7 +86,7 @@ public:
 
   [[nodiscard]] CronService cron_service(CronServiceOptions options = {}) noexcept;
   [[nodiscard]] CronLoop cron_loop(CronServiceOptions options = {}) noexcept;
-  [[nodiscard]] TriggeredService triggered_service() noexcept;
+  [[nodiscard]] TriggeredService triggered_service(TriggeredServiceOptions options = {}) noexcept;
 
   [[nodiscard]] MemoryRetentionService memory_retention_service(memory::longterm::Backend& backend,
                                                                 MemoryRetentionServiceOptions options = {}) noexcept;

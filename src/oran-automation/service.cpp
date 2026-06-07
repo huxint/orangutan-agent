@@ -316,6 +316,47 @@ make_cron_job_started_payload(const CronHookOptions& hooks, const CronDueJob& du
   return payload;
 }
 
+[[nodiscard]] hook::JobLifecyclePayload make_triggered_job_started_payload(const TriggeredHookOptions& hooks,
+                                                                           const TriggeredExecutionJob& execution,
+                                                                           core::Time started_at) {
+  hook::JobLifecyclePayload payload;
+  payload.who = hook::Identity{
+      .scope_key = {},
+      .agent_key = execution.job.agent_key,
+      .identity = hooks.identity,
+  };
+  payload.source = hooks.source;
+  payload.job_key = execution.job.job_key;
+  payload.job_type = "triggered";
+  payload.scheduled_at = execution.received_at;
+  payload.started_at = started_at;
+  return payload;
+}
+
+[[nodiscard]] hook::JobLifecyclePayload make_triggered_job_finished_payload(const TriggeredHookOptions& hooks,
+                                                                            const TriggeredExecutionJob& execution,
+                                                                            core::Time started_at,
+                                                                            core::Time finished_at) {
+  auto payload = make_triggered_job_started_payload(hooks, execution, started_at);
+  payload.finished_at = finished_at;
+  payload.duration = duration_between(started_at, finished_at);
+  payload.succeeded = true;
+  return payload;
+}
+
+[[nodiscard]] hook::JobLifecyclePayload make_triggered_job_failed_payload(const TriggeredHookOptions& hooks,
+                                                                          const TriggeredExecutionJob& execution,
+                                                                          core::Time started_at,
+                                                                          core::Time finished_at,
+                                                                          const core::Error& error) {
+  auto payload = make_triggered_job_started_payload(hooks, execution, started_at);
+  payload.finished_at = finished_at;
+  payload.duration = duration_between(started_at, finished_at);
+  payload.error_kind = std::string{core::enum_name(error.kind())};
+  payload.error_message = failure_message(error, "triggered job handler failed");
+  return payload;
+}
+
 [[nodiscard]] async::Awaitable<std::optional<MemoryRetentionHookPublishResult>>
 publish_memory_decay(const MemoryRetentionHookOptions& hooks,
                      const MemoryRetentionJobRecord& job,
@@ -348,9 +389,18 @@ publish_job_lifecycle(const CronHookOptions& hooks, hook::Event event, hook::Job
   [[maybe_unused]] auto outcome = co_await hooks.bus->publish_advisory(event, std::move(payload));
 }
 
+async::Awaitable<void>
+publish_job_lifecycle(const TriggeredHookOptions& hooks, hook::Event event, hook::JobLifecyclePayload payload) {
+  if (hooks.bus == nullptr) {
+    co_return;
+  }
+  [[maybe_unused]] auto outcome = co_await hooks.bus->publish_advisory(event, std::move(payload));
+}
+
 }  // namespace
 
-TriggeredService::TriggeredService(AutomationRepository& repository) noexcept : repository_{&repository} {}
+TriggeredService::TriggeredService(AutomationRepository& repository, TriggeredServiceOptions options) noexcept
+    : repository_{&repository}, options_{std::move(options)} {}
 
 AutomationRepository& TriggeredService::repository() noexcept {
   return *repository_;
@@ -405,6 +455,11 @@ async::Awaitable<core::Result<TriggeredExecuteResult>> TriggeredService::execute
     };
     TriggeredExecuteAttempt attempt{.execution = execution};
     ++result.attempted_count;
+    const auto started_at = result.intake.received_at;
+
+    co_await publish_job_lifecycle(options_.hooks,
+                                   hook::Event::job_started,
+                                   make_triggered_job_started_payload(options_.hooks, execution, started_at));
 
     auto executed = co_await request.handler(execution);
     if (!executed) {
@@ -420,6 +475,10 @@ async::Awaitable<core::Result<TriggeredExecuteResult>> TriggeredService::execute
       if (!recorded) {
         co_return std::unexpected(std::move(recorded).error());
       }
+      co_await publish_job_lifecycle(
+          options_.hooks,
+          hook::Event::job_failed,
+          make_triggered_job_failed_payload(options_.hooks, execution, started_at, result.intake.received_at, error));
       attempt.error = std::move(error);
       attempt.run = std::move(*recorded);
       result.attempts.push_back(std::move(attempt));
@@ -440,6 +499,10 @@ async::Awaitable<core::Result<TriggeredExecuteResult>> TriggeredService::execute
     attempt.completed = true;
     attempt.run = std::move(*recorded);
     ++result.completed_count;
+    co_await publish_job_lifecycle(
+        options_.hooks,
+        hook::Event::job_finished,
+        make_triggered_job_finished_payload(options_.hooks, execution, started_at, result.intake.received_at));
     result.attempts.push_back(std::move(attempt));
   }
 

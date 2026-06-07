@@ -7,28 +7,26 @@
 
 ## Snapshot
 
-- **Slice:** 212 (`xmake run orangutan -- --help` reports slice 212)
+- **Slice:** 213 (`xmake run orangutan -- --help` reports slice 213)
 - **Last completed history:**
-  [`histories/2026-06/20260608-0330-automation-triggered-execution.md`](histories/2026-06/20260608-0330-automation-triggered-execution.md)
+  [`histories/2026-06/20260608-0351-automation-triggered-lifecycle-hooks.md`](histories/2026-06/20260608-0351-automation-triggered-lifecycle-hooks.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-cron-category.md`](exec-plans/active/2026-06-07-automation-cron-category.md).
-- **Latest completed slice:** slice 212 adds explicit triggered-category
-  handler execution plus durable triggered run history without starting a
-  scheduler. Migration v9 creates `automation_triggered_runs`;
-  `AutomationRepository` can record and list triggered run rows with
-  `success` / `failure` / `aborted` outcomes, and
-  `TriggeredService::execute(...)` first matches stored descriptors through the
-  caller-owned intake path, then invokes a caller-supplied handler once per
-  match and records one run row per attempt. Cancelled handler errors are stored
-  as `aborted`, other handler errors as `failure`, and successful handlers as
-  `success`. This slice still does not enqueue work, notify channels, acquire
-  triggered agent leases, call agents, or make bootstrap open/apply/run
-  `automation.db` automatically. Focused result: `test-automation` **79 cases /
-  1178 assertions**.
+- **Latest completed slice:** slice 213 adds advisory triggered job lifecycle
+  hooks around explicit caller-supplied triggered handler execution. Runtime
+  owners can construct `TriggeredService` with `TriggeredServiceOptions::hooks`
+  or `AutomationRuntime::triggered_service(options)`, and due execution publishes
+  metadata-only `job_started` before the handler, `job_failed` after a failed
+  attempt has been durably recorded, and `job_finished` after a successful
+  attempt has been durably recorded. Hook sink failures remain advisory and do
+  not change the execution result. This slice still does not enqueue work,
+  notify channels, acquire triggered agent leases, call agents, or make
+  bootstrap open/apply/run `automation.db` automatically. Focused result:
+  `test-automation` **81 cases / 1246 assertions**.
 - **Next intended slice:** continue the active automation cron/category plan.
   The next useful implementation boundary is a small scheduler-service
   ownership slice such as triggered queue/backpressure policy, notifier routing,
-  triggered lifecycle hooks/leases, or agent firing.
+  triggered leases, or agent firing.
   Do not add bootstrap-owned background automation or unrelated STATUS-only
   slice churn.
 
@@ -1825,7 +1823,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 37 cases / 299 assertions.
 - `oran-memory`: 38 cases / 841 assertions.
-- `oran-automation`: 79 cases / 1178 assertions.
+- `oran-automation`: 81 cases / 1246 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 208 cases / 2181 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.

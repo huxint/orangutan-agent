@@ -11,10 +11,10 @@ cron schedule seeds mapped by bootstrap into repository descriptors.
 Explicit seed persistence, one caller-awaited cron service cycle, durable cron
 run history, cooperative finite-loop stop policy, typed cron run outcome
 classification, repository-backed cron execution leases for explicit loop
-owners, the first per-agent cron lease policy, triggered intake, and triggered
-execution/run history now exist; detached service-loop startup, queues,
-notifiers, triggered leases/hooks, and agent firing stay in later scheduler
-slices.
+owners, the first per-agent cron lease policy, triggered intake, triggered
+execution/run history, and triggered lifecycle hooks now exist; detached
+service-loop startup, queues, notifiers, triggered leases, and agent firing stay
+in later scheduler slices.
 
 ## Scope
 
@@ -55,14 +55,17 @@ slices.
 - Execute matched triggered descriptors through a caller-supplied handler and
   record success/failure/aborted triggered run rows without adding queueing,
   notifier routing, leases, or agent execution ownership.
+- Publish advisory triggered lifecycle metadata around explicit triggered
+  handler execution when callers supply a hook bus, without adding queueing,
+  notifier routing, leases, or agent execution ownership.
 - Keep the slice free of agent, detached timer, automatic bootstrap
   persistence, or background task ownership.
 - Update automation docs/status/history/release notes in the same slice.
 - Out of scope:
 - Scheduler service startup that automatically reads config and applies/runs
   cron seeds.
-- Process timers, triggered queueing/backpressure, triggered lifecycle hooks or
-  leases, notifier routing, and agent firing.
+- Process timers, triggered queueing/backpressure, triggered leases, notifier
+  routing, and agent firing.
 - Bootstrap opening `automation.db`, starting timers, or spawning detached
   automation work.
 - Scheduler tick performance work beyond focused correctness coverage.
@@ -146,11 +149,11 @@ slices.
 4. **Triggered/notifier/queue policy.**
    In progress: slice 211 adds durable triggered job descriptors and
    caller-owned `TriggeredService::intake(...)` matching by external
-   `trigger_key`, and slice 212 adds durable triggered run history plus
-   caller-supplied handler execution over those matches, without queueing,
-   notifier routing, triggered leases, or agent execution. Later: add
-   queueing/backpressure, notifier routing, lifecycle hooks/leases, and agent
-   firing.
+   `trigger_key`, slice 212 adds durable triggered run history plus
+   caller-supplied handler execution over those matches, and slice 213 adds
+   advisory triggered lifecycle metadata around those handler attempts, without
+   queueing, notifier routing, triggered leases, or agent execution. Later: add
+   queueing/backpressure, notifier routing, triggered leases, and agent firing.
 5. **Scheduler performance.**
    Later: measure the 1 000-job scheduler tick criterion once the scheduler
    exists.
@@ -176,6 +179,8 @@ slices.
 - `build/linux/x86_64/release/test-automation "TriggeredService::intake matches stored jobs for a trigger key"`
 - `build/linux/x86_64/release/test-automation "TriggeredService::execute records explicit triggered handler attempts"`
 - `build/linux/x86_64/release/test-automation "TriggeredService::execute records cancelled triggered handlers as aborted"`
+- `build/linux/x86_64/release/test-automation "TriggeredService::execute publishes lifecycle metadata for handler success"`
+- `build/linux/x86_64/release/test-automation "TriggeredService::execute publishes lifecycle metadata for handler failure"`
 - `build/linux/x86_64/release/test-automation "AutomationRuntime constructs triggered service execution over owned state"`
 - `build/linux/x86_64/release/test-automation "CronService::execute_due blocks active cron agent leases before handlers"`
 - `build/linux/x86_64/release/test-automation "CronLoop::run uses cron agent leases before calling handlers"`
@@ -220,6 +225,8 @@ slices.
 - Confirm triggered execution records one success/failure/aborted run row per
   matched descriptor through a caller-supplied handler and still does not
   enqueue work, notify channels, acquire triggered leases, or call agents.
+- Confirm triggered execution publishes advisory lifecycle metadata only when a
+  caller supplies hook options, and sink failures remain non-vetoing.
 - Confirm no new dependency direction crosses from automation into bootstrap,
   config, or agent.
 - Observability checks:
@@ -333,6 +340,13 @@ slices.
   `success`, `failure`, or `aborted` attempt rows without queueing work,
   notifying channels, acquiring triggered leases, calling agents, or making
   bootstrap own automation state.
+- [x] 2026-06-08 03:51 +0800: Implemented advisory triggered lifecycle hooks
+  around explicit handler execution through `TriggeredServiceOptions::hooks`,
+  `AutomationRuntime::triggered_service(...)` option pass-through, and
+  metadata-only `job_started` / `job_failed` / `job_finished` publishing.
+  Runtime owners can observe triggered handler attempts without queueing work,
+  notifying channels, acquiring triggered leases, calling agents, or making
+  bootstrap own automation state.
 - [x] **Update the docs that this slice invalidates in the same PR**
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -407,6 +421,10 @@ slices.
   triggered handler behavior inspectable now, while hold/drop semantics,
   lifecycle hooks, leases, notifier routing, and actual agent invocation remain
   downstream.
+- 2026-06-08: Add triggered lifecycle hooks before queue/notifier/agent firing
+  policy. The explicit triggered handler boundary now has durable outcome rows,
+  so advisory start/outcome metadata can be published without changing retry,
+  hold/drop, lease, notifier, or agent invocation semantics.
 
 ## Linked Artifacts
 
@@ -430,5 +448,6 @@ slices.
 - `docs/histories/2026-06/20260608-0236-automation-cron-agent-leases.md`
 - `docs/histories/2026-06/20260608-0258-automation-triggered-intake.md`
 - `docs/histories/2026-06/20260608-0330-automation-triggered-execution.md`
+- `docs/histories/2026-06/20260608-0351-automation-triggered-lifecycle-hooks.md`
 - Release note:
 - `docs/releases/feature-release-notes.md#2026-06`

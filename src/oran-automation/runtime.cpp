@@ -210,8 +210,8 @@ CronLoop AutomationRuntime::cron_loop(CronServiceOptions options) noexcept {
   return CronLoop{impl_->executor, cron_service(std::move(options))};
 }
 
-TriggeredService AutomationRuntime::triggered_service() noexcept {
-  return TriggeredService{impl_->repository};
+TriggeredService AutomationRuntime::triggered_service(TriggeredServiceOptions options) noexcept {
+  return TriggeredService{impl_->repository, std::move(options)};
 }
 
 MemoryRetentionService AutomationRuntime::memory_retention_service(memory::longterm::Backend& backend,
