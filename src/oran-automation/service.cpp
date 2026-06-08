@@ -103,6 +103,25 @@ namespace {
   return {};
 }
 
+[[nodiscard]] core::Result<void> validate_triggered_execute_one_request(const TriggeredExecuteOneRequest& request) {
+  if (request.execution.job.job_key.empty()) {
+    return std::unexpected(invalid_triggered_execute_field("job_key", "empty"));
+  }
+  if (request.execution.job.agent_key.empty()) {
+    return std::unexpected(invalid_triggered_execute_field("agent_key", "empty"));
+  }
+  if (request.execution.trigger_key.empty()) {
+    return std::unexpected(invalid_triggered_execute_field("trigger_key", "empty"));
+  }
+  if (!request.handler) {
+    return std::unexpected(invalid_triggered_execute_field("handler", "empty"));
+  }
+  if (!request.lease_owner_key.empty() && request.lease_ttl <= std::chrono::steady_clock::duration::zero()) {
+    return std::unexpected(invalid_triggered_execute_field("lease_ttl", "not_positive"));
+  }
+  return {};
+}
+
 void track_next_fire(CronTickResult& result, core::Time next_fire_at) {
   if (!result.next_fire_at.has_value() || next_fire_at < *result.next_fire_at) {
     result.next_fire_at = next_fire_at;
@@ -475,94 +494,46 @@ async::Awaitable<core::Result<TriggeredIntakeResult>> TriggeredService::intake(T
   };
 }
 
-async::Awaitable<core::Result<TriggeredExecuteResult>> TriggeredService::execute(TriggeredExecuteRequest request) {
-  if (auto valid = validate_triggered_execute_request(request); !valid) {
+async::Awaitable<core::Result<TriggeredExecuteOneResult>>
+TriggeredService::execute_one(TriggeredExecuteOneRequest request) {
+  if (auto valid = validate_triggered_execute_one_request(request); !valid) {
     co_return std::unexpected(std::move(valid).error());
   }
 
-  auto intake = co_await this->intake(TriggeredIntakeRequest{
-      .trigger_key = request.trigger_key,
-      .received_at = request.received_at,
-      .job_limit = request.job_limit,
-  });
-  if (!intake) {
-    co_return std::unexpected(std::move(intake).error());
+  auto execution = std::move(request.execution);
+  const auto lease_enabled = !request.lease_owner_key.empty();
+  if (lease_enabled) {
+    auto lease = co_await repository_->acquire_triggered_agent_lease(AcquireTriggeredAgentLeaseRequest{
+        .agent_key = execution.job.agent_key,
+        .owner_key = request.lease_owner_key,
+        .acquired_at = execution.received_at,
+        .expires_at = add_steady_duration(execution.received_at, request.lease_ttl),
+    });
+    if (!lease) {
+      co_return std::unexpected(std::move(lease).error());
+    }
+    if (!lease->has_value()) {
+      co_return std::unexpected(triggered_agent_lease_conflict_error(execution, request.lease_owner_key));
+    }
   }
 
-  TriggeredExecuteResult result{.intake = std::move(*intake)};
-  for (const auto& job : result.intake.jobs) {
-    TriggeredExecutionJob execution{
-        .job = job,
-        .trigger_key = result.intake.trigger_key,
-        .received_at = result.intake.received_at,
-    };
-    const auto lease_enabled = !request.lease_owner_key.empty();
-    if (lease_enabled) {
-      auto lease = co_await repository_->acquire_triggered_agent_lease(AcquireTriggeredAgentLeaseRequest{
-          .agent_key = execution.job.agent_key,
-          .owner_key = request.lease_owner_key,
-          .acquired_at = result.intake.received_at,
-          .expires_at = add_steady_duration(result.intake.received_at, request.lease_ttl),
-      });
-      if (!lease) {
-        co_return std::unexpected(std::move(lease).error());
-      }
-      if (!lease->has_value()) {
-        co_return std::unexpected(triggered_agent_lease_conflict_error(execution, request.lease_owner_key));
-      }
-    }
+  TriggeredExecuteAttempt attempt{.execution = execution};
+  const auto started_at = execution.received_at;
 
-    TriggeredExecuteAttempt attempt{.execution = execution};
-    ++result.attempted_count;
-    const auto started_at = result.intake.received_at;
+  co_await publish_job_lifecycle(options_.hooks,
+                                 hook::Event::job_started,
+                                 make_triggered_job_started_payload(options_.hooks, execution, started_at));
 
-    co_await publish_job_lifecycle(options_.hooks,
-                                   hook::Event::job_started,
-                                   make_triggered_job_started_payload(options_.hooks, execution, started_at));
-
-    auto executed = co_await request.handler(execution);
-    if (!executed) {
-      auto error = std::move(executed).error();
-      auto recorded = co_await repository_->record_triggered_run(RecordTriggeredRunRequest{
-          .job_key = job.job_key,
-          .trigger_key = result.intake.trigger_key,
-          .fired_at = result.intake.received_at,
-          .finished_at = result.intake.received_at,
-          .outcome = triggered_run_outcome_for_error(error),
-          .error_message = failure_message(error, "triggered job handler failed"),
-      });
-      if (!recorded) {
-        if (lease_enabled) {
-          auto released = co_await release_triggered_execution_lease(*repository_, execution, request.lease_owner_key);
-          if (!released) {
-            co_return std::unexpected(
-                attach_triggered_lease_release_error(std::move(recorded).error(), released.error()));
-          }
-        }
-        co_return std::unexpected(std::move(recorded).error());
-      }
-      if (lease_enabled) {
-        auto released = co_await release_triggered_execution_lease(*repository_, execution, request.lease_owner_key);
-        if (!released) {
-          co_return std::unexpected(std::move(released).error());
-        }
-      }
-      co_await publish_job_lifecycle(
-          options_.hooks,
-          hook::Event::job_failed,
-          make_triggered_job_failed_payload(options_.hooks, execution, started_at, result.intake.received_at, error));
-      attempt.error = std::move(error);
-      attempt.run = std::move(*recorded);
-      result.attempts.push_back(std::move(attempt));
-      continue;
-    }
-
+  auto executed = co_await request.handler(execution);
+  if (!executed) {
+    auto error = std::move(executed).error();
     auto recorded = co_await repository_->record_triggered_run(RecordTriggeredRunRequest{
-        .job_key = job.job_key,
-        .trigger_key = result.intake.trigger_key,
-        .fired_at = result.intake.received_at,
-        .finished_at = result.intake.received_at,
-        .outcome = TriggeredRunOutcome::success,
+        .job_key = execution.job.job_key,
+        .trigger_key = execution.trigger_key,
+        .fired_at = execution.received_at,
+        .finished_at = execution.received_at,
+        .outcome = triggered_run_outcome_for_error(error),
+        .error_message = failure_message(error, "triggered job handler failed"),
     });
     if (!recorded) {
       if (lease_enabled) {
@@ -580,15 +551,93 @@ async::Awaitable<core::Result<TriggeredExecuteResult>> TriggeredService::execute
         co_return std::unexpected(std::move(released).error());
       }
     }
-
-    attempt.completed = true;
-    attempt.run = std::move(*recorded);
-    ++result.completed_count;
     co_await publish_job_lifecycle(
         options_.hooks,
-        hook::Event::job_finished,
-        make_triggered_job_finished_payload(options_.hooks, execution, started_at, result.intake.received_at));
-    result.attempts.push_back(std::move(attempt));
+        hook::Event::job_failed,
+        make_triggered_job_failed_payload(options_.hooks, execution, started_at, execution.received_at, error));
+    attempt.error = std::move(error);
+    attempt.run = std::move(*recorded);
+    co_return TriggeredExecuteOneResult{
+        .attempt = std::move(attempt),
+        .completed = false,
+    };
+  }
+
+  auto recorded = co_await repository_->record_triggered_run(RecordTriggeredRunRequest{
+      .job_key = execution.job.job_key,
+      .trigger_key = execution.trigger_key,
+      .fired_at = execution.received_at,
+      .finished_at = execution.received_at,
+      .outcome = TriggeredRunOutcome::success,
+  });
+  if (!recorded) {
+    if (lease_enabled) {
+      auto released = co_await release_triggered_execution_lease(*repository_, execution, request.lease_owner_key);
+      if (!released) {
+        co_return std::unexpected(attach_triggered_lease_release_error(std::move(recorded).error(), released.error()));
+      }
+    }
+    co_return std::unexpected(std::move(recorded).error());
+  }
+  if (lease_enabled) {
+    auto released = co_await release_triggered_execution_lease(*repository_, execution, request.lease_owner_key);
+    if (!released) {
+      co_return std::unexpected(std::move(released).error());
+    }
+  }
+
+  attempt.completed = true;
+  attempt.run = std::move(*recorded);
+  co_await publish_job_lifecycle(
+      options_.hooks,
+      hook::Event::job_finished,
+      make_triggered_job_finished_payload(options_.hooks, execution, started_at, execution.received_at));
+
+  co_return TriggeredExecuteOneResult{
+      .attempt = std::move(attempt),
+      .completed = true,
+  };
+}
+
+async::Awaitable<core::Result<TriggeredExecuteResult>> TriggeredService::execute(TriggeredExecuteRequest request) {
+  if (auto valid = validate_triggered_execute_request(request); !valid) {
+    co_return std::unexpected(std::move(valid).error());
+  }
+
+  auto intake = co_await this->intake(TriggeredIntakeRequest{
+      .trigger_key = request.trigger_key,
+      .received_at = request.received_at,
+      .job_limit = request.job_limit,
+  });
+  if (!intake) {
+    co_return std::unexpected(std::move(intake).error());
+  }
+
+  TriggeredExecuteResult result{.intake = std::move(*intake)};
+  auto& handler = request.handler;
+  for (const auto& job : result.intake.jobs) {
+    auto executed = co_await execute_one(TriggeredExecuteOneRequest{
+        .execution =
+            TriggeredExecutionJob{
+                .job = job,
+                .trigger_key = result.intake.trigger_key,
+                .received_at = result.intake.received_at,
+            },
+        .handler = [&handler](TriggeredExecutionJob execution) -> async::Awaitable<core::Result<void>> {
+          co_return co_await handler(std::move(execution));
+        },
+        .lease_owner_key = request.lease_owner_key,
+        .lease_ttl = request.lease_ttl,
+    });
+    if (!executed) {
+      co_return std::unexpected(std::move(executed).error());
+    }
+
+    ++result.attempted_count;
+    if (executed->completed) {
+      ++result.completed_count;
+    }
+    result.attempts.push_back(std::move(executed->attempt));
   }
 
   co_return result;

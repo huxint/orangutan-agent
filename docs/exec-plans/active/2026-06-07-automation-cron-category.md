@@ -12,10 +12,11 @@ Explicit seed persistence, one caller-awaited cron service cycle, durable cron
 run history, cooperative finite-loop stop policy, typed cron run outcome
 classification, repository-backed cron execution leases for explicit loop
 owners, the first per-agent cron lease policy, triggered intake, triggered
-execution/run history, triggered lifecycle hooks, and triggered agent leases
-now exist; bounded caller-owned triggered queue/backpressure now exists as
-well. Detached service-loop startup, queue drain ownership, notifiers, and agent
-firing stay in later scheduler slices.
+execution/run history, triggered lifecycle hooks, triggered agent leases,
+bounded caller-owned triggered queue/backpressure, and one-at-a-time triggered
+queue draining now exist. Detached service-loop startup, blocked-agent queue
+hold/drop semantics, notifiers, and agent firing stay in later scheduler
+slices.
 
 ## Scope
 
@@ -65,15 +66,15 @@ firing stay in later scheduler slices.
   ownership.
 - Buffer matched triggered descriptors in a bounded caller-owned queue with
   explicit receive/drain by callers and advisory drop metadata on overflow,
-  without adding notifier routing, queue-drain policy, or agent execution
-  ownership.
+  without adding notifier routing, blocked-agent hold/drop policy, or agent
+  execution ownership.
 - Keep the slice free of agent, detached timer, automatic bootstrap
   persistence, or background task ownership.
 - Update automation docs/status/history/release notes in the same slice.
 - Out of scope:
 - Scheduler service startup that automatically reads config and applies/runs
   cron seeds.
-- Process timers, queue drain ownership, blocked-agent hold/drop policy,
+- Process timers, blocked-agent queue hold/drop policy,
   notifier routing, and agent firing.
 - Bootstrap opening `automation.db`, starting timers, or spawning detached
   automation work.
@@ -164,7 +165,9 @@ firing stay in later scheduler slices.
    advisory triggered lifecycle metadata around those handler attempts. Slice
    214 adds repository-backed triggered agent leases for explicit handler
    owners. Slice 215 adds bounded caller-owned triggered queue/backpressure with
-   advisory drop metadata. Later: add queue drain ownership, notifier routing,
+   advisory drop metadata. Slice 216 adds explicit one-at-a-time queue draining
+   through `TriggeredQueue::drain_once(...)` and
+   `TriggeredService::execute_one(...)`. Later: add notifier routing,
    blocked-agent hold/drop policy, and agent firing.
 5. **Scheduler performance.**
    Later: measure the 1 000-job scheduler tick criterion once the scheduler
@@ -199,6 +202,8 @@ firing stay in later scheduler slices.
 - `build/linux/x86_64/release/test-automation "AutomationRuntime constructs triggered service execution over owned state"`
 - `build/linux/x86_64/release/test-automation "TriggeredQueue enqueues matched triggered jobs for explicit receive"`
 - `build/linux/x86_64/release/test-automation "TriggeredQueue drops newest overflow and publishes job_dropped metadata"`
+- `build/linux/x86_64/release/test-automation "TriggeredService::execute_one records one explicit triggered descriptor"`
+- `build/linux/x86_64/release/test-automation "TriggeredQueue drains one queued descriptor through the triggered service"`
 - `build/linux/x86_64/release/test-automation "TriggeredQueue rejects invalid enqueue policy"`
 - `build/linux/x86_64/release/test-automation "CronService::execute_due blocks active cron agent leases before handlers"`
 - `build/linux/x86_64/release/test-automation "CronLoop::run uses cron agent leases before calling handlers"`
@@ -254,6 +259,9 @@ firing stay in later scheduler slices.
 - Confirm full triggered queues apply `drop_newest`, return dropped metadata,
   publish advisory `job_dropped` only when callers supply hooks, and reject
   invalid queue policy such as zero capacity.
+- Confirm triggered queue draining receives and executes exactly one queued
+  descriptor, records only that descriptor's triggered run row, leaves later
+  queued descriptors buffered, and rejects empty drain handlers.
 - Confirm no new dependency direction crosses from automation into bootstrap,
   config, or agent.
 - Observability checks:
@@ -478,6 +486,10 @@ firing stay in later scheduler slices.
   triggered descriptors and report full-queue drops, while queue drain
   ownership, blocked-agent hold/drop policy, notifier routing, and actual agent
   invocation remain downstream.
+- 2026-06-08: Add explicit triggered queue drain-one before notifier and
+  agent-firing policy. `TriggeredService::execute_one(...)` avoids re-intaking
+  by trigger key, and `TriggeredQueue::drain_once(...)` consumes and executes
+  exactly one queued descriptor while later queued work remains buffered.
 
 ## Linked Artifacts
 

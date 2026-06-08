@@ -58,12 +58,22 @@ struct TriggeredQueueEnqueueResult {
   std::vector<TriggeredDroppedJob> dropped{};
 };
 
+struct TriggeredQueueDrainOnceRequest {
+  TriggeredJobHandler handler{};
+};
+
+struct TriggeredQueueDrainOnceResult {
+  TriggeredQueuedJob queued{};
+  TriggeredExecuteOneResult execution{};
+};
+
 /// Caller-owned bounded queue for matched triggered job descriptors.
 ///
 /// `enqueue(...)` reuses `TriggeredService::intake(...)`, pushes matched jobs
 /// into bounded in-process state, and applies explicit overflow policy. It does
-/// not execute handlers, notify channels, call agents, or start a background
-/// drain loop; consumers must explicitly `receive()` queued jobs.
+/// not notify channels, call agents, or start a background drain loop.
+/// Consumers must explicitly `receive()` queued jobs or call `drain_once(...)`
+/// to execute exactly one queued descriptor through the supplied handler.
 class TriggeredQueue {
 public:
   TriggeredQueue(asio::any_io_executor executor, TriggeredService service, TriggeredQueueOptions options = {});
@@ -77,6 +87,8 @@ public:
   [[nodiscard]] async::Awaitable<core::Result<TriggeredQueueEnqueueResult>>
   enqueue(TriggeredQueueEnqueueRequest request);
   [[nodiscard]] async::Awaitable<core::Result<TriggeredQueuedJob>> receive();
+  [[nodiscard]] async::Awaitable<core::Result<TriggeredQueueDrainOnceResult>>
+  drain_once(TriggeredQueueDrainOnceRequest request);
 
   void close() noexcept;
   [[nodiscard]] std::size_t capacity() const noexcept;

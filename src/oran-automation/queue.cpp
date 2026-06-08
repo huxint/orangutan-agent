@@ -39,6 +39,13 @@ namespace {
   return {};
 }
 
+[[nodiscard]] core::Result<void> validate_drain_once_request(const TriggeredQueueDrainOnceRequest& request) {
+  if (!request.handler) {
+    return std::unexpected(invalid_triggered_queue_field("handler", "empty"));
+  }
+  return {};
+}
+
 [[nodiscard]] hook::JobDroppedPayload make_triggered_job_dropped_payload(const TriggeredHookOptions& hooks,
                                                                          const TriggeredDroppedJob& dropped) {
   return hook::JobDroppedPayload{
@@ -151,6 +158,31 @@ TriggeredQueue::enqueue(TriggeredQueueEnqueueRequest request) {
 
 async::Awaitable<core::Result<TriggeredQueuedJob>> TriggeredQueue::receive() {
   co_return co_await impl_->channel.receive();
+}
+
+async::Awaitable<core::Result<TriggeredQueueDrainOnceResult>>
+TriggeredQueue::drain_once(TriggeredQueueDrainOnceRequest request) {
+  if (auto valid = validate_drain_once_request(request); !valid) {
+    co_return std::unexpected(std::move(valid).error());
+  }
+
+  auto queued = co_await receive();
+  if (!queued) {
+    co_return std::unexpected(std::move(queued).error());
+  }
+
+  auto execution = co_await impl_->service.execute_one(TriggeredExecuteOneRequest{
+      .execution = queued->execution,
+      .handler = std::move(request.handler),
+  });
+  if (!execution) {
+    co_return std::unexpected(std::move(execution).error());
+  }
+
+  co_return TriggeredQueueDrainOnceResult{
+      .queued = std::move(*queued),
+      .execution = std::move(*execution),
+  };
 }
 
 void TriggeredQueue::close() noexcept {

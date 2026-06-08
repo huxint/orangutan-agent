@@ -15,14 +15,15 @@ for explicit loop owners, durable triggered job descriptors with caller-driven
 triggered intake plus explicit triggered handler execution and durable
 triggered run history, advisory triggered lifecycle hook metadata,
 repository-backed triggered agent leases, bounded caller-owned triggered queue
-backpressure with advisory drop metadata, and a caller-driven retention service
+backpressure with advisory drop metadata, explicit one-at-a-time triggered queue
+draining, and a caller-driven retention service
 tick with optional
 advisory `memory_decay` plus job lifecycle metadata,
 plus a caller-started retention loop step that can wait within a caller budget
 for one stored job to become due and lease due execution, plus a finite
 caller-owned loop policy over that step. It does not start detached background
 work, own a long-running process service loop, persist configured cron seeds
-from bootstrap automatically, drain queued work, notify channels, or call an
+from bootstrap automatically, run a detached queue-drain loop, notify channels, or call an
 agent loop.
 
 ## Current Status
@@ -342,6 +343,15 @@ when callers provide a hook bus, publishes advisory `hook::Event::job_dropped`
 with metadata-only `JobDroppedPayload`. The queue still does not execute
 handlers, record triggered run rows, notify channels, call agents, or start a
 detached drain loop.
+
+Slice 216 adds the explicit one-item drain boundary without making the queue a
+background service. `TriggeredService::execute_one(...)` executes exactly one
+caller-provided `TriggeredExecutionJob`, reusing the same run-record,
+lifecycle-hook, and optional triggered-agent-lease behavior as the existing
+multi-match `execute(...)` path. `TriggeredQueue::drain_once(...)` receives one
+queued descriptor and executes only that descriptor through the service. It does
+not re-intake by trigger key, drain later queued jobs, notify channels, call
+agents, or define blocked-agent hold/drop policy for lease conflicts.
 
 ## Public API
 
@@ -824,6 +834,18 @@ struct TriggeredExecuteResult {
   std::vector<TriggeredExecuteAttempt> attempts;
 };
 
+struct TriggeredExecuteOneRequest {
+  TriggeredExecutionJob execution;
+  TriggeredJobHandler handler;
+  std::string lease_owner_key;
+  std::chrono::steady_clock::duration lease_ttl;
+};
+
+struct TriggeredExecuteOneResult {
+  TriggeredExecuteAttempt attempt;
+  bool completed;
+};
+
 struct TriggeredHookOptions {
   hook::Bus* bus;
   std::string source;
@@ -876,12 +898,23 @@ struct TriggeredQueueEnqueueResult {
   std::vector<TriggeredDroppedJob> dropped;
 };
 
+struct TriggeredQueueDrainOnceRequest {
+  TriggeredJobHandler handler;
+};
+
+struct TriggeredQueueDrainOnceResult {
+  TriggeredQueuedJob queued;
+  TriggeredExecuteOneResult execution;
+};
+
 class TriggeredService {
  public:
   explicit TriggeredService(AutomationRepository&, TriggeredServiceOptions = {});
 
   async::Awaitable<core::Result<TriggeredIntakeResult>>
   intake(TriggeredIntakeRequest);
+  async::Awaitable<core::Result<TriggeredExecuteOneResult>>
+  execute_one(TriggeredExecuteOneRequest);
   async::Awaitable<core::Result<TriggeredExecuteResult>>
   execute(TriggeredExecuteRequest);
   AutomationRepository& repository() noexcept;
@@ -895,6 +928,8 @@ class TriggeredQueue {
   async::Awaitable<core::Result<TriggeredQueueEnqueueResult>>
   enqueue(TriggeredQueueEnqueueRequest);
   async::Awaitable<core::Result<TriggeredQueuedJob>> receive();
+  async::Awaitable<core::Result<TriggeredQueueDrainOnceResult>>
+  drain_once(TriggeredQueueDrainOnceRequest);
   void close() noexcept;
   std::size_t capacity() const noexcept;
   std::size_t size() const;
@@ -1299,10 +1334,23 @@ When `TriggeredQueueOptions::hooks.bus` is set, each drop publishes advisory
 metadata-only: source, identity, job key/type, stored agent key, trigger key,
 drop reason, queue capacity/size, and scheduled/drop timestamps. It carries no
 trigger body, channel payload, prompt bytes, or agent input. Advisory sink
-failures remain non-fatal. The queue deliberately does not execute handlers,
-record `automation_triggered_runs`, acquire triggered agent leases, notify
-channels, call agents, or own queue-drain policy; those remain downstream
-service-loop slices.
+failures remain non-fatal.
+
+`TriggeredQueue::drain_once(...)` is the first queue-drain owner. It validates a
+non-empty handler, awaits `receive()` for one `TriggeredQueuedJob`, then calls
+`TriggeredService::execute_one(...)` with the queued descriptor. The execution
+step records exactly one `automation_triggered_runs` row, publishes the same
+advisory lifecycle metadata as service execution when hooks are configured, and
+returns both the queued descriptor and the execution attempt. It deliberately
+does not call `TriggeredService::execute(...)`, because that would re-intake by
+trigger key and execute every stored descriptor matching the key instead of the
+single queued descriptor. `drain_once(...)` also does not expose lease fields in
+this slice: consuming a queue item before discovering a same-agent lease
+conflict would silently drop work unless a later hold/drop policy is defined.
+For now, blocked-agent lease policy stays a downstream service-loop slice.
+
+The queue still does not notify channels, call agents, start a detached drain
+loop, or define service shutdown policy.
 
 ## Memory Retention Planning
 
@@ -1743,9 +1791,10 @@ scan/wait/execute-due/run surface plus config-authored cron seeds, explicit
 seed application/service-cycle policy, run history, stop policy, typed
 outcomes, stored cron execution leases, stored cron agent leases, triggered
 descriptor intake, triggered execution/run history, triggered lifecycle hooks,
-triggered agent leases, and bounded triggered queue/backpressure: detached
-service startup policy, queue drain ownership, notifier routing, blocked-agent
-hold/drop policy, and actual agent firing for agent-facing jobs.
+triggered agent leases, bounded triggered queue/backpressure, and explicit
+one-at-a-time queue draining: detached service startup policy, notifier
+routing, blocked-agent hold/drop policy, and actual agent firing for
+agent-facing jobs.
 
 ## Validation
 
@@ -1855,6 +1904,11 @@ caller-owned triggered queue, covering matched job enqueue/receive behavior,
 drop-newest overflow, `job_dropped` metadata publishing, run-row suppression for
 queued/dropped work, and invalid enqueue policy validation. `test-hook` reports
 38 cases / 313 assertions for the public `JobDroppedPayload` delivery surface.
+Slice 216 reports `test-automation` at 89 cases / 1409 assertions for
+one-at-a-time triggered queue draining, covering explicit single-descriptor
+execution through `TriggeredService::execute_one(...)`, queue `drain_once(...)`
+run recording, preservation of later queued descriptors, and invalid drain
+policy validation.
 
 `bench-automation` planning rows are:
 

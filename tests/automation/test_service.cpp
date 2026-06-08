@@ -314,6 +314,68 @@ TEST_CASE("TriggeredService::execute records explicit triggered handler attempts
   });
 }
 
+TEST_CASE("TriggeredService::execute_one records one explicit triggered descriptor",
+          "[unit][automation][service][triggered]") {
+  TempDb db{"oran-automation-service-triggered-execute-one"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:webhook-ci",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "researcher",
+             }))
+                .has_value());
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:webhook-ci-secondary",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "coder",
+             }))
+                .has_value());
+
+    automation::TriggeredService service{repo};
+    auto executed = co_await service.execute_one(automation::TriggeredExecuteOneRequest{
+        .execution =
+            automation::TriggeredExecutionJob{
+                .job =
+                    automation::TriggeredJobRecord{
+                        .job_key = "triggered:webhook-ci",
+                        .trigger_key = "webhook:ci",
+                        .agent_key = "researcher",
+                        .created_at = "2026-06-08T00:00:00Z",
+                        .updated_at = "2026-06-08T00:00:00Z",
+                    },
+                .trigger_key = "webhook:ci",
+                .received_at = at(120s),
+            },
+        .handler = [](automation::TriggeredExecutionJob execution) -> async::Awaitable<core::Result<void>> {
+          REQUIRE(execution.job.job_key == "triggered:webhook-ci");
+          co_return core::Result<void>{};
+        },
+    });
+
+    REQUIRE(executed.has_value());
+    REQUIRE(executed->completed);
+    REQUIRE(executed->attempt.completed);
+    REQUIRE(executed->attempt.execution.job.job_key == "triggered:webhook-ci");
+
+    auto primary_runs = co_await repo.list_triggered_runs(automation::ListTriggeredRunsOptions{
+        .job_key = "triggered:webhook-ci",
+        .limit = 10,
+    });
+    REQUIRE(primary_runs.has_value());
+    REQUIRE(primary_runs->size() == 1);
+
+    auto secondary_runs = co_await repo.list_triggered_runs(automation::ListTriggeredRunsOptions{
+        .job_key = "triggered:webhook-ci-secondary",
+        .limit = 10,
+    });
+    REQUIRE(secondary_runs.has_value());
+    REQUIRE(secondary_runs->empty());
+  });
+}
+
 TEST_CASE("TriggeredService::execute records cancelled triggered handlers as aborted",
           "[unit][automation][service][triggered]") {
   TempDb db{"oran-automation-service-triggered-aborted"};

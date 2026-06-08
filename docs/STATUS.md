@@ -7,26 +7,25 @@
 
 ## Snapshot
 
-- **Slice:** 215 (`xmake run orangutan -- --help` reports slice 215)
+- **Slice:** 216 (`xmake run orangutan -- --help` reports slice 216)
 - **Last completed history:**
-  [`histories/2026-06/20260608-1123-automation-triggered-queue.md`](histories/2026-06/20260608-1123-automation-triggered-queue.md)
+  [`histories/2026-06/20260608-1215-automation-triggered-queue-drain.md`](histories/2026-06/20260608-1215-automation-triggered-queue-drain.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-cron-category.md`](exec-plans/active/2026-06-07-automation-cron-category.md).
-- **Latest completed slice:** slice 215 adds a caller-owned bounded
-  `TriggeredQueue` for explicit triggered work intake. Runtime owners can build
-  the queue from `AutomationRuntime::triggered_queue(...)` or directly from a
-  `TriggeredService`, enqueue matched triggered descriptors into bounded
-  in-process state, explicitly `receive()` queued jobs, and apply
-  `drop_newest` backpressure when the queue is full. Dropped jobs publish
-  advisory `job_dropped` metadata when callers provide a hook bus. The queue
-  still does not execute handlers, record run rows, notify channels, call
-  agents, or make bootstrap open/apply/run `automation.db` automatically.
-  Focused result: `test-automation` **87 cases / 1376 assertions** and
-  `test-hook` **38 cases / 313 assertions**.
+- **Latest completed slice:** slice 216 adds explicit one-at-a-time triggered
+  queue draining. `TriggeredService::execute_one(...)` executes exactly one
+  caller-provided triggered descriptor while reusing the existing durable
+  run-row, advisory lifecycle hook, and optional triggered-agent-lease behavior.
+  `TriggeredQueue::drain_once(...)` receives one queued descriptor and executes
+  only that descriptor through a caller-supplied handler, leaving later queued
+  jobs buffered. The queue still does not notify channels, call agents, start a
+  detached drain loop, or define blocked-agent hold/drop semantics for lease
+  conflicts. Focused result: `test-automation` **89 cases / 1409 assertions**
+  and `test-hook` **38 cases / 313 assertions**.
 - **Next intended slice:** continue the active automation cron/category plan.
   The next useful implementation boundary is a small scheduler-service
-  ownership slice such as notifier routing, queue drain/agent-firing policy, or
-  detached service-loop startup.
+  ownership slice such as blocked-agent queue hold/drop semantics, notifier
+  routing, agent firing policy, or detached service-loop startup.
   Do not add bootstrap-owned background automation or unrelated STATUS-only
   slice churn.
 
@@ -1823,7 +1822,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 38 cases / 313 assertions.
 - `oran-memory`: 38 cases / 841 assertions.
-- `oran-automation`: 87 cases / 1376 assertions.
+- `oran-automation`: 89 cases / 1409 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 208 cases / 2181 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
