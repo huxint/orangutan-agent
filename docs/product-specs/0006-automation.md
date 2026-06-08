@@ -66,7 +66,10 @@ path. Slice 219 adds required prompt input to cron and triggered job
 descriptors so future agent firing has durable work text. Slice 220 adds an
 injected prompt-runner adapter that maps those stored prompts into existing
 cron/triggered handler surfaces without making automation depend on bootstrap or
-starting a background owner. The current API evaluates
+starting a background owner. Slice 221 adds the first bootstrap-owned bridge
+that maps those `AutomationPromptRunner` requests into configured-route
+`AgentPromptRunner` execution one durable job at a time while keeping
+`automation.db` and service-loop ownership caller-owned. The current API evaluates
 periodic and cron schedules from caller-supplied state, maps a long-term memory
 retention policy into a due-only `memory::longterm::DecayRequest`, persists the
 configured retention job plus run history and lease state through
@@ -118,8 +121,11 @@ step. Bootstrap maps configured-route `memory.longterm.retention` into a stored
 `MemoryRetentionJob` descriptor whose first fire is after the one-shot startup
 decay pass, and maps `automation.cron.jobs[]` into
 `UpsertCronJobRequest` descriptors including `agent_key` and `agent_prompt`,
-but bootstrap still does not open `automation.db`, apply those rows, or run a
-background service.
+and can now adapt stored automation prompt requests into one-job-at-a-time
+configured-route `AgentPromptRunner` execution with stable per-job session
+continuity and fail-closed noninteractive approvals. Bootstrap still does not
+open `automation.db`, apply those rows automatically, or run a background
+service.
 
 Current implementation:
 
@@ -287,8 +293,8 @@ Current implementation:
 - `test-automation` reports 94 cases / 1574 assertions.
 - `test-hook` reports 38 cases / 313 assertions for the hook payload surface.
 - `test-config` reports 51 cases / 468 assertions for the consuming config
-  boundary, and `test-bootstrap` reports 129 cases / 1095 assertions for mapped
-  cron seeds.
+  boundary, and `test-bootstrap` reports 134 cases / 1160 assertions for mapped
+  cron seeds plus bootstrap-owned automation prompt bridge coverage.
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 
@@ -322,16 +328,18 @@ scheduler/category lifecycle ownership remains downstream.
 1. A cron job ("`* * * * *`") fires exactly once per minute under nominal load.
 2. A periodic job (every 15 s) fires within ±100 ms of the scheduled time.
 3. A triggered job fires within 50 ms of the trigger event. Current status:
-   slice 220 can persist prompt-bearing triggered descriptors, match a trigger
+   slice 221 can persist prompt-bearing triggered descriptors, match a trigger
    event key to stored jobs through caller-owned intake, run caller-supplied
    handlers while recording run history, publish advisory lifecycle metadata,
    optionally lease the matched stored `agent_key`, adapt stored prompts into
-   injected prompt-runner calls, and enqueue matched jobs into bounded
-   in-process queue state with drop-newest backpressure. Queue consumers can
-   now drain and execute one queued descriptor at a time, finite-drain all
-   currently available queued descriptors up to a caller limit, or explicitly
-   drop a queued descriptor blocked by an active triggered-agent lease, while
-   notifier routing and actual agent firing latency remain downstream.
+   injected prompt-runner calls, bridge those prompt runs into configured-route
+   `AgentPromptRunner` execution one durable job at a time, and enqueue matched
+   jobs into bounded in-process queue state with drop-newest backpressure.
+   Queue consumers can now drain and execute one queued descriptor at a time,
+   finite-drain all currently available queued descriptors up to a caller
+   limit, or explicitly drop a queued descriptor blocked by an active
+   triggered-agent lease, while notifier routing and actual agent firing
+   latency remain downstream.
 4. Per-agent lease prevents two concurrent runs of the same agent_key; the queued
    firing is held or dropped per policy. Current status: slice 210 prevents
    overlapping explicit cron execution for the same stored `agent_key` through
@@ -344,8 +352,10 @@ scheduler/category lifecycle ownership remains downstream.
    with `job_dropped(reason=agent_lease_conflict)`. Slice 218 adds finite
    available-batch draining over the same drop path, slice 219 makes stored
    cron/triggered jobs carry the required prompt text future agent firing will
-   use, and slice 220 adds injected prompt-runner handler factories over those
-   prompts. Richer hold/requeue
+   use, slice 220 adds injected prompt-runner handler factories over those
+   prompts, and slice 221 bridges those prompt runs into configured-route
+   `AgentPromptRunner` execution without moving scheduler ownership into
+   bootstrap. Richer hold/requeue
    policy, notifier routing, and actual agent firing remain downstream.
 5. A failing job is recorded with the failure reason; the next firing happens on
    schedule. Current status: slice 206 records explicit cron handler failures

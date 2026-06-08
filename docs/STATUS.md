@@ -7,27 +7,29 @@
 
 ## Snapshot
 
-- **Slice:** 220 (`xmake run orangutan -- --help` reports slice 220)
+- **Slice:** 221 (`xmake run orangutan -- --help` reports slice 221)
 - **Last completed history:**
-  [`histories/2026-06/20260608-1440-automation-prompt-handlers.md`](histories/2026-06/20260608-1440-automation-prompt-handlers.md)
+  [`histories/2026-06/20260609-0139-automation-agent-prompt-bridge.md`](histories/2026-06/20260609-0139-automation-agent-prompt-bridge.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-cron-category.md`](exec-plans/active/2026-06-07-automation-cron-category.md).
-- **Latest completed slice:** slice 220 adds the first injected prompt-runner
-  adapter for automation jobs. `AutomationPromptRunRequest` carries
-  `job_key`, `job_type`, `agent_key`, `prompt`, fired time, and optional
-  `trigger_key`; `make_cron_prompt_handler(...)` and
-  `make_triggered_prompt_handler(...)` turn a caller-supplied prompt runner into
-  the existing `CronJobHandler` / `TriggeredJobHandler` surfaces. This makes
-  stored cron/triggered `agent_prompt` executable through explicit service and
-  queue owners while preserving current run-history, retry, and lease semantics.
-  It still does not construct `AgentPromptRunner`, notify channels, start a
-  detached loop, or implement hold/requeue policy. Focused result:
-  `test-automation` **94 cases / 1574 assertions**.
+- **Latest completed slice:** slice 221 adds the first bootstrap-owned bridge
+  from automation prompt execution into `AgentPromptRunner`. The new
+  `make_automation_agent_prompt_runner(...)` callback builds one
+  `AgentPromptRunner` per durable automation job execution, derives a stable
+  per-job `session_id` from job type/scope/job key/agent key, applies
+  `agents.<name>` prompt and permission overlays only when that config entry
+  exists, and keeps noninteractive automation fail-closed by disabling
+  `cli::OperatorPromptSink` binding by default. This makes stored cron and
+  triggered `agent_prompt` descriptors runnable through caller-owned
+  `AutomationRuntime`, `CronService`, and `TriggeredService` paths without
+  making bootstrap open `automation.db`, start detached automation work, route
+  notifiers, or define hold/requeue policy. Focused result:
+  `test-bootstrap` **134 cases / 1160 assertions**.
 - **Next intended slice:** continue the active automation cron/category plan.
   The next useful implementation boundary is a small scheduler-service
-  ownership slice such as bootstrap/runtime wiring from the automation
-  prompt-runner adapter into `AgentPromptRunner`, notifier routing, richer
-  blocked-agent hold/requeue policy, or detached service-loop startup.
+  ownership slice such as notifier routing, richer blocked-agent hold/requeue
+  policy, or detached service-loop startup over the now-complete automation to
+  `AgentPromptRunner` bridge.
   Do not add bootstrap-owned background automation or unrelated STATUS-only
   slice churn.
 
@@ -1831,7 +1833,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 129 cases / 1095 assertions.
+- `oran-bootstrap`: 134 cases / 1160 assertions.
 
 ## Open Tech-Debt Rows
 

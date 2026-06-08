@@ -109,6 +109,11 @@ struct AgentPromptRunnerOptions {
   /// false. `nullptr` renders to `std::cout` (the production terminal); tests
   /// inject their own `std::ostream`.
   std::ostream* stream_out{nullptr};
+  /// When `false`, `AgentPromptRunner` does not bind `cli::OperatorPromptSink`
+  /// to the process hook bus, so `ask` permissions fail through the existing
+  /// no-sink path instead of reading terminal stdin. This keeps noninteractive
+  /// automation callers fail-closed by default.
+  bool bind_operator_prompt_sink{true};
 };
 
 /// Adapter-neutral bridge from `cli::run_async` into `agent::Loop`.

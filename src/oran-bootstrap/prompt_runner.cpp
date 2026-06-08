@@ -607,15 +607,18 @@ public:
             .operator_identity = identity_,
             .scripted_answers = std::move(options.approval_answers),
             .quiet = options.quiet,
-        }} {
+        }},
+        bind_operator_prompt_sink_{options.bind_operator_prompt_sink} {
     if (!options.skills_directory.empty() && skills_catalog_.catalog().section_text.empty()) {
       skill_snapshot_.emplace(executor_, std::move(options.skills_directory));
     }
-    assembly_->hook_bus().bind(operator_sink_, {hook::Event::permission_ask_rendered});
+    if (bind_operator_prompt_sink_) {
+      assembly_->hook_bus().bind(operator_sink_, {hook::Event::permission_ask_rendered});
+    }
   }
 
   ~Impl() {
-    if (assembly_ != nullptr) {
+    if (assembly_ != nullptr && bind_operator_prompt_sink_) {
       assembly_->hook_bus().unbind(operator_sink_);
     }
   }
@@ -1382,6 +1385,7 @@ private:
   std::size_t prompts_processed_{0};
   std::size_t tool_search_observations_{0};
   std::size_t skill_catalog_loads_{0};
+  bool bind_operator_prompt_sink_{true};
 };
 
 core::Result<std::unique_ptr<AgentPromptRunner>> AgentPromptRunner::create(AgentPromptRunnerOptions options) {

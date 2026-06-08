@@ -30,6 +30,10 @@ core::Result<LoadedConfig> load_config(BootstrapOptions);
 core::Result<int> run(BootstrapOptions);
 
 struct AgentPromptRunnerOptions;
+struct AutomationAgentPromptRunnerOptions;
+
+core::Result<automation::AutomationPromptRunner>
+make_automation_agent_prompt_runner(AutomationAgentPromptRunnerOptions);
 
 class AgentPromptRunner final : public cli::PromptRunner {
  public:
@@ -187,8 +191,11 @@ borrows a caller-supplied `RuntimeAssembly`, typed config, resolved `provider::R
 executor, and provider backend; registers the builtin tool catalog; materializes
 permission rules from config plus an optional agent overlay; wraps the backend in
 `provider::execution::Runtime`; binds `cli::OperatorPromptSink` to the
-assembly-owned `permission_ask_rendered` bus; and drives `agent::Loop` with workspace,
-audit, broker, hook, output-cap, trace, and session-memory services from the assembly.
+assembly-owned `permission_ask_rendered` bus by default; and drives `agent::Loop`
+with workspace, audit, broker, hook, output-cap, trace, and session-memory
+services from the assembly. `AgentPromptRunnerOptions::bind_operator_prompt_sink`
+lets noninteractive callers disable that binding so `Verdict::ask` stays on the
+existing fail-closed no-sink path instead of reading terminal stdin.
 When the assembly exposes `session_store()`, the runner loads the persisted history for
 the current `session_id` + `agent_key` plus the durable skill activation rows for
 that same key before each prompt, then appends only the new successful transcript
@@ -342,6 +349,21 @@ the new transcript suffix and feeds each tool result back through
 through `system_preamble_renders()` and `memory_framing_renders()`. The runner
 does not construct real provider adapters or read provider credentials.
 
+`<oran/bootstrap/automation_prompt_runner.hpp>` exposes the first bootstrap-owned
+automation bridge above the automation library's injected prompt seam.
+`make_automation_agent_prompt_runner(...)` returns an
+`automation::AutomationPromptRunner` that validates the supplied runtime
+assembly, config, provider backend, route, scope, and identity, then constructs
+one `AgentPromptRunner` per durable automation job execution. The bridge
+derives a stable per-job `session_id` from job type, scope key, durable job
+key, and agent key so session-memory-backed jobs reuse the same transcript
+state across later executions. It applies `agents.<name>` prompt and permission
+overlays only when that config entry exists, leaves them empty otherwise, and
+defaults `bind_operator_prompt_sink=false` so automation asks stay fail-closed.
+The bridge does not open `automation.db`, persist cron seeds, start timers, or
+launch background work; callers still own `AutomationRuntime`, cron service
+cycles, and triggered execution.
+
 ## Config Resolution
 
 `run` and `load_config` consume these bootstrap arguments:
@@ -416,6 +438,12 @@ missing credentials fail as `ErrorKind::auth` with only non-secret context.
 identity metadata into every loop turn, so provider request/response/error and
 fallback hooks are published for configured-route prompts without making
 `oran-provider` depend on the hook subsystem.
+The same configured-route provider backend, route, config, and runtime assembly
+can also be handed to `make_automation_agent_prompt_runner(...)` when a caller
+opens `AutomationRuntime` explicitly and wants stored cron or triggered
+`agent_prompt` descriptors to execute through the real prompt runtime one job
+at a time. Bootstrap still does not do that automatically during ordinary
+startup.
 The built-in empty-defaults path still reports `provider route: none configured`
 and uses the deterministic no-runner `cli::run` shell so fresh checkouts remain
 runnable without provider credentials or a sessions DB; selector flags

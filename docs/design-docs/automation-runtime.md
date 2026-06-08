@@ -400,6 +400,22 @@ runner success and triggered/cron failures are recorded as run rows. This still
 does not construct `bootstrap::AgentPromptRunner`, route notifications, start a
 detached owner, or define hold/requeue policy.
 
+Slice 221 adds the first bootstrap-owned bridge above that adapter seam.
+`<oran/bootstrap/automation_prompt_runner.hpp>` exposes
+`AutomationAgentPromptRunnerOptions` plus
+`make_automation_agent_prompt_runner(...)`, which returns an
+`automation::AutomationPromptRunner` backed by configured-route
+`AgentPromptRunner` execution. The bridge deliberately builds one
+`AgentPromptRunner` per automation job execution so each durable job keeps the
+correct `agent_key`, selected `agents.<name>` overlay, permission overlay, and
+persisted session identity. It derives a stable per-job `session_id` from job
+type, scope key, durable job key, and agent key; applies config-backed prompt
+and permission overlays only when `agents.<name>` exists; and defaults
+`AgentPromptRunnerOptions::bind_operator_prompt_sink` off so noninteractive
+automation asks stay fail-closed instead of reading terminal stdin. Bootstrap
+still does not open `automation.db`, start a detached service loop, or route
+notifications automatically.
+
 ## Public API
 
 ```cpp
@@ -2091,6 +2107,11 @@ Slice 220 reports `test-automation` at 94 cases / 1574 assertions for the
 injected automation prompt-runner adapter, covering cron prompt-handler success
 with stored state advancement and triggered prompt-handler failure with durable
 run-history failure recording.
+Slice 221 reports `test-bootstrap` at 134 cases / 1160 assertions for the
+bootstrap-owned automation prompt bridge, covering durable session-history
+reuse for one job, per-job configured-agent overlay selection, fail-closed
+noninteractive ask behavior, and runtime-level cron/triggered execution through
+configured-route `AgentPromptRunner`.
 
 `bench-automation` planning rows are:
 
