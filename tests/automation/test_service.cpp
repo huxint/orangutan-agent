@@ -155,6 +155,24 @@ struct CapturedJobLifecycle {
   hook::JobLifecyclePayload payload{};
 };
 
+class RecordingPromptRunner {
+public:
+  automation::AutomationPromptRunner handler() {
+    return [this](automation::AutomationPromptRunRequest request)
+               -> async::Awaitable<core::Result<automation::AutomationPromptRunResult>> {
+      requests.push_back(std::move(request));
+      if (error.has_value()) {
+        co_return std::unexpected(std::move(*error));
+      }
+      co_return automation::AutomationPromptRunResult{.text = response_text};
+    };
+  }
+
+  std::vector<automation::AutomationPromptRunRequest> requests;
+  std::string response_text{"automation prompt ok"};
+  std::optional<core::Error> error{};
+};
+
 }  // namespace
 
 TEST_CASE("TriggeredService::intake matches stored jobs for a trigger key", "[unit][automation][service][triggered]") {
@@ -383,6 +401,51 @@ TEST_CASE("TriggeredService::execute_one records one explicit triggered descript
     });
     REQUIRE(secondary_runs.has_value());
     REQUIRE(secondary_runs->empty());
+  });
+}
+
+TEST_CASE("Triggered prompt handler runs stored triggered job prompt", "[unit][automation][service][triggered]") {
+  TempDb db{"oran-automation-service-triggered-prompt-handler"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:webhook-ci",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "researcher",
+                 .agent_prompt = "Investigate the webhook payload.",
+             }))
+                .has_value());
+
+    RecordingPromptRunner runner;
+    runner.error = core::Error::upstream("prompt runner failed");
+    automation::TriggeredService service{repo};
+    auto result = co_await service.execute(automation::TriggeredExecuteRequest{
+        .trigger_key = "webhook:ci",
+        .received_at = at(120s),
+        .job_limit = 10,
+        .handler = automation::make_triggered_prompt_handler(runner.handler()),
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->attempted_count == 1);
+    REQUIRE(result->completed_count == 0);
+    REQUIRE(result->attempts.size() == 1);
+    REQUIRE(result->attempts[0].error.has_value());
+    REQUIRE(result->attempts[0].error->message() == "prompt runner failed");
+    REQUIRE(result->attempts[0].run.has_value());
+    REQUIRE_FALSE(result->attempts[0].run->success);
+    REQUIRE(result->attempts[0].run->outcome == automation::TriggeredRunOutcome::failure);
+    REQUIRE(result->attempts[0].run->error_message == "prompt runner failed");
+
+    REQUIRE(runner.requests.size() == 1);
+    REQUIRE(runner.requests[0].job_key == "triggered:webhook-ci");
+    REQUIRE(runner.requests[0].job_type == automation::AutomationPromptJobType::triggered);
+    REQUIRE(runner.requests[0].agent_key == "researcher");
+    REQUIRE(runner.requests[0].prompt == "Investigate the webhook payload.");
+    REQUIRE(runner.requests[0].fired_at == at(120s));
+    REQUIRE(runner.requests[0].trigger_key == "webhook:ci");
   });
 }
 
@@ -841,6 +904,48 @@ TEST_CASE("CronService::execute_due advances only successful due cron jobs", "[u
     REQUIRE_FALSE((*failure_runs)[0].success);
     REQUIRE((*failure_runs)[0].outcome == automation::CronRunOutcome::failure);
     REQUIRE((*failure_runs)[0].error_message == "cron payload failed");
+  });
+}
+
+TEST_CASE("Cron prompt handler runs stored cron job prompt", "[unit][automation][service][cron]") {
+  TempDb db{"oran-automation-service-cron-prompt-handler"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
+                 .job_key = "cron:daily-summary",
+                 .agent_key = "researcher",
+                 .agent_prompt = "Summarize yesterday's activity.",
+                 .schedule = make_cron_schedule(),
+             }))
+                .has_value());
+
+    RecordingPromptRunner runner;
+    automation::CronService service{repo};
+    auto result = co_await service.execute_due(automation::CronExecuteRequest{
+        .now = at(120s),
+        .job_limit = 10,
+        .handler = automation::make_cron_prompt_handler(runner.handler()),
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->attempted_count == 1);
+    REQUIRE(result->advanced_count == 1);
+    REQUIRE(result->attempts.size() == 1);
+    REQUIRE(result->attempts[0].advanced);
+    REQUIRE(result->attempts[0].run.has_value());
+    REQUIRE(result->attempts[0].run->success);
+    REQUIRE(result->attempts[0].marked_job.has_value());
+    REQUIRE(result->attempts[0].marked_job->state.last_fired_at == at(60s));
+
+    REQUIRE(runner.requests.size() == 1);
+    REQUIRE(runner.requests[0].job_key == "cron:daily-summary");
+    REQUIRE(runner.requests[0].job_type == automation::AutomationPromptJobType::cron);
+    REQUIRE(runner.requests[0].agent_key == "researcher");
+    REQUIRE(runner.requests[0].prompt == "Summarize yesterday's activity.");
+    REQUIRE(runner.requests[0].fired_at == at(60s));
+    REQUIRE_FALSE(runner.requests[0].trigger_key.has_value());
   });
 }
 

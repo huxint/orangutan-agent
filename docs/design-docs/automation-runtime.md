@@ -388,6 +388,18 @@ and stored triggered descriptors now require non-empty `agent_prompt`.
 This is still descriptor state only: no notifier routing, prompt-runner adapter,
 detached service owner, or agent invocation is added.
 
+Slice 220 adds the first prompt-runner adapter without making automation depend
+on bootstrap, CLI, or provider code. `<oran/automation/prompt.hpp>` exposes an
+automation-owned `AutomationPromptRunner` callback plus request/result shapes.
+`make_cron_prompt_handler(...)` and `make_triggered_prompt_handler(...)` turn a
+caller-supplied prompt runner into the existing `CronJobHandler` /
+`TriggeredJobHandler` surfaces by copying the stored descriptor prompt and
+agent key into `AutomationPromptRunRequest`. Success and failure still flow
+through the existing service/queue paths, so cron state advances only after
+runner success and triggered/cron failures are recorded as run rows. This still
+does not construct `bootstrap::AgentPromptRunner`, route notifications, start a
+detached owner, or define hold/requeue policy.
+
 ## Public API
 
 ```cpp
@@ -639,6 +651,31 @@ struct CronTickResult {
 using CronJobHandler =
     std::function<async::Awaitable<core::Result<void>>(CronDueJob)>;
 
+enum class AutomationPromptJobType {
+  cron,
+  triggered,
+};
+
+struct AutomationPromptRunRequest {
+  std::string job_key;
+  AutomationPromptJobType job_type;
+  std::string agent_key;
+  std::string prompt;
+  core::Time fired_at;
+  std::optional<std::string> trigger_key;
+};
+
+struct AutomationPromptRunResult {
+  std::string text;
+};
+
+using AutomationPromptRunner =
+    std::function<async::Awaitable<core::Result<AutomationPromptRunResult>>(
+        AutomationPromptRunRequest)>;
+
+AutomationPromptRunRequest make_cron_prompt_run_request(const CronDueJob&);
+CronJobHandler make_cron_prompt_handler(AutomationPromptRunner);
+
 struct CronExecuteRequest {
   core::Time now;
   std::size_t job_limit;
@@ -849,6 +886,10 @@ struct TriggeredExecutionJob {
 
 using TriggeredJobHandler =
     std::function<async::Awaitable<core::Result<void>>(TriggeredExecutionJob)>;
+
+AutomationPromptRunRequest make_triggered_prompt_run_request(
+    const TriggeredExecutionJob&);
+TriggeredJobHandler make_triggered_prompt_handler(AutomationPromptRunner);
 
 struct TriggeredExecuteRequest {
   std::string trigger_key;
@@ -2046,6 +2087,10 @@ Slice 219 reports `test-config` at 51 cases / 468 assertions,
 missing/empty prompt rejection, bootstrap cron seed prompt mapping, repository
 cron/triggered prompt round-trips and updates, service/queue/runtime prompt
 preservation, and empty prompt validation before SQLite writes.
+Slice 220 reports `test-automation` at 94 cases / 1574 assertions for the
+injected automation prompt-runner adapter, covering cron prompt-handler success
+with stored state advancement and triggered prompt-handler failure with durable
+run-history failure recording.
 
 `bench-automation` planning rows are:
 

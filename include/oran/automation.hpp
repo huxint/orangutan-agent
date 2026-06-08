@@ -16,6 +16,7 @@
 
 #include <oran/automation/loop.hpp>
 #include <oran/automation/periodic.hpp>
+#include <oran/automation/prompt.hpp>
 #include <oran/automation/queue.hpp>
 #include <oran/automation/repository.hpp>
 #include <oran/automation/runtime.hpp>

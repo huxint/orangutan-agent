@@ -63,7 +63,10 @@ backpressure, slice 216 adds one-at-a-time triggered queue draining, and slice
 active triggered-agent leases. Slice 218 adds non-blocking queue polling and
 finite available-batch draining over the same explicit queue execution/drop
 path. Slice 219 adds required prompt input to cron and triggered job
-descriptors so future agent firing has durable work text. The current API evaluates
+descriptors so future agent firing has durable work text. Slice 220 adds an
+injected prompt-runner adapter that maps those stored prompts into existing
+cron/triggered handler surfaces without making automation depend on bootstrap or
+starting a background owner. The current API evaluates
 periodic and cron schedules from caller-supplied state, maps a long-term memory
 retention policy into a due-only `memory::longterm::DecayRequest`, persists the
 configured retention job plus run history and lease state through
@@ -79,6 +82,8 @@ lets a runtime owner scan stored cron jobs for due work without mutating them,
 lets a runtime owner execute due cron jobs through a supplied handler and mark
 only handler-successful fires complete while recording one run row per handler
 attempt and optionally leasing both the due job and the stored job's agent key,
+can adapt a caller-supplied prompt runner into that cron handler shape using
+the stored `agent_prompt`,
 lets a runtime owner run a finite explicit cron loop that can catch up due
 fires, wait within a caller budget, or stop cooperatively between explicit
 execution iterations while defaulting to repository-backed cron execution
@@ -96,6 +101,8 @@ lets a caller-owned runtime match a supplied external `trigger_key` against
 stored triggered job descriptors through `TriggeredService::intake(...)`,
 lets that same explicit triggered owner execute matched descriptors through a
 caller-supplied handler while recording one triggered run row per attempt,
+can adapt a caller-supplied prompt runner into that triggered handler shape
+using the stored `agent_prompt`,
 publishes advisory triggered job lifecycle metadata when the caller supplies a
 hook bus,
 lets a queue consumer drain and execute exactly one queued triggered descriptor
@@ -268,11 +275,16 @@ Current implementation:
   `max_jobs`, stopping on queue empty, queue closed, or the limit. Batch
   draining reuses the exact one-descriptor execution/drop path and reports
   drained/completed/failed/dropped counters plus per-item drain results.
+- `<oran/automation/prompt.hpp>` exposes `AutomationPromptRunRequest`,
+  `AutomationPromptRunResult`, and `AutomationPromptRunner` plus cron/triggered
+  handler factories. Runtime owners can inject any prompt runner and reuse the
+  existing `CronService`, `TriggeredService`, or `TriggeredQueue` execution
+  paths; automation still does not construct `AgentPromptRunner` itself.
 - `AutomationRuntime::triggered_queue(...)` constructs that queue over the
   caller-owned automation repository and runtime executor.
 - `test-async` reports 14 cases / 76 assertions for the bounded channel
   polling primitive consumed by triggered queues.
-- `test-automation` reports 92 cases / 1533 assertions.
+- `test-automation` reports 94 cases / 1574 assertions.
 - `test-hook` reports 38 cases / 313 assertions for the hook payload surface.
 - `test-config` reports 51 cases / 468 assertions for the consuming config
   boundary, and `test-bootstrap` reports 129 cases / 1095 assertions for mapped
@@ -310,11 +322,11 @@ scheduler/category lifecycle ownership remains downstream.
 1. A cron job ("`* * * * *`") fires exactly once per minute under nominal load.
 2. A periodic job (every 15 s) fires within ±100 ms of the scheduled time.
 3. A triggered job fires within 50 ms of the trigger event. Current status:
-   slice 219 can persist prompt-bearing triggered descriptors, match a trigger
+   slice 220 can persist prompt-bearing triggered descriptors, match a trigger
    event key to stored jobs through caller-owned intake, run caller-supplied
    handlers while recording run history, publish advisory lifecycle metadata,
-   optionally lease the matched stored `agent_key`, and enqueue matched jobs
-   into bounded
+   optionally lease the matched stored `agent_key`, adapt stored prompts into
+   injected prompt-runner calls, and enqueue matched jobs into bounded
    in-process queue state with drop-newest backpressure. Queue consumers can
    now drain and execute one queued descriptor at a time, finite-drain all
    currently available queued descriptors up to a caller limit, or explicitly
@@ -330,9 +342,10 @@ scheduler/category lifecycle ownership remains downstream.
    descriptor at a time without consuming additional queued jobs, and slice 217
    drops a drained triggered descriptor on active same-agent lease conflicts
    with `job_dropped(reason=agent_lease_conflict)`. Slice 218 adds finite
-   available-batch draining over the same drop path, and slice 219 makes stored
+   available-batch draining over the same drop path, slice 219 makes stored
    cron/triggered jobs carry the required prompt text future agent firing will
-   use. Richer hold/requeue
+   use, and slice 220 adds injected prompt-runner handler factories over those
+   prompts. Richer hold/requeue
    policy, notifier routing, and actual agent firing remain downstream.
 5. A failing job is recorded with the failure reason; the next firing happens on
    schedule. Current status: slice 206 records explicit cron handler failures

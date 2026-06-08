@@ -17,7 +17,9 @@ bounded caller-owned triggered queue/backpressure, one-at-a-time triggered
 queue draining, finite available-batch draining, and drop-on-conflict handling
 for drained descriptors blocked by triggered-agent leases now exist. Cron and
 triggered descriptors also now carry required prompt input so future agent
-firing has durable work text. Detached
+firing has durable work text, and slice 220 now adapts those stored prompts
+into injected cron/triggered handlers without making automation own
+`AgentPromptRunner`. Detached
 service-loop startup, richer blocked-agent hold/requeue semantics, notifiers,
 and agent firing stay in later scheduler slices.
 
@@ -82,6 +84,9 @@ and agent firing stay in later scheduler slices.
 - Require prompt text on config-authored cron seeds plus stored cron and
   triggered job descriptors so agent-firing work has durable input, without
   wiring `AgentPromptRunner` or notifier routing yet.
+- Adapt stored cron and triggered prompts into injected caller-owned prompt
+  execution through the existing handler surfaces, without moving provider,
+  CLI, notifier, or detached service ownership into `oran-automation`.
 - Keep the slice free of agent, detached timer, automatic bootstrap
   persistence, or background task ownership.
 - Update automation docs/status/history/release notes in the same slice.
@@ -187,8 +192,11 @@ and agent firing stay in later scheduler slices.
    available-batch draining through `TriggeredQueue::try_receive()` and
    `drain_available(...)`. Slice 219 adds required `agent_prompt` to cron config
    seeds plus stored cron/triggered descriptors so the future agent-firing owner
-   has durable prompt input. Later: add notifier routing, richer hold/requeue
-   policy, and agent firing.
+   has durable prompt input, and slice 220 adds
+   `make_cron_prompt_handler(...)` / `make_triggered_prompt_handler(...)` so
+   callers can inject prompt execution through the same durable service/queue
+   paths. Later: add notifier routing, richer hold/requeue policy, bootstrap
+   runtime wiring to `AgentPromptRunner`, and agent firing.
 5. **Scheduler performance.**
    Later: measure the 1 000-job scheduler tick criterion once the scheduler
    exists.
@@ -230,6 +238,8 @@ and agent firing stay in later scheduler slices.
 - `build/linux/x86_64/release/test-automation "TriggeredQueue drains available queued descriptors without waiting"`
 - `build/linux/x86_64/release/test-automation "TriggeredQueue drain_available counts handler failures and lease-conflict drops"`
 - `build/linux/x86_64/release/test-automation "TriggeredQueue rejects invalid enqueue policy"`
+- `build/linux/x86_64/release/test-automation "Cron prompt handler runs stored cron job prompt"`
+- `build/linux/x86_64/release/test-automation "Triggered prompt handler runs stored triggered job prompt"`
 - `build/linux/x86_64/release/test-async "Channel try_receive reports empty without waiting and drains FIFO values"`
 - `build/linux/x86_64/release/test-async "Channel try_receive drains buffered values before reporting closed"`
 - `build/linux/x86_64/release/test-async "Channel try_receive completes a pending sender without awaiting"`
