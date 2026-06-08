@@ -2,6 +2,7 @@
 
 #include <oran/automation/queue.hpp>
 
+#include <chrono>
 #include <expected>
 #include <string>
 #include <utility>
@@ -43,7 +44,31 @@ namespace {
   if (!request.handler) {
     return std::unexpected(invalid_triggered_queue_field("handler", "empty"));
   }
+  if (!request.lease_owner_key.empty() && request.lease_ttl <= std::chrono::steady_clock::duration::zero()) {
+    return std::unexpected(invalid_triggered_queue_field("lease_ttl", "not_positive"));
+  }
+  if (core::enum_name(request.blocked_agent_policy) == "unknown") {
+    return std::unexpected(invalid_triggered_queue_field("blocked_agent_policy", "unknown"));
+  }
   return {};
+}
+
+[[nodiscard]] bool is_triggered_agent_lease_conflict(const core::Error& error) {
+  if (error.kind() != core::ErrorKind::conflict || error.message() != "triggered agent lease is already held") {
+    return false;
+  }
+
+  auto has_agent_key = false;
+  auto has_owner_key = false;
+  for (const auto& [key, value] : error.context()) {
+    if (key == "agent_key" && !value.empty()) {
+      has_agent_key = true;
+    }
+    if (key == "owner_key" && !value.empty()) {
+      has_owner_key = true;
+    }
+  }
+  return has_agent_key && has_owner_key;
 }
 
 [[nodiscard]] hook::JobDroppedPayload make_triggered_job_dropped_payload(const TriggeredHookOptions& hooks,
@@ -174,8 +199,26 @@ TriggeredQueue::drain_once(TriggeredQueueDrainOnceRequest request) {
   auto execution = co_await impl_->service.execute_one(TriggeredExecuteOneRequest{
       .execution = queued->execution,
       .handler = std::move(request.handler),
+      .lease_owner_key = std::move(request.lease_owner_key),
+      .lease_ttl = request.lease_ttl,
   });
   if (!execution) {
+    if (is_triggered_agent_lease_conflict(execution.error()) &&
+        request.blocked_agent_policy == TriggeredQueueBlockedAgentPolicy::drop_on_conflict) {
+      auto dropped = TriggeredDroppedJob{
+          .execution = queued->execution,
+          .reason = TriggeredQueueDropReason::agent_lease_conflict,
+          .dropped_at = queued->execution.received_at,
+          .queue_capacity = impl_->channel.capacity(),
+          .queue_size = impl_->channel.size(),
+      };
+      co_await publish_job_dropped(impl_->options.hooks, dropped);
+      co_return TriggeredQueueDrainOnceResult{
+          .queued = std::move(*queued),
+          .execution = {},
+          .dropped = std::move(dropped),
+      };
+    }
     co_return std::unexpected(std::move(execution).error());
   }
 

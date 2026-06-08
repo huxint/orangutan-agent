@@ -292,6 +292,115 @@ TEST_CASE("TriggeredQueue drains one queued descriptor through the triggered ser
   });
 }
 
+TEST_CASE("TriggeredQueue drops drained descriptors on active triggered agent lease conflicts",
+          "[unit][automation][queue][triggered][lease][hook]") {
+  TempDb db{"oran-automation-queue-triggered-drain-lease-conflict"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:webhook-ci-a",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "researcher",
+             }))
+                .has_value());
+    auto held = co_await repo.acquire_triggered_agent_lease(automation::AcquireTriggeredAgentLeaseRequest{
+        .agent_key = "researcher",
+        .owner_key = "owner-b",
+        .acquired_at = at(100s),
+        .expires_at = at(200s),
+    });
+    REQUIRE(held.has_value());
+    REQUIRE(held->has_value());
+
+    std::vector<hook::JobDroppedPayload> dropped_payloads;
+    hook::Bus bus;
+    hook::InProcessSink sink{
+        "triggered-queue-lease-drop-recorder",
+        [&dropped_payloads](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
+          REQUIRE(event == hook::Event::job_dropped);
+          const auto* dropped = std::get_if<hook::JobDroppedPayload>(payload.get());
+          REQUIRE(dropped != nullptr);
+          dropped_payloads.push_back(*dropped);
+          co_return core::Result<void>{};
+        }};
+    bus.bind(sink, {hook::Event::job_dropped});
+
+    automation::TriggeredQueue queue{io.get_executor(),
+                                     automation::TriggeredService{repo},
+                                     automation::TriggeredQueueOptions{
+                                         .capacity = 4,
+                                         .hooks =
+                                             automation::TriggeredHookOptions{
+                                                 .bus = &bus,
+                                                 .source = "triggered-queue",
+                                                 .identity = "trigger-loop",
+                                             },
+                                     }};
+    auto enqueued = co_await queue.enqueue(automation::TriggeredQueueEnqueueRequest{
+        .trigger_key = "webhook:ci",
+        .received_at = at(120s),
+        .job_limit = 10,
+    });
+    REQUIRE(enqueued.has_value());
+    REQUIRE(enqueued->enqueued_count == 1);
+    REQUIRE(queue.size() == 1);
+
+    int handler_calls{};
+    auto drained = co_await queue.drain_once(automation::TriggeredQueueDrainOnceRequest{
+        .handler = [&handler_calls](automation::TriggeredExecutionJob) -> async::Awaitable<core::Result<void>> {
+          ++handler_calls;
+          co_return core::Result<void>{};
+        },
+        .lease_owner_key = "owner-a",
+        .lease_ttl = 60s,
+        .blocked_agent_policy = automation::TriggeredQueueBlockedAgentPolicy::drop_on_conflict,
+    });
+
+    REQUIRE(drained.has_value());
+    REQUIRE_FALSE(drained->execution.completed);
+    REQUIRE_FALSE(drained->execution.attempt.completed);
+    REQUIRE(drained->dropped.has_value());
+    REQUIRE(drained->dropped->reason == automation::TriggeredQueueDropReason::agent_lease_conflict);
+    REQUIRE(drained->dropped->execution.job.job_key == "triggered:webhook-ci-a");
+    REQUIRE(drained->dropped->queue_capacity == 4);
+    REQUIRE(drained->dropped->queue_size == 0);
+    REQUIRE(drained->dropped->dropped_at == at(120s));
+    REQUIRE(handler_calls == 0);
+    REQUIRE(queue.size() == 0);
+    REQUIRE(dropped_payloads.size() == 1);
+
+    const auto& payload = dropped_payloads.front();
+    REQUIRE(payload.source == "triggered-queue");
+    REQUIRE(payload.who.identity == "trigger-loop");
+    REQUIRE(payload.job_key == "triggered:webhook-ci-a");
+    REQUIRE(payload.who.agent_key == "researcher");
+    REQUIRE(payload.trigger_key == "webhook:ci");
+    REQUIRE(payload.reason == "agent_lease_conflict");
+    REQUIRE(payload.scheduled_at == at(120s));
+    REQUIRE(payload.dropped_at == at(120s));
+    REQUIRE(payload.queue_capacity == 4);
+    REQUIRE(payload.queue_size == 0);
+
+    auto runs = co_await repo.list_triggered_runs(automation::ListTriggeredRunsOptions{
+        .job_key = "triggered:webhook-ci-a",
+        .limit = 10,
+    });
+    REQUIRE(runs.has_value());
+    REQUIRE(runs->empty());
+
+    auto still_held = co_await repo.acquire_triggered_agent_lease(automation::AcquireTriggeredAgentLeaseRequest{
+        .agent_key = "researcher",
+        .owner_key = "owner-c",
+        .acquired_at = at(121s),
+        .expires_at = at(240s),
+    });
+    REQUIRE(still_held.has_value());
+    REQUIRE_FALSE(still_held->has_value());
+  });
+}
+
 TEST_CASE("TriggeredQueue rejects invalid enqueue policy", "[unit][automation][queue][triggered]") {
   TempDb db{"oran-automation-queue-triggered-validation"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
@@ -332,5 +441,24 @@ TEST_CASE("TriggeredQueue rejects invalid enqueue policy", "[unit][automation][q
     auto bad_drain = co_await queue.drain_once(automation::TriggeredQueueDrainOnceRequest{});
     REQUIRE_FALSE(bad_drain.has_value());
     REQUIRE(bad_drain.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto bad_drain_ttl = co_await queue.drain_once(automation::TriggeredQueueDrainOnceRequest{
+        .handler = [](automation::TriggeredExecutionJob) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        },
+        .lease_owner_key = "owner-a",
+        .lease_ttl = 0s,
+    });
+    REQUIRE_FALSE(bad_drain_ttl.has_value());
+    REQUIRE(bad_drain_ttl.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto bad_blocked_policy = co_await queue.drain_once(automation::TriggeredQueueDrainOnceRequest{
+        .handler = [](automation::TriggeredExecutionJob) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        },
+        .blocked_agent_policy = static_cast<automation::TriggeredQueueBlockedAgentPolicy>(255),
+    });
+    REQUIRE_FALSE(bad_blocked_policy.has_value());
+    REQUIRE(bad_blocked_policy.error().kind() == core::ErrorKind::invalid_argument);
   });
 }

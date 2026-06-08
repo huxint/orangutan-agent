@@ -570,9 +570,12 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > publish no lifecycle events; advisory sink failures remain non-fatal. Slice
 > 215 adds the triggered queue producer: `TriggeredQueue::enqueue(...)`
 > publishes advisory `job_dropped` for each drop-newest overflow when callers
-> supply a hook bus. Queue enqueues, explicit receives, and queue instances
-> without a bus publish no drop events; advisory sink failures remain
-> non-fatal.
+> supply a hook bus. Slice 217 has `TriggeredQueue::drain_once(...)` publish
+> the same advisory event with `reason=agent_lease_conflict` when a caller opts
+> into drop-on-conflict handling for a drained descriptor blocked by an active
+> triggered-agent lease. Queue enqueues, explicit receives, successful drains,
+> and queue instances without a bus publish no drop events; advisory sink
+> failures remain non-fatal.
 > `test-hook` now reports 38 cases / 313 assertions.
 
 ### Surface

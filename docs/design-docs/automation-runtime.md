@@ -16,7 +16,7 @@ triggered intake plus explicit triggered handler execution and durable
 triggered run history, advisory triggered lifecycle hook metadata,
 repository-backed triggered agent leases, bounded caller-owned triggered queue
 backpressure with advisory drop metadata, explicit one-at-a-time triggered queue
-draining, and a caller-driven retention service
+draining plus drop-on-conflict handling for blocked triggered-agent leases, and a caller-driven retention service
 tick with optional
 advisory `memory_decay` plus job lifecycle metadata,
 plus a caller-started retention loop step that can wait within a caller budget
@@ -351,7 +351,17 @@ lifecycle-hook, and optional triggered-agent-lease behavior as the existing
 multi-match `execute(...)` path. `TriggeredQueue::drain_once(...)` receives one
 queued descriptor and executes only that descriptor through the service. It does
 not re-intake by trigger key, drain later queued jobs, notify channels, call
-agents, or define blocked-agent hold/drop policy for lease conflicts.
+agents, or start a detached drain loop.
+
+Slice 217 adds the first explicit blocked-agent queue policy for triggered
+drains. `TriggeredQueueDrainOnceRequest` can supply `lease_owner_key` /
+`lease_ttl` and `blocked_agent_policy=drop_on_conflict`. When the queued
+descriptor's stored `agent_key` has an active triggered-agent lease, the queue
+consumes exactly that descriptor, returns `TriggeredDroppedJob` metadata with
+`reason=agent_lease_conflict`, publishes advisory `job_dropped` when callers
+provide a hook bus, and does not run the handler, record a triggered run row, or
+publish job lifecycle events. This is intentionally a drop policy, not a
+hold/requeue policy; richer blocked-agent queue semantics remain downstream.
 
 ## Public API
 
@@ -863,6 +873,11 @@ enum class TriggeredQueueOverflowPolicy {
 
 enum class TriggeredQueueDropReason {
   queue_full,
+  agent_lease_conflict,
+};
+
+enum class TriggeredQueueBlockedAgentPolicy {
+  drop_on_conflict,
 };
 
 struct TriggeredQueuedJob {
@@ -900,11 +915,15 @@ struct TriggeredQueueEnqueueResult {
 
 struct TriggeredQueueDrainOnceRequest {
   TriggeredJobHandler handler;
+  std::string lease_owner_key;
+  std::chrono::steady_clock::duration lease_ttl;
+  TriggeredQueueBlockedAgentPolicy blocked_agent_policy;
 };
 
 struct TriggeredQueueDrainOnceResult {
   TriggeredQueuedJob queued;
   TriggeredExecuteOneResult execution;
+  std::optional<TriggeredDroppedJob> dropped;
 };
 
 class TriggeredService {
@@ -1337,20 +1356,27 @@ trigger body, channel payload, prompt bytes, or agent input. Advisory sink
 failures remain non-fatal.
 
 `TriggeredQueue::drain_once(...)` is the first queue-drain owner. It validates a
-non-empty handler, awaits `receive()` for one `TriggeredQueuedJob`, then calls
-`TriggeredService::execute_one(...)` with the queued descriptor. The execution
-step records exactly one `automation_triggered_runs` row, publishes the same
-advisory lifecycle metadata as service execution when hooks are configured, and
-returns both the queued descriptor and the execution attempt. It deliberately
-does not call `TriggeredService::execute(...)`, because that would re-intake by
-trigger key and execute every stored descriptor matching the key instead of the
-single queued descriptor. `drain_once(...)` also does not expose lease fields in
-this slice: consuming a queue item before discovering a same-agent lease
-conflict would silently drop work unless a later hold/drop policy is defined.
-For now, blocked-agent lease policy stays a downstream service-loop slice.
+non-empty handler, positive lease TTL when lease ownership is supplied, and a
+known blocked-agent policy, awaits `receive()` for one `TriggeredQueuedJob`,
+then calls `TriggeredService::execute_one(...)` with the queued descriptor and
+optional lease owner. The normal execution step records exactly one
+`automation_triggered_runs` row, publishes the same advisory lifecycle metadata
+as service execution when hooks are configured, and returns both the queued
+descriptor and the execution attempt. It deliberately does not call
+`TriggeredService::execute(...)`, because that would re-intake by trigger key
+and execute every stored descriptor matching the key instead of the single
+queued descriptor.
+
+When `execute_one(...)` reports an active triggered-agent lease conflict and
+`blocked_agent_policy=drop_on_conflict`, `drain_once(...)` treats the already
+received queue item as an explicit drop. The result carries
+`TriggeredQueueDrainOnceResult::dropped`, no handler is called, no
+`automation_triggered_runs` row is recorded, no job lifecycle hook is published,
+and `job_dropped` receives `reason=agent_lease_conflict` through the queue hook
+options. Other execution errors still propagate as errors.
 
 The queue still does not notify channels, call agents, start a detached drain
-loop, or define service shutdown policy.
+loop, requeue blocked jobs, or define service shutdown policy.
 
 ## Memory Retention Planning
 
@@ -1792,9 +1818,9 @@ seed application/service-cycle policy, run history, stop policy, typed
 outcomes, stored cron execution leases, stored cron agent leases, triggered
 descriptor intake, triggered execution/run history, triggered lifecycle hooks,
 triggered agent leases, bounded triggered queue/backpressure, and explicit
-one-at-a-time queue draining: detached service startup policy, notifier
-routing, blocked-agent hold/drop policy, and actual agent firing for
-agent-facing jobs.
+one-at-a-time queue draining plus drain-time drop-on-conflict handling:
+detached service startup policy, notifier routing, richer blocked-agent
+hold/requeue policy, and actual agent firing for agent-facing jobs.
 
 ## Validation
 
@@ -1908,7 +1934,11 @@ Slice 216 reports `test-automation` at 89 cases / 1409 assertions for
 one-at-a-time triggered queue draining, covering explicit single-descriptor
 execution through `TriggeredService::execute_one(...)`, queue `drain_once(...)`
 run recording, preservation of later queued descriptors, and invalid drain
-policy validation.
+policy validation. Slice 217 reports `test-automation` at 90 cases / 1450
+assertions for queue drain-time triggered-agent lease conflicts, covering
+drop-on-conflict metadata, advisory `job_dropped` reason
+`agent_lease_conflict`, handler/run-row suppression, queue consumption, and
+invalid drain lease/policy validation.
 
 `bench-automation` planning rows are:
 

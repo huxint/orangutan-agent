@@ -2,9 +2,11 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -23,6 +25,11 @@ enum class TriggeredQueueOverflowPolicy : std::uint8_t {
 
 enum class TriggeredQueueDropReason : std::uint8_t {
   queue_full,
+  agent_lease_conflict,
+};
+
+enum class TriggeredQueueBlockedAgentPolicy : std::uint8_t {
+  drop_on_conflict,
 };
 
 struct TriggeredQueuedJob {
@@ -60,11 +67,15 @@ struct TriggeredQueueEnqueueResult {
 
 struct TriggeredQueueDrainOnceRequest {
   TriggeredJobHandler handler{};
+  std::string lease_owner_key{};
+  std::chrono::steady_clock::duration lease_ttl{std::chrono::minutes{5}};
+  TriggeredQueueBlockedAgentPolicy blocked_agent_policy{TriggeredQueueBlockedAgentPolicy::drop_on_conflict};
 };
 
 struct TriggeredQueueDrainOnceResult {
   TriggeredQueuedJob queued{};
   TriggeredExecuteOneResult execution{};
+  std::optional<TriggeredDroppedJob> dropped{};
 };
 
 /// Caller-owned bounded queue for matched triggered job descriptors.
