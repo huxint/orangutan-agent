@@ -12,9 +12,9 @@ Explicit seed persistence, one caller-awaited cron service cycle, durable cron
 run history, cooperative finite-loop stop policy, typed cron run outcome
 classification, repository-backed cron execution leases for explicit loop
 owners, the first per-agent cron lease policy, triggered intake, triggered
-execution/run history, and triggered lifecycle hooks now exist; detached
-service-loop startup, queues, notifiers, triggered leases, and agent firing stay
-in later scheduler slices.
+execution/run history, triggered lifecycle hooks, and triggered agent leases
+now exist; detached service-loop startup, queues, notifiers, and agent firing
+stay in later scheduler slices.
 
 ## Scope
 
@@ -58,14 +58,18 @@ in later scheduler slices.
 - Publish advisory triggered lifecycle metadata around explicit triggered
   handler execution when callers supply a hook bus, without adding queueing,
   notifier routing, leases, or agent execution ownership.
+- Lease explicit triggered handler execution per stored triggered job
+  `agent_key` so caller-owned execution does not overlap active work for the
+  same agent, without adding queueing, notifier routing, or agent execution
+  ownership.
 - Keep the slice free of agent, detached timer, automatic bootstrap
   persistence, or background task ownership.
 - Update automation docs/status/history/release notes in the same slice.
 - Out of scope:
 - Scheduler service startup that automatically reads config and applies/runs
   cron seeds.
-- Process timers, triggered queueing/backpressure, triggered leases, notifier
-  routing, and agent firing.
+- Process timers, triggered queueing/backpressure, notifier routing, and agent
+  firing.
 - Bootstrap opening `automation.db`, starting timers, or spawning detached
   automation work.
 - Scheduler tick performance work beyond focused correctness coverage.
@@ -151,9 +155,9 @@ in later scheduler slices.
    caller-owned `TriggeredService::intake(...)` matching by external
    `trigger_key`, slice 212 adds durable triggered run history plus
    caller-supplied handler execution over those matches, and slice 213 adds
-   advisory triggered lifecycle metadata around those handler attempts, without
-   queueing, notifier routing, triggered leases, or agent execution. Later: add
-   queueing/backpressure, notifier routing, triggered leases, and agent firing.
+   advisory triggered lifecycle metadata around those handler attempts. Slice
+   214 adds repository-backed triggered agent leases for explicit handler
+   owners. Later: add queueing/backpressure, notifier routing, and agent firing.
 5. **Scheduler performance.**
    Later: measure the 1 000-job scheduler tick criterion once the scheduler
    exists.
@@ -181,6 +185,9 @@ in later scheduler slices.
 - `build/linux/x86_64/release/test-automation "TriggeredService::execute records cancelled triggered handlers as aborted"`
 - `build/linux/x86_64/release/test-automation "TriggeredService::execute publishes lifecycle metadata for handler success"`
 - `build/linux/x86_64/release/test-automation "TriggeredService::execute publishes lifecycle metadata for handler failure"`
+- `build/linux/x86_64/release/test-automation "[unit][automation][repository][triggered][lease]"`
+- `build/linux/x86_64/release/test-automation "TriggeredService::execute leases triggered handlers and releases after outcomes"`
+- `build/linux/x86_64/release/test-automation "TriggeredService::execute blocks active triggered agent leases before handlers"`
 - `build/linux/x86_64/release/test-automation "AutomationRuntime constructs triggered service execution over owned state"`
 - `build/linux/x86_64/release/test-automation "CronService::execute_due blocks active cron agent leases before handlers"`
 - `build/linux/x86_64/release/test-automation "CronLoop::run uses cron agent leases before calling handlers"`
@@ -224,9 +231,12 @@ in later scheduler slices.
   agents.
 - Confirm triggered execution records one success/failure/aborted run row per
   matched descriptor through a caller-supplied handler and still does not
-  enqueue work, notify channels, acquire triggered leases, or call agents.
+  enqueue work, notify channels, or call agents.
 - Confirm triggered execution publishes advisory lifecycle metadata only when a
   caller supplies hook options, and sink failures remain non-vetoing.
+- Confirm triggered execution can acquire/release triggered agent leases when
+  callers opt in, rejects active same-agent conflicts before handler/run/hook
+  work, and releases after durable success/failure outcomes.
 - Confirm no new dependency direction crosses from automation into bootstrap,
   config, or agent.
 - Observability checks:
@@ -347,6 +357,15 @@ in later scheduler slices.
   Runtime owners can observe triggered handler attempts without queueing work,
   notifying channels, acquiring triggered leases, calling agents, or making
   bootstrap own automation state.
+- [x] 2026-06-08 09:59 +0800: Implemented repository-backed triggered agent
+  leases through migration v10,
+  `AutomationRepository::acquire_triggered_agent_lease(...)`, and
+  `release_triggered_agent_lease(...)`. `TriggeredService::execute(...)` can
+  opt into same-agent lease ownership with `lease_owner_key` / `lease_ttl`,
+  returns `ErrorKind::conflict` before handler/run/hook work on active
+  conflicts, and releases after durable success/failure/aborted outcomes
+  without adding queueing, notifier routing, agent calls, or bootstrap-owned
+  automation state.
 - [x] **Update the docs that this slice invalidates in the same PR**
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -425,6 +444,10 @@ in later scheduler slices.
   policy. The explicit triggered handler boundary now has durable outcome rows,
   so advisory start/outcome metadata can be published without changing retry,
   hold/drop, lease, notifier, or agent invocation semantics.
+- 2026-06-08: Add triggered agent leases before queue/notifier/agent firing
+  policy. Explicit triggered handlers can now avoid overlapping same-agent work
+  for stored descriptors, while queue hold/drop semantics, notifier routing,
+  and actual agent invocation remain downstream.
 
 ## Linked Artifacts
 
@@ -449,5 +472,6 @@ in later scheduler slices.
 - `docs/histories/2026-06/20260608-0258-automation-triggered-intake.md`
 - `docs/histories/2026-06/20260608-0330-automation-triggered-execution.md`
 - `docs/histories/2026-06/20260608-0351-automation-triggered-lifecycle-hooks.md`
+- `docs/histories/2026-06/20260608-0959-automation-triggered-agent-leases.md`
 - Release note:
 - `docs/releases/feature-release-notes.md#2026-06`

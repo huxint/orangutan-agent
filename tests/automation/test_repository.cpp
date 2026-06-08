@@ -103,13 +103,13 @@ TEST_CASE("AutomationRepository::migrate applies the automation schema once", "[
     auto first = co_await repo.migrate();
     REQUIRE(first.has_value());
     REQUIRE(first->previous_version == 0);
-    REQUIRE(first->current_version == 9);
-    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3, 4, 5, 6, 7, 8, 9});
+    REQUIRE(first->current_version == 10);
+    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
 
     auto second = co_await repo.migrate();
     REQUIRE(second.has_value());
-    REQUIRE(second->previous_version == 9);
-    REQUIRE(second->current_version == 9);
+    REQUIRE(second->previous_version == 10);
+    REQUIRE(second->current_version == 10);
     REQUIRE(second->applied_versions.empty());
   });
 }
@@ -523,6 +523,71 @@ TEST_CASE("AutomationRepository acquires, expires, and releases cron agent lease
     REQUIRE(*released);
 
     auto reacquired = co_await repo.acquire_cron_agent_lease(automation::AcquireCronAgentLeaseRequest{
+        .agent_key = "researcher",
+        .owner_key = "owner-c",
+        .acquired_at = at(180s),
+        .expires_at = at(240s),
+    });
+    REQUIRE(reacquired.has_value());
+    REQUIRE(reacquired->has_value());
+    REQUIRE((*reacquired)->owner_key == "owner-c");
+  });
+}
+
+TEST_CASE("AutomationRepository acquires, expires, and releases triggered agent leases",
+          "[unit][automation][repository][triggered][lease]") {
+  TempDb db{"oran-automation-repo-triggered-agent-lease"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+
+    auto first = co_await repo.acquire_triggered_agent_lease(automation::AcquireTriggeredAgentLeaseRequest{
+        .agent_key = "researcher",
+        .owner_key = "owner-a",
+        .acquired_at = at(100s),
+        .expires_at = at(160s),
+    });
+    REQUIRE(first.has_value());
+    REQUIRE(first->has_value());
+    REQUIRE((*first)->agent_key == "researcher");
+    REQUIRE((*first)->owner_key == "owner-a");
+    REQUIRE((*first)->acquired_at == at(100s));
+    REQUIRE((*first)->expires_at == at(160s));
+    REQUIRE_FALSE((*first)->updated_at.empty());
+
+    auto active_competitor = co_await repo.acquire_triggered_agent_lease(automation::AcquireTriggeredAgentLeaseRequest{
+        .agent_key = "researcher",
+        .owner_key = "owner-b",
+        .acquired_at = at(120s),
+        .expires_at = at(180s),
+    });
+    REQUIRE(active_competitor.has_value());
+    REQUIRE_FALSE(active_competitor->has_value());
+
+    auto expired_takeover = co_await repo.acquire_triggered_agent_lease(automation::AcquireTriggeredAgentLeaseRequest{
+        .agent_key = "researcher",
+        .owner_key = "owner-b",
+        .acquired_at = at(161s),
+        .expires_at = at(220s),
+    });
+    REQUIRE(expired_takeover.has_value());
+    REQUIRE(expired_takeover->has_value());
+    REQUIRE((*expired_takeover)->owner_key == "owner-b");
+    REQUIRE((*expired_takeover)->acquired_at == at(161s));
+    REQUIRE((*expired_takeover)->expires_at == at(220s));
+
+    auto wrong_owner = co_await repo.release_triggered_agent_lease(
+        automation::ReleaseTriggeredAgentLeaseRequest{.agent_key = "researcher", .owner_key = "owner-a"});
+    REQUIRE(wrong_owner.has_value());
+    REQUIRE_FALSE(*wrong_owner);
+
+    auto released = co_await repo.release_triggered_agent_lease(
+        automation::ReleaseTriggeredAgentLeaseRequest{.agent_key = "researcher", .owner_key = "owner-b"});
+    REQUIRE(released.has_value());
+    REQUIRE(*released);
+
+    auto reacquired = co_await repo.acquire_triggered_agent_lease(automation::AcquireTriggeredAgentLeaseRequest{
         .agent_key = "researcher",
         .owner_key = "owner-c",
         .acquired_at = at(180s),
@@ -949,6 +1014,26 @@ TEST_CASE("AutomationRepository validates cron persistence inputs", "[unit][auto
     });
     REQUIRE_FALSE(invalid_agent_lease_key.has_value());
     REQUIRE(has_field(invalid_agent_lease_key.error(), "agent_key"));
+
+    auto invalid_triggered_agent_lease_key =
+        co_await repo.acquire_triggered_agent_lease(automation::AcquireTriggeredAgentLeaseRequest{
+            .agent_key = "",
+            .owner_key = "owner-a",
+            .acquired_at = at(20s),
+            .expires_at = at(21s),
+        });
+    REQUIRE_FALSE(invalid_triggered_agent_lease_key.has_value());
+    REQUIRE(has_field(invalid_triggered_agent_lease_key.error(), "agent_key"));
+
+    auto invalid_triggered_agent_lease_expiry =
+        co_await repo.acquire_triggered_agent_lease(automation::AcquireTriggeredAgentLeaseRequest{
+            .agent_key = "researcher",
+            .owner_key = "owner-a",
+            .acquired_at = at(20s),
+            .expires_at = at(20s),
+        });
+    REQUIRE_FALSE(invalid_triggered_agent_lease_expiry.has_value());
+    REQUIRE(has_field(invalid_triggered_agent_lease_expiry.error(), "expires_at"));
   });
 }
 

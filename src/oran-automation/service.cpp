@@ -97,6 +97,9 @@ namespace {
   if (!request.handler) {
     return std::unexpected(invalid_triggered_execute_field("handler", "empty"));
   }
+  if (!request.lease_owner_key.empty() && request.lease_ttl <= std::chrono::steady_clock::duration::zero()) {
+    return std::unexpected(invalid_triggered_execute_field("lease_ttl", "not_positive"));
+  }
   return {};
 }
 
@@ -138,6 +141,14 @@ void track_next_fire(CronTickResult& result, core::Time next_fire_at) {
       .with("owner_key", std::string{owner_key});
 }
 
+[[nodiscard]] core::Error triggered_agent_lease_conflict_error(const TriggeredExecutionJob& execution,
+                                                               std::string_view owner_key) {
+  return core::Error{core::ErrorKind::conflict, "triggered agent lease is already held"}
+      .with("job_key", execution.job.job_key)
+      .with("agent_key", execution.job.agent_key)
+      .with("owner_key", std::string{owner_key});
+}
+
 [[nodiscard]] core::Error cron_lease_release_conflict_error(const CronDueJob& due, std::string_view owner_key) {
   return core::Error{core::ErrorKind::conflict, "cron job lease was not released"}
       .with("job_key", due.job.job_key)
@@ -151,7 +162,21 @@ void track_next_fire(CronTickResult& result, core::Time next_fire_at) {
       .with("owner_key", std::string{owner_key});
 }
 
+[[nodiscard]] core::Error triggered_agent_lease_release_conflict_error(const TriggeredExecutionJob& execution,
+                                                                       std::string_view owner_key) {
+  return core::Error{core::ErrorKind::conflict, "triggered agent lease was not released"}
+      .with("job_key", execution.job.job_key)
+      .with("agent_key", execution.job.agent_key)
+      .with("owner_key", std::string{owner_key});
+}
+
 [[nodiscard]] core::Error attach_cron_lease_release_error(core::Error error, const core::Error& release_error) {
+  return std::move(error)
+      .with("lease_release_error_kind", std::string{core::enum_name(release_error.kind())})
+      .with("lease_release_error_message", std::string{release_error.message()});
+}
+
+[[nodiscard]] core::Error attach_triggered_lease_release_error(core::Error error, const core::Error& release_error) {
   return std::move(error)
       .with("lease_release_error_kind", std::string{core::enum_name(release_error.kind())})
       .with("lease_release_error_message", std::string{release_error.message()});
@@ -196,6 +221,24 @@ void remember_lease_release_error(std::optional<core::Error>& first_error, core:
 
   if (first_error.has_value()) {
     co_return std::unexpected(std::move(*first_error));
+  }
+  co_return core::Result<void>{};
+}
+
+[[nodiscard]] async::Awaitable<core::Result<void>>
+release_triggered_execution_lease(AutomationRepository& repository,
+                                  const TriggeredExecutionJob& execution,
+                                  std::string_view owner_key) {
+  co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+  auto released = co_await repository.release_triggered_agent_lease(ReleaseTriggeredAgentLeaseRequest{
+      .agent_key = execution.job.agent_key,
+      .owner_key = std::string{owner_key},
+  });
+  if (!released) {
+    co_return std::unexpected(std::move(released).error());
+  }
+  if (!*released) {
+    co_return std::unexpected(triggered_agent_lease_release_conflict_error(execution, owner_key));
   }
   co_return core::Result<void>{};
 }
@@ -453,6 +496,22 @@ async::Awaitable<core::Result<TriggeredExecuteResult>> TriggeredService::execute
         .trigger_key = result.intake.trigger_key,
         .received_at = result.intake.received_at,
     };
+    const auto lease_enabled = !request.lease_owner_key.empty();
+    if (lease_enabled) {
+      auto lease = co_await repository_->acquire_triggered_agent_lease(AcquireTriggeredAgentLeaseRequest{
+          .agent_key = execution.job.agent_key,
+          .owner_key = request.lease_owner_key,
+          .acquired_at = result.intake.received_at,
+          .expires_at = add_steady_duration(result.intake.received_at, request.lease_ttl),
+      });
+      if (!lease) {
+        co_return std::unexpected(std::move(lease).error());
+      }
+      if (!lease->has_value()) {
+        co_return std::unexpected(triggered_agent_lease_conflict_error(execution, request.lease_owner_key));
+      }
+    }
+
     TriggeredExecuteAttempt attempt{.execution = execution};
     ++result.attempted_count;
     const auto started_at = result.intake.received_at;
@@ -473,7 +532,20 @@ async::Awaitable<core::Result<TriggeredExecuteResult>> TriggeredService::execute
           .error_message = failure_message(error, "triggered job handler failed"),
       });
       if (!recorded) {
+        if (lease_enabled) {
+          auto released = co_await release_triggered_execution_lease(*repository_, execution, request.lease_owner_key);
+          if (!released) {
+            co_return std::unexpected(
+                attach_triggered_lease_release_error(std::move(recorded).error(), released.error()));
+          }
+        }
         co_return std::unexpected(std::move(recorded).error());
+      }
+      if (lease_enabled) {
+        auto released = co_await release_triggered_execution_lease(*repository_, execution, request.lease_owner_key);
+        if (!released) {
+          co_return std::unexpected(std::move(released).error());
+        }
       }
       co_await publish_job_lifecycle(
           options_.hooks,
@@ -493,7 +565,20 @@ async::Awaitable<core::Result<TriggeredExecuteResult>> TriggeredService::execute
         .outcome = TriggeredRunOutcome::success,
     });
     if (!recorded) {
+      if (lease_enabled) {
+        auto released = co_await release_triggered_execution_lease(*repository_, execution, request.lease_owner_key);
+        if (!released) {
+          co_return std::unexpected(
+              attach_triggered_lease_release_error(std::move(recorded).error(), released.error()));
+        }
+      }
       co_return std::unexpected(std::move(recorded).error());
+    }
+    if (lease_enabled) {
+      auto released = co_await release_triggered_execution_lease(*repository_, execution, request.lease_owner_key);
+      if (!released) {
+        co_return std::unexpected(std::move(released).error());
+      }
     }
 
     attempt.completed = true;

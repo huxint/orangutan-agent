@@ -145,6 +145,8 @@ struct TriggeredExecuteRequest {
   core::Time received_at{core::Time::epoch()};
   std::size_t job_limit{100};
   TriggeredJobHandler handler{};
+  std::string lease_owner_key{};
+  std::chrono::steady_clock::duration lease_ttl{std::chrono::minutes{5}};
 };
 
 struct TriggeredExecuteAttempt {
@@ -167,6 +169,7 @@ struct TriggeredExecuteResult {
 /// job descriptors. `execute(...)` accepts a caller-supplied handler and records
 /// one run row per matched descriptor. When constructed with a hook bus,
 /// execution publishes advisory job lifecycle metadata around handler work. It
+/// can optionally lease the matched job's agent key before handler work. It
 /// does not enqueue work or call agents.
 class TriggeredService {
 public:

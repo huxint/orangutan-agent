@@ -165,6 +165,26 @@ struct ReleaseCronAgentLeaseRequest {
   std::string owner_key;
 };
 
+struct AcquireTriggeredAgentLeaseRequest {
+  std::string agent_key;
+  std::string owner_key;
+  core::Time acquired_at{core::Time::epoch()};
+  core::Time expires_at{core::Time::epoch()};
+};
+
+struct TriggeredAgentLeaseRecord {
+  std::string agent_key;
+  std::string owner_key;
+  core::Time acquired_at{core::Time::epoch()};
+  core::Time expires_at{core::Time::epoch()};
+  std::string updated_at;
+};
+
+struct ReleaseTriggeredAgentLeaseRequest {
+  std::string agent_key;
+  std::string owner_key;
+};
+
 struct UpsertMemoryRetentionJobRequest {
   std::string job_key;
   MemoryRetentionJob job;
@@ -268,6 +288,12 @@ public:
   acquire_cron_agent_lease(AcquireCronAgentLeaseRequest request);
 
   [[nodiscard]] async::Awaitable<core::Result<bool>> release_cron_agent_lease(ReleaseCronAgentLeaseRequest request);
+
+  [[nodiscard]] async::Awaitable<core::Result<std::optional<TriggeredAgentLeaseRecord>>>
+  acquire_triggered_agent_lease(AcquireTriggeredAgentLeaseRequest request);
+
+  [[nodiscard]] async::Awaitable<core::Result<bool>>
+  release_triggered_agent_lease(ReleaseTriggeredAgentLeaseRequest request);
 
   [[nodiscard]] async::Awaitable<core::Result<MemoryRetentionJobRecord>>
   upsert_memory_retention_job(UpsertMemoryRetentionJobRequest request);

@@ -357,6 +357,119 @@ TEST_CASE("TriggeredService::execute records cancelled triggered handlers as abo
   });
 }
 
+TEST_CASE("TriggeredService::execute leases triggered handlers and releases after outcomes",
+          "[unit][automation][service][triggered][lease]") {
+  TempDb db{"oran-automation-service-triggered-agent-lease"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:succeeds",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "researcher",
+             }))
+                .has_value());
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:fails",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "coder",
+             }))
+                .has_value());
+
+    std::vector<std::string> calls;
+    automation::TriggeredService service{repo};
+    auto result = co_await service.execute(automation::TriggeredExecuteRequest{
+        .trigger_key = "webhook:ci",
+        .received_at = at(120s),
+        .job_limit = 10,
+        .handler = [&calls](automation::TriggeredExecutionJob execution) -> async::Awaitable<core::Result<void>> {
+          calls.push_back(execution.job.job_key);
+          if (execution.job.job_key == "triggered:fails") {
+            co_return std::unexpected(core::Error::upstream("triggered payload failed"));
+          }
+          co_return core::Result<void>{};
+        },
+        .lease_owner_key = "owner-a",
+        .lease_ttl = 60s,
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->attempted_count == 2);
+    REQUIRE(result->completed_count == 1);
+    REQUIRE(calls.size() == 2);
+
+    auto researcher_reacquired =
+        co_await repo.acquire_triggered_agent_lease(automation::AcquireTriggeredAgentLeaseRequest{
+            .agent_key = "researcher",
+            .owner_key = "owner-b",
+            .acquired_at = at(121s),
+            .expires_at = at(240s),
+        });
+    REQUIRE(researcher_reacquired.has_value());
+    REQUIRE(researcher_reacquired->has_value());
+    REQUIRE((*researcher_reacquired)->owner_key == "owner-b");
+
+    auto coder_reacquired = co_await repo.acquire_triggered_agent_lease(automation::AcquireTriggeredAgentLeaseRequest{
+        .agent_key = "coder",
+        .owner_key = "owner-b",
+        .acquired_at = at(121s),
+        .expires_at = at(240s),
+    });
+    REQUIRE(coder_reacquired.has_value());
+    REQUIRE(coder_reacquired->has_value());
+    REQUIRE((*coder_reacquired)->owner_key == "owner-b");
+  });
+}
+
+TEST_CASE("TriggeredService::execute blocks active triggered agent leases before handlers",
+          "[unit][automation][service][triggered][lease]") {
+  TempDb db{"oran-automation-service-triggered-agent-lease-conflict"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:research",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "researcher",
+             }))
+                .has_value());
+    auto held = co_await repo.acquire_triggered_agent_lease(automation::AcquireTriggeredAgentLeaseRequest{
+        .agent_key = "researcher",
+        .owner_key = "owner-b",
+        .acquired_at = at(100s),
+        .expires_at = at(200s),
+    });
+    REQUIRE(held.has_value());
+    REQUIRE(held->has_value());
+
+    int handler_calls{};
+    automation::TriggeredService service{repo};
+    auto blocked = co_await service.execute(automation::TriggeredExecuteRequest{
+        .trigger_key = "webhook:ci",
+        .received_at = at(120s),
+        .job_limit = 10,
+        .handler = [&handler_calls](automation::TriggeredExecutionJob) -> async::Awaitable<core::Result<void>> {
+          ++handler_calls;
+          co_return core::Result<void>{};
+        },
+        .lease_owner_key = "owner-a",
+        .lease_ttl = 60s,
+    });
+    REQUIRE_FALSE(blocked.has_value());
+    REQUIRE(blocked.error().kind() == core::ErrorKind::conflict);
+    REQUIRE(handler_calls == 0);
+
+    auto runs = co_await repo.list_triggered_runs(automation::ListTriggeredRunsOptions{
+        .job_key = "triggered:research",
+        .limit = 10,
+    });
+    REQUIRE(runs.has_value());
+    REQUIRE(runs->empty());
+  });
+}
+
 TEST_CASE("TriggeredService::execute publishes lifecycle metadata for handler success",
           "[unit][automation][service][triggered][hook]") {
   TempDb db{"oran-automation-service-triggered-lifecycle-success"};
@@ -536,6 +649,19 @@ TEST_CASE("TriggeredService::execute rejects invalid execution policy", "[unit][
     });
     REQUIRE_FALSE(bad_limit.has_value());
     REQUIRE(bad_limit.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto invalid_lease_ttl = co_await service.execute(automation::TriggeredExecuteRequest{
+        .trigger_key = "webhook:ci",
+        .received_at = at(120s),
+        .job_limit = 10,
+        .handler = [](automation::TriggeredExecutionJob) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        },
+        .lease_owner_key = "owner-a",
+        .lease_ttl = 0s,
+    });
+    REQUIRE_FALSE(invalid_lease_ttl.has_value());
+    REQUIRE(invalid_lease_ttl.error().kind() == core::ErrorKind::invalid_argument);
   });
 }
 

@@ -7,26 +7,26 @@
 
 ## Snapshot
 
-- **Slice:** 213 (`xmake run orangutan -- --help` reports slice 213)
+- **Slice:** 214 (`xmake run orangutan -- --help` reports slice 214)
 - **Last completed history:**
-  [`histories/2026-06/20260608-0351-automation-triggered-lifecycle-hooks.md`](histories/2026-06/20260608-0351-automation-triggered-lifecycle-hooks.md)
+  [`histories/2026-06/20260608-0959-automation-triggered-agent-leases.md`](histories/2026-06/20260608-0959-automation-triggered-agent-leases.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-cron-category.md`](exec-plans/active/2026-06-07-automation-cron-category.md).
-- **Latest completed slice:** slice 213 adds advisory triggered job lifecycle
-  hooks around explicit caller-supplied triggered handler execution. Runtime
-  owners can construct `TriggeredService` with `TriggeredServiceOptions::hooks`
-  or `AutomationRuntime::triggered_service(options)`, and due execution publishes
-  metadata-only `job_started` before the handler, `job_failed` after a failed
-  attempt has been durably recorded, and `job_finished` after a successful
-  attempt has been durably recorded. Hook sink failures remain advisory and do
-  not change the execution result. This slice still does not enqueue work,
-  notify channels, acquire triggered agent leases, call agents, or make
+- **Latest completed slice:** slice 214 adds repository-backed triggered agent
+  leases around explicit caller-supplied triggered handler execution. Migration
+  v10 creates `automation_triggered_agent_leases`; `AutomationRepository`
+  exposes acquire/release APIs with active-conflict, expired-takeover, and
+  owner-matched release semantics; and `TriggeredService::execute(...)` can opt
+  in through `TriggeredExecuteRequest::lease_owner_key` / `lease_ttl`. Active
+  same-agent conflicts return `ErrorKind::conflict` before handlers, run rows,
+  or lifecycle hooks, and successful/failed durable outcomes release the lease.
+  This slice still does not enqueue work, notify channels, call agents, or make
   bootstrap open/apply/run `automation.db` automatically. Focused result:
-  `test-automation` **81 cases / 1246 assertions**.
+  `test-automation` **84 cases / 1302 assertions**.
 - **Next intended slice:** continue the active automation cron/category plan.
   The next useful implementation boundary is a small scheduler-service
   ownership slice such as triggered queue/backpressure policy, notifier routing,
-  triggered leases, or agent firing.
+  or agent firing.
   Do not add bootstrap-owned background automation or unrelated STATUS-only
   slice churn.
 
@@ -1823,7 +1823,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 37 cases / 299 assertions.
 - `oran-memory`: 38 cases / 841 assertions.
-- `oran-automation`: 81 cases / 1246 assertions.
+- `oran-automation`: 84 cases / 1302 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 208 cases / 2181 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.

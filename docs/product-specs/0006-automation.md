@@ -219,14 +219,17 @@ Current implementation:
   caller-supplied handler for each matched descriptor, records one triggered run
   row per handler attempt, records `ErrorKind::cancelled` handler errors as
   `aborted`, records other handler errors as `failure`, and continues through
-  other matched jobs without queueing, notifying channels, acquiring triggered
-  agent leases, or calling agents. When constructed with
-  `TriggeredServiceOptions::hooks`, it publishes advisory `job_started`,
-  `job_failed`, and `job_finished` metadata around handler execution after the
-  corresponding durable outcome boundary.
+  other matched jobs without queueing, notifying channels, or calling agents.
+  When `TriggeredExecuteRequest::lease_owner_key` is supplied, it acquires the
+  matched job's stored `agent_key` in `automation_triggered_agent_leases` before
+  handler work, returns `ErrorKind::conflict` before handler/run/hook work on an
+  active same-agent lease, and releases the lease after the durable success or
+  failure outcome. When constructed with `TriggeredServiceOptions::hooks`, it
+  publishes advisory `job_started`, `job_failed`, and `job_finished` metadata
+  around handler execution after the corresponding durable outcome boundary.
 - `AutomationRuntime::triggered_service(...)` constructs that triggered owner
   over the caller-owned automation repository and can pass through hook options.
-- `test-automation` reports 81 cases / 1246 assertions.
+- `test-automation` reports 84 cases / 1302 assertions.
 - `test-config` reports 51 cases / 462 assertions for the consuming config
   boundary, and `test-bootstrap` reports 129 cases / 1091 assertions for mapped
   cron seeds.
@@ -235,8 +238,8 @@ Current implementation:
 
 Still open: detached/background service-loop startup over `AutomationRuntime`,
 triggered queueing/backpressure, process service/timer shutdown policy,
-triggered leases, notifier callbacks, agent firing, queue
-hold/drop semantics for blocked agent leases, and the scheduler tick
+notifier callbacks, agent firing, queue hold/drop semantics for blocked agent
+leases, and the scheduler tick
 performance criterion. Triggered descriptor intake exists, but full
 scheduler/category lifecycle ownership remains downstream.
 
@@ -262,16 +265,19 @@ scheduler/category lifecycle ownership remains downstream.
 1. A cron job ("`* * * * *`") fires exactly once per minute under nominal load.
 2. A periodic job (every 15 s) fires within ±100 ms of the scheduled time.
 3. A triggered job fires within 50 ms of the trigger event. Current status:
-   slice 213 can persist triggered descriptors, match a trigger event key to
+   slice 214 can persist triggered descriptors, match a trigger event key to
    stored jobs through caller-owned intake, run caller-supplied handlers while
-   recording run history, and publish advisory lifecycle metadata; queueing,
-   notifier routing, and actual agent firing latency remain downstream.
+   recording run history, publish advisory lifecycle metadata, and optionally
+   lease the matched stored `agent_key`; queueing, notifier routing, and actual
+   agent firing latency remain downstream.
 4. Per-agent lease prevents two concurrent runs of the same agent_key; the queued
    firing is held or dropped per policy. Current status: slice 210 prevents
    overlapping explicit cron execution for the same stored `agent_key` through
-   repository-backed cron agent leases. Queue hold/drop policy, triggered
-   leases, triggered queue policy, notifier routing, and actual agent firing
-   remain downstream.
+   repository-backed cron agent leases, and slice 214 prevents overlapping
+   explicit triggered handler execution for the same stored `agent_key` when
+   callers opt into triggered lease ownership. Queue hold/drop policy,
+   triggered queue policy, notifier routing, and actual agent firing remain
+   downstream.
 5. A failing job is recorded with the failure reason; the next firing happens on
    schedule. Current status: slice 206 records explicit cron handler failures
    with the failure reason and leaves stored state due for retry, while slice

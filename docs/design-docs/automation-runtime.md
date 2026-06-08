@@ -13,8 +13,9 @@ loop policy, advisory cron lifecycle metadata, typed cron run outcome
 classification, repository-backed cron execution leases and cron agent leases
 for explicit loop owners, durable triggered job descriptors with caller-driven
 triggered intake plus explicit triggered handler execution and durable
-triggered run history, advisory triggered lifecycle hook metadata, and a
-caller-driven retention service tick with optional
+triggered run history, advisory triggered lifecycle hook metadata,
+repository-backed triggered agent leases, and a caller-driven retention service
+tick with optional
 advisory `memory_decay` plus job lifecycle metadata,
 plus a caller-started retention loop step that can wait within a caller budget
 for one stored job to become due and lease due execution, plus a finite
@@ -320,6 +321,17 @@ triggered job `agent_key`, the durable `job_key`, and the caller-supplied
 `received_at` timestamp for scheduled/start/finish timing. Sink failures remain
 advisory and cannot veto or fail triggered execution.
 
+Slice 214 adds repository-backed triggered agent leases to the same explicit
+execution owner without adding queues, notifiers, agent invocation, or detached
+scheduler ownership. Migration version 10 creates
+`automation_triggered_agent_leases`; `AutomationRepository` can acquire and
+release lease rows keyed by stored triggered `agent_key`, with the same
+active-conflict, expired-takeover, and owner-matched release semantics as cron
+agent leases. `TriggeredService::execute(...)` can opt into that lease boundary
+with `TriggeredExecuteRequest::lease_owner_key` and `lease_ttl`; active
+same-agent conflicts return `ErrorKind::conflict` before handlers, run rows, or
+lifecycle hooks, and durable success/failure paths release the lease.
+
 ## Public API
 
 ```cpp
@@ -527,6 +539,26 @@ struct ReleaseCronAgentLeaseRequest {
   std::string owner_key;
 };
 
+struct AcquireTriggeredAgentLeaseRequest {
+  std::string agent_key;
+  std::string owner_key;
+  core::Time acquired_at;
+  core::Time expires_at;
+};
+
+struct TriggeredAgentLeaseRecord {
+  std::string agent_key;
+  std::string owner_key;
+  core::Time acquired_at;
+  core::Time expires_at;
+  std::string updated_at;
+};
+
+struct ReleaseTriggeredAgentLeaseRequest {
+  std::string agent_key;
+  std::string owner_key;
+};
+
 struct CronTickRequest {
   core::Time now;
   std::size_t job_limit;
@@ -664,6 +696,10 @@ class AutomationRepository {
   acquire_cron_agent_lease(AcquireCronAgentLeaseRequest);
   async::Awaitable<core::Result<bool>>
   release_cron_agent_lease(ReleaseCronAgentLeaseRequest);
+  async::Awaitable<core::Result<std::optional<TriggeredAgentLeaseRecord>>>
+  acquire_triggered_agent_lease(AcquireTriggeredAgentLeaseRequest);
+  async::Awaitable<core::Result<bool>>
+  release_triggered_agent_lease(ReleaseTriggeredAgentLeaseRequest);
   async::Awaitable<core::Result<MemoryRetentionJobRecord>>
   upsert_memory_retention_job(UpsertMemoryRetentionJobRequest);
   async::Awaitable<core::Result<std::optional<MemoryRetentionJobRecord>>>
@@ -759,6 +795,8 @@ struct TriggeredExecuteRequest {
   core::Time received_at;
   std::size_t job_limit;
   TriggeredJobHandler handler;
+  std::string lease_owner_key;
+  std::chrono::steady_clock::duration lease_ttl;
 };
 
 struct TriggeredExecuteAttempt {
@@ -1138,8 +1176,26 @@ handler once per matched descriptor. It records `success` for successful
 handlers, `failure` for ordinary handler errors, and `aborted` for
 `ErrorKind::cancelled`. Handler failures are per-attempt results and do not
 stop other matched jobs. The execution surface is still explicit caller-owned
-work: it does not persist a queue, notify channels, acquire triggered agent
-leases, or call agents.
+work: it does not persist a queue, notify channels, or call agents.
+
+`automation_triggered_agent_leases` records optional same-agent execution
+ownership for explicit triggered handlers. The row key is the stored triggered
+job `agent_key`; values carry an owner key, acquisition time, expiry time, and
+updated timestamp. `AutomationRepository::acquire_triggered_agent_lease(...)`
+inserts a new row, takes over expired rows when `expires_at <= acquired_at`, and
+returns `std::nullopt` for active conflicts.
+`release_triggered_agent_lease(...)` deletes only rows whose owner matches the
+request.
+
+When `TriggeredExecuteRequest::lease_owner_key` is non-empty,
+`TriggeredService::execute(...)` validates a positive `lease_ttl`, acquires the
+matched job's `agent_key` before publishing lifecycle hooks or invoking the
+handler, and returns `ErrorKind::conflict` without recording a run row on active
+lease conflicts. After a success/failure/aborted attempt is durably recorded,
+the service releases the lease before publishing the terminal lifecycle hook.
+Release is run with cancellation disabled, matching the existing cron lease
+cleanup boundary; if release fails, the execution returns that release error or
+attaches it to the primary durable-recording error.
 
 When `TriggeredServiceOptions::hooks.bus` is set, explicit execution also
 publishes advisory `hook::Event::job_started` before each matched handler. It
@@ -1590,9 +1646,10 @@ surface, cron evaluator, cron repository state, and caller-driven cron
 scan/wait/execute-due/run surface plus config-authored cron seeds, explicit
 seed application/service-cycle policy, run history, stop policy, typed
 outcomes, stored cron execution leases, stored cron agent leases, triggered
-descriptor intake, triggered execution/run history, and triggered lifecycle
-hooks: detached service startup policy, queueing/backpressure, triggered
-leases, notifier routing, and actual agent firing for agent-facing jobs.
+descriptor intake, triggered execution/run history, triggered lifecycle hooks,
+and triggered agent leases: detached service startup policy,
+queueing/backpressure, notifier routing, and actual agent firing for
+agent-facing jobs.
 
 ## Validation
 
@@ -1692,6 +1749,11 @@ Slice 213 reports `test-automation` at 81 cases / 1246 assertions for triggered
 lifecycle hooks, covering advisory `job_started`/`job_finished` metadata on
 handler success and `job_started`/`job_failed` metadata on handler failure
 through `TriggeredService::execute(...)`.
+Slice 214 reports `test-automation` at 84 cases / 1302 assertions for triggered
+agent leases, covering migration v10, repository acquire/conflict/expired
+takeover/release behavior, service-level same-agent conflict before handlers,
+durable success/failure release, invalid lease input validation, and
+`AutomationRuntime::open(...)` migration report version 10.
 
 `bench-automation` planning rows are:
 
