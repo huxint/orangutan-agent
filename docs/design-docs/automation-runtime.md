@@ -14,15 +14,16 @@ classification, repository-backed cron execution leases and cron agent leases
 for explicit loop owners, durable triggered job descriptors with caller-driven
 triggered intake plus explicit triggered handler execution and durable
 triggered run history, advisory triggered lifecycle hook metadata,
-repository-backed triggered agent leases, and a caller-driven retention service
+repository-backed triggered agent leases, bounded caller-owned triggered queue
+backpressure with advisory drop metadata, and a caller-driven retention service
 tick with optional
 advisory `memory_decay` plus job lifecycle metadata,
 plus a caller-started retention loop step that can wait within a caller budget
 for one stored job to become due and lease due execution, plus a finite
 caller-owned loop policy over that step. It does not start detached background
 work, own a long-running process service loop, persist configured cron seeds
-from bootstrap automatically, enqueue cron or triggered work, or call an agent
-loop.
+from bootstrap automatically, drain queued work, notify channels, or call an
+agent loop.
 
 ## Current Status
 
@@ -331,6 +332,16 @@ agent leases. `TriggeredService::execute(...)` can opt into that lease boundary
 with `TriggeredExecuteRequest::lease_owner_key` and `lease_ttl`; active
 same-agent conflicts return `ErrorKind::conflict` before handlers, run rows, or
 lifecycle hooks, and durable success/failure paths release the lease.
+
+Slice 215 adds a caller-owned bounded `TriggeredQueue` above triggered intake.
+It reuses `TriggeredService::intake(...)`, stores matched descriptors in
+bounded process-local `async::Channel` state, and lets consumers explicitly
+`receive()` queued work. When the queue is full, the first shipped overflow
+policy is `drop_newest`: the attempted row is returned as a dropped item and,
+when callers provide a hook bus, publishes advisory `hook::Event::job_dropped`
+with metadata-only `JobDroppedPayload`. The queue still does not execute
+handlers, record triggered run rows, notify channels, call agents, or start a
+detached drain loop.
 
 ## Public API
 
@@ -824,6 +835,47 @@ struct TriggeredServiceOptions {
   TriggeredHookOptions hooks;
 };
 
+enum class TriggeredQueueOverflowPolicy {
+  drop_newest,
+};
+
+enum class TriggeredQueueDropReason {
+  queue_full,
+};
+
+struct TriggeredQueuedJob {
+  TriggeredExecutionJob execution;
+  core::Time enqueued_at;
+};
+
+struct TriggeredDroppedJob {
+  TriggeredExecutionJob execution;
+  TriggeredQueueDropReason reason;
+  core::Time dropped_at;
+  std::size_t queue_capacity;
+  std::size_t queue_size;
+};
+
+struct TriggeredQueueOptions {
+  std::size_t capacity;
+  TriggeredQueueOverflowPolicy overflow_policy;
+  TriggeredHookOptions hooks;
+};
+
+struct TriggeredQueueEnqueueRequest {
+  std::string trigger_key;
+  core::Time received_at;
+  std::size_t job_limit;
+};
+
+struct TriggeredQueueEnqueueResult {
+  TriggeredIntakeResult intake;
+  std::size_t enqueued_count;
+  std::size_t dropped_count;
+  std::vector<TriggeredQueuedJob> enqueued;
+  std::vector<TriggeredDroppedJob> dropped;
+};
+
 class TriggeredService {
  public:
   explicit TriggeredService(AutomationRepository&, TriggeredServiceOptions = {});
@@ -834,6 +886,21 @@ class TriggeredService {
   execute(TriggeredExecuteRequest);
   AutomationRepository& repository() noexcept;
   const AutomationRepository& repository() const noexcept;
+};
+
+class TriggeredQueue {
+ public:
+  TriggeredQueue(asio::any_io_executor, TriggeredService, TriggeredQueueOptions = {});
+
+  async::Awaitable<core::Result<TriggeredQueueEnqueueResult>>
+  enqueue(TriggeredQueueEnqueueRequest);
+  async::Awaitable<core::Result<TriggeredQueuedJob>> receive();
+  void close() noexcept;
+  std::size_t capacity() const noexcept;
+  std::size_t size() const;
+  bool closed() const;
+  TriggeredService& service() noexcept;
+  const TriggeredService& service() const noexcept;
 };
 
 class CronService {
@@ -901,6 +968,7 @@ class AutomationRuntime {
   CronService cron_service(CronServiceOptions = {}) noexcept;
   CronLoop cron_loop(CronServiceOptions = {}) noexcept;
   TriggeredService triggered_service(TriggeredServiceOptions = {}) noexcept;
+  TriggeredQueue triggered_queue(TriggeredQueueOptions = {});
 
   MemoryRetentionService memory_retention_service(
       memory::longterm::Backend&,
@@ -1207,6 +1275,34 @@ is recorded. Lifecycle payloads use `job_type=triggered`, carry the durable
 started, and finished time for this no-hidden-clock boundary. Advisory sink
 failures are ignored by this service; observers cannot veto triggered execution
 or turn a successful handler into a failed attempt.
+
+`TriggeredQueue` is the first triggered queue/backpressure owner. It is
+process-local and caller-owned: construction receives an executor, a
+`TriggeredService`, and `TriggeredQueueOptions`, and it does not open
+`automation.db` or start detached work by itself. `enqueue(...)` validates a
+non-empty `trigger_key` and positive `job_limit`, then calls
+`TriggeredService::intake(...)`. Each matched descriptor becomes a
+`TriggeredQueuedJob` preserving the stored job row, external trigger key,
+caller-supplied received timestamp, and queue enqueue timestamp.
+
+The queue is bounded by `TriggeredQueueOptions::capacity` and uses
+`async::Channel<TriggeredQueuedJob>` as the backing primitive. The only shipped
+overflow policy is `drop_newest`: when a matched job cannot be inserted because
+the channel is full, the queue records a `TriggeredDroppedJob` with
+`reason=queue_full`, queue capacity, queue size, and the same caller-supplied
+timestamp as `dropped_at`. It then continues processing later matches instead
+of failing the whole enqueue request. Other channel errors, such as closed
+queue cancellation, still propagate as errors.
+
+When `TriggeredQueueOptions::hooks.bus` is set, each drop publishes advisory
+`hook::Event::job_dropped` with `hook::JobDroppedPayload`. The payload is
+metadata-only: source, identity, job key/type, stored agent key, trigger key,
+drop reason, queue capacity/size, and scheduled/drop timestamps. It carries no
+trigger body, channel payload, prompt bytes, or agent input. Advisory sink
+failures remain non-fatal. The queue deliberately does not execute handlers,
+record `automation_triggered_runs`, acquire triggered agent leases, notify
+channels, call agents, or own queue-drain policy; those remain downstream
+service-loop slices.
 
 ## Memory Retention Planning
 
@@ -1647,9 +1743,9 @@ scan/wait/execute-due/run surface plus config-authored cron seeds, explicit
 seed application/service-cycle policy, run history, stop policy, typed
 outcomes, stored cron execution leases, stored cron agent leases, triggered
 descriptor intake, triggered execution/run history, triggered lifecycle hooks,
-and triggered agent leases: detached service startup policy,
-queueing/backpressure, notifier routing, and actual agent firing for
-agent-facing jobs.
+triggered agent leases, and bounded triggered queue/backpressure: detached
+service startup policy, queue drain ownership, notifier routing, blocked-agent
+hold/drop policy, and actual agent firing for agent-facing jobs.
 
 ## Validation
 
@@ -1754,6 +1850,11 @@ agent leases, covering migration v10, repository acquire/conflict/expired
 takeover/release behavior, service-level same-agent conflict before handlers,
 durable success/failure release, invalid lease input validation, and
 `AutomationRuntime::open(...)` migration report version 10.
+Slice 215 reports `test-automation` at 87 cases / 1376 assertions for the
+caller-owned triggered queue, covering matched job enqueue/receive behavior,
+drop-newest overflow, `job_dropped` metadata publishing, run-row suppression for
+queued/dropped work, and invalid enqueue policy validation. `test-hook` reports
+38 cases / 313 assertions for the public `JobDroppedPayload` delivery surface.
 
 `bench-automation` planning rows are:
 

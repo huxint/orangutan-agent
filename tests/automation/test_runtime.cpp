@@ -322,6 +322,21 @@ TEST_CASE("AutomationRuntime constructs triggered service execution over owned s
     REQUIRE(intake->jobs.front().job_key == "triggered:webhook-ci");
     REQUIRE(intake->jobs.front().agent_key == "researcher");
 
+    auto queue = runtime->triggered_queue(automation::TriggeredQueueOptions{.capacity = 2});
+    auto queued = co_await queue.enqueue(automation::TriggeredQueueEnqueueRequest{
+        .trigger_key = "webhook:ci",
+        .received_at = at(150s),
+        .job_limit = 10,
+    });
+    REQUIRE(queued.has_value());
+    REQUIRE(queued->enqueued_count == 1);
+    REQUIRE(queued->dropped_count == 0);
+    auto received = co_await queue.receive();
+    REQUIRE(received.has_value());
+    REQUIRE(received->execution.job.job_key == "triggered:webhook-ci");
+    REQUIRE(received->execution.trigger_key == "webhook:ci");
+    REQUIRE(received->execution.received_at == at(150s));
+
     auto executed = co_await service.execute(automation::TriggeredExecuteRequest{
         .trigger_key = "webhook:ci",
         .received_at = at(180s),

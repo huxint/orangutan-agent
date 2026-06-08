@@ -229,7 +229,17 @@ Current implementation:
   around handler execution after the corresponding durable outcome boundary.
 - `AutomationRuntime::triggered_service(...)` constructs that triggered owner
   over the caller-owned automation repository and can pass through hook options.
-- `test-automation` reports 84 cases / 1302 assertions.
+- `TriggeredQueue` is a caller-owned bounded in-process queue for matched
+  triggered descriptors. `enqueue(...)` reuses triggered intake, writes matched
+  jobs into bounded queue state, returns enqueued/dropped rows, applies
+  `drop_newest` on overflow, and publishes advisory `job_dropped` metadata when
+  callers supply a hook bus. Consumers must explicitly `receive()` queued jobs;
+  no handler execution, run-row recording, notification, or agent call happens
+  inside the queue.
+- `AutomationRuntime::triggered_queue(...)` constructs that queue over the
+  caller-owned automation repository and runtime executor.
+- `test-automation` reports 87 cases / 1376 assertions.
+- `test-hook` reports 38 cases / 313 assertions for the hook payload surface.
 - `test-config` reports 51 cases / 462 assertions for the consuming config
   boundary, and `test-bootstrap` reports 129 cases / 1091 assertions for mapped
   cron seeds.
@@ -237,9 +247,8 @@ Current implementation:
   request planning over a 1024-job batch.
 
 Still open: detached/background service-loop startup over `AutomationRuntime`,
-triggered queueing/backpressure, process service/timer shutdown policy,
-notifier callbacks, agent firing, queue hold/drop semantics for blocked agent
-leases, and the scheduler tick
+process service/timer shutdown policy, notifier callbacks, agent firing, queue
+hold/drop semantics for blocked agent leases, queue drain ownership, and the scheduler tick
 performance criterion. Triggered descriptor intake exists, but full
 scheduler/category lifecycle ownership remains downstream.
 
@@ -265,18 +274,20 @@ scheduler/category lifecycle ownership remains downstream.
 1. A cron job ("`* * * * *`") fires exactly once per minute under nominal load.
 2. A periodic job (every 15 s) fires within ±100 ms of the scheduled time.
 3. A triggered job fires within 50 ms of the trigger event. Current status:
-   slice 214 can persist triggered descriptors, match a trigger event key to
+   slice 215 can persist triggered descriptors, match a trigger event key to
    stored jobs through caller-owned intake, run caller-supplied handlers while
-   recording run history, publish advisory lifecycle metadata, and optionally
-   lease the matched stored `agent_key`; queueing, notifier routing, and actual
-   agent firing latency remain downstream.
+   recording run history, publish advisory lifecycle metadata, optionally lease
+   the matched stored `agent_key`, and enqueue matched jobs into bounded
+   in-process queue state with drop-newest backpressure; notifier routing,
+   queue drain ownership, and actual agent firing latency remain downstream.
 4. Per-agent lease prevents two concurrent runs of the same agent_key; the queued
    firing is held or dropped per policy. Current status: slice 210 prevents
    overlapping explicit cron execution for the same stored `agent_key` through
    repository-backed cron agent leases, and slice 214 prevents overlapping
    explicit triggered handler execution for the same stored `agent_key` when
-   callers opt into triggered lease ownership. Queue hold/drop policy,
-   triggered queue policy, notifier routing, and actual agent firing remain
+   callers opt into triggered lease ownership. Slice 215 adds drop-newest
+   backpressure for a full triggered queue, while queue hold/drop policy for
+   blocked agent leases, notifier routing, and actual agent firing remain
    downstream.
 5. A failing job is recorded with the failure reason; the next firing happens on
    schedule. Current status: slice 206 records explicit cron handler failures

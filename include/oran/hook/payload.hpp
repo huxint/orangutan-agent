@@ -296,6 +296,24 @@ struct JobLifecyclePayload {
   std::string error_message;
 };
 
+/// Advisory automation job drop metadata. Published by explicit queue owners
+/// when bounded backpressure policy drops queued work before execution starts.
+/// The payload is metadata-only: it identifies the job and queue policy outcome
+/// without carrying channel payloads, trigger bodies, or agent prompt content.
+struct JobDroppedPayload {
+  Identity who;
+  std::string source;
+  std::string job_key;
+  std::string job_type;
+  std::string scope_key;
+  std::string trigger_key;
+  std::string reason;
+  core::Time scheduled_at{};
+  core::Time dropped_at{};
+  std::size_t queue_capacity{0};
+  std::size_t queue_size{0};
+};
+
 /// Provider token/cost counters copied without making `oran-hook` depend on
 /// `oran-provider`.
 struct ProviderUsage {
@@ -400,6 +418,7 @@ using Payload = std::variant<std::monostate,
                              MemoryForgetPayload,
                              MemoryDecayPayload,
                              JobLifecyclePayload,
+                             JobDroppedPayload,
                              ProviderRequestPayload,
                              ProviderResponsePayload,
                              ProviderErrorPayload,

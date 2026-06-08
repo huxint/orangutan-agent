@@ -570,8 +570,11 @@ acquire/release APIs for optional same-agent explicit triggered execution
 ownership. When callers supply `TriggeredExecuteRequest::lease_owner_key`,
 `TriggeredService::execute(...)` acquires the stored triggered job `agent_key`
 before handler work, rejects active conflicts before handler/run/hook work, and
-releases after durable success/failure outcomes. It does not persist a
-queue, notify channels, or call agents.
+releases after durable success/failure outcomes. Slice 215 adds a caller-owned
+`TriggeredQueue` over triggered intake so runtime owners can buffer matched
+descriptors in bounded process-local state, explicitly receive queued jobs, and
+observe `drop_newest` overflow through advisory `job_dropped` metadata. It does
+not drain queued work, notify channels, or call agents.
 
 **Binaries** built on top:
 

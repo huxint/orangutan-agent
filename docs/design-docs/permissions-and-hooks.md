@@ -372,8 +372,9 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > 94's `PermissionAskRenderedPayload`, slice 126's provider lifecycle
 > payloads, slice 179's `MemoryWritePayload` / `MemoryForgetPayload`,
 > slice 180's `MemoryReadPayload` / `MemoryReadHitPayload`, slice
-> 186's `MemoryDecayPayload`, and slice 194's `JobLifecyclePayload`
-> lifecycle payloads. Slice 60 adds the `ToolUsage`
+> 186's `MemoryDecayPayload`, slice 194's `JobLifecyclePayload`
+> lifecycle payloads, and slice 215's `JobDroppedPayload` queue
+> backpressure payload. Slice 60 adds the `ToolUsage`
 > metrics copied from `tool::Output::usage` onto successful
 > `ToolAfterPayload`s without making `oran-hook` depend on
 > `oran-tool`; slice 65 adds optional
@@ -422,7 +423,10 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > due execution, using `job_type=cron` and metadata-only handler outcome
 > details. Slice 213 reuses it for explicit triggered handler execution, using
 > `job_type=triggered`, the stored triggered job agent key, and metadata-only
-> handler outcome details.
+> handler outcome details. Slice 215 adds `JobDroppedPayload` for bounded
+> automation queue backpressure. It carries identity, source, durable job
+> key/type, trigger key, drop reason, queue capacity/size, and scheduled/drop
+> timing, but no trigger body, queued payload, prompt bytes, or agent input.
 > Typed shapes for
 > the remaining non-tool
 > events ship with their producers (provider request /
@@ -563,8 +567,13 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > caller handler, `job_failed` after a handler error while leaving stored cron
 > state unadvanced, and `job_finished` only after handler success plus durable
 > `last_fired_at` advancement. Cron scan-only ticks and services without a bus
-> publish no lifecycle events; advisory sink failures remain non-fatal.
-> `test-hook` now reports 37 cases / 299 assertions.
+> publish no lifecycle events; advisory sink failures remain non-fatal. Slice
+> 215 adds the triggered queue producer: `TriggeredQueue::enqueue(...)`
+> publishes advisory `job_dropped` for each drop-newest overflow when callers
+> supply a hook bus. Queue enqueues, explicit receives, and queue instances
+> without a bus publish no drop events; advisory sink failures remain
+> non-fatal.
+> `test-hook` now reports 38 cases / 313 assertions.
 
 ### Surface
 
@@ -616,6 +625,7 @@ enum class Event {
   job_started,
   job_finished,
   job_failed,
+  job_dropped,
   // session
   session_start,
   session_end,

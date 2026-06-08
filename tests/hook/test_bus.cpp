@@ -70,6 +70,8 @@ struct Capture {
           return "memory_decay";
         } else if constexpr (std::same_as<T, hook::JobLifecyclePayload>) {
           return "job_lifecycle";
+        } else if constexpr (std::same_as<T, hook::JobDroppedPayload>) {
+          return "job_dropped";
         } else if constexpr (std::same_as<T, hook::ProviderRequestPayload>) {
           return "provider_request";
         } else if constexpr (std::same_as<T, hook::ProviderResponsePayload>) {
@@ -340,6 +342,22 @@ hook::MemoryDecayPayload sample_memory_decay() {
   };
 }
 
+hook::JobDroppedPayload sample_job_dropped() {
+  return hook::JobDroppedPayload{
+      .who = hook::Identity{.scope_key = "", .agent_key = "researcher", .identity = "trigger-loop"},
+      .source = "triggered-queue",
+      .job_key = "triggered:webhook-ci",
+      .job_type = "triggered",
+      .scope_key = "",
+      .trigger_key = "webhook:ci",
+      .reason = "queue_full",
+      .scheduled_at = core::Time{core::Time::time_point{120s}},
+      .dropped_at = core::Time{core::Time::time_point{120s}},
+      .queue_capacity = 1,
+      .queue_size = 1,
+  };
+}
+
 }  // namespace
 
 TEST_CASE("Bus is empty by default", "[hook][bus]") {
@@ -387,6 +405,37 @@ TEST_CASE("publish_advisory delivers memory decay metadata", "[hook][bus][memory
   REQUIRE(captured.limit == 10);
   REQUIRE(captured.shadowed_count == 3);
   REQUIRE(captured.duration == 1ms);
+}
+
+TEST_CASE("publish_advisory delivers job dropped metadata", "[hook][bus][automation]") {
+  hook::Bus bus;
+  hook::JobDroppedPayload captured;
+  hook::InProcessSink sink{"job-drop-recorder",
+                           [&](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
+                             REQUIRE(event == hook::Event::job_dropped);
+                             const auto* dropped = std::get_if<hook::JobDroppedPayload>(payload.get());
+                             REQUIRE(dropped != nullptr);
+                             captured = *dropped;
+                             co_return core::Result<void>{};
+                           }};
+  bus.bind(sink, {hook::Event::job_dropped});
+
+  test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
+    auto outcome = co_await bus.publish_advisory(hook::Event::job_dropped, sample_job_dropped());
+    REQUIRE(outcome.sinks.size() == 1);
+    REQUIRE(outcome.sinks[0].sink_id == "job-drop-recorder");
+    REQUIRE(outcome.all_succeeded());
+    co_return;
+  });
+
+  REQUIRE(captured.source == "triggered-queue");
+  REQUIRE(captured.who.agent_key == "researcher");
+  REQUIRE(captured.job_key == "triggered:webhook-ci");
+  REQUIRE(captured.job_type == "triggered");
+  REQUIRE(captured.trigger_key == "webhook:ci");
+  REQUIRE(captured.reason == "queue_full");
+  REQUIRE(captured.queue_capacity == 1);
+  REQUIRE(captured.queue_size == 1);
 }
 
 TEST_CASE("bind connects sink to event, publish_advisory drives it", "[hook][bus]") {

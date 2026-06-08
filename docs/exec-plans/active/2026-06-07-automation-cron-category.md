@@ -13,8 +13,9 @@ run history, cooperative finite-loop stop policy, typed cron run outcome
 classification, repository-backed cron execution leases for explicit loop
 owners, the first per-agent cron lease policy, triggered intake, triggered
 execution/run history, triggered lifecycle hooks, and triggered agent leases
-now exist; detached service-loop startup, queues, notifiers, and agent firing
-stay in later scheduler slices.
+now exist; bounded caller-owned triggered queue/backpressure now exists as
+well. Detached service-loop startup, queue drain ownership, notifiers, and agent
+firing stay in later scheduler slices.
 
 ## Scope
 
@@ -62,14 +63,18 @@ stay in later scheduler slices.
   `agent_key` so caller-owned execution does not overlap active work for the
   same agent, without adding queueing, notifier routing, or agent execution
   ownership.
+- Buffer matched triggered descriptors in a bounded caller-owned queue with
+  explicit receive/drain by callers and advisory drop metadata on overflow,
+  without adding notifier routing, queue-drain policy, or agent execution
+  ownership.
 - Keep the slice free of agent, detached timer, automatic bootstrap
   persistence, or background task ownership.
 - Update automation docs/status/history/release notes in the same slice.
 - Out of scope:
 - Scheduler service startup that automatically reads config and applies/runs
   cron seeds.
-- Process timers, triggered queueing/backpressure, notifier routing, and agent
-  firing.
+- Process timers, queue drain ownership, blocked-agent hold/drop policy,
+  notifier routing, and agent firing.
 - Bootstrap opening `automation.db`, starting timers, or spawning detached
   automation work.
 - Scheduler tick performance work beyond focused correctness coverage.
@@ -100,6 +105,7 @@ stay in later scheduler slices.
 - `tests/bootstrap/test_memory_retention.cpp`
 - `tests/bootstrap/test_runtime_assembly.cpp`
 - `include/oran/automation.hpp`
+- `include/oran/automation/queue.hpp`
 - Constraints:
 - Keep `oran-automation` independent of `oran-config`, `oran-agent`, and
   bootstrap scheduling ownership.
@@ -107,9 +113,9 @@ stay in later scheduler slices.
 - Cron evaluation must not skip/coalesce missed firings; later service policy
   decides catch-up/drop behavior.
 - Compile-budget impact (if any):
-- Implementation stays in the existing `periodic.cpp` translation unit and
-  repository state stays in the existing `repository.cpp` translation unit plus
-  one embedded SQL migration; no new third-party dependency is added.
+- Implementation mostly stays in existing service/runtime translation units.
+  Slice 215 adds one small `queue.cpp` translation unit over the existing
+  `async::Channel` primitive; no new third-party dependency is added.
 
 ## Risks
 
@@ -157,7 +163,9 @@ stay in later scheduler slices.
    caller-supplied handler execution over those matches, and slice 213 adds
    advisory triggered lifecycle metadata around those handler attempts. Slice
    214 adds repository-backed triggered agent leases for explicit handler
-   owners. Later: add queueing/backpressure, notifier routing, and agent firing.
+   owners. Slice 215 adds bounded caller-owned triggered queue/backpressure with
+   advisory drop metadata. Later: add queue drain ownership, notifier routing,
+   blocked-agent hold/drop policy, and agent firing.
 5. **Scheduler performance.**
    Later: measure the 1 000-job scheduler tick criterion once the scheduler
    exists.
@@ -189,6 +197,9 @@ stay in later scheduler slices.
 - `build/linux/x86_64/release/test-automation "TriggeredService::execute leases triggered handlers and releases after outcomes"`
 - `build/linux/x86_64/release/test-automation "TriggeredService::execute blocks active triggered agent leases before handlers"`
 - `build/linux/x86_64/release/test-automation "AutomationRuntime constructs triggered service execution over owned state"`
+- `build/linux/x86_64/release/test-automation "TriggeredQueue enqueues matched triggered jobs for explicit receive"`
+- `build/linux/x86_64/release/test-automation "TriggeredQueue drops newest overflow and publishes job_dropped metadata"`
+- `build/linux/x86_64/release/test-automation "TriggeredQueue rejects invalid enqueue policy"`
 - `build/linux/x86_64/release/test-automation "CronService::execute_due blocks active cron agent leases before handlers"`
 - `build/linux/x86_64/release/test-automation "CronLoop::run uses cron agent leases before calling handlers"`
 - `build/linux/x86_64/release/test-automation "CronService::execute_due records cancelled cron handlers as aborted"`
@@ -237,12 +248,20 @@ stay in later scheduler slices.
 - Confirm triggered execution can acquire/release triggered agent leases when
   callers opt in, rejects active same-agent conflicts before handler/run/hook
   work, and releases after durable success/failure outcomes.
+- Confirm triggered queueing reuses triggered intake, stores matched descriptors
+  in bounded caller-owned state, lets callers explicitly receive queued jobs,
+  and records no triggered run rows for queued or dropped work.
+- Confirm full triggered queues apply `drop_newest`, return dropped metadata,
+  publish advisory `job_dropped` only when callers supply hooks, and reject
+  invalid queue policy such as zero capacity.
 - Confirm no new dependency direction crosses from automation into bootstrap,
   config, or agent.
 - Observability checks:
-- Not applicable in the first cron evaluator slice; no hook events are emitted.
+- `job_dropped` is advisory metadata-only and carries no trigger body, channel
+  payload, prompt bytes, or agent input.
 - Bench comparison (if perf-relevant):
-- Not perf-relevant until a scheduler tick loop exists.
+- Triggered queue/backpressure is not perf-relevant; correctness coverage is the
+  right gate until a scheduler tick loop exists.
 
 ## Progress Log
 
@@ -366,6 +385,12 @@ stay in later scheduler slices.
   conflicts, and releases after durable success/failure/aborted outcomes
   without adding queueing, notifier routing, agent calls, or bootstrap-owned
   automation state.
+- [x] 2026-06-08 11:23 +0800: Implemented bounded caller-owned triggered
+  queue/backpressure through `TriggeredQueue`, `AutomationRuntime::triggered_queue(...)`,
+  and advisory `job_dropped` metadata. Runtime owners can buffer matched
+  triggered descriptors, explicitly `receive()` queued jobs, and observe
+  drop-newest overflow without executing handlers, recording triggered run rows,
+  notifying channels, calling agents, or starting detached work.
 - [x] **Update the docs that this slice invalidates in the same PR**
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -448,6 +473,11 @@ stay in later scheduler slices.
   policy. Explicit triggered handlers can now avoid overlapping same-agent work
   for stored descriptors, while queue hold/drop semantics, notifier routing,
   and actual agent invocation remain downstream.
+- 2026-06-08: Add bounded triggered queue/backpressure before notifier and
+  agent firing policy. The runtime now has a caller-owned place to hold matched
+  triggered descriptors and report full-queue drops, while queue drain
+  ownership, blocked-agent hold/drop policy, notifier routing, and actual agent
+  invocation remain downstream.
 
 ## Linked Artifacts
 

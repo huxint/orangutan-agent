@@ -214,6 +214,13 @@ TriggeredService AutomationRuntime::triggered_service(TriggeredServiceOptions op
   return TriggeredService{impl_->repository, std::move(options)};
 }
 
+TriggeredQueue AutomationRuntime::triggered_queue(TriggeredQueueOptions options) {
+  auto hooks = options.hooks;
+  return TriggeredQueue{impl_->executor,
+                        triggered_service(TriggeredServiceOptions{.hooks = std::move(hooks)}),
+                        std::move(options)};
+}
+
 MemoryRetentionService AutomationRuntime::memory_retention_service(memory::longterm::Backend& backend,
                                                                    MemoryRetentionServiceOptions options) noexcept {
   return MemoryRetentionService{impl_->repository, backend, std::move(options)};

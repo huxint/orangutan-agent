@@ -13,6 +13,7 @@
 
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/automation/loop.hpp>
+#include <oran/automation/queue.hpp>
 #include <oran/automation/service.hpp>
 #include <oran/core/result.hpp>
 #include <oran/storage/migrations.hpp>
@@ -87,6 +88,7 @@ public:
   [[nodiscard]] CronService cron_service(CronServiceOptions options = {}) noexcept;
   [[nodiscard]] CronLoop cron_loop(CronServiceOptions options = {}) noexcept;
   [[nodiscard]] TriggeredService triggered_service(TriggeredServiceOptions options = {}) noexcept;
+  [[nodiscard]] TriggeredQueue triggered_queue(TriggeredQueueOptions options = {});
 
   [[nodiscard]] MemoryRetentionService memory_retention_service(memory::longterm::Backend& backend,
                                                                 MemoryRetentionServiceOptions options = {}) noexcept;

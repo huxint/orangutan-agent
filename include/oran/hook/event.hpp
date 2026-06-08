@@ -66,6 +66,7 @@ enum class Event : std::uint8_t {
   job_started,
   job_finished,
   job_failed,
+  job_dropped,
   // session boundary
   session_start,
   session_end,
