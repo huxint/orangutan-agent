@@ -7,22 +7,21 @@
 
 ## Snapshot
 
-- **Slice:** 217 (`xmake run orangutan -- --help` reports slice 217)
+- **Slice:** 218 (`xmake run orangutan -- --help` reports slice 218)
 - **Last completed history:**
-  [`histories/2026-06/20260608-1247-automation-triggered-queue-lease-drop.md`](histories/2026-06/20260608-1247-automation-triggered-queue-lease-drop.md)
+  [`histories/2026-06/20260608-1313-automation-triggered-queue-drain-available.md`](histories/2026-06/20260608-1313-automation-triggered-queue-drain-available.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-cron-category.md`](exec-plans/active/2026-06-07-automation-cron-category.md).
-- **Latest completed slice:** slice 217 adds explicit drop-on-conflict semantics
-  for queued triggered work blocked by a held triggered-agent lease.
-  `TriggeredQueue::drain_once(...)` can opt into the same lease boundary as
-  `TriggeredService::execute_one(...)`; an active same-agent lease consumes
-  exactly the received queued descriptor, returns `TriggeredDroppedJob` metadata
-  with `reason=agent_lease_conflict`, publishes advisory `job_dropped` when
-  hooks are configured, and skips handler execution plus triggered run-row
-  recording. The queue still does not notify channels, call agents, start a
-  detached drain loop, or implement hold/requeue policy. Focused result:
-  `test-automation` **90 cases / 1450 assertions**
-  and `test-hook` **38 cases / 313 assertions**.
+- **Latest completed slice:** slice 218 adds non-blocking queue drain
+  primitives for the caller-owned triggered queue. `async::Channel<T>` now has
+  `try_receive()` for bounded FIFO polling without awaiting, and
+  `TriggeredQueue` exposes `try_receive()` plus `drain_available(...)` to drain
+  up to a caller limit, stopping on empty/closed queue or `max_jobs`. Batch
+  draining reuses the exact one-descriptor execution/drop path, reports
+  completed/failed/dropped counters, and still does not notify channels, call
+  agents, start a detached loop, or implement hold/requeue policy. Focused
+  result: `test-async` **14 cases / 76 assertions**, `test-automation`
+  **92 cases / 1513 assertions**, and `test-hook` **38 cases / 313 assertions**.
 - **Next intended slice:** continue the active automation cron/category plan.
   The next useful implementation boundary is a small scheduler-service
   ownership slice such as notifier routing, agent firing policy, richer
@@ -1815,7 +1814,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 ## Latest Library Surfaces
 
 - `oran-core`: 71 cases / 459 assertions.
-- `oran-async`: 11 cases / 51 assertions.
+- `oran-async`: 14 cases / 76 assertions.
 - `oran-http`: 3 cases / 21 assertions.
 - `oran-io`: 54 cases / 311 assertions.
 - `oran-storage`: 77 cases / 988 assertions.
@@ -1823,7 +1822,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 38 cases / 313 assertions.
 - `oran-memory`: 38 cases / 841 assertions.
-- `oran-automation`: 90 cases / 1450 assertions.
+- `oran-automation`: 92 cases / 1513 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 208 cases / 2181 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.

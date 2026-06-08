@@ -15,6 +15,8 @@ single `asio::io_context` wrapped in `oran::async::Runtime`. There are no
 > policy and reusable async test helpers land in later slices. Bootstrap
 > signal integration shipped in slice 23 as `bootstrap::SignalScope`
 > (see [`Cancellation`](#cancellation) below).
+> Slice 218 adds non-blocking `Channel<T>::try_receive()` for finite queue
+> polling without requiring a waiter coroutine.
 
 ## Runtime Topology
 
@@ -184,6 +186,9 @@ class Channel {
   // Non-blocking try_send: returns ErrorKind::mailbox_overflowed if full.
   core::Result<void> try_send(T value);
 
+  // Non-blocking try_receive: returns nullopt when open and empty.
+  core::Result<std::optional<T>> try_receive();
+
   // Returns Awaitable<Result<T>>; resolves when an item is available.
   Awaitable<core::Result<T>> receive();
 
@@ -200,6 +205,15 @@ Used by:
 - `oran-channel::ChannelManager::inbound_queue` — bounded per channel adapter.
 - `oran-automation::JobQueue` — bounded; oldest pending job is dropped with a hook
   event when overflow occurs.
+- `oran-automation::TriggeredQueue` — bounded process-local triggered job
+  descriptors; callers can `try_receive()` or finite-drain available work
+  without starting a detached queue loop.
+
+`try_receive()` is a polling primitive, not a background consumer. It returns a
+buffered value first, consumes a pending sender directly for zero-capacity
+channels while completing that sender successfully, returns `std::nullopt` when
+the channel is open and empty, and returns `ErrorKind::cancelled` only when the
+channel is closed and no buffered value remains.
 
 Unbounded channels are allowed only for **log / metric publication**, where dropping is
 worse than buffering. They live in `oran-log` and are clearly named

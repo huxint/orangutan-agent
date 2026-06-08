@@ -139,6 +139,75 @@ TEST_CASE("Channel try_send reports overflow when full", "[unit][async][channel]
   REQUIRE(overflow.error().kind() == core::ErrorKind::mailbox_overflowed);
 }
 
+TEST_CASE("Channel try_receive reports empty without waiting and drains FIFO values", "[unit][async][channel]") {
+  asio::io_context io;
+  async::Channel<int> channel{io.get_executor(), 2};
+
+  auto empty = channel.try_receive();
+  REQUIRE(empty.has_value());
+  REQUIRE_FALSE(empty->has_value());
+
+  REQUIRE(channel.try_send(7).has_value());
+  REQUIRE(channel.try_send(8).has_value());
+
+  auto first = channel.try_receive();
+  auto second = channel.try_receive();
+  auto empty_again = channel.try_receive();
+
+  REQUIRE(first.has_value());
+  REQUIRE(first->has_value());
+  REQUIRE(**first == 7);
+  REQUIRE(second.has_value());
+  REQUIRE(second->has_value());
+  REQUIRE(**second == 8);
+  REQUIRE(empty_again.has_value());
+  REQUIRE_FALSE(empty_again->has_value());
+}
+
+TEST_CASE("Channel try_receive drains buffered values before reporting closed", "[unit][async][channel]") {
+  asio::io_context io;
+  async::Channel<int> channel{io.get_executor(), 1};
+
+  REQUIRE(channel.try_send(7).has_value());
+  channel.close();
+
+  auto buffered = channel.try_receive();
+  auto closed = channel.try_receive();
+
+  REQUIRE(buffered.has_value());
+  REQUIRE(buffered->has_value());
+  REQUIRE(**buffered == 7);
+  REQUIRE_FALSE(closed.has_value());
+  REQUIRE(closed.error().kind() == core::ErrorKind::cancelled);
+}
+
+TEST_CASE("Channel try_receive completes a pending sender without awaiting", "[unit][async][channel]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    async::Channel<int> channel{io.get_executor(), 0};
+    std::optional<core::Result<void>> send_result;
+
+    asio::co_spawn(
+        io,
+        [&]() -> async::Awaitable<void> {
+          send_result = co_await channel.send(42);
+          co_return;
+        },
+        asio::detached);
+
+    co_await asio::post(io, asio::use_awaitable);
+    REQUIRE_FALSE(send_result.has_value());
+
+    auto received = channel.try_receive();
+    REQUIRE(received.has_value());
+    REQUIRE(received->has_value());
+    REQUIRE(**received == 42);
+
+    co_await asio::post(io, asio::use_awaitable);
+    REQUIRE(send_result.has_value());
+    REQUIRE(send_result->has_value());
+  });
+}
+
 TEST_CASE("Channel pending send completes when receive frees capacity", "[unit][async][channel]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     async::Channel<int> channel{io.get_executor(), 1};

@@ -53,6 +53,22 @@ namespace {
   return {};
 }
 
+[[nodiscard]] core::Result<void> validate_drain_available_request(const TriggeredQueueDrainAvailableRequest& request) {
+  if (!request.handler) {
+    return std::unexpected(invalid_triggered_queue_field("handler", "empty"));
+  }
+  if (request.max_jobs == 0) {
+    return std::unexpected(invalid_triggered_queue_field("max_jobs", "zero"));
+  }
+  if (!request.lease_owner_key.empty() && request.lease_ttl <= std::chrono::steady_clock::duration::zero()) {
+    return std::unexpected(invalid_triggered_queue_field("lease_ttl", "not_positive"));
+  }
+  if (core::enum_name(request.blocked_agent_policy) == "unknown") {
+    return std::unexpected(invalid_triggered_queue_field("blocked_agent_policy", "unknown"));
+  }
+  return {};
+}
+
 [[nodiscard]] bool is_triggered_agent_lease_conflict(const core::Error& error) {
   if (error.kind() != core::ErrorKind::conflict || error.message() != "triggered agent lease is already held") {
     return false;
@@ -114,6 +130,19 @@ struct TriggeredQueue::Impl {
   TriggeredQueueOptions options;
   async::Channel<TriggeredQueuedJob> channel;
 };
+
+namespace {
+
+[[nodiscard]] TriggeredQueueDrainOnceRequest drain_once_request_from(TriggeredQueueDrainAvailableRequest request) {
+  return TriggeredQueueDrainOnceRequest{
+      .handler = std::move(request.handler),
+      .lease_owner_key = std::move(request.lease_owner_key),
+      .lease_ttl = request.lease_ttl,
+      .blocked_agent_policy = request.blocked_agent_policy,
+  };
+}
+
+}  // namespace
 
 TriggeredQueue::TriggeredQueue(asio::any_io_executor executor, TriggeredService service, TriggeredQueueOptions options)
     : impl_{std::make_unique<Impl>(std::move(executor), std::move(service), std::move(options))} {}
@@ -185,6 +214,44 @@ async::Awaitable<core::Result<TriggeredQueuedJob>> TriggeredQueue::receive() {
   co_return co_await impl_->channel.receive();
 }
 
+core::Result<std::optional<TriggeredQueuedJob>> TriggeredQueue::try_receive() {
+  return impl_->channel.try_receive();
+}
+
+async::Awaitable<core::Result<TriggeredQueueDrainOnceResult>>
+TriggeredQueue::execute_queued(TriggeredQueuedJob queued, TriggeredQueueDrainOnceRequest request) {
+  auto execution = co_await impl_->service.execute_one(TriggeredExecuteOneRequest{
+      .execution = queued.execution,
+      .handler = std::move(request.handler),
+      .lease_owner_key = std::move(request.lease_owner_key),
+      .lease_ttl = request.lease_ttl,
+  });
+  if (!execution) {
+    if (is_triggered_agent_lease_conflict(execution.error()) &&
+        request.blocked_agent_policy == TriggeredQueueBlockedAgentPolicy::drop_on_conflict) {
+      auto dropped = TriggeredDroppedJob{
+          .execution = queued.execution,
+          .reason = TriggeredQueueDropReason::agent_lease_conflict,
+          .dropped_at = queued.execution.received_at,
+          .queue_capacity = impl_->channel.capacity(),
+          .queue_size = impl_->channel.size(),
+      };
+      co_await publish_job_dropped(impl_->options.hooks, dropped);
+      co_return TriggeredQueueDrainOnceResult{
+          .queued = std::move(queued),
+          .execution = {},
+          .dropped = std::move(dropped),
+      };
+    }
+    co_return std::unexpected(std::move(execution).error());
+  }
+
+  co_return TriggeredQueueDrainOnceResult{
+      .queued = std::move(queued),
+      .execution = std::move(*execution),
+  };
+}
+
 async::Awaitable<core::Result<TriggeredQueueDrainOnceResult>>
 TriggeredQueue::drain_once(TriggeredQueueDrainOnceRequest request) {
   if (auto valid = validate_drain_once_request(request); !valid) {
@@ -196,36 +263,62 @@ TriggeredQueue::drain_once(TriggeredQueueDrainOnceRequest request) {
     co_return std::unexpected(std::move(queued).error());
   }
 
-  auto execution = co_await impl_->service.execute_one(TriggeredExecuteOneRequest{
-      .execution = queued->execution,
-      .handler = std::move(request.handler),
-      .lease_owner_key = std::move(request.lease_owner_key),
-      .lease_ttl = request.lease_ttl,
-  });
-  if (!execution) {
-    if (is_triggered_agent_lease_conflict(execution.error()) &&
-        request.blocked_agent_policy == TriggeredQueueBlockedAgentPolicy::drop_on_conflict) {
-      auto dropped = TriggeredDroppedJob{
-          .execution = queued->execution,
-          .reason = TriggeredQueueDropReason::agent_lease_conflict,
-          .dropped_at = queued->execution.received_at,
-          .queue_capacity = impl_->channel.capacity(),
-          .queue_size = impl_->channel.size(),
-      };
-      co_await publish_job_dropped(impl_->options.hooks, dropped);
-      co_return TriggeredQueueDrainOnceResult{
-          .queued = std::move(*queued),
-          .execution = {},
-          .dropped = std::move(dropped),
-      };
-    }
-    co_return std::unexpected(std::move(execution).error());
+  co_return co_await execute_queued(std::move(*queued), std::move(request));
+}
+
+async::Awaitable<core::Result<TriggeredQueueDrainAvailableResult>>
+TriggeredQueue::drain_available(TriggeredQueueDrainAvailableRequest request) {
+  if (auto valid = validate_drain_available_request(request); !valid) {
+    co_return std::unexpected(std::move(valid).error());
   }
 
-  co_return TriggeredQueueDrainOnceResult{
-      .queued = std::move(*queued),
-      .execution = std::move(*execution),
-  };
+  const auto max_jobs = request.max_jobs;
+  auto drain_request = drain_once_request_from(std::move(request));
+  TriggeredQueueDrainAvailableResult result{};
+  while (result.drained_count < max_jobs) {
+    auto queued = try_receive();
+    if (!queued) {
+      if (queued.error().kind() == core::ErrorKind::cancelled) {
+        result.stop_reason = TriggeredQueueDrainAvailableStopReason::queue_closed;
+        co_return result;
+      }
+      co_return std::unexpected(std::move(queued).error());
+    }
+    if (!queued->has_value()) {
+      result.stop_reason = TriggeredQueueDrainAvailableStopReason::queue_empty;
+      co_return result;
+    }
+
+    auto& handler = drain_request.handler;
+    auto drained = co_await execute_queued(
+        std::move(**queued),
+        TriggeredQueueDrainOnceRequest{
+            .handler = [&handler](TriggeredExecutionJob execution) -> async::Awaitable<core::Result<void>> {
+              co_return co_await handler(std::move(execution));
+            },
+            .lease_owner_key = drain_request.lease_owner_key,
+            .lease_ttl = drain_request.lease_ttl,
+            .blocked_agent_policy = drain_request.blocked_agent_policy,
+        });
+    if (!drained) {
+      co_return std::unexpected(std::move(drained).error());
+    }
+
+    ++result.drained_count;
+    if (drained->execution.completed) {
+      ++result.completed_count;
+    }
+    if (!drained->execution.completed && !drained->dropped.has_value()) {
+      ++result.failed_count;
+    }
+    if (drained->dropped.has_value()) {
+      ++result.dropped_count;
+    }
+    result.drains.push_back(std::move(*drained));
+  }
+
+  result.stop_reason = TriggeredQueueDrainAvailableStopReason::max_jobs;
+  co_return result;
 }
 
 void TriggeredQueue::close() noexcept {

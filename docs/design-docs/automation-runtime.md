@@ -16,15 +16,15 @@ triggered intake plus explicit triggered handler execution and durable
 triggered run history, advisory triggered lifecycle hook metadata,
 repository-backed triggered agent leases, bounded caller-owned triggered queue
 backpressure with advisory drop metadata, explicit one-at-a-time triggered queue
-draining plus drop-on-conflict handling for blocked triggered-agent leases, and a caller-driven retention service
-tick with optional
-advisory `memory_decay` plus job lifecycle metadata,
+draining, finite available-batch draining, plus drop-on-conflict handling for
+blocked triggered-agent leases, and a caller-driven retention service tick with
+optional advisory `memory_decay` plus job lifecycle metadata,
 plus a caller-started retention loop step that can wait within a caller budget
 for one stored job to become due and lease due execution, plus a finite
 caller-owned loop policy over that step. It does not start detached background
 work, own a long-running process service loop, persist configured cron seeds
-from bootstrap automatically, run a detached queue-drain loop, notify channels, or call an
-agent loop.
+from bootstrap automatically, run a detached queue-drain loop, notify channels,
+or call an agent loop.
 
 ## Current Status
 
@@ -362,6 +362,20 @@ consumes exactly that descriptor, returns `TriggeredDroppedJob` metadata with
 provide a hook bus, and does not run the handler, record a triggered run row, or
 publish job lifecycle events. This is intentionally a drop policy, not a
 hold/requeue policy; richer blocked-agent queue semantics remain downstream.
+
+Slice 218 adds non-blocking triggered queue polling and finite available-batch
+draining without making the queue a background service. `async::Channel<T>` now
+exposes `try_receive()` so `TriggeredQueue::try_receive()` can poll the
+process-local queue: a buffered descriptor is returned immediately, an open
+empty queue returns `std::nullopt`, and a closed empty queue returns
+`ErrorKind::cancelled`. `TriggeredQueue::drain_available(...)` loops over that
+polling boundary until the queue is empty/closed or the caller's `max_jobs`
+limit is reached, executing each consumed descriptor through the same
+single-descriptor `execute_one(...)` / drop-on-conflict path as
+`drain_once(...)`. The result reports stop reason plus
+drained/completed/failed/dropped counters and per-item drain results. It still
+does not notify channels, call agents, start a detached queue owner, or define
+hold/requeue semantics for blocked agents.
 
 ## Public API
 
@@ -880,6 +894,12 @@ enum class TriggeredQueueBlockedAgentPolicy {
   drop_on_conflict,
 };
 
+enum class TriggeredQueueDrainAvailableStopReason {
+  queue_empty,
+  queue_closed,
+  max_jobs,
+};
+
 struct TriggeredQueuedJob {
   TriggeredExecutionJob execution;
   core::Time enqueued_at;
@@ -926,6 +946,23 @@ struct TriggeredQueueDrainOnceResult {
   std::optional<TriggeredDroppedJob> dropped;
 };
 
+struct TriggeredQueueDrainAvailableRequest {
+  TriggeredJobHandler handler;
+  std::size_t max_jobs;
+  std::string lease_owner_key;
+  std::chrono::steady_clock::duration lease_ttl;
+  TriggeredQueueBlockedAgentPolicy blocked_agent_policy;
+};
+
+struct TriggeredQueueDrainAvailableResult {
+  TriggeredQueueDrainAvailableStopReason stop_reason;
+  std::size_t drained_count;
+  std::size_t completed_count;
+  std::size_t failed_count;
+  std::size_t dropped_count;
+  std::vector<TriggeredQueueDrainOnceResult> drains;
+};
+
 class TriggeredService {
  public:
   explicit TriggeredService(AutomationRepository&, TriggeredServiceOptions = {});
@@ -946,9 +983,12 @@ class TriggeredQueue {
 
   async::Awaitable<core::Result<TriggeredQueueEnqueueResult>>
   enqueue(TriggeredQueueEnqueueRequest);
+  core::Result<std::optional<TriggeredQueuedJob>> try_receive();
   async::Awaitable<core::Result<TriggeredQueuedJob>> receive();
   async::Awaitable<core::Result<TriggeredQueueDrainOnceResult>>
   drain_once(TriggeredQueueDrainOnceRequest);
+  async::Awaitable<core::Result<TriggeredQueueDrainAvailableResult>>
+  drain_available(TriggeredQueueDrainAvailableRequest);
   void close() noexcept;
   std::size_t capacity() const noexcept;
   std::size_t size() const;
@@ -1374,6 +1414,31 @@ received queue item as an explicit drop. The result carries
 `automation_triggered_runs` row is recorded, no job lifecycle hook is published,
 and `job_dropped` receives `reason=agent_lease_conflict` through the queue hook
 options. Other execution errors still propagate as errors.
+
+`TriggeredQueue::try_receive()` is the non-blocking polling surface over the
+same bounded channel. It returns one queued descriptor when available,
+`std::nullopt` when the queue is open and empty, and `ErrorKind::cancelled`
+when the queue is closed and empty. It preserves FIFO order and does not
+execute handlers or mutate automation repository state.
+
+`TriggeredQueue::drain_available(...)` is a finite caller-owned batch drain. It
+validates the handler, positive `max_jobs`, positive lease TTL when supplied,
+and known blocked-agent policy, then repeatedly calls `try_receive()` until one
+of three stop reasons occurs:
+
+- `queue_empty`: the queue is open but no descriptor is currently buffered.
+- `queue_closed`: the queue is closed and no descriptor remains.
+- `max_jobs`: the caller-supplied batch limit has been consumed.
+
+Every consumed descriptor is executed through the same private
+single-descriptor path as `drain_once(...)`, so run-row recording, lifecycle
+hook publication, handler failure classification, and
+`drop_on_conflict`/`agent_lease_conflict` semantics remain identical per item.
+The result aggregates `drained_count`, `completed_count`, `failed_count`, and
+`dropped_count` while preserving the per-item `TriggeredQueueDrainOnceResult`
+vector for callers that need exact descriptors or run rows. It never calls
+`drain_once(...)` after polling, because that would receive a second queue item
+and skip the descriptor already returned by `try_receive()`.
 
 The queue still does not notify channels, call agents, start a detached drain
 loop, requeue blocked jobs, or define service shutdown policy.
@@ -1818,9 +1883,10 @@ seed application/service-cycle policy, run history, stop policy, typed
 outcomes, stored cron execution leases, stored cron agent leases, triggered
 descriptor intake, triggered execution/run history, triggered lifecycle hooks,
 triggered agent leases, bounded triggered queue/backpressure, and explicit
-one-at-a-time queue draining plus drain-time drop-on-conflict handling:
-detached service startup policy, notifier routing, richer blocked-agent
-hold/requeue policy, and actual agent firing for agent-facing jobs.
+one-at-a-time queue draining plus finite available-batch draining and
+drain-time drop-on-conflict handling: detached service startup policy, notifier
+routing, richer blocked-agent hold/requeue policy, and actual agent firing for
+agent-facing jobs.
 
 ## Validation
 
@@ -1938,7 +2004,13 @@ policy validation. Slice 217 reports `test-automation` at 90 cases / 1450
 assertions for queue drain-time triggered-agent lease conflicts, covering
 drop-on-conflict metadata, advisory `job_dropped` reason
 `agent_lease_conflict`, handler/run-row suppression, queue consumption, and
-invalid drain lease/policy validation.
+invalid drain lease/policy validation. Slice 218 reports `test-async` at 14
+cases / 76 assertions for channel polling and `test-automation` at 92 cases /
+1513 assertions for finite triggered queue batch draining, covering
+non-blocking FIFO queue polling, empty/closed/max-jobs stop reasons, batch
+counters for completed/failed/dropped descriptors, shared handler state across
+items, drop-on-conflict behavior inside a batch, and invalid max-jobs
+validation.
 
 `bench-automation` planning rows are:
 

@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -54,6 +55,10 @@ public:
 
   [[nodiscard]] core::Result<void> try_send(T value) {
     return state_->try_send(std::move(value));
+  }
+
+  [[nodiscard]] core::Result<std::optional<T>> try_receive() {
+    return state_->try_receive();
   }
 
   [[nodiscard]] Awaitable<core::Result<T>> receive() {
@@ -183,6 +188,29 @@ private:
           pump_locked(completions);
         } else {
           result = std::unexpected(core::Error{core::ErrorKind::mailbox_overflowed, "channel capacity exceeded"});
+        }
+      }
+
+      run_deferred(completions);
+      return result;
+    }
+
+    [[nodiscard]] core::Result<std::optional<T>> try_receive() {
+      std::vector<Deferred> completions;
+      core::Result<std::optional<T>> result{std::optional<T>{}};
+
+      {
+        const std::scoped_lock lock{mutex_};
+        pump_locked(completions);
+        if (!values_.empty()) {
+          result = std::optional<T>{pop_front(values_)};
+          pump_locked(completions);
+        } else if (!senders_.empty()) {
+          auto sender = pop_front(senders_);
+          result = std::optional<T>{std::move(sender.value)};
+          completions.push_back(complete_send(std::move(sender.complete), core::Result<void>{}));
+        } else if (closed_) {
+          result = std::unexpected(channel_closed_error());
         }
       }
 

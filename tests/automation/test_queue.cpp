@@ -401,6 +401,187 @@ TEST_CASE("TriggeredQueue drops drained descriptors on active triggered agent le
   });
 }
 
+TEST_CASE("TriggeredQueue drains available queued descriptors without waiting",
+          "[unit][automation][queue][triggered]") {
+  TempDb db{"oran-automation-queue-triggered-drain-available"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:webhook-ci-a",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "researcher",
+             }))
+                .has_value());
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:webhook-ci-b",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "coder",
+             }))
+                .has_value());
+
+    automation::TriggeredQueue queue{io.get_executor(),
+                                     automation::TriggeredService{repo},
+                                     automation::TriggeredQueueOptions{.capacity = 4}};
+
+    auto empty = co_await queue.drain_available(automation::TriggeredQueueDrainAvailableRequest{
+        .handler = [](automation::TriggeredExecutionJob) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        },
+        .max_jobs = 10,
+    });
+    REQUIRE(empty.has_value());
+    REQUIRE(empty->stop_reason == automation::TriggeredQueueDrainAvailableStopReason::queue_empty);
+    REQUIRE(empty->drained_count == 0);
+    REQUIRE(empty->drains.empty());
+
+    auto enqueued = co_await queue.enqueue(automation::TriggeredQueueEnqueueRequest{
+        .trigger_key = "webhook:ci",
+        .received_at = at(120s),
+        .job_limit = 10,
+    });
+    REQUIRE(enqueued.has_value());
+    REQUIRE(enqueued->enqueued_count == 2);
+
+    std::vector<std::string> handled;
+    auto first_batch = co_await queue.drain_available(automation::TriggeredQueueDrainAvailableRequest{
+        .handler = [&handled](automation::TriggeredExecutionJob execution) -> async::Awaitable<core::Result<void>> {
+          handled.push_back(execution.job.job_key);
+          co_return core::Result<void>{};
+        },
+        .max_jobs = 1,
+    });
+    REQUIRE(first_batch.has_value());
+    REQUIRE(first_batch->stop_reason == automation::TriggeredQueueDrainAvailableStopReason::max_jobs);
+    REQUIRE(first_batch->drained_count == 1);
+    REQUIRE(first_batch->completed_count == 1);
+    REQUIRE(first_batch->failed_count == 0);
+    REQUIRE(first_batch->dropped_count == 0);
+    REQUIRE(first_batch->drains.size() == 1);
+    REQUIRE(first_batch->drains.front().execution.completed);
+    REQUIRE(first_batch->drains.front().queued.execution.job.job_key == handled.front());
+    REQUIRE(queue.size() == 1);
+
+    auto second_batch = co_await queue.drain_available(automation::TriggeredQueueDrainAvailableRequest{
+        .handler = [&handled](automation::TriggeredExecutionJob execution) -> async::Awaitable<core::Result<void>> {
+          handled.push_back(execution.job.job_key);
+          co_return core::Result<void>{};
+        },
+        .max_jobs = 10,
+    });
+    REQUIRE(second_batch.has_value());
+    REQUIRE(second_batch->stop_reason == automation::TriggeredQueueDrainAvailableStopReason::queue_empty);
+    REQUIRE(second_batch->drained_count == 1);
+    REQUIRE(second_batch->completed_count == 1);
+    REQUIRE(second_batch->failed_count == 0);
+    REQUIRE(second_batch->dropped_count == 0);
+    REQUIRE(queue.size() == 0);
+    REQUIRE(handled.size() == 2);
+
+    auto runs_a = co_await repo.list_triggered_runs(automation::ListTriggeredRunsOptions{
+        .job_key = "triggered:webhook-ci-a",
+        .limit = 10,
+    });
+    auto runs_b = co_await repo.list_triggered_runs(automation::ListTriggeredRunsOptions{
+        .job_key = "triggered:webhook-ci-b",
+        .limit = 10,
+    });
+    REQUIRE(runs_a.has_value());
+    REQUIRE(runs_b.has_value());
+    REQUIRE(runs_a->size() == 1);
+    REQUIRE(runs_b->size() == 1);
+  });
+}
+
+TEST_CASE("TriggeredQueue drain_available counts handler failures and lease-conflict drops",
+          "[unit][automation][queue][triggered][lease]") {
+  TempDb db{"oran-automation-queue-triggered-drain-available-outcomes"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:webhook-ci-a",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "researcher",
+             }))
+                .has_value());
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:webhook-ci-b",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "coder",
+             }))
+                .has_value());
+    auto held = co_await repo.acquire_triggered_agent_lease(automation::AcquireTriggeredAgentLeaseRequest{
+        .agent_key = "researcher",
+        .owner_key = "owner-b",
+        .acquired_at = at(100s),
+        .expires_at = at(200s),
+    });
+    REQUIRE(held.has_value());
+    REQUIRE(held->has_value());
+
+    automation::TriggeredQueue queue{io.get_executor(),
+                                     automation::TriggeredService{repo},
+                                     automation::TriggeredQueueOptions{.capacity = 4}};
+    auto enqueued = co_await queue.enqueue(automation::TriggeredQueueEnqueueRequest{
+        .trigger_key = "webhook:ci",
+        .received_at = at(120s),
+        .job_limit = 10,
+    });
+    REQUIRE(enqueued.has_value());
+    REQUIRE(enqueued->enqueued_count == 2);
+
+    std::vector<std::string> handler_calls;
+    auto drained = co_await queue.drain_available(automation::TriggeredQueueDrainAvailableRequest{
+        .handler =
+            [&handler_calls](automation::TriggeredExecutionJob execution) -> async::Awaitable<core::Result<void>> {
+          handler_calls.push_back(execution.job.job_key);
+          co_return std::unexpected(core::Error::upstream("triggered handler failed"));
+        },
+        .max_jobs = 10,
+        .lease_owner_key = "owner-a",
+        .lease_ttl = 60s,
+    });
+
+    REQUIRE(drained.has_value());
+    REQUIRE(drained->stop_reason == automation::TriggeredQueueDrainAvailableStopReason::queue_empty);
+    REQUIRE(drained->drained_count == 2);
+    REQUIRE(drained->completed_count == 0);
+    REQUIRE(drained->failed_count == 1);
+    REQUIRE(drained->dropped_count == 1);
+    REQUIRE(drained->drains.size() == 2);
+    REQUIRE(handler_calls.size() == 1);
+    REQUIRE(queue.size() == 0);
+
+    auto dropped = std::ranges::find_if(drained->drains, [](const auto& item) { return item.dropped.has_value(); });
+    REQUIRE(dropped != drained->drains.end());
+    REQUIRE(dropped->dropped->reason == automation::TriggeredQueueDropReason::agent_lease_conflict);
+    REQUIRE(dropped->queued.execution.job.agent_key == "researcher");
+
+    auto failed = std::ranges::find_if(drained->drains, [](const auto& item) {
+      return !item.execution.completed && !item.dropped.has_value();
+    });
+    REQUIRE(failed != drained->drains.end());
+    REQUIRE(failed->queued.execution.job.agent_key == "coder");
+    REQUIRE(failed->execution.attempt.error.has_value());
+
+    auto researcher_runs = co_await repo.list_triggered_runs(automation::ListTriggeredRunsOptions{
+        .job_key = "triggered:webhook-ci-a",
+        .limit = 10,
+    });
+    auto coder_runs = co_await repo.list_triggered_runs(automation::ListTriggeredRunsOptions{
+        .job_key = "triggered:webhook-ci-b",
+        .limit = 10,
+    });
+    REQUIRE(researcher_runs.has_value());
+    REQUIRE(coder_runs.has_value());
+    REQUIRE(researcher_runs->empty());
+    REQUIRE(coder_runs->size() == 1);
+  });
+}
+
 TEST_CASE("TriggeredQueue rejects invalid enqueue policy", "[unit][automation][queue][triggered]") {
   TempDb db{"oran-automation-queue-triggered-validation"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
@@ -460,5 +641,14 @@ TEST_CASE("TriggeredQueue rejects invalid enqueue policy", "[unit][automation][q
     });
     REQUIRE_FALSE(bad_blocked_policy.has_value());
     REQUIRE(bad_blocked_policy.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto empty_max_jobs = co_await queue.drain_available(automation::TriggeredQueueDrainAvailableRequest{
+        .handler = [](automation::TriggeredExecutionJob) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        },
+        .max_jobs = 0,
+    });
+    REQUIRE_FALSE(empty_max_jobs.has_value());
+    REQUIRE(empty_max_jobs.error().kind() == core::ErrorKind::invalid_argument);
   });
 }

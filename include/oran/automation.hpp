@@ -6,10 +6,11 @@
 // runtime handle, explicit cron seed application, a caller-awaited cron service
 // cycle, caller-driven cron tick/execute owners, explicit cron wait/run loop
 // steps, caller-driven triggered intake/execution plus bounded triggered
-// queue/backpressure with optional triggered agent leases, retention/cron/
-// triggered hook metadata, and caller-started leased retention loop steps plus
-// finite loop policy. Notifier routing, agent firing, and detached background
-// service loops land behind this boundary in later slices.
+// queue/backpressure, non-blocking queue polling, finite batch draining with
+// optional triggered agent leases, retention/cron/triggered hook metadata, and
+// caller-started leased retention loop steps plus finite loop policy. Notifier
+// routing, agent firing, and detached background service loops land behind this
+// boundary in later slices.
 
 #pragma once
 

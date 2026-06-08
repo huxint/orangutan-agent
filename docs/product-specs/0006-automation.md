@@ -60,7 +60,9 @@ job lifecycle metadata around that same explicit execution owner, slice 214
 adds triggered agent leases, slice 215 adds bounded triggered queue
 backpressure, slice 216 adds one-at-a-time triggered queue draining, and slice
 217 adds drop-on-conflict handling for queued triggered descriptors blocked by
-active triggered-agent leases. The current API evaluates
+active triggered-agent leases. Slice 218 adds non-blocking queue polling and
+finite available-batch draining over the same explicit queue execution/drop
+path. The current API evaluates
 periodic and cron schedules from caller-supplied state, maps a long-term memory
 retention policy into a due-only `memory::longterm::DecayRequest`, persists the
 configured retention job plus run history and lease state through
@@ -96,7 +98,9 @@ caller-supplied handler while recording one triggered run row per attempt,
 publishes advisory triggered job lifecycle metadata when the caller supplies a
 hook bus,
 lets a queue consumer drain and execute exactly one queued triggered descriptor
-at a time through `TriggeredQueue::drain_once(...)`,
+at a time through `TriggeredQueue::drain_once(...)`, or drain currently
+available queued descriptors up to a caller-owned `max_jobs` limit through
+`TriggeredQueue::drain_available(...)`,
 lets a runtime owner tick one stored retention job against a supplied long-term
 memory backend, publishes advisory retention metadata when the caller supplies a
 hook bus, can wait once within a caller budget for the earliest stored cron fire,
@@ -255,10 +259,16 @@ Current implementation:
   `reason=agent_lease_conflict`, publishes advisory `job_dropped`, and skips
   the handler plus run-row/lifecycle-hook writes. It still does not define
   notifier routing, agent firing, background loop ownership, or hold/requeue
-  semantics.
+  semantics. `try_receive()` polls one queued descriptor without awaiting, and
+  `drain_available(...)` repeatedly consumes available descriptors up to
+  `max_jobs`, stopping on queue empty, queue closed, or the limit. Batch
+  draining reuses the exact one-descriptor execution/drop path and reports
+  drained/completed/failed/dropped counters plus per-item drain results.
 - `AutomationRuntime::triggered_queue(...)` constructs that queue over the
   caller-owned automation repository and runtime executor.
-- `test-automation` reports 90 cases / 1450 assertions.
+- `test-async` reports 14 cases / 76 assertions for the bounded channel
+  polling primitive consumed by triggered queues.
+- `test-automation` reports 92 cases / 1513 assertions.
 - `test-hook` reports 38 cases / 313 assertions for the hook payload surface.
 - `test-config` reports 51 cases / 462 assertions for the consuming config
   boundary, and `test-bootstrap` reports 129 cases / 1091 assertions for mapped
@@ -270,8 +280,8 @@ Still open: detached/background service-loop startup over `AutomationRuntime`,
 process service/timer shutdown policy, notifier callbacks, agent firing, queue
 hold/requeue semantics for blocked agent leases, and the scheduler tick
 performance criterion. Triggered descriptor intake, explicit one-item queue
-draining, and drop-on-conflict handling for active triggered-agent leases exist,
-but full
+draining, finite available-batch draining, and drop-on-conflict handling for
+active triggered-agent leases exist, but full
 scheduler/category lifecycle ownership remains downstream.
 
 ## Scope (v1.1)
@@ -296,14 +306,15 @@ scheduler/category lifecycle ownership remains downstream.
 1. A cron job ("`* * * * *`") fires exactly once per minute under nominal load.
 2. A periodic job (every 15 s) fires within ±100 ms of the scheduled time.
 3. A triggered job fires within 50 ms of the trigger event. Current status:
-   slice 217 can persist triggered descriptors, match a trigger event key to
+   slice 218 can persist triggered descriptors, match a trigger event key to
    stored jobs through caller-owned intake, run caller-supplied handlers while
    recording run history, publish advisory lifecycle metadata, optionally lease
    the matched stored `agent_key`, and enqueue matched jobs into bounded
    in-process queue state with drop-newest backpressure. Queue consumers can
-   now drain and execute one queued descriptor at a time or explicitly drop a
-   queued descriptor blocked by an active triggered-agent lease, while notifier
-   routing and actual agent firing latency remain downstream.
+   now drain and execute one queued descriptor at a time, finite-drain all
+   currently available queued descriptors up to a caller limit, or explicitly
+   drop a queued descriptor blocked by an active triggered-agent lease, while
+   notifier routing and actual agent firing latency remain downstream.
 4. Per-agent lease prevents two concurrent runs of the same agent_key; the queued
    firing is held or dropped per policy. Current status: slice 210 prevents
    overlapping explicit cron execution for the same stored `agent_key` through
@@ -313,8 +324,9 @@ scheduler/category lifecycle ownership remains downstream.
    backpressure for a full triggered queue, slice 216 drains one queued
    descriptor at a time without consuming additional queued jobs, and slice 217
    drops a drained triggered descriptor on active same-agent lease conflicts
-   with `job_dropped(reason=agent_lease_conflict)`. Richer hold/requeue policy,
-   notifier routing, and actual agent firing remain downstream.
+   with `job_dropped(reason=agent_lease_conflict)`. Slice 218 adds finite
+   available-batch draining over the same drop path. Richer hold/requeue
+   policy, notifier routing, and actual agent firing remain downstream.
 5. A failing job is recorded with the failure reason; the next firing happens on
    schedule. Current status: slice 206 records explicit cron handler failures
    with the failure reason and leaves stored state due for retry, while slice

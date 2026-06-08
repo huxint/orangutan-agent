@@ -14,10 +14,10 @@ classification, repository-backed cron execution leases for explicit loop
 owners, the first per-agent cron lease policy, triggered intake, triggered
 execution/run history, triggered lifecycle hooks, triggered agent leases,
 bounded caller-owned triggered queue/backpressure, one-at-a-time triggered
-queue draining, and drop-on-conflict handling for drained descriptors blocked
-by triggered-agent leases now exist. Detached service-loop startup, richer
-blocked-agent hold/requeue semantics, notifiers, and agent firing stay in later
-scheduler slices.
+queue draining, finite available-batch draining, and drop-on-conflict handling
+for drained descriptors blocked by triggered-agent leases now exist. Detached
+service-loop startup, richer blocked-agent hold/requeue semantics, notifiers,
+and agent firing stay in later scheduler slices.
 
 ## Scope
 
@@ -73,6 +73,10 @@ scheduler slices.
   triggered-agent lease conflicts, returning dropped metadata and advisory
   `job_dropped` while suppressing handler/run-row side effects, without adding
   notifier routing, hold/requeue policy, or agent execution ownership.
+- Poll and finite-drain currently available triggered queue descriptors up to a
+  caller-owned `max_jobs` limit, reusing the same single-descriptor
+  execution/drop path without adding notifier routing, hold/requeue policy,
+  detached queue ownership, or agent execution ownership.
 - Keep the slice free of agent, detached timer, automatic bootstrap
   persistence, or background task ownership.
 - Update automation docs/status/history/release notes in the same slice.
@@ -174,8 +178,10 @@ scheduler slices.
    through `TriggeredQueue::drain_once(...)` and
    `TriggeredService::execute_one(...)`. Slice 217 adds `drop_on_conflict`
    handling for drained triggered descriptors blocked by active triggered-agent
-   leases. Later: add notifier routing, richer hold/requeue policy, and agent
-   firing.
+   leases. Slice 218 adds non-blocking queue polling and finite
+   available-batch draining through `TriggeredQueue::try_receive()` and
+   `drain_available(...)`. Later: add notifier routing, richer hold/requeue
+   policy, and agent firing.
 5. **Scheduler performance.**
    Later: measure the 1 000-job scheduler tick criterion once the scheduler
    exists.
@@ -187,6 +193,8 @@ scheduler slices.
 - `xmake run test-config`
 - `xmake build test-bootstrap`
 - `xmake run test-bootstrap`
+- `xmake build test-async`
+- `xmake run test-async`
 - `xmake build test-automation`
 - `build/linux/x86_64/release/test-automation "AutomationRuntime applies cron job seeds explicitly"`
 - `build/linux/x86_64/release/test-automation "AutomationRuntime runs a caller-awaited cron service cycle"`
@@ -212,7 +220,12 @@ scheduler slices.
 - `build/linux/x86_64/release/test-automation "TriggeredService::execute_one records one explicit triggered descriptor"`
 - `build/linux/x86_64/release/test-automation "TriggeredQueue drains one queued descriptor through the triggered service"`
 - `build/linux/x86_64/release/test-automation "TriggeredQueue drops drained descriptors on active triggered agent lease conflicts"`
+- `build/linux/x86_64/release/test-automation "TriggeredQueue drains available queued descriptors without waiting"`
+- `build/linux/x86_64/release/test-automation "TriggeredQueue drain_available counts handler failures and lease-conflict drops"`
 - `build/linux/x86_64/release/test-automation "TriggeredQueue rejects invalid enqueue policy"`
+- `build/linux/x86_64/release/test-async "Channel try_receive reports empty without waiting and drains FIFO values"`
+- `build/linux/x86_64/release/test-async "Channel try_receive drains buffered values before reporting closed"`
+- `build/linux/x86_64/release/test-async "Channel try_receive completes a pending sender without awaiting"`
 - `build/linux/x86_64/release/test-automation "CronService::execute_due blocks active cron agent leases before handlers"`
 - `build/linux/x86_64/release/test-automation "CronLoop::run uses cron agent leases before calling handlers"`
 - `build/linux/x86_64/release/test-automation "CronService::execute_due records cancelled cron handlers as aborted"`
@@ -274,6 +287,9 @@ scheduler slices.
   active triggered-agent lease conflicts, publishes advisory
   `job_dropped(reason=agent_lease_conflict)`, runs no handler, and records no
   triggered run row for the dropped descriptor.
+- Confirm triggered queue available-batch draining consumes only descriptors
+  returned by `try_receive()`, stops on empty/closed/`max_jobs`, shares handler
+  state across drained items, and reports completed/failed/dropped counters.
 - Confirm no new dependency direction crosses from automation into bootstrap,
   config, or agent.
 - Observability checks:
@@ -411,6 +427,25 @@ scheduler slices.
   triggered descriptors, explicitly `receive()` queued jobs, and observe
   drop-newest overflow without executing handlers, recording triggered run rows,
   notifying channels, calling agents, or starting detached work.
+- [x] 2026-06-08 12:15 +0800: Implemented explicit one-at-a-time triggered
+  queue draining through `TriggeredService::execute_one(...)` and
+  `TriggeredQueue::drain_once(...)`. Runtime owners can consume and execute
+  exactly one queued descriptor without re-intaking by trigger key, while later
+  queued work remains buffered and no notifier/agent/background-loop ownership
+  is added.
+- [x] 2026-06-08 12:47 +0800: Implemented triggered queue
+  `drop_on_conflict` handling for active triggered-agent leases. Draining can
+  consume exactly the blocked descriptor, return
+  `TriggeredDroppedJob(reason=agent_lease_conflict)`, publish advisory
+  `job_dropped`, and suppress handler/run-row/lifecycle-hook side effects
+  without defining richer hold/requeue policy.
+- [x] 2026-06-08 13:13 +0800: Implemented non-blocking triggered queue polling
+  and finite available-batch draining through `async::Channel<T>::try_receive`,
+  `TriggeredQueue::try_receive()`, and `TriggeredQueue::drain_available(...)`.
+  Runtime owners can drain up to `max_jobs`, stop on empty/closed queue or the
+  limit, and receive completed/failed/dropped counters over the same
+  single-descriptor execution/drop path, without notifier routing, agent calls,
+  detached queue ownership, or hold/requeue semantics.
 - [x] **Update the docs that this slice invalidates in the same PR**
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -507,6 +542,12 @@ scheduler slices.
   agent leases and explicitly drop the consumed descriptor with
   `agent_lease_conflict` metadata when another owner holds the same agent key,
   while richer hold/requeue semantics remain downstream.
+- 2026-06-08: Add finite available-batch draining before notifier and
+  agent-firing policy. The next service owner needs a non-blocking queue drain
+  primitive, but a detached loop would prematurely own shutdown, wakeup, and
+  notifier/agent dispatch policy. `drain_available(...)` therefore stays a
+  caller-awaited finite batch over the existing one-descriptor execution/drop
+  path.
 
 ## Linked Artifacts
 
@@ -535,5 +576,6 @@ scheduler slices.
 - `docs/histories/2026-06/20260608-1123-automation-triggered-queue.md`
 - `docs/histories/2026-06/20260608-1215-automation-triggered-queue-drain.md`
 - `docs/histories/2026-06/20260608-1247-automation-triggered-queue-lease-drop.md`
+- `docs/histories/2026-06/20260608-1313-automation-triggered-queue-drain-available.md`
 - Release note:
 - `docs/releases/feature-release-notes.md#2026-06`
