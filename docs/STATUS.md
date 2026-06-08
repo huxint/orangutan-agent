@@ -7,25 +7,29 @@
 
 ## Snapshot
 
-- **Slice:** 218 (`xmake run orangutan -- --help` reports slice 218)
+- **Slice:** 219 (`xmake run orangutan -- --help` reports slice 219)
 - **Last completed history:**
-  [`histories/2026-06/20260608-1313-automation-triggered-queue-drain-available.md`](histories/2026-06/20260608-1313-automation-triggered-queue-drain-available.md)
+  [`histories/2026-06/20260608-1401-automation-agent-prompts.md`](histories/2026-06/20260608-1401-automation-agent-prompts.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-cron-category.md`](exec-plans/active/2026-06-07-automation-cron-category.md).
-- **Latest completed slice:** slice 218 adds non-blocking queue drain
-  primitives for the caller-owned triggered queue. `async::Channel<T>` now has
-  `try_receive()` for bounded FIFO polling without awaiting, and
-  `TriggeredQueue` exposes `try_receive()` plus `drain_available(...)` to drain
-  up to a caller limit, stopping on empty/closed queue or `max_jobs`. Batch
-  draining reuses the exact one-descriptor execution/drop path, reports
-  completed/failed/dropped counters, and still does not notify channels, call
-  agents, start a detached loop, or implement hold/requeue policy. Focused
-  result: `test-async` **14 cases / 76 assertions**, `test-automation`
-  **92 cases / 1513 assertions**, and `test-hook` **38 cases / 313 assertions**.
+- **Latest completed slice:** slice 219 makes cron and triggered automation
+  job descriptors carry the required prompt input future agent firing needs.
+  `automation.cron.jobs[]` now requires non-empty `agent_prompt`,
+  `bootstrap::cron_jobs_from(...)` maps it into `UpsertCronJobRequest`, and
+  `AutomationRepository` persists and round-trips non-empty `agent_prompt` for
+  both cron and triggered rows. The pre-v1 automation schema is updated in
+  place: cron rows carry `agent_key` and `agent_prompt` from the base cron-job
+  migration, and triggered rows carry `agent_prompt` from their descriptor
+  migration. This still does not notify channels, call agents, start a detached
+  loop, or implement hold/requeue policy. Focused result: `test-config`
+  **51 cases / 468 assertions**, `test-bootstrap`
+  **129 cases / 1095 assertions**, and `test-automation`
+  **92 cases / 1533 assertions**.
 - **Next intended slice:** continue the active automation cron/category plan.
   The next useful implementation boundary is a small scheduler-service
-  ownership slice such as notifier routing, agent firing policy, richer
-  blocked-agent hold/requeue policy, or detached service-loop startup.
+  ownership slice such as adapting stored `agent_prompt` into
+  `AgentPromptRunner`, notifier routing, richer blocked-agent hold/requeue
+  policy, or detached service-loop startup.
   Do not add bootstrap-owned background automation or unrelated STATUS-only
   slice churn.
 
@@ -1818,18 +1822,18 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-http`: 3 cases / 21 assertions.
 - `oran-io`: 54 cases / 311 assertions.
 - `oran-storage`: 77 cases / 988 assertions.
-- `oran-config`: 51 cases / 462 assertions.
+- `oran-config`: 51 cases / 468 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 38 cases / 313 assertions.
 - `oran-memory`: 38 cases / 841 assertions.
-- `oran-automation`: 92 cases / 1513 assertions.
+- `oran-automation`: 92 cases / 1533 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 208 cases / 2181 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 129 cases / 1091 assertions.
+- `oran-bootstrap`: 129 cases / 1095 assertions.
 
 ## Open Tech-Debt Rows
 

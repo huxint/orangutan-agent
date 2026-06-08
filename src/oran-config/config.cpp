@@ -107,9 +107,10 @@ constexpr auto kRecognizedAutomationCronFields = std::array<std::string_view, 1>
     "jobs",
 };
 
-constexpr auto kRecognizedAutomationCronJobFields = std::array<std::string_view, 5>{
+constexpr auto kRecognizedAutomationCronJobFields = std::array<std::string_view, 6>{
     "job_key",
     "agent_key",
+    "agent_prompt",
     "expression",
     "first_fire_at",
     "last_fired_at",
@@ -1011,6 +1012,15 @@ parse_automation_cron_job(const json& value, std::string_view path, bool strict,
     }
   }
 
+  auto agent_prompt = required_string(value, "agent_prompt", path);
+  if (!agent_prompt) {
+    return std::unexpected(std::move(agent_prompt.error()));
+  }
+  if (agent_prompt->empty()) {
+    return std::unexpected(
+        config_error("automation cron agent_prompt must be non-empty", child_path(path, "agent_prompt")));
+  }
+
   auto expression = required_string(value, "expression", path);
   if (!expression) {
     return std::unexpected(std::move(expression.error()));
@@ -1043,6 +1053,7 @@ parse_automation_cron_job(const json& value, std::string_view path, bool strict,
   return AutomationCronJobConfig{
       .job_key = std::move(*job_key),
       .agent_key = std::move(agent_key),
+      .agent_prompt = std::move(*agent_prompt),
       .expression = std::move(*expression),
       .first_fire_at = *first_fire_at,
       .last_fired_at = std::move(*last_fired_at),

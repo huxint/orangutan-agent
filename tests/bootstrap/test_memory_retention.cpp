@@ -84,11 +84,13 @@ TEST_CASE("cron_jobs_from maps automation cron config into repository seeds", "[
         {
           "job_key": "daily-summary",
           "agent_key": "researcher",
+          "agent_prompt": "Summarize yesterday's repository activity.",
           "expression": "0 9 * * *",
           "first_fire_at": "2026-06-08T09:00:00Z"
         },
         {
           "job_key": "hourly-ci",
+          "agent_prompt": "Check CI status and summarize failures.",
           "expression": "15 * * * *",
           "first_fire_at": "2026-06-08T00:15:00Z",
           "last_fired_at": "2026-06-08T03:15:00Z"
@@ -105,12 +107,14 @@ TEST_CASE("cron_jobs_from maps automation cron config into repository seeds", "[
   REQUIRE(jobs->size() == 2);
   REQUIRE((*jobs)[0].job_key == "daily-summary");
   REQUIRE((*jobs)[0].agent_key == "researcher");
+  REQUIRE((*jobs)[0].agent_prompt == "Summarize yesterday's repository activity.");
   REQUIRE((*jobs)[0].schedule.expression == "0 9 * * *");
   REQUIRE(core::time::format_iso8601_utc((*jobs)[0].schedule.first_fire_at) == "2026-06-08T09:00:00.000Z");
   REQUIRE_FALSE((*jobs)[0].state.last_fired_at.has_value());
 
   REQUIRE((*jobs)[1].job_key == "hourly-ci");
   REQUIRE((*jobs)[1].agent_key == "automation");
+  REQUIRE((*jobs)[1].agent_prompt == "Check CI status and summarize failures.");
   REQUIRE((*jobs)[1].schedule.expression == "15 * * * *");
   REQUIRE((*jobs)[1].state.last_fired_at.has_value());
 }
@@ -121,6 +125,7 @@ TEST_CASE("cron_jobs_from rejects invalid cron expressions at bootstrap composit
     "cron": {
       "jobs": [{
         "job_key": "bad-cron",
+        "agent_prompt": "Run invalid cron for validation.",
         "expression": "not a cron",
         "first_fire_at": "2026-06-08T00:00:00Z"
       }]

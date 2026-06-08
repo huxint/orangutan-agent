@@ -124,12 +124,14 @@ TEST_CASE("AutomationRepository round-trips cron jobs", "[unit][automation][repo
     auto upserted = co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
         .job_key = "cron:daily-summary",
         .agent_key = "researcher",
+        .agent_prompt = "Run scheduled automation job.",
         .schedule = make_cron_schedule(),
         .state = automation::PeriodicJobState{.last_fired_at = at(120s)},
     });
     REQUIRE(upserted.has_value());
     REQUIRE(upserted->job_key == "cron:daily-summary");
     REQUIRE(upserted->agent_key == "researcher");
+    REQUIRE(upserted->agent_prompt == "Run scheduled automation job.");
     REQUIRE(upserted->schedule == make_cron_schedule());
     REQUIRE(upserted->state.last_fired_at == at(120s));
     REQUIRE_FALSE(upserted->created_at.empty());
@@ -140,6 +142,7 @@ TEST_CASE("AutomationRepository round-trips cron jobs", "[unit][automation][repo
     REQUIRE(loaded->has_value());
     REQUIRE((*loaded)->job_key == upserted->job_key);
     REQUIRE((*loaded)->agent_key == upserted->agent_key);
+    REQUIRE((*loaded)->agent_prompt == upserted->agent_prompt);
     REQUIRE((*loaded)->schedule == upserted->schedule);
     REQUIRE((*loaded)->state == upserted->state);
 
@@ -157,11 +160,13 @@ TEST_CASE("AutomationRepository updates and lists cron job state", "[unit][autom
     REQUIRE((co_await repo.migrate()).has_value());
     REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:daily-summary",
+                 .agent_prompt = "Run scheduled automation job.",
                  .schedule = make_cron_schedule(),
              }))
                 .has_value());
     REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:weekly-summary",
+                 .agent_prompt = "Run scheduled automation job.",
                  .schedule = make_cron_schedule("30 10 * * 1"),
              }))
                 .has_value());
@@ -171,11 +176,13 @@ TEST_CASE("AutomationRepository updates and lists cron job state", "[unit][autom
     auto upserted = co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
         .job_key = "cron:daily-summary",
         .agent_key = "coder",
+        .agent_prompt = "Run updated scheduled automation job.",
         .schedule = changed,
         .state = automation::PeriodicJobState{.last_fired_at = at(240s)},
     });
     REQUIRE(upserted.has_value());
     REQUIRE(upserted->agent_key == "coder");
+    REQUIRE(upserted->agent_prompt == "Run updated scheduled automation job.");
     REQUIRE(upserted->schedule == changed);
     REQUIRE(upserted->state.last_fired_at == at(240s));
 
@@ -211,6 +218,7 @@ TEST_CASE("AutomationRepository records and lists cron runs", "[unit][automation
     REQUIRE((co_await repo.migrate()).has_value());
     REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:daily-summary",
+                 .agent_prompt = "Run scheduled automation job.",
                  .schedule = make_cron_schedule(),
              }))
                 .has_value());
@@ -283,11 +291,13 @@ TEST_CASE("AutomationRepository round-trips triggered jobs by trigger key",
         .job_key = "triggered:webhook-ci",
         .trigger_key = "webhook:ci",
         .agent_key = "researcher",
+        .agent_prompt = "Handle triggered automation job.",
     });
     REQUIRE(upserted.has_value());
     REQUIRE(upserted->job_key == "triggered:webhook-ci");
     REQUIRE(upserted->trigger_key == "webhook:ci");
     REQUIRE(upserted->agent_key == "researcher");
+    REQUIRE(upserted->agent_prompt == "Handle triggered automation job.");
     REQUIRE_FALSE(upserted->created_at.empty());
     REQUIRE_FALSE(upserted->updated_at.empty());
 
@@ -297,21 +307,25 @@ TEST_CASE("AutomationRepository round-trips triggered jobs by trigger key",
     REQUIRE((*loaded)->job_key == upserted->job_key);
     REQUIRE((*loaded)->trigger_key == upserted->trigger_key);
     REQUIRE((*loaded)->agent_key == upserted->agent_key);
+    REQUIRE((*loaded)->agent_prompt == upserted->agent_prompt);
 
     REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
                  .job_key = "triggered:file-watch",
                  .trigger_key = "file:workspace",
                  .agent_key = "automation",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
     auto updated = co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
         .job_key = "triggered:webhook-ci",
         .trigger_key = "webhook:release",
         .agent_key = "coder",
+        .agent_prompt = "Handle release automation job.",
     });
     REQUIRE(updated.has_value());
     REQUIRE(updated->trigger_key == "webhook:release");
     REQUIRE(updated->agent_key == "coder");
+    REQUIRE(updated->agent_prompt == "Handle release automation job.");
 
     auto release_jobs = co_await repo.list_triggered_jobs(
         automation::ListTriggeredJobsOptions{.trigger_key = "webhook:release", .limit = 10});
@@ -319,6 +333,7 @@ TEST_CASE("AutomationRepository round-trips triggered jobs by trigger key",
     REQUIRE(release_jobs->size() == 1);
     REQUIRE(release_jobs->front().job_key == "triggered:webhook-ci");
     REQUIRE(release_jobs->front().agent_key == "coder");
+    REQUIRE(release_jobs->front().agent_prompt == "Handle release automation job.");
 
     auto missing = co_await repo.get_triggered_job("triggered:missing");
     REQUIRE(missing.has_value());
@@ -336,6 +351,7 @@ TEST_CASE("AutomationRepository records and lists triggered runs", "[unit][autom
                  .job_key = "triggered:webhook-ci",
                  .trigger_key = "webhook:ci",
                  .agent_key = "researcher",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
 
@@ -408,6 +424,7 @@ TEST_CASE("AutomationRepository acquires, expires, and releases cron leases",
     REQUIRE((co_await repo.migrate()).has_value());
     REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:daily-summary",
+                 .agent_prompt = "Run scheduled automation job.",
                  .schedule = make_cron_schedule(),
              }))
                 .has_value());
@@ -948,6 +965,7 @@ TEST_CASE("AutomationRepository validates cron persistence inputs", "[unit][auto
 
     auto invalid_job_key = co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
         .job_key = "",
+        .agent_prompt = "Run scheduled automation job.",
         .schedule = make_cron_schedule(),
     });
     REQUIRE_FALSE(invalid_job_key.has_value());
@@ -956,6 +974,7 @@ TEST_CASE("AutomationRepository validates cron persistence inputs", "[unit][auto
 
     auto invalid_expression = co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
         .job_key = "cron:daily-summary",
+        .agent_prompt = "Run scheduled automation job.",
         .schedule = make_cron_schedule("60 9 * * *"),
     });
     REQUIRE_FALSE(invalid_expression.has_value());
@@ -965,11 +984,21 @@ TEST_CASE("AutomationRepository validates cron persistence inputs", "[unit][auto
     auto invalid_agent_key = co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
         .job_key = "cron:daily-summary",
         .agent_key = "",
+        .agent_prompt = "Run scheduled automation job.",
         .schedule = make_cron_schedule(),
     });
     REQUIRE_FALSE(invalid_agent_key.has_value());
     REQUIRE(invalid_agent_key.error().kind() == core::ErrorKind::invalid_argument);
     REQUIRE(has_field(invalid_agent_key.error(), "agent_key"));
+
+    auto invalid_agent_prompt = co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
+        .job_key = "cron:daily-summary",
+        .agent_prompt = "",
+        .schedule = make_cron_schedule(),
+    });
+    REQUIRE_FALSE(invalid_agent_prompt.has_value());
+    REQUIRE(invalid_agent_prompt.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(has_field(invalid_agent_prompt.error(), "agent_prompt"));
 
     auto bad_limit = co_await repo.list_cron_jobs(automation::ListCronJobsOptions{.limit = 0});
     REQUIRE_FALSE(bad_limit.has_value());
@@ -1047,6 +1076,7 @@ TEST_CASE("AutomationRepository validates triggered persistence inputs", "[unit]
     auto invalid_job_key = co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
         .job_key = "",
         .trigger_key = "webhook:ci",
+        .agent_prompt = "Handle triggered automation job.",
     });
     REQUIRE_FALSE(invalid_job_key.has_value());
     REQUIRE(invalid_job_key.error().kind() == core::ErrorKind::invalid_argument);
@@ -1055,6 +1085,7 @@ TEST_CASE("AutomationRepository validates triggered persistence inputs", "[unit]
     auto invalid_trigger_key = co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
         .job_key = "triggered:webhook-ci",
         .trigger_key = "",
+        .agent_prompt = "Handle triggered automation job.",
     });
     REQUIRE_FALSE(invalid_trigger_key.has_value());
     REQUIRE(invalid_trigger_key.error().kind() == core::ErrorKind::invalid_argument);
@@ -1064,10 +1095,20 @@ TEST_CASE("AutomationRepository validates triggered persistence inputs", "[unit]
         .job_key = "triggered:webhook-ci",
         .trigger_key = "webhook:ci",
         .agent_key = "",
+        .agent_prompt = "Handle triggered automation job.",
     });
     REQUIRE_FALSE(invalid_agent_key.has_value());
     REQUIRE(invalid_agent_key.error().kind() == core::ErrorKind::invalid_argument);
     REQUIRE(has_field(invalid_agent_key.error(), "agent_key"));
+
+    auto invalid_agent_prompt = co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+        .job_key = "triggered:webhook-ci",
+        .trigger_key = "webhook:ci",
+        .agent_prompt = "",
+    });
+    REQUIRE_FALSE(invalid_agent_prompt.has_value());
+    REQUIRE(invalid_agent_prompt.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(has_field(invalid_agent_prompt.error(), "agent_prompt"));
 
     auto empty_trigger = co_await repo.list_triggered_jobs(automation::ListTriggeredJobsOptions{
         .trigger_key = "",

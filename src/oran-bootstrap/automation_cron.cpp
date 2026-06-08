@@ -32,6 +32,7 @@ core::Result<std::vector<automation::UpsertCronJobRequest>> cron_jobs_from(const
     auto request = automation::UpsertCronJobRequest{
         .job_key = job.job_key,
         .agent_key = job.agent_key,
+        .agent_prompt = job.agent_prompt,
         .schedule =
             automation::CronSchedule{
                 .expression = job.expression,

@@ -4,16 +4,16 @@
 still intentionally narrow: deterministic periodic schedule and POSIX cron
 evaluation, long-term memory retention request planning, a bootstrap-owned
 mapping from configured retention policy into that job descriptor,
-automation-owned retention job/run/lease persistence, durable cron job state,
-config-authored cron schedule seeds mapped by bootstrap into stored descriptors,
-a caller-owned runtime state handle, explicit cron seed application, a
+automation-owned retention job/run/lease persistence, durable prompt-bearing
+cron job state, config-authored cron schedule seeds mapped by bootstrap into
+stored descriptors, a caller-owned runtime state handle, explicit cron seed application, a
 caller-awaited cron service cycle over the existing finite cron loop, a
 caller-driven cron scan/wait/execute-due boundary plus finite caller-owned cron
 loop policy, advisory cron lifecycle metadata, typed cron run outcome
 classification, repository-backed cron execution leases and cron agent leases
-for explicit loop owners, durable triggered job descriptors with caller-driven
-triggered intake plus explicit triggered handler execution and durable
-triggered run history, advisory triggered lifecycle hook metadata,
+for explicit loop owners, durable prompt-bearing triggered job descriptors with
+caller-driven triggered intake plus explicit triggered handler execution and
+durable triggered run history, advisory triggered lifecycle hook metadata,
 repository-backed triggered agent leases, bounded caller-owned triggered queue
 backpressure with advisory drop metadata, explicit one-at-a-time triggered queue
 draining, finite available-batch draining, plus drop-on-conflict handling for
@@ -153,12 +153,14 @@ periodic jobs and intentionally does not persist cron jobs, open automation
 state, start timers, spawn detached work, or call agents.
 
 Slice 198 persists cron-category job state without introducing a scheduler.
-`AutomationRepository` migration version 3 creates `automation_cron_jobs`; the
-repository can upsert, load, mark fired, and list cron jobs keyed by durable
-`job_key`. Stored rows carry `CronSchedule` (`expression`, `first_fire_at`),
-nullable `PeriodicJobState::last_fired_at`, and created/updated timestamps.
-Repository validation reuses `evaluate_cron_schedule(...)` before touching
-SQLite, enforces positive list limits, returns `std::nullopt` for missing
+`AutomationRepository` migration version 3 creates `automation_cron_jobs`; as of
+slice 219 this base row includes `agent_key` and required `agent_prompt` in
+addition to cron schedule/state fields. The repository can upsert, load, mark
+fired, and list cron jobs keyed by durable `job_key`. Stored rows carry
+`CronSchedule` (`expression`, `first_fire_at`), nullable
+`PeriodicJobState::last_fired_at`, and created/updated timestamps. Repository
+validation reuses `evaluate_cron_schedule(...)` before touching SQLite,
+enforces positive list limits, returns `std::nullopt` for missing
 `get_cron_job(...)`, and returns `ErrorKind::not_found` for mutation operations
 that require an existing cron job. It still does not read config, start timers,
 spawn detached work, or call agents.
@@ -202,9 +204,10 @@ durable outcome still return to the caller without inventing an outcome event.
 
 Slice 203 adds cron config ownership without adding scheduler startup.
 `oran-config` parses `automation.cron.jobs[]` as typed schedule seeds with
-`job_key`, POSIX cron `expression`, UTC `first_fire_at`, and optional UTC
-`last_fired_at`. `bootstrap::cron_jobs_from(...)` validates those expressions
-through `evaluate_cron_schedule(...)` and maps them into
+`job_key`, optional `agent_key`, required `agent_prompt`, POSIX cron
+`expression`, UTC `first_fire_at`, and optional UTC `last_fired_at`.
+`bootstrap::cron_jobs_from(...)` validates those expressions through
+`evaluate_cron_schedule(...)` and maps them into
 `automation::UpsertCronJobRequest` rows. `RuntimeAssemblyOptions::cron_jobs`
 and `RuntimeAssembly::cron_jobs()` store those descriptors for diagnostics and
 future runtime owners, while `RuntimeAssembly::build(...)` still does not open
@@ -277,8 +280,8 @@ handler execution when another owner holds the lease. `CronLoop::run(...)` and
 Slice 210 adds the first cron agent-key lease policy without adding queue,
 notifier, agent invocation, or detached scheduler ownership. Config-authored
 cron seeds and stored cron jobs now carry `agent_key`, defaulting to
-`automation` when omitted. Migration version 7 appends
-`automation_cron_jobs.agent_key` and creates `automation_cron_agent_leases`;
+`automation` when omitted. Migration version 7 creates
+`automation_cron_agent_leases`;
 `AutomationRepository` can acquire/release agent leases by `agent_key` with the
 same active-conflict and expired-takeover semantics as job leases.
 `CronService::execute_due(...)` acquires both the per-job lease and the stored
@@ -291,7 +294,7 @@ Slice 211 adds the first triggered-category intake boundary without adding
 queue, notifier, agent invocation, or detached scheduler ownership. Migration
 version 8 creates `automation_triggered_jobs`; `AutomationRepository` can
 upsert/load/list stored descriptors by durable `job_key` and external
-`trigger_key`, with a stored `agent_key` defaulting to `automation`.
+`trigger_key`, with stored `agent_key` and required `agent_prompt`.
 `TriggeredService::intake(...)` validates a caller-supplied `trigger_key` plus
 positive match limit and returns the matching stored descriptors with the
 caller-supplied intake timestamp. `AutomationRuntime::triggered_service()`
@@ -377,6 +380,14 @@ drained/completed/failed/dropped counters and per-item drain results. It still
 does not notify channels, call agents, start a detached queue owner, or define
 hold/requeue semantics for blocked agents.
 
+Slice 219 makes cron and triggered job descriptors carry the required prompt
+input future agent execution needs. Config-authored cron rows, stored cron jobs,
+and stored triggered descriptors now require non-empty `agent_prompt`.
+`bootstrap::cron_jobs_from(...)` maps that text into `UpsertCronJobRequest`, and
+`AutomationRepository` validates/persists it for both cron and triggered rows.
+This is still descriptor state only: no notifier routing, prompt-runner adapter,
+detached service owner, or agent invocation is added.
+
 ## Public API
 
 ```cpp
@@ -446,6 +457,7 @@ struct AutomationRuntimeOptions {
 struct UpsertCronJobRequest {
   std::string job_key;
   std::string agent_key;
+  std::string agent_prompt;
   CronSchedule schedule;
   PeriodicJobState state;
 };
@@ -453,6 +465,7 @@ struct UpsertCronJobRequest {
 struct CronJobRecord {
   std::string job_key;
   std::string agent_key;
+  std::string agent_prompt;
   CronSchedule schedule;
   PeriodicJobState state;
   std::string created_at;
@@ -467,12 +480,14 @@ struct UpsertTriggeredJobRequest {
   std::string job_key;
   std::string trigger_key;
   std::string agent_key;
+  std::string agent_prompt;
 };
 
 struct TriggeredJobRecord {
   std::string job_key;
   std::string trigger_key;
   std::string agent_key;
+  std::string agent_prompt;
   std::string created_at;
   std::string updated_at;
 };
@@ -1173,6 +1188,7 @@ namespace orangutan::config {
 struct AutomationCronJobConfig {
   std::string job_key;
   std::string agent_key;
+  std::string agent_prompt;
   std::string expression;
   core::Time first_fire_at;
   std::optional<core::Time> last_fired_at;
@@ -1269,6 +1285,8 @@ surface. Each row describes repository seed state only:
   config.
 - `agent_key`: optional non-empty agent execution key, defaulting to
   `automation` when omitted.
+- `agent_prompt`: required non-empty prompt text that future agent firing will
+  pass to the selected agent.
 - `expression`: POSIX 5-field cron expression.
 - `first_fire_at`: UTC ISO-8601 timestamp for the never-fired schedule anchor.
 - `last_fired_at`: optional UTC ISO-8601 timestamp for a pre-seeded stored
@@ -1276,12 +1294,14 @@ surface. Each row describes repository seed state only:
 
 `oran-config` validates the object shape, timestamps, non-empty strings, and
 unique keys. Missing `agent_key` is normalized to `automation`; present empty
-values are rejected. Config deliberately does not implement cron parsing,
-because that syntax is owned by `oran-automation`.
+`agent_key` values and missing/empty `agent_prompt` values are rejected. Config
+deliberately does not implement cron parsing, because that syntax is owned by
+`oran-automation`.
 `bootstrap::cron_jobs_from(...)` is the composition helper that can depend on
 both libraries: it validates each expression through
-`evaluate_cron_schedule(...)` and maps the row, including `agent_key`, into an
-`AutomationRepository::upsert_cron_job(...)` request shape.
+`evaluate_cron_schedule(...)` and maps the row, including `agent_key` and
+`agent_prompt`, into an `AutomationRepository::upsert_cron_job(...)` request
+shape.
 
 `RuntimeAssemblyOptions::cron_jobs` and `RuntimeAssembly::cron_jobs()` preserve
 those mapped seeds for diagnostics and for the future runtime owner that will
@@ -1310,13 +1330,15 @@ stored row has:
 - `trigger_key`: external event routing key supplied by a runtime owner, such
   as a webhook route, signal name, or file-watch topic.
 - `agent_key`: target agent execution key, defaulting to `automation`.
+- `agent_prompt`: required non-empty prompt text that future agent firing will
+  pass to the selected agent.
 - `created_at` / `updated_at`: repository timestamps.
 
-`AutomationRepository::upsert_triggered_job(...)` validates all three keys
-before touching SQLite. `get_triggered_job(...)` returns `std::nullopt` for a
-missing durable job key, and `list_triggered_jobs(...)` requires a non-empty
-`trigger_key` plus positive limit and returns newest-updated matching
-descriptors.
+`AutomationRepository::upsert_triggered_job(...)` validates all three keys plus
+the prompt text before touching SQLite. `get_triggered_job(...)` returns
+`std::nullopt` for a missing durable job key, and `list_triggered_jobs(...)`
+requires a non-empty `trigger_key` plus positive limit and returns
+newest-updated matching descriptors.
 
 `TriggeredService::intake(...)` is the caller-owned runtime surface over those
 rows. The caller supplies the external `trigger_key`, an intake timestamp, and
@@ -1484,9 +1506,10 @@ lease row has a foreign key to `automation_memory_retention_jobs(job_key)` with
 `ON DELETE CASCADE`, so deleting a future job row drops the matching lease row.
 
 Migration version 3 creates `automation_cron_jobs`, keyed by durable `job_key`,
-with the cron `expression`, `first_fire_at`, nullable `last_fired_at`, and
-timestamps. `idx_automation_cron_jobs_updated` lists rows by `updated_at DESC,
-job_key ASC` for bounded scheduler scans or diagnostics.
+with `agent_key`, required `agent_prompt`, the cron `expression`,
+`first_fire_at`, nullable `last_fired_at`, and timestamps.
+`idx_automation_cron_jobs_updated` lists rows by `updated_at DESC, job_key ASC`
+for bounded scheduler scans or diagnostics.
 
 Migration version 4 creates `automation_cron_runs`, keyed by autoincrement
 `id`, with a foreign key to `automation_cron_jobs(job_key)`, scheduled fire
@@ -1506,11 +1529,15 @@ The lease row has a foreign key to `automation_cron_jobs(job_key)` with
 `ON DELETE CASCADE`, so deleting a future cron job row drops the matching lease
 row.
 
-Migration version 7 adds `automation_cron_jobs.agent_key`, defaulting existing
-rows to `automation`, and creates `automation_cron_agent_leases`, keyed by
+Migration version 7 creates `automation_cron_agent_leases`, keyed by
 `agent_key`, with `owner_key`, `acquired_at`, `expires_at`, and `updated_at`.
 Agent leases are keyed by the execution agent, not by one cron job row, so they
 intentionally do not carry a foreign key to `automation_cron_jobs`.
+
+Migration version 8 creates `automation_triggered_jobs`, keyed by durable
+`job_key`, with required `trigger_key`, `agent_key`, required `agent_prompt`,
+and timestamps. `idx_automation_triggered_jobs_trigger` lists matching
+descriptors by external trigger key and newest update time.
 
 `job_key` is the durable repository identity. `scope_key` remains the memory
 decay scope inside the stored job descriptor, so future different automation
@@ -1519,17 +1546,19 @@ jobs use the same durable `job_key` identity and store the cron expression
 directly because there is not yet a higher-level config/job descriptor type.
 
 Repository calls validate inputs before touching SQLite: empty job keys are
-rejected, cron agent keys are rejected when empty, cron schedules must pass
-`evaluate_cron_schedule(...)`, retention jobs must pass the same policy
-validation used by `plan_memory_retention(...)`, failed runs require an error
-message, run finish time must not precede fire time, failed or aborted cron runs
-require an error message, list limits must be positive, lease owner keys must be
-non-empty, and lease expiry must be after acquisition time. Missing jobs return
-`std::nullopt` on `get_cron_job(...)` / `get_memory_retention_job(...)` and
+rejected, cron/triggered agent keys are rejected when empty, cron and triggered
+agent prompts are rejected when empty, trigger keys are rejected when empty,
+cron schedules must pass `evaluate_cron_schedule(...)`, retention jobs must
+pass the same policy validation used by `plan_memory_retention(...)`, failed
+runs require an error message, run finish time must not precede fire time,
+failed or aborted cron runs require an error message, list limits must be
+positive, lease owner keys must be non-empty, and lease expiry must be after
+acquisition time. Missing jobs return `std::nullopt` on `get_cron_job(...)` /
+`get_triggered_job(...)` / `get_memory_retention_job(...)` and
 `ErrorKind::not_found` from mutation operations that require an existing job.
 
-`upsert_cron_job(...)` replaces the stored agent key, schedule, and last-fired
-state for a durable `job_key` while preserving `created_at`;
+`upsert_cron_job(...)` replaces the stored agent key, agent prompt, schedule,
+and last-fired state for a durable `job_key` while preserving `created_at`;
 `mark_cron_job_fired(...)` advances only `last_fired_at` and `updated_at`;
 `list_cron_jobs(...)` returns a positive-limit bounded vector ordered by most
 recently updated first.
@@ -1969,8 +1998,8 @@ agent leases, covering migration v7, cron job `agent_key` round-trips, repositor
 agent lease acquire/conflict/expired-takeover/release behavior, service-level
 same-agent conflict before handler execution, loop default agent lease
 ownership, and `AutomationRuntime::open(...)` migration report version 7.
-`test-config` reports 51 cases / 462 assertions for optional cron seed
-`agent_key` parsing, and `test-bootstrap` reports 129 cases / 1091 assertions
+`test-config` reported 51 cases / 462 assertions for optional cron seed
+`agent_key` parsing, and `test-bootstrap` reported 129 cases / 1091 assertions
 for mapping it into stored cron seed descriptors.
 Slice 211 reports `test-automation` at 75 cases / 1078 assertions for triggered
 intake, covering migration v8, triggered descriptor round-trip/update/listing,
@@ -2011,6 +2040,12 @@ non-blocking FIFO queue polling, empty/closed/max-jobs stop reasons, batch
 counters for completed/failed/dropped descriptors, shared handler state across
 items, drop-on-conflict behavior inside a batch, and invalid max-jobs
 validation.
+Slice 219 reports `test-config` at 51 cases / 468 assertions,
+`test-bootstrap` at 129 cases / 1095 assertions, and `test-automation` at
+92 cases / 1533 assertions for required automation job prompts, covering config
+missing/empty prompt rejection, bootstrap cron seed prompt mapping, repository
+cron/triggered prompt round-trips and updates, service/queue/runtime prompt
+preservation, and empty prompt validation before SQLite writes.
 
 `bench-automation` planning rows are:
 

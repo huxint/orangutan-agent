@@ -62,17 +62,18 @@ backpressure, slice 216 adds one-at-a-time triggered queue draining, and slice
 217 adds drop-on-conflict handling for queued triggered descriptors blocked by
 active triggered-agent leases. Slice 218 adds non-blocking queue polling and
 finite available-batch draining over the same explicit queue execution/drop
-path. The current API evaluates
+path. Slice 219 adds required prompt input to cron and triggered job
+descriptors so future agent firing has durable work text. The current API evaluates
 periodic and cron schedules from caller-supplied state, maps a long-term memory
 retention policy into a due-only `memory::longterm::DecayRequest`, persists the
 configured retention job plus run history and lease state through
 `AutomationRepository`,
-persists cron job schedule/agent/last-fired state through `AutomationRepository`,
+persists cron job schedule/agent/prompt/last-fired state through `AutomationRepository`,
 persists cron success/failure/aborted run history through `AutomationRepository`,
 persists cron execution lease and cron agent lease state through
 `AutomationRepository`,
-persists triggered job descriptor and success/failure/aborted run history state
-through `AutomationRepository`,
+persists triggered job descriptor prompt input and success/failure/aborted run
+history state through `AutomationRepository`,
 explicitly opens/migrates automation state through `AutomationRuntime::open(...)`,
 lets a runtime owner scan stored cron jobs for due work without mutating them,
 lets a runtime owner execute due cron jobs through a supplied handler and mark
@@ -109,8 +110,9 @@ due while leasing due execution or run a finite caller-owned loop over that
 step. Bootstrap maps configured-route `memory.longterm.retention` into a stored
 `MemoryRetentionJob` descriptor whose first fire is after the one-shot startup
 decay pass, and maps `automation.cron.jobs[]` into
-`UpsertCronJobRequest` descriptors including `agent_key`, but bootstrap still
-does not open `automation.db`, apply those rows, or run a background service.
+`UpsertCronJobRequest` descriptors including `agent_key` and `agent_prompt`,
+but bootstrap still does not open `automation.db`, apply those rows, or run a
+background service.
 
 Current implementation:
 
@@ -127,9 +129,10 @@ Current implementation:
   `RuntimeAssembly::build`.
 - `config::Config::automation().cron.jobs` exposes typed cron schedule seeds
   from `automation.cron.jobs[]`, while `bootstrap::cron_jobs_from(...)`
-  validates the cron expressions through `evaluate_cron_schedule(...)` and maps
-  them into repository upsert requests. Bootstrap performs that mapping for
-  loaded config even when no provider route is configured.
+  requires non-empty `agent_prompt`, validates the cron expressions through
+  `evaluate_cron_schedule(...)`, and maps them into repository upsert requests.
+  Bootstrap performs that mapping for loaded config even when no provider route
+  is configured.
 - `RuntimeAssembly::cron_jobs()` exposes those mapped cron seeds for diagnostics
   and future persistence ownership; it is not persisted or run by
   `RuntimeAssembly::build`.
@@ -146,11 +149,11 @@ Current implementation:
   `last_fired_at`, records success/failure run rows, lists recent runs, acquires
   retention job leases when no active lease exists or an existing lease has
   expired, releases leases only for the matching owner, and upserts/loads/lists
-  cron jobs with durable schedule plus last-fired state and
+  cron jobs with durable agent key, prompt, schedule, last-fired state, and
   success/failure/aborted run history. It also acquires/releases cron execution
   leases for stored cron jobs with the same active-conflict and expired-takeover
-  semantics, upserts/loads/lists triggered job descriptors by external
-  `trigger_key`, and records/lists triggered run rows with durable
+  semantics, upserts/loads/lists prompt-bearing triggered job descriptors by
+  external `trigger_key`, and records/lists triggered run rows with durable
   `success` / `failure` / `aborted` outcomes.
 - `AutomationRuntime::open(...)` validates an explicit database path, creates
   parent directories, opens `automation.db` through an owned `storage::Pool`,
@@ -190,9 +193,10 @@ Current implementation:
   the never-fired anchor; advance from `PeriodicJobState::last_fired_at`; and
   return one next `PeriodicEvaluation` without starting a scheduler.
 - Cron job repository APIs persist `CronSchedule` plus
-  `PeriodicJobState::last_fired_at`, return `std::nullopt` for missing reads,
-  return `ErrorKind::not_found` for missing mark-fired mutations, validate cron
-  expressions before SQLite writes, and list rows by newest update.
+  `PeriodicJobState::last_fired_at` plus the stored agent key and prompt,
+  return `std::nullopt` for missing reads, return `ErrorKind::not_found` for
+  missing mark-fired mutations, validate cron expressions and non-empty prompts
+  before SQLite writes, and list rows by newest update.
 - `CronService::tick(...)` scans stored cron jobs up to a caller limit,
   evaluates each stored schedule, and returns checked count, due jobs, and the
   earliest next fire without advancing `last_fired_at`.
@@ -223,8 +227,8 @@ Current implementation:
   cron job `agent_key`; advisory sink failures remain non-fatal.
 - `TriggeredService::intake(...)` validates a caller-supplied external trigger
   key and positive match limit, then returns stored triggered job descriptors
-  with the intake timestamp. It does not enqueue, record runs, notify channels,
-  or call agents.
+  with the stored agent prompt and intake timestamp. It does not enqueue,
+  record runs, notify channels, or call agents.
 - `TriggeredService::execute_one(...)` executes exactly one caller-provided
   triggered descriptor, records one triggered run row, classifies cancelled
   handler errors as `aborted`, publishes the same advisory lifecycle metadata
@@ -268,10 +272,10 @@ Current implementation:
   caller-owned automation repository and runtime executor.
 - `test-async` reports 14 cases / 76 assertions for the bounded channel
   polling primitive consumed by triggered queues.
-- `test-automation` reports 92 cases / 1513 assertions.
+- `test-automation` reports 92 cases / 1533 assertions.
 - `test-hook` reports 38 cases / 313 assertions for the hook payload surface.
-- `test-config` reports 51 cases / 462 assertions for the consuming config
-  boundary, and `test-bootstrap` reports 129 cases / 1091 assertions for mapped
+- `test-config` reports 51 cases / 468 assertions for the consuming config
+  boundary, and `test-bootstrap` reports 129 cases / 1095 assertions for mapped
   cron seeds.
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
@@ -306,10 +310,11 @@ scheduler/category lifecycle ownership remains downstream.
 1. A cron job ("`* * * * *`") fires exactly once per minute under nominal load.
 2. A periodic job (every 15 s) fires within ±100 ms of the scheduled time.
 3. A triggered job fires within 50 ms of the trigger event. Current status:
-   slice 218 can persist triggered descriptors, match a trigger event key to
-   stored jobs through caller-owned intake, run caller-supplied handlers while
-   recording run history, publish advisory lifecycle metadata, optionally lease
-   the matched stored `agent_key`, and enqueue matched jobs into bounded
+   slice 219 can persist prompt-bearing triggered descriptors, match a trigger
+   event key to stored jobs through caller-owned intake, run caller-supplied
+   handlers while recording run history, publish advisory lifecycle metadata,
+   optionally lease the matched stored `agent_key`, and enqueue matched jobs
+   into bounded
    in-process queue state with drop-newest backpressure. Queue consumers can
    now drain and execute one queued descriptor at a time, finite-drain all
    currently available queued descriptors up to a caller limit, or explicitly
@@ -325,7 +330,9 @@ scheduler/category lifecycle ownership remains downstream.
    descriptor at a time without consuming additional queued jobs, and slice 217
    drops a drained triggered descriptor on active same-agent lease conflicts
    with `job_dropped(reason=agent_lease_conflict)`. Slice 218 adds finite
-   available-batch draining over the same drop path. Richer hold/requeue
+   available-batch draining over the same drop path, and slice 219 makes stored
+   cron/triggered jobs carry the required prompt text future agent firing will
+   use. Richer hold/requeue
    policy, notifier routing, and actual agent firing remain downstream.
 5. A failing job is recorded with the failure reason; the next firing happens on
    schedule. Current status: slice 206 records explicit cron handler failures

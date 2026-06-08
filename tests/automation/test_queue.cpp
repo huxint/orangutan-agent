@@ -89,12 +89,14 @@ TEST_CASE("TriggeredQueue enqueues matched triggered jobs for explicit receive",
                  .job_key = "triggered:webhook-ci",
                  .trigger_key = "webhook:ci",
                  .agent_key = "researcher",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
     REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
                  .job_key = "triggered:webhook-ci-secondary",
                  .trigger_key = "webhook:ci",
                  .agent_key = "coder",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
 
@@ -124,6 +126,8 @@ TEST_CASE("TriggeredQueue enqueues matched triggered jobs for explicit receive",
     REQUIRE(contains_job(received, "triggered:webhook-ci-secondary"));
     REQUIRE(first->execution.trigger_key == "webhook:ci");
     REQUIRE(second->execution.trigger_key == "webhook:ci");
+    REQUIRE(first->execution.job.agent_prompt == "Handle triggered automation job.");
+    REQUIRE(second->execution.job.agent_prompt == "Handle triggered automation job.");
     REQUIRE(first->execution.received_at == at(120s));
     REQUIRE(second->execution.received_at == at(120s));
     REQUIRE(first->enqueued_at == at(120s));
@@ -149,12 +153,14 @@ TEST_CASE("TriggeredQueue drops newest overflow and publishes job_dropped metada
                  .job_key = "triggered:webhook-ci-a",
                  .trigger_key = "webhook:ci",
                  .agent_key = "researcher",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
     REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
                  .job_key = "triggered:webhook-ci-b",
                  .trigger_key = "webhook:ci",
                  .agent_key = "coder",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
 
@@ -239,12 +245,14 @@ TEST_CASE("TriggeredQueue drains one queued descriptor through the triggered ser
                  .job_key = "triggered:webhook-ci-a",
                  .trigger_key = "webhook:ci",
                  .agent_key = "researcher",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
     REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
                  .job_key = "triggered:webhook-ci-b",
                  .trigger_key = "webhook:ci",
                  .agent_key = "coder",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
 
@@ -303,6 +311,7 @@ TEST_CASE("TriggeredQueue drops drained descriptors on active triggered agent le
                  .job_key = "triggered:webhook-ci-a",
                  .trigger_key = "webhook:ci",
                  .agent_key = "researcher",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
     auto held = co_await repo.acquire_triggered_agent_lease(automation::AcquireTriggeredAgentLeaseRequest{
@@ -412,12 +421,14 @@ TEST_CASE("TriggeredQueue drains available queued descriptors without waiting",
                  .job_key = "triggered:webhook-ci-a",
                  .trigger_key = "webhook:ci",
                  .agent_key = "researcher",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
     REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
                  .job_key = "triggered:webhook-ci-b",
                  .trigger_key = "webhook:ci",
                  .agent_key = "coder",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
 
@@ -505,12 +516,14 @@ TEST_CASE("TriggeredQueue drain_available counts handler failures and lease-conf
                  .job_key = "triggered:webhook-ci-a",
                  .trigger_key = "webhook:ci",
                  .agent_key = "researcher",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
     REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
                  .job_key = "triggered:webhook-ci-b",
                  .trigger_key = "webhook:ci",
                  .agent_key = "coder",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
     auto held = co_await repo.acquire_triggered_agent_lease(automation::AcquireTriggeredAgentLeaseRequest{

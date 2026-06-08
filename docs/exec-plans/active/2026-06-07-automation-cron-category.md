@@ -15,7 +15,9 @@ owners, the first per-agent cron lease policy, triggered intake, triggered
 execution/run history, triggered lifecycle hooks, triggered agent leases,
 bounded caller-owned triggered queue/backpressure, one-at-a-time triggered
 queue draining, finite available-batch draining, and drop-on-conflict handling
-for drained descriptors blocked by triggered-agent leases now exist. Detached
+for drained descriptors blocked by triggered-agent leases now exist. Cron and
+triggered descriptors also now carry required prompt input so future agent
+firing has durable work text. Detached
 service-loop startup, richer blocked-agent hold/requeue semantics, notifiers,
 and agent firing stay in later scheduler slices.
 
@@ -77,6 +79,9 @@ and agent firing stay in later scheduler slices.
   caller-owned `max_jobs` limit, reusing the same single-descriptor
   execution/drop path without adding notifier routing, hold/requeue policy,
   detached queue ownership, or agent execution ownership.
+- Require prompt text on config-authored cron seeds plus stored cron and
+  triggered job descriptors so agent-firing work has durable input, without
+  wiring `AgentPromptRunner` or notifier routing yet.
 - Keep the slice free of agent, detached timer, automatic bootstrap
   persistence, or background task ownership.
 - Update automation docs/status/history/release notes in the same slice.
@@ -160,12 +165,12 @@ and agent firing stay in later scheduler slices.
    over seed apply plus finite cron loop execution, slice 206 records durable
    run history for due cron handler attempts, slice 207 adds cooperative stop
    policy for the finite cron loop and service-cycle handoff, and slice 208
-  classifies explicit run history as `success`, `failure`, or `aborted` for
-  cancelled handlers, slice 209 adds repository-backed cron execution leases
-  used by the finite cron loop and service-cycle handoff, and slice 210 adds
-  stored cron job `agent_key` plus repository-backed cron agent leases for the
-  same explicit execution owner. Later: add detached service/timer ownership
-  without bootstrap-owned background work.
+   classifies explicit run history as `success`, `failure`, or `aborted` for
+   cancelled handlers, slice 209 adds repository-backed cron execution leases
+   used by the finite cron loop and service-cycle handoff, and slice 210 adds
+   stored cron job `agent_key` plus repository-backed cron agent leases for the
+   same explicit execution owner. Later: add detached service/timer ownership
+   without bootstrap-owned background work.
 4. **Triggered/notifier/queue policy.**
    In progress: slice 211 adds durable triggered job descriptors and
    caller-owned `TriggeredService::intake(...)` matching by external
@@ -180,7 +185,9 @@ and agent firing stay in later scheduler slices.
    handling for drained triggered descriptors blocked by active triggered-agent
    leases. Slice 218 adds non-blocking queue polling and finite
    available-batch draining through `TriggeredQueue::try_receive()` and
-   `drain_available(...)`. Later: add notifier routing, richer hold/requeue
+   `drain_available(...)`. Slice 219 adds required `agent_prompt` to cron config
+   seeds plus stored cron/triggered descriptors so the future agent-firing owner
+   has durable prompt input. Later: add notifier routing, richer hold/requeue
    policy, and agent firing.
 5. **Scheduler performance.**
    Later: measure the 1 000-job scheduler tick criterion once the scheduler
@@ -446,6 +453,14 @@ and agent firing stay in later scheduler slices.
   limit, and receive completed/failed/dropped counters over the same
   single-descriptor execution/drop path, without notifier routing, agent calls,
   detached queue ownership, or hold/requeue semantics.
+- [x] 2026-06-08 14:01 +0800: Implemented required automation job prompts for
+  stored cron and triggered descriptors. `automation.cron.jobs[]` now requires
+  non-empty `agent_prompt`, bootstrap maps it into `UpsertCronJobRequest`, and
+  `AutomationRepository` validates plus round-trips prompt text for cron and
+  triggered rows. Because the automation schema is still pre-v1/pre-generation,
+  the base cron/triggered migrations were updated in place instead of adding a
+  compatibility migration. This intentionally stops before notifier routing,
+  `AgentPromptRunner` wiring, detached loops, or agent invocation.
 - [x] **Update the docs that this slice invalidates in the same PR**
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -548,6 +563,12 @@ and agent firing stay in later scheduler slices.
   notifier/agent dispatch policy. `drain_available(...)` therefore stays a
   caller-awaited finite batch over the existing one-descriptor execution/drop
   path.
+- 2026-06-08: Add required job prompts before notifier and agent-firing policy.
+  Stored job descriptors only named the target agent, so the next agent-firing
+  slice had no durable prompt to pass to `cli::PromptRunRequest::prompt`.
+  Because no generated automation schema exists yet, changing the base
+  migrations directly is simpler than carrying a compatibility migration for a
+  pre-v1 shape.
 
 ## Linked Artifacts
 
@@ -577,5 +598,6 @@ and agent firing stay in later scheduler slices.
 - `docs/histories/2026-06/20260608-1215-automation-triggered-queue-drain.md`
 - `docs/histories/2026-06/20260608-1247-automation-triggered-queue-lease-drop.md`
 - `docs/histories/2026-06/20260608-1313-automation-triggered-queue-drain-available.md`
+- `docs/histories/2026-06/20260608-1401-automation-agent-prompts.md`
 - Release note:
 - `docs/releases/feature-release-notes.md#2026-06`

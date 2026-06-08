@@ -1,5 +1,7 @@
 CREATE TABLE IF NOT EXISTS automation_cron_jobs(
   job_key TEXT PRIMARY KEY,
+  agent_key TEXT NOT NULL DEFAULT 'automation',
+  agent_prompt TEXT NOT NULL,
   expression TEXT NOT NULL,
   first_fire_at TEXT NOT NULL,
   last_fired_at TEXT,

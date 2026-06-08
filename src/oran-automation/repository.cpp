@@ -69,14 +69,16 @@ constexpr std::string_view kUpsertCronJobSql = R"sql(
 INSERT INTO automation_cron_jobs(
   job_key,
   agent_key,
+  agent_prompt,
   expression,
   first_fire_at,
   last_fired_at,
   created_at,
   updated_at
-) VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+) VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 ON CONFLICT(job_key) DO UPDATE SET
   agent_key = excluded.agent_key,
+  agent_prompt = excluded.agent_prompt,
   expression = excluded.expression,
   first_fire_at = excluded.first_fire_at,
   last_fired_at = excluded.last_fired_at,
@@ -84,6 +86,7 @@ ON CONFLICT(job_key) DO UPDATE SET
 RETURNING
   job_key,
   agent_key,
+  agent_prompt,
   expression,
   first_fire_at,
   last_fired_at,
@@ -95,6 +98,7 @@ constexpr std::string_view kGetCronJobSql = R"sql(
 SELECT
   job_key,
   agent_key,
+  agent_prompt,
   expression,
   first_fire_at,
   last_fired_at,
@@ -112,6 +116,7 @@ WHERE job_key = ?
 RETURNING
   job_key,
   agent_key,
+  agent_prompt,
   expression,
   first_fire_at,
   last_fired_at,
@@ -123,6 +128,7 @@ constexpr std::string_view kListCronJobsSql = R"sql(
 SELECT
   job_key,
   agent_key,
+  agent_prompt,
   expression,
   first_fire_at,
   last_fired_at,
@@ -138,17 +144,20 @@ INSERT INTO automation_triggered_jobs(
   job_key,
   trigger_key,
   agent_key,
+  agent_prompt,
   created_at,
   updated_at
-) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+) VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 ON CONFLICT(job_key) DO UPDATE SET
   trigger_key = excluded.trigger_key,
   agent_key = excluded.agent_key,
+  agent_prompt = excluded.agent_prompt,
   updated_at = excluded.updated_at
 RETURNING
   job_key,
   trigger_key,
   agent_key,
+  agent_prompt,
   created_at,
   updated_at
 )sql";
@@ -158,6 +167,7 @@ SELECT
   job_key,
   trigger_key,
   agent_key,
+  agent_prompt,
   created_at,
   updated_at
 FROM automation_triggered_jobs
@@ -169,6 +179,7 @@ SELECT
   job_key,
   trigger_key,
   agent_key,
+  agent_prompt,
   created_at,
   updated_at
 FROM automation_triggered_jobs
@@ -578,6 +589,13 @@ template <std::size_t N>
   return {};
 }
 
+[[nodiscard]] core::Result<void> validate_agent_prompt(std::string_view agent_prompt) {
+  if (agent_prompt.empty()) {
+    return std::unexpected(invalid_field("agent_prompt", "empty"));
+  }
+  return {};
+}
+
 [[nodiscard]] core::Result<void> validate_trigger_key(std::string_view trigger_key) {
   if (trigger_key.empty()) {
     return std::unexpected(invalid_field("trigger_key", "empty"));
@@ -600,6 +618,9 @@ template <std::size_t N>
   if (auto valid = validate_agent_key(request.agent_key); !valid) {
     return std::unexpected(valid.error());
   }
+  if (auto valid = validate_agent_prompt(request.agent_prompt); !valid) {
+    return std::unexpected(valid.error());
+  }
   if (auto valid = validate_cron_schedule_for_storage(request.schedule); !valid) {
     return std::unexpected(valid.error());
   }
@@ -614,6 +635,9 @@ template <std::size_t N>
     return std::unexpected(valid.error());
   }
   if (auto valid = validate_agent_key(request.agent_key); !valid) {
+    return std::unexpected(valid.error());
+  }
+  if (auto valid = validate_agent_prompt(request.agent_prompt); !valid) {
     return std::unexpected(valid.error());
   }
   return {};
@@ -995,23 +1019,30 @@ read_size(storage::Statement& statement, int index, std::string_view field, bool
   if (auto valid = validate_agent_key(*agent_key); !valid) {
     return std::unexpected(valid.error());
   }
-  auto expression = required_text(statement, 2, "expression");
+  auto agent_prompt = required_text(statement, 2, "agent_prompt");
+  if (!agent_prompt) {
+    return std::unexpected(agent_prompt.error());
+  }
+  if (auto valid = validate_agent_prompt(*agent_prompt); !valid) {
+    return std::unexpected(valid.error());
+  }
+  auto expression = required_text(statement, 3, "expression");
   if (!expression) {
     return std::unexpected(expression.error());
   }
-  auto first_fire_at = required_time(statement, 3, "first_fire_at");
+  auto first_fire_at = required_time(statement, 4, "first_fire_at");
   if (!first_fire_at) {
     return std::unexpected(first_fire_at.error());
   }
-  auto last_fired_at = optional_time(statement, 4);
+  auto last_fired_at = optional_time(statement, 5);
   if (!last_fired_at) {
     return std::unexpected(last_fired_at.error());
   }
-  auto created_at = required_text(statement, 5, "created_at");
+  auto created_at = required_text(statement, 6, "created_at");
   if (!created_at) {
     return std::unexpected(created_at.error());
   }
-  auto updated_at = required_text(statement, 6, "updated_at");
+  auto updated_at = required_text(statement, 7, "updated_at");
   if (!updated_at) {
     return std::unexpected(updated_at.error());
   }
@@ -1027,6 +1058,7 @@ read_size(storage::Statement& statement, int index, std::string_view field, bool
   return CronJobRecord{
       .job_key = std::move(*job_key),
       .agent_key = std::move(*agent_key),
+      .agent_prompt = std::move(*agent_prompt),
       .schedule = std::move(schedule),
       .state = PeriodicJobState{.last_fired_at = *last_fired_at},
       .created_at = std::move(*created_at),
@@ -1053,11 +1085,18 @@ read_size(storage::Statement& statement, int index, std::string_view field, bool
   if (auto valid = validate_agent_key(*agent_key); !valid) {
     return std::unexpected(valid.error());
   }
-  auto created_at = required_text(statement, 3, "created_at");
+  auto agent_prompt = required_text(statement, 3, "agent_prompt");
+  if (!agent_prompt) {
+    return std::unexpected(agent_prompt.error());
+  }
+  if (auto valid = validate_agent_prompt(*agent_prompt); !valid) {
+    return std::unexpected(valid.error());
+  }
+  auto created_at = required_text(statement, 4, "created_at");
   if (!created_at) {
     return std::unexpected(created_at.error());
   }
-  auto updated_at = required_text(statement, 4, "updated_at");
+  auto updated_at = required_text(statement, 5, "updated_at");
   if (!updated_at) {
     return std::unexpected(updated_at.error());
   }
@@ -1066,6 +1105,7 @@ read_size(storage::Statement& statement, int index, std::string_view field, bool
       .job_key = std::move(*job_key),
       .trigger_key = std::move(*trigger_key),
       .agent_key = std::move(*agent_key),
+      .agent_prompt = std::move(*agent_prompt),
       .created_at = std::move(*created_at),
       .updated_at = std::move(*updated_at),
   };
@@ -1375,13 +1415,16 @@ async::Awaitable<core::Result<CronJobRecord>> AutomationRepository::upsert_cron_
   if (auto bound = statement.bind_text(2, request.agent_key); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = statement.bind_text(3, request.schedule.expression); !bound) {
+  if (auto bound = statement.bind_text(3, request.agent_prompt); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = statement.bind_text(4, core::time::format_iso8601_utc(request.schedule.first_fire_at)); !bound) {
+  if (auto bound = statement.bind_text(4, request.schedule.expression); !bound) {
     co_return std::unexpected(bound.error());
   }
-  if (auto bound = bind_optional_time(statement, 5, request.state.last_fired_at); !bound) {
+  if (auto bound = statement.bind_text(5, core::time::format_iso8601_utc(request.schedule.first_fire_at)); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = bind_optional_time(statement, 6, request.state.last_fired_at); !bound) {
     co_return std::unexpected(bound.error());
   }
 
@@ -1541,6 +1584,9 @@ AutomationRepository::upsert_triggered_job(UpsertTriggeredJobRequest request) {
     co_return std::unexpected(bound.error());
   }
   if (auto bound = statement.bind_text(3, request.agent_key); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(4, request.agent_prompt); !bound) {
     co_return std::unexpected(bound.error());
   }
 

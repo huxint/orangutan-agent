@@ -27,6 +27,7 @@ struct AutomationRepositoryOptions {
 struct UpsertCronJobRequest {
   std::string job_key;
   std::string agent_key{"automation"};
+  std::string agent_prompt;
   CronSchedule schedule;
   PeriodicJobState state{};
 };
@@ -34,6 +35,7 @@ struct UpsertCronJobRequest {
 struct CronJobRecord {
   std::string job_key;
   std::string agent_key{"automation"};
+  std::string agent_prompt;
   CronSchedule schedule;
   PeriodicJobState state{};
   std::string created_at;
@@ -48,12 +50,14 @@ struct UpsertTriggeredJobRequest {
   std::string job_key;
   std::string trigger_key;
   std::string agent_key{"automation"};
+  std::string agent_prompt;
 };
 
 struct TriggeredJobRecord {
   std::string job_key;
   std::string trigger_key;
   std::string agent_key{"automation"};
+  std::string agent_prompt;
   std::string created_at;
   std::string updated_at;
 };

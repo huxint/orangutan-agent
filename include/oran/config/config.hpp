@@ -182,6 +182,7 @@ struct MemoryConfig {
 struct AutomationCronJobConfig {
   std::string job_key;
   std::string agent_key{"automation"};
+  std::string agent_prompt;
   std::string expression;
   core::Time first_fire_at{core::Time::epoch()};
   std::optional<core::Time> last_fired_at{};

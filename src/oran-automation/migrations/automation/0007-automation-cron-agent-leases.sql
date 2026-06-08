@@ -1,6 +1,3 @@
-ALTER TABLE automation_cron_jobs
-  ADD COLUMN agent_key TEXT NOT NULL DEFAULT 'automation';
-
 CREATE TABLE IF NOT EXISTS automation_cron_agent_leases(
   agent_key TEXT PRIMARY KEY,
   owner_key TEXT NOT NULL,

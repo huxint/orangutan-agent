@@ -825,6 +825,7 @@ TEST_CASE("run validates automation cron seeds without provider routes", "[unit]
     "cron": {
       "jobs": [{
         "job_key": "bad-cron",
+        "agent_prompt": "Run invalid cron for validation.",
         "expression": "not a cron",
         "first_fire_at": "2026-06-08T00:00:00Z"
       }]

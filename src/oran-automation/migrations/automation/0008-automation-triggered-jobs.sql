@@ -2,6 +2,7 @@ CREATE TABLE IF NOT EXISTS automation_triggered_jobs(
   job_key TEXT PRIMARY KEY,
   trigger_key TEXT NOT NULL,
   agent_key TEXT NOT NULL DEFAULT 'automation',
+  agent_prompt TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );

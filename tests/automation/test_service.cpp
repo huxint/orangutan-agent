@@ -167,17 +167,20 @@ TEST_CASE("TriggeredService::intake matches stored jobs for a trigger key", "[un
                  .job_key = "triggered:webhook-ci",
                  .trigger_key = "webhook:ci",
                  .agent_key = "researcher",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
     REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
                  .job_key = "triggered:webhook-ci-secondary",
                  .trigger_key = "webhook:ci",
                  .agent_key = "coder",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
     REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
                  .job_key = "triggered:file-watch",
                  .trigger_key = "file:workspace",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
 
@@ -194,7 +197,8 @@ TEST_CASE("TriggeredService::intake matches stored jobs for a trigger key", "[un
     REQUIRE(intake->matched_count == 2);
     REQUIRE(intake->jobs.size() == 2);
     auto first = std::ranges::find_if(intake->jobs, [](const auto& job) {
-      return job.job_key == "triggered:webhook-ci" && job.agent_key == "researcher";
+      return job.job_key == "triggered:webhook-ci" && job.agent_key == "researcher" &&
+             job.agent_prompt == "Handle triggered automation job.";
     });
     REQUIRE(first != intake->jobs.end());
     auto second = std::ranges::find_if(intake->jobs, [](const auto& job) {
@@ -241,12 +245,14 @@ TEST_CASE("TriggeredService::execute records explicit triggered handler attempts
                  .job_key = "triggered:succeeds",
                  .trigger_key = "webhook:ci",
                  .agent_key = "researcher",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
     REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
                  .job_key = "triggered:fails",
                  .trigger_key = "webhook:ci",
                  .agent_key = "coder",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
 
@@ -260,6 +266,7 @@ TEST_CASE("TriggeredService::execute records explicit triggered handler attempts
           calls.push_back(execution.job.job_key);
           REQUIRE(execution.trigger_key == "webhook:ci");
           REQUIRE(execution.received_at == at(120s));
+          REQUIRE(execution.job.agent_prompt == "Handle triggered automation job.");
           if (execution.job.job_key == "triggered:fails") {
             co_return std::unexpected(core::Error::upstream("triggered payload failed"));
           }
@@ -325,12 +332,14 @@ TEST_CASE("TriggeredService::execute_one records one explicit triggered descript
                  .job_key = "triggered:webhook-ci",
                  .trigger_key = "webhook:ci",
                  .agent_key = "researcher",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
     REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
                  .job_key = "triggered:webhook-ci-secondary",
                  .trigger_key = "webhook:ci",
                  .agent_key = "coder",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
 
@@ -343,6 +352,7 @@ TEST_CASE("TriggeredService::execute_one records one explicit triggered descript
                         .job_key = "triggered:webhook-ci",
                         .trigger_key = "webhook:ci",
                         .agent_key = "researcher",
+                        .agent_prompt = "Handle triggered automation job.",
                         .created_at = "2026-06-08T00:00:00Z",
                         .updated_at = "2026-06-08T00:00:00Z",
                     },
@@ -386,6 +396,7 @@ TEST_CASE("TriggeredService::execute records cancelled triggered handlers as abo
     REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
                  .job_key = "triggered:cancelled",
                  .trigger_key = "webhook:ci",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
 
@@ -430,12 +441,14 @@ TEST_CASE("TriggeredService::execute leases triggered handlers and releases afte
                  .job_key = "triggered:succeeds",
                  .trigger_key = "webhook:ci",
                  .agent_key = "researcher",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
     REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
                  .job_key = "triggered:fails",
                  .trigger_key = "webhook:ci",
                  .agent_key = "coder",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
 
@@ -495,6 +508,7 @@ TEST_CASE("TriggeredService::execute blocks active triggered agent leases before
                  .job_key = "triggered:research",
                  .trigger_key = "webhook:ci",
                  .agent_key = "researcher",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
     auto held = co_await repo.acquire_triggered_agent_lease(automation::AcquireTriggeredAgentLeaseRequest{
@@ -543,6 +557,7 @@ TEST_CASE("TriggeredService::execute publishes lifecycle metadata for handler su
                  .job_key = "triggered:succeeds",
                  .trigger_key = "webhook:ci",
                  .agent_key = "researcher",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
 
@@ -623,6 +638,7 @@ TEST_CASE("TriggeredService::execute publishes lifecycle metadata for handler fa
     REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
                  .job_key = "triggered:fails",
                  .trigger_key = "webhook:ci",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
 
@@ -735,11 +751,13 @@ TEST_CASE("CronService::execute_due advances only successful due cron jobs", "[u
     REQUIRE((co_await repo.migrate()).has_value());
     REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:succeeds",
+                 .agent_prompt = "Run scheduled automation job.",
                  .schedule = make_cron_schedule(),
              }))
                 .has_value());
     REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:fails",
+                 .agent_prompt = "Run scheduled automation job.",
                  .schedule = make_cron_schedule(),
              }))
                 .has_value());
@@ -834,6 +852,7 @@ TEST_CASE("CronService::execute_due records cancelled cron handlers as aborted",
     REQUIRE((co_await repo.migrate()).has_value());
     REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:cancelled",
+                 .agent_prompt = "Run scheduled automation job.",
                  .schedule = make_cron_schedule(),
              }))
                 .has_value());
@@ -889,6 +908,7 @@ TEST_CASE("CronService::execute_due leases cron handlers and reports active conf
     REQUIRE((co_await repo.migrate()).has_value());
     REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:leased",
+                 .agent_prompt = "Run scheduled automation job.",
                  .schedule = make_cron_schedule(),
              }))
                 .has_value());
@@ -952,6 +972,7 @@ TEST_CASE("CronService::execute_due blocks active cron agent leases before handl
     REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:research",
                  .agent_key = "researcher",
+                 .agent_prompt = "Run scheduled automation job.",
                  .schedule = make_cron_schedule(),
              }))
                 .has_value());
@@ -1001,6 +1022,7 @@ TEST_CASE("CronService::execute_due skips handlers before cron jobs are due", "[
     schedule.first_fire_at = at(300s);
     REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:five-minute",
+                 .agent_prompt = "Run scheduled automation job.",
                  .schedule = schedule,
              }))
                 .has_value());
@@ -1049,6 +1071,7 @@ TEST_CASE("CronService::execute_due publishes lifecycle metadata for handler suc
     REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:succeeds",
                  .agent_key = "researcher",
+                 .agent_prompt = "Run scheduled automation job.",
                  .schedule = make_cron_schedule(),
                  .state = automation::PeriodicJobState{.last_fired_at = at(60s)},
              }))
@@ -1130,6 +1153,7 @@ TEST_CASE("CronService::execute_due publishes lifecycle metadata for handler fai
     REQUIRE((co_await repo.migrate()).has_value());
     REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:fails",
+                 .agent_prompt = "Run scheduled automation job.",
                  .schedule = make_cron_schedule(),
              }))
                 .has_value());

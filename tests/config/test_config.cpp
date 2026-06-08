@@ -925,11 +925,13 @@ TEST_CASE("Config::parse extracts automation cron jobs", "[unit][config][automat
         {
           "job_key": "daily-summary",
           "agent_key": "researcher",
+          "agent_prompt": "Summarize yesterday's repository activity.",
           "expression": "0 9 * * *",
           "first_fire_at": "2026-06-08T09:00:00Z"
         },
         {
           "job_key": "hourly-ci",
+          "agent_prompt": "Check CI status and summarize failures.",
           "expression": "15 * * * *",
           "first_fire_at": "2026-06-08T00:15:00Z",
           "last_fired_at": "2026-06-08T03:15:00.250Z"
@@ -943,6 +945,7 @@ TEST_CASE("Config::parse extracts automation cron jobs", "[unit][config][automat
   REQUIRE(result->automation().cron.jobs.size() == 2);
   REQUIRE(result->automation().cron.jobs[0].job_key == "daily-summary");
   REQUIRE(result->automation().cron.jobs[0].agent_key == "researcher");
+  REQUIRE(result->automation().cron.jobs[0].agent_prompt == "Summarize yesterday's repository activity.");
   REQUIRE(result->automation().cron.jobs[0].expression == "0 9 * * *");
   REQUIRE(core::time::format_iso8601_utc(result->automation().cron.jobs[0].first_fire_at) ==
           "2026-06-08T09:00:00.000Z");
@@ -950,6 +953,7 @@ TEST_CASE("Config::parse extracts automation cron jobs", "[unit][config][automat
 
   REQUIRE(result->automation().cron.jobs[1].job_key == "hourly-ci");
   REQUIRE(result->automation().cron.jobs[1].agent_key == "automation");
+  REQUIRE(result->automation().cron.jobs[1].agent_prompt == "Check CI status and summarize failures.");
   REQUIRE(result->automation().cron.jobs[1].expression == "15 * * * *");
   REQUIRE(core::time::format_iso8601_utc(result->automation().cron.jobs[1].first_fire_at) ==
           "2026-06-08T00:15:00.000Z");
@@ -988,7 +992,12 @@ TEST_CASE("Config::parse rejects malformed automation cron jobs", "[unit][config
     auto result = config::Config::parse(R"json({
   "automation": {
     "cron": {
-      "jobs": [{"job_key": "", "expression": "* * * * *", "first_fire_at": "2026-06-08T00:00:00Z"}]
+      "jobs": [{
+        "job_key": "",
+        "agent_prompt": "Run daily automation.",
+        "expression": "* * * * *",
+        "first_fire_at": "2026-06-08T00:00:00Z"
+      }]
     }
   }
 })json");
@@ -1000,7 +1009,7 @@ TEST_CASE("Config::parse rejects malformed automation cron jobs", "[unit][config
     auto result = config::Config::parse(R"json({
   "automation": {
     "cron": {
-      "jobs": [{"job_key": "daily", "expression": "* * * * *"}]
+      "jobs": [{"job_key": "daily", "agent_prompt": "Run daily automation.", "expression": "* * * * *"}]
     }
   }
 })json");
@@ -1015,6 +1024,40 @@ TEST_CASE("Config::parse rejects malformed automation cron jobs", "[unit][config
       "jobs": [{
         "job_key": "daily",
         "agent_key": "",
+        "agent_prompt": "Run daily automation.",
+        "expression": "* * * * *",
+        "first_fire_at": "2026-06-08T00:00:00Z"
+      }]
+    }
+  }
+})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("missing agent prompt") {
+    auto result = config::Config::parse(R"json({
+  "automation": {
+    "cron": {
+      "jobs": [{
+        "job_key": "daily",
+        "expression": "* * * * *",
+        "first_fire_at": "2026-06-08T00:00:00Z"
+      }]
+    }
+  }
+})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("empty agent prompt") {
+    auto result = config::Config::parse(R"json({
+  "automation": {
+    "cron": {
+      "jobs": [{
+        "job_key": "daily",
+        "agent_prompt": "",
         "expression": "* * * * *",
         "first_fire_at": "2026-06-08T00:00:00Z"
       }]
@@ -1031,6 +1074,7 @@ TEST_CASE("Config::parse rejects malformed automation cron jobs", "[unit][config
     "cron": {
       "jobs": [{
         "job_key": "daily",
+        "agent_prompt": "Run daily automation.",
         "expression": "* * * * *",
         "first_fire_at": "2026-06-08T00:00:00Z",
         "last_fired_at": "not-a-time"
@@ -1047,8 +1091,18 @@ TEST_CASE("Config::parse rejects malformed automation cron jobs", "[unit][config
   "automation": {
     "cron": {
       "jobs": [
-        {"job_key": "daily", "expression": "* * * * *", "first_fire_at": "2026-06-08T00:00:00Z"},
-        {"job_key": "daily", "expression": "0 9 * * *", "first_fire_at": "2026-06-08T09:00:00Z"}
+        {
+          "job_key": "daily",
+          "agent_prompt": "Run daily automation.",
+          "expression": "* * * * *",
+          "first_fire_at": "2026-06-08T00:00:00Z"
+        },
+        {
+          "job_key": "daily",
+          "agent_prompt": "Run daily automation.",
+          "expression": "0 9 * * *",
+          "first_fire_at": "2026-06-08T09:00:00Z"
+        }
       ]
     }
   }

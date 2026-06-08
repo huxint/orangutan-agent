@@ -237,6 +237,7 @@ TEST_CASE("AutomationRuntime applies cron job seeds explicitly", "[unit][automat
     auto seeds = std::vector<automation::UpsertCronJobRequest>{
         automation::UpsertCronJobRequest{
             .job_key = "cron:daily-summary",
+            .agent_prompt = "Run scheduled automation job.",
             .schedule =
                 automation::CronSchedule{
                     .expression = "0 9 * * *",
@@ -245,6 +246,7 @@ TEST_CASE("AutomationRuntime applies cron job seeds explicitly", "[unit][automat
         },
         automation::UpsertCronJobRequest{
             .job_key = "cron:hourly-ci",
+            .agent_prompt = "Run scheduled automation job.",
             .schedule =
                 automation::CronSchedule{
                     .expression = "15 * * * *",
@@ -279,6 +281,7 @@ TEST_CASE("AutomationRuntime applies cron job seeds explicitly", "[unit][automat
     auto bad_seeds = std::vector<automation::UpsertCronJobRequest>{
         automation::UpsertCronJobRequest{
             .job_key = "cron:bad",
+            .agent_prompt = "Run scheduled automation job.",
             .schedule =
                 automation::CronSchedule{
                     .expression = "not a cron",
@@ -306,6 +309,7 @@ TEST_CASE("AutomationRuntime constructs triggered service execution over owned s
                  .job_key = "triggered:webhook-ci",
                  .trigger_key = "webhook:ci",
                  .agent_key = "researcher",
+                 .agent_prompt = "Handle triggered automation job.",
              }))
                 .has_value());
 
@@ -321,6 +325,7 @@ TEST_CASE("AutomationRuntime constructs triggered service execution over owned s
     REQUIRE(intake->jobs.size() == 1);
     REQUIRE(intake->jobs.front().job_key == "triggered:webhook-ci");
     REQUIRE(intake->jobs.front().agent_key == "researcher");
+    REQUIRE(intake->jobs.front().agent_prompt == "Handle triggered automation job.");
 
     auto queue = runtime->triggered_queue(automation::TriggeredQueueOptions{.capacity = 2});
     auto queued = co_await queue.enqueue(automation::TriggeredQueueEnqueueRequest{
@@ -334,6 +339,7 @@ TEST_CASE("AutomationRuntime constructs triggered service execution over owned s
     auto received = co_await queue.receive();
     REQUIRE(received.has_value());
     REQUIRE(received->execution.job.job_key == "triggered:webhook-ci");
+    REQUIRE(received->execution.job.agent_prompt == "Handle triggered automation job.");
     REQUIRE(received->execution.trigger_key == "webhook:ci");
     REQUIRE(received->execution.received_at == at(150s));
 
@@ -344,6 +350,7 @@ TEST_CASE("AutomationRuntime constructs triggered service execution over owned s
         .handler = [](automation::TriggeredExecutionJob execution) -> async::Awaitable<core::Result<void>> {
           REQUIRE(execution.job.job_key == "triggered:webhook-ci");
           REQUIRE(execution.job.agent_key == "researcher");
+          REQUIRE(execution.job.agent_prompt == "Handle triggered automation job.");
           co_return core::Result<void>{};
         },
     });
@@ -373,6 +380,7 @@ TEST_CASE("AutomationRuntime runs a caller-awaited cron service cycle", "[unit][
     auto seeds = std::vector<automation::UpsertCronJobRequest>{
         automation::UpsertCronJobRequest{
             .job_key = "cron:every-minute",
+            .agent_prompt = "Run scheduled automation job.",
             .schedule = make_cron_schedule(),
         },
     };
@@ -416,6 +424,7 @@ TEST_CASE("AutomationRuntime forwards cron service cycle stop requests", "[unit]
     auto seeds = std::vector<automation::UpsertCronJobRequest>{
         automation::UpsertCronJobRequest{
             .job_key = "cron:every-minute",
+            .agent_prompt = "Run scheduled automation job.",
             .schedule = make_cron_schedule(),
         },
     };
@@ -455,6 +464,7 @@ TEST_CASE("AutomationRuntime validates cron service cycles before applying seeds
     auto seeds = std::vector<automation::UpsertCronJobRequest>{
         automation::UpsertCronJobRequest{
             .job_key = "cron:never-applied",
+            .agent_prompt = "Run scheduled automation job.",
             .schedule = make_cron_schedule(),
         },
     };
@@ -487,6 +497,7 @@ TEST_CASE("AutomationRuntime creates cron services over owned repository state",
     REQUIRE(runtime.has_value());
     REQUIRE((co_await runtime->repository().upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:every-minute",
+                 .agent_prompt = "Run scheduled automation job.",
                  .schedule = make_cron_schedule(),
              }))
                 .has_value());
@@ -494,6 +505,7 @@ TEST_CASE("AutomationRuntime creates cron services over owned repository state",
     five_minute.first_fire_at = at(300s);
     REQUIRE((co_await runtime->repository().upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:five-minute",
+                 .agent_prompt = "Run scheduled automation job.",
                  .schedule = five_minute,
              }))
                 .has_value());
@@ -530,6 +542,7 @@ TEST_CASE("CronLoop::run_once skips waits beyond the caller budget", "[unit][aut
     schedule.first_fire_at = at(300s);
     REQUIRE((co_await runtime->repository().upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:five-minute",
+                 .agent_prompt = "Run scheduled automation job.",
                  .schedule = schedule,
              }))
                 .has_value());
@@ -559,6 +572,7 @@ TEST_CASE("CronLoop::run_once waits within budget and reports due cron jobs",
     REQUIRE(runtime.has_value());
     REQUIRE((co_await runtime->repository().upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:every-minute",
+                 .agent_prompt = "Run scheduled automation job.",
                  .schedule = make_cron_schedule(),
              }))
                 .has_value());
@@ -594,6 +608,7 @@ TEST_CASE("CronLoop::run catches up due cron fires through the supplied handler"
     REQUIRE(runtime.has_value());
     REQUIRE((co_await runtime->repository().upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:every-minute",
+                 .agent_prompt = "Run scheduled automation job.",
                  .schedule = make_cron_schedule(),
              }))
                 .has_value());
@@ -638,6 +653,7 @@ TEST_CASE("CronLoop::run uses cron execution leases before calling handlers",
     REQUIRE(runtime.has_value());
     REQUIRE((co_await runtime->repository().upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:leased",
+                 .agent_prompt = "Run scheduled automation job.",
                  .schedule = make_cron_schedule(),
              }))
                 .has_value());
@@ -684,6 +700,7 @@ TEST_CASE("CronLoop::run uses cron agent leases before calling handlers",
     REQUIRE((co_await runtime->repository().upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:research",
                  .agent_key = "researcher",
+                 .agent_prompt = "Run scheduled automation job.",
                  .schedule = make_cron_schedule(),
              }))
                 .has_value());
@@ -728,6 +745,7 @@ TEST_CASE("CronLoop::run honors stop requests before starting work", "[unit][aut
     REQUIRE(runtime.has_value());
     REQUIRE((co_await runtime->repository().upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:every-minute",
+                 .agent_prompt = "Run scheduled automation job.",
                  .schedule = make_cron_schedule(),
              }))
                 .has_value());
@@ -778,6 +796,7 @@ TEST_CASE("CronLoop::run stops after a successful iteration when requested",
     REQUIRE(runtime.has_value());
     REQUIRE((co_await runtime->repository().upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:every-minute",
+                 .agent_prompt = "Run scheduled automation job.",
                  .schedule = make_cron_schedule(),
              }))
                 .has_value());
@@ -824,6 +843,7 @@ TEST_CASE("CronLoop::run stops on handler failure without retrying immediately",
     REQUIRE(runtime.has_value());
     REQUIRE((co_await runtime->repository().upsert_cron_job(automation::UpsertCronJobRequest{
                  .job_key = "cron:fails",
+                 .agent_prompt = "Run scheduled automation job.",
                  .schedule = make_cron_schedule(),
              }))
                 .has_value());
@@ -1282,6 +1302,7 @@ TEST_CASE("CronLoop::run_once reports cancellation while waiting",
         }
         auto upserted = co_await runtime->repository().upsert_cron_job(automation::UpsertCronJobRequest{
             .job_key = "cron:every-minute",
+            .agent_prompt = "Run scheduled automation job.",
             .schedule = make_cron_schedule(),
         });
         if (!upserted) {
