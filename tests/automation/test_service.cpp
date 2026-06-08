@@ -410,6 +410,88 @@ TEST_CASE("TriggeredService::execute_one records one explicit triggered descript
   });
 }
 
+TEST_CASE("TriggeredService::execute_one validates and uses attempted_at for delayed retries",
+          "[unit][automation][service][triggered][lease]") {
+  TempDb db{"oran-automation-service-triggered-execute-one-attempted-at"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:webhook-ci",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "researcher",
+                 .agent_prompt = "Handle triggered automation job.",
+             }))
+                .has_value());
+
+    automation::TriggeredExecutionJob execution{
+        .job =
+            automation::TriggeredJobRecord{
+                .job_key = "triggered:webhook-ci",
+                .trigger_key = "webhook:ci",
+                .agent_key = "researcher",
+                .agent_prompt = "Handle triggered automation job.",
+                .created_at = "2026-06-08T00:00:00Z",
+                .updated_at = "2026-06-08T00:00:00Z",
+            },
+        .trigger_key = "webhook:ci",
+        .received_at = at(120s),
+    };
+
+    automation::TriggeredService service{repo};
+    auto invalid_attempt_time = co_await service.execute_one(automation::TriggeredExecuteOneRequest{
+        .execution = execution,
+        .handler = [](automation::TriggeredExecutionJob) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        },
+        .attempted_at = at(60s),
+    });
+    REQUIRE_FALSE(invalid_attempt_time.has_value());
+    REQUIRE(invalid_attempt_time.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto held = co_await repo.acquire_triggered_agent_lease(automation::AcquireTriggeredAgentLeaseRequest{
+        .agent_key = "researcher",
+        .owner_key = "owner-b",
+        .acquired_at = at(100s),
+        .expires_at = at(200s),
+    });
+    REQUIRE(held.has_value());
+    REQUIRE(held->has_value());
+
+    int handler_calls{};
+    auto delayed = co_await service.execute_one(automation::TriggeredExecuteOneRequest{
+        .execution = execution,
+        .handler = [&handler_calls](
+                       automation::TriggeredExecutionJob retry_execution) -> async::Awaitable<core::Result<void>> {
+          ++handler_calls;
+          REQUIRE(retry_execution.received_at == at(120s));
+          co_return core::Result<void>{};
+        },
+        .lease_owner_key = "owner-a",
+        .lease_ttl = 60s,
+        .attempted_at = at(240s),
+    });
+
+    REQUIRE(delayed.has_value());
+    REQUIRE(delayed->completed);
+    REQUIRE(delayed->attempt.completed);
+    REQUIRE(handler_calls == 1);
+    REQUIRE(delayed->attempt.run.has_value());
+    REQUIRE(delayed->attempt.run->fired_at == at(120s));
+    REQUIRE(delayed->attempt.run->finished_at == at(240s));
+
+    auto reacquired = co_await repo.acquire_triggered_agent_lease(automation::AcquireTriggeredAgentLeaseRequest{
+        .agent_key = "researcher",
+        .owner_key = "owner-c",
+        .acquired_at = at(241s),
+        .expires_at = at(300s),
+    });
+    REQUIRE(reacquired.has_value());
+    REQUIRE(reacquired->has_value());
+  });
+}
+
 TEST_CASE("Triggered prompt handler runs stored triggered job prompt", "[unit][automation][service][triggered]") {
   TempDb db{"oran-automation-service-triggered-prompt-handler"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {

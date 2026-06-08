@@ -451,6 +451,21 @@ cron service cycle. This creates a legitimate ownership locus for downstream
 blocked-agent hold/requeue without hiding detached work inside bootstrap or
 forcing that policy into `TriggeredQueue::drain_*`.
 
+Slice 224 lands that first blocked-agent hold/retry policy on the composed
+owner instead of on the public queue boundary. `TriggeredExecuteOneRequest`
+now carries optional `attempted_at`, so delayed retries can acquire triggered
+agent leases and record `finished_at` at the real retry attempt time while
+preserving the original trigger receive time. Public
+`TriggeredQueueBlockedAgentPolicy` now includes `requeue_on_conflict`, but
+`TriggeredQueue::drain_once(...)` and `drain_available(...)` still reject that
+policy so queue drains remain execute-or-drop over the descriptors they already
+hold. `AutomationService::run_cycle(...)` is where
+`requeue_on_conflict` is consumed: the owner retries previously held blocked
+descriptors before newer queued work, parks same-agent lease conflicts in
+owner-local state for later explicit cycles, and reports held-vs-dropped
+triggered outcomes through `AutomationServiceTriggeredCycleResult` without
+starting a detached service loop or automatic wakeup path.
+
 ## Public API
 
 ```cpp
@@ -1013,6 +1028,7 @@ struct TriggeredExecuteOneRequest {
   TriggeredJobHandler handler;
   std::string lease_owner_key;
   std::chrono::steady_clock::duration lease_ttl;
+  std::optional<core::Time> attempted_at;
 };
 
 struct TriggeredExecuteOneResult {
@@ -1043,6 +1059,7 @@ enum class TriggeredQueueDropReason {
 
 enum class TriggeredQueueBlockedAgentPolicy {
   drop_on_conflict,
+  requeue_on_conflict,
 };
 
 enum class TriggeredQueueDrainAvailableStopReason {
@@ -1200,6 +1217,32 @@ struct AutomationServiceOptions {
   TriggeredQueueOptions triggered_queue;
 };
 
+enum class AutomationServiceTriggeredCycleStopReason {
+  queue_empty,
+  queue_closed,
+  max_jobs,
+  held_jobs_remaining,
+};
+
+struct AutomationServiceTriggeredAttemptResult {
+  TriggeredQueuedJob queued;
+  TriggeredExecuteOneResult execution;
+  std::optional<TriggeredDroppedJob> dropped;
+  bool held_for_retry;
+};
+
+struct AutomationServiceTriggeredCycleResult {
+  AutomationServiceTriggeredCycleStopReason stop_reason;
+  std::size_t attempted_count;
+  std::size_t completed_count;
+  std::size_t failed_count;
+  std::size_t held_count;
+  std::size_t dropped_count;
+  std::size_t remaining_queue_size;
+  std::size_t remaining_held_count;
+  std::vector<AutomationServiceTriggeredAttemptResult> attempts;
+};
+
 struct AutomationServiceCycleRequest {
   std::vector<UpsertCronJobRequest> cron_seeds;
   core::Time now;
@@ -1218,7 +1261,7 @@ struct AutomationServiceCycleRequest {
 };
 
 struct AutomationServiceCycleResult {
-  TriggeredQueueDrainAvailableResult triggered;
+  AutomationServiceTriggeredCycleResult triggered;
   CronServiceCycleResult cron;
 };
 
@@ -1666,9 +1709,12 @@ queue plus cron surface. `AutomationRuntime::automation_service(...)`
 constructs one `AutomationService` that keeps a bounded triggered queue beside
 stable runtime state and can run one explicit cycle that drains buffered
 triggered work before applying cron seeds and awaiting the existing finite cron
-cycle. This is the intended ownership seam for later blocked-agent
-hold/requeue, still without hiding detached work or bootstrap-owned scheduler
-startup.
+cycle. Slice 224 extends that same owner with caller-owned blocked-agent
+hold/retry: previously held blocked descriptors are retried before newer queued
+work, active same-agent lease conflicts can be parked for a later explicit
+cycle through `requeue_on_conflict`, and the public queue boundary still
+remains execute-or-drop. The ownership seam stays explicit and awaited, without
+hiding detached work or bootstrap-owned scheduler startup.
 
 ## Memory Retention Planning
 
@@ -2017,6 +2063,21 @@ owner still does not start detached timers, keep an always-on queue drain loop,
 automatically apply bootstrap cron seeds, route concrete notifications, or call
 an agent loop by itself.
 
+As of slice 224, the same explicit owner also carries the first hold/retry
+state for blocked triggered work. `AutomationService::run_cycle(...)` now
+retries previously held blocked descriptors before reading newer queued ones.
+When the triggered execution path returns an active same-agent lease conflict
+and the caller selected
+`blocked_agent_policy=TriggeredQueueBlockedAgentPolicy::requeue_on_conflict`,
+the descriptor is parked in owner-local state for a later explicit cycle rather
+than being dropped. Public `TriggeredQueue::drain_once(...)` and
+`drain_available(...)` still reject `requeue_on_conflict`; the queue boundary
+remains execute-or-drop for descriptors it already owns. Retried executions now
+pass `TriggeredExecuteOneRequest::attempted_at`, so triggered leases and
+durable `finished_at` timestamps reflect the actual retry attempt time while
+the original trigger receive time remains preserved on the descriptor and
+notification payloads.
+
 `MemoryRetentionLoop::run_once(...)` is a single caller-started awaitable for
 one stored retention job. It is the smallest useful owner above
 `MemoryRetentionService::tick(...)`: it can wait for the next scheduled fire,
@@ -2303,7 +2364,13 @@ failure remaining advisory, and prompt-backed handler result text preservation
 on both cron and triggered paths. Slice 223 reports `test-automation` at
 98 cases / 1672 assertions for the caller-owned composed automation service
 owner, covering triggered-before-cron cycle ordering and full-request
-validation before queue drain or cron seed writes.
+validation before queue drain or cron seed writes. Slice 224 reports
+`test-automation` at 100 cases / 1747 assertions for service-owned blocked
+hold/retry plus delayed-attempt timing, covering retries of held blocked
+descriptors before newer queued work, preservation of held backlog on mid-cycle
+failure, queue-level rejection of `requeue_on_conflict`, and
+`TriggeredService::execute_one(...)` lease / `finished_at` timing at the actual
+retry attempt time.
 
 `bench-automation` planning rows are:
 

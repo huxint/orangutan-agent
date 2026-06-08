@@ -655,6 +655,15 @@ TEST_CASE("TriggeredQueue rejects invalid enqueue policy", "[unit][automation][q
     REQUIRE_FALSE(bad_blocked_policy.has_value());
     REQUIRE(bad_blocked_policy.error().kind() == core::ErrorKind::invalid_argument);
 
+    auto unsupported_requeue = co_await queue.drain_once(automation::TriggeredQueueDrainOnceRequest{
+        .handler = [](automation::TriggeredExecutionJob) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        },
+        .blocked_agent_policy = automation::TriggeredQueueBlockedAgentPolicy::requeue_on_conflict,
+    });
+    REQUIRE_FALSE(unsupported_requeue.has_value());
+    REQUIRE(unsupported_requeue.error().kind() == core::ErrorKind::invalid_argument);
+
     auto empty_max_jobs = co_await queue.drain_available(automation::TriggeredQueueDrainAvailableRequest{
         .handler = [](automation::TriggeredExecutionJob) -> async::Awaitable<core::Result<void>> {
           co_return core::Result<void>{};
@@ -663,5 +672,15 @@ TEST_CASE("TriggeredQueue rejects invalid enqueue policy", "[unit][automation][q
     });
     REQUIRE_FALSE(empty_max_jobs.has_value());
     REQUIRE(empty_max_jobs.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto unsupported_requeue_batch = co_await queue.drain_available(automation::TriggeredQueueDrainAvailableRequest{
+        .handler = [](automation::TriggeredExecutionJob) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        },
+        .max_jobs = 1,
+        .blocked_agent_policy = automation::TriggeredQueueBlockedAgentPolicy::requeue_on_conflict,
+    });
+    REQUIRE_FALSE(unsupported_requeue_batch.has_value());
+    REQUIRE(unsupported_requeue_batch.error().kind() == core::ErrorKind::invalid_argument);
   });
 }

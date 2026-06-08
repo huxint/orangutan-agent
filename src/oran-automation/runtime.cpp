@@ -87,6 +87,28 @@ validate_automation_service_cycle_request(const AutomationServiceCycleRequest& r
   return {};
 }
 
+[[nodiscard]] bool is_triggered_agent_lease_conflict(const core::Error& error) {
+  if (error.kind() != core::ErrorKind::conflict || error.message() != "triggered agent lease is already held") {
+    return false;
+  }
+
+  auto has_agent_key = false;
+  auto has_owner_key = false;
+  for (const auto& [key, value] : error.context()) {
+    if (key == "agent_key" && !value.empty()) {
+      has_agent_key = true;
+    }
+    if (key == "owner_key" && !value.empty()) {
+      has_owner_key = true;
+    }
+  }
+  return has_agent_key && has_owner_key;
+}
+
+[[nodiscard]] core::Time triggered_attempt_time(core::Time cycle_now, core::Time received_at) noexcept {
+  return cycle_now < received_at ? received_at : cycle_now;
+}
+
 [[nodiscard]] core::Result<void> ensure_parent_directory(const std::filesystem::path& target) {
   const auto parent = target.parent_path();
   if (parent.empty()) {
@@ -184,6 +206,7 @@ struct AutomationService::Impl {
   AutomationRepository* repository;
   CronServiceOptions cron_options;
   TriggeredQueue triggered_queue;
+  std::vector<TriggeredQueuedJob> blocked_triggered_jobs;
 };
 
 struct AutomationRuntime::Impl {
@@ -280,15 +303,126 @@ AutomationService::run_cycle(AutomationServiceCycleRequest request) {
     co_return std::unexpected(std::move(valid).error());
   }
 
-  auto triggered = co_await impl_->triggered_queue.drain_available(TriggeredQueueDrainAvailableRequest{
-      .handler = std::move(request.triggered_handler),
-      .max_jobs = request.triggered_max_jobs,
-      .lease_owner_key = std::move(request.triggered_lease_owner_key),
-      .lease_ttl = request.triggered_lease_ttl,
-      .blocked_agent_policy = request.blocked_agent_policy,
-  });
-  if (!triggered) {
-    co_return std::unexpected(std::move(triggered).error());
+  auto& queue = impl_->triggered_queue;
+  auto handler = std::move(request.triggered_handler);
+  auto pending_blocked_jobs = std::move(impl_->blocked_triggered_jobs);
+  impl_->blocked_triggered_jobs.clear();
+  std::vector<TriggeredQueuedJob> next_blocked_jobs;
+
+  auto process_one = [this, &handler, &request, &next_blocked_jobs](
+                         TriggeredQueuedJob queued,
+                         AutomationServiceTriggeredCycleResult& result) -> async::Awaitable<core::Result<void>> {
+    auto execution = co_await impl_->triggered_queue.service().execute_one(TriggeredExecuteOneRequest{
+        .execution = queued.execution,
+        .handler = [&handler](TriggeredExecutionJob execution_job)
+            -> async::Awaitable<core::Result<AutomationJobHandlerResult>> {
+          co_return co_await handler(std::move(execution_job));
+        },
+        .lease_owner_key = request.triggered_lease_owner_key,
+        .lease_ttl = request.triggered_lease_ttl,
+        .attempted_at = triggered_attempt_time(request.now, queued.execution.received_at),
+    });
+
+    AutomationServiceTriggeredAttemptResult attempt{.queued = queued};
+    ++result.attempted_count;
+
+    if (!execution) {
+      if (!is_triggered_agent_lease_conflict(execution.error())) {
+        co_return std::unexpected(std::move(execution).error());
+      }
+
+      if (request.blocked_agent_policy == TriggeredQueueBlockedAgentPolicy::requeue_on_conflict) {
+        attempt.held_for_retry = true;
+        ++result.held_count;
+        next_blocked_jobs.push_back(std::move(queued));
+      } else {
+        auto dropped = co_await impl_->triggered_queue.drop_queued(
+            queued,
+            TriggeredQueueDropReason::agent_lease_conflict,
+            triggered_attempt_time(request.now, queued.execution.received_at),
+            impl_->triggered_queue.size());
+        attempt.dropped = std::move(dropped);
+        ++result.dropped_count;
+      }
+
+      result.attempts.push_back(std::move(attempt));
+      co_return core::Result<void>{};
+    }
+
+    attempt.execution = std::move(*execution);
+    if (attempt.execution.completed) {
+      ++result.completed_count;
+    } else {
+      ++result.failed_count;
+    }
+    result.attempts.push_back(std::move(attempt));
+    co_return core::Result<void>{};
+  };
+
+  AutomationServiceTriggeredCycleResult triggered{};
+  auto remaining_budget = request.triggered_max_jobs;
+
+  std::size_t blocked_index = 0;
+  while (blocked_index < pending_blocked_jobs.size() && remaining_budget > 0) {
+    auto processed = co_await process_one(std::move(pending_blocked_jobs[blocked_index]), triggered);
+    if (!processed) {
+      while (blocked_index + 1 < pending_blocked_jobs.size()) {
+        ++blocked_index;
+        impl_->blocked_triggered_jobs.push_back(std::move(pending_blocked_jobs[blocked_index]));
+      }
+      impl_->blocked_triggered_jobs.insert(impl_->blocked_triggered_jobs.end(),
+                                           std::make_move_iterator(next_blocked_jobs.begin()),
+                                           std::make_move_iterator(next_blocked_jobs.end()));
+      co_return std::unexpected(std::move(processed).error());
+    }
+    ++blocked_index;
+    --remaining_budget;
+  }
+  while (blocked_index < pending_blocked_jobs.size()) {
+    impl_->blocked_triggered_jobs.push_back(std::move(pending_blocked_jobs[blocked_index]));
+    ++blocked_index;
+  }
+
+  auto queue_closed = false;
+  while (remaining_budget > 0) {
+    auto queued = queue.try_receive();
+    if (!queued) {
+      if (queued.error().kind() == core::ErrorKind::cancelled) {
+        queue_closed = true;
+        break;
+      }
+      impl_->blocked_triggered_jobs.insert(impl_->blocked_triggered_jobs.end(),
+                                           std::make_move_iterator(next_blocked_jobs.begin()),
+                                           std::make_move_iterator(next_blocked_jobs.end()));
+      co_return std::unexpected(std::move(queued).error());
+    }
+    if (!queued->has_value()) {
+      break;
+    }
+
+    auto processed = co_await process_one(std::move(**queued), triggered);
+    if (!processed) {
+      impl_->blocked_triggered_jobs.insert(impl_->blocked_triggered_jobs.end(),
+                                           std::make_move_iterator(next_blocked_jobs.begin()),
+                                           std::make_move_iterator(next_blocked_jobs.end()));
+      co_return std::unexpected(std::move(processed).error());
+    }
+    --remaining_budget;
+  }
+
+  impl_->blocked_triggered_jobs.insert(impl_->blocked_triggered_jobs.end(),
+                                       std::make_move_iterator(next_blocked_jobs.begin()),
+                                       std::make_move_iterator(next_blocked_jobs.end()));
+  triggered.remaining_queue_size = queue.size();
+  triggered.remaining_held_count = impl_->blocked_triggered_jobs.size();
+  if (remaining_budget == 0) {
+    triggered.stop_reason = AutomationServiceTriggeredCycleStopReason::max_jobs;
+  } else if (triggered.remaining_held_count > 0) {
+    triggered.stop_reason = AutomationServiceTriggeredCycleStopReason::held_jobs_remaining;
+  } else if (queue_closed) {
+    triggered.stop_reason = AutomationServiceTriggeredCycleStopReason::queue_closed;
+  } else {
+    triggered.stop_reason = AutomationServiceTriggeredCycleStopReason::queue_empty;
   }
 
   auto cron = co_await run_cron_service_cycle_impl(impl_->executor,
@@ -310,7 +444,7 @@ AutomationService::run_cycle(AutomationServiceCycleRequest request) {
   }
 
   co_return AutomationServiceCycleResult{
-      .triggered = std::move(*triggered),
+      .triggered = std::move(triggered),
       .cron = std::move(*cron),
   };
 }
@@ -320,7 +454,7 @@ std::size_t AutomationService::triggered_queue_capacity() const noexcept {
 }
 
 std::size_t AutomationService::triggered_queue_size() const {
-  return impl_->triggered_queue.size();
+  return impl_->triggered_queue.size() + impl_->blocked_triggered_jobs.size();
 }
 
 async::Awaitable<core::Result<CronSeedApplyResult>>

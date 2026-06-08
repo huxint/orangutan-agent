@@ -19,6 +19,8 @@
 
 namespace orangutan::automation {
 
+class AutomationService;
+
 enum class TriggeredQueueOverflowPolicy : std::uint8_t {
   drop_newest,
 };
@@ -30,6 +32,7 @@ enum class TriggeredQueueDropReason : std::uint8_t {
 
 enum class TriggeredQueueBlockedAgentPolicy : std::uint8_t {
   drop_on_conflict,
+  requeue_on_conflict,
 };
 
 enum class TriggeredQueueDrainAvailableStopReason : std::uint8_t {
@@ -109,7 +112,9 @@ struct TriggeredQueueDrainAvailableResult {
 /// not notify channels, call agents, or start a background drain loop.
 /// Consumers must explicitly `receive()` / `try_receive()` queued jobs,
 /// `drain_once(...)` one descriptor, or `drain_available(...)` a finite batch
-/// through the supplied handler.
+/// through the supplied handler. Public queue drains intentionally stop at
+/// execute-or-drop semantics for the descriptors they already hold; richer
+/// blocked-agent hold/retry belongs above this type on `AutomationService`.
 class TriggeredQueue {
 public:
   TriggeredQueue(asio::any_io_executor executor, TriggeredService service, TriggeredQueueOptions options = {});
@@ -141,8 +146,14 @@ private:
 
   [[nodiscard]] async::Awaitable<core::Result<TriggeredQueueDrainOnceResult>>
   execute_queued(TriggeredQueuedJob queued, TriggeredQueueDrainOnceRequest request);
+  [[nodiscard]] async::Awaitable<TriggeredDroppedJob> drop_queued(const TriggeredQueuedJob& queued,
+                                                                  TriggeredQueueDropReason reason,
+                                                                  core::Time dropped_at,
+                                                                  std::size_t queue_size);
 
   std::unique_ptr<Impl> impl_;
+
+  friend class AutomationService;
 };
 
 }  // namespace orangutan::automation

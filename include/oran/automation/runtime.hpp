@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -59,6 +60,32 @@ struct AutomationServiceOptions {
   TriggeredQueueOptions triggered_queue{};
 };
 
+enum class AutomationServiceTriggeredCycleStopReason : std::uint8_t {
+  queue_empty,
+  queue_closed,
+  max_jobs,
+  held_jobs_remaining,
+};
+
+struct AutomationServiceTriggeredAttemptResult {
+  TriggeredQueuedJob queued{};
+  TriggeredExecuteOneResult execution{};
+  std::optional<TriggeredDroppedJob> dropped{};
+  bool held_for_retry{false};
+};
+
+struct AutomationServiceTriggeredCycleResult {
+  AutomationServiceTriggeredCycleStopReason stop_reason{AutomationServiceTriggeredCycleStopReason::queue_empty};
+  std::size_t attempted_count{0};
+  std::size_t completed_count{0};
+  std::size_t failed_count{0};
+  std::size_t held_count{0};
+  std::size_t dropped_count{0};
+  std::size_t remaining_queue_size{0};
+  std::size_t remaining_held_count{0};
+  std::vector<AutomationServiceTriggeredAttemptResult> attempts{};
+};
+
 struct AutomationServiceCycleRequest {
   std::vector<UpsertCronJobRequest> cron_seeds{};
   core::Time now{core::Time::epoch()};
@@ -77,17 +104,18 @@ struct AutomationServiceCycleRequest {
 };
 
 struct AutomationServiceCycleResult {
-  TriggeredQueueDrainAvailableResult triggered{};
+  AutomationServiceTriggeredCycleResult triggered{};
   CronServiceCycleResult cron{};
 };
 
 /// Caller-owned composed automation service over stable runtime state.
 ///
 /// This owner keeps one bounded triggered queue beside the caller-owned
-/// repository/runtime state and can run one explicit service cycle that drains
-/// currently buffered triggered work, then applies cron seeds and awaits the
-/// existing finite cron service cycle. It still does not start detached timers
-/// or a background service loop; callers decide if and how to repeat it.
+/// repository/runtime state and can run one explicit service cycle that first
+/// retries owner-held blocked triggered work, then drains currently buffered
+/// queued triggered work, then applies cron seeds and awaits the existing
+/// finite cron service cycle. It still does not start detached timers or a
+/// background service loop; callers decide if and how to repeat it.
 class AutomationService {
 public:
   ~AutomationService();

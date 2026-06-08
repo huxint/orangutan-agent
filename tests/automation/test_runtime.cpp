@@ -483,11 +483,17 @@ TEST_CASE("AutomationRuntime creates a caller-owned automation service cycle ove
     REQUIRE(result.has_value());
     REQUIRE(execution_order == std::vector<std::string>{"triggered:triggered:webhook-ci", "cron:cron:five-minute"});
     REQUIRE(service.triggered_queue_size() == 0);
-    REQUIRE(result->triggered.drained_count == 1);
+    REQUIRE(result->triggered.attempted_count == 1);
     REQUIRE(result->triggered.completed_count == 1);
     REQUIRE(result->triggered.failed_count == 0);
+    REQUIRE(result->triggered.held_count == 0);
     REQUIRE(result->triggered.dropped_count == 0);
-    REQUIRE(result->triggered.stop_reason == automation::TriggeredQueueDrainAvailableStopReason::queue_empty);
+    REQUIRE(result->triggered.remaining_queue_size == 0);
+    REQUIRE(result->triggered.remaining_held_count == 0);
+    REQUIRE(result->triggered.attempts.size() == 1);
+    REQUIRE(result->triggered.attempts.front().execution.completed);
+    REQUIRE_FALSE(result->triggered.attempts.front().held_for_retry);
+    REQUIRE(result->triggered.stop_reason == automation::AutomationServiceTriggeredCycleStopReason::queue_empty);
     REQUIRE(result->cron.seed_apply.requested_count == 1);
     REQUIRE(result->cron.seed_apply.upserted_count == 1);
     REQUIRE(result->cron.loop.iterations == 2);
@@ -578,6 +584,137 @@ TEST_CASE("AutomationService validates one-cycle policy before draining or apply
     });
     REQUIRE(triggered_runs.has_value());
     REQUIRE(triggered_runs->empty());
+  });
+}
+
+TEST_CASE("AutomationService holds blocked triggered work for a later cycle retry",
+          "[unit][automation][runtime][service][triggered][lease]") {
+  TempWorkspace workspace{"oran-automation-runtime-automation-service-requeue"};
+  test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {
+    auto runtime = co_await automation::AutomationRuntime::open(
+        io.get_executor(),
+        automation::AutomationRuntimeOptions{.database_path = automation_db_path(workspace)});
+    REQUIRE(runtime.has_value());
+    REQUIRE((co_await runtime->repository().upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:webhook-ci",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "researcher",
+                 .agent_prompt = "Handle triggered automation job.",
+             }))
+                .has_value());
+
+    auto held =
+        co_await runtime->repository().acquire_triggered_agent_lease(automation::AcquireTriggeredAgentLeaseRequest{
+            .agent_key = "researcher",
+            .owner_key = "owner-b",
+            .acquired_at = at(100s),
+            .expires_at = at(400s),
+        });
+    REQUIRE(held.has_value());
+    REQUIRE(held->has_value());
+
+    auto service = runtime->automation_service(automation::AutomationServiceOptions{
+        .triggered_queue =
+            automation::TriggeredQueueOptions{
+                .capacity = 2,
+            },
+    });
+    auto queued = co_await service.enqueue_triggered(automation::TriggeredQueueEnqueueRequest{
+        .trigger_key = "webhook:ci",
+        .received_at = at(240s),
+        .job_limit = 10,
+    });
+    REQUIRE(queued.has_value());
+    REQUIRE(queued->enqueued_count == 1);
+    REQUIRE(service.triggered_queue_size() == 1);
+
+    std::vector<std::string> triggered_calls;
+    auto first = co_await service.run_cycle(automation::AutomationServiceCycleRequest{
+        .now = at(300s),
+        .max_iterations = 1,
+        .cron_job_limit = 10,
+        .cron_handler = [](automation::CronDueJob) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        },
+        .triggered_handler =
+            [&triggered_calls](automation::TriggeredExecutionJob execution) -> async::Awaitable<core::Result<void>> {
+          triggered_calls.push_back(execution.job.job_key);
+          co_return core::Result<void>{};
+        },
+        .triggered_max_jobs = 10,
+        .triggered_lease_owner_key = "owner-a",
+        .triggered_lease_ttl = 60s,
+        .blocked_agent_policy = automation::TriggeredQueueBlockedAgentPolicy::requeue_on_conflict,
+    });
+
+    REQUIRE(first.has_value());
+    REQUIRE(triggered_calls.empty());
+    REQUIRE(service.triggered_queue_size() == 1);
+    REQUIRE(first->triggered.attempted_count == 1);
+    REQUIRE(first->triggered.completed_count == 0);
+    REQUIRE(first->triggered.failed_count == 0);
+    REQUIRE(first->triggered.held_count == 1);
+    REQUIRE(first->triggered.dropped_count == 0);
+    REQUIRE(first->triggered.remaining_queue_size == 0);
+    REQUIRE(first->triggered.remaining_held_count == 1);
+    REQUIRE(first->triggered.attempts.size() == 1);
+    REQUIRE(first->triggered.attempts.front().held_for_retry);
+    REQUIRE_FALSE(first->triggered.attempts.front().execution.completed);
+    REQUIRE(first->triggered.stop_reason == automation::AutomationServiceTriggeredCycleStopReason::held_jobs_remaining);
+
+    auto blocked_runs = co_await runtime->repository().list_triggered_runs(automation::ListTriggeredRunsOptions{
+        .job_key = "triggered:webhook-ci",
+        .limit = 10,
+    });
+    REQUIRE(blocked_runs.has_value());
+    REQUIRE(blocked_runs->empty());
+
+    auto second = co_await service.run_cycle(automation::AutomationServiceCycleRequest{
+        .now = at(600s),
+        .max_iterations = 1,
+        .cron_job_limit = 10,
+        .cron_handler = [](automation::CronDueJob) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        },
+        .triggered_handler =
+            [&triggered_calls](automation::TriggeredExecutionJob execution) -> async::Awaitable<core::Result<void>> {
+          triggered_calls.push_back(execution.job.job_key);
+          REQUIRE(execution.received_at == at(240s));
+          co_return core::Result<void>{};
+        },
+        .triggered_max_jobs = 10,
+        .triggered_lease_owner_key = "owner-a",
+        .triggered_lease_ttl = 60s,
+        .blocked_agent_policy = automation::TriggeredQueueBlockedAgentPolicy::requeue_on_conflict,
+    });
+
+    REQUIRE(second.has_value());
+    REQUIRE(triggered_calls == std::vector<std::string>{"triggered:webhook-ci"});
+    REQUIRE(service.triggered_queue_size() == 0);
+    REQUIRE(second->triggered.attempted_count == 1);
+    REQUIRE(second->triggered.completed_count == 1);
+    REQUIRE(second->triggered.failed_count == 0);
+    REQUIRE(second->triggered.held_count == 0);
+    REQUIRE(second->triggered.dropped_count == 0);
+    REQUIRE(second->triggered.remaining_queue_size == 0);
+    REQUIRE(second->triggered.remaining_held_count == 0);
+    REQUIRE(second->triggered.attempts.size() == 1);
+    REQUIRE_FALSE(second->triggered.attempts.front().held_for_retry);
+    REQUIRE(second->triggered.attempts.front().execution.completed);
+    REQUIRE(second->triggered.attempts.front().execution.attempt.run.has_value());
+    REQUIRE(second->triggered.attempts.front().execution.attempt.run->fired_at == at(240s));
+    REQUIRE(second->triggered.attempts.front().execution.attempt.run->finished_at == at(600s));
+    REQUIRE(second->triggered.stop_reason == automation::AutomationServiceTriggeredCycleStopReason::queue_empty);
+
+    auto completed_runs = co_await runtime->repository().list_triggered_runs(automation::ListTriggeredRunsOptions{
+        .job_key = "triggered:webhook-ci",
+        .limit = 10,
+    });
+    REQUIRE(completed_runs.has_value());
+    REQUIRE(completed_runs->size() == 1);
+    REQUIRE(completed_runs->front().outcome == automation::TriggeredRunOutcome::success);
+    REQUIRE(completed_runs->front().fired_at == at(240s));
+    REQUIRE(completed_runs->front().finished_at == at(600s));
   });
 }
 

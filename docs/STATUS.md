@@ -7,28 +7,28 @@
 
 ## Snapshot
 
-- **Slice:** 223 (`xmake run orangutan -- --help` reports slice 223)
+- **Slice:** 224 (`xmake run orangutan -- --help` reports slice 224)
 - **Last completed history:**
-  [`histories/2026-06/20260609-0329-automation-service-owner.md`](histories/2026-06/20260609-0329-automation-service-owner.md)
+  [`histories/2026-06/20260609-0545-automation-service-hold-retry.md`](histories/2026-06/20260609-0545-automation-service-hold-retry.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-cron-category.md`](exec-plans/active/2026-06-07-automation-cron-category.md).
-- **Latest completed slice:** slice 223 adds the first caller-owned automation
-  service owner above the existing triggered queue and cron cycle surfaces.
-  `AutomationRuntime::automation_service(...)` now constructs one composed
-  owner over stable runtime state; `AutomationService::enqueue_triggered(...)`
-  reuses triggered intake plus bounded queue buffering, and
-  `AutomationService::run_cycle(...)` validates its full request before side
-  effects, drains currently buffered triggered work, then applies cron seeds
-  and awaits the existing finite cron service cycle. This creates the smallest
-  useful scheduler-service ownership locus for downstream blocked-agent
-  hold/requeue without making bootstrap own `automation.db`, hiding detached
-  background work, or forcing that policy into `TriggeredQueue::drain_*`.
-  Focused results: `test-automation` **98 cases / 1672 assertions**.
+- **Latest completed slice:** slice 224 adds the first caller-owned blocked-
+  agent hold/retry policy on top of the composed automation service owner.
+  `TriggeredQueueBlockedAgentPolicy::requeue_on_conflict` is now consumed by
+  `AutomationService::run_cycle(...)`, which validates its full request before
+  side effects, retries owner-held blocked triggered descriptors before newly
+  queued ones, keeps same-agent lease conflicts in owner-local retry state for
+  later cycles, and reports held-vs-dropped triggered outcomes separately from
+  queue-level drain semantics. Public `TriggeredQueue::drain_*` APIs keep
+  their documented drop-only boundary and reject `requeue_on_conflict`, while
+  retried triggered executions now acquire leases and record `finished_at` at
+  the actual attempt time without changing the original `fired_at`. Focused
+  results: `test-automation` **100 cases / 1747 assertions**.
 - **Next intended slice:** continue the active automation cron/category plan.
-  The next useful implementation boundary is richer blocked-agent hold/requeue
-  semantics on top of the caller-owned `AutomationService` owner.
-  Do not add bootstrap-owned background automation, skip straight to detached
-  startup, or do unrelated STATUS-only slice churn.
+  The next useful implementation boundary is explicit finite caller-owned
+  service-loop policy above `AutomationService`, so one owner can revisit held
+  triggered work and sleep within caller-owned budgets without jumping straight
+  to bootstrap-owned background automation or detached startup.
 
 Slice 183 adds the operator-facing long-term
   retention policy contract. `oran-config` now parses

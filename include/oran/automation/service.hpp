@@ -290,6 +290,7 @@ struct TriggeredExecuteOneRequest {
   TriggeredJobHandler handler{};
   std::string lease_owner_key{};
   std::chrono::steady_clock::duration lease_ttl{std::chrono::minutes{5}};
+  std::optional<core::Time> attempted_at{};
 };
 
 struct TriggeredExecuteOneResult {

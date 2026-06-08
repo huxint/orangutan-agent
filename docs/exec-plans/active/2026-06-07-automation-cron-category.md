@@ -204,10 +204,12 @@ and agent firing stay in later scheduler slices.
    `make_automation_agent_prompt_runner(...)` wiring into configured-route
    `AgentPromptRunner` while keeping `automation.db` and service ownership
    caller-owned, slice 222 adds caller-owned notifier callbacks plus
-   output-carrying cron/triggered attempt results after durable outcomes, and
-   slice 223 adds the first caller-owned composed automation service owner over
-   buffered triggered work plus one cron cycle. Later: add concrete notifier
-   routing, richer hold/requeue policy on that owner, and agent firing.
+   output-carrying cron/triggered attempt results after durable outcomes, slice
+   223 adds the first caller-owned composed automation service owner over
+   buffered triggered work plus one cron cycle, and slice 224 adds caller-owned
+   blocked-agent hold/retry on top of that owner. Later: add concrete notifier
+   routing, explicit finite service-loop policy above `AutomationService`, and
+   agent firing.
 5. **Scheduler performance.**
    Later: measure the 1 000-job scheduler tick criterion once the scheduler
    exists.
@@ -518,6 +520,13 @@ and agent firing stay in later scheduler slices.
   then apply cron seeds and await the existing finite cron cycle. This sets the
   correct ownership locus for downstream blocked-agent hold/requeue without
   making bootstrap own `automation.db` or hiding detached background work.
+- [x] 2026-06-09 05:17 +0800: Implemented caller-owned blocked-agent
+  hold/retry on top of `AutomationService`. `requeue_on_conflict` now parks
+  same-agent triggered lease conflicts on the service owner for later cycles,
+  retries held descriptors before newer queued work, keeps public
+  `TriggeredQueue::drain_*` semantics drop-only, and records retried triggered
+  lease/finish timing at the actual attempt time while preserving the original
+  fired timestamp.
 - [x] **Update the docs that this slice invalidates in the same PR**
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -636,6 +645,11 @@ and agent firing stay in later scheduler slices.
   single-descriptor or currently-available batch execution; the next ownership
   locus for retry/parking policy should sit above buffered triggered work plus
   one cron cycle, not inside bootstrap and not hidden behind detached startup.
+- 2026-06-09: Keep blocked-agent hold/retry on `AutomationService`, not on
+  `TriggeredQueue`. Queue drains already document an execute-or-drop boundary
+  over the descriptors they hold; retry policy belongs to the composed owner
+  that can revisit held triggered work across later explicit cycles while
+  preserving bounded queue semantics and caller-owned scheduler control.
 
 ## Linked Artifacts
 

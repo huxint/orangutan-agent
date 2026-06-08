@@ -119,6 +119,9 @@ namespace {
   if (!request.lease_owner_key.empty() && request.lease_ttl <= std::chrono::steady_clock::duration::zero()) {
     return std::unexpected(invalid_triggered_execute_field("lease_ttl", "not_positive"));
   }
+  if (request.attempted_at.has_value() && *request.attempted_at < request.execution.received_at) {
+    return std::unexpected(invalid_triggered_execute_field("attempted_at", "before_received_at"));
+  }
   return {};
 }
 
@@ -587,13 +590,14 @@ TriggeredService::execute_one(TriggeredExecuteOneRequest request) {
   }
 
   auto execution = std::move(request.execution);
+  const auto attempted_at = request.attempted_at.value_or(execution.received_at);
   const auto lease_enabled = !request.lease_owner_key.empty();
   if (lease_enabled) {
     auto lease = co_await repository_->acquire_triggered_agent_lease(AcquireTriggeredAgentLeaseRequest{
         .agent_key = execution.job.agent_key,
         .owner_key = request.lease_owner_key,
-        .acquired_at = execution.received_at,
-        .expires_at = add_steady_duration(execution.received_at, request.lease_ttl),
+        .acquired_at = attempted_at,
+        .expires_at = add_steady_duration(attempted_at, request.lease_ttl),
     });
     if (!lease) {
       co_return std::unexpected(std::move(lease).error());
@@ -604,7 +608,7 @@ TriggeredService::execute_one(TriggeredExecuteOneRequest request) {
   }
 
   TriggeredExecuteAttempt attempt{.execution = execution};
-  const auto started_at = execution.received_at;
+  const auto started_at = attempted_at;
 
   co_await publish_job_lifecycle(options_.hooks,
                                  hook::Event::job_started,
@@ -617,7 +621,7 @@ TriggeredService::execute_one(TriggeredExecuteOneRequest request) {
         .job_key = execution.job.job_key,
         .trigger_key = execution.trigger_key,
         .fired_at = execution.received_at,
-        .finished_at = execution.received_at,
+        .finished_at = attempted_at,
         .outcome = triggered_run_outcome_for_error(error),
         .error_message = failure_message(error, "triggered job handler failed"),
     });
@@ -640,13 +644,13 @@ TriggeredService::execute_one(TriggeredExecuteOneRequest request) {
     co_await publish_job_lifecycle(
         options_.hooks,
         hook::Event::job_failed,
-        make_triggered_job_failed_payload(options_.hooks, execution, started_at, execution.received_at, error));
+        make_triggered_job_failed_payload(options_.hooks, execution, started_at, attempted_at, error));
     attempt.error = std::move(error);
     attempt.run = std::move(*recorded);
     attempt.notification =
         co_await publish_notification(options_.notifier,
                                       make_triggered_notification(execution,
-                                                                  execution.received_at,
+                                                                  attempted_at,
                                                                   automation_job_outcome(attempt.run->outcome),
                                                                   std::nullopt,
                                                                   &*attempt.error));
@@ -662,7 +666,7 @@ TriggeredService::execute_one(TriggeredExecuteOneRequest request) {
       .job_key = execution.job.job_key,
       .trigger_key = execution.trigger_key,
       .fired_at = execution.received_at,
-      .finished_at = execution.received_at,
+      .finished_at = attempted_at,
       .outcome = TriggeredRunOutcome::success,
   });
   if (!recorded) {
@@ -687,11 +691,11 @@ TriggeredService::execute_one(TriggeredExecuteOneRequest request) {
   co_await publish_job_lifecycle(
       options_.hooks,
       hook::Event::job_finished,
-      make_triggered_job_finished_payload(options_.hooks, execution, started_at, execution.received_at));
+      make_triggered_job_finished_payload(options_.hooks, execution, started_at, attempted_at));
   attempt.notification =
       co_await publish_notification(options_.notifier,
                                     make_triggered_notification(execution,
-                                                                execution.received_at,
+                                                                attempted_at,
                                                                 automation_job_outcome(attempt.run->outcome),
                                                                 attempt.handler_result));
 
@@ -731,6 +735,7 @@ async::Awaitable<core::Result<TriggeredExecuteResult>> TriggeredService::execute
         },
         .lease_owner_key = request.lease_owner_key,
         .lease_ttl = request.lease_ttl,
+        .attempted_at = request.received_at,
     });
     if (!executed) {
       co_return std::unexpected(std::move(executed).error());

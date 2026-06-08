@@ -50,6 +50,9 @@ namespace {
   if (core::enum_name(request.blocked_agent_policy) == "unknown") {
     return std::unexpected(invalid_triggered_queue_field("blocked_agent_policy", "unknown"));
   }
+  if (request.blocked_agent_policy == TriggeredQueueBlockedAgentPolicy::requeue_on_conflict) {
+    return std::unexpected(invalid_triggered_queue_field("blocked_agent_policy", "unsupported_for_triggered_queue"));
+  }
   return {};
 }
 
@@ -65,6 +68,9 @@ namespace {
   }
   if (core::enum_name(request.blocked_agent_policy) == "unknown") {
     return std::unexpected(invalid_triggered_queue_field("blocked_agent_policy", "unknown"));
+  }
+  if (request.blocked_agent_policy == TriggeredQueueBlockedAgentPolicy::requeue_on_conflict) {
+    return std::unexpected(invalid_triggered_queue_field("blocked_agent_policy", "unsupported_for_triggered_queue"));
   }
   return {};
 }
@@ -229,14 +235,10 @@ TriggeredQueue::execute_queued(TriggeredQueuedJob queued, TriggeredQueueDrainOnc
   if (!execution) {
     if (is_triggered_agent_lease_conflict(execution.error()) &&
         request.blocked_agent_policy == TriggeredQueueBlockedAgentPolicy::drop_on_conflict) {
-      auto dropped = TriggeredDroppedJob{
-          .execution = queued.execution,
-          .reason = TriggeredQueueDropReason::agent_lease_conflict,
-          .dropped_at = queued.execution.received_at,
-          .queue_capacity = impl_->channel.capacity(),
-          .queue_size = impl_->channel.size(),
-      };
-      co_await publish_job_dropped(impl_->options.hooks, dropped);
+      auto dropped = co_await drop_queued(queued,
+                                          TriggeredQueueDropReason::agent_lease_conflict,
+                                          queued.execution.received_at,
+                                          impl_->channel.size());
       co_return TriggeredQueueDrainOnceResult{
           .queued = std::move(queued),
           .execution = {},
@@ -250,6 +252,21 @@ TriggeredQueue::execute_queued(TriggeredQueuedJob queued, TriggeredQueueDrainOnc
       .queued = std::move(queued),
       .execution = std::move(*execution),
   };
+}
+
+async::Awaitable<TriggeredDroppedJob> TriggeredQueue::drop_queued(const TriggeredQueuedJob& queued,
+                                                                  TriggeredQueueDropReason reason,
+                                                                  core::Time dropped_at,
+                                                                  std::size_t queue_size) {
+  auto dropped = TriggeredDroppedJob{
+      .execution = queued.execution,
+      .reason = reason,
+      .dropped_at = dropped_at,
+      .queue_capacity = impl_->channel.capacity(),
+      .queue_size = queue_size,
+  };
+  co_await publish_job_dropped(impl_->options.hooks, dropped);
+  co_return dropped;
 }
 
 async::Awaitable<core::Result<TriggeredQueueDrainOnceResult>>
