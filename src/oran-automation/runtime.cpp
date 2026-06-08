@@ -9,6 +9,7 @@
 #include <string>
 #include <utility>
 
+#include <oran/async/sleep.hpp>
 #include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
 #include <oran/storage/pool.hpp>
@@ -87,6 +88,19 @@ validate_automation_service_cycle_request(const AutomationServiceCycleRequest& r
   return {};
 }
 
+[[nodiscard]] core::Result<void> validate_automation_service_run_request(const AutomationServiceRunRequest& request) {
+  if (request.max_total_retry_wait < std::chrono::steady_clock::duration::zero()) {
+    return std::unexpected(invalid_runtime_field("max_total_retry_wait", "negative"));
+  }
+  if (request.max_iterations == 0) {
+    return std::unexpected(invalid_runtime_field("max_iterations", "zero"));
+  }
+  if (request.retry_wait < std::chrono::steady_clock::duration::zero()) {
+    return std::unexpected(invalid_runtime_field("retry_wait", "negative"));
+  }
+  return validate_automation_service_cycle_request(request.cycle);
+}
+
 [[nodiscard]] bool is_triggered_agent_lease_conflict(const core::Error& error) {
   if (error.kind() != core::ErrorKind::conflict || error.message() != "triggered agent lease is already held") {
     return false;
@@ -107,6 +121,23 @@ validate_automation_service_cycle_request(const AutomationServiceCycleRequest& r
 
 [[nodiscard]] core::Time triggered_attempt_time(core::Time cycle_now, core::Time received_at) noexcept {
   return cycle_now < received_at ? received_at : cycle_now;
+}
+
+[[nodiscard]] core::Time add_wait(core::Time now, std::chrono::nanoseconds waited_for) noexcept {
+  return core::Time{now.to_system_time_point() + waited_for};
+}
+
+[[nodiscard]] bool should_stop(const CronLoopStopPredicate& predicate) {
+  return predicate && predicate();
+}
+
+[[nodiscard]] bool cycle_has_failures(const AutomationServiceCycleResult& cycle) noexcept {
+  return cycle.triggered.failed_count > 0 || cycle.cron.loop.failed_count > 0;
+}
+
+[[nodiscard]] bool cycle_has_immediate_work(const AutomationServiceCycleResult& cycle) noexcept {
+  return cycle.triggered.stop_reason == AutomationServiceTriggeredCycleStopReason::max_jobs ||
+         cycle.cron.loop.stop_reason == CronLoopRunStopReason::iteration_limit;
 }
 
 [[nodiscard]] core::Result<void> ensure_parent_directory(const std::filesystem::path& target) {
@@ -447,6 +478,96 @@ AutomationService::run_cycle(AutomationServiceCycleRequest request) {
       .triggered = std::move(triggered),
       .cron = std::move(*cron),
   };
+}
+
+async::Awaitable<core::Result<AutomationServiceRunResult>> AutomationService::run(AutomationServiceRunRequest request) {
+  if (auto valid = validate_automation_service_run_request(request); !valid) {
+    co_return std::unexpected(std::move(valid).error());
+  }
+
+  auto cycle_template = std::move(request.cycle);
+  auto pending_seeds = std::move(cycle_template.cron_seeds);
+  cycle_template.cron_seeds.clear();
+
+  const auto outer_stop = std::move(request.stop_requested);
+  const auto cycle_stop = std::move(cycle_template.stop_requested);
+  const auto retry_wait = std::chrono::duration_cast<std::chrono::nanoseconds>(request.retry_wait);
+
+  AutomationServiceRunResult result{};
+  auto now = cycle_template.now;
+  auto remaining_retry_wait = std::chrono::duration_cast<std::chrono::nanoseconds>(request.max_total_retry_wait);
+
+  while (result.iterations < request.max_iterations) {
+    if (should_stop(outer_stop) || should_stop(cycle_stop)) {
+      result.stop_reason = AutomationServiceRunStopReason::stop_requested;
+      co_return result;
+    }
+
+    auto cycle_request = cycle_template;
+    cycle_request.now = now;
+    cycle_request.stop_requested = [outer_stop, cycle_stop] {
+      return should_stop(outer_stop) || should_stop(cycle_stop);
+    };
+    if (result.iterations == 0) {
+      cycle_request.cron_seeds = std::move(pending_seeds);
+    }
+
+    auto cycle = co_await run_cycle(std::move(cycle_request));
+    if (!cycle) {
+      co_return std::unexpected(std::move(cycle).error());
+    }
+
+    ++result.iterations;
+    result.triggered_attempted_count += cycle->triggered.attempted_count;
+    result.triggered_completed_count += cycle->triggered.completed_count;
+    result.triggered_failed_count += cycle->triggered.failed_count;
+    result.triggered_held_count += cycle->triggered.held_count;
+    result.triggered_dropped_count += cycle->triggered.dropped_count;
+    result.cron_attempted_count += cycle->cron.loop.attempted_count;
+    result.cron_advanced_count += cycle->cron.loop.advanced_count;
+    result.cron_failed_count += cycle->cron.loop.failed_count;
+    result.waited_for += cycle->cron.loop.waited_for;
+
+    now = add_wait(now, cycle->cron.loop.waited_for);
+    result.last_cycle = std::move(*cycle);
+
+    if (cycle_has_failures(*result.last_cycle)) {
+      result.stop_reason = AutomationServiceRunStopReason::handler_failure;
+      co_return result;
+    }
+    if (should_stop(outer_stop) || should_stop(cycle_stop)) {
+      result.stop_reason = AutomationServiceRunStopReason::stop_requested;
+      co_return result;
+    }
+    if (cycle_has_immediate_work(*result.last_cycle)) {
+      continue;
+    }
+    if (result.last_cycle->triggered.remaining_held_count > 0) {
+      if (retry_wait == std::chrono::nanoseconds::zero()) {
+        continue;
+      }
+      if (retry_wait > remaining_retry_wait) {
+        result.stop_reason = AutomationServiceRunStopReason::held_jobs_remaining;
+        co_return result;
+      }
+
+      auto slept = co_await async::sleep_for(impl_->executor, retry_wait);
+      if (!slept) {
+        co_return std::unexpected(std::move(slept).error());
+      }
+
+      remaining_retry_wait -= retry_wait;
+      result.waited_for += retry_wait;
+      now = add_wait(now, retry_wait);
+      continue;
+    }
+
+    result.stop_reason = AutomationServiceRunStopReason::no_due_work;
+    co_return result;
+  }
+
+  result.stop_reason = AutomationServiceRunStopReason::iteration_limit;
+  co_return result;
 }
 
 std::size_t AutomationService::triggered_queue_capacity() const noexcept {

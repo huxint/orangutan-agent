@@ -1265,6 +1265,37 @@ struct AutomationServiceCycleResult {
   CronServiceCycleResult cron;
 };
 
+enum class AutomationServiceRunStopReason {
+  iteration_limit,
+  no_due_work,
+  handler_failure,
+  stop_requested,
+  held_jobs_remaining,
+};
+
+struct AutomationServiceRunRequest {
+  AutomationServiceCycleRequest cycle;
+  std::chrono::steady_clock::duration max_total_retry_wait;
+  std::size_t max_iterations;
+  std::chrono::steady_clock::duration retry_wait;
+  CronLoopStopPredicate stop_requested;
+};
+
+struct AutomationServiceRunResult {
+  std::size_t iterations;
+  std::size_t triggered_attempted_count;
+  std::size_t triggered_completed_count;
+  std::size_t triggered_failed_count;
+  std::size_t triggered_held_count;
+  std::size_t triggered_dropped_count;
+  std::size_t cron_attempted_count;
+  std::size_t cron_advanced_count;
+  std::size_t cron_failed_count;
+  std::chrono::nanoseconds waited_for;
+  AutomationServiceRunStopReason stop_reason;
+  std::optional<AutomationServiceCycleResult> last_cycle;
+};
+
 class AutomationService {
  public:
   async::Awaitable<core::Result<TriggeredQueueEnqueueResult>>
@@ -1272,6 +1303,9 @@ class AutomationService {
 
   async::Awaitable<core::Result<AutomationServiceCycleResult>>
   run_cycle(AutomationServiceCycleRequest);
+
+  async::Awaitable<core::Result<AutomationServiceRunResult>>
+  run(AutomationServiceRunRequest);
 
   std::size_t triggered_queue_capacity() const noexcept;
   std::size_t triggered_queue_size() const;
@@ -2078,6 +2112,29 @@ durable `finished_at` timestamps reflect the actual retry attempt time while
 the original trigger receive time remains preserved on the descriptor and
 notification payloads.
 
+Slice 225 adds the explicit finite caller-owned loop policy above that owner.
+`AutomationService::run(...)` validates the outer loop request before side
+effects, then repeatedly calls `run_cycle(...)` over caller-owned iteration and
+retry-wait budgets. It aggregates triggered and cron counters across explicit
+cycles and carries the last cycle result for diagnostics. The loop sleeps only
+when held blocked triggered work remains and the caller supplied retry budget;
+otherwise it either continues immediately (for queue or cron backlog still
+inside the same caller-owned run) or stops. The stop reasons are explicit:
+
+- `iteration_limit` when the caller's outer iteration budget is exhausted.
+- `no_due_work` when no held triggered work, queued triggered work, or cron
+  backlog remains that this finite run should continue consuming immediately.
+- `handler_failure` when either triggered execution or the delegated cron loop
+  reports a handler failure inside the last explicit cycle.
+- `stop_requested` when the outer predicate or inner cycle predicate asks to
+  stop before starting more work.
+- `held_jobs_remaining` when blocked triggered work still exists but the caller
+  did not grant enough retry-wait budget for another delayed attempt.
+
+This run policy remains explicit and awaited. It does not start detached timers
+or long-running process service ownership by itself; it just removes the need
+for each caller to hand-roll the finite loop around `AutomationService` state.
+
 `MemoryRetentionLoop::run_once(...)` is a single caller-started awaitable for
 one stored retention job. It is the smallest useful owner above
 `MemoryRetentionService::tick(...)`: it can wait for the next scheduled fire,
@@ -2370,7 +2427,12 @@ hold/retry plus delayed-attempt timing, covering retries of held blocked
 descriptors before newer queued work, preservation of held backlog on mid-cycle
 failure, queue-level rejection of `requeue_on_conflict`, and
 `TriggeredService::execute_one(...)` lease / `finished_at` timing at the actual
-retry attempt time.
+retry attempt time. Slice 225 reports `test-automation` at
+106 cases / 1849 assertions for the finite caller-owned automation service loop
+policy, covering held-work retry within caller wait budget, held-work
+retry-budget exhaustion, outer stop requests before work, triggered handler
+failure stop, cron handler failure stop, and loop validation before side
+effects.
 
 `bench-automation` planning rows are:
 

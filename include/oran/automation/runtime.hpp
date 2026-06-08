@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -108,14 +109,48 @@ struct AutomationServiceCycleResult {
   CronServiceCycleResult cron{};
 };
 
+enum class AutomationServiceRunStopReason : std::uint8_t {
+  iteration_limit,
+  no_due_work,
+  handler_failure,
+  stop_requested,
+  held_jobs_remaining,
+};
+
+struct AutomationServiceRunRequest {
+  AutomationServiceCycleRequest cycle{};
+  std::chrono::steady_clock::duration max_total_retry_wait{std::chrono::steady_clock::duration::zero()};
+  std::size_t max_iterations{1};
+  std::chrono::steady_clock::duration retry_wait{std::chrono::seconds{1}};
+  CronLoopStopPredicate stop_requested{};
+};
+
+struct AutomationServiceRunResult {
+  std::size_t iterations{0};
+  std::size_t triggered_attempted_count{0};
+  std::size_t triggered_completed_count{0};
+  std::size_t triggered_failed_count{0};
+  std::size_t triggered_held_count{0};
+  std::size_t triggered_dropped_count{0};
+  std::size_t cron_attempted_count{0};
+  std::size_t cron_advanced_count{0};
+  std::size_t cron_failed_count{0};
+  std::chrono::nanoseconds waited_for{0};
+  AutomationServiceRunStopReason stop_reason{AutomationServiceRunStopReason::iteration_limit};
+  std::optional<AutomationServiceCycleResult> last_cycle{};
+};
+
 /// Caller-owned composed automation service over stable runtime state.
 ///
 /// This owner keeps one bounded triggered queue beside the caller-owned
 /// repository/runtime state and can run one explicit service cycle that first
 /// retries owner-held blocked triggered work, then drains currently buffered
 /// queued triggered work, then applies cron seeds and awaits the existing
-/// finite cron service cycle. It still does not start detached timers or a
-/// background service loop; callers decide if and how to repeat it.
+/// finite cron service cycle. It can also run a finite caller-owned loop above
+/// that cycle, sleeping between iterations only when held blocked triggered
+/// work remains and the caller supplied a retry-wait budget. It still does not
+/// start detached timers or a background service loop; callers decide if and
+/// how to repeat it.
 class AutomationService {
 public:
   ~AutomationService();
@@ -130,6 +165,8 @@ public:
 
   [[nodiscard]] async::Awaitable<core::Result<AutomationServiceCycleResult>>
   run_cycle(AutomationServiceCycleRequest request);
+
+  [[nodiscard]] async::Awaitable<core::Result<AutomationServiceRunResult>> run(AutomationServiceRunRequest request);
 
   [[nodiscard]] std::size_t triggered_queue_capacity() const noexcept;
   [[nodiscard]] std::size_t triggered_queue_size() const;

@@ -77,7 +77,10 @@ runtime state, draining buffered triggered work before one explicit cron cycle
 so later hold/retry policy has a legitimate owner, and slice 224 lands that
 first owner-local blocked-agent hold/retry policy by keeping same-agent
 triggered conflicts for later explicit cycles without broadening the public
-queue drain boundary. The current API evaluates
+queue drain boundary. Slice 225 adds the finite caller-owned loop policy above
+that owner, so one caller can repeat explicit service cycles and sleep within a
+retry-wait budget before any detached/background startup exists. The current
+API evaluates
 periodic and cron schedules from caller-supplied state, maps a long-term memory
 retention policy into a due-only `memory::longterm::DecayRequest`, persists the
 configured retention job plus run history and lease state through
@@ -182,8 +185,12 @@ Current implementation:
   keeps one bounded triggered queue, forwards triggered enqueue through that
   owner, validates one-cycle policy before side effects, drains currently
   buffered triggered work first, and only then applies cron seeds plus awaits
-  the existing finite cron service cycle. It does not start detached work,
-  automatically apply bootstrap seeds, or choose notifier delivery routing.
+  the existing finite cron service cycle. `AutomationService::run(...)` adds
+  the finite caller-owned loop policy above that same owner, repeating explicit
+  cycles over caller-owned iteration and retry-wait budgets, sleeping only when
+  held blocked triggered work remains, and stopping with explicit reasons. The
+  service still does not start detached work, automatically apply bootstrap
+  seeds, or choose notifier delivery routing.
 - `AutomationRepository` runs migrations over a caller-supplied `storage::Pool`,
   upserts and loads retention jobs by durable `job_key`, persists
   `last_fired_at`, records success/failure run rows, lists recent runs, acquires
@@ -338,9 +345,15 @@ Current implementation:
   `TriggeredExecuteOneRequest::attempted_at` so triggered leases and durable
   `finished_at` timestamps reflect the actual retry attempt time while the
   original trigger receive time remains preserved.
+  `AutomationService::run(...)` now layers the finite caller-owned loop policy
+  above that explicit cycle, aggregating triggered and cron counters across
+  repeated cycles, sleeping only when held blocked triggered work remains and
+  the caller supplied retry budget, and stopping with explicit
+  `iteration_limit` / `no_due_work` / `handler_failure` / `stop_requested` /
+  `held_jobs_remaining` reasons.
 - `test-async` reports 14 cases / 76 assertions for the bounded channel
   polling primitive consumed by triggered queues.
-- `test-automation` reports 100 cases / 1747 assertions.
+- `test-automation` reports 106 cases / 1849 assertions.
 - `test-hook` reports 38 cases / 313 assertions for the hook payload surface.
 - `test-config` reports 51 cases / 468 assertions for the consuming config
   boundary, and `test-bootstrap` reports 134 cases / 1160 assertions for mapped
@@ -350,11 +363,12 @@ Current implementation:
 
 Still open: detached/background service-loop startup over `AutomationRuntime`,
 process service/timer shutdown policy, concrete cli/channel/desktop notifier
-routing, agent firing, explicit finite service-loop policy above
-`AutomationService`, and the scheduler tick performance criterion. Triggered
+routing, agent firing, long-running startup/shutdown ownership above
+`AutomationService::run(...)`, and the scheduler tick performance criterion. Triggered
 descriptor intake, explicit one-item queue draining, finite available-batch
 draining, drop-on-conflict handling for active triggered-agent leases, and the
-first owner-local blocked-agent hold/retry path exist, but full
+owner-local blocked-agent hold/retry path plus the finite explicit loop policy
+above it exist, but full
 scheduler/category lifecycle ownership remains downstream.
 
 ## Scope (v1.1)
@@ -392,10 +406,12 @@ scheduler/category lifecycle ownership remains downstream.
    triggered-agent lease. Triggered execution and queue drains can also publish
    one caller-owned post-outcome notifier callback after the durable run row is
    recorded. Slice 223 adds a composed `AutomationService` owner that can drain
-   buffered triggered work before one explicit cron cycle, and slice 224 lets
-   that same owner retry previously held blocked triggered work before newer
-   queued items while keeping public queue drains execute-or-drop only.
-   Concrete notifier routing and actual agent firing latency remain downstream.
+   buffered triggered work before one explicit cron cycle, slice 224 lets that
+   same owner retry previously held blocked triggered work before newer queued
+   items while keeping public queue drains execute-or-drop only, and slice 225
+   lets one caller repeat those explicit cycles within bounded retry-wait and
+   iteration budgets. Concrete notifier routing and actual agent firing latency
+   remain downstream.
 4. Per-agent lease prevents two concurrent runs of the same agent_key; the queued
    firing is held or dropped per policy. Current status: slice 210 prevents
    overlapping explicit cron execution for the same stored `agent_key` through
@@ -414,10 +430,11 @@ scheduler/category lifecycle ownership remains downstream.
    bootstrap, slice 222 adds post-outcome cron/triggered notifier callbacks
    without moving concrete delivery routing into automation, slice 223 adds the
    composed `AutomationService` owner that downstream blocked-agent policy can
-   attach to, and slice 224 lets that owner hold same-agent triggered conflicts
-   for later explicit retry cycles through `requeue_on_conflict` while public
-   queue drains still drop or fail. Concrete notifier routing, explicit
-   finite service-loop policy above the owner, and actual agent firing remain
+   attach to, slice 224 lets that owner hold same-agent triggered conflicts for
+   later explicit retry cycles through `requeue_on_conflict` while public queue
+   drains still drop or fail, and slice 225 adds the finite explicit loop
+   policy above the owner. Concrete notifier routing, long-running
+   startup/shutdown ownership above that loop, and actual agent firing remain
    downstream.
 5. A failing job is recorded with the failure reason; the next firing happens on
    schedule. Current status: slice 206 records explicit cron handler failures

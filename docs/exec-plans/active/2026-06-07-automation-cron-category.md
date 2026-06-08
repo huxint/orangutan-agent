@@ -206,10 +206,11 @@ and agent firing stay in later scheduler slices.
    caller-owned, slice 222 adds caller-owned notifier callbacks plus
    output-carrying cron/triggered attempt results after durable outcomes, slice
    223 adds the first caller-owned composed automation service owner over
-   buffered triggered work plus one cron cycle, and slice 224 adds caller-owned
-   blocked-agent hold/retry on top of that owner. Later: add concrete notifier
-   routing, explicit finite service-loop policy above `AutomationService`, and
-   agent firing.
+   buffered triggered work plus one cron cycle, slice 224 adds caller-owned
+   blocked-agent hold/retry on top of that owner, and slice 225 adds the
+   finite caller-owned service-loop policy above that owner. Later: add
+   concrete notifier routing, long-running startup/shutdown ownership above the
+   finite loop, and agent firing.
 5. **Scheduler performance.**
    Later: measure the 1 000-job scheduler tick criterion once the scheduler
    exists.
@@ -527,6 +528,13 @@ and agent firing stay in later scheduler slices.
   `TriggeredQueue::drain_*` semantics drop-only, and records retried triggered
   lease/finish timing at the actual attempt time while preserving the original
   fired timestamp.
+- [x] 2026-06-09 06:48 +0800: Implemented the finite caller-owned loop policy
+  above `AutomationService`. `AutomationService::run(...)` now repeats
+  explicit service cycles over caller-owned iteration and retry-wait budgets,
+  aggregates triggered and cron counters across cycles, sleeps only when held
+  blocked triggered work remains, and stops with explicit
+  `iteration_limit` / `no_due_work` / `handler_failure` / `stop_requested` /
+  `held_jobs_remaining` reasons.
 - [x] **Update the docs that this slice invalidates in the same PR**
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -650,6 +658,11 @@ and agent firing stay in later scheduler slices.
   over the descriptors they hold; retry policy belongs to the composed owner
   that can revisit held triggered work across later explicit cycles while
   preserving bounded queue semantics and caller-owned scheduler control.
+- 2026-06-09: Add the finite caller-owned loop policy above `AutomationService`
+  before any detached/background startup. The service owner already had the
+  right state for held triggered retries, so the next boundary needed to be a
+  bounded explicit run policy that callers can await, not a hidden daemon or a
+  broader queue API.
 
 ## Linked Artifacts
 
