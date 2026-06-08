@@ -3,14 +3,20 @@
 #pragma once
 
 #include <chrono>
+#include <concepts>
 #include <cstddef>
+#include <cstdint>
+#include <expected>
 #include <functional>
 #include <optional>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/automation/repository.hpp>
+#include <oran/core/error.hpp>
 #include <oran/core/result.hpp>
 #include <oran/core/time.hpp>
 
@@ -23,6 +29,116 @@ class Bus;
 }  // namespace orangutan::hook
 
 namespace orangutan::automation {
+
+enum class AutomationJobType : std::uint8_t {
+  cron,
+  triggered,
+};
+
+enum class AutomationJobOutcome : std::uint8_t {
+  success,
+  failure,
+  aborted,
+};
+
+struct AutomationJobHandlerResult {
+  std::string text{};
+};
+
+struct AutomationNotificationResult {
+  bool delivered{false};
+  std::optional<core::Error> error{};
+};
+
+struct AutomationJobNotification {
+  std::string job_key{};
+  AutomationJobType job_type{AutomationJobType::cron};
+  std::string agent_key{"automation"};
+  std::optional<std::string> trigger_key{};
+  core::Time fired_at{core::Time::epoch()};
+  core::Time finished_at{core::Time::epoch()};
+  AutomationJobOutcome outcome{AutomationJobOutcome::success};
+  std::optional<AutomationJobHandlerResult> handler_result{};
+  std::optional<std::string> error_kind{};
+  std::optional<std::string> error_message{};
+};
+
+using AutomationNotifier = std::function<async::Awaitable<core::Result<void>>(AutomationJobNotification)>;
+
+namespace detail {
+
+template <typename Fn, typename Job>
+concept RichAutomationJobHandlerFn =
+    std::invocable<Fn&, Job> &&
+    std::same_as<std::invoke_result_t<Fn&, Job>, async::Awaitable<core::Result<AutomationJobHandlerResult>>>;
+
+template <typename Fn, typename Job>
+concept LegacyAutomationJobHandlerFn =
+    std::invocable<Fn&, Job> && std::same_as<std::invoke_result_t<Fn&, Job>, async::Awaitable<core::Result<void>>>;
+
+template <typename Job>
+class AutomationJobHandler {
+public:
+  AutomationJobHandler() = default;
+  AutomationJobHandler(std::nullptr_t) noexcept : fn_{} {}
+
+  template <typename Fn>
+    requires(!std::same_as<std::remove_cvref_t<Fn>, AutomationJobHandler> &&
+             (RichAutomationJobHandlerFn<std::remove_cvref_t<Fn>, Job> ||
+              LegacyAutomationJobHandlerFn<std::remove_cvref_t<Fn>, Job>))
+  AutomationJobHandler(Fn&& fn) : fn_{wrap(std::forward<Fn>(fn))} {}
+
+  template <typename Fn>
+    requires(RichAutomationJobHandlerFn<std::remove_cvref_t<Fn>, Job> ||
+             LegacyAutomationJobHandlerFn<std::remove_cvref_t<Fn>, Job>)
+  AutomationJobHandler& operator=(Fn&& fn) {
+    fn_ = wrap(std::forward<Fn>(fn));
+    return *this;
+  }
+
+  AutomationJobHandler& operator=(std::nullptr_t) noexcept {
+    fn_ = nullptr;
+    return *this;
+  }
+
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return static_cast<bool>(fn_);
+  }
+
+  [[nodiscard]] async::Awaitable<core::Result<AutomationJobHandlerResult>> operator()(Job job) const {
+    if (!fn_) {
+      co_return std::unexpected(core::Error::invalid_argument("automation job handler is invalid")
+                                    .with("field", "handler")
+                                    .with("reason", "empty"));
+    }
+    co_return co_await fn_(std::move(job));
+  }
+
+private:
+  using StorageFn = std::function<async::Awaitable<core::Result<AutomationJobHandlerResult>>(Job)>;
+
+  template <typename Fn>
+    requires RichAutomationJobHandlerFn<std::remove_cvref_t<Fn>, Job>
+  static StorageFn wrap(Fn&& fn) {
+    return StorageFn{std::forward<Fn>(fn)};
+  }
+
+  template <typename Fn>
+    requires LegacyAutomationJobHandlerFn<std::remove_cvref_t<Fn>, Job>
+  static StorageFn wrap(Fn&& fn) {
+    return [fn = std::forward<Fn>(fn)](Job job) mutable -> async::Awaitable<core::Result<AutomationJobHandlerResult>> {
+      auto result = co_await fn(std::move(job));
+      if (!result) {
+        co_return std::unexpected(std::move(result).error());
+      }
+      co_return AutomationJobHandlerResult{};
+    };
+  }
+
+  StorageFn fn_{};
+};
+
+}  // namespace detail
 
 struct MemoryRetentionHookOptions {
   hook::Bus* bus{};
@@ -44,6 +160,7 @@ struct CronHookOptions {
 
 struct CronServiceOptions {
   CronHookOptions hooks{};
+  AutomationNotifier notifier{};
 };
 
 struct TriggeredHookOptions {
@@ -55,6 +172,7 @@ struct TriggeredHookOptions {
 
 struct TriggeredServiceOptions {
   TriggeredHookOptions hooks{};
+  AutomationNotifier notifier{};
 };
 
 struct MemoryRetentionTickRequest {
@@ -94,7 +212,7 @@ struct CronTickResult {
   std::optional<core::Time> next_fire_at{};
 };
 
-using CronJobHandler = std::function<async::Awaitable<core::Result<void>>(CronDueJob)>;
+using CronJobHandler = detail::AutomationJobHandler<CronDueJob>;
 
 struct CronExecuteRequest {
   core::Time now{core::Time::epoch()};
@@ -108,8 +226,10 @@ struct CronExecuteAttempt {
   CronDueJob due{};
   bool advanced{false};
   std::optional<core::Error> error{};
+  std::optional<AutomationJobHandlerResult> handler_result{};
   std::optional<CronRunRecord> run{};
   std::optional<CronJobRecord> marked_job{};
+  std::optional<AutomationNotificationResult> notification{};
 };
 
 struct CronExecuteResult {
@@ -138,7 +258,7 @@ struct TriggeredExecutionJob {
   core::Time received_at{core::Time::epoch()};
 };
 
-using TriggeredJobHandler = std::function<async::Awaitable<core::Result<void>>(TriggeredExecutionJob)>;
+using TriggeredJobHandler = detail::AutomationJobHandler<TriggeredExecutionJob>;
 
 struct TriggeredExecuteRequest {
   std::string trigger_key;
@@ -153,7 +273,9 @@ struct TriggeredExecuteAttempt {
   TriggeredExecutionJob execution{};
   bool completed{false};
   std::optional<core::Error> error{};
+  std::optional<AutomationJobHandlerResult> handler_result{};
   std::optional<TriggeredRunRecord> run{};
+  std::optional<AutomationNotificationResult> notification{};
 };
 
 struct TriggeredExecuteResult {
@@ -182,7 +304,10 @@ struct TriggeredExecuteOneResult {
 /// one run row per matched descriptor by delegating to `execute_one(...)`, which
 /// executes exactly one caller-provided descriptor. When constructed with a hook
 /// bus, execution publishes advisory job lifecycle metadata around handler
-/// work. It can optionally lease the matched job's agent key before handler
+/// work. When constructed with a notifier callback, execution also publishes one
+/// post-outcome notification after the durable run result has been recorded,
+/// carrying optional handler output text plus delivery status in the attempt
+/// result. It can optionally lease the matched job's agent key before handler
 /// work. It does not enqueue work or call agents.
 class TriggeredService {
 public:
@@ -207,8 +332,11 @@ private:
 /// fired. `execute_due(...)` accepts a caller-supplied handler and advances a
 /// due cron job only after that handler returns success. When constructed with
 /// a hook bus, due execution publishes advisory job lifecycle metadata around
-/// handler work. The service still does not enqueue work, call agents, or start
-/// a background loop.
+/// handler work. When constructed with a notifier callback, due execution also
+/// publishes one post-outcome notification after the durable run/state
+/// transition has completed, carrying optional handler output text plus
+/// delivery status in the attempt result. The service still does not enqueue
+/// work, call agents, or start a background loop.
 class CronService {
 public:
   explicit CronService(AutomationRepository& repository, CronServiceOptions options = {}) noexcept;

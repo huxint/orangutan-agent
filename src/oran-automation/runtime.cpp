@@ -216,8 +216,12 @@ TriggeredService AutomationRuntime::triggered_service(TriggeredServiceOptions op
 
 TriggeredQueue AutomationRuntime::triggered_queue(TriggeredQueueOptions options) {
   auto hooks = options.hooks;
+  auto notifier = options.notifier;
   return TriggeredQueue{impl_->executor,
-                        triggered_service(TriggeredServiceOptions{.hooks = std::move(hooks)}),
+                        triggered_service(TriggeredServiceOptions{
+                            .hooks = std::move(hooks),
+                            .notifier = std::move(notifier),
+                        }),
                         std::move(options)};
 }
 

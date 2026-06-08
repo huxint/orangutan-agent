@@ -40,7 +40,7 @@ AutomationPromptRunRequest make_triggered_prompt_run_request(const TriggeredExec
 }
 
 CronJobHandler make_cron_prompt_handler(AutomationPromptRunner runner) {
-  return [runner = std::move(runner)](CronDueJob due) -> async::Awaitable<core::Result<void>> {
+  return [runner = std::move(runner)](CronDueJob due) -> async::Awaitable<core::Result<AutomationJobHandlerResult>> {
     if (!runner) {
       co_return std::unexpected(invalid_prompt_runner());
     }
@@ -48,12 +48,13 @@ CronJobHandler make_cron_prompt_handler(AutomationPromptRunner runner) {
     if (!result) {
       co_return std::unexpected(std::move(result).error());
     }
-    co_return core::Result<void>{};
+    co_return AutomationJobHandlerResult{.text = std::move(result->text)};
   };
 }
 
 TriggeredJobHandler make_triggered_prompt_handler(AutomationPromptRunner runner) {
-  return [runner = std::move(runner)](TriggeredExecutionJob execution) -> async::Awaitable<core::Result<void>> {
+  return [runner = std::move(runner)](
+             TriggeredExecutionJob execution) -> async::Awaitable<core::Result<AutomationJobHandlerResult>> {
     if (!runner) {
       co_return std::unexpected(invalid_prompt_runner());
     }
@@ -61,7 +62,7 @@ TriggeredJobHandler make_triggered_prompt_handler(AutomationPromptRunner runner)
     if (!result) {
       co_return std::unexpected(std::move(result).error());
     }
-    co_return core::Result<void>{};
+    co_return AutomationJobHandlerResult{.text = std::move(result->text)};
   };
 }
 

@@ -200,11 +200,13 @@ and agent firing stay in later scheduler slices.
    has durable prompt input, slice 220 adds
    `make_cron_prompt_handler(...)` / `make_triggered_prompt_handler(...)` so
    callers can inject prompt execution through the same durable service/queue
-   paths, and slice 221 adds bootstrap-owned
+   paths, slice 221 adds bootstrap-owned
    `make_automation_agent_prompt_runner(...)` wiring into configured-route
    `AgentPromptRunner` while keeping `automation.db` and service ownership
-   caller-owned. Later: add notifier routing, richer hold/requeue policy, and
-   agent firing.
+   caller-owned, and slice 222 adds caller-owned notifier callbacks plus
+   output-carrying cron/triggered attempt results after durable outcomes.
+   Later: add concrete notifier routing, richer hold/requeue policy, and agent
+   firing.
 5. **Scheduler performance.**
    Later: measure the 1 000-job scheduler tick criterion once the scheduler
    exists.
@@ -248,6 +250,8 @@ and agent firing stay in later scheduler slices.
 - `build/linux/x86_64/release/test-automation "TriggeredQueue rejects invalid enqueue policy"`
 - `build/linux/x86_64/release/test-automation "Cron prompt handler runs stored cron job prompt"`
 - `build/linux/x86_64/release/test-automation "Triggered prompt handler runs stored triggered job prompt"`
+- `build/linux/x86_64/release/test-automation "CronService::execute_due notifies after durable success with handler output"`
+- `build/linux/x86_64/release/test-automation "TriggeredService::execute reports notifier failures without failing durable success"`
 - `build/linux/x86_64/release/test-async "Channel try_receive reports empty without waiting and drains FIFO values"`
 - `build/linux/x86_64/release/test-async "Channel try_receive drains buffered values before reporting closed"`
 - `build/linux/x86_64/release/test-async "Channel try_receive completes a pending sender without awaiting"`
@@ -315,6 +319,12 @@ and agent firing stay in later scheduler slices.
 - Confirm triggered queue available-batch draining consumes only descriptors
   returned by `try_receive()`, stops on empty/closed/`max_jobs`, shares handler
   state across drained items, and reports completed/failed/dropped counters.
+- Confirm cron notifier callbacks run only after the durable cron run row and
+  successful `last_fired_at` advancement are visible, preserve handler output
+  text, and do not roll state back on notifier failure.
+- Confirm triggered notifier callbacks run only after the durable triggered run
+  row is visible, preserve handler output text, and surface notifier failure as
+  advisory attempt metadata without changing the durable run outcome.
 - Confirm no new dependency direction crosses from automation into bootstrap,
   config, or agent.
 - Observability checks:
@@ -479,6 +489,24 @@ and agent firing stay in later scheduler slices.
   the base cron/triggered migrations were updated in place instead of adding a
   compatibility migration. This intentionally stops before notifier routing,
   `AgentPromptRunner` wiring, detached loops, or agent invocation.
+- [x] 2026-06-08 14:40 +0800: Implemented injected automation prompt-runner
+  handler adapters through `AutomationPromptRunRequest`,
+  `AutomationPromptRunner`, `make_cron_prompt_handler(...)`, and
+  `make_triggered_prompt_handler(...)`. Stored cron and triggered descriptors
+  can now drive caller-supplied prompt execution without moving bootstrap,
+  provider, CLI, or detached service ownership into `oran-automation`.
+- [x] 2026-06-09 01:39 +0800: Implemented bootstrap-owned
+  `make_automation_agent_prompt_runner(...)` as the configured-route bridge
+  from automation prompt runs into `AgentPromptRunner`. Durable automation jobs
+  now reuse stable per-job session identity and configured-agent overlays while
+  keeping automation state ownership caller-owned and noninteractive asks
+  fail-closed by default.
+- [x] 2026-06-09 02:37 +0800: Implemented caller-owned notifier callbacks plus
+  output-carrying automation attempt results. Cron and triggered execution now
+  preserve optional handler text through `AutomationJobHandlerResult`, publish
+  one post-outcome callback only after durable run/state transitions, and keep
+  notifier failures advisory on the attempt result without rolling durable
+  outcomes back.
 - [x] **Update the docs that this slice invalidates in the same PR**
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -587,6 +615,11 @@ and agent firing stay in later scheduler slices.
   Because no generated automation schema exists yet, changing the base
   migrations directly is simpler than carrying a compatibility migration for a
   pre-v1 shape.
+- 2026-06-09: Add caller-owned notifier callbacks before concrete delivery
+  routing. The durable cron/triggered execution surfaces now carry enough
+  outcome and output information to publish one post-outcome callback without
+  making automation own cli/channel/desktop routing, bootstrap own
+  `automation.db`, or any runtime own a detached scheduler.
 
 ## Linked Artifacts
 
@@ -617,5 +650,8 @@ and agent firing stay in later scheduler slices.
 - `docs/histories/2026-06/20260608-1247-automation-triggered-queue-lease-drop.md`
 - `docs/histories/2026-06/20260608-1313-automation-triggered-queue-drain-available.md`
 - `docs/histories/2026-06/20260608-1401-automation-agent-prompts.md`
+- `docs/histories/2026-06/20260608-1440-automation-prompt-handlers.md`
+- `docs/histories/2026-06/20260609-0139-automation-agent-prompt-bridge.md`
+- `docs/histories/2026-06/20260609-0237-automation-notifier-callbacks.md`
 - Release note:
 - `docs/releases/feature-release-notes.md#2026-06`

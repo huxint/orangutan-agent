@@ -55,6 +55,7 @@ struct TriggeredQueueOptions {
   std::size_t capacity{64};
   TriggeredQueueOverflowPolicy overflow_policy{TriggeredQueueOverflowPolicy::drop_newest};
   TriggeredHookOptions hooks{};
+  AutomationNotifier notifier{};
 };
 
 struct TriggeredQueueEnqueueRequest {

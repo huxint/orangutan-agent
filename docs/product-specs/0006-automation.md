@@ -69,7 +69,9 @@ cron/triggered handler surfaces without making automation depend on bootstrap or
 starting a background owner. Slice 221 adds the first bootstrap-owned bridge
 that maps those `AutomationPromptRunner` requests into configured-route
 `AgentPromptRunner` execution one durable job at a time while keeping
-`automation.db` and service-loop ownership caller-owned. The current API evaluates
+`automation.db` and service-loop ownership caller-owned. Slice 222 adds the
+first caller-owned notifier callbacks plus output-carrying cron/triggered
+attempt results over those same durable execution paths. The current API evaluates
 periodic and cron schedules from caller-supplied state, maps a long-term memory
 retention policy into a due-only `memory::longterm::DecayRequest`, persists the
 configured retention job plus run history and lease state through
@@ -108,6 +110,12 @@ can adapt a caller-supplied prompt runner into that triggered handler shape
 using the stored `agent_prompt`,
 publishes advisory triggered job lifecycle metadata when the caller supplies a
 hook bus,
+lets cron and triggered handlers preserve optional text output through
+`AutomationJobHandlerResult`,
+lets caller-owned cron and triggered services publish one post-outcome notifier
+callback after the durable run row or cron state transition has completed,
+reporting notifier delivery status back on the attempt result without rolling
+durable outcomes back,
 lets a queue consumer drain and execute exactly one queued triggered descriptor
 at a time through `TriggeredQueue::drain_once(...)`, or drain currently
 available queued descriptors up to a caller-owned `max_jobs` limit through
@@ -252,7 +260,7 @@ Current implementation:
   `execute_one(...)`, records one triggered run row per handler attempt,
   records `ErrorKind::cancelled` handler errors as `aborted`, records other
   handler errors as `failure`, and continues through other matched jobs without
-  queueing, notifying channels, or calling agents.
+  queueing, concrete notifier routing, or calling agents.
   When `TriggeredExecuteRequest::lease_owner_key` is supplied, it acquires the
   matched job's stored `agent_key` in `automation_triggered_agent_leases` before
   handler work, returns `ErrorKind::conflict` before handler/run/hook work on an
@@ -260,8 +268,13 @@ Current implementation:
   failure outcome. When constructed with `TriggeredServiceOptions::hooks`, it
   publishes advisory `job_started`, `job_failed`, and `job_finished` metadata
   around handler execution after the corresponding durable outcome boundary.
+  When constructed with `TriggeredServiceOptions::notifier`, it also publishes
+  one post-outcome `AutomationJobNotification` after the durable triggered run
+  row has been recorded and returns advisory delivery state on
+  `TriggeredExecuteAttempt::notification`.
 - `AutomationRuntime::triggered_service(...)` constructs that triggered owner
-  over the caller-owned automation repository and can pass through hook options.
+  over the caller-owned automation repository and can pass through hook and
+  notifier options.
 - `TriggeredQueue` is a caller-owned bounded in-process queue for matched
   triggered descriptors. `enqueue(...)` reuses triggered intake, writes matched
   jobs into bounded queue state, returns enqueued/dropped rows, applies
@@ -275,22 +288,27 @@ Current implementation:
   `drop_on_conflict`, returns dropped metadata with
   `reason=agent_lease_conflict`, publishes advisory `job_dropped`, and skips
   the handler plus run-row/lifecycle-hook writes. It still does not define
-  notifier routing, agent firing, background loop ownership, or hold/requeue
+  concrete notifier routing, agent firing, background loop ownership, or hold/requeue
   semantics. `try_receive()` polls one queued descriptor without awaiting, and
   `drain_available(...)` repeatedly consumes available descriptors up to
   `max_jobs`, stopping on queue empty, queue closed, or the limit. Batch
   draining reuses the exact one-descriptor execution/drop path and reports
   drained/completed/failed/dropped counters plus per-item drain results.
+  `TriggeredQueueOptions::notifier` passes the same post-outcome callback
+  through the internal triggered service owner so queue drains can reuse the
+  caller-owned notifier path.
 - `<oran/automation/prompt.hpp>` exposes `AutomationPromptRunRequest`,
   `AutomationPromptRunResult`, and `AutomationPromptRunner` plus cron/triggered
   handler factories. Runtime owners can inject any prompt runner and reuse the
   existing `CronService`, `TriggeredService`, or `TriggeredQueue` execution
-  paths; automation still does not construct `AgentPromptRunner` itself.
+  paths, and successful prompt-backed handlers preserve returned text through
+  `AutomationJobHandlerResult`; automation still does not construct
+  `AgentPromptRunner` itself.
 - `AutomationRuntime::triggered_queue(...)` constructs that queue over the
   caller-owned automation repository and runtime executor.
 - `test-async` reports 14 cases / 76 assertions for the bounded channel
   polling primitive consumed by triggered queues.
-- `test-automation` reports 94 cases / 1574 assertions.
+- `test-automation` reports 96 cases / 1627 assertions.
 - `test-hook` reports 38 cases / 313 assertions for the hook payload surface.
 - `test-config` reports 51 cases / 468 assertions for the consuming config
   boundary, and `test-bootstrap` reports 134 cases / 1160 assertions for mapped
@@ -299,8 +317,9 @@ Current implementation:
   request planning over a 1024-job batch.
 
 Still open: detached/background service-loop startup over `AutomationRuntime`,
-process service/timer shutdown policy, notifier callbacks, agent firing, queue
-hold/requeue semantics for blocked agent leases, and the scheduler tick
+process service/timer shutdown policy, concrete cli/channel/desktop notifier
+routing, agent firing, queue hold/requeue semantics for blocked agent leases,
+and the scheduler tick
 performance criterion. Triggered descriptor intake, explicit one-item queue
 draining, finite available-batch draining, and drop-on-conflict handling for
 active triggered-agent leases exist, but full
@@ -328,7 +347,7 @@ scheduler/category lifecycle ownership remains downstream.
 1. A cron job ("`* * * * *`") fires exactly once per minute under nominal load.
 2. A periodic job (every 15 s) fires within ±100 ms of the scheduled time.
 3. A triggered job fires within 50 ms of the trigger event. Current status:
-   slice 221 can persist prompt-bearing triggered descriptors, match a trigger
+   slice 222 can persist prompt-bearing triggered descriptors, match a trigger
    event key to stored jobs through caller-owned intake, run caller-supplied
    handlers while recording run history, publish advisory lifecycle metadata,
    optionally lease the matched stored `agent_key`, adapt stored prompts into
@@ -338,8 +357,10 @@ scheduler/category lifecycle ownership remains downstream.
    Queue consumers can now drain and execute one queued descriptor at a time,
    finite-drain all currently available queued descriptors up to a caller
    limit, or explicitly drop a queued descriptor blocked by an active
-   triggered-agent lease, while notifier routing and actual agent firing
-   latency remain downstream.
+   triggered-agent lease. Triggered execution and queue drains can also publish
+   one caller-owned post-outcome notifier callback after the durable run row is
+   recorded, while concrete notifier routing and actual agent firing latency
+   remain downstream.
 4. Per-agent lease prevents two concurrent runs of the same agent_key; the queued
    firing is held or dropped per policy. Current status: slice 210 prevents
    overlapping explicit cron execution for the same stored `agent_key` through
@@ -353,10 +374,12 @@ scheduler/category lifecycle ownership remains downstream.
    available-batch draining over the same drop path, slice 219 makes stored
    cron/triggered jobs carry the required prompt text future agent firing will
    use, slice 220 adds injected prompt-runner handler factories over those
-   prompts, and slice 221 bridges those prompt runs into configured-route
+   prompts, slice 221 bridges those prompt runs into configured-route
    `AgentPromptRunner` execution without moving scheduler ownership into
-   bootstrap. Richer hold/requeue
-   policy, notifier routing, and actual agent firing remain downstream.
+   bootstrap, and slice 222 adds post-outcome cron/triggered notifier
+   callbacks without moving concrete delivery routing into automation. Richer
+   hold/requeue policy, concrete notifier routing, and actual agent firing
+   remain downstream.
 5. A failing job is recorded with the failure reason; the next firing happens on
    schedule. Current status: slice 206 records explicit cron handler failures
    with the failure reason and leaves stored state due for retry, while slice

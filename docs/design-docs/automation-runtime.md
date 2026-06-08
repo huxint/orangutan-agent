@@ -17,14 +17,16 @@ durable triggered run history, advisory triggered lifecycle hook metadata,
 repository-backed triggered agent leases, bounded caller-owned triggered queue
 backpressure with advisory drop metadata, explicit one-at-a-time triggered queue
 draining, finite available-batch draining, plus drop-on-conflict handling for
-blocked triggered-agent leases, and a caller-driven retention service tick with
-optional advisory `memory_decay` plus job lifecycle metadata,
+blocked triggered-agent leases, caller-owned cron/triggered notifier callbacks
+that run only after durable outcomes and can carry optional handler output
+text, and a caller-driven retention service tick with optional advisory
+`memory_decay` plus job lifecycle metadata,
 plus a caller-started retention loop step that can wait within a caller budget
 for one stored job to become due and lease due execution, plus a finite
 caller-owned loop policy over that step. It does not start detached background
 work, own a long-running process service loop, persist configured cron seeds
-from bootstrap automatically, run a detached queue-drain loop, notify channels,
-or call an agent loop.
+from bootstrap automatically, run a detached queue-drain loop, route concrete
+cli/channel/desktop notifications, or call an agent loop.
 
 ## Current Status
 
@@ -385,8 +387,8 @@ input future agent execution needs. Config-authored cron rows, stored cron jobs,
 and stored triggered descriptors now require non-empty `agent_prompt`.
 `bootstrap::cron_jobs_from(...)` maps that text into `UpsertCronJobRequest`, and
 `AutomationRepository` validates/persists it for both cron and triggered rows.
-This is still descriptor state only: no notifier routing, prompt-runner adapter,
-detached service owner, or agent invocation is added.
+This is still descriptor state only: no prompt-runner adapter, detached service
+owner, concrete notifier routing, or agent invocation is added.
 
 Slice 220 adds the first prompt-runner adapter without making automation depend
 on bootstrap, CLI, or provider code. `<oran/automation/prompt.hpp>` exposes an
@@ -397,8 +399,8 @@ caller-supplied prompt runner into the existing `CronJobHandler` /
 agent key into `AutomationPromptRunRequest`. Success and failure still flow
 through the existing service/queue paths, so cron state advances only after
 runner success and triggered/cron failures are recorded as run rows. This still
-does not construct `bootstrap::AgentPromptRunner`, route notifications, start a
-detached owner, or define hold/requeue policy.
+does not construct `bootstrap::AgentPromptRunner`, publish notifier callbacks,
+start a detached owner, or define hold/requeue policy.
 
 Slice 221 adds the first bootstrap-owned bridge above that adapter seam.
 `<oran/bootstrap/automation_prompt_runner.hpp>` exposes
@@ -415,6 +417,24 @@ and permission overlays only when `agents.<name>` exists; and defaults
 automation asks stay fail-closed instead of reading terminal stdin. Bootstrap
 still does not open `automation.db`, start a detached service loop, or route
 notifications automatically.
+
+Slice 222 adds the first caller-owned notifier seam on top of those explicit
+cron and triggered execution paths. `<oran/automation/service.hpp>` now
+exposes `AutomationJobHandlerResult`, `AutomationJobNotification`,
+`AutomationNotificationResult`, and `AutomationNotifier`, while
+`CronServiceOptions`, `TriggeredServiceOptions`, and `TriggeredQueueOptions`
+can carry an optional notifier callback. Automation job handlers can now return
+optional output text through `AutomationJobHandlerResult`; the prompt-backed
+cron and triggered adapters preserve the configured-route `AgentPromptRunner`
+text on the attempt result. After a cron attempt has durably recorded its run
+row and, on success, advanced `last_fired_at`, or after a triggered attempt has
+durably recorded its run row, the service can publish one notifier callback
+with the final job key, agent key, timing, outcome, optional trigger key, and
+optional handler text. Notifier delivery stays advisory: callback failures are
+reported back through `CronExecuteAttempt::notification` /
+`TriggeredExecuteAttempt::notification` without rolling the durable outcome
+back, and automation still does not choose concrete cli/channel/desktop routing
+or own a background notifier loop.
 
 ## Public API
 
@@ -664,8 +684,47 @@ struct CronTickResult {
   std::optional<core::Time> next_fire_at;
 };
 
-using CronJobHandler =
-    std::function<async::Awaitable<core::Result<void>>(CronDueJob)>;
+enum class AutomationJobType {
+  cron,
+  triggered,
+};
+
+enum class AutomationJobOutcome {
+  success,
+  failure,
+  aborted,
+};
+
+struct AutomationJobHandlerResult {
+  std::string text;
+};
+
+struct AutomationNotificationResult {
+  bool delivered;
+  std::optional<core::Error> error;
+};
+
+struct AutomationJobNotification {
+  std::string job_key;
+  AutomationJobType job_type;
+  std::string agent_key;
+  std::optional<std::string> trigger_key;
+  core::Time fired_at;
+  core::Time finished_at;
+  AutomationJobOutcome outcome;
+  std::optional<AutomationJobHandlerResult> handler_result;
+  std::optional<std::string> error_kind;
+  std::optional<std::string> error_message;
+};
+
+using AutomationNotifier =
+    std::function<async::Awaitable<core::Result<void>>(AutomationJobNotification)>;
+
+using CronJobHandler = detail::AutomationJobHandler<CronDueJob>;
+// Accepts callables returning either:
+//   async::Awaitable<core::Result<void>>(CronDueJob)
+// or
+//   async::Awaitable<core::Result<AutomationJobHandlerResult>>(CronDueJob)
 
 enum class AutomationPromptJobType {
   cron,
@@ -704,8 +763,10 @@ struct CronExecuteAttempt {
   CronDueJob due;
   bool advanced;
   std::optional<core::Error> error;
+  std::optional<AutomationJobHandlerResult> handler_result;
   std::optional<CronRunRecord> run;
   std::optional<CronJobRecord> marked_job;
+  std::optional<AutomationNotificationResult> notification;
 };
 
 struct CronExecuteResult {
@@ -879,6 +940,7 @@ struct CronHookOptions {
 
 struct CronServiceOptions {
   CronHookOptions hooks;
+  AutomationNotifier notifier;
 };
 
 struct TriggeredIntakeRequest {
@@ -900,8 +962,7 @@ struct TriggeredExecutionJob {
   core::Time received_at;
 };
 
-using TriggeredJobHandler =
-    std::function<async::Awaitable<core::Result<void>>(TriggeredExecutionJob)>;
+using TriggeredJobHandler = detail::AutomationJobHandler<TriggeredExecutionJob>;
 
 AutomationPromptRunRequest make_triggered_prompt_run_request(
     const TriggeredExecutionJob&);
@@ -920,7 +981,9 @@ struct TriggeredExecuteAttempt {
   TriggeredExecutionJob execution;
   bool completed;
   std::optional<core::Error> error;
+  std::optional<AutomationJobHandlerResult> handler_result;
   std::optional<TriggeredRunRecord> run;
+  std::optional<AutomationNotificationResult> notification;
 };
 
 struct TriggeredExecuteResult {
@@ -951,6 +1014,7 @@ struct TriggeredHookOptions {
 
 struct TriggeredServiceOptions {
   TriggeredHookOptions hooks;
+  AutomationNotifier notifier;
 };
 
 enum class TriggeredQueueOverflowPolicy {
@@ -989,6 +1053,7 @@ struct TriggeredQueueOptions {
   std::size_t capacity;
   TriggeredQueueOverflowPolicy overflow_policy;
   TriggeredHookOptions hooks;
+  AutomationNotifier notifier;
 };
 
 struct TriggeredQueueEnqueueRequest {
@@ -1521,6 +1586,24 @@ and skip the descriptor already returned by `try_receive()`.
 
 The queue still does not notify channels, call agents, start a detached drain
 loop, requeue blocked jobs, or define service shutdown policy.
+
+Slice 222 adds caller-owned notifier callbacks above the existing cron and
+triggered durable execution owners without moving notification routing into
+automation. `AutomationJobHandlerResult` lets a handler preserve optional text
+output on a successful attempt, and `make_cron_prompt_handler(...)` /
+`make_triggered_prompt_handler(...)` now pass the configured-route
+`AgentPromptRunner` text through that result. `CronServiceOptions::notifier`
+and `TriggeredServiceOptions::notifier` can supply one callback that runs only
+after the durable cron/triggered outcome has been recorded, with cron success
+also waiting until `last_fired_at` has advanced. The callback receives
+`AutomationJobNotification`, including job type, durable job key, stored
+`agent_key`, trigger key when present, fired/finished time, final outcome,
+optional handler result text, and optional durable error summary.
+`TriggeredQueueOptions::notifier` passes the same callback through its internal
+service owner, so explicit queue drains can reuse the same post-outcome path.
+Notifier failures stay advisory and are surfaced on the attempt result without
+rolling the durable outcome back. Concrete cli/channel/desktop routing still
+belongs to the caller.
 
 ## Memory Retention Planning
 
@@ -2112,6 +2195,11 @@ bootstrap-owned automation prompt bridge, covering durable session-history
 reuse for one job, per-job configured-agent overlay selection, fail-closed
 noninteractive ask behavior, and runtime-level cron/triggered execution through
 configured-route `AgentPromptRunner`.
+Slice 222 reports `test-automation` at 96 cases / 1627 assertions for caller-
+owned notifier callbacks plus output-carrying attempt results, covering cron
+post-outcome notification after durable state advancement, triggered notifier
+failure remaining advisory, and prompt-backed handler result text preservation
+on both cron and triggered paths.
 
 `bench-automation` planning rows are:
 

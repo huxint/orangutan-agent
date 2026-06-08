@@ -7,29 +7,31 @@
 
 ## Snapshot
 
-- **Slice:** 221 (`xmake run orangutan -- --help` reports slice 221)
+- **Slice:** 222 (`xmake run orangutan -- --help` reports slice 222)
 - **Last completed history:**
-  [`histories/2026-06/20260609-0139-automation-agent-prompt-bridge.md`](histories/2026-06/20260609-0139-automation-agent-prompt-bridge.md)
+  [`histories/2026-06/20260609-0237-automation-notifier-callbacks.md`](histories/2026-06/20260609-0237-automation-notifier-callbacks.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-cron-category.md`](exec-plans/active/2026-06-07-automation-cron-category.md).
-- **Latest completed slice:** slice 221 adds the first bootstrap-owned bridge
-  from automation prompt execution into `AgentPromptRunner`. The new
-  `make_automation_agent_prompt_runner(...)` callback builds one
-  `AgentPromptRunner` per durable automation job execution, derives a stable
-  per-job `session_id` from job type/scope/job key/agent key, applies
-  `agents.<name>` prompt and permission overlays only when that config entry
-  exists, and keeps noninteractive automation fail-closed by disabling
-  `cli::OperatorPromptSink` binding by default. This makes stored cron and
-  triggered `agent_prompt` descriptors runnable through caller-owned
-  `AutomationRuntime`, `CronService`, and `TriggeredService` paths without
-  making bootstrap open `automation.db`, start detached automation work, route
-  notifiers, or define hold/requeue policy. Focused result:
+- **Latest completed slice:** slice 222 adds caller-owned automation notifier
+  callbacks plus output-carrying cron/triggered execution attempts. Automation
+  job handlers can now preserve optional text results through
+  `AutomationJobHandlerResult`, prompt-backed cron/triggered executions keep
+  the `AgentPromptRunner` text in their durable attempt results, and
+  `CronServiceOptions::notifier` / `TriggeredServiceOptions::notifier` publish
+  one post-outcome callback only after the durable run row or cron
+  `last_fired_at` advancement has completed. Notifier failures stay advisory
+  and are surfaced on the attempt result without rolling back the durable job
+  outcome, while `TriggeredQueueOptions::notifier` passes the same callback
+  through queue-owned triggered execution. This adds the smallest useful
+  notifier seam without making automation own channel delivery, bootstrap own
+  `automation.db`, or any runtime own a detached background scheduler. Focused
+  results: `test-automation` **96 cases / 1627 assertions** and
   `test-bootstrap` **134 cases / 1160 assertions**.
 - **Next intended slice:** continue the active automation cron/category plan.
   The next useful implementation boundary is a small scheduler-service
-  ownership slice such as notifier routing, richer blocked-agent hold/requeue
-  policy, or detached service-loop startup over the now-complete automation to
-  `AgentPromptRunner` bridge.
+  ownership slice such as richer blocked-agent hold/requeue policy or detached
+  service-loop startup over the now-complete automation prompt plus notifier
+  execution surfaces.
   Do not add bootstrap-owned background automation or unrelated STATUS-only
   slice churn.
 

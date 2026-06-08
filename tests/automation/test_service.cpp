@@ -155,6 +155,12 @@ struct CapturedJobLifecycle {
   hook::JobLifecyclePayload payload{};
 };
 
+struct CapturedNotification {
+  automation::AutomationJobNotification payload{};
+  bool run_visible{false};
+  bool marked_visible{false};
+};
+
 class RecordingPromptRunner {
 public:
   automation::AutomationPromptRunner handler() {
@@ -433,6 +439,7 @@ TEST_CASE("Triggered prompt handler runs stored triggered job prompt", "[unit][a
     REQUIRE(result->completed_count == 0);
     REQUIRE(result->attempts.size() == 1);
     REQUIRE(result->attempts[0].error.has_value());
+    REQUIRE_FALSE(result->attempts[0].handler_result.has_value());
     REQUIRE(result->attempts[0].error->message() == "prompt runner failed");
     REQUIRE(result->attempts[0].run.has_value());
     REQUIRE_FALSE(result->attempts[0].run->success);
@@ -446,6 +453,64 @@ TEST_CASE("Triggered prompt handler runs stored triggered job prompt", "[unit][a
     REQUIRE(runner.requests[0].prompt == "Investigate the webhook payload.");
     REQUIRE(runner.requests[0].fired_at == at(120s));
     REQUIRE(runner.requests[0].trigger_key == "webhook:ci");
+  });
+}
+
+TEST_CASE("TriggeredService::execute reports notifier failures without failing durable success",
+          "[unit][automation][service][triggered][notifier]") {
+  TempDb db{"oran-automation-service-triggered-notifier-failure"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:webhook-ci",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "researcher",
+                 .agent_prompt = "Handle triggered automation job.",
+             }))
+                .has_value());
+
+    std::size_t notifier_calls{};
+    automation::TriggeredService service{
+        repo,
+        automation::TriggeredServiceOptions{
+            .notifier =
+                [&notifier_calls](automation::AutomationJobNotification) -> async::Awaitable<core::Result<void>> {
+              ++notifier_calls;
+              co_return std::unexpected(core::Error::internal("notifier failed"));
+            },
+        }};
+    auto result = co_await service.execute(automation::TriggeredExecuteRequest{
+        .trigger_key = "webhook:ci",
+        .received_at = at(120s),
+        .job_limit = 10,
+        .handler = [](automation::TriggeredExecutionJob)
+            -> async::Awaitable<core::Result<automation::AutomationJobHandlerResult>> {
+          co_return automation::AutomationJobHandlerResult{.text = "triggered summary"};
+        },
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->attempted_count == 1);
+    REQUIRE(result->completed_count == 1);
+    REQUIRE(result->attempts.size() == 1);
+    REQUIRE(notifier_calls == 1);
+    REQUIRE(result->attempts[0].completed);
+    REQUIRE(result->attempts[0].handler_result.has_value());
+    REQUIRE(result->attempts[0].handler_result->text == "triggered summary");
+    REQUIRE(result->attempts[0].notification.has_value());
+    REQUIRE_FALSE(result->attempts[0].notification->delivered);
+    REQUIRE(result->attempts[0].notification->error.has_value());
+    REQUIRE(result->attempts[0].notification->error->message() == "notifier failed");
+
+    auto runs = co_await repo.list_triggered_runs(automation::ListTriggeredRunsOptions{
+        .job_key = "triggered:webhook-ci",
+        .limit = 10,
+    });
+    REQUIRE(runs.has_value());
+    REQUIRE(runs->size() == 1);
+    REQUIRE(runs->front().outcome == automation::TriggeredRunOutcome::success);
   });
 }
 
@@ -934,6 +999,8 @@ TEST_CASE("Cron prompt handler runs stored cron job prompt", "[unit][automation]
     REQUIRE(result->advanced_count == 1);
     REQUIRE(result->attempts.size() == 1);
     REQUIRE(result->attempts[0].advanced);
+    REQUIRE(result->attempts[0].handler_result.has_value());
+    REQUIRE(result->attempts[0].handler_result->text == "automation prompt ok");
     REQUIRE(result->attempts[0].run.has_value());
     REQUIRE(result->attempts[0].run->success);
     REQUIRE(result->attempts[0].marked_job.has_value());
@@ -946,6 +1013,81 @@ TEST_CASE("Cron prompt handler runs stored cron job prompt", "[unit][automation]
     REQUIRE(runner.requests[0].prompt == "Summarize yesterday's activity.");
     REQUIRE(runner.requests[0].fired_at == at(60s));
     REQUIRE_FALSE(runner.requests[0].trigger_key.has_value());
+  });
+}
+
+TEST_CASE("CronService::execute_due notifies after durable success with handler output",
+          "[unit][automation][service][cron][notifier]") {
+  TempDb db{"oran-automation-service-cron-notifier-success"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    automation::AutomationRepository repo{pool};
+    REQUIRE((co_await repo.migrate()).has_value());
+    REQUIRE((co_await repo.upsert_cron_job(automation::UpsertCronJobRequest{
+                 .job_key = "cron:daily-summary",
+                 .agent_key = "researcher",
+                 .agent_prompt = "Run scheduled automation job.",
+                 .schedule = make_cron_schedule(),
+             }))
+                .has_value());
+
+    std::vector<CapturedNotification> notifications;
+    automation::CronService service{
+        repo,
+        automation::CronServiceOptions{
+            .notifier = [&repo, &notifications](automation::AutomationJobNotification notification)
+                -> async::Awaitable<core::Result<void>> {
+              auto runs = co_await repo.list_cron_runs(automation::ListCronRunsOptions{
+                  .job_key = notification.job_key,
+                  .limit = 10,
+              });
+              REQUIRE(runs.has_value());
+              auto loaded = co_await repo.get_cron_job(notification.job_key);
+              REQUIRE(loaded.has_value());
+              REQUIRE(loaded->has_value());
+              notifications.push_back(CapturedNotification{
+                  .payload = std::move(notification),
+                  .run_visible = !runs->empty(),
+                  .marked_visible = (*loaded)->state.last_fired_at == at(60s),
+              });
+              co_return core::Result<void>{};
+            },
+        }};
+    auto result = co_await service.execute_due(automation::CronExecuteRequest{
+        .now = at(120s),
+        .job_limit = 10,
+        .handler =
+            [](automation::CronDueJob) -> async::Awaitable<core::Result<automation::AutomationJobHandlerResult>> {
+          co_return automation::AutomationJobHandlerResult{.text = "daily summary"};
+        },
+    });
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->attempted_count == 1);
+    REQUIRE(result->advanced_count == 1);
+    REQUIRE(result->attempts.size() == 1);
+    REQUIRE(result->attempts[0].advanced);
+    REQUIRE(result->attempts[0].handler_result.has_value());
+    REQUIRE(result->attempts[0].handler_result->text == "daily summary");
+    REQUIRE(result->attempts[0].notification.has_value());
+    REQUIRE(result->attempts[0].notification->delivered);
+    REQUIRE_FALSE(result->attempts[0].notification->error.has_value());
+    REQUIRE(notifications.size() == 1);
+    REQUIRE(notifications[0].run_visible);
+    REQUIRE(notifications[0].marked_visible);
+
+    const auto& payload = notifications[0].payload;
+    REQUIRE(payload.job_key == "cron:daily-summary");
+    REQUIRE(payload.job_type == automation::AutomationJobType::cron);
+    REQUIRE(payload.agent_key == "researcher");
+    REQUIRE(payload.fired_at == at(60s));
+    REQUIRE(payload.finished_at == at(120s));
+    REQUIRE(payload.outcome == automation::AutomationJobOutcome::success);
+    REQUIRE(payload.handler_result.has_value());
+    REQUIRE(payload.handler_result->text == "daily summary");
+    REQUIRE_FALSE(payload.trigger_key.has_value());
+    REQUIRE_FALSE(payload.error_kind.has_value());
+    REQUIRE_FALSE(payload.error_message.has_value());
   });
 }
 

@@ -143,6 +143,30 @@ void track_next_fire(CronTickResult& result, core::Time next_fire_at) {
   return error.kind() == core::ErrorKind::cancelled ? TriggeredRunOutcome::aborted : TriggeredRunOutcome::failure;
 }
 
+[[nodiscard]] AutomationJobOutcome automation_job_outcome(TriggeredRunOutcome outcome) noexcept {
+  switch (outcome) {
+    case TriggeredRunOutcome::success:
+      return AutomationJobOutcome::success;
+    case TriggeredRunOutcome::failure:
+      return AutomationJobOutcome::failure;
+    case TriggeredRunOutcome::aborted:
+      return AutomationJobOutcome::aborted;
+  }
+  return AutomationJobOutcome::failure;
+}
+
+[[nodiscard]] AutomationJobOutcome automation_job_outcome(CronRunOutcome outcome) noexcept {
+  switch (outcome) {
+    case CronRunOutcome::success:
+      return AutomationJobOutcome::success;
+    case CronRunOutcome::failure:
+      return AutomationJobOutcome::failure;
+    case CronRunOutcome::aborted:
+      return AutomationJobOutcome::aborted;
+  }
+  return AutomationJobOutcome::failure;
+}
+
 [[nodiscard]] core::Time add_steady_duration(core::Time now, std::chrono::steady_clock::duration duration) noexcept {
   return core::Time{now.to_system_time_point() + std::chrono::duration_cast<core::Time::clock::duration>(duration)};
 }
@@ -419,6 +443,68 @@ make_cron_job_started_payload(const CronHookOptions& hooks, const CronDueJob& du
   return payload;
 }
 
+void apply_notification_error(AutomationJobNotification& notification, const core::Error& error) {
+  notification.error_kind = std::string{core::enum_name(error.kind())};
+  notification.error_message = failure_message(error, "automation job failed");
+}
+
+[[nodiscard]] AutomationJobNotification make_cron_notification(const CronDueJob& due,
+                                                               core::Time finished_at,
+                                                               AutomationJobOutcome outcome,
+                                                               std::optional<AutomationJobHandlerResult> handler_result,
+                                                               const core::Error* error = nullptr) {
+  AutomationJobNotification notification{
+      .job_key = due.job.job_key,
+      .job_type = AutomationJobType::cron,
+      .agent_key = due.job.agent_key,
+      .fired_at = due.schedule.next_fire_at,
+      .finished_at = finished_at,
+      .outcome = outcome,
+      .handler_result = std::move(handler_result),
+  };
+  if (error != nullptr) {
+    apply_notification_error(notification, *error);
+  }
+  return notification;
+}
+
+[[nodiscard]] AutomationJobNotification
+make_triggered_notification(const TriggeredExecutionJob& execution,
+                            core::Time finished_at,
+                            AutomationJobOutcome outcome,
+                            std::optional<AutomationJobHandlerResult> handler_result,
+                            const core::Error* error = nullptr) {
+  AutomationJobNotification notification{
+      .job_key = execution.job.job_key,
+      .job_type = AutomationJobType::triggered,
+      .agent_key = execution.job.agent_key,
+      .trigger_key = execution.trigger_key,
+      .fired_at = execution.received_at,
+      .finished_at = finished_at,
+      .outcome = outcome,
+      .handler_result = std::move(handler_result),
+  };
+  if (error != nullptr) {
+    apply_notification_error(notification, *error);
+  }
+  return notification;
+}
+
+[[nodiscard]] async::Awaitable<std::optional<AutomationNotificationResult>>
+publish_notification(const AutomationNotifier& notifier, AutomationJobNotification notification) {
+  if (!notifier) {
+    co_return std::nullopt;
+  }
+  auto delivered = co_await notifier(std::move(notification));
+  if (!delivered) {
+    co_return AutomationNotificationResult{
+        .delivered = false,
+        .error = std::move(delivered).error(),
+    };
+  }
+  co_return AutomationNotificationResult{.delivered = true};
+}
+
 [[nodiscard]] async::Awaitable<std::optional<MemoryRetentionHookPublishResult>>
 publish_memory_decay(const MemoryRetentionHookOptions& hooks,
                      const MemoryRetentionJobRecord& job,
@@ -557,11 +643,20 @@ TriggeredService::execute_one(TriggeredExecuteOneRequest request) {
         make_triggered_job_failed_payload(options_.hooks, execution, started_at, execution.received_at, error));
     attempt.error = std::move(error);
     attempt.run = std::move(*recorded);
+    attempt.notification =
+        co_await publish_notification(options_.notifier,
+                                      make_triggered_notification(execution,
+                                                                  execution.received_at,
+                                                                  automation_job_outcome(attempt.run->outcome),
+                                                                  std::nullopt,
+                                                                  &*attempt.error));
     co_return TriggeredExecuteOneResult{
         .attempt = std::move(attempt),
         .completed = false,
     };
   }
+
+  auto handler_result = std::move(*executed);
 
   auto recorded = co_await repository_->record_triggered_run(RecordTriggeredRunRequest{
       .job_key = execution.job.job_key,
@@ -587,11 +682,18 @@ TriggeredService::execute_one(TriggeredExecuteOneRequest request) {
   }
 
   attempt.completed = true;
+  attempt.handler_result = std::move(handler_result);
   attempt.run = std::move(*recorded);
   co_await publish_job_lifecycle(
       options_.hooks,
       hook::Event::job_finished,
       make_triggered_job_finished_payload(options_.hooks, execution, started_at, execution.received_at));
+  attempt.notification =
+      co_await publish_notification(options_.notifier,
+                                    make_triggered_notification(execution,
+                                                                execution.received_at,
+                                                                automation_job_outcome(attempt.run->outcome),
+                                                                attempt.handler_result));
 
   co_return TriggeredExecuteOneResult{
       .attempt = std::move(attempt),
@@ -623,7 +725,8 @@ async::Awaitable<core::Result<TriggeredExecuteResult>> TriggeredService::execute
                 .trigger_key = result.intake.trigger_key,
                 .received_at = result.intake.received_at,
             },
-        .handler = [&handler](TriggeredExecutionJob execution) -> async::Awaitable<core::Result<void>> {
+        .handler =
+            [&handler](TriggeredExecutionJob execution) -> async::Awaitable<core::Result<AutomationJobHandlerResult>> {
           co_return co_await handler(std::move(execution));
         },
         .lease_owner_key = request.lease_owner_key,
@@ -777,9 +880,18 @@ async::Awaitable<core::Result<CronExecuteResult>> CronService::execute_due(CronE
                                      make_cron_job_failed_payload(options_.hooks, due, started_at, request.now, error));
       attempt.error = std::move(error);
       attempt.run = std::move(*recorded);
+      attempt.notification =
+          co_await publish_notification(options_.notifier,
+                                        make_cron_notification(due,
+                                                               request.now,
+                                                               automation_job_outcome(attempt.run->outcome),
+                                                               std::nullopt,
+                                                               &*attempt.error));
       result.attempts.push_back(std::move(attempt));
       continue;
     }
+
+    auto handler_result = std::move(*executed);
 
     auto recorded = co_await repository_->record_cron_run(RecordCronRunRequest{
         .job_key = due.job.job_key,
@@ -820,12 +932,16 @@ async::Awaitable<core::Result<CronExecuteResult>> CronService::execute_due(CronE
     }
 
     attempt.advanced = true;
+    attempt.handler_result = std::move(handler_result);
     attempt.run = std::move(*recorded);
     attempt.marked_job = std::move(*marked);
     ++result.advanced_count;
     co_await publish_job_lifecycle(options_.hooks,
                                    hook::Event::job_finished,
                                    make_cron_job_finished_payload(options_.hooks, due, started_at, request.now));
+    attempt.notification = co_await publish_notification(
+        options_.notifier,
+        make_cron_notification(due, request.now, automation_job_outcome(attempt.run->outcome), attempt.handler_result));
     result.attempts.push_back(std::move(attempt));
   }
 

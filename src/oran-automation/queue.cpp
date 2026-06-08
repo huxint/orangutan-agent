@@ -290,16 +290,16 @@ TriggeredQueue::drain_available(TriggeredQueueDrainAvailableRequest request) {
     }
 
     auto& handler = drain_request.handler;
-    auto drained = co_await execute_queued(
-        std::move(**queued),
-        TriggeredQueueDrainOnceRequest{
-            .handler = [&handler](TriggeredExecutionJob execution) -> async::Awaitable<core::Result<void>> {
-              co_return co_await handler(std::move(execution));
-            },
-            .lease_owner_key = drain_request.lease_owner_key,
-            .lease_ttl = drain_request.lease_ttl,
-            .blocked_agent_policy = drain_request.blocked_agent_policy,
-        });
+    auto drained = co_await execute_queued(std::move(**queued),
+                                           TriggeredQueueDrainOnceRequest{
+                                               .handler = [&handler](TriggeredExecutionJob execution)
+                                                   -> async::Awaitable<core::Result<AutomationJobHandlerResult>> {
+                                                 co_return co_await handler(std::move(execution));
+                                               },
+                                               .lease_owner_key = drain_request.lease_owner_key,
+                                               .lease_ttl = drain_request.lease_ttl,
+                                               .blocked_agent_policy = drain_request.blocked_agent_policy,
+                                           });
     if (!drained) {
       co_return std::unexpected(std::move(drained).error());
     }
