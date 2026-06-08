@@ -4,14 +4,16 @@
 // memory retention planning primitives, durable retention job/run/lease state
 // plus durable cron and triggered job/run/lease state, a caller-owned automation
 // runtime handle, explicit cron seed application, a caller-awaited cron service
-// cycle, caller-driven cron tick/execute owners, explicit cron wait/run loop
-// steps, caller-driven triggered intake/execution plus bounded triggered
-// queue/backpressure, non-blocking queue polling, finite batch draining with
-// optional triggered agent leases, retention/cron/triggered hook metadata,
-// caller-owned cron/triggered notifier callbacks, and caller-started leased
-// retention loop steps plus finite loop policy. Concrete cli/channel/desktop
-// notifier routing, agent firing, and detached background service loops land
-// behind this boundary in later slices.
+// cycle, a caller-owned composed automation service owner that drains buffered
+// triggered work before one explicit cron cycle, caller-driven cron
+// tick/execute owners, explicit cron wait/run loop steps, caller-driven
+// triggered intake/execution plus bounded triggered queue/backpressure,
+// non-blocking queue polling, finite batch draining with optional triggered
+// agent leases, retention/cron/triggered hook metadata, caller-owned
+// cron/triggered notifier callbacks, and caller-started leased retention loop
+// steps plus finite loop policy. Concrete cli/channel/desktop notifier
+// routing, agent firing, and detached background service loops land behind
+// this boundary in later slices.
 
 #pragma once
 

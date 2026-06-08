@@ -6,20 +6,22 @@ evaluation, long-term memory retention request planning, a bootstrap-owned
 mapping from configured retention policy into that job descriptor,
 automation-owned retention job/run/lease persistence, durable prompt-bearing
 cron job state, config-authored cron schedule seeds mapped by bootstrap into
-stored descriptors, a caller-owned runtime state handle, explicit cron seed application, a
-caller-awaited cron service cycle over the existing finite cron loop, a
-caller-driven cron scan/wait/execute-due boundary plus finite caller-owned cron
-loop policy, advisory cron lifecycle metadata, typed cron run outcome
-classification, repository-backed cron execution leases and cron agent leases
-for explicit loop owners, durable prompt-bearing triggered job descriptors with
-caller-driven triggered intake plus explicit triggered handler execution and
-durable triggered run history, advisory triggered lifecycle hook metadata,
+stored descriptors, a caller-owned runtime state handle, explicit cron seed
+application, a caller-awaited cron service cycle over the existing finite cron
+loop, a caller-owned composed automation service owner that drains buffered
+triggered work before one explicit cron cycle, a caller-driven cron
+scan/wait/execute-due boundary plus finite caller-owned cron loop policy,
+advisory cron lifecycle metadata, typed cron run outcome classification,
+repository-backed cron execution leases and cron agent leases for explicit loop
+owners, durable prompt-bearing triggered job descriptors with caller-driven
+triggered intake plus explicit triggered handler execution and durable
+triggered run history, advisory triggered lifecycle hook metadata,
 repository-backed triggered agent leases, bounded caller-owned triggered queue
-backpressure with advisory drop metadata, explicit one-at-a-time triggered queue
-draining, finite available-batch draining, plus drop-on-conflict handling for
-blocked triggered-agent leases, caller-owned cron/triggered notifier callbacks
-that run only after durable outcomes and can carry optional handler output
-text, and a caller-driven retention service tick with optional advisory
+backpressure with advisory drop metadata, explicit one-at-a-time triggered
+queue draining, finite available-batch draining, plus drop-on-conflict
+handling for blocked triggered-agent leases, caller-owned cron/triggered
+notifier callbacks that run only after durable outcomes and can carry optional
+handler output text, and a caller-driven retention service tick with optional advisory
 `memory_decay` plus job lifecycle metadata,
 plus a caller-started retention loop step that can wait within a caller budget
 for one stored job to become due and lease due execution, plus a finite
@@ -435,6 +437,19 @@ reported back through `CronExecuteAttempt::notification` /
 `TriggeredExecuteAttempt::notification` without rolling the durable outcome
 back, and automation still does not choose concrete cli/channel/desktop routing
 or own a background notifier loop.
+
+Slice 223 adds the first caller-owned composed automation service owner above
+those explicit queue and cron-cycle surfaces. `<oran/automation/runtime.hpp>`
+now exposes `AutomationServiceOptions`, `AutomationServiceCycleRequest`,
+`AutomationServiceCycleResult`, and move-only `AutomationService`, while
+`AutomationRuntime::automation_service(...)` constructs that owner over stable
+runtime state. `AutomationService::enqueue_triggered(...)` reuses triggered
+intake plus the owned bounded queue, and `run_cycle(...)` validates its full
+triggered-plus-cron request before side effects, drains the currently buffered
+triggered descriptors, then applies cron seeds and awaits the existing finite
+cron service cycle. This creates a legitimate ownership locus for downstream
+blocked-agent hold/requeue without hiding detached work inside bootstrap or
+forcing that policy into `TriggeredQueue::drain_*`.
 
 ## Public API
 
@@ -1180,6 +1195,45 @@ struct CronServiceCycleResult {
   CronLoopRunResult loop;
 };
 
+struct AutomationServiceOptions {
+  CronServiceOptions cron;
+  TriggeredQueueOptions triggered_queue;
+};
+
+struct AutomationServiceCycleRequest {
+  std::vector<UpsertCronJobRequest> cron_seeds;
+  core::Time now;
+  std::chrono::steady_clock::duration max_total_wait;
+  std::size_t max_iterations;
+  std::size_t cron_job_limit;
+  CronJobHandler cron_handler;
+  std::string cron_lease_owner_key;
+  std::chrono::steady_clock::duration cron_lease_ttl;
+  CronLoopStopPredicate stop_requested;
+  TriggeredJobHandler triggered_handler;
+  std::size_t triggered_max_jobs;
+  std::string triggered_lease_owner_key;
+  std::chrono::steady_clock::duration triggered_lease_ttl;
+  TriggeredQueueBlockedAgentPolicy blocked_agent_policy;
+};
+
+struct AutomationServiceCycleResult {
+  TriggeredQueueDrainAvailableResult triggered;
+  CronServiceCycleResult cron;
+};
+
+class AutomationService {
+ public:
+  async::Awaitable<core::Result<TriggeredQueueEnqueueResult>>
+  enqueue_triggered(TriggeredQueueEnqueueRequest);
+
+  async::Awaitable<core::Result<AutomationServiceCycleResult>>
+  run_cycle(AutomationServiceCycleRequest);
+
+  std::size_t triggered_queue_capacity() const noexcept;
+  std::size_t triggered_queue_size() const;
+};
+
 class AutomationRuntime {
  public:
   static async::Awaitable<core::Result<AutomationRuntime>>
@@ -1195,6 +1249,8 @@ class AutomationRuntime {
 
   async::Awaitable<core::Result<CronServiceCycleResult>>
   run_cron_service_cycle(CronServiceCycleRequest);
+
+  AutomationService automation_service(AutomationServiceOptions = {});
 
   CronService cron_service(CronServiceOptions = {}) noexcept;
   CronLoop cron_loop(CronServiceOptions = {}) noexcept;
@@ -1605,6 +1661,15 @@ Notifier failures stay advisory and are surfaced on the attempt result without
 rolling the durable outcome back. Concrete cli/channel/desktop routing still
 belongs to the caller.
 
+Slice 223 adds the first caller-owned composed owner above that notifier-capable
+queue plus cron surface. `AutomationRuntime::automation_service(...)`
+constructs one `AutomationService` that keeps a bounded triggered queue beside
+stable runtime state and can run one explicit cycle that drains buffered
+triggered work before applying cron seeds and awaiting the existing finite cron
+cycle. This is the intended ownership seam for later blocked-agent
+hold/requeue, still without hiding detached work or bootstrap-owned scheduler
+startup.
+
 ## Memory Retention Planning
 
 `plan_memory_retention(...)` adapts the shipped long-term retention policy into
@@ -1762,11 +1827,13 @@ service objects borrow them.
 
 The handle exposes `repository()` for direct callers that seed or inspect jobs,
 `cron_service()` / `cron_loop()` as convenience factories for the caller-driven
-cron scan/wait/execute-due/run surface, and `memory_retention_service(...)` as a
-convenience factory for `MemoryRetentionService` over the owned repository plus
-a caller-supplied `memory::longterm::Backend`. It also exposes
-`memory_retention_loop(...)` as a convenience factory for the caller-started loop
-step over the same repository, backend, and hook options.
+cron scan/wait/execute-due/run surface, `automation_service()` as the composed
+owner for buffered triggered intake plus one explicit cron cycle, and
+`memory_retention_service(...)` as a convenience factory for
+`MemoryRetentionService` over the owned repository plus a caller-supplied
+`memory::longterm::Backend`. It also exposes `memory_retention_loop(...)` as a
+convenience factory for the caller-started loop step over the same repository,
+backend, and hook options.
 
 The runtime handle is intentionally not a scheduler. It does not sleep, spawn
 detached coroutines, acquire process leases, own a hook bus, or decide whether
@@ -1915,6 +1982,40 @@ does not spawn detached coroutines, keep a timer alive after return, enqueue
 work, notify channels, call agents, or make bootstrap open `automation.db`.
 Any cron run rows come only from the delegated explicit `CronLoop::run(...)`
 execution path.
+
+`AutomationRuntime::automation_service(...)` is the first composed owner above
+triggered queue buffering and cron-cycle execution. It constructs one
+`AutomationService` that keeps a bounded `TriggeredQueue` beside the stable
+runtime repository and executor, while preserving caller-owned notifier/hook
+options on the inner triggered execution path and caller-owned cron options on
+the delegated cron cycle path. The owner is explicit and awaited; it is not a
+daemon and does not survive process policy decisions by itself.
+
+`AutomationService::enqueue_triggered(...)` is a small forwarding seam over the
+owned `TriggeredQueue::enqueue(...)`. It reuses triggered intake matching plus
+bounded queue buffering and returns the same enqueue/dropped metadata while
+keeping queue ownership attached to the composed service owner rather than a
+separate caller-managed queue variable.
+
+`AutomationService::run_cycle(...)` is the first explicit service-cycle
+composition that spans both triggered and cron work. It validates the entire
+request before side effects, including positive cron and triggered budgets,
+non-empty cron and triggered handlers, valid lease settings, and a known
+`TriggeredQueueBlockedAgentPolicy`. When valid, it first drains currently
+buffered queued triggered descriptors through `TriggeredQueue::drain_available(...)`
+with the supplied triggered handler, lease policy, and blocked-agent policy.
+After that drain result is complete, it applies supplied cron seeds and awaits
+the delegated `AutomationRuntime::run_cron_service_cycle(...)` logic over the
+same stable repository, cron options, logical clock, lease policy, and
+cooperative stop predicate. The result reports both the triggered drain summary
+and the cron seed-plus-loop summary.
+
+This ordering is deliberate: buffered trigger work is handled before one cron
+cycle, and later blocked-agent hold/requeue policy can attach to this owner
+instead of being forced into the single-descriptor queue APIs. The composed
+owner still does not start detached timers, keep an always-on queue drain loop,
+automatically apply bootstrap cron seeds, route concrete notifications, or call
+an agent loop by itself.
 
 `MemoryRetentionLoop::run_once(...)` is a single caller-started awaitable for
 one stored retention job. It is the smallest useful owner above
@@ -2199,7 +2300,10 @@ Slice 222 reports `test-automation` at 96 cases / 1627 assertions for caller-
 owned notifier callbacks plus output-carrying attempt results, covering cron
 post-outcome notification after durable state advancement, triggered notifier
 failure remaining advisory, and prompt-backed handler result text preservation
-on both cron and triggered paths.
+on both cron and triggered paths. Slice 223 reports `test-automation` at
+98 cases / 1672 assertions for the caller-owned composed automation service
+owner, covering triggered-before-cron cycle ordering and full-request
+validation before queue drain or cron seed writes.
 
 `bench-automation` planning rows are:
 

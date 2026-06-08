@@ -203,10 +203,11 @@ and agent firing stay in later scheduler slices.
    paths, slice 221 adds bootstrap-owned
    `make_automation_agent_prompt_runner(...)` wiring into configured-route
    `AgentPromptRunner` while keeping `automation.db` and service ownership
-   caller-owned, and slice 222 adds caller-owned notifier callbacks plus
-   output-carrying cron/triggered attempt results after durable outcomes.
-   Later: add concrete notifier routing, richer hold/requeue policy, and agent
-   firing.
+   caller-owned, slice 222 adds caller-owned notifier callbacks plus
+   output-carrying cron/triggered attempt results after durable outcomes, and
+   slice 223 adds the first caller-owned composed automation service owner over
+   buffered triggered work plus one cron cycle. Later: add concrete notifier
+   routing, richer hold/requeue policy on that owner, and agent firing.
 5. **Scheduler performance.**
    Later: measure the 1 000-job scheduler tick criterion once the scheduler
    exists.
@@ -264,6 +265,8 @@ and agent firing stay in later scheduler slices.
 - `build/linux/x86_64/release/test-automation "CronLoop::run honors stop requests before starting work"`
 - `build/linux/x86_64/release/test-automation "CronLoop::run stops after a successful iteration when requested"`
 - `build/linux/x86_64/release/test-automation "AutomationRuntime forwards cron service cycle stop requests"`
+- `build/linux/x86_64/release/test-automation "AutomationRuntime creates a caller-owned automation service cycle over triggered and cron work"`
+- `build/linux/x86_64/release/test-automation "AutomationService validates one-cycle policy before draining or applying seeds"`
 - `build/linux/x86_64/release/test-bootstrap "RuntimeAssembly cron seeds persist only through caller-owned automation runtime"`
 - `build/linux/x86_64/release/test-automation "[repository]"`
 - `xmake run test-automation`
@@ -507,6 +510,14 @@ and agent firing stay in later scheduler slices.
   one post-outcome callback only after durable run/state transitions, and keep
   notifier failures advisory on the attempt result without rolling durable
   outcomes back.
+- [x] 2026-06-09 04:03 +0800: Implemented the first caller-owned composed
+  automation service owner through `AutomationRuntime::automation_service(...)`
+  and `AutomationService::run_cycle(...)`. One owner can now keep a bounded
+  triggered queue beside stable runtime state, validate a full triggered-plus-
+  cron cycle request before side effects, drain buffered triggered work first,
+  then apply cron seeds and await the existing finite cron cycle. This sets the
+  correct ownership locus for downstream blocked-agent hold/requeue without
+  making bootstrap own `automation.db` or hiding detached background work.
 - [x] **Update the docs that this slice invalidates in the same PR**
   (`docs/rules/docs-in-sync.md`).
 - [x] Run validation and record results.
@@ -620,6 +631,11 @@ and agent firing stay in later scheduler slices.
   outcome and output information to publish one post-outcome callback without
   making automation own cli/channel/desktop routing, bootstrap own
   `automation.db`, or any runtime own a detached scheduler.
+- 2026-06-09: Add a caller-owned composed service owner before richer
+  blocked-agent hold/requeue. Queue-level drain APIs intentionally stop at
+  single-descriptor or currently-available batch execution; the next ownership
+  locus for retry/parking policy should sit above buffered triggered work plus
+  one cron cycle, not inside bootstrap and not hidden behind detached startup.
 
 ## Linked Artifacts
 
@@ -653,5 +669,6 @@ and agent firing stay in later scheduler slices.
 - `docs/histories/2026-06/20260608-1440-automation-prompt-handlers.md`
 - `docs/histories/2026-06/20260609-0139-automation-agent-prompt-bridge.md`
 - `docs/histories/2026-06/20260609-0237-automation-notifier-callbacks.md`
+- `docs/histories/2026-06/20260609-0329-automation-service-owner.md`
 - Release note:
 - `docs/releases/feature-release-notes.md#2026-06`

@@ -7,33 +7,28 @@
 
 ## Snapshot
 
-- **Slice:** 222 (`xmake run orangutan -- --help` reports slice 222)
+- **Slice:** 223 (`xmake run orangutan -- --help` reports slice 223)
 - **Last completed history:**
-  [`histories/2026-06/20260609-0237-automation-notifier-callbacks.md`](histories/2026-06/20260609-0237-automation-notifier-callbacks.md)
+  [`histories/2026-06/20260609-0329-automation-service-owner.md`](histories/2026-06/20260609-0329-automation-service-owner.md)
 - **Active exec-plan:**
   [`exec-plans/active/2026-06-07-automation-cron-category.md`](exec-plans/active/2026-06-07-automation-cron-category.md).
-- **Latest completed slice:** slice 222 adds caller-owned automation notifier
-  callbacks plus output-carrying cron/triggered execution attempts. Automation
-  job handlers can now preserve optional text results through
-  `AutomationJobHandlerResult`, prompt-backed cron/triggered executions keep
-  the `AgentPromptRunner` text in their durable attempt results, and
-  `CronServiceOptions::notifier` / `TriggeredServiceOptions::notifier` publish
-  one post-outcome callback only after the durable run row or cron
-  `last_fired_at` advancement has completed. Notifier failures stay advisory
-  and are surfaced on the attempt result without rolling back the durable job
-  outcome, while `TriggeredQueueOptions::notifier` passes the same callback
-  through queue-owned triggered execution. This adds the smallest useful
-  notifier seam without making automation own channel delivery, bootstrap own
-  `automation.db`, or any runtime own a detached background scheduler. Focused
-  results: `test-automation` **96 cases / 1627 assertions** and
-  `test-bootstrap` **134 cases / 1160 assertions**.
+- **Latest completed slice:** slice 223 adds the first caller-owned automation
+  service owner above the existing triggered queue and cron cycle surfaces.
+  `AutomationRuntime::automation_service(...)` now constructs one composed
+  owner over stable runtime state; `AutomationService::enqueue_triggered(...)`
+  reuses triggered intake plus bounded queue buffering, and
+  `AutomationService::run_cycle(...)` validates its full request before side
+  effects, drains currently buffered triggered work, then applies cron seeds
+  and awaits the existing finite cron service cycle. This creates the smallest
+  useful scheduler-service ownership locus for downstream blocked-agent
+  hold/requeue without making bootstrap own `automation.db`, hiding detached
+  background work, or forcing that policy into `TriggeredQueue::drain_*`.
+  Focused results: `test-automation` **98 cases / 1672 assertions**.
 - **Next intended slice:** continue the active automation cron/category plan.
-  The next useful implementation boundary is a small scheduler-service
-  ownership slice such as richer blocked-agent hold/requeue policy or detached
-  service-loop startup over the now-complete automation prompt plus notifier
-  execution surfaces.
-  Do not add bootstrap-owned background automation or unrelated STATUS-only
-  slice churn.
+  The next useful implementation boundary is richer blocked-agent hold/requeue
+  semantics on top of the caller-owned `AutomationService` owner.
+  Do not add bootstrap-owned background automation, skip straight to detached
+  startup, or do unrelated STATUS-only slice churn.
 
 Slice 183 adds the operator-facing long-term
   retention policy contract. `oran-config` now parses

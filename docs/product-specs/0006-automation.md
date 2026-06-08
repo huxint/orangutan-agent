@@ -71,7 +71,10 @@ that maps those `AutomationPromptRunner` requests into configured-route
 `AgentPromptRunner` execution one durable job at a time while keeping
 `automation.db` and service-loop ownership caller-owned. Slice 222 adds the
 first caller-owned notifier callbacks plus output-carrying cron/triggered
-attempt results over those same durable execution paths. The current API evaluates
+attempt results over those same durable execution paths. Slice 223 adds the
+first caller-owned composed automation service owner over the same stable
+runtime state, draining buffered triggered work before one explicit cron cycle
+so later hold/requeue policy has a legitimate owner. The current API evaluates
 periodic and cron schedules from caller-supplied state, maps a long-term memory
 retention policy into a due-only `memory::longterm::DecayRequest`, persists the
 configured retention job plus run history and lease state through
@@ -120,6 +123,10 @@ lets a queue consumer drain and execute exactly one queued triggered descriptor
 at a time through `TriggeredQueue::drain_once(...)`, or drain currently
 available queued descriptors up to a caller-owned `max_jobs` limit through
 `TriggeredQueue::drain_available(...)`,
+lets a caller-owned composed automation service owner keep one bounded triggered
+queue beside stable runtime state, enqueue matched triggered descriptors, and
+run one explicit cycle that drains buffered triggered work before applying cron
+seeds and awaiting the existing finite cron service cycle,
 lets a runtime owner tick one stored retention job against a supplied long-term
 memory backend, publishes advisory retention metadata when the caller supplies a
 hook bus, can wait once within a caller budget for the earliest stored cron fire,
@@ -165,6 +172,13 @@ Current implementation:
   service-cycle policy before repository mutation, applies supplied cron seeds,
   and delegates to `CronLoop::run(...)`. It returns both seed-apply and loop
   summaries, while still leaving lifecycle ownership with the caller.
+- `AutomationRuntime::automation_service(...)` constructs the composed
+  caller-owned service owner over stable runtime state. `AutomationService`
+  keeps one bounded triggered queue, forwards triggered enqueue through that
+  owner, validates one-cycle policy before side effects, drains currently
+  buffered triggered work first, and only then applies cron seeds plus awaits
+  the existing finite cron service cycle. It does not start detached work,
+  automatically apply bootstrap seeds, or choose notifier delivery routing.
 - `AutomationRepository` runs migrations over a caller-supplied `storage::Pool`,
   upserts and loads retention jobs by durable `job_key`, persists
   `last_fired_at`, records success/failure run rows, lists recent runs, acquires
@@ -180,8 +194,9 @@ Current implementation:
   parent directories, opens `automation.db` through an owned `storage::Pool`,
   runs automation migrations, exposes the migration report and repository, can
   explicitly apply cron seed descriptors or run one cron service cycle, and can
-  construct `CronService`, `CronLoop`, `TriggeredService`,
-  `MemoryRetentionService`, or `MemoryRetentionLoop` over that stable state.
+  construct `AutomationService`, `CronService`, `CronLoop`,
+  `TriggeredService`, `MemoryRetentionService`, or `MemoryRetentionLoop` over
+  that stable state.
 - `MemoryRetentionService::tick(...)` loads one stored job, skips not-due work
   without mutation, invokes `memory::longterm::Backend::decay(...)` only when
   due, records success/failure run rows, and advances `last_fired_at` only
@@ -308,7 +323,7 @@ Current implementation:
   caller-owned automation repository and runtime executor.
 - `test-async` reports 14 cases / 76 assertions for the bounded channel
   polling primitive consumed by triggered queues.
-- `test-automation` reports 96 cases / 1627 assertions.
+- `test-automation` reports 98 cases / 1672 assertions.
 - `test-hook` reports 38 cases / 313 assertions for the hook payload surface.
 - `test-config` reports 51 cases / 468 assertions for the consuming config
   boundary, and `test-bootstrap` reports 134 cases / 1160 assertions for mapped
@@ -347,7 +362,7 @@ scheduler/category lifecycle ownership remains downstream.
 1. A cron job ("`* * * * *`") fires exactly once per minute under nominal load.
 2. A periodic job (every 15 s) fires within ±100 ms of the scheduled time.
 3. A triggered job fires within 50 ms of the trigger event. Current status:
-   slice 222 can persist prompt-bearing triggered descriptors, match a trigger
+   slice 223 can persist prompt-bearing triggered descriptors, match a trigger
    event key to stored jobs through caller-owned intake, run caller-supplied
    handlers while recording run history, publish advisory lifecycle metadata,
    optionally lease the matched stored `agent_key`, adapt stored prompts into
@@ -359,8 +374,9 @@ scheduler/category lifecycle ownership remains downstream.
    limit, or explicitly drop a queued descriptor blocked by an active
    triggered-agent lease. Triggered execution and queue drains can also publish
    one caller-owned post-outcome notifier callback after the durable run row is
-   recorded, while concrete notifier routing and actual agent firing latency
-   remain downstream.
+   recorded. Slice 223 adds a composed `AutomationService` owner that can drain
+   buffered triggered work before one explicit cron cycle, while concrete
+   notifier routing and actual agent firing latency remain downstream.
 4. Per-agent lease prevents two concurrent runs of the same agent_key; the queued
    firing is held or dropped per policy. Current status: slice 210 prevents
    overlapping explicit cron execution for the same stored `agent_key` through
@@ -376,10 +392,11 @@ scheduler/category lifecycle ownership remains downstream.
    use, slice 220 adds injected prompt-runner handler factories over those
    prompts, slice 221 bridges those prompt runs into configured-route
    `AgentPromptRunner` execution without moving scheduler ownership into
-   bootstrap, and slice 222 adds post-outcome cron/triggered notifier
-   callbacks without moving concrete delivery routing into automation. Richer
-   hold/requeue policy, concrete notifier routing, and actual agent firing
-   remain downstream.
+   bootstrap, slice 222 adds post-outcome cron/triggered notifier callbacks
+   without moving concrete delivery routing into automation, and slice 223 adds
+   the composed `AutomationService` owner that downstream blocked-agent
+   hold/requeue policy can attach to. Richer hold/requeue policy, concrete
+   notifier routing, and actual agent firing remain downstream.
 5. A failing job is recorded with the failure reason; the next firing happens on
    schedule. Current status: slice 206 records explicit cron handler failures
    with the failure reason and leaves stored state due for retry, while slice

@@ -412,6 +412,175 @@ TEST_CASE("AutomationRuntime runs a caller-awaited cron service cycle", "[unit][
   });
 }
 
+TEST_CASE("AutomationRuntime creates a caller-owned automation service cycle over triggered and cron work",
+          "[unit][automation][runtime][service]") {
+  TempWorkspace workspace{"oran-automation-runtime-automation-service"};
+  test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {
+    auto runtime = co_await automation::AutomationRuntime::open(
+        io.get_executor(),
+        automation::AutomationRuntimeOptions{.database_path = automation_db_path(workspace)});
+    REQUIRE(runtime.has_value());
+    REQUIRE((co_await runtime->repository().upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:webhook-ci",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "researcher",
+                 .agent_prompt = "Handle triggered automation job.",
+             }))
+                .has_value());
+
+    auto service = runtime->automation_service(automation::AutomationServiceOptions{
+        .triggered_queue =
+            automation::TriggeredQueueOptions{
+                .capacity = 2,
+            },
+    });
+
+    auto queued = co_await service.enqueue_triggered(automation::TriggeredQueueEnqueueRequest{
+        .trigger_key = "webhook:ci",
+        .received_at = at(240s),
+        .job_limit = 10,
+    });
+    REQUIRE(queued.has_value());
+    REQUIRE(queued->enqueued_count == 1);
+    REQUIRE(service.triggered_queue_size() == 1);
+
+    auto cron_seeds = std::vector<automation::UpsertCronJobRequest>{
+        automation::UpsertCronJobRequest{
+            .job_key = "cron:five-minute",
+            .agent_prompt = "Run scheduled automation job.",
+            .schedule =
+                automation::CronSchedule{
+                    .expression = "*/5 * * * *",
+                    .first_fire_at = at(300s),
+                },
+        },
+    };
+
+    std::vector<std::string> execution_order;
+    auto request = automation::AutomationServiceCycleRequest{
+        .cron_seeds = std::move(cron_seeds),
+        .now = at(300s),
+        .max_iterations = 2,
+        .cron_job_limit = 10,
+        .cron_handler = [&execution_order](automation::CronDueJob due) -> async::Awaitable<core::Result<void>> {
+          execution_order.push_back("cron:" + due.job.job_key);
+          REQUIRE(due.job.job_key == "cron:five-minute");
+          REQUIRE(due.job.agent_prompt == "Run scheduled automation job.");
+          co_return core::Result<void>{};
+        },
+        .triggered_handler =
+            [&execution_order](automation::TriggeredExecutionJob execution) -> async::Awaitable<core::Result<void>> {
+          execution_order.push_back("triggered:" + execution.job.job_key);
+          REQUIRE(execution.job.job_key == "triggered:webhook-ci");
+          REQUIRE(execution.job.agent_prompt == "Handle triggered automation job.");
+          REQUIRE(execution.trigger_key == "webhook:ci");
+          co_return core::Result<void>{};
+        },
+        .triggered_max_jobs = 10,
+    };
+    auto result = co_await service.run_cycle(std::move(request));
+
+    REQUIRE(result.has_value());
+    REQUIRE(execution_order == std::vector<std::string>{"triggered:triggered:webhook-ci", "cron:cron:five-minute"});
+    REQUIRE(service.triggered_queue_size() == 0);
+    REQUIRE(result->triggered.drained_count == 1);
+    REQUIRE(result->triggered.completed_count == 1);
+    REQUIRE(result->triggered.failed_count == 0);
+    REQUIRE(result->triggered.dropped_count == 0);
+    REQUIRE(result->triggered.stop_reason == automation::TriggeredQueueDrainAvailableStopReason::queue_empty);
+    REQUIRE(result->cron.seed_apply.requested_count == 1);
+    REQUIRE(result->cron.seed_apply.upserted_count == 1);
+    REQUIRE(result->cron.loop.iterations == 2);
+    REQUIRE(result->cron.loop.attempted_count == 1);
+    REQUIRE(result->cron.loop.advanced_count == 1);
+    REQUIRE(result->cron.loop.failed_count == 0);
+    REQUIRE(result->cron.loop.stop_reason == automation::CronLoopRunStopReason::no_due_work);
+
+    auto triggered_runs = co_await runtime->repository().list_triggered_runs(automation::ListTriggeredRunsOptions{
+        .job_key = "triggered:webhook-ci",
+        .limit = 10,
+    });
+    REQUIRE(triggered_runs.has_value());
+    REQUIRE(triggered_runs->size() == 1);
+    REQUIRE(triggered_runs->front().outcome == automation::TriggeredRunOutcome::success);
+
+    auto cron_job = co_await runtime->repository().get_cron_job("cron:five-minute");
+    REQUIRE(cron_job.has_value());
+    REQUIRE(cron_job->has_value());
+    REQUIRE((*cron_job)->state.last_fired_at == at(300s));
+  });
+}
+
+TEST_CASE("AutomationService validates one-cycle policy before draining or applying seeds",
+          "[unit][automation][runtime][service]") {
+  TempWorkspace workspace{"oran-automation-runtime-automation-service-invalid"};
+  test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {
+    auto runtime = co_await automation::AutomationRuntime::open(
+        io.get_executor(),
+        automation::AutomationRuntimeOptions{.database_path = automation_db_path(workspace)});
+    REQUIRE(runtime.has_value());
+    REQUIRE((co_await runtime->repository().upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:webhook-ci",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "researcher",
+                 .agent_prompt = "Handle triggered automation job.",
+             }))
+                .has_value());
+
+    auto service = runtime->automation_service(automation::AutomationServiceOptions{
+        .triggered_queue =
+            automation::TriggeredQueueOptions{
+                .capacity = 2,
+            },
+    });
+    auto queued = co_await service.enqueue_triggered(automation::TriggeredQueueEnqueueRequest{
+        .trigger_key = "webhook:ci",
+        .received_at = at(240s),
+        .job_limit = 10,
+    });
+    REQUIRE(queued.has_value());
+    REQUIRE(service.triggered_queue_size() == 1);
+
+    auto cron_seeds = std::vector<automation::UpsertCronJobRequest>{
+        automation::UpsertCronJobRequest{
+            .job_key = "cron:never-applied",
+            .agent_prompt = "Run scheduled automation job.",
+            .schedule = make_cron_schedule(),
+        },
+    };
+    auto request = automation::AutomationServiceCycleRequest{
+        .cron_seeds = std::move(cron_seeds),
+        .now = at(300s),
+        .max_iterations = 1,
+        .cron_job_limit = 10,
+        .cron_handler = [](automation::CronDueJob) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        },
+        .triggered_handler = [](automation::TriggeredExecutionJob) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        },
+        .triggered_max_jobs = 0,
+    };
+    auto result = co_await service.run_cycle(std::move(request));
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(has_field(result.error(), "triggered_max_jobs"));
+    REQUIRE(service.triggered_queue_size() == 1);
+
+    auto cron_job = co_await runtime->repository().get_cron_job("cron:never-applied");
+    REQUIRE(cron_job.has_value());
+    REQUIRE_FALSE(cron_job->has_value());
+
+    auto triggered_runs = co_await runtime->repository().list_triggered_runs(automation::ListTriggeredRunsOptions{
+        .job_key = "triggered:webhook-ci",
+        .limit = 10,
+    });
+    REQUIRE(triggered_runs.has_value());
+    REQUIRE(triggered_runs->empty());
+  });
+}
+
 TEST_CASE("AutomationRuntime forwards cron service cycle stop requests", "[unit][automation][runtime][cron][service]") {
   TempWorkspace workspace{"oran-automation-runtime-cron-service-cycle-stop"};
   test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {
