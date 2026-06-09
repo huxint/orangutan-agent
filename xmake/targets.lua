@@ -49,6 +49,7 @@ if has_config("vector_memory") then
     target_end()
 end
 oran_lib("automation", { "oran-core", "oran-async", "oran-storage", "oran-memory", "oran-hook" }, {})
+oran_lib("channel", { "oran-core", "oran-async" }, {})
 oran_lib("skill", { "oran-core", "oran-async", "oran-io" }, {})
 oran_lib("tool", { "oran-core", "oran-async", "oran-io", "oran-permission", "oran-hook" }, { "nlohmann_json" })
 oran_lib("prompt", { "oran-core", "oran-async", "oran-config", "oran-tool" }, {})

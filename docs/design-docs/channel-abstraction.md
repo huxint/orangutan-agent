@@ -41,6 +41,10 @@ class Channel {
 The agent runtime is given a `Channel&` (or a `std::shared_ptr<Channel>`) by the
 bootstrap. It does not know which adapter is behind it.
 
+Slice 226 ships this foundation in `oran-channel`. Concrete adapters and
+bootstrap routing remain downstream, but the trait, envelopes, capability
+matrix, `ChannelManager`, `test-channel`, and `bench-channel` are now live.
+
 ## Inbound / Outbound Envelopes
 
 ```cpp
@@ -143,14 +147,17 @@ namespace orangutan::channel {
 
 class ChannelManager {
  public:
-  explicit ChannelManager(async::Runtime&);
+  explicit ChannelManager(asio::any_io_executor, ChannelManagerOptions = {});
 
   // Register at startup; adapters are owned by the manager.
-  void register_adapter(std::unique_ptr<Channel>);
+  core::Result<void> register_adapter(std::unique_ptr<Channel>);
 
   // Lifecycle.
   async::Awaitable<core::Result<void>> start_all();
   async::Awaitable<core::Result<void>> stop_all();
+
+  // Explicit one-message fan-in; later owners decide how to loop/cancel.
+  async::Awaitable<core::Result<void>> receive_one(std::string_view channel_id);
 
   // Fan-in: returns a bounded async::Channel of InboundMessage from all adapters.
   // The receiver is the agent runtime (or oran-orchestration's dispatcher).
@@ -161,7 +168,7 @@ class ChannelManager {
   send(std::string_view channel_id, OutboundMessage);
 
   // Capability lookup.
-  Capabilities caps(std::string_view channel_id) const;
+  core::Result<Capabilities> caps(std::string_view channel_id) const;
 };
 
 }  // namespace orangutan::channel
@@ -170,8 +177,15 @@ class ChannelManager {
 The manager:
 
 - Owns lifetimes of all registered adapters.
-- Multiplexes inbound queues into a single bounded `async::Channel<InboundMessage>`.
+- Normalizes one explicit `next_message()` result at a time into a single
+  bounded `async::Channel<InboundMessage>`.
 - Provides per-channel send.
+- Rejects null, unnamed, duplicate, or missing channel ids with `core::Error`
+  instead of relying on adapter-specific failure modes.
+
+It does **not** yet spawn a background fan-in loop or own per-conversation
+serialization. That ownership lands with the first daemon/dispatcher slice so
+cancellation and shutdown policy can be tested at the actual caller boundary.
 
 ## Per-Conversation Serialization
 

@@ -8,9 +8,10 @@ only — v2 makes channels pluggable.
 
 ## Scope (v1)
 
-- `oran-channel::Channel` trait + `Capabilities` matrix.
-- `oran-channel::ChannelManager` with per-conversation strands and a bounded inbound
-  fan-in queue.
+- `oran-channel::Channel` trait + `Capabilities` matrix. Shipped in slice 226.
+- `oran-channel::ChannelManager` with a bounded inbound fan-in queue. Slice 226
+  ships explicit caller-owned `receive_one(...)` fan-in; automatic adapter
+  loops and per-conversation strands remain downstream.
 - Two adapters shipping:
   - **QQ** (`oran-channel-qq`) — ported from legacy, refactored onto the trait.
   - **Webhook** (`oran-channel-webhook`) — generic inbound HTTP receiver + outbound
@@ -37,8 +38,9 @@ only — v2 makes channels pluggable.
 
 ## Acceptance Criteria
 
-1. Compiling with all v1 adapters disabled produces a binary with zero channel code
-   linked in.
+1. Compiling with all v1 adapters disabled produces a binary with zero adapter code
+   linked in. The foundation `oran-channel` library itself now builds independently
+   as of slice 226.
 2. A QQ message arrives → routed to the configured agent → response sent back; the
    round-trip is observed via the `audit.db`.
 3. A webhook adapter accepts a POST body, the agent processes it, the response is
@@ -53,6 +55,12 @@ only — v2 makes channels pluggable.
 7. `tests/channel/` ≥ 70% coverage including the webhook adapter end-to-end with a
    mock HTTP server.
 8. `bench/channel/` reports inbound throughput ≥ 200 msg/s on the mock adapter.
+
+## Shipped So Far
+
+- Slice 226: `oran-channel` foundation target, public `Channel` trait,
+  `Capabilities`, inbound/outbound envelopes, `ChannelManager`, `test-channel`
+  coverage, and `bench-channel` direct-append vs. manager fan-in comparison.
 
 ## Design Doc Cross-References
 

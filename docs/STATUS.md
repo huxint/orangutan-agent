@@ -7,27 +7,28 @@
 
 ## Snapshot
 
-- **Slice:** 225 (`xmake run orangutan -- --help` reports slice 225)
+- **Slice:** 226 (`xmake run orangutan -- --help` reports slice 226)
 - **Last completed history:**
-  [`histories/2026-06/20260609-0648-automation-service-loop-policy.md`](histories/2026-06/20260609-0648-automation-service-loop-policy.md)
+  [`histories/2026-06/20260609-2334-channel-foundation.md`](histories/2026-06/20260609-2334-channel-foundation.md)
 - **Active exec-plan:**
-  [`exec-plans/active/2026-06-07-automation-cron-category.md`](exec-plans/active/2026-06-07-automation-cron-category.md).
-- **Latest completed slice:** slice 225 adds the explicit finite caller-owned
-  service-loop policy above the composed automation service owner.
-  `AutomationService::run(...)` now repeats `run_cycle(...)` over caller-owned
-  iteration and retry-wait budgets, reuses owner-local held triggered backlog
-  across explicit iterations, sleeps only when held blocked work remains and
-  the caller supplied retry budget, and stops with explicit
-  `iteration_limit` / `no_due_work` / `handler_failure` / `stop_requested` /
-  `held_jobs_remaining` reasons. This turns slice 224's owner-local hold/retry
-  state into a real finite service-loop boundary without broadening public
-  `TriggeredQueue::drain_*` semantics or starting detached background work.
-  Focused results: `test-automation` **106 cases / 1849 assertions**.
-- **Next intended slice:** continue the active automation cron/category plan.
-  The next useful implementation boundary is explicit long-running startup /
-  shutdown ownership above `AutomationService::run(...)`, so one owner can opt
-  into process-lived automation service policy without broadening queue APIs or
-  hiding bootstrap-owned detached work prematurely.
+  [`exec-plans/active/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/active/2026-06-09-channel-ingress-and-adapters.md).
+  The automation cron/category plan remains open, but channel ingress is the
+  current higher-value coupling track.
+- **Latest completed slice:** slice 226 adds the first `oran-channel`
+  foundation library. `<oran/channel.hpp>` now exports `Capabilities`,
+  normalized inbound/outbound envelopes, the abstract `Channel` adapter trait,
+  and caller-owned `ChannelManager` APIs for registration, explicit
+  one-message fan-in through a bounded `async::Channel<InboundMessage>`,
+  outbound send routing, lifecycle calls, and capability lookup. The foundation
+  depends only on `oran-core` and `oran-async`; it does not port QQ, open an
+  HTTP listener, start a background receive loop, or route messages into
+  `AgentPromptRunner` yet. Focused result: `test-channel` **8 cases / 65
+  assertions**; `bench-channel` builds with direct-append vs. manager fan-in
+  coverage.
+- **Next intended slice:** continue the channel ingress plan with the smallest
+  concrete adapter/routing boundary, preferably a mock or webhook ingress path
+  that proves one external message can enter the manager and be handed toward
+  the configured agent path without starting with the full QQ port.
 
 Slice 183 adds the operator-facing long-term
   retention policy contract. `oran-config` now parses
@@ -1822,7 +1823,8 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 38 cases / 313 assertions.
 - `oran-memory`: 38 cases / 841 assertions.
-- `oran-automation`: 94 cases / 1574 assertions.
+- `oran-automation`: 106 cases / 1849 assertions.
+- `oran-channel`: 8 cases / 65 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 208 cases / 2181 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
