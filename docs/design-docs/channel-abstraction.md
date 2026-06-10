@@ -41,9 +41,21 @@ class Channel {
 The agent runtime is given a `Channel&` (or a `std::shared_ptr<Channel>`) by the
 bootstrap. It does not know which adapter is behind it.
 
-Slice 226 ships this foundation in `oran-channel`. Concrete adapters and
-bootstrap routing remain downstream, but the trait, envelopes, capability
-matrix, `ChannelManager`, `test-channel`, and `bench-channel` are now live.
+Slice 226 ships this foundation in `oran-channel`. Slice 227 adds the first
+concrete adapter — the in-process `channel::MockChannel` (external producers
+`push_inbound(...)` into a bounded queue; `next_message()` awaits it
+long-poll-style; sends are recorded with deterministic receipts) — plus the
+channel→agent dispatch seam: `channel::ChannelPromptRunRequest` /
+`ChannelPromptRunResult`, the `ChannelPromptRunner` function contract,
+`make_prompt_run_request(...)` / `make_reply_message(...)`, and caller-owned
+`dispatch_one(manager, runner)` that takes one queued inbound message through
+the runner and replies via the owning adapter. `oran-bootstrap` owns the
+concrete runner factory (`make_channel_agent_prompt_runner(...)`), which
+builds one `AgentPromptRunner` per dispatched message and derives a stable
+per-conversation session id — mirroring the automation prompt-runner
+precedent so `oran-channel` never depends on agent or bootstrap internals.
+Platform adapters, bootstrap registration/routing, and any receive loop
+remain downstream.
 
 ## Inbound / Outbound Envelopes
 

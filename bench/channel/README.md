@@ -11,6 +11,7 @@ bounded inbound handoff overhead against a direct in-memory append baseline.
 | File | A vs. B |
 | --- | --- |
 | [`scenarios/manager_fanin.cpp`](scenarios/manager_fanin.cpp) | Direct vector append vs. `ChannelManager::receive_one(...)` fan-in through `async::Channel<InboundMessage>`. |
+| [`scenarios/mock_ingress.cpp`](scenarios/mock_ingress.cpp) | Direct prompt-runner invocation vs. full mock ingress (`MockChannel::push_inbound` → `receive_one` → `dispatch_one` → reply send). |
 
 ## Running
 

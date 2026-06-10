@@ -95,7 +95,11 @@ mock/webhook/QQ adapter and bootstrap routing slices.
 - [x] 2026-06-09 23:34 +0800: Shipped slice 226 foundation library with
   channel envelopes, `Channel`, `ChannelManager`, `test-channel`, and
   `bench-channel`.
-- [ ] Add the first concrete mock/webhook ingress adapter.
+- [x] 2026-06-10 10:35 +0800: Shipped slice 227 mock ingress — concrete
+  `channel::MockChannel`, the `ChannelPromptRunner` dispatch seam with
+  caller-owned `dispatch_one(...)`, and bootstrap's
+  `make_channel_agent_prompt_runner(...)` bridge; end-to-end mock→manager→
+  agent-path→reply proof against a mocked provider in `test-bootstrap`.
 - [ ] Wire bootstrap channel registration and agent dispatch.
 - [ ] Port QQ behind the shipped trait.
 
@@ -109,6 +113,15 @@ mock/webhook/QQ adapter and bootstrap routing slices.
   than spawning background adapter receive loops. This keeps lifecycle,
   cancellation, per-conversation serialization, and daemon ownership out of the
   foundation slice.
+- 2026-06-10: Milestone 2 shipped the *mock* adapter, not the webhook one:
+  `oran-http` is client-only today, so webhook ingress would pull a new HTTP
+  server surface into the same slice. The mock adapter lives inside
+  `oran-channel` (no separate `oran-channel-mock` target) because it has zero
+  platform dependencies and exists to serve higher-layer tests, benches, and
+  loopback wiring. The dispatch seam mirrors the automation prompt-runner
+  precedent: the channel library owns the `std::function` runner contract and
+  one caller-owned `dispatch_one` step; bootstrap owns the
+  `AgentPromptRunner`-backed factory with per-conversation session ids.
 
 ## Linked Artifacts
 

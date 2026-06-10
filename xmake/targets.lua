@@ -56,7 +56,7 @@ oran_lib("prompt", { "oran-core", "oran-async", "oran-config", "oran-tool" }, {}
 oran_lib("provider", { "oran-core", "oran-async", "oran-config", "oran-prompt" }, { "nlohmann_json" })
 oran_lib("agent", { "oran-core", "oran-async", "oran-storage", "oran-prompt", "oran-tool", "oran-provider", "oran-hook" }, { "nlohmann_json" })
 oran_lib("cli", { "oran-core", "oran-async", "oran-hook", "oran-provider" }, {})
-oran_lib("bootstrap", { "oran-core", "oran-async", "oran-http", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-memory", "oran-automation", "oran-skill", "oran-tool", "oran-provider", "oran-agent", "oran-cli" }, {})
+oran_lib("bootstrap", { "oran-core", "oran-async", "oran-http", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-memory", "oran-automation", "oran-channel", "oran-skill", "oran-tool", "oran-provider", "oran-agent", "oran-cli" }, {})
 
 target("orangutan")
     set_kind("binary")

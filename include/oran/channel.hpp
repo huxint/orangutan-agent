@@ -3,4 +3,6 @@
 #pragma once
 
 #include <oran/channel/channel.hpp>
+#include <oran/channel/dispatch.hpp>
 #include <oran/channel/manager.hpp>
+#include <oran/channel/mock.hpp>

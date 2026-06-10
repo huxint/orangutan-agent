@@ -7,7 +7,8 @@
 
 namespace orangutan::bench {
 void register_channel_manager_fanin(ankerl::nanobench::Bench&);
-}
+void register_channel_mock_ingress(ankerl::nanobench::Bench&);
+}  // namespace orangutan::bench
 
 int main() {
   ankerl::nanobench::Bench b;
@@ -17,6 +18,7 @@ int main() {
   b.warmup(100);
 
   orangutan::bench::register_channel_manager_fanin(b);
+  orangutan::bench::register_channel_mock_ingress(b);
 
   std::println();
   return 0;

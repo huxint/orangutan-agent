@@ -9,9 +9,9 @@
 
 ## Snapshot
 
-- **Slice:** 226 (`xmake run orangutan -- --help` reports slice 226)
+- **Slice:** 227 (`xmake run orangutan -- --help` reports slice 227)
 - **Last completed history:**
-  [`histories/2026-06/20260610-0941-docs-roadmap-and-status-slim.md`](histories/2026-06/20260610-0941-docs-roadmap-and-status-slim.md)
+  [`histories/2026-06/20260610-1035-channel-mock-ingress-dispatch.md`](histories/2026-06/20260610-1035-channel-mock-ingress-dispatch.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/active/2026-06-09-channel-ingress-and-adapters.md)
     — the current higher-value coupling track.
@@ -19,21 +19,24 @@
     — open but paused in favor of channel ingress.
   - [`exec-plans/active/2026-06-06-replace-webui-with-desktop.md`](exec-plans/active/2026-06-06-replace-webui-with-desktop.md)
     — docs-stage desktop repivot; reference sweep unfinished.
-- **Latest completed slice:** slice 226 adds the first `oran-channel`
-  foundation library. `<oran/channel.hpp>` now exports `Capabilities`,
-  normalized inbound/outbound envelopes, the abstract `Channel` adapter trait,
-  and caller-owned `ChannelManager` APIs for registration, explicit
-  one-message fan-in through a bounded `async::Channel<InboundMessage>`,
-  outbound send routing, lifecycle calls, and capability lookup. The foundation
-  depends only on `oran-core` and `oran-async`; it does not port QQ, open an
-  HTTP listener, start a background receive loop, or route messages into
-  `AgentPromptRunner` yet. Focused result: `test-channel` **8 cases / 65
-  assertions**; `bench-channel` builds with direct-append vs. manager fan-in
-  coverage.
-- **Next intended slice:** continue the channel ingress plan with the smallest
-  concrete adapter/routing boundary, preferably a mock or webhook ingress path
-  that proves one external message can enter the manager and be handed toward
-  the configured agent path without starting with the full QQ port.
+- **Latest completed slice:** slice 227 ships channel-ingress milestone 2:
+  the first concrete adapter plus the channel→agent dispatch seam.
+  `channel::MockChannel` accepts externally pushed inbound messages over a
+  bounded queue and records outbound sends; `channel::ChannelPromptRunner` /
+  `dispatch_one(...)` take one queued message through a caller-supplied
+  runner and reply through the owning adapter; bootstrap's
+  `make_channel_agent_prompt_runner(...)` backs that runner with
+  `AgentPromptRunner` and stable per-conversation session ids. The
+  end-to-end proof (mock push → manager fan-in → dispatch → mocked provider
+  → reply in the adapter) lives in `test-bootstrap`. No HTTP listener,
+  background receive loop, or bootstrap channel registration yet. Focused
+  result: `test-channel` **24 cases / 186 assertions**, `test-bootstrap`
+  **139 cases / 1224 assertions**; `bench-channel` adds direct-runner vs.
+  full-mock-ingress dispatch.
+- **Next intended slice:** channel-ingress milestone 3 — bootstrap channel
+  registration and routing: map config-authored channels into registered
+  adapters and route inbound messages to configured agents through the
+  shipped dispatch seam.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 
@@ -61,14 +64,14 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-hook`: 38 cases / 313 assertions.
 - `oran-memory`: 38 cases / 841 assertions.
 - `oran-automation`: 106 cases / 1849 assertions.
-- `oran-channel`: 8 cases / 65 assertions.
+- `oran-channel`: 24 cases / 186 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 208 cases / 2181 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 134 cases / 1160 assertions.
+- `oran-bootstrap`: 139 cases / 1224 assertions.
 
 ## Open Tech-Debt Rows
 

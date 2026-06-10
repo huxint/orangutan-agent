@@ -358,9 +358,13 @@ no-route defaults remain on the deterministic `cli::run` shell.
 `oran-channel` is a shipped interface-layer foundation target as of slice 226.
 It depends only on `oran-core` and `oran-async`, exports the adapter trait plus
 manager/envelope types, and has matching `test-channel` / `bench-channel`
-buckets. Concrete adapter targets such as `oran-channel-webhook` and
-`oran-channel-qq` remain future targets and are not linked into `orangutan`
-until bootstrap registration exists.
+buckets. Slice 227 adds the in-process `MockChannel` adapter and the
+`ChannelPromptRunner` dispatch seam inside the same target (no new xmake
+target), and `oran-bootstrap` now depends on `oran-channel` for the
+`make_channel_agent_prompt_runner(...)` bridge, so the `orangutan` binary
+links `oran-channel` transitively. Platform adapter targets such as
+`oran-channel-webhook` and `oran-channel-qq` remain future targets and are not
+linked until bootstrap registration exists.
 
 **Key compile-time wins from this shape:**
 

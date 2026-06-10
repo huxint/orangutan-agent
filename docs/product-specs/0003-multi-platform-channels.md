@@ -61,6 +61,14 @@ only — v2 makes channels pluggable.
 - Slice 226: `oran-channel` foundation target, public `Channel` trait,
   `Capabilities`, inbound/outbound envelopes, `ChannelManager`, `test-channel`
   coverage, and `bench-channel` direct-append vs. manager fan-in comparison.
+- Slice 227: first concrete ingress — in-process `channel::MockChannel`
+  (push-driven bounded-queue adapter), the `ChannelPromptRunner` dispatch
+  seam with caller-owned `dispatch_one(...)`, and bootstrap's
+  `make_channel_agent_prompt_runner(...)` bridging dispatched messages into
+  `AgentPromptRunner` with per-conversation session continuity. The
+  mock-adapter inbound path benches at ~2.4 µs/message locally (≫ the
+  200 msg/s acceptance floor). Webhook/QQ adapters and bootstrap
+  registration/routing remain open.
 
 ## Design Doc Cross-References
 
