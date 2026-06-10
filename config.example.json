@@ -82,7 +82,14 @@
     }
   },
   "teams": {},
-  "channels": [],
+  "channels": [
+    {
+      "id": "mock-main",
+      "kind": "mock",
+      "agent_key": "default",
+      "inbound_capacity": 64
+    }
+  ],
   "hooks": {
     "timeout_ms": 2000
   },

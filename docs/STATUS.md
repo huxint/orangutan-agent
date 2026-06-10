@@ -9,34 +9,34 @@
 
 ## Snapshot
 
-- **Slice:** 227 (`xmake run orangutan -- --help` reports slice 227)
+- **Slice:** 228 (`xmake run orangutan -- --help` reports slice 228)
 - **Last completed history:**
-  [`histories/2026-06/20260610-1035-channel-mock-ingress-dispatch.md`](histories/2026-06/20260610-1035-channel-mock-ingress-dispatch.md)
+  [`histories/2026-06/20260610-1147-channel-config-registration-routing.md`](histories/2026-06/20260610-1147-channel-config-registration-routing.md)
 - **Active exec-plans:**
-  - [`exec-plans/active/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/active/2026-06-09-channel-ingress-and-adapters.md)
-    — the current higher-value coupling track.
+  - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
+    — the current main line; spun off from the completed channel-ingress
+    plan ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
   - [`exec-plans/active/2026-06-07-automation-cron-category.md`](exec-plans/active/2026-06-07-automation-cron-category.md)
     — open but paused in favor of channel ingress.
   - [`exec-plans/active/2026-06-06-replace-webui-with-desktop.md`](exec-plans/active/2026-06-06-replace-webui-with-desktop.md)
     — docs-stage desktop repivot; reference sweep unfinished.
-- **Latest completed slice:** slice 227 ships channel-ingress milestone 2:
-  the first concrete adapter plus the channel→agent dispatch seam.
-  `channel::MockChannel` accepts externally pushed inbound messages over a
-  bounded queue and records outbound sends; `channel::ChannelPromptRunner` /
-  `dispatch_one(...)` take one queued message through a caller-supplied
-  runner and reply through the owning adapter; bootstrap's
-  `make_channel_agent_prompt_runner(...)` backs that runner with
-  `AgentPromptRunner` and stable per-conversation session ids. The
-  end-to-end proof (mock push → manager fan-in → dispatch → mocked provider
-  → reply in the adapter) lives in `test-bootstrap`. No HTTP listener,
-  background receive loop, or bootstrap channel registration yet. Focused
-  result: `test-channel` **24 cases / 186 assertions**, `test-bootstrap`
-  **139 cases / 1224 assertions**; `bench-channel` adds direct-runner vs.
-  full-mock-ingress dispatch.
-- **Next intended slice:** channel-ingress milestone 3 — bootstrap channel
-  registration and routing: map config-authored channels into registered
-  adapters and route inbound messages to configured agents through the
-  shipped dispatch seam.
+- **Latest completed slice:** slice 228 ships channel-ingress milestone 3:
+  config-authored channel registration and per-channel agent routing. The
+  typed `channels[]` config block (`id`, `kind`, `agent_key`,
+  `inbound_capacity`) parses in `oran-config`; bootstrap's
+  `register_configured_channels(...)` builds and registers buildable
+  adapters into a caller-owned `ChannelManager` (unknown kinds skipped and
+  reported, mock handles returned), and
+  `make_routed_channel_prompt_runner(...)` dispatches each channel id to its
+  configured agent's prompt bridge. End-to-end proof: two configured
+  channels with different agents — external pushes route through the manager
+  to per-agent overlays and reply into the right adapter. Focused result:
+  `test-config` **54 cases / 501 assertions**, `test-bootstrap` **145 cases
+  / 1304 assertions**.
+- **Next intended slice:** start the QQ port behind the shipped trait —
+  first slice of
+  [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
+  (API client over `oran-http`, then transport/token/dispatch slices).
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 
@@ -59,7 +59,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-http`: 3 cases / 21 assertions.
 - `oran-io`: 54 cases / 311 assertions.
 - `oran-storage`: 77 cases / 988 assertions.
-- `oran-config`: 51 cases / 468 assertions.
+- `oran-config`: 54 cases / 501 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 38 cases / 313 assertions.
 - `oran-memory`: 38 cases / 841 assertions.
@@ -71,7 +71,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 139 cases / 1224 assertions.
+- `oran-bootstrap`: 145 cases / 1304 assertions.
 
 ## Open Tech-Debt Rows
 

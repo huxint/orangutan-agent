@@ -67,8 +67,16 @@ only — v2 makes channels pluggable.
   `make_channel_agent_prompt_runner(...)` bridging dispatched messages into
   `AgentPromptRunner` with per-conversation session continuity. The
   mock-adapter inbound path benches at ~2.4 µs/message locally (≫ the
-  200 msg/s acceptance floor). Webhook/QQ adapters and bootstrap
-  registration/routing remain open.
+  200 msg/s acceptance floor).
+- Slice 228: config-authored registration and routing — typed
+  `config.channels[]` (`id`, `kind`, `agent_key`, `inbound_capacity`),
+  bootstrap `register_configured_channels(...)` into a caller-owned
+  `ChannelManager` (unknown kinds skipped + reported), and
+  `make_routed_channel_prompt_runner(...)` routing each channel id to its
+  configured agent. This closes the v1 "per-channel config in
+  `config.channels[]`" scope line for buildable adapters. Webhook/QQ
+  adapters and any background receive loop remain open; the QQ port has its
+  own plan.
 
 ## Design Doc Cross-References
 

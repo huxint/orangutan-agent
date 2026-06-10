@@ -1126,6 +1126,114 @@ TEST_CASE("Config::parse rejects malformed automation cron jobs", "[unit][config
   }
 }
 
+TEST_CASE("Config::parse extracts channel adapters", "[unit][config][channel]") {
+  auto result = config::Config::parse(R"json({
+  "channels": [
+    {
+      "id": "mock-main",
+      "kind": "mock",
+      "agent_key": "concierge",
+      "inbound_capacity": 16
+    },
+    {
+      "id": "mock-side",
+      "kind": "mock"
+    }
+  ]
+})json");
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->channels().size() == 2);
+  REQUIRE(result->channels()[0].id == "mock-main");
+  REQUIRE(result->channels()[0].kind == "mock");
+  REQUIRE(result->channels()[0].agent_key == "concierge");
+  REQUIRE(result->channels()[0].inbound_capacity == 16);
+
+  REQUIRE(result->channels()[1].id == "mock-side");
+  REQUIRE(result->channels()[1].kind == "mock");
+  REQUIRE(result->channels()[1].agent_key == "default");
+  REQUIRE(result->channels()[1].inbound_capacity == 64);
+}
+
+TEST_CASE("Config::parse defaults channels when absent", "[unit][config][channel]") {
+  auto absent = config::Config::parse(R"json({})json");
+  REQUIRE(absent.has_value());
+  REQUIRE(absent->channels().empty());
+
+  auto empty = config::Config::parse(R"json({"channels": []})json");
+  REQUIRE(empty.has_value());
+  REQUIRE(empty->channels().empty());
+}
+
+TEST_CASE("Config::parse rejects malformed channels", "[unit][config][channel]") {
+  SECTION("non-array channels block") {
+    auto result = config::Config::parse(R"json({"channels": {}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-object channel entry") {
+    auto result = config::Config::parse(R"json({"channels": ["mock"]})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("empty id") {
+    auto result = config::Config::parse(R"json({"channels": [{"id": "", "kind": "mock"}]})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("missing kind") {
+    auto result = config::Config::parse(R"json({"channels": [{"id": "mock-main"}]})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("empty agent key") {
+    auto result =
+        config::Config::parse(R"json({"channels": [{"id": "mock-main", "kind": "mock", "agent_key": ""}]})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-positive inbound capacity") {
+    auto result =
+        config::Config::parse(R"json({"channels": [{"id": "mock-main", "kind": "mock", "inbound_capacity": 0}]})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("duplicate id") {
+    auto result = config::Config::parse(R"json({
+  "channels": [
+    {"id": "mock-main", "kind": "mock"},
+    {"id": "mock-main", "kind": "mock"}
+  ]
+})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("unknown channel field fails under strict config") {
+    auto result = config::Config::parse(R"json({
+  "strict_config": true,
+  "channels": [{"id": "mock-main", "kind": "mock", "token": "secret"}]
+})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("unknown channel field warns without strict config") {
+    auto result = config::Config::parse(R"json({
+  "channels": [{"id": "mock-main", "kind": "mock", "token": "secret"}]
+})json");
+    REQUIRE(result.has_value());
+    REQUIRE(result->warnings().size() == 1);
+    REQUIRE(result->warnings()[0].path == "$.channels[0].token");
+  }
+}
+
 TEST_CASE("Config::parse rejects malformed memory recall policy", "[unit][config][memory]") {
   SECTION("non-object memory block") {
     auto result = config::Config::parse(R"json({"memory": []})json");

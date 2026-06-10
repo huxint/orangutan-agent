@@ -202,6 +202,21 @@ struct AutomationConfig {
   friend bool operator==(const AutomationConfig&, const AutomationConfig&) = default;
 };
 
+/// One config-authored channel adapter instance under `config.channels[]`.
+/// `kind` selects the adapter implementation ("mock" today; platform kinds
+/// arrive with their adapter libraries). `agent_key` names the agent that
+/// answers messages arriving on this channel; bootstrap maps it through the
+/// channel prompt-runner bridge. `inbound_capacity` bounds the adapter's
+/// inbound queue.
+struct ChannelConfig {
+  std::string id;
+  std::string kind;
+  std::string agent_key{"default"};
+  std::size_t inbound_capacity{64};
+
+  friend bool operator==(const ChannelConfig&, const ChannelConfig&) = default;
+};
+
 /// Verdict spelling that appears in `config.permissions.{allow,deny,ask}`.
 /// Mirrors `permission::Verdict` but stays inside `oran-config` because the
 /// dependency direction (config below permission) forbids importing the
@@ -344,6 +359,9 @@ public:
   [[nodiscard]] const AutomationConfig& automation() const noexcept {
     return automation_;
   }
+  [[nodiscard]] std::span<const ChannelConfig> channels() const noexcept {
+    return std::span<const ChannelConfig>{channels_};
+  }
   [[nodiscard]] const PermissionsConfig& permissions() const noexcept {
     return permissions_;
   }
@@ -365,6 +383,7 @@ private:
   HooksConfig hooks_{};
   MemoryConfig memory_{};
   AutomationConfig automation_{};
+  std::vector<ChannelConfig> channels_{};
   PermissionsConfig permissions_{};
   std::vector<AgentConfig> agents_{};
   std::vector<ConfigWarning> warnings_{};

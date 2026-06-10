@@ -1,5 +1,11 @@
 # Channel Ingress And Adapters
 
+> **Closed 2026-06-10 (complete).** Milestones 1–3 shipped in slices 226–228:
+> foundation library, mock ingress + dispatch seam, and config-authored
+> bootstrap registration/routing. Milestone 4 (QQ port) is handed off to its
+> own plan per `design-docs/channel-abstraction.md`:
+> [`2026-06-10-channel-qq-port.md`](../active/2026-06-10-channel-qq-port.md).
+
 ## Goal
 
 Land the channel interface path that lets external chat/webhook messages reach
@@ -100,8 +106,14 @@ mock/webhook/QQ adapter and bootstrap routing slices.
   caller-owned `dispatch_one(...)`, and bootstrap's
   `make_channel_agent_prompt_runner(...)` bridge; end-to-end mock→manager→
   agent-path→reply proof against a mocked provider in `test-bootstrap`.
-- [ ] Wire bootstrap channel registration and agent dispatch.
-- [ ] Port QQ behind the shipped trait.
+- [x] 2026-06-10 11:30 +0800: Shipped slice 228 bootstrap registration and
+  routing — typed `config.channels[]`, `register_configured_channels(...)`
+  into a caller-owned `ChannelManager` (unknown kinds skipped + reported),
+  and `make_routed_channel_prompt_runner(...)` per-channel agent routing
+  with an end-to-end config→adapter→agent→reply proof.
+- [x] 2026-06-10: Port QQ behind the shipped trait — handed off to
+  [`2026-06-10-channel-qq-port.md`](../active/2026-06-10-channel-qq-port.md);
+  plan closed.
 
 ## Decision Log
 
@@ -122,6 +134,11 @@ mock/webhook/QQ adapter and bootstrap routing slices.
   precedent: the channel library owns the `std::function` runner contract and
   one caller-owned `dispatch_one` step; bootstrap owns the
   `AgentPromptRunner`-backed factory with per-conversation session ids.
+- 2026-06-10: Closed the plan after slice 228 instead of carrying milestone 4
+  here. The QQ port is a platform-specific multi-slice migration with its own
+  risk profile; `channel-abstraction.md` already reserves a dedicated plan
+  for it, and `PLANS_GUIDE.md` prefers closing plans and opening follow-ups
+  over living plans that never close.
 
 ## Linked Artifacts
 

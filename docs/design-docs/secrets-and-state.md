@@ -116,7 +116,17 @@ Current implementation status:
   profile-routed provider backends without adding the key values to logs,
   hook payloads, or error context. Regular configured-route `bootstrap::run`
   uses this boundary when building the provider-backed prompt runner.
-- `teams` and `channels` remain recognized but untyped. The config
+- `teams` remains recognized but untyped. The `channels[]` block is typed as
+  of slice 228: each entry carries a non-empty unique `id`, a non-empty
+  `kind` (only `"mock"` is buildable today), an optional non-empty
+  `agent_key` (default `"default"`), and an optional positive
+  `inbound_capacity` (default 64). `oran-config` validates shape and unique
+  ids; bootstrap's `register_configured_channels(...)` constructs and
+  registers buildable adapters into a caller-owned `channel::ChannelManager`
+  (unknown kinds are skipped and reported), and
+  `make_routed_channel_prompt_runner(...)` routes each channel id to its
+  configured agent through the channel prompt-runner bridge. Bootstrap does
+  not start adapters or spawn receive loops. The config
   `automation.cron.jobs[]` block is typed: each job carries a non-empty
   `job_key`, POSIX 5-field UTC `expression`, UTC `first_fire_at`, and optional
   UTC `last_fired_at`. `oran-config` validates shape, timestamps, and unique

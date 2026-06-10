@@ -54,8 +54,14 @@ concrete runner factory (`make_channel_agent_prompt_runner(...)`), which
 builds one `AgentPromptRunner` per dispatched message and derives a stable
 per-conversation session id — mirroring the automation prompt-runner
 precedent so `oran-channel` never depends on agent or bootstrap internals.
-Platform adapters, bootstrap registration/routing, and any receive loop
-remain downstream.
+Slice 228 adds the config-authored layer on top: the typed
+`config.channels[]` block, bootstrap's `register_configured_channels(...)`
+(builds buildable adapters — only `"mock"` today — into a caller-owned
+`ChannelManager`, skipping and reporting unknown kinds per the
+adapter-toggle policy below), and `make_routed_channel_prompt_runner(...)`,
+which routes each configured channel id to its `agent_key` bridge. Platform
+adapters and any receive loop remain downstream; the QQ port is managed by
+its own exec plan.
 
 ## Inbound / Outbound Envelopes
 

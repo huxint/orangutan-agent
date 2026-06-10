@@ -116,6 +116,13 @@ constexpr auto kRecognizedAutomationCronJobFields = std::array<std::string_view,
     "last_fired_at",
 };
 
+constexpr auto kRecognizedChannelFields = std::array<std::string_view, 4>{
+    "id",
+    "kind",
+    "agent_key",
+    "inbound_capacity",
+};
+
 constexpr auto kRecognizedProfileFields = std::array<std::string_view, 6>{
     "provider",
     "protocol",
@@ -1153,6 +1160,92 @@ parse_automation(const json& root, bool strict, std::vector<ConfigWarning>& warn
   return automation;
 }
 
+[[nodiscard]] Result<ChannelConfig>
+parse_channel(const json& value, std::string_view path, bool strict, std::vector<ConfigWarning>& warnings) {
+  if (!value.is_object()) {
+    return std::unexpected(config_error("channel must be an object", std::string{path}));
+  }
+
+  auto id = required_string(value, "id", path);
+  if (!id) {
+    return std::unexpected(std::move(id.error()));
+  }
+  if (id->empty()) {
+    return std::unexpected(config_error("channel id must be non-empty", child_path(path, "id")));
+  }
+
+  auto kind = required_string(value, "kind", path);
+  if (!kind) {
+    return std::unexpected(std::move(kind.error()));
+  }
+  if (kind->empty()) {
+    return std::unexpected(config_error("channel kind must be non-empty", child_path(path, "kind")));
+  }
+
+  auto channel = ChannelConfig{
+      .id = std::move(*id),
+      .kind = std::move(*kind),
+  };
+
+  if (const auto it = value.find("agent_key"); it != value.end()) {
+    if (!it->is_string()) {
+      return std::unexpected(config_error("expected string", child_path(path, "agent_key")));
+    }
+    channel.agent_key = it->get<std::string>();
+    if (channel.agent_key.empty()) {
+      return std::unexpected(config_error("channel agent_key must be non-empty", child_path(path, "agent_key")));
+    }
+  }
+
+  if (const auto it = value.find("inbound_capacity"); it != value.end()) {
+    auto parsed = positive_integer_value(*it, child_path(path, "inbound_capacity"));
+    if (!parsed) {
+      return std::unexpected(std::move(parsed.error()));
+    }
+    channel.inbound_capacity = static_cast<std::size_t>(*parsed);
+  }
+
+  auto unknowns =
+      collect_unknown_object_fields(value, path, kRecognizedChannelFields, "unknown channel field", strict, warnings);
+  if (!unknowns) {
+    return std::unexpected(std::move(unknowns.error()));
+  }
+
+  return channel;
+}
+
+[[nodiscard]] Result<std::vector<ChannelConfig>>
+parse_channels(const json& root, bool strict, std::vector<ConfigWarning>& warnings) {
+  auto channels = std::vector<ChannelConfig>{};
+  const auto it = root.find("channels");
+  if (it == root.end()) {
+    return channels;
+  }
+  constexpr std::string_view kPath = "$.channels";
+  if (!it->is_array()) {
+    return std::unexpected(config_error("expected array of channels", std::string{kPath}));
+  }
+
+  auto seen_ids = std::vector<std::string>{};
+  channels.reserve(it->size());
+  seen_ids.reserve(it->size());
+  auto index = std::size_t{0};
+  for (const auto& item : *it) {
+    const auto item_path = element_path(kPath, index);
+    auto channel = parse_channel(item, item_path, strict, warnings);
+    if (!channel) {
+      return std::unexpected(std::move(channel.error()));
+    }
+    if (std::ranges::contains(seen_ids, channel->id)) {
+      return std::unexpected(config_error("channel id must be unique", child_path(item_path, "id")));
+    }
+    seen_ids.push_back(channel->id);
+    channels.push_back(std::move(*channel));
+    ++index;
+  }
+  return channels;
+}
+
 [[nodiscard]] Result<void>
 parse_optional_price(const json& object, std::string_view key, std::string_view path, std::optional<double>& out) {
   const auto it = object.find(key);
@@ -1795,6 +1888,10 @@ core::Result<Config> Config::parse(std::string_view contents, LoadOptions option
     if (!automation) {
       return std::unexpected(std::move(automation.error()));
     }
+    auto channels = parse_channels(root, strict_effective, warnings);
+    if (!channels) {
+      return std::unexpected(std::move(channels.error()));
+    }
     auto permissions = parse_root_permissions(root, strict_effective, warnings);
     if (!permissions) {
       return std::unexpected(std::move(permissions.error()));
@@ -1815,6 +1912,7 @@ core::Result<Config> Config::parse(std::string_view contents, LoadOptions option
     config.hooks_ = std::move(*hooks);
     config.memory_ = *memory;
     config.automation_ = std::move(*automation);
+    config.channels_ = std::move(*channels);
     config.permissions_ = std::move(*permissions);
     config.agents_ = std::move(*agents);
     config.warnings_ = std::move(warnings);
