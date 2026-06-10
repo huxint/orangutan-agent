@@ -61,7 +61,9 @@ Slice 228 adds the config-authored layer on top: the typed
 adapter-toggle policy below), and `make_routed_channel_prompt_runner(...)`,
 which routes each configured channel id to its `agent_key` bridge. Platform
 adapters and any receive loop remain downstream; the QQ port is managed by
-its own exec plan.
+its own exec plan, whose milestone 1 (slice 229) ships the gated
+`oran-channel-qq` library with the token store and API client described
+under "QQ Adapter Migration" below.
 
 ## Inbound / Outbound Envelopes
 
@@ -146,12 +148,18 @@ src/oran-channel-ws/      generic websocket adapter (stretch)
 xmake option toggles:
 
 ```lua
-option("channel_qq")       set_default(true)
+option("channel_qq")       set_default(false)  -- shipped (slice 229); off until round-trip acceptance
 option("channel_discord")  set_default(false)
 option("channel_slack")    set_default(false)
 option("channel_telegram") set_default(false)
-option("channel_webhook")  set_default(true)
+option("channel_webhook")  set_default(true)   -- planned
 ```
+
+An adapter option defaults **on** only after its port's round-trip
+acceptance has passed (mock server in CI plus a manual real-credential
+smoke test); `channel_qq` therefore ships default-off — see the decision
+log in
+[`../exec-plans/active/2026-06-10-channel-qq-port.md`](../exec-plans/active/2026-06-10-channel-qq-port.md).
 
 Disabled adapters do not link, do not compile. The `oran-bootstrap` config-loader
 silently ignores config entries for disabled adapters with a single warning.
@@ -238,7 +246,16 @@ mitigates by:
   *the abstraction* (download URL, get bytes, cache) is shared with other adapters via
   `oran-channel::AttachmentCache`.
 
-`docs/exec-plans/active/<date>-channel-qq-port.md` (to be created) will manage the port.
+[`../exec-plans/active/2026-06-10-channel-qq-port.md`](../exec-plans/active/2026-06-10-channel-qq-port.md)
+manages the port. Milestone 1 (slice 229) shipped the first two pieces:
+`qq::TokenStore` (single-flight app-access-token refresh with refresh-ahead
+expiry, `invalidate()` for the 401 path) and `qq::ApiClient` (authenticated
+requests with the platform retry ladder — one token refresh on 401, bounded
+`retry-after` 429 retries, bounded gateway backoff — plus
+`normalize_api_response` for trace-id/retry-after/business-envelope
+capture), validated offline against a scripted loopback HTTP server. The
+receive transport, the `Channel` trait adapter, and bootstrap registration
+are the remaining milestones.
 
 ## New Adapter Recipe
 

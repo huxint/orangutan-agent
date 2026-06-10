@@ -40,6 +40,7 @@
     "oran-orchestration":{ "median_sec": 1.5, "p95_sec": 3.0, "hard_cap_sec": 3.5 },
     "oran-automation":   { "median_sec": 1.5, "p95_sec": 3.0, "hard_cap_sec": 3.5 },
     "oran-channel":      { "median_sec": 1.2, "p95_sec": 2.5, "hard_cap_sec": 3.0 },
+    "oran-channel-qq":   { "median_sec": 1.2, "p95_sec": 2.5, "hard_cap_sec": 3.0 },
     "oran-web":          { "median_sec": 1.5, "p95_sec": 3.0, "hard_cap_sec": 4.0 },
     "oran-cli":          { "median_sec": 1.5, "p95_sec": 3.0, "hard_cap_sec": 4.0 },
     "oran-bootstrap":    { "median_sec": 2.0, "p95_sec": 4.0, "hard_cap_sec": 5.0 }

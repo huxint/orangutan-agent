@@ -50,6 +50,9 @@ if has_config("vector_memory") then
 end
 oran_lib("automation", { "oran-core", "oran-async", "oran-storage", "oran-memory", "oran-hook" }, {})
 oran_lib("channel", { "oran-core", "oran-async" }, {})
+if has_config("channel_qq") then
+    oran_lib("channel-qq", { "oran-core", "oran-async", "oran-http" }, { "nlohmann_json" }, { "asio" })
+end
 oran_lib("skill", { "oran-core", "oran-async", "oran-io" }, {})
 oran_lib("tool", { "oran-core", "oran-async", "oran-io", "oran-permission", "oran-hook" }, { "nlohmann_json" })
 oran_lib("prompt", { "oran-core", "oran-async", "oran-config", "oran-tool" }, {})

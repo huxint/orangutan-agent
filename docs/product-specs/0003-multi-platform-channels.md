@@ -77,6 +77,18 @@ only — v2 makes channels pluggable.
   `config.channels[]`" scope line for buildable adapters. Webhook/QQ
   adapters and any background receive loop remain open; the QQ port has its
   own plan.
+- Slice 229: QQ-port milestone 1 — the gated `oran-channel-qq` library
+  (`xmake f --channel_qq=y`, default off until round-trip acceptance) with
+  `qq::TokenStore` (single-flight app-access-token refresh, refresh-ahead
+  expiry, 401-path `invalidate()`) and `qq::ApiClient` (authenticated
+  `get`/`post`/`put`/`del` over `oran-http::Client`, `Authorization: QQBot`,
+  the 401/429/gateway retry ladder, `normalize_api_response` trace-id /
+  retry-after / business-envelope capture). Request/response shapes
+  validated offline against a scripted loopback HTTP server
+  (`test-channel-qq` 21 cases / 129 assertions); disabled builds configure
+  zero adapter targets, keeping acceptance criterion 1 intact. The receive
+  transport, trait adapter, and bootstrap registration follow in the
+  QQ-port plan's later milestones.
 
 ## Design Doc Cross-References
 

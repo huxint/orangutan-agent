@@ -20,7 +20,7 @@ Each entry contains:
 
 | Lib | Version | Used by | Purpose | Cost | License | Boundary |
 | --- | --- | --- | --- | --- | --- | --- |
-| `nlohmann_json` | 3.12.0 | config, tool, provider, agent, memory, future prompt | JSON parsing/serialization | med | MIT | `.cpp` only; public headers avoid JSON parser types |
+| `nlohmann_json` | 3.12.0 | config, tool, provider, agent, memory, channel-qq (gated), future prompt | JSON parsing/serialization | med | MIT | `.cpp` only; public headers avoid JSON parser types |
 | `fmt` | 12.1.0 | log, prompt, desktop | string formatting | low | MIT | PCH set |
 | `spdlog` | 1.17.0 | oran-log only | structured logging | med | MIT | hidden behind `oran-log` shim |
 | `rapidhash` | 1.0 | core, storage | hashing | low | BSD-2 | wherever |

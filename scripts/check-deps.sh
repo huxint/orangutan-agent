@@ -57,6 +57,8 @@ declare -A LAYER=(
   [cli]=4
   [web]=4
   [channel]=4
+  # Quoted: shfmt rewrites an unquoted dashed subscript as arithmetic.
+  ["channel-qq"]=4
   # composition root
   [bootstrap]=5
 )

@@ -165,7 +165,12 @@ option_end()
 ```
 
 Feature options such as `channel_qq`, `hook_lua`, and `vector_memory` land with the
-library that consumes them.
+library that consumes them. Shipped so far: `vector_memory` (sqlite-vec memory
+backend) and `channel_qq` (slice 229 — gates the `oran-channel-qq` /
+`test-channel-qq` / `bench-channel-qq` targets in `xmake/targets.lua`,
+`xmake/tests.lua`, and `xmake/bench.lua`; default off until the QQ port's
+round-trip acceptance passes, per
+`docs/exec-plans/active/2026-06-10-channel-qq-port.md`).
 
 ## Packages
 
@@ -362,9 +367,12 @@ buckets. Slice 227 adds the in-process `MockChannel` adapter and the
 `ChannelPromptRunner` dispatch seam inside the same target (no new xmake
 target), and `oran-bootstrap` now depends on `oran-channel` for the
 `make_channel_agent_prompt_runner(...)` bridge, so the `orangutan` binary
-links `oran-channel` transitively. Platform adapter targets such as
-`oran-channel-webhook` and `oran-channel-qq` remain future targets and are not
-linked until bootstrap registration exists.
+links `oran-channel` transitively. Slice 229 adds the first gated platform
+adapter target: `oran-channel-qq` (plus `test-channel-qq` /
+`bench-channel-qq`) exists only under `xmake f --channel_qq=y` and currently
+depends on `oran-core`, `oran-async`, and `oran-http`; it is not linked into
+the `orangutan` binary until bootstrap registration lands in a later QQ-port
+milestone. `oran-channel-webhook` remains a future target.
 
 **Key compile-time wins from this shape:**
 

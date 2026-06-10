@@ -38,6 +38,9 @@ oran_test("hook", { "oran-hook" })
 oran_test("memory", { "oran-memory" })
 oran_test("automation", { "oran-automation" })
 oran_test("channel", { "oran-channel" })
+if has_config("channel_qq") then
+    oran_test("channel-qq", { "oran-channel-qq" })
+end
 oran_test("skill", { "oran-skill" })
 oran_test("tool", { "oran-tool" }, { "nlohmann_json" })
 oran_test("prompt", { "oran-prompt" })

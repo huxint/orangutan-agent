@@ -34,3 +34,8 @@ option("vector_memory")
     set_default(false)
     set_description("Enable optional sqlite-vec long-term memory vector backend.")
 option_end()
+
+option("channel_qq")
+    set_default(false)
+    set_description("Enable the optional QQ channel adapter library (oran-channel-qq). Off until the port's round-trip acceptance passes (exec-plans/active/2026-06-10-channel-qq-port.md).")
+option_end()

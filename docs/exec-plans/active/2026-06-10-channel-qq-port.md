@@ -106,7 +106,11 @@ Migration"), which reserves a dedicated plan for the port.
 
 - [x] 2026-06-10: Plan created at the channel-ingress plan's close; no code
   yet.
-- [ ] Milestone 1: API client + TokenStore.
+- [x] Milestone 1: API client + TokenStore — slice 229
+  ([`../../histories/2026-06/20260610-1325-channel-qq-api-client.md`](../../histories/2026-06/20260610-1325-channel-qq-api-client.md)).
+  Gated `oran-channel-qq` target plus `test-channel-qq` (21 cases / 129
+  assertions against a scripted loopback HTTP server) and
+  `bench-channel-qq`; request/response shapes validated offline.
 - [ ] Milestone 2: receive transport.
 - [ ] Milestone 3: trait adapter + gated registration.
 - [ ] Milestone 4: round-trip acceptance.
@@ -122,6 +126,20 @@ Migration"), which reserves a dedicated plan for the port.
   round-trip acceptance passes against a mock server and a manual
   real-credential smoke test, despite the design doc sketching `default(true)`
   — an unvalidated network adapter must not be in default builds.
+- 2026-06-10 (slice 229): the token-refresh race is serialized with the
+  `oran-io` singleflight idiom (per-waiter timer, leader wake, shared
+  outcome) instead of the strand the Risks section sketched — a strand
+  cannot prevent double-refresh across `co_await` suspension points.
+  Waiters whose leader was cancelled retry as the new leader so one
+  cancelled caller does not poison concurrent callers.
+- 2026-06-10 (slice 229): milestone 1 declares only the deps it consumes
+  (`oran-core`, `oran-async`, `oran-http`); the `oran-channel` dep joins
+  with milestone 3's trait adapter, keeping the dep graph honest
+  (`scripts/check-deps.sh` gained the `channel-qq` interface-layer row).
+- 2026-06-10 (slice 229): API bodies cross the public surface as serialized
+  JSON strings (mirroring `tool::Output::data_json`) so the headers stay
+  C6-clean; typed request/response shapes belong to the milestone-3
+  adapter internals.
 
 ## Linked Artifacts
 
@@ -129,4 +147,6 @@ Migration"), which reserves a dedicated plan for the port.
 - Related product spec: `docs/product-specs/0003-multi-platform-channels.md`
 - Predecessor plan:
   `docs/exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`
-- History entries: none yet.
+- History entries:
+  - `docs/histories/2026-06/20260610-1325-channel-qq-api-client.md`
+    (milestone 1, slice 229)

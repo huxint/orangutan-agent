@@ -29,6 +29,9 @@ oran_bench("hook", { "oran-hook" })
 oran_bench("memory", { "oran-memory" })
 oran_bench("automation", { "oran-automation" })
 oran_bench("channel", { "oran-channel" })
+if has_config("channel_qq") then
+    oran_bench("channel-qq", { "oran-channel-qq" })
+end
 oran_bench("skill", { "oran-skill" })
 oran_bench("tool", { "oran-tool", "oran-hook" })
 oran_bench("prompt", { "oran-prompt" })

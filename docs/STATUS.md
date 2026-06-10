@@ -9,33 +9,29 @@
 
 ## Snapshot
 
-- **Slice:** 228 (`xmake run orangutan -- --help` reports slice 228)
+- **Slice:** 229 (`xmake run orangutan -- --help` reports slice 229)
 - **Last completed history:**
-  [`histories/2026-06/20260610-1203-exec-plan-lifecycle-archive.md`](histories/2026-06/20260610-1203-exec-plan-lifecycle-archive.md)
+  [`histories/2026-06/20260610-1325-channel-qq-api-client.md`](histories/2026-06/20260610-1325-channel-qq-api-client.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — the current main line; spun off from the completed channel-ingress
     plan ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-    The 2026-06-10 lifecycle sweep also archived the completed
-    automation-cron and desktop-repivot plans into
-    [`exec-plans/completed/`](exec-plans/completed/).
-- **Latest completed slice:** slice 228 ships channel-ingress milestone 3:
-  config-authored channel registration and per-channel agent routing. The
-  typed `channels[]` config block (`id`, `kind`, `agent_key`,
-  `inbound_capacity`) parses in `oran-config`; bootstrap's
-  `register_configured_channels(...)` builds and registers buildable
-  adapters into a caller-owned `ChannelManager` (unknown kinds skipped and
-  reported, mock handles returned), and
-  `make_routed_channel_prompt_runner(...)` dispatches each channel id to its
-  configured agent's prompt bridge. End-to-end proof: two configured
-  channels with different agents — external pushes route through the manager
-  to per-agent overlays and reply into the right adapter. Focused result:
-  `test-config` **54 cases / 501 assertions**, `test-bootstrap` **145 cases
-  / 1304 assertions**.
-- **Next intended slice:** start the QQ port behind the shipped trait —
-  first slice of
-  [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
-  (API client over `oran-http`, then transport/token/dispatch slices).
+- **Latest completed slice:** slice 229 ships QQ-port milestone 1: the new
+  gated `oran-channel-qq` library (`xmake f --channel_qq=y`, default off)
+  with `qq::TokenStore` (app-access-token fetch/refresh-ahead caching,
+  single-flight refresh, `invalidate()` for the 401 path) and
+  `qq::ApiClient` (authenticated `get`/`post`/`put`/`del` over
+  `oran-http::Client` with the platform retry ladder — one token refresh on
+  401, bounded `retry-after` 429 retries, bounded gateway backoff — plus the
+  pure `normalize_api_response` seam for `x-tps-trace-id` / `retry-after` /
+  business-envelope capture). Request/response shapes validated offline
+  against a scripted loopback HTTP server; disabled builds configure zero
+  adapter targets. Focused result: `test-channel-qq` **21 cases / 129
+  assertions**.
+- **Next intended slice:** QQ-port milestone 2 — the long-poll receive
+  transport with reconnect backoff and cancel-awareness behind
+  `Channel::next_message()`
+  ([`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)).
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 
@@ -64,6 +60,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-memory`: 38 cases / 841 assertions.
 - `oran-automation`: 106 cases / 1849 assertions.
 - `oran-channel`: 24 cases / 186 assertions.
+- `oran-channel-qq` (gated, `--channel_qq=y`): 21 cases / 129 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 208 cases / 2181 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
