@@ -1,7 +1,20 @@
 # Replace the Web UI with a Slint Desktop App
 
-> Status: active · Date: 2026-06-06 · Type: framework-docs refactor (no C++ build/logic
-> change) · Owner: huxint
+> Status: **closed 2026-06-10 (complete)** · Date: 2026-06-06 · Type: framework-docs
+> refactor (no C++ build/logic change) · Owner: huxint
+>
+> **Closing note.** All four milestones shipped (the progress log below was
+> reconciled post-hoc during the 2026-06-10 plan-lifecycle sweep): spec 0007
+> is rewritten as "Desktop App", `docs/FRONTEND.md` → `docs/DESKTOP.md` with
+> `scripts/check-docs.sh` updated, framework docs and code comments are
+> swept, and the final `rg` sweep confirms the only remaining `web` mentions
+> are the deliberately-kept ones (the `0007-web-ui.md` filename stem, the
+> historical legacy-audit description, and the still-implemented `web`
+> config block whose `web` → `desktop` migration is tracked in
+> `tech-debt-tracker.md`). The first `oran-desktop` implementation slice is
+> *not* part of this plan; it is gated on the Slint package +
+> compile-budget row and the config-block migration decision
+> ([`../../ROADMAP.md`](../../ROADMAP.md) Desktop row).
 
 ## Goal
 
@@ -107,10 +120,17 @@ refactor only; the `oran-desktop` library itself is built later in its own slice
 ## Progress Log
 
 - [x] Confirm scope, decisions, and CI constraints.
-- [ ] Milestone 1: 0007 rewrite + DESKTOP.md rename + check-docs.sh.
-- [ ] Milestone 2: framework-doc interface sync.
-- [ ] Milestone 3: code-comment sync.
-- [ ] Milestone 4: `make ci` green + sweep + commit.
+- [x] Milestone 1: 0007 rewrite + DESKTOP.md rename + check-docs.sh.
+      (Verified 2026-06-10: `docs/DESKTOP.md` exists, `docs/FRONTEND.md` is
+      gone, `scripts/check-docs.sh` lists `DESKTOP.md`, spec 0007 is titled
+      "Desktop App".)
+- [x] Milestone 2: framework-doc interface sync. (Verified 2026-06-10: the
+      reference sweep returns only the deliberately-kept mentions.)
+- [x] Milestone 3: code-comment sync. (Verified 2026-06-10: no `web UI` /
+      `oran-web` mentions remain under `src/`, `include/`, or `tests/`.)
+- [x] Milestone 4: `make ci` green + sweep + commit. (Shipped across the
+      docs commits preceding slice 226; `make ci` green as of the
+      2026-06-10 sweep.)
 
 ## Decision Log
 

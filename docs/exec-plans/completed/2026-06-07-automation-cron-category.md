@@ -1,5 +1,19 @@
 # Automation Cron Category
 
+> **Closed 2026-06-10 (complete).** The plan's goal — cron-category planning
+> and state boundaries without starting a scheduler service — shipped across
+> slices 197–225 (evaluator, durable cron/triggered state, leases, queue,
+> prompt handlers, bootstrap agent-prompt bridge, notifier callbacks, the
+> composed caller-owned `AutomationService` owner, hold/retry, and the finite
+> `AutomationService::run(...)` loop policy). The remaining "later scheduler
+> slices" (detached service-loop startup/shutdown ownership, concrete
+> notifier routing, agent firing above the finite loop) are intentionally
+> out of this plan's scope and gated on the runtime-service/daemon owner
+> decision — [`../../ROADMAP.md`](../../ROADMAP.md) Dependency Frontier #2.
+> Archived as part of the 2026-06-10 plan-lifecycle sweep; the track was
+> paused in favor of channel ingress on 2026-06-09 and its frontier lives in
+> the ROADMAP Automation row.
+
 ## Goal
 
 Land the first cron-category planning and state boundaries for

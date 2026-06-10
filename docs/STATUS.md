@@ -11,15 +11,14 @@
 
 - **Slice:** 228 (`xmake run orangutan -- --help` reports slice 228)
 - **Last completed history:**
-  [`histories/2026-06/20260610-1147-channel-config-registration-routing.md`](histories/2026-06/20260610-1147-channel-config-registration-routing.md)
+  [`histories/2026-06/20260610-1203-exec-plan-lifecycle-archive.md`](histories/2026-06/20260610-1203-exec-plan-lifecycle-archive.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — the current main line; spun off from the completed channel-ingress
     plan ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-  - [`exec-plans/active/2026-06-07-automation-cron-category.md`](exec-plans/active/2026-06-07-automation-cron-category.md)
-    — open but paused in favor of channel ingress.
-  - [`exec-plans/active/2026-06-06-replace-webui-with-desktop.md`](exec-plans/active/2026-06-06-replace-webui-with-desktop.md)
-    — docs-stage desktop repivot; reference sweep unfinished.
+    The 2026-06-10 lifecycle sweep also archived the completed
+    automation-cron and desktop-repivot plans into
+    [`exec-plans/completed/`](exec-plans/completed/).
 - **Latest completed slice:** slice 228 ships channel-ingress milestone 3:
   config-authored channel registration and per-channel agent routing. The
   typed `channels[]` config block (`id`, `kind`, `agent_key`,
