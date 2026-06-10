@@ -21,6 +21,7 @@ required_files=(
   "docs/PRODUCT_SENSE.md"
   "docs/QUALITY_SCORE.md"
   "docs/STATUS.md"
+  "docs/ROADMAP.md"
   "docs/RELIABILITY.md"
   "docs/SECURITY.md"
   "docs/SUPPLY_CHAIN_SECURITY.md"

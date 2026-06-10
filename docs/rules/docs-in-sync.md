@@ -37,6 +37,7 @@ same change:
 | Anything user-visible                                    | `docs/releases/feature-release-notes.md` |
 | Any behavior change at all                               | `docs/histories/YYYY-MM/YYYYMMDD-HHmm-<slug>.md` |
 | Any history entry that completes a slice or moves a `QUALITY_SCORE` row | `docs/STATUS.md` (bump `Slice`, repoint `Last completed history`, refresh test/assertion counts and the open-tech-debt list) |
+| Any slice that moves a subsystem's frontier (new capability, new "next step", resolved or added pre-dependency) | `docs/ROADMAP.md` (refresh the touched track's row and, if a cross-track blocker changed, the Dependency Frontier list) |
 
 If the table doesn't list your change, ask "what doc would a new agent want to read
 about this in six months?" — and update *that* doc.

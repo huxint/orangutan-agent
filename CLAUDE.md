@@ -12,7 +12,7 @@ This file is a **routing index**. Rules → `docs/rules/`. Architecture → `doc
 
 Start to commit; the sections below hold the detail.
 
-1. **Orient** — read `docs/STATUS.md`, then the **Module Routing** row for your area.
+1. **Orient** — read `docs/STATUS.md`, your track's `docs/ROADMAP.md` row, then the **Module Routing** row for your area.
 2. **Scope** — one small slice; beyond ~600 LoC / ~6 files wants a plan first ([`PLANS_GUIDE.md`](docs/PLANS_GUIDE.md)).
 3. **Build to the rules** — [`critical-rules.md`](docs/rules/critical-rules.md) + [`compile-budget.md`](docs/rules/compile-budget.md).
 4. **Verify** — add or tighten a test/bench ([`testing-and-bench.md`](docs/rules/testing-and-bench.md)).
@@ -23,7 +23,8 @@ Start to commit; the sections below hold the detail.
 
 | File | Why |
 | --- | --- |
-| `docs/STATUS.md` | Project snapshot: current slice, last history, active exec-plan, tech-debt. **Read first.** |
+| `docs/STATUS.md` | Project snapshot: current slice, last history, active exec-plans, tech-debt. **Read first.** |
+| `docs/ROADMAP.md` | Per-track progress matrix: frontier, next step, pre-dependencies. Read your track's row before scoping. |
 | `docs/REPO_COLLAB_GUIDE.md` | Commit / PR / test expectations. |
 | `docs/ARCHITECTURE.md` | Library boundaries, binary inventory. |
 | `docs/PRODUCT_SENSE.md` | Product principles — shape tradeoffs without re-asking. |
