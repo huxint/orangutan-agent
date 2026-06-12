@@ -28,9 +28,10 @@
   against a scripted loopback HTTP server; disabled builds configure zero
   adapter targets. Focused result: `test-channel-qq` **21 cases / 129
   assertions**.
-- **Next intended slice:** QQ-port milestone 2 — the long-poll receive
-  transport with reconnect backoff and cancel-awareness behind
-  `Channel::next_message()`
+- **Next intended slice:** QQ-port milestone 2 — the WebSocket-gateway
+  receive transport (Hello/Identify/heartbeat/Resume) with reconnect
+  backoff and cancel-awareness behind `Channel::next_message()` (QQ has no
+  long-poll; see [`references/messaging-platform-apis.md`](references/messaging-platform-apis.md))
   ([`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)).
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.

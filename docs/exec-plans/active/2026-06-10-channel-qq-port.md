@@ -19,8 +19,10 @@ Migration"), which reserves a dedicated plan for the port.
   `oran-core` + `oran-async` only.
 - QQ API client rewritten over `oran-http::Client` (no direct libcurl), with
   OAuth/token refresh isolated in a `TokenStore`.
-- Long-poll/receive transport with reconnect backoff behind
-  `Channel::next_message()`.
+- WebSocket-gateway receive transport (Hello/Identify/heartbeat/Resume) with
+  reconnect backoff behind `Channel::next_message()`. (QQ has no long-poll;
+  the gateway — or an HTTP webhook — is the only inbound transport. See
+  `docs/references/messaging-platform-apis.md`.)
 - Outbound send + message builder behind `Channel::send(...)`, with an
   honestly-filled `Capabilities` matrix.
 - Config: `channels[].kind == "qq"` fields (credentials env names only — no
@@ -69,16 +71,18 @@ Migration"), which reserves a dedicated plan for the port.
 - Risk: token refresh races under the single-executor model. Mitigation:
   serialize refresh through a strand; test with the mock HTTP server's
   delayed responses.
-- Risk: long-poll transport hides a background loop. Mitigation:
-  `next_message()` stays one-resume-per-call long-poll; loop ownership stays
+- Risk: the WebSocket-gateway receive loop hides a background loop. Mitigation:
+  `next_message()` stays one-resume-per-call (surfacing one gateway dispatch
+  frame per resume); the persistent connection/heartbeat loop ownership stays
   with the future runtime-service owner.
 
 ## Milestones
 
 1. **API client + TokenStore.** Offline request building/response decoding
    over `oran-http::Client` against a mock server; OAuth refresh isolated.
-2. **Receive transport.** Long-poll `next_message()` with reconnect backoff
-   and cancel-awareness.
+2. **Receive transport.** WebSocket-gateway `next_message()`
+   (Hello/Identify/heartbeat/Resume) with reconnect backoff and
+   cancel-awareness. (QQ offers no long-poll; gateway or webhook only.)
 3. **Channel adapter.** `qq::QqChannel` implementing the trait end-to-end
    (send + message builder + capabilities), registered through
    `register_configured_channels(...)` behind `kind == "qq"` and
@@ -140,10 +144,26 @@ Migration"), which reserves a dedicated plan for the port.
   JSON strings (mirroring `tool::Output::data_json`) so the headers stay
   C6-clean; typed request/response shapes belong to the milestone-3
   adapter internals.
+- 2026-06-12: corrected milestone 2's wording from "long-poll receive
+  transport" to "WebSocket-gateway receive transport." A research pass
+  against Tencent's own SDKs (`botgo`, `botpy`) and the
+  `tencent-connect/openclaw-qqbot` plugin confirmed QQ offers **no**
+  long-poll — inbound is a persistent WebSocket gateway
+  (Hello/Identify/heartbeat/Resume) or an HTTP webhook (Ed25519 + op-13
+  handshake). The `Channel::next_message()` trait method is unchanged
+  (still one-resume-per-call); only the transport behind it was misnamed.
+  The same pass also validated milestone-1 code (`QQBot ` auth prefix,
+  string-or-int `expires_in`, case-insensitive `x-tps-trace-id`) as
+  correct, and recorded the gateway opcode/close-code/intents details for
+  milestone 2 in `docs/references/messaging-platform-apis.md`. Build the
+  gateway before the webhook: it needs no public ingress and no Ed25519
+  dependency.
 
 ## Linked Artifacts
 
 - Related design doc: `docs/design-docs/channel-abstraction.md`
+- Related reference: `docs/references/messaging-platform-apis.md`
+  (code-grounded QQ gateway opcodes / close codes / intents / send shapes)
 - Related product spec: `docs/product-specs/0003-multi-platform-channels.md`
 - Predecessor plan:
   `docs/exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`

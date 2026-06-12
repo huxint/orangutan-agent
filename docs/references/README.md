@@ -21,3 +21,7 @@ Avoid dumping large vendor manuals here. Keep references curated and scoped.
   scaffold's philosophy in one place.
 - [`third-party-libs.md`](third-party-libs.md) — notes about the libraries we use
   beyond what's captured in [`../rules/libraries.md`](../rules/libraries.md).
+- [`messaging-platform-apis.md`](messaging-platform-apis.md) — distilled
+  channel-adapter reference for QQ / Discord / Telegram / WeChat bot APIs, keyed
+  to our [`Channel` trait](../design-docs/channel-abstraction.md); QQ findings
+  code-grounded against Tencent's own SDKs.
