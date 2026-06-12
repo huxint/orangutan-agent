@@ -7,6 +7,7 @@
 
 namespace orangutan::bench {
 void register_channel_qq_normalize_response(ankerl::nanobench::Bench&);
+void register_channel_qq_gateway_consume(ankerl::nanobench::Bench&);
 }  // namespace orangutan::bench
 
 int main() {
@@ -17,6 +18,7 @@ int main() {
   b.warmup(100);
 
   orangutan::bench::register_channel_qq_normalize_response(b);
+  orangutan::bench::register_channel_qq_gateway_consume(b);
 
   std::println();
   return 0;

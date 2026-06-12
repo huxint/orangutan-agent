@@ -115,7 +115,17 @@ Migration"), which reserves a dedicated plan for the port.
   Gated `oran-channel-qq` target plus `test-channel-qq` (21 cases / 129
   assertions against a scripted loopback HTTP server) and
   `bench-channel-qq`; request/response shapes validated offline.
-- [ ] Milestone 2: receive transport.
+- [~] Milestone 2: receive transport.
+  - [x] Milestone 2a: pure gateway protocol/session state machine — slice 230
+    ([`../../histories/2026-06/20260612-1631-channel-qq-gateway-protocol.md`](../../histories/2026-06/20260612-1631-channel-qq-gateway-protocol.md)).
+    `qq::GatewaySession` (`consume(frame_json)` → `GatewayReaction`,
+    Identify-vs-Resume, seq/session-id continuity,
+    `build_identify`/`build_resume`/`build_heartbeat`, `classify_close_code`),
+    offline-tested (`test-channel-qq` +19 cases → 40 / 209) with no new
+    dependency.
+  - [ ] Milestone 2b: `wss://` network transport — a cancel-aware WebSocket
+    boundary on `oran-http` driving `GatewaySession` behind
+    `Channel::next_message()`, plus the heartbeat timer and reconnect backoff.
 - [ ] Milestone 3: trait adapter + gated registration.
 - [ ] Milestone 4: round-trip acceptance.
 
@@ -158,6 +168,26 @@ Migration"), which reserves a dedicated plan for the port.
   milestone 2 in `docs/references/messaging-platform-apis.md`. Build the
   gateway before the webhook: it needs no public ingress and no Ed25519
   dependency.
+- 2026-06-12 (slice 230): split milestone 2 into **2a** (this slice — the
+  pure `qq::GatewaySession` protocol/session state machine) and **2b** (the
+  `wss://` network transport). The codebase has no WebSocket primitive:
+  `oran-http::Client` is body + SSE only, and the legacy transport ran raw
+  `curl_ws_*` on a dedicated `std::thread`, which C2 (no `std::thread`) and
+  C6 (no curl in headers) forbid. Doing the transport right means extending
+  `oran-http` with a cancel-aware WebSocket boundary under `async::Runtime`
+  — its own slice. 2a follows milestone 1's discipline of validating the
+  protocol shapes offline first; it is also where the high-value SDK-grounded
+  corrections live (4009 = the only resume-able close, 4013/4014 = intents,
+  4914/4915 = fatal — facts the wiki and botpy get wrong), so locking them
+  down under test before any network code is the right boundary.
+- 2026-06-12 (slice 230): `consume` returns lifecycle frames (Hello, READY,
+  RESUMED, heartbeat-ack) *before* the dispatch branch re-serializes the `d`
+  object, so the read loop pays the `nlohmann` re-dump only for the
+  non-lifecycle dispatches the inbound parser actually consumes (the bench
+  confirms the heartbeat-ack hot path stays a decode-plus-no-op). The
+  `GatewayReaction` is a struct of independent directives rather than a
+  single enum because one Hello frame must both arm the heartbeat timer and
+  request Identify/Resume.
 
 ## Linked Artifacts
 
@@ -170,3 +200,5 @@ Migration"), which reserves a dedicated plan for the port.
 - History entries:
   - `docs/histories/2026-06/20260610-1325-channel-qq-api-client.md`
     (milestone 1, slice 229)
+  - `docs/histories/2026-06/20260612-1631-channel-qq-gateway-protocol.md`
+    (milestone 2a, slice 230)

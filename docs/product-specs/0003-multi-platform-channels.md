@@ -89,6 +89,20 @@ only — v2 makes channels pluggable.
   zero adapter targets, keeping acceptance criterion 1 intact. The receive
   transport, trait adapter, and bootstrap registration follow in the
   QQ-port plan's later milestones.
+- Slice 230: QQ-port milestone 2a — the pure `qq::GatewaySession`
+  protocol/session state machine: `consume(frame_json)` decodes one gateway
+  text frame at a time and returns a `GatewayReaction` (arm heartbeat timer,
+  send Identify-vs-Resume, surface a non-lifecycle dispatch, reconnect
+  resume/fresh, session-ready) while caching the `s` seq cursor and the READY
+  `session_id`; `build_identify`/`build_resume`/`build_heartbeat` emit the
+  outbound payloads with the token injected per-call (the session never
+  stores the secret, C5); `classify_close_code` maps close codes to a
+  recovery action with the SDK-grounded corrections (4009 = the *only*
+  resume-able close, 4013/4014 = intents, 4914/4915 = fatal). Offline-tested
+  (`test-channel-qq` 40 cases / 209 assertions, 19 new) with no new
+  dependency; frames/payloads cross the public surface as JSON strings (C6).
+  The `wss://` network transport that drives the session behind
+  `Channel::next_message()` is milestone 2b.
 
 ## Design Doc Cross-References
 

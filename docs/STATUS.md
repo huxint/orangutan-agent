@@ -9,29 +9,33 @@
 
 ## Snapshot
 
-- **Slice:** 229 (`xmake run orangutan -- --help` reports slice 229)
+- **Slice:** 230 (`xmake run orangutan -- --help` reports slice 230)
 - **Last completed history:**
-  [`histories/2026-06/20260610-1325-channel-qq-api-client.md`](histories/2026-06/20260610-1325-channel-qq-api-client.md)
+  [`histories/2026-06/20260612-1631-channel-qq-gateway-protocol.md`](histories/2026-06/20260612-1631-channel-qq-gateway-protocol.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — the current main line; spun off from the completed channel-ingress
     plan ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-- **Latest completed slice:** slice 229 ships QQ-port milestone 1: the new
-  gated `oran-channel-qq` library (`xmake f --channel_qq=y`, default off)
-  with `qq::TokenStore` (app-access-token fetch/refresh-ahead caching,
-  single-flight refresh, `invalidate()` for the 401 path) and
-  `qq::ApiClient` (authenticated `get`/`post`/`put`/`del` over
-  `oran-http::Client` with the platform retry ladder — one token refresh on
-  401, bounded `retry-after` 429 retries, bounded gateway backoff — plus the
-  pure `normalize_api_response` seam for `x-tps-trace-id` / `retry-after` /
-  business-envelope capture). Request/response shapes validated offline
-  against a scripted loopback HTTP server; disabled builds configure zero
-  adapter targets. Focused result: `test-channel-qq` **21 cases / 129
-  assertions**.
-- **Next intended slice:** QQ-port milestone 2 — the WebSocket-gateway
-  receive transport (Hello/Identify/heartbeat/Resume) with reconnect
-  backoff and cancel-awareness behind `Channel::next_message()` (QQ has no
-  long-poll; see [`references/messaging-platform-apis.md`](references/messaging-platform-apis.md))
+- **Latest completed slice:** slice 230 ships QQ-port milestone 2a: the pure,
+  offline-testable QQ gateway protocol/session state machine
+  (`qq::GatewaySession`) — `consume(frame_json)` decodes one gateway text
+  frame at a time and returns a `GatewayReaction` (arm heartbeat timer,
+  send Identify-vs-Resume, surface a non-lifecycle dispatch, reconnect
+  resume/fresh, session-ready), caching the `s` seq cursor and the READY
+  `session_id`; `build_identify`/`build_resume`/`build_heartbeat` emit the
+  outbound payloads (token injected per-call so the session never stores the
+  secret, C5); `classify_close_code` maps WebSocket close codes to a
+  recovery action with the SDK-grounded corrections (4009 = the *only*
+  resume-able close; 4013/4014 = intents; 4914/4915 = fatal). Frames/payloads
+  cross the public surface as JSON strings (C6); no new dependency. Focused
+  result: `test-channel-qq` **40 cases / 209 assertions** (19 new gateway
+  cases).
+- **Next intended slice:** QQ-port milestone 2b — the `wss://` network
+  transport that drives `GatewaySession` behind `Channel::next_message()`:
+  a cancel-aware WebSocket boundary on `oran-http` (the codebase has no
+  WebSocket primitive yet; the legacy used raw `curl_ws_*` on a dedicated
+  `std::thread`, which C2/C6 forbid), the persistent read loop, the
+  heartbeat timer over `async::sleep_for`, and reconnect backoff
   ([`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)).
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
@@ -61,7 +65,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-memory`: 38 cases / 841 assertions.
 - `oran-automation`: 106 cases / 1849 assertions.
 - `oran-channel`: 24 cases / 186 assertions.
-- `oran-channel-qq` (gated, `--channel_qq=y`): 21 cases / 129 assertions.
+- `oran-channel-qq` (gated, `--channel_qq=y`): 40 cases / 209 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 208 cases / 2181 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.

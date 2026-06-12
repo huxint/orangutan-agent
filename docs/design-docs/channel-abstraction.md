@@ -253,9 +253,22 @@ expiry, `invalidate()` for the 401 path) and `qq::ApiClient` (authenticated
 requests with the platform retry ladder — one token refresh on 401, bounded
 `retry-after` 429 retries, bounded gateway backoff — plus
 `normalize_api_response` for trace-id/retry-after/business-envelope
-capture), validated offline against a scripted loopback HTTP server. The
-receive transport, the `Channel` trait adapter, and bootstrap registration
-are the remaining milestones.
+capture), validated offline against a scripted loopback HTTP server.
+Milestone 2a (slice 230) adds `qq::GatewaySession`, the pure gateway
+protocol/session state machine: `consume(frame_json)` decodes one gateway
+text frame into a `GatewayReaction` (heartbeat-arm, Identify-vs-Resume,
+non-lifecycle dispatch, reconnect resume/fresh, session-ready), tracks the
+`s` seq cursor and READY `session_id` for Resume continuity,
+`build_identify`/`build_resume`/`build_heartbeat` emit outbound payloads
+with the token injected per-call, and `classify_close_code` carries the
+SDK-grounded close-code corrections (4009 = the only resume-able close;
+4013/4014 = intents; 4914/4915 = fatal). It is split deliberately from the
+network transport: the protocol is fully offline-testable with no new
+dependency, while the `wss://` connection needs a WebSocket primitive the
+codebase does not yet have (the legacy adapter used raw `curl_ws_*` on a
+dedicated `std::thread`, which C2/C6 forbid). The `wss://` network transport
+(milestone 2b), the `Channel` trait adapter, and bootstrap registration are
+the remaining milestones.
 
 ## New Adapter Recipe
 
