@@ -114,7 +114,19 @@ only — v2 makes channels pluggable.
   `src/oran-http/_impl/curl_common.hpp` (curl stays out of headers, C6).
   `test-http` 27 cases / 148 assertions (12 new WebSocket cases, clean under
   ASan/UBSan), no new dependency. Driving `qq::GatewaySession` over the
-  primitive behind `Channel::next_message()` is milestone 2b-ii.
+  primitive is milestone 2b-ii.
+- Slice 232: QQ-port milestone 2b-ii — `qq::GatewayTransport`, the
+  caller-owned WebSocket-gateway driver under the future `QqChannel`
+  trait adapter. It keeps one persistent `http::WebSocket`, drives
+  `qq::GatewaySession` lifecycle frames, sends Identify/Resume/heartbeat
+  payloads with tokens from `TokenStore`, races receive waits against an
+  `async::sleep_for` heartbeat timer, reconnects with the documented
+  close-code/backoff policy, invalidates cached tokens on auth close 4004, and
+  returns one non-lifecycle `GatewayDispatch` per `next_dispatch()` resume.
+  Offline loopback validation covers identify, heartbeat, resume, auth-close
+  refresh, token-failure propagation, and cancellation (`test-channel-qq` 45
+  cases / 249 assertions). Trait-envelope parsing, outbound send, and
+  bootstrap registration remain milestone 3.
 
 ## Design Doc Cross-References
 

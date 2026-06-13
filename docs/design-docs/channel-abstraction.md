@@ -272,10 +272,16 @@ dedicated `std::thread`, which C2/C6 forbid). Milestone 2b is itself split:
 thread, the handshake driven by non-blocking `curl_multi_perform` rounds and
 receive/send suspending on asio socket readiness; `close()` completes the RFC
 6455 closing handshake), with the shared libcurl RAII wrappers extracted to
-`src/oran-http/_impl/curl_common.hpp`. **2b-ii** drives `GatewaySession` over
-that primitive behind `Channel::next_message()` (persistent read loop,
-heartbeat timer over `async::sleep_for`, reconnect backoff). The `Channel`
-trait adapter and bootstrap registration are the remaining milestones.
+`src/oran-http/_impl/curl_common.hpp`. **2b-ii (slice 232)** adds
+`qq::GatewayTransport`, the caller-owned driver that keeps a persistent
+`http::WebSocket`, drives `GatewaySession` lifecycle frames, sends
+Identify/Resume/heartbeat payloads with tokens from `TokenStore`, races
+receive waits against an `async::sleep_for` heartbeat timer, applies the
+documented close-code/reconnect policy, and returns one non-lifecycle
+`GatewayDispatch` per `next_dispatch()` resume. It sits under the future
+`QqChannel::next_message()` trait adapter; dispatch-to-`InboundMessage`
+parsing, outbound sends, and bootstrap registration are the remaining
+milestones.
 
 ## New Adapter Recipe
 

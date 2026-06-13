@@ -80,9 +80,10 @@ Migration"), which reserves a dedicated plan for the port.
 
 1. **API client + TokenStore.** Offline request building/response decoding
    over `oran-http::Client` against a mock server; OAuth refresh isolated.
-2. **Receive transport.** WebSocket-gateway `next_message()`
-   (Hello/Identify/heartbeat/Resume) with reconnect backoff and
-   cancel-awareness. (QQ offers no long-poll; gateway or webhook only.)
+2. **Receive transport.** WebSocket-gateway driver under the future
+   `QqChannel::next_message()` boundary (Hello/Identify/heartbeat/Resume)
+   with reconnect backoff and cancel-awareness. (QQ offers no long-poll;
+   gateway or webhook only.)
 3. **Channel adapter.** `qq::QqChannel` implementing the trait end-to-end
    (send + message builder + capabilities), registered through
    `register_configured_channels(...)` behind `kind == "qq"` and
@@ -115,7 +116,7 @@ Migration"), which reserves a dedicated plan for the port.
   Gated `oran-channel-qq` target plus `test-channel-qq` (21 cases / 129
   assertions against a scripted loopback HTTP server) and
   `bench-channel-qq`; request/response shapes validated offline.
-- [~] Milestone 2: receive transport.
+- [x] Milestone 2: receive transport.
   - [x] Milestone 2a: pure gateway protocol/session state machine — slice 230
     ([`../../histories/2026-06/20260612-1631-channel-qq-gateway-protocol.md`](../../histories/2026-06/20260612-1631-channel-qq-gateway-protocol.md)).
     `qq::GatewaySession` (`consume(frame_json)` → `GatewayReaction`,
@@ -123,17 +124,22 @@ Migration"), which reserves a dedicated plan for the port.
     `build_identify`/`build_resume`/`build_heartbeat`, `classify_close_code`),
     offline-tested (`test-channel-qq` +19 cases → 40 / 209) with no new
     dependency.
-  - [~] Milestone 2b: `wss://` network transport.
+  - [x] Milestone 2b: `wss://` network transport.
     - [x] Milestone 2b-i: the `oran-http` WebSocket primitive — slice 231
       ([`../../histories/2026-06/20260613-1357-http-websocket-boundary.md`](../../histories/2026-06/20260613-1357-http-websocket-boundary.md)).
       `http::WebSocket` (`connect`/`receive`/`send_text`/`close` over libcurl
       connect-only mode), cancel-aware without a thread; shared libcurl RAII
       wrappers extracted to `src/oran-http/_impl/curl_common.hpp`; `test-http`
       +12 cases → 27 / 148, clean under ASan/UBSan, no new dependency.
-    - [ ] Milestone 2b-ii: drive `qq::GatewaySession` over `http::WebSocket`
-      behind `Channel::next_message()` in `oran-channel-qq` — the persistent
-      read loop, the heartbeat timer over `async::sleep_for`, and reconnect
-      backoff.
+    - [x] Milestone 2b-ii: drive `qq::GatewaySession` over `http::WebSocket`
+      in `oran-channel-qq` — slice 232
+      ([`../../histories/2026-06/20260613-2258-channel-qq-gateway-transport.md`](../../histories/2026-06/20260613-2258-channel-qq-gateway-transport.md)).
+      `qq::GatewayTransport` owns the caller-driven persistent read loop under
+      the future trait adapter, races receives against the heartbeat timer over
+      `async::sleep_for`, sends Identify/Resume/heartbeat payloads with tokens
+      from `TokenStore`, applies the documented close-code/reconnect policy,
+      and returns one non-lifecycle `GatewayDispatch` per `next_dispatch()`
+      resume; `test-channel-qq` +5 cases → 45 / 249.
 - [ ] Milestone 3: trait adapter + gated registration.
 - [ ] Milestone 4: round-trip acceptance.
 
@@ -212,6 +218,19 @@ Migration"), which reserves a dedicated plan for the port.
   (removing it severed `CURLINFO_ACTIVESOCKET`); (2) `close()` now completes the
   RFC 6455 closing handshake (drain to peer close/EOF, bounded) so the close
   frame is delivered before the connection is torn down on destruction.
+- 2026-06-13 (slice 232): completed **2b-ii** as a narrow
+  `qq::GatewayTransport` driver instead of folding the full `QqChannel` trait
+  adapter into the same slice. The driver returns `GatewayDispatch` from
+  `next_dispatch()` and leaves platform dispatch-to-`InboundMessage` parsing,
+  outbound sends, and bootstrap registration to milestone 3. That keeps the
+  network/session/reconnect risk in one small surface while preserving the
+  existing dependency boundary: `oran-channel-qq` still depends only on
+  `oran-core`, `oran-async`, and `oran-http`; `oran-channel` joins when the
+  trait adapter exists. The driver races `WebSocket::receive(...)` against the
+  next heartbeat deadline with `async::sleep_for`, so no detached heartbeat
+  task or background receive loop is introduced. Token acquisition failures
+  surface immediately (auth/config errors are not swallowed as reconnects),
+  while close 4004 invalidates the cached token before a fresh reconnect.
 
 ## Linked Artifacts
 
@@ -228,3 +247,5 @@ Migration"), which reserves a dedicated plan for the port.
     (milestone 2a, slice 230)
   - `docs/histories/2026-06/20260613-1357-http-websocket-boundary.md`
     (milestone 2b-i, slice 231)
+  - `docs/histories/2026-06/20260613-2258-channel-qq-gateway-transport.md`
+    (milestone 2b-ii, slice 232)
