@@ -1,6 +1,7 @@
 // tests/bootstrap/test_channel_ingress.cpp - config-authored channel registration and routing coverage.
 
 #include <chrono>
+#include <cstdlib>
 #include <deque>
 #include <filesystem>
 #include <memory>
@@ -93,6 +94,54 @@ config::Config parse_config(std::string_view json) {
   REQUIRE(parsed.has_value());
   return std::move(*parsed);
 }
+
+class ScopedEnv {
+public:
+  ScopedEnv(std::string name, std::string value) : name_{std::move(name)} {
+    if (const auto* old = std::getenv(name_.c_str()); old != nullptr) {
+      old_value_ = old;
+    }
+    setenv(name_.c_str(), value.c_str(), 1);
+  }
+
+  ~ScopedEnv() {
+    if (old_value_) {
+      setenv(name_.c_str(), old_value_->c_str(), 1);
+    } else {
+      unsetenv(name_.c_str());
+    }
+  }
+
+  ScopedEnv(const ScopedEnv&) = delete;
+  ScopedEnv& operator=(const ScopedEnv&) = delete;
+
+private:
+  std::string name_;
+  std::optional<std::string> old_value_;
+};
+
+class ScopedUnsetEnv {
+public:
+  explicit ScopedUnsetEnv(std::string name) : name_{std::move(name)} {
+    if (const auto* old = std::getenv(name_.c_str()); old != nullptr) {
+      old_value_ = old;
+      unsetenv(name_.c_str());
+    }
+  }
+
+  ~ScopedUnsetEnv() {
+    if (old_value_) {
+      setenv(name_.c_str(), old_value_->c_str(), 1);
+    }
+  }
+
+  ScopedUnsetEnv(const ScopedUnsetEnv&) = delete;
+  ScopedUnsetEnv& operator=(const ScopedUnsetEnv&) = delete;
+
+private:
+  std::string name_;
+  std::optional<std::string> old_value_;
+};
 
 bootstrap::RuntimeAssembly
 build_assembly(const std::filesystem::path& workspace, asio::io_context& io, bool session_memory_enabled = false) {
@@ -204,7 +253,7 @@ TEST_CASE("register_configured_channels registers mock adapters and reports skip
   auto cfg = parse_config(R"json({
   "channels": [
     {"id": "mock-main", "kind": "mock", "inbound_capacity": 1},
-    {"id": "qq-main", "kind": "qq"}
+    {"id": "discord-main", "kind": "discord"}
   ]
 })json");
 
@@ -215,11 +264,11 @@ TEST_CASE("register_configured_channels registers mock adapters and reports skip
   REQUIRE(report->registered_count == 1);
   REQUIRE(manager.registered_count() == 1);
   REQUIRE(manager.contains("mock-main"));
-  REQUIRE_FALSE(manager.contains("qq-main"));
+  REQUIRE_FALSE(manager.contains("discord-main"));
 
   REQUIRE(report->skipped.size() == 1);
-  REQUIRE(report->skipped[0].id == "qq-main");
-  REQUIRE(report->skipped[0].kind == "qq");
+  REQUIRE(report->skipped[0].id == "discord-main");
+  REQUIRE(report->skipped[0].kind == "discord");
 
   REQUIRE(report->mocks.size() == 1);
   REQUIRE(report->mocks[0].id == "mock-main");
@@ -231,6 +280,97 @@ TEST_CASE("register_configured_channels registers mock adapters and reports skip
   REQUIRE_FALSE(overflow.has_value());
   REQUIRE(overflow.error().kind() == core::ErrorKind::mailbox_overflowed);
 }
+
+#if !defined(ORAN_ENABLE_CHANNEL_QQ)
+TEST_CASE("register_configured_channels skips QQ adapters when the option is disabled",
+          "[unit][bootstrap][channel_ingress][channel-qq]") {
+  asio::io_context io;
+  auto cfg = parse_config(R"json({
+  "channels": [
+    {
+      "id": "qq-main",
+      "kind": "qq",
+      "qq_app_id_env": "ORAN_TEST_QQ_APP_ID",
+      "qq_client_secret_env": "ORAN_TEST_QQ_CLIENT_SECRET",
+      "qq_gateway_url": "wss://127.0.0.1/gateway"
+    }
+  ]
+})json");
+
+  channel::ChannelManager manager{io.get_executor()};
+  auto report = bootstrap::register_configured_channels(manager, io.get_executor(), cfg);
+
+  REQUIRE(report.has_value());
+  REQUIRE(report->registered_count == 0);
+  REQUIRE(manager.registered_count() == 0);
+  REQUIRE_FALSE(manager.contains("qq-main"));
+  REQUIRE(report->skipped.size() == 1);
+  REQUIRE(report->skipped[0].id == "qq-main");
+  REQUIRE(report->skipped[0].kind == "qq");
+}
+#else
+TEST_CASE("register_configured_channels registers QQ adapters when the option is enabled",
+          "[unit][bootstrap][channel_ingress][channel-qq]") {
+  ScopedEnv app_id{"ORAN_TEST_QQ_APP_ID", "app-123"};
+  ScopedEnv client_secret{"ORAN_TEST_QQ_CLIENT_SECRET", "secret-123"};
+
+  asio::io_context io;
+  auto cfg = parse_config(R"json({
+  "channels": [
+    {
+      "id": "qq-main",
+      "kind": "qq",
+      "qq_app_id_env": "ORAN_TEST_QQ_APP_ID",
+      "qq_client_secret_env": "ORAN_TEST_QQ_CLIENT_SECRET",
+      "qq_token_url": "http://127.0.0.1/token",
+      "qq_api_base_url": "http://127.0.0.1/api",
+      "qq_gateway_url": "wss://127.0.0.1/gateway"
+    }
+  ]
+})json");
+
+  channel::ChannelManager manager{io.get_executor()};
+  auto report = bootstrap::register_configured_channels(manager, io.get_executor(), cfg);
+
+  REQUIRE(report.has_value());
+  REQUIRE(report->registered_count == 1);
+  REQUIRE(report->skipped.empty());
+  REQUIRE(report->mocks.empty());
+  REQUIRE(manager.registered_count() == 1);
+  REQUIRE(manager.contains("qq-main"));
+  auto caps = manager.caps("qq-main");
+  REQUIRE(caps.has_value());
+  REQUIRE(caps->mentions);
+  REQUIRE(caps->reply_quoting);
+  REQUIRE(caps->max_text_bytes == 5'000);
+}
+
+TEST_CASE("register_configured_channels fails closed when QQ credential env vars are missing",
+          "[unit][bootstrap][channel_ingress][channel-qq]") {
+  ScopedUnsetEnv app_id{"ORAN_TEST_QQ_MISSING_APP_ID"};
+  ScopedUnsetEnv client_secret{"ORAN_TEST_QQ_MISSING_CLIENT_SECRET"};
+
+  asio::io_context io;
+  auto cfg = parse_config(R"json({
+  "channels": [
+    {
+      "id": "qq-main",
+      "kind": "qq",
+      "qq_app_id_env": "ORAN_TEST_QQ_MISSING_APP_ID",
+      "qq_client_secret_env": "ORAN_TEST_QQ_MISSING_CLIENT_SECRET",
+      "qq_gateway_url": "wss://127.0.0.1/gateway"
+    }
+  ]
+})json");
+
+  channel::ChannelManager manager{io.get_executor()};
+  auto report = bootstrap::register_configured_channels(manager, io.get_executor(), cfg);
+
+  REQUIRE_FALSE(report.has_value());
+  REQUIRE(report.error().kind() == core::ErrorKind::auth);
+  REQUIRE(manager.registered_count() == 0);
+}
+#endif
 
 TEST_CASE("register_configured_channels handles empty channel config", "[unit][bootstrap][channel_ingress]") {
   asio::io_context io;

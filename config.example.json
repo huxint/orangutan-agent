@@ -88,6 +88,17 @@
       "kind": "mock",
       "agent_key": "default",
       "inbound_capacity": 64
+    },
+    {
+      "id": "qq-main",
+      "kind": "qq",
+      "agent_key": "default",
+      "inbound_capacity": 64,
+      "qq_app_id_env": "QQ_APP_ID",
+      "qq_client_secret_env": "QQ_CLIENT_SECRET",
+      "qq_token_url": "https://bots.qq.com/app/getAppAccessToken",
+      "qq_api_base_url": "https://api.sgroup.qq.com",
+      "qq_gateway_url": "wss://example.invalid/qq-gateway"
     }
   ],
   "hooks": {

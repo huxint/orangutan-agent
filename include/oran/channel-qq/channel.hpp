@@ -3,7 +3,8 @@
 // Normalizes QQ gateway message dispatches into the generic channel envelope,
 // exposes `Channel::next_message()` over the caller-owned gateway transport,
 // and sends passive text replies through the QQ API client. Bootstrap
-// registration is intentionally left to the next QQ-port slice.
+// registration owns this borrow-based adapter through a small wrapper when
+// `--channel_qq=y`.
 
 #pragma once
 

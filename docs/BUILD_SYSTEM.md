@@ -171,8 +171,12 @@ backend) and `channel_qq` (slice 229 — gates the `oran-channel-qq` /
 `xmake/tests.lua`, and `xmake/bench.lua`; slice 233 adds the
 `oran-channel` dependency when the gated target starts implementing the
 generic `Channel` trait, and slice 234 adds the first passive text send path
-over that same dependency set; default off until the QQ port's round-trip
-acceptance passes, per
+over that same dependency set; slice 235 also adds an enabled-build
+`oran-bootstrap` dependency on `oran-channel-qq` plus the
+`ORAN_ENABLE_CHANNEL_QQ` compile define so configured QQ channels can register
+through bootstrap, while default builds still omit every adapter target and
+bootstrap branch; default off until the QQ port's round-trip acceptance passes,
+per
 `docs/exec-plans/active/2026-06-10-channel-qq-port.md`).
 
 ## Packages
@@ -375,9 +379,11 @@ adapter target: `oran-channel-qq` (plus `test-channel-qq` /
 `bench-channel-qq`) exists only under `xmake f --channel_qq=y` and currently
 depends on `oran-core`, `oran-async`, `oran-http`, and `oran-channel` now that
 the `QqChannel` trait adapter can receive gateway messages and send passive
-text replies; it is not linked into the `orangutan` binary until bootstrap
-registration lands in a later QQ-port milestone. `oran-channel-webhook` remains
-a future target.
+text replies. Slice 235 links that target into `oran-bootstrap` only when the
+same option is enabled, publishing `ORAN_ENABLE_CHANNEL_QQ` so bootstrap can
+compile the QQ registration branch; default builds still skip QQ config entries
+without compiling or linking the adapter. `oran-channel-webhook` remains a
+future target.
 
 **Key compile-time wins from this shape:**
 

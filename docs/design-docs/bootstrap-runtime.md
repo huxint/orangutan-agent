@@ -31,9 +31,17 @@ core::Result<int> run(BootstrapOptions);
 
 struct AgentPromptRunnerOptions;
 struct AutomationAgentPromptRunnerOptions;
+struct ChannelAgentPromptRunnerOptions;
+struct ChannelRegistrationReport;
 
 core::Result<automation::AutomationPromptRunner>
 make_automation_agent_prompt_runner(AutomationAgentPromptRunnerOptions);
+
+core::Result<ChannelRegistrationReport>
+register_configured_channels(channel::ChannelManager&, asio::any_io_executor, const config::Config&);
+
+core::Result<channel::ChannelPromptRunner>
+make_routed_channel_prompt_runner(ChannelAgentPromptRunnerOptions);
 
 class AgentPromptRunner final : public cli::PromptRunner {
  public:
@@ -444,6 +452,21 @@ opens `AutomationRuntime` explicitly and wants stored cron or triggered
 `agent_prompt` descriptors to execute through the real prompt runtime one job
 at a time. Bootstrap still does not do that automatically during ordinary
 startup.
+Channel runtime owners use the parallel channel ingress seam:
+`register_configured_channels(manager, executor, config)` constructs configured
+adapters into a caller-owned `channel::ChannelManager`, while
+`make_routed_channel_prompt_runner(...)` routes each configured channel id to
+its selected agent bridge. The registration function is construction-only: it
+does not call `Channel::start()`, does not spawn receive loops, and does not
+drive `dispatch_one(...)`. For `kind == "mock"` it returns non-owning mock
+handles for loopback tests. For `kind == "qq"`, default `--channel_qq=n` builds
+skip and report the entry without linking `oran-channel-qq`; enabled builds
+resolve `qq_app_id_env` / `qq_client_secret_env` at the credential boundary,
+assemble `http::Client`, `qq::TokenStore`, `qq::ApiClient`,
+`qq::GatewayTransport`, and `qq::QqChannel` behind a private owning wrapper,
+then register that wrapper as a generic `Channel`. The QQ branch requires a
+configured `qq_gateway_url` until milestone 4 owns gateway discovery and
+round-trip acceptance.
 The built-in empty-defaults path still reports `provider route: none configured`
 and uses the deterministic no-runner `cli::run` shell so fresh checkouts remain
 runnable without provider credentials or a sessions DB; selector flags

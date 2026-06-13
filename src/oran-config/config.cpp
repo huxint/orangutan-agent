@@ -116,11 +116,16 @@ constexpr auto kRecognizedAutomationCronJobFields = std::array<std::string_view,
     "last_fired_at",
 };
 
-constexpr auto kRecognizedChannelFields = std::array<std::string_view, 4>{
+constexpr auto kRecognizedChannelFields = std::array<std::string_view, 9>{
     "id",
     "kind",
     "agent_key",
     "inbound_capacity",
+    "qq_app_id_env",
+    "qq_client_secret_env",
+    "qq_token_url",
+    "qq_api_base_url",
+    "qq_gateway_url",
 };
 
 constexpr auto kRecognizedProfileFields = std::array<std::string_view, 6>{
@@ -302,6 +307,22 @@ template <std::size_t N>
     return std::unexpected(config_error("expected string", child_path(path, key)));
   }
   return it->get<std::string>();
+}
+
+[[nodiscard]] Result<void>
+parse_optional_non_empty_string(const json& object, std::string_view key, std::string_view path, std::string& out) {
+  const auto it = object.find(key);
+  if (it == object.end()) {
+    return {};
+  }
+  if (!it->is_string()) {
+    return std::unexpected(config_error("expected string", child_path(path, key)));
+  }
+  out = it->get<std::string>();
+  if (out.empty()) {
+    return std::unexpected(config_error(std::string{key}.append(" must be non-empty"), child_path(path, key)));
+  }
+  return {};
 }
 
 [[nodiscard]] Result<std::vector<std::string>> string_array(const json& value, std::string_view path) {
@@ -1203,6 +1224,47 @@ parse_channel(const json& value, std::string_view path, bool strict, std::vector
       return std::unexpected(std::move(parsed.error()));
     }
     channel.inbound_capacity = static_cast<std::size_t>(*parsed);
+  }
+
+  for (const auto field : {std::string_view{"qq_app_id_env"},
+                           std::string_view{"qq_client_secret_env"},
+                           std::string_view{"qq_token_url"},
+                           std::string_view{"qq_api_base_url"},
+                           std::string_view{"qq_gateway_url"}}) {
+    auto* out = [&]() -> std::string* {
+      if (field == std::string_view{"qq_app_id_env"}) {
+        return &channel.qq_app_id_env;
+      }
+      if (field == std::string_view{"qq_client_secret_env"}) {
+        return &channel.qq_client_secret_env;
+      }
+      if (field == std::string_view{"qq_token_url"}) {
+        return &channel.qq_token_url;
+      }
+      if (field == std::string_view{"qq_api_base_url"}) {
+        return &channel.qq_api_base_url;
+      }
+      return &channel.qq_gateway_url;
+    }();
+    auto parsed = parse_optional_non_empty_string(value, field, path, *out);
+    if (!parsed) {
+      return std::unexpected(std::move(parsed.error()));
+    }
+  }
+
+  if (channel.kind == "qq") {
+    if (channel.qq_app_id_env.empty()) {
+      return std::unexpected(
+          config_error("qq channel qq_app_id_env must be non-empty", child_path(path, "qq_app_id_env")));
+    }
+    if (channel.qq_client_secret_env.empty()) {
+      return std::unexpected(
+          config_error("qq channel qq_client_secret_env must be non-empty", child_path(path, "qq_client_secret_env")));
+    }
+    if (channel.qq_gateway_url.empty()) {
+      return std::unexpected(
+          config_error("qq channel qq_gateway_url must be non-empty", child_path(path, "qq_gateway_url")));
+    }
   }
 
   auto unknowns =

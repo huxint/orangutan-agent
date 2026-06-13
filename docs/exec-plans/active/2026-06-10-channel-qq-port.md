@@ -160,7 +160,16 @@ Migration"), which reserves a dedicated plan for the port.
     `make_reply_message(...)` now propagates the first inbound reply reference
     so `dispatch_one(...)` can preserve QQ inbound `msg_id`; `test-channel` +1
     case → 25 / 191 and `test-channel-qq` +4 cases → 55 / 344.
-  - [ ] Milestone 3c: bootstrap registration for `channels[].kind == "qq"`.
+  - [x] Milestone 3c: bootstrap registration for `channels[].kind == "qq"` —
+    slice 235
+    ([`../../histories/2026-06/20260614-0015-channel-qq-bootstrap-registration.md`](../../histories/2026-06/20260614-0015-channel-qq-bootstrap-registration.md)).
+    `oran-config` now validates QQ channel credential env-name and endpoint
+    metadata, and enabled `--channel_qq=y` bootstrap builds register QQ
+    channels through an internal owning wrapper that keeps `http::Client`,
+    `TokenStore`, `ApiClient`, `GatewayTransport`, and `QqChannel` lifetimes
+    together before handing a `Channel` pointer to `ChannelManager`. Default
+    builds still skip/report QQ entries without linking adapter code; focused
+    validation covers both build options.
 - [ ] Milestone 4: round-trip acceptance.
 
 ## Decision Log
@@ -271,6 +280,17 @@ Migration"), which reserves a dedicated plan for the port.
   real configured channels. Receipt decoding accepts the three response id
   spellings seen across the QQ references, and malformed receipts surface as
   parsing errors without logging raw bodies.
+- 2026-06-14 (slice 235): completed **3c** as registration and ownership
+  assembly, not receive-loop ownership. `QqChannel` deliberately keeps its
+  borrow-based constructor so platform tests and embedders can assemble the
+  adapter pieces directly; bootstrap instead wraps it in a private `Channel`
+  implementation that owns `http::Client`, `TokenStore`, `ApiClient`, and the
+  concrete channel in declaration order. QQ channel config stores env-var
+  names and endpoint URLs only; bootstrap resolves the app id / client secret
+  environment variables only in enabled builds and keeps errors to non-secret
+  context. `qq_gateway_url` is required in this slice because gateway discovery
+  from `/gateway/bot` is asynchronous network work and belongs with milestone
+  4's round-trip acceptance path.
 
 ## Linked Artifacts
 
@@ -293,3 +313,5 @@ Migration"), which reserves a dedicated plan for the port.
     (milestone 3a, slice 233)
   - `docs/histories/2026-06/20260613-2347-channel-qq-outbound-text.md`
     (milestone 3b, slice 234)
+  - `docs/histories/2026-06/20260614-0015-channel-qq-bootstrap-registration.md`
+    (milestone 3c, slice 235)

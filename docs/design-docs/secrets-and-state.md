@@ -117,16 +117,23 @@ Current implementation status:
   hook payloads, or error context. Regular configured-route `bootstrap::run`
   uses this boundary when building the provider-backed prompt runner.
 - `teams` remains recognized but untyped. The `channels[]` block is typed as
-  of slice 228: each entry carries a non-empty unique `id`, a non-empty
-  `kind` (only `"mock"` is buildable today), an optional non-empty
+  of slice 228 and extended for QQ in slice 235: each entry carries a
+  non-empty unique `id`, a non-empty `kind`, an optional non-empty
   `agent_key` (default `"default"`), and an optional positive
-  `inbound_capacity` (default 64). `oran-config` validates shape and unique
-  ids; bootstrap's `register_configured_channels(...)` constructs and
-  registers buildable adapters into a caller-owned `channel::ChannelManager`
-  (unknown kinds are skipped and reported), and
+  `inbound_capacity` (default 64). QQ entries additionally carry
+  `qq_app_id_env`, `qq_client_secret_env`, optional `qq_token_url` /
+  `qq_api_base_url`, and required `qq_gateway_url`; the first two are
+  environment-variable names, not secret values. `oran-config` validates shape
+  and unique ids; bootstrap's `register_configured_channels(...)` constructs
+  and registers buildable adapters into a caller-owned `channel::ChannelManager`
+  (unknown and disabled kinds are skipped and reported), and
   `make_routed_channel_prompt_runner(...)` routes each channel id to its
-  configured agent through the channel prompt-runner bridge. Bootstrap does
-  not start adapters or spawn receive loops. The config
+  configured agent through the channel prompt-runner bridge. When
+  `--channel_qq=y`, bootstrap resolves the QQ app id / client secret env vars
+  during registration and keeps any missing/empty errors to non-secret context
+  (`channel_id`, field name, env name); default builds do not link the QQ
+  adapter and skip/report those entries. Bootstrap does not start adapters or
+  spawn receive loops. The config
   `automation.cron.jobs[]` block is typed: each job carries a non-empty
   `job_key`, POSIX 5-field UTC `expression`, UTC `first_fire_at`, and optional
   UTC `last_fired_at`. `oran-config` validates shape, timestamps, and unique

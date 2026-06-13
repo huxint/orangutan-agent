@@ -23,6 +23,10 @@ Current slice:
   that explicit boundary, the factory passes key values only through in-memory
   targets to caller-registered protocol factories, and both surfaces report
   failures with non-secret identifiers rather than secret values.
+- QQ channel config stores only `qq_app_id_env` and `qq_client_secret_env`
+  names. `register_configured_channels(...)` reads those environment variables
+  only in `--channel_qq=y` builds when constructing the QQ adapter stack, and
+  missing/empty failures carry only the channel id, field name, and env name.
 - `${VAR}` substitution exists for string config values. Missing variables are errors
   unless `${VAR:-default}` provides a fallback.
 - Secret values must not be placed in `config.example.json`.

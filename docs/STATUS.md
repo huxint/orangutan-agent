@@ -9,31 +9,33 @@
 
 ## Snapshot
 
-- **Slice:** 234 (`xmake run orangutan -- --help` reports slice 234)
+- **Slice:** 235 (`xmake run orangutan -- --help` reports slice 235)
 - **Last completed history:**
-  [`histories/2026-06/20260613-2347-channel-qq-outbound-text.md`](histories/2026-06/20260613-2347-channel-qq-outbound-text.md)
+  [`histories/2026-06/20260614-0015-channel-qq-bootstrap-registration.md`](histories/2026-06/20260614-0015-channel-qq-bootstrap-registration.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — the current main line; spun off from the completed channel-ingress
     plan ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-- **Latest completed slice:** slice 234 ships QQ-port milestone 3b: outbound
-  passive text replies for `qq::QqChannel`. `Channel::send(...)` now requires
-  `reply_to_message_id`, maps `c2c:{user_openid}` /
-  `group:{group_openid}` conversations to the QQ v2 C2C/group message
-  endpoints, serializes plain text replies as `{content,msg_type:0,msg_id,
-  msg_seq}`, parses `id` / `msg_id` / `message_id` delivery receipts, and
-  rejects unsupported outbound shapes before touching HTTP. The generic
-  `channel::make_reply_message(...)` now carries the first inbound reply
-  reference into `OutboundMessage::reply_to_message_id`, so `dispatch_one(...)`
-  preserves QQ inbound `msg_id` for passive replies. Bootstrap registration /
-  background receive ownership are still not present. Focused results:
-  `test-channel` **25 cases / 191 assertions** and gated `test-channel-qq`
-  **55 cases / 344 assertions**.
-- **Next intended slice:** QQ-port milestone 3c — register configured QQ
-  channels in bootstrap behind `--channel_qq=y` and
-  `channels[].kind == "qq"` (credential env-name config, `TokenStore` /
-  `ApiClient` / `GatewayTransport` assembly, disabled-option skip behavior,
-  and mock-validated config registration) before round-trip acceptance
+- **Latest completed slice:** slice 235 ships QQ-port milestone 3c: bootstrap
+  can now register configured QQ channels behind `--channel_qq=y` and
+  `channels[].kind == "qq"`. `oran-config` parses QQ env-name / endpoint
+  metadata (`qq_app_id_env`, `qq_client_secret_env`, `qq_token_url`,
+  `qq_api_base_url`, `qq_gateway_url`) and requires the credential env names
+  plus gateway URL for QQ entries. Enabled builds add `oran-channel-qq` to
+  `oran-bootstrap` with `ORAN_ENABLE_CHANNEL_QQ`; registration resolves the
+  configured env vars at the bootstrap credential boundary, owns
+  `http::Client` / `qq::TokenStore` / `qq::ApiClient` / `qq::QqChannel` in an
+  internal wrapper, and registers the wrapper into the caller-owned
+  `ChannelManager` without starting the adapter or opening a receive loop.
+  Default `--channel_qq=n` builds still skip and report QQ entries without
+  compiling or linking the adapter. Focused results: `test-config` **55 cases /
+  519 assertions**, default `test-bootstrap` **146 cases / 1312 assertions**,
+  gated `test-bootstrap` **147 cases / 1319 assertions**, `test-channel`
+  **25 cases / 191 assertions**, and gated `test-channel-qq` **55 cases / 344
+  assertions**.
+- **Next intended slice:** QQ-port milestone 4 — round-trip acceptance over the
+  registered QQ channel path (mock gateway/API in CI, real-credential manual
+  smoke gate) before considering `channel_qq` default-on
   ([`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)).
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
@@ -57,7 +59,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-http`: 27 cases / 148 assertions.
 - `oran-io`: 54 cases / 311 assertions.
 - `oran-storage`: 77 cases / 988 assertions.
-- `oran-config`: 54 cases / 501 assertions.
+- `oran-config`: 55 cases / 519 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 38 cases / 313 assertions.
 - `oran-memory`: 38 cases / 841 assertions.
@@ -70,7 +72,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 145 cases / 1304 assertions.
+- `oran-bootstrap`: 146 cases / 1312 assertions.
 
 ## Open Tech-Debt Rows
 

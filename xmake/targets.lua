@@ -60,6 +60,12 @@ oran_lib("provider", { "oran-core", "oran-async", "oran-config", "oran-prompt" }
 oran_lib("agent", { "oran-core", "oran-async", "oran-storage", "oran-prompt", "oran-tool", "oran-provider", "oran-hook" }, { "nlohmann_json" })
 oran_lib("cli", { "oran-core", "oran-async", "oran-hook", "oran-provider" }, {})
 oran_lib("bootstrap", { "oran-core", "oran-async", "oran-http", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-memory", "oran-automation", "oran-channel", "oran-skill", "oran-tool", "oran-provider", "oran-agent", "oran-cli" }, {})
+if has_config("channel_qq") then
+    target("oran-bootstrap")
+        add_deps("oran-channel-qq")
+        add_defines("ORAN_ENABLE_CHANNEL_QQ", { public = true })
+    target_end()
+end
 
 target("orangutan")
     set_kind("binary")

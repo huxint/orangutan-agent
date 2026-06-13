@@ -37,6 +37,8 @@ trust the audit log. This doc captures the operational expectations.
 | ------------------------- | --------- | ------- | ------- |
 | `ANTHROPIC_API_KEY`       | Yes when a configured route uses an Anthropic profile | — | Anthropic provider creds; read by configured-route `bootstrap::run` through the explicit provider credential resolver. |
 | `OPENAI_API_KEY`          | Yes when a configured route uses an OpenAI profile | — | OpenAI provider creds; read by configured-route `bootstrap::run` through the explicit provider credential resolver. |
+| `QQ_APP_ID` (or the env named by `channels[].qq_app_id_env`) | Yes when registering a QQ channel under `--channel_qq=y` | — | QQ bot app id; read by `register_configured_channels(...)` only in enabled QQ builds. |
+| `QQ_CLIENT_SECRET` (or the env named by `channels[].qq_client_secret_env`) | Yes when registering a QQ channel under `--channel_qq=y` | — | QQ bot client secret; read by `register_configured_channels(...)` only in enabled QQ builds and never logged. |
 | `ORAN_SECRET_PASSWORD`    | Recommended | —     | Decrypts secret-protected config fields. |
 | `ORAN_WORKSPACE`          | No         | `cwd` | Workspace path. |
 | `ORAN_TEST_REAL_PROVIDERS` | No (tests only) | unset | Enable real-provider integration tests. |

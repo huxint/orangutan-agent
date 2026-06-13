@@ -1155,6 +1155,39 @@ TEST_CASE("Config::parse extracts channel adapters", "[unit][config][channel]") 
   REQUIRE(result->channels()[1].inbound_capacity == 64);
 }
 
+TEST_CASE("Config::parse extracts QQ channel metadata", "[unit][config][channel]") {
+  auto result = config::Config::parse(R"json({
+  "strict_config": true,
+  "channels": [
+    {
+      "id": "qq-main",
+      "kind": "qq",
+      "agent_key": "concierge",
+      "inbound_capacity": 8,
+      "qq_app_id_env": "ORAN_QQ_APP_ID",
+      "qq_client_secret_env": "ORAN_QQ_CLIENT_SECRET",
+      "qq_token_url": "https://bots.qq.com/app/getAppAccessToken",
+      "qq_api_base_url": "https://api.sgroup.qq.com",
+      "qq_gateway_url": "wss://api.sgroup.qq.com/websocket"
+    }
+  ]
+})json");
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->warnings().empty());
+  REQUIRE(result->channels().size() == 1);
+  const auto& channel = result->channels()[0];
+  REQUIRE(channel.id == "qq-main");
+  REQUIRE(channel.kind == "qq");
+  REQUIRE(channel.agent_key == "concierge");
+  REQUIRE(channel.inbound_capacity == 8);
+  REQUIRE(channel.qq_app_id_env == "ORAN_QQ_APP_ID");
+  REQUIRE(channel.qq_client_secret_env == "ORAN_QQ_CLIENT_SECRET");
+  REQUIRE(channel.qq_token_url == "https://bots.qq.com/app/getAppAccessToken");
+  REQUIRE(channel.qq_api_base_url == "https://api.sgroup.qq.com");
+  REQUIRE(channel.qq_gateway_url == "wss://api.sgroup.qq.com/websocket");
+}
+
 TEST_CASE("Config::parse defaults channels when absent", "[unit][config][channel]") {
   auto absent = config::Config::parse(R"json({})json");
   REQUIRE(absent.has_value());
@@ -1200,6 +1233,52 @@ TEST_CASE("Config::parse rejects malformed channels", "[unit][config][channel]")
   SECTION("non-positive inbound capacity") {
     auto result =
         config::Config::parse(R"json({"channels": [{"id": "mock-main", "kind": "mock", "inbound_capacity": 0}]})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("qq channel missing app id env") {
+    auto result = config::Config::parse(R"json({
+  "channels": [
+    {
+      "id": "qq-main",
+      "kind": "qq",
+      "qq_client_secret_env": "ORAN_QQ_CLIENT_SECRET",
+      "qq_gateway_url": "wss://api.sgroup.qq.com/websocket"
+    }
+  ]
+})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("qq channel empty client secret env") {
+    auto result = config::Config::parse(R"json({
+  "channels": [
+    {
+      "id": "qq-main",
+      "kind": "qq",
+      "qq_app_id_env": "ORAN_QQ_APP_ID",
+      "qq_client_secret_env": "",
+      "qq_gateway_url": "wss://api.sgroup.qq.com/websocket"
+    }
+  ]
+})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("qq channel missing gateway url") {
+    auto result = config::Config::parse(R"json({
+  "channels": [
+    {
+      "id": "qq-main",
+      "kind": "qq",
+      "qq_app_id_env": "ORAN_QQ_APP_ID",
+      "qq_client_secret_env": "ORAN_QQ_CLIENT_SECRET"
+    }
+  ]
+})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }

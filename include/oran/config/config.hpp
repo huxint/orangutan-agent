@@ -203,16 +203,22 @@ struct AutomationConfig {
 };
 
 /// One config-authored channel adapter instance under `config.channels[]`.
-/// `kind` selects the adapter implementation ("mock" today; platform kinds
-/// arrive with their adapter libraries). `agent_key` names the agent that
+/// `kind` selects the adapter implementation. `agent_key` names the agent that
 /// answers messages arriving on this channel; bootstrap maps it through the
 /// channel prompt-runner bridge. `inbound_capacity` bounds the adapter's
-/// inbound queue.
+/// inbound queue. The `qq_*` fields are adapter-specific metadata consumed only
+/// when `kind == "qq"` and the optional QQ adapter is compiled in; they store
+/// environment-variable names and endpoint URLs, never secret values.
 struct ChannelConfig {
   std::string id;
   std::string kind;
   std::string agent_key{"default"};
   std::size_t inbound_capacity{64};
+  std::string qq_app_id_env;
+  std::string qq_client_secret_env;
+  std::string qq_token_url;
+  std::string qq_api_base_url;
+  std::string qq_gateway_url;
 
   friend bool operator==(const ChannelConfig&, const ChannelConfig&) = default;
 };

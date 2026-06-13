@@ -56,15 +56,14 @@ per-conversation session id — mirroring the automation prompt-runner
 precedent so `oran-channel` never depends on agent or bootstrap internals.
 Slice 228 adds the config-authored layer on top: the typed
 `config.channels[]` block, bootstrap's `register_configured_channels(...)`
-(builds buildable adapters — only `"mock"` today — into a caller-owned
-`ChannelManager`, skipping and reporting unknown kinds per the
-adapter-toggle policy below), and `make_routed_channel_prompt_runner(...)`,
-which routes each configured channel id to its `agent_key` bridge. Platform
-adapters and any receive loop remain downstream; the QQ port is managed by
-its own exec plan. Slices 229-233 have advanced the gated `oran-channel-qq`
-library from token/API client through gateway transport to the first
-receive-side `QqChannel` trait adapter described under "QQ Adapter Migration"
-below.
+(builds buildable adapters into a caller-owned `ChannelManager`, skipping and
+reporting unknown or disabled kinds per the adapter-toggle policy below), and
+`make_routed_channel_prompt_runner(...)`, which routes each configured channel
+id to its `agent_key` bridge. Slice 235 extends that registration seam to QQ
+when `--channel_qq=y`: `channels[].kind == "qq"` entries carry QQ credential
+env-name / endpoint metadata and bootstrap owns the concrete adapter stack
+behind a private `Channel` wrapper before registering it. Any receive loop
+remains downstream; the QQ port is managed by its own exec plan.
 
 ## Inbound / Outbound Envelopes
 
@@ -294,7 +293,15 @@ C2C/group message endpoints, sends text JSON with `content`, `msg_type:0`,
 `message_id` delivery receipts. The generic `make_reply_message(...)` now copies
 the first inbound reply reference into `OutboundMessage::reply_to_message_id`, so
 the `ChannelManager` → `dispatch_one(...)` path preserves QQ inbound `msg_id`
-for passive replies. Bootstrap registration is the remaining milestone-3 piece.
+for passive replies. **3c (slice 235)** wires configured QQ channels into
+bootstrap behind `--channel_qq=y`: `oran-config` validates `qq_app_id_env`,
+`qq_client_secret_env`, optional `qq_token_url` / `qq_api_base_url`, and
+required `qq_gateway_url`; enabled bootstrap builds resolve the env vars at the
+credential boundary, assemble `http::Client`, `TokenStore`, `ApiClient`,
+`GatewayTransport`, and `QqChannel` in an internal owning wrapper, and register
+that wrapper into `ChannelManager`. Default builds still skip/report QQ entries
+without linking the adapter. Round-trip acceptance and gateway discovery remain
+milestone 4.
 
 ## New Adapter Recipe
 

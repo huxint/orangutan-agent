@@ -147,8 +147,22 @@ only — v2 makes channels pluggable.
   `message_id` delivery receipts. The generic `make_reply_message(...)` now
   preserves the first inbound reply reference so the existing dispatch seam can
   produce QQ passive replies. Focused validation: `test-channel` 25 cases / 191
-  assertions and gated `test-channel-qq` 55 cases / 344 assertions. Bootstrap
-  registration remains off, so full QQ round-trip acceptance is still open.
+  assertions and gated `test-channel-qq` 55 cases / 344 assertions. At that
+  point bootstrap registration still remained off; slice 235 below adds the
+  registration seam while full QQ round-trip acceptance stays open.
+- Slice 235: QQ-port milestone 3c — gated bootstrap registration for QQ
+  channels. `config.channels[]` now accepts QQ-specific env-name / endpoint
+  metadata (`qq_app_id_env`, `qq_client_secret_env`, `qq_token_url`,
+  `qq_api_base_url`, `qq_gateway_url`) and requires the credential env names
+  plus gateway URL when `kind == "qq"`. With `xmake f --channel_qq=y`,
+  `register_configured_channels(...)` resolves those env vars, assembles the
+  QQ HTTP/token/API/gateway/channel stack through a bootstrap-owned wrapper,
+  and registers it into `ChannelManager`; with the default option disabled,
+  the same entry is skipped and reported without linking adapter code. Focused
+  validation: `test-config` 55 cases / 519 assertions, default
+  `test-bootstrap` 146 / 1312, gated `test-bootstrap` 147 / 1319,
+  `test-channel` 25 / 191, and gated `test-channel-qq` 55 / 344. Full QQ
+  round-trip acceptance remains open.
 
 ## Design Doc Cross-References
 

@@ -50,9 +50,10 @@ struct ChannelRegistrationReport {
 };
 
 /// Construct and register adapters for every `config.channels[]` entry.
-/// Only `"mock"` is constructible today; platform kinds arrive with their
-/// adapter libraries. Registration stays caller-owned: no adapter is started
-/// and no receive loop is spawned.
+/// `"mock"` is always constructible; `"qq"` is constructible only in builds
+/// configured with `--channel_qq=y`. Other unknown or disabled platform kinds
+/// are skipped and reported. Registration stays caller-owned: no adapter is
+/// started and no receive loop is spawned.
 [[nodiscard]] core::Result<ChannelRegistrationReport> register_configured_channels(channel::ChannelManager& manager,
                                                                                    asio::any_io_executor executor,
                                                                                    const config::Config& cfg);
