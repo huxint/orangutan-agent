@@ -46,7 +46,8 @@ using ChannelPromptRunner =
 /// `invalid_argument`.
 [[nodiscard]] core::Result<ChannelPromptRunRequest> make_prompt_run_request(const InboundMessage& message);
 
-/// Builds the outbound reply mirrored onto the inbound conversation.
+/// Builds the outbound reply mirrored onto the inbound conversation, carrying
+/// the first inbound reply reference when one exists.
 [[nodiscard]] OutboundMessage make_reply_message(const InboundMessage& message, std::string text);
 
 /// Receives one normalized message from the manager's fan-in queue, runs the

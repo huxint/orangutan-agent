@@ -1,10 +1,9 @@
 // include/oran/channel-qq/channel.hpp — QQ channel trait adapter.
 //
-// Normalizes QQ gateway message dispatches into the generic channel envelope
-// and exposes the first `Channel::next_message()` boundary over the caller-owned
-// gateway transport. Outbound sending is intentionally deferred to the next
-// QQ-port slice; this adapter still implements the trait so receive-side wiring
-// can be validated without bootstrap registration.
+// Normalizes QQ gateway message dispatches into the generic channel envelope,
+// exposes `Channel::next_message()` over the caller-owned gateway transport,
+// and sends passive text replies through the QQ API client. Bootstrap
+// registration is intentionally left to the next QQ-port slice.
 
 #pragma once
 

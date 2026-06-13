@@ -287,7 +287,14 @@ first `qq::QqChannel` trait-adapter boundary plus the pure
 capabilities, inbound message ids preserved as reply references, and group
 mention tokens stripped from prompt text. `QqChannel::next_message()` awaits
 `GatewayTransport::next_dispatch()` and skips unsupported non-message dispatches.
-Outbound sends and bootstrap registration are the remaining milestone-3 pieces.
+**3b (slice 234)** fills the passive text send path: `QqChannel::send(...)`
+requires `reply_to_message_id`, maps `c2c:` and `group:` conversations to QQ v2
+C2C/group message endpoints, sends text JSON with `content`, `msg_type:0`,
+`msg_id`, and process-local `msg_seq`, and parses `id` / `msg_id` /
+`message_id` delivery receipts. The generic `make_reply_message(...)` now copies
+the first inbound reply reference into `OutboundMessage::reply_to_message_id`, so
+the `ChannelManager` → `dispatch_one(...)` path preserves QQ inbound `msg_id`
+for passive replies. Bootstrap registration is the remaining milestone-3 piece.
 
 ## New Adapter Recipe
 

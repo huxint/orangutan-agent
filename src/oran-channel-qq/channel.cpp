@@ -3,9 +3,11 @@
 #include <oran/channel-qq/channel.hpp>
 
 #include <cctype>
+#include <cstdint>
 #include <expected>
 #include <initializer_list>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -141,6 +143,84 @@ using json = nlohmann::json;
   return {orangutan::channel::Reference{.message_id = std::move(*message_id)}};
 }
 
+[[nodiscard]] core::Error
+send_argument_error(std::string message, std::string_view channel_id, std::string_view conversation_id) {
+  return core::Error::invalid_argument(std::move(message))
+      .with("channel_id", std::string{channel_id})
+      .with("conversation_id", std::string{conversation_id});
+}
+
+[[nodiscard]] core::Result<std::string> outbound_text(const orangutan::channel::OutboundMessage& message,
+                                                      std::string_view channel_id,
+                                                      std::size_t max_text_bytes) {
+  auto texts = message.content |
+               std::views::transform([](const core::Content& block) { return core::text_view(block); }) |
+               std::views::filter([](const auto& text) { return text.has_value() && !text->empty(); }) |
+               std::views::transform([](const auto& text) { return *text; });
+  auto text = texts | std::views::join_with('\n') | std::ranges::to<std::string>();
+  if (text.empty()) {
+    return std::unexpected(send_argument_error("qq outbound text reply requires non-empty text content",
+                                               channel_id,
+                                               message.conversation_id));
+  }
+  if (max_text_bytes > 0 && text.size() > max_text_bytes) {
+    return std::unexpected(
+        send_argument_error("qq outbound text reply exceeds max text bytes", channel_id, message.conversation_id)
+            .with("text_bytes", std::to_string(text.size()))
+            .with("max_text_bytes", std::to_string(max_text_bytes)));
+  }
+  return text;
+}
+
+[[nodiscard]] core::Result<std::string> send_path_for(std::string_view conversation_id, std::string_view channel_id) {
+  static constexpr std::string_view kC2cPrefix = "c2c:";
+  static constexpr std::string_view kGroupPrefix = "group:";
+
+  auto segment_or_error = [&](std::string_view segment, std::string_view kind) -> core::Result<std::string> {
+    if (segment.empty() || segment.contains('/')) {
+      return std::unexpected(
+          send_argument_error("qq outbound conversation id has an invalid target id", channel_id, conversation_id)
+              .with("conversation_kind", std::string{kind}));
+    }
+    return std::string{segment};
+  };
+
+  if (conversation_id.starts_with(kC2cPrefix)) {
+    auto openid = segment_or_error(conversation_id.substr(kC2cPrefix.size()), "c2c");
+    if (!openid) {
+      return std::unexpected(std::move(openid).error());
+    }
+    return "/v2/users/" + *std::move(openid) + "/messages";
+  }
+  if (conversation_id.starts_with(kGroupPrefix)) {
+    auto group_openid = segment_or_error(conversation_id.substr(kGroupPrefix.size()), "group");
+    if (!group_openid) {
+      return std::unexpected(std::move(group_openid).error());
+    }
+    return "/v2/groups/" + *std::move(group_openid) + "/messages";
+  }
+
+  return std::unexpected(
+      send_argument_error("qq outbound conversation id must start with c2c: or group:", channel_id, conversation_id));
+}
+
+[[nodiscard]] core::Result<std::string> receipt_message_id(const ApiResponse& response, std::string_view path) {
+  const auto payload = json::parse(response.body, nullptr, /*allow_exceptions=*/false);
+  if (!payload.is_object()) {
+    return std::unexpected(core::Error::parsing("qq send response body is not a json object")
+                               .with("path", std::string{path})
+                               .with("http_status", std::to_string(response.http_status)));
+  }
+
+  auto message_id = first_scalar_string(payload, {"id", "msg_id", "message_id"});
+  if (!message_id.has_value()) {
+    return std::unexpected(core::Error::parsing("qq send response is missing message id")
+                               .with("path", std::string{path})
+                               .with("http_status", std::to_string(response.http_status)));
+  }
+  return *std::move(message_id);
+}
+
 [[nodiscard]] orangutan::channel::InboundMessage make_message(QqDispatchNormalizationOptions options,
                                                               std::string conversation_id,
                                                               std::string user_id,
@@ -246,9 +326,16 @@ struct QqChannel::Impl {
   Impl(GatewayTransport gateway_transport, ApiClient& client, QqChannelOptions opts)
       : transport{std::move(gateway_transport)}, api_client{&client}, options{normalize(std::move(opts))} {}
 
+  [[nodiscard]] std::uint32_t next_msg_seq() noexcept {
+    const auto current = send_sequence;
+    send_sequence = send_sequence == 65'535 ? 1 : send_sequence + 1;
+    return current;
+  }
+
   GatewayTransport transport;
-  [[maybe_unused]] ApiClient* api_client;
+  ApiClient* api_client;
   QqChannelOptions options;
+  std::uint32_t send_sequence{1};
   bool started{false};
   bool permanently_stopped{false};
 };
@@ -319,13 +406,46 @@ async::Awaitable<core::Result<orangutan::channel::InboundMessage>> QqChannel::ne
 
 async::Awaitable<core::Result<orangutan::channel::DeliveryReceipt>>
 QqChannel::send(orangutan::channel::OutboundMessage message) {
-  static_cast<void>(message);
   if (!impl_->started) {
     co_return std::unexpected(not_started(impl_->options.id));
   }
-  co_return std::unexpected(
-      core::Error{core::ErrorKind::capability_not_granted, "qq channel outbound send is not implemented in this slice"}
-          .with("channel_id", impl_->options.id));
+  if (!message.reply_to_message_id.has_value() || message.reply_to_message_id->empty()) {
+    co_return std::unexpected(send_argument_error("qq passive text reply requires reply_to_message_id",
+                                                  impl_->options.id,
+                                                  message.conversation_id)
+                                  .with("reason", "qq_passive_reply_requires_message_id"));
+  }
+
+  auto path = send_path_for(message.conversation_id, impl_->options.id);
+  if (!path) {
+    co_return std::unexpected(std::move(path).error());
+  }
+
+  auto text = outbound_text(message, impl_->options.id, impl_->options.capabilities.max_text_bytes);
+  if (!text) {
+    co_return std::unexpected(std::move(text).error());
+  }
+
+  const auto body = json{
+      {"content", *std::move(text)},
+      {"msg_type", 0},
+      {"msg_id", *message.reply_to_message_id},
+      {"msg_seq", impl_->next_msg_seq()},
+  };
+  auto response = co_await impl_->api_client->post(*path, body.dump());
+  if (!response) {
+    co_return std::unexpected(std::move(response).error().with("channel_id", impl_->options.id));
+  }
+
+  auto message_id = receipt_message_id(*response, *path);
+  if (!message_id) {
+    co_return std::unexpected(std::move(message_id).error().with("channel_id", impl_->options.id));
+  }
+
+  co_return orangutan::channel::DeliveryReceipt{
+      .message_id = std::move(*message_id),
+      .accepted_at = core::time::now_utc(),
+  };
 }
 
 bool QqChannel::started() const noexcept {

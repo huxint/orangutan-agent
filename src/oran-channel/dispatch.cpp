@@ -40,11 +40,16 @@ core::Result<ChannelPromptRunRequest> make_prompt_run_request(const InboundMessa
 }
 
 OutboundMessage make_reply_message(const InboundMessage& message, std::string text) {
-  return OutboundMessage{
+  auto reply = OutboundMessage{
       .conversation_id = message.conversation_id,
       .content = {core::TextContent{.text = std::move(text)}},
       .reactions = {},
   };
+  if (!message.replies_to.empty()) {
+    reply.reply_to_message_id = message.replies_to.front().message_id;
+    reply.thread_id = message.replies_to.front().thread_id;
+  }
+  return reply;
 }
 
 async::Awaitable<core::Result<DeliveryReceipt>> dispatch_one(ChannelManager& manager,

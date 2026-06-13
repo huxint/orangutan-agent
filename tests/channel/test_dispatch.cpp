@@ -96,7 +96,23 @@ TEST_CASE("make_reply_message mirrors the inbound conversation", "[unit][channel
   auto reply = channel::make_reply_message(message, "answer");
 
   REQUIRE(reply.conversation_id == "room-7");
+  REQUIRE_FALSE(reply.reply_to_message_id.has_value());
   REQUIRE(reply.content.size() == 1);
+  REQUIRE(core::text_view(reply.content.front()) == "answer");
+}
+
+TEST_CASE("make_reply_message carries the first inbound reply reference", "[unit][channel][dispatch]") {
+  auto message = inbound({core::TextContent{.text = "hello"}}, "room-7");
+  message.replies_to = {
+      channel::Reference{.message_id = "msg-7", .thread_id = "thread-7"},
+      channel::Reference{.message_id = "msg-8"},
+  };
+
+  auto reply = channel::make_reply_message(message, "answer");
+
+  REQUIRE(reply.conversation_id == "room-7");
+  REQUIRE(reply.reply_to_message_id == "msg-7");
+  REQUIRE(reply.thread_id == "thread-7");
   REQUIRE(core::text_view(reply.content.front()) == "answer");
 }
 

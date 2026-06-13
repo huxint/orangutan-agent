@@ -9,30 +9,31 @@
 
 ## Snapshot
 
-- **Slice:** 233 (`xmake run orangutan -- --help` reports slice 233)
+- **Slice:** 234 (`xmake run orangutan -- --help` reports slice 234)
 - **Last completed history:**
-  [`histories/2026-06/20260613-2321-channel-qq-inbound-adapter.md`](histories/2026-06/20260613-2321-channel-qq-inbound-adapter.md)
+  [`histories/2026-06/20260613-2347-channel-qq-outbound-text.md`](histories/2026-06/20260613-2347-channel-qq-outbound-text.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — the current main line; spun off from the completed channel-ingress
     plan ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-- **Latest completed slice:** slice 233 ships QQ-port milestone 3a: the first
-  `qq::QqChannel` trait-adapter surface in `oran-channel-qq`. It adds
-  `qq::normalize_gateway_dispatch(...)`, mapping C2C and group QQ gateway
-  message events into `channel::InboundMessage` (`c2c:{user_openid}` /
-  `group:{group_openid}` conversations, QQ origin, inbound message id carried
-  as a reply reference, group mention stripping, and QQ text/mention/reply
-  capabilities), and implements `Channel::next_message()` over
-  `GatewayTransport::next_dispatch()` while skipping unsupported non-message
-  dispatches. The adapter now depends on `oran-channel`; outbound sends return
-  an explicit `capability_not_granted` error, and bootstrap registration /
-  background receive ownership are still not present. Focused result: gated
-  `test-channel-qq` **51 cases / 309 assertions**.
-- **Next intended slice:** QQ-port milestone 3b — implement the smallest
-  outbound text send/passive-reply builder for `qq::QqChannel` over
-  `ApiClient` (C2C/group endpoint selection from `conversation_id`, text body
-  serialization, reply target handling, receipt parsing, and focused mock-HTTP
-  coverage) before bootstrap registration
+- **Latest completed slice:** slice 234 ships QQ-port milestone 3b: outbound
+  passive text replies for `qq::QqChannel`. `Channel::send(...)` now requires
+  `reply_to_message_id`, maps `c2c:{user_openid}` /
+  `group:{group_openid}` conversations to the QQ v2 C2C/group message
+  endpoints, serializes plain text replies as `{content,msg_type:0,msg_id,
+  msg_seq}`, parses `id` / `msg_id` / `message_id` delivery receipts, and
+  rejects unsupported outbound shapes before touching HTTP. The generic
+  `channel::make_reply_message(...)` now carries the first inbound reply
+  reference into `OutboundMessage::reply_to_message_id`, so `dispatch_one(...)`
+  preserves QQ inbound `msg_id` for passive replies. Bootstrap registration /
+  background receive ownership are still not present. Focused results:
+  `test-channel` **25 cases / 191 assertions** and gated `test-channel-qq`
+  **55 cases / 344 assertions**.
+- **Next intended slice:** QQ-port milestone 3c — register configured QQ
+  channels in bootstrap behind `--channel_qq=y` and
+  `channels[].kind == "qq"` (credential env-name config, `TokenStore` /
+  `ApiClient` / `GatewayTransport` assembly, disabled-option skip behavior,
+  and mock-validated config registration) before round-trip acceptance
   ([`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)).
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
@@ -61,8 +62,8 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-hook`: 38 cases / 313 assertions.
 - `oran-memory`: 38 cases / 841 assertions.
 - `oran-automation`: 106 cases / 1849 assertions.
-- `oran-channel`: 24 cases / 186 assertions.
-- `oran-channel-qq` (gated, `--channel_qq=y`): 51 cases / 309 assertions.
+- `oran-channel`: 25 cases / 191 assertions.
+- `oran-channel-qq` (gated, `--channel_qq=y`): 55 cases / 344 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 208 cases / 2181 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.

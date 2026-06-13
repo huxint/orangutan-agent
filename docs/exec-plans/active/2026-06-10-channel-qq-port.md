@@ -150,7 +150,16 @@ Migration"), which reserves a dedicated plan for the port.
     stripping. Outbound sends intentionally return `capability_not_granted`
     until the passive-reply builder lands; `test-channel-qq` +6 cases → 51 /
     309, and `oran-channel-qq` now depends on `oran-channel`.
-  - [ ] Milestone 3b: outbound text/passive reply over `ApiClient`.
+  - [x] Milestone 3b: outbound text/passive reply over `ApiClient` — slice 234
+    ([`../../histories/2026-06/20260613-2347-channel-qq-outbound-text.md`](../../histories/2026-06/20260613-2347-channel-qq-outbound-text.md)).
+    `QqChannel::send(...)` now implements the smallest passive text reply path:
+    it requires `reply_to_message_id`, maps `c2c:` / `group:` conversation ids
+    onto the QQ v2 C2C/group message endpoints, serializes text replies with
+    `content`, `msg_type:0`, `msg_id`, and a process-local `msg_seq`, and parses
+    `id` / `msg_id` / `message_id` delivery receipts. The generic
+    `make_reply_message(...)` now propagates the first inbound reply reference
+    so `dispatch_one(...)` can preserve QQ inbound `msg_id`; `test-channel` +1
+    case → 25 / 191 and `test-channel-qq` +4 cases → 55 / 344.
   - [ ] Milestone 3c: bootstrap registration for `channels[].kind == "qq"`.
 - [ ] Milestone 4: round-trip acceptance.
 
@@ -253,6 +262,15 @@ Migration"), which reserves a dedicated plan for the port.
   `send(...)` is deliberate so inbound normalization can be validated through a
   real `GatewayTransport` without mixing QQ's passive-reply quotas, `msg_seq`,
   and receipt decoding into the same slice.
+- 2026-06-13 (slice 234): completed **3b** as a passive-text-only send path,
+  not a general QQ outbound surface. Active push is documented as discontinued,
+  so `send(...)` rejects messages without `reply_to_message_id` instead of
+  silently attempting proactive sends. The `msg_seq` is a process-local
+  monotonic counter for the first adapter slice; a durable per-`msg_id` quota /
+  chunk tracker belongs with round-trip acceptance once bootstrap can assemble
+  real configured channels. Receipt decoding accepts the three response id
+  spellings seen across the QQ references, and malformed receipts surface as
+  parsing errors without logging raw bodies.
 
 ## Linked Artifacts
 
@@ -273,3 +291,5 @@ Migration"), which reserves a dedicated plan for the port.
     (milestone 2b-ii, slice 232)
   - `docs/histories/2026-06/20260613-2321-channel-qq-inbound-adapter.md`
     (milestone 3a, slice 233)
+  - `docs/histories/2026-06/20260613-2347-channel-qq-outbound-text.md`
+    (milestone 3b, slice 234)

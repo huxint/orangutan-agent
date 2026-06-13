@@ -125,8 +125,9 @@ only — v2 makes channels pluggable.
   returns one non-lifecycle `GatewayDispatch` per `next_dispatch()` resume.
   Offline loopback validation covers identify, heartbeat, resume, auth-close
   refresh, token-failure propagation, and cancellation (`test-channel-qq` 45
-  cases / 249 assertions). The slice 233 entry below adds trait-envelope
-  parsing; outbound send and bootstrap registration remain milestone 3.
+  cases / 249 assertions). The slice 233 and 234 entries below add
+  trait-envelope parsing and passive outbound send; bootstrap registration
+  remains milestone 3.
 - Slice 233: QQ-port milestone 3a — `qq::QqChannel`, the first trait-adapter
   receive boundary over `GatewayTransport`. `normalize_gateway_dispatch(...)`
   maps C2C and group gateway message events into `channel::InboundMessage`
@@ -134,10 +135,20 @@ only — v2 makes channels pluggable.
   reply references, group mention stripping, and text/mention/reply
   capabilities), and `QqChannel::next_message()` skips unsupported non-message
   dispatches until a message arrives. `oran-channel-qq` now depends on
-  `oran-channel`; outbound `send(...)` is present only as an explicit
-  `capability_not_granted` placeholder until the text/passive-reply builder
-  lands. Focused validation: `test-channel-qq` 51 cases / 309 assertions.
-  Bootstrap registration remains off.
+  `oran-channel`; outbound `send(...)` is present on the trait but intentionally
+  deferred until the slice-234 text/passive-reply builder. Focused validation:
+  `test-channel-qq` 51 cases / 309 assertions.
+- Slice 234: QQ-port milestone 3b — outbound passive text replies for
+  `qq::QqChannel`. `send(...)` requires an inbound reply target, maps
+  `c2c:{user_openid}` / `group:{group_openid}` conversations to
+  `POST /v2/users/{openid}/messages` or
+  `POST /v2/groups/{group_openid}/messages`, serializes `content`,
+  `msg_type:0`, `msg_id`, and `msg_seq`, and parses `id` / `msg_id` /
+  `message_id` delivery receipts. The generic `make_reply_message(...)` now
+  preserves the first inbound reply reference so the existing dispatch seam can
+  produce QQ passive replies. Focused validation: `test-channel` 25 cases / 191
+  assertions and gated `test-channel-qq` 55 cases / 344 assertions. Bootstrap
+  registration remains off, so full QQ round-trip acceptance is still open.
 
 ## Design Doc Cross-References
 

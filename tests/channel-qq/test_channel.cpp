@@ -7,7 +7,9 @@
 
 #include <chrono>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include <asio/io_context.hpp>
 #include <asio/thread_pool.hpp>
@@ -48,9 +50,25 @@ using json = nlohmann::json;
   };
 }
 
+[[nodiscard]] test::ScriptedResponse api_response(int status, std::string body) {
+  return test::ScriptedResponse{
+      .status = status,
+      .body = std::move(body),
+      .headers = {{"Content-Type", "application/json"}},
+      .delay = 0ms,
+  };
+}
+
 [[nodiscard]] qq::TokenStoreOptions token_options(const test::ScriptedHttpServer& server) {
   auto options = qq::TokenStoreOptions{};
   options.token_url = server.url("/app/getAppAccessToken");
+  options.request_timeout = 2s;
+  return options;
+}
+
+[[nodiscard]] qq::ApiClientOptions api_options(const test::ScriptedHttpServer& server) {
+  auto options = qq::ApiClientOptions{};
+  options.base_url = server.base_url();
   options.request_timeout = 2s;
   return options;
 }
@@ -81,12 +99,34 @@ using json = nlohmann::json;
   return qq::GatewayDispatch{.event_type = std::move(event_type), .data_json = std::move(data).dump()};
 }
 
+[[nodiscard]] std::string_view request_body(std::string_view request) {
+  const auto header_end = request.find("\r\n\r\n");
+  if (header_end == std::string_view::npos) {
+    return {};
+  }
+  return request.substr(header_end + 4);
+}
+
 struct ChannelFixture {
   ChannelFixture(const test::ScriptedHttpServer& token_server, const ws::ScriptedWsServer& gateway_server)
       : client{blocking.get_executor()}, tokens{client,
                                                 qq::Credentials{.app_id = "test-app", .client_secret = "test-secret"},
                                                 token_options(token_server)},
         api{client, tokens}, transport{tokens, transport_options(gateway_server)} {}
+
+  asio::thread_pool blocking{1};
+  http::Client client;
+  qq::TokenStore tokens;
+  qq::ApiClient api;
+  qq::GatewayTransport transport;
+};
+
+struct SendFixture {
+  explicit SendFixture(const test::ScriptedHttpServer& server)
+      : client{blocking.get_executor()},
+        tokens{client, qq::Credentials{.app_id = "test-app", .client_secret = "test-secret"}, token_options(server)},
+        api{client, tokens, api_options(server)},
+        transport{tokens, qq::GatewayTransportOptions{.gateway_url = "ws://127.0.0.1:1/gateway"}} {}
 
   asio::thread_pool blocking{1};
   http::Client client;
@@ -179,7 +219,7 @@ TEST_CASE("QQ gateway dispatch normalization rejects malformed message payloads"
   REQUIRE(missing_group.error().kind() == core::ErrorKind::parsing);
 }
 
-TEST_CASE("QqChannel reports identity, lifecycle, and deferred outbound", "[unit][channel-qq][channel][async]") {
+TEST_CASE("QqChannel reports identity, lifecycle, and passive-reply guard", "[unit][channel-qq][channel][async]") {
   OfflineFixture fixture;
   qq::QqChannel adapter{std::move(fixture.transport), fixture.api, qq::QqChannelOptions{.id = "qq-main"}};
 
@@ -201,7 +241,7 @@ TEST_CASE("QqChannel reports identity, lifecycle, and deferred outbound", "[unit
     auto sent =
         co_await adapter.send(channel::OutboundMessage{.conversation_id = "c2c:user", .content = {}, .reactions = {}});
     REQUIRE_FALSE(sent.has_value());
-    REQUIRE(sent.error().kind() == core::ErrorKind::capability_not_granted);
+    REQUIRE(sent.error().kind() == core::ErrorKind::invalid_argument);
 
     auto stopped = co_await adapter.stop();
     REQUIRE(stopped.has_value());
@@ -212,6 +252,130 @@ TEST_CASE("QqChannel reports identity, lifecycle, and deferred outbound", "[unit
     REQUIRE(restarted.error().kind() == core::ErrorKind::conflict);
   });
 
+  fixture.blocking.join();
+}
+
+TEST_CASE("QqChannel send posts C2C passive text replies", "[unit][channel-qq][channel][async]") {
+  test::ScriptedHttpServer server{{token_ok("tok-1"), api_response(200, R"({"id":"out-1"})")}};
+  SendFixture fixture{server};
+  qq::QqChannel adapter{std::move(fixture.transport), fixture.api, qq::QqChannelOptions{.id = "qq-main"}};
+
+  test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
+    auto started = co_await adapter.start();
+    REQUIRE(started.has_value());
+
+    auto receipt = co_await adapter.send(channel::OutboundMessage{
+        .conversation_id = "c2c:user-openid",
+        .content = {core::TextContent{.text = "hello c2c"}},
+        .reply_to_message_id = "inbound-msg-1",
+        .reactions = {},
+    });
+    REQUIRE(receipt.has_value());
+    REQUIRE(receipt->message_id == "out-1");
+  });
+
+  REQUIRE(server.served_count() == 2);
+  const auto request = server.request_text(1);
+  REQUIRE(request.starts_with("POST /v2/users/user-openid/messages HTTP/1.1"));
+  REQUIRE(request.contains("Authorization: QQBot tok-1"));
+  const auto body = json::parse(request_body(request));
+  REQUIRE(body.at("content") == "hello c2c");
+  REQUIRE(body.at("msg_type") == 0);
+  REQUIRE(body.at("msg_id") == "inbound-msg-1");
+  REQUIRE(body.at("msg_seq") == 1);
+  fixture.blocking.join();
+}
+
+TEST_CASE("QqChannel send posts group passive text replies", "[unit][channel-qq][channel][async]") {
+  test::ScriptedHttpServer server{{token_ok("tok-1"), api_response(200, R"({"message_id":"out-group"})")}};
+  SendFixture fixture{server};
+  qq::QqChannel adapter{std::move(fixture.transport), fixture.api, qq::QqChannelOptions{.id = "qq-group"}};
+
+  test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
+    auto started = co_await adapter.start();
+    REQUIRE(started.has_value());
+
+    auto receipt = co_await adapter.send(channel::OutboundMessage{
+        .conversation_id = "group:group-openid",
+        .content = {core::TextContent{.text = "first"}, core::TextContent{.text = "second"}},
+        .reply_to_message_id = "group-inbound-msg",
+        .reactions = {},
+    });
+    REQUIRE(receipt.has_value());
+    REQUIRE(receipt->message_id == "out-group");
+  });
+
+  REQUIRE(server.served_count() == 2);
+  const auto request = server.request_text(1);
+  REQUIRE(request.starts_with("POST /v2/groups/group-openid/messages HTTP/1.1"));
+  const auto body = json::parse(request_body(request));
+  REQUIRE(body.at("content") == "first\nsecond");
+  REQUIRE(body.at("msg_type") == 0);
+  REQUIRE(body.at("msg_id") == "group-inbound-msg");
+  REQUIRE(body.at("msg_seq") == 1);
+  fixture.blocking.join();
+}
+
+TEST_CASE("QqChannel send rejects unsupported outbound shapes before HTTP", "[unit][channel-qq][channel][async]") {
+  test::ScriptedHttpServer server{std::vector<test::ScriptedResponse>{}};
+  SendFixture fixture{server};
+  qq::QqChannel adapter{std::move(fixture.transport), fixture.api, qq::QqChannelOptions{.id = "qq-main"}};
+
+  test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
+    auto started = co_await adapter.start();
+    REQUIRE(started.has_value());
+
+    auto missing_reply = co_await adapter.send(channel::OutboundMessage{
+        .conversation_id = "c2c:user-openid",
+        .content = {core::TextContent{.text = "hello"}},
+        .reactions = {},
+    });
+    REQUIRE_FALSE(missing_reply.has_value());
+    REQUIRE(missing_reply.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto bad_conversation = co_await adapter.send(channel::OutboundMessage{
+        .conversation_id = "guild:channel-id",
+        .content = {core::TextContent{.text = "hello"}},
+        .reply_to_message_id = "msg-1",
+        .reactions = {},
+    });
+    REQUIRE_FALSE(bad_conversation.has_value());
+    REQUIRE(bad_conversation.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto empty_text = co_await adapter.send(channel::OutboundMessage{
+        .conversation_id = "group:group-openid",
+        .content = {},
+        .reply_to_message_id = "msg-1",
+        .reactions = {},
+    });
+    REQUIRE_FALSE(empty_text.has_value());
+    REQUIRE(empty_text.error().kind() == core::ErrorKind::invalid_argument);
+  });
+
+  REQUIRE(server.served_count() == 0);
+  fixture.blocking.join();
+}
+
+TEST_CASE("QqChannel send rejects malformed receipt bodies", "[unit][channel-qq][channel][async]") {
+  test::ScriptedHttpServer server{{token_ok("tok-1"), api_response(200, R"({"ok":true})")}};
+  SendFixture fixture{server};
+  qq::QqChannel adapter{std::move(fixture.transport), fixture.api, qq::QqChannelOptions{.id = "qq-main"}};
+
+  test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
+    auto started = co_await adapter.start();
+    REQUIRE(started.has_value());
+
+    auto receipt = co_await adapter.send(channel::OutboundMessage{
+        .conversation_id = "c2c:user-openid",
+        .content = {core::TextContent{.text = "hello"}},
+        .reply_to_message_id = "msg-1",
+        .reactions = {},
+    });
+    REQUIRE_FALSE(receipt.has_value());
+    REQUIRE(receipt.error().kind() == core::ErrorKind::parsing);
+  });
+
+  REQUIRE(server.served_count() == 2);
   fixture.blocking.join();
 }
 
