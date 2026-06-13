@@ -116,8 +116,8 @@ only — v2 makes channels pluggable.
   ASan/UBSan), no new dependency. Driving `qq::GatewaySession` over the
   primitive is milestone 2b-ii.
 - Slice 232: QQ-port milestone 2b-ii — `qq::GatewayTransport`, the
-  caller-owned WebSocket-gateway driver under the future `QqChannel`
-  trait adapter. It keeps one persistent `http::WebSocket`, drives
+  caller-owned WebSocket-gateway driver under the `QqChannel` trait adapter.
+  It keeps one persistent `http::WebSocket`, drives
   `qq::GatewaySession` lifecycle frames, sends Identify/Resume/heartbeat
   payloads with tokens from `TokenStore`, races receive waits against an
   `async::sleep_for` heartbeat timer, reconnects with the documented
@@ -125,8 +125,19 @@ only — v2 makes channels pluggable.
   returns one non-lifecycle `GatewayDispatch` per `next_dispatch()` resume.
   Offline loopback validation covers identify, heartbeat, resume, auth-close
   refresh, token-failure propagation, and cancellation (`test-channel-qq` 45
-  cases / 249 assertions). Trait-envelope parsing, outbound send, and
-  bootstrap registration remain milestone 3.
+  cases / 249 assertions). The slice 233 entry below adds trait-envelope
+  parsing; outbound send and bootstrap registration remain milestone 3.
+- Slice 233: QQ-port milestone 3a — `qq::QqChannel`, the first trait-adapter
+  receive boundary over `GatewayTransport`. `normalize_gateway_dispatch(...)`
+  maps C2C and group gateway message events into `channel::InboundMessage`
+  (`c2c:{user_openid}` / `group:{group_openid}` conversations, QQ origin,
+  reply references, group mention stripping, and text/mention/reply
+  capabilities), and `QqChannel::next_message()` skips unsupported non-message
+  dispatches until a message arrives. `oran-channel-qq` now depends on
+  `oran-channel`; outbound `send(...)` is present only as an explicit
+  `capability_not_granted` placeholder until the text/passive-reply builder
+  lands. Focused validation: `test-channel-qq` 51 cases / 309 assertions.
+  Bootstrap registration remains off.
 
 ## Design Doc Cross-References
 

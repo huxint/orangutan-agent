@@ -2,10 +2,9 @@
 //
 // Drives the pure `GatewaySession` state machine over `http::WebSocket`,
 // returning one non-lifecycle dispatch per `next_dispatch()` resume. This is
-// the network half of QQ-port milestone 2b: persistent connection ownership,
-// heartbeat scheduling, token injection for Identify/Resume, and reconnect
-// backoff live here, while translating dispatch payloads into `InboundMessage`
-// remains the later `QqChannel` trait-adapter slice.
+// the network half of the QQ port: persistent connection ownership, heartbeat
+// scheduling, token injection for Identify/Resume, and reconnect backoff live
+// here, while `QqChannel` owns translation into `InboundMessage`.
 
 #pragma once
 

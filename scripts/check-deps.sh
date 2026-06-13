@@ -88,6 +88,7 @@ declare -A LAYER_NAME=(
 #   tool   -> hook     : dispatch publishes tool_before / tool_dispatched / tool_error / tool_after.
 #   prompt -> tool     : prompt assembly delegates schema/catalog bytes to CatalogRenderer.
 #   provider-> prompt  : provider adapters consume RenderedPrompt cache hints; prompt never calls providers.
+#   channel-qq->channel: platform adapter implements the generic Channel trait.
 declare -A ALLOWED_SIBLING=(
   [http__async]=1
   [io__async]=1
@@ -97,6 +98,7 @@ declare -A ALLOWED_SIBLING=(
   [tool__hook]=1
   [prompt__tool]=1
   [provider__prompt]=1
+  ["channel-qq__channel"]=1
 )
 
 failed=0

@@ -168,8 +168,10 @@ Feature options such as `channel_qq`, `hook_lua`, and `vector_memory` land with 
 library that consumes them. Shipped so far: `vector_memory` (sqlite-vec memory
 backend) and `channel_qq` (slice 229 — gates the `oran-channel-qq` /
 `test-channel-qq` / `bench-channel-qq` targets in `xmake/targets.lua`,
-`xmake/tests.lua`, and `xmake/bench.lua`; default off until the QQ port's
-round-trip acceptance passes, per
+`xmake/tests.lua`, and `xmake/bench.lua`; slice 233 adds the first
+`oran-channel` dependency when the gated target starts implementing the
+generic `Channel` trait; default off until the QQ port's round-trip acceptance
+passes, per
 `docs/exec-plans/active/2026-06-10-channel-qq-port.md`).
 
 ## Packages
@@ -370,8 +372,9 @@ target), and `oran-bootstrap` now depends on `oran-channel` for the
 links `oran-channel` transitively. Slice 229 adds the first gated platform
 adapter target: `oran-channel-qq` (plus `test-channel-qq` /
 `bench-channel-qq`) exists only under `xmake f --channel_qq=y` and currently
-depends on `oran-core`, `oran-async`, and `oran-http`; it is not linked into
-the `orangutan` binary until bootstrap registration lands in a later QQ-port
+depends on `oran-core`, `oran-async`, `oran-http`, and `oran-channel` now that
+slice 233 ships the first `QqChannel` trait adapter; it is not linked into the
+`orangutan` binary until bootstrap registration lands in a later QQ-port
 milestone. `oran-channel-webhook` remains a future target.
 
 **Key compile-time wins from this shape:**

@@ -9,28 +9,30 @@
 
 ## Snapshot
 
-- **Slice:** 232 (`xmake run orangutan -- --help` reports slice 232)
+- **Slice:** 233 (`xmake run orangutan -- --help` reports slice 233)
 - **Last completed history:**
-  [`histories/2026-06/20260613-2258-channel-qq-gateway-transport.md`](histories/2026-06/20260613-2258-channel-qq-gateway-transport.md)
+  [`histories/2026-06/20260613-2321-channel-qq-inbound-adapter.md`](histories/2026-06/20260613-2321-channel-qq-inbound-adapter.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — the current main line; spun off from the completed channel-ingress
     plan ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-- **Latest completed slice:** slice 232 ships QQ-port milestone 2b-ii: the
-  caller-owned `qq::GatewayTransport` driver in `oran-channel-qq`. It keeps one
-  persistent `http::WebSocket`, drives `qq::GatewaySession` lifecycle frames
-  (Hello → Identify/Resume, READY/RESUMED, heartbeat ACK, server-requested
-  heartbeat), races receive waits against an `async::sleep_for` heartbeat timer,
-  reconnects with the documented openclaw backoff, resumes only when the
-  session state says it can, invalidates/refreshes tokens on close 4004, and
-  returns one non-lifecycle `GatewayDispatch` per `next_dispatch()` resume for
-  the upcoming trait adapter. It still does not implement `QqChannel`,
-  outbound sends, bootstrap registration, or a background receive loop. Focused
-  result: gated `test-channel-qq` **45 cases / 249 assertions**.
-- **Next intended slice:** QQ-port milestone 3 — introduce the first
-  `qq::QqChannel` trait-adapter slice over `GatewayTransport` and `ApiClient`,
-  starting with gateway dispatch normalization into `channel::InboundMessage`
-  and the `Channel::next_message()` boundary
+- **Latest completed slice:** slice 233 ships QQ-port milestone 3a: the first
+  `qq::QqChannel` trait-adapter surface in `oran-channel-qq`. It adds
+  `qq::normalize_gateway_dispatch(...)`, mapping C2C and group QQ gateway
+  message events into `channel::InboundMessage` (`c2c:{user_openid}` /
+  `group:{group_openid}` conversations, QQ origin, inbound message id carried
+  as a reply reference, group mention stripping, and QQ text/mention/reply
+  capabilities), and implements `Channel::next_message()` over
+  `GatewayTransport::next_dispatch()` while skipping unsupported non-message
+  dispatches. The adapter now depends on `oran-channel`; outbound sends return
+  an explicit `capability_not_granted` error, and bootstrap registration /
+  background receive ownership are still not present. Focused result: gated
+  `test-channel-qq` **51 cases / 309 assertions**.
+- **Next intended slice:** QQ-port milestone 3b — implement the smallest
+  outbound text send/passive-reply builder for `qq::QqChannel` over
+  `ApiClient` (C2C/group endpoint selection from `conversation_id`, text body
+  serialization, reply target handling, receipt parsing, and focused mock-HTTP
+  coverage) before bootstrap registration
   ([`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)).
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
@@ -60,7 +62,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-memory`: 38 cases / 841 assertions.
 - `oran-automation`: 106 cases / 1849 assertions.
 - `oran-channel`: 24 cases / 186 assertions.
-- `oran-channel-qq` (gated, `--channel_qq=y`): 45 cases / 249 assertions.
+- `oran-channel-qq` (gated, `--channel_qq=y`): 51 cases / 309 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 208 cases / 2181 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.

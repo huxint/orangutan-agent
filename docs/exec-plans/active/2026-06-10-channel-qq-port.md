@@ -135,12 +135,23 @@ Migration"), which reserves a dedicated plan for the port.
       in `oran-channel-qq` — slice 232
       ([`../../histories/2026-06/20260613-2258-channel-qq-gateway-transport.md`](../../histories/2026-06/20260613-2258-channel-qq-gateway-transport.md)).
       `qq::GatewayTransport` owns the caller-driven persistent read loop under
-      the future trait adapter, races receives against the heartbeat timer over
+      the trait adapter, races receives against the heartbeat timer over
       `async::sleep_for`, sends Identify/Resume/heartbeat payloads with tokens
       from `TokenStore`, applies the documented close-code/reconnect policy,
       and returns one non-lifecycle `GatewayDispatch` per `next_dispatch()`
       resume; `test-channel-qq` +5 cases → 45 / 249.
 - [ ] Milestone 3: trait adapter + gated registration.
+  - [x] Milestone 3a: inbound trait adapter — slice 233
+    ([`../../histories/2026-06/20260613-2321-channel-qq-inbound-adapter.md`](../../histories/2026-06/20260613-2321-channel-qq-inbound-adapter.md)).
+    `qq::QqChannel` now implements the receive side of the generic
+    `Channel` trait over `GatewayTransport`; `normalize_gateway_dispatch(...)`
+    maps C2C/group message dispatches into `channel::InboundMessage` with QQ
+    conversation ids, reply references, origin/capabilities, and mention
+    stripping. Outbound sends intentionally return `capability_not_granted`
+    until the passive-reply builder lands; `test-channel-qq` +6 cases → 51 /
+    309, and `oran-channel-qq` now depends on `oran-channel`.
+  - [ ] Milestone 3b: outbound text/passive reply over `ApiClient`.
+  - [ ] Milestone 3c: bootstrap registration for `channels[].kind == "qq"`.
 - [ ] Milestone 4: round-trip acceptance.
 
 ## Decision Log
@@ -224,13 +235,24 @@ Migration"), which reserves a dedicated plan for the port.
   `next_dispatch()` and leaves platform dispatch-to-`InboundMessage` parsing,
   outbound sends, and bootstrap registration to milestone 3. That keeps the
   network/session/reconnect risk in one small surface while preserving the
-  existing dependency boundary: `oran-channel-qq` still depends only on
-  `oran-core`, `oran-async`, and `oran-http`; `oran-channel` joins when the
-  trait adapter exists. The driver races `WebSocket::receive(...)` against the
+  then-existing dependency boundary: `oran-channel-qq` still depended only on
+  `oran-core`, `oran-async`, and `oran-http`; the trait-adapter slice was left
+  to move the `oran-channel` dependency. The driver races
+  `WebSocket::receive(...)` against the
   next heartbeat deadline with `async::sleep_for`, so no detached heartbeat
   task or background receive loop is introduced. Token acquisition failures
   surface immediately (auth/config errors are not swallowed as reconnects),
   while close 4004 invalidates the cached token before a fresh reconnect.
+- 2026-06-13 (slice 233): split milestone 3 into **3a** (this slice —
+  receive-side trait adapter), **3b** (outbound text/passive reply), and **3c**
+  (bootstrap registration). The key dependency boundary has now moved:
+  `oran-channel-qq` depends on `oran-channel` because `qq::QqChannel`
+  implements the generic trait, and `scripts/check-deps.sh` documents that
+  interface-layer sibling dependency. The adapter still does not register in
+  bootstrap and still does not send; returning `capability_not_granted` from
+  `send(...)` is deliberate so inbound normalization can be validated through a
+  real `GatewayTransport` without mixing QQ's passive-reply quotas, `msg_seq`,
+  and receipt decoding into the same slice.
 
 ## Linked Artifacts
 
@@ -249,3 +271,5 @@ Migration"), which reserves a dedicated plan for the port.
     (milestone 2b-i, slice 231)
   - `docs/histories/2026-06/20260613-2258-channel-qq-gateway-transport.md`
     (milestone 2b-ii, slice 232)
+  - `docs/histories/2026-06/20260613-2321-channel-qq-inbound-adapter.md`
+    (milestone 3a, slice 233)

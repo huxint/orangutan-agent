@@ -6,6 +6,7 @@
 #pragma once
 
 #include <oran/channel-qq/api_client.hpp>
+#include <oran/channel-qq/channel.hpp>
 #include <oran/channel-qq/gateway.hpp>
 #include <oran/channel-qq/gateway_transport.hpp>
 #include <oran/channel-qq/token_store.hpp>

@@ -61,9 +61,10 @@ Slice 228 adds the config-authored layer on top: the typed
 adapter-toggle policy below), and `make_routed_channel_prompt_runner(...)`,
 which routes each configured channel id to its `agent_key` bridge. Platform
 adapters and any receive loop remain downstream; the QQ port is managed by
-its own exec plan, whose milestone 1 (slice 229) ships the gated
-`oran-channel-qq` library with the token store and API client described
-under "QQ Adapter Migration" below.
+its own exec plan. Slices 229-233 have advanced the gated `oran-channel-qq`
+library from token/API client through gateway transport to the first
+receive-side `QqChannel` trait adapter described under "QQ Adapter Migration"
+below.
 
 ## Inbound / Outbound Envelopes
 
@@ -278,10 +279,15 @@ receive/send suspending on asio socket readiness; `close()` completes the RFC
 Identify/Resume/heartbeat payloads with tokens from `TokenStore`, races
 receive waits against an `async::sleep_for` heartbeat timer, applies the
 documented close-code/reconnect policy, and returns one non-lifecycle
-`GatewayDispatch` per `next_dispatch()` resume. It sits under the future
-`QqChannel::next_message()` trait adapter; dispatch-to-`InboundMessage`
-parsing, outbound sends, and bootstrap registration are the remaining
-milestones.
+`GatewayDispatch` per `next_dispatch()` resume. **3a (slice 233)** adds the
+first `qq::QqChannel` trait-adapter boundary plus the pure
+`normalize_gateway_dispatch(...)` seam: C2C and group message dispatches become
+`channel::InboundMessage` envelopes with `c2c:{user_openid}` /
+`group:{group_openid}` conversation ids, QQ origin, honest text/mention/reply
+capabilities, inbound message ids preserved as reply references, and group
+mention tokens stripped from prompt text. `QqChannel::next_message()` awaits
+`GatewayTransport::next_dispatch()` and skips unsupported non-message dispatches.
+Outbound sends and bootstrap registration are the remaining milestone-3 pieces.
 
 ## New Adapter Recipe
 
