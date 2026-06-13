@@ -123,9 +123,17 @@ Migration"), which reserves a dedicated plan for the port.
     `build_identify`/`build_resume`/`build_heartbeat`, `classify_close_code`),
     offline-tested (`test-channel-qq` +19 cases → 40 / 209) with no new
     dependency.
-  - [ ] Milestone 2b: `wss://` network transport — a cancel-aware WebSocket
-    boundary on `oran-http` driving `GatewaySession` behind
-    `Channel::next_message()`, plus the heartbeat timer and reconnect backoff.
+  - [~] Milestone 2b: `wss://` network transport.
+    - [x] Milestone 2b-i: the `oran-http` WebSocket primitive — slice 231
+      ([`../../histories/2026-06/20260613-1357-http-websocket-boundary.md`](../../histories/2026-06/20260613-1357-http-websocket-boundary.md)).
+      `http::WebSocket` (`connect`/`receive`/`send_text`/`close` over libcurl
+      connect-only mode), cancel-aware without a thread; shared libcurl RAII
+      wrappers extracted to `src/oran-http/_impl/curl_common.hpp`; `test-http`
+      +12 cases → 27 / 148, clean under ASan/UBSan, no new dependency.
+    - [ ] Milestone 2b-ii: drive `qq::GatewaySession` over `http::WebSocket`
+      behind `Channel::next_message()` in `oran-channel-qq` — the persistent
+      read loop, the heartbeat timer over `async::sleep_for`, and reconnect
+      backoff.
 - [ ] Milestone 3: trait adapter + gated registration.
 - [ ] Milestone 4: round-trip acceptance.
 
@@ -188,6 +196,22 @@ Migration"), which reserves a dedicated plan for the port.
   `GatewayReaction` is a struct of independent directives rather than a
   single enum because one Hello frame must both arm the heartbeat timer and
   request Identify/Resume.
+- 2026-06-13 (slice 231): split milestone 2b into **2b-i** (this slice — the
+  `oran-http` WebSocket primitive) and **2b-ii** (the `GatewaySession` driver),
+  the split slice 230's decision log already anticipated. Chose libcurl's
+  connect-only WebSocket mode (`CURLOPT_CONNECT_ONLY = 2`) driven by the *multi*
+  interface for cancel-awareness: the handshake runs in short non-blocking
+  `curl_multi_perform` rounds between `async::sleep_for` ticks, and
+  receive/send use connect-only's non-blocking `curl_ws_recv`/`curl_ws_send`
+  (CURLE_AGAIN) suspending on asio socket readiness over a `dup` of curl's
+  active socket — no `std::thread` (C2), no curl in headers (C6), and an idle
+  connection costs no CPU-pool thread (critical under the default
+  `cpu_workers = 1`). Two correctness fixes landed under test: (1) the
+  connection lives in the *multi* handle's connection pool, so the `Impl` must
+  keep the easy handle attached to a live multi for the connection's lifetime
+  (removing it severed `CURLINFO_ACTIVESOCKET`); (2) `close()` now completes the
+  RFC 6455 closing handshake (drain to peer close/EOF, bounded) so the close
+  frame is delivered before the connection is torn down on destruction.
 
 ## Linked Artifacts
 
@@ -202,3 +226,5 @@ Migration"), which reserves a dedicated plan for the port.
     (milestone 1, slice 229)
   - `docs/histories/2026-06/20260612-1631-channel-qq-gateway-protocol.md`
     (milestone 2a, slice 230)
+  - `docs/histories/2026-06/20260613-1357-http-websocket-boundary.md`
+    (milestone 2b-i, slice 231)

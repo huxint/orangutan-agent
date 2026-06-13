@@ -11,7 +11,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -27,6 +26,7 @@
 
 #include <oran/core/error.hpp>
 
+#include "_impl/curl_common.hpp"
 #include "_impl/sse_parser.hpp"
 
 namespace orangutan::http {
@@ -34,11 +34,16 @@ namespace {
 
 using orangutan::core::Error;
 
-constexpr long kPollTimeoutMs = 50;
+using detail::curl_error;
+using detail::curl_global;
+using detail::curl_multi_error;
+using detail::CurlEasy;
+using detail::CurlEasyRegistration;
+using detail::CurlHeaders;
+using detail::CurlMulti;
+using detail::is_cancelled;
 
-[[nodiscard]] bool is_cancelled(const asio::cancellation_state& cancellation) noexcept {
-  return cancellation.cancelled() != asio::cancellation_type::none;
-}
+constexpr long kPollTimeoutMs = 50;
 
 [[nodiscard]] bool is_http_url(std::string_view url) noexcept {
   return url.starts_with("http://") || url.starts_with("https://");
@@ -48,153 +53,6 @@ constexpr long kPollTimeoutMs = 50;
   return method == "GET" || method == "POST" || method == "PUT" || method == "PATCH" || method == "DELETE" ||
          method == "HEAD";
 }
-
-[[nodiscard]] Error curl_error(CURLcode code, std::string_view action) {
-  const auto message = std::string{curl_easy_strerror(code)};
-  switch (code) {
-    case CURLE_OPERATION_TIMEDOUT:
-      return Error{core::ErrorKind::timeout, "http request timed out"}.with("curl_error", message);
-    case CURLE_COULDNT_RESOLVE_HOST:
-    case CURLE_COULDNT_CONNECT:
-    case CURLE_RECV_ERROR:
-    case CURLE_SEND_ERROR:
-    case CURLE_GOT_NOTHING:
-      return Error::network("http transport failed").with("curl_error", message).with("action", std::string{action});
-    case CURLE_SSL_CONNECT_ERROR:
-    case CURLE_PEER_FAILED_VERIFICATION:
-      return Error::network("http TLS verification failed")
-          .with("curl_error", message)
-          .with("action", std::string{action});
-    default:
-      return Error::upstream("http client failed").with("curl_error", message).with("action", std::string{action});
-  }
-}
-
-[[nodiscard]] Error curl_multi_error(CURLMcode code, std::string_view action) {
-  return Error::network("http multi transport failed")
-      .with("curl_multi_error", curl_multi_strerror(code))
-      .with("action", std::string{action});
-}
-
-class CurlGlobal {
-public:
-  CurlGlobal() : ok_{curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK} {}
-
-  ~CurlGlobal() {
-    if (ok_) {
-      curl_global_cleanup();
-    }
-  }
-
-  CurlGlobal(const CurlGlobal&) = delete;
-  CurlGlobal& operator=(const CurlGlobal&) = delete;
-
-  [[nodiscard]] bool ok() const noexcept {
-    return ok_;
-  }
-
-private:
-  bool ok_{false};
-};
-
-[[nodiscard]] CurlGlobal& curl_global() {
-  static CurlGlobal global;
-  return global;
-}
-
-class CurlEasy {
-public:
-  CurlEasy() : handle_{curl_easy_init()} {}
-
-  ~CurlEasy() {
-    if (handle_ != nullptr) {
-      curl_easy_cleanup(handle_);
-    }
-  }
-
-  CurlEasy(const CurlEasy&) = delete;
-  CurlEasy& operator=(const CurlEasy&) = delete;
-
-  [[nodiscard]] CURL* get() const noexcept {
-    return handle_;
-  }
-
-private:
-  CURL* handle_{nullptr};
-};
-
-class CurlMulti {
-public:
-  CurlMulti() : handle_{curl_multi_init()} {}
-
-  ~CurlMulti() {
-    if (handle_ != nullptr) {
-      curl_multi_cleanup(handle_);
-    }
-  }
-
-  CurlMulti(const CurlMulti&) = delete;
-  CurlMulti& operator=(const CurlMulti&) = delete;
-
-  [[nodiscard]] CURLM* get() const noexcept {
-    return handle_;
-  }
-
-private:
-  CURLM* handle_{nullptr};
-};
-
-class CurlHeaders {
-public:
-  CurlHeaders() = default;
-
-  ~CurlHeaders() {
-    if (headers_ != nullptr) {
-      curl_slist_free_all(headers_);
-    }
-  }
-
-  CurlHeaders(const CurlHeaders&) = delete;
-  CurlHeaders& operator=(const CurlHeaders&) = delete;
-
-  [[nodiscard]] core::Result<void> append(const Header& header) {
-    if (header.name.empty()) {
-      return std::unexpected(Error::invalid_argument("http header name must be non-empty"));
-    }
-    const auto line = header.name + ": " + header.value;
-    auto* next = curl_slist_append(headers_, line.c_str());
-    if (next == nullptr) {
-      return std::unexpected(Error::internal("failed to allocate curl header list"));
-    }
-    headers_ = next;
-    return {};
-  }
-
-  [[nodiscard]] curl_slist* get() const noexcept {
-    return headers_;
-  }
-
-private:
-  curl_slist* headers_{nullptr};
-};
-
-class CurlEasyRegistration {
-public:
-  CurlEasyRegistration(CURLM* multi, CURL* easy) : multi_{multi}, easy_{easy} {}
-
-  ~CurlEasyRegistration() {
-    if (multi_ != nullptr && easy_ != nullptr) {
-      curl_multi_remove_handle(multi_, easy_);
-    }
-  }
-
-  CurlEasyRegistration(const CurlEasyRegistration&) = delete;
-  CurlEasyRegistration& operator=(const CurlEasyRegistration&) = delete;
-
-private:
-  CURLM* multi_{nullptr};
-  CURL* easy_{nullptr};
-};
 
 [[nodiscard]] std::string_view trim_header_value(std::string_view value) noexcept {
   while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
@@ -318,7 +176,7 @@ std::size_t write_stream(char* data, std::size_t size, std::size_t count, void* 
                                                 curl_write_callback body_callback,
                                                 void* body_data) {
   for (const auto& header : request.headers) {
-    auto appended = headers.append(header);
+    auto appended = headers.append(header.name, header.value);
     if (!appended) {
       return std::unexpected(std::move(appended).error());
     }

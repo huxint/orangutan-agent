@@ -9,33 +9,30 @@
 
 ## Snapshot
 
-- **Slice:** 230 (`xmake run orangutan -- --help` reports slice 230)
+- **Slice:** 231 (`xmake run orangutan -- --help` reports slice 231)
 - **Last completed history:**
-  [`histories/2026-06/20260612-1631-channel-qq-gateway-protocol.md`](histories/2026-06/20260612-1631-channel-qq-gateway-protocol.md)
+  [`histories/2026-06/20260613-1357-http-websocket-boundary.md`](histories/2026-06/20260613-1357-http-websocket-boundary.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — the current main line; spun off from the completed channel-ingress
     plan ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-- **Latest completed slice:** slice 230 ships QQ-port milestone 2a: the pure,
-  offline-testable QQ gateway protocol/session state machine
-  (`qq::GatewaySession`) — `consume(frame_json)` decodes one gateway text
-  frame at a time and returns a `GatewayReaction` (arm heartbeat timer,
-  send Identify-vs-Resume, surface a non-lifecycle dispatch, reconnect
-  resume/fresh, session-ready), caching the `s` seq cursor and the READY
-  `session_id`; `build_identify`/`build_resume`/`build_heartbeat` emit the
-  outbound payloads (token injected per-call so the session never stores the
-  secret, C5); `classify_close_code` maps WebSocket close codes to a
-  recovery action with the SDK-grounded corrections (4009 = the *only*
-  resume-able close; 4013/4014 = intents; 4914/4915 = fatal). Frames/payloads
-  cross the public surface as JSON strings (C6); no new dependency. Focused
-  result: `test-channel-qq` **40 cases / 209 assertions** (19 new gateway
-  cases).
-- **Next intended slice:** QQ-port milestone 2b — the `wss://` network
-  transport that drives `GatewaySession` behind `Channel::next_message()`:
-  a cancel-aware WebSocket boundary on `oran-http` (the codebase has no
-  WebSocket primitive yet; the legacy used raw `curl_ws_*` on a dedicated
-  `std::thread`, which C2/C6 forbid), the persistent read loop, the
-  heartbeat timer over `async::sleep_for`, and reconnect backoff
+- **Latest completed slice:** slice 231 ships QQ-port milestone 2b-i: the first
+  WebSocket primitive on `oran-http` (`http::WebSocket` —
+  `connect`/`receive`/`send_text`/`close` over libcurl's connect-only
+  WebSocket mode), the `wss://` transport the gateway session needs but the
+  codebase lacked (the client was body + SSE only). It is cancel-aware without
+  a thread (C2/C11): the handshake runs in non-blocking `curl_multi_perform`
+  rounds and receive/send suspend on asio socket readiness (a `dup` of curl's
+  active socket), so an idle gateway connection costs no CPU-pool thread. The
+  shared libcurl RAII wrappers were extracted into
+  `src/oran-http/_impl/curl_common.hpp` so the client and WebSocket TUs share
+  one copy (curl stays out of headers, C6). No new dependency. Focused result:
+  `test-http` **27 cases / 148 assertions** (12 new WebSocket cases / 88
+  assertions, including a cancellation proof; clean under ASan/UBSan).
+- **Next intended slice:** QQ-port milestone 2b-ii — drive
+  `qq::GatewaySession` over `http::WebSocket` behind `Channel::next_message()`:
+  the persistent read loop, the heartbeat timer over `async::sleep_for`, and
+  reconnect backoff, in `oran-channel-qq`
   ([`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)).
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
@@ -56,7 +53,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 - `oran-core`: 71 cases / 459 assertions.
 - `oran-async`: 14 cases / 76 assertions.
-- `oran-http`: 3 cases / 21 assertions.
+- `oran-http`: 27 cases / 148 assertions.
 - `oran-io`: 54 cases / 311 assertions.
 - `oran-storage`: 77 cases / 988 assertions.
 - `oran-config`: 54 cases / 501 assertions.

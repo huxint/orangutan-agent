@@ -103,6 +103,18 @@ only — v2 makes channels pluggable.
   dependency; frames/payloads cross the public surface as JSON strings (C6).
   The `wss://` network transport that drives the session behind
   `Channel::next_message()` is milestone 2b.
+- Slice 231: QQ-port milestone 2b-i — the first WebSocket primitive on
+  `oran-http` (`http::WebSocket`: `connect`/`receive`/`send_text`/`close` over
+  libcurl connect-only mode), the `wss://` transport the gateway session needs.
+  It is cancel-aware without a thread (C2/C11): the handshake runs in
+  non-blocking `curl_multi_perform` rounds and receive/send suspend on asio
+  socket readiness over a `dup` of curl's active socket, so an idle gateway
+  connection costs no CPU-pool thread; `close()` completes the RFC 6455 closing
+  handshake. The shared libcurl RAII wrappers were extracted to
+  `src/oran-http/_impl/curl_common.hpp` (curl stays out of headers, C6).
+  `test-http` 27 cases / 148 assertions (12 new WebSocket cases, clean under
+  ASan/UBSan), no new dependency. Driving `qq::GatewaySession` over the
+  primitive behind `Channel::next_message()` is milestone 2b-ii.
 
 ## Design Doc Cross-References
 
