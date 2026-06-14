@@ -142,6 +142,28 @@ struct ListAuditEventsOptions {
   std::size_t limit{50};
 };
 
+struct ToolCallRollup {
+  core::TurnId parent_turn_id{};
+  std::string tool_name;
+  std::int64_t first_audit_event_id{};
+  std::int64_t last_audit_event_id{};
+  std::int64_t decision_count{};
+  std::int64_t hook_publish_count{};
+  std::int64_t permitted_count{};
+  std::int64_t blocked_count{};
+  std::int64_t latency_sample_count{};
+  double total_wall_time_ms{};
+  std::optional<double> average_wall_time_ms{};
+};
+
+struct ListToolCallRollupsOptions {
+  /// Optional parent trace turn id. Set this for the spec-0018 per-turn query;
+  /// leave it unset to list the most recent turn/tool rollups.
+  std::optional<core::TurnId> parent_turn_id{};
+  std::string tool_name{};
+  std::size_t limit{50};
+};
+
 struct AuditRepositoryOptions {
   std::string migrations_directory;
 };
@@ -169,6 +191,15 @@ public:
   /// Returns `Error::invalid_argument` for a zero turn id or zero limit.
   [[nodiscard]] async::Awaitable<core::Result<std::vector<AuditEventRecord>>>
   list_events_for_turn(core::TurnId parent_turn_id, std::size_t limit = 200);
+
+  /// Read-only spec-0018 v1.1 rollup over `audit_tool_call_rollups`.
+  /// Counts are derived from permission-decision rows; `permitted_count`
+  /// covers decisions whose handler was allowed to run (`allow`, `approved`,
+  /// or rewritten input), while `blocked_count` covers denied/unresolved or
+  /// hook-blocked decisions. Latency fields use
+  /// `metadata_json.usage.wall_time_ms` samples when present.
+  [[nodiscard]] async::Awaitable<core::Result<std::vector<ToolCallRollup>>>
+  list_tool_call_rollups(ListToolCallRollupsOptions options);
 
   /// Count of rows visible under the same scope. Useful for the
   /// upcoming `--audit-stats` CLI and for tests that need to assert

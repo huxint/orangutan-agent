@@ -44,7 +44,11 @@ trust the audit log. This doc captures the operational expectations.
   code. These commands read `<workspace>/.orangutan/audit.db`, run the
   idempotent audit migration first, and preserve the redacted trace/audit
   contract: no raw prompt bytes, tool inputs, provider bodies, or secrets are
-  added by the exporter.
+  added by the exporter. The same SQLite-native inspection layer now includes
+  the audit DB v5 `audit_tool_call_rollups` view and storage API, which derive
+  per-turn/per-tool decision counts, hook-publish counts, permitted/blocked
+  counts, and optional `metadata_json.usage.wall_time_ms` latency samples from
+  joined audit rows for future operator surfaces.
 - v1.1: distributed tracing via OpenTelemetry (stretch — adds a dependency; gate it
   behind `--obs_otel=y`).
 

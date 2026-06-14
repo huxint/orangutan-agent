@@ -134,14 +134,21 @@ TEST_CASE("AuditRepository::migrate applies the audit schema once", "[unit][stor
     auto first = co_await repo.migrate();
     REQUIRE(first.has_value());
     REQUIRE(first->previous_version == 0);
-    REQUIRE(first->current_version == 4);
-    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3, 4});
+    REQUIRE(first->current_version == 5);
+    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3, 4, 5});
 
     auto second = co_await repo.migrate();
     REQUIRE(second.has_value());
-    REQUIRE(second->previous_version == 4);
-    REQUIRE(second->current_version == 4);
+    REQUIRE(second->previous_version == 5);
+    REQUIRE(second->current_version == 5);
     REQUIRE(second->applied_versions.empty());
+
+    auto reader = co_await pool.acquire_reader();
+    REQUIRE(reader.has_value());
+    auto view = reader->connection().query(
+        "SELECT name FROM sqlite_master WHERE type = 'view' AND name = 'audit_tool_call_rollups'");
+    REQUIRE(view.has_value());
+    REQUIRE(view->rows.size() == 1);
   });
 }
 
@@ -621,6 +628,138 @@ TEST_CASE("AuditRepository::list_events_for_turn rejects malformed inputs",
     REQUIRE(zero_id.error().kind() == core::ErrorKind::invalid_argument);
 
     auto zero_limit = co_await repo.list_events_for_turn(turn_id_with(0x10), 0);
+    REQUIRE_FALSE(zero_limit.has_value());
+    REQUIRE(zero_limit.error().kind() == core::ErrorKind::invalid_argument);
+  });
+}
+
+TEST_CASE("AuditRepository::list_tool_call_rollups aggregates per-turn tool decisions",
+          "[unit][storage][audit_repository][trace]") {
+  TempDb db{"oran-audit-repo-tool-call-rollups"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::AuditRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+
+    const auto turn_a = turn_id_with(0x10);
+    const auto turn_b = turn_id_with(0x20);
+
+    auto read_hook = make_request("scope-A", "file.read", "allow");
+    read_hook.event_kind = "hook_publish";
+    read_hook.parent_turn_id = turn_a;
+    read_hook.metadata_json = R"json({"event":"tool_before","sink_id":"policy","decision_kind":"proceed"})json";
+    REQUIRE((co_await repo.append_event(std::move(read_hook))).has_value());
+
+    auto read_fast = make_request("scope-A", "file.read", "allow");
+    read_fast.parent_turn_id = turn_a;
+    read_fast.metadata_json = R"json({"usage":{"wall_time_ms":5.5,"bytes_read":32}})json";
+    auto read_fast_row = co_await repo.append_event(std::move(read_fast));
+    REQUIRE(read_fast_row.has_value());
+
+    auto read_approved = make_request("scope-A", "file.read", "approved");
+    read_approved.verdict = "ask";
+    read_approved.parent_turn_id = turn_a;
+    read_approved.metadata_json = R"json({"usage":{"wall_time_ms":1.5}})json";
+    REQUIRE((co_await repo.append_event(std::move(read_approved))).has_value());
+
+    auto read_invalid_metadata = make_request("scope-A", "file.read", "allow");
+    read_invalid_metadata.parent_turn_id = turn_a;
+    read_invalid_metadata.metadata_json = "{not-json";
+    REQUIRE((co_await repo.append_event(std::move(read_invalid_metadata))).has_value());
+
+    auto write_hook = make_request("scope-A", "file.write", "allow");
+    write_hook.event_kind = "hook_publish";
+    write_hook.parent_turn_id = turn_a;
+    write_hook.metadata_json = R"json({"event":"tool_before","sink_id":"policy","decision_kind":"veto"})json";
+    REQUIRE((co_await repo.append_event(std::move(write_hook))).has_value());
+
+    auto write_blocked = make_request("scope-A", "file.write", "blocked_by_hook");
+    write_blocked.parent_turn_id = turn_a;
+    auto write_blocked_row = co_await repo.append_event(std::move(write_blocked));
+    REQUIRE(write_blocked_row.has_value());
+
+    auto list_denied = make_request("scope-B", "directory.list", "deny");
+    list_denied.verdict = "deny";
+    list_denied.parent_turn_id = turn_a;
+    auto list_denied_row = co_await repo.append_event(std::move(list_denied));
+    REQUIRE(list_denied_row.has_value());
+
+    auto other_turn = make_request("scope-A", "file.read", "allow");
+    other_turn.parent_turn_id = turn_b;
+    REQUIRE((co_await repo.append_event(std::move(other_turn))).has_value());
+
+    auto no_turn = make_request("scope-A", "file.read", "allow");
+    REQUIRE((co_await repo.append_event(std::move(no_turn))).has_value());
+
+    auto rows = co_await repo.list_tool_call_rollups(
+        storage::ListToolCallRollupsOptions{.parent_turn_id = turn_a, .limit = 10});
+    REQUIRE(rows.has_value());
+    REQUIRE(rows->size() == 3);
+
+    REQUIRE((*rows)[0].parent_turn_id == turn_a);
+    REQUIRE((*rows)[0].tool_name == "directory.list");
+    REQUIRE((*rows)[0].first_audit_event_id == list_denied_row->id);
+    REQUIRE((*rows)[0].last_audit_event_id == list_denied_row->id);
+    REQUIRE((*rows)[0].decision_count == 1);
+    REQUIRE((*rows)[0].hook_publish_count == 0);
+    REQUIRE((*rows)[0].permitted_count == 0);
+    REQUIRE((*rows)[0].blocked_count == 1);
+    REQUIRE((*rows)[0].latency_sample_count == 0);
+    REQUIRE((*rows)[0].total_wall_time_ms == 0.0);
+    REQUIRE_FALSE((*rows)[0].average_wall_time_ms.has_value());
+
+    REQUIRE((*rows)[1].tool_name == "file.write");
+    REQUIRE((*rows)[1].last_audit_event_id == write_blocked_row->id);
+    REQUIRE((*rows)[1].decision_count == 1);
+    REQUIRE((*rows)[1].hook_publish_count == 1);
+    REQUIRE((*rows)[1].permitted_count == 0);
+    REQUIRE((*rows)[1].blocked_count == 1);
+
+    REQUIRE((*rows)[2].tool_name == "file.read");
+    REQUIRE((*rows)[2].first_audit_event_id < read_fast_row->id);
+    REQUIRE((*rows)[2].decision_count == 3);
+    REQUIRE((*rows)[2].hook_publish_count == 1);
+    REQUIRE((*rows)[2].permitted_count == 3);
+    REQUIRE((*rows)[2].blocked_count == 0);
+    REQUIRE((*rows)[2].latency_sample_count == 2);
+    REQUIRE((*rows)[2].total_wall_time_ms == 7.0);
+    REQUIRE((*rows)[2].average_wall_time_ms.has_value());
+    REQUIRE(*(*rows)[2].average_wall_time_ms == 3.5);
+
+    auto only_read = co_await repo.list_tool_call_rollups(
+        storage::ListToolCallRollupsOptions{.parent_turn_id = turn_a, .tool_name = "file.read", .limit = 10});
+    REQUIRE(only_read.has_value());
+    REQUIRE(only_read->size() == 1);
+    REQUIRE((*only_read)[0].tool_name == "file.read");
+
+    auto global_limit = co_await repo.list_tool_call_rollups(storage::ListToolCallRollupsOptions{.limit = 1});
+    REQUIRE(global_limit.has_value());
+    REQUIRE(global_limit->size() == 1);
+    REQUIRE((*global_limit)[0].parent_turn_id == turn_b);
+
+    auto missing = co_await repo.list_tool_call_rollups(
+        storage::ListToolCallRollupsOptions{.parent_turn_id = turn_id_with(0x99), .limit = 10});
+    REQUIRE(missing.has_value());
+    REQUIRE(missing->empty());
+  });
+}
+
+TEST_CASE("AuditRepository::list_tool_call_rollups rejects malformed inputs",
+          "[unit][storage][audit_repository][trace]") {
+  TempDb db{"oran-audit-repo-tool-call-rollups-validate"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::AuditRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+
+    auto zero_id =
+        co_await repo.list_tool_call_rollups(storage::ListToolCallRollupsOptions{.parent_turn_id = core::TurnId{}});
+    REQUIRE_FALSE(zero_id.has_value());
+    REQUIRE(zero_id.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto zero_limit = co_await repo.list_tool_call_rollups(storage::ListToolCallRollupsOptions{.limit = 0});
     REQUIRE_FALSE(zero_limit.has_value());
     REQUIRE(zero_limit.error().kind() == core::ErrorKind::invalid_argument);
   });

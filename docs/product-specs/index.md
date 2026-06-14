@@ -24,7 +24,7 @@ ship*). For per-track frontier / next-step / pre-dependency detail, see
 | 0015 | [Blocking hook decisions](0015-blocking-hook-decisions.md) | v1 shipped — blocking dispatch, timeout, ask bridge (slices 91–96) |
 | 0016 | [Prompt + tool-catalog cache](0016-prompt-and-tool-catalog-cache.md) | v1 shipped — builder, promotion, cache hints, stability bench (slices 59–73) |
 | 0017 | [Fake-provider-first agent loop](0017-fake-provider-first-agent-loop.md) | shipped — slices 74–77 |
-| 0018 | [First-loop observability & trace](0018-first-loop-observability.md) | v1 shipped — trace rows, `--trace` inspector, rollups, retention (slices 78–150) |
+| 0018 | [First-loop observability & trace](0018-first-loop-observability.md) | v1 shipped; v1.1 in progress — trace rows, inspector/export, provider usage rollups, retention, and audit-derived tool-call rollups (slices 78–150, 239–243) |
 
 ## Conventions
 

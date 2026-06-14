@@ -85,6 +85,9 @@ makes the existing audit rows joinable. Nothing else.
   Slice 93 adds `audit_events.event_kind` as audit DB migration version 4 so
   ordinary permission decisions and `hook_publish` observability rows can share
   the same table and parent-turn cause chain without overloading metadata.
+  Slice 243 adds audit DB migration version 5 with the
+  `audit_tool_call_rollups` view, keeping per-turn/per-tool tool-call
+  aggregates as a SQL-derived read instead of adding trace columns.
   The repository covers append/get/list/count, audit-v1-to-trace-v2/v3
   upgrade, and validation; `agent::Loop` now uses it for terminal-success rows,
   skips it when `TraceContext::enabled=false`, writes cancelled rows for
@@ -136,8 +139,8 @@ makes the existing audit rows joinable. Nothing else.
   SQL ships as audit DB migration version 2 under `migrations/audit/` via the
   existing `#embed` pattern. **Status (slice 79):** shipped as
   `storage::built_in_trace_migrations()`, intentionally equivalent to the
-  complete `storage::built_in_audit_migrations()` set, now including version 4
-  for `audit_events.event_kind`.
+  complete `storage::built_in_audit_migrations()` set, now including version 5
+  for the `audit_tool_call_rollups` view.
 - **`oran-core::TurnId`** — 16-byte UUID type (existing pattern; new
   alias if no equivalent exists). Generated at turn start; passed
   through every dispatch context, every audit event, every hook
@@ -282,6 +285,14 @@ makes the existing audit rows joinable. Nothing else.
 - **Tool-call rollup** — derived view on `audit_events` that pre-
   aggregates per-turn tool counts, per-tool latencies, per-tool
   failure rates. Lives as a SQL view, not a new column.
+  **Status (slice 243):** shipped as audit DB migration version 5 and
+  `AuditRepository::list_tool_call_rollups(...)`. The current rollup groups
+  permission-decision rows and sibling `hook_publish` rows by
+  `parent_turn_id` + `tool_name`, returning decision/hook counts,
+  permitted/blocked decision counts, and optional latency samples from valid
+  `metadata_json.usage.wall_time_ms`. It deliberately does not claim complete
+  handler failure rates yet because failed handler exits are not durable audit
+  rows today.
 - **Cache hit/miss counters** — the `BoundedCache` stats from spec
   0012 surface as per-turn counters
   (`prompt_block_cache_hits`, `regex_cache_hits`, `file_view_cache_hits`).
@@ -450,6 +461,19 @@ makes the existing audit rows joinable. Nothing else.
     a file or POST sink is selected, duplicate/missing/empty/unscoped sink
     rejection, file/POST mutual exclusion, loopback POST payload shape for
     single-turn and bounded list modes, and non-2xx POST failure reporting.
+14. **Tool-call rollup.** A traced turn with several permission-decision rows
+    for multiple tools and sibling `hook_publish` rows can be queried as
+    per-turn/per-tool rollups without scanning raw audit rows in the caller.
+    The rollup reports decision counts, hook-publish counts,
+    permitted/blocked decision counts, and averages only valid
+    `metadata_json.usage.wall_time_ms` samples. Rows without a
+    `parent_turn_id` are excluded, and the storage API supports a parent-turn
+    filter, a tool-name filter, and a bounded limit.
+    **Status (slice 243):** shipped. Audit DB migration version 5 creates
+    `audit_tool_call_rollups`, and `AuditRepository::list_tool_call_rollups`
+    exposes the derived rows. `test-storage` pins migration v5 application,
+    the view's presence, invalid JSON handling, hook/decision aggregation,
+    filter/limit behavior, and malformed option validation.
 
 ## Design Doc Cross-References
 
@@ -513,6 +537,7 @@ makes the existing audit rows joinable. Nothing else.
 ```sh
 xmake build oran-storage oran-agent
 xmake run test-storage                        # trace_turns migration + insert + query
+xmake run test-storage "[audit_repository]"   # audit join + tool-call rollups
 xmake run test-agent                          # trace rows joined to spec 0017 scenarios
 xmake run test-tool                           # direct tool_before hook_publish rows
 xmake run test-bootstrap                      # --trace inspector output over mixed rows

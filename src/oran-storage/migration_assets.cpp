@@ -51,6 +51,10 @@ constexpr unsigned char kAuditEventKindBytes[] = {
 #embed "migrations/audit/0004-audit-event-kind.sql"
 };
 
+constexpr unsigned char kAuditToolCallRollupsBytes[] = {
+#embed "migrations/audit/0005-audit-tool-call-rollups.sql"
+};
+
 template <std::size_t N>
 [[nodiscard]] std::string to_sql_string(const unsigned char (&bytes)[N]) {
   return std::string{reinterpret_cast<const char*>(bytes), N};
@@ -59,7 +63,7 @@ template <std::size_t N>
 }  // namespace
 
 std::span<const Migration> built_in_audit_migrations() {
-  static const std::array<Migration, 4> kMigrations{
+  static const std::array<Migration, 5> kMigrations{
       Migration{
           .version = 1,
           .name = "audit-initial",
@@ -79,6 +83,11 @@ std::span<const Migration> built_in_audit_migrations() {
           .version = 4,
           .name = "audit-event-kind",
           .sql = to_sql_string(kAuditEventKindBytes),
+      },
+      Migration{
+          .version = 5,
+          .name = "audit-tool-call-rollups",
+          .sql = to_sql_string(kAuditToolCallRollupsBytes),
       },
   };
   return kMigrations;

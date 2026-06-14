@@ -45,6 +45,21 @@ FROM audit_events WHERE parent_turn_id = ?
 ORDER BY id ASC LIMIT ?
 )sql";
 
+constexpr std::string_view kToolCallRollupColumnsSql = R"sql(
+SELECT parent_turn_id,
+  tool_name,
+  first_audit_event_id,
+  last_audit_event_id,
+  decision_count,
+  hook_publish_count,
+  permitted_count,
+  blocked_count,
+  latency_sample_count,
+  total_wall_time_ms,
+  average_wall_time_ms
+FROM audit_tool_call_rollups
+)sql";
+
 constexpr std::string_view kUpdateEventMetadataSql = R"sql(
 UPDATE audit_events
 SET metadata_json = ?
@@ -140,6 +155,19 @@ RETURNING id, event_kind, scope_key, agent_key, tool_name, identity, verdict, ou
   }
   if (options.limit > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
     return std::unexpected(core::Error::invalid_argument("audit list limit is too large"));
+  }
+  return {};
+}
+
+[[nodiscard]] core::Result<void> validate_tool_call_rollups_options(const ListToolCallRollupsOptions& options) {
+  if (options.parent_turn_id.has_value() && core::is_zero_turn_id(*options.parent_turn_id)) {
+    return std::unexpected(invalid_field("parent_turn_id"));
+  }
+  if (options.limit == 0) {
+    return std::unexpected(core::Error::invalid_argument("tool-call rollup limit must be greater than zero"));
+  }
+  if (options.limit > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
+    return std::unexpected(core::Error::invalid_argument("tool-call rollup limit is too large"));
   }
   return {};
 }
@@ -316,6 +344,89 @@ optional_turn_id(Statement& statement, int index, std::string_view field) {
   }
   sql += " ORDER BY id DESC LIMIT ?";
   return sql;
+}
+
+[[nodiscard]] std::string build_tool_call_rollups_sql(const ListToolCallRollupsOptions& options) {
+  std::string sql{kToolCallRollupColumnsSql};
+  bool has_where = false;
+  if (options.parent_turn_id.has_value()) {
+    sql += " WHERE parent_turn_id = ?";
+    has_where = true;
+  }
+  if (!options.tool_name.empty()) {
+    sql += has_where ? " AND tool_name = ?" : " WHERE tool_name = ?";
+  }
+  sql += " ORDER BY last_audit_event_id DESC, tool_name ASC LIMIT ?";
+  return sql;
+}
+
+[[nodiscard]] core::Result<ToolCallRollup> read_tool_call_rollup_row(Statement& statement) {
+  auto parent_turn_id = optional_turn_id(statement, 0, "parent_turn_id");
+  if (!parent_turn_id) {
+    return std::unexpected(parent_turn_id.error());
+  }
+  if (!parent_turn_id->has_value()) {
+    return std::unexpected(core::Error::storage("tool-call rollup row has null parent turn id"));
+  }
+  auto tool_name = required_text(statement, 1, "tool_name");
+  if (!tool_name) {
+    return std::unexpected(tool_name.error());
+  }
+  auto first_audit_event_id = statement.column_int64(2);
+  if (!first_audit_event_id) {
+    return std::unexpected(first_audit_event_id.error().with("field", "first_audit_event_id"));
+  }
+  auto last_audit_event_id = statement.column_int64(3);
+  if (!last_audit_event_id) {
+    return std::unexpected(last_audit_event_id.error().with("field", "last_audit_event_id"));
+  }
+  auto decision_count = statement.column_int64(4);
+  if (!decision_count) {
+    return std::unexpected(decision_count.error().with("field", "decision_count"));
+  }
+  auto hook_publish_count = statement.column_int64(5);
+  if (!hook_publish_count) {
+    return std::unexpected(hook_publish_count.error().with("field", "hook_publish_count"));
+  }
+  auto permitted_count = statement.column_int64(6);
+  if (!permitted_count) {
+    return std::unexpected(permitted_count.error().with("field", "permitted_count"));
+  }
+  auto blocked_count = statement.column_int64(7);
+  if (!blocked_count) {
+    return std::unexpected(blocked_count.error().with("field", "blocked_count"));
+  }
+  auto latency_sample_count = statement.column_int64(8);
+  if (!latency_sample_count) {
+    return std::unexpected(latency_sample_count.error().with("field", "latency_sample_count"));
+  }
+  auto total_wall_time_ms = statement.column_double(9);
+  if (!total_wall_time_ms) {
+    return std::unexpected(total_wall_time_ms.error().with("field", "total_wall_time_ms"));
+  }
+  auto average_wall_time_ms_value = statement.column_double(10);
+  if (!average_wall_time_ms_value) {
+    return std::unexpected(average_wall_time_ms_value.error().with("field", "average_wall_time_ms"));
+  }
+
+  auto average_wall_time_ms = std::optional<double>{};
+  if (*latency_sample_count > 0) {
+    average_wall_time_ms = *average_wall_time_ms_value;
+  }
+
+  return ToolCallRollup{
+      .parent_turn_id = **parent_turn_id,
+      .tool_name = std::move(*tool_name),
+      .first_audit_event_id = *first_audit_event_id,
+      .last_audit_event_id = *last_audit_event_id,
+      .decision_count = *decision_count,
+      .hook_publish_count = *hook_publish_count,
+      .permitted_count = *permitted_count,
+      .blocked_count = *blocked_count,
+      .latency_sample_count = *latency_sample_count,
+      .total_wall_time_ms = *total_wall_time_ms,
+      .average_wall_time_ms = average_wall_time_ms,
+  };
 }
 
 }  // namespace
@@ -620,6 +731,58 @@ AuditRepository::list_events_for_turn(core::TurnId parent_turn_id, std::size_t l
   }
 
   co_return events;
+}
+
+async::Awaitable<core::Result<std::vector<ToolCallRollup>>>
+AuditRepository::list_tool_call_rollups(ListToolCallRollupsOptions options) {
+  if (auto valid = validate_tool_call_rollups_options(options); !valid) {
+    co_return std::unexpected(valid.error());
+  }
+
+  auto reader = co_await pool_->acquire_reader();
+  if (!reader) {
+    co_return std::unexpected(reader.error());
+  }
+
+  const auto sql = build_tool_call_rollups_sql(options);
+  auto cached = reader->statement_cache().acquire(reader->connection(), sql);
+  if (!cached) {
+    co_return std::unexpected(cached.error());
+  }
+  auto& statement = cached->statement();
+
+  int index = 1;
+  if (options.parent_turn_id.has_value()) {
+    if (auto bound = statement.bind_blob(index++, turn_id_span(*options.parent_turn_id)); !bound) {
+      co_return std::unexpected(bound.error());
+    }
+  }
+  if (!options.tool_name.empty()) {
+    if (auto bound = statement.bind_text(index++, options.tool_name); !bound) {
+      co_return std::unexpected(bound.error());
+    }
+  }
+  if (auto bound = statement.bind_int64(index, static_cast<std::int64_t>(options.limit)); !bound) {
+    co_return std::unexpected(bound.error());
+  }
+
+  std::vector<ToolCallRollup> rows;
+  while (true) {
+    auto step = statement.step();
+    if (!step) {
+      co_return std::unexpected(step.error());
+    }
+    if (*step == StepResult::done) {
+      break;
+    }
+    auto row = read_tool_call_rollup_row(statement);
+    if (!row) {
+      co_return std::unexpected(row.error());
+    }
+    rows.push_back(std::move(*row));
+  }
+
+  co_return rows;
 }
 
 async::Awaitable<core::Result<std::int64_t>> AuditRepository::count_events(std::string scope_key) {

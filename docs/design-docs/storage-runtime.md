@@ -4,7 +4,7 @@
 automation, audit logs, and configuration metadata. It owns the SQLite dependency and
 does not expose `sqlite3.h` from public headers.
 
-> **Storage status (2026-06-07):** `oran-storage` ships `Connection`, `Statement`,
+> **Storage status (2026-06-14):** `oran-storage` ships `Connection`, `Statement`,
 > typed binding/stepping/column readers (including BLOB bind/read for trace ids),
 > WAL + foreign-key setup, a simple `query`
 > helper, the synchronous `run_migrations` runner plus SQL-file migration
@@ -22,7 +22,11 @@ does not expose `sqlite3.h` from public headers.
 > permission rows keep `event_kind=permission_decision` while spec-0018
 > hook observability rows use `event_kind=hook_publish`; `AuditRepository`
 > exposes the field on append/update/list records and can filter
-> `list_events` by it. Slice 78 adds
+> `list_events` by it. Slice 243 adds audit DB version 5 with the
+> `audit_tool_call_rollups` view plus
+> `AuditRepository::list_tool_call_rollups(...)`, deriving per-turn/per-tool
+> decision and hook counts plus optional `usage.wall_time_ms` latency samples
+> from existing joined audit rows. Slice 78 adds
 > `TraceRepository`, the spec-0018 `trace_turns` schema, and
 > `built_in_trace_migrations()` for redacted per-turn rows keyed by 16-byte BLOB
 > ids. Slice 79 adds the audit DB version-3 `audit_events.parent_turn_id`
@@ -616,6 +620,26 @@ struct UpdateAuditEventMetadataRequest {
   std::string metadata_json{"{}"};
 };
 
+struct ToolCallRollup {
+  core::TurnId parent_turn_id;
+  std::string tool_name;
+  std::int64_t first_audit_event_id;
+  std::int64_t last_audit_event_id;
+  std::int64_t decision_count;
+  std::int64_t hook_publish_count;
+  std::int64_t permitted_count;
+  std::int64_t blocked_count;
+  std::int64_t latency_sample_count;
+  double total_wall_time_ms;
+  std::optional<double> average_wall_time_ms;
+};
+
+struct ListToolCallRollupsOptions {
+  std::optional<core::TurnId> parent_turn_id;
+  std::string tool_name;
+  std::size_t limit{50};
+};
+
 class AuditRepository {
  public:
   explicit AuditRepository(Pool&, AuditRepositoryOptions = {}) noexcept;
@@ -629,6 +653,8 @@ class AuditRepository {
   list_events(ListAuditEventsOptions);
   async::Awaitable<core::Result<std::vector<AuditEventRecord>>>
   list_events_for_turn(core::TurnId parent_turn_id, std::size_t limit = 200);
+  async::Awaitable<core::Result<std::vector<ToolCallRollup>>>
+  list_tool_call_rollups(ListToolCallRollupsOptions);
   async::Awaitable<core::Result<std::int64_t>>
   count_events(std::string scope_key);
 };
@@ -640,7 +666,11 @@ Slice 67 adds `update_event_metadata` for post-result audit enrichment. Slice
 79 adds optional `parent_turn_id` to append records, listed records, and
 metadata updates. Slice 93 adds `event_kind` to append/update/list records and
 to the update match key, so enrichment for ordinary permission rows cannot
-clobber a same-tool `hook_publish` row. The update matches by the same event
+clobber a same-tool `hook_publish` row. Slice 243 adds
+`list_tool_call_rollups`, a read-only operator/API query over the
+`audit_tool_call_rollups` view. It validates non-zero turn ids and positive
+limits, can filter by parent turn and tool name, and returns newest turn/tool
+groups first. The update matches by the same event
 identity fields as the append path (`event_kind`, `scope_key`, `agent_key`,
 `tool_name`, `identity`, optional input hash, optional parent turn id) plus the
 previously stored metadata JSON, then updates the newest matching row. This lets
@@ -667,7 +697,14 @@ tool audit rows without scanning the whole audit table. Version 4 adds
 `audit_events.event_kind TEXT NOT NULL DEFAULT 'permission_decision'` plus the
 `idx_audit_events_kind_parent_turn` partial index so hook-publish rows can share
 the same parent-turn cause chain without changing existing permission-decision
-payloads. Explicit
+payloads. Version 5 creates the `audit_tool_call_rollups` view. The view groups
+rows with non-NULL `parent_turn_id` by `(parent_turn_id, tool_name)`, counts
+permission decisions and sibling hook-publish rows, classifies
+`allow`/`approved`/`rewritten` as permitted decisions and
+`deny`/`ask`/`rejected`/`blocked_by_hook` as blocked decisions, and aggregates
+only valid numeric `metadata_json.usage.wall_time_ms` values. It excludes
+groups with no permission-decision row, so hook-only rows never look like tool
+calls. Explicit
 `AuditRepositoryOptions::migrations_directory` still supplies a caller-owned
 migration set for tests and packaged layouts.
 

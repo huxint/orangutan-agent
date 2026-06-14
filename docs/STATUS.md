@@ -9,34 +9,34 @@
 
 ## Snapshot
 
-- **Slice:** 242 (`xmake run orangutan -- --help` reports slice 242)
+- **Slice:** 243 (`xmake run orangutan -- --help` reports slice 243)
 - **Last completed history:**
-  [`histories/2026-06/20260614-1725-trace-export-http-post-sink.md`](histories/2026-06/20260614-1725-trace-export-http-post-sink.md)
+  [`histories/2026-06/20260614-1749-audit-tool-call-rollups.md`](histories/2026-06/20260614-1749-audit-tool-call-rollups.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — remains active, but its next gate is externally blocked on real QQ
     credentials plus a sendable operator conversation; it was spun off from the
     completed channel-ingress plan
     ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-- **Latest completed slice:** slice 242 completes the unblocked
-  Observability/trace export sink set while QQ 4b-ii remains
-  credential-blocked. The bootstrap trace exporter now supports
-  `--trace-export-post <url>` on both `--trace-export <turn-id>` and bounded
-  list mode: `--trace-export [--agent <name>] [--limit <n>]`. The POST sink
-  sends the exact same redacted newline-delimited JSON payload that stdout and
-  `--trace-export-file <path>` emit, uses an explicit operator URL, suppresses
-  stdout, and reports non-2xx responses as IO errors with the HTTP status code.
-  File and POST sinks are mutually exclusive, duplicate/empty/missing/unscoped
-  sink arguments are rejected, and the exporter remains read-only against
-  `<workspace>/.orangutan/audit.db`. Focused results: default
-  `test-bootstrap` **156 cases / 1573 assertions** and `[trace]` **19 cases /
-  319 assertions**; gated QQ counts remain gated `test-bootstrap` **148 cases /
-  1352 assertions** and gated `test-channel-qq` **58 cases / 369 assertions**
-  from slice 238.
-- **Next intended slice:** Observability v1.1 — add the SQL-derived per-turn
-  tool-call rollup over joined audit rows. This is the next unblocked spec-0018
-  item after stdout/file/HTTP trace export sinks; QQ-port 4b-ii remains waiting
-  on real QQ credentials and an operator conversation.
+- **Latest completed slice:** slice 243 ships the unblocked Observability v1.1
+  SQL-derived tool-call rollup while QQ 4b-ii remains credential-blocked.
+  Audit DB migration version 5 creates `audit_tool_call_rollups`, a read-only
+  view over joinable `audit_events` rows with `parent_turn_id IS NOT NULL`.
+  `AuditRepository::list_tool_call_rollups(...)` exposes per-turn/per-tool
+  decision counts, hook-publish counts, permitted/blocked decision counts, and
+  optional `metadata_json.usage.wall_time_ms` latency aggregates without adding
+  trace columns or inventing handler-failure data that is not durable today.
+  Focused results: `test-storage` **79 cases / 1047 assertions** and
+  `[audit_repository]` **15 cases / 243 assertions**; default
+  `test-bootstrap` remains **156 cases / 1573 assertions** and gated QQ counts
+  remain gated `test-bootstrap` **148 cases / 1352 assertions** plus gated
+  `test-channel-qq` **58 cases / 369 assertions** from slice 238.
+- **Next intended slice:** Observability v1.1 — refine provider streaming
+  cancellation phases (`provider_initial`, `provider_stream`,
+  `provider_complete`) on the existing `trace_turns.cancellation_phase` field.
+  This is the next unblocked spec-0018 item after trace export sinks and the
+  audit-derived tool-call rollup; QQ-port 4b-ii remains waiting on real QQ
+  credentials and an operator conversation.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 
@@ -58,7 +58,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-async`: 14 cases / 76 assertions.
 - `oran-http`: 27 cases / 148 assertions.
 - `oran-io`: 54 cases / 311 assertions.
-- `oran-storage`: 77 cases / 988 assertions.
+- `oran-storage`: 79 cases / 1047 assertions.
 - `oran-config`: 55 cases / 519 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 38 cases / 313 assertions.
