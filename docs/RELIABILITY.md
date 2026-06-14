@@ -37,10 +37,14 @@ trust the audit log. This doc captures the operational expectations.
   a list query with no matches exits 0 with no output. Adding
   `--trace-export-file <path>` writes the same JSON Lines sequence to an
   explicit operator-selected file path instead of stdout, creating parent
-  directories and truncating the target file. These commands read
-  `<workspace>/.orangutan/audit.db`, run the idempotent audit migration first,
-  and preserve the redacted trace/audit contract: no raw prompt bytes, tool
-  inputs, provider bodies, or secrets are added by the exporter.
+  directories and truncating the target file. Adding `--trace-export-post
+  <url>` instead POSTs the same newline-delimited JSON payload to an explicit
+  operator-selected HTTP endpoint as `application/x-ndjson`; 2xx responses are
+  success, and non-2xx responses are reported as IO errors with the status
+  code. These commands read `<workspace>/.orangutan/audit.db`, run the
+  idempotent audit migration first, and preserve the redacted trace/audit
+  contract: no raw prompt bytes, tool inputs, provider bodies, or secrets are
+  added by the exporter.
 - v1.1: distributed tracing via OpenTelemetry (stretch — adds a dependency; gate it
   behind `--obs_otel=y`).
 

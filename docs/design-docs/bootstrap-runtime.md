@@ -482,7 +482,7 @@ opens the workspace audit DB, runs the idempotent audit migration, loads the
 `trace_turns` row, then prints joined `audit_events` rows ordered by `id ASC`.
 Since slice 93 those audit lines include `kind=<event_kind>`, so mixed
 permission-decision and `hook_publish` rows are readable in the same output.
-Slice 241 extends the sibling `orangutan --trace-export` path: with a
+Slice 242 extends the sibling `orangutan --trace-export` path: with a
 `<turn-id>` it reuses the same read-only lookup and emits one JSON Lines object
 with the trace row plus ordered joined audit rows; without a turn id it lists
 newest turns through `TraceRepository::list_turns`, applies optional
@@ -490,9 +490,13 @@ newest turns through `TraceRepository::list_turns`, applies optional
 rows, and emits one JSON Lines object per turn. Adding
 `--trace-export-file <path>` to either export form writes the same JSON Lines
 sequence to an explicit file sink, creates parent directories, truncates the
-target file, and suppresses stdout. Both trace commands share the same
-idempotent migration and signal-aware one-shot drain, while single-turn export
-keeps the `--trace` turn-id validation and missing-row behavior.
+target file, and suppresses stdout. Adding `--trace-export-post <url>` instead
+uses `oran-http::Client` to POST the same newline-delimited JSON payload as
+`application/x-ndjson` to an explicit operator URL, suppresses stdout, accepts
+2xx responses, and returns an IO error for non-2xx responses with the status
+code. The trace DB lookup still shares the same idempotent migration and
+signal-aware one-shot drain, while single-turn export keeps the `--trace`
+turn-id validation and missing-row behavior.
 
 ## Next Steps
 

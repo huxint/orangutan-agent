@@ -258,20 +258,23 @@ makes the existing audit rows joinable. Nothing else.
 - **Trace export**. JSON Lines emitter for an external SIEM. One
   line per turn; trace row + joined audit rows + joined hook
   publishes. Output to stdout, file, or `oran-http` POST endpoint.
-  **Status (slice 241):** stdout export now covers both single-turn
-  and bounded multi-turn operator reads, and the same JSON Lines sequence can
-  be written to an explicit file sink. `orangutan --trace-export <turn-id>`
-  keeps the slice-239 behavior: the same 32-character lowercase hex validation
-  as `--trace`, idempotent audit migration, one `trace_turns` row, and joined
-  `audit_events.parent_turn_id` matches emitted as one JSON Lines object with
-  parsed `context_json` and `metadata_json` fields. `orangutan --trace-export
-  [--agent <name>] [--limit <n>]` lists newest trace rows through
-  `TraceRepository::list_turns`, optionally filters by `agent_key`, joins each
-  turn's audit rows in `id ASC` order, and emits one `kind="trace_turn"` JSON
-  Lines object per turn. Adding `--trace-export-file <path>` to either form
-  creates parent directories, truncates the target file, writes the same
-  redacted JSON Lines objects, and suppresses stdout. HTTP posting remains
-  downstream.
+  **Status (slice 242):** stdout export covers both single-turn and bounded
+  multi-turn operator reads, and the same JSON Lines sequence can be written to
+  an explicit file sink or POSTed to an operator-supplied HTTP endpoint.
+  `orangutan --trace-export <turn-id>` keeps the slice-239 behavior: the same
+  32-character lowercase hex validation as `--trace`, idempotent audit
+  migration, one `trace_turns` row, and joined `audit_events.parent_turn_id`
+  matches emitted as one JSON Lines object with parsed `context_json` and
+  `metadata_json` fields. `orangutan --trace-export [--agent <name>] [--limit
+  <n>]` lists newest trace rows through `TraceRepository::list_turns`,
+  optionally filters by `agent_key`, joins each turn's audit rows in `id ASC`
+  order, and emits one `kind="trace_turn"` JSON Lines object per turn. Adding
+  `--trace-export-file <path>` to either form creates parent directories,
+  truncates the target file, writes the same redacted JSON Lines objects, and
+  suppresses stdout. Adding `--trace-export-post <url>` instead sends the same
+  newline-delimited JSON payload as `application/x-ndjson`, accepts 2xx
+  responses, and reports non-2xx responses as IO errors with the status code.
+  File and POST sinks are mutually exclusive.
 - **Provider streaming phase rollup**. The `cancellation_phase`
   field grows to record `provider_stream`,
   `provider_initial`, `provider_complete` so a cancellation during
@@ -436,16 +439,17 @@ makes the existing audit rows joinable. Nothing else.
     joined audit row in deterministic `id ASC` order. Unknown ids
     return `Error::not_found`; malformed ids use the same validation
     as `--trace`.
-    **Status (slice 241):** shipped for single-turn and bounded
-    multi-turn stdout export plus the explicit file sink. `test-bootstrap`
-    pins empty-value and invalid-limit handling, unknown single-turn ids,
-    mutual exclusion with `--trace`, parsed trace context JSON, parsed
-    hook-publish metadata JSON, NULL input hashes, the one-line single-turn
-    output shape, the multi-line newest-first agent-filtered list shape,
+    **Status (slice 242):** shipped for single-turn and bounded multi-turn
+    stdout export plus explicit file and HTTP POST sinks. `test-bootstrap` pins
+    empty-value and invalid-limit handling, unknown single-turn ids, mutual
+    exclusion with `--trace`, parsed trace context JSON, parsed hook-publish
+    metadata JSON, NULL input hashes, the one-line single-turn output shape,
+    the multi-line newest-first agent-filtered list shape,
     success-with-empty-output for a bounded list query with no matches, file
-    output for both single-turn and bounded list modes, stdout suppression
-    when a file sink is selected, and duplicate/missing/empty/unscoped
-    `--trace-export-file` rejection. HTTP POST export remains downstream.
+    output for both single-turn and bounded list modes, stdout suppression when
+    a file or POST sink is selected, duplicate/missing/empty/unscoped sink
+    rejection, file/POST mutual exclusion, loopback POST payload shape for
+    single-turn and bounded list modes, and non-2xx POST failure reporting.
 
 ## Design Doc Cross-References
 
@@ -519,6 +523,7 @@ xmake run orangutan -- --trace <turn-id>      # CLI inspector
 xmake run orangutan -- --trace-export <turn-id> # JSON Lines trace export
 xmake run orangutan -- --trace-export --agent coder --limit 10
 xmake run orangutan -- --trace-export --agent coder --limit 10 --trace-export-file traces.jsonl
+xmake run orangutan -- --trace-export --agent coder --limit 10 --trace-export-post http://127.0.0.1:9000/traces
 ```
 
 ## Out-of-Band Cross-Cuts

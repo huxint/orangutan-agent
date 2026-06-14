@@ -1814,6 +1814,12 @@ void populate_trace_export_list_fixture(const std::filesystem::path& audit_db) {
   return rows;
 }
 
+[[nodiscard]] std::string_view request_body(std::string_view request) {
+  const auto header_end = request.find("\r\n\r\n");
+  REQUIRE(header_end != std::string_view::npos);
+  return request.substr(header_end + 4);
+}
+
 }  // namespace
 
 TEST_CASE("run --trace rejects missing or empty turn id", "[unit][bootstrap][trace]") {
@@ -1956,6 +1962,49 @@ TEST_CASE("run --trace-export rejects empty turn id and invalid list filters", "
                                               "first.jsonl",
                                               "--trace-export-file",
                                               "second.jsonl"};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+
+  SECTION("--trace-export-post without value") {
+    auto args = std::vector<std::string_view>{"--trace-export", "--trace-export-post"};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+
+  SECTION("--trace-export-post= empty value") {
+    auto args = std::vector<std::string_view>{"--trace-export", "--trace-export-post="};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+
+  SECTION("--trace-export-post requires --trace-export") {
+    auto args = std::vector<std::string_view>{"--trace-export-post", "http://127.0.0.1:1/trace"};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+
+  SECTION("duplicate --trace-export-post") {
+    auto args = std::vector<std::string_view>{"--trace-export",
+                                              "--trace-export-post",
+                                              "http://127.0.0.1:1/one",
+                                              "--trace-export-post",
+                                              "http://127.0.0.1:1/two"};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+
+  SECTION("--trace-export-file and --trace-export-post are mutually exclusive") {
+    auto args = std::vector<std::string_view>{"--trace-export",
+                                              "--trace-export-file",
+                                              "trace.jsonl",
+                                              "--trace-export-post",
+                                              "http://127.0.0.1:1/trace"};
     auto result = bootstrap::run(options(args, temp.path()));
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
@@ -2141,6 +2190,112 @@ TEST_CASE("run --trace-export writes bounded JSON Lines turns to a file", "[unit
   REQUIRE(rows[1]["trace"]["turn_id"] == "505152535455565758595a5b5c5d5e5f");
   REQUIRE(rows[1]["trace"]["agent_key"] == "coder");
   REQUIRE(rows[1]["audit_rows"][0]["tool_name"] == "file.write");
+}
+
+TEST_CASE("run --trace-export posts one JSON Lines trace object", "[unit][bootstrap][trace]") {
+  TempDir temp{"oran-bootstrap-trace-export-post-happy"};
+  const auto audit_db = temp.path() / ".orangutan" / "audit.db";
+  std::filesystem::create_directories(audit_db.parent_path());
+
+  populate_trace_fixture(audit_db, sample_turn_id());
+
+  ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
+  ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
+  OneShotHttpServer server{"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n"};
+  const auto post_url = server.base_url() + "/trace";
+  auto args = std::vector<std::string_view>{
+      "--trace-export",
+      std::string_view{kSampleTurnHex},
+      "--trace-export-post",
+      post_url,
+  };
+  auto stdout_capture = ScopedStdoutCapture{};
+  auto result = bootstrap::run(options(args, temp.path()));
+  auto output = stdout_capture.finish();
+
+  REQUIRE(result.has_value());
+  REQUIRE(*result == 0);
+  REQUIRE(output.empty());
+  REQUIRE(server.served());
+
+  const auto request = server.request_text();
+  REQUIRE(request.contains("POST /trace HTTP/1.1"));
+  REQUIRE(request.contains("content-type: application/x-ndjson"));
+
+  auto rows = parse_json_lines(request_body(request));
+  REQUIRE(rows.size() == 1);
+  REQUIRE(rows[0]["kind"] == "trace_turn");
+  REQUIRE(rows[0]["trace"]["turn_id"] == kSampleTurnHex);
+  REQUIRE(rows[0]["trace"]["agent_key"] == "coder");
+  REQUIRE(rows[0]["audit_rows"].size() == 3);
+}
+
+TEST_CASE("run --trace-export posts bounded JSON Lines turns", "[unit][bootstrap][trace]") {
+  TempDir temp{"oran-bootstrap-trace-export-list-post"};
+  const auto audit_db = temp.path() / ".orangutan" / "audit.db";
+  std::filesystem::create_directories(audit_db.parent_path());
+
+  populate_trace_export_list_fixture(audit_db);
+
+  ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
+  ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
+  OneShotHttpServer server{"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n\r\n"};
+  const auto post_url = server.base_url() + "/trace/batch";
+  auto args = std::vector<std::string_view>{
+      "--trace-export",
+      "--agent",
+      "coder",
+      "--limit",
+      "2",
+      "--trace-export-post",
+      post_url,
+  };
+  auto stdout_capture = ScopedStdoutCapture{};
+  auto result = bootstrap::run(options(args, temp.path()));
+  auto output = stdout_capture.finish();
+
+  REQUIRE(result.has_value());
+  REQUIRE(*result == 0);
+  REQUIRE(output.empty());
+  REQUIRE(server.served());
+
+  const auto request = server.request_text();
+  REQUIRE(request.contains("POST /trace/batch HTTP/1.1"));
+  REQUIRE(request.contains("content-type: application/x-ndjson"));
+
+  auto rows = parse_json_lines(request_body(request));
+  REQUIRE(rows.size() == 2);
+  REQUIRE(rows[0]["trace"]["turn_id"] == "303132333435363738393a3b3c3d3e3f");
+  REQUIRE(rows[0]["trace"]["agent_key"] == "coder");
+  REQUIRE(rows[0]["audit_rows"][0]["tool_name"] == "file.read");
+  REQUIRE(rows[1]["trace"]["turn_id"] == "505152535455565758595a5b5c5d5e5f");
+  REQUIRE(rows[1]["audit_rows"][0]["tool_name"] == "file.write");
+}
+
+TEST_CASE("run --trace-export reports HTTP POST sink failures", "[unit][bootstrap][trace]") {
+  TempDir temp{"oran-bootstrap-trace-export-post-failure"};
+  const auto audit_db = temp.path() / ".orangutan" / "audit.db";
+  std::filesystem::create_directories(audit_db.parent_path());
+
+  populate_trace_fixture(audit_db, sample_turn_id());
+
+  ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
+  ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
+  OneShotHttpServer server{
+      "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 4\r\n\r\nbusy"};
+  const auto post_url = server.base_url() + "/trace";
+  auto args = std::vector<std::string_view>{"--trace-export",
+                                            std::string_view{kSampleTurnHex},
+                                            "--trace-export-post",
+                                            post_url};
+  auto stdout_capture = ScopedStdoutCapture{};
+  auto result = bootstrap::run(options(args, temp.path()));
+  auto output = stdout_capture.finish();
+
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(result.error().kind() == core::ErrorKind::io);
+  REQUIRE(output.empty());
+  REQUIRE(server.served());
 }
 
 TEST_CASE("run --trace-export list mode succeeds with no matching turns", "[unit][bootstrap][trace]") {

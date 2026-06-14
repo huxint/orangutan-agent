@@ -9,35 +9,33 @@
 
 ## Snapshot
 
-- **Slice:** 241 (`xmake run orangutan -- --help` reports slice 241)
+- **Slice:** 242 (`xmake run orangutan -- --help` reports slice 242)
 - **Last completed history:**
-  [`histories/2026-06/20260614-1656-trace-export-file-sink.md`](histories/2026-06/20260614-1656-trace-export-file-sink.md)
+  [`histories/2026-06/20260614-1725-trace-export-http-post-sink.md`](histories/2026-06/20260614-1725-trace-export-http-post-sink.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — remains active, but its next gate is externally blocked on real QQ
     credentials plus a sendable operator conversation; it was spun off from the
     completed channel-ingress plan
     ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-- **Latest completed slice:** slice 241 advances the unblocked
-  Observability/trace line while QQ 4b-ii remains credential-blocked. The
-  bootstrap trace exporter now supports `--trace-export-file <path>` on both
-  `--trace-export <turn-id>` and bounded list mode:
-  `--trace-export [--agent <name>] [--limit <n>]`. The file sink writes the
-  exact same redacted JSON Lines objects that stdout mode would emit, creates
-  parent directories, truncates the target file, and suppresses stdout so
-  operators can hand the result to log/SIEM collectors without shell
-  redirection. The command remains read-only against
-  `<workspace>/.orangutan/audit.db`, rejects duplicate, empty, missing, and
-  unscoped file-sink arguments, preserves invalid-limit and single-turn-filter
-  validation, and still returns success with an empty file/output when a
-  bounded list query has no matches. Focused results: default
-  `test-bootstrap` **153 cases / 1484 assertions** and `[trace]` **16 cases /
-  230 assertions**; gated QQ counts remain gated `test-bootstrap` **148 cases /
+- **Latest completed slice:** slice 242 completes the unblocked
+  Observability/trace export sink set while QQ 4b-ii remains
+  credential-blocked. The bootstrap trace exporter now supports
+  `--trace-export-post <url>` on both `--trace-export <turn-id>` and bounded
+  list mode: `--trace-export [--agent <name>] [--limit <n>]`. The POST sink
+  sends the exact same redacted newline-delimited JSON payload that stdout and
+  `--trace-export-file <path>` emit, uses an explicit operator URL, suppresses
+  stdout, and reports non-2xx responses as IO errors with the HTTP status code.
+  File and POST sinks are mutually exclusive, duplicate/empty/missing/unscoped
+  sink arguments are rejected, and the exporter remains read-only against
+  `<workspace>/.orangutan/audit.db`. Focused results: default
+  `test-bootstrap` **156 cases / 1573 assertions** and `[trace]` **19 cases /
+  319 assertions**; gated QQ counts remain gated `test-bootstrap` **148 cases /
   1352 assertions** and gated `test-channel-qq` **58 cases / 369 assertions**
   from slice 238.
-- **Next intended slice:** Observability v1.1 — add an explicit HTTP POST sink
-  for the same single-turn and bounded trace-export query, with loopback tests,
-  before considering a broader query language. QQ-port 4b-ii remains waiting
+- **Next intended slice:** Observability v1.1 — add the SQL-derived per-turn
+  tool-call rollup over joined audit rows. This is the next unblocked spec-0018
+  item after stdout/file/HTTP trace export sinks; QQ-port 4b-ii remains waiting
   on real QQ credentials and an operator conversation.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
@@ -74,7 +72,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 153 cases / 1484 assertions (gated `--channel_qq=y`: 148 /
+- `oran-bootstrap`: 156 cases / 1573 assertions (gated `--channel_qq=y`: 148 /
   1352).
 
 ## Open Tech-Debt Rows

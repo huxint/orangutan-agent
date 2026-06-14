@@ -41,6 +41,7 @@
 #include <oran/core/time.hpp>
 #include <oran/core/turn_id.hpp>
 #include <oran/hook.hpp>
+#include <oran/http.hpp>
 #include <oran/memory/longterm.hpp>
 #include <oran/permission.hpp>
 #include <oran/provider.hpp>
@@ -53,7 +54,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice241";
+constexpr std::string_view kVersion = "2.0.0-slice242";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 constexpr std::size_t kTraceExportDefaultLimit = 50;
@@ -76,6 +77,8 @@ struct ParsedArgs {
   std::size_t trace_export_limit{kTraceExportDefaultLimit};
   bool trace_export_file_supplied{false};
   std::string trace_export_file_path{};
+  bool trace_export_post_supplied{false};
+  std::string trace_export_post_url{};
   bool has_explicit_config{false};
   std::string explicit_config_path{};
   ExplainRulesSelector explain_selector{};
@@ -409,6 +412,19 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
       continue;
     }
 
+    if (matches_flag(arg, "--trace-export-post")) {
+      if (parsed.trace_export_post_supplied) {
+        return std::unexpected(arg_error("--trace-export-post may be provided only once"));
+      }
+      auto value = consume_value(args, index, "--trace-export-post");
+      if (!value) {
+        return std::unexpected(std::move(value.error()));
+      }
+      parsed.trace_export_post_supplied = true;
+      parsed.trace_export_post_url = std::move(*value);
+      continue;
+    }
+
     constexpr auto kConfigPrefix = std::string_view{"--config="};
     if (arg.starts_with(kConfigPrefix)) {
       if (parsed.has_explicit_config) {
@@ -445,6 +461,12 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
   }
   if (parsed.trace_export_file_supplied && !parsed.trace_export) {
     return std::unexpected(arg_error("--trace-export-file requires --trace-export"));
+  }
+  if (parsed.trace_export_post_supplied && !parsed.trace_export) {
+    return std::unexpected(arg_error("--trace-export-post requires --trace-export"));
+  }
+  if (parsed.trace_export_file_supplied && parsed.trace_export_post_supplied) {
+    return std::unexpected(arg_error("--trace-export-file and --trace-export-post are mutually exclusive"));
   }
   if (parsed.trace_export && parsed.selector_mode_supplied) {
     return std::unexpected(arg_error("--mode is not supported with --trace-export"));
@@ -497,7 +519,7 @@ void print_usage() {
   std::println("usage: orangutan [--config <path>] [--mode <m>] [--agent <name>] [--explain-rules]");
   std::println("                  [--audit-init [<path>]] [--trace <turn-id>]");
   std::println("                  [--trace-export [<turn-id>] [--agent <name>] [--limit <n>]");
-  std::println("                                  [--trace-export-file <path>]]");
+  std::println("                                  [--trace-export-file <path>|--trace-export-post <url>]]");
   std::println("                  [--prompt <text>] [--help]");
   std::println();
   std::println(
@@ -512,6 +534,7 @@ void print_usage() {
   std::println("--trace-export prints trace rows plus joined audit rows as JSON Lines; a turn id prints one");
   std::println("               turn, otherwise --agent filters and --limit bounds the newest turns.");
   std::println("               --trace-export-file writes the same JSON Lines to a file instead of stdout.");
+  std::println("               --trace-export-post POSTs the same JSON Lines to an HTTP endpoint.");
 }
 
 [[nodiscard]] Result<int> print_materialized_rules(const config::Config& cfg, const ExplainRulesSelector& selector) {
@@ -949,6 +972,21 @@ load_trace_inspect_rows(std::string_view workspace, std::string_view turn_id_hex
   return lines;
 }
 
+[[nodiscard]] std::string trace_export_jsonl_payload(const std::vector<std::string>& lines) {
+  auto size = std::size_t{0};
+  for (const auto& line : lines) {
+    size += line.size() + 1;
+  }
+
+  auto payload = std::string{};
+  payload.reserve(size);
+  for (const auto& line : lines) {
+    payload.append(line);
+    payload.push_back('\n');
+  }
+  return payload;
+}
+
 [[nodiscard]] Result<void> write_trace_export_file(std::string_view path_text, const std::vector<std::string>& lines) {
   auto path = std::filesystem::path{std::string{path_text}};
   auto ec = std::error_code{};
@@ -966,12 +1004,53 @@ load_trace_inspect_rows(std::string_view workspace, std::string_view turn_id_hex
   if (!output) {
     return std::unexpected(Error::io("failed to open trace export file").with("path", path.string()));
   }
-  for (const auto& line : lines) {
-    output << line << '\n';
-  }
+  output << trace_export_jsonl_payload(lines);
   output.flush();
   if (!output) {
     return std::unexpected(Error::io("failed to write trace export file").with("path", path.string()));
+  }
+  return {};
+}
+
+[[nodiscard]] Result<void> post_trace_export_lines(std::string_view url, const std::vector<std::string>& lines) {
+  auto runtime = async::Runtime{async::RuntimeConfig{.io_workers = 1, .cpu_workers = 1}};
+  auto client = http::Client{runtime.cpu_executor()};
+  auto response = std::make_shared<std::optional<Result<http::BodyResponse>>>();
+
+  asio::co_spawn(
+      runtime.executor(),
+      [&client, &runtime, response, url_text = std::string{url}, payload = trace_export_jsonl_payload(lines)]() mutable
+          -> async::Awaitable<void> {
+        auto request = http::BodyRequest{};
+        request.method = "POST";
+        request.url = std::move(url_text);
+        request.headers = {
+            http::Header{"content-type", "application/x-ndjson"},
+            http::Header{"accept", "application/json, text/plain, */*"},
+        };
+        request.body = std::move(payload);
+        request.timeout = std::chrono::milliseconds{30000};
+        auto posted = co_await client.send(std::move(request));
+        *response = std::move(posted);
+        runtime.stop();
+        co_return;
+      },
+      asio::detached);
+
+  auto run_result = runtime.run();
+  if (!run_result) {
+    return std::unexpected(std::move(run_result).error());
+  }
+  if (!response->has_value()) {
+    return std::unexpected(Error::internal("trace export POST did not complete"));
+  }
+  auto posted = std::move(**response);
+  if (!posted) {
+    return std::unexpected(std::move(posted).error());
+  }
+  if (posted->status_code < 200 || posted->status_code >= 300) {
+    return std::unexpected(Error::io("trace export POST returned non-2xx status")
+                               .with("status_code", std::to_string(posted->status_code)));
   }
   return {};
 }
@@ -1038,6 +1117,13 @@ load_trace_inspect_rows(std::string_view workspace, std::string_view turn_id_hex
     auto written = write_trace_export_file(parsed.trace_export_file_path, *lines);
     if (!written) {
       return std::unexpected(std::move(written.error()));
+    }
+    return 0;
+  }
+  if (parsed.trace_export_post_supplied) {
+    auto posted = post_trace_export_lines(parsed.trace_export_post_url, *lines);
+    if (!posted) {
+      return std::unexpected(std::move(posted.error()));
     }
     return 0;
   }

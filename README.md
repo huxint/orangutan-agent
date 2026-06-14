@@ -59,6 +59,7 @@ tests/    bench/     Catch2 + nanobench buckets, one per library
    # Trace exports read <workspace>/.orangutan/audit.db and stay redacted:
    xmake run orangutan -- --trace-export <32-hex-turn-id> --trace-export-file trace.jsonl
    xmake run orangutan -- --trace-export --agent coder --limit 10 --trace-export-file traces.jsonl
+   xmake run orangutan -- --trace-export --agent coder --limit 10 --trace-export-post http://127.0.0.1:9000/traces
    ```
 
 4. Before a PR: `make ci`.
