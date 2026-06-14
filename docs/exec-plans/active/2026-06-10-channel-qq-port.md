@@ -89,8 +89,9 @@ Migration"), which reserves a dedicated plan for the port.
    `register_configured_channels(...)` behind `kind == "qq"` and
    `option("channel_qq")`.
 4. **Round-trip acceptance.** Spec 0003 criterion 2: inbound QQ message →
-   configured agent → reply sent back, observed via `audit.db` (mock server
-   in CI; real credentials in a manual/nightly gate).
+   configured agent → reply sent back, observed via `audit.db`. Split into
+   **4a** mock gateway/API coverage in CI and **4b** manual/nightly
+   real-credential smoke before `channel_qq` can default on.
 5. **Attachments (later).** Shared `AttachmentCache` + media capabilities.
 
 ## Validation
@@ -171,6 +172,17 @@ Migration"), which reserves a dedicated plan for the port.
     builds still skip/report QQ entries without linking adapter code; focused
     validation covers both build options.
 - [ ] Milestone 4: round-trip acceptance.
+  - [x] Milestone 4a: CI mock registered-path round-trip — slice 236
+    ([`../../histories/2026-06/20260614-1507-channel-qq-registered-round-trip.md`](../../histories/2026-06/20260614-1507-channel-qq-registered-round-trip.md)).
+    `test-bootstrap` now proves a configured QQ channel can be registered by
+    bootstrap under `--channel_qq=y`, started by `ChannelManager`, receive one
+    scripted WebSocket gateway C2C message, route through
+    `make_routed_channel_prompt_runner(...)` to the configured agent, persist
+    a trace turn through `audit.db`, and send the passive QQ reply back through
+    a scripted v2 user-message API request. Default builds remain default-off
+    and skip/report QQ entries without linking adapter code.
+  - [ ] Milestone 4b: manual/nightly real-credential smoke over the same
+    registered path before considering `channel_qq` default-on.
 
 ## Decision Log
 
@@ -291,6 +303,15 @@ Migration"), which reserves a dedicated plan for the port.
   context. `qq_gateway_url` is required in this slice because gateway discovery
   from `/gateway/bot` is asynchronous network work and belongs with milestone
   4's round-trip acceptance path.
+- 2026-06-14 (slice 236): split milestone 4 into **4a** (this slice — mock
+  registered-path acceptance) and **4b** (manual/nightly real-credential
+  smoke). 4a deliberately drives the same caller-owned boundaries the future
+  real smoke should use — bootstrap registration, `ChannelManager::start_all`,
+  one explicit `receive_one`, routed prompt dispatch, trace/audit observation,
+  and passive QQ send — but replaces the platform with scripted HTTP/WebSocket
+  loopback servers so CI can run without secrets or public network. Because it
+  does not exercise real QQ credentials, gateway behavior, or platform quotas,
+  `channel_qq` remains default-off.
 
 ## Linked Artifacts
 
@@ -315,3 +336,5 @@ Migration"), which reserves a dedicated plan for the port.
     (milestone 3b, slice 234)
   - `docs/histories/2026-06/20260614-0015-channel-qq-bootstrap-registration.md`
     (milestone 3c, slice 235)
+  - `docs/histories/2026-06/20260614-1507-channel-qq-registered-round-trip.md`
+    (milestone 4a, slice 236)

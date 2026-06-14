@@ -9,33 +9,31 @@
 
 ## Snapshot
 
-- **Slice:** 235 (`xmake run orangutan -- --help` reports slice 235)
+- **Slice:** 236 (`xmake run orangutan -- --help` reports slice 236)
 - **Last completed history:**
-  [`histories/2026-06/20260614-0015-channel-qq-bootstrap-registration.md`](histories/2026-06/20260614-0015-channel-qq-bootstrap-registration.md)
+  [`histories/2026-06/20260614-1507-channel-qq-registered-round-trip.md`](histories/2026-06/20260614-1507-channel-qq-registered-round-trip.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — the current main line; spun off from the completed channel-ingress
     plan ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-- **Latest completed slice:** slice 235 ships QQ-port milestone 3c: bootstrap
-  can now register configured QQ channels behind `--channel_qq=y` and
-  `channels[].kind == "qq"`. `oran-config` parses QQ env-name / endpoint
-  metadata (`qq_app_id_env`, `qq_client_secret_env`, `qq_token_url`,
-  `qq_api_base_url`, `qq_gateway_url`) and requires the credential env names
-  plus gateway URL for QQ entries. Enabled builds add `oran-channel-qq` to
-  `oran-bootstrap` with `ORAN_ENABLE_CHANNEL_QQ`; registration resolves the
-  configured env vars at the bootstrap credential boundary, owns
-  `http::Client` / `qq::TokenStore` / `qq::ApiClient` / `qq::QqChannel` in an
-  internal wrapper, and registers the wrapper into the caller-owned
-  `ChannelManager` without starting the adapter or opening a receive loop.
-  Default `--channel_qq=n` builds still skip and report QQ entries without
-  compiling or linking the adapter. Focused results: `test-config` **55 cases /
-  519 assertions**, default `test-bootstrap` **146 cases / 1312 assertions**,
-  gated `test-bootstrap` **147 cases / 1319 assertions**, `test-channel`
+- **Latest completed slice:** slice 236 ships QQ-port milestone 4a: the
+  registered QQ channel path now has mock gateway/API round-trip acceptance in
+  CI-capable `test-bootstrap` coverage. With `--channel_qq=y`, a configured
+  `channels[].kind == "qq"` entry is registered through bootstrap, started by
+  the caller-owned `ChannelManager`, receives one scripted QQ gateway C2C
+  message, routes it through `make_routed_channel_prompt_runner(...)` to the
+  configured agent, records a trace turn through the assembly-owned audit/trace
+  store, and sends the passive QQ reply back through the scripted v2 user
+  message API with the inbound `msg_id` and process-local `msg_seq`. Default
+  `--channel_qq=n` builds still skip/report QQ entries without compiling or
+  linking the optional adapter. Focused results: `test-config` **55 cases / 519
+  assertions**, default `test-bootstrap` **146 cases / 1312 assertions**,
+  gated `test-bootstrap` **148 cases / 1352 assertions**, `test-channel`
   **25 cases / 191 assertions**, and gated `test-channel-qq` **55 cases / 344
   assertions**.
-- **Next intended slice:** QQ-port milestone 4 — round-trip acceptance over the
-  registered QQ channel path (mock gateway/API in CI, real-credential manual
-  smoke gate) before considering `channel_qq` default-on
+- **Next intended slice:** QQ-port milestone 4b — manual/nightly
+  real-credential smoke over the same registered QQ path before considering
+  `channel_qq` default-on
   ([`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)).
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
@@ -72,7 +70,8 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 146 cases / 1312 assertions.
+- `oran-bootstrap`: 146 cases / 1312 assertions (gated `--channel_qq=y`: 148 /
+  1352).
 
 ## Open Tech-Debt Rows
 

@@ -163,6 +163,18 @@ only — v2 makes channels pluggable.
   `test-bootstrap` 146 / 1312, gated `test-bootstrap` 147 / 1319,
   `test-channel` 25 / 191, and gated `test-channel-qq` 55 / 344. Full QQ
   round-trip acceptance remains open.
+- Slice 236: QQ-port milestone 4a — mock registered-path round-trip
+  acceptance for QQ channels. Under `xmake f --channel_qq=y`, a configured QQ
+  channel registers through bootstrap, starts under the caller-owned
+  `ChannelManager`, receives one scripted WebSocket gateway C2C message, routes
+  through `make_routed_channel_prompt_runner(...)` to the configured agent,
+  records a trace turn through the assembly-owned audit/trace repository, and
+  sends the passive text reply through a scripted
+  `POST /v2/users/{openid}/messages` API call preserving `content`, inbound
+  `msg_id`, and `msg_seq`. Focused validation: gated `test-bootstrap` 148 /
+  1352. The real-credential manual/nightly smoke gate remains open, so
+  acceptance criterion 2 is not yet fully closed and `channel_qq` remains
+  default-off.
 
 ## Design Doc Cross-References
 

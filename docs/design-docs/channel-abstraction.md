@@ -62,8 +62,11 @@ reporting unknown or disabled kinds per the adapter-toggle policy below), and
 id to its `agent_key` bridge. Slice 235 extends that registration seam to QQ
 when `--channel_qq=y`: `channels[].kind == "qq"` entries carry QQ credential
 env-name / endpoint metadata and bootstrap owns the concrete adapter stack
-behind a private `Channel` wrapper before registering it. Any receive loop
-remains downstream; the QQ port is managed by its own exec plan.
+behind a private `Channel` wrapper before registering it. Slice 236 proves the
+registered QQ path under mock gateway/API coverage: one configured QQ message
+flows through `ChannelManager`, the routed agent bridge, trace/audit storage,
+and the QQ passive-reply API. Real-credential smoke remains the gate before the
+adapter can default on; the QQ port is managed by its own exec plan.
 
 ## Inbound / Outbound Envelopes
 
@@ -300,8 +303,14 @@ required `qq_gateway_url`; enabled bootstrap builds resolve the env vars at the
 credential boundary, assemble `http::Client`, `TokenStore`, `ApiClient`,
 `GatewayTransport`, and `QqChannel` in an internal owning wrapper, and register
 that wrapper into `ChannelManager`. Default builds still skip/report QQ entries
-without linking the adapter. Round-trip acceptance and gateway discovery remain
-milestone 4.
+without linking the adapter. **4a (slice 236)** adds mock registered-path
+round-trip acceptance in `test-bootstrap`: bootstrap registration starts the
+same QQ stack under `--channel_qq=y`, a scripted WebSocket gateway supplies one
+C2C message, the routed prompt bridge runs the configured agent, `audit.db`
+receives the trace row, and a scripted QQ API server observes the passive text
+reply body with the inbound `msg_id` and `msg_seq`. Real QQ credentials,
+platform quotas, and any gateway discovery behavior remain milestone 4b, so
+`channel_qq` stays default-off.
 
 ## New Adapter Recipe
 

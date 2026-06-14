@@ -24,8 +24,14 @@
 #include <oran/core/message.hpp>
 #include <oran/core/stop_reason.hpp>
 #include <oran/provider.hpp>
+#include <oran/storage.hpp>
 
 #include "../test-helpers/run_async.hpp"
+
+#if defined(ORAN_ENABLE_CHANNEL_QQ)
+#include "../channel-qq/scripted_http_server.hpp"
+#include "../test-helpers/ws_test_server.hpp"
+#endif
 
 namespace async = orangutan::async;
 namespace bootstrap = orangutan::bootstrap;
@@ -33,7 +39,11 @@ namespace channel = orangutan::channel;
 namespace config = orangutan::config;
 namespace core = orangutan::core;
 namespace provider = orangutan::provider;
+namespace storage = orangutan::storage;
 namespace test = orangutan::tests;
+#if defined(ORAN_ENABLE_CHANNEL_QQ)
+namespace ws = orangutan::tests::ws;
+#endif
 
 namespace {
 
@@ -245,6 +255,38 @@ constexpr std::string_view kTwoChannelConfig = R"json({
   }
 })json";
 
+#if defined(ORAN_ENABLE_CHANNEL_QQ)
+[[nodiscard]] test::ScriptedResponse qq_token_ok(std::string token) {
+  return test::ScriptedResponse{
+      .status = 200,
+      .body = R"({"access_token":")" + std::move(token) + R"(","expires_in":7200})",
+      .headers = {{"Content-Type", "application/json"}},
+      .delay = std::chrono::milliseconds{0},
+  };
+}
+
+[[nodiscard]] test::ScriptedResponse qq_api_response(int status, std::string body) {
+  return test::ScriptedResponse{
+      .status = status,
+      .body = std::move(body),
+      .headers = {{"Content-Type", "application/json"}},
+      .delay = std::chrono::milliseconds{0},
+  };
+}
+
+[[nodiscard]] std::string qq_hello_frame() {
+  return R"({"op":10,"d":{"heartbeat_interval":200}})";
+}
+
+[[nodiscard]] std::string qq_ready_frame() {
+  return R"({"op":0,"s":1,"t":"READY","d":{"session_id":"sess-round-trip"}})";
+}
+
+[[nodiscard]] std::string qq_c2c_message_frame() {
+  return R"({"op":0,"s":2,"t":"C2C_MESSAGE_CREATE","d":{"id":"msg-round-trip","content":"ping from qq","author":{"user_openid":"user-openid","username":"QQ Operator"}}})";
+}
+#endif
+
 }  // namespace
 
 TEST_CASE("register_configured_channels registers mock adapters and reports skipped kinds",
@@ -369,6 +411,107 @@ TEST_CASE("register_configured_channels fails closed when QQ credential env vars
   REQUIRE_FALSE(report.has_value());
   REQUIRE(report.error().kind() == core::ErrorKind::auth);
   REQUIRE(manager.registered_count() == 0);
+}
+
+TEST_CASE("registered QQ channels round-trip one gateway message through the routed prompt path",
+          "[unit][bootstrap][channel_ingress][channel-qq][async]") {
+  ScopedEnv app_id{"ORAN_TEST_QQ_ROUND_TRIP_APP_ID", "app-round-trip"};
+  ScopedEnv client_secret{"ORAN_TEST_QQ_ROUND_TRIP_CLIENT_SECRET", "secret-round-trip"};
+  test::ScriptedHttpServer qq_api_server{{qq_token_ok("tok-round-trip"), qq_api_response(200, R"({"id":"out-qq-1"})")}};
+  ws::ScriptedWsServer gateway_server{{{
+      ws::SendText{qq_hello_frame()},
+      ws::RecvFrame{},
+      ws::SendText{qq_ready_frame()},
+      ws::SendText{qq_c2c_message_frame()},
+  }}};
+  TempDir temp{"oran-bootstrap-channel-qq-round-trip"};
+  auto config_json = std::string{R"json({
+  "channels": [
+    {
+      "id": "qq-main",
+      "kind": "qq",
+      "agent_key": "concierge",
+      "qq_app_id_env": "ORAN_TEST_QQ_ROUND_TRIP_APP_ID",
+      "qq_client_secret_env": "ORAN_TEST_QQ_ROUND_TRIP_CLIENT_SECRET",
+      "qq_token_url": ")json"} +
+                     qq_api_server.url("/app/getAppAccessToken") + R"json(",
+      "qq_api_base_url": ")json" +
+                     qq_api_server.base_url() + R"json(",
+      "qq_gateway_url": ")json" +
+                     gateway_server.url() + R"json("
+    }
+  ],
+  "agents": {
+    "concierge": {
+      "prompt_overlay": "Agent overlay: answer like a concierge."
+    }
+  }
+})json";
+  auto cfg = parse_config(config_json);
+
+  test::run_async(
+      [&temp, &cfg](asio::io_context& io) -> async::Awaitable<void> {
+        auto assembly_options = bootstrap::RuntimeAssemblyOptions{};
+        assembly_options.audit_enabled = true;
+        assembly_options.session_memory_enabled = false;
+        assembly_options.longterm_memory_enabled = false;
+        auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), assembly_options);
+        REQUIRE(built.has_value());
+        auto assembly = std::move(*built);
+        REQUIRE(assembly.audit_enabled());
+        REQUIRE(assembly.trace_repository() != nullptr);
+
+        RecordingProvider recording{{text_response("round trip answer")}};
+        channel::ChannelManager manager{io.get_executor()};
+
+        auto report = bootstrap::register_configured_channels(manager, io.get_executor(), cfg);
+        REQUIRE(report.has_value());
+        REQUIRE(report->registered_count == 1);
+        REQUIRE(report->skipped.empty());
+        REQUIRE(manager.contains("qq-main"));
+
+        auto routed = bootstrap::make_routed_channel_prompt_runner(base_bridge_options(io, assembly, cfg, recording));
+        REQUIRE(routed.has_value());
+
+        auto started = co_await manager.start_all();
+        REQUIRE(started.has_value());
+
+        auto received = co_await manager.receive_one("qq-main");
+        REQUIRE(received.has_value());
+
+        auto receipt = co_await channel::dispatch_one(manager, *routed);
+        REQUIRE(receipt.has_value());
+        REQUIRE(receipt->message_id == "out-qq-1");
+
+        const auto requests = recording.requests();
+        REQUIRE(requests.size() == 1);
+        REQUIRE(requests.front().messages.size() == 1);
+        REQUIRE(requests.front().messages.front().blocks == core::Message::user_text("ping from qq").blocks);
+        REQUIRE(requests.front().system_prompt.has_value());
+        REQUIRE(requests.front().system_prompt->contains("Agent overlay: answer like a concierge."));
+
+        auto traces = co_await assembly.trace_repository()->list_turns(
+            storage::ListTraceTurnsOptions{.agent_key = "concierge", .limit = 10});
+        REQUIRE(traces.has_value());
+        REQUIRE(traces->size() == 1);
+        REQUIRE(traces->front().agent_key == "concierge");
+      },
+      std::chrono::seconds{5});
+
+  REQUIRE(std::filesystem::exists(temp.path() / ".orangutan" / "audit.db"));
+  REQUIRE(gateway_server.accepted_count() == 1);
+  const auto frames = gateway_server.recorded_frames();
+  REQUIRE(frames.size() == 1);
+  REQUIRE(frames.front().payload.contains(R"("op":2)"));
+  REQUIRE(frames.front().payload.contains("tok-round-trip"));
+
+  REQUIRE(qq_api_server.served_count() == 2);
+  const auto reply_request = qq_api_server.request_text(1);
+  REQUIRE(reply_request.starts_with("POST /v2/users/user-openid/messages HTTP/1.1"));
+  REQUIRE(reply_request.contains("Authorization: QQBot tok-round-trip"));
+  REQUIRE(reply_request.contains(R"("content":"round trip answer")"));
+  REQUIRE(reply_request.contains(R"("msg_id":"msg-round-trip")"));
+  REQUIRE(reply_request.contains(R"("msg_seq":1)"));
 }
 #endif
 
