@@ -11,6 +11,7 @@
 #include <expected>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -52,7 +53,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice240";
+constexpr std::string_view kVersion = "2.0.0-slice241";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 constexpr std::size_t kTraceExportDefaultLimit = 50;
@@ -73,6 +74,8 @@ struct ParsedArgs {
   std::string trace_turn_id_hex{};
   bool trace_export_limit_supplied{false};
   std::size_t trace_export_limit{kTraceExportDefaultLimit};
+  bool trace_export_file_supplied{false};
+  std::string trace_export_file_path{};
   bool has_explicit_config{false};
   std::string explicit_config_path{};
   ExplainRulesSelector explain_selector{};
@@ -393,6 +396,19 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
       continue;
     }
 
+    if (matches_flag(arg, "--trace-export-file")) {
+      if (parsed.trace_export_file_supplied) {
+        return std::unexpected(arg_error("--trace-export-file may be provided only once"));
+      }
+      auto value = consume_value(args, index, "--trace-export-file");
+      if (!value) {
+        return std::unexpected(std::move(value.error()));
+      }
+      parsed.trace_export_file_supplied = true;
+      parsed.trace_export_file_path = std::move(*value);
+      continue;
+    }
+
     constexpr auto kConfigPrefix = std::string_view{"--config="};
     if (arg.starts_with(kConfigPrefix)) {
       if (parsed.has_explicit_config) {
@@ -426,6 +442,9 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
 
   if (parsed.trace_export_limit_supplied && !parsed.trace_export) {
     return std::unexpected(arg_error("--limit requires --trace-export"));
+  }
+  if (parsed.trace_export_file_supplied && !parsed.trace_export) {
+    return std::unexpected(arg_error("--trace-export-file requires --trace-export"));
   }
   if (parsed.trace_export && parsed.selector_mode_supplied) {
     return std::unexpected(arg_error("--mode is not supported with --trace-export"));
@@ -477,7 +496,8 @@ void print_usage() {
   std::println("orangutan v{}", kVersion);
   std::println("usage: orangutan [--config <path>] [--mode <m>] [--agent <name>] [--explain-rules]");
   std::println("                  [--audit-init [<path>]] [--trace <turn-id>]");
-  std::println("                  [--trace-export [<turn-id>] [--agent <name>] [--limit <n>]]");
+  std::println("                  [--trace-export [<turn-id>] [--agent <name>] [--limit <n>]");
+  std::println("                                  [--trace-export-file <path>]]");
   std::println("                  [--prompt <text>] [--help]");
   std::println();
   std::println(
@@ -491,6 +511,7 @@ void print_usage() {
   std::println("        (32 lowercase hex characters); reads <workspace>/.orangutan/audit.db.");
   std::println("--trace-export prints trace rows plus joined audit rows as JSON Lines; a turn id prints one");
   std::println("               turn, otherwise --agent filters and --limit bounds the newest turns.");
+  std::println("               --trace-export-file writes the same JSON Lines to a file instead of stdout.");
 }
 
 [[nodiscard]] Result<int> print_materialized_rules(const config::Config& cfg, const ExplainRulesSelector& selector) {
@@ -903,6 +924,58 @@ load_trace_inspect_rows(std::string_view workspace, std::string_view turn_id_hex
   };
 }
 
+[[nodiscard]] Result<std::vector<std::string>> load_trace_export_lines(std::string_view workspace,
+                                                                       const ParsedArgs& parsed) {
+  if (!parsed.trace_turn_id_hex.empty()) {
+    auto rows = load_trace_inspect_rows(workspace, parsed.trace_turn_id_hex, "--trace-export");
+    if (!rows) {
+      return std::unexpected(std::move(rows).error());
+    }
+    return std::vector<std::string>{trace_export_json(*rows).dump()};
+  }
+
+  auto rows = load_trace_export_list_rows(
+      workspace,
+      TraceExportListQuery{.agent_key = parsed.explain_selector.agent_name, .limit = parsed.trace_export_limit});
+  if (!rows) {
+    return std::unexpected(std::move(rows).error());
+  }
+
+  auto lines = std::vector<std::string>{};
+  lines.reserve(rows->size());
+  for (const auto& row : *rows) {
+    lines.push_back(trace_export_json(row).dump());
+  }
+  return lines;
+}
+
+[[nodiscard]] Result<void> write_trace_export_file(std::string_view path_text, const std::vector<std::string>& lines) {
+  auto path = std::filesystem::path{std::string{path_text}};
+  auto ec = std::error_code{};
+  const auto parent = path.parent_path();
+  if (!parent.empty()) {
+    std::filesystem::create_directories(parent, ec);
+    if (ec) {
+      return std::unexpected(Error::io("failed to create trace export file directory")
+                                 .with("path", parent.string())
+                                 .with("detail", ec.message()));
+    }
+  }
+
+  auto output = std::ofstream{path, std::ios::binary | std::ios::trunc};
+  if (!output) {
+    return std::unexpected(Error::io("failed to open trace export file").with("path", path.string()));
+  }
+  for (const auto& line : lines) {
+    output << line << '\n';
+  }
+  output.flush();
+  if (!output) {
+    return std::unexpected(Error::io("failed to write trace export file").with("path", path.string()));
+  }
+  return {};
+}
+
 [[nodiscard]] Result<int> run_trace_inspect(std::string_view workspace, std::string_view turn_id_hex) {
   auto rows = load_trace_inspect_rows(workspace, turn_id_hex, "--trace");
   if (!rows) {
@@ -956,23 +1029,20 @@ load_trace_inspect_rows(std::string_view workspace, std::string_view turn_id_hex
 }
 
 [[nodiscard]] Result<int> run_trace_export(std::string_view workspace, const ParsedArgs& parsed) {
-  if (!parsed.trace_turn_id_hex.empty()) {
-    auto rows = load_trace_inspect_rows(workspace, parsed.trace_turn_id_hex, "--trace-export");
-    if (!rows) {
-      return std::unexpected(std::move(rows).error());
-    }
-    std::println("{}", trace_export_json(*rows).dump());
-    return 0;
+  auto lines = load_trace_export_lines(workspace, parsed);
+  if (!lines) {
+    return std::unexpected(std::move(lines).error());
   }
 
-  auto rows = load_trace_export_list_rows(
-      workspace,
-      TraceExportListQuery{.agent_key = parsed.explain_selector.agent_name, .limit = parsed.trace_export_limit});
-  if (!rows) {
-    return std::unexpected(std::move(rows).error());
+  if (parsed.trace_export_file_supplied) {
+    auto written = write_trace_export_file(parsed.trace_export_file_path, *lines);
+    if (!written) {
+      return std::unexpected(std::move(written.error()));
+    }
+    return 0;
   }
-  for (const auto& row : *rows) {
-    std::println("{}", trace_export_json(row).dump());
+  for (const auto& line : *lines) {
+    std::println("{}", line);
   }
   return 0;
 }

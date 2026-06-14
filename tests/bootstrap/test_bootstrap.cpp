@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <span>
 #include <string>
@@ -80,6 +81,12 @@ void write_file(const std::filesystem::path& path, std::string_view contents) {
   std::filesystem::create_directories(path.parent_path());
   auto out = std::ofstream{path};
   out << contents;
+}
+
+[[nodiscard]] std::string read_file(const std::filesystem::path& path) {
+  auto in = std::ifstream{path, std::ios::binary};
+  REQUIRE(in);
+  return std::string{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
 }
 
 bool table_exists(const std::filesystem::path& db_path, std::string_view table) {
@@ -205,6 +212,8 @@ private:
 class ScopedStdoutCapture {
 public:
   ScopedStdoutCapture() {
+    REQUIRE(std::fflush(stdout) == 0);
+
     int pipe_fds[2] = {-1, -1};
     REQUIRE(::pipe(pipe_fds) == 0);
 
@@ -1917,6 +1926,40 @@ TEST_CASE("run --trace-export rejects empty turn id and invalid list filters", "
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
   }
+
+  SECTION("--trace-export-file without value") {
+    auto args = std::vector<std::string_view>{"--trace-export", "--trace-export-file"};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+
+  SECTION("--trace-export-file= empty value") {
+    auto args = std::vector<std::string_view>{"--trace-export", "--trace-export-file="};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+
+  SECTION("--trace-export-file requires --trace-export") {
+    auto output_path = temp.path() / "exports" / "trace.jsonl";
+    auto output_path_text = output_path.string();
+    auto args = std::vector<std::string_view>{"--trace-export-file", output_path_text};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+
+  SECTION("duplicate --trace-export-file") {
+    auto args = std::vector<std::string_view>{"--trace-export",
+                                              "--trace-export-file",
+                                              "first.jsonl",
+                                              "--trace-export-file",
+                                              "second.jsonl"};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
 }
 
 TEST_CASE("run --trace-export reports not_found for unknown turn ids", "[unit][bootstrap][trace]") {
@@ -2024,6 +2067,79 @@ TEST_CASE("run --trace-export lists bounded JSON Lines turns by agent", "[unit][
   REQUIRE(rows[1]["trace"]["agent_key"] == "coder");
   REQUIRE(rows[1]["trace"]["started_at_ns"] == 1000);
   REQUIRE(rows[1]["audit_rows"].size() == 1);
+  REQUIRE(rows[1]["audit_rows"][0]["tool_name"] == "file.write");
+}
+
+TEST_CASE("run --trace-export writes one JSON Lines trace object to a file", "[unit][bootstrap][trace]") {
+  TempDir temp{"oran-bootstrap-trace-export-file-happy"};
+  const auto audit_db = temp.path() / ".orangutan" / "audit.db";
+  std::filesystem::create_directories(audit_db.parent_path());
+
+  populate_trace_fixture(audit_db, sample_turn_id());
+
+  const auto export_path = temp.path() / "exports" / "turn.jsonl";
+  const auto export_path_text = export_path.string();
+  auto args = std::vector<std::string_view>{
+      "--trace-export",
+      std::string_view{kSampleTurnHex},
+      "--trace-export-file",
+      export_path_text,
+  };
+  auto stdout_capture = ScopedStdoutCapture{};
+  auto result = bootstrap::run(options(args, temp.path()));
+  auto output = stdout_capture.finish();
+
+  REQUIRE(result.has_value());
+  REQUIRE(*result == 0);
+  REQUIRE(output.empty());
+
+  const auto contents = read_file(export_path);
+  REQUIRE(std::ranges::count(contents, '\n') == 1);
+  const auto exported = nlohmann::json::parse(contents);
+  REQUIRE(exported["kind"] == "trace_turn");
+  REQUIRE(exported["trace"]["turn_id"] == kSampleTurnHex);
+  REQUIRE(exported["trace"]["agent_key"] == "coder");
+  REQUIRE(exported["audit_rows"].size() == 3);
+  REQUIRE(exported["audit_rows"][1]["event_kind"] == "hook_publish");
+}
+
+TEST_CASE("run --trace-export writes bounded JSON Lines turns to a file", "[unit][bootstrap][trace]") {
+  TempDir temp{"oran-bootstrap-trace-export-list-file"};
+  const auto audit_db = temp.path() / ".orangutan" / "audit.db";
+  std::filesystem::create_directories(audit_db.parent_path());
+
+  populate_trace_export_list_fixture(audit_db);
+
+  const auto export_path = temp.path() / "exports" / "trace.jsonl";
+  const auto export_path_text = export_path.string();
+  auto args = std::vector<std::string_view>{
+      "--trace-export",
+      "--agent",
+      "coder",
+      "--limit",
+      "2",
+      "--trace-export-file",
+      export_path_text,
+  };
+  auto stdout_capture = ScopedStdoutCapture{};
+  auto result = bootstrap::run(options(args, temp.path()));
+  auto output = stdout_capture.finish();
+
+  REQUIRE(result.has_value());
+  REQUIRE(*result == 0);
+  REQUIRE(output.empty());
+
+  const auto contents = read_file(export_path);
+  REQUIRE(std::ranges::count(contents, '\n') == 2);
+  auto rows = parse_json_lines(contents);
+  REQUIRE(rows.size() == 2);
+  REQUIRE(rows[0]["kind"] == "trace_turn");
+  REQUIRE(rows[0]["trace"]["turn_id"] == "303132333435363738393a3b3c3d3e3f");
+  REQUIRE(rows[0]["trace"]["agent_key"] == "coder");
+  REQUIRE(rows[0]["audit_rows"][0]["tool_name"] == "file.read");
+
+  REQUIRE(rows[1]["trace"]["turn_id"] == "505152535455565758595a5b5c5d5e5f");
+  REQUIRE(rows[1]["trace"]["agent_key"] == "coder");
   REQUIRE(rows[1]["audit_rows"][0]["tool_name"] == "file.write");
 }
 

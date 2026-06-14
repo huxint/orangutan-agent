@@ -56,6 +56,9 @@ tests/    bench/     Catch2 + nanobench buckets, one per library
    ANTHROPIC_API_KEY=... xmake run orangutan -- --config config.example.json --agent researcher --prompt "hello"
    ANTHROPIC_API_KEY=... xmake run orangutan -- --config config.example.json
    # REPL mode exits on an empty line, /exit, or /quit; /help lists commands.
+   # Trace exports read <workspace>/.orangutan/audit.db and stay redacted:
+   xmake run orangutan -- --trace-export <32-hex-turn-id> --trace-export-file trace.jsonl
+   xmake run orangutan -- --trace-export --agent coder --limit 10 --trace-export-file traces.jsonl
    ```
 
 4. Before a PR: `make ci`.
