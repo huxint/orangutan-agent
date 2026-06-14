@@ -80,7 +80,7 @@ and lands with the `oran-desktop` slice.
 
 1. `orangutan --desktop` opens the app window and reaches the chat view.
 2. A submitted prompt renders streamed tokens in real time; the stop control cancels the
-   in-flight turn (`Error::cancelled`, `cancellation_phase=provider`).
+   in-flight turn (`Error::cancelled`, `cancellation_phase=provider_stream` after visible deltas).
 3. The streamed view survives a slow tool call without dropping output.
 4. The audit view shows recent tool calls + permission decisions with timestamps and
    identity.

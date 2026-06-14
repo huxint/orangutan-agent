@@ -434,7 +434,7 @@ sink for non-quiet streaming runs, passes it to `agent::Loop::run_turn`, and cle
 the assembled `PromptRunResult::text` once the answer streamed live so the CLI does
 not print it twice. Ordinary configured-route `orangutan --prompt` over Anthropic
 now renders tokens character-by-character (spec 0001 AC3); a mid-stream Ctrl-C
-surfaces as `Error::cancelled` with `cancellation_phase=provider` (spec 0018,
+surfaces as `Error::cancelled` with `cancellation_phase=provider_stream` (spec 0018,
 reused). Slice 124 adds the OpenAI Responses SSE decoder and lifts the provider
 gate so OpenAI Responses can use the same streaming transport when configured.
 

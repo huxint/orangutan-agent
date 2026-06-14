@@ -396,6 +396,67 @@ private:
   mutable std::size_t cursor_{0};
 };
 
+enum class ProviderCancellationPoint {
+  initial,
+  stream,
+  complete,
+};
+
+class ProviderPhaseCancellationProvider final : public provider::System {
+public:
+  explicit ProviderPhaseCancellationProvider(ProviderCancellationPoint point) : point_{point} {}
+
+  [[nodiscard]] async::Awaitable<core::Result<provider::Response>>
+  send(provider::Request request, provider::Route route, provider::EventSink* sink = nullptr) const override {
+    static_cast<void>(request);
+    static_cast<void>(route);
+
+    ++calls_;
+    switch (point_) {
+      case ProviderCancellationPoint::initial:
+        break;
+      case ProviderCancellationPoint::stream:
+        if (sink != nullptr) {
+          sink->on_text_delta("partial");
+        }
+        break;
+      case ProviderCancellationPoint::complete:
+        if (sink != nullptr) {
+          sink->on_done(core::StopReason::end_turn);
+        }
+        break;
+    }
+    waiting_ = true;
+
+    auto executor = co_await asio::this_coro::executor;
+    auto slept = co_await async::sleep_for(executor, 1s);
+    if (!slept) {
+      co_return std::unexpected(std::move(slept).error());
+    }
+
+    co_return provider::Response{
+        .blocks = {core::TextContent{.text = "late"}},
+        .stop_reason = core::StopReason::end_turn,
+        .usage = {},
+        .model_used = std::string{"phase-model"},
+        .route_profile_used = std::nullopt,
+    };
+  }
+
+  [[nodiscard]] bool waiting() const noexcept {
+    return waiting_;
+  }
+
+  [[nodiscard]] std::size_t calls() const noexcept {
+    return calls_;
+  }
+
+private:
+  ProviderCancellationPoint point_;
+  mutable bool waiting_{false};
+  mutable std::size_t calls_{0};
+};
+
 }  // namespace
 
 TEST_CASE("Loop returns text from a single fake-provider end_turn", "[unit][agent][loop]") {
@@ -978,8 +1039,83 @@ TEST_CASE("Loop annotates cancellation during provider await", "[unit][agent][lo
   REQUIRE_FALSE(result->has_value());
   REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
   REQUIRE(contains_context(result->error(), "reason", "parent_cancelled"));
-  REQUIRE(contains_context(result->error(), "cancellation_phase", "provider"));
+  REQUIRE(contains_context(result->error(), "cancellation_phase", "provider_initial"));
   REQUIRE(fake.turns_consumed() == 1);
+}
+
+TEST_CASE("Loop classifies provider streaming cancellation phases", "[unit][agent][loop][trace][cancellation]") {
+  TempDb db{"oran-agent-loop-trace-provider-phase-cancel"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_trace_pool(io, db);
+    storage::TraceRepository trace{pool};
+    auto migrated = co_await trace.migrate();
+    REQUIRE(migrated.has_value());
+
+    const auto catalog = loop_catalog();
+    provider::EventSink sink;
+
+    auto run_phase = [&](ProviderCancellationPoint point,
+                         unsigned char turn_seed,
+                         std::string_view expected_phase) -> async::Awaitable<void> {
+      ProviderPhaseCancellationProvider provider{point};
+      agent::Loop loop{provider, default_route()};
+      const std::vector<core::Message> tail{core::Message::user_text("cancel provider phase")};
+      auto inputs = base_inputs(catalog, tail);
+      const auto turn_id = turn_id_with(turn_seed);
+      inputs.turn_id = turn_id;
+      inputs.trace = agent::TraceContext{
+          .repository = &trace,
+          .session_id = turn_id_with(0x80),
+          .agent_key = "coder",
+          .origin = "cli",
+      };
+
+      asio::cancellation_signal signal;
+      std::optional<core::Result<agent::RunTurnResult>> result;
+      std::exception_ptr failure;
+      asio::co_spawn(
+          io,
+          [&]() -> async::Awaitable<core::Result<agent::RunTurnResult>> {
+            co_return co_await loop.run_turn(inputs, &sink);
+          },
+          asio::bind_cancellation_slot(signal.slot(), [&](std::exception_ptr ep, core::Result<agent::RunTurnResult> r) {
+            failure = ep;
+            result = std::move(r);
+          }));
+
+      while (!provider.waiting() && !result.has_value() && !failure) {
+        auto tick = co_await async::sleep_for(io.get_executor(), 1ms);
+        REQUIRE(tick.has_value());
+      }
+      REQUIRE(provider.waiting());
+      signal.emit(asio::cancellation_type::terminal);
+      while (!result.has_value() && !failure) {
+        auto tick = co_await async::sleep_for(io.get_executor(), 1ms);
+        REQUIRE(tick.has_value());
+      }
+      if (failure) {
+        std::rethrow_exception(failure);
+      }
+
+      REQUIRE(result.has_value());
+      REQUIRE_FALSE(result->has_value());
+      REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
+      REQUIRE(contains_context(result->error(), "cancellation_phase", expected_phase));
+      REQUIRE(provider.calls() == 1);
+
+      auto row = co_await trace.get_turn(turn_id);
+      REQUIRE(row.has_value());
+      REQUIRE(row->has_value());
+      REQUIRE((*row)->turn_id == turn_id);
+      REQUIRE((*row)->stop_reason == "cancelled");
+      REQUIRE((*row)->cancellation_phase.has_value());
+      REQUIRE(*(*row)->cancellation_phase == expected_phase);
+    };
+
+    co_await run_phase(ProviderCancellationPoint::initial, 0x61, "provider_initial");
+    co_await run_phase(ProviderCancellationPoint::stream, 0x62, "provider_stream");
+    co_await run_phase(ProviderCancellationPoint::complete, 0x63, "provider_complete");
+  });
 }
 
 TEST_CASE("Loop rejects tool-use responses until the dispatch iteration slice lands", "[unit][agent][loop]") {
@@ -1721,7 +1857,7 @@ TEST_CASE("Loop persists provider cancellation trace rows", "[unit][agent][loop]
     REQUIRE(result.has_value());
     REQUIRE_FALSE(result->has_value());
     REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
-    REQUIRE(contains_context(result->error(), "cancellation_phase", "provider"));
+    REQUIRE(contains_context(result->error(), "cancellation_phase", "provider_initial"));
 
     auto row = co_await trace.get_turn(turn_id_with(0x41));
     REQUIRE(row.has_value());
@@ -1734,7 +1870,7 @@ TEST_CASE("Loop persists provider cancellation trace rows", "[unit][agent][loop]
     REQUIRE((*row)->input_tokens == 0);
     REQUIRE((*row)->output_tokens == 0);
     REQUIRE((*row)->cancellation_phase.has_value());
-    REQUIRE(*(*row)->cancellation_phase == "provider");
+    REQUIRE(*(*row)->cancellation_phase == "provider_initial");
   });
 }
 

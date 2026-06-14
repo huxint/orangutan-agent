@@ -440,7 +440,8 @@ own test bucket, its own bench bucket, and its own public header set under
 > and, when supplied a `tool::Registry` plus `tool::DispatchContext`,
 > sequentially dispatches `tool_use` blocks, appends ordered tool results,
 > re-enters the provider until a terminal turn or iteration cap, tags
-> parent-cancelled provider/tool awaits with `cancellation_phase`, and writes
+> parent-cancelled provider awaits with `provider_initial`,
+> `provider_stream`, or `provider_complete` and tool awaits with `tools`, and writes
 > cancelled trace rows when trace is configured; slice 79
 > threads `RunTurnInputs::turn_id` into direct dispatch audit rows when
 > tracing is enabled, slice 85 generates that id when a trace writer is

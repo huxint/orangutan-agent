@@ -102,8 +102,10 @@ own library, its own tests, its own bench, its own design doc."
 > ordered tool results, rebuilds the prompt, and re-enters the provider.
 > Parent cancellation during the provider await or direct tool dispatch now
 > returns `ErrorKind::cancelled` with `reason=parent_cancelled` and
-> `cancellation_phase=provider|tools`; slice 83 persists the same phase into
-> `trace_turns` rows when trace is configured, slice 84 writes
+> `cancellation_phase=provider_initial|provider_stream|provider_complete|tools`;
+> slice 83 persists cancellation phases into `trace_turns` rows when trace is
+> configured, slice 244 refines the provider phase into those three streaming
+> milestones, slice 84 writes
 > `stop_reason=error` rows for non-cancelled provider and response-backed
 > loop-boundary failures, and slice 85 generates a turn id when trace is
 > configured and the caller leaves it unset. Slice 96 refreshes

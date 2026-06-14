@@ -74,8 +74,10 @@ proves the loop behaves correctly without a network.
     cancellation-observability prework at the loop boundary: provider-await
     cancellations and direct tool-dispatch cancellations keep returning
     `ErrorKind::cancelled`, now with `reason=parent_cancelled` plus
-    `cancellation_phase=provider|tools`; slice 83 records that phase in
-    spec-0018 trace rows when trace is configured. Slice 79 adds the first cause-chain
+    `cancellation_phase=provider_initial|provider_stream|provider_complete|tools`;
+    slice 83 records cancellation phases in spec-0018 trace rows when trace is
+    configured, and slice 244 refines the provider phase into the three streaming
+    milestones. Slice 79 adds the first cause-chain
     join primitive: `RunTurnInputs::turn_id` is copied into
     `DispatchContext::parent_turn_id` for every direct tool dispatch in a
     traced loop turn. Slice 80 adds the
@@ -161,8 +163,9 @@ proves the loop behaves correctly without a network.
     the existing registry boundary when caller-supplied services are present,
     append ordered tool-result messages, rebuild the prompt, and stop on a
     terminal text-style response or iteration cap. Provider/tool parent
-    cancellations are classified with `cancellation_phase=provider|tools` and
-    written to `trace_turns` when trace is configured, ordinary provider and
+    cancellations are classified with
+    `cancellation_phase=provider_initial|provider_stream|provider_complete|tools`
+    and written to `trace_turns` when trace is configured, ordinary provider and
     response-backed loop-boundary failures are written as `stop_reason=error`,
     and direct dispatch audit rows can now carry the loop turn id as
     `parent_turn_id` when trace is enabled. The loop generates that id when a
@@ -377,10 +380,11 @@ proves the loop behaves correctly without a network.
    sleeps `latency=10s`; the parent token fires at `t=100ms`. The
    loop returns `Error::cancelled` within `< 200ms`; the audit row
    records `stop_reason=cancelled, reason=parent_cancelled`. **Status
-   (slice 83):** the loop returns `ErrorKind::cancelled` with
-   `reason=parent_cancelled` and `cancellation_phase=provider`, and writes a
-   `trace_turns` row with `stop_reason=cancelled` / `cancellation_phase=provider`
-   when trace is configured.
+   (slice 244):** the loop returns `ErrorKind::cancelled` with
+   `reason=parent_cancelled` and a provider phase of `provider_initial`,
+   `provider_stream`, or `provider_complete`, and writes a `trace_turns` row
+   with the same `stop_reason=cancelled` / `cancellation_phase` when trace is
+   configured.
 9. **Cancellation during tool dispatch.** Scenario #10: the fake
    returns one `tool_use`; the tool handler sleeps long; the parent
    token fires; the loop returns `Error::cancelled` within `< 200ms`;

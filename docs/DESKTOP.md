@@ -26,7 +26,8 @@ The one genuinely new design seam is the **Slint event loop ↔ asio executor br
   existing `provider::EventSink` — the same observer `cli::StreamingPromptSink`
   implements — marshalled onto the UI thread via Slint's event-loop post/invoke API.
 - Cancellation (the chat "stop" control) emits on the turn's `asio::cancellation_signal`,
-  surfacing as `Error::cancelled` with `cancellation_phase=provider`.
+  surfacing as `Error::cancelled` with `cancellation_phase=provider_stream`
+  after visible deltas.
 - Backpressure: the bridge uses bounded queues for UI→runtime and runtime→UI traffic,
   per the platform's "bounded queues are the default" rule.
 

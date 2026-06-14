@@ -181,8 +181,9 @@ public:
   /// remain later slices. Parent cancellation during
   /// the provider await or direct tool dispatch is surfaced as
   /// `ErrorKind::cancelled` with `reason=parent_cancelled` plus
-  /// `cancellation_phase=provider|tools`; when a trace context is configured,
-  /// the same phase is persisted before the cancelled result is returned.
+  /// `cancellation_phase=provider_initial|provider_stream|provider_complete|tools`;
+  /// when a trace context is configured, the same phase is persisted before
+  /// the cancelled result is returned.
   /// When `LoopOptions::max_iterations` is exhausted by repeated tool_use
   /// responses and a trace context is configured, an `error` row is written
   /// with the final iteration's rendered prompt and the cumulative usage

@@ -93,8 +93,11 @@ makes the existing audit rows joinable. Nothing else.
   skips it when `TraceContext::enabled=false`, writes cancelled rows for
   provider/tool parent cancellation, writes ordinary provider/loop-boundary
   error rows, and writes iteration-cap error rows when
-  `LoopOptions::max_iterations` is exhausted. `bootstrap::run` now constructs
-  the assembly-owned `TraceRepository` from `config.trace().enabled`. Slice 93
+  `LoopOptions::max_iterations` is exhausted. Slice 244 refines provider
+  cancellation rows to distinguish `provider_initial`, `provider_stream`, and
+  `provider_complete` on the existing `cancellation_phase` field.
+  `bootstrap::run` now constructs the assembly-owned `TraceRepository` from
+  `config.trace().enabled`. Slice 93
   writes direct-dispatch blocking `tool_before` hook-publish rows when the
   dispatch context carries a parent turn id. Slice 101's `AgentPromptRunner`
   now threads the assembly repository into `RunTurnInputs::trace` for
@@ -129,7 +132,7 @@ makes the existing audit rows joinable. Nothing else.
     input_tokens            INTEGER NOT NULL DEFAULT 0,
     output_tokens           INTEGER NOT NULL DEFAULT 0,
     cost_estimate_usd       REAL    NOT NULL DEFAULT 0,
-    cancellation_phase      TEXT NULL,              -- provider | tools | hooks | null
+    cancellation_phase      TEXT NULL,              -- provider_initial | provider_stream | provider_complete | tools | hooks | null
     context_json            BLOB NOT NULL DEFAULT X'7b7d',  -- extension grab-bag
     schema_version          INTEGER NOT NULL DEFAULT 1
   );
@@ -282,6 +285,10 @@ makes the existing audit rows joinable. Nothing else.
   field grows to record `provider_stream`,
   `provider_initial`, `provider_complete` so a cancellation during
   streaming is distinguishable from one before the first byte.
+  **Status (slice 244):** shipped in `agent::Loop`. Parent-cancelled provider
+  awaits now return and persist `provider_initial` before any sink callback,
+  `provider_stream` after text/thinking/tool deltas, and `provider_complete`
+  after the provider terminal `on_done` callback.
 - **Tool-call rollup** — derived view on `audit_events` that pre-
   aggregates per-turn tool counts, per-tool latencies, per-tool
   failure rates. Lives as a SQL view, not a new column.
@@ -352,9 +359,11 @@ makes the existing audit rows joinable. Nothing else.
    configured. Dedicated N-tool storage-join coverage remains downstream.
 4. **Cancellation phase recorded.** Cancellation during provider
    await (spec 0017 scenario #9) produces a trace row with
-   `cancellation_phase='provider'`, `stop_reason='cancelled'`.
+   `cancellation_phase='provider_initial'`, `provider_stream`, or
+   `provider_complete` depending on whether the provider had emitted no
+   stream callbacks, visible deltas, or terminal `on_done`.
    Cancellation during tool dispatch (scenario #10) produces
-   `cancellation_phase='tools'`. **Status (slice 83):** shipped for
+   `cancellation_phase='tools'`. **Status (slice 244):** shipped for
    trace-enabled parent-cancelled provider and tool phases. The loop still
    returns `ErrorKind::cancelled` with `reason=parent_cancelled` and the same
    phase after the row is written.

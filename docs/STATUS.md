@@ -9,34 +9,31 @@
 
 ## Snapshot
 
-- **Slice:** 243 (`xmake run orangutan -- --help` reports slice 243)
+- **Slice:** 244 (`xmake run orangutan -- --help` reports slice 244)
 - **Last completed history:**
-  [`histories/2026-06/20260614-1749-audit-tool-call-rollups.md`](histories/2026-06/20260614-1749-audit-tool-call-rollups.md)
+  [`histories/2026-06/20260614-1827-provider-cancellation-phases.md`](histories/2026-06/20260614-1827-provider-cancellation-phases.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — remains active, but its next gate is externally blocked on real QQ
     credentials plus a sendable operator conversation; it was spun off from the
     completed channel-ingress plan
     ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-- **Latest completed slice:** slice 243 ships the unblocked Observability v1.1
-  SQL-derived tool-call rollup while QQ 4b-ii remains credential-blocked.
-  Audit DB migration version 5 creates `audit_tool_call_rollups`, a read-only
-  view over joinable `audit_events` rows with `parent_turn_id IS NOT NULL`.
-  `AuditRepository::list_tool_call_rollups(...)` exposes per-turn/per-tool
-  decision counts, hook-publish counts, permitted/blocked decision counts, and
-  optional `metadata_json.usage.wall_time_ms` latency aggregates without adding
-  trace columns or inventing handler-failure data that is not durable today.
-  Focused results: `test-storage` **79 cases / 1047 assertions** and
-  `[audit_repository]` **15 cases / 243 assertions**; default
-  `test-bootstrap` remains **156 cases / 1573 assertions** and gated QQ counts
-  remain gated `test-bootstrap` **148 cases / 1352 assertions** plus gated
-  `test-channel-qq` **58 cases / 369 assertions** from slice 238.
-- **Next intended slice:** Observability v1.1 — refine provider streaming
-  cancellation phases (`provider_initial`, `provider_stream`,
-  `provider_complete`) on the existing `trace_turns.cancellation_phase` field.
-  This is the next unblocked spec-0018 item after trace export sinks and the
-  audit-derived tool-call rollup; QQ-port 4b-ii remains waiting on real QQ
-  credentials and an operator conversation.
+- **Latest completed slice:** slice 244 ships the unblocked Observability v1.1
+  provider cancellation phase refinement while QQ 4b-ii remains
+  credential-blocked. `agent::Loop` now distinguishes parent cancellation
+  before provider streaming (`provider_initial`), after visible provider
+  deltas (`provider_stream`), and after provider terminal `on_done`
+  (`provider_complete`) on the existing `trace_turns.cancellation_phase`
+  field, while preserving `tools` for direct dispatch cancellation. The
+  returned cancellation error carries the same phase, and trace-enabled turns
+  persist it before returning. Focused result: `test-agent` **57 cases /
+  10 786 assertions**.
+- **Next intended slice:** Re-read this snapshot and [`ROADMAP.md`](ROADMAP.md)
+  before scoping the next slice. No new observability slice is pre-selected
+  after the provider-phase refinement; broader trace query language or metrics
+  endpoints need a concrete operator/runtime consumer before they become the
+  next best target. QQ-port 4b-ii remains waiting on real QQ credentials and an
+  operator conversation.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 
@@ -70,7 +67,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-tool`: 208 cases / 2181 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 86 cases / 652 assertions.
-- `oran-agent`: 56 cases / 10 744 assertions.
+- `oran-agent`: 57 cases / 10 786 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
 - `oran-bootstrap`: 156 cases / 1573 assertions (gated `--channel_qq=y`: 148 /
   1352).

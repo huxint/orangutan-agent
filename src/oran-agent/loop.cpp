@@ -146,6 +146,74 @@ void append_text_block(std::string& output, std::string_view text) {
   return std::move(error).with("reason", "parent_cancelled").with("cancellation_phase", std::string{phase});
 }
 
+enum class ProviderPhase {
+  initial,
+  stream,
+  complete,
+};
+
+class ProviderPhaseSink final : public provider::EventSink {
+public:
+  explicit ProviderPhaseSink(provider::EventSink* inner) noexcept : inner_{inner} {}
+
+  [[nodiscard]] std::string_view cancellation_phase() const noexcept {
+    switch (phase_) {
+      case ProviderPhase::initial:
+        return "provider_initial";
+      case ProviderPhase::stream:
+        return "provider_stream";
+      case ProviderPhase::complete:
+        return "provider_complete";
+    }
+    return "provider_initial";
+  }
+
+  void on_text_delta(std::string_view delta) override {
+    mark_streaming();
+    if (inner_ != nullptr) {
+      inner_->on_text_delta(delta);
+    }
+  }
+
+  void on_thinking_delta(std::string_view delta) override {
+    mark_streaming();
+    if (inner_ != nullptr) {
+      inner_->on_thinking_delta(delta);
+    }
+  }
+
+  void on_tool_start(std::string_view id, std::string_view name) override {
+    mark_streaming();
+    if (inner_ != nullptr) {
+      inner_->on_tool_start(id, name);
+    }
+  }
+
+  void on_tool_delta(std::string_view id, std::string_view input_delta) override {
+    mark_streaming();
+    if (inner_ != nullptr) {
+      inner_->on_tool_delta(id, input_delta);
+    }
+  }
+
+  void on_done(core::StopReason stop_reason) override {
+    phase_ = ProviderPhase::complete;
+    if (inner_ != nullptr) {
+      inner_->on_done(stop_reason);
+    }
+  }
+
+private:
+  void mark_streaming() noexcept {
+    if (phase_ == ProviderPhase::initial) {
+      phase_ = ProviderPhase::stream;
+    }
+  }
+
+  provider::EventSink* inner_;
+  ProviderPhase phase_{ProviderPhase::initial};
+};
+
 [[nodiscard]] std::vector<core::ToolUseContent> tool_uses_in(std::span<const core::Content> blocks) {
   std::vector<core::ToolUseContent> uses;
   for (const auto& block : blocks) {
@@ -702,10 +770,13 @@ public:
 
       const auto provider_started_at = core::time::now_utc();
       co_await publish_provider_request(inputs, request, route_, iteration, provider_started_at);
-      auto response = co_await provider_.send(std::move(request), route_, sink);
+      ProviderPhaseSink provider_phase_sink{sink};
+      auto* provider_sink = sink == nullptr ? nullptr : &provider_phase_sink;
+      auto response = co_await provider_.send(std::move(request), route_, provider_sink);
       const auto provider_finished_at = core::time::now_utc();
       if (!response) {
-        auto error = with_cancellation_phase(std::move(response).error(), "provider");
+        const auto cancellation_phase = provider_phase_sink.cancellation_phase();
+        auto error = with_cancellation_phase(std::move(response).error(), cancellation_phase);
         if (error.kind() == core::ErrorKind::cancelled) {
           co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
         }
@@ -725,7 +796,7 @@ public:
                                                   route_.primary.model,
                                                   route_.primary.profile,
                                                   core::StopReason::cancelled,
-                                                  std::string{"provider"});
+                                                  std::string{cancellation_phase});
           if (!traced) {
             error = attach_trace_write_error(std::move(error), std::move(traced).error());
           }
