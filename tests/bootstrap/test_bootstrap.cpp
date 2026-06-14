@@ -7,6 +7,7 @@
 #include <charconv>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -1635,6 +1636,40 @@ core::TurnId session_id_seed(unsigned char seed) {
   return id;
 }
 
+core::TurnId turn_id_seed(unsigned char seed) {
+  core::TurnId id{};
+  for (std::size_t i = 0; i < id.size(); ++i) {
+    id[i] = static_cast<std::byte>(seed + i);
+  }
+  return id;
+}
+
+[[nodiscard]] storage::AppendTraceTurnRequest
+make_trace_request(core::TurnId turn_id, std::string agent_key, std::int64_t started_at_ns) {
+  return storage::AppendTraceTurnRequest{
+      .turn_id = turn_id,
+      .session_id = session_id_seed(0x80),
+      .agent_key = std::move(agent_key),
+      .origin = "cli",
+      .route_profile = "fake-main",
+      .route_model = "fake-model",
+      .started_at_ns = started_at_ns,
+      .finished_at_ns = started_at_ns + 1'500,
+      .stop_reason = "end_turn",
+      .iteration_count = 2,
+      .prompt_prefix_hash = 0xfeed'face'1234'5678ULL,
+      .prompt_prefix_bytes = 4'096,
+      .active_catalog_hash = 0x1111'2222'3333'4444ULL,
+      .deferred_catalog_hash = 0x5555'6666'7777'8888ULL,
+      .cache_creation_tokens = 32,
+      .cache_read_tokens = 1024,
+      .input_tokens = 1'500,
+      .output_tokens = 200,
+      .cost_estimate_usd = 0.012,
+      .context_json = R"json({"source":"trace-inspector-test"})json",
+  };
+}
+
 void populate_trace_fixture(const std::filesystem::path& audit_db, const core::TurnId& turn_id) {
   test::run_async([&audit_db, &turn_id](asio::io_context& io) -> async::Awaitable<void> {
     auto pool = storage::Pool::open(
@@ -1647,29 +1682,7 @@ void populate_trace_fixture(const std::filesystem::path& audit_db, const core::T
     auto migrated = co_await audit_repo.migrate();
     REQUIRE(migrated.has_value());
 
-    auto trace_request = storage::AppendTraceTurnRequest{
-        .turn_id = turn_id,
-        .session_id = session_id_seed(0x80),
-        .agent_key = "coder",
-        .origin = "cli",
-        .route_profile = "fake-main",
-        .route_model = "fake-model",
-        .started_at_ns = 1'000,
-        .finished_at_ns = 2'500,
-        .stop_reason = "end_turn",
-        .iteration_count = 2,
-        .prompt_prefix_hash = 0xfeed'face'1234'5678ULL,
-        .prompt_prefix_bytes = 4'096,
-        .active_catalog_hash = 0x1111'2222'3333'4444ULL,
-        .deferred_catalog_hash = 0x5555'6666'7777'8888ULL,
-        .cache_creation_tokens = 32,
-        .cache_read_tokens = 1024,
-        .input_tokens = 1'500,
-        .output_tokens = 200,
-        .cost_estimate_usd = 0.012,
-        .context_json = R"json({"source":"trace-inspector-test"})json",
-    };
-    auto trace_row = co_await trace_repo.append_turn(std::move(trace_request));
+    auto trace_row = co_await trace_repo.append_turn(make_trace_request(turn_id, "coder", 1'000));
     REQUIRE(trace_row.has_value());
 
     auto first_audit = storage::AppendAuditEventRequest{
@@ -1714,6 +1727,82 @@ void populate_trace_fixture(const std::filesystem::path& audit_db, const core::T
     REQUIRE(second_audit_row.has_value());
     co_return;
   });
+}
+
+void populate_trace_export_list_fixture(const std::filesystem::path& audit_db) {
+  test::run_async([&audit_db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = storage::Pool::open(
+        io.get_executor(),
+        storage::PoolOptions{.path = audit_db.string(), .reader_count = 1, .statement_cache_capacity = 4});
+    REQUIRE(pool.has_value());
+
+    storage::AuditRepository audit_repo{*pool};
+    storage::TraceRepository trace_repo{*pool};
+    auto migrated = co_await audit_repo.migrate();
+    REQUIRE(migrated.has_value());
+
+    const auto newest_coder = turn_id_seed(0x30);
+    auto newest_coder_row = co_await trace_repo.append_turn(make_trace_request(newest_coder, "coder", 3'000));
+    REQUIRE(newest_coder_row.has_value());
+    auto newest_coder_audit = co_await audit_repo.append_event(storage::AppendAuditEventRequest{
+        .scope_key = "scope-list",
+        .agent_key = "coder",
+        .tool_name = "file.read",
+        .identity = "operator-1",
+        .verdict = "allow",
+        .outcome = "allow",
+        .reason = "fixture",
+        .parent_turn_id = newest_coder,
+    });
+    REQUIRE(newest_coder_audit.has_value());
+
+    const auto reviewer = turn_id_seed(0x40);
+    auto reviewer_row = co_await trace_repo.append_turn(make_trace_request(reviewer, "reviewer", 2'000));
+    REQUIRE(reviewer_row.has_value());
+    auto reviewer_audit = co_await audit_repo.append_event(storage::AppendAuditEventRequest{
+        .scope_key = "scope-list",
+        .agent_key = "reviewer",
+        .tool_name = "file.read",
+        .identity = "operator-1",
+        .verdict = "allow",
+        .outcome = "allow",
+        .reason = "fixture",
+        .parent_turn_id = reviewer,
+    });
+    REQUIRE(reviewer_audit.has_value());
+
+    const auto older_coder = turn_id_seed(0x50);
+    auto older_coder_row = co_await trace_repo.append_turn(make_trace_request(older_coder, "coder", 1'000));
+    REQUIRE(older_coder_row.has_value());
+    auto older_coder_audit = co_await audit_repo.append_event(storage::AppendAuditEventRequest{
+        .scope_key = "scope-list",
+        .agent_key = "coder",
+        .tool_name = "file.write",
+        .identity = "operator-1",
+        .verdict = "allow",
+        .outcome = "allow",
+        .reason = "fixture",
+        .parent_turn_id = older_coder,
+    });
+    REQUIRE(older_coder_audit.has_value());
+    co_return;
+  });
+}
+
+[[nodiscard]] std::vector<nlohmann::json> parse_json_lines(std::string_view output) {
+  auto rows = std::vector<nlohmann::json>{};
+  while (!output.empty()) {
+    const auto newline = output.find('\n');
+    const auto line = output.substr(0, newline == std::string_view::npos ? output.size() : newline);
+    if (!line.empty()) {
+      rows.push_back(nlohmann::json::parse(std::string{line}));
+    }
+    if (newline == std::string_view::npos) {
+      break;
+    }
+    output.remove_prefix(newline + 1);
+  }
+  return rows;
 }
 
 }  // namespace
@@ -1791,18 +1880,39 @@ TEST_CASE("run --trace reports not_found for unknown turn ids", "[unit][bootstra
   REQUIRE(result.error().kind() == core::ErrorKind::not_found);
 }
 
-TEST_CASE("run --trace-export rejects missing or empty turn id", "[unit][bootstrap][trace]") {
+TEST_CASE("run --trace-export rejects empty turn id and invalid list filters", "[unit][bootstrap][trace]") {
   TempDir temp{"oran-bootstrap-trace-export-no-id"};
 
-  SECTION("--trace-export without value") {
-    auto args = std::vector<std::string_view>{"--trace-export"};
+  SECTION("--trace-export= empty value") {
+    auto args = std::vector<std::string_view>{"--trace-export="};
     auto result = bootstrap::run(options(args, temp.path()));
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
   }
 
-  SECTION("--trace-export= empty value") {
-    auto args = std::vector<std::string_view>{"--trace-export="};
+  SECTION("--limit without value") {
+    auto args = std::vector<std::string_view>{"--trace-export", "--limit"};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+
+  SECTION("zero --limit") {
+    auto args = std::vector<std::string_view>{"--trace-export", "--limit", "0"};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+
+  SECTION("non-numeric --limit") {
+    auto args = std::vector<std::string_view>{"--trace-export", "--limit", "two"};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+
+  SECTION("--limit requires list mode") {
+    auto args = std::vector<std::string_view>{"--trace-export", std::string_view{kSampleTurnHex}, "--limit", "2"};
     auto result = bootstrap::run(options(args, temp.path()));
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
@@ -1883,4 +1993,53 @@ TEST_CASE("run --trace-export prints one JSON Lines trace object", "[unit][boots
   REQUIRE(exported["audit_rows"][1]["metadata_json"]["event"] == "tool_before");
   REQUIRE(exported["audit_rows"][1]["metadata_json"]["decision_kind"] == "veto");
   REQUIRE(exported["audit_rows"][2]["tool_name"] == "file.write");
+}
+
+TEST_CASE("run --trace-export lists bounded JSON Lines turns by agent", "[unit][bootstrap][trace]") {
+  TempDir temp{"oran-bootstrap-trace-export-list"};
+  const auto audit_db = temp.path() / ".orangutan" / "audit.db";
+  std::filesystem::create_directories(audit_db.parent_path());
+
+  populate_trace_export_list_fixture(audit_db);
+
+  auto args = std::vector<std::string_view>{"--trace-export", "--agent", "coder", "--limit", "2"};
+  auto stdout_capture = ScopedStdoutCapture{};
+  auto result = bootstrap::run(options(args, temp.path()));
+  auto output = stdout_capture.finish();
+
+  REQUIRE(result.has_value());
+  REQUIRE(*result == 0);
+  REQUIRE(std::ranges::count(output, '\n') == 2);
+
+  auto rows = parse_json_lines(output);
+  REQUIRE(rows.size() == 2);
+  REQUIRE(rows[0]["kind"] == "trace_turn");
+  REQUIRE(rows[0]["trace"]["turn_id"] == "303132333435363738393a3b3c3d3e3f");
+  REQUIRE(rows[0]["trace"]["agent_key"] == "coder");
+  REQUIRE(rows[0]["trace"]["started_at_ns"] == 3000);
+  REQUIRE(rows[0]["audit_rows"].size() == 1);
+  REQUIRE(rows[0]["audit_rows"][0]["tool_name"] == "file.read");
+
+  REQUIRE(rows[1]["trace"]["turn_id"] == "505152535455565758595a5b5c5d5e5f");
+  REQUIRE(rows[1]["trace"]["agent_key"] == "coder");
+  REQUIRE(rows[1]["trace"]["started_at_ns"] == 1000);
+  REQUIRE(rows[1]["audit_rows"].size() == 1);
+  REQUIRE(rows[1]["audit_rows"][0]["tool_name"] == "file.write");
+}
+
+TEST_CASE("run --trace-export list mode succeeds with no matching turns", "[unit][bootstrap][trace]") {
+  TempDir temp{"oran-bootstrap-trace-export-empty-list"};
+  const auto audit_db = temp.path() / ".orangutan" / "audit.db";
+  std::filesystem::create_directories(audit_db.parent_path());
+
+  populate_trace_export_list_fixture(audit_db);
+
+  auto args = std::vector<std::string_view>{"--trace-export", "--agent", "ghost", "--limit", "5"};
+  auto stdout_capture = ScopedStdoutCapture{};
+  auto result = bootstrap::run(options(args, temp.path()));
+  auto output = stdout_capture.finish();
+
+  REQUIRE(result.has_value());
+  REQUIRE(*result == 0);
+  REQUIRE(output.empty());
 }

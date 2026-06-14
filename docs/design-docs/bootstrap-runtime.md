@@ -482,11 +482,14 @@ opens the workspace audit DB, runs the idempotent audit migration, loads the
 `trace_turns` row, then prints joined `audit_events` rows ordered by `id ASC`.
 Since slice 93 those audit lines include `kind=<event_kind>`, so mixed
 permission-decision and `hook_publish` rows are readable in the same output.
-Slice 239 adds the sibling `orangutan --trace-export <turn-id>` path: it reuses
-the same read-only lookup, but emits one JSON Lines object with the trace row
-and ordered joined audit rows for downstream log/SIEM ingestion. Both commands
-share the same turn-id validation, missing-row behavior, idempotent migration,
-and signal-aware one-shot drain.
+Slice 240 extends the sibling `orangutan --trace-export` path: with a
+`<turn-id>` it reuses the same read-only lookup and emits one JSON Lines object
+with the trace row plus ordered joined audit rows; without a turn id it lists
+newest turns through `TraceRepository::list_turns`, applies optional
+`--agent <name>` and positive `--limit <n>` filters, joins each turn's audit
+rows, and emits one JSON Lines object per turn. Both trace commands share the
+same idempotent migration and signal-aware one-shot drain, while single-turn
+export keeps the `--trace` turn-id validation and missing-row behavior.
 
 ## Next Steps
 

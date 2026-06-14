@@ -9,32 +9,33 @@
 
 ## Snapshot
 
-- **Slice:** 239 (`xmake run orangutan -- --help` reports slice 239)
+- **Slice:** 240 (`xmake run orangutan -- --help` reports slice 240)
 - **Last completed history:**
-  [`histories/2026-06/20260614-1612-trace-jsonl-export.md`](histories/2026-06/20260614-1612-trace-jsonl-export.md)
+  [`histories/2026-06/20260614-1636-trace-export-multi-turn.md`](histories/2026-06/20260614-1636-trace-export-multi-turn.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — remains active, but its next gate is externally blocked on real QQ
     credentials plus a sendable operator conversation; it was spun off from the
     completed channel-ingress plan
     ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-- **Latest completed slice:** slice 239 advances the unblocked
+- **Latest completed slice:** slice 240 advances the unblocked
   Observability/trace line while QQ 4b-ii remains credential-blocked. The
-  bootstrap trace inspector now has a sibling `--trace-export <turn-id>`
-  command that reads the same `<workspace>/.orangutan/audit.db` row and joined
-  audit cause chain as `--trace`, then emits one JSON Lines object to stdout:
-  `kind=trace_turn`, the trace row, parsed `context_json`, and ordered joined
-  audit rows with parsed `metadata_json`. The export stays read-only, keeps the
-  same lowercase 32-hex turn-id validation and missing-row errors, and does not
-  expose raw prompt/tool/provider bodies beyond the already persisted
-  redacted audit/trace fields. Focused results: default `test-bootstrap` **149
-  cases / 1361 assertions** and `[trace]` **12 cases / 107 assertions**; gated
-  QQ counts remain gated `test-bootstrap` **148 cases / 1352 assertions** and
+  bootstrap trace exporter now supports both the existing
+  `--trace-export <turn-id>` single-turn JSON Lines object and a bounded
+  multi-turn stdout mode: `--trace-export [--agent <name>] [--limit <n>]`.
+  List mode reads newest `trace_turns` rows from the same
+  `<workspace>/.orangutan/audit.db`, optionally filters by `agent_key`, joins
+  each turn's audit cause chain in deterministic `id ASC` order, and emits one
+  `kind=trace_turn` JSON Lines object per turn. The command remains read-only,
+  keeps the redacted trace/audit contract, rejects invalid limits and
+  single-turn filters, and returns success with no output when a bounded list
+  query has no matches. Focused results: default `test-bootstrap` **151 cases /
+  1418 assertions** and `[trace]` **14 cases / 164 assertions**; gated QQ
+  counts remain gated `test-bootstrap` **148 cases / 1352 assertions** and
   gated `test-channel-qq` **58 cases / 369 assertions** from slice 238.
-- **Next intended slice:** Observability v1.1 — extend trace export from a
-  single turn-id inspector/export into a bounded multi-turn operator surface
-  (for example `--trace-export --agent <name> --limit <n>`) before adding file
-  or HTTP sinks. QQ-port 4b-ii remains waiting on real QQ credentials and an
+- **Next intended slice:** Observability v1.1 — add the same bounded trace
+  export query to a file sink before considering an HTTP sink or broader query
+  language. QQ-port 4b-ii remains waiting on real QQ credentials and an
   operator conversation.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
@@ -71,7 +72,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 149 cases / 1361 assertions (gated `--channel_qq=y`: 148 /
+- `oran-bootstrap`: 151 cases / 1418 assertions (gated `--channel_qq=y`: 148 /
   1352).
 
 ## Open Tech-Debt Rows

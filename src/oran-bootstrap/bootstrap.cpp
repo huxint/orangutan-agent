@@ -3,6 +3,7 @@
 #include <oran/bootstrap/bootstrap.hpp>
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -51,9 +52,10 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice239";
+constexpr std::string_view kVersion = "2.0.0-slice240";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
+constexpr std::size_t kTraceExportDefaultLimit = 50;
 constexpr std::string_view kLongtermTextEmbeddingModel = "oran-local-text-v1";
 constexpr std::size_t kLongtermTextEmbeddingDimensions = 64;
 constexpr std::int64_t kNanosecondsPerDay = 86'400'000'000'000;
@@ -69,6 +71,8 @@ struct ParsedArgs {
   bool trace_inspect{false};
   bool trace_export{false};
   std::string trace_turn_id_hex{};
+  bool trace_export_limit_supplied{false};
+  std::size_t trace_export_limit{kTraceExportDefaultLimit};
   bool has_explicit_config{false};
   std::string explicit_config_path{};
   ExplainRulesSelector explain_selector{};
@@ -227,6 +231,20 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
   return arg == flag || arg.starts_with(std::string{flag} + "=");
 }
 
+[[nodiscard]] Result<std::size_t> parse_positive_size(std::string_view text, std::string_view flag) {
+  auto value = std::size_t{};
+  const auto* const begin = text.data();
+  const auto* const end = text.data() + text.size();
+  const auto [ptr, ec] = std::from_chars(begin, end, value);
+  if (ec != std::errc{} || ptr != end) {
+    return std::unexpected(arg_error(std::string{flag} + " requires a positive integer"));
+  }
+  if (value == 0) {
+    return std::unexpected(arg_error(std::string{flag} + " must be greater than zero"));
+  }
+  return value;
+}
+
 [[nodiscard]] Result<ParsedArgs> parse_args(std::span<const std::string_view> args) {
   auto parsed = ParsedArgs{};
 
@@ -349,13 +367,29 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
         return std::unexpected(arg_error("--trace and --trace-export are mutually exclusive"));
       }
       parsed.trace_export = true;
-      if (index + 1 >= args.size()) {
-        return std::unexpected(arg_error("--trace-export requires a turn id"));
+      if (index + 1 < args.size() && !args[index + 1].starts_with("-")) {
+        parsed.trace_turn_id_hex = std::string{args[++index]};
+        if (parsed.trace_turn_id_hex.empty()) {
+          return std::unexpected(arg_error("--trace-export requires a non-empty turn id"));
+        }
       }
-      parsed.trace_turn_id_hex = std::string{args[++index]};
-      if (parsed.trace_turn_id_hex.empty()) {
-        return std::unexpected(arg_error("--trace-export requires a non-empty turn id"));
+      continue;
+    }
+
+    if (matches_flag(arg, "--limit")) {
+      if (parsed.trace_export_limit_supplied) {
+        return std::unexpected(arg_error("--limit may be provided only once"));
       }
+      auto value = consume_value(args, index, "--limit");
+      if (!value) {
+        return std::unexpected(std::move(value.error()));
+      }
+      auto limit = parse_positive_size(*value, "--limit");
+      if (!limit) {
+        return std::unexpected(std::move(limit.error()));
+      }
+      parsed.trace_export_limit_supplied = true;
+      parsed.trace_export_limit = *limit;
       continue;
     }
 
@@ -388,6 +422,23 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
     }
 
     parsed.cli_args.push_back(arg);
+  }
+
+  if (parsed.trace_export_limit_supplied && !parsed.trace_export) {
+    return std::unexpected(arg_error("--limit requires --trace-export"));
+  }
+  if (parsed.trace_export && parsed.selector_mode_supplied) {
+    return std::unexpected(arg_error("--mode is not supported with --trace-export"));
+  }
+  if (parsed.trace_export && !parsed.trace_turn_id_hex.empty() && parsed.selector_agent_supplied) {
+    return std::unexpected(arg_error("--agent requires --trace-export list mode"));
+  }
+  if (parsed.trace_export && !parsed.trace_turn_id_hex.empty() && parsed.trace_export_limit_supplied) {
+    return std::unexpected(arg_error("--limit requires --trace-export list mode"));
+  }
+  if (parsed.trace_export && !parsed.cli_args.empty()) {
+    return std::unexpected(
+        arg_error("--trace-export received an unsupported argument").with("arg", std::string{parsed.cli_args.front()}));
   }
 
   return parsed;
@@ -425,7 +476,8 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
 void print_usage() {
   std::println("orangutan v{}", kVersion);
   std::println("usage: orangutan [--config <path>] [--mode <m>] [--agent <name>] [--explain-rules]");
-  std::println("                  [--audit-init [<path>]] [--trace <turn-id>] [--trace-export <turn-id>]");
+  std::println("                  [--audit-init [<path>]] [--trace <turn-id>]");
+  std::println("                  [--trace-export [<turn-id>] [--agent <name>] [--limit <n>]]");
   std::println("                  [--prompt <text>] [--help]");
   std::println();
   std::println(
@@ -437,7 +489,8 @@ void print_usage() {
   std::println("--audit-init applies the audit.db schema (defaults to <workspace>/.orangutan/audit.db) and exits.");
   std::println("--trace prints the trace_turns row and joined audit rows, including hook_publish, for <turn-id>");
   std::println("        (32 lowercase hex characters); reads <workspace>/.orangutan/audit.db.");
-  std::println("--trace-export prints the same trace row plus joined audit rows as one JSON Lines object.");
+  std::println("--trace-export prints trace rows plus joined audit rows as JSON Lines; a turn id prints one");
+  std::println("               turn, otherwise --agent filters and --limit bounds the newest turns.");
 }
 
 [[nodiscard]] Result<int> print_materialized_rules(const config::Config& cfg, const ExplainRulesSelector& selector) {
@@ -591,6 +644,11 @@ struct TraceInspectRows {
   std::vector<storage::AuditEventRecord> audits;
 };
 
+struct TraceExportListQuery {
+  std::string agent_key{};
+  std::size_t limit{kTraceExportDefaultLimit};
+};
+
 /// Shared read-only trace lookup for `--trace` and `--trace-export`.
 /// Resolves the workspace audit DB, opens a single-reader `Pool`, runs the idempotent migration
 /// so the inspector tolerates a fresh DB that has not yet seen
@@ -679,6 +737,84 @@ load_trace_inspect_rows(std::string_view workspace, std::string_view turn_id_hex
   }
 
   return TraceInspectRows{.trace = std::move(*trace_row), .audits = std::move(audit_rows)};
+}
+
+[[nodiscard]] Result<std::vector<TraceInspectRows>> load_trace_export_list_rows(std::string_view workspace,
+                                                                                const TraceExportListQuery& query) {
+  if (workspace.empty()) {
+    return std::unexpected(Error::invalid_argument("workspace path is empty"));
+  }
+
+  auto audit_path = default_audit_path(workspace);
+  auto exists = path_exists(audit_path);
+  if (!exists) {
+    return std::unexpected(std::move(exists).error());
+  }
+  if (!*exists) {
+    return std::unexpected(
+        Error::not_found("audit database not found; run --audit-init first").with("path", audit_path));
+  }
+
+  asio::io_context io;
+  SignalScope signals{io};
+
+  auto pool_result =
+      storage::Pool::open(io.get_executor(),
+                          storage::PoolOptions{.path = audit_path, .reader_count = 1, .statement_cache_capacity = 4});
+  if (!pool_result) {
+    return std::unexpected(std::move(pool_result).error());
+  }
+  auto pool = std::move(*pool_result);
+  storage::AuditRepository audit_repo{pool};
+  storage::TraceRepository trace_repo{pool};
+
+  auto export_error = std::optional<core::Error>{};
+  auto export_rows = std::vector<TraceInspectRows>{};
+
+  asio::co_spawn(
+      io,
+      [&]() -> async::Awaitable<void> {
+        auto migrated = co_await audit_repo.migrate();
+        if (!migrated) {
+          export_error = std::move(migrated).error();
+          signals.release();
+          co_return;
+        }
+
+        auto traces = co_await trace_repo.list_turns(
+            storage::ListTraceTurnsOptions{.agent_key = query.agent_key, .limit = query.limit});
+        if (!traces) {
+          export_error = std::move(traces).error();
+          signals.release();
+          co_return;
+        }
+
+        export_rows.reserve(traces->size());
+        for (auto& trace : *traces) {
+          auto audits = co_await audit_repo.list_events_for_turn(trace.turn_id);
+          if (!audits) {
+            export_error = std::move(audits).error();
+            signals.release();
+            co_return;
+          }
+          export_rows.push_back(TraceInspectRows{.trace = std::move(trace), .audits = std::move(*audits)});
+        }
+        signals.release();
+        co_return;
+      },
+      asio::detached);
+  io.run();
+
+  if (const auto sig = signals.signum(); sig != 0) {
+    return std::unexpected(
+        core::Error::cancelled().with("signal", std::string{signal_name(sig)}).with("signum", std::to_string(sig)));
+  }
+
+  if (export_error) {
+    return std::unexpected(std::move(*export_error));
+  }
+
+  return export_rows;
 }
 
 [[nodiscard]] nlohmann::ordered_json parse_json_value_or_string(std::string_view text) {
@@ -819,12 +955,25 @@ load_trace_inspect_rows(std::string_view workspace, std::string_view turn_id_hex
   return 0;
 }
 
-[[nodiscard]] Result<int> run_trace_export(std::string_view workspace, std::string_view turn_id_hex) {
-  auto rows = load_trace_inspect_rows(workspace, turn_id_hex, "--trace-export");
+[[nodiscard]] Result<int> run_trace_export(std::string_view workspace, const ParsedArgs& parsed) {
+  if (!parsed.trace_turn_id_hex.empty()) {
+    auto rows = load_trace_inspect_rows(workspace, parsed.trace_turn_id_hex, "--trace-export");
+    if (!rows) {
+      return std::unexpected(std::move(rows).error());
+    }
+    std::println("{}", trace_export_json(*rows).dump());
+    return 0;
+  }
+
+  auto rows = load_trace_export_list_rows(
+      workspace,
+      TraceExportListQuery{.agent_key = parsed.explain_selector.agent_name, .limit = parsed.trace_export_limit});
   if (!rows) {
     return std::unexpected(std::move(rows).error());
   }
-  std::println("{}", trace_export_json(*rows).dump());
+  for (const auto& row : *rows) {
+    std::println("{}", trace_export_json(row).dump());
+  }
   return 0;
 }
 
@@ -1017,7 +1166,7 @@ core::Result<int> run(BootstrapOptions options) {
   }
 
   if (parsed->trace_export) {
-    auto trace_result = run_trace_export(options.workspace, parsed->trace_turn_id_hex);
+    auto trace_result = run_trace_export(options.workspace, *parsed);
     if (!trace_result && trace_result.error().kind() == core::ErrorKind::cancelled) {
       if (auto signum = signum_from_error(trace_result.error()); signum) {
         std::println(stderr, "orangutan: interrupted by {} ({})", signal_name(*signum), *signum);

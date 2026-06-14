@@ -30,8 +30,11 @@ trust the audit log. This doc captures the operational expectations.
   Prometheus exposition format is a possible future option).
 - Trace inspection is SQLite-native today: `orangutan --trace <turn-id>` prints a
   human-readable `trace_turns` row plus joined audit rows, and
-  `orangutan --trace-export <turn-id>` emits the same single turn as one JSON
-  Lines object to stdout for log/SIEM ingestion. Both commands read
+  `orangutan --trace-export <turn-id>` emits that same single turn as one JSON
+  Lines object to stdout for log/SIEM ingestion. For bounded operator pulls,
+  `orangutan --trace-export [--agent <name>] [--limit <n>]` lists newest turns,
+  optionally scoped by agent key, and emits one JSON Lines object per turn;
+  a list query with no matches exits 0 with no output. These commands read
   `<workspace>/.orangutan/audit.db`, run the idempotent audit migration first,
   and preserve the redacted trace/audit contract: no raw prompt bytes, tool
   inputs, provider bodies, or secrets are added by the exporter.
