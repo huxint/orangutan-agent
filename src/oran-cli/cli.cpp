@@ -115,7 +115,8 @@ enum class ReplCommand : std::uint8_t {
 void print_usage() {
   std::println("usage: orangutan [--config <path>] [--prompt <text>] [--help]");
   std::println();
-  std::println("Configured provider routes run prompts through the agent loop; no-route runs use the built-in shell.");
+  std::println(
+      "Configured provider routes run prompts through the agent loop; no-route runs only use the local CLI shell.");
 }
 
 void print_repl_help() {
@@ -135,21 +136,22 @@ void print_repl_banner(bool has_runner, bool reads_terminal) {
     std::println("REPL shell is ready. Use /help for commands.");
     return;
   }
-  std::println("REPL shell is ready, but the agent loop is not implemented yet. Use /help for commands.");
+  std::println("REPL shell is ready without a provider route. Configure a route to run the agent loop.");
+  std::println("Use /help for commands.");
 }
 
 void print_single_shot(std::string_view prompt, bool has_runner) {
   std::println("cli mode: single-shot");
   std::println("prompt: {}", prompt);
   if (!has_runner) {
-    std::println("agent loop is not implemented yet.");
+    std::println("no provider route configured; prompt was not sent to the agent loop.");
   }
 }
 
 void print_scripted_prompt(std::string_view prompt, bool has_runner) {
   std::println("> {}", prompt);
   if (!has_runner) {
-    std::println("agent loop is not implemented yet.");
+    std::println("no provider route configured; prompt was not sent to the agent loop.");
   }
 }
 

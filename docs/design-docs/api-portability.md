@@ -240,8 +240,10 @@ the fallback order authored by the operator, and fills `ModelTarget` with the
 profile key, vendor model id, and resolved `ProtocolKind`. Slice 102 adds the
 optional `profiles.<name>.protocol` field: when present, the resolver parses it
 as an exact `ProtocolKind` spelling and uses it ahead of provider-name aliases;
-when absent, existing provider aliases such as `anthropic`, `openai`, and
-`deepseek` still infer the protocol. Slice 103 adds
+when absent, existing provider aliases such as `anthropic` and `openai` still
+infer the protocol. Provider aliases are only defaults: when a vendor exposes
+another wire-compatible endpoint, set `protocol` to the actual wire family.
+Slice 103 adds
 `provider::resolve_route_profiles(config, route_name)` for adapter factories:
 it returns `RouteProfileResolution { primary, fallbacks }` where each
 `ResolvedProfileTarget` carries the resolved `ModelTarget` plus the profile's
@@ -307,7 +309,6 @@ Built-in adapters:
 | `openai_chat_completions`      | OpenAI Chat Completions (`/v1/chat/completions`) | Streaming, function calling |
 | `openai_responses`             | OpenAI Responses API (`/v1/responses`)         | Streaming, multimodal |
 | `gemini_generate_content`      | Google Gemini (`/v1beta/models/.../generateContent`) | Streaming via SSE |
-| `deepseek_chat`                | OpenAI-compatible                              | Just an alias entry in profiles |
 | `custom_openai_compatible`     | Generic OpenAI-compatible                      | For self-hosted / 3rd-party providers |
 
 Adding a new protocol = adding a new `Adapter` subclass and an entry in

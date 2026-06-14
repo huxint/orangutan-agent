@@ -138,7 +138,8 @@ ordinary binary path.
 
 `oran-bootstrap` consumes `--config`, `--config=...`, and global help. Arguments that are
 not bootstrap-owned are forwarded unchanged to `cli::run` only when no provider route is
-configured. When config declares a `default` route, bootstrap constructs the
+configured; that fallback is a local shell and now reports the missing route
+directly instead of implying that `agent::Loop` is absent. When config declares a `default` route, bootstrap constructs the
 HTTP-backed provider backend, creates `AgentPromptRunner`, and calls
 `cli::run_async` with `interactive_repl=true`. This keeps config discovery,
 provider-route validation, provider construction, and terminal mode selection separate

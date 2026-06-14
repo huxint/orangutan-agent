@@ -9,35 +9,28 @@
 
 ## Snapshot
 
-- **Slice:** 245 (`xmake run orangutan -- --help` reports slice 245)
+- **Slice:** 246 (`xmake run orangutan -- --help` reports slice 246)
 - **Last completed history:**
-  [`histories/2026-06/20260614-1915-pascal-tool-names.md`](histories/2026-06/20260614-1915-pascal-tool-names.md)
+  [`histories/2026-06/20260614-1936-cli-provider-route-message.md`](histories/2026-06/20260614-1936-cli-provider-route-message.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — remains active, but its next gate is externally blocked on real QQ
     credentials plus a sendable operator conversation; it was spun off from the
     completed channel-ingress plan
     ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-- **Latest completed slice:** slice 245 renames the shipped tool public surface
-  away from dotted names and onto PascalCase provider-safe names. Built-ins now
-  register as `FileRead`, `FileWrite`, `FileEdit`, `FileSearch`,
-  `DirectoryList`, `FileDelete`, `ToolSearch`, `SkillInvoke`,
-  `SkillDeactivate`, `MemoryRecall`, `MemoryRemember`, and `MemoryForget`; the
-  prompt catalog, permission patterns, audit/trace rows, provider body/SSE
-  tool-use names, config examples, tests, and docs all use the same names. This
-  removes the Anthropic-compatible endpoint failure class caused by dotted
-  tool names without adding a provider-only alias layer. Focused validation:
-  `test-provider` **86 cases / 652 assertions**, `test-tool` **208 / 2181**,
-  `test-permission` **89 / 426**, `test-config` **55 / 519**, `test-prompt`
-  **10 / 98**, `test-agent` **57 / 10 786**, and `test-bootstrap`
-  **156 / 1573**; full validation also passed `test-http` **27 / 148**,
-  `xmake test` **18 / 18 buckets**, `make ci`, and binary help at
-  `2.0.0-slice245`.
+- **Latest completed slice:** slice 246 corrects the no-provider-route CLI
+  fallback text. Configured provider routes already run prompts through
+  `AgentPromptRunner` / `agent::Loop`; the built-in empty-defaults path now says
+  `no provider route configured` instead of the stale `agent loop is not
+  implemented yet` placeholder. API portability docs also clarify that
+  Anthropic-compatible endpoints use `protocol: "anthropic_messages"`; the
+  provider label is not the protocol. Focused validation: `test-cli` **27 cases
+  / 219 assertions**.
 - **Next intended slice:** Re-read this snapshot and [`ROADMAP.md`](ROADMAP.md)
-  before scoping the next slice. Provider/tool naming is now aligned with
+  before scoping the next slice. Provider/tool naming is aligned with
   Anthropic-family tool-name constraints; broader live-provider smoke evidence
-  should be gathered only through the documented secret-handling path. QQ-port
-  4b-ii remains waiting on real QQ credentials and an operator conversation.
+  still requires secret-safe real-provider credentials. QQ-port 4b-ii remains
+  waiting on real QQ credentials and an operator conversation.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 
@@ -72,7 +65,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 57 cases / 10 786 assertions.
-- `oran-cli`: 26 cases / 205 assertions.
+- `oran-cli`: 27 cases / 219 assertions.
 - `oran-bootstrap`: 156 cases / 1573 assertions (gated `--channel_qq=y`: 148 /
   1352).
 

@@ -1,6 +1,8 @@
 // tests/cli/test_cli.cpp — early CLI mode coverage.
 
+#include <array>
 #include <cerrno>
+#include <cstdio>
 #include <expected>
 #include <span>
 #include <sstream>
@@ -92,6 +94,69 @@ public:
 
 private:
   int saved_fd_{-1};
+};
+
+class ScopedStdoutCapture final {
+public:
+  ScopedStdoutCapture() {
+    REQUIRE(std::fflush(stdout) == 0);
+
+    int pipe_fds[2] = {-1, -1};
+    REQUIRE(::pipe(pipe_fds) == 0);
+
+    saved_fd_ = ::dup(STDOUT_FILENO);
+    REQUIRE(saved_fd_ >= 0);
+
+    read_fd_ = pipe_fds[0];
+    REQUIRE(::dup2(pipe_fds[1], STDOUT_FILENO) >= 0);
+    REQUIRE(::close(pipe_fds[1]) == 0);
+  }
+
+  ~ScopedStdoutCapture() {
+    restore_stdout();
+    if (read_fd_ >= 0) {
+      (void)::close(read_fd_);
+    }
+  }
+
+  [[nodiscard]] std::string finish() {
+    REQUIRE(std::fflush(stdout) == 0);
+    restore_stdout();
+
+    auto captured = std::string{};
+    auto buffer = std::array<char, 4096>{};
+    while (true) {
+      const auto bytes = ::read(read_fd_, buffer.data(), buffer.size());
+      if (bytes < 0 && errno == EINTR) {
+        continue;
+      }
+      REQUIRE(bytes >= 0);
+      if (bytes == 0) {
+        break;
+      }
+      captured.append(buffer.data(), static_cast<std::size_t>(bytes));
+    }
+    REQUIRE(::close(read_fd_) == 0);
+    read_fd_ = -1;
+    return captured;
+  }
+
+  ScopedStdoutCapture(const ScopedStdoutCapture&) = delete;
+  ScopedStdoutCapture& operator=(const ScopedStdoutCapture&) = delete;
+  ScopedStdoutCapture(ScopedStdoutCapture&&) = delete;
+  ScopedStdoutCapture& operator=(ScopedStdoutCapture&&) = delete;
+
+private:
+  void restore_stdout() {
+    if (saved_fd_ >= 0) {
+      (void)::dup2(saved_fd_, STDOUT_FILENO);
+      (void)::close(saved_fd_);
+      saved_fd_ = -1;
+    }
+  }
+
+  int saved_fd_{-1};
+  int read_fd_{-1};
 };
 
 cli::CliOptions options(std::vector<std::string_view>& args) {
@@ -210,6 +275,20 @@ TEST_CASE("run selects single-shot mode from prompt arguments", "[unit][cli]") {
     REQUIRE(result->mode == cli::CliMode::single_shot);
     REQUIRE(result->prompts_processed == 1);
   }
+}
+
+TEST_CASE("run reports a missing provider route instead of an unimplemented agent loop", "[unit][cli]") {
+  auto args = std::vector<std::string_view>{"--prompt", "hello"};
+  auto stdout_capture = ScopedStdoutCapture{};
+
+  auto result = cli::run(cli::CliOptions{.args = std::span<const std::string_view>{args}});
+  auto output = stdout_capture.finish();
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->mode == cli::CliMode::single_shot);
+  REQUIRE(result->prompts_processed == 1);
+  REQUIRE(output.contains("no provider route configured"));
+  REQUIRE_FALSE(output.contains("agent loop is not implemented"));
 }
 
 TEST_CASE("run_async delegates a single-shot prompt to the supplied runner", "[unit][cli][async]") {

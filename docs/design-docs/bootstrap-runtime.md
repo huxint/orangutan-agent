@@ -469,7 +469,10 @@ configured `qq_gateway_url` until milestone 4 owns gateway discovery and
 round-trip acceptance.
 The built-in empty-defaults path still reports `provider route: none configured`
 and uses the deterministic no-runner `cli::run` shell so fresh checkouts remain
-runnable without provider credentials or a sessions DB; selector flags
+runnable without provider credentials or a sessions DB. In that mode CLI prompt
+output says the prompt was not sent because no provider route is configured;
+configured-route prompts already run through `AgentPromptRunner` and
+`agent::Loop`. Selector flags
 (`--mode` / `--agent`) are rejected on that path unless `--explain-rules` is
 active. The runtime assembly opens the audit DB when audit is enabled so
 migrations, trace repository ownership, and audit sinks are available before

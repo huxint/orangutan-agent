@@ -29,9 +29,9 @@ history intentionally records only the protocol symptom and omits secrets.
 
 ### Design Intent
 
-Anthropic-family tool names must be alphanumeric/underscore/hyphen names, and
-DeepSeek's Anthropic-compatible endpoint rejects dotted names before the model
-can call a tool. A provider-only alias layer would have preserved the old
+Anthropic-family tool names must be alphanumeric/underscore/hyphen names, and a
+tested Anthropic-compatible endpoint rejected dotted names before the model can
+call a tool. A provider-only alias layer would have preserved the old
 internal names but left prompts, permissions, audits, and transcript state using
 names that cannot be sent as-is to a real provider. This slice makes the public
 tool name itself provider-safe, so the registry, prompt builder, agent loop,
