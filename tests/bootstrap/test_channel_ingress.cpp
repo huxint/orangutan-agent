@@ -14,6 +14,11 @@
 
 #include <asio/io_context.hpp>
 #include <catch2/catch_test_macros.hpp>
+#if defined(ORAN_ENABLE_CHANNEL_QQ)
+#include <array>
+#include <charconv>
+#include <nlohmann/json.hpp>
+#endif
 
 #include <oran/async.hpp>
 #include <oran/bootstrap.hpp>
@@ -43,6 +48,7 @@ namespace storage = orangutan::storage;
 namespace test = orangutan::tests;
 #if defined(ORAN_ENABLE_CHANNEL_QQ)
 namespace ws = orangutan::tests::ws;
+using json = nlohmann::json;
 #endif
 
 namespace {
@@ -285,6 +291,69 @@ constexpr std::string_view kTwoChannelConfig = R"json({
 [[nodiscard]] std::string qq_c2c_message_frame() {
   return R"({"op":0,"s":2,"t":"C2C_MESSAGE_CREATE","d":{"id":"msg-round-trip","content":"ping from qq","author":{"user_openid":"user-openid","username":"QQ Operator"}}})";
 }
+
+constexpr std::string_view kQqRealSmokeOptIn = "ORAN_TEST_QQ_REAL_SMOKE";
+constexpr std::array<std::string_view, 3> kRequiredQqRealSmokeEnv{
+    "ORAN_TEST_QQ_APP_ID",
+    "ORAN_TEST_QQ_CLIENT_SECRET",
+    "ORAN_TEST_QQ_GATEWAY_URL",
+};
+
+[[nodiscard]] std::optional<std::string> env_value(std::string_view name) {
+  auto name_text = std::string{name};
+  const auto* value = std::getenv(name_text.c_str());
+  if (value == nullptr || std::string_view{value}.empty()) {
+    return std::nullopt;
+  }
+  return std::string{value};
+}
+
+[[nodiscard]] bool qq_real_smoke_enabled() {
+  const auto value = env_value(kQqRealSmokeOptIn);
+  return value.has_value() && *value == "1";
+}
+
+[[nodiscard]] std::chrono::milliseconds qq_real_smoke_timeout() {
+  const auto raw = env_value("ORAN_TEST_QQ_TIMEOUT_MS");
+  if (!raw) {
+    return std::chrono::seconds{60};
+  }
+  auto parsed = std::int64_t{};
+  const auto* first = raw->data();
+  const auto* last = raw->data() + raw->size();
+  const auto result = std::from_chars(first, last, parsed);
+  if (result.ec != std::errc{} || result.ptr != last || parsed <= 0) {
+    return std::chrono::seconds{60};
+  }
+  return std::chrono::milliseconds{parsed};
+}
+
+[[nodiscard]] config::Config qq_real_smoke_config() {
+  const auto channel_id = env_value("ORAN_TEST_QQ_CHANNEL_ID").value_or("qq-real-smoke");
+  const auto agent_key = env_value("ORAN_TEST_QQ_AGENT_KEY").value_or("qq-smoke");
+
+  auto channel_entry = json{
+      {"id", channel_id},
+      {"kind", "qq"},
+      {"agent_key", agent_key},
+      {"qq_app_id_env", "ORAN_TEST_QQ_APP_ID"},
+      {"qq_client_secret_env", "ORAN_TEST_QQ_CLIENT_SECRET"},
+      {"qq_gateway_url", *env_value("ORAN_TEST_QQ_GATEWAY_URL")},
+  };
+  if (auto token_url = env_value("ORAN_TEST_QQ_TOKEN_URL"); token_url) {
+    channel_entry["qq_token_url"] = *std::move(token_url);
+  }
+  if (auto api_base_url = env_value("ORAN_TEST_QQ_API_BASE_URL"); api_base_url) {
+    channel_entry["qq_api_base_url"] = *std::move(api_base_url);
+  }
+
+  auto root = json{
+      {"channels", json::array({std::move(channel_entry)})},
+      {"agents",
+       json{{agent_key, json{{"prompt_overlay", "QQ real-smoke route. Reply with the supplied smoke text."}}}}},
+  };
+  return parse_config(root.dump());
+}
 #endif
 
 }  // namespace
@@ -512,6 +581,78 @@ TEST_CASE("registered QQ channels round-trip one gateway message through the rou
   REQUIRE(reply_request.contains(R"("content":"round trip answer")"));
   REQUIRE(reply_request.contains(R"("msg_id":"msg-round-trip")"));
   REQUIRE(reply_request.contains(R"("msg_seq":1)"));
+}
+
+TEST_CASE("registered QQ channels real-smoke one operator message through the routed prompt path",
+          "[.][manual][bootstrap][channel_ingress][channel-qq][async]") {
+  if (!qq_real_smoke_enabled()) {
+    SUCCEED("set ORAN_TEST_QQ_REAL_SMOKE=1 to run the real QQ registered-path smoke test");
+    return;
+  }
+  for (const auto name : kRequiredQqRealSmokeEnv) {
+    if (!env_value(name)) {
+      SUCCEED(std::string{"missing required real QQ smoke environment variable: "} + std::string{name});
+      return;
+    }
+  }
+
+  const auto channel_id = env_value("ORAN_TEST_QQ_CHANNEL_ID").value_or("qq-real-smoke");
+  const auto agent_key = env_value("ORAN_TEST_QQ_AGENT_KEY").value_or("qq-smoke");
+  const auto reply_text = env_value("ORAN_TEST_QQ_REPLY_TEXT").value_or("orangutan qq real smoke ok");
+  const auto timeout = qq_real_smoke_timeout();
+  TempDir temp{"oran-bootstrap-channel-qq-real-smoke"};
+  auto cfg = qq_real_smoke_config();
+
+  test::run_async(
+      [&temp, &cfg, &channel_id, &agent_key, &reply_text](asio::io_context& io) -> async::Awaitable<void> {
+        auto assembly_options = bootstrap::RuntimeAssemblyOptions{};
+        assembly_options.audit_enabled = true;
+        assembly_options.session_memory_enabled = false;
+        assembly_options.longterm_memory_enabled = false;
+        auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), assembly_options);
+        REQUIRE(built.has_value());
+        auto assembly = std::move(*built);
+        REQUIRE(assembly.trace_repository() != nullptr);
+
+        RecordingProvider recording{{text_response(reply_text)}};
+        channel::ChannelManager manager{io.get_executor()};
+
+        auto report = bootstrap::register_configured_channels(manager, io.get_executor(), cfg);
+        REQUIRE(report.has_value());
+        REQUIRE(report->registered_count == 1);
+        REQUIRE(report->skipped.empty());
+        REQUIRE(manager.contains(channel_id));
+
+        auto routed = bootstrap::make_routed_channel_prompt_runner(base_bridge_options(io, assembly, cfg, recording));
+        REQUIRE(routed.has_value());
+
+        auto started = co_await manager.start_all();
+        REQUIRE(started.has_value());
+
+        auto received = co_await manager.receive_one(channel_id);
+        REQUIRE(received.has_value());
+
+        auto receipt = co_await channel::dispatch_one(manager, *routed);
+        REQUIRE(receipt.has_value());
+        REQUIRE_FALSE(receipt->message_id.empty());
+
+        const auto requests = recording.requests();
+        REQUIRE(requests.size() == 1);
+        REQUIRE(requests.front().messages.size() == 1);
+        REQUIRE_FALSE(requests.front().messages.front().blocks.empty());
+
+        auto traces = co_await assembly.trace_repository()->list_turns(
+            storage::ListTraceTurnsOptions{.agent_key = agent_key, .limit = 10});
+        REQUIRE(traces.has_value());
+        REQUIRE(traces->size() == 1);
+        REQUIRE(traces->front().agent_key == agent_key);
+
+        auto stopped = co_await manager.stop_all();
+        REQUIRE(stopped.has_value());
+      },
+      timeout);
+
+  REQUIRE(std::filesystem::exists(temp.path() / ".orangutan" / "audit.db"));
 }
 #endif
 

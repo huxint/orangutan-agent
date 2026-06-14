@@ -66,7 +66,9 @@ behind a private `Channel` wrapper before registering it. Slice 236 proves the
 registered QQ path under mock gateway/API coverage: one configured QQ message
 flows through `ChannelManager`, the routed agent bridge, trace/audit storage,
 and the QQ passive-reply API. Real-credential smoke remains the gate before the
-adapter can default on; the QQ port is managed by its own exec plan.
+adapter can default on. Slice 237 adds the hidden opt-in real-smoke entrypoint
+for that gate, but the pass/fail credentialed run remains open; the QQ port is
+managed by its own exec plan.
 
 ## Inbound / Outbound Envelopes
 
@@ -310,7 +312,14 @@ C2C message, the routed prompt bridge runs the configured agent, `audit.db`
 receives the trace row, and a scripted QQ API server observes the passive text
 reply body with the inbound `msg_id` and `msg_seq`. Real QQ credentials,
 platform quotas, and any gateway discovery behavior remain milestone 4b, so
-`channel_qq` stays default-off.
+`channel_qq` stays default-off. **4b-i (slice 237)** adds the executable
+manual/nightly gate: enabled `test-bootstrap` builds include a hidden
+`[.][manual][channel-qq]` case that no-ops successfully unless
+`ORAN_TEST_QQ_REAL_SMOKE=1` and the required QQ smoke env vars are present.
+When opted in, it registers the configured adapter against real QQ, waits for
+one operator message, sends a deterministic fake-provider reply through the QQ
+passive API, verifies trace/audit state, and shuts down. The credentialed run
+result itself remains 4b-ii before any default-on decision.
 
 ## New Adapter Recipe
 

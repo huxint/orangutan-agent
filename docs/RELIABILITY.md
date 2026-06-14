@@ -43,6 +43,43 @@ trust the audit log. This doc captures the operational expectations.
 | `ORAN_WORKSPACE`          | No         | `cwd` | Workspace path. |
 | `ORAN_TEST_REAL_PROVIDERS` | No (tests only) | unset | Enable real-provider integration tests. |
 
+## Opt-In Smoke Environment
+
+Real-network smoke tests are hidden and excluded from ordinary `xmake test` /
+`make ci` runs. Explicit smoke commands no-op successfully until the opt-in
+variable and required credentials are present. They are operator/nightly gates:
+set the opt-in variable plus the required credentials, run the named test, and
+send one message to the bot before the timeout. Secret values must stay in the
+environment and must not be printed in logs or copied into config files.
+
+### QQ Registered-Path Smoke
+
+Command shape:
+
+```sh
+xmake f -m release --channel_qq=y
+xmake build test-bootstrap
+ORAN_TEST_QQ_REAL_SMOKE=1 \
+ORAN_TEST_QQ_APP_ID=... \
+ORAN_TEST_QQ_CLIENT_SECRET=... \
+ORAN_TEST_QQ_GATEWAY_URL=wss://... \
+build/linux/x86_64/release/test-bootstrap \
+  "registered QQ channels real-smoke one operator message through the routed prompt path"
+```
+
+| Variable | Required? | Default | Purpose |
+| -------- | --------- | ------- | ------- |
+| `ORAN_TEST_QQ_REAL_SMOKE` | Yes (`1`) | unset | Opts into the hidden real QQ smoke test. Without it, an explicitly selected smoke command returns a no-op success. |
+| `ORAN_TEST_QQ_APP_ID` | Yes | — | QQ bot app id consumed through `channels[].qq_app_id_env`; do not log the value. |
+| `ORAN_TEST_QQ_CLIENT_SECRET` | Yes | — | QQ bot client secret consumed through `channels[].qq_client_secret_env`; do not log the value. |
+| `ORAN_TEST_QQ_GATEWAY_URL` | Yes | — | Real QQ gateway WebSocket URL for the current bot/account. Gateway discovery is not implemented yet. |
+| `ORAN_TEST_QQ_TOKEN_URL` | No | `https://bots.qq.com/app/getAppAccessToken` | Override token endpoint for platform staging or diagnostics. |
+| `ORAN_TEST_QQ_API_BASE_URL` | No | `https://api.sgroup.qq.com` | Override QQ API base URL for platform staging or diagnostics. |
+| `ORAN_TEST_QQ_CHANNEL_ID` | No | `qq-real-smoke` | Configured channel id used by the smoke. |
+| `ORAN_TEST_QQ_AGENT_KEY` | No | `qq-smoke` | Configured agent key used for the trace row. |
+| `ORAN_TEST_QQ_REPLY_TEXT` | No | `orangutan qq real smoke ok` | Deterministic fake-provider reply text sent through QQ passive reply. |
+| `ORAN_TEST_QQ_TIMEOUT_MS` | No | `60000` | Time allowed for gateway connect, operator message arrival, reply send, and shutdown. |
+
 ## Retries / Backoff
 
 - Provider retries on `network`, `rate_limit`, `upstream`. Backoff:

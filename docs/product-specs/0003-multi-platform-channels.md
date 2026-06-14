@@ -175,6 +175,14 @@ only — v2 makes channels pluggable.
   1352. The real-credential manual/nightly smoke gate remains open, so
   acceptance criterion 2 is not yet fully closed and `channel_qq` remains
   default-off.
+- Slice 237: QQ-port milestone 4b-i — hidden opt-in real-smoke gate for the
+  same registered QQ path. Enabled `test-bootstrap` builds now carry a
+  `[.][manual][channel-qq]` case that requires `ORAN_TEST_QQ_REAL_SMOKE=1`,
+  QQ credential env vars, and a real gateway URL. The smoke keeps the provider
+  deterministic, waits for one real operator message, sends the configured
+  passive reply through QQ, verifies trace/audit state, and shuts down. This is
+  the executable gate for acceptance criterion 2, not the pass result; the
+  credentialed run remains open and `channel_qq` remains default-off.
 
 ## Design Doc Cross-References
 

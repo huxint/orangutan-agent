@@ -91,7 +91,8 @@ Migration"), which reserves a dedicated plan for the port.
 4. **Round-trip acceptance.** Spec 0003 criterion 2: inbound QQ message →
    configured agent → reply sent back, observed via `audit.db`. Split into
    **4a** mock gateway/API coverage in CI and **4b** manual/nightly
-   real-credential smoke before `channel_qq` can default on.
+   real-credential smoke before `channel_qq` can default on. 4b is split into
+   the executable opt-in gate and the credentialed run result.
 5. **Attachments (later).** Shared `AttachmentCache` + media capabilities.
 
 ## Validation
@@ -183,6 +184,18 @@ Migration"), which reserves a dedicated plan for the port.
     and skip/report QQ entries without linking adapter code.
   - [ ] Milestone 4b: manual/nightly real-credential smoke over the same
     registered path before considering `channel_qq` default-on.
+    - [x] Milestone 4b-i: hidden opt-in real-smoke gate — slice 237
+      ([`../../histories/2026-06/20260614-1523-channel-qq-real-smoke-gate.md`](../../histories/2026-06/20260614-1523-channel-qq-real-smoke-gate.md)).
+      Enabled `test-bootstrap` builds now include a hidden
+      `[.][manual][channel-qq]` test that requires
+      `ORAN_TEST_QQ_REAL_SMOKE=1` plus QQ app/gateway env vars, then drives
+      the registered path against the real platform with a deterministic fake
+      provider response: registration, start, one real operator message,
+      routed prompt dispatch, trace/audit observation, passive reply send, and
+      shutdown. Ordinary CI remains secret-free/network-free.
+    - [ ] Milestone 4b-ii: run the hidden smoke with real QQ credentials and
+      record the pass/fail evidence before considering `channel_qq`
+      default-on.
 
 ## Decision Log
 
@@ -312,6 +325,14 @@ Migration"), which reserves a dedicated plan for the port.
   loopback servers so CI can run without secrets or public network. Because it
   does not exercise real QQ credentials, gateway behavior, or platform quotas,
   `channel_qq` remains default-off.
+- 2026-06-14 (slice 237): split **4b** into **4b-i** (this slice — the hidden
+  opt-in smoke gate) and **4b-ii** (the actual credentialed run result). The
+  gate uses the same registered-path boundaries as 4a and keeps the provider
+  deterministic with `RecordingProvider`; the only real external dependency is
+  QQ itself. The current agent environment has no QQ smoke env vars, so the
+  slice can prove the gate compiles, remains hidden by default, and no-ops
+  successfully when explicitly selected without credentials, but cannot
+  honestly mark the platform smoke complete.
 
 ## Linked Artifacts
 
@@ -338,3 +359,5 @@ Migration"), which reserves a dedicated plan for the port.
     (milestone 3c, slice 235)
   - `docs/histories/2026-06/20260614-1507-channel-qq-registered-round-trip.md`
     (milestone 4a, slice 236)
+  - `docs/histories/2026-06/20260614-1523-channel-qq-real-smoke-gate.md`
+    (milestone 4b-i, slice 237)

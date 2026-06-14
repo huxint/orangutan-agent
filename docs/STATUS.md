@@ -9,30 +9,32 @@
 
 ## Snapshot
 
-- **Slice:** 236 (`xmake run orangutan -- --help` reports slice 236)
+- **Slice:** 237 (`xmake run orangutan -- --help` reports slice 237)
 - **Last completed history:**
-  [`histories/2026-06/20260614-1507-channel-qq-registered-round-trip.md`](histories/2026-06/20260614-1507-channel-qq-registered-round-trip.md)
+  [`histories/2026-06/20260614-1523-channel-qq-real-smoke-gate.md`](histories/2026-06/20260614-1523-channel-qq-real-smoke-gate.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — the current main line; spun off from the completed channel-ingress
     plan ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-- **Latest completed slice:** slice 236 ships QQ-port milestone 4a: the
-  registered QQ channel path now has mock gateway/API round-trip acceptance in
-  CI-capable `test-bootstrap` coverage. With `--channel_qq=y`, a configured
-  `channels[].kind == "qq"` entry is registered through bootstrap, started by
-  the caller-owned `ChannelManager`, receives one scripted QQ gateway C2C
-  message, routes it through `make_routed_channel_prompt_runner(...)` to the
-  configured agent, records a trace turn through the assembly-owned audit/trace
-  store, and sends the passive QQ reply back through the scripted v2 user
-  message API with the inbound `msg_id` and process-local `msg_seq`. Default
-  `--channel_qq=n` builds still skip/report QQ entries without compiling or
-  linking the optional adapter. Focused results: `test-config` **55 cases / 519
+- **Latest completed slice:** slice 237 ships QQ-port milestone 4b-i: an
+  executable real-credential smoke gate for the registered QQ path. Enabled
+  `--channel_qq=y` `test-bootstrap` builds now include a hidden
+  `[.][manual][channel-qq]` case that requires `ORAN_TEST_QQ_REAL_SMOKE=1` and
+  QQ smoke env vars, then drives the same registered path against real QQ:
+  bootstrap registration, `ChannelManager::start_all`, one operator message
+  via `receive_one`, routed prompt dispatch with a deterministic fake provider
+  reply, trace/audit observation, passive QQ send, and shutdown. Ordinary CI
+  remains secret-free/network-free because the case is hidden by default; when
+  explicitly selected without opt-in or credentials, it returns a no-op success.
+  The local environment has no QQ real-smoke variables, so this slice does not
+  claim the real smoke passed and `channel_qq` remains default-off. Focused
+  results remain: `test-config` **55 cases / 519
   assertions**, default `test-bootstrap` **146 cases / 1312 assertions**,
   gated `test-bootstrap` **148 cases / 1352 assertions**, `test-channel`
   **25 cases / 191 assertions**, and gated `test-channel-qq` **55 cases / 344
   assertions**.
-- **Next intended slice:** QQ-port milestone 4b — manual/nightly
-  real-credential smoke over the same registered QQ path before considering
+- **Next intended slice:** QQ-port milestone 4b-ii — run the hidden real QQ
+  smoke gate with real credentials and record the result before considering
   `channel_qq` default-on
   ([`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)).
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
