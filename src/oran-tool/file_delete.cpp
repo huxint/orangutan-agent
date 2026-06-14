@@ -1,4 +1,4 @@
-// src/oran-tool/file_delete.cpp — `file.delete` built-in.
+// src/oran-tool/file_delete.cpp — `FileDelete` built-in.
 //
 // Thin wrapper around `oran-io::delete_file`. Refuses anything but a regular
 // file (directories, symlinks, and unknown kinds reject with

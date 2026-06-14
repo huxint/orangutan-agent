@@ -64,26 +64,26 @@ using permission::Verdict;
   for (int i = 0; i < 6; ++i) {
     rules.push_back(Rule{
         .verdict = Verdict::allow,
-        .tool_pattern = "file.read_" + std::to_string(i),
+        .tool_pattern = "FileRead" + std::to_string(i),
         .capability = std::nullopt,
     });
   }
   for (int i = 0; i < 4; ++i) {
     rules.push_back(Rule{
         .verdict = Verdict::ask,
-        .tool_pattern = "file.write_" + std::to_string(i),
+        .tool_pattern = "FileWrite" + std::to_string(i),
         .capability = std::nullopt,
     });
   }
   for (int i = 0; i < 4; ++i) {
     rules.push_back(Rule{
         .verdict = Verdict::deny,
-        .tool_pattern = "shell.rm_" + std::to_string(i),
+        .tool_pattern = "ShellRm" + std::to_string(i),
         .capability = std::nullopt,
     });
   }
-  rules.push_back(Rule{.verdict = Verdict::allow, .tool_pattern = "shell.*", .capability = std::nullopt});
-  rules.push_back(Rule{.verdict = Verdict::deny, .tool_pattern = "shell.rm", .capability = std::nullopt});
+  rules.push_back(Rule{.verdict = Verdict::allow, .tool_pattern = "Shell*", .capability = std::nullopt});
+  rules.push_back(Rule{.verdict = Verdict::deny, .tool_pattern = "ShellRm", .capability = std::nullopt});
   return rules;
 }
 
@@ -106,37 +106,37 @@ using permission::Verdict;
   rules.reserve(16);
   rules.push_back(Rule{
       .verdict = Verdict::allow,
-      .tool_pattern = "file.*",
+      .tool_pattern = "File*",
       .capability = Capability::read_file,
   });
   rules.push_back(Rule{
       .verdict = Verdict::allow,
-      .tool_pattern = "file.*",
+      .tool_pattern = "File*",
       .capability = Capability::write_file,
   });
   rules.push_back(Rule{
       .verdict = Verdict::allow,
-      .tool_pattern = "shell.*",
+      .tool_pattern = "Shell*",
       .capability = Capability::spawn_subprocess,
   });
   rules.push_back(Rule{
       .verdict = Verdict::allow,
-      .tool_pattern = "net.*",
+      .tool_pattern = "Net*",
       .capability = Capability::egress_http,
   });
   rules.push_back(Rule{
       .verdict = Verdict::allow,
-      .tool_pattern = "memory.*",
+      .tool_pattern = "Memory*",
       .capability = Capability::read_memory,
   });
   rules.push_back(Rule{
       .verdict = Verdict::ask,
-      .tool_pattern = "memory.*",
+      .tool_pattern = "Memory*",
       .capability = Capability::write_memory,
   });
   rules.push_back(Rule{
       .verdict = Verdict::ask,
-      .tool_pattern = "automation.*",
+      .tool_pattern = "Automation*",
       .capability = Capability::schedule_job,
   });
   rules.push_back(Rule{
@@ -146,12 +146,12 @@ using permission::Verdict;
   });
   rules.push_back(Rule{.verdict = Verdict::allow, .tool_pattern = "ping", .capability = std::nullopt});
   rules.push_back(Rule{.verdict = Verdict::allow, .tool_pattern = "version", .capability = std::nullopt});
-  rules.push_back(Rule{.verdict = Verdict::allow, .tool_pattern = "clock.now", .capability = std::nullopt});
-  rules.push_back(Rule{.verdict = Verdict::ask, .tool_pattern = "skill.invoke", .capability = std::nullopt});
-  rules.push_back(Rule{.verdict = Verdict::ask, .tool_pattern = "agent.spawn", .capability = std::nullopt});
-  rules.push_back(Rule{.verdict = Verdict::deny, .tool_pattern = "shell.rm", .capability = std::nullopt});
-  rules.push_back(Rule{.verdict = Verdict::deny, .tool_pattern = "shell.fork_bomb", .capability = std::nullopt});
-  rules.push_back(Rule{.verdict = Verdict::deny, .tool_pattern = "process.*", .capability = std::nullopt});
+  rules.push_back(Rule{.verdict = Verdict::allow, .tool_pattern = "ClockNow", .capability = std::nullopt});
+  rules.push_back(Rule{.verdict = Verdict::ask, .tool_pattern = "SkillInvoke", .capability = std::nullopt});
+  rules.push_back(Rule{.verdict = Verdict::ask, .tool_pattern = "AgentSpawn", .capability = std::nullopt});
+  rules.push_back(Rule{.verdict = Verdict::deny, .tool_pattern = "ShellRm", .capability = std::nullopt});
+  rules.push_back(Rule{.verdict = Verdict::deny, .tool_pattern = "ShellForkBomb", .capability = std::nullopt});
+  rules.push_back(Rule{.verdict = Verdict::deny, .tool_pattern = "Process*", .capability = std::nullopt});
   return rules;
 }
 
@@ -169,7 +169,7 @@ void register_rule_set_scenarios(ankerl::nanobench::Bench& bench) {
   }();
   // Pick a tool name that needs all three precedence passes (deny matches
   // late in the list, allow matches in the wildcard rule, ask never fires).
-  static const std::string tool_name = "shell.rm";
+  static const std::string tool_name = "ShellRm";
 
   bench.run("permission.rule_set_evaluate", [&] {
     auto decision = rule_set.evaluate(tool_name, permission::Mode::permissive);
@@ -205,7 +205,7 @@ void register_rule_set_scenarios(ankerl::nanobench::Bench& bench) {
       Capability::invoke_skill,
       Capability::external_mcp,
   };
-  static const std::string capability_tool = "shell.exec";
+  static const std::string capability_tool = "ShellExec";
 
   bench.run("permission.rule_set_capability_match", [&] {
     auto decision = cap_rule_set.evaluate(capability_tool,

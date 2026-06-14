@@ -29,7 +29,7 @@ constexpr std::string_view kEmptySchema = R"({"type":"object","properties":{},"a
 
 [[gnu::noinline]] ToolDef make_via_aggregate() {
   return ToolDef{
-      .name = "clock.now",
+      .name = "ClockNow",
       .description = "Return current UTC time.",
       .input_schema_json = std::string{kEmptySchema},
       .required_capabilities = {},
@@ -39,7 +39,7 @@ constexpr std::string_view kEmptySchema = R"({"type":"object","properties":{},"a
 }
 
 [[gnu::noinline]] ToolDef make_via_helper() {
-  return ToolDef::with_no_input("clock.now", "Return current UTC time.");
+  return ToolDef::with_no_input("ClockNow", "Return current UTC time.");
 }
 
 }  // namespace

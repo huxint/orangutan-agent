@@ -2,7 +2,7 @@
 //
 // Skills are repository-local markdown templates with a small frontmatter
 // metadata block. The loader owns filesystem snapshots for
-// `<workspace>/.orangutan/skills/*.md`; bootstrap's `skill.invoke` callback
+// `<workspace>/.orangutan/skills/*.md`; bootstrap's `SkillInvoke` callback
 // consumes the same `SkillDocument` body snapshot. The workspace snapshot owner
 // adds watcher-backed refresh without moving skill bodies into prompt bytes.
 

@@ -107,12 +107,12 @@ promotion side effect that the first agent loop will reuse.
     JSON Schema bytes in `src/oran-tool/catalog.cpp`, and keeps a bounded
     256-entry rendered-block cache keyed by the fields that affect the
     block bytes plus renderer version, with aggregate stats. Slice 68 adds
-    the registry-owned `tool.search` lookup primitive in `oran-tool`.
+    the registry-owned `ToolSearch` lookup primitive in `oran-tool`.
     Slice 69 adds the typed `runtime.prompt.active_tools` config surface in
     `oran-config`; slice 70 consumes that selector in `prompt::Builder`.
     Slice 71 adds `prompt::PromotionState` plus builder consumption of its
     sorted snapshot. Slice 72 adds `agent::SessionState` as the first owner
-    that observes successful `tool.search` outputs and mutates that state.
+    that observes successful `ToolSearch` outputs and mutates that state.
   - Pure function of `ToolDef`:
     `(name, description, input_schema, required_capabilities,
     category)`.
@@ -125,8 +125,8 @@ promotion side effect that the first agent loop will reuse.
     the bytes, not hand-written strings (rule already requires this).
 - **Active vs. deferred catalog policy**:
   - Default active set:
-    `file.read`, `file.write`, `file.edit` (or `file.modify` once spec
-    0011 v2 lands), `file.search`, `directory.list`, `tool.search`.
+    `FileRead`, `FileWrite`, `FileEdit` (or `FileModify` once spec
+    0011 v2 lands), `FileSearch`, `DirectoryList`, `ToolSearch`.
   - Deferred tools not selected by active config or the promotion snapshot
     land in section 3 (deferred-tool index) as name + one-line description
     only.
@@ -143,15 +143,15 @@ promotion side effect that the first agent loop will reuse.
     config is below the tool layer. `prompt::Builder` resolves explicit
     names against the tool catalog snapshot and returns `ErrorKind::not_found`
     for missing names.
-- **`tool.search` built-in** (the *non-deferred* lookup tool; session
+- **`ToolSearch` built-in** (the *non-deferred* lookup tool; session
   promotion consumes its matches):
   - **Status (slice 72, 2026-05-24):** the registry lookup primitive is
     implemented in `oran-tool`; `prompt::PromotionState` exists in
     `oran-prompt`; and `agent::SessionState` now observes successful
-    `tool.search` `Output::data_json`, validates
+    `ToolSearch` `Output::data_json`, validates
     `{kind:"tool_search", matches[]}`, and promotes only deferred matches by
     name into the next prompt snapshot. Non-search outputs and failed
-    `tool.search` outputs are no-ops; malformed successful structured data
+    `ToolSearch` outputs are no-ops; malformed successful structured data
     returns `ErrorKind::invalid_argument` without mutating state.
   - Input: `{ name?, category?, capability? }`. At least one field
     required. Supplied fields are ANDed; `name` and `category` are exact
@@ -233,7 +233,7 @@ promotion side effect that the first agent loop will reuse.
   workspace skill snapshot at later prompt boundaries when watcher/signature
   changes are visible; `prompt::Builder` still consumes the stable
   `BuilderInputs::skills_catalog` string for the current turn. Skill bodies
-  remain outside the system preamble and outside the catalog. `skill.invoke`
+  remain outside the system preamble and outside the catalog. `SkillInvoke`
   returns the matched loaded snapshot body through the ordinary conversation-tail
   tool-result path, so it does not change the cached prefix. Add/update/remove
   skill changes intentionally break section-4 cache bytes on the next prompt,
@@ -303,17 +303,17 @@ promotion side effect that the first agent loop will reuse.
    `deferred=true` does not appear in section 2's tool catalog;
    appears in section 3's deferred-tool index with name + one-line
    description only; does not appear in section 2 *during the same turn
-   where `tool.search` discovers it* — promotion shifts the
+   where `ToolSearch` discovers it* — promotion shifts the
    *next* turn's section 2, not the current.
-5. **Promotion semantics.** Calling `tool.search(name="memory.recall")`
-   from a turn lets `agent::SessionState` add `memory.recall` to the next turn's
+5. **Promotion semantics.** Calling `ToolSearch(name="MemoryRecall")`
+   from a turn lets `agent::SessionState` add `MemoryRecall` to the next turn's
    active catalog with its full schema. After 16 promotions in a
    session, the oldest evicts back to the deferred index (LRU per
    spec 0012). Slice 71 ships the state and builder snapshot consumption;
-   slice 72 ships the agent-owned `tool.search` side effect.
+   slice 72 ships the agent-owned `ToolSearch` side effect.
    The evicted tool stays callable; the agent that uses it without
    re-promotion sees the same dispatch error as any other
-   not-promoted call to a deferred tool (`tool.search` is the
+   not-promoted call to a deferred tool (`ToolSearch` is the
    reminder, not a precondition).
 6. **Cache version bump invalidates.** Bumping `cache_version` on
    any section produces a different `prefix_hash` even when content
@@ -333,7 +333,7 @@ promotion side effect that the first agent loop will reuse.
    cache hints cleanly, and malformed boundaries return
    `ErrorKind::invalid_argument`.
 9. **Active-set config drives section 2.** A config with
-   `runtime.prompt.active_tools = ["file.read", "file.search"]`
+   `runtime.prompt.active_tools = ["FileRead", "FileSearch"]`
    produces a section 2 that contains *only* those two tools; every
    other registered tool moves to section 3. Parser status: slice 69
    validates both config shapes and exposes the typed data; builder status:
@@ -387,7 +387,7 @@ promotion side effect that the first agent loop will reuse.
   — records `RenderedPrompt::prefix_hash`, prefix bytes,
   active/deferred catalog hashes, and cache-token usage per turn.
 - [`0014-structured-tool-output.md`](0014-structured-tool-output.md)
-  — `tool.search` uses the shipped `Output::data_json` structured
+  — `ToolSearch` uses the shipped `Output::data_json` structured
   channel plus a text fallback.
 - [`0012-tool-scheduler-and-state.md`](0012-tool-scheduler-and-state.md)
   — the rendered-block cache uses `BoundedCache`; the promotion set follows
@@ -395,7 +395,7 @@ promotion side effect that the first agent loop will reuse.
   `prompt::PromotionState` because prompt assembly needs sorted live names and
   promotion-vs-refresh stats.
 - [`0009-skills.md`](0009-skills.md) — section 4 (skills catalog)
-  consumes the skill loader/snapshot owner; `skill.invoke` returns body text as
+  consumes the skill loader/snapshot owner; `SkillInvoke` returns body text as
   a tool result, and watcher/signature refresh updates section 4 before the next
   prompt.
 - [`0010-benchmark-harness.md`](0010-benchmark-harness.md) — the
@@ -429,7 +429,7 @@ promotion side effect that the first agent loop will reuse.
 ```sh
 xmake build oran-prompt
 xmake run test-prompt                     # builder determinism + promotion state + breakpoint
-xmake run test-agent                      # SessionState tool.search promotion owner
+xmake run test-agent                      # SessionState ToolSearch promotion owner
 xmake run test-config                     # active-tool config parser contract
 xmake run bench-prompt                    # prompt-owned precursor bench, including promoted snapshots
 xmake run bench-agent                     # agent-owned prompt-cache stability fixture

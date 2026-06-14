@@ -61,7 +61,7 @@ permission::AuditEvent make_audit_event(std::string scope, std::string tool, per
   event.identity = "operator-1";
   event.verdict = permission::Verdict::allow;
   event.outcome = outcome;
-  event.reason = "rule #1 (allow: file.*)";
+  event.reason = "rule #1 (allow: File*)";
   return event;
 }
 
@@ -99,14 +99,14 @@ TEST_CASE("verdict_to_outcome maps each Verdict to its rule-engine outcome", "[u
 TEST_CASE("make_audit_event_from_decision copies verdict, outcome, reason", "[unit][permission][audit]") {
   permission::Decision decision;
   decision.verdict = permission::Verdict::ask;
-  decision.reason = "rule #3 (ask: shell.exec)";
+  decision.reason = "rule #3 (ask: ShellExec)";
   decision.replay_max = 4;
   decision.approval_ttl = std::chrono::seconds{1800};
 
   auto event = permission::make_audit_event_from_decision(decision);
   REQUIRE(event.verdict == permission::Verdict::ask);
   REQUIRE(event.outcome == permission::AuditOutcome::ask);
-  REQUIRE(event.reason == "rule #3 (ask: shell.exec)");
+  REQUIRE(event.reason == "rule #3 (ask: ShellExec)");
   REQUIRE(event.scope_key.empty());
   REQUIRE(event.metadata_json == "{}");
 }
@@ -127,9 +127,9 @@ TEST_CASE("permission::to_hex matches RFC 6234 SHA-256 of the empty string", "[u
 TEST_CASE("NullAuditSink discards every event and returns success", "[unit][permission][audit]") {
   test::run_async([](asio::io_context& /*io*/) -> async::Awaitable<void> {
     permission::NullAuditSink sink;
-    auto r1 = co_await sink.record(make_audit_event("scope-A", "file.read", permission::AuditOutcome::allow));
+    auto r1 = co_await sink.record(make_audit_event("scope-A", "FileRead", permission::AuditOutcome::allow));
     REQUIRE(r1.has_value());
-    auto r2 = co_await sink.record(make_audit_event("scope-A", "shell.exec", permission::AuditOutcome::approved));
+    auto r2 = co_await sink.record(make_audit_event("scope-A", "ShellExec", permission::AuditOutcome::approved));
     REQUIRE(r2.has_value());
   });
 }
@@ -139,16 +139,16 @@ TEST_CASE("RecordingAuditSink captures events in insertion order", "[unit][permi
     permission::RecordingAuditSink sink;
     REQUIRE(sink.events().empty());
 
-    auto r1 = co_await sink.record(make_audit_event("scope-A", "file.read", permission::AuditOutcome::allow));
+    auto r1 = co_await sink.record(make_audit_event("scope-A", "FileRead", permission::AuditOutcome::allow));
     REQUIRE(r1.has_value());
-    auto r2 = co_await sink.record(make_audit_event("scope-A", "file.write", permission::AuditOutcome::deny));
+    auto r2 = co_await sink.record(make_audit_event("scope-A", "FileWrite", permission::AuditOutcome::deny));
     REQUIRE(r2.has_value());
 
     auto events = sink.events();
     REQUIRE(events.size() == 2);
-    REQUIRE(events[0].tool_name == "file.read");
+    REQUIRE(events[0].tool_name == "FileRead");
     REQUIRE(events[0].outcome == permission::AuditOutcome::allow);
-    REQUIRE(events[1].tool_name == "file.write");
+    REQUIRE(events[1].tool_name == "FileWrite");
     REQUIRE(events[1].outcome == permission::AuditOutcome::deny);
 
     sink.clear();
@@ -159,7 +159,7 @@ TEST_CASE("RecordingAuditSink captures events in insertion order", "[unit][permi
 TEST_CASE("RecordingAuditSink updates matching event metadata", "[unit][permission][audit]") {
   test::run_async([](asio::io_context& /*io*/) -> async::Awaitable<void> {
     permission::RecordingAuditSink sink;
-    auto event = make_audit_event("scope-A", "file.read", permission::AuditOutcome::allow);
+    auto event = make_audit_event("scope-A", "FileRead", permission::AuditOutcome::allow);
     event.metadata_json = R"json({"dispatch":{"sequence":3}})json";
     auto recorded = co_await sink.record(std::move(event));
     REQUIRE(recorded.has_value());
@@ -167,7 +167,7 @@ TEST_CASE("RecordingAuditSink updates matching event metadata", "[unit][permissi
     auto updated = co_await sink.update_metadata(permission::AuditMetadataUpdate{
         .scope_key = "scope-A",
         .agent_key = "coder",
-        .tool_name = "file.read",
+        .tool_name = "FileRead",
         .identity = "operator-1",
         .previous_metadata_json = R"json({"dispatch":{"sequence":3}})json",
         .metadata_json = R"json({"dispatch":{"sequence":3},"usage":{"files_touched":1}})json",
@@ -181,13 +181,13 @@ TEST_CASE("RecordingAuditSink updates matching event metadata", "[unit][permissi
 TEST_CASE("RecordingAuditSink scopes metadata updates by parent_turn_id", "[unit][permission][audit]") {
   test::run_async([](asio::io_context& /*io*/) -> async::Awaitable<void> {
     permission::RecordingAuditSink sink;
-    auto first = make_audit_event("scope-A", "file.read", permission::AuditOutcome::allow);
+    auto first = make_audit_event("scope-A", "FileRead", permission::AuditOutcome::allow);
     first.parent_turn_id = turn_id_with(0x10);
     first.metadata_json = R"json({"dispatch":{"sequence":1}})json";
     auto recorded_first = co_await sink.record(std::move(first));
     REQUIRE(recorded_first.has_value());
 
-    auto second = make_audit_event("scope-A", "file.read", permission::AuditOutcome::allow);
+    auto second = make_audit_event("scope-A", "FileRead", permission::AuditOutcome::allow);
     second.parent_turn_id = turn_id_with(0x40);
     second.metadata_json = R"json({"dispatch":{"sequence":1}})json";
     auto recorded_second = co_await sink.record(std::move(second));
@@ -196,7 +196,7 @@ TEST_CASE("RecordingAuditSink scopes metadata updates by parent_turn_id", "[unit
     auto updated = co_await sink.update_metadata(permission::AuditMetadataUpdate{
         .scope_key = "scope-A",
         .agent_key = "coder",
-        .tool_name = "file.read",
+        .tool_name = "FileRead",
         .identity = "operator-1",
         .parent_turn_id = turn_id_with(0x10),
         .previous_metadata_json = R"json({"dispatch":{"sequence":1}})json",
@@ -224,7 +224,7 @@ TEST_CASE("StorageAuditSink persists events into the audit repository with corre
 
     permission::StorageAuditSink sink{repo};
 
-    auto event = make_audit_event("scope-A", "file.read", permission::AuditOutcome::allow);
+    auto event = make_audit_event("scope-A", "FileRead", permission::AuditOutcome::allow);
     event.input_hash = std::array<std::byte, 32>{};
     for (std::size_t i = 0; i < 32; ++i) {
       (*event.input_hash)[i] = std::byte{0xAB};
@@ -241,11 +241,11 @@ TEST_CASE("StorageAuditSink persists events into the audit repository with corre
     const auto& row = (*listed)[0];
     REQUIRE(row.scope_key == "scope-A");
     REQUIRE(row.agent_key == "coder");
-    REQUIRE(row.tool_name == "file.read");
+    REQUIRE(row.tool_name == "FileRead");
     REQUIRE(row.identity == "operator-1");
     REQUIRE(row.verdict == "allow");
     REQUIRE(row.outcome == "allow");
-    REQUIRE(row.reason == "rule #1 (allow: file.*)");
+    REQUIRE(row.reason == "rule #1 (allow: File*)");
     REQUIRE(row.input_hash_hex.has_value());
     // 32 bytes of 0xAB hex-encode to "ab" repeated 32 times.
     REQUIRE(*row.input_hash_hex == "abababababababababababababababababababababababababababababababab");
@@ -268,7 +268,7 @@ TEST_CASE("StorageAuditSink updates persisted metadata", "[unit][permission][aud
     REQUIRE(migrated.has_value());
 
     permission::StorageAuditSink sink{repo};
-    auto event = make_audit_event("scope-A", "file.read", permission::AuditOutcome::allow);
+    auto event = make_audit_event("scope-A", "FileRead", permission::AuditOutcome::allow);
     event.parent_turn_id = turn_id_with(0x30);
     event.metadata_json = R"json({"dispatch":{"sequence":4}})json";
     auto recorded = co_await sink.record(std::move(event));
@@ -277,7 +277,7 @@ TEST_CASE("StorageAuditSink updates persisted metadata", "[unit][permission][aud
     auto updated = co_await sink.update_metadata(permission::AuditMetadataUpdate{
         .scope_key = "scope-A",
         .agent_key = "coder",
-        .tool_name = "file.read",
+        .tool_name = "FileRead",
         .identity = "operator-1",
         .parent_turn_id = turn_id_with(0x30),
         .previous_metadata_json = R"json({"dispatch":{"sequence":4}})json",
@@ -308,7 +308,7 @@ TEST_CASE("StorageAuditSink records a NULL input_hash when the event omits it", 
 
     permission::StorageAuditSink sink{repo};
 
-    auto event = make_audit_event("scope-A", "file.read", permission::AuditOutcome::deny);
+    auto event = make_audit_event("scope-A", "FileRead", permission::AuditOutcome::deny);
     event.verdict = permission::Verdict::deny;
     auto recorded = co_await sink.record(std::move(event));
     REQUIRE(recorded.has_value());
@@ -339,7 +339,7 @@ TEST_CASE("StorageAuditSink writes each AuditOutcome wire spelling", "[unit][per
     using O = permission::AuditOutcome;
     constexpr auto outcomes = core::enum_values<O>();
     for (auto outcome : outcomes) {
-      auto event = make_audit_event("scope-A", "file.read", outcome);
+      auto event = make_audit_event("scope-A", "FileRead", outcome);
       auto recorded = co_await sink.record(std::move(event));
       REQUIRE(recorded.has_value());
     }
@@ -369,7 +369,7 @@ TEST_CASE("StorageAuditSink propagates repository errors", "[unit][permission][a
     // error rather than swallow it.
 
     permission::StorageAuditSink sink{repo};
-    auto recorded = co_await sink.record(make_audit_event("scope-A", "file.read", permission::AuditOutcome::allow));
+    auto recorded = co_await sink.record(make_audit_event("scope-A", "FileRead", permission::AuditOutcome::allow));
     REQUIRE_FALSE(recorded.has_value());
     REQUIRE(recorded.error().kind() == core::ErrorKind::storage);
   });

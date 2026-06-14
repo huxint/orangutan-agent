@@ -77,7 +77,7 @@ struct Rule {
   Verdict verdict{Verdict::deny};
   /// Glob pattern matched against the tool name. `*` matches any (possibly
   /// empty) byte sequence; everything else matches literally. Examples:
-  /// `file.read`, `file.*`, `shell.exec`.
+  /// `FileRead`, `File*`, `ShellExec`.
   std::string tool_pattern;
   /// Optional capability scope. When unset, the rule matches every
   /// invocation that satisfies `tool_pattern`. When set, the rule matches
@@ -113,9 +113,9 @@ struct Decision {
   Verdict verdict{Verdict::deny};
   /// Human-readable explanation: which rule fired, or which mode fell back.
   /// When the firing rule had a capability scope, the spelling appears in
-  /// the reason (e.g. `rule #2 (allow: file.* capability=read_file)`).
+  /// the reason (e.g. `rule #2 (allow: File* capability=read_file)`).
   /// When the firing rule had an input_pattern, the pattern source string
-  /// appears too (e.g. `rule #3 (deny: shell.exec input=~"^rm ")`).
+  /// appears too (e.g. `rule #3 (deny: ShellExec input=~"^rm ")`).
   std::string reason;
   /// Replay budget the `ApprovalBroker` should apply when this decision
   /// is acted on. Copied from the matched rule when a rule fires; falls

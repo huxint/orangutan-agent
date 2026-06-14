@@ -65,7 +65,7 @@ core::Message full_message(core::Role role) {
           {
               core::TextContent{.text = "hello"},
               core::ThinkingContent{.thinking = "considering", .signature = std::string{"sig"}},
-              core::ToolUseContent{.id = "toolu-1", .name = "file.read", .input_json = R"({"path":"README.md"})"},
+              core::ToolUseContent{.id = "toolu-1", .name = "FileRead", .input_json = R"({"path":"README.md"})"},
               core::ToolResultContent{
                   .tool_use_id = "toolu-1",
                   .output = "README",

@@ -23,7 +23,7 @@ constexpr auto kConfigText = std::string_view{R"json(
     "workers": 4,
     "request_timeout_ms": 600000,
     "prompt": {
-      "active_tools": ["file.read", "file.search", "tool.search"]
+      "active_tools": ["FileRead", "FileSearch", "ToolSearch"]
     },
     "redaction_patterns": ["token=[^ ]+", "Bearer [A-Za-z0-9_.-]+"]
   },

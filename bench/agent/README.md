@@ -5,7 +5,7 @@ hot path.
 
 | Scenario | Compares |
 | --- | --- |
-| [`scenarios/prompt_cache_hit_rate.cpp`](scenarios/prompt_cache_hit_rate.cpp) | Stable prompt builds without promotions vs. builds after `tool.search` promotes one deferred tool. |
+| [`scenarios/prompt_cache_hit_rate.cpp`](scenarios/prompt_cache_hit_rate.cpp) | Stable prompt builds without promotions vs. builds after `ToolSearch` promotes one deferred tool. |
 | [`scenarios/scheduler_overhead.cpp`](scenarios/scheduler_overhead.cpp) | Direct `Registry::dispatch` of a no-op tool vs. a single-call `ToolScheduler::run_batch` of the same tool (spec 0012 AC12). |
 | [`scenarios/scheduler_audit_fanout.cpp`](scenarios/scheduler_audit_fanout.cpp) | An 8-call batch recording through `NullAuditSink` vs. through `StorageAuditSink` over an in-memory `Pool` (audit-writer fan-out under bounded parallelism). |
 

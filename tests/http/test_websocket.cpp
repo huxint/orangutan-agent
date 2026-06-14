@@ -5,6 +5,7 @@
 #include <oran/http/websocket.hpp>
 
 #include <chrono>
+#include <cstdlib>
 #include <exception>
 #include <expected>
 #include <optional>
@@ -36,6 +37,31 @@ namespace core = orangutan::core;
 namespace http = orangutan::http;
 namespace test = orangutan::tests;
 namespace ws = orangutan::tests::ws;
+
+class ScopedEnvVar {
+public:
+  ScopedEnvVar(std::string name, const std::string& value) : name_{std::move(name)} {
+    if (const auto* old = std::getenv(name_.c_str()); old != nullptr) {
+      old_value_ = old;
+    }
+    setenv(name_.c_str(), value.c_str(), 1);
+  }
+
+  ~ScopedEnvVar() {
+    if (old_value_) {
+      setenv(name_.c_str(), old_value_->c_str(), 1);
+    } else {
+      unsetenv(name_.c_str());
+    }
+  }
+
+  ScopedEnvVar(const ScopedEnvVar&) = delete;
+  ScopedEnvVar& operator=(const ScopedEnvVar&) = delete;
+
+private:
+  std::string name_;
+  std::optional<std::string> old_value_;
+};
 
 [[nodiscard]] http::WsConnectRequest request_for(const ws::ScriptedWsServer& server) {
   return http::WsConnectRequest{.url = server.url(), .headers = {}, .handshake_timeout = 2000ms};
@@ -279,6 +305,9 @@ TEST_CASE("WebSocket connect fails when the server rejects the upgrade", "[unit]
 }
 
 TEST_CASE("WebSocket connect fails fast when nothing listens", "[unit][http][websocket]") {
+  const ScopedEnvVar no_proxy_upper{"NO_PROXY", "127.0.0.1,localhost"};
+  const ScopedEnvVar no_proxy_lower{"no_proxy", "127.0.0.1,localhost"};
+
   test::run_async(
       [&](asio::io_context&) -> async::Awaitable<void> {
         // Port 1 on loopback refuses immediately on Linux.

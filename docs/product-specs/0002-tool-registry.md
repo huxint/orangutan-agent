@@ -10,18 +10,18 @@ the surface where these capabilities are presented, gated, observed, and extende
 
 - `oran-tool::Registry` with the dispatch contract from `tool-runtime.md`.
 - Built-in libraries, each registering its tools at bootstrap:
-  - `oran-tool-file` — `file.read`, `file.write`, `file.edit`, `file.search`.
-  - `oran-tool-shell` — `shell.exec`, `shell.glob`, `shell.ls`, `shell.move`.
-  - `oran-tool-memory` — `memory.recall`, `memory.remember`, `memory.forget`.
+  - `oran-tool-file` — `FileRead`, `FileWrite`, `FileEdit`, `FileSearch`.
+  - `oran-tool-shell` — `ShellExec`, `ShellGlob`, `ShellLs`, `ShellMove`.
+  - `oran-tool-memory` — `MemoryRecall`, `MemoryRemember`, `MemoryForget`.
 - Capability declarations on every built-in.
-- `tool.search` (deferred-tool discovery) — non-deferred tool that returns schemas for
+- `ToolSearch` (deferred-tool discovery) — non-deferred tool that returns schemas for
   deferred tools on demand.
 - Output redaction via runtime regex from config.
 - Hook lifecycle wired (tool_before / tool_dispatched / tool_after / tool_error).
 
 > **Status (slice 170):** the current built-in catalog ships the filesystem
-> set, `tool.search`, `skill.invoke`, `skill.deactivate`, and deferred
-> `memory.recall` / `memory.remember` / `memory.forget`.
+> set, `ToolSearch`, `SkillInvoke`, `SkillDeactivate`, and deferred
+> `MemoryRecall` / `MemoryRemember` / `MemoryForget`.
 
 ## Scope (v1.1)
 
@@ -46,10 +46,10 @@ the surface where these capabilities are presented, gated, observed, and extende
    ask flow if applicable → hook dispatched → handler → hook after.
 3. A tool with `Capability::read_file` declared cannot call `runtime.workspace()` if
    the permission engine did not grant it (returns `Error::capability_not_granted`).
-4. `tool.search` returns the schema of any deferred tool within 10 ms.
-5. `file.edit` performs structured patches with conflict detection (returns a
+4. `ToolSearch` returns the schema of any deferred tool within 10 ms.
+5. `FileEdit` performs structured patches with conflict detection (returns a
    typed error when the file changed underneath).
-6. `shell.exec("rm -rf /")` is denied by default permission rules; audit log records
+6. `ShellExec("rm -rf /")` is denied by default permission rules; audit log records
    the attempt.
 7. `bench/tool/dispatch_overhead` reports < 50 µs median dispatch path (excluding
    handler).

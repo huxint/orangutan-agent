@@ -1,4 +1,4 @@
-// src/oran-tool/tool_search.cpp — `tool.search` built-in.
+// src/oran-tool/tool_search.cpp — `ToolSearch` built-in.
 //
 // This is the registry-owned half of spec 0016's deferred-tool lookup: it can
 // expose full metadata for any registered tool, while the future agent session
@@ -52,11 +52,11 @@ read_string_selector(const json& input, std::string_view field, std::optional<st
     return {};
   }
   if (!it->is_string()) {
-    return std::unexpected(core::Error::invalid_argument("tool.search: selector must be a string").with("field", key));
+    return std::unexpected(core::Error::invalid_argument("ToolSearch: selector must be a string").with("field", key));
   }
   auto value = it->get<std::string>();
   if (value.empty()) {
-    return std::unexpected(core::Error::invalid_argument("tool.search: selector must be non-empty").with("field", key));
+    return std::unexpected(core::Error::invalid_argument("ToolSearch: selector must be non-empty").with("field", key));
   }
   output = std::move(value);
   return {};
@@ -81,14 +81,14 @@ read_string_selector(const json& input, std::string_view field, std::optional<st
 
   if (!query.name.has_value() && !query.category.has_value() && !query.capability_name.has_value()) {
     return std::unexpected(
-        core::Error::invalid_argument("tool.search: at least one of `name`, `category`, or `capability` is required"));
+        core::Error::invalid_argument("ToolSearch: at least one of `name`, `category`, or `capability` is required"));
   }
 
   if (query.capability_name.has_value()) {
     auto capability = core::parse_enum<core::Capability>(*query.capability_name);
     if (!capability.has_value()) {
       return std::unexpected(
-          core::Error::invalid_argument("tool.search: unknown capability").with("capability", *query.capability_name));
+          core::Error::invalid_argument("ToolSearch: unknown capability").with("capability", *query.capability_name));
     }
     query.capability = *capability;
   }
@@ -168,11 +168,11 @@ read_string_selector(const json& input, std::string_view field, std::optional<st
 
 [[nodiscard]] std::string format_text(const std::vector<core::ToolDef>& matches) {
   if (matches.empty()) {
-    return "tool.search: no matches";
+    return "ToolSearch: no matches";
   }
 
   std::string text;
-  std::format_to(std::back_inserter(text), "tool.search: {} match{}", matches.size(), matches.size() == 1 ? "" : "es");
+  std::format_to(std::back_inserter(text), "ToolSearch: {} match{}", matches.size(), matches.size() == 1 ? "" : "es");
   for (const auto& def : matches) {
     std::format_to(std::back_inserter(text), "\n- {}", def.name);
     if (def.category.has_value()) {
@@ -194,7 +194,7 @@ read_string_selector(const json& input, std::string_view field, std::optional<st
   }
 
   if (ctx.registry == nullptr) {
-    co_return std::unexpected(core::Error::internal("tool.search: registry context is not available"));
+    co_return std::unexpected(core::Error::internal("ToolSearch: registry context is not available"));
   }
 
   std::vector<core::ToolDef> matches;

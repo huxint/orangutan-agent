@@ -68,11 +68,11 @@ Planned secret slice:
 
 ## Sandbox Posture
 
-- `shell.exec` runs subprocesses with the runtime's UID. We do not run as root and
+- `ShellExec` runs subprocesses with the runtime's UID. We do not run as root and
   refuse to start if running as root unless `--allow-root` is set.
 - Workspace-scoped file operations: slice 37 introduces `tool::Workspace`;
-  slices 37-40 make every filesystem built-in (`file.read`, `file.write`,
-  `file.edit`, `file.delete`, `file.search`, `directory.list`) use it when
+  slices 37-40 make every filesystem built-in (`FileRead`, `FileWrite`,
+  `FileEdit`, `FileDelete`, `FileSearch`, `DirectoryList`) use it when
   the runtime supplies `DispatchContext::workspace`. Slice 41 moves
   workspace ownership into `bootstrap::RuntimeAssembly` and routes
   `permissions.workspace.extra_{read,write}_roots` from `oran-config`

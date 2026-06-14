@@ -1,4 +1,4 @@
-// src/oran-tool/directory_list.cpp — `directory.list` built-in.
+// src/oran-tool/directory_list.cpp — `DirectoryList` built-in.
 //
 // Thin formatter on top of `oran-io::list_directory`: parses the JSON input,
 // validates the typed options, dispatches the existing coroutine helper, and
@@ -13,7 +13,7 @@
 // `oran-io::list_directory` semantics are unchanged.
 //
 // Slice 64 (2026-05-24) closes spec 0014's third built-in migration step
-// (after slice 62 `file.read` and slice 63 `file.search`): successful calls
+// (after slice 62 `FileRead` and slice 63 `FileSearch`): successful calls
 // keep the existing `<path>:<kind>:<size_bytes or '-'>` text rendering and
 // also fill `Output::data_json` with `{kind:"directory_list", path,
 // include_hidden, max_entries, entry_count, entries[]}`, where each entry
@@ -79,18 +79,18 @@ struct ParsedInput {
 
   if (parsed->contains("include_hidden")) {
     if (!(*parsed)["include_hidden"].is_boolean()) {
-      return std::unexpected(core::Error::invalid_argument("directory.list: `include_hidden` must be a boolean"));
+      return std::unexpected(core::Error::invalid_argument("DirectoryList: `include_hidden` must be a boolean"));
     }
     result.include_hidden = (*parsed)["include_hidden"].get<bool>();
   }
 
   if (parsed->contains("max_entries")) {
     if (!(*parsed)["max_entries"].is_number_unsigned()) {
-      return std::unexpected(core::Error::invalid_argument("directory.list: `max_entries` must be a positive integer"));
+      return std::unexpected(core::Error::invalid_argument("DirectoryList: `max_entries` must be a positive integer"));
     }
     const auto raw = (*parsed)["max_entries"].get<std::uint64_t>();
     if (raw == 0) {
-      return std::unexpected(core::Error::invalid_argument("directory.list: `max_entries` must be greater than zero"));
+      return std::unexpected(core::Error::invalid_argument("DirectoryList: `max_entries` must be greater than zero"));
     }
     result.max_entries = static_cast<std::size_t>(raw);
   }

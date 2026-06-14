@@ -214,7 +214,7 @@ proves the loop behaves correctly without a network.
      rendering, prefix hashes, and breakpoint placement, and the slice-71
      `prompt::PromotionState` snapshot can feed promoted deferred tools into
      the next active catalog. Slice 72 adds `agent::SessionState` as the
-     session owner that observes successful `tool.search` output and performs
+     session owner that observes successful `ToolSearch` output and performs
      that promotion before the full loop lands).
   4. Send `provider::Request` with streaming sink.
   5. Parse response blocks into typed `core::Content`.
@@ -320,14 +320,14 @@ proves the loop behaves correctly without a network.
    mapping path; turn-level audit rows are still future spec-0018 work.
 2. **Single-tool turn.** Scenario #2: the loop sends a `Request`, the
    fake returns one `tool_use` block, the loop dispatches the tool
-   (using the existing `file.read` built-in), appends the tool result,
+   (using the existing `FileRead` built-in), appends the tool result,
    sends a second `Request`, the fake returns final text. Audit
    records: one turn row, one tool row; the tool row's
    `parent_event_id` matches the turn row's id. **Status (slice 76):**
    shipped for direct registry dispatch, ordered `tool_result` append,
    provider re-entry, provider-usage aggregation, and complete returned
    transcript. The test fixture uses a minimal registry tool rather than the
-   `file.read` built-in so loop coverage stays focused on the registry
+   `FileRead` built-in so loop coverage stays focused on the registry
    boundary. **Status (slice 85):** direct dispatch audit rows can now carry
    `parent_turn_id` from a caller-supplied or generated loop turn id when trace
    is enabled; terminal-success turns write the loop-owned `trace_turns` row
@@ -342,7 +342,7 @@ proves the loop behaves correctly without a network.
    results. **Status (slice 76):** shipped for sequential dispatch and
    original-order result appends.
 4. **Missing tool.** Scenario #4: the fake returns
-   `tool_use { name: "tool.does_not_exist" }`. The loop synthesises a
+   `tool_use { name: "ToolDoesNotExist" }`. The loop synthesises a
    `tool_result` carrying an error message ("tool not found"); the
    audit row records `outcome=error,
    error_kind=tool_not_found`; the next `Request` carries the error

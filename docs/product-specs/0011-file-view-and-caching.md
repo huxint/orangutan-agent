@@ -6,15 +6,15 @@ An agent that edits code must trust its view of the workspace. Today's file
 tools are correct in isolation but invent a different stale-file story per
 tool:
 
-- `file.read` returns the entire body and no version token. Agents have no
+- `FileRead` returns the entire body and no version token. Agents have no
   way to say "edit only if the file is still the one I read."
-- `file.edit` reads, computes, and writes without a fingerprint round-trip,
+- `FileEdit` reads, computes, and writes without a fingerprint round-trip,
   so a concurrent process change between read and write silently overwrites
   the newer content (TOCTOU).
-- `file.search` reopens each match candidate from scratch; even on a stable
+- `FileSearch` reopens each match candidate from scratch; even on a stable
   tree, a long agent turn re-pays the IO cost of cold reads.
-- There is no shared notion of "this path's bytes" that `file.read`,
-  `file.edit`, `file.search`, and the future `code.symbols` /
+- There is no shared notion of "this path's bytes" that `FileRead`,
+  `FileEdit`, `FileSearch`, and the future `CodeSymbols` /
   `code.references` can agree on.
 
 The risk is not "slow reads". The risk is *the agent confidently acting on a
@@ -29,7 +29,7 @@ making them wrong.
 
 Today's seams that motivate this spec:
 
-- `file.read` accepts only `{path}` and returns the entire body
+- `FileRead` accepts only `{path}` and returns the entire body
   (`src/oran-tool/file_read.cpp`).
 - `oran-io::ReadTextOptions` already has a `max_bytes` cap; neither the IO
   surface nor the tool schema exposes ranges, fingerprints, or change tokens.
@@ -55,14 +55,14 @@ when the rich result reports `truncated=true`. `size_bytes` and
 `mtime_ns` populate unconditionally; `sha256` and the
 `ComputeFingerprintOptions::compute_hash` plumbing stay `nullopt` until
 the future content-hash slice. The remaining v1 bullets — the
-`file.read` v2 schema, the opaque version token, the `if_version`
+`FileRead` v2 schema, the opaque version token, the `if_version`
 short-circuit (gated on adding `Error::not_modified`), and the
-`expected_version` contract on `file.edit` / `file.write` — remain
+`expected_version` contract on `FileEdit` / `FileWrite` — remain
 unimplemented; those land per slice on top of the io-layer surface.
 
-**Status (slice 45, 2026-05-22):** the `file.read` v2 schema, the
+**Status (slice 45, 2026-05-22):** the `FileRead` v2 schema, the
 opaque `v1:<sha256(canonical_path)>:<size>:<mtime_ns>` version token,
-and the `if_version` short-circuit ship in `oran-tool`. `file.read`
+and the `if_version` short-circuit ship in `oran-tool`. `FileRead`
 accepts `{path, start_line?, line_count?, offset_bytes?, length_bytes?,
 max_bytes?, if_version?}` (line and byte ranges remain mutually
 exclusive at both schema and handler level), dispatches through
@@ -75,10 +75,10 @@ the existing libsodium SHA-256 via
 accidentally be aliased to a file with the same `(size, mtime_ns)`
 pair. `core::ErrorKind::not_modified` (and `Error::not_modified()`)
 join the cross-boundary error vocabulary. The remaining v1 bullets
-narrow to the `expected_version` contract on `file.edit` / `file.write`.
+narrow to the `expected_version` contract on `FileEdit` / `FileWrite`.
 
 **Status (slice 46, 2026-05-23):** the `expected_version` contract on
-`file.write` and `file.edit` ships in `oran-tool` — v1 of the
+`FileWrite` and `FileEdit` ships in `oran-tool` — v1 of the
 file-view system is complete. Both mutation tools accept the optional
 `expected_version` field; a stale supplied token (or a path that
 vanished between the read and the mutation) fails the call with
@@ -86,17 +86,17 @@ vanished between the read and the mutation) fails the call with
 `fingerprint=<current>` carried in context). The pre-mutation check
 runs *before* the temp-then-rename or read, so a conflict never
 leaves a partially-written file behind. The opaque-token helper that
-`file.read` introduced in slice 45 is lifted into the private
+`FileRead` introduced in slice 45 is lifted into the private
 `src/oran-tool/version_token.hpp` header so all three file built-ins
 speak the same wire spelling. v1 acceptance criterion 4 (stale-edit
-detection) is now pinned by `tests/tool` (`file.write` + `file.edit`
+detection) is now pinned by `tests/tool` (`FileWrite` + `FileEdit`
 each cover happy-path, stale-token, and missing-path conflict paths).
 v1.1 (line-offset index, file-view cache, regex compile cache,
 singleflight, external-edit awareness) is next on top of the
 slice-44 `BoundedCache` primitive.
 
 **Status (slice 62, 2026-05-24):** spec 0014's `Output::data_json`
-migration now covers `file.read` without removing the text fallback.
+migration now covers `FileRead` without removing the text fallback.
 Successful reads still render the header line plus requested body for
 current callers, and also fill serialized `data_json` with
 `{kind:"file_read", path, text, fingerprint, start_line, end_line,
@@ -104,7 +104,7 @@ returned_bytes, truncated}`. `Output::usage` carries `bytes_read`,
 `files_touched=1`, and the truncation flag.
 
 **Status (slice 47, 2026-05-23):** the first v1.1 item — "Output cap
-on `file.search`" — ships in `oran-tool`. `file.search` accepts an
+on `FileSearch`" — ships in `oran-tool`. `FileSearch` accepts an
 optional `max_output_bytes` field (default 1 MiB) that caps the
 rendered `path:line:text` payload. The scan stops the moment the next
 match's exact rendered cost (`path + ":" + line_number + ":" + text`
@@ -120,7 +120,7 @@ cache, singleflight, external-edit awareness) are next on top of the
 slice-44 `BoundedCache` primitive.
 
 **Status (slice 48, 2026-05-23):** the first piece of v1.1's
-"`file.search` ignore predicate" item ships in `oran-tool` — the
+"`FileSearch` ignore predicate" item ships in `oran-tool` — the
 built-in skip list. The recursive walk now skips `.git`, `.xmake`,
 `.orangutan`, `build`, and `node_modules` directories regardless of
 `include_hidden`, so an opt-in to scan hidden files (e.g., `.env`)
@@ -135,8 +135,8 @@ index, file-view cache, regex compile cache, singleflight,
 external-edit awareness, `.gitignore` / `.ignore` honor) stay next.
 
 **Status (slice 49, 2026-05-23):** the source-controlled half of
-v1.1's "`file.search` ignore predicate" item ships in `oran-tool`.
-When `respect_ignore=true` (default), recursive `file.search` loads
+v1.1's "`FileSearch` ignore predicate" item ships in `oran-tool`.
+When `respect_ignore=true` (default), recursive `FileSearch` loads
 `.gitignore` and `.ignore` files from the search root downward and
 applies them as a per-directory rule stack. The shipped subset covers
 the repo rules agents rely on most: blank lines, `#` comments, escaped
@@ -148,7 +148,7 @@ single-file searches still honour the named file directly, and
 slice-48 built-in skip list for forensic walks. Full Git parity for
 edge-case escapes / double-star semantics and the final shared
 `Workspace::is_ignored(...)` home remain future structure work under
-spec 0013; the current `file.search` predicate work called out by
+spec 0013; the current `FileSearch` predicate work called out by
 this spec is complete. v1.1's remaining items are the line-offset
 index, file-view cache, regex compile cache, singleflight reads, and
 external-edit awareness.
@@ -170,7 +170,7 @@ file-view cache, regex compile cache, singleflight reads, and
 external-edit awareness.
 
 **Status (slice 51, 2026-05-24):** the v1.1 regex compile cache ships
-inside `oran-tool`. `file.search` with `regex=true` now looks up a
+inside `oran-tool`. `FileSearch` with `regex=true` now looks up a
 compiled `permission::InputPattern` in a bounded process-local
 `core::BoundedCache` before compiling. The cache is keyed by
 `(pattern, partial_line_match=true)`, capped at 64 entries / 64 KiB /
@@ -305,7 +305,7 @@ deltas (single-strand, `Value*` from `get`, `erase_if`,
   ```
   Output cap (`max_bytes`) enforces *returned bytes*, never *file size*.
   A huge line range fails or truncates before flooding the prompt.
-- **`file.read` v2** schema:
+- **`FileRead` v2** schema:
   ```json
   {
     "path": "...",
@@ -326,10 +326,10 @@ deltas (single-strand, `Value*` from `get`, `erase_if`,
   `v1:<sha256(canonical_path)>:<size>:<mtime_ns>` (sha256 of *path*, not
   content). Stable across tools; embeds the cheap fingerprint so the agent
   cannot accidentally feed a token from a different file into
-  `file.edit(expected_version=...)`. The strong content hash lives in
+  `FileEdit(expected_version=...)`. The strong content hash lives in
   `FileFingerprint::sha256` and only fires when `compute_hash=true`.
 - **`if_version` semantics**: when supplied and the current fingerprint
-  matches, `file.read` returns `Error::not_modified` (new kind) instead of
+  matches, `FileRead` returns `Error::not_modified` (new kind) instead of
   re-sending content. The agent's transcript carries the token; the prompt
   does not re-pay the bytes.
 - **Mid-read change detection**: capture fingerprint before *and* after the
@@ -342,17 +342,17 @@ deltas (single-strand, `Value*` from `get`, `erase_if`,
     the full file then slice.
   - Line ranges stream until `start_line`, then copy up to
     `line_count` / `max_bytes`. Avoid building a full `std::vector<line>`.
-- **`file.edit` / `file.write` token contract**: `expected_version` field
-  becomes optional in v1, *required* in `file.modify` (spec 0011 v1.1
+- **`FileEdit` / `FileWrite` token contract**: `expected_version` field
+  becomes optional in v1, *required* in `FileModify` (spec 0011 v1.1
   below). When supplied, mismatch fails as `Error::conflict` with
   `reason=stale_fingerprint` and the current token in context, forcing the
   agent to re-read.
-- **`file.edit` / `file.write` size caps**: both mutation tools accept an
+- **`FileEdit` / `FileWrite` size caps**: both mutation tools accept an
   optional `max_bytes` field (default and hard ceiling 16 MiB, matching
-  `io::ReadTextOptions::max_bytes`). `file.write` refuses an oversized
-  `content` payload before touching the target path. `file.edit` applies the
+  `io::ReadTextOptions::max_bytes`). `FileWrite` refuses an oversized
+  `content` payload before touching the target path. `FileEdit` applies the
   same cap to the read and to the final replacement output, so an edit cannot
-  create text that a follow-up `file.read` would reject.
+  create text that a follow-up `FileRead` would reject.
 
 ## Scope (v1.1)
 
@@ -372,22 +372,22 @@ correctness is anchored:
   is explicit in the type name, never hidden in a comment.
 - **Line-offset index** as the first cache: maps line number → byte offset
   for files larger than a configured threshold (default 256 KiB). Built
-  lazily on first range read; invalidated on any `file.write` /
-  `file.edit` / `file.modify` / `file.delete` for the same canonical path.
+  lazily on first range read; invalidated on any `FileWrite` /
+  `FileEdit` / `FileModify` / `FileDelete` for the same canonical path.
   Memory cost is `O(lines * 8 bytes)`, far cheaper than caching the body.
-- **`file.search` re-uses the line-offset index** so that a follow-up
+- **`FileSearch` re-uses the line-offset index** so that a follow-up
   range-read of a match doesn't rescan the file from the top.
-- **`file.search` regex compile cache**: shipped in slice 51 inside
+- **`FileSearch` regex compile cache**: shipped in slice 51 inside
   `oran-tool`. Compiled `permission::InputPattern` values are held in a
   process-local `BoundedCache<(pattern, options), shared_ptr<const InputPattern>>`
   capped at 64 entries / 64 KiB / 10 minutes. The cache is bounded, not
   an unbounded `unordered_map`, and literal searches never touch it.
-- **`file.search` ignore predicate**: shipped inside the current
-  `file.search` walk across slices 48-49. It honours `.gitignore`,
+- **`FileSearch` ignore predicate**: shipped inside the current
+  `FileSearch` walk across slices 48-49. It honours `.gitignore`,
   `.ignore`, and a built-in skip list (`.git`, `build`, `.xmake`,
   `node_modules`, `.orangutan`) when `respect_ignore=true`. The future
   structural move is to lift the same predicate onto `tool::Workspace`
-  per spec 0013 so `directory.scan` shares it.
+  per spec 0013 so `DirectoryScan` shares it.
 - **File-view cache**: shipped in slice 52 inside `oran-io`. Successful
   `read_text_file_ranged` results are held in a process-local
   `BoundedCache` keyed by `(canonical_path, range, max_bytes,
@@ -400,7 +400,7 @@ correctness is anchored:
   line-offset index without exposing private keys; slice 57 adds the
   public path-invalidation seam and slice 58 adds the Linux watcher event
   source that calls it.
-- **Singleflight reads**: ten concurrent `file.read` calls for the same
+- **Singleflight reads**: ten concurrent `FileRead` calls for the same
   `(canonical_path, range, max_bytes, size_bytes, mtime_ns)` share one
   filesystem read instead of stampeding the executor. Shipped in slice
   53 inside `oran-io` for cold `read_text_file_ranged` calls, with a
@@ -415,13 +415,13 @@ correctness is anchored:
   aggregate-only stats and cancellation-aware run-until-cancelled semantics.
   Without a started watcher, validate metadata (`stat` only) before every
   cache hit; on uncertainty, miss.
-- **Output cap on `file.search`**: in addition to `max_matches`, an output
+- **Output cap on `FileSearch`**: in addition to `max_matches`, an output
   byte cap so a small match count of very long lines does not flood the
   prompt.
 
 ## Scope (v2)
 
-- **`file.modify`** — structured multi-edit transaction:
+- **`FileModify`** — structured multi-edit transaction:
   ```json
   {
     "path": "...",
@@ -434,7 +434,7 @@ correctness is anchored:
   ```
   Applies all edits against the original file and commits once. Reports
   conflicts per-edit so the agent repairs only the failed hunk. Replaces
-  the current `file.edit` for heavy coding workloads; `file.edit` keeps its
+  the current `FileEdit` for heavy coding workloads; `FileEdit` keeps its
   simple single-replacement contract for trivial fixes.
 - **Persisted index store** under `<workspace>/.orangutan/cache/indexes/`
   for line-offset indexes that survive process restarts. Every persisted
@@ -444,7 +444,7 @@ correctness is anchored:
   (`max_index_bytes_per_workspace`).
 - **Text-search shard index** (per-file trigram / line-offset metadata)
   built only after a workspace crosses a size threshold (default 5 000
-  files). Optional; `file.search` falls back to the un-indexed walk
+  files). Optional; `FileSearch` falls back to the un-indexed walk
   whenever the shard is absent or stale.
 - **Vector-search backend** is deferred — keep it out of this spec; spec
   0005 (memory) owns retrieval strategy.
@@ -470,16 +470,16 @@ correctness is anchored:
    `end_line=199` (or fewer if `max_bytes` truncates), and the returned
    bytes count matches the wire payload exactly. Byte-range tests cover
    exact-boundary, UTF-8-mid-boundary (adjust mode), and overflow.
-2. **Fingerprint stability.** Two consecutive `file.read` calls on an
+2. **Fingerprint stability.** Two consecutive `FileRead` calls on an
    unchanged file produce identical version tokens. Touching the file
    (mtime bump, no content change) produces a different token; rewriting
-   the file via `file.write` produces a different token.
-3. **`if_version` short-circuit.** A `file.read` call with `if_version`
+   the file via `FileWrite` produces a different token.
+3. **`if_version` short-circuit.** A `FileRead` call with `if_version`
    matching the current fingerprint returns `Error::not_modified` with the
    *same* token in context, no body. A mismatching `if_version` returns
    fresh content and the new token. Tested for size change, mtime change,
    and content rewrite.
-4. **Stale-edit detection.** `file.edit` (and later `file.modify`) with a
+4. **Stale-edit detection.** `FileEdit` (and later `FileModify`) with a
    stale `expected_version` returns `Error::conflict` with
    `reason=stale_fingerprint` and the *current* token in context; the file
    on disk is untouched. Tested against an external `touch` between read
@@ -492,9 +492,9 @@ correctness is anchored:
    long fails with `truncated=true` when `max_bytes` is below the line
    size; the prompt never receives the over-cap bytes. Tested at boundary
    and boundary+1.
-7. **Cache safety.** Every `file.read` cache hit still records an
-   `AuditEvent` and publishes `hook::Event::tool_after`. A `file.write` /
-   `file.edit` / `file.delete` invalidates affected cache + line-offset
+7. **Cache safety.** Every `FileRead` cache hit still records an
+   `AuditEvent` and publishes `hook::Event::tool_after`. A `FileWrite` /
+   `FileEdit` / `FileDelete` invalidates affected cache + line-offset
    entries *synchronously* before returning success. Pinned via a test
    that interleaves cached read → write → cached read on the same path.
 8. **Bounded growth.** `BoundedCache` rejects no inserts but evicts oldest
@@ -516,7 +516,7 @@ correctness is anchored:
   the "Future Slices" section gains the v1 shape when this spec ships.
 - [`../design-docs/tool-runtime.md`](../design-docs/tool-runtime.md) —
   `tool::Output` v2 (the `{text, data_json, attachments, usage, is_error}`
-  shape in the design doc) is now the structured side of `file.read`; the
+  shape in the design doc) is now the structured side of `FileRead`; the
   header-line rendering remains the text fallback.
 - [`0013-workspace-and-path-policy.md`](0013-workspace-and-path-policy.md)
   — every path in the file-view system goes through `tool::Workspace`
@@ -538,10 +538,10 @@ correctness is anchored:
   `Output::data_json` so adapter work can switch without re-parsing prose.
 - **Fingerprint forgery.** A motivated adversary can produce a file with
   the same size + mtime as the original. Mitigation: high-trust paths
-  (`file.modify` v2, memory citations) set `compute_hash=true` and use the
-  SHA-256 token; low-trust paths (interactive `file.read`) skip the hash
+  (`FileModify` v2, memory citations) set `compute_hash=true` and use the
+  SHA-256 token; low-trust paths (interactive `FileRead`) skip the hash
   to stay cheap.
-- **Cache memory growth.** A pathological agent calls `file.read` on every
+- **Cache memory growth.** A pathological agent calls `FileRead` on every
   file in a 10 000-file repo. Mitigation: bounded LRU + byte budget +
   TTL; configurable via `runtime.file_view_cache.{max_entries,max_bytes,ttl_seconds}`.
 - **Watcher portability.** `asio` filesystem watchers are non-uniform
@@ -559,7 +559,7 @@ correctness is anchored:
 ```sh
 xmake build oran-io oran-tool
 xmake test test-io                    # ReadTextResult + FileRange + fingerprint suite
-xmake test test-tool                  # file.read v2 + file.edit token + cache suite
+xmake test test-tool                  # FileRead v2 + FileEdit token + cache suite
 xmake build bench-oran-io bench-oran-tool
 xmake run bench-oran-io  read_range   # full vs. 100-line range from 10 MiB file
 xmake run bench-oran-tool file_view_cache  # cold vs. hot, stat vs. SHA-256 validation
@@ -571,7 +571,7 @@ xmake run bench-oran-tool file_view_cache  # cold vs. hot, stat vs. SHA-256 vali
   the slice that lands them moves the old `read_text_file` overload to
   "compat alias".
 - `docs/design-docs/tool-runtime.md` "Tool Handler Shape" notes that
-  `file.read` v2 is the first built-in with a structured `Output::data_json`
+  `FileRead` v2 is the first built-in with a structured `Output::data_json`
   payload.
 - `docs/exec-plans/tech-debt-tracker.md` retires the deep-review §File
   read range / change detection / cache plan rows in the slice that

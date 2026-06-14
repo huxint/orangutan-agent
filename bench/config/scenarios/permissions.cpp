@@ -33,8 +33,8 @@ constexpr auto kTypedPermissionsConfig = std::string_view{R"json(
   "runtime": {"workers": 1},
   "permissions": {
     "allow": [
-      {"tool_pattern": "file.read"},
-      {"tool_pattern": "file.search"},
+      {"tool_pattern": "FileRead"},
+      {"tool_pattern": "FileSearch"},
       {"tool_pattern": "*", "capability": "read_file"},
       {"tool_pattern": "*", "capability": "read_memory"},
       {"tool_pattern": "*", "capability": "egress_http"}
@@ -42,11 +42,11 @@ constexpr auto kTypedPermissionsConfig = std::string_view{R"json(
     "deny": [
       {"tool_pattern": "*", "capability": "runtime_loader"},
       {"tool_pattern": "*", "capability": "delete_path"},
-      {"tool_pattern": "shell.exec(rm:*)"}
+      {"tool_pattern": "ShellExec(rm:*)"}
     ],
     "ask": [
-      {"tool_pattern": "file.write"},
-      {"tool_pattern": "file.edit"},
+      {"tool_pattern": "FileWrite"},
+      {"tool_pattern": "FileEdit"},
       {"tool_pattern": "*", "capability": "write_file"},
       {"tool_pattern": "*", "capability": "edit_file"},
       {"tool_pattern": "*", "capability": "spawn_subprocess"},
@@ -73,8 +73,8 @@ constexpr auto kInputPatternPermissionsConfig = std::string_view{R"json(
   "runtime": {"workers": 1},
   "permissions": {
     "allow": [
-      {"tool_pattern": "file.read"},
-      {"tool_pattern": "file.search"},
+      {"tool_pattern": "FileRead"},
+      {"tool_pattern": "FileSearch"},
       {"tool_pattern": "*", "capability": "read_file"},
       {"tool_pattern": "*", "capability": "read_memory"},
       {"tool_pattern": "*", "capability": "egress_http"}
@@ -82,14 +82,14 @@ constexpr auto kInputPatternPermissionsConfig = std::string_view{R"json(
     "deny": [
       {"tool_pattern": "*", "capability": "runtime_loader"},
       {"tool_pattern": "*", "capability": "delete_path"},
-      {"tool_pattern": "shell.exec", "input_pattern": "^rm -rf"},
-      {"tool_pattern": "shell.exec", "input_pattern": "^git push"},
-      {"tool_pattern": "shell.exec", "input_pattern": "^sudo"},
-      {"tool_pattern": "shell.exec", "input_pattern": "; *rm "}
+      {"tool_pattern": "ShellExec", "input_pattern": "^rm -rf"},
+      {"tool_pattern": "ShellExec", "input_pattern": "^git push"},
+      {"tool_pattern": "ShellExec", "input_pattern": "^sudo"},
+      {"tool_pattern": "ShellExec", "input_pattern": "; *rm "}
     ],
     "ask": [
-      {"tool_pattern": "file.write"},
-      {"tool_pattern": "file.edit"},
+      {"tool_pattern": "FileWrite"},
+      {"tool_pattern": "FileEdit"},
       {"tool_pattern": "*", "capability": "write_file"},
       {"tool_pattern": "*", "capability": "edit_file"},
       {"tool_pattern": "*", "capability": "spawn_subprocess"}

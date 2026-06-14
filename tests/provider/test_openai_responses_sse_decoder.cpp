@@ -95,7 +95,7 @@ constexpr std::string_view kToolResponse = R"json({
       "id": "fc_1",
       "type": "function_call",
       "call_id": "call_1",
-      "name": "file.read",
+      "name": "FileRead",
       "arguments": "{\"path\":\"README.md\"}",
       "status": "completed"
     }
@@ -147,13 +147,13 @@ TEST_CASE("openai responses sse decoder streams reasoning and function-call argu
           {"response.reasoning_summary_text.delta",
            R"({"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":"checking","sequence_number":1})"},
           {"response.output_item.added",
-           R"({"type":"response.output_item.added","output_index":0,"item":{"id":"fc_1","type":"function_call","status":"in_progress","call_id":"call_1","name":"file.read","arguments":""},"sequence_number":2})"},
+           R"({"type":"response.output_item.added","output_index":0,"item":{"id":"fc_1","type":"function_call","status":"in_progress","call_id":"call_1","name":"FileRead","arguments":""},"sequence_number":2})"},
           {"response.function_call_arguments.delta",
            R"({"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"{\"path\":","sequence_number":3})"},
           {"response.function_call_arguments.delta",
            R"({"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"\"README.md\"}","sequence_number":4})"},
           {"response.function_call_arguments.done",
-           R"({"type":"response.function_call_arguments.done","item_id":"fc_1","name":"file.read","output_index":0,"arguments":"{\"path\":\"README.md\"}","sequence_number":5})"},
+           R"({"type":"response.function_call_arguments.done","item_id":"fc_1","name":"FileRead","output_index":0,"arguments":"{\"path\":\"README.md\"}","sequence_number":5})"},
           {"response.completed",
            std::string{R"({"type":"response.completed","response":)"} + std::string{kToolResponse} +
                R"(,"sequence_number":6})"},
@@ -169,11 +169,11 @@ TEST_CASE("openai responses sse decoder streams reasoning and function-call argu
   REQUIRE(streamed->stop_reason == core::StopReason::tool_use);
   const auto& tool = std::get<core::ToolUseContent>(streamed->blocks.front());
   REQUIRE(tool.id == "call_1");
-  REQUIRE(tool.name == "file.read");
+  REQUIRE(tool.name == "FileRead");
   REQUIRE(tool.input_json == R"({"path":"README.md"})");
   REQUIRE(sink.log == std::vector<std::string>{
                           "thinking:checking",
-                          "tool_start:call_1:file.read",
+                          "tool_start:call_1:FileRead",
                           R"(tool_delta:call_1:{"path":)",
                           R"(tool_delta:call_1:"README.md"})",
                           "done",

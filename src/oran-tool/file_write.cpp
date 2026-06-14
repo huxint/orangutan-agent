@@ -1,4 +1,4 @@
-// src/oran-tool/file_write.cpp — `file.write` built-in.
+// src/oran-tool/file_write.cpp — `FileWrite` built-in.
 
 #include <oran/tool/builtins.hpp>
 
@@ -60,7 +60,7 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
 
   const auto& raw = parsed["max_bytes"];
   if (!raw.is_number_integer() || raw.is_number_float()) {
-    return std::unexpected(core::Error::invalid_argument("file.write: `max_bytes` must be a positive integer"));
+    return std::unexpected(core::Error::invalid_argument("FileWrite: `max_bytes` must be a positive integer"));
   }
 
   std::uint64_t value = 0U;
@@ -69,14 +69,14 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
   } else {
     const auto signed_value = raw.get<std::int64_t>();
     if (signed_value <= 0) {
-      return std::unexpected(core::Error::invalid_argument("file.write: `max_bytes` must be between 1 and 16777216")
+      return std::unexpected(core::Error::invalid_argument("FileWrite: `max_bytes` must be between 1 and 16777216")
                                  .with("value", std::to_string(signed_value)));
     }
     value = static_cast<std::uint64_t>(signed_value);
   }
 
   if (value == 0U || value > kMaxWriteBytes) {
-    return std::unexpected(core::Error::invalid_argument("file.write: `max_bytes` must be between 1 and 16777216")
+    return std::unexpected(core::Error::invalid_argument("FileWrite: `max_bytes` must be between 1 and 16777216")
                                .with("value", std::to_string(value))
                                .with("max_bytes", std::to_string(kMaxWriteBytes)));
   }
@@ -107,20 +107,20 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
   io::WriteTextOptions options{};
   if (parsed->contains("mode")) {
     if (!(*parsed)["mode"].is_string()) {
-      co_return std::unexpected(core::Error::invalid_argument("file.write: `mode` must be a string"));
+      co_return std::unexpected(core::Error::invalid_argument("FileWrite: `mode` must be a string"));
     }
     const auto mode_text = (*parsed)["mode"].get<std::string>();
     auto mode = core::parse_enum<io::WriteMode>(mode_text);
     if (!mode.has_value()) {
       co_return std::unexpected(
-          core::Error::invalid_argument("file.write: `mode` must be one of truncate|append|fail_if_exists")
+          core::Error::invalid_argument("FileWrite: `mode` must be one of truncate|append|fail_if_exists")
               .with("value", mode_text));
     }
     options.mode = *mode;
   }
   if (parsed->contains("create_parents")) {
     if (!(*parsed)["create_parents"].is_boolean()) {
-      co_return std::unexpected(core::Error::invalid_argument("file.write: `create_parents` must be a boolean"));
+      co_return std::unexpected(core::Error::invalid_argument("FileWrite: `create_parents` must be a boolean"));
     }
     options.create_parent_directories = (*parsed)["create_parents"].get<bool>();
   }
@@ -128,7 +128,7 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
   std::optional<std::string> expected_version;
   if (parsed->contains("expected_version")) {
     if (!(*parsed)["expected_version"].is_string()) {
-      co_return std::unexpected(core::Error::invalid_argument("file.write: `expected_version` must be a string"));
+      co_return std::unexpected(core::Error::invalid_argument("FileWrite: `expected_version` must be a string"));
     }
     expected_version = (*parsed)["expected_version"].get<std::string>();
   }
@@ -137,7 +137,7 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
   auto content = *std::move(content_field);
   const auto byte_count = content.size();
   if (static_cast<std::uintmax_t>(byte_count) > *max_bytes) {
-    co_return std::unexpected(core::Error::invalid_argument("file.write: `content` exceeds max_bytes")
+    co_return std::unexpected(core::Error::invalid_argument("FileWrite: `content` exceeds max_bytes")
                                   .with("path", path)
                                   .with("content_bytes", std::to_string(byte_count))
                                   .with("max_bytes", std::to_string(*max_bytes)));
@@ -157,22 +157,21 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
   // Pre-write fingerprint check: a stale `expected_version` aborts the
   // mutation before the temp-then-rename so the caller observes a
   // consistent `conflict / stale_fingerprint` response instead of a
-  // half-written file. A missing target is itself a mismatch — `file.write`
-  // is meant to be paired with a recent `file.read`, so vanishing-from-disk
+  // half-written file. A missing target is itself a mismatch — `FileWrite`
+  // is meant to be paired with a recent `FileRead`, so vanishing-from-disk
   // is the same "your token is stale, re-read" outcome.
   if (expected_version) {
     auto pre = io::compute_file_fingerprint(path);
     if (!pre) {
-      co_return std::unexpected(
-          core::Error{core::ErrorKind::conflict, "file.write: expected_version cannot be verified"}
-              .with("path", path)
-              .with("reason", "stale_fingerprint")
-              .with("detail", std::string{pre.error().message()}));
+      co_return std::unexpected(core::Error{core::ErrorKind::conflict, "FileWrite: expected_version cannot be verified"}
+                                    .with("path", path)
+                                    .with("reason", "stale_fingerprint")
+                                    .with("detail", std::string{pre.error().message()}));
     }
     const auto current_token = detail::version_token(path, *pre);
     if (*expected_version != current_token) {
       co_return std::unexpected(
-          core::Error{core::ErrorKind::conflict, "file.write: file has changed since the expected version"}
+          core::Error{core::ErrorKind::conflict, "FileWrite: file has changed since the expected version"}
               .with("path", path)
               .with("reason", "stale_fingerprint")
               .with("expected", *expected_version)
@@ -209,7 +208,7 @@ core::Result<void> register_file_write(Registry& registry) {
                      "\"truncate\"|\"append\"|\"fail_if_exists\" (default truncate), "
                      "\"create_parents\"?: bool (default false), \"max_bytes\"?: "
                      "positive integer <= 16777216 (default 16777216), "
-                     "\"expected_version\"?: <version token from a prior `file.read`>}. "
+                     "\"expected_version\"?: <version token from a prior `FileRead`>}. "
                      "When `expected_version` is supplied the call fails with "
                      "`conflict` (reason=stale_fingerprint, current `fingerprint` in "
                      "context) if the file's current version differs. Returns a brief "

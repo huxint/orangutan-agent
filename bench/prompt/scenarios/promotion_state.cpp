@@ -27,7 +27,7 @@ std::vector<std::string> promotion_names() {
   std::vector<std::string> names;
   names.reserve(20);
   for (int i = 0; i < 20; ++i) {
-    names.push_back("deferred.tool." + std::to_string(i));
+    names.push_back("DeferredTool" + std::to_string(i));
   }
   return names;
 }

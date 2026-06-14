@@ -11,7 +11,7 @@ A-vs-B comparisons:
   record, and a trivial in-process handler. The delta over `registry.lookup`
   is the dispatch overhead the agent loop pays per tool call.
 - `file_write.dispatch_truncate` vs. `file_write.dispatch_append`: full
-  `file.write` dispatch through the registry under each `WriteMode`,
+  `FileWrite` dispatch through the registry under each `WriteMode`,
   hitting a real 64-byte write to a tempfile. The two scenarios share
   every cost (permission eval + SHA-256 input hash + audit record + JSON
   parse + disk IO); the contrast measures whether the mode choice has
@@ -19,7 +19,7 @@ A-vs-B comparisons:
   future "buffered vs. unbuffered" or "direct vs. cached" write
   optimization would need to beat.
 - `file_edit.dispatch_unique_replace` vs.
-  `file_edit.dispatch_replace_all_many`: full `file.edit` dispatch on a
+  `file_edit.dispatch_replace_all_many`: full `FileEdit` dispatch on a
   1 KiB seed file. The unique-replace case finds and rewrites one
   occurrence; the replace-all case rewrites 64 occurrences spaced every
   16 bytes. Both scenarios pay the same per-call overhead (permission
@@ -28,7 +28,7 @@ A-vs-B comparisons:
   the bulk read/write at typical edit sizes. The baseline a future
   rope or in-place rewrite would need to beat.
 - `file_search.single_file_one_match` vs.
-  `file_search.recursive_dir_many_matches`: full `file.search` dispatch
+  `file_search.recursive_dir_many_matches`: full `FileSearch` dispatch
   rooted at a single file (one match across ~14 lines) vs. rooted at a
   4-file / 14-line directory tree (5 matches scattered across subfolders).
   Both scenarios share the fixed dispatch costs (permission eval +
@@ -38,7 +38,7 @@ A-vs-B comparisons:
   reaches for a tree rather than a single file. The baseline a future
   memory-mapped scan or parallel walker would need to beat.
 - `file_search.literal_match_1kib` vs. `file_search.regex_match_1kib`:
-  full `file.search` dispatch over the same ~1 KiB seed file (32 lines
+  full `FileSearch` dispatch over the same ~1 KiB seed file (32 lines
   × 32 bytes, one match in the middle). The literal path uses
   `std::string_view::contains`; the regex path routes the same pattern
   through `permission::InputPattern` and each line through

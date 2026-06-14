@@ -71,7 +71,7 @@ own library, its own tests, its own bench, its own design doc."
 > **Status (slice 101, 2026-05-25):** `oran-prompt` owns the first
 > deterministic `prompt::Builder` skeleton plus `prompt::PromotionState`,
 > `oran-agent` owns the narrow `agent::SessionState` surface that observes
-> successful `tool.search` output and promotes deferred matches into the
+> successful `ToolSearch` output and promotes deferred matches into the
 > next prompt snapshot, and `oran-provider` owns the cache-hint mapper plus
 > the slice-74 abstract `provider::System` / `EventSink` / `Route` surface
 > with the first concrete `provider::FakeProvider` (scripted-turn plan,
@@ -153,7 +153,7 @@ The agent loop owns:
   + JSON Schema) by delegating to `tool::CatalogRenderer`. Memoized per
   `ToolDef`; see [`tool-runtime.md`](tool-runtime.md).
 - **Deferred-tool index renderer** — section (3). Compact name + one-line
-  description listing; full schema arrives via `tool.search`. See
+  description listing; full schema arrives via `ToolSearch`. See
   [`tool-runtime.md`](tool-runtime.md) "Deferred Tools".
 - **Skills catalog renderer** — section (4). Compact listing only;
   activated skill bodies shift this section, never section (1). Slice 135 adds
@@ -161,7 +161,7 @@ The agent loop owns:
   section-4 owner in bootstrap. Slice 136 adds `skill::Loader` and has
   configured-route bootstrap snapshot `<workspace>/.orangutan/skills/*.md` into
   that catalog once before the first prompt while keeping skill bodies out of
-  the prompt. Slice 137 wires `skill.invoke` through the ordinary tool
+  the prompt. Slice 137 wires `SkillInvoke` through the ordinary tool
   dispatch path, returning the matched snapshot body as conversation-tail tool
   result text rather than changing the stable prompt prefix. Slice 138 replaces
   the one-shot directory load with a prompt-boundary `skill::WorkspaceSkillSnapshot`
@@ -169,12 +169,12 @@ The agent loop owns:
   the active turn still uses one coherent catalog/body snapshot. Slice 139 lets
   bootstrap callers select an `agents.<name>.skills_enabled` allowlist so the
   runner filters the workspace snapshot before rendering section 4 and before
-  serving `skill.invoke`; slice 140 maps the configured-route binary
+  serving `SkillInvoke`; slice 140 maps the configured-route binary
   `--agent <name>` selector into that runner-owned agent selection. Slice 141
   adds `agents.<name>.prompt_overlay` as the config-owned source for stable
   section-6 overlay bytes when callers have not supplied exact section text.
   Slice 142 adds `skill::ActiveSkill` markers and the versioned
-  `skill.invoke` activation metadata path: the active turn still receives the
+  `SkillInvoke` activation metadata path: the active turn still receives the
   skill body only as conversation-tail tool-result text, while the next prompt
   can render deterministic `Active Skill: <name>` rows in section 4 from
   successful transcript tool results that are still present in the current
@@ -193,9 +193,9 @@ The agent loop owns:
   runner clock, so configured-route section 4 drops deactivated and expired
   markers while the renderer stays clock-free.
   Slice 147 adds the first event-driven source: the permissioned
-  `skill.deactivate` built-in records a versioned `skill_deactivation`
+  `SkillDeactivate` built-in records a versioned `skill_deactivation`
   transcript result, and `skill::active_skills_from_transcript` nets it against
-  prior `skill.invoke` activations in transcript order (most recent event wins),
+  prior `SkillInvoke` activations in transcript order (most recent event wins),
   so the agent can drop an active skill mid-session without a config edit while
   the section-4 owner stays clock-free.
   Slice 149 exposes `skill::SkillActivationEvent` plus
@@ -225,7 +225,7 @@ conversation-progress bytes in sections (1)–(6). The minted section IDs are
 `memory_framing`, `per_agent_overlay`, and `conversation_tail`; all start at
 `cache_version=1` through `prompt::SectionVersions`. Slice 71 adds the
 promotion snapshot path, and slice 72 adds the first `oran-agent` owner for
-that path: `agent::SessionState` consumes successful `tool.search`
+that path: `agent::SessionState` consumes successful `ToolSearch`
 structured output, promotes deferred matches, and exposes the sorted snapshot
 for the next build. `bench-prompt` compares default, explicit, promoted, and
 promotion-state snapshot paths; `bench-agent` now pins no-promotion and
@@ -381,11 +381,11 @@ Skills come from `<workspace>/.orangutan/skills/`. The runtime watches that dire
 (asio + inotify on Linux) and re-renders the catalog without restart. Slice 135
 landed the first deterministic section-4 catalog renderer and owner boundary;
 slice 136 adds the first one-shot loader snapshot consumed by configured-route
-prompts, and slice 137 uses that snapshot for one-shot `skill.invoke` tool
+prompts, and slice 137 uses that snapshot for one-shot `SkillInvoke` tool
 calls. Slice 138 lands the prompt-boundary hot-reload path: `oran-skill` owns a
 watcher/signature-backed workspace snapshot, and `AgentPromptRunner` refreshes it
 before each prompt so the next turn sees add/update/remove changes while the
-current turn's prompt and `skill.invoke` body lookup stay consistent.
+current turn's prompt and `SkillInvoke` body lookup stay consistent.
 
 ### Provider Cost Awareness
 

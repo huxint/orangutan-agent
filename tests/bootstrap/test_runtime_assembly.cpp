@@ -751,7 +751,7 @@ TEST_CASE("RuntimeAssembly storage sink records events end-to-end", "[unit][boot
     auto assembly = std::move(*built);
 
     auto recorded =
-        co_await assembly.audit_sink().record(make_event("scope-A", "file.read", permission::AuditOutcome::allow));
+        co_await assembly.audit_sink().record(make_event("scope-A", "FileRead", permission::AuditOutcome::allow));
     REQUIRE(recorded.has_value());
   });
 }
@@ -767,7 +767,7 @@ TEST_CASE("RuntimeAssembly null sink discards events silently", "[unit][bootstra
     auto assembly = std::move(*built);
 
     auto recorded =
-        co_await assembly.audit_sink().record(make_event("scope-A", "file.read", permission::AuditOutcome::allow));
+        co_await assembly.audit_sink().record(make_event("scope-A", "FileRead", permission::AuditOutcome::allow));
     REQUIRE(recorded.has_value());
   });
 }
@@ -784,16 +784,16 @@ TEST_CASE("RuntimeAssembly approval broker round-trips a fresh token", "[unit][b
 
   const auto now = fixed_now();
   permission::ApprovalGrant grant{
-      .tool_name = "file.write",
+      .tool_name = "FileWrite",
       .input = "/tmp/note.txt",
       .identity = "operator-1",
       .ttl = std::chrono::seconds{60},
       .replay_max = 2,
   };
   auto token = assembly.approval_broker().approve(grant, now);
-  REQUIRE(token.tool_name == "file.write");
+  REQUIRE(token.tool_name == "FileWrite");
 
-  auto check = assembly.approval_broker().check(token, "file.write", "/tmp/note.txt", "operator-1", now);
+  auto check = assembly.approval_broker().check(token, "FileWrite", "/tmp/note.txt", "operator-1", now);
   REQUIRE(check.has_value());
 }
 
@@ -809,13 +809,13 @@ TEST_CASE("RuntimeAssembly approval broker rejects a cross-tool token", "[unit][
 
   const auto now = fixed_now();
   permission::ApprovalGrant grant{
-      .tool_name = "file.write",
+      .tool_name = "FileWrite",
       .input = "/tmp/note.txt",
       .identity = "operator-1",
   };
   auto token = assembly.approval_broker().approve(grant, now);
 
-  auto cross_tool = assembly.approval_broker().check(token, "file.delete", "/tmp/note.txt", "operator-1", now);
+  auto cross_tool = assembly.approval_broker().check(token, "FileDelete", "/tmp/note.txt", "operator-1", now);
   REQUIRE_FALSE(cross_tool.has_value());
   REQUIRE(cross_tool.error().kind() == core::ErrorKind::permission_denied);
 }

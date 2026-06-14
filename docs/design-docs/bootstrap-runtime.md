@@ -149,7 +149,7 @@ Session memory uses a separate `storage::Pool` and `storage::SessionRepository` 
 schema before opening the long-lived pool, optionally runs one bounded startup
 decay pass from `LongtermMemoryStartupDecayOptions`, and exposes both the backend
 and `memory::longterm::Runtime` for prompt-boundary recall and the read-only
-`memory.recall` tool plus the write-side `memory.remember` and `memory.forget`
+`MemoryRecall` tool plus the write-side `MemoryRemember` and `MemoryForget`
 tools. When vector memory is enabled, the assembly opens a separate
 `<workspace>/.orangutan/memory-vectors.db` pool with sqlite-vec auto extensions,
 migrates `memory::longterm::SqliteVecBackend`, and exposes both the vector
@@ -222,8 +222,8 @@ directories produce an empty catalog, loader errors fail before the loop, and
 `skill_catalog_loads()` exposes the number of snapshot reloads. Before rendering
 section 4, the runner asks `oran-skill` to resolve active skill markers through
 the current `skill::ActivationPolicy`. That policy currently derives markers
-from the already-loaded conversation transcript, nets successful `skill.invoke`
-activation and `skill.deactivate` deactivation tool-results that carry the
+from the already-loaded conversation transcript, nets successful `SkillInvoke`
+activation and `SkillDeactivate` deactivation tool-results that carry the
 versioned `data_json` records in transcript order (most recent event wins), overlays
 durable session activation rows loaded from `memory::session::Store`, and filters
 through the current loaded/allowed catalog entries so removed or disallowed skills do
@@ -264,7 +264,7 @@ prompt-boundary query. Omitting `kinds` preserves all-kind recall. Slice 167 add
 prompt text query, while `last_user_message` uses the latest prior user text
 when one exists so follow-up prompts can recall from session context.
 Slice 168 also installs `DispatchContext::memory_recall` for the runner-owned
-tool registry. The `memory.recall` built-in parses and gates the call in
+tool registry. The `MemoryRecall` built-in parses and gates the call in
 `oran-tool`, then bootstrap adapts the request to the assembly-owned
 `memory::longterm::Runtime` with the runner's stable `scope_key`; successful
 tool results return deterministic recall text, structured `memory_recall`
@@ -275,14 +275,14 @@ startup when the binary is built with `--vector_memory=y`: bootstrap enables the
 assembly-owned vector pool/backend, maps the configured hybrid limits/weights
 into `AgentPromptRunnerOptions::longterm_hybrid_search`, and the runner uses a
 deterministic local text embedding owner for prompt/query embeddings. Prompt
-boundary recall and `memory.recall` use `HybridRuntime`; `memory.remember` and
-`memory.forget` mirror vector upserts/deletes when a vector backend is present.
+boundary recall and `MemoryRecall` use `HybridRuntime`; `MemoryRemember` and
+`MemoryForget` mirror vector upserts/deletes when a vector backend is present.
 Default builds still reject `enabled=true` before `RuntimeAssembly::build` or
 provider construction with `ErrorKind::config`,
 `path=$.memory.longterm.hybrid_search.enabled`,
 `reason=build_option_disabled`, and `option=vector_memory`.
 Slice 169 installs `DispatchContext::memory_remember` beside that recall
-binding. The `memory.remember` built-in parses and gates one record-shaped write
+binding. The `MemoryRemember` built-in parses and gates one record-shaped write
 in `oran-tool`; bootstrap adapts it to the assembly-owned
 `memory::longterm::Backend`, stamps the runner's stable `scope_key` plus
 `DispatchContext::now` timestamps, publishes blocking `memory_write_before`
@@ -295,7 +295,7 @@ gate: `proceed` continues, `veto` returns a permission-denied tool error with
 consumer. After a successful lexical/vector write, the runner publishes
 advisory `memory_write_after` with the saved record.
 Slice 170 installs `DispatchContext::memory_forget` beside those memory
-bindings. The `memory.forget` built-in parses and gates one `{id}` delete in
+bindings. The `MemoryForget` built-in parses and gates one `{id}` delete in
 `oran-tool`; bootstrap adapts it to the assembly-owned
 `memory::longterm::Backend`, supplies the runner's stable `scope_key`, calls the
 backend's idempotent `remove(...)`, and returns confirmation text, structured
@@ -303,7 +303,7 @@ backend's idempotent `remove(...)`, and returns confirmation text, structured
 same provider re-entry path. Slice 179 publishes advisory `memory_forget` after
 that successful scoped delete. Slice 180 publishes advisory `memory_read_after`
 after successful prompt-boundary long-term recall and after successful
-`memory.recall` tool reads, for both lexical and hybrid recall paths. Memory
+`MemoryRecall` tool reads, for both lexical and hybrid recall paths. Memory
 lifecycle payloads carry runner identity, scope/id/source metadata, timing
 fields, and per-sink redaction: default hook sinks receive redacted summaries
 for writes and reads, while `trusted_local` sinks receive raw long-term memory
@@ -322,7 +322,7 @@ configured-route binary startup now maps `--agent <name>` into both
 controls permission overlay, prompt overlay, skill allowlist, audit/session
 agent key, and provider hook metadata.
 The same filtered document vector is the immutable source for the
-`skill.invoke` built-in during that runner's current turn: bootstrap installs a
+`SkillInvoke` built-in during that runner's current turn: bootstrap installs a
 `DispatchContext::skill_invoke` callback, and the tool dispatch path returns the
 matched markdown body as ordinary tool-result text for the next provider
 iteration without re-reading disk mid-turn. Successful invokes also return a
@@ -330,11 +330,11 @@ small structured activation record through `Output::data_json`; the next prompt
 boundary feeds that record through `skill::resolve_active_skills(...)` to mark
 the skill active in section 4 without parsing model-visible body text.
 Slice 147 installs a parallel `DispatchContext::skill_deactivate` callback over
-the same filtered document vector: `skill.deactivate` returns a versioned
+the same filtered document vector: `SkillDeactivate` returns a versioned
 `skill_deactivation` record in `Output::data_json`, and the next prompt boundary
 nets it against prior activations through the same transcript scan so a
 mid-session deactivation clears the section-4 marker without a config edit or a
-renderer clock. Slice 148 persists successful `skill.invoke` / `skill.deactivate`
+renderer clock. Slice 148 persists successful `SkillInvoke` / `SkillDeactivate`
 results as per-session activation rows after the turn succeeds. Those rows overlay
 the transcript-derived set on later prompts, so pruning old transcript tool results
 cannot lose the latest active/inactive decision. Slice 149 moves the transcript
@@ -352,7 +352,7 @@ the loop. After every successful turn the runner walks
 the new transcript suffix and feeds each tool result back through
 `agent::SessionState::observe_tool_output(...)` so the next turn's
 `promotion_snapshot(...)` sees deferred-tool promotions; the count of observed
-`tool.search` results is exposed for diagnostics through
+`ToolSearch` results is exposed for diagnostics through
 `tool_search_observations_recorded()`, and section render counters are exposed
 through `system_preamble_renders()` and `memory_framing_renders()`. The runner
 does not construct real provider adapters or read provider credentials.

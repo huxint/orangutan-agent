@@ -1,6 +1,6 @@
 // bench/tool/scenarios/file_edit.cpp
 //
-// A-vs-B comparison: full `file.edit` dispatch through the registry under
+// A-vs-B comparison: full `FileEdit` dispatch through the registry under
 // `unique_replace` (one match, `replace_all` omitted) vs. `replace_all_many`
 // (many matches, `replace_all=true`). Both scenarios pay the same fixed
 // costs (permission eval + libsodium SHA-256 of the input + audit record +

@@ -111,7 +111,7 @@ storage::AppendAuditEventRequest make_request(std::string scope_key, std::string
       .identity = "operator-1",
       .verdict = "allow",
       .outcome = std::move(outcome),
-      .reason = "rule #1 (allow: file.*)",
+      .reason = "rule #1 (allow: File*)",
   };
 }
 
@@ -186,7 +186,7 @@ TEST_CASE("AuditRepository append_event round-trips a typical decision row", "[u
     auto migrated = co_await repo.migrate();
     REQUIRE(migrated.has_value());
 
-    auto request = make_request("scope-A", "file.read", "allow");
+    auto request = make_request("scope-A", "FileRead", "allow");
     request.input_hash_hex = std::string(64, 'a');
     request.metadata_json = R"json({"source":"test"})json";
     auto appended = co_await repo.append_event(request);
@@ -194,9 +194,9 @@ TEST_CASE("AuditRepository append_event round-trips a typical decision row", "[u
     REQUIRE(appended->id > 0);
     REQUIRE(appended->event_kind == "permission_decision");
     REQUIRE(appended->scope_key == "scope-A");
-    REQUIRE(appended->tool_name == "file.read");
+    REQUIRE(appended->tool_name == "FileRead");
     REQUIRE(appended->outcome == "allow");
-    REQUIRE(appended->reason == "rule #1 (allow: file.*)");
+    REQUIRE(appended->reason == "rule #1 (allow: File*)");
     REQUIRE(appended->input_hash_hex.has_value());
     REQUIRE(*appended->input_hash_hex == std::string(64, 'a'));
     REQUIRE_FALSE(appended->parent_turn_id.has_value());
@@ -208,7 +208,7 @@ TEST_CASE("AuditRepository append_event round-trips a typical decision row", "[u
     REQUIRE(listed->size() == 1);
     REQUIRE((*listed)[0].id == appended->id);
     REQUIRE((*listed)[0].event_kind == "permission_decision");
-    REQUIRE((*listed)[0].tool_name == "file.read");
+    REQUIRE((*listed)[0].tool_name == "FileRead");
     REQUIRE_FALSE((*listed)[0].parent_turn_id.has_value());
 
     auto count = co_await repo.count_events("scope-A");
@@ -225,7 +225,7 @@ TEST_CASE("AuditRepository round-trips parent_turn_id blobs", "[unit][storage][a
     auto migrated = co_await repo.migrate();
     REQUIRE(migrated.has_value());
 
-    auto request = make_request("scope-A", "file.read", "allow");
+    auto request = make_request("scope-A", "FileRead", "allow");
     request.input_hash_hex = std::string(64, 'c');
     request.parent_turn_id = turn_id_with(0x10);
     auto appended = co_await repo.append_event(request);
@@ -249,7 +249,7 @@ TEST_CASE("AuditRepository stores a null input_hash when the caller omits it", "
     auto migrated = co_await repo.migrate();
     REQUIRE(migrated.has_value());
 
-    auto appended = co_await repo.append_event(make_request("scope-A", "file.read", "deny"));
+    auto appended = co_await repo.append_event(make_request("scope-A", "FileRead", "deny"));
     REQUIRE(appended.has_value());
     REQUIRE_FALSE(appended->input_hash_hex.has_value());
 
@@ -268,7 +268,7 @@ TEST_CASE("AuditRepository metadata update is scoped by parent_turn_id", "[unit]
     auto migrated = co_await repo.migrate();
     REQUIRE(migrated.has_value());
 
-    auto first = make_request("scope-A", "file.read", "allow");
+    auto first = make_request("scope-A", "FileRead", "allow");
     first.input_hash_hex = std::string(64, 'd');
     first.parent_turn_id = turn_id_with(0x10);
     first.metadata_json = R"json({"dispatch":{"sequence":1}})json";
@@ -283,7 +283,7 @@ TEST_CASE("AuditRepository metadata update is scoped by parent_turn_id", "[unit]
     auto updated = co_await repo.update_event_metadata(storage::UpdateAuditEventMetadataRequest{
         .scope_key = "scope-A",
         .agent_key = "coder",
-        .tool_name = "file.read",
+        .tool_name = "FileRead",
         .identity = "operator-1",
         .input_hash_hex = std::string(64, 'd'),
         .parent_turn_id = turn_id_with(0x10),
@@ -311,7 +311,7 @@ TEST_CASE("AuditRepository updates metadata for the matching audit row", "[unit]
     auto migrated = co_await repo.migrate();
     REQUIRE(migrated.has_value());
 
-    auto request = make_request("scope-A", "file.read", "allow");
+    auto request = make_request("scope-A", "FileRead", "allow");
     request.input_hash_hex = std::string(64, 'b');
     request.metadata_json = R"json({"dispatch":{"sequence":7}})json";
     auto appended = co_await repo.append_event(request);
@@ -320,7 +320,7 @@ TEST_CASE("AuditRepository updates metadata for the matching audit row", "[unit]
     auto updated = co_await repo.update_event_metadata(storage::UpdateAuditEventMetadataRequest{
         .scope_key = "scope-A",
         .agent_key = "coder",
-        .tool_name = "file.read",
+        .tool_name = "FileRead",
         .identity = "operator-1",
         .input_hash_hex = std::string(64, 'b'),
         .previous_metadata_json = R"json({"dispatch":{"sequence":7}})json",
@@ -345,15 +345,15 @@ TEST_CASE("AuditRepository list_events orders newest first and applies filters",
     auto migrated = co_await repo.migrate();
     REQUIRE(migrated.has_value());
 
-    auto a1 = co_await repo.append_event(make_request("scope-A", "file.read", "allow"));
+    auto a1 = co_await repo.append_event(make_request("scope-A", "FileRead", "allow"));
     REQUIRE(a1.has_value());
-    auto a2 = co_await repo.append_event(make_request("scope-A", "file.write", "deny"));
+    auto a2 = co_await repo.append_event(make_request("scope-A", "FileWrite", "deny"));
     REQUIRE(a2.has_value());
-    auto a3 = co_await repo.append_event(make_request("scope-A", "shell.exec", "approved"));
+    auto a3 = co_await repo.append_event(make_request("scope-A", "ShellExec", "approved"));
     REQUIRE(a3.has_value());
-    auto a4 = co_await repo.append_event(make_request("scope-B", "file.read", "allow"));
+    auto a4 = co_await repo.append_event(make_request("scope-B", "FileRead", "allow"));
     REQUIRE(a4.has_value());
-    auto hook_publish = make_request("scope-A", "file.read", "allow");
+    auto hook_publish = make_request("scope-A", "FileRead", "allow");
     hook_publish.event_kind = "hook_publish";
     hook_publish.metadata_json = R"json({"event":"tool_before","sink_id":"policy","decision_kind":"veto"})json";
     auto a5 = co_await repo.append_event(std::move(hook_publish));
@@ -363,18 +363,18 @@ TEST_CASE("AuditRepository list_events orders newest first and applies filters",
     REQUIRE(all.has_value());
     REQUIRE(all->size() == 4);
     REQUIRE((*all)[0].event_kind == "hook_publish");
-    REQUIRE((*all)[1].tool_name == "shell.exec");
-    REQUIRE((*all)[2].tool_name == "file.write");
-    REQUIRE((*all)[3].tool_name == "file.read");
+    REQUIRE((*all)[1].tool_name == "ShellExec");
+    REQUIRE((*all)[2].tool_name == "FileWrite");
+    REQUIRE((*all)[3].tool_name == "FileRead");
 
     auto only_deny =
         co_await repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-A", .outcome = "deny"});
     REQUIRE(only_deny.has_value());
     REQUIRE(only_deny->size() == 1);
-    REQUIRE((*only_deny)[0].tool_name == "file.write");
+    REQUIRE((*only_deny)[0].tool_name == "FileWrite");
 
     auto only_file_read =
-        co_await repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-A", .tool_name = "file.read"});
+        co_await repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-A", .tool_name = "FileRead"});
     REQUIRE(only_file_read.has_value());
     REQUIRE(only_file_read->size() == 2);
 
@@ -409,7 +409,7 @@ TEST_CASE("AuditRepository validates required fields", "[unit][storage][audit_re
     auto missing_scope = co_await repo.append_event(storage::AppendAuditEventRequest{
         .scope_key = "",
         .agent_key = "coder",
-        .tool_name = "file.read",
+        .tool_name = "FileRead",
         .identity = "op",
         .verdict = "allow",
         .outcome = "allow",
@@ -418,7 +418,7 @@ TEST_CASE("AuditRepository validates required fields", "[unit][storage][audit_re
     REQUIRE_FALSE(missing_scope.has_value());
     REQUIRE(missing_scope.error().kind() == core::ErrorKind::invalid_argument);
 
-    auto missing_event_kind = make_request("scope-A", "file.read", "allow");
+    auto missing_event_kind = make_request("scope-A", "FileRead", "allow");
     missing_event_kind.event_kind = "";
     auto missing_event_kind_result = co_await repo.append_event(std::move(missing_event_kind));
     REQUIRE_FALSE(missing_event_kind_result.has_value());
@@ -427,7 +427,7 @@ TEST_CASE("AuditRepository validates required fields", "[unit][storage][audit_re
     auto missing_metadata = co_await repo.append_event(storage::AppendAuditEventRequest{
         .scope_key = "scope-A",
         .agent_key = "coder",
-        .tool_name = "file.read",
+        .tool_name = "FileRead",
         .identity = "op",
         .verdict = "allow",
         .outcome = "allow",
@@ -453,14 +453,14 @@ TEST_CASE("AuditRepository validates required fields", "[unit][storage][audit_re
     auto update_missing_metadata = co_await repo.update_event_metadata(storage::UpdateAuditEventMetadataRequest{
         .scope_key = "scope-A",
         .agent_key = "coder",
-        .tool_name = "file.read",
+        .tool_name = "FileRead",
         .identity = "op",
         .previous_metadata_json = "",
     });
     REQUIRE_FALSE(update_missing_metadata.has_value());
     REQUIRE(update_missing_metadata.error().kind() == core::ErrorKind::invalid_argument);
 
-    auto zero_parent = make_request("scope-A", "file.read", "allow");
+    auto zero_parent = make_request("scope-A", "FileRead", "allow");
     zero_parent.parent_turn_id = core::TurnId{};
     auto zero_parent_result = co_await repo.append_event(std::move(zero_parent));
     REQUIRE_FALSE(zero_parent_result.has_value());
@@ -469,7 +469,7 @@ TEST_CASE("AuditRepository validates required fields", "[unit][storage][audit_re
     auto update_zero_parent = co_await repo.update_event_metadata(storage::UpdateAuditEventMetadataRequest{
         .scope_key = "scope-A",
         .agent_key = "coder",
-        .tool_name = "file.read",
+        .tool_name = "FileRead",
         .identity = "op",
         .parent_turn_id = core::TurnId{},
     });
@@ -518,7 +518,7 @@ COMMIT;
       auto inserted = writer->connection().execute(
           R"sql(
 INSERT INTO audit_events(scope_key, agent_key, tool_name, identity, verdict, outcome, reason, metadata_json, created_at)
-VALUES ('scope-A', 'coder', 'file.read', 'op', 'allow', 'allow', NULL, '{}', '2026-05-17T00:00:00.000Z')
+VALUES ('scope-A', 'coder', 'FileRead', 'op', 'allow', 'allow', NULL, '{}', '2026-05-17T00:00:00.000Z')
 )sql");
       REQUIRE(inserted.has_value());
     }
@@ -562,29 +562,29 @@ TEST_CASE("AuditRepository::list_events_for_turn preserves dispatch order and ig
     // Three rows belong to turn A under two scopes; one belongs to turn B; one
     // has no parent turn. The trace inspector must surface every turn-A row
     // regardless of scope and skip the unrelated rows.
-    auto first = make_request("scope-A", "file.read", "allow");
+    auto first = make_request("scope-A", "FileRead", "allow");
     first.parent_turn_id = turn_a;
     auto first_row = co_await repo.append_event(std::move(first));
     REQUIRE(first_row.has_value());
 
-    auto second = make_request("scope-A", "file.write", "allow");
+    auto second = make_request("scope-A", "FileWrite", "allow");
     second.event_kind = "hook_publish";
     second.parent_turn_id = turn_a;
     second.metadata_json = R"json({"event":"tool_before","sink_id":"policy","decision_kind":"proceed"})json";
     auto second_row = co_await repo.append_event(std::move(second));
     REQUIRE(second_row.has_value());
 
-    auto third = make_request("scope-B", "directory.list", "allow");
+    auto third = make_request("scope-B", "DirectoryList", "allow");
     third.parent_turn_id = turn_a;
     auto third_row = co_await repo.append_event(std::move(third));
     REQUIRE(third_row.has_value());
 
-    auto unrelated_turn = make_request("scope-A", "file.read", "deny");
+    auto unrelated_turn = make_request("scope-A", "FileRead", "deny");
     unrelated_turn.parent_turn_id = turn_b;
     auto unrelated_turn_row = co_await repo.append_event(std::move(unrelated_turn));
     REQUIRE(unrelated_turn_row.has_value());
 
-    auto no_turn = make_request("scope-A", "file.read", "allow");
+    auto no_turn = make_request("scope-A", "FileRead", "allow");
     auto no_turn_row = co_await repo.append_event(std::move(no_turn));
     REQUIRE(no_turn_row.has_value());
 
@@ -597,9 +597,9 @@ TEST_CASE("AuditRepository::list_events_for_turn preserves dispatch order and ig
     REQUIRE((*joined)[0].event_kind == "permission_decision");
     REQUIRE((*joined)[1].event_kind == "hook_publish");
     REQUIRE((*joined)[2].event_kind == "permission_decision");
-    REQUIRE((*joined)[0].tool_name == "file.read");
-    REQUIRE((*joined)[1].tool_name == "file.write");
-    REQUIRE((*joined)[2].tool_name == "directory.list");
+    REQUIRE((*joined)[0].tool_name == "FileRead");
+    REQUIRE((*joined)[1].tool_name == "FileWrite");
+    REQUIRE((*joined)[2].tool_name == "DirectoryList");
     REQUIRE((*joined)[2].scope_key == "scope-B");
 
     auto limited = co_await repo.list_events_for_turn(turn_a, 2);
@@ -645,51 +645,51 @@ TEST_CASE("AuditRepository::list_tool_call_rollups aggregates per-turn tool deci
     const auto turn_a = turn_id_with(0x10);
     const auto turn_b = turn_id_with(0x20);
 
-    auto read_hook = make_request("scope-A", "file.read", "allow");
+    auto read_hook = make_request("scope-A", "FileRead", "allow");
     read_hook.event_kind = "hook_publish";
     read_hook.parent_turn_id = turn_a;
     read_hook.metadata_json = R"json({"event":"tool_before","sink_id":"policy","decision_kind":"proceed"})json";
     REQUIRE((co_await repo.append_event(std::move(read_hook))).has_value());
 
-    auto read_fast = make_request("scope-A", "file.read", "allow");
+    auto read_fast = make_request("scope-A", "FileRead", "allow");
     read_fast.parent_turn_id = turn_a;
     read_fast.metadata_json = R"json({"usage":{"wall_time_ms":5.5,"bytes_read":32}})json";
     auto read_fast_row = co_await repo.append_event(std::move(read_fast));
     REQUIRE(read_fast_row.has_value());
 
-    auto read_approved = make_request("scope-A", "file.read", "approved");
+    auto read_approved = make_request("scope-A", "FileRead", "approved");
     read_approved.verdict = "ask";
     read_approved.parent_turn_id = turn_a;
     read_approved.metadata_json = R"json({"usage":{"wall_time_ms":1.5}})json";
     REQUIRE((co_await repo.append_event(std::move(read_approved))).has_value());
 
-    auto read_invalid_metadata = make_request("scope-A", "file.read", "allow");
+    auto read_invalid_metadata = make_request("scope-A", "FileRead", "allow");
     read_invalid_metadata.parent_turn_id = turn_a;
     read_invalid_metadata.metadata_json = "{not-json";
     REQUIRE((co_await repo.append_event(std::move(read_invalid_metadata))).has_value());
 
-    auto write_hook = make_request("scope-A", "file.write", "allow");
+    auto write_hook = make_request("scope-A", "FileWrite", "allow");
     write_hook.event_kind = "hook_publish";
     write_hook.parent_turn_id = turn_a;
     write_hook.metadata_json = R"json({"event":"tool_before","sink_id":"policy","decision_kind":"veto"})json";
     REQUIRE((co_await repo.append_event(std::move(write_hook))).has_value());
 
-    auto write_blocked = make_request("scope-A", "file.write", "blocked_by_hook");
+    auto write_blocked = make_request("scope-A", "FileWrite", "blocked_by_hook");
     write_blocked.parent_turn_id = turn_a;
     auto write_blocked_row = co_await repo.append_event(std::move(write_blocked));
     REQUIRE(write_blocked_row.has_value());
 
-    auto list_denied = make_request("scope-B", "directory.list", "deny");
+    auto list_denied = make_request("scope-B", "DirectoryList", "deny");
     list_denied.verdict = "deny";
     list_denied.parent_turn_id = turn_a;
     auto list_denied_row = co_await repo.append_event(std::move(list_denied));
     REQUIRE(list_denied_row.has_value());
 
-    auto other_turn = make_request("scope-A", "file.read", "allow");
+    auto other_turn = make_request("scope-A", "FileRead", "allow");
     other_turn.parent_turn_id = turn_b;
     REQUIRE((co_await repo.append_event(std::move(other_turn))).has_value());
 
-    auto no_turn = make_request("scope-A", "file.read", "allow");
+    auto no_turn = make_request("scope-A", "FileRead", "allow");
     REQUIRE((co_await repo.append_event(std::move(no_turn))).has_value());
 
     auto rows = co_await repo.list_tool_call_rollups(
@@ -698,7 +698,7 @@ TEST_CASE("AuditRepository::list_tool_call_rollups aggregates per-turn tool deci
     REQUIRE(rows->size() == 3);
 
     REQUIRE((*rows)[0].parent_turn_id == turn_a);
-    REQUIRE((*rows)[0].tool_name == "directory.list");
+    REQUIRE((*rows)[0].tool_name == "DirectoryList");
     REQUIRE((*rows)[0].first_audit_event_id == list_denied_row->id);
     REQUIRE((*rows)[0].last_audit_event_id == list_denied_row->id);
     REQUIRE((*rows)[0].decision_count == 1);
@@ -709,14 +709,14 @@ TEST_CASE("AuditRepository::list_tool_call_rollups aggregates per-turn tool deci
     REQUIRE((*rows)[0].total_wall_time_ms == 0.0);
     REQUIRE_FALSE((*rows)[0].average_wall_time_ms.has_value());
 
-    REQUIRE((*rows)[1].tool_name == "file.write");
+    REQUIRE((*rows)[1].tool_name == "FileWrite");
     REQUIRE((*rows)[1].last_audit_event_id == write_blocked_row->id);
     REQUIRE((*rows)[1].decision_count == 1);
     REQUIRE((*rows)[1].hook_publish_count == 1);
     REQUIRE((*rows)[1].permitted_count == 0);
     REQUIRE((*rows)[1].blocked_count == 1);
 
-    REQUIRE((*rows)[2].tool_name == "file.read");
+    REQUIRE((*rows)[2].tool_name == "FileRead");
     REQUIRE((*rows)[2].first_audit_event_id < read_fast_row->id);
     REQUIRE((*rows)[2].decision_count == 3);
     REQUIRE((*rows)[2].hook_publish_count == 1);
@@ -728,10 +728,10 @@ TEST_CASE("AuditRepository::list_tool_call_rollups aggregates per-turn tool deci
     REQUIRE(*(*rows)[2].average_wall_time_ms == 3.5);
 
     auto only_read = co_await repo.list_tool_call_rollups(
-        storage::ListToolCallRollupsOptions{.parent_turn_id = turn_a, .tool_name = "file.read", .limit = 10});
+        storage::ListToolCallRollupsOptions{.parent_turn_id = turn_a, .tool_name = "FileRead", .limit = 10});
     REQUIRE(only_read.has_value());
     REQUIRE(only_read->size() == 1);
-    REQUIRE((*only_read)[0].tool_name == "file.read");
+    REQUIRE((*only_read)[0].tool_name == "FileRead");
 
     auto global_limit = co_await repo.list_tool_call_rollups(storage::ListToolCallRollupsOptions{.limit = 1});
     REQUIRE(global_limit.has_value());

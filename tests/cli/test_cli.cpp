@@ -108,10 +108,10 @@ cli::CliOptions options(std::vector<std::string_view>& args, std::vector<std::st
 
 hook::PermissionAskRenderedPayload sample_ask_payload() {
   return hook::PermissionAskRenderedPayload{
-      .tool_name = "file.write",
+      .tool_name = "FileWrite",
       .input_json = R"({"path":"notes.txt","content":"hello"})",
       .who = hook::Identity{.scope_key = "scope-A", .agent_key = "coder", .identity = "operator-1"},
-      .decision_reason = "rule #2 (ask: file.write)",
+      .decision_reason = "rule #2 (ask: FileWrite)",
       .replay_max = 3,
       .approval_ttl = std::chrono::seconds{120},
       .requested_at = core::Time::epoch(),
@@ -120,7 +120,7 @@ hook::PermissionAskRenderedPayload sample_ask_payload() {
 
 hook::ToolBeforePayload sample_before_payload() {
   return hook::ToolBeforePayload{
-      .tool_name = "file.write",
+      .tool_name = "FileWrite",
       .input_json = R"({"path":"notes.txt","content":"hello"})",
       .who = hook::Identity{.scope_key = "scope-A", .agent_key = "coder", .identity = "operator-1"},
       .started_at = core::Time::epoch(),

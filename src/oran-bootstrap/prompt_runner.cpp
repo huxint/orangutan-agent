@@ -76,10 +76,10 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
   for (const auto& name : names) {
     auto parsed = core::parse_enum<memory::longterm::RecordKind>(name);
     if (!parsed) {
-      return std::unexpected(Error::invalid_argument("memory.recall: unknown kind").with("kind", name));
+      return std::unexpected(Error::invalid_argument("MemoryRecall: unknown kind").with("kind", name));
     }
     if (std::ranges::contains(kinds, *parsed)) {
-      return std::unexpected(Error::invalid_argument("memory.recall: kind filters must be unique").with("kind", name));
+      return std::unexpected(Error::invalid_argument("MemoryRecall: kind filters must be unique").with("kind", name));
     }
     kinds.push_back(*parsed);
   }
@@ -89,7 +89,7 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
 [[nodiscard]] Result<memory::longterm::RecordKind> parse_memory_tool_remember_kind(std::string_view name) {
   auto parsed = core::parse_enum<memory::longterm::RecordKind>(name);
   if (!parsed) {
-    return std::unexpected(Error::invalid_argument("memory.remember: unknown kind").with("kind", std::string{name}));
+    return std::unexpected(Error::invalid_argument("MemoryRemember: unknown kind").with("kind", std::string{name}));
   }
   return *parsed;
 }
@@ -275,7 +275,7 @@ filter_skill_documents(std::span<const skill::SkillDocument> documents,
                                                        std::string_view inputs_json) {
   std::string text;
   text.reserve(document.metadata.name.size() + document.body.size() + inputs_json.size() + 64U);
-  text.append("skill.invoke: ");
+  text.append("SkillInvoke: ");
   text.append(document.metadata.name);
   text.append("\ninputs: ");
   text.append(inputs_json);
@@ -287,7 +287,7 @@ filter_skill_documents(std::span<const skill::SkillDocument> documents,
 [[nodiscard]] std::string render_skill_deactivation_text(std::string_view skill_name) {
   std::string text;
   text.reserve(skill_name.size() + 48U);
-  text.append("skill.deactivate: ");
+  text.append("SkillDeactivate: ");
   text.append(skill_name);
   text.append("\nstatus: deactivated for this session");
   return text;
@@ -295,12 +295,12 @@ filter_skill_documents(std::span<const skill::SkillDocument> documents,
 
 [[nodiscard]] std::string render_memory_recall_tool_text(const memory::longterm::RecallResult& recalled) {
   if (recalled.hits.empty()) {
-    return "memory.recall: no matches";
+    return "MemoryRecall: no matches";
   }
 
   std::string text;
   std::format_to(std::back_inserter(text),
-                 "memory.recall: {} match{}\n",
+                 "MemoryRecall: {} match{}\n",
                  recalled.hits.size(),
                  recalled.hits.size() == 1 ? "" : "es");
   text.append(recalled.framing.section_text);
@@ -463,7 +463,7 @@ hook_identity(std::string_view scope_key, std::string_view agent_key, std::strin
 [[nodiscard]] std::string render_memory_remember_tool_text(const memory::longterm::Record& record) {
   std::string text;
   std::format_to(std::back_inserter(text),
-                 "memory.remember: saved {} record {}\n",
+                 "MemoryRemember: saved {} record {}\n",
                  core::enum_name(record.kind),
                  record.key.id);
   std::format_to(std::back_inserter(text), "title: {}", record.title);
@@ -474,7 +474,7 @@ hook_identity(std::string_view scope_key, std::string_view agent_key, std::strin
 }
 
 [[nodiscard]] std::string render_memory_forget_tool_text(const memory::longterm::RecordKey& key) {
-  return std::format("memory.forget: removed record {}", key.id);
+  return std::format("MemoryForget: removed record {}", key.id);
 }
 
 [[nodiscard]] std::vector<skill::SessionSkillActivation>
@@ -974,7 +974,7 @@ private:
       return document.metadata.name == skill_name;
     });
     if (match == skill_documents_.end()) {
-      return std::unexpected(Error::not_found("skill.invoke: skill is not loaded")
+      return std::unexpected(Error::not_found("SkillInvoke: skill is not loaded")
                                  .with("skill", std::string{skill_name})
                                  .with("reason", "skill_not_loaded"));
     }
@@ -1000,7 +1000,7 @@ private:
       return document.metadata.name == skill_name;
     });
     if (match == skill_documents_.end()) {
-      return std::unexpected(Error::not_found("skill.deactivate: skill is not loaded")
+      return std::unexpected(Error::not_found("SkillDeactivate: skill is not loaded")
                                  .with("skill", std::string{skill_name})
                                  .with("reason", "skill_not_loaded"));
     }
@@ -1025,7 +1025,7 @@ private:
 
     auto* runtime = assembly_->longterm_memory_runtime();
     if (runtime == nullptr) {
-      co_return std::unexpected(Error::invalid_argument("memory.recall: runtime service is not available")
+      co_return std::unexpected(Error::invalid_argument("MemoryRecall: runtime service is not available")
                                     .with("reason", "memory_runtime_unavailable"));
     }
     auto kinds = parse_memory_tool_recall_kinds(std::span<const std::string>{request.kinds});
@@ -1051,7 +1051,7 @@ private:
       const auto finished_at = core::time::now_utc();
       co_await publish_memory_read_after(*ctx.bus,
                                          hook_identity(ctx),
-                                         "memory.recall",
+                                         "MemoryRecall",
                                          std::move(query_text),
                                          request.limit,
                                          std::span<const memory::longterm::RecordKind>{*kinds},
@@ -1078,7 +1078,7 @@ private:
                                                                             tool::DispatchContext& ctx) const {
     auto* runtime = assembly_->longterm_hybrid_runtime();
     if (runtime == nullptr) {
-      co_return std::unexpected(Error::invalid_argument("memory.recall: hybrid runtime service is not available")
+      co_return std::unexpected(Error::invalid_argument("MemoryRecall: hybrid runtime service is not available")
                                     .with("reason", "hybrid_memory_runtime_unavailable"));
     }
     auto kinds = parse_memory_tool_recall_kinds(std::span<const std::string>{request.kinds});
@@ -1114,7 +1114,7 @@ private:
       const auto finished_at = core::time::now_utc();
       co_await publish_memory_read_after(*ctx.bus,
                                          hook_identity(ctx),
-                                         "memory.recall",
+                                         "MemoryRecall",
                                          std::move(query_text),
                                          result_limit,
                                          std::span<const memory::longterm::RecordKind>{*kinds},
@@ -1141,7 +1141,7 @@ private:
                                                                        tool::DispatchContext& ctx) const {
     auto* backend = assembly_->longterm_memory_backend();
     if (backend == nullptr) {
-      co_return std::unexpected(Error::invalid_argument("memory.remember: runtime service is not available")
+      co_return std::unexpected(Error::invalid_argument("MemoryRemember: runtime service is not available")
                                     .with("reason", "memory_runtime_unavailable"));
     }
     auto kind = parse_memory_tool_remember_kind(request.kind);
@@ -1227,7 +1227,7 @@ private:
                                                                      tool::DispatchContext& ctx) const {
     auto* backend = assembly_->longterm_memory_backend();
     if (backend == nullptr) {
-      co_return std::unexpected(Error::invalid_argument("memory.forget: runtime service is not available")
+      co_return std::unexpected(Error::invalid_argument("MemoryForget: runtime service is not available")
                                     .with("reason", "memory_runtime_unavailable"));
     }
 
@@ -1293,7 +1293,7 @@ private:
   // After a successful turn, walk the new transcript suffix for
   // (ToolUseContent, ToolResultContent) pairs and feed each result through
   // `agent::SessionState::observe_tool_output`. The session state filters by
-  // tool name (only `tool.search` drives promotion), so the work is best-effort
+  // tool name (only `ToolSearch` drives promotion), so the work is best-effort
   // and observation errors do not abort the prompt response — the loop has
   // already committed its audit/trace rows.
   void observe_turn_results(const std::vector<core::Message>& transcript, std::size_t start_index) {

@@ -38,14 +38,14 @@ core::ToolDef tool_def(std::string name, std::string description, bool deferred 
 
 std::vector<core::ToolDef> make_catalog() {
   return {
-      tool_def("file.read", "Read a file"),
-      tool_def("file.write", "Write a file"),
-      tool_def("file.edit", "Edit a file"),
-      tool_def("file.search", "Search files"),
-      tool_def("directory.list", "List a directory"),
-      tool_def("tool.search", "Search tools"),
-      tool_def("memory.recall", "Recall memory", true),
-      tool_def("agent.spawn", "Spawn an agent", true),
+      tool_def("FileRead", "Read a file"),
+      tool_def("FileWrite", "Write a file"),
+      tool_def("FileEdit", "Edit a file"),
+      tool_def("FileSearch", "Search files"),
+      tool_def("DirectoryList", "List a directory"),
+      tool_def("ToolSearch", "Search tools"),
+      tool_def("MemoryRecall", "Recall memory", true),
+      tool_def("AgentSpawn", "Spawn an agent", true),
   };
 }
 
@@ -86,9 +86,9 @@ void register_catalog_sections(ankerl::nanobench::Bench& bench) {
   prompt::Builder explicit_builder;
   auto explicit_tools = config::PromptActiveToolsConfig{
       .use_defaults = false,
-      .tool_names = {"file.read", "tool.search"},
+      .tool_names = {"FileRead", "ToolSearch"},
   };
-  const std::vector<std::string> promoted_tools{"memory.recall", "agent.spawn"};
+  const std::vector<std::string> promoted_tools{"MemoryRecall", "AgentSpawn"};
 
   bench.run("prompt.build_default_active_set", [&] {
     auto rendered = build_once(default_builder, catalog);

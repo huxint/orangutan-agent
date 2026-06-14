@@ -9,19 +9,19 @@ the remaining problem is that most built-ins and every future provider
 adapter still consume only the text fallback. Current built-ins still
 flatten structured facts into prose:
 
-- `file.read` returns the file body as text; range metadata, fingerprint,
+- `FileRead` returns the file body as text; range metadata, fingerprint,
   and truncation flag (spec 0011) have nowhere to live except a
   hand-rolled header line.
-- `file.search` returns one `<path>:<line>: <preview>` line per match; the
+- `FileSearch` returns one `<path>:<line>: <preview>` line per match; the
   match count, byte budget consumed, and per-file fingerprints are
   invisible.
-- The future `code.outline` / `code.symbols` (per
+- The future `CodeOutline` / `CodeSymbols` (per
   [`../design-docs/tool-runtime.md`](../design-docs/tool-runtime.md)
   "Built-in Tool Categories" and the deep-review §Tool design judgment)
   needs to return a structured symbol tree — converting it to markdown in
   the handler then reparsing it in the agent is a downstream-of-the-LLM
   anti-pattern.
-- `memory.recall` distinguishes *the records retrieved* from *the summary
+- `MemoryRecall` distinguishes *the records retrieved* from *the summary
   surfaced to the model* by returning model-facing recall text plus serialized
   `data_json` record metadata.
 
@@ -69,25 +69,25 @@ handlers can adopt without churning every callsite at once.
 > `AuditRepository::update_event_metadata(...)`. This preserves the one-row
 > permission-decision invariant while making bytes, touched-file counts,
 > match counts, wall time, and cap flags queryable from the audit log.
-> `file.read` carries its
+> `FileRead` carries its
 > requested text plus range/fingerprint tuple in serialized `data_json`
 > while keeping the spec-0011 text fallback, the current mutation built-ins
 > fill measured usage counters while keeping `data_json=nullopt` for the v1
-> migration path, `file.search` fills serialized `data_json` with
+> migration path, `FileSearch` fills serialized `data_json` with
 > `{kind:"file_search", path, pattern, regex, matches[], match_count,
 > truncated, truncation_reason, files_scanned, bytes_read}` plus usage
 > `bytes_read` / `files_touched` / `match_count` / `truncated`, and
-> `directory.list` fills serialized `data_json` with
+> `DirectoryList` fills serialized `data_json` with
 > `{kind:"directory_list", path, include_hidden, max_entries, entry_count,
 > entries[]}` plus usage `files_touched=1` and `match_count=entry_count`.
-> Slice 168 adds `memory.recall`, which fills `data_json` with
+> Slice 168 adds `MemoryRecall`, which fills `data_json` with
 > `{kind:"memory_recall", match_count, records[]}` plus
 > `usage.match_count`, while keeping deterministic recall text as the
 > provider fallback.
-> Slice 169 adds `memory.remember`, which fills `data_json` with
+> Slice 169 adds `MemoryRemember`, which fills `data_json` with
 > `{kind:"memory_remember", record:{...}}` plus `usage.bytes_written`, while
 > keeping a compact confirmation text as the provider fallback.
-> Slice 170 adds `memory.forget`, which fills `data_json` with
+> Slice 170 adds `MemoryForget`, which fills `data_json` with
 > `{kind:"memory_forget", record:{id, scope_key}}` plus
 > `usage.bytes_written = 0`, while keeping compact confirmation text as the
 > provider fallback.
@@ -189,7 +189,7 @@ handlers can adopt without churning every callsite at once.
   in the default view unless the consuming sink's `kind()` returns
   `SinkKind::trusted_local`, matching the deep-review §Hook/audit redaction
   recommendation. Slice 152 extends that same trust boundary to sensitive
-  mutation inputs: `file.write` / `file.edit` lifecycle payloads carry a
+  mutation inputs: `FileWrite` / `FileEdit` lifecycle payloads carry a
   `redacted_input_json` summary, and `hook::Bus` substitutes it in the shared
   default view while trusted-local sinks keep the raw input.
 - **Byte caps**. Two caps, independent:
@@ -204,39 +204,39 @@ handlers can adopt without churning every callsite at once.
   successful handler return; when `oran-agent` lands, the scheduler owns the
   options and calls the shared primitive before returning ordered results.
 - **Migration path.** Built-ins migrate one at a time:
-  1. `file.read` — shipped in slice 62: keeps the text header/body fallback
+  1. `FileRead` — shipped in slice 62: keeps the text header/body fallback
      and fills `data_json` with `{kind:"file_read", path, text, fingerprint,
      start_line, end_line, returned_bytes, truncated}` plus
      `usage.bytes_read`, `files_touched`, and `truncated`.
-  2. `file.search` — shipped in slice 63: keeps the existing
+  2. `FileSearch` — shipped in slice 63: keeps the existing
      `path:line:text` text rendering and trailing truncation summary, and
      fills `data_json` with `{kind:"file_search", path, pattern, regex,
      matches[], match_count, truncated, truncation_reason, files_scanned,
      bytes_read}` plus `usage.bytes_read` (cumulative scanned file bytes),
      `files_touched` (non-binary scanned files), `match_count`
      (post-truncation), and the `truncated` cap flag.
-  3. `directory.list` — shipped in slice 64: keeps the existing
+  3. `DirectoryList` — shipped in slice 64: keeps the existing
      `<path>:<kind>:<size_bytes or '-'>` text rendering, and fills
      `data_json` with `{kind:"directory_list", path, include_hidden,
      max_entries, entry_count, entries[]}` where each entry is
      `{name, path, kind, size_bytes}` (JSON null `size_bytes` for
      non-regular kinds) plus `usage.files_touched=1` and
      `usage.match_count=entry_count`.
-  4. `file.write` / `file.edit` / `file.delete` — shipped in slice 61:
-     `file.write` fills `usage.bytes_written` and `files_touched`;
-     `file.edit` fills `bytes_read`, `bytes_written`, `files_touched`,
-     and `match_count`; `file.delete` fills `bytes_written=0` and
+  4. `FileWrite` / `FileEdit` / `FileDelete` — shipped in slice 61:
+     `FileWrite` fills `usage.bytes_written` and `files_touched`;
+     `FileEdit` fills `bytes_read`, `bytes_written`, `files_touched`,
+     and `match_count`; `FileDelete` fills `bytes_written=0` and
      `files_touched=1`; `data_json` stays `nullopt` for v1.
-  5. `memory.recall` — shipped in slice 168: keeps a deterministic text
-     fallback (`memory.recall: <n> match(es)` plus recall framing), fills
+  5. `MemoryRecall` — shipped in slice 168: keeps a deterministic text
+     fallback (`MemoryRecall: <n> match(es)` plus recall framing), fills
      `data_json` with `{kind:"memory_recall", match_count, records[]}`, and
      fills `usage.match_count`.
-  6. `memory.remember` — shipped in slice 169: keeps a compact confirmation
-     fallback (`memory.remember: saved <kind> record <id>`), fills `data_json`
+  6. `MemoryRemember` — shipped in slice 169: keeps a compact confirmation
+     fallback (`MemoryRemember: saved <kind> record <id>`), fills `data_json`
      with `{kind:"memory_remember", record:{...}}`, and fills
      `usage.bytes_written` from the saved record payload.
-  7. `memory.forget` — shipped in slice 170: keeps a compact confirmation
-     fallback (`memory.forget: removed record <id>`), fills `data_json` with
+  7. `MemoryForget` — shipped in slice 170: keeps a compact confirmation
+     fallback (`MemoryForget: removed record <id>`), fills `data_json` with
      `{kind:"memory_forget", record:{id, scope_key}}`, and fills
      `usage.bytes_written = 0`.
   All built-ins shipped to date have completed their v1 migration to the
@@ -246,7 +246,7 @@ handlers can adopt without churning every callsite at once.
 ## Scope (v1.1)
 
 - **`Attachment` shape finalised** when the first tool produces one
-  (likely a `file.read` binary fallback or a `code.outline` rendered
+  (likely a `FileRead` binary fallback or a `CodeOutline` rendered
   graph). Until then `attachments` stays an empty vector — present in the
   envelope, absent in transport.
 - **Cost estimation surface.** Tools that consult an external service
@@ -262,7 +262,7 @@ handlers can adopt without churning every callsite at once.
 
 ## Scope (v2)
 
-- Streaming tool output. Long-running tools (`shell.exec`, future
+- Streaming tool output. Long-running tools (`ShellExec`, future
   `code.test`) emit chunks via a `tool::OutputSink` analogous to the
   provider streaming sink in
   [`../design-docs/api-portability.md`](../design-docs/api-portability.md).
@@ -277,7 +277,7 @@ handlers can adopt without churning every callsite at once.
   would force a recompile of every consumer, breaking the compile
   budget. The serialized `data_json` channel is the escape hatch that
   keeps the public header narrow.
-- Binary patch / diff representation. `file.modify` (spec 0011 v2)
+- Binary patch / diff representation. `FileModify` (spec 0011 v2)
   defines its own per-edit conflict shape inside `data_json`; a generic
   binary-diff attachment is out of scope until a real call site needs
   it.
@@ -321,7 +321,7 @@ handlers can adopt without churning every callsite at once.
    `ToolAfterPayload` delivered to a default sink contains the text fallback
    and byte/count metrics in `usage` but no raw `data_json`; the same payload
    delivered to a sink whose `kind()` returns `SinkKind::trusted_local`
-   contains the raw `data_json` field. For `file.write` / `file.edit`,
+   contains the raw `data_json` field. For `FileWrite` / `FileEdit`,
    default sinks receive a redacted `input_json` summary containing the full
    input hash plus byte counts, while trusted-local sinks receive the original
    mutation input. Pinned by hook-bus and registry two-sink tests.
@@ -360,7 +360,7 @@ handlers can adopt without churning every callsite at once.
   the existing `Adapter::send` contract changes only at the
   `tool_result` rendering site.
 - [`0011-file-view-and-caching.md`](0011-file-view-and-caching.md) —
-  the first structured caller: `file.read` v2's
+  the first structured caller: `FileRead` v2's
   `(path, text, start_line, end_line, fingerprint, returned_bytes,
   truncated)` payload now rides in `Output::data_json`, while v1 of 0011
   keeps the same facts as a text header for forward compatibility.
@@ -387,7 +387,7 @@ handlers can adopt without churning every callsite at once.
   agent loop sends the same `Output` value to every adapter; the
   adapter owns its serialisation. Cross-adapter A/B tests will extend
   `bench-provider` once the first protocol mapper lands.
-- **Spec 0011 timing dependency.** `file.read` v2's structured metadata
+- **Spec 0011 timing dependency.** `FileRead` v2's structured metadata
   is more useful with `Output` v2 shipped first. Mitigation: spec 0011
   v1 explicitly ships the same tuple as a text header so the two specs
   decouple — `Output` v2 is *required by* spec 0011 v1.1, not v1.

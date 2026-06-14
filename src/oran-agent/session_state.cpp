@@ -26,21 +26,21 @@ struct ToolSearchMatch {
 };
 
 [[nodiscard]] core::Error malformed_tool_search_output(std::string reason) {
-  return core::Error::invalid_argument("agent session: malformed tool.search output").with("reason", std::move(reason));
+  return core::Error::invalid_argument("agent session: malformed ToolSearch output").with("reason", std::move(reason));
 }
 
 [[nodiscard]] core::Result<json> parse_data_json(const tool::Output& output) {
   if (!output.data_json.has_value()) {
-    return std::unexpected(core::Error::invalid_argument("agent session: tool.search output is missing data_json"));
+    return std::unexpected(core::Error::invalid_argument("agent session: ToolSearch output is missing data_json"));
   }
 
   try {
     return json::parse(*output.data_json);
   } catch (const json::parse_error& e) {
-    return std::unexpected(core::Error::invalid_argument("agent session: tool.search data_json is not valid JSON")
+    return std::unexpected(core::Error::invalid_argument("agent session: ToolSearch data_json is not valid JSON")
                                .with("detail", e.what()));
   } catch (const std::exception& e) {
-    return std::unexpected(core::Error::invalid_argument("agent session: tool.search data_json is not valid JSON")
+    return std::unexpected(core::Error::invalid_argument("agent session: ToolSearch data_json is not valid JSON")
                                .with("detail", e.what()));
   }
 }

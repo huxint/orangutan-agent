@@ -19,7 +19,7 @@ invariants from `docs/rules/prompt-design.md`.
     single breakpoint before the conversation tail.
   - Keep the first slice independent of `oran-agent` / provider adapters.
 - Out of scope:
-  - Per-session promotion state from `tool.search` results.
+  - Per-session promotion state from `ToolSearch` results.
   - Memory and skill body renderers beyond empty/stub section inputs.
   - Provider adapter cache mapping and fake-provider agent-loop scenarios.
   - Generated prompt-schema or real prompt text polish beyond deterministic section

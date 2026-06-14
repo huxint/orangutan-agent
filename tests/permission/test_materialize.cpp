@@ -79,13 +79,13 @@ TEST_CASE("materialize(empty, empty) equals Defaults::for_mode", "[unit][permiss
 
 TEST_CASE("materialize appends global config rules after defaults", "[unit][permission][materialize]") {
   cfg::PermissionsConfig global;
-  global.rules.push_back(allow("custom.tool"));
+  global.rules.push_back(allow("CustomTool"));
 
   const auto rs = require_materialized(Mode::default_, global);
   REQUIRE(rs.size() == Defaults::for_mode(Mode::default_).size() + 1);
 
-  // The custom.tool literal is now allowed even without a capability scope.
-  REQUIRE(eval_no_caps(rs, "custom.tool") == Verdict::allow);
+  // The CustomTool literal is now allowed even without a capability scope.
+  REQUIRE(eval_no_caps(rs, "CustomTool") == Verdict::allow);
 
   // The defaults are still in place.
   const std::array<Capability, 1> read{Capability::read_file};
@@ -94,15 +94,15 @@ TEST_CASE("materialize appends global config rules after defaults", "[unit][perm
 
 TEST_CASE("materialize appends per-agent overlay after global", "[unit][permission][materialize]") {
   cfg::PermissionsConfig global;
-  global.rules.push_back(allow("global.only"));
+  global.rules.push_back(allow("GlobalOnly"));
 
   cfg::PermissionsConfig overlay;
-  overlay.rules.push_back(allow("agent.only"));
+  overlay.rules.push_back(allow("AgentOnly"));
 
   const auto rs = require_materialized(Mode::default_, global, overlay);
   REQUIRE(rs.size() == Defaults::for_mode(Mode::default_).size() + 2);
-  REQUIRE(eval_no_caps(rs, "global.only") == Verdict::allow);
-  REQUIRE(eval_no_caps(rs, "agent.only") == Verdict::allow);
+  REQUIRE(eval_no_caps(rs, "GlobalOnly") == Verdict::allow);
+  REQUIRE(eval_no_caps(rs, "AgentOnly") == Verdict::allow);
 }
 
 TEST_CASE("materialize maps config verdicts one-to-one", "[unit][permission][materialize]") {
@@ -185,19 +185,19 @@ TEST_CASE("materialize compiles config-side input_pattern into the runtime Rule"
   cfg::PermissionsConfig global;
   global.rules.push_back(cfg::PermissionRuleConfig{
       .verdict = cfg::PermissionVerdict::deny,
-      .tool_pattern = "shell.exec",
+      .tool_pattern = "ShellExec",
       .input_pattern = std::string{"^rm "},
   });
 
   const auto rs = require_materialized(Mode::permissive, global);
   // Input matches the regex -> rule fires.
-  const auto blocked = rs.evaluate("shell.exec", "rm -rf /tmp", {}, Mode::permissive);
+  const auto blocked = rs.evaluate("ShellExec", "rm -rf /tmp", {}, Mode::permissive);
   REQUIRE(blocked.verdict == Verdict::deny);
   REQUIRE(blocked.reason.contains("input=~"));
   REQUIRE(blocked.reason.contains("^rm "));
 
   // Non-matching input -> falls through.
-  const auto allowed = rs.evaluate("shell.exec", "ls -la", {}, Mode::permissive);
+  const auto allowed = rs.evaluate("ShellExec", "ls -la", {}, Mode::permissive);
   REQUIRE(allowed.verdict == Verdict::allow);
 }
 
@@ -209,7 +209,7 @@ TEST_CASE("materialize surfaces re2 compile failures on input_pattern",
   cfg::PermissionsConfig global;
   global.rules.push_back(cfg::PermissionRuleConfig{
       .verdict = cfg::PermissionVerdict::deny,
-      .tool_pattern = "shell.exec",
+      .tool_pattern = "ShellExec",
       .input_pattern = std::string{"[unclosed"},
   });
 
@@ -223,13 +223,13 @@ TEST_CASE("materialize forwards replay_max + approval_ttl_seconds from config in
   cfg::PermissionsConfig global;
   global.rules.push_back(cfg::PermissionRuleConfig{
       .verdict = cfg::PermissionVerdict::ask,
-      .tool_pattern = "file.write",
+      .tool_pattern = "FileWrite",
       .replay_max = std::uint32_t{4},
       .approval_ttl_seconds = std::int64_t{120},
   });
 
   const auto rs = require_materialized(Mode::strict, global);
-  const auto decision = rs.evaluate("file.write", Mode::strict);
+  const auto decision = rs.evaluate("FileWrite", Mode::strict);
   REQUIRE(decision.verdict == Verdict::ask);
   REQUIRE(decision.replay_max == 4);
   REQUIRE(decision.approval_ttl == std::chrono::seconds{120});
@@ -241,11 +241,11 @@ TEST_CASE("materialize keeps Rule defaults when config omits replay_max / approv
   // Both optional fields unset — operator omitted them.
   global.rules.push_back(cfg::PermissionRuleConfig{
       .verdict = cfg::PermissionVerdict::ask,
-      .tool_pattern = "shell.exec",
+      .tool_pattern = "ShellExec",
   });
 
   const auto rs = require_materialized(Mode::strict, global);
-  const auto decision = rs.evaluate("shell.exec", Mode::strict);
+  const auto decision = rs.evaluate("ShellExec", Mode::strict);
   REQUIRE(decision.verdict == Verdict::ask);
   REQUIRE(decision.replay_max == 8);
   REQUIRE(decision.approval_ttl == std::chrono::seconds{3600});

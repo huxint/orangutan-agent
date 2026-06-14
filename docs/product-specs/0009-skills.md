@@ -32,7 +32,7 @@ activate them on demand without bloating the system prompt.
   preamble. **Status (slices 142-149, 2026-06-04):** `oran-skill` can render
   deterministic `Active Skill: <name>` markers ahead of the ordinary compact
   skill entries. The current `skill::ActivationPolicy` derives markers from
-  versioned `skill.invoke` metadata in the session transcript and filters them
+  versioned `SkillInvoke` metadata in the session transcript and filters them
   through the current loaded/allowed catalog entries before section 4 is
   rendered for the next prompt. Slice 148 adds durable
   `session_skill_activations` rows as an overlay on that transcript-derived set,
@@ -50,7 +50,7 @@ activate them on demand without bloating the system prompt.
   configured-route renderer stays clock-free. Slice 149 exposes
   `skill::SkillActivationEvent` plus
   `skill::skill_activation_events_from_transcript(...)`, making the
-  transcript `skill.invoke` / `skill.deactivate` event scan a reusable
+  transcript `SkillInvoke` / `SkillDeactivate` event scan a reusable
   `oran-skill` public primitive for future CLI/web/channel/automation runtime
   owners instead of bootstrap-local parsing.
 - Section-4 cache semantics for activation policy.
@@ -67,7 +67,7 @@ activate them on demand without bloating the system prompt.
   read hidden clocks. Exact
   `AgentPromptRunnerOptions::skills_catalog` bytes remain an embedder/test
   bypass of automatic loader and policy handling.
-- `skill.invoke(name, inputs)` tool runs a loaded skill. **Status (slices
+- `SkillInvoke(name, inputs)` tool runs a loaded skill. **Status (slices
   137, 142, 148, and 149, 2026-06-04):** the built-in is registered in the default active
   catalog with `Capability::invoke_skill`, parses only `name` plus optional
   raw JSON `inputs`, delegates lookup through `DispatchContext::skill_invoke`,
@@ -83,14 +83,14 @@ activate them on demand without bloating the system prompt.
   turn succeeds. The tool layer owns parsing, permissions, audit, hooks,
   scheduler dispatch, and output caps; bootstrap owns the snapshot lookup so
   `oran-tool` does not depend on `oran-skill`.
-- `skill.deactivate(name)` tool clears a loaded skill's active marker. **Status
+- `SkillDeactivate(name)` tool clears a loaded skill's active marker. **Status
   (slices 147-149, 2026-06-04):** the built-in is registered in the default active
   catalog with `Capability::deactivate_skill`, parses only `{"name": <string>}`,
   delegates through `DispatchContext::skill_deactivate`, and returns a short
   confirmation plus a versioned `data_json` deactivation record
   (`kind=skill_deactivation`, `version=1`, `name`). The prompt-boundary
-  `skill::active_skills_from_transcript` scan nets `skill.invoke` activations
-  against `skill.deactivate` deactivations in transcript order, so the most
+  `skill::active_skills_from_transcript` scan nets `SkillInvoke` activations
+  against `SkillDeactivate` deactivations in transcript order, so the most
   recent transcript event for a skill decides whether it stays active; the
   record stays out of sections (1)-(6) and travels only as a section-7
   tool-result `data_json`. When session memory is enabled, bootstrap persists
@@ -110,7 +110,7 @@ activate them on demand without bloating the system prompt.
   `agents.<name>` entry via `AgentPromptRunnerOptions::agent_config_name` (or
   fall back to `permission_agent_name`). When the field is absent, all loaded
   workspace skills remain visible. When it is present, the runner filters both
-  the compact section-4 catalog and the `skill.invoke` document snapshot to
+  the compact section-4 catalog and the `SkillInvoke` document snapshot to
   that allowlist before each prompt-boundary snapshot replacement. A
   disallowed skill name therefore behaves like any other unloaded skill at
   invocation time. Configured-route binary startup maps `--agent <name>` into
@@ -125,11 +125,11 @@ activate them on demand without bloating the system prompt.
 - Durable skill activation policy beyond per-agent config inputs is now shipped
   for the session-memory path. Slice 146 added per-agent `skills_deactivated` /
   `skills_expirations` config (the first runtime-owned source), slice 147
-  adds the permissioned `skill.deactivate` built-in (capability
+  adds the permissioned `SkillDeactivate` built-in (capability
   `deactivate_skill`): a successful call records a versioned `skill_deactivation`
   transcript result so the agent can drop an active skill mid-session without a
   config edit. `skill::active_skills_from_transcript` nets that result against
-  prior `skill.invoke` activations in transcript order (most recent event wins),
+  prior `SkillInvoke` activations in transcript order (most recent event wins),
   so the change lands at the next prompt boundary only. Slice 148 adds a
   session-store-backed activation record that overlays transcript-derived state
   and survives transcript compaction/pruning; slice 149 promotes the
@@ -153,12 +153,12 @@ activate them on demand without bloating the system prompt.
    agent's initial skill catalog snapshot. Add/update/remove changes are
    reflected on the next prompt after the filesystem event is visible; no
    restart is required.
-2. `skill.invoke("release-note", { since: "v1.2", ... })` runs the skill and the
+2. `SkillInvoke("release-note", { since: "v1.2", ... })` runs the skill and the
    agent produces output consistent with the skill template.
 3. Removing the skill file from disk removes it from the next prompt's catalog
    without restart, while any already-running turn keeps its coherent snapshot.
 4. Skill activation is observable via the `tool_after` hook with
-   `tool_name = "skill.invoke"`, and the next prompt marks successful
+   `tool_name = "SkillInvoke"`, and the next prompt marks successful
    transcript-backed invocations as active in section 4 while the active turn's
    cached prefix remains unchanged.
 5. Activation policy changes affect section 4 only at prompt boundaries. Given
@@ -170,7 +170,7 @@ activate them on demand without bloating the system prompt.
 6. `tests/skill/` ≥ 80% coverage. Slices 142-146 add activation metadata,
    active-marker, and explicit activation/deactivation/expiration policy
    coverage, plus config-sourced deactivation/expiration; slice 147 adds
-   transcript-event `skill.deactivate` coverage (`tests/skill`, `tests/tool`,
+   transcript-event `SkillDeactivate` coverage (`tests/skill`, `tests/tool`,
   `tests/core`); slice 148 adds durable session activation overlay coverage
   (`tests/skill`, `tests/storage`, `tests/memory`, `tests/bootstrap`), and
   slice 149 adds public activation-event extractor coverage in `tests/skill`.

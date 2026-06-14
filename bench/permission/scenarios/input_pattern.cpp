@@ -52,7 +52,7 @@ using permission::Verdict;
   RuleSet rs;
   rs.add(Rule{
       .verdict = Verdict::deny,
-      .tool_pattern = "shell.exec",
+      .tool_pattern = "ShellExec",
       .input_pattern = std::move(*pat),
   });
   return rs;
@@ -62,7 +62,7 @@ using permission::Verdict;
   RuleSet rs;
   rs.add(Rule{
       .verdict = Verdict::deny,
-      .tool_pattern = "shell.exec",
+      .tool_pattern = "ShellExec",
   });
   return rs;
 }
@@ -76,17 +76,17 @@ void register_input_pattern_scenarios(ankerl::nanobench::Bench& b) {
   const auto non_matching_input = std::string_view{"ls -la /tmp/scratch"};
 
   b.run("permission.input_pattern_match", [&] {
-    auto decision = patterned_rs.evaluate("shell.exec", matching_input, {}, Mode::permissive);
+    auto decision = patterned_rs.evaluate("ShellExec", matching_input, {}, Mode::permissive);
     ankerl::nanobench::doNotOptimizeAway(decision.verdict);
   });
 
   b.run("permission.input_pattern_miss", [&] {
-    auto decision = patterned_rs.evaluate("shell.exec", non_matching_input, {}, Mode::permissive);
+    auto decision = patterned_rs.evaluate("ShellExec", non_matching_input, {}, Mode::permissive);
     ankerl::nanobench::doNotOptimizeAway(decision.verdict);
   });
 
   b.run("permission.no_input_pattern", [&] {
-    auto decision = plain_rs.evaluate("shell.exec", matching_input, {}, Mode::permissive);
+    auto decision = plain_rs.evaluate("ShellExec", matching_input, {}, Mode::permissive);
     ankerl::nanobench::doNotOptimizeAway(decision.verdict);
   });
 }

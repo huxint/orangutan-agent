@@ -45,7 +45,7 @@ namespace {
 
 void add_noop_tool(tool::Registry& registry) {
   auto def = core::ToolDef{
-      .name = "bench.noop",
+      .name = "BenchNoop",
       .description = "No-op bench tool",
       .input_schema_json = R"({"type":"object","properties":{},"additionalProperties":true})",
       .required_capabilities = {},
@@ -95,7 +95,7 @@ void register_scheduler_overhead(ankerl::nanobench::Bench& bench) {
     asio::co_spawn(
         io,
         [&]() -> async::Awaitable<void> {
-          auto out = co_await registry.dispatch("bench.noop", "{}", ctx);
+          auto out = co_await registry.dispatch("BenchNoop", "{}", ctx);
           ok = out.has_value();
         },
         asio::detached);
@@ -114,7 +114,7 @@ void register_scheduler_overhead(ankerl::nanobench::Bench& bench) {
         io,
         [&]() -> async::Awaitable<void> {
           std::vector<agent::ToolBatchCall> batch;
-          batch.push_back(agent::ToolBatchCall{.tool_use_id = "b", .name = "bench.noop", .input_json = "{}"});
+          batch.push_back(agent::ToolBatchCall{.tool_use_id = "b", .name = "BenchNoop", .input_json = "{}"});
           auto out = co_await scheduler.run_batch(std::move(batch), ctx);
           ok = out.has_value() && out->size() == 1 && (*out)[0].output.has_value();
         },

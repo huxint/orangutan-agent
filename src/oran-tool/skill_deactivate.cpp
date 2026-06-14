@@ -1,4 +1,4 @@
-// src/oran-tool/skill_deactivate.cpp - `skill.deactivate` built-in.
+// src/oran-tool/skill_deactivate.cpp - `SkillDeactivate` built-in.
 
 #include <oran/tool/builtins.hpp>
 
@@ -33,7 +33,7 @@ constexpr std::string_view kSkillDeactivateSchema =
     return std::unexpected(std::move(name).error());
   }
   if (name->empty()) {
-    return std::unexpected(core::Error::invalid_argument("skill.deactivate: `name` must be non-empty"));
+    return std::unexpected(core::Error::invalid_argument("SkillDeactivate: `name` must be non-empty"));
   }
   return std::move(*name);
 }
@@ -45,7 +45,7 @@ constexpr std::string_view kSkillDeactivateSchema =
     co_return std::unexpected(std::move(name).error());
   }
   if (!ctx.skill_deactivate) {
-    co_return std::unexpected(core::Error::invalid_argument("skill.deactivate: runtime service is not available")
+    co_return std::unexpected(core::Error::invalid_argument("SkillDeactivate: runtime service is not available")
                                   .with("reason", "skill_runtime_unavailable")
                                   .with("skill", *name));
   }

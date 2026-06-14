@@ -89,7 +89,7 @@ struct AgentPromptRunnerOptions {
   /// embedders/config can opt in explicitly after choosing query policy.
   LongtermRecallOptions longterm_recall{};
   /// Optional hybrid long-term search policy. When enabled, prompt-boundary
-  /// recall and `memory.recall` combine lexical search with the assembly-owned
+  /// recall and `MemoryRecall` combine lexical search with the assembly-owned
   /// vector backend; memory writes/deletes maintain the vector index.
   LongtermHybridSearchOptions longterm_hybrid_search{};
   std::string memory_framing{};
@@ -147,9 +147,9 @@ public:
 
   [[nodiscard]] std::size_t prompts_processed() const noexcept;
   [[nodiscard]] std::size_t approval_prompts_rendered() const noexcept;
-  /// Count of `tool.search` results the runner fed back into the per-session
+  /// Count of `ToolSearch` results the runner fed back into the per-session
   /// `agent::SessionState` after each turn. The counter increments once per
-  /// observed `tool.search` tool_result, including ones that returned no
+  /// observed `ToolSearch` tool_result, including ones that returned no
   /// deferred matches.
   [[nodiscard]] std::size_t tool_search_observations_recorded() const noexcept;
   /// Count of prompt memory-framing renders performed at the runner boundary.

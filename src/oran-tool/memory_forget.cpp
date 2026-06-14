@@ -1,4 +1,4 @@
-// src/oran-tool/memory_forget.cpp - `memory.forget` built-in.
+// src/oran-tool/memory_forget.cpp - `MemoryForget` built-in.
 
 #include <oran/tool/builtins.hpp>
 
@@ -32,7 +32,7 @@ constexpr std::string_view kMemoryForgetSchema =
     return std::unexpected(std::move(id).error());
   }
   if (id->empty()) {
-    return std::unexpected(core::Error::invalid_argument("memory.forget: `id` must be non-empty").with("field", "id"));
+    return std::unexpected(core::Error::invalid_argument("MemoryForget: `id` must be non-empty").with("field", "id"));
   }
   return std::move(*id);
 }
@@ -60,7 +60,7 @@ constexpr std::string_view kMemoryForgetSchema =
     co_return std::unexpected(std::move(parsed).error());
   }
   if (!ctx.memory_forget) {
-    co_return std::unexpected(core::Error::invalid_argument("memory.forget: runtime service is not available")
+    co_return std::unexpected(core::Error::invalid_argument("MemoryForget: runtime service is not available")
                                   .with("reason", "memory_runtime_unavailable")
                                   .with("id", parsed->id));
   }

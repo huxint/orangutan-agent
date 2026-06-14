@@ -239,7 +239,7 @@ merged `RuleSet` programmatically.
 ```cpp
 struct Rule {
   Verdict     verdict;        // allow | deny | ask
-  std::string tool_pattern;   // glob: "file.*", "shell.exec", "memory.write"
+  std::string tool_pattern;   // glob: "File*", "ShellExec", "MemoryWrite"
   std::optional<InputPattern> input_pattern;  // optional, runtime regex
   std::optional<Capability>   capability;     // gate by capability
   std::optional<std::string>  reason;         // human-readable in approval prompt
@@ -250,16 +250,16 @@ struct Rule {
 
 ```yaml
 allow:
-  - file.read
-  - file.search
-  - "shell.exec(/bin/{ls,cat,head,tail,grep,find}:*)"
+  - FileRead
+  - FileSearch
+  - "ShellExec(/bin/{ls,cat,head,tail,grep,find}:*)"
 deny:
-  - "shell.exec(rm:*)"
-  - "shell.exec(git push *)"
+  - "ShellExec(rm:*)"
+  - "ShellExec(git push *)"
 ask:
-  - file.write
-  - file.edit
-  - "shell.exec"
+  - FileWrite
+  - FileEdit
+  - "ShellExec"
 ```
 
 ### Modes
@@ -310,8 +310,8 @@ deny:
 This is more expressive than "match by tool name" and survives tool renames.
 
 Skill-management tools are capability-gated too: `invoke_skill` runs a loaded
-skill (`skill.invoke`) and `deactivate_skill` clears its active marker
-(`skill.deactivate`, slice 147), so an operator can allow or deny each
+skill (`SkillInvoke`) and `deactivate_skill` clears its active marker
+(`SkillDeactivate`, slice 147), so an operator can allow or deny each
 independently. Neither carries an explicit `Defaults::for_mode` rule, so both
 inherit the per-mode catch-all (`ask` in `default`, `deny` in
 `strict`/`sandboxed`, `allow` in `permissive`).
@@ -387,8 +387,8 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > payloads that carry `input_json` also carry an optional
 > `redacted_input_json`, and both advisory and blocking bus
 > publishes substitute that sanitized view for non-trusted
-> sinks. `Registry::dispatch` fills the field for `file.write`
-> and `file.edit` with a compact JSON object containing
+> sinks. `Registry::dispatch` fills the field for `FileWrite`
+> and `FileEdit` with a compact JSON object containing
 > `kind=redacted_tool_input`, `tool_name`, the full
 > SHA-256 `input_hash`, `input_bytes`, and the redacted string
 > byte counts (`content_bytes` or `old_string_bytes` /
@@ -405,7 +405,7 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > receiving memory content.
 > Slice 180 extends that trust boundary to long-term memory reads:
 > `MemoryReadPayload` carries the raw recall `query`, source label
-> (`prompt_boundary` or `memory.recall`), limit, kind filters, match
+> (`prompt_boundary` or `MemoryRecall`), limit, kind filters, match
 > count, timing, hybrid flag, and hit scores plus records. The bus clears
 > `query`, hit titles/bodies/tags, and linked ids for default sinks while
 > preserving query byte count and record byte/count metadata; trusted-local
@@ -539,14 +539,14 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > timing fields, but no prompt text, messages, headers, credentials, or raw
 > provider bodies. Slice 179 adds the first memory write/delete lifecycle
 > producer at the bootstrap callback boundary: `AgentPromptRunner` publishes
-> blocking `memory_write_before` for `memory.remember` after parsing/scoping the
+> blocking `memory_write_before` for `MemoryRemember` after parsing/scoping the
 > record and before mutating the lexical/vector backends; `veto` returns
 > `ErrorKind::permission_denied` with `reason=blocked_by_hook`, while
 > `rewrite` and `require_approval` are rejected as unsupported for this
 > consumer. Successful writes publish advisory `memory_write_after`, and
-> successful `memory.forget` calls publish advisory `memory_forget`. Slice 180
+> successful `MemoryForget` calls publish advisory `memory_forget`. Slice 180
 > adds the read-side advisory producer: prompt-boundary long-term recall and
-> the `memory.recall` tool publish `memory_read_after` after successful lexical
+> the `MemoryRecall` tool publish `memory_read_after` after successful lexical
 > or hybrid recall, with query/hit content redacted for default sinks. Blocking
 > `memory_read_before` remains a declared event without a runtime consumer. Slice
 > 186 adds the startup decay producer: configured-route startup publishes

@@ -60,11 +60,11 @@ with persistent session history and a CLI surface. The first deliverable is "I c
   configured + working end-to-end is acceptance; the other is built and bench-only).
 - CLI REPL **and** single-shot (`--prompt`) modes.
 - Tool calls dispatched through `oran-tool` to:
-  - `file.read`
-  - `file.write`
-  - `file.edit`
-  - `file.search`
-  - `shell.exec` (sandboxed)
+  - `FileRead`
+  - `FileWrite`
+  - `FileEdit`
+  - `FileSearch`
+  - `ShellExec` (sandboxed)
 - Session history persisted to `sessions.db` through the configured-route
   bootstrap runner.
 - Hook bus skeleton — at least `tool.before` and `tool.after` events firing to a shell
@@ -95,7 +95,7 @@ with persistent session history and a CLI surface. The first deliverable is "I c
 5. After 100 turns of a conversation, the session file is < 1 MB and
    re-loadable. **(Session persistence now ships through the configured-route
    bootstrap runner; the remaining check is size/robustness under long runs.)**
-6. The permission engine refuses `shell.exec("rm -rf ...")` by default with an
+6. The permission engine refuses `ShellExec("rm -rf ...")` by default with an
    audited entry.
 7. A `tool.after` shell hook fires for every tool call, observable in
    `<workspace>/.orangutan/audit.db`.
@@ -124,9 +124,9 @@ Welcome to Orangutan v2. Type your message; Ctrl-C cancels; /help for commands.
 > Find the largest C++ file in this repo and explain its top-level structure.
 
 [thinking...]
-[tool: file.search { pattern = "*.cpp", sort = "size" }]
+[tool: FileSearch { pattern = "*.cpp", sort = "size" }]
   → src/oran-agent/loop.cpp (4128 lines)
-[tool: file.read { path = "src/oran-agent/loop.cpp", lines = "1-80" }]
+[tool: FileRead { path = "src/oran-agent/loop.cpp", lines = "1-80" }]
 
 The largest file is src/oran-agent/loop.cpp at 4128 lines. Its top-level structure:
 

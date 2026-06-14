@@ -1,9 +1,9 @@
-// src/oran-tool/file_search.cpp — `file.search` built-in.
+// src/oran-tool/file_search.cpp — `FileSearch` built-in.
 //
 // Slice 20 shipped literal-substring matching; slice 24 adds the
 // `"regex": true` opt-in tracked in `docs/exec-plans/tech-debt-tracker.md`.
 // Slice 63 (2026-05-24) closes spec 0014's "structured `data_json` migration
-// for `file.search`" item: successful calls keep the existing
+// for `FileSearch`" item: successful calls keep the existing
 // `path:line:text` text rendering for current callers AND fill
 // `Output::data_json` with a serialized `{kind:"file_search", path, pattern,
 // regex, matches[], match_count, truncated, truncation_reason, files_scanned,
@@ -19,7 +19,7 @@
 // continue to skip symlinks wholesale during the recursive walk — a stricter
 // form of the same "symlinks may only follow when they stay inside the
 // workspace" rule. Slice 47 closes spec 0011 v1.1's "Output cap on
-// `file.search`" item: an optional `max_output_bytes` field (default 1 MiB)
+// `FileSearch`" item: an optional `max_output_bytes` field (default 1 MiB)
 // caps the *rendered* `path:line:text` payload so a handful of very long
 // lines cannot flood the prompt even when `max_matches` is generous. When
 // the byte cap fires first, the trailing summary line spells out
@@ -43,7 +43,7 @@
 // `invalid_argument` with the re2 error message attached as `regex_error`,
 // matching the rule-side input-pattern compile-error shape.
 //
-// Slice 48 takes the first step on spec 0011 v1.1's "`file.search` ignore
+// Slice 48 takes the first step on spec 0011 v1.1's "`FileSearch` ignore
 // predicate" item by adding a *built-in* skip list: the recursive directory
 // walk no longer descends into `build`, `node_modules`, `.git`, `.xmake`, or
 // `.orangutan` regardless of the `include_hidden` flag. Slice 49 completes
@@ -117,7 +117,7 @@ constexpr std::string_view kFileSearchSchema =
 constexpr std::size_t kDefaultMaxMatches = 100U;
 
 /// Default rendered-output byte cap. Closes spec 0011 v1.1's "Output cap on
-/// `file.search`" item: even with a modest `max_matches`, a handful of very
+/// `FileSearch`" item: even with a modest `max_matches`, a handful of very
 /// long lines can flood the prompt. The cap is on *rendered* bytes — the
 /// `path:line:text` payload the agent sees — not on the file body. 1 MiB is
 /// large enough that no current single-call test trips it; agents that want
@@ -259,16 +259,16 @@ struct LineMatcher {
   options.pattern = *std::move(pattern_field);
 
   if (options.pattern.empty()) {
-    return std::unexpected(core::Error::invalid_argument("file.search: `pattern` must be non-empty"));
+    return std::unexpected(core::Error::invalid_argument("FileSearch: `pattern` must be non-empty"));
   }
 
   if (parsed->contains("max_matches")) {
     if (!(*parsed)["max_matches"].is_number_integer() || (*parsed)["max_matches"].is_number_float()) {
-      return std::unexpected(core::Error::invalid_argument("file.search: `max_matches` must be a positive integer"));
+      return std::unexpected(core::Error::invalid_argument("FileSearch: `max_matches` must be a positive integer"));
     }
     const auto raw = (*parsed)["max_matches"].get<std::int64_t>();
     if (raw <= 0) {
-      return std::unexpected(core::Error::invalid_argument("file.search: `max_matches` must be a positive integer")
+      return std::unexpected(core::Error::invalid_argument("FileSearch: `max_matches` must be a positive integer")
                                  .with("value", std::to_string(raw)));
     }
     options.max_matches = static_cast<std::size_t>(raw);
@@ -276,14 +276,14 @@ struct LineMatcher {
 
   if (parsed->contains("include_hidden")) {
     if (!(*parsed)["include_hidden"].is_boolean()) {
-      return std::unexpected(core::Error::invalid_argument("file.search: `include_hidden` must be a boolean"));
+      return std::unexpected(core::Error::invalid_argument("FileSearch: `include_hidden` must be a boolean"));
     }
     options.include_hidden = (*parsed)["include_hidden"].get<bool>();
   }
 
   if (parsed->contains("regex")) {
     if (!(*parsed)["regex"].is_boolean()) {
-      return std::unexpected(core::Error::invalid_argument("file.search: `regex` must be a boolean"));
+      return std::unexpected(core::Error::invalid_argument("FileSearch: `regex` must be a boolean"));
     }
     options.regex = (*parsed)["regex"].get<bool>();
   }
@@ -291,11 +291,11 @@ struct LineMatcher {
   if (parsed->contains("max_output_bytes")) {
     if (!(*parsed)["max_output_bytes"].is_number_integer() || (*parsed)["max_output_bytes"].is_number_float()) {
       return std::unexpected(
-          core::Error::invalid_argument("file.search: `max_output_bytes` must be a positive integer"));
+          core::Error::invalid_argument("FileSearch: `max_output_bytes` must be a positive integer"));
     }
     const auto raw = (*parsed)["max_output_bytes"].get<std::int64_t>();
     if (raw <= 0) {
-      return std::unexpected(core::Error::invalid_argument("file.search: `max_output_bytes` must be a positive integer")
+      return std::unexpected(core::Error::invalid_argument("FileSearch: `max_output_bytes` must be a positive integer")
                                  .with("value", std::to_string(raw)));
     }
     options.max_output_bytes = static_cast<std::size_t>(raw);
@@ -303,7 +303,7 @@ struct LineMatcher {
 
   if (parsed->contains("respect_ignore")) {
     if (!(*parsed)["respect_ignore"].is_boolean()) {
-      return std::unexpected(core::Error::invalid_argument("file.search: `respect_ignore` must be a boolean"));
+      return std::unexpected(core::Error::invalid_argument("FileSearch: `respect_ignore` must be a boolean"));
     }
     options.respect_ignore = (*parsed)["respect_ignore"].get<bool>();
   }
@@ -530,7 +530,7 @@ private:
   errno = 0;
   std::ifstream input{path, std::ios::binary};
   if (!input) {
-    return std::unexpected(core::Error::io("file.search: failed to open file").with("path", path.string()));
+    return std::unexpected(core::Error::io("FileSearch: failed to open file").with("path", path.string()));
   }
   std::string contents;
   std::array<char, 8192> buffer{};
@@ -543,7 +543,7 @@ private:
     if (count > 0) {
       const auto next_size = static_cast<std::uintmax_t>(contents.size()) + static_cast<std::uintmax_t>(count);
       if (next_size > kMaxFileBytes) {
-        return std::unexpected(core::Error::invalid_argument("file.search: file exceeds max bytes")
+        return std::unexpected(core::Error::invalid_argument("FileSearch: file exceeds max bytes")
                                    .with("path", path.string())
                                    .with("max_bytes", std::to_string(kMaxFileBytes)));
       }
@@ -551,7 +551,7 @@ private:
     }
   }
   if (input.bad()) {
-    return std::unexpected(core::Error::io("file.search: failed while reading file").with("path", path.string()));
+    return std::unexpected(core::Error::io("FileSearch: failed while reading file").with("path", path.string()));
   }
   return contents;
 }
@@ -585,7 +585,7 @@ private:
 /// `match_budget = max_matches + 1` so that hitting the match budget is a
 /// reliable truncation signal: if the final tally exceeds `max_matches`, at
 /// least one further match existed. The byte budget caps prompt size — see
-/// spec 0011 v1.1 "Output cap on `file.search`". Returns the truncation
+/// spec 0011 v1.1 "Output cap on `FileSearch`". Returns the truncation
 /// reason that fired (or `none` when scanning ran to EOF).
 [[nodiscard]] TruncReason scan_text(std::string_view contents,
                                     const LineMatcher& matcher,
@@ -637,7 +637,7 @@ private:
 
   auto compiled = permission::InputPattern::compile(opts.pattern);
   if (!compiled) {
-    auto err = core::Error::invalid_argument("file.search: invalid regex").with("pattern", opts.pattern);
+    auto err = core::Error::invalid_argument("FileSearch: invalid regex").with("pattern", opts.pattern);
     for (const auto& [key, value] : compiled.error().context()) {
       err.with(key, value);
     }
@@ -668,11 +668,11 @@ private:
   const std::filesystem::path root{opts.path};
   if (!std::filesystem::exists(root, stat_ec)) {
     if (stat_ec) {
-      return std::unexpected(core::Error::io("file.search: failed to stat path")
+      return std::unexpected(core::Error::io("FileSearch: failed to stat path")
                                  .with("path", opts.path)
                                  .with("system_error", stat_ec.message()));
     }
-    return std::unexpected(core::Error::not_found("file.search: path does not exist").with("path", opts.path));
+    return std::unexpected(core::Error::not_found("FileSearch: path does not exist").with("path", opts.path));
   }
 
   if (std::filesystem::is_regular_file(root, stat_ec)) {
@@ -773,12 +773,12 @@ private:
         ++it;
       }
     } catch (const std::filesystem::filesystem_error& e) {
-      return std::unexpected(core::Error::io("file.search: failed to walk directory")
+      return std::unexpected(core::Error::io("FileSearch: failed to walk directory")
                                  .with("path", opts.path)
                                  .with("system_error", e.code().message()));
     }
   } else {
-    return std::unexpected(core::Error::invalid_argument("file.search: path is neither a regular file nor a directory")
+    return std::unexpected(core::Error::invalid_argument("FileSearch: path is neither a regular file nor a directory")
                                .with("path", opts.path));
   }
 

@@ -265,7 +265,7 @@ hook::ToolAfterPayload sample_after_with_data() {
 
 hook::ToolAfterPayload sample_after_with_redacted_input() {
   return hook::ToolAfterPayload{
-      .tool_name = "file.write",
+      .tool_name = "FileWrite",
       .input_json = R"({"path":"notes.md","content":"secret"})",
       .redacted_input_json = R"({"kind":"redacted_tool_input","input_hash":"abc","content_bytes":6})",
       .who = hook::Identity{.scope_key = "scope", .agent_key = "agent", .identity = "operator"},
@@ -281,7 +281,7 @@ hook::ToolAfterPayload sample_after_with_redacted_input() {
 hook::MemoryReadPayload sample_memory_read() {
   return hook::MemoryReadPayload{
       .who = hook::Identity{.scope_key = "scope", .agent_key = "agent", .identity = "operator"},
-      .source = "memory.recall",
+      .source = "MemoryRecall",
       .query = "sensitive query",
       .redacted_query_bytes = std::string_view{"sensitive query"}.size(),
       .limit = 5,
@@ -610,7 +610,7 @@ TEST_CASE("publish_advisory redacts memory read query and records for default si
     co_return;
   });
 
-  REQUIRE(default_payload.source == "memory.recall");
+  REQUIRE(default_payload.source == "MemoryRecall");
   REQUIRE(default_payload.query.empty());
   REQUIRE(default_payload.redacted_query_bytes == std::string_view{"sensitive query"}.size());
   REQUIRE(default_payload.match_count == 1);

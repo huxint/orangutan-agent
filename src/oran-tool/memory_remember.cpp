@@ -1,4 +1,4 @@
-// src/oran-tool/memory_remember.cpp - `memory.remember` built-in.
+// src/oran-tool/memory_remember.cpp - `MemoryRemember` built-in.
 
 #include <oran/tool/builtins.hpp>
 
@@ -38,7 +38,7 @@ constexpr std::string_view kMemoryRememberSchema =
     return std::unexpected(std::move(value).error());
   }
   if (value->empty()) {
-    return std::unexpected(core::Error::invalid_argument("memory.remember: string field must be non-empty")
+    return std::unexpected(core::Error::invalid_argument("MemoryRemember: string field must be non-empty")
                                .with("field", std::string{field}));
   }
   return std::move(*value);
@@ -51,11 +51,11 @@ constexpr std::string_view kMemoryRememberSchema =
   const auto& raw = parsed["importance"];
   if (!raw.is_number()) {
     return std::unexpected(
-        core::Error::invalid_argument("memory.remember: `importance` must be a number").with("field", "importance"));
+        core::Error::invalid_argument("MemoryRemember: `importance` must be a number").with("field", "importance"));
   }
   const auto value = raw.get<double>();
   if (!std::isfinite(value) || value < 0.0 || value > 1.0) {
-    return std::unexpected(core::Error::invalid_argument("memory.remember: `importance` must be in the range [0, 1]")
+    return std::unexpected(core::Error::invalid_argument("MemoryRemember: `importance` must be in the range [0, 1]")
                                .with("field", "importance"));
   }
   return value;
@@ -68,7 +68,7 @@ constexpr std::string_view kMemoryRememberSchema =
   const auto& raw = parsed["shadow"];
   if (!raw.is_boolean()) {
     return std::unexpected(
-        core::Error::invalid_argument("memory.remember: `shadow` must be a boolean").with("field", "shadow"));
+        core::Error::invalid_argument("MemoryRemember: `shadow` must be a boolean").with("field", "shadow"));
   }
   return raw.get<bool>();
 }
@@ -81,24 +81,24 @@ constexpr std::string_view kMemoryRememberSchema =
   }
   const auto& raw = parsed[key];
   if (!raw.is_array()) {
-    return std::unexpected(core::Error::invalid_argument("memory.remember: field must be an array").with("field", key));
+    return std::unexpected(core::Error::invalid_argument("MemoryRemember: field must be an array").with("field", key));
   }
   values.reserve(raw.size());
   for (std::size_t i = 0; i < raw.size(); ++i) {
     const auto& item = raw[i];
     if (!item.is_string()) {
-      return std::unexpected(core::Error::invalid_argument("memory.remember: array item must be a string")
+      return std::unexpected(core::Error::invalid_argument("MemoryRemember: array item must be a string")
                                  .with("field", key)
                                  .with("index", std::to_string(i)));
     }
     auto value = item.get<std::string>();
     if (value.empty()) {
-      return std::unexpected(core::Error::invalid_argument("memory.remember: array item must be non-empty")
+      return std::unexpected(core::Error::invalid_argument("MemoryRemember: array item must be non-empty")
                                  .with("field", key)
                                  .with("index", std::to_string(i)));
     }
     if (std::ranges::contains(values, value)) {
-      return std::unexpected(core::Error::invalid_argument("memory.remember: array values must be unique")
+      return std::unexpected(core::Error::invalid_argument("MemoryRemember: array values must be unique")
                                  .with("field", key)
                                  .with("value", value));
     }
@@ -165,7 +165,7 @@ constexpr std::string_view kMemoryRememberSchema =
     co_return std::unexpected(std::move(parsed).error());
   }
   if (!ctx.memory_remember) {
-    co_return std::unexpected(core::Error::invalid_argument("memory.remember: runtime service is not available")
+    co_return std::unexpected(core::Error::invalid_argument("MemoryRemember: runtime service is not available")
                                   .with("reason", "memory_runtime_unavailable")
                                   .with("id", parsed->id));
   }

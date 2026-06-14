@@ -60,7 +60,7 @@ TEST_CASE("Message can carry mixed-alternative blocks", "[unit][core][message]")
   m.blocks.push_back(TextContent{.text = "Let me look that up."});
   m.blocks.push_back(ToolUseContent{
       .id = "tool-1",
-      .name = "file.read",
+      .name = "FileRead",
       .input_json = R"({"path":"README.md"})",
   });
 

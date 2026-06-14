@@ -72,7 +72,7 @@ xmake run orangutan-bench --json > all.json
 | `bootstrap`        | missing default config fallback | explicit config file load |
 | `skill`            | order-trusting metadata concat | deterministic catalog render |
 | `prompt`           | default active-tool set        | explicit active-tool subset |
-| `agent`            | no promoted tools              | after `tool.search` promotion |
+| `agent`            | no promoted tools              | after `ToolSearch` promotion |
 | `memory`           | raw `SessionRepository` append/load | typed `memory::session::Store` append/load |
 | `provider`         | cache hints enabled            | cache hints disabled       |
 | `orchestration`    | leader-worker strategy         | vote strategy              |

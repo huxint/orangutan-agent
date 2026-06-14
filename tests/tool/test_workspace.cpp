@@ -99,7 +99,7 @@ void create_symlink_or_skip(const std::filesystem::path& target, const std::file
 
 [[nodiscard]] permission::RuleSet allow_file_read_rules() {
   permission::RuleSet rules;
-  rules.add(permission::Rule{.verdict = permission::Verdict::allow, .tool_pattern = "file.read"});
+  rules.add(permission::Rule{.verdict = permission::Verdict::allow, .tool_pattern = "FileRead"});
   return rules;
 }
 
@@ -448,7 +448,7 @@ TEST_CASE("Registry leaves malformed write options to the handler instead of pre
   });
 }
 
-TEST_CASE("file.read uses DispatchContext workspace when supplied", "[unit][tool][workspace][file_read]") {
+TEST_CASE("FileRead uses DispatchContext workspace when supplied", "[unit][tool][workspace][file_read]") {
   TempDir root{"oran-workspace-file-read"};
   TempDir outside{"oran-workspace-file-read-outside"};
   write_text(root.path() / "note.txt", "inside");
@@ -463,7 +463,7 @@ TEST_CASE("file.read uses DispatchContext workspace when supplied", "[unit][tool
     permission::RecordingAuditSink sink;
     auto ctx = make_workspace_ctx(io, rules, sink, workspace);
 
-    auto read = co_await registry.dispatch("file.read", R"({"path":"note.txt"})", ctx);
+    auto read = co_await registry.dispatch("FileRead", R"({"path":"note.txt"})", ctx);
     REQUIRE(read.has_value());
     REQUIRE(read->text.contains("\ninside"));
     REQUIRE(read->text.contains("fingerprint=v1:"));
@@ -473,14 +473,14 @@ TEST_CASE("file.read uses DispatchContext workspace when supplied", "[unit][tool
     REQUIRE(ec.value() == 0);
     const auto outside_relative = outside_relative_path.string();
     const auto escaped_input = std::format(R"({{"path":"{}"}})", outside_relative);
-    auto escaped = co_await registry.dispatch("file.read", escaped_input, ctx);
+    auto escaped = co_await registry.dispatch("FileRead", escaped_input, ctx);
     REQUIRE_FALSE(escaped.has_value());
     REQUIRE(escaped.error().kind() == core::ErrorKind::permission_denied);
     REQUIRE(context_has(escaped.error(), "reason", "outside_workspace"));
   });
 }
 
-TEST_CASE("file.write uses DispatchContext workspace for relative writes and traversal refusal",
+TEST_CASE("FileWrite uses DispatchContext workspace for relative writes and traversal refusal",
           "[unit][tool][workspace][file_write]") {
   TempDir root{"oran-workspace-file-write"};
   TempDir outside{"oran-workspace-file-write-outside"};
@@ -516,7 +516,7 @@ TEST_CASE("file.write uses DispatchContext workspace for relative writes and tra
   REQUIRE(std::string{std::istreambuf_iterator<char>{written}, std::istreambuf_iterator<char>{}} == "inside");
 }
 
-TEST_CASE("file.edit uses DispatchContext workspace for relative edits and traversal refusal",
+TEST_CASE("FileEdit uses DispatchContext workspace for relative edits and traversal refusal",
           "[unit][tool][workspace][file_edit]") {
   TempDir root{"oran-workspace-file-edit"};
   TempDir outside{"oran-workspace-file-edit-outside"};
@@ -554,7 +554,7 @@ TEST_CASE("file.edit uses DispatchContext workspace for relative edits and trave
   REQUIRE(std::string{std::istreambuf_iterator<char>{outside_file}, std::istreambuf_iterator<char>{}} == "do not edit");
 }
 
-TEST_CASE("file.edit rejects workspace symlink mutation targets", "[unit][tool][workspace][file_edit]") {
+TEST_CASE("FileEdit rejects workspace symlink mutation targets", "[unit][tool][workspace][file_edit]") {
   TempDir root{"oran-workspace-file-edit-link"};
   write_text(root.path() / "target.txt", "alpha");
   create_symlink_or_skip(root.path() / "target.txt", root.path() / "link.txt");
@@ -581,7 +581,7 @@ TEST_CASE("file.edit rejects workspace symlink mutation targets", "[unit][tool][
   REQUIRE(std::string{std::istreambuf_iterator<char>{target}, std::istreambuf_iterator<char>{}} == "alpha");
 }
 
-TEST_CASE("file.delete uses DispatchContext workspace for relative deletes and traversal refusal",
+TEST_CASE("FileDelete uses DispatchContext workspace for relative deletes and traversal refusal",
           "[unit][tool][workspace][file_delete]") {
   TempDir root{"oran-workspace-file-delete"};
   TempDir outside{"oran-workspace-file-delete-outside"};
@@ -613,7 +613,7 @@ TEST_CASE("file.delete uses DispatchContext workspace for relative deletes and t
   });
 }
 
-TEST_CASE("file.delete rejects workspace symlink mutation targets", "[unit][tool][workspace][file_delete]") {
+TEST_CASE("FileDelete rejects workspace symlink mutation targets", "[unit][tool][workspace][file_delete]") {
   TempDir root{"oran-workspace-file-delete-link"};
   write_text(root.path() / "target.txt", "survives");
   create_symlink_or_skip(root.path() / "target.txt", root.path() / "link.txt");
@@ -636,7 +636,7 @@ TEST_CASE("file.delete rejects workspace symlink mutation targets", "[unit][tool
   });
 }
 
-TEST_CASE("file.search uses DispatchContext workspace for relative searches and traversal refusal",
+TEST_CASE("FileSearch uses DispatchContext workspace for relative searches and traversal refusal",
           "[unit][tool][workspace][file_search]") {
   TempDir root{"oran-workspace-file-search"};
   TempDir outside{"oran-workspace-file-search-outside"};
@@ -668,7 +668,7 @@ TEST_CASE("file.search uses DispatchContext workspace for relative searches and 
   });
 }
 
-TEST_CASE("file.search rejects symlink roots that escape the workspace", "[unit][tool][workspace][file_search]") {
+TEST_CASE("FileSearch rejects symlink roots that escape the workspace", "[unit][tool][workspace][file_search]") {
   TempDir root{"oran-workspace-file-search-symlink"};
   TempDir outside{"oran-workspace-file-search-symlink-outside"};
   write_text(outside.path() / "secret.txt", "needle outside");
@@ -691,7 +691,7 @@ TEST_CASE("file.search rejects symlink roots that escape the workspace", "[unit]
   });
 }
 
-TEST_CASE("file.search honors extra_read_roots through the workspace seam", "[unit][tool][workspace][file_search]") {
+TEST_CASE("FileSearch honors extra_read_roots through the workspace seam", "[unit][tool][workspace][file_search]") {
   TempDir root{"oran-workspace-file-search-primary"};
   TempDir readable{"oran-workspace-file-search-readable"};
   write_text(readable.path() / "audit.log", "needle in the override root");
@@ -716,7 +716,7 @@ TEST_CASE("file.search honors extra_read_roots through the workspace seam", "[un
   });
 }
 
-TEST_CASE("directory.list uses DispatchContext workspace for relative listings and traversal refusal",
+TEST_CASE("DirectoryList uses DispatchContext workspace for relative listings and traversal refusal",
           "[unit][tool][workspace][directory_list]") {
   TempDir root{"oran-workspace-directory-list"};
   TempDir outside{"oran-workspace-directory-list-outside"};
@@ -749,7 +749,7 @@ TEST_CASE("directory.list uses DispatchContext workspace for relative listings a
   });
 }
 
-TEST_CASE("directory.list rejects symlink roots that escape the workspace", "[unit][tool][workspace][directory_list]") {
+TEST_CASE("DirectoryList rejects symlink roots that escape the workspace", "[unit][tool][workspace][directory_list]") {
   TempDir root{"oran-workspace-directory-list-symlink"};
   TempDir outside{"oran-workspace-directory-list-symlink-outside"};
   write_text(outside.path() / "secret.txt", "outside");

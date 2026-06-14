@@ -126,7 +126,7 @@ hook::Payload sample_payload() {
 
 hook::Payload large_redacted_after_payload() {
   return hook::Payload{hook::ToolAfterPayload{
-      .tool_name = "file.write",
+      .tool_name = "FileWrite",
       .input_json = std::string(16 * 1024, 'i'),
       .redacted_input_json = R"({"kind":"redacted_tool_input","input_hash":"bench","content_bytes":16384})",
       .who = hook::Identity{.scope_key = "scope", .agent_key = "agent", .identity = "operator"},

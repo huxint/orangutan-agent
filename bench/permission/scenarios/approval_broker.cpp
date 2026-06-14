@@ -80,7 +80,7 @@ using permission::ApprovalGrant;
 
 void register_approval_broker_scenarios(ankerl::nanobench::Bench& b) {
   const auto now = bench_now();
-  constexpr std::string_view tool = "shell.exec";
+  constexpr std::string_view tool = "ShellExec";
   constexpr std::string_view input = "ls -la /tmp/scratch";
   constexpr std::string_view identity = "operator";
 

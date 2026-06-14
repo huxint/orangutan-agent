@@ -34,7 +34,7 @@
 //      require_approval decisions before permission evaluation. It then
 //      publishes advisory `tool_dispatched` on paths where the handler will
 //      run, `tool_error` on error exits, and `tool_after` at every exit.
-//      Sensitive `file.write` / `file.edit` payloads carry redacted
+//      Sensitive `FileWrite` / `FileEdit` payloads carry redacted
 //      hash-and-byte-count input views for non-trusted hook sinks.
 //      Sinks subscribed to other events (provider, memory, …) are unaffected.
 //   6. The slice-55 workspace pre-resolution boundary: when a caller
@@ -94,7 +94,7 @@ class Registry;
 class Workspace;
 struct DispatchContext;
 
-/// Runtime callback consumed by the `skill.invoke` built-in. The tool layer
+/// Runtime callback consumed by the `SkillInvoke` built-in. The tool layer
 /// owns JSON parsing, permissions, audit, hooks, and output caps; bootstrap
 /// supplies the already-loaded skill snapshot through this callback so
 /// `oran-tool` does not depend on `oran-skill`.
@@ -102,7 +102,7 @@ using SkillInvokeHandler = std::function<async::Awaitable<core::Result<Output>>(
                                                                                 std::string_view inputs_json,
                                                                                 DispatchContext& ctx)>;
 
-/// Runtime callback consumed by the `skill.deactivate` built-in. Like
+/// Runtime callback consumed by the `SkillDeactivate` built-in. Like
 /// `SkillInvokeHandler`, the tool layer owns JSON parsing, permissions, audit,
 /// hooks, and output caps; bootstrap supplies the already-loaded skill snapshot
 /// through this callback so `oran-tool` does not depend on `oran-skill`.
@@ -137,21 +137,21 @@ struct MemoryForgetRequest {
   friend bool operator==(const MemoryForgetRequest&, const MemoryForgetRequest&) = default;
 };
 
-/// Runtime callback consumed by the `memory.recall` built-in. The tool layer
+/// Runtime callback consumed by the `MemoryRecall` built-in. The tool layer
 /// owns JSON parsing, permissions, audit, hooks, and output caps; bootstrap
 /// supplies the concrete long-term memory runtime through this callback so
 /// `oran-tool` does not take a sibling dependency on `oran-memory`.
 using MemoryRecallHandler =
     std::function<async::Awaitable<core::Result<Output>>(MemoryRecallRequest request, DispatchContext& ctx)>;
 
-/// Runtime callback consumed by the `memory.remember` built-in. The tool layer
+/// Runtime callback consumed by the `MemoryRemember` built-in. The tool layer
 /// owns JSON parsing, permissions, audit, hooks, and output caps; bootstrap
 /// supplies the concrete long-term memory backend through this callback so
 /// `oran-tool` does not take a sibling dependency on `oran-memory`.
 using MemoryRememberHandler =
     std::function<async::Awaitable<core::Result<Output>>(MemoryRememberRequest request, DispatchContext& ctx)>;
 
-/// Runtime callback consumed by the `memory.forget` built-in. The tool layer
+/// Runtime callback consumed by the `MemoryForget` built-in. The tool layer
 /// owns JSON parsing, permissions, audit, hooks, and output caps; bootstrap
 /// supplies the concrete long-term memory backend through this callback so
 /// `oran-tool` does not take a sibling dependency on `oran-memory`.
@@ -250,35 +250,35 @@ struct DispatchContext {
   hook::Bus* bus{nullptr};
   /// Registry currently running this dispatch. Set by `Registry::dispatch`
   /// before any handler runs and restored when dispatch exits. Most handlers
-  /// ignore it; metadata tools such as `tool.search` use it to inspect the
+  /// ignore it; metadata tools such as `ToolSearch` use it to inspect the
   /// live catalog without capturing a self-reference inside a movable
   /// `Registry`.
   const Registry* registry{nullptr};
-  /// Optional skill invocation service. When set, `skill.invoke` calls it with
+  /// Optional skill invocation service. When set, `SkillInvoke` calls it with
   /// the requested skill name plus the raw `inputs` JSON value and returns the
   /// produced tool output through the ordinary dispatch path. When unset,
-  /// `skill.invoke` reports a model-repairable missing-runtime error.
+  /// `SkillInvoke` reports a model-repairable missing-runtime error.
   SkillInvokeHandler skill_invoke{};
-  /// Optional skill deactivation service. When set, `skill.deactivate` calls it
+  /// Optional skill deactivation service. When set, `SkillDeactivate` calls it
   /// with the requested skill name and returns the produced tool output through
   /// the ordinary dispatch path; the runner records a versioned deactivation
   /// record in the result `data_json` so the next prompt boundary clears the
-  /// active marker. When unset, `skill.deactivate` reports a model-repairable
+  /// active marker. When unset, `SkillDeactivate` reports a model-repairable
   /// missing-runtime error.
   SkillDeactivateHandler skill_deactivate{};
-  /// Optional long-term memory recall service. When set, `memory.recall` calls
+  /// Optional long-term memory recall service. When set, `MemoryRecall` calls
   /// it with the parsed query, limit, and kind spellings, and returns the
   /// produced output through the ordinary dispatch path. When unset,
-  /// `memory.recall` reports a model-repairable missing-runtime error.
+  /// `MemoryRecall` reports a model-repairable missing-runtime error.
   MemoryRecallHandler memory_recall{};
-  /// Optional long-term memory write service. When set, `memory.remember` calls
+  /// Optional long-term memory write service. When set, `MemoryRemember` calls
   /// it with parsed record fields and returns the produced output through the
-  /// ordinary dispatch path. When unset, `memory.remember` reports a
+  /// ordinary dispatch path. When unset, `MemoryRemember` reports a
   /// model-repairable missing-runtime error.
   MemoryRememberHandler memory_remember{};
-  /// Optional long-term memory delete service. When set, `memory.forget` calls
+  /// Optional long-term memory delete service. When set, `MemoryForget` calls
   /// it with the parsed record id and returns the produced output through the
-  /// ordinary dispatch path. When unset, `memory.forget` reports a
+  /// ordinary dispatch path. When unset, `MemoryForget` reports a
   /// model-repairable missing-runtime error.
   MemoryForgetHandler memory_forget{};
   /// Optional workspace resolver for file built-ins. The pointer is

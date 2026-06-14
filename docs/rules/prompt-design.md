@@ -23,7 +23,7 @@ bytes produced by this project.
 | Surface | Canonical file(s) | Owns |
 | --- | --- | --- |
 | Invariants / cache section membership | This rule | Section order, cacheability rules, "no clocks / request IDs in the cached prefix", stable-input renderer discipline. |
-| Prompt builder + rendered prompt contract | [`../product-specs/0016-prompt-and-tool-catalog-cache.md`](../product-specs/0016-prompt-and-tool-catalog-cache.md) | `oran-prompt`, `prompt::Builder`, `CacheSection`, prefix hash, active/deferred catalog, `tool.search`, prompt-cache stability bench. |
+| Prompt builder + rendered prompt contract | [`../product-specs/0016-prompt-and-tool-catalog-cache.md`](../product-specs/0016-prompt-and-tool-catalog-cache.md) | `oran-prompt`, `prompt::Builder`, `CacheSection`, prefix hash, active/deferred catalog, `ToolSearch`, prompt-cache stability bench. |
 | Provider cache mapping | [`../design-docs/api-portability.md`](../design-docs/api-portability.md) | Adapter mapping from `RenderedPrompt` to vendor cache APIs and cache-key versioning. |
 | Tool catalog / deferred tools | [`../design-docs/tool-runtime.md`](../design-docs/tool-runtime.md), [`../product-specs/0012-tool-scheduler-and-state.md`](../product-specs/0012-tool-scheduler-and-state.md) | Tool catalog shape, deferred-tool promotion state, bounded caches used by renderers and schedulers. |
 | Structured tool results in prompts | [`../product-specs/0014-structured-tool-output.md`](../product-specs/0014-structured-tool-output.md) | `ToolOutput { text, data, attachments, usage, is_error }`, byte caps, hook-safe redaction fields. |
@@ -91,7 +91,7 @@ The prompt is assembled in this order, oldest-stable to newest-dynamic:
    `remove` runs; *the rendering of a single tool's description must be
    deterministic in the tool's static fields*, never the call site.
 3. **Deferred-tool index** — remaining deferred tools as name + one-line
-   description only (no schema). The shipped `tool.search` returns full
+   description only (no schema). The shipped `ToolSearch` returns full
    metadata on demand; session promotion moves selected tools into the next
    turn's full-schema catalog.
 4. **Skills catalog** — compact listing of activated skills. Adding /
@@ -179,7 +179,7 @@ Two layers:
   IDs, conversation status, and inline skill bodies.
 - **Bench / regression gate.** `bench-agent` ships the SessionState-owned
   `prompt_cache_hit_rate` scenario that runs synthetic prompt builds before
-  and after a `tool.search` promotion and aborts if the cached-prefix
+  and after a `ToolSearch` promotion and aborts if the cached-prefix
   `RenderedPrompt::prefix_hash` drifts across changing conversation tails.
   Future full-loop fixtures can extend the same bucket with recorded turns.
 
@@ -222,7 +222,7 @@ When a slice introduces a new prompt-bearing artifact:
   — skill body shape and per-skill body size cap.
 
 Slices 135-149 land the first deterministic section-4 owner, loader snapshot,
-the `skill.invoke` and slice-147 `skill.deactivate` dispatch paths,
+the `SkillInvoke` and slice-147 `SkillDeactivate` dispatch paths,
 prompt-boundary hot-reload,
 runner-selected per-agent filtering, and transcript-derived active skill
 markers plus an explicit `skill::ActivationPolicy` resolver with
@@ -230,13 +230,13 @@ caller-supplied deactivation names and expiration inputs in `oran-skill`,
 `oran-tool`, and bootstrap, now sourced from per-agent
 `agents.<name>.skills_deactivated` / `skills_expirations` config with a
 runner-supplied prompt-boundary evaluation time, plus a transcript-event
-`skill.deactivate` built-in (capability `deactivate_skill`) whose
-`skill_deactivation` records net against `skill.invoke` activations at the next
+`SkillDeactivate` built-in (capability `deactivate_skill`) whose
+`skill_deactivation` records net against `SkillInvoke` activations at the next
 prompt boundary, slice-148 durable session activation rows, and slice-149
 `skill::SkillActivationEvent` extraction so runtime owners can persist the same
 activation/deactivation event stream without changing section-4 rendering.
 That owner keeps skill bodies out of section 1 and renders a compact
-metadata-only catalog before loop entry; `skill.invoke` returns body text as an
+metadata-only catalog before loop entry; `SkillInvoke` returns body text as an
 ordinary conversation-tail tool result, so it does not mutate cached sections
 (1)-(6) during an active turn. Watcher / signature refresh, per-agent allowlist
 filtering, successful activation metadata, explicit deactivation policy inputs,

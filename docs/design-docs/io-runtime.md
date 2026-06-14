@@ -25,8 +25,8 @@ performs the requested operation and returns `core::Result<T>`.
 > rename(2), so a crash or partial write leaves the original target
 > intact instead of truncated. The flag rejects `append` and
 > `fail_if_exists` with `invalid_argument` (temp-then-rename has no
-> coherent semantics for either). The tool layer wires `file.edit`
-> through the atomic path on every rewrite, and `file.write` through
+> coherent semantics for either). The tool layer wires `FileEdit`
+> through the atomic path on every rewrite, and `FileWrite` through
 > the atomic path whenever `mode == truncate`; the deep-review BUG-4.1.1
 > data-loss footgun is closed.
 >
@@ -299,7 +299,7 @@ surface for effectful agent actions.
   boundary alignment for byte ranges, and mid-read change detection
   that retries small whole-file reads once and surfaces `Error::conflict`
   for larger or ranged reads. Slice 45 (2026-05-22) consumes the range
-  surface from `oran-tool`'s `file.read` v2 schema and adds the new
+  surface from `oran-tool`'s `FileRead` v2 schema and adds the new
   `Error::not_modified` enum kind that powers the `if_version`
   short-circuit (the opaque token `v1:<sha256(canonical_path)>:<size>:<mtime_ns>`
   is computed at the tool layer; the io layer stays content-only).

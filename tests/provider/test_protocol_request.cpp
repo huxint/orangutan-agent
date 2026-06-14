@@ -33,7 +33,7 @@ provider::ModelTarget target(provider::ProtocolKind protocol) {
 
 core::ToolDef read_tool() {
   return core::ToolDef{
-      .name = "file.read",
+      .name = "FileRead",
       .description = "Read a file",
       .input_schema_json = R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})",
       .required_capabilities = {},
@@ -55,7 +55,7 @@ provider::Request tool_request() {
           .role = core::Role::assistant,
           .blocks = {core::ToolUseContent{
               .id = "call-1",
-              .name = "file.read",
+              .name = "FileRead",
               .input_json = R"({"path":"README.md"})",
           }},
           .created_at = std::nullopt,
@@ -108,7 +108,7 @@ TEST_CASE("protocol request maps Anthropic Messages payloads", "[unit][provider]
   REQUIRE(body.at("tool_choice").at("type") == "auto");
 
   REQUIRE(body.at("tools").size() == 1);
-  REQUIRE(body.at("tools")[0].at("name") == "file.read");
+  REQUIRE(body.at("tools")[0].at("name") == "FileRead");
   REQUIRE(body.at("tools")[0].at("input_schema").at("properties").contains("path"));
 
   REQUIRE(body.at("messages").size() == 3);
@@ -140,7 +140,7 @@ TEST_CASE("protocol request maps OpenAI Responses payloads", "[unit][provider][p
 
   REQUIRE(body.at("tools").size() == 1);
   REQUIRE(body.at("tools")[0].at("type") == "function");
-  REQUIRE(body.at("tools")[0].at("name") == "file.read");
+  REQUIRE(body.at("tools")[0].at("name") == "FileRead");
   REQUIRE(body.at("tools")[0].at("parameters").at("required")[0] == "path");
 
   REQUIRE(body.at("input").size() == 3);
@@ -202,7 +202,7 @@ TEST_CASE("protocol request rejects malformed opaque JSON fields", "[unit][provi
     REQUIRE_FALSE(encoded.has_value());
     REQUIRE(encoded.error().kind() == core::ErrorKind::parsing);
     REQUIRE(context_value(encoded.error(), "field") == std::optional<std::string_view>{"tool.input_schema_json"});
-    REQUIRE(context_value(encoded.error(), "tool") == std::optional<std::string_view>{"file.read"});
+    REQUIRE(context_value(encoded.error(), "tool") == std::optional<std::string_view>{"FileRead"});
   }
 
   SECTION("tool input") {

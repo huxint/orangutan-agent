@@ -1,4 +1,4 @@
-// src/oran-tool/memory_recall.cpp - `memory.recall` built-in.
+// src/oran-tool/memory_recall.cpp - `MemoryRecall` built-in.
 
 #include <oran/tool/builtins.hpp>
 
@@ -40,12 +40,12 @@ constexpr std::string_view kMemoryRecallSchema =
   }
   if (!it->is_number_unsigned()) {
     return std::unexpected(
-        core::Error::invalid_argument("memory.recall: `limit` must be a positive integer").with("field", "limit"));
+        core::Error::invalid_argument("MemoryRecall: `limit` must be a positive integer").with("field", "limit"));
   }
   const auto value = it->get<std::uint64_t>();
   if (value == 0 || value > kMaxMemoryRecallLimit) {
     return std::unexpected(
-        core::Error::invalid_argument("memory.recall: `limit` must be between 1 and 20").with("field", "limit"));
+        core::Error::invalid_argument("MemoryRecall: `limit` must be between 1 and 20").with("field", "limit"));
   }
   return static_cast<std::size_t>(value);
 }
@@ -58,24 +58,24 @@ constexpr std::string_view kMemoryRecallSchema =
   }
   if (!it->is_array()) {
     return std::unexpected(
-        core::Error::invalid_argument("memory.recall: `kinds` must be an array").with("field", "kinds"));
+        core::Error::invalid_argument("MemoryRecall: `kinds` must be an array").with("field", "kinds"));
   }
   kinds.reserve(it->size());
   for (std::size_t i = 0; i < it->size(); ++i) {
     const auto& item = (*it)[i];
     if (!item.is_string()) {
-      return std::unexpected(core::Error::invalid_argument("memory.recall: kind must be a string")
+      return std::unexpected(core::Error::invalid_argument("MemoryRecall: kind must be a string")
                                  .with("field", "kinds")
                                  .with("index", std::to_string(i)));
     }
     auto kind = item.get<std::string>();
     if (kind.empty()) {
-      return std::unexpected(core::Error::invalid_argument("memory.recall: kind must be non-empty")
+      return std::unexpected(core::Error::invalid_argument("MemoryRecall: kind must be non-empty")
                                  .with("field", "kinds")
                                  .with("index", std::to_string(i)));
     }
     if (std::ranges::contains(kinds, kind)) {
-      return std::unexpected(core::Error::invalid_argument("memory.recall: kind filters must be unique")
+      return std::unexpected(core::Error::invalid_argument("MemoryRecall: kind filters must be unique")
                                  .with("field", "kinds")
                                  .with("kind", kind));
     }
@@ -95,7 +95,7 @@ constexpr std::string_view kMemoryRecallSchema =
     return std::unexpected(std::move(query).error());
   }
   if (query->empty()) {
-    return std::unexpected(core::Error::invalid_argument("memory.recall: `query` must be non-empty"));
+    return std::unexpected(core::Error::invalid_argument("MemoryRecall: `query` must be non-empty"));
   }
 
   auto limit = parse_limit(*parsed);
@@ -121,7 +121,7 @@ constexpr std::string_view kMemoryRecallSchema =
     co_return std::unexpected(std::move(parsed).error());
   }
   if (!ctx.memory_recall) {
-    co_return std::unexpected(core::Error::invalid_argument("memory.recall: runtime service is not available")
+    co_return std::unexpected(core::Error::invalid_argument("MemoryRecall: runtime service is not available")
                                   .with("reason", "memory_runtime_unavailable"));
   }
 

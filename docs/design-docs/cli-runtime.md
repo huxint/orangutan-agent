@@ -119,7 +119,7 @@ Duplicate or empty prompt values are `invalid_argument` errors.
 `hook::PermissionAskRenderedPayload`, renders the tool name, caller identity, matched
 decision reason, replay/TTL policy, request timestamp, and the bus-delivered input JSON,
 then asks the operator for a yes/no answer. For sensitive mutation tools such as
-`file.write` / `file.edit`, the prompt sink uses the default hook sink kind and therefore
+`FileWrite` / `FileEdit`, the prompt sink uses the default hook sink kind and therefore
 receives the redacted summary unless a future caller installs an explicitly trusted-local
 approval sink. Approval answers (`y`, `yes`, `approve`, `approved`, `proceed`) return
 `HookDecisionKind::proceed` with

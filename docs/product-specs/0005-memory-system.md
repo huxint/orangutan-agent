@@ -65,20 +65,20 @@ operators can reason about retention, scope, and visibility.
   `prompt_text` keeps the current prompt as the search text, while
   `last_user_message` uses the most recent previous user text when a follow-up
   prompt should recall from session context.
-- Read-only long-term memory tool shipped in slice 168: `memory.recall` is a
+- Read-only long-term memory tool shipped in slice 168: `MemoryRecall` is a
   deferred built-in with `Capability::read_memory`, parses
   `{query, limit?, kinds?}`, delegates through
   `DispatchContext::memory_recall`, and uses the assembly-owned
   `longterm::Runtime` to return deterministic recall text plus structured
   `memory_recall` record metadata.
-- Write-side long-term memory tool shipped in slice 169: `memory.remember` is a
+- Write-side long-term memory tool shipped in slice 169: `MemoryRemember` is a
   deferred built-in with `Capability::write_memory`, parses
   `{id, kind, title, body, importance?, tags?, linked_record_ids?, shadow?}`,
   delegates through `DispatchContext::memory_remember`, and uses the
   assembly-owned long-term `Backend` to upsert a record scoped to the runner's
   stable scope key with dispatch-time timestamps, returning confirmation text
   plus structured `memory_remember` saved-record metadata.
-- Delete-side long-term memory tool shipped in slice 170: `memory.forget` is a
+- Delete-side long-term memory tool shipped in slice 170: `MemoryForget` is a
   deferred built-in with `Capability::write_memory`, parses `{id}`, delegates
   through `DispatchContext::memory_forget`, and uses the assembly-owned
   long-term `Backend` to remove the scoped record idempotently, returning
@@ -145,20 +145,20 @@ operators can reason about retention, scope, and visibility.
   enables that owner when `memory.longterm.hybrid_search.enabled=true` and the
   binary was built with `--vector_memory=y`; `AgentPromptRunner` maps the
   configured hybrid limits/weights into enabled prompt-boundary recall and
-  `memory.recall`, using deterministic local text embeddings
-  (`oran-local-text-v1`, 64 dimensions). `memory.remember` mirrors saved records
-  into vector memory, and `memory.forget` removes the matching vector row.
+  `MemoryRecall`, using deterministic local text embeddings
+  (`oran-local-text-v1`, 64 dimensions). `MemoryRemember` mirrors saved records
+  into vector memory, and `MemoryForget` removes the matching vector row.
   Default builds keep sqlite-vec optional and fail fast on enabled hybrid search.
 - Memory lifecycle hook wiring shipped in slices 179-180:
   `oran-hook` now carries typed `MemoryWritePayload` / `MemoryForgetPayload`
   plus `MemoryReadPayload` / `MemoryReadHitPayload` shapes. Default sinks
   receive redacted memory metadata; `trusted_local` sinks can inspect raw write
   records and raw recall queries/hit records. `AgentPromptRunner` publishes
-  blocking `memory_write_before` before `memory.remember` mutates
+  blocking `memory_write_before` before `MemoryRemember` mutates
   lexical/vector memory; a veto returns a permission-denied tool error and
   skips persistence. Successful memory writes publish advisory
-  `memory_write_after`, successful `memory.forget` calls publish advisory
-  `memory_forget`, and successful prompt-boundary recall plus `memory.recall`
+  `memory_write_after`, successful `MemoryForget` calls publish advisory
+  `memory_forget`, and successful prompt-boundary recall plus `MemoryRecall`
   tool reads publish advisory `memory_read_after`.
 - Recall read-touch metadata shipped in slice 181:
   `memory::longterm::Backend` now includes `touch(TouchRequest)`. The default
@@ -300,7 +300,7 @@ operators can reason about retention, scope, and visibility.
    ordinary configured-route startup enable that recall through config, and
    slice 166 lets that config constrain recall to selected record kinds; slice
    167 adds the first selectable query-derivation policy, and slice 168 exposes
-   read-only recall through the permissioned `memory.recall` tool. Slice 171
+   read-only recall through the permissioned `MemoryRecall` tool. Slice 171
    adds the 10k-record FTS5 bench over `longterm::Runtime::search`, with a
    local result of **~15.08 ms / batch** for `limit=10`. Slice 172 adds
    the library-local `HybridRuntime` composition contract, and slice 173 adds the
@@ -346,8 +346,8 @@ operators can reason about retention, scope, and visibility.
    finite caller-owned loop policy over that leased step without moving timers
    or bootstrap startup into memory. Bootstrap service ownership and process
    scheduler ownership remain open.
-5. A `memory.write.before` hook can veto a write. **Status:** closed for the
-   bootstrap `memory.remember` tool path in slice 179. `AgentPromptRunner`
+5. A `MemoryWrite.before` hook can veto a write. **Status:** closed for the
+   bootstrap `MemoryRemember` tool path in slice 179. `AgentPromptRunner`
    publishes blocking `memory_write_before` after parsing/scoping the record and
    before calling the long-term lexical/vector backends; a veto returns
    `ErrorKind::permission_denied` with `event=memory_write_before`,
@@ -359,7 +359,8 @@ operators can reason about retention, scope, and visibility.
    fake async backend interface coverage, public `Fts5Backend` migration /
    scoped search / filtering / update / touch / decay / delete coverage, and
    `longterm::Runtime` validation / deterministic recall-framing plus
-   recall/remember/forget `data_json` coverage. Slice 178 adds deterministic
+   `MemoryRecall` / `MemoryRemember` / `MemoryForget` `data_json` coverage.
+   Slice 178 adds deterministic
    local text/record embedding helper coverage. Slice 172 adds hybrid-runtime validation,
    lexical/vector merge ordering, vector-only hydration, stale vector-row skip,
    and recall-framing coverage. Slice 181 adds default-build coverage for
@@ -391,16 +392,16 @@ operators can reason about retention, scope, and visibility.
    reports 124 cases / 1054 assertions by default and 120 cases / 958 assertions
    with `--vector_memory=y` for the assembly, prompt-runner, and
    configured-route recall consumers, including slice-167 query-strategy
-   coverage, slice-168 `memory.recall` tool binding, and slice-169
-   `memory.remember` plus slice-170 `memory.forget` tool bindings and
+   coverage, slice-168 `MemoryRecall` tool binding, and slice-169
+   `MemoryRemember` plus slice-170 `MemoryForget` tool bindings and
    slice-175 hybrid-search fail-fast coverage. Slice 178 adds gated coverage for
    vector-memory assembly ownership, configured-route hybrid startup, hybrid
-   prompt-boundary recall, hybrid `memory.recall`, and vector mirroring for
-   `memory.remember`; slice 179 adds default-build bootstrap coverage for
+   prompt-boundary recall, hybrid `MemoryRecall`, and vector mirroring for
+   `MemoryRemember`; slice 179 adds default-build bootstrap coverage for
    `memory_write_before` / `memory_write_after` / `memory_forget` publishing and
    veto/no-persist behavior, and slice 180 adds default-build bootstrap coverage
    for `memory_read_after` publishing after prompt-boundary recall and
-   `memory.recall`.
+   `MemoryRecall`.
 7. `bench/memory/search-fts5-vs-vector` (v2): reports the FTS5 baseline + vector
    results in machine-readable JSON. **Status:** partially open; slice 171 adds
    the FTS5 baseline scenario under `bench/memory/scenarios/longterm_fts5.cpp`,

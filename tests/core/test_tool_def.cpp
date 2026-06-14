@@ -10,14 +10,14 @@ using orangutan::core::ToolDef;
 
 TEST_CASE("ToolDef aggregate-init exposes name/description/schema", "[unit][core][tool_def]") {
   ToolDef td{
-      .name = "file.read",
+      .name = "FileRead",
       .description = "Read a UTF-8 text file.",
       .input_schema_json = R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})",
       .required_capabilities = {},
       .deferred = false,
       .category = {},
   };
-  REQUIRE(td.name == "file.read");
+  REQUIRE(td.name == "FileRead");
   REQUIRE(td.description == "Read a UTF-8 text file.");
   REQUIRE(td.input_schema_json.contains("\"path\""));
   REQUIRE_FALSE(td.deferred);
@@ -25,8 +25,8 @@ TEST_CASE("ToolDef aggregate-init exposes name/description/schema", "[unit][core
 }
 
 TEST_CASE("ToolDef::with_no_input fills a minimal object schema", "[unit][core][tool_def]") {
-  const auto td = ToolDef::with_no_input("clock.now", "Return current UTC time.");
-  REQUIRE(td.name == "clock.now");
+  const auto td = ToolDef::with_no_input("ClockNow", "Return current UTC time.");
+  REQUIRE(td.name == "ClockNow");
   REQUIRE(td.description == "Return current UTC time.");
   REQUIRE(td.input_schema_json.contains("\"type\":\"object\""));
   REQUIRE(td.input_schema_json.contains("\"properties\":{}"));
@@ -60,10 +60,10 @@ TEST_CASE("ToolDef equality is member-wise", "[unit][core][tool_def]") {
 }
 
 TEST_CASE("ToolDef is move-constructed cheaply", "[unit][core][tool_def]") {
-  ToolDef src = ToolDef::with_no_input("agent.handoff", "Hand off to a sibling agent.");
+  ToolDef src = ToolDef::with_no_input("AgentHandoff", "Hand off to a sibling agent.");
   const auto schema_addr = src.input_schema_json.data();
   ToolDef dst = std::move(src);
-  REQUIRE(dst.name == "agent.handoff");
+  REQUIRE(dst.name == "AgentHandoff");
   // The moved-from string's data pointer should have transferred (libstdc++
   // moves the buffer for non-SSO sizes; either way `dst` owns the data).
   REQUIRE(dst.input_schema_json.contains("\"type\":\"object\""));

@@ -538,7 +538,7 @@ TEST_CASE("AgentPromptRunner publishes provider hooks through RuntimeAssembly",
   });
 }
 
-TEST_CASE("AgentPromptRunner feeds tool.search results back into per-session state",
+TEST_CASE("AgentPromptRunner feeds ToolSearch results back into per-session state",
           "[unit][bootstrap][prompt_runner][session_state]") {
   TempDir temp{"oran-bootstrap-prompt-runner-observe"};
   test::run_async(
@@ -551,8 +551,8 @@ TEST_CASE("AgentPromptRunner feeds tool.search results back into per-session sta
                 provider::Response{
                     .blocks = {core::ToolUseContent{
                         .id = "search-1",
-                        .name = "tool.search",
-                        .input_json = R"({"name":"file.read"})",
+                        .name = "ToolSearch",
+                        .input_json = R"({"name":"FileRead"})",
                     }},
                     .stop_reason = core::StopReason::tool_use,
                     .usage = provider::Usage{.input_tokens = 1,
@@ -600,7 +600,7 @@ TEST_CASE("AgentPromptRunner renders memory framing once per prompt before loop 
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "read-1",
-                .name = "file.read",
+                .name = "FileRead",
                 .input_json = R"({"path":"note.txt"})",
             }},
             .stop_reason = core::StopReason::tool_use,
@@ -684,7 +684,7 @@ TEST_CASE("AgentPromptRunner recalls long-term memory once before loop iteration
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "read-1",
-                .name = "file.read",
+                .name = "FileRead",
                 .input_json = R"({"path":"note.txt"})",
             }},
             .stop_reason = core::StopReason::tool_use,
@@ -788,7 +788,7 @@ TEST_CASE("AgentPromptRunner uses hybrid recall for prompt-boundary memory",
 }
 #endif
 
-TEST_CASE("AgentPromptRunner dispatches memory.recall through long-term runtime",
+TEST_CASE("AgentPromptRunner dispatches MemoryRecall through long-term runtime",
           "[unit][bootstrap][prompt_runner][memory]") {
   TempDir temp{"oran-bootstrap-prompt-runner-memory-recall-tool"};
   test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
@@ -807,7 +807,7 @@ TEST_CASE("AgentPromptRunner dispatches memory.recall through long-term runtime"
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "memory-1",
-                .name = "memory.recall",
+                .name = "MemoryRecall",
                 .input_json = R"({"query":"toolrecallanchor","limit":5,"kinds":["project"]})",
             }},
             .stop_reason = core::StopReason::tool_use,
@@ -829,7 +829,7 @@ TEST_CASE("AgentPromptRunner dispatches memory.recall through long-term runtime"
     const auto requests = recording.requests();
     REQUIRE(requests.size() == 2);
     const auto output = tool_result_output_in(requests[1], "memory-1");
-    REQUIRE(output.contains("memory.recall: 1 match"));
+    REQUIRE(output.contains("MemoryRecall: 1 match"));
     REQUIRE(output.contains("Memory tool found toolrecallanchor in the project."));
     const auto data_json = tool_result_data_json_in(requests[1], "memory-1");
     REQUIRE(data_json.has_value());
@@ -844,7 +844,7 @@ TEST_CASE("AgentPromptRunner dispatches memory.recall through long-term runtime"
     REQUIRE(read->who.scope_key == "scope-A");
     REQUIRE(read->who.agent_key == "coder");
     REQUIRE(read->who.identity == "operator-1");
-    REQUIRE(read->source == "memory.recall");
+    REQUIRE(read->source == "MemoryRecall");
     REQUIRE(read->query == "toolrecallanchor");
     REQUIRE(read->redacted_query_bytes == std::string_view{"toolrecallanchor"}.size());
     REQUIRE(read->limit == 5);
@@ -863,7 +863,7 @@ TEST_CASE("AgentPromptRunner dispatches memory.recall through long-term runtime"
 }
 
 #if defined(ORAN_ENABLE_SQLITE_VEC)
-TEST_CASE("AgentPromptRunner dispatches memory.recall through hybrid runtime",
+TEST_CASE("AgentPromptRunner dispatches MemoryRecall through hybrid runtime",
           "[unit][bootstrap][prompt_runner][memory][sqlite-vec]") {
   TempDir temp{"oran-bootstrap-prompt-runner-memory-recall-hybrid-tool"};
   test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
@@ -889,7 +889,7 @@ TEST_CASE("AgentPromptRunner dispatches memory.recall through hybrid runtime",
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "memory-1",
-                .name = "memory.recall",
+                .name = "MemoryRecall",
                 .input_json = R"({"query":"raretoolhybridanchor","limit":5,"kinds":["project"]})",
             }},
             .stop_reason = core::StopReason::tool_use,
@@ -917,7 +917,7 @@ TEST_CASE("AgentPromptRunner dispatches memory.recall through hybrid runtime",
     const auto requests = recording.requests();
     REQUIRE(requests.size() == 2);
     const auto output = tool_result_output_in(requests[1], "memory-1");
-    REQUIRE(output.contains("memory.recall: 1 match"));
+    REQUIRE(output.contains("MemoryRecall: 1 match"));
     REQUIRE(output.contains("Hybrid tool recall hydrates vector-only rows."));
     const auto data_json = tool_result_data_json_in(requests[1], "memory-1");
     REQUIRE(data_json.has_value());
@@ -926,7 +926,7 @@ TEST_CASE("AgentPromptRunner dispatches memory.recall through hybrid runtime",
 }
 #endif
 
-TEST_CASE("AgentPromptRunner dispatches memory.remember through long-term backend",
+TEST_CASE("AgentPromptRunner dispatches MemoryRemember through long-term backend",
           "[unit][bootstrap][prompt_runner][memory]") {
   TempDir temp{"oran-bootstrap-prompt-runner-memory-remember-tool"};
   test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
@@ -941,7 +941,7 @@ TEST_CASE("AgentPromptRunner dispatches memory.remember through long-term backen
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "memory-write-1",
-                .name = "memory.remember",
+                .name = "MemoryRemember",
                 .input_json =
                     R"({"id":"lt-tool-remember","kind":"project","title":"Remembered note","body":"Memory remember wrote rememberanchor into the project.","importance":0.75,"tags":["remember","tool"],"linked_record_ids":["lt-tool-recall"]})",
             }},
@@ -966,7 +966,7 @@ TEST_CASE("AgentPromptRunner dispatches memory.remember through long-term backen
     const auto requests = recording.requests();
     REQUIRE(requests.size() == 2);
     const auto output = tool_result_output_in(requests[1], "memory-write-1");
-    REQUIRE(output.contains("memory.remember: saved project record lt-tool-remember"));
+    REQUIRE(output.contains("MemoryRemember: saved project record lt-tool-remember"));
     REQUIRE(output.contains("title: Remembered note"));
     const auto data_json = tool_result_data_json_in(requests[1], "memory-write-1");
     REQUIRE(data_json.has_value());
@@ -1013,7 +1013,7 @@ TEST_CASE("AgentPromptRunner dispatches memory.remember through long-term backen
   });
 }
 
-TEST_CASE("AgentPromptRunner lets memory.write.before veto memory.remember",
+TEST_CASE("AgentPromptRunner lets MemoryWrite.before veto MemoryRemember",
           "[unit][bootstrap][prompt_runner][memory][hook]") {
   TempDir temp{"oran-bootstrap-prompt-runner-memory-write-veto"};
   test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
@@ -1031,7 +1031,7 @@ TEST_CASE("AgentPromptRunner lets memory.write.before veto memory.remember",
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "memory-write-veto-1",
-                .name = "memory.remember",
+                .name = "MemoryRemember",
                 .input_json =
                     R"({"id":"lt-tool-remember-veto","kind":"project","title":"Blocked note","body":"This should not persist."})",
             }},
@@ -1076,7 +1076,7 @@ TEST_CASE("AgentPromptRunner lets memory.write.before veto memory.remember",
 }
 
 #if defined(ORAN_ENABLE_SQLITE_VEC)
-TEST_CASE("AgentPromptRunner mirrors memory.remember writes into vector memory",
+TEST_CASE("AgentPromptRunner mirrors MemoryRemember writes into vector memory",
           "[unit][bootstrap][prompt_runner][memory][sqlite-vec]") {
   TempDir temp{"oran-bootstrap-prompt-runner-memory-remember-vector"};
   test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
@@ -1089,7 +1089,7 @@ TEST_CASE("AgentPromptRunner mirrors memory.remember writes into vector memory",
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "memory-write-1",
-                .name = "memory.remember",
+                .name = "MemoryRemember",
                 .input_json =
                     R"({"id":"lt-tool-remember-vector","kind":"project","title":"Vector remembered note","body":"Memory remember mirrored rarevectorremember into sqlite-vec.","importance":0.75,"tags":["remember","vector"]})",
             }},
@@ -1128,7 +1128,7 @@ TEST_CASE("AgentPromptRunner mirrors memory.remember writes into vector memory",
 }
 #endif
 
-TEST_CASE("AgentPromptRunner dispatches memory.forget through long-term backend",
+TEST_CASE("AgentPromptRunner dispatches MemoryForget through long-term backend",
           "[unit][bootstrap][prompt_runner][memory]") {
   TempDir temp{"oran-bootstrap-prompt-runner-memory-forget-tool"};
   test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
@@ -1147,7 +1147,7 @@ TEST_CASE("AgentPromptRunner dispatches memory.forget through long-term backend"
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "memory-forget-1",
-                .name = "memory.forget",
+                .name = "MemoryForget",
                 .input_json = R"({"id":"lt-tool-forget"})",
             }},
             .stop_reason = core::StopReason::tool_use,
@@ -1171,7 +1171,7 @@ TEST_CASE("AgentPromptRunner dispatches memory.forget through long-term backend"
     const auto requests = recording.requests();
     REQUIRE(requests.size() == 2);
     const auto output = tool_result_output_in(requests[1], "memory-forget-1");
-    REQUIRE(output.contains("memory.forget: removed record lt-tool-forget"));
+    REQUIRE(output.contains("MemoryForget: removed record lt-tool-forget"));
     const auto data_json = tool_result_data_json_in(requests[1], "memory-forget-1");
     REQUIRE(data_json.has_value());
     REQUIRE(data_json->contains(R"("kind":"memory_forget")"));
@@ -1199,7 +1199,7 @@ TEST_CASE("AgentPromptRunner dispatches memory.forget through long-term backend"
 }
 
 #if defined(ORAN_ENABLE_SQLITE_VEC)
-TEST_CASE("AgentPromptRunner mirrors memory.forget deletes into vector memory",
+TEST_CASE("AgentPromptRunner mirrors MemoryForget deletes into vector memory",
           "[unit][bootstrap][prompt_runner][memory][sqlite-vec]") {
   TempDir temp{"oran-bootstrap-prompt-runner-memory-forget-vector"};
   test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
@@ -1225,7 +1225,7 @@ TEST_CASE("AgentPromptRunner mirrors memory.forget deletes into vector memory",
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "memory-forget-vector-1",
-                .name = "memory.forget",
+                .name = "MemoryForget",
                 .input_json = R"({"id":"lt-tool-forget-vector"})",
             }},
             .stop_reason = core::StopReason::tool_use,
@@ -1333,7 +1333,7 @@ TEST_CASE("AgentPromptRunner renders skill catalog once per prompt before loop i
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "read-1",
-                .name = "file.read",
+                .name = "FileRead",
                 .input_json = R"({"path":"note.txt"})",
             }},
             .stop_reason = core::StopReason::tool_use,
@@ -1397,7 +1397,7 @@ TEST_CASE("AgentPromptRunner loads skill catalog from the workspace skills direc
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "read-1",
-                .name = "file.read",
+                .name = "FileRead",
                 .input_json = R"({"path":"note.txt"})",
             }},
             .stop_reason = core::StopReason::tool_use,
@@ -1445,7 +1445,7 @@ TEST_CASE("AgentPromptRunner invokes loaded skill bodies through the tool path",
 {
   "permissions": {
     "allow": [
-      {"tool_pattern": "skill.invoke"}
+      {"tool_pattern": "SkillInvoke"}
     ]
   }
 }
@@ -1457,7 +1457,7 @@ TEST_CASE("AgentPromptRunner invokes loaded skill bodies through the tool path",
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "skill-1",
-                .name = "skill.invoke",
+                .name = "SkillInvoke",
                 .input_json = R"({"name":"release-note","inputs":{"since":"slice-136"}})",
             }},
             .stop_reason = core::StopReason::tool_use,
@@ -1486,7 +1486,7 @@ TEST_CASE("AgentPromptRunner invokes loaded skill bodies through the tool path",
     REQUIRE(requests[0].system_prompt->contains("Skill: release-note"));
     REQUIRE_FALSE(requests[0].system_prompt->contains("Use concise bullets"));
     const auto output = tool_result_output_in(requests[1], "skill-1");
-    REQUIRE(output.contains("skill.invoke: release-note"));
+    REQUIRE(output.contains("SkillInvoke: release-note"));
     REQUIRE(output.contains(R"("since":"slice-136")"));
     REQUIRE(output.contains("Use concise bullets for the shipped changes."));
     REQUIRE((*runner)->skill_catalog_loads() == 1);
@@ -1507,7 +1507,7 @@ TEST_CASE("AgentPromptRunner marks invoked skills active on the next prompt",
 {
   "permissions": {
     "allow": [
-      {"tool_pattern": "skill.invoke"}
+      {"tool_pattern": "SkillInvoke"}
     ]
   }
 }
@@ -1521,7 +1521,7 @@ TEST_CASE("AgentPromptRunner marks invoked skills active on the next prompt",
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "skill-1",
-                .name = "skill.invoke",
+                .name = "SkillInvoke",
                 .input_json = R"({"name":"release-note","inputs":{"since":"slice-142"}})",
             }},
             .stop_reason = core::StopReason::tool_use,
@@ -1581,7 +1581,7 @@ TEST_CASE("AgentPromptRunner restores active skills from session records after t
 {
   "permissions": {
     "allow": [
-      {"tool_pattern": "skill.invoke"}
+      {"tool_pattern": "SkillInvoke"}
     ]
   }
 }
@@ -1597,7 +1597,7 @@ TEST_CASE("AgentPromptRunner restores active skills from session records after t
           provider::Response{
               .blocks = {core::ToolUseContent{
                   .id = "skill-1",
-                  .name = "skill.invoke",
+                  .name = "SkillInvoke",
                   .input_json = R"({"name":"release-note","inputs":{"since":"slice-148"}})",
               }},
               .stop_reason = core::StopReason::tool_use,
@@ -1652,7 +1652,7 @@ TEST_CASE("AgentPromptRunner restores active skills from session records after t
   });
 }
 
-TEST_CASE("AgentPromptRunner clears active markers after skill.deactivate", "[unit][bootstrap][prompt_runner][skill]") {
+TEST_CASE("AgentPromptRunner clears active markers after SkillDeactivate", "[unit][bootstrap][prompt_runner][skill]") {
   TempDir temp{"oran-bootstrap-prompt-runner-skill-deactivate"};
   write_file(temp.path() / ".orangutan" / "skills" / "release-note.md",
              "---\n"
@@ -1665,8 +1665,8 @@ TEST_CASE("AgentPromptRunner clears active markers after skill.deactivate", "[un
 {
   "permissions": {
     "allow": [
-      {"tool_pattern": "skill.invoke"},
-      {"tool_pattern": "skill.deactivate"}
+      {"tool_pattern": "SkillInvoke"},
+      {"tool_pattern": "SkillDeactivate"}
     ]
   }
 }
@@ -1680,7 +1680,7 @@ TEST_CASE("AgentPromptRunner clears active markers after skill.deactivate", "[un
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "skill-1",
-                .name = "skill.invoke",
+                .name = "SkillInvoke",
                 .input_json = R"({"name":"release-note","inputs":{"since":"slice-147"}})",
             }},
             .stop_reason = core::StopReason::tool_use,
@@ -1692,7 +1692,7 @@ TEST_CASE("AgentPromptRunner clears active markers after skill.deactivate", "[un
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "skill-2",
-                .name = "skill.deactivate",
+                .name = "SkillDeactivate",
                 .input_json = R"({"name":"release-note"})",
             }},
             .stop_reason = core::StopReason::tool_use,
@@ -1739,14 +1739,14 @@ TEST_CASE("AgentPromptRunner clears active markers after skill.deactivate", "[un
     // Prompt 1 renders before the invoke takes effect: not yet active.
     REQUIRE(requests[0].system_prompt.has_value());
     REQUIRE_FALSE(requests[0].system_prompt->contains("Active Skill: release-note"));
-    // Prompt 2 sees the transcript skill.invoke -> active going in.
+    // Prompt 2 sees the transcript SkillInvoke -> active going in.
     REQUIRE(requests[2].system_prompt.has_value());
     REQUIRE(requests[2].system_prompt->contains("Active Skill: release-note"));
-    // The skill.deactivate tool result carries the versioned deactivation record.
+    // The SkillDeactivate tool result carries the versioned deactivation record.
     const auto data_json = tool_result_data_json_in(requests[3], "skill-2");
     REQUIRE(data_json.has_value());
     REQUIRE(*data_json == R"({"kind":"skill_deactivation","version":1,"name":"release-note"})");
-    REQUIRE(tool_result_output_in(requests[3], "skill-2").contains("skill.deactivate: release-note"));
+    REQUIRE(tool_result_output_in(requests[3], "skill-2").contains("SkillDeactivate: release-note"));
     // Prompt 3 sees invoke then deactivate -> no longer active, but still catalogued.
     REQUIRE(requests[4].system_prompt.has_value());
     REQUIRE_FALSE(requests[4].system_prompt->contains("Active Skill: release-note"));
@@ -1768,7 +1768,7 @@ TEST_CASE("AgentPromptRunner suppresses active markers for config-deactivated sk
 {
   "permissions": {
     "allow": [
-      {"tool_pattern": "skill.invoke"}
+      {"tool_pattern": "SkillInvoke"}
     ]
   },
   "agents": {
@@ -1785,7 +1785,7 @@ TEST_CASE("AgentPromptRunner suppresses active markers for config-deactivated sk
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "skill-1",
-                .name = "skill.invoke",
+                .name = "SkillInvoke",
                 .input_json = R"({"name":"release-note","inputs":{"since":"slice-146"}})",
             }},
             .stop_reason = core::StopReason::tool_use,
@@ -1833,7 +1833,7 @@ TEST_CASE("AgentPromptRunner drops active markers for expired config skills",
 {
   "permissions": {
     "allow": [
-      {"tool_pattern": "skill.invoke"}
+      {"tool_pattern": "SkillInvoke"}
     ]
   },
   "agents": {
@@ -1852,7 +1852,7 @@ TEST_CASE("AgentPromptRunner drops active markers for expired config skills",
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "skill-1",
-                .name = "skill.invoke",
+                .name = "SkillInvoke",
                 .input_json = R"({"name":"release-note","inputs":{"since":"slice-146"}})",
             }},
             .stop_reason = core::StopReason::tool_use,
@@ -1900,7 +1900,7 @@ TEST_CASE("AgentPromptRunner keeps active markers for not-yet-expired config ski
 {
   "permissions": {
     "allow": [
-      {"tool_pattern": "skill.invoke"}
+      {"tool_pattern": "SkillInvoke"}
     ]
   },
   "agents": {
@@ -1919,7 +1919,7 @@ TEST_CASE("AgentPromptRunner keeps active markers for not-yet-expired config ski
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "skill-1",
-                .name = "skill.invoke",
+                .name = "SkillInvoke",
                 .input_json = R"({"name":"release-note","inputs":{"since":"slice-146"}})",
             }},
             .stop_reason = core::StopReason::tool_use,
@@ -1974,7 +1974,7 @@ TEST_CASE("AgentPromptRunner filters workspace skills by selected agent allowlis
 {
   "permissions": {
     "allow": [
-      {"tool_pattern": "skill.invoke"}
+      {"tool_pattern": "SkillInvoke"}
     ]
   },
   "agents": {
@@ -1991,7 +1991,7 @@ TEST_CASE("AgentPromptRunner filters workspace skills by selected agent allowlis
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "skill-filtered",
-                .name = "skill.invoke",
+                .name = "SkillInvoke",
                 .input_json = R"({"name":"review-pr"})",
             }},
             .stop_reason = core::StopReason::tool_use,
@@ -2020,7 +2020,7 @@ TEST_CASE("AgentPromptRunner filters workspace skills by selected agent allowlis
     REQUIRE(requests[0].system_prompt->contains("Skill: release-note"));
     REQUIRE_FALSE(requests[0].system_prompt->contains("Skill: review-pr"));
     const auto output = tool_result_output_in(requests[1], "skill-filtered");
-    REQUIRE(output.contains("tool error: skill.invoke: skill is not loaded"));
+    REQUIRE(output.contains("tool error: SkillInvoke: skill is not loaded"));
     REQUIRE(output.contains("skill: review-pr"));
     REQUIRE(output.contains("reason: skill_not_loaded"));
     REQUIRE((*runner)->skill_catalog_loads() == 1);
@@ -2042,7 +2042,7 @@ TEST_CASE("AgentPromptRunner treats an empty agent skill allowlist as no skills"
 {
   "permissions": {
     "allow": [
-      {"tool_pattern": "skill.invoke"}
+      {"tool_pattern": "SkillInvoke"}
     ]
   },
   "agents": {
@@ -2059,7 +2059,7 @@ TEST_CASE("AgentPromptRunner treats an empty agent skill allowlist as no skills"
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "skill-empty-allowlist",
-                .name = "skill.invoke",
+                .name = "SkillInvoke",
                 .input_json = R"({"name":"release-note"})",
             }},
             .stop_reason = core::StopReason::tool_use,
@@ -2087,7 +2087,7 @@ TEST_CASE("AgentPromptRunner treats an empty agent skill allowlist as no skills"
     REQUIRE(requests[0].system_prompt.has_value());
     REQUIRE_FALSE(requests[0].system_prompt->contains("Skill: release-note"));
     const auto output = tool_result_output_in(requests[1], "skill-empty-allowlist");
-    REQUIRE(output.contains("tool error: skill.invoke: skill is not loaded"));
+    REQUIRE(output.contains("tool error: SkillInvoke: skill is not loaded"));
     REQUIRE(output.contains("skill: release-note"));
     REQUIRE(output.contains("reason: skill_not_loaded"));
     REQUIRE((*runner)->skill_catalog_loads() == 1);
@@ -2110,7 +2110,7 @@ TEST_CASE("AgentPromptRunner refreshes workspace skill snapshots before the next
 {
   "permissions": {
     "allow": [
-      {"tool_pattern": "skill.invoke"}
+      {"tool_pattern": "SkillInvoke"}
     ]
   }
 }
@@ -2123,7 +2123,7 @@ TEST_CASE("AgentPromptRunner refreshes workspace skill snapshots before the next
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "skill-2",
-                .name = "skill.invoke",
+                .name = "SkillInvoke",
                 .input_json = R"({"name":"release-note","inputs":{"since":"slice-138"}})",
             }},
             .stop_reason = core::StopReason::tool_use,
@@ -2192,7 +2192,7 @@ TEST_CASE("AgentPromptRunner renders default system preamble once per prompt bef
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "read-1",
-                .name = "file.read",
+                .name = "FileRead",
                 .input_json = R"({"path":"note.txt"})",
             }},
             .stop_reason = core::StopReason::tool_use,
@@ -2219,7 +2219,7 @@ TEST_CASE("AgentPromptRunner renders default system preamble once per prompt bef
     REQUIRE(requests[1].system_prompt.has_value());
     REQUIRE(requests[0].system_prompt->contains("You are Orangutan"));
     REQUIRE(requests[0].system_prompt->contains("Operating principles:"));
-    REQUIRE(requests[0].system_prompt->contains("Tool: file.read"));
+    REQUIRE(requests[0].system_prompt->contains("Tool: FileRead"));
     REQUIRE(*requests[0].system_prompt == *requests[1].system_prompt);
     REQUIRE((*runner)->system_preamble_renders() == 1);
   });
@@ -2246,7 +2246,7 @@ TEST_CASE("AgentPromptRunner renders selected agent prompt overlay in the stable
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "read-1",
-                .name = "file.read",
+                .name = "FileRead",
                 .input_json = R"({"path":"note.txt"})",
             }},
             .stop_reason = core::StopReason::tool_use,
@@ -2285,7 +2285,7 @@ TEST_CASE("AgentPromptRunner binds the CLI approval sink for builtin tool dispat
 {
   "permissions": {
     "ask": [
-      {"tool_pattern": "file.read"}
+      {"tool_pattern": "FileRead"}
     ]
   }
 }
@@ -2299,7 +2299,7 @@ TEST_CASE("AgentPromptRunner binds the CLI approval sink for builtin tool dispat
             provider::Response{
                 .blocks = {core::ToolUseContent{
                     .id = "read-1",
-                    .name = "file.read",
+                    .name = "FileRead",
                     .input_json = R"({"path":"note.txt"})",
                 }},
                 .stop_reason = core::StopReason::tool_use,

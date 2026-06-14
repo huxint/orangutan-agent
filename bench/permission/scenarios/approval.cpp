@@ -70,24 +70,24 @@ void register_approval_scenarios(ankerl::nanobench::Bench& b) {
 
   b.run("permission.approval_issue", [&] {
     auto token =
-        authority.issue(ApprovalRequest{.tool_name = "shell.exec", .input = input, .identity = "operator"}, now);
+        authority.issue(ApprovalRequest{.tool_name = "ShellExec", .input = input, .identity = "operator"}, now);
     ankerl::nanobench::doNotOptimizeAway(token);
   });
 
-  const auto valid = authority.issue(ApprovalRequest{.tool_name = "shell.exec",
+  const auto valid = authority.issue(ApprovalRequest{.tool_name = "ShellExec",
                                                      .input = input,
                                                      .identity = "operator",
                                                      .ttl = std::chrono::seconds{60}},
                                      now);
 
   b.run("permission.approval_verify_ok", [&] {
-    auto r = authority.verify(valid, "shell.exec", input, "operator", now);
+    auto r = authority.verify(valid, "ShellExec", input, "operator", now);
     ankerl::nanobench::doNotOptimizeAway(r.has_value());
   });
 
   const auto past_expiry = core::Time{valid.expires_at.to_system_time_point() + std::chrono::seconds{1}};
   b.run("permission.approval_verify_expired", [&] {
-    auto r = authority.verify(valid, "shell.exec", input, "operator", past_expiry);
+    auto r = authority.verify(valid, "ShellExec", input, "operator", past_expiry);
     ankerl::nanobench::doNotOptimizeAway(r.has_value());
   });
 }

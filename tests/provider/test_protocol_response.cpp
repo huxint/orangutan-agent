@@ -47,7 +47,7 @@ TEST_CASE("protocol response decodes Anthropic Messages payloads", "[unit][provi
     "content": [
       {"type": "thinking", "thinking": "checking", "signature": "sig-1"},
       {"type": "text", "text": "I will read it."},
-      {"type": "tool_use", "id": "toolu_1", "name": "file.read", "input": {"path": "README.md"}}
+      {"type": "tool_use", "id": "toolu_1", "name": "FileRead", "input": {"path": "README.md"}}
     ],
     "stop_reason": "tool_use",
     "stop_sequence": null,
@@ -74,7 +74,7 @@ TEST_CASE("protocol response decodes Anthropic Messages payloads", "[unit][provi
   REQUIRE(std::get<core::TextContent>(decoded->blocks[1]).text == "I will read it.");
   const auto& tool = std::get<core::ToolUseContent>(decoded->blocks[2]);
   REQUIRE(tool.id == "toolu_1");
-  REQUIRE(tool.name == "file.read");
+  REQUIRE(tool.name == "FileRead");
   REQUIRE(tool.input_json == R"({"path":"README.md"})");
 }
 
@@ -116,7 +116,7 @@ TEST_CASE("protocol response decodes OpenAI Responses payloads", "[unit][provide
       {
         "type": "function_call",
         "call_id": "call_1",
-        "name": "file.read",
+        "name": "FileRead",
         "arguments": "{\"path\":\"README.md\"}"
       }
     ],
@@ -142,7 +142,7 @@ TEST_CASE("protocol response decodes OpenAI Responses payloads", "[unit][provide
   REQUIRE(std::get<core::TextContent>(decoded->blocks[1]).text == "I will inspect the file.");
   const auto& tool = std::get<core::ToolUseContent>(decoded->blocks[2]);
   REQUIRE(tool.id == "call_1");
-  REQUIRE(tool.name == "file.read");
+  REQUIRE(tool.name == "FileRead");
   REQUIRE(tool.input_json == R"({"path":"README.md"})");
 }
 
@@ -190,7 +190,7 @@ TEST_CASE("protocol response rejects malformed protocol JSON", "[unit][provider]
       "role": "assistant",
       "model": "claude-sonnet",
       "content": [
-        {"type": "tool_use", "id": "toolu_1", "name": "file.read", "input": "README.md"}
+        {"type": "tool_use", "id": "toolu_1", "name": "FileRead", "input": "README.md"}
       ],
       "stop_reason": "tool_use",
       "usage": {"input_tokens": 1, "output_tokens": 1}
@@ -208,7 +208,7 @@ TEST_CASE("protocol response rejects malformed protocol JSON", "[unit][provider]
       "status": "completed",
       "model": "gpt-5.1",
       "output": [
-        {"type": "function_call", "call_id": "call_1", "name": "file.read", "arguments": "not json"}
+        {"type": "function_call", "call_id": "call_1", "name": "FileRead", "arguments": "not json"}
       ],
       "usage": {"input_tokens": 1, "output_tokens": 1}
     })json";

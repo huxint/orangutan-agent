@@ -20,7 +20,7 @@ using orangutan::core::ToolUseContent;
 TEST_CASE("Content holds_* predicates match the active alternative", "[unit][core][content]") {
   const Content text = TextContent{.text = "hello"};
   const Content thinking = ThinkingContent{.thinking = "deep", .signature = std::nullopt};
-  const Content tool_use = ToolUseContent{.id = "t1", .name = "file.read", .input_json = "{}"};
+  const Content tool_use = ToolUseContent{.id = "t1", .name = "FileRead", .input_json = "{}"};
   const Content tool_result =
       ToolResultContent{.tool_use_id = "t1", .output = "ok", .data_json = std::nullopt, .is_error = false};
 
@@ -41,7 +41,7 @@ TEST_CASE("Content holds_* predicates match the active alternative", "[unit][cor
 
 TEST_CASE("text_view exposes the inner string only for TextContent", "[unit][core][content]") {
   const Content text = TextContent{.text = "hello"};
-  const Content tool_use = ToolUseContent{.id = "t1", .name = "file.read", .input_json = "{}"};
+  const Content tool_use = ToolUseContent{.id = "t1", .name = "FileRead", .input_json = "{}"};
 
   const auto view = text_view(text);
   REQUIRE(view.has_value());
@@ -58,9 +58,9 @@ TEST_CASE("Content equality is member-wise", "[unit][core][content]") {
   REQUIRE(a == b);
   REQUIRE_FALSE(a == c);
 
-  const Content tool_a = ToolUseContent{.id = "t1", .name = "file.read", .input_json = "{}"};
-  const Content tool_b = ToolUseContent{.id = "t1", .name = "file.read", .input_json = "{}"};
-  const Content tool_c = ToolUseContent{.id = "t2", .name = "file.read", .input_json = "{}"};
+  const Content tool_a = ToolUseContent{.id = "t1", .name = "FileRead", .input_json = "{}"};
+  const Content tool_b = ToolUseContent{.id = "t1", .name = "FileRead", .input_json = "{}"};
+  const Content tool_c = ToolUseContent{.id = "t2", .name = "FileRead", .input_json = "{}"};
 
   REQUIRE(tool_a == tool_b);
   REQUIRE_FALSE(tool_a == tool_c);

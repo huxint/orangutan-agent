@@ -17,42 +17,42 @@
 namespace orangutan::tool {
 
 /// Stable wire name for the file-read built-in.
-inline constexpr std::string_view kFileReadName{"file.read"};
+inline constexpr std::string_view kFileReadName{"FileRead"};
 
 /// Stable wire name for the file-write built-in.
-inline constexpr std::string_view kFileWriteName{"file.write"};
+inline constexpr std::string_view kFileWriteName{"FileWrite"};
 
 /// Stable wire name for the file-edit built-in.
-inline constexpr std::string_view kFileEditName{"file.edit"};
+inline constexpr std::string_view kFileEditName{"FileEdit"};
 
 /// Stable wire name for the file-search built-in.
-inline constexpr std::string_view kFileSearchName{"file.search"};
+inline constexpr std::string_view kFileSearchName{"FileSearch"};
 
 /// Stable wire name for the directory-list built-in.
-inline constexpr std::string_view kDirectoryListName{"directory.list"};
+inline constexpr std::string_view kDirectoryListName{"DirectoryList"};
 
 /// Stable wire name for the file-delete built-in.
-inline constexpr std::string_view kFileDeleteName{"file.delete"};
+inline constexpr std::string_view kFileDeleteName{"FileDelete"};
 
 /// Stable wire name for the catalog metadata lookup built-in.
-inline constexpr std::string_view kToolSearchName{"tool.search"};
+inline constexpr std::string_view kToolSearchName{"ToolSearch"};
 
 /// Stable wire name for the markdown skill invocation built-in.
-inline constexpr std::string_view kSkillInvokeName{"skill.invoke"};
+inline constexpr std::string_view kSkillInvokeName{"SkillInvoke"};
 
 /// Stable wire name for the markdown skill deactivation built-in.
-inline constexpr std::string_view kSkillDeactivateName{"skill.deactivate"};
+inline constexpr std::string_view kSkillDeactivateName{"SkillDeactivate"};
 
 /// Stable wire name for the long-term memory recall built-in.
-inline constexpr std::string_view kMemoryRecallName{"memory.recall"};
+inline constexpr std::string_view kMemoryRecallName{"MemoryRecall"};
 
 /// Stable wire name for the long-term memory write built-in.
-inline constexpr std::string_view kMemoryRememberName{"memory.remember"};
+inline constexpr std::string_view kMemoryRememberName{"MemoryRemember"};
 
 /// Stable wire name for the long-term memory delete built-in.
-inline constexpr std::string_view kMemoryForgetName{"memory.forget"};
+inline constexpr std::string_view kMemoryForgetName{"MemoryForget"};
 
-/// Register the `file.read` tool. Reads UTF-8 content using `oran-io`'s
+/// Register the `FileRead` tool. Reads UTF-8 content using `oran-io`'s
 /// coroutine helper; when `DispatchContext::workspace` is set, the input path
 /// is first resolved through `tool::Workspace`. Capability `read_file` is
 /// required. Input shape: `{"path": <string>, "start_line"?, "line_count"?,
@@ -66,23 +66,23 @@ inline constexpr std::string_view kMemoryForgetName{"memory.forget"};
 /// `files_touched`, and `truncated`.
 [[nodiscard]] core::Result<void> register_file_read(Registry& registry);
 
-/// Register the `file.write` tool. Writes UTF-8 content to a path using
+/// Register the `FileWrite` tool. Writes UTF-8 content to a path using
 /// `oran-io`'s coroutine helper; capability `write_file` is required.
 /// Input shape: `{"path": <string>, "content": <string>, "mode"?:
 /// "truncate"|"append"|"fail_if_exists", "create_parents"?: bool,
 /// "max_bytes"?: positive integer <= 16777216,
-/// "expected_version"?: <version token from a prior `file.read`>}`. When
+/// "expected_version"?: <version token from a prior `FileRead`>}`. When
 /// `expected_version` is supplied the call fails with `conflict`
 /// (reason=stale_fingerprint, current `fingerprint` in context) if the
 /// file's current version differs. Successful writes fill
 /// `Output::usage.bytes_written` and `files_touched`.
 [[nodiscard]] core::Result<void> register_file_write(Registry& registry);
 
-/// Register the `file.edit` tool. Replaces `old_string` with `new_string` in
+/// Register the `FileEdit` tool. Replaces `old_string` with `new_string` in
 /// a UTF-8 text file; capability `edit_file` is required. Input shape:
 /// `{"path": <string>, "old_string": <string>, "new_string": <string>,
 /// "replace_all"?: bool, "max_bytes"?: positive integer <= 16777216,
-/// "expected_version"?: <version token from a prior `file.read`>}`.
+/// "expected_version"?: <version token from a prior `FileRead`>}`.
 /// Returns `conflict` if `old_string` is not unique unless `replace_all`
 /// is set; `not_found` if `old_string` does not occur. When
 /// `expected_version` is supplied the call fails with `conflict`
@@ -92,7 +92,7 @@ inline constexpr std::string_view kMemoryForgetName{"memory.forget"};
 /// `match_count`.
 [[nodiscard]] core::Result<void> register_file_edit(Registry& registry);
 
-/// Register the `file.search` tool. Scans a UTF-8 text file or (recursively)
+/// Register the `FileSearch` tool. Scans a UTF-8 text file or (recursively)
 /// a directory for literal substring matches; capability `read_file` is
 /// required. Input shape: `{"path": <string>, "pattern": <string>,
 /// "max_matches"?: uint (default 100), "include_hidden"?: bool (default
@@ -120,7 +120,7 @@ inline constexpr std::string_view kMemoryForgetName{"memory.forget"};
 /// (post-truncation), and the `truncated` cap flag.
 [[nodiscard]] core::Result<void> register_file_search(Registry& registry);
 
-/// Register the `directory.list` tool. Enumerates the immediate children of
+/// Register the `DirectoryList` tool. Enumerates the immediate children of
 /// a directory through `oran-io::list_directory`; capability
 /// `list_directory` is required. Input shape:
 /// `{"path": <string>, "include_hidden"?: bool (default false),
@@ -141,7 +141,7 @@ inline constexpr std::string_view kMemoryForgetName{"memory.forget"};
 /// (the entry count).
 [[nodiscard]] core::Result<void> register_directory_list(Registry& registry);
 
-/// Register the `file.delete` tool. Deletes the regular file at `path`
+/// Register the `FileDelete` tool. Deletes the regular file at `path`
 /// through `oran-io::delete_file`; capability `delete_path` is required.
 /// Input shape: `{"path": <string>}`. Returns `invalid_argument` when the
 /// path is a directory or a symlink (the v1 surface refuses anything but
@@ -152,7 +152,7 @@ inline constexpr std::string_view kMemoryForgetName{"memory.forget"};
 /// `Output::usage.bytes_written=0` plus `files_touched=1`.
 [[nodiscard]] core::Result<void> register_file_delete(Registry& registry);
 
-/// Register the `tool.search` tool. Searches the current registry catalog by
+/// Register the `ToolSearch` tool. Searches the current registry catalog by
 /// exact `name`, exact `category`, and/or declared `capability`; at least one
 /// selector is required and supplied selectors are ANDed. Input shape:
 /// `{"name"?: <string>, "category"?: <string>, "capability"?:
@@ -163,7 +163,7 @@ inline constexpr std::string_view kMemoryForgetName{"memory.forget"};
 /// deferred flag, and category.
 [[nodiscard]] core::Result<void> register_tool_search(Registry& registry);
 
-/// Register the `skill.invoke` tool. Runs a markdown skill from the runtime's
+/// Register the `SkillInvoke` tool. Runs a markdown skill from the runtime's
 /// current skill snapshot; capability `invoke_skill` is required. Input shape:
 /// `{"name": <string>, "inputs"?: <JSON value>}`. The concrete skill lookup
 /// lives behind `DispatchContext::skill_invoke`, so this built-in remains an
@@ -171,7 +171,7 @@ inline constexpr std::string_view kMemoryForgetName{"memory.forget"};
 /// depend on `oran-skill`.
 [[nodiscard]] core::Result<void> register_skill_invoke(Registry& registry);
 
-/// Register the `skill.deactivate` tool. Clears a loaded skill's active marker
+/// Register the `SkillDeactivate` tool. Clears a loaded skill's active marker
 /// from the next prompt's section 4 catalog; capability `deactivate_skill` is
 /// required. Input shape: `{"name": <string>}`. The concrete skill lookup lives
 /// behind `DispatchContext::skill_deactivate`, so this built-in stays an
@@ -179,10 +179,10 @@ inline constexpr std::string_view kMemoryForgetName{"memory.forget"};
 /// depend on `oran-skill`. A successful deactivation returns a short
 /// confirmation text plus a versioned `skill_deactivation` record in
 /// `Output::data_json`; the next prompt boundary nets it against any prior
-/// `skill.invoke` activation so the skill stops appearing as active.
+/// `SkillInvoke` activation so the skill stops appearing as active.
 [[nodiscard]] core::Result<void> register_skill_deactivate(Registry& registry);
 
-/// Register the `memory.recall` tool. Searches long-term memory through the
+/// Register the `MemoryRecall` tool. Searches long-term memory through the
 /// runtime supplied on `DispatchContext::memory_recall`; capability
 /// `read_memory` is required. Input shape: `{"query": <string>,
 /// "limit"?: positive integer <= 20 (default 5), "kinds"?: [<RecordKind wire
@@ -193,7 +193,7 @@ inline constexpr std::string_view kMemoryForgetName{"memory.forget"};
 /// record metadata.
 [[nodiscard]] core::Result<void> register_memory_recall(Registry& registry);
 
-/// Register the `memory.remember` tool. Upserts one long-term memory record
+/// Register the `MemoryRemember` tool. Upserts one long-term memory record
 /// through the runtime supplied on `DispatchContext::memory_remember`;
 /// capability `write_memory` is required. Input shape:
 /// `{"id": <string>, "kind": <RecordKind wire spelling>, "title": <string>,
@@ -205,7 +205,7 @@ inline constexpr std::string_view kMemoryForgetName{"memory.forget"};
 /// confirmation text plus structured `data_json` with saved record metadata.
 [[nodiscard]] core::Result<void> register_memory_remember(Registry& registry);
 
-/// Register the `memory.forget` tool. Removes one long-term memory record in
+/// Register the `MemoryForget` tool. Removes one long-term memory record in
 /// the current agent scope through the runtime supplied on
 /// `DispatchContext::memory_forget`; capability `write_memory` is required.
 /// Input shape: `{"id": <string>}`. The concrete memory backend lives outside
@@ -215,11 +215,11 @@ inline constexpr std::string_view kMemoryForgetName{"memory.forget"};
 /// structured `data_json` with the scoped removed key.
 [[nodiscard]] core::Result<void> register_memory_forget(Registry& registry);
 
-/// Register every built-in this repository ships. Currently wires `file.read`,
-/// `file.write`, `file.edit`, `file.search`, `directory.list`, then
-/// `file.delete`, then `tool.search`, then `skill.invoke`, then
-/// `skill.deactivate`, then `memory.recall`, then `memory.remember`, then
-/// `memory.forget`; future slices append additional tools so production callers
+/// Register every built-in this repository ships. Currently wires `FileRead`,
+/// `FileWrite`, `FileEdit`, `FileSearch`, `DirectoryList`, then
+/// `FileDelete`, then `ToolSearch`, then `SkillInvoke`, then
+/// `SkillDeactivate`, then `MemoryRecall`, then `MemoryRemember`, then
+/// `MemoryForget`; future slices append additional tools so production callers
 /// can stay on this single entry point.
 [[nodiscard]] core::Result<void> register_builtins(Registry& registry);
 

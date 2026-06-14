@@ -52,20 +52,20 @@ const prompt::CacheSection& section(const prompt::RenderedPrompt& rendered, std:
 
 tool::Output tool_search_output(std::string data_json) {
   return tool::Output{
-      .text = "tool.search: matches",
+      .text = "ToolSearch: matches",
       .data_json = std::move(data_json),
   };
 }
 
 }  // namespace
 
-TEST_CASE("SessionState promotes deferred tool.search matches into the next prompt snapshot", "[unit][agent]") {
+TEST_CASE("SessionState promotes deferred ToolSearch matches into the next prompt snapshot", "[unit][agent]") {
   test::run_async([](asio::io_context&) -> asio::awaitable<void> {
     agent::SessionState session;
     auto observed = session.observe_tool_output(
         tool::kToolSearchName,
         tool_search_output(
-            R"({"kind":"tool_search","matches":[{"name":"memory.recall","deferred":true},{"name":"file.read","deferred":false}]})"),
+            R"({"kind":"tool_search","matches":[{"name":"MemoryRecall","deferred":true},{"name":"FileRead","deferred":false}]})"),
         at_seconds(1));
 
     REQUIRE(observed.has_value());
@@ -75,11 +75,11 @@ TEST_CASE("SessionState promotes deferred tool.search matches into the next prom
     REQUIRE(observed->skipped_non_deferred == 1);
 
     auto snapshot = session.promotion_snapshot(at_seconds(2));
-    REQUIRE(snapshot.tool_names == std::vector<std::string>{"memory.recall"});
+    REQUIRE(snapshot.tool_names == std::vector<std::string>{"MemoryRecall"});
 
     const std::vector<core::ToolDef> catalog{
-        tool_def("memory.recall", "Recall memory", true),
-        tool_def("file.read", "Read a file"),
+        tool_def("MemoryRecall", "Recall memory", true),
+        tool_def("FileRead", "Read a file"),
     };
     prompt::Builder builder;
     auto result = co_await builder.build(prompt::BuilderInputs{
@@ -94,8 +94,8 @@ TEST_CASE("SessionState promotes deferred tool.search matches into the next prom
     });
 
     REQUIRE(result.has_value());
-    REQUIRE(section(*result, "tool_catalog").content.contains("Tool: memory.recall"));
-    REQUIRE_FALSE(section(*result, "deferred_tools").content.contains("memory.recall"));
+    REQUIRE(section(*result, "tool_catalog").content.contains("Tool: MemoryRecall"));
+    REQUIRE_FALSE(section(*result, "deferred_tools").content.contains("MemoryRecall"));
   });
 }
 
@@ -103,15 +103,15 @@ TEST_CASE("SessionState ignores non-search and failed search outputs", "[unit][a
   agent::SessionState session;
 
   auto non_search = session.observe_tool_output(
-      "file.read",
-      tool_search_output(R"({"kind":"tool_search","matches":[{"name":"memory.recall","deferred":true}]})"),
+      "FileRead",
+      tool_search_output(R"({"kind":"tool_search","matches":[{"name":"MemoryRecall","deferred":true}]})"),
       at_seconds(1));
   REQUIRE(non_search.has_value());
   REQUIRE_FALSE(non_search->observed_tool_search);
   REQUIRE(session.promotion_snapshot(at_seconds(2)).tool_names.empty());
 
   auto failed =
-      session.observe_tool_output(tool::kToolSearchName, tool::Output::error("tool.search failed"), at_seconds(3));
+      session.observe_tool_output(tool::kToolSearchName, tool::Output::error("ToolSearch failed"), at_seconds(3));
   REQUIRE(failed.has_value());
   REQUIRE(failed->observed_tool_search);
   REQUIRE(failed->matches_seen == 0);
@@ -119,7 +119,7 @@ TEST_CASE("SessionState ignores non-search and failed search outputs", "[unit][a
   REQUIRE(session.promotion_snapshot(at_seconds(4)).tool_names.empty());
 }
 
-TEST_CASE("SessionState rejects malformed successful tool.search data", "[unit][agent]") {
+TEST_CASE("SessionState rejects malformed successful ToolSearch data", "[unit][agent]") {
   agent::SessionState session;
   auto malformed = session.observe_tool_output(tool::kToolSearchName,
                                                tool_search_output(R"({"kind":"tool_search","matches":[{"name":""}]})"),

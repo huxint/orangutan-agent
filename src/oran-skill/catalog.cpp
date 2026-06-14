@@ -24,8 +24,8 @@
 namespace orangutan::skill {
 namespace {
 
-constexpr std::string_view kSkillInvokeName{"skill.invoke"};
-constexpr std::string_view kSkillDeactivateName{"skill.deactivate"};
+constexpr std::string_view kSkillInvokeName{"SkillInvoke"};
+constexpr std::string_view kSkillDeactivateName{"SkillDeactivate"};
 constexpr std::string_view kActivationPrefix{R"({"kind":"skill_activation","version":1,"name":")"};
 constexpr std::string_view kDeactivationPrefix{R"({"kind":"skill_deactivation","version":1,"name":")"};
 constexpr std::string_view kActivationSuffix{R"("})"};

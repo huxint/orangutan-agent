@@ -1,6 +1,6 @@
 // bench/tool/scenarios/file_write.cpp
 //
-// A-vs-B comparison: full `file.write` dispatch through the registry under
+// A-vs-B comparison: full `FileWrite` dispatch through the registry under
 // `mode=truncate` vs. `mode=append`. Both scenarios pay the same costs
 // (permission eval + libsodium SHA-256 of the input + audit record + JSON
 // parse + a 64-byte write to a tempfile); the contrast measures whether

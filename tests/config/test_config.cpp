@@ -79,7 +79,7 @@ constexpr auto kMinimalConfig = R"json(
       "max_data_bytes": 8192
     },
     "prompt": {
-      "active_tools": ["file.read", "tool.search"]
+      "active_tools": ["FileRead", "ToolSearch"]
     },
     "redaction_patterns": ["token=[^ ]+"]
   },
@@ -161,7 +161,7 @@ TEST_CASE("Config::parse returns typed config values", "[unit][config]") {
   REQUIRE(result->runtime().tool_output.max_text_bytes == 4096);
   REQUIRE(result->runtime().tool_output.max_data_bytes == 8192);
   REQUIRE_FALSE(result->runtime().prompt.active_tools.use_defaults);
-  REQUIRE(result->runtime().prompt.active_tools.tool_names == std::vector<std::string>{"file.read", "tool.search"});
+  REQUIRE(result->runtime().prompt.active_tools.tool_names == std::vector<std::string>{"FileRead", "ToolSearch"});
   REQUIRE(result->runtime().redaction_patterns.size() == 1);
   REQUIRE_FALSE(result->trace().enabled);
   REQUIRE(result->trace().store_raw_bodies);
@@ -719,7 +719,7 @@ TEST_CASE("Config::parse extracts runtime.prompt active tools", "[unit][config][
     auto result = config::Config::parse(R"json({
   "runtime": {
     "prompt": {
-      "active_tools": ["file.read", "file.search", "tool.search"]
+      "active_tools": ["FileRead", "FileSearch", "ToolSearch"]
     }
   }
 })json");
@@ -727,7 +727,7 @@ TEST_CASE("Config::parse extracts runtime.prompt active tools", "[unit][config][
     REQUIRE(result.has_value());
     REQUIRE_FALSE(result->runtime().prompt.active_tools.use_defaults);
     REQUIRE(result->runtime().prompt.active_tools.tool_names ==
-            std::vector<std::string>{"file.read", "file.search", "tool.search"});
+            std::vector<std::string>{"FileRead", "FileSearch", "ToolSearch"});
   }
 
   SECTION("empty explicit allowlist") {
@@ -759,19 +759,19 @@ TEST_CASE("Config::parse rejects malformed runtime.prompt active tools", "[unit]
   }
 
   SECTION("non-array active_tools") {
-    auto result = config::Config::parse(R"json({"runtime": {"prompt": {"active_tools": {"name": "file.read"}}}})json");
+    auto result = config::Config::parse(R"json({"runtime": {"prompt": {"active_tools": {"name": "FileRead"}}}})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }
 
   SECTION("non-string tool name") {
-    auto result = config::Config::parse(R"json({"runtime": {"prompt": {"active_tools": ["file.read", 42]}}})json");
+    auto result = config::Config::parse(R"json({"runtime": {"prompt": {"active_tools": ["FileRead", 42]}}})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }
 
   SECTION("empty tool name") {
-    auto result = config::Config::parse(R"json({"runtime": {"prompt": {"active_tools": ["file.read", ""]}}})json");
+    auto result = config::Config::parse(R"json({"runtime": {"prompt": {"active_tools": ["FileRead", ""]}}})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }
@@ -1524,14 +1524,14 @@ TEST_CASE("Config::parse extracts a populated permissions block", "[unit][config
 {
   "permissions": {
     "allow": [
-      {"tool_pattern": "file.read"},
+      {"tool_pattern": "FileRead"},
       {"tool_pattern": "*", "capability": "read_memory"}
     ],
     "deny": [
       {"tool_pattern": "*", "capability": "runtime_loader"}
     ],
     "ask": [
-      {"tool_pattern": "file.write"},
+      {"tool_pattern": "FileWrite"},
       {"tool_pattern": "*", "capability": "spawn_subprocess"}
     ]
   }
@@ -1543,7 +1543,7 @@ TEST_CASE("Config::parse extracts a populated permissions block", "[unit][config
   REQUIRE(perms.rules.size() == 5);
 
   REQUIRE(perms.rules[0].verdict == config::PermissionVerdict::allow);
-  REQUIRE(perms.rules[0].tool_pattern == "file.read");
+  REQUIRE(perms.rules[0].tool_pattern == "FileRead");
   REQUIRE_FALSE(perms.rules[0].capability.has_value());
 
   REQUIRE(perms.rules[1].verdict == config::PermissionVerdict::allow);
@@ -1553,7 +1553,7 @@ TEST_CASE("Config::parse extracts a populated permissions block", "[unit][config
   REQUIRE(perms.rules[2].capability == core::Capability::runtime_loader);
 
   REQUIRE(perms.rules[3].verdict == config::PermissionVerdict::ask);
-  REQUIRE(perms.rules[3].tool_pattern == "file.write");
+  REQUIRE(perms.rules[3].tool_pattern == "FileWrite");
 
   REQUIRE(perms.rules[4].verdict == config::PermissionVerdict::ask);
   REQUIRE(perms.rules[4].capability == core::Capability::spawn_subprocess);
@@ -1653,7 +1653,7 @@ TEST_CASE("Config::parse defaults agents.<name> skill policy inputs to empty", "
 }
 
 TEST_CASE("Config::parse env-substitutes inside permission rules", "[unit][config][permissions]") {
-  ScopedEnv pattern{"ORAN_CONFIG_TEST_PATTERN", "file.*"};
+  ScopedEnv pattern{"ORAN_CONFIG_TEST_PATTERN", "File*"};
 
   auto result = config::Config::parse(R"json(
 {
@@ -1665,7 +1665,7 @@ TEST_CASE("Config::parse env-substitutes inside permission rules", "[unit][confi
 
   REQUIRE(result.has_value());
   REQUIRE(result->permissions().rules.size() == 1);
-  REQUIRE(result->permissions().rules[0].tool_pattern == "file.*");
+  REQUIRE(result->permissions().rules[0].tool_pattern == "File*");
   REQUIRE(result->permissions().rules[0].capability == core::Capability::read_file);
 }
 
@@ -1690,7 +1690,7 @@ TEST_CASE("Config::parse rejects malformed permission rules", "[unit][config][pe
   }
 
   SECTION("non-object rule entry") {
-    auto result = config::Config::parse(R"json({"permissions": {"allow": ["file.read"]}})json");
+    auto result = config::Config::parse(R"json({"permissions": {"allow": ["FileRead"]}})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }
@@ -1706,7 +1706,7 @@ TEST_CASE("Config::parse extracts input_pattern on permission rules", "[unit][co
   auto result = config::Config::parse(R"json({
   "permissions": {
     "deny": [
-      {"tool_pattern": "shell.exec", "input_pattern": "^rm "}
+      {"tool_pattern": "ShellExec", "input_pattern": "^rm "}
     ]
   }
 })json");
@@ -1722,7 +1722,7 @@ TEST_CASE("Config::parse rejects malformed input_pattern at load time", "[unit][
     auto result = config::Config::parse(R"json({
   "permissions": {
     "deny": [
-      {"tool_pattern": "shell.exec", "input_pattern": "[unclosed"}
+      {"tool_pattern": "ShellExec", "input_pattern": "[unclosed"}
     ]
   }
 })json");
@@ -1744,7 +1744,7 @@ TEST_CASE("Config::parse rejects malformed input_pattern at load time", "[unit][
 
   SECTION("empty input_pattern is rejected") {
     auto result = config::Config::parse(R"json({
-  "permissions": {"deny": [{"tool_pattern": "shell.exec", "input_pattern": ""}]}
+  "permissions": {"deny": [{"tool_pattern": "ShellExec", "input_pattern": ""}]}
 })json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
@@ -1752,7 +1752,7 @@ TEST_CASE("Config::parse rejects malformed input_pattern at load time", "[unit][
 
   SECTION("non-string input_pattern is rejected") {
     auto result = config::Config::parse(R"json({
-  "permissions": {"deny": [{"tool_pattern": "shell.exec", "input_pattern": 42}]}
+  "permissions": {"deny": [{"tool_pattern": "ShellExec", "input_pattern": 42}]}
 })json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
@@ -1842,7 +1842,7 @@ TEST_CASE("Config::parse extracts replay_max + approval_ttl_seconds on permissio
   auto result = config::Config::parse(R"json({
   "permissions": {
     "ask": [
-      {"tool_pattern": "file.write", "replay_max": 2, "approval_ttl_seconds": 300}
+      {"tool_pattern": "FileWrite", "replay_max": 2, "approval_ttl_seconds": 300}
     ]
   }
 })json");
@@ -1858,7 +1858,7 @@ TEST_CASE("Config::parse leaves replay_max + approval_ttl_seconds unset by defau
   auto result = config::Config::parse(R"json({
   "permissions": {
     "ask": [
-      {"tool_pattern": "file.write"}
+      {"tool_pattern": "FileWrite"}
     ]
   }
 })json");
@@ -1873,7 +1873,7 @@ TEST_CASE("Config::parse rejects negative replay_max", "[unit][config][permissio
   auto result = config::Config::parse(R"json({
   "permissions": {
     "ask": [
-      {"tool_pattern": "file.write", "replay_max": -1}
+      {"tool_pattern": "FileWrite", "replay_max": -1}
     ]
   }
 })json");
@@ -1892,7 +1892,7 @@ TEST_CASE("Config::parse rejects negative approval_ttl_seconds", "[unit][config]
   auto result = config::Config::parse(R"json({
   "permissions": {
     "ask": [
-      {"tool_pattern": "file.write", "approval_ttl_seconds": -60}
+      {"tool_pattern": "FileWrite", "approval_ttl_seconds": -60}
     ]
   }
 })json");
@@ -1911,7 +1911,7 @@ TEST_CASE("Config::parse rejects non-integer replay_max", "[unit][config][permis
   auto result = config::Config::parse(R"json({
   "permissions": {
     "ask": [
-      {"tool_pattern": "file.write", "replay_max": "many"}
+      {"tool_pattern": "FileWrite", "replay_max": "many"}
     ]
   }
 })json");
@@ -1926,7 +1926,7 @@ TEST_CASE("Config::parse extracts permissions.workspace extra roots", "[unit][co
       "extra_read_roots": ["/var/log/oran", "/srv/data"],
       "extra_write_roots": ["/var/lib/oran-out"]
     },
-    "allow": [{"tool_pattern": "file.read"}]
+    "allow": [{"tool_pattern": "FileRead"}]
   }
 })json");
 
@@ -1936,7 +1936,7 @@ TEST_CASE("Config::parse extracts permissions.workspace extra roots", "[unit][co
   REQUIRE(workspace.extra_write_roots == std::vector<std::string>{"/var/lib/oran-out"});
   // Rule parsing still works alongside the workspace block.
   REQUIRE(result->permissions().rules.size() == 1);
-  REQUIRE(result->permissions().rules[0].tool_pattern == "file.read");
+  REQUIRE(result->permissions().rules[0].tool_pattern == "FileRead");
 }
 
 TEST_CASE("Config::parse env-substitutes workspace roots", "[unit][config][permissions][workspace]") {

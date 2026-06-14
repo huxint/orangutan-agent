@@ -107,7 +107,7 @@ void migrate(asio::io_context& io, storage::AuditRepository& repo) {
             }
             const auto reason = std::format("rule #{} (allow)", i);
             if (!cached->statement().bind_text(1, scope) || !cached->statement().bind_text(2, kAgentKey) ||
-                !cached->statement().bind_text(3, "file.read") || !cached->statement().bind_text(4, kIdentity) ||
+                !cached->statement().bind_text(3, "FileRead") || !cached->statement().bind_text(4, kIdentity) ||
                 !cached->statement().bind_text(5, "allow") || !cached->statement().bind_text(6, "allow") ||
                 !cached->statement().bind_text(7, reason)) {
               std::abort();
@@ -161,7 +161,7 @@ run_repository_append_list(asio::io_context& io, storage::AuditRepository& repo,
           auto request = storage::AppendAuditEventRequest{
               .scope_key = scope,
               .agent_key = std::string{kAgentKey},
-              .tool_name = "file.read",
+              .tool_name = "FileRead",
               .identity = std::string{kIdentity},
               .verdict = "allow",
               .outcome = "allow",

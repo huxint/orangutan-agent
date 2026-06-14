@@ -108,8 +108,8 @@ struct RuntimeAssemblyOptions {
   std::size_t audit_statement_cache_capacity{4};
   /// Workspace policy options threaded into the assembly-owned
   /// `tool::Workspace`. Extra read/write roots widen which canonical
-  /// roots count as "inside the workspace" for `file.read` / `file.search`
-  /// / `directory.list` and `file.write` / `file.edit` / `file.delete`
+  /// roots count as "inside the workspace" for `FileRead` / `FileSearch`
+  /// / `DirectoryList` and `FileWrite` / `FileEdit` / `FileDelete`
   /// respectively. The strings are passed through verbatim;
   /// `tool::Workspace::create` canonicalises and validates each root.
   tool::WorkspaceOptions workspace_options{};

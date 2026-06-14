@@ -298,7 +298,7 @@ TEST_CASE("automation prompt bridge keeps ask permissions fail-closed without an
 {
   "permissions": {
     "ask": [
-      {"tool_pattern": "file.read"}
+      {"tool_pattern": "FileRead"}
     ]
   }
 }
@@ -310,7 +310,7 @@ TEST_CASE("automation prompt bridge keeps ask permissions fail-closed without an
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "read-1",
-                .name = "file.read",
+                .name = "FileRead",
                 .input_json = R"({"path":"note.txt"})",
             }},
             .stop_reason = core::StopReason::tool_use,

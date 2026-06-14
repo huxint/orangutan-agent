@@ -159,7 +159,12 @@ struct Response {
 > output, cache-creation, and cache-read tokens; route resolution preserves that
 > non-secret metadata on `ModelTarget`; and `agent::Loop` fills missing
 > `Response::usage.cost_estimate` from the selected target before provider
-> response hooks, result aggregation, and trace writes consume the usage.
+> response hooks, result aggregation, and trace writes consume the usage. Slice
+> 245 makes the shared `ToolDef::name` surface provider-safe by renaming shipped
+> tools to PascalCase names (`FileRead`, `ToolSearch`, `MemoryRecall`, ...).
+> Anthropic/OpenAI request serializers still emit `ToolDef::name` directly; no
+> provider-only alias map exists, so prompts, transcripts, permissions, audits,
+> traces, and wire requests all use the same tool spelling.
 
 ## Layered Implementation
 

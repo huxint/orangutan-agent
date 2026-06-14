@@ -34,7 +34,7 @@ Six failure modes the existing surface cannot answer:
 1. *Which* prompt prefix was cached on iteration 4 vs iteration 3?
 2. *Why* did the agent loop spend 12 seconds on iteration 2? Was it
    the provider, the tools, or a blocked hook?
-3. *Which* hook sink vetoed `tool_before` for `file.write` on this
+3. *Which* hook sink vetoed `tool_before` for `FileWrite` on this
    turn?
 4. *Which* tool calls in this turn used the cache (spec 0011) vs.
    hit cold storage?
@@ -113,7 +113,7 @@ makes the existing audit rows joinable. Nothing else.
   ```sql
   CREATE TABLE trace_turns (
     turn_id           BLOB PRIMARY KEY,             -- 16-byte UUID
-    parent_turn_id    BLOB NULL,                    -- nested via agent.spawn (later)
+    parent_turn_id    BLOB NULL,                    -- nested via AgentSpawn (later)
     session_id        BLOB NOT NULL,
     agent_key         TEXT NOT NULL,
     origin            TEXT NOT NULL,                -- cli, desktop, channel:qq, automation:cron, ...
@@ -395,7 +395,7 @@ makes the existing audit rows joinable. Nothing else.
    monotonic-version change is visible to an operator running
    `--trace`.
 8. **Redaction default.** A turn whose tool calls carry sensitive
-   inputs (a `file.write` of secret content) produces a trace
+   inputs (a `FileWrite` of secret content) produces a trace
    row whose `context_json` is empty `{}` and whose audit rows
    carry `input_hash` only — no raw bytes. Pinned by a
    secret-pattern test.

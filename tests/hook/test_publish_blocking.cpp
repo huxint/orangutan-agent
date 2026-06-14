@@ -48,7 +48,7 @@ using namespace std::chrono_literals;
 
 [[nodiscard]] hook::ToolBeforePayload sample_before_with_redacted_input() {
   return hook::ToolBeforePayload{
-      .tool_name = "file.edit",
+      .tool_name = "FileEdit",
       .input_json = R"({"path":"notes.md","old_string":"secret","new_string":"public"})",
       .redacted_input_json =
           R"({"kind":"redacted_tool_input","input_hash":"abc","old_string_bytes":6,"new_string_bytes":6})",

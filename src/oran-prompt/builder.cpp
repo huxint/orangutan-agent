@@ -28,14 +28,14 @@ constexpr std::uint64_t kFnvOffset = 14695981039346656037ull;
 constexpr std::uint64_t kFnvPrime = 1099511628211ull;
 constexpr std::string_view kHashSeparator = "\x1F";
 constexpr auto kDefaultActiveTools = std::array<std::string_view, 8>{
-    "file.read",
-    "file.write",
-    "file.edit",
-    "file.search",
-    "directory.list",
-    "tool.search",
-    "skill.invoke",
-    "skill.deactivate",
+    "FileRead",
+    "FileWrite",
+    "FileEdit",
+    "FileSearch",
+    "DirectoryList",
+    "ToolSearch",
+    "SkillInvoke",
+    "SkillDeactivate",
 };
 
 [[nodiscard]] std::uint64_t hash_append(std::uint64_t hash, std::string_view bytes) noexcept {

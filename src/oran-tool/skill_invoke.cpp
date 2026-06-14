@@ -1,4 +1,4 @@
-// src/oran-tool/skill_invoke.cpp - `skill.invoke` built-in.
+// src/oran-tool/skill_invoke.cpp - `SkillInvoke` built-in.
 
 #include <oran/tool/builtins.hpp>
 
@@ -42,7 +42,7 @@ struct ParsedInvoke {
     return std::unexpected(std::move(name).error());
   }
   if (name->empty()) {
-    return std::unexpected(core::Error::invalid_argument("skill.invoke: `name` must be non-empty"));
+    return std::unexpected(core::Error::invalid_argument("SkillInvoke: `name` must be non-empty"));
   }
 
   auto inputs_json = std::string{"{}"};
@@ -64,7 +64,7 @@ struct ParsedInvoke {
     co_return std::unexpected(std::move(parsed).error());
   }
   if (!ctx.skill_invoke) {
-    co_return std::unexpected(core::Error::invalid_argument("skill.invoke: runtime service is not available")
+    co_return std::unexpected(core::Error::invalid_argument("SkillInvoke: runtime service is not available")
                                   .with("reason", "skill_runtime_unavailable")
                                   .with("skill", parsed->name));
   }

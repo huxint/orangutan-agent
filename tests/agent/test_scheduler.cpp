@@ -376,7 +376,7 @@ TEST_CASE("ToolScheduler: single call returns one ordered result with the regist
           "[unit][agent][scheduler]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
-    add_latency_tool(registry, "fake.noop", 0ms);
+    add_latency_tool(registry, "FakeNoop", 0ms);
     auto rules = allow_all_rules();
     permission::NullAuditSink audit;
     auto prototype = make_prototype(io, rules, audit);
@@ -384,13 +384,13 @@ TEST_CASE("ToolScheduler: single call returns one ordered result with the regist
     agent::ToolScheduler scheduler{io.get_executor(), registry};
 
     std::vector<agent::ToolBatchCall> batch;
-    batch.push_back(call(0, "fake.noop", R"({"k":"v"})"));
+    batch.push_back(call(0, "FakeNoop", R"({"k":"v"})"));
 
     auto result = co_await scheduler.run_batch(std::move(batch), prototype);
     REQUIRE(result.has_value());
     REQUIRE(result->size() == 1);
     REQUIRE((*result)[0].tool_use_id == "call-0");
-    REQUIRE((*result)[0].name == "fake.noop");
+    REQUIRE((*result)[0].name == "FakeNoop");
     REQUIRE((*result)[0].output.has_value());
     REQUIRE((*result)[0].output->text == R"(done:{"k":"v"})");
   });
@@ -405,7 +405,7 @@ TEST_CASE("ToolScheduler: bounded parallelism caps in-flight calls", "[unit][age
 
         auto tracker = std::make_shared<ConcurrencyTracker>();
         tool::Registry registry;
-        add_latency_tool(registry, "fake.latency", kLatency, tracker);
+        add_latency_tool(registry, "FakeLatency", kLatency, tracker);
         auto rules = allow_all_rules();
         permission::NullAuditSink audit;
         auto prototype = make_prototype(io, rules, audit);
@@ -420,7 +420,7 @@ TEST_CASE("ToolScheduler: bounded parallelism caps in-flight calls", "[unit][age
         std::vector<agent::ToolBatchCall> batch;
         batch.reserve(kBatch);
         for (std::size_t i = 0; i < kBatch; ++i) {
-          batch.push_back(call(i, "fake.latency"));
+          batch.push_back(call(i, "FakeLatency"));
         }
 
         const auto started = std::chrono::steady_clock::now();
@@ -443,8 +443,8 @@ TEST_CASE("ToolScheduler: results are returned in original tool_use order", "[un
   test::run_async(
       [](asio::io_context& io) -> async::Awaitable<void> {
         tool::Registry registry;
-        add_latency_tool(registry, "fake.slow", 60ms);
-        add_latency_tool(registry, "fake.fast", 5ms);
+        add_latency_tool(registry, "FakeSlow", 60ms);
+        add_latency_tool(registry, "FakeFast", 5ms);
         auto rules = allow_all_rules();
         permission::NullAuditSink audit;
         auto prototype = make_prototype(io, rules, audit);
@@ -454,22 +454,22 @@ TEST_CASE("ToolScheduler: results are returned in original tool_use order", "[un
                                        agent::ToolSchedulerOptions{.max_parallel_tools = 4, .per_call_timeout = 5s}};
 
         std::vector<agent::ToolBatchCall> batch;
-        batch.push_back(call(0, "fake.slow"));
-        batch.push_back(call(1, "fake.fast"));
-        batch.push_back(call(2, "fake.slow"));
-        batch.push_back(call(3, "fake.fast"));
+        batch.push_back(call(0, "FakeSlow"));
+        batch.push_back(call(1, "FakeFast"));
+        batch.push_back(call(2, "FakeSlow"));
+        batch.push_back(call(3, "FakeFast"));
 
         auto result = co_await scheduler.run_batch(std::move(batch), prototype);
         REQUIRE(result.has_value());
         REQUIRE(result->size() == 4);
         REQUIRE((*result)[0].tool_use_id == "call-0");
-        REQUIRE((*result)[0].name == "fake.slow");
+        REQUIRE((*result)[0].name == "FakeSlow");
         REQUIRE((*result)[1].tool_use_id == "call-1");
-        REQUIRE((*result)[1].name == "fake.fast");
+        REQUIRE((*result)[1].name == "FakeFast");
         REQUIRE((*result)[2].tool_use_id == "call-2");
-        REQUIRE((*result)[2].name == "fake.slow");
+        REQUIRE((*result)[2].name == "FakeSlow");
         REQUIRE((*result)[3].tool_use_id == "call-3");
-        REQUIRE((*result)[3].name == "fake.fast");
+        REQUIRE((*result)[3].name == "FakeFast");
         // All four returned the canned `done:<input>` payload regardless of
         // the order in which they actually finished.
         for (const auto& row : *result) {
@@ -485,7 +485,7 @@ TEST_CASE("ToolScheduler: per-call timeout surfaces Error::cancelled with reason
   test::run_async(
       [](asio::io_context& io) -> async::Awaitable<void> {
         tool::Registry registry;
-        add_latency_tool(registry, "fake.slow", 500ms);
+        add_latency_tool(registry, "FakeSlow", 500ms);
         auto rules = allow_all_rules();
         permission::NullAuditSink audit;
         auto prototype = make_prototype(io, rules, audit);
@@ -498,7 +498,7 @@ TEST_CASE("ToolScheduler: per-call timeout surfaces Error::cancelled with reason
                                        }};
 
         std::vector<agent::ToolBatchCall> batch;
-        batch.push_back(call(0, "fake.slow"));
+        batch.push_back(call(0, "FakeSlow"));
 
         auto result = co_await scheduler.run_batch(std::move(batch), prototype);
         REQUIRE(result.has_value());
@@ -508,7 +508,7 @@ TEST_CASE("ToolScheduler: per-call timeout surfaces Error::cancelled with reason
         REQUIRE_FALSE(row.output.has_value());
         REQUIRE(row.output.error().kind() == core::ErrorKind::cancelled);
         REQUIRE(error_has_context(row.output.error(), "reason", "timeout"));
-        REQUIRE(error_has_context(row.output.error(), "tool", "fake.slow"));
+        REQUIRE(error_has_context(row.output.error(), "tool", "FakeSlow"));
         REQUIRE(error_has_context(row.output.error(), "per_call_timeout_ms", "50"));
       },
       2s);
@@ -520,7 +520,7 @@ TEST_CASE("ToolScheduler: parent cancellation propagates to in-flight calls",
   asio::cancellation_signal signal;
 
   tool::Registry registry;
-  add_latency_tool(registry, "fake.slow", 1s);
+  add_latency_tool(registry, "FakeSlow", 1s);
   auto rules = allow_all_rules();
   permission::NullAuditSink audit;
   auto prototype = make_prototype(io, rules, audit);
@@ -533,8 +533,8 @@ TEST_CASE("ToolScheduler: parent cancellation propagates to in-flight calls",
                                  }};
 
   std::vector<agent::ToolBatchCall> batch;
-  batch.push_back(call(0, "fake.slow"));
-  batch.push_back(call(1, "fake.slow"));
+  batch.push_back(call(0, "FakeSlow"));
+  batch.push_back(call(1, "FakeSlow"));
 
   std::optional<core::Result<std::vector<agent::ToolBatchResult>>> result;
   std::exception_ptr failure;
@@ -576,7 +576,7 @@ TEST_CASE("ToolScheduler: two writes to the same canonical path serialize (AC3)"
 
         auto tracker = std::make_shared<LockTracker>();
         tool::Registry registry;
-        add_tracked_tool(registry, "fake.lock.write", {core::Capability::write_file}, 80ms, tracker);
+        add_tracked_tool(registry, "FakeLockWrite", {core::Capability::write_file}, 80ms, tracker);
 
         auto workspace = make_workspace(root.path());
         auto rules = allow_all_rules();
@@ -588,8 +588,8 @@ TEST_CASE("ToolScheduler: two writes to the same canonical path serialize (AC3)"
                                        agent::ToolSchedulerOptions{.max_parallel_tools = 4, .per_call_timeout = 10s}};
 
         std::vector<agent::ToolBatchCall> batch;
-        batch.push_back(call(0, "fake.lock.write", write_call_input(rel)));
-        batch.push_back(call(1, "fake.lock.write", write_call_input(rel)));
+        batch.push_back(call(0, "FakeLockWrite", write_call_input(rel)));
+        batch.push_back(call(1, "FakeLockWrite", write_call_input(rel)));
 
         auto result = co_await scheduler.run_batch(std::move(batch), prototype);
         REQUIRE(result.has_value());
@@ -622,8 +622,8 @@ TEST_CASE("ToolScheduler: concurrent read and write on the same path obey the re
 
         auto tracker = std::make_shared<LockTracker>();
         tool::Registry registry;
-        add_tracked_tool(registry, "fake.lock.read", {core::Capability::read_file}, 80ms, tracker);
-        add_tracked_tool(registry, "fake.lock.write", {core::Capability::write_file}, 80ms, tracker);
+        add_tracked_tool(registry, "FakeLockRead", {core::Capability::read_file}, 80ms, tracker);
+        add_tracked_tool(registry, "FakeLockWrite", {core::Capability::write_file}, 80ms, tracker);
 
         auto workspace = make_workspace(root.path());
         auto rules = allow_all_rules();
@@ -635,8 +635,8 @@ TEST_CASE("ToolScheduler: concurrent read and write on the same path obey the re
                                        agent::ToolSchedulerOptions{.max_parallel_tools = 4, .per_call_timeout = 10s}};
 
         std::vector<agent::ToolBatchCall> batch;
-        batch.push_back(call(0, "fake.lock.read", write_call_input(rel)));
-        batch.push_back(call(1, "fake.lock.write", write_call_input(rel)));
+        batch.push_back(call(0, "FakeLockRead", write_call_input(rel)));
+        batch.push_back(call(1, "FakeLockWrite", write_call_input(rel)));
 
         auto result = co_await scheduler.run_batch(std::move(batch), prototype);
         REQUIRE(result.has_value());
@@ -666,7 +666,7 @@ TEST_CASE("ToolScheduler: two reads to the same path run concurrently under the 
 
         auto tracker = std::make_shared<LockTracker>();
         tool::Registry registry;
-        add_tracked_tool(registry, "fake.lock.read", {core::Capability::read_file}, 80ms, tracker);
+        add_tracked_tool(registry, "FakeLockRead", {core::Capability::read_file}, 80ms, tracker);
 
         auto workspace = make_workspace(root.path());
         auto rules = allow_all_rules();
@@ -678,8 +678,8 @@ TEST_CASE("ToolScheduler: two reads to the same path run concurrently under the 
                                        agent::ToolSchedulerOptions{.max_parallel_tools = 4, .per_call_timeout = 10s}};
 
         std::vector<agent::ToolBatchCall> batch;
-        batch.push_back(call(0, "fake.lock.read", write_call_input(rel)));
-        batch.push_back(call(1, "fake.lock.read", write_call_input(rel)));
+        batch.push_back(call(0, "FakeLockRead", write_call_input(rel)));
+        batch.push_back(call(1, "FakeLockRead", write_call_input(rel)));
 
         auto result = co_await scheduler.run_batch(std::move(batch), prototype);
         REQUIRE(result.has_value());
@@ -703,7 +703,7 @@ TEST_CASE("ToolScheduler: writes to different paths run concurrently", "[unit][a
 
         auto tracker = std::make_shared<LockTracker>();
         tool::Registry registry;
-        add_tracked_tool(registry, "fake.lock.write", {core::Capability::write_file}, 80ms, tracker);
+        add_tracked_tool(registry, "FakeLockWrite", {core::Capability::write_file}, 80ms, tracker);
 
         auto workspace = make_workspace(root.path());
         auto rules = allow_all_rules();
@@ -715,8 +715,8 @@ TEST_CASE("ToolScheduler: writes to different paths run concurrently", "[unit][a
                                        agent::ToolSchedulerOptions{.max_parallel_tools = 4, .per_call_timeout = 10s}};
 
         std::vector<agent::ToolBatchCall> batch;
-        batch.push_back(call(0, "fake.lock.write", write_call_input("a.txt")));
-        batch.push_back(call(1, "fake.lock.write", write_call_input("b.txt")));
+        batch.push_back(call(0, "FakeLockWrite", write_call_input("a.txt")));
+        batch.push_back(call(1, "FakeLockWrite", write_call_input("b.txt")));
 
         auto result = co_await scheduler.run_batch(std::move(batch), prototype);
         REQUIRE(result.has_value());
@@ -740,7 +740,7 @@ TEST_CASE("ToolScheduler: capability-free tools skip the path lock", "[unit][age
         auto tracker = std::make_shared<LockTracker>();
         tool::Registry registry;
         // No capability => no lock class, no path resolution required.
-        add_tracked_tool(registry, "fake.lock.noop", {}, 30ms, tracker);
+        add_tracked_tool(registry, "FakeLockNoop", {}, 30ms, tracker);
 
         auto workspace = make_workspace(root.path());
         auto rules = allow_all_rules();
@@ -752,8 +752,8 @@ TEST_CASE("ToolScheduler: capability-free tools skip the path lock", "[unit][age
                                        agent::ToolSchedulerOptions{.max_parallel_tools = 4, .per_call_timeout = 5s}};
 
         std::vector<agent::ToolBatchCall> batch;
-        batch.push_back(call(0, "fake.lock.noop", write_call_input("c.txt")));
-        batch.push_back(call(1, "fake.lock.noop", write_call_input("c.txt")));
+        batch.push_back(call(0, "FakeLockNoop", write_call_input("c.txt")));
+        batch.push_back(call(1, "FakeLockNoop", write_call_input("c.txt")));
 
         auto result = co_await scheduler.run_batch(std::move(batch), prototype);
         REQUIRE(result.has_value());
@@ -775,7 +775,7 @@ TEST_CASE("ToolScheduler: reap_idle_locks drops idle entries past the TTL", "[un
 
         auto tracker = std::make_shared<LockTracker>();
         tool::Registry registry;
-        add_tracked_tool(registry, "fake.lock.write", {core::Capability::write_file}, 5ms, tracker);
+        add_tracked_tool(registry, "FakeLockWrite", {core::Capability::write_file}, 5ms, tracker);
 
         auto workspace = make_workspace(root.path());
         auto rules = allow_all_rules();
@@ -788,7 +788,7 @@ TEST_CASE("ToolScheduler: reap_idle_locks drops idle entries past the TTL", "[un
             agent::ToolSchedulerOptions{.max_parallel_tools = 4, .per_call_timeout = 5s, .idle_lock_ttl = 100ms}};
 
         std::vector<agent::ToolBatchCall> batch;
-        batch.push_back(call(0, "fake.lock.write", write_call_input("d.txt")));
+        batch.push_back(call(0, "FakeLockWrite", write_call_input("d.txt")));
 
         auto result = co_await scheduler.run_batch(std::move(batch), prototype);
         REQUIRE(result.has_value());
@@ -923,8 +923,8 @@ TEST_CASE("ToolScheduler: a batch records exactly N audit rows and N tool_after 
   test::run_async(
       [](asio::io_context& io) -> async::Awaitable<void> {
         tool::Registry registry;
-        add_latency_tool(registry, "fake.ok", 40ms);
-        add_failing_tool(registry, "fake.fail", 10ms);
+        add_latency_tool(registry, "FakeOk", 40ms);
+        add_failing_tool(registry, "FakeFail", 10ms);
         auto rules = allow_all_rules();
         permission::RecordingAuditSink audit;
 
@@ -949,10 +949,10 @@ TEST_CASE("ToolScheduler: a batch records exactly N audit rows and N tool_after 
         // Mixed success/failure with varied latency so completions interleave
         // out of original order — AC7 must hold "regardless of execution order".
         std::vector<agent::ToolBatchCall> batch;
-        batch.push_back(call(0, "fake.ok"));
-        batch.push_back(call(1, "fake.fail"));
-        batch.push_back(call(2, "fake.ok"));
-        batch.push_back(call(3, "fake.fail"));
+        batch.push_back(call(0, "FakeOk"));
+        batch.push_back(call(1, "FakeFail"));
+        batch.push_back(call(2, "FakeOk"));
+        batch.push_back(call(3, "FakeFail"));
 
         auto result = co_await scheduler.run_batch(std::move(batch), prototype);
         REQUIRE(result.has_value());
@@ -985,7 +985,7 @@ TEST_CASE("ToolScheduler: identical concurrent calls each enrich their own audit
         tool::Registry registry;
         // Non-zero usage so a successful result drives slice-67 enrichment to
         // write a non-"{}" metadata blob the assertions below can detect.
-        add_usage_tool(registry, "fake.usage", 30ms, tool::ToolUsage{.bytes_read = 7, .files_touched = 1});
+        add_usage_tool(registry, "FakeUsage", 30ms, tool::ToolUsage{.bytes_read = 7, .files_touched = 1});
         auto rules = allow_all_rules();
         permission::RecordingAuditSink audit;
 
@@ -1008,8 +1008,8 @@ TEST_CASE("ToolScheduler: identical concurrent calls each enrich their own audit
         // parallelism, both updates land on the same row and the other stays
         // "{}" — which the per-row assertion below would catch.
         std::vector<agent::ToolBatchCall> batch;
-        batch.push_back(call(0, "fake.usage", R"({"path":"same"})"));
-        batch.push_back(call(1, "fake.usage", R"({"path":"same"})"));
+        batch.push_back(call(0, "FakeUsage", R"({"path":"same"})"));
+        batch.push_back(call(1, "FakeUsage", R"({"path":"same"})"));
 
         auto result = co_await scheduler.run_batch(std::move(batch), prototype);
         REQUIRE(result.has_value());
@@ -1038,11 +1038,11 @@ TEST_CASE("ToolScheduler: ask calls resolve per call and a denied call is not hi
   test::run_async(
       [](asio::io_context& io) -> async::Awaitable<void> {
         tool::Registry registry;
-        add_latency_tool(registry, "fake.ask", 20ms);
+        add_latency_tool(registry, "FakeAsk", 20ms);
         permission::RuleSet rules;
         rules.add(permission::Rule{
             .verdict = permission::Verdict::ask,
-            .tool_pattern = "fake.ask",
+            .tool_pattern = "FakeAsk",
             .capability = std::nullopt,
         });
         permission::RecordingAuditSink audit;
@@ -1053,7 +1053,7 @@ TEST_CASE("ToolScheduler: ask calls resolve per call and a denied call is not hi
         auto broker = make_broker();
         const auto now = core::time::now_utc();
         constexpr std::string_view approved_input = R"({"k":"approve"})";
-        const auto token = grant(broker, "fake.ask", approved_input, now);
+        const auto token = grant(broker, "FakeAsk", approved_input, now);
 
         auto prototype = make_prototype(io, rules, audit);
         prototype.approval_broker = &broker;
@@ -1067,8 +1067,8 @@ TEST_CASE("ToolScheduler: ask calls resolve per call and a denied call is not hi
         // call 1 carries a different input the grant does not cover -> rejected.
         // Both are `ask`; each must resolve through the broker on its own slot.
         std::vector<agent::ToolBatchCall> batch;
-        batch.push_back(call(0, "fake.ask", std::string{approved_input}));
-        batch.push_back(call(1, "fake.ask", R"({"k":"unauthorized"})"));
+        batch.push_back(call(0, "FakeAsk", std::string{approved_input}));
+        batch.push_back(call(1, "FakeAsk", R"({"k":"unauthorized"})"));
 
         auto result = co_await scheduler.run_batch(std::move(batch), prototype);
         REQUIRE(result.has_value());
@@ -1081,7 +1081,7 @@ TEST_CASE("ToolScheduler: ask calls resolve per call and a denied call is not hi
         REQUIRE((*result)[0].output->text == R"(done:{"k":"approve"})");
         REQUIRE_FALSE((*result)[1].output.has_value());
         REQUIRE((*result)[1].output.error().kind() == core::ErrorKind::permission_denied);
-        REQUIRE(error_has_context((*result)[1].output.error(), "tool", "fake.ask"));
+        REQUIRE(error_has_context((*result)[1].output.error(), "tool", "FakeAsk"));
 
         // Each call recorded exactly one decision row carrying its own outcome.
         REQUIRE(audit.events().size() == 2);
@@ -1117,9 +1117,9 @@ TEST_CASE("ToolScheduler: a cancellation-ignoring tool is named as cancellation_
   tool::Registry registry;
   // Cancel-aware: its sleep resolves to `cancelled` the moment the scheduler
   // emits, so it winds down well inside the 100 ms grace window.
-  add_latency_tool(registry, "fake.cancelaware", 5s);
+  add_latency_tool(registry, "FakeCancelAware", 5s);
   // Cancellation-ignoring: runs its full 1 s regardless of the emitted cancel.
-  add_uncancellable_tool(registry, "fake.stuck", 1s);
+  add_uncancellable_tool(registry, "FakeStuck", 1s);
   auto rules = allow_all_rules();
   permission::RecordingAuditSink audit;
   auto prototype = make_prototype(io, rules, audit);
@@ -1129,8 +1129,8 @@ TEST_CASE("ToolScheduler: a cancellation-ignoring tool is named as cancellation_
                                  agent::ToolSchedulerOptions{.max_parallel_tools = 4, .per_call_timeout = 30s}};
 
   std::vector<agent::ToolBatchCall> batch;
-  batch.push_back(call(0, "fake.cancelaware"));
-  batch.push_back(call(1, "fake.stuck"));
+  batch.push_back(call(0, "FakeCancelAware"));
+  batch.push_back(call(1, "FakeStuck"));
 
   std::optional<core::Result<std::vector<agent::ToolBatchResult>>> result;
   std::exception_ptr failure;
@@ -1186,11 +1186,11 @@ TEST_CASE("ToolScheduler: a cancellation-ignoring tool is named as cancellation_
   });
   REQUIRE(lag_rows == 1);
   const auto stuck_named = std::ranges::any_of(audit.events(), [](const permission::AuditEvent& e) {
-    return e.event_kind == "cancellation_lag" && e.tool_name == "fake.stuck";
+    return e.event_kind == "cancellation_lag" && e.tool_name == "FakeStuck";
   });
   REQUIRE(stuck_named);
   const auto cancelaware_named = std::ranges::any_of(audit.events(), [](const permission::AuditEvent& e) {
-    return e.event_kind == "cancellation_lag" && e.tool_name == "fake.cancelaware";
+    return e.event_kind == "cancellation_lag" && e.tool_name == "FakeCancelAware";
   });
   REQUIRE_FALSE(cancelaware_named);
   // The row carries the `error_kind=cancellation_lag` marker spec 0012 AC5 names.
@@ -1206,7 +1206,7 @@ TEST_CASE("ToolScheduler: cancel-aware tools record no cancellation_lag rows on 
   asio::cancellation_signal signal;
 
   tool::Registry registry;
-  add_latency_tool(registry, "fake.slow", 1s);
+  add_latency_tool(registry, "FakeSlow", 1s);
   auto rules = allow_all_rules();
   permission::RecordingAuditSink audit;
   auto prototype = make_prototype(io, rules, audit);
@@ -1216,8 +1216,8 @@ TEST_CASE("ToolScheduler: cancel-aware tools record no cancellation_lag rows on 
                                  agent::ToolSchedulerOptions{.max_parallel_tools = 4, .per_call_timeout = 30s}};
 
   std::vector<agent::ToolBatchCall> batch;
-  batch.push_back(call(0, "fake.slow"));
-  batch.push_back(call(1, "fake.slow"));
+  batch.push_back(call(0, "FakeSlow"));
+  batch.push_back(call(1, "FakeSlow"));
 
   std::optional<core::Result<std::vector<agent::ToolBatchResult>>> result;
   std::exception_ptr failure;
@@ -1262,7 +1262,7 @@ TEST_CASE("ToolScheduler: a queued call cancelled before it runs is not mis-name
   asio::cancellation_signal signal;
 
   tool::Registry registry;
-  add_latency_tool(registry, "fake.slow", 1s);  // cancel-aware
+  add_latency_tool(registry, "FakeSlow", 1s);  // cancel-aware
   auto rules = allow_all_rules();
   permission::RecordingAuditSink audit;
   auto prototype = make_prototype(io, rules, audit);
@@ -1277,7 +1277,7 @@ TEST_CASE("ToolScheduler: a queued call cancelled before it runs is not mis-name
 
   std::vector<agent::ToolBatchCall> batch;
   for (std::size_t i = 0; i < 6; ++i) {
-    batch.push_back(call(i, "fake.slow"));
+    batch.push_back(call(i, "FakeSlow"));
   }
 
   std::optional<core::Result<std::vector<agent::ToolBatchResult>>> result;

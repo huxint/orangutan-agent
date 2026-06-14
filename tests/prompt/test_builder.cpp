@@ -67,10 +67,10 @@ prompt::BuilderInputs inputs_for(std::span<const core::ToolDef> catalog,
 TEST_CASE("Builder renders the default active tool set and a deferred index", "[unit][prompt]") {
   test::run_async([](asio::io_context&) -> asio::awaitable<void> {
     const std::vector<core::ToolDef> catalog{
-        tool_def("memory.recall", "Recall memory", true),
-        tool_def("file.write", "Write a file"),
-        tool_def("tool.search", "Search tools"),
-        tool_def("file.read", "Read a file"),
+        tool_def("MemoryRecall", "Recall memory", true),
+        tool_def("FileWrite", "Write a file"),
+        tool_def("ToolSearch", "Search tools"),
+        tool_def("FileRead", "Read a file"),
     };
 
     prompt::Builder builder;
@@ -95,11 +95,11 @@ TEST_CASE("Builder renders the default active tool set and a deferred index", "[
       expected_prefix_bytes += result->sections[i].content.size();
     }
     REQUIRE(result->prefix_bytes == expected_prefix_bytes);
-    REQUIRE(section(*result, "tool_catalog").content.find("Tool: file.read") <
-            section(*result, "tool_catalog").content.find("Tool: file.write"));
-    REQUIRE(section(*result, "tool_catalog").content.contains("Tool: tool.search"));
-    REQUIRE_FALSE(section(*result, "tool_catalog").content.contains("memory.recall"));
-    REQUIRE(section(*result, "deferred_tools").content == "memory.recall - Recall memory");
+    REQUIRE(section(*result, "tool_catalog").content.find("Tool: FileRead") <
+            section(*result, "tool_catalog").content.find("Tool: FileWrite"));
+    REQUIRE(section(*result, "tool_catalog").content.contains("Tool: ToolSearch"));
+    REQUIRE_FALSE(section(*result, "tool_catalog").content.contains("MemoryRecall"));
+    REQUIRE(section(*result, "deferred_tools").content == "MemoryRecall - Recall memory");
     REQUIRE(section(*result, "per_agent_overlay").is_breakpoint);
     REQUIRE(std::ranges::count(result->sections, true, &prompt::CacheSection::is_breakpoint) == 1);
   });
@@ -108,57 +108,57 @@ TEST_CASE("Builder renders the default active tool set and a deferred index", "[
 TEST_CASE("Builder uses explicit active tools and moves all others to the deferred index", "[unit][prompt]") {
   test::run_async([](asio::io_context&) -> asio::awaitable<void> {
     const std::vector<core::ToolDef> catalog{
-        tool_def("file.write", "Write a file"),
-        tool_def("tool.search", "Search tools"),
-        tool_def("file.read", "Read a file"),
+        tool_def("FileWrite", "Write a file"),
+        tool_def("ToolSearch", "Search tools"),
+        tool_def("FileRead", "Read a file"),
     };
     auto active_tools = config::PromptActiveToolsConfig{
         .use_defaults = false,
-        .tool_names = {"file.read", "tool.search"},
+        .tool_names = {"FileRead", "ToolSearch"},
     };
 
     prompt::Builder builder;
     auto result = co_await builder.build(inputs_for(catalog, std::move(active_tools)));
 
     REQUIRE(result.has_value());
-    REQUIRE(section(*result, "tool_catalog").content.contains("Tool: file.read"));
-    REQUIRE(section(*result, "tool_catalog").content.contains("Tool: tool.search"));
-    REQUIRE_FALSE(section(*result, "tool_catalog").content.contains("Tool: file.write"));
-    REQUIRE(section(*result, "deferred_tools").content == "file.write - Write a file");
+    REQUIRE(section(*result, "tool_catalog").content.contains("Tool: FileRead"));
+    REQUIRE(section(*result, "tool_catalog").content.contains("Tool: ToolSearch"));
+    REQUIRE_FALSE(section(*result, "tool_catalog").content.contains("Tool: FileWrite"));
+    REQUIRE(section(*result, "deferred_tools").content == "FileWrite - Write a file");
   });
 }
 
 TEST_CASE("Builder can explicitly promote a deferred tool into the active catalog", "[unit][prompt]") {
   test::run_async([](asio::io_context&) -> asio::awaitable<void> {
     const std::vector<core::ToolDef> catalog{
-        tool_def("memory.recall", "Recall memory", true),
-        tool_def("file.read", "Read a file"),
+        tool_def("MemoryRecall", "Recall memory", true),
+        tool_def("FileRead", "Read a file"),
     };
     auto active_tools = config::PromptActiveToolsConfig{
         .use_defaults = false,
-        .tool_names = {"memory.recall"},
+        .tool_names = {"MemoryRecall"},
     };
 
     prompt::Builder builder;
     auto result = co_await builder.build(inputs_for(catalog, std::move(active_tools)));
 
     REQUIRE(result.has_value());
-    REQUIRE(section(*result, "tool_catalog").content.contains("Tool: memory.recall"));
-    REQUIRE_FALSE(section(*result, "tool_catalog").content.contains("Tool: file.read"));
-    REQUIRE(section(*result, "deferred_tools").content == "file.read - Read a file");
+    REQUIRE(section(*result, "tool_catalog").content.contains("Tool: MemoryRecall"));
+    REQUIRE_FALSE(section(*result, "tool_catalog").content.contains("Tool: FileRead"));
+    REQUIRE(section(*result, "deferred_tools").content == "FileRead - Read a file");
   });
 }
 
 TEST_CASE("Builder applies a promotion snapshot to the next active catalog", "[unit][prompt]") {
   test::run_async([](asio::io_context&) -> asio::awaitable<void> {
     const std::vector<core::ToolDef> catalog{
-        tool_def("memory.recall", "Recall memory", true),
-        tool_def("agent.spawn", "Spawn an agent", true),
-        tool_def("file.read", "Read a file"),
+        tool_def("MemoryRecall", "Recall memory", true),
+        tool_def("AgentSpawn", "Spawn an agent", true),
+        tool_def("FileRead", "Read a file"),
     };
 
     prompt::PromotionState promotions;
-    REQUIRE(promotions.promote("memory.recall", at_seconds(1)).has_value());
+    REQUIRE(promotions.promote("MemoryRecall", at_seconds(1)).has_value());
     auto snapshot = promotions.snapshot(at_seconds(2));
     auto inputs = inputs_for(catalog);
     inputs.promoted_tools = snapshot.tool_names;
@@ -167,21 +167,21 @@ TEST_CASE("Builder applies a promotion snapshot to the next active catalog", "[u
     auto result = co_await builder.build(inputs);
 
     REQUIRE(result.has_value());
-    REQUIRE(section(*result, "tool_catalog").content.contains("Tool: memory.recall"));
-    REQUIRE(section(*result, "tool_catalog").content.contains("Tool: file.read"));
-    REQUIRE_FALSE(section(*result, "tool_catalog").content.contains("Tool: agent.spawn"));
-    REQUIRE(section(*result, "deferred_tools").content == "agent.spawn - Spawn an agent");
+    REQUIRE(section(*result, "tool_catalog").content.contains("Tool: MemoryRecall"));
+    REQUIRE(section(*result, "tool_catalog").content.contains("Tool: FileRead"));
+    REQUIRE_FALSE(section(*result, "tool_catalog").content.contains("Tool: AgentSpawn"));
+    REQUIRE(section(*result, "deferred_tools").content == "AgentSpawn - Spawn an agent");
   });
 }
 
 TEST_CASE("Builder reports missing explicit active tools", "[unit][prompt]") {
   test::run_async([](asio::io_context&) -> asio::awaitable<void> {
     const std::vector<core::ToolDef> catalog{
-        tool_def("file.read", "Read a file"),
+        tool_def("FileRead", "Read a file"),
     };
     auto active_tools = config::PromptActiveToolsConfig{
         .use_defaults = false,
-        .tool_names = {"tool.missing"},
+        .tool_names = {"ToolMissing"},
     };
 
     prompt::Builder builder;
@@ -190,7 +190,7 @@ TEST_CASE("Builder reports missing explicit active tools", "[unit][prompt]") {
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::not_found);
     REQUIRE(std::ranges::any_of(result.error().context(), [](const auto& entry) {
-      return entry.first == "tool" && entry.second == "tool.missing";
+      return entry.first == "tool" && entry.second == "ToolMissing";
     }));
   });
 }
@@ -202,7 +202,7 @@ TEST_CASE("PromotionState bounds promotions by LRU and returns a sorted snapshot
   }};
 
   REQUIRE(state.promote("zeta.tool", at_seconds(1)).has_value());
-  REQUIRE(state.promote("alpha.tool", at_seconds(2)).has_value());
+  REQUIRE(state.promote("AlphaTool", at_seconds(2)).has_value());
   REQUIRE(state.contains("zeta.tool", at_seconds(3)));
   REQUIRE(state.promote("beta.tool", at_seconds(4)).has_value());
 
@@ -220,9 +220,9 @@ TEST_CASE("PromotionState reaps expired promotions", "[unit][prompt]") {
       .ttl = std::chrono::seconds{10},
   }};
 
-  REQUIRE(state.promote("memory.recall", at_seconds(1)).has_value());
-  REQUIRE(state.contains("memory.recall", at_seconds(10)));
-  REQUIRE_FALSE(state.contains("memory.recall", at_seconds(12)));
+  REQUIRE(state.promote("MemoryRecall", at_seconds(1)).has_value());
+  REQUIRE(state.contains("MemoryRecall", at_seconds(10)));
+  REQUIRE_FALSE(state.contains("MemoryRecall", at_seconds(12)));
   REQUIRE(state.stats().evictions_ttl == 1);
   REQUIRE(state.stats().current_entries == 0);
 }
@@ -238,8 +238,8 @@ TEST_CASE("PromotionState rejects empty tool names", "[unit][prompt]") {
 TEST_CASE("Builder keeps the cached prefix stable across conversation tails", "[unit][prompt]") {
   test::run_async([](asio::io_context&) -> asio::awaitable<void> {
     const std::vector<core::ToolDef> catalog{
-        tool_def("file.read", "Read a file"),
-        tool_def("tool.search", "Search tools"),
+        tool_def("FileRead", "Read a file"),
+        tool_def("ToolSearch", "Search tools"),
     };
     const std::vector<core::Message> tail_a{core::Message::user_text("first")};
     const std::vector<core::Message> tail_b{core::Message::user_text("second")};
@@ -267,7 +267,7 @@ TEST_CASE("Builder keeps the cached prefix stable across conversation tails", "[
 TEST_CASE("Builder cache versions invalidate the prefix hash without changing content", "[unit][prompt]") {
   test::run_async([](asio::io_context&) -> asio::awaitable<void> {
     const std::vector<core::ToolDef> catalog{
-        tool_def("file.read", "Read a file"),
+        tool_def("FileRead", "Read a file"),
     };
     auto options = prompt::BuilderOptions{};
     options.versions.tool_catalog = 2;

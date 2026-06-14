@@ -82,9 +82,9 @@ constexpr std::chrono::milliseconds kCancellationGrace{100};
 /// the filesystem via `Capability::write_file` / `edit_file` / `delete_path`
 /// takes an exclusive per-path lock, a tool that reads via
 /// `Capability::read_file` / `list_directory` takes a shared per-path lock,
-/// and everything else (e.g., `tool.search`, memory tools, future shell /
+/// and everything else (e.g., `ToolSearch`, memory tools, future shell /
 /// agent.spawn workloads) skips path locking. The spec calls out
-/// `shell.exec` / `agent.spawn` / `tool.runtime_loader` as globally
+/// `ShellExec` / `agent.spawn` / `tool.runtime_loader` as globally
 /// serialised in a future revision — they keep no v1 lock until that ships.
 [[nodiscard]] std::optional<detail::PathLockMode>
 classify_lock_mode(const std::vector<core::Capability>& capabilities) {
@@ -149,16 +149,16 @@ classify_lock_mode(const std::vector<core::Capability>& capabilities) {
   core::Result<tool::ResolvedPath> resolved =
       std::unexpected(core::Error::internal("derive_lock_key: unreachable resolver path"));
   if (mode == detail::PathLockMode::shared) {
-    // Shared lock covers both `file.read` and the listing intents
-    // (`file.search`, `directory.list`). The workspace's resolve_list shape
+    // Shared lock covers both `FileRead` and the listing intents
+    // (`FileSearch`, `DirectoryList`). The workspace's resolve_list shape
     // is permissive enough to accept both filenames and directory targets,
     // so use it for the listing capability.
     const bool list_intent = std::ranges::contains(capabilities, core::Capability::list_directory);
     resolved = list_intent ? workspace->resolve_list(raw_path) : workspace->resolve_read(raw_path);
   } else {
-    // Exclusive: delete vs. write/edit. delete_path implies `file.delete`;
-    // otherwise resolve through `resolve_write` (covers `file.write` and
-    // `file.edit`, both of which dispatch own re-resolution internally).
+    // Exclusive: delete vs. write/edit. delete_path implies `FileDelete`;
+    // otherwise resolve through `resolve_write` (covers `FileWrite` and
+    // `FileEdit`, both of which dispatch own re-resolution internally).
     const bool delete_intent = std::ranges::contains(capabilities, core::Capability::delete_path);
     resolved =
         delete_intent ? workspace->resolve_delete(raw_path) : workspace->resolve_write(raw_path, tool::WriteIntent{});

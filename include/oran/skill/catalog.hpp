@@ -63,9 +63,9 @@ struct SkillActivationEvent {
 };
 
 struct ActivationPolicy {
-  /// Current v1 policy: successful `skill.invoke` tool results in the session
+  /// Current v1 policy: successful `SkillInvoke` tool results in the session
   /// transcript mark the skill active on the next prompt, and successful
-  /// `skill.deactivate` tool results clear it again — the most recent
+  /// `SkillDeactivate` tool results clear it again — the most recent
   /// transcript event for a skill wins. Durable session-store activation rows
   /// overlay that transcript-derived set so compaction/pruning cannot lose the
   /// latest state for a skill. Explicit `deactivated_skill_names` subtract from
@@ -104,16 +104,16 @@ public:
 [[nodiscard]] core::Result<RenderedCatalog> render_catalog(std::span<const CatalogEntry> entries,
                                                            std::span<const ActiveSkill> active_skills);
 
-/// Versioned structured metadata emitted by `skill.invoke` (`skill_activation`)
-/// and `skill.deactivate` (`skill_deactivation`) on successful dispatch. Each
+/// Versioned structured metadata emitted by `SkillInvoke` (`skill_activation`)
+/// and `SkillDeactivate` (`skill_deactivation`) on successful dispatch. Each
 /// record is small enough to travel in `ToolResultContent::data_json`; the text
 /// body remains the model-visible confirmation.
 [[nodiscard]] core::Result<std::string> render_activation_data_json(std::string_view skill_name);
 [[nodiscard]] std::optional<ActiveSkill> active_skill_from_data_json(std::string_view data_json);
 [[nodiscard]] core::Result<std::string> render_deactivation_data_json(std::string_view skill_name);
 [[nodiscard]] std::optional<std::string> deactivated_skill_from_data_json(std::string_view data_json);
-/// Net transcript-derived active markers: successful `skill.invoke` results add
-/// a skill and successful `skill.deactivate` results remove it, in transcript
+/// Net transcript-derived active markers: successful `SkillInvoke` results add
+/// a skill and successful `SkillDeactivate` results remove it, in transcript
 /// order, so the most recent event for a skill decides whether it stays active.
 [[nodiscard]] std::vector<SkillActivationEvent>
 skill_activation_events_from_transcript(std::span<const core::Message> transcript, std::size_t start_index = 0);
@@ -127,7 +127,7 @@ resolve_active_skills(ActivationPolicy policy,
 ///
 /// It owns already-rendered section text so bootstrap can render the prompt
 /// section exactly once before a multi-iteration agent loop. Loader, watcher,
-/// and `skill.invoke` consumers can replace the catalog snapshot without
+/// and `SkillInvoke` consumers can replace the catalog snapshot without
 /// changing the loop or prompt-builder boundary.
 class CatalogOwner {
 public:

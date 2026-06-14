@@ -220,7 +220,7 @@ permission::RuleSet ask_file_read_rules() {
   permission::RuleSet rules;
   rules.add(permission::Rule{
       .verdict = permission::Verdict::ask,
-      .tool_pattern = "file.read",
+      .tool_pattern = "FileRead",
       .replay_max = 2,
       .approval_ttl = 30s,
   });
@@ -297,9 +297,9 @@ tool::DispatchContext dispatch_context(asio::io_context& io,
 
 std::vector<core::ToolDef> loop_catalog() {
   return {
-      tool_def("memory.recall", "Recall memory", true),
-      canned_tool_def("file.read"),
-      tool_def("custom.non_default", "A registered tool outside the default prompt set"),
+      tool_def("MemoryRecall", "Recall memory", true),
+      canned_tool_def("FileRead"),
+      tool_def("CustomNonDefault", "A registered tool outside the default prompt set"),
   };
 }
 
@@ -514,7 +514,7 @@ TEST_CASE("Loop maps prompt, messages, active tools, and cache hints into the pr
     agent::Loop loop{provider, default_route(provider::PromptCacheOptions{.enabled = true, .min_prefix_bytes = 1})};
 
     const auto catalog = loop_catalog();
-    const std::vector<std::string> promoted{"memory.recall"};
+    const std::vector<std::string> promoted{"MemoryRecall"};
     const std::vector<core::Message> tail{core::Message::user_text("map this")};
     auto inputs = base_inputs(catalog, tail);
     inputs.promoted_tools = promoted;
@@ -531,13 +531,13 @@ TEST_CASE("Loop maps prompt, messages, active tools, and cache hints into the pr
     REQUIRE(request.max_tokens == 512);
     REQUIRE(request.system_prompt.has_value());
     REQUIRE(request.system_prompt->contains("system: deterministic test preamble"));
-    REQUIRE(request.system_prompt->contains("Tool: file.read"));
-    REQUIRE(request.system_prompt->contains("Tool: memory.recall"));
-    REQUIRE_FALSE(request.system_prompt->contains("Tool: custom.non_default"));
+    REQUIRE(request.system_prompt->contains("Tool: FileRead"));
+    REQUIRE(request.system_prompt->contains("Tool: MemoryRecall"));
+    REQUIRE_FALSE(request.system_prompt->contains("Tool: CustomNonDefault"));
 
     REQUIRE(request.tools.size() == 2);
-    REQUIRE(request.tools[0].name == "file.read");
-    REQUIRE(request.tools[1].name == "memory.recall");
+    REQUIRE(request.tools[0].name == "FileRead");
+    REQUIRE(request.tools[1].name == "MemoryRecall");
     REQUIRE(request.cache.has_value());
     REQUIRE(request.cache->prefix_bytes == result->rendered_prompt.prefix_bytes);
     REQUIRE(provider.route().has_value());
@@ -550,7 +550,7 @@ TEST_CASE("Loop uses the stable default system preamble when no override is supp
     RecordingSequenceProvider provider{{
         provider::Response{
             .blocks =
-                {core::ToolUseContent{.id = "read-1", .name = "file.read", .input_json = R"({"path":"note.txt"})"}},
+                {core::ToolUseContent{.id = "read-1", .name = "FileRead", .input_json = R"({"path":"note.txt"})"}},
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::nullopt,
@@ -567,10 +567,10 @@ TEST_CASE("Loop uses the stable default system preamble when no override is supp
     auto loop =
         agent::Loop{provider, default_route(provider::PromptCacheOptions{.enabled = true, .min_prefix_bytes = 1})};
     auto registry = tool::Registry{};
-    add_canned_tool(registry, canned_tool_def("file.read"), "read ok");
+    add_canned_tool(registry, canned_tool_def("FileRead"), "read ok");
     permission::NullAuditSink audit;
     permission::RuleSet rules;
-    rules.add(permission::Rule{.verdict = permission::Verdict::allow, .tool_pattern = "file.*"});
+    rules.add(permission::Rule{.verdict = permission::Verdict::allow, .tool_pattern = "File*"});
     auto context = tool::DispatchContext{
         .executor = co_await asio::this_coro::executor,
         .mode = permission::Mode::strict,
@@ -597,7 +597,7 @@ TEST_CASE("Loop uses the stable default system preamble when no override is supp
     REQUIRE(provider.requests()[1].system_prompt.has_value());
     REQUIRE(provider.requests()[0].system_prompt->contains("You are Orangutan"));
     REQUIRE(provider.requests()[0].system_prompt->contains("Operating principles:"));
-    REQUIRE(provider.requests()[0].system_prompt->contains("Tool: file.read"));
+    REQUIRE(provider.requests()[0].system_prompt->contains("Tool: FileRead"));
     REQUIRE(provider.requests()[0].system_prompt->contains("memory: none"));
     REQUIRE(*provider.requests()[0].system_prompt == *provider.requests()[1].system_prompt);
     REQUIRE(first->rendered_prompt.sections[0].id == "system_preamble");
@@ -1124,7 +1124,7 @@ TEST_CASE("Loop rejects tool-use responses until the dispatch iteration slice la
     plan.push_back(provider::ScriptedTurn{
         .response =
             provider::Response{
-                .blocks = {core::ToolUseContent{.id = "t1", .name = "file.read", .input_json = R"({"path":"x"})"}},
+                .blocks = {core::ToolUseContent{.id = "t1", .name = "FileRead", .input_json = R"({"path":"x"})"}},
                 .stop_reason = core::StopReason::tool_use,
                 .usage = {},
                 .model_used = std::nullopt,
@@ -1159,7 +1159,7 @@ TEST_CASE("Loop persists loop-boundary error trace rows", "[unit][agent][loop][t
     plan.push_back(provider::ScriptedTurn{
         .response =
             provider::Response{
-                .blocks = {core::ToolUseContent{.id = "t1", .name = "file.read", .input_json = R"({"path":"x"})"}},
+                .blocks = {core::ToolUseContent{.id = "t1", .name = "FileRead", .input_json = R"({"path":"x"})"}},
                 .stop_reason = core::StopReason::tool_use,
                 .usage = provider::Usage{.input_tokens = 13,
                                          .output_tokens = 2,
@@ -1213,7 +1213,7 @@ TEST_CASE("Loop dispatches one tool_use and re-enters the provider with a tool r
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     RecordingSequenceProvider provider{std::vector<provider::Response>{
         provider::Response{
-            .blocks = {core::ToolUseContent{.id = "t1", .name = "file.read", .input_json = R"({"value":"a"})"}},
+            .blocks = {core::ToolUseContent{.id = "t1", .name = "FileRead", .input_json = R"({"value":"a"})"}},
             .stop_reason = core::StopReason::tool_use,
             .usage = provider::Usage{.input_tokens = 5,
                                      .output_tokens = 1,
@@ -1237,7 +1237,7 @@ TEST_CASE("Loop dispatches one tool_use and re-enters the provider with a tool r
     }};
     agent::Loop loop{provider, default_route()};
     tool::Registry registry;
-    add_canned_tool(registry, canned_tool_def("file.read"), "read-ok");
+    add_canned_tool(registry, canned_tool_def("FileRead"), "read-ok");
     auto rules = allow_all_rules();
     permission::RecordingAuditSink audit;
     auto ctx = dispatch_context(io, rules, audit);
@@ -1276,7 +1276,7 @@ TEST_CASE("Loop dispatches one tool_use and re-enters the provider with a tool r
     REQUIRE(result->transcript[3].role == core::Role::assistant);
     REQUIRE(std::get<core::TextContent>(result->transcript[3].blocks[0]).text == "final");
     REQUIRE(audit.events().size() == 1);
-    REQUIRE(audit.events()[0].tool_name == "file.read");
+    REQUIRE(audit.events()[0].tool_name == "FileRead");
     REQUIRE(audit.events()[0].parent_turn_id.has_value());
     REQUIRE(*audit.events()[0].parent_turn_id == turn_id_with(0x20));
     REQUIRE(ctx.parent_turn_id.has_value());
@@ -1289,7 +1289,7 @@ TEST_CASE("Loop preserves structured tool output for provider protocol mapping",
     RecordingSequenceProvider provider{std::vector<provider::Response>{
         provider::Response{
             .blocks = {core::ToolUseContent{.id = "structured-1",
-                                            .name = "file.read",
+                                            .name = "FileRead",
                                             .input_json = R"({"value":"structured"})"}},
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
@@ -1307,7 +1307,7 @@ TEST_CASE("Loop preserves structured tool output for provider protocol mapping",
     agent::Loop loop{provider, default_route()};
     tool::Registry registry;
     add_structured_tool(registry,
-                        canned_tool_def("file.read"),
+                        canned_tool_def("FileRead"),
                         "read-ok",
                         R"({"kind":"file_read","path":"README.md","text":"body"})");
     auto rules = allow_all_rules();
@@ -1337,7 +1337,7 @@ TEST_CASE("Loop refreshes dispatch time for blocking permission approvals", "[un
     constexpr std::string_view input = R"({"value":"approve"})";
     RecordingSequenceProvider provider{std::vector<provider::Response>{
         provider::Response{
-            .blocks = {core::ToolUseContent{.id = "approval-1", .name = "file.read", .input_json = std::string{input}}},
+            .blocks = {core::ToolUseContent{.id = "approval-1", .name = "FileRead", .input_json = std::string{input}}},
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::nullopt,
@@ -1353,7 +1353,7 @@ TEST_CASE("Loop refreshes dispatch time for blocking permission approvals", "[un
     }};
     agent::Loop loop{provider, default_route()};
     tool::Registry registry;
-    add_canned_tool(registry, canned_tool_def("file.read"), "approved-read");
+    add_canned_tool(registry, canned_tool_def("FileRead"), "approved-read");
     auto rules = ask_file_read_rules();
     permission::RecordingAuditSink audit;
     auto broker = make_broker();
@@ -1400,12 +1400,12 @@ TEST_CASE("Loop refreshes dispatch time for blocking permission approvals", "[un
 
     REQUIRE(prompts.size() == 1);
     const auto& ask = prompts[0];
-    REQUIRE(ask.tool_name == "file.read");
+    REQUIRE(ask.tool_name == "FileRead");
     REQUIRE(ask.input_json == input);
     REQUIRE(ask.who.scope_key == "scope-A");
     REQUIRE(ask.who.agent_key == "coder");
     REQUIRE(ask.who.identity == "operator-1");
-    REQUIRE(ask.decision_reason == "rule #0 (ask: file.read)");
+    REQUIRE(ask.decision_reason == "rule #0 (ask: FileRead)");
     REQUIRE(ask.replay_max == 2);
     REQUIRE(ask.approval_ttl == 30s);
     REQUIRE(ask.requested_at > core::Time::epoch());
@@ -1418,7 +1418,7 @@ TEST_CASE("Loop refreshes dispatch time for blocking permission approvals", "[un
     REQUIRE(audit.events()[0].metadata_json.contains("agent-approval"));
     REQUIRE(audit.events()[0].metadata_json.contains("operator_approved:operator-1"));
 
-    auto replay = broker.check(issued_token, "file.read", input, "operator-1", ask.requested_at);
+    auto replay = broker.check(issued_token, "FileRead", input, "operator-1", ask.requested_at);
     REQUIRE(replay.has_value());
   });
 }
@@ -1428,7 +1428,7 @@ TEST_CASE("Loop routes tool dispatch through a caller-supplied scheduler", "[uni
       [](asio::io_context& io) -> async::Awaitable<void> {
         RecordingSequenceProvider provider{std::vector<provider::Response>{
             provider::Response{
-                .blocks = {core::ToolUseContent{.id = "slow-1", .name = "file.read", .input_json = R"({"value":"x"})"}},
+                .blocks = {core::ToolUseContent{.id = "slow-1", .name = "FileRead", .input_json = R"({"value":"x"})"}},
                 .stop_reason = core::StopReason::tool_use,
                 .usage = {},
                 .model_used = std::nullopt,
@@ -1453,7 +1453,7 @@ TEST_CASE("Loop routes tool dispatch through a caller-supplied scheduler", "[uni
           }
           co_return tool::Output::text_only("slow-done");
         };
-        REQUIRE(registry.add(canned_tool_def("file.read"), slow).has_value());
+        REQUIRE(registry.add(canned_tool_def("FileRead"), slow).has_value());
 
         auto rules = allow_all_rules();
         permission::RecordingAuditSink audit;
@@ -1570,7 +1570,7 @@ TEST_CASE("Loop persists a terminal trace row and correlates storage audit rows"
 
     RecordingSequenceProvider provider{std::vector<provider::Response>{
         provider::Response{
-            .blocks = {core::ToolUseContent{.id = "t1", .name = "file.read", .input_json = R"({"value":"a"})"}},
+            .blocks = {core::ToolUseContent{.id = "t1", .name = "FileRead", .input_json = R"({"value":"a"})"}},
             .stop_reason = core::StopReason::tool_use,
             .usage = provider::Usage{.input_tokens = 11,
                                      .output_tokens = 1,
@@ -1594,7 +1594,7 @@ TEST_CASE("Loop persists a terminal trace row and correlates storage audit rows"
     }};
     agent::Loop loop{provider, default_route()};
     tool::Registry registry;
-    add_canned_tool(registry, canned_tool_def("file.read"), "read-ok");
+    add_canned_tool(registry, canned_tool_def("FileRead"), "read-ok");
     auto rules = allow_all_rules();
     permission::StorageAuditSink audit{audit_repo};
     auto ctx = dispatch_context(io, rules, audit);
@@ -1649,7 +1649,7 @@ TEST_CASE("Loop persists a terminal trace row and correlates storage audit rows"
     auto events = co_await audit_repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-A", .limit = 10});
     REQUIRE(events.has_value());
     REQUIRE(events->size() == 1);
-    REQUIRE((*events)[0].tool_name == "file.read");
+    REQUIRE((*events)[0].tool_name == "FileRead");
     REQUIRE((*events)[0].parent_turn_id.has_value());
     REQUIRE(*(*events)[0].parent_turn_id == (*row)->turn_id);
   });
@@ -1666,7 +1666,7 @@ TEST_CASE("Loop generates trace turn ids and correlates storage audit rows", "[u
 
     RecordingSequenceProvider provider{std::vector<provider::Response>{
         provider::Response{
-            .blocks = {core::ToolUseContent{.id = "t1", .name = "file.read", .input_json = R"({"value":"a"})"}},
+            .blocks = {core::ToolUseContent{.id = "t1", .name = "FileRead", .input_json = R"({"value":"a"})"}},
             .stop_reason = core::StopReason::tool_use,
             .usage = provider::Usage{.input_tokens = 5,
                                      .output_tokens = 1,
@@ -1690,7 +1690,7 @@ TEST_CASE("Loop generates trace turn ids and correlates storage audit rows", "[u
     }};
     agent::Loop loop{provider, default_route()};
     tool::Registry registry;
-    add_canned_tool(registry, canned_tool_def("file.read"), "read-ok");
+    add_canned_tool(registry, canned_tool_def("FileRead"), "read-ok");
     auto rules = allow_all_rules();
     permission::StorageAuditSink audit{audit_repo};
     auto ctx = dispatch_context(io, rules, audit);
@@ -1742,7 +1742,7 @@ TEST_CASE("Loop disables trace rows and audit parent ids when trace is off", "[u
         provider::Response{
             .blocks = {core::ToolUseContent{
                 .id = "t1",
-                .name = "file.read",
+                .name = "FileRead",
                 .input_json = R"({"value":"a"})",
             }},
             .stop_reason = core::StopReason::tool_use,
@@ -1760,7 +1760,7 @@ TEST_CASE("Loop disables trace rows and audit parent ids when trace is off", "[u
     }};
     agent::Loop loop{provider, default_route()};
     tool::Registry registry;
-    add_canned_tool(registry, canned_tool_def("file.read"), "read-ok");
+    add_canned_tool(registry, canned_tool_def("FileRead"), "read-ok");
     auto rules = allow_all_rules();
     permission::StorageAuditSink audit{audit_repo};
     auto ctx = dispatch_context(io, rules, audit);
@@ -1791,7 +1791,7 @@ TEST_CASE("Loop disables trace rows and audit parent ids when trace is off", "[u
     auto events = co_await audit_repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-A", .limit = 10});
     REQUIRE(events.has_value());
     REQUIRE(events->size() == 1);
-    REQUIRE((*events)[0].tool_name == "file.read");
+    REQUIRE((*events)[0].tool_name == "FileRead");
     REQUIRE_FALSE((*events)[0].parent_turn_id.has_value());
     REQUIRE(ctx.parent_turn_id.has_value());
     REQUIRE(*ctx.parent_turn_id == turn_id_with(0x70));
@@ -1885,7 +1885,7 @@ TEST_CASE("Loop persists tool cancellation trace rows", "[unit][agent][loop][tra
     asio::cancellation_signal signal;
     RecordingSequenceProvider provider{std::vector<provider::Response>{
         provider::Response{
-            .blocks = {core::ToolUseContent{.id = "t1", .name = "file.read", .input_json = "{}"}},
+            .blocks = {core::ToolUseContent{.id = "t1", .name = "FileRead", .input_json = "{}"}},
             .stop_reason = core::StopReason::tool_use,
             .usage = provider::Usage{.input_tokens = 9,
                                      .output_tokens = 1,
@@ -1905,7 +1905,7 @@ TEST_CASE("Loop persists tool cancellation trace rows", "[unit][agent][loop][tra
       }
       co_return tool::Output::text_only("late");
     };
-    REQUIRE(registry.add(canned_tool_def("file.read"), std::move(handler)).has_value());
+    REQUIRE(registry.add(canned_tool_def("FileRead"), std::move(handler)).has_value());
     auto rules = allow_all_rules();
     permission::RecordingAuditSink audit;
     auto ctx = dispatch_context(io, rules, audit);
@@ -1972,8 +1972,8 @@ TEST_CASE("Loop preserves multiple tool_results in tool_use order", "[unit][agen
         provider::Response{
             .blocks =
                 {
-                    core::ToolUseContent{.id = "b", .name = "second.tool", .input_json = R"({"value":"2"})"},
-                    core::ToolUseContent{.id = "a", .name = "first.tool", .input_json = R"({"value":"1"})"},
+                    core::ToolUseContent{.id = "b", .name = "SecondTool", .input_json = R"({"value":"2"})"},
+                    core::ToolUseContent{.id = "a", .name = "FirstTool", .input_json = R"({"value":"1"})"},
                 },
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
@@ -1990,8 +1990,8 @@ TEST_CASE("Loop preserves multiple tool_results in tool_use order", "[unit][agen
     }};
     agent::Loop loop{provider, default_route()};
     tool::Registry registry;
-    add_canned_tool(registry, canned_tool_def("first.tool"), "first");
-    add_canned_tool(registry, canned_tool_def("second.tool"), "second");
+    add_canned_tool(registry, canned_tool_def("FirstTool"), "first");
+    add_canned_tool(registry, canned_tool_def("SecondTool"), "second");
     auto rules = allow_all_rules();
     permission::RecordingAuditSink audit;
     auto ctx = dispatch_context(io, rules, audit);
@@ -2002,7 +2002,7 @@ TEST_CASE("Loop preserves multiple tool_results in tool_use order", "[unit][agen
     auto inputs = base_inputs(catalog, tail);
     inputs.active_tools = config::PromptActiveToolsConfig{
         .use_defaults = false,
-        .tool_names = {"first.tool", "second.tool"},
+        .tool_names = {"FirstTool", "SecondTool"},
     };
     inputs.tools = &registry;
     inputs.dispatch_context = &ctx;
@@ -2019,8 +2019,8 @@ TEST_CASE("Loop preserves multiple tool_results in tool_use order", "[unit][agen
     REQUIRE(tool_result_at(tool_message, 1).tool_use_id == "a");
     REQUIRE(tool_result_at(tool_message, 1).output == R"(first:{"value":"1"})");
     REQUIRE(audit.events().size() == 2);
-    REQUIRE(audit.events()[0].tool_name == "second.tool");
-    REQUIRE(audit.events()[1].tool_name == "first.tool");
+    REQUIRE(audit.events()[0].tool_name == "SecondTool");
+    REQUIRE(audit.events()[1].tool_name == "FirstTool");
     REQUIRE_FALSE(audit.events()[0].parent_turn_id.has_value());
     REQUIRE_FALSE(audit.events()[1].parent_turn_id.has_value());
     REQUIRE(ctx.parent_turn_id.has_value());
@@ -2032,7 +2032,7 @@ TEST_CASE("Loop returns model-visible tool errors as tool_result blocks", "[unit
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     RecordingSequenceProvider provider{std::vector<provider::Response>{
         provider::Response{
-            .blocks = {core::ToolUseContent{.id = "missing", .name = "tool.missing", .input_json = "{}"}},
+            .blocks = {core::ToolUseContent{.id = "missing", .name = "ToolMissing", .input_json = "{}"}},
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::nullopt,
@@ -2065,7 +2065,7 @@ TEST_CASE("Loop returns model-visible tool errors as tool_result blocks", "[unit
     REQUIRE(tool_result.tool_use_id == "missing");
     REQUIRE(tool_result.is_error);
     REQUIRE(tool_result.output.contains("tool error: tool is not registered"));
-    REQUIRE(tool_result.output.contains("tool: tool.missing"));
+    REQUIRE(tool_result.output.contains("tool: ToolMissing"));
   });
 }
 
@@ -2073,7 +2073,7 @@ TEST_CASE("Loop propagates infrastructure errors from tool dispatch", "[unit][ag
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     RecordingSequenceProvider provider{std::vector<provider::Response>{
         provider::Response{
-            .blocks = {core::ToolUseContent{.id = "t1", .name = "file.read", .input_json = "{}"}},
+            .blocks = {core::ToolUseContent{.id = "t1", .name = "FileRead", .input_json = "{}"}},
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::nullopt,
@@ -2082,7 +2082,7 @@ TEST_CASE("Loop propagates infrastructure errors from tool dispatch", "[unit][ag
     }};
     agent::Loop loop{provider, default_route()};
     tool::Registry registry;
-    add_canned_tool(registry, canned_tool_def("file.read"), "audit broke", false, core::ErrorKind::internal);
+    add_canned_tool(registry, canned_tool_def("FileRead"), "audit broke", false, core::ErrorKind::internal);
     auto rules = allow_all_rules();
     permission::RecordingAuditSink audit;
     auto ctx = dispatch_context(io, rules, audit);
@@ -2106,7 +2106,7 @@ TEST_CASE("Loop annotates cancellation during tool dispatch", "[unit][agent][loo
 
   RecordingSequenceProvider provider{std::vector<provider::Response>{
       provider::Response{
-          .blocks = {core::ToolUseContent{.id = "t1", .name = "file.read", .input_json = "{}"}},
+          .blocks = {core::ToolUseContent{.id = "t1", .name = "FileRead", .input_json = "{}"}},
           .stop_reason = core::StopReason::tool_use,
           .usage = {},
           .model_used = std::nullopt,
@@ -2122,7 +2122,7 @@ TEST_CASE("Loop annotates cancellation during tool dispatch", "[unit][agent][loo
     }
     co_return tool::Output::text_only("late");
   };
-  REQUIRE(registry.add(canned_tool_def("file.read"), std::move(handler)).has_value());
+  REQUIRE(registry.add(canned_tool_def("FileRead"), std::move(handler)).has_value());
   auto rules = allow_all_rules();
   permission::RecordingAuditSink audit;
   auto ctx = dispatch_context(io, rules, audit);
@@ -2163,14 +2163,14 @@ TEST_CASE("Loop stops repeated tool_use turns at the iteration cap", "[unit][age
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     RecordingSequenceProvider provider{std::vector<provider::Response>{
         provider::Response{
-            .blocks = {core::ToolUseContent{.id = "t1", .name = "file.read", .input_json = "{}"}},
+            .blocks = {core::ToolUseContent{.id = "t1", .name = "FileRead", .input_json = "{}"}},
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::nullopt,
             .route_profile_used = std::nullopt,
         },
         provider::Response{
-            .blocks = {core::ToolUseContent{.id = "t2", .name = "file.read", .input_json = "{}"}},
+            .blocks = {core::ToolUseContent{.id = "t2", .name = "FileRead", .input_json = "{}"}},
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::nullopt,
@@ -2179,7 +2179,7 @@ TEST_CASE("Loop stops repeated tool_use turns at the iteration cap", "[unit][age
     }};
     agent::Loop loop{provider, default_route(), agent::LoopOptions{.max_iterations = 2}};
     tool::Registry registry;
-    add_canned_tool(registry, canned_tool_def("file.read"), "read");
+    add_canned_tool(registry, canned_tool_def("FileRead"), "read");
     auto rules = allow_all_rules();
     permission::RecordingAuditSink audit;
     auto ctx = dispatch_context(io, rules, audit);
@@ -2210,7 +2210,7 @@ TEST_CASE("Loop persists iteration-cap trace rows", "[unit][agent][loop][trace]"
 
     RecordingSequenceProvider provider{std::vector<provider::Response>{
         provider::Response{
-            .blocks = {core::ToolUseContent{.id = "t1", .name = "file.read", .input_json = "{}"}},
+            .blocks = {core::ToolUseContent{.id = "t1", .name = "FileRead", .input_json = "{}"}},
             .stop_reason = core::StopReason::tool_use,
             .usage = provider::Usage{.input_tokens = 4,
                                      .output_tokens = 1,
@@ -2221,7 +2221,7 @@ TEST_CASE("Loop persists iteration-cap trace rows", "[unit][agent][loop][trace]"
             .route_profile_used = std::nullopt,
         },
         provider::Response{
-            .blocks = {core::ToolUseContent{.id = "t2", .name = "file.read", .input_json = "{}"}},
+            .blocks = {core::ToolUseContent{.id = "t2", .name = "FileRead", .input_json = "{}"}},
             .stop_reason = core::StopReason::tool_use,
             .usage = provider::Usage{.input_tokens = 6,
                                      .output_tokens = 2,
@@ -2234,7 +2234,7 @@ TEST_CASE("Loop persists iteration-cap trace rows", "[unit][agent][loop][trace]"
     }};
     agent::Loop loop{provider, default_route(), agent::LoopOptions{.max_iterations = 2}};
     tool::Registry registry;
-    add_canned_tool(registry, canned_tool_def("file.read"), "read");
+    add_canned_tool(registry, canned_tool_def("FileRead"), "read");
     auto rules = allow_all_rules();
     permission::RecordingAuditSink audit;
     auto ctx = dispatch_context(io, rules, audit);

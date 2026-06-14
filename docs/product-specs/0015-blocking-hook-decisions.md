@@ -111,12 +111,12 @@ in what order.
 > dispatch, so `PermissionAskRenderedPayload::requested_at`, broker grant
 > expiry, and immediate broker verification use the per-call wall clock even
 > when the caller's reusable context held a stale value. `test-agent` covers a
-> fake-provider turn whose `file.read` ask flows through
+> fake-provider turn whose `FileRead` ask flows through
 > `permission::ApprovalBroker` plus a blocking `permission_ask_rendered` sink,
 > records `metadata_json.permission_ask_decisions[]`, returns the approved tool
 > result to the provider, and verifies the issued token against the prompt time.
 > Slice 152 applies the hook trust boundary to sensitive mutation inputs on
-> blocking publishes too: `file.write` / `file.edit` `tool_before` and
+> blocking publishes too: `FileWrite` / `FileEdit` `tool_before` and
 > `permission_ask_rendered` payloads deliver a hash-and-byte-count
 > `input_json` summary to default sinks, while `SinkKind::trusted_local` sinks
 > receive the original input. Slice 158 keeps that trust boundary while sharing
@@ -126,14 +126,14 @@ in what order.
 > records: default sinks receive id/scope/kind plus byte/count metadata while
 > record title/body/tags/linked ids are cleared, and trusted-local sinks receive
 > the raw record. `AgentPromptRunner` publishes blocking
-> `memory_write_before` before `memory.remember` mutates the lexical/vector
+> `memory_write_before` before `MemoryRemember` mutates the lexical/vector
 > backends; `veto` returns a permission-denied tool error with
 > `reason=blocked_by_hook`, while `rewrite` and `require_approval` remain
-> unsupported for this consumer. Successful `memory.remember` and
-> `memory.forget` paths publish advisory `memory_write_after` and
+> unsupported for this consumer. Successful `MemoryRemember` and
+> `MemoryForget` paths publish advisory `memory_write_after` and
 > `memory_forget`. Slice 180 adds typed `MemoryReadPayload` /
 > `MemoryReadHitPayload` and applies the same trust boundary to successful
-> long-term reads: prompt-boundary recall and `memory.recall` publish advisory
+> long-term reads: prompt-boundary recall and `MemoryRecall` publish advisory
 > `memory_read_after`; default sinks receive source/scope/kind/limit/match,
 > score, timing, and byte/count metadata while raw recall query text plus hit
 > title/body/tags/linked ids are cleared; trusted-local sinks receive the raw
@@ -181,7 +181,7 @@ blocking hook waits for v1.1.
   - `permission_ask_rendered` — proceed / veto (renders the prompt; the
     sink's `reason` carries the operator's response identity).
   - `memory_write_before` — veto / proceed. Slice 179 ships the first
-    runtime consumer for bootstrap `memory.remember`; rewrite remains deferred
+    runtime consumer for bootstrap `MemoryRemember`; rewrite remains deferred
     to v1.1.
   Every other event in `hook::Event` stays advisory in v1.
 - **Sink resolution order**. Blocking sinks for the same event execute

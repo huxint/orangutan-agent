@@ -144,7 +144,7 @@ TEST_CASE("Skill activation metadata round-trips through transcripts", "[unit][s
           .role = core::Role::assistant,
           .blocks = {core::ToolUseContent{
               .id = "skill-1",
-              .name = "skill.invoke",
+              .name = "SkillInvoke",
               .input_json = R"({"name":"release-note"})",
           }},
           .created_at = std::nullopt,
@@ -238,15 +238,15 @@ TEST_CASE("skill_activation_events_from_transcript extracts suffix activation up
   REQUIRE(deactivation.has_value());
 
   const std::vector<core::Message> transcript{
-      skill_tool_use("old-1", "skill.invoke"),
+      skill_tool_use("old-1", "SkillInvoke"),
       skill_tool_result("old-1", *old_activation),
-      skill_tool_use("s1", "skill.invoke"),
+      skill_tool_use("s1", "SkillInvoke"),
       skill_tool_result("s1", *activation),
-      skill_tool_use("s2", "file.read"),
+      skill_tool_use("s2", "FileRead"),
       skill_tool_result("s2", *activation),
-      skill_tool_use("s3", "skill.invoke"),
+      skill_tool_use("s3", "SkillInvoke"),
       skill_tool_error_result("s3", *activation),
-      skill_tool_use("s4", "skill.deactivate"),
+      skill_tool_use("s4", "SkillDeactivate"),
       skill_tool_result("s4", *deactivation),
   };
 
@@ -259,7 +259,7 @@ TEST_CASE("skill_activation_events_from_transcript extracts suffix activation up
   REQUIRE(skill::skill_activation_events_from_transcript(transcript, transcript.size() + 1).empty());
 }
 
-TEST_CASE("active_skills_from_transcript nets skill.deactivate against skill.invoke", "[unit][skill][catalog]") {
+TEST_CASE("active_skills_from_transcript nets SkillDeactivate against SkillInvoke", "[unit][skill][catalog]") {
   auto activation = skill::render_activation_data_json("release-note");
   auto deactivation = skill::render_deactivation_data_json("release-note");
   REQUIRE(activation.has_value());
@@ -267,9 +267,9 @@ TEST_CASE("active_skills_from_transcript nets skill.deactivate against skill.inv
 
   SECTION("invoke then deactivate leaves the skill inactive") {
     const std::vector<core::Message> transcript{
-        skill_tool_use("s1", "skill.invoke"),
+        skill_tool_use("s1", "SkillInvoke"),
         skill_tool_result("s1", *activation),
-        skill_tool_use("s2", "skill.deactivate"),
+        skill_tool_use("s2", "SkillDeactivate"),
         skill_tool_result("s2", *deactivation),
     };
     REQUIRE(skill::active_skills_from_transcript(transcript).empty());
@@ -277,11 +277,11 @@ TEST_CASE("active_skills_from_transcript nets skill.deactivate against skill.inv
 
   SECTION("a later invoke reactivates the skill (most recent event wins)") {
     const std::vector<core::Message> transcript{
-        skill_tool_use("s1", "skill.invoke"),
+        skill_tool_use("s1", "SkillInvoke"),
         skill_tool_result("s1", *activation),
-        skill_tool_use("s2", "skill.deactivate"),
+        skill_tool_use("s2", "SkillDeactivate"),
         skill_tool_result("s2", *deactivation),
-        skill_tool_use("s3", "skill.invoke"),
+        skill_tool_use("s3", "SkillInvoke"),
         skill_tool_result("s3", *activation),
     };
     REQUIRE(skill::active_skills_from_transcript(transcript) ==
@@ -290,14 +290,14 @@ TEST_CASE("active_skills_from_transcript nets skill.deactivate against skill.inv
 
   SECTION("deactivating a never-invoked skill is a harmless no-op") {
     const std::vector<core::Message> transcript{
-        skill_tool_use("s1", "skill.deactivate"),
+        skill_tool_use("s1", "SkillDeactivate"),
         skill_tool_result("s1", *deactivation),
     };
     REQUIRE(skill::active_skills_from_transcript(transcript).empty());
   }
 }
 
-TEST_CASE("resolve_active_skills honours transcript skill.deactivate", "[unit][skill][catalog]") {
+TEST_CASE("resolve_active_skills honours transcript SkillDeactivate", "[unit][skill][catalog]") {
   auto release_activation = skill::render_activation_data_json("release-note");
   auto review_activation = skill::render_activation_data_json("review-pr");
   auto release_deactivation = skill::render_deactivation_data_json("release-note");
@@ -306,11 +306,11 @@ TEST_CASE("resolve_active_skills honours transcript skill.deactivate", "[unit][s
   REQUIRE(release_deactivation.has_value());
 
   const std::vector<core::Message> transcript{
-      skill_tool_use("s1", "skill.invoke"),
+      skill_tool_use("s1", "SkillInvoke"),
       skill_tool_result("s1", *release_activation),
-      skill_tool_use("s2", "skill.invoke"),
+      skill_tool_use("s2", "SkillInvoke"),
       skill_tool_result("s2", *review_activation),
-      skill_tool_use("s3", "skill.deactivate"),
+      skill_tool_use("s3", "SkillDeactivate"),
       skill_tool_result("s3", *release_deactivation),
   };
   const std::vector<skill::CatalogEntry> available{
@@ -348,12 +348,12 @@ TEST_CASE("ActivationPolicy resolves active markers against available skills", "
               {
                   core::ToolUseContent{
                       .id = "skill-1",
-                      .name = "skill.invoke",
+                      .name = "SkillInvoke",
                       .input_json = R"({"name":"release-note"})",
                   },
                   core::ToolUseContent{
                       .id = "skill-2",
-                      .name = "skill.invoke",
+                      .name = "SkillInvoke",
                       .input_json = R"({"name":"removed-skill"})",
                   },
               },
@@ -404,7 +404,7 @@ TEST_CASE("ActivationPolicy can disable transcript-derived active markers", "[un
           .role = core::Role::assistant,
           .blocks = {core::ToolUseContent{
               .id = "skill-1",
-              .name = "skill.invoke",
+              .name = "SkillInvoke",
               .input_json = R"({"name":"release-note"})",
           }},
           .created_at = std::nullopt,
@@ -443,9 +443,9 @@ TEST_CASE("ActivationPolicy overlays session-store activation records", "[unit][
   REQUIRE(release_activation.has_value());
   REQUIRE(review_activation.has_value());
   const std::vector<core::Message> transcript{
-      skill_tool_use("s1", "skill.invoke"),
+      skill_tool_use("s1", "SkillInvoke"),
       skill_tool_result("s1", *release_activation),
-      skill_tool_use("s2", "skill.invoke"),
+      skill_tool_use("s2", "SkillInvoke"),
       skill_tool_result("s2", *review_activation),
   };
   const std::vector<skill::CatalogEntry> available{
@@ -530,12 +530,12 @@ TEST_CASE("ActivationPolicy deactivates transcript-derived active markers", "[un
               {
                   core::ToolUseContent{
                       .id = "skill-1",
-                      .name = "skill.invoke",
+                      .name = "SkillInvoke",
                       .input_json = R"({"name":"release-note"})",
                   },
                   core::ToolUseContent{
                       .id = "skill-2",
-                      .name = "skill.invoke",
+                      .name = "SkillInvoke",
                       .input_json = R"({"name":"review-pr"})",
                   },
               },
@@ -637,12 +637,12 @@ TEST_CASE("ActivationPolicy expires transcript-derived active markers at explici
               {
                   core::ToolUseContent{
                       .id = "skill-1",
-                      .name = "skill.invoke",
+                      .name = "SkillInvoke",
                       .input_json = R"({"name":"release-note"})",
                   },
                   core::ToolUseContent{
                       .id = "skill-2",
-                      .name = "skill.invoke",
+                      .name = "SkillInvoke",
                       .input_json = R"({"name":"review-pr"})",
                   },
               },

@@ -85,8 +85,8 @@ stored rows. `RuntimeAssembly` opens and migrates
 `session_store()`, and lets built-in no-route startup disable the store so fresh
 deterministic CLI runs do not create session state. `AgentPromptRunner` now loads
 persisted history and durable skill activation rows before each prompt, then appends
-the successful transcript suffix and records successful `skill.invoke` /
-`skill.deactivate` activation updates through that owner when session memory is
+the successful transcript suffix and records successful `SkillInvoke` /
+`SkillDeactivate` activation updates through that owner when session memory is
 enabled; the in-process transcript remains the fallback when it is not.
 `memory::FramingOwner` separately owns prompt section 5 and is rendered once by
 `AgentPromptRunner` before each loop turn.
@@ -207,15 +207,15 @@ the prompt-boundary query; omitting it keeps the previous all-kind search. Slice
 the current-prompt query and `last_user_message` deriving the single recall
 query from the most recent previous user text when one exists. Slice 168 adds
 `render_recall_data_json(...)` for structured recall record metadata and the
-read-only `memory.recall` tool path, which reaches the same runtime through
+read-only `MemoryRecall` tool path, which reaches the same runtime through
 bootstrap's `DispatchContext::memory_recall` callback and the ordinary
 permission/audit/hook/output-cap pipeline. Slice 169 adds
 `render_remember_data_json(...)` for structured saved-record metadata and the
-write-side `memory.remember` tool path, which reaches the same assembly-owned
+write-side `MemoryRemember` tool path, which reaches the same assembly-owned
 long-term `Backend` through `DispatchContext::memory_remember`; bootstrap
 stamps the runner's stable scope key plus dispatch-time timestamps before
 upserting. Slice 170 adds `render_forget_data_json(...)` for scoped removed-key
-metadata and the delete-side `memory.forget` tool path, which reaches the same
+metadata and the delete-side `MemoryForget` tool path, which reaches the same
 assembly-owned long-term `Backend` through `DispatchContext::memory_forget`;
 bootstrap derives the runner's stable scope key before calling the backend's
 idempotent `remove(...)`. Slice 171 adds the first 10k-record FTS5 search bench:
@@ -242,17 +242,17 @@ wires the gated bootstrap owner: when the binary is built with
 `<workspace>/.orangutan/memory-vectors.db`, migrates `SqliteVecBackend`,
 constructs `HybridRuntime`, and `AgentPromptRunner` uses a deterministic local
 text embedding owner (`oran-local-text-v1`, 64 dimensions) for prompt-boundary
-recall and `memory.recall`. The same runner mirrors `memory.remember` writes and
-`memory.forget` deletes into the vector index. Slices 179 and 180 wire the first
+recall and `MemoryRecall`. The same runner mirrors `MemoryRemember` writes and
+`MemoryForget` deletes into the vector index. Slices 179 and 180 wire the first
 long-term memory lifecycle hooks at the bootstrap callback boundary:
-`memory.remember` publishes blocking `memory_write_before` after parsing and
+`MemoryRemember` publishes blocking `memory_write_before` after parsing and
 scoping the record but before any lexical/vector backend mutation, then
 publishes advisory `memory_write_after` after a successful write. A veto returns
 `ErrorKind::permission_denied` with `reason=blocked_by_hook` and skips both
 backend writes; rewrite and require-approval decisions are explicitly rejected
-as unsupported for this consumer. `memory.forget` publishes advisory
+as unsupported for this consumer. `MemoryForget` publishes advisory
 `memory_forget` after a successful scoped delete. Prompt-boundary long-term
-recall and the `memory.recall` tool publish advisory `memory_read_after` after
+recall and the `MemoryRecall` tool publish advisory `memory_read_after` after
 successful lexical or hybrid recall. Default hook sinks receive redacted
 memory payloads: writes omit record title/body/tags/linked ids, reads omit raw
 query text plus hit title/body/tags/linked ids while preserving byte/count
@@ -447,7 +447,7 @@ The shipped bootstrap embedding owner is intentionally small and deterministic:
 `make_text_embedding(text, TextEmbeddingOptions{model, dimensions})` lowercases
 ASCII text, hashes token features into a fixed-width vector, and L2-normalizes
 the result. `make_record_embedding(record, options)` embeds title, body, tags,
-and linked ids for `memory.remember` vector mirroring. This owner exists to make
+and linked ids for `MemoryRemember` vector mirroring. This owner exists to make
 the hybrid runtime path testable and dependency-free beyond sqlite-vec; it is
 not a semantic embedding model. External or provider-backed embeddings remain a
 separate runtime owner.
@@ -568,7 +568,7 @@ retention job is due and, when due, produce the matching `DecayRequest`; startup
 does not loop or schedule background work. Decayed records are not immediately deleted;
 they enter a "shadow" state where they are excluded from default search but
 visible to runtime callers that set `Query::include_shadow=true`. The shipped
-`memory.recall` tool keeps `include_shadow=false`. Slice 181 provides the
+`MemoryRecall` tool keeps `include_shadow=false`. Slice 181 provides the
 read-touch metadata prerequisite (`Backend::touch` plus recall-side
 `last_read_at` updates), slice 182 provides the backend execution boundary
 (`Backend::decay`) that applies the shadow transition for a bounded scope batch,
@@ -609,18 +609,18 @@ Memory lifecycle:
 
 - `memory.read.before(scope, kind, query)` — planned; may rewrite the query.
 - `memory.read.after(scope, kind, results)` — shipped in slice 180 as advisory
-  after successful prompt-boundary long-term recall and `memory.recall` tool
+  after successful prompt-boundary long-term recall and `MemoryRecall` tool
   reads. Default hook sinks receive source, scope, kind, limit, match count,
   score, timing, hybrid flag, and byte/count metadata; trusted-local sinks also
   receive the raw recall query and hit records.
-- `memory.write.before(scope, record)` — shipped for bootstrap
-  `memory.remember` in slice 179 as veto/proceed only. The blocking publish runs
+- `MemoryWrite.before(scope, record)` — shipped for bootstrap
+  `MemoryRemember` in slice 179 as veto/proceed only. The blocking publish runs
   before lexical/vector backend mutation; veto returns permission-denied and
   skips persistence. Rewrite/annotation remain downstream.
-- `memory.write.after(scope, record)` — shipped in slice 179 as advisory after
-  successful bootstrap `memory.remember`.
-- `memory.forget(scope, id)` — shipped in slice 179 as advisory after
-  successful bootstrap `memory.forget`.
+- `MemoryWrite.after(scope, record)` — shipped in slice 179 as advisory after
+  successful bootstrap `MemoryRemember`.
+- `MemoryForget(scope, id)` — shipped in slice 179 as advisory after
+  successful bootstrap `MemoryForget`.
 - `memory.decay(scope, count)` — shipped for the configured-route startup
   retention pass in slice 186 as advisory metadata (`source`, scope, policy
   inputs, shadowed count, timing) with no record content. `oran-automation`
@@ -629,7 +629,7 @@ Memory lifecycle:
   `memory_decay` when callers supply a hook bus.
 
 These hooks are why team shared memory works: the orchestration leader can install a
-`memory.write.after` hook on the shared tier to mirror notes to a Slack channel, for
+`MemoryWrite.after` hook on the shared tier to mirror notes to a Slack channel, for
 example.
 
 ## Identity / Scope Derivation

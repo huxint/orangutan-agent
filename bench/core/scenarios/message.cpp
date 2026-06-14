@@ -73,7 +73,7 @@ struct TextLengthVisitor {
       case 2:
         m.blocks.emplace_back(ToolUseContent{
             .id = "tool-" + std::to_string(i),
-            .name = "file.read",
+            .name = "FileRead",
             .input_json = R"({"path":"README.md"})",
         });
         break;

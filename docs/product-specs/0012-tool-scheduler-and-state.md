@@ -77,25 +77,25 @@ observe — so the future agent loop can call them safely on day one.
     run_batch(std::vector<ToolUse> batch, DispatchContext ctx);
   };
   ```
-- **Per-path lock table** for mutating tools (`file.write`, `file.edit`,
-  `file.modify`, `file.delete`):
+- **Per-path lock table** for mutating tools (`FileWrite`, `FileEdit`,
+  `FileModify`, `FileDelete`):
   - Lock key: canonical workspace-resolved path (spec 0013).
   - Lock type: exclusive for write/edit/delete, shared for read.
   - Lock rows are bounded with an idle TTL (default 5 min) and reaped on
     a background tick. A cancelled mutation never leaves a dead row.
 - **Bounded parallelism**:
 - **Read-only tools** (may run concurrently up to
-  `max_parallel_tools`): `file.read`, `file.search`,
-  `directory.list`, `directory.scan` (future), `code.outline`
-  (future), `code.symbols` (future), `code.references` (future),
-  `memory.recall`.
+  `max_parallel_tools`): `FileRead`, `FileSearch`,
+  `DirectoryList`, `DirectoryScan` (future), `CodeOutline`
+  (future), `CodeSymbols` (future), `code.references` (future),
+  `MemoryRecall`.
 - **Mutating tools** (serialise per canonical resource):
-  `file.write`, `file.edit`, `file.modify` (future), `file.delete`,
-  `memory.remember`, and `memory.forget`.
+  `FileWrite`, `FileEdit`, `FileModify` (future), `FileDelete`,
+  `MemoryRemember`, and `MemoryForget`.
 - **Globally serialised tools** (compete for a process-wide slot
   until they ship a per-resource lock):
-  `shell.exec` (future — workspace lock until it gains per-cwd
-  scoping), `agent.spawn` (future), `tool.runtime_loader` (future).
+  `ShellExec` (future — workspace lock until it gains per-cwd
+  scoping), `AgentSpawn` (future), `tool.runtime_loader` (future).
   Their `ToolDef::required_capabilities` already implies the slot
   via `spawn_subprocess` / `runtime_loader`.
 
@@ -183,7 +183,7 @@ implicitly via the capability list.
   | Deferred-tool promotion set (per session) | LRU on session size + 24-hour TTL (`prompt::PromotionState`, slice 71; explicit `core::Time` inputs, sorted snapshots for prompt determinism) | 16 entries |
   | Approval broker grants | TTL + max-per-identity (slice 56 shipped the cap; `approve` lazily reaps expired rows then evicts the oldest same-identity grant before inserting a new distinct triple) | existing TTL + 64 per identity |
   | Provider route health / retry backoff | TTL per route | 30 s |
-  | Regex compile cache (`file.search`) | LRU | 64 entries |
+  | Regex compile cache (`FileSearch`) | LRU | 64 entries |
   | `read_text_file_ranged` line-offset index | LRU + TTL + byte cap + stats | 32 entries / 8 MiB / 10 min |
   | `read_text_file_ranged` file-view cache | LRU + TTL + byte cap + stats | 64 entries / 16 MiB / 10 min |
   | `read_text_file_ranged` singleflight table | max in-flight rows + stats | 64 entries |
@@ -210,7 +210,7 @@ implicitly via the capability list.
   `prompt::PromotionState` for the deferred-tool promotion set with the
   documented 16-entry cap, 24-hour TTL, explicit `core::Time` inputs, and
   aggregate stats; `agent::SessionState` now owns that state and mutates it
-  after successful `tool.search` output.
+  after successful `ToolSearch` output.
   Pre-`oran-log`, `--explain-rules`-style debug surfaces in `oran-bootstrap`
   can reuse the same numbers.
 
@@ -218,8 +218,8 @@ implicitly via the capability list.
 
 - **Index caches** (built on `BoundedCache`):
   - Directory tree index (path, kind, size, mtime, hidden flag, ignored
-    flag) — first cache because it benefits both `directory.scan` and
-    `file.search`.
+    flag) — first cache because it benefits both `DirectoryScan` and
+    `FileSearch`.
   - Tool schema index — mapping name/category/capability to `ToolDef` and
     rendered prompt block hash.
   - Skill catalog index — frontmatter metadata + body hash for hot-reload
@@ -232,7 +232,7 @@ implicitly via the capability list.
 - **Singleflight on dispatch**: N concurrent `run_batch` calls that
   request the *same* `(tool_name, input_hash)` collapse into one
   in-flight execution; the rest await its result. Useful for memory
-  recall and `file.read` of hot paths. **Status (slice 53,
+  recall and `FileRead` of hot paths. **Status (slice 53,
   2026-05-24):** the lower-level `oran-io` consumer now ships first:
   concurrent cold `read_text_file_ranged` calls collapse by
   `(canonical_path, range, max_bytes, size_bytes, mtime_ns)` behind a
@@ -287,7 +287,7 @@ implicitly via the capability list.
    returns results in the order `[result_0, result_1, …, result_N]`.
    The agent's transcript bytes are byte-identical regardless of execution
    ordering.
-3. **Per-path serialisation.** Two concurrent `file.write` calls to the
+3. **Per-path serialisation.** Two concurrent `FileWrite` calls to the
    same canonical path execute strictly one after the other; two writes
    to *different* paths run in parallel. Pinned via a fake mutating tool
    that records its lock acquisition timestamps.

@@ -6,10 +6,10 @@
 explicitly overridden. Before slice 37 every built-in file tool read `path`
 straight from the JSON input and called `oran-io` without canonicalisation,
 traversal checks, or symlink policy. Slice 37 adds the resolver foundation and
-migrates `file.read` when `DispatchContext::workspace` is supplied; slice 38
-migrates `file.write`, `file.edit`, and `file.delete` through the same seam;
-slice 39 migrates `file.search` through `resolve_list`; slice 40 migrates
-`directory.list` through `resolve_list`. Every filesystem built-in now
+migrates `FileRead` when `DispatchContext::workspace` is supplied; slice 38
+migrates `FileWrite`, `FileEdit`, and `FileDelete` through the same seam;
+slice 39 migrates `FileSearch` through `resolve_list`; slice 40 migrates
+`DirectoryList` through `resolve_list`. Every filesystem built-in now
 consumes the workspace seam at handler entry, slice 41 moves workspace
 ownership into bootstrap, and slice 55 moves known filesystem built-ins to a
 pre-permission registry resolver with audit metadata. Permission rules can
@@ -25,20 +25,20 @@ the same resolver.
 
 Current seams and future work:
 
-- Every filesystem built-in (`file.read`, `file.write`, `file.edit`,
-  `file.delete`, `file.search`, `directory.list`) consumes
+- Every filesystem built-in (`FileRead`, `FileWrite`, `FileEdit`,
+  `FileDelete`, `FileSearch`, `DirectoryList`) consumes
   `DispatchContext::workspace` through `Registry::dispatch` when supplied;
   handlers retain an in-handler fallback for tests and legacy callers that
   dispatch without a workspace.
-- Root paths for `file.search` and `directory.list` use
+- Root paths for `FileSearch` and `DirectoryList` use
   `Workspace::resolve_list` and therefore follow symlinks only when the
   canonical target remains in an allowed root. Nested entries during a
-  recursive `file.search` walk still skip symlinks wholesale, a stricter
+  recursive `FileSearch` walk still skip symlinks wholesale, a stricter
   policy that avoids recursive escape complexity until a shared directory
   scanner exists.
-- `file.search`'s hidden / ignored-entry predicate is still private to that
+- `FileSearch`'s hidden / ignored-entry predicate is still private to that
   tool. The shared `Workspace::is_ignored(...)` predicate waits for a second
-  recursive consumer such as `directory.scan`.
+  recursive consumer such as `DirectoryScan`.
 - The future `tool::Runtime::workspace()` capability-gated accessor is
   described in [`../design-docs/tool-runtime.md`](../design-docs/tool-runtime.md)
   "ToolRuntime" but unbuilt.
@@ -54,9 +54,9 @@ roots, exposes `resolve_read`, `resolve_write`, `resolve_delete`, and
 `resolve_list`, returns `ResolvedPath` strings/flags without exposing
 `<filesystem>` in the public header, and rejects traversal or symlink escapes
 with the context reasons this spec names. `DispatchContext` carries an
-optional non-owning `Workspace*`; `file.read` uses it when supplied.
+optional non-owning `Workspace*`; `FileRead` uses it when supplied.
 
-**Slice 38 (2026-05-22):** `file.write`, `file.edit`, and `file.delete` now
+**Slice 38 (2026-05-22):** `FileWrite`, `FileEdit`, and `FileDelete` now
 resolve through `DispatchContext::workspace` when it is supplied. Writes pass
 their current `mode` and `create_parents` intent to `resolve_write`; edits use
 `resolve_write` before the read+atomic rewrite; deletes use `resolve_delete`.
@@ -64,23 +64,23 @@ Relative in-workspace paths work, traversal outside the workspace rejects with
 `reason=outside_workspace`, and mutating symlink targets reject with
 `reason=symlink_target`.
 
-**Slice 39 (2026-05-22):** `file.search` now resolves its input through
+**Slice 39 (2026-05-22):** `FileSearch` now resolves its input through
 `Workspace::resolve_list` when `DispatchContext::workspace` is supplied, before
 the executor hop that drives the blocking walk. Single-file and recursive-walk
 shapes still work; relative in-workspace searches succeed, traversal rejects
 with `reason=outside_workspace`, root-side symlink escapes reject with
 `reason=symlink_escape`, and `permissions.workspace.extra_read_roots` widens
-the resolver in the read direction the same way it does for `file.read`.
+the resolver in the read direction the same way it does for `FileRead`.
 Nested entries during the walk continue to skip symlinks wholesale — a
 stricter form of the same workspace policy.
 
-**Slice 40 (2026-05-22):** `directory.list` now resolves its input through
+**Slice 40 (2026-05-22):** `DirectoryList` now resolves its input through
 `Workspace::resolve_list` when `DispatchContext::workspace` is supplied,
 before `oran-io::list_directory`. Relative in-workspace listings succeed,
 traversal rejects with `reason=outside_workspace`, and root-side symlink
 escapes reject with `reason=symlink_escape`. After this slice every
-filesystem built-in (`file.read`, `file.write`, `file.edit`, `file.delete`,
-`file.search`, `directory.list`) consumes the workspace seam at the handler
+filesystem built-in (`FileRead`, `FileWrite`, `FileEdit`, `FileDelete`,
+`FileSearch`, `DirectoryList`) consumes the workspace seam at the handler
 entry, closing the per-tool half of this spec.
 
 **Slice 41 (2026-05-22):** Bootstrap-owned workspace lands.
@@ -97,16 +97,16 @@ fails the boot rather than the first dispatched tool call. A latent bug in
 `tool::Workspace::create` that surfaced ENOENT as `Error::io` instead of
 `Error::not_found` was fixed in the same slice.
 
-**Slice 49 (2026-05-23):** `file.search` now owns the first
+**Slice 49 (2026-05-23):** `FileSearch` now owns the first
 source-controlled ignore-file implementation. Recursive walks with
 `respect_ignore=true` load `.gitignore` and `.ignore` files from the search
 root downward and apply the common repo-rule subset (comments, blanks,
 escaped leading marker literals, negation, directory-only rules,
 slash-relative patterns, basename patterns, and fnmatch-style globs) on
 top of the slice-48 built-in skip list. This
-closes the immediate `file.search` product need in spec 0011, but the
+closes the immediate `FileSearch` product need in spec 0011, but the
 workspace-owned sharing point described below is still pending for the
-future `directory.scan`.
+future `DirectoryScan`.
 
 **Slice 55 (2026-05-24):** The registry pre-permission boundary lands for
 current filesystem built-ins. `Registry::dispatch` now clears
@@ -122,20 +122,20 @@ audit row still records the permission verdict/outcome plus
 resolves record `resolved_relative_path`, `symlink_followed`,
 `created_parents`, `outside_workspace_explicit_override`, and
 `override_root_index` under the same `metadata_json` object. Malformed JSON,
-missing `path`, and malformed `file.write` `mode` / `create_parents` fields
+missing `path`, and malformed `FileWrite` `mode` / `create_parents` fields
 skip pre-resolution so each handler keeps its existing schema-error contract.
 
 Still pending: The shared
 `Workspace::is_ignored(...)` predicate remains a v1.1 structure task once a
-second consumer (`directory.scan`) exists. The future capability-gated
+second consumer (`DirectoryScan`) exists. The future capability-gated
 `tool::Runtime::workspace()` accessor still lands with `tool::Runtime`; the
 current dispatch context remains the interim service seam.
 
 ## Scope (v1)
 
 The MVP closes the deep-review P0 workspace gap with the minimum surface that
-all six current built-ins (`file.read`, `file.write`, `file.edit`,
-`file.search`, `directory.list`, `file.delete`) can adopt in one slice.
+all six current built-ins (`FileRead`, `FileWrite`, `FileEdit`,
+`FileSearch`, `DirectoryList`, `FileDelete`) can adopt in one slice.
 
 - `tool::Workspace` (or `tool::PathPolicy`) value type owned by
   `bootstrap::RuntimeAssembly` and threaded into `tool::DispatchContext`
@@ -182,25 +182,25 @@ all six current built-ins (`file.read`, `file.write`, `file.edit`,
   The raw `input_path` is hashed, never logged in full, to mirror today's
   `input_hash` discipline (`SHA-256(input_json)` per `Registry::dispatch`).
 
-`WriteIntent` enumerates the three modes the existing `file.write` already
+`WriteIntent` enumerates the three modes the existing `FileWrite` already
 supports (`truncate`, `append`, `fail_if_exists`) plus
 `create_parents`, so the workspace can decide whether parent-directory
 creation is allowed for this resolve call.
 
 ## Scope (v1.1)
 
-- Lift the shipped `file.search` ignore predicate into a workspace-owned
-  predicate (`Workspace::is_ignored(ResolvedPath)`) once `directory.scan`
-  exists. The current implementation lives in `file.search` only; the shared
+- Lift the shipped `FileSearch` ignore predicate into a workspace-owned
+  predicate (`Workspace::is_ignored(ResolvedPath)`) once `DirectoryScan`
+  exists. The current implementation lives in `FileSearch` only; the shared
   predicate will carry the built-in skip list plus `.gitignore` / `.ignore`
   rule stack so both recursive tools make the same decision.
-- Per-call override field for `file.read` / `file.search` /
-  `directory.list`: `allow_outside_workspace=true` requires an `ask`
+- Per-call override field for `FileRead` / `FileSearch` /
+  `DirectoryList`: `allow_outside_workspace=true` requires an `ask`
   permission verdict at runtime and records the resolved path in audit
   verbatim (no override exists for write/delete — that gate stays config-only).
 - Path display helper: `Workspace::display(const ResolvedPath&)` produces the
   `<root>/...` short form for tool output and audit. Lifts the current ad-hoc
-  rendering across `file.search` / `directory.list`.
+  rendering across `FileSearch` / `DirectoryList`.
 
 ## Scope (v2)
 
@@ -235,20 +235,20 @@ is supplied, audit rows carry path-resolution metadata in the existing
 audit / approval-replay edge cases. Criterion 7 remains tied to the future
 `tool::Runtime::workspace()` accessor.
 
-1. **Traversal rejection.** A `file.write` whose `path` resolves via `..` to a
+1. **Traversal rejection.** A `FileWrite` whose `path` resolves via `..` to a
    point outside the workspace root returns `Error::permission_denied` with
    `reason=outside_workspace`. The same rule fires for an absolute path
    outside the root. Test matrix covers `path=../outside.txt`,
    `path=/etc/passwd`, `path=workspace/../../outside`,
    `path=workspace/legit/../../../outside`.
-2. **Symlink policy.** `file.write` on a path whose final component is a
-   symlink rejects with `reason=symlink_target`; `file.delete` on a symlink
-   rejects with `reason=symlink_target`; `file.read` and `file.search` follow
+2. **Symlink policy.** `FileWrite` on a path whose final component is a
+   symlink rejects with `reason=symlink_target`; `FileDelete` on a symlink
+   rejects with `reason=symlink_target`; `FileRead` and `FileSearch` follow
    a symlink whose canonical target stays inside the workspace and reject
    (`reason=symlink_escape`) when the target leaves the root.
 3. **Override roots widen, not bypass.** With
-   `permissions.workspace.extra_read_roots=["/var/log/oran"]`, a `file.read`
-   of `/var/log/oran/audit.log` succeeds; a `file.write` to the same path
+   `permissions.workspace.extra_read_roots=["/var/log/oran"]`, a `FileRead`
+   of `/var/log/oran/audit.log` succeeds; a `FileWrite` to the same path
    still rejects because the override list is read-only. A
    `permissions.workspace.extra_write_roots` override that overlaps a symlink
    chain pointing outside both roots still rejects via the symlink-escape
@@ -260,7 +260,7 @@ audit / approval-replay edge cases. Criterion 7 remains tied to the future
    `permission::AuditEvent::metadata_json` extension column. Resolver failures
    record hashed input/root plus `error_kind` and `error_reason` instead of a
    resolved path. The `audit.db` schema stays compatible.
-5. **Single resolver.** `file.search`'s root path goes through
+5. **Single resolver.** `FileSearch`'s root path goes through
    `Workspace::resolve_list` before permission evaluation. It follows
    in-workspace symlink roots and rejects root-side symlink escapes with
    `reason=symlink_escape`; nested entries during the recursive walk continue
@@ -301,7 +301,7 @@ audit / approval-replay edge cases. Criterion 7 remains tied to the future
 - **Slice scope blowup.** Touching all six built-ins plus dispatch context in
   one PR could break the ~600 LoC / ~6 files guideline. Mitigation: land
   `tool::Workspace` + the v1 resolver matrix + one built-in migration
-  (`file.read`) in slice N; migrate mutating tools in slice N+1; then migrate
+  (`FileRead`) in slice N; migrate mutating tools in slice N+1; then migrate
   the remaining read/list tools in a later slice. STATUS.md names the active
   migration target.
 - **`weakly_canonical` cost.** Every dispatch now stat-walks the path. For

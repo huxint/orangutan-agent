@@ -31,7 +31,7 @@ memory search results without re-querying inside each ReAct iteration.
 - Out of scope:
   - Long-term FTS5 records, decay, vector search, or the MEMORY.md mirror.
   - Team/shared memory.
-  - New memory tools such as `memory.recall` / `memory.write`.
+  - New memory tools such as `MemoryRecall` / `MemoryWrite`.
   - Hook payload implementation for memory read/write events beyond preserving
     the existing event names.
   - CLI commands for session selection/listing.

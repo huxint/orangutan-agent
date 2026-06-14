@@ -1,7 +1,7 @@
 // bench/agent/scenarios/prompt_cache_hit_rate.cpp
 //
 // A-vs-B comparison: stable prompt-cache fixture without promotions vs. after
-// the session observes a `tool.search` result that promotes one deferred tool.
+// the session observes a `ToolSearch` result that promotes one deferred tool.
 
 #include <nanobench.h>
 
@@ -50,14 +50,14 @@ core::ToolDef tool_def(std::string name, std::string description, bool deferred 
 
 std::vector<core::ToolDef> make_catalog() {
   return {
-      tool_def("file.read", "Read a file"),
-      tool_def("file.write", "Write a file"),
-      tool_def("file.edit", "Edit a file"),
-      tool_def("file.search", "Search files"),
-      tool_def("directory.list", "List a directory"),
-      tool_def("tool.search", "Search tools"),
-      tool_def("memory.recall", "Recall memory", true),
-      tool_def("agent.spawn", "Spawn an agent", true),
+      tool_def("FileRead", "Read a file"),
+      tool_def("FileWrite", "Write a file"),
+      tool_def("FileEdit", "Edit a file"),
+      tool_def("FileSearch", "Search files"),
+      tool_def("DirectoryList", "List a directory"),
+      tool_def("ToolSearch", "Search tools"),
+      tool_def("MemoryRecall", "Recall memory", true),
+      tool_def("AgentSpawn", "Spawn an agent", true),
   };
 }
 
@@ -98,8 +98,8 @@ std::uint64_t run_prompt_cache_fixture(bool with_promotion) {
     auto observed = session.observe_tool_output(
         tool::kToolSearchName,
         tool::Output{
-            .text = "tool.search: 1 match",
-            .data_json = R"({"kind":"tool_search","matches":[{"name":"memory.recall","deferred":true}]})",
+            .text = "ToolSearch: 1 match",
+            .data_json = R"({"kind":"tool_search","matches":[{"name":"MemoryRecall","deferred":true}]})",
         },
         at_seconds(1));
     if (!observed || observed->promoted != 1) {

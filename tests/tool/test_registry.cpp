@@ -165,27 +165,27 @@ TEST_CASE("Registry::add rejects empty handler", "[unit][tool][registry]") {
 
 TEST_CASE("Registry::add rejects invalid input_schema_json", "[unit][tool][registry]") {
   tool::Registry registry;
-  auto def = core::ToolDef::with_no_input("bad.schema", "bad schema");
+  auto def = core::ToolDef::with_no_input("BadSchema", "bad schema");
   def.input_schema_json = R"({"type":"object","properties":)";
 
   auto added = registry.add(std::move(def), make_echo_handler());
   REQUIRE_FALSE(added.has_value());
   REQUIRE(added.error().kind() == core::ErrorKind::invalid_argument);
-  REQUIRE(context_has(added.error(), "tool", "bad.schema"));
+  REQUIRE(context_has(added.error(), "tool", "BadSchema"));
   REQUIRE(context_has(added.error(), "schema_path", "$"));
   REQUIRE(registry.size() == 0);
 }
 
 TEST_CASE("Registry::add rejects malformed JSON Schema keywords", "[unit][tool][registry]") {
   tool::Registry registry;
-  auto def = core::ToolDef::with_no_input("bad.required", "bad required");
+  auto def = core::ToolDef::with_no_input("BadRequired", "bad required");
   def.input_schema_json =
       R"({"type":"object","properties":{"path":{"type":"string"}},"required":"path","additionalProperties":false})";
 
   auto added = registry.add(std::move(def), make_echo_handler());
   REQUIRE_FALSE(added.has_value());
   REQUIRE(added.error().kind() == core::ErrorKind::invalid_argument);
-  REQUIRE(context_has(added.error(), "tool", "bad.required"));
+  REQUIRE(context_has(added.error(), "tool", "BadRequired"));
   REQUIRE(context_has(added.error(), "schema_path", "$.required"));
   REQUIRE(registry.size() == 0);
 }
@@ -282,7 +282,7 @@ TEST_CASE("Registry::catalog reports tools in insertion order", "[unit][tool][re
 
 TEST_CASE("CatalogRenderer renders a deterministic full-schema tool block", "[unit][tool][catalog]") {
   core::ToolDef def{
-      .name = "file.read",
+      .name = "FileRead",
       .description = "Read a UTF-8 text file.",
       .input_schema_json =
           R"({"required":["path"],"properties":{"path":{"type":"string"}},"type":"object","additionalProperties":false})",
@@ -298,7 +298,7 @@ TEST_CASE("CatalogRenderer renders a deterministic full-schema tool block", "[un
   REQUIRE(second.has_value());
 
   REQUIRE(*first == *second);
-  REQUIRE(first->contains("Tool: file.read\n"));
+  REQUIRE(first->contains("Tool: FileRead\n"));
   REQUIRE(first->contains("Description: Read a UTF-8 text file.\n"));
   REQUIRE(first->contains("Category: file\n"));
   REQUIRE(first->contains("Capabilities: read_file\n"));
@@ -314,16 +314,16 @@ TEST_CASE("CatalogRenderer renders a deterministic full-schema tool block", "[un
 }
 
 TEST_CASE("CatalogRenderer sorts active tools and separates deferred entries", "[unit][tool][catalog]") {
-  auto active_b = core::ToolDef::with_no_input("file.write", "Write a file.");
+  auto active_b = core::ToolDef::with_no_input("FileWrite", "Write a file.");
   active_b.required_capabilities = {core::Capability::write_file};
   active_b.category = "file";
 
-  auto deferred = core::ToolDef::with_no_input("memory.recall", "Recall memory.");
+  auto deferred = core::ToolDef::with_no_input("MemoryRecall", "Recall memory.");
   deferred.required_capabilities = {core::Capability::read_memory};
   deferred.deferred = true;
   deferred.category = "memory";
 
-  auto active_a = core::ToolDef::with_no_input("file.read", "Read a file.");
+  auto active_a = core::ToolDef::with_no_input("FileRead", "Read a file.");
   active_a.required_capabilities = {core::Capability::read_file};
   active_a.category = "file";
 
@@ -333,16 +333,16 @@ TEST_CASE("CatalogRenderer sorts active tools and separates deferred entries", "
   REQUIRE(rendered.has_value());
 
   REQUIRE(rendered->active_blocks.size() == 2);
-  REQUIRE(rendered->active_blocks[0].starts_with("Tool: file.read\n"));
-  REQUIRE(rendered->active_blocks[1].starts_with("Tool: file.write\n"));
-  REQUIRE(rendered->active_text.find("Tool: file.read") < rendered->active_text.find("Tool: file.write"));
-  REQUIRE_FALSE(rendered->active_text.contains("memory.recall"));
-  REQUIRE(rendered->deferred_entries == std::vector<std::string>{"memory.recall - Recall memory."});
-  REQUIRE(rendered->deferred_text == "memory.recall - Recall memory.");
+  REQUIRE(rendered->active_blocks[0].starts_with("Tool: FileRead\n"));
+  REQUIRE(rendered->active_blocks[1].starts_with("Tool: FileWrite\n"));
+  REQUIRE(rendered->active_text.find("Tool: FileRead") < rendered->active_text.find("Tool: FileWrite"));
+  REQUIRE_FALSE(rendered->active_text.contains("MemoryRecall"));
+  REQUIRE(rendered->deferred_entries == std::vector<std::string>{"MemoryRecall - Recall memory."});
+  REQUIRE(rendered->deferred_text == "MemoryRecall - Recall memory.");
 }
 
 TEST_CASE("CatalogRenderer cache key includes renderer version and rendered ToolDef fields", "[unit][tool][catalog]") {
-  auto def = core::ToolDef::with_no_input("alpha.tool", "Alpha.");
+  auto def = core::ToolDef::with_no_input("AlphaTool", "Alpha.");
   def.required_capabilities = {core::Capability::read_file};
   def.category = "alpha";
 
@@ -373,7 +373,7 @@ TEST_CASE("CatalogRenderer cache key includes renderer version and rendered Tool
 }
 
 TEST_CASE("CatalogRenderer can disable memoisation without unbounded state", "[unit][tool][catalog]") {
-  auto def = core::ToolDef::with_no_input("alpha.tool", "Alpha.");
+  auto def = core::ToolDef::with_no_input("AlphaTool", "Alpha.");
   tool::CatalogRenderer renderer{tool::ToolCatalogRenderOptions{.renderer_version = 1, .max_cached_blocks = 0}};
 
   REQUIRE(renderer.render_tool_block(def).has_value());
@@ -517,7 +517,7 @@ TEST_CASE("Registry::dispatch honors a capability scope on the firing rule", "[u
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     core::ToolDef def{
-        .name = "needs.read",
+        .name = "NeedsRead",
         .description = "tool needing read_file",
         .input_schema_json = "{}",
         .required_capabilities = {core::Capability::read_file},
@@ -530,24 +530,24 @@ TEST_CASE("Registry::dispatch honors a capability scope on the firing rule", "[u
     // `Mode::strict` the call falls through to the mode default (deny).
     auto wrong_cap = single_rule(permission::Rule{
         .verdict = permission::Verdict::allow,
-        .tool_pattern = "needs.*",
+        .tool_pattern = "Needs*",
         .capability = core::Capability::write_file,
     });
     permission::RecordingAuditSink sink_wrong;
     auto ctx_wrong = make_ctx(io, wrong_cap, sink_wrong, permission::Mode::strict);
-    auto wrong = co_await registry.dispatch("needs.read", "{}", ctx_wrong);
+    auto wrong = co_await registry.dispatch("NeedsRead", "{}", ctx_wrong);
     REQUIRE_FALSE(wrong.has_value());
     REQUIRE(wrong.error().kind() == core::ErrorKind::permission_denied);
 
     // Capability that DOES match — the rule fires and allow flows through.
     auto right_cap = single_rule(permission::Rule{
         .verdict = permission::Verdict::allow,
-        .tool_pattern = "needs.*",
+        .tool_pattern = "Needs*",
         .capability = core::Capability::read_file,
     });
     permission::RecordingAuditSink sink_right;
     auto ctx_right = make_ctx(io, right_cap, sink_right, permission::Mode::strict);
-    auto right = co_await registry.dispatch("needs.read", "{}", ctx_right);
+    auto right = co_await registry.dispatch("NeedsRead", "{}", ctx_right);
     REQUIRE(right.has_value());
   });
 }
@@ -698,7 +698,7 @@ TEST_CASE("register_builtins seeds the file tool catalog", "[unit][tool][builtin
   REQUIRE(catalog[11].name == tool::kMemoryForgetName);
 }
 
-TEST_CASE("tool.search returns structured tool metadata by exact name", "[unit][tool][tool_search]") {
+TEST_CASE("ToolSearch returns structured tool metadata by exact name", "[unit][tool][tool_search]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_file_read(registry).has_value());
@@ -711,18 +711,18 @@ TEST_CASE("tool.search returns structured tool metadata by exact name", "[unit][
     permission::RecordingAuditSink sink;
     auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
 
-    auto result = co_await registry.dispatch(tool::kToolSearchName, R"({"name":"file.read"})", ctx);
+    auto result = co_await registry.dispatch(tool::kToolSearchName, R"({"name":"FileRead"})", ctx);
     REQUIRE(result.has_value());
-    REQUIRE(result->text.starts_with("tool.search: 1 match"));
-    REQUIRE(result->text.contains("file.read"));
+    REQUIRE(result->text.starts_with("ToolSearch: 1 match"));
+    REQUIRE(result->text.contains("FileRead"));
     REQUIRE(result->data_json.has_value());
     const auto data = nlohmann::json::parse(*result->data_json);
     REQUIRE(data["kind"] == "tool_search");
-    REQUIRE(data["query"]["name"] == "file.read");
+    REQUIRE(data["query"]["name"] == "FileRead");
     REQUIRE(data["match_count"] == 1);
     REQUIRE(data["matches"].size() == 1);
     const auto& match = data["matches"][0];
-    REQUIRE(match["name"] == "file.read");
+    REQUIRE(match["name"] == "FileRead");
     REQUIRE(match["category"] == "file");
     REQUIRE(match["deferred"] == false);
     REQUIRE(match["description"].get<std::string>().contains("Read"));
@@ -733,13 +733,12 @@ TEST_CASE("tool.search returns structured tool metadata by exact name", "[unit][
   });
 }
 
-TEST_CASE("tool.search filters late-registered deferred tools by category and capability",
-          "[unit][tool][tool_search]") {
+TEST_CASE("ToolSearch filters late-registered deferred tools by category and capability", "[unit][tool][tool_search]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_tool_search(registry).has_value());
 
-    auto memory = core::ToolDef::with_no_input("memory.recall", "Recall long-term memory.");
+    auto memory = core::ToolDef::with_no_input("MemoryRecall", "Recall long-term memory.");
     memory.required_capabilities = {core::Capability::read_memory};
     memory.deferred = true;
     memory.category = "memory";
@@ -755,19 +754,19 @@ TEST_CASE("tool.search filters late-registered deferred tools by category and ca
     auto result =
         co_await registry.dispatch(tool::kToolSearchName, R"({"category":"memory","capability":"read_memory"})", ctx);
     REQUIRE(result.has_value());
-    REQUIRE(result->text.contains("memory.recall [memory] [deferred]"));
+    REQUIRE(result->text.contains("MemoryRecall [memory] [deferred]"));
     REQUIRE(result->data_json.has_value());
     const auto data = nlohmann::json::parse(*result->data_json);
     REQUIRE(data["query"]["category"] == "memory");
     REQUIRE(data["query"]["capability"] == "read_memory");
     REQUIRE(data["match_count"] == 1);
-    REQUIRE(data["matches"][0]["name"] == "memory.recall");
+    REQUIRE(data["matches"][0]["name"] == "MemoryRecall");
     REQUIRE(data["matches"][0]["deferred"] == true);
     REQUIRE(data["matches"][0]["required_capabilities"] == nlohmann::json::array({"read_memory"}));
   });
 }
 
-TEST_CASE("tool.search reads the dispatching registry after Registry move", "[unit][tool][tool_search]") {
+TEST_CASE("ToolSearch reads the dispatching registry after Registry move", "[unit][tool][tool_search]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry original;
     REQUIRE(tool::register_tool_search(original).has_value());
@@ -782,16 +781,16 @@ TEST_CASE("tool.search reads the dispatching registry after Registry move", "[un
     permission::RecordingAuditSink sink;
     auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
 
-    auto result = co_await registry.dispatch(tool::kToolSearchName, R"({"name":"file.read"})", ctx);
+    auto result = co_await registry.dispatch(tool::kToolSearchName, R"({"name":"FileRead"})", ctx);
     REQUIRE(result.has_value());
     REQUIRE(result->data_json.has_value());
     const auto data = nlohmann::json::parse(*result->data_json);
     REQUIRE(data["match_count"] == 1);
-    REQUIRE(data["matches"][0]["name"] == "file.read");
+    REQUIRE(data["matches"][0]["name"] == "FileRead");
   });
 }
 
-TEST_CASE("tool.search rejects malformed selectors as invalid_argument", "[unit][tool][tool_search]") {
+TEST_CASE("ToolSearch rejects malformed selectors as invalid_argument", "[unit][tool][tool_search]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_tool_search(registry).has_value());
@@ -829,7 +828,7 @@ TEST_CASE("tool.search rejects malformed selectors as invalid_argument", "[unit]
   });
 }
 
-TEST_CASE("skill.invoke delegates parsed name and inputs through DispatchContext", "[unit][tool][skill_invoke]") {
+TEST_CASE("SkillInvoke delegates parsed name and inputs through DispatchContext", "[unit][tool][skill_invoke]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_skill_invoke(registry).has_value());
@@ -864,7 +863,7 @@ TEST_CASE("skill.invoke delegates parsed name and inputs through DispatchContext
   });
 }
 
-TEST_CASE("skill.invoke reports missing runtime service as a model-repairable error", "[unit][tool][skill_invoke]") {
+TEST_CASE("SkillInvoke reports missing runtime service as a model-repairable error", "[unit][tool][skill_invoke]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_skill_invoke(registry).has_value());
@@ -887,7 +886,7 @@ TEST_CASE("skill.invoke reports missing runtime service as a model-repairable er
   });
 }
 
-TEST_CASE("skill.deactivate delegates the parsed name through DispatchContext", "[unit][tool][skill_deactivate]") {
+TEST_CASE("SkillDeactivate delegates the parsed name through DispatchContext", "[unit][tool][skill_deactivate]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_skill_deactivate(registry).has_value());
@@ -915,7 +914,7 @@ TEST_CASE("skill.deactivate delegates the parsed name through DispatchContext", 
   });
 }
 
-TEST_CASE("skill.deactivate reports missing runtime service as a model-repairable error",
+TEST_CASE("SkillDeactivate reports missing runtime service as a model-repairable error",
           "[unit][tool][skill_deactivate]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
@@ -939,7 +938,7 @@ TEST_CASE("skill.deactivate reports missing runtime service as a model-repairabl
   });
 }
 
-TEST_CASE("memory.recall delegates parsed query through DispatchContext", "[unit][tool][memory_recall]") {
+TEST_CASE("MemoryRecall delegates parsed query through DispatchContext", "[unit][tool][memory_recall]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_memory_recall(registry).has_value());
@@ -956,7 +955,7 @@ TEST_CASE("memory.recall delegates parsed query through DispatchContext", "[unit
                                 tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
       seen = std::move(request);
       co_return tool::Output{
-          .text = "memory.recall: delegated",
+          .text = "MemoryRecall: delegated",
           .data_json = R"({"kind":"memory_recall","match_count":1,"records":[]})",
           .usage = tool::ToolUsage{.match_count = 1},
       };
@@ -967,7 +966,7 @@ TEST_CASE("memory.recall delegates parsed query through DispatchContext", "[unit
                                              ctx);
 
     REQUIRE(result.has_value());
-    REQUIRE(result->text == "memory.recall: delegated");
+    REQUIRE(result->text == "MemoryRecall: delegated");
     REQUIRE(result->data_json.has_value());
     REQUIRE(result->usage.match_count.has_value());
     REQUIRE(*result->usage.match_count == 1);
@@ -979,7 +978,7 @@ TEST_CASE("memory.recall delegates parsed query through DispatchContext", "[unit
   });
 }
 
-TEST_CASE("memory.recall reports missing runtime service as a model-repairable error", "[unit][tool][memory_recall]") {
+TEST_CASE("MemoryRecall reports missing runtime service as a model-repairable error", "[unit][tool][memory_recall]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_memory_recall(registry).has_value());
@@ -1002,7 +1001,7 @@ TEST_CASE("memory.recall reports missing runtime service as a model-repairable e
   });
 }
 
-TEST_CASE("memory.remember delegates parsed record fields through DispatchContext", "[unit][tool][memory_remember]") {
+TEST_CASE("MemoryRemember delegates parsed record fields through DispatchContext", "[unit][tool][memory_remember]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_memory_remember(registry).has_value());
@@ -1019,7 +1018,7 @@ TEST_CASE("memory.remember delegates parsed record fields through DispatchContex
                                   tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
       seen = std::move(request);
       co_return tool::Output{
-          .text = "memory.remember: delegated",
+          .text = "MemoryRemember: delegated",
           .data_json = R"({"kind":"memory_remember","record":{"id":"rec-1"}})",
           .usage = tool::ToolUsage{.bytes_written = 42},
       };
@@ -1031,7 +1030,7 @@ TEST_CASE("memory.remember delegates parsed record fields through DispatchContex
         ctx);
 
     REQUIRE(result.has_value());
-    REQUIRE(result->text == "memory.remember: delegated");
+    REQUIRE(result->text == "MemoryRemember: delegated");
     REQUIRE(result->data_json.has_value());
     REQUIRE(result->usage.bytes_written.has_value());
     REQUIRE(*result->usage.bytes_written == 42);
@@ -1048,7 +1047,7 @@ TEST_CASE("memory.remember delegates parsed record fields through DispatchContex
   });
 }
 
-TEST_CASE("memory.remember reports missing runtime service as a model-repairable error",
+TEST_CASE("MemoryRemember reports missing runtime service as a model-repairable error",
           "[unit][tool][memory_remember]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
@@ -1076,7 +1075,7 @@ TEST_CASE("memory.remember reports missing runtime service as a model-repairable
   });
 }
 
-TEST_CASE("memory.remember rejects malformed input as invalid_argument", "[unit][tool][memory_remember]") {
+TEST_CASE("MemoryRemember rejects malformed input as invalid_argument", "[unit][tool][memory_remember]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_memory_remember(registry).has_value());
@@ -1110,7 +1109,7 @@ TEST_CASE("memory.remember rejects malformed input as invalid_argument", "[unit]
   });
 }
 
-TEST_CASE("memory.forget delegates parsed id through DispatchContext", "[unit][tool][memory_forget]") {
+TEST_CASE("MemoryForget delegates parsed id through DispatchContext", "[unit][tool][memory_forget]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_memory_forget(registry).has_value());
@@ -1127,7 +1126,7 @@ TEST_CASE("memory.forget delegates parsed id through DispatchContext", "[unit][t
                                 tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
       seen = std::move(request);
       co_return tool::Output{
-          .text = "memory.forget: delegated",
+          .text = "MemoryForget: delegated",
           .data_json = R"({"kind":"memory_forget","record":{"id":"rec-1"}})",
           .usage = tool::ToolUsage{.bytes_written = 0},
       };
@@ -1136,7 +1135,7 @@ TEST_CASE("memory.forget delegates parsed id through DispatchContext", "[unit][t
     auto result = co_await registry.dispatch(tool::kMemoryForgetName, R"({"id":"rec-1"})", ctx);
 
     REQUIRE(result.has_value());
-    REQUIRE(result->text == "memory.forget: delegated");
+    REQUIRE(result->text == "MemoryForget: delegated");
     REQUIRE(result->data_json.has_value());
     REQUIRE(result->usage.bytes_written.has_value());
     REQUIRE(*result->usage.bytes_written == 0);
@@ -1146,7 +1145,7 @@ TEST_CASE("memory.forget delegates parsed id through DispatchContext", "[unit][t
   });
 }
 
-TEST_CASE("memory.forget reports missing runtime service as a model-repairable error", "[unit][tool][memory_forget]") {
+TEST_CASE("MemoryForget reports missing runtime service as a model-repairable error", "[unit][tool][memory_forget]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_memory_forget(registry).has_value());
@@ -1170,7 +1169,7 @@ TEST_CASE("memory.forget reports missing runtime service as a model-repairable e
   });
 }
 
-TEST_CASE("memory.forget rejects malformed input as invalid_argument", "[unit][tool][memory_forget]") {
+TEST_CASE("MemoryForget rejects malformed input as invalid_argument", "[unit][tool][memory_forget]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_memory_forget(registry).has_value());
@@ -1200,7 +1199,7 @@ TEST_CASE("memory.forget rejects malformed input as invalid_argument", "[unit][t
   });
 }
 
-TEST_CASE("file.read returns text fallback and structured metadata", "[unit][tool][file_read]") {
+TEST_CASE("FileRead returns text fallback and structured metadata", "[unit][tool][file_read]") {
   TempFile file{"happy"};
   file.write("hello, slice 17");
 
@@ -1250,7 +1249,7 @@ TEST_CASE("file.read returns text fallback and structured metadata", "[unit][too
   });
 }
 
-TEST_CASE("file.read rejects malformed input as invalid_argument", "[unit][tool][file_read]") {
+TEST_CASE("FileRead rejects malformed input as invalid_argument", "[unit][tool][file_read]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_file_read(registry).has_value());
@@ -1283,7 +1282,7 @@ TEST_CASE("file.read rejects malformed input as invalid_argument", "[unit][tool]
   });
 }
 
-TEST_CASE("file.read returns not_found when the path does not exist", "[unit][tool][file_read]") {
+TEST_CASE("FileRead returns not_found when the path does not exist", "[unit][tool][file_read]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_file_read(registry).has_value());
@@ -1322,7 +1321,7 @@ namespace {
 
 }  // namespace
 
-TEST_CASE("file.read line range returns only the requested span", "[unit][tool][file_read][range]") {
+TEST_CASE("FileRead line range returns only the requested span", "[unit][tool][file_read][range]") {
   TempFile file{"line-range"};
   file.write("alpha\nbeta\ngamma\ndelta\nepsilon\n");
 
@@ -1356,7 +1355,7 @@ TEST_CASE("file.read line range returns only the requested span", "[unit][tool][
   });
 }
 
-TEST_CASE("file.read byte range returns the requested byte span", "[unit][tool][file_read][range]") {
+TEST_CASE("FileRead byte range returns the requested byte span", "[unit][tool][file_read][range]") {
   TempFile file{"byte-range"};
   file.write("0123456789ABCDEF");
 
@@ -1389,7 +1388,7 @@ TEST_CASE("file.read byte range returns the requested byte span", "[unit][tool][
   });
 }
 
-TEST_CASE("file.read max_bytes reports truncation in data_json and usage", "[unit][tool][file_read][range]") {
+TEST_CASE("FileRead max_bytes reports truncation in data_json and usage", "[unit][tool][file_read][range]") {
   TempFile file{"read-max-bytes"};
   file.write("0123456789");
 
@@ -1423,7 +1422,7 @@ TEST_CASE("file.read max_bytes reports truncation in data_json and usage", "[uni
   });
 }
 
-TEST_CASE("file.read rejects mixing line and byte range", "[unit][tool][file_read][range]") {
+TEST_CASE("FileRead rejects mixing line and byte range", "[unit][tool][file_read][range]") {
   TempFile file{"mixed-range"};
   file.write("contents");
 
@@ -1446,8 +1445,7 @@ TEST_CASE("file.read rejects mixing line and byte range", "[unit][tool][file_rea
   });
 }
 
-TEST_CASE("file.read if_version short-circuits unchanged files as not_modified",
-          "[unit][tool][file_read][if_version]") {
+TEST_CASE("FileRead if_version short-circuits unchanged files as not_modified", "[unit][tool][file_read][if_version]") {
   TempFile file{"if-version"};
   file.write("payload");
 
@@ -1488,7 +1486,7 @@ TEST_CASE("file.read if_version short-circuits unchanged files as not_modified",
   });
 }
 
-TEST_CASE("file.read version token changes when the file is rewritten", "[unit][tool][file_read][if_version]") {
+TEST_CASE("FileRead version token changes when the file is rewritten", "[unit][tool][file_read][if_version]") {
   TempFile file{"if-version-changes"};
   file.write("first");
 
@@ -1552,7 +1550,7 @@ permission::RuleSet write_rule_set() {
 
 }  // namespace
 
-TEST_CASE("file.write happy path writes the bytes verbatim and reports the size", "[unit][tool][file_write]") {
+TEST_CASE("FileWrite happy path writes the bytes verbatim and reports the size", "[unit][tool][file_write]") {
   TempFile file{"happy-write"};
 
   test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
@@ -1580,7 +1578,7 @@ TEST_CASE("file.write happy path writes the bytes verbatim and reports the size"
   REQUIRE(slurp(file.string()) == "hello, slice 18");
 }
 
-TEST_CASE("file.write default mode overwrites an existing file", "[unit][tool][file_write]") {
+TEST_CASE("FileWrite default mode overwrites an existing file", "[unit][tool][file_write]") {
   TempFile file{"overwrite"};
   file.write("original");
 
@@ -1599,7 +1597,7 @@ TEST_CASE("file.write default mode overwrites an existing file", "[unit][tool][f
   REQUIRE(slurp(file.string()) == "replaced");
 }
 
-TEST_CASE("file.write mode=append appends to existing content", "[unit][tool][file_write]") {
+TEST_CASE("FileWrite mode=append appends to existing content", "[unit][tool][file_write]") {
   TempFile file{"append"};
   file.write("head");
 
@@ -1618,7 +1616,7 @@ TEST_CASE("file.write mode=append appends to existing content", "[unit][tool][fi
   REQUIRE(slurp(file.string()) == "head-tail");
 }
 
-TEST_CASE("file.write mode=fail_if_exists returns conflict when the path already exists", "[unit][tool][file_write]") {
+TEST_CASE("FileWrite mode=fail_if_exists returns conflict when the path already exists", "[unit][tool][file_write]") {
   TempFile file{"exists"};
   file.write("present");
 
@@ -1638,7 +1636,7 @@ TEST_CASE("file.write mode=fail_if_exists returns conflict when the path already
   REQUIRE(slurp(file.string()) == "present");
 }
 
-TEST_CASE("file.write create_parents=true creates missing directories", "[unit][tool][file_write]") {
+TEST_CASE("FileWrite create_parents=true creates missing directories", "[unit][tool][file_write]") {
   const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
   const auto base = std::filesystem::temp_directory_path() / ("oran-tool-create-parents-" + stamp);
   const auto target = base / "nested" / "deeper" / "out.txt";
@@ -1662,8 +1660,7 @@ TEST_CASE("file.write create_parents=true creates missing directories", "[unit][
   std::filesystem::remove_all(base, ec);
 }
 
-TEST_CASE("file.write enforces max_bytes and leaves existing content untouched",
-          "[unit][tool][file_write][max_bytes]") {
+TEST_CASE("FileWrite enforces max_bytes and leaves existing content untouched", "[unit][tool][file_write][max_bytes]") {
   TempFile file{"write-max-bytes"};
   file.write("original");
 
@@ -1692,7 +1689,7 @@ TEST_CASE("file.write enforces max_bytes and leaves existing content untouched",
   REQUIRE(slurp(file.string()) == "1234");
 }
 
-TEST_CASE("file.write rejects malformed input as invalid_argument", "[unit][tool][file_write]") {
+TEST_CASE("FileWrite rejects malformed input as invalid_argument", "[unit][tool][file_write]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_file_write(registry).has_value());
@@ -1801,7 +1798,7 @@ dispatch_read_and_extract_token(tool::Registry& registry, tool::DispatchContext&
 
 }  // namespace
 
-TEST_CASE("file.write expected_version succeeds when the token matches", "[unit][tool][file_write][if_version]") {
+TEST_CASE("FileWrite expected_version succeeds when the token matches", "[unit][tool][file_write][if_version]") {
   TempFile file{"write-expected-ok"};
   file.write("seed");
 
@@ -1822,7 +1819,7 @@ TEST_CASE("file.write expected_version succeeds when the token matches", "[unit]
   });
 }
 
-TEST_CASE("file.write expected_version returns conflict when the token is stale",
+TEST_CASE("FileWrite expected_version returns conflict when the token is stale",
           "[unit][tool][file_write][if_version]") {
   TempFile file{"write-expected-stale"};
   file.write("seed");
@@ -1853,7 +1850,7 @@ TEST_CASE("file.write expected_version returns conflict when the token is stale"
   });
 }
 
-TEST_CASE("file.write expected_version on a missing file surfaces conflict", "[unit][tool][file_write][if_version]") {
+TEST_CASE("FileWrite expected_version on a missing file surfaces conflict", "[unit][tool][file_write][if_version]") {
   TempFile file{"write-expected-missing"};  // deliberately not created
   test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
@@ -1899,7 +1896,7 @@ permission::RuleSet edit_rule_set() {
 
 }  // namespace
 
-TEST_CASE("file.edit happy path replaces a unique occurrence and reports a count", "[unit][tool][file_edit]") {
+TEST_CASE("FileEdit happy path replaces a unique occurrence and reports a count", "[unit][tool][file_edit]") {
   TempFile file{"edit-unique"};
   file.write("alpha beta gamma");
 
@@ -1932,7 +1929,7 @@ TEST_CASE("file.edit happy path replaces a unique occurrence and reports a count
   REQUIRE(slurp(file.string()) == "alpha BETA gamma");
 }
 
-TEST_CASE("file.edit replace_all=true rewrites every occurrence", "[unit][tool][file_edit]") {
+TEST_CASE("FileEdit replace_all=true rewrites every occurrence", "[unit][tool][file_edit]") {
   TempFile file{"edit-replace-all"};
   file.write("foo bar foo baz foo");
 
@@ -1961,7 +1958,7 @@ TEST_CASE("file.edit replace_all=true rewrites every occurrence", "[unit][tool][
   REQUIRE(slurp(file.string()) == "qux bar qux baz qux");
 }
 
-TEST_CASE("file.edit returns conflict when old_string is not unique and replace_all is false",
+TEST_CASE("FileEdit returns conflict when old_string is not unique and replace_all is false",
           "[unit][tool][file_edit]") {
   TempFile file{"edit-ambiguous"};
   file.write("dup dup dup");
@@ -1984,7 +1981,7 @@ TEST_CASE("file.edit returns conflict when old_string is not unique and replace_
   REQUIRE(slurp(file.string()) == "dup dup dup");
 }
 
-TEST_CASE("file.edit returns not_found when old_string does not appear", "[unit][tool][file_edit]") {
+TEST_CASE("FileEdit returns not_found when old_string does not appear", "[unit][tool][file_edit]") {
   TempFile file{"edit-missing-substring"};
   file.write("hello world");
 
@@ -2004,7 +2001,7 @@ TEST_CASE("file.edit returns not_found when old_string does not appear", "[unit]
   REQUIRE(slurp(file.string()) == "hello world");
 }
 
-TEST_CASE("file.edit enforces max_bytes on replacement output and leaves the file untouched",
+TEST_CASE("FileEdit enforces max_bytes on replacement output and leaves the file untouched",
           "[unit][tool][file_edit][max_bytes]") {
   TempFile file{"edit-max-bytes"};
   file.write("a b c");
@@ -2034,7 +2031,7 @@ TEST_CASE("file.edit enforces max_bytes on replacement output and leaves the fil
   REQUIRE(slurp(file.string()) == "a b c");
 }
 
-TEST_CASE("file.edit propagates not_found when the file is missing", "[unit][tool][file_edit]") {
+TEST_CASE("FileEdit propagates not_found when the file is missing", "[unit][tool][file_edit]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_file_edit(registry).has_value());
@@ -2051,7 +2048,7 @@ TEST_CASE("file.edit propagates not_found when the file is missing", "[unit][too
   });
 }
 
-TEST_CASE("file.edit expected_version succeeds when the token matches", "[unit][tool][file_edit][if_version]") {
+TEST_CASE("FileEdit expected_version succeeds when the token matches", "[unit][tool][file_edit][if_version]") {
   TempFile file{"edit-expected-ok"};
   file.write("alpha-beta-gamma");
 
@@ -2073,8 +2070,7 @@ TEST_CASE("file.edit expected_version succeeds when the token matches", "[unit][
   });
 }
 
-TEST_CASE("file.edit expected_version returns conflict when the token is stale",
-          "[unit][tool][file_edit][if_version]") {
+TEST_CASE("FileEdit expected_version returns conflict when the token is stale", "[unit][tool][file_edit][if_version]") {
   TempFile file{"edit-expected-stale"};
   file.write("alpha-beta-gamma");
 
@@ -2103,7 +2099,7 @@ TEST_CASE("file.edit expected_version returns conflict when the token is stale",
   });
 }
 
-TEST_CASE("file.edit rejects malformed input as invalid_argument", "[unit][tool][file_edit]") {
+TEST_CASE("FileEdit rejects malformed input as invalid_argument", "[unit][tool][file_edit]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_file_edit(registry).has_value());
@@ -2235,7 +2231,7 @@ TEST_CASE("register_file_search advertises a `read_file` capability and a path/p
   REQUIRE(def->input_schema_json.contains("\"include_hidden\""));
 }
 
-TEST_CASE("file.search happy path on a single file reports path:line:text", "[unit][tool][file_search]") {
+TEST_CASE("FileSearch happy path on a single file reports path:line:text", "[unit][tool][file_search]") {
   TempFile file{"search-single"};
   file.write("alpha\nNEEDLE here\ngamma\n");
 
@@ -2255,7 +2251,7 @@ TEST_CASE("file.search happy path on a single file reports path:line:text", "[un
   });
 }
 
-TEST_CASE("file.search walks a directory recursively and reports each match", "[unit][tool][file_search]") {
+TEST_CASE("FileSearch walks a directory recursively and reports each match", "[unit][tool][file_search]") {
   TempDir dir{"recursive"};
   dir.write_file("a.txt", "TARGET on line one\n");
   dir.write_file("sub/b.txt", "filler\nTARGET on line two\n");
@@ -2278,7 +2274,7 @@ TEST_CASE("file.search walks a directory recursively and reports each match", "[
   });
 }
 
-TEST_CASE("file.search caps results at max_matches and reports truncation", "[unit][tool][file_search]") {
+TEST_CASE("FileSearch caps results at max_matches and reports truncation", "[unit][tool][file_search]") {
   TempDir dir{"truncate"};
   dir.write_file("a.txt", "X\nX\nX\nX\nX\n");
 
@@ -2299,14 +2295,14 @@ TEST_CASE("file.search caps results at max_matches and reports truncation", "[un
   });
 }
 
-// Slice 47 — `file.search` output byte cap closes spec 0011 v1.1's "Output cap
-// on `file.search`" item. A tight `max_output_bytes` cap fires *before* the
+// Slice 47 — `FileSearch` output byte cap closes spec 0011 v1.1's "Output cap
+// on `FileSearch`" item. A tight `max_output_bytes` cap fires *before* the
 // match cap and rendering surfaces a distinct trailing line. A generous cap
 // is invisible — proves the default-shape callsite is unchanged. The
 // match-cap-vs-byte-cap tie test pins the documented precedence: when both
 // caps could have fired, the match-cap message wins.
 
-TEST_CASE("file.search caps rendered output at max_output_bytes", "[unit][tool][file_search][max_output_bytes]") {
+TEST_CASE("FileSearch caps rendered output at max_output_bytes", "[unit][tool][file_search][max_output_bytes]") {
   TempFile file{"search-bytecap"};
   // Five matching lines, each rendered as `<path>:<line>:NEEDLE`. With a tight
   // byte cap below the second match's cumulative cost, only the first is kept
@@ -2335,7 +2331,7 @@ TEST_CASE("file.search caps rendered output at max_output_bytes", "[unit][tool][
   });
 }
 
-TEST_CASE("file.search default max_output_bytes leaves small responses untouched",
+TEST_CASE("FileSearch default max_output_bytes leaves small responses untouched",
           "[unit][tool][file_search][max_output_bytes]") {
   TempFile file{"search-bytecap-default"};
   file.write("alpha NEEDLE\nbeta NEEDLE\ngamma NEEDLE\n");
@@ -2357,7 +2353,7 @@ TEST_CASE("file.search default max_output_bytes leaves small responses untouched
   });
 }
 
-TEST_CASE("file.search match-cap wins when both caps could fire", "[unit][tool][file_search][max_output_bytes]") {
+TEST_CASE("FileSearch match-cap wins when both caps could fire", "[unit][tool][file_search][max_output_bytes]") {
   TempFile file{"search-bytecap-tie"};
   file.write("X\nX\nX\nX\nX\n");
 
@@ -2380,13 +2376,13 @@ TEST_CASE("file.search match-cap wins when both caps could fire", "[unit][tool][
   });
 }
 
-// Slice 48 — `file.search` built-in ignore predicate. Hard-coded skip list
+// Slice 48 — `FileSearch` built-in ignore predicate. Hard-coded skip list
 // (`.git`, `.xmake`, `.orangutan`, `build`, `node_modules`) fires regardless
 // of `include_hidden` so an opt-in to scan hidden files still doesn't unleash
 // a full descent through `.git/`. Disabled by `respect_ignore=false` for
 // forensic searches.
 
-TEST_CASE("file.search built-in ignore predicate skips build and node_modules by default",
+TEST_CASE("FileSearch built-in ignore predicate skips build and node_modules by default",
           "[unit][tool][file_search][respect_ignore]") {
   TempDir dir{"respect-ignore-default"};
   dir.write_file("src/a.txt", "NEEDLE in src\n");
@@ -2409,7 +2405,7 @@ TEST_CASE("file.search built-in ignore predicate skips build and node_modules by
   });
 }
 
-TEST_CASE("file.search respect_ignore=false re-enables build and node_modules walks",
+TEST_CASE("FileSearch respect_ignore=false re-enables build and node_modules walks",
           "[unit][tool][file_search][respect_ignore]") {
   TempDir dir{"respect-ignore-off"};
   dir.write_file("src/a.txt", "NEEDLE in src\n");
@@ -2432,7 +2428,7 @@ TEST_CASE("file.search respect_ignore=false re-enables build and node_modules wa
   });
 }
 
-TEST_CASE("file.search ignore predicate still skips .git even with include_hidden=true",
+TEST_CASE("FileSearch ignore predicate still skips .git even with include_hidden=true",
           "[unit][tool][file_search][respect_ignore]") {
   TempDir dir{"respect-ignore-vs-hidden"};
   dir.write_file("src/a.txt", "NEEDLE in src\n");
@@ -2464,7 +2460,7 @@ TEST_CASE("file.search ignore predicate still skips .git even with include_hidde
 // relative patterns, trailing-slash directory rules, escaped leading
 // markers, and `!` negation.
 
-TEST_CASE("file.search honors .gitignore basename, directory, relative path, and negation rules",
+TEST_CASE("FileSearch honors .gitignore basename, directory, relative path, and negation rules",
           "[unit][tool][file_search][respect_ignore]") {
   TempDir dir{"gitignore-root"};
   dir.write_file(".gitignore", "*.log\nignored/\ndocs/secret.txt\n!keep.log\n");
@@ -2494,7 +2490,7 @@ TEST_CASE("file.search honors .gitignore basename, directory, relative path, and
   });
 }
 
-TEST_CASE("file.search treats escaped ignore markers as literal leading characters",
+TEST_CASE("FileSearch treats escaped ignore markers as literal leading characters",
           "[unit][tool][file_search][respect_ignore]") {
   TempDir dir{"ignore-escaped-markers"};
   dir.write_file(".gitignore", "\\!literal.txt\n\\#literal.txt\n");
@@ -2518,7 +2514,7 @@ TEST_CASE("file.search treats escaped ignore markers as literal leading characte
   });
 }
 
-TEST_CASE("file.search loads nested .ignore rules for descendants only", "[unit][tool][file_search][respect_ignore]") {
+TEST_CASE("FileSearch loads nested .ignore rules for descendants only", "[unit][tool][file_search][respect_ignore]") {
   TempDir dir{"nested-ignore"};
   dir.write_file("local.txt", "NEEDLE at root\n");
   dir.write_file("src/.ignore", "local.txt\n");
@@ -2541,7 +2537,7 @@ TEST_CASE("file.search loads nested .ignore rules for descendants only", "[unit]
   });
 }
 
-TEST_CASE("file.search respect_ignore=false ignores .gitignore and .ignore rules",
+TEST_CASE("FileSearch respect_ignore=false ignores .gitignore and .ignore rules",
           "[unit][tool][file_search][respect_ignore]") {
   TempDir dir{"ignore-file-off"};
   dir.write_file(".gitignore", "*.log\n");
@@ -2564,7 +2560,7 @@ TEST_CASE("file.search respect_ignore=false ignores .gitignore and .ignore rules
   });
 }
 
-TEST_CASE("file.search skips binary files (NUL bytes in the first 8 KiB)", "[unit][tool][file_search]") {
+TEST_CASE("FileSearch skips binary files (NUL bytes in the first 8 KiB)", "[unit][tool][file_search]") {
   TempDir dir{"binary"};
   std::string binary_content;
   binary_content.append("\0\0\0NEEDLE", 9U);
@@ -2587,7 +2583,7 @@ TEST_CASE("file.search skips binary files (NUL bytes in the first 8 KiB)", "[uni
   });
 }
 
-TEST_CASE("file.search default include_hidden=false skips dot-prefixed files and directories",
+TEST_CASE("FileSearch default include_hidden=false skips dot-prefixed files and directories",
           "[unit][tool][file_search]") {
   TempDir dir{"hidden"};
   dir.write_file("visible.txt", "needle here\n");
@@ -2617,7 +2613,7 @@ TEST_CASE("file.search default include_hidden=false skips dot-prefixed files and
   });
 }
 
-TEST_CASE("file.search reports 'no matches' (non-error) when nothing matches", "[unit][tool][file_search]") {
+TEST_CASE("FileSearch reports 'no matches' (non-error) when nothing matches", "[unit][tool][file_search]") {
   TempFile file{"search-nomatch"};
   file.write("alpha\nbeta\n");
 
@@ -2637,7 +2633,7 @@ TEST_CASE("file.search reports 'no matches' (non-error) when nothing matches", "
   });
 }
 
-TEST_CASE("file.search returns not_found when the path does not exist", "[unit][tool][file_search]") {
+TEST_CASE("FileSearch returns not_found when the path does not exist", "[unit][tool][file_search]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_file_search(registry).has_value());
@@ -2654,7 +2650,7 @@ TEST_CASE("file.search returns not_found when the path does not exist", "[unit][
   });
 }
 
-TEST_CASE("file.search rejects malformed input as invalid_argument", "[unit][tool][file_search]") {
+TEST_CASE("FileSearch rejects malformed input as invalid_argument", "[unit][tool][file_search]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_file_search(registry).has_value());
@@ -2735,7 +2731,7 @@ TEST_CASE("file.search rejects malformed input as invalid_argument", "[unit][too
 }
 
 // ---------------------------------------------------------------------------
-// Slice 24 — `file.search` regex opt-in. Closes tech-debt #13. The default
+// Slice 24 — `FileSearch` regex opt-in. Closes tech-debt #13. The default
 // path stays literal substring; `"regex": true` routes the pattern through
 // `permission::InputPattern` (re2 PartialMatch). Tests assert: happy regex
 // on a single file, happy regex on a recursive walk, invalid regex
@@ -2744,7 +2740,7 @@ TEST_CASE("file.search rejects malformed input as invalid_argument", "[unit][too
 // slice-20 literal-substring path verbatim (so legacy callers see no
 // behavior change).
 
-TEST_CASE("file.search regex=true matches a re2 pattern on a single file", "[unit][tool][file_search][regex]") {
+TEST_CASE("FileSearch regex=true matches a re2 pattern on a single file", "[unit][tool][file_search][regex]") {
   TempFile file{"search-regex-single"};
   file.write("error: 42\ninfo: ready\nerror: 7\ndebug: noop\n");
 
@@ -2769,7 +2765,7 @@ TEST_CASE("file.search regex=true matches a re2 pattern on a single file", "[uni
   });
 }
 
-TEST_CASE("file.search regex=true reuses a cached compiled pattern across dispatches",
+TEST_CASE("FileSearch regex=true reuses a cached compiled pattern across dispatches",
           "[unit][tool][file_search][regex]") {
   TempFile first_file{"regex-cache-first"};
   TempFile second_file{"regex-cache-second"};
@@ -2801,7 +2797,7 @@ TEST_CASE("file.search regex=true reuses a cached compiled pattern across dispat
   });
 }
 
-TEST_CASE("file.search regex=true walks a directory and matches each line", "[unit][tool][file_search][regex]") {
+TEST_CASE("FileSearch regex=true walks a directory and matches each line", "[unit][tool][file_search][regex]") {
   TempDir dir{"regex-recursive"};
   dir.write_file("a.txt", "TODO(alice): fix it\nfiller\n");
   dir.write_file("sub/b.txt", "filler\nTODO(bob): later\n");
@@ -2830,7 +2826,7 @@ TEST_CASE("file.search regex=true walks a directory and matches each line", "[un
   });
 }
 
-TEST_CASE("file.search regex=true with invalid pattern returns invalid_argument with regex_error context",
+TEST_CASE("FileSearch regex=true with invalid pattern returns invalid_argument with regex_error context",
           "[unit][tool][file_search][regex]") {
   TempFile file{"regex-bad"};
   file.write("alpha\n");
@@ -2857,7 +2853,7 @@ TEST_CASE("file.search regex=true with invalid pattern returns invalid_argument 
   });
 }
 
-TEST_CASE("file.search regex=true honors max_matches and reports truncation", "[unit][tool][file_search][regex]") {
+TEST_CASE("FileSearch regex=true honors max_matches and reports truncation", "[unit][tool][file_search][regex]") {
   TempFile file{"regex-truncate"};
   file.write("LOG 1\nLOG 2\nLOG 3\nLOG 4\nLOG 5\n");
 
@@ -2879,7 +2875,7 @@ TEST_CASE("file.search regex=true honors max_matches and reports truncation", "[
   });
 }
 
-TEST_CASE("file.search regex=false explicit still treats the pattern as a literal substring",
+TEST_CASE("FileSearch regex=false explicit still treats the pattern as a literal substring",
           "[unit][tool][file_search][regex]") {
   TempFile file{"regex-false"};
   // The literal text `\d+` only appears once; if regex=false silently fell
@@ -2903,7 +2899,7 @@ TEST_CASE("file.search regex=false explicit still treats the pattern as a litera
 }
 
 // ---------------------------------------------------------------------------
-// Slice 33 — file.search cancellation polling inside the synchronous walk.
+// Slice 33 — FileSearch cancellation polling inside the synchronous walk.
 //
 // Before slice 33 the handler only checked cancellation_state before the
 // executor hop and immediately after it; once `walk_and_scan` started it ran
@@ -2916,7 +2912,7 @@ TEST_CASE("file.search regex=false explicit still treats the pattern as a litera
 // during the read; the next chunk-iteration poll surfaces it as
 // `core::ErrorKind::cancelled`. Driven by `orangutan-deep-review.md` §4.1.3.
 
-TEST_CASE("file.search aborts a large-file read when cancellation fires mid-walk",
+TEST_CASE("FileSearch aborts a large-file read when cancellation fires mid-walk",
           "[unit][tool][file_search][cancellation]") {
   const auto root =
       std::filesystem::temp_directory_path() /
@@ -2983,14 +2979,14 @@ TEST_CASE("file.search aborts a large-file read when cancellation fires mid-walk
 }
 
 // ---------------------------------------------------------------------------
-// Slice 63 — `file.search` structured `Output::data_json` + usage counters.
+// Slice 63 — `FileSearch` structured `Output::data_json` + usage counters.
 // Closes the second built-in step of spec 0014's text→structured migration
-// (after slice 62's `file.read`). The text fallback is unchanged: every prior
-// `file.search` case still passes verbatim. These tests pin the new shape so
+// (after slice 62's `FileRead`). The text fallback is unchanged: every prior
+// `FileSearch` case still passes verbatim. These tests pin the new shape so
 // provider adapters, the desktop app, and audit fan-out can consume matches as
 // JSON instead of re-parsing `path:line:text` lines.
 
-TEST_CASE("file.search single-file happy path fills data_json with structured matches",
+TEST_CASE("FileSearch single-file happy path fills data_json with structured matches",
           "[unit][tool][file_search][structured]") {
   TempFile file{"search-structured-single"};
   file.write("alpha\nNEEDLE one\nfiller\nNEEDLE two\n");
@@ -3042,7 +3038,7 @@ TEST_CASE("file.search single-file happy path fills data_json with structured ma
   });
 }
 
-TEST_CASE("file.search recursive walk reports per-walk usage and structured matches",
+TEST_CASE("FileSearch recursive walk reports per-walk usage and structured matches",
           "[unit][tool][file_search][structured]") {
   TempDir dir{"search-structured-walk"};
   // Each file body has a deterministic size: total bytes_read should equal
@@ -3089,7 +3085,7 @@ TEST_CASE("file.search recursive walk reports per-walk usage and structured matc
   });
 }
 
-TEST_CASE("file.search match-cap truncation sets usage.truncated and truncation_reason=matches",
+TEST_CASE("FileSearch match-cap truncation sets usage.truncated and truncation_reason=matches",
           "[unit][tool][file_search][structured]") {
   TempFile file{"search-structured-trunc-matches"};
   file.write("X\nX\nX\nX\nX\n");
@@ -3118,7 +3114,7 @@ TEST_CASE("file.search match-cap truncation sets usage.truncated and truncation_
   });
 }
 
-TEST_CASE("file.search byte-cap truncation sets truncation_reason=bytes", "[unit][tool][file_search][structured]") {
+TEST_CASE("FileSearch byte-cap truncation sets truncation_reason=bytes", "[unit][tool][file_search][structured]") {
   TempFile file{"search-structured-trunc-bytes"};
   file.write("NEEDLE\nNEEDLE\nNEEDLE\n");
 
@@ -3147,7 +3143,7 @@ TEST_CASE("file.search byte-cap truncation sets truncation_reason=bytes", "[unit
   });
 }
 
-TEST_CASE("file.search no-matches still emits an empty structured payload", "[unit][tool][file_search][structured]") {
+TEST_CASE("FileSearch no-matches still emits an empty structured payload", "[unit][tool][file_search][structured]") {
   TempFile file{"search-structured-nomatch"};
   file.write("alpha\nbeta\n");
 
@@ -3179,7 +3175,7 @@ TEST_CASE("file.search no-matches still emits an empty structured payload", "[un
   });
 }
 
-TEST_CASE("file.search regex=true echoes regex flag in data_json", "[unit][tool][file_search][structured]") {
+TEST_CASE("FileSearch regex=true echoes regex flag in data_json", "[unit][tool][file_search][structured]") {
   TempFile file{"search-structured-regex"};
   file.write("error: 42\nok\n");
 
@@ -4429,7 +4425,7 @@ TEST_CASE("dispatch redacts structured output from untrusted tool_after sinks", 
   });
 }
 
-TEST_CASE("dispatch redacts file.write input for non-trusted hook sinks", "[unit][tool][hook][redaction]") {
+TEST_CASE("dispatch redacts FileWrite input for non-trusted hook sinks", "[unit][tool][hook][redaction]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(registry.add(named_noop_tool_def(tool::kFileWriteName), &noop_ok_handler).has_value());
@@ -4468,7 +4464,7 @@ TEST_CASE("dispatch redacts file.write input for non-trusted hook sinks", "[unit
   });
 }
 
-TEST_CASE("dispatch redacts file.edit input for non-trusted hook sinks", "[unit][tool][hook][redaction]") {
+TEST_CASE("dispatch redacts FileEdit input for non-trusted hook sinks", "[unit][tool][hook][redaction]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(registry.add(named_noop_tool_def(tool::kFileEditName), &noop_ok_handler).has_value());
@@ -4509,7 +4505,7 @@ TEST_CASE("dispatch redacts file.edit input for non-trusted hook sinks", "[unit]
   });
 }
 
-TEST_CASE("dispatch redacts file.write input on tool_error for non-trusted hook sinks",
+TEST_CASE("dispatch redacts FileWrite input on tool_error for non-trusted hook sinks",
           "[unit][tool][hook][redaction]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
@@ -4541,7 +4537,7 @@ TEST_CASE("dispatch redacts file.write input on tool_error for non-trusted hook 
   });
 }
 
-TEST_CASE("dispatch redacts file.write input in permission ask payloads for non-trusted hook sinks",
+TEST_CASE("dispatch redacts FileWrite input in permission ask payloads for non-trusted hook sinks",
           "[unit][tool][hook][redaction][approval]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
@@ -5260,7 +5256,7 @@ TEST_CASE("dispatch publishes tool_dispatched + tool_error + tool_after in the r
 }
 
 // ---------------------------------------------------------------------------
-// Slice 29 — `directory.list` built-in. Wraps `oran-io::list_directory` and
+// Slice 29 — `DirectoryList` built-in. Wraps `oran-io::list_directory` and
 // renders each entry as `<path>:<kind>:<size_bytes or '-'>`, sorted by path,
 // with the literal text `no entries` for empty directories. Capability is
 // the new `core::Capability::list_directory`. Tests cover: registration
@@ -5294,7 +5290,7 @@ TEST_CASE("register_directory_list advertises a `list_directory` capability and 
   REQUIRE(def->input_schema_json.contains("\"max_entries\""));
 }
 
-TEST_CASE("directory.list happy path renders one entry per line, sorted by path", "[unit][tool][directory_list]") {
+TEST_CASE("DirectoryList happy path renders one entry per line, sorted by path", "[unit][tool][directory_list]") {
   TempDir dir{"list-happy"};
   dir.write_file("a.txt", "alpha");
   dir.write_file("b.txt", "be");
@@ -5328,7 +5324,7 @@ TEST_CASE("directory.list happy path renders one entry per line, sorted by path"
   });
 }
 
-TEST_CASE("directory.list returns the literal 'no entries' for an empty directory", "[unit][tool][directory_list]") {
+TEST_CASE("DirectoryList returns the literal 'no entries' for an empty directory", "[unit][tool][directory_list]") {
   TempDir dir{"list-empty"};
 
   test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
@@ -5345,7 +5341,7 @@ TEST_CASE("directory.list returns the literal 'no entries' for an empty director
   });
 }
 
-TEST_CASE("directory.list skips dotfiles by default and includes them with include_hidden=true",
+TEST_CASE("DirectoryList skips dotfiles by default and includes them with include_hidden=true",
           "[unit][tool][directory_list]") {
   TempDir dir{"list-hidden"};
   dir.write_file("visible.txt", "v");
@@ -5373,7 +5369,7 @@ TEST_CASE("directory.list skips dotfiles by default and includes them with inclu
   });
 }
 
-TEST_CASE("directory.list returns io when the directory exceeds max_entries", "[unit][tool][directory_list]") {
+TEST_CASE("DirectoryList returns io when the directory exceeds max_entries", "[unit][tool][directory_list]") {
   TempDir dir{"list-overflow"};
   // Three files; ask for a cap of 2 so io::list_directory aborts at the
   // third entry with `io: directory entry limit exceeded`.
@@ -5395,7 +5391,7 @@ TEST_CASE("directory.list returns io when the directory exceeds max_entries", "[
   });
 }
 
-TEST_CASE("directory.list returns not_found when the directory does not exist", "[unit][tool][directory_list]") {
+TEST_CASE("DirectoryList returns not_found when the directory does not exist", "[unit][tool][directory_list]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_directory_list(registry).has_value());
@@ -5412,7 +5408,7 @@ TEST_CASE("directory.list returns not_found when the directory does not exist", 
   });
 }
 
-TEST_CASE("directory.list returns invalid_argument when the path is a regular file, not a directory",
+TEST_CASE("DirectoryList returns invalid_argument when the path is a regular file, not a directory",
           "[unit][tool][directory_list]") {
   TempFile file{"list-not-a-dir"};
   file.write("not a directory");
@@ -5431,7 +5427,7 @@ TEST_CASE("directory.list returns invalid_argument when the path is a regular fi
   });
 }
 
-TEST_CASE("directory.list rejects malformed input as invalid_argument", "[unit][tool][directory_list]") {
+TEST_CASE("DirectoryList rejects malformed input as invalid_argument", "[unit][tool][directory_list]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_directory_list(registry).has_value());
@@ -5476,14 +5472,14 @@ TEST_CASE("directory.list rejects malformed input as invalid_argument", "[unit][
 }
 
 // ---------------------------------------------------------------------------
-// Slice 64 — `directory.list` structured `Output::data_json` + usage counters.
+// Slice 64 — `DirectoryList` structured `Output::data_json` + usage counters.
 // Third built-in step of spec 0014's text -> structured migration (after
-// slice 62 `file.read` and slice 63 `file.search`). The text rendering and
-// every prior `directory.list` test pass verbatim. These cases pin the new
+// slice 62 `FileRead` and slice 63 `FileSearch`). The text rendering and
+// every prior `DirectoryList` test pass verbatim. These cases pin the new
 // JSON shape and usage so provider adapters and the desktop app can render a
 // typed entries array without re-parsing `<path>:<kind>:<size>` lines.
 
-TEST_CASE("directory.list happy path fills data_json with structured entries",
+TEST_CASE("DirectoryList happy path fills data_json with structured entries",
           "[unit][tool][directory_list][structured]") {
   TempDir dir{"list-structured-happy"};
   dir.write_file("a.txt", "alpha");
@@ -5540,7 +5536,7 @@ TEST_CASE("directory.list happy path fills data_json with structured entries",
   });
 }
 
-TEST_CASE("directory.list empty directory emits an empty entries array", "[unit][tool][directory_list][structured]") {
+TEST_CASE("DirectoryList empty directory emits an empty entries array", "[unit][tool][directory_list][structured]") {
   TempDir dir{"list-structured-empty"};
 
   test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
@@ -5567,7 +5563,7 @@ TEST_CASE("directory.list empty directory emits an empty entries array", "[unit]
   });
 }
 
-TEST_CASE("directory.list include_hidden round-trips through data_json", "[unit][tool][directory_list][structured]") {
+TEST_CASE("DirectoryList include_hidden round-trips through data_json", "[unit][tool][directory_list][structured]") {
   TempDir dir{"list-structured-hidden"};
   dir.write_file("visible.txt", "v");
   dir.write_file(".hidden", "h");
@@ -5599,7 +5595,7 @@ TEST_CASE("directory.list include_hidden round-trips through data_json", "[unit]
   });
 }
 
-TEST_CASE("directory.list max_entries=1 honors the cap before failing on the second entry",
+TEST_CASE("DirectoryList max_entries=1 honors the cap before failing on the second entry",
           "[unit][tool][directory_list][structured]") {
   TempDir dir{"list-structured-cap"};
   dir.write_file("a", "1");
@@ -5627,7 +5623,7 @@ TEST_CASE("directory.list max_entries=1 honors the cap before failing on the sec
 }
 
 // ---------------------------------------------------------------------------
-// Slice 30 — `file.delete` built-in. Thin wrapper over `oran-io::delete_file`.
+// Slice 30 — `FileDelete` built-in. Thin wrapper over `oran-io::delete_file`.
 // Capability is the existing `core::Capability::delete_path` (first built-in
 // that actually requires it). Tests cover: registration surface, happy
 // delete with the `deleted <path>` success message, missing path,
@@ -5656,7 +5652,7 @@ TEST_CASE("register_file_delete advertises a `delete_path` capability and a path
   REQUIRE(def->input_schema_json.contains("\"path\""));
 }
 
-TEST_CASE("file.delete happy path removes the file and reports the deletion", "[unit][tool][file_delete]") {
+TEST_CASE("FileDelete happy path removes the file and reports the deletion", "[unit][tool][file_delete]") {
   TempFile file{"delete-happy"};
   file.write("doomed");
 
@@ -5683,7 +5679,7 @@ TEST_CASE("file.delete happy path removes the file and reports the deletion", "[
   });
 }
 
-TEST_CASE("file.delete returns not_found when the file does not exist", "[unit][tool][file_delete]") {
+TEST_CASE("FileDelete returns not_found when the file does not exist", "[unit][tool][file_delete]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_file_delete(registry).has_value());
@@ -5700,7 +5696,7 @@ TEST_CASE("file.delete returns not_found when the file does not exist", "[unit][
   });
 }
 
-TEST_CASE("file.delete refuses directories with invalid_argument and leaves them intact", "[unit][tool][file_delete]") {
+TEST_CASE("FileDelete refuses directories with invalid_argument and leaves them intact", "[unit][tool][file_delete]") {
   TempDir dir{"delete-dir-refused"};
   dir.write_file("guardian.txt", "still here");
 
@@ -5720,7 +5716,7 @@ TEST_CASE("file.delete refuses directories with invalid_argument and leaves them
   });
 }
 
-TEST_CASE("file.delete refuses symlinks with invalid_argument and leaves the target intact",
+TEST_CASE("FileDelete refuses symlinks with invalid_argument and leaves the target intact",
           "[unit][tool][file_delete]") {
   TempDir dir{"delete-symlink-refused"};
   dir.write_file("target.txt", "untouched");
@@ -5750,7 +5746,7 @@ TEST_CASE("file.delete refuses symlinks with invalid_argument and leaves the tar
   });
 }
 
-TEST_CASE("file.delete rejects malformed input as invalid_argument", "[unit][tool][file_delete]") {
+TEST_CASE("FileDelete rejects malformed input as invalid_argument", "[unit][tool][file_delete]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_file_delete(registry).has_value());
@@ -5779,7 +5775,7 @@ TEST_CASE("file.delete rejects malformed input as invalid_argument", "[unit][too
   });
 }
 
-TEST_CASE("file.delete deny verdict short-circuits and does not unlink the file", "[unit][tool][file_delete]") {
+TEST_CASE("FileDelete deny verdict short-circuits and does not unlink the file", "[unit][tool][file_delete]") {
   TempFile file{"delete-denied"};
   file.write("survives");
 

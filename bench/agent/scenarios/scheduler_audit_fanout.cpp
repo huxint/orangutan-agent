@@ -54,7 +54,7 @@ constexpr std::size_t kBatchSize = 8;
 
 void add_audited_tool(tool::Registry& registry) {
   auto def = core::ToolDef{
-      .name = "bench.audited",
+      .name = "BenchAudited",
       .description = "No-cap tool that records a decision row per call",
       .input_schema_json = R"({"type":"object","properties":{},"additionalProperties":true})",
       .required_capabilities = {},
@@ -93,7 +93,7 @@ std::vector<agent::ToolBatchCall> make_batch() {
   for (std::size_t i = 0; i < kBatchSize; ++i) {
     batch.push_back(agent::ToolBatchCall{
         .tool_use_id = "call-" + std::to_string(i),
-        .name = "bench.audited",
+        .name = "BenchAudited",
         .input_json = "{}",
     });
   }

@@ -4,7 +4,7 @@
 // Private to `oran-tool` translation units. Lives under `src/` (not
 // `include/oran/tool/`) because the token shape is an implementation
 // detail of the built-in catalog: agents treat the token as opaque, and
-// future built-ins (the `file.modify` v2 surface, the `code.*` family)
+// future built-ins (the `FileModify` v2 surface, the `code.*` family)
 // will go through the same helper rather than re-spelling the shape.
 
 #pragma once
@@ -22,7 +22,7 @@
 namespace orangutan::tool::detail {
 
 /// Lowercase hex-string of the supplied bytes. Kept inline so the three
-/// file built-ins (`file.read`, `file.write`, `file.edit`) all share the
+/// file built-ins (`FileRead`, `FileWrite`, `FileEdit`) all share the
 /// same wire spelling without paying a TU dependency on a `version_token.cpp`.
 [[nodiscard]] inline std::string hex_lower(std::span<const std::byte> bytes) {
   constexpr std::string_view kHex = "0123456789abcdef";

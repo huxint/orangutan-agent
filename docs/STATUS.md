@@ -9,31 +9,35 @@
 
 ## Snapshot
 
-- **Slice:** 244 (`xmake run orangutan -- --help` reports slice 244)
+- **Slice:** 245 (`xmake run orangutan -- --help` reports slice 245)
 - **Last completed history:**
-  [`histories/2026-06/20260614-1827-provider-cancellation-phases.md`](histories/2026-06/20260614-1827-provider-cancellation-phases.md)
+  [`histories/2026-06/20260614-1915-pascal-tool-names.md`](histories/2026-06/20260614-1915-pascal-tool-names.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — remains active, but its next gate is externally blocked on real QQ
     credentials plus a sendable operator conversation; it was spun off from the
     completed channel-ingress plan
     ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-- **Latest completed slice:** slice 244 ships the unblocked Observability v1.1
-  provider cancellation phase refinement while QQ 4b-ii remains
-  credential-blocked. `agent::Loop` now distinguishes parent cancellation
-  before provider streaming (`provider_initial`), after visible provider
-  deltas (`provider_stream`), and after provider terminal `on_done`
-  (`provider_complete`) on the existing `trace_turns.cancellation_phase`
-  field, while preserving `tools` for direct dispatch cancellation. The
-  returned cancellation error carries the same phase, and trace-enabled turns
-  persist it before returning. Focused result: `test-agent` **57 cases /
-  10 786 assertions**.
+- **Latest completed slice:** slice 245 renames the shipped tool public surface
+  away from dotted names and onto PascalCase provider-safe names. Built-ins now
+  register as `FileRead`, `FileWrite`, `FileEdit`, `FileSearch`,
+  `DirectoryList`, `FileDelete`, `ToolSearch`, `SkillInvoke`,
+  `SkillDeactivate`, `MemoryRecall`, `MemoryRemember`, and `MemoryForget`; the
+  prompt catalog, permission patterns, audit/trace rows, provider body/SSE
+  tool-use names, config examples, tests, and docs all use the same names. This
+  removes the Anthropic-compatible endpoint failure class caused by dotted
+  tool names without adding a provider-only alias layer. Focused validation:
+  `test-provider` **86 cases / 652 assertions**, `test-tool` **208 / 2181**,
+  `test-permission` **89 / 426**, `test-config` **55 / 519**, `test-prompt`
+  **10 / 98**, `test-agent` **57 / 10 786**, and `test-bootstrap`
+  **156 / 1573**; full validation also passed `test-http` **27 / 148**,
+  `xmake test` **18 / 18 buckets**, `make ci`, and binary help at
+  `2.0.0-slice245`.
 - **Next intended slice:** Re-read this snapshot and [`ROADMAP.md`](ROADMAP.md)
-  before scoping the next slice. No new observability slice is pre-selected
-  after the provider-phase refinement; broader trace query language or metrics
-  endpoints need a concrete operator/runtime consumer before they become the
-  next best target. QQ-port 4b-ii remains waiting on real QQ credentials and an
-  operator conversation.
+  before scoping the next slice. Provider/tool naming is now aligned with
+  Anthropic-family tool-name constraints; broader live-provider smoke evidence
+  should be gathered only through the documented secret-handling path. QQ-port
+  4b-ii remains waiting on real QQ credentials and an operator conversation.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 
@@ -98,7 +102,7 @@ Closed entries do *not* live here — the tracker is canonical.
   but is not wired into `scripts/ci.sh`. Gated on CI provisioning xmake on
   the documented reference hardware (8-core / NVMe / native Linux);
   otherwise the gate fires on environmental drift, not real regressions.
-- 2026-05-17 — `file.search` does not yet ship ripgrep-class optimisations
+- 2026-05-17 — `FileSearch` does not yet ship ripgrep-class optimisations
   (mmap, extension-based binary skip, multi-threaded walk).
   Adequate at slice 20 (~27 µs / 4-file tree) but 3-10× slower than a tuned
   scanner on repo-scale inputs. Re-bench once `oran-agent` produces a real

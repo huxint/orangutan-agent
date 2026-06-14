@@ -222,10 +222,10 @@ struct MemoryReadHitPayload {
 };
 
 /// Advisory read memory payload. Published after a successful long-term recall
-/// at either the prompt boundary or the `memory.recall` tool boundary.
+/// at either the prompt boundary or the `MemoryRecall` tool boundary.
 struct MemoryReadPayload {
   Identity who;
-  /// Producer label such as `prompt_boundary` or `memory.recall`.
+  /// Producer label such as `prompt_boundary` or `MemoryRecall`.
   std::string source;
   /// Raw recall query for trusted-local sinks. If `redacted_query_bytes` is set,
   /// `Bus` clears this field for non-trusted sinks.

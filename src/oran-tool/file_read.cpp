@@ -1,4 +1,4 @@
-// src/oran-tool/file_read.cpp — `file.read` built-in (spec 0011 v1).
+// src/oran-tool/file_read.cpp — `FileRead` built-in (spec 0011 v1).
 //
 // v2 input shape: `{"path": <string>, "start_line"?, "line_count"?,
 // "offset_bytes"?, "length_bytes"?, "max_bytes"?, "if_version"?}`. The
@@ -55,7 +55,7 @@ constexpr std::uintmax_t kMaxReadBytes = 16U * 1024U * 1024U;
 [[nodiscard]] core::Result<std::uintmax_t> parse_positive_unsigned(const nlohmann::json& raw, std::string_view field) {
   if (!raw.is_number_integer() || raw.is_number_float()) {
     return std::unexpected(
-        core::Error::invalid_argument(std::format("file.read: `{}` must be a positive integer", field)));
+        core::Error::invalid_argument(std::format("FileRead: `{}` must be a positive integer", field)));
   }
   std::uint64_t value = 0U;
   if (raw.is_number_unsigned()) {
@@ -63,13 +63,13 @@ constexpr std::uintmax_t kMaxReadBytes = 16U * 1024U * 1024U;
   } else {
     const auto signed_value = raw.get<std::int64_t>();
     if (signed_value <= 0) {
-      return std::unexpected(core::Error::invalid_argument(std::format("file.read: `{}` must be positive", field))
+      return std::unexpected(core::Error::invalid_argument(std::format("FileRead: `{}` must be positive", field))
                                  .with("value", std::to_string(signed_value)));
     }
     value = static_cast<std::uint64_t>(signed_value);
   }
   if (value == 0U) {
-    return std::unexpected(core::Error::invalid_argument(std::format("file.read: `{}` must be positive", field)));
+    return std::unexpected(core::Error::invalid_argument(std::format("FileRead: `{}` must be positive", field)));
   }
   return static_cast<std::uintmax_t>(value);
 }
@@ -83,7 +83,7 @@ constexpr std::uintmax_t kMaxReadBytes = 16U * 1024U * 1024U;
       return std::unexpected(std::move(mb).error());
     }
     if (*mb > kMaxReadBytes) {
-      return std::unexpected(core::Error::invalid_argument("file.read: `max_bytes` must be <= 16777216")
+      return std::unexpected(core::Error::invalid_argument("FileRead: `max_bytes` must be <= 16777216")
                                  .with("value", std::to_string(*mb))
                                  .with("max_bytes", std::to_string(kMaxReadBytes)));
     }
@@ -93,7 +93,7 @@ constexpr std::uintmax_t kMaxReadBytes = 16U * 1024U * 1024U;
   const bool has_line = parsed.contains("start_line") || parsed.contains("line_count");
   const bool has_byte = parsed.contains("offset_bytes") || parsed.contains("length_bytes");
   if (has_line && has_byte) {
-    return std::unexpected(core::Error::invalid_argument("file.read: line range (start_line/line_count) and byte range "
+    return std::unexpected(core::Error::invalid_argument("FileRead: line range (start_line/line_count) and byte range "
                                                          "(offset_bytes/length_bytes) are mutually exclusive"));
   }
 
@@ -116,7 +116,7 @@ constexpr std::uintmax_t kMaxReadBytes = 16U * 1024U * 1024U;
       span.line_count = static_cast<std::uint64_t>(*v);
     } else {
       return std::unexpected(
-          core::Error::invalid_argument("file.read: `line_count` is required when `start_line` is supplied"));
+          core::Error::invalid_argument("FileRead: `line_count` is required when `start_line` is supplied"));
     }
     options.range = io::FileRange{.lines = span};
   } else if (has_byte) {
@@ -129,7 +129,7 @@ constexpr std::uintmax_t kMaxReadBytes = 16U * 1024U * 1024U;
       span.offset_bytes = *v;
     } else {
       return std::unexpected(
-          core::Error::invalid_argument("file.read: `offset_bytes` is required when `length_bytes` is supplied"));
+          core::Error::invalid_argument("FileRead: `offset_bytes` is required when `length_bytes` is supplied"));
     }
     if (parsed.contains("length_bytes")) {
       auto v = parse_positive_unsigned(parsed["length_bytes"], "length_bytes");
@@ -139,7 +139,7 @@ constexpr std::uintmax_t kMaxReadBytes = 16U * 1024U * 1024U;
       span.length_bytes = *v;
     } else {
       return std::unexpected(
-          core::Error::invalid_argument("file.read: `length_bytes` is required when `offset_bytes` is supplied"));
+          core::Error::invalid_argument("FileRead: `length_bytes` is required when `offset_bytes` is supplied"));
     }
     options.range = io::FileRange{.bytes = span};
   }
@@ -201,7 +201,7 @@ format_header(std::string_view path, const io::ReadTextResult& result, const std
   std::optional<std::string> if_version;
   if (parsed->contains("if_version")) {
     if (!(*parsed)["if_version"].is_string()) {
-      co_return std::unexpected(core::Error::invalid_argument("file.read: `if_version` must be a string"));
+      co_return std::unexpected(core::Error::invalid_argument("FileRead: `if_version` must be a string"));
     }
     if_version = (*parsed)["if_version"].get<std::string>();
   }
@@ -226,7 +226,7 @@ format_header(std::string_view path, const io::ReadTextResult& result, const std
     }
     const auto current_token = detail::version_token(path, *pre);
     if (*if_version == current_token) {
-      co_return std::unexpected(core::Error::not_modified("file.read: file is unchanged since the supplied version")
+      co_return std::unexpected(core::Error::not_modified("FileRead: file is unchanged since the supplied version")
                                     .with("path", path)
                                     .with("fingerprint", current_token));
     }

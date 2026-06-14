@@ -122,7 +122,7 @@ TEST_CASE("FakeProvider assembles a Response from streamed deltas", "[unit][prov
     std::vector<prov::StreamDelta> deltas;
     deltas.push_back(prov::TextDelta{.text = "hel"});
     deltas.push_back(prov::TextDelta{.text = "lo "});
-    deltas.push_back(prov::ToolStart{.id = "t1", .name = "file.read"});
+    deltas.push_back(prov::ToolStart{.id = "t1", .name = "FileRead"});
     deltas.push_back(prov::ToolInputDelta{.id = "t1", .input_delta = R"({"pa)"});
     deltas.push_back(prov::ToolInputDelta{.id = "t1", .input_delta = R"(th":"x"})"});
     deltas.push_back(prov::StreamEnd{
@@ -157,13 +157,13 @@ TEST_CASE("FakeProvider assembles a Response from streamed deltas", "[unit][prov
     REQUIRE(std::holds_alternative<core::ToolUseContent>(result->blocks[1]));
     const auto& tool = std::get<core::ToolUseContent>(result->blocks[1]);
     REQUIRE(tool.id == "t1");
-    REQUIRE(tool.name == "file.read");
+    REQUIRE(tool.name == "FileRead");
     REQUIRE(tool.input_json == R"({"path":"x"})");
 
     REQUIRE(sink.events.size() == 6);
     REQUIRE(sink.events[0] == "text:hel");
     REQUIRE(sink.events[1] == "text:lo ");
-    REQUIRE(sink.events[2] == "tool_start:t1:file.read");
+    REQUIRE(sink.events[2] == "tool_start:t1:FileRead");
     REQUIRE(sink.events[3] == std::string{"tool_delta:t1:"} + R"({"pa)");
     REQUIRE(sink.events[4] == std::string{"tool_delta:t1:"} + R"(th":"x"})");
     REQUIRE(sink.events[5] == "done:tool_use");

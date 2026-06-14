@@ -84,19 +84,19 @@ TEST_CASE("Rule with input_pattern fires only when the pattern matches",
   RuleSet rs;
   rs.add(Rule{
       .verdict = Verdict::deny,
-      .tool_pattern = "shell.exec",
+      .tool_pattern = "ShellExec",
       .input_pattern = std::move(*pat),
   });
 
   // Matching input -> deny fires.
-  const auto blocked = rs.evaluate("shell.exec", "rm -rf /", {}, Mode::permissive);
+  const auto blocked = rs.evaluate("ShellExec", "rm -rf /", {}, Mode::permissive);
   REQUIRE(blocked.verdict == Verdict::deny);
   REQUIRE(blocked.reason.contains("rule #0"));
   REQUIRE(blocked.reason.contains("input=~"));
   REQUIRE(blocked.reason.contains("^rm "));
 
   // Non-matching input -> rule misses, mode default applies.
-  const auto allowed = rs.evaluate("shell.exec", "ls -la", {}, Mode::permissive);
+  const auto allowed = rs.evaluate("ShellExec", "ls -la", {}, Mode::permissive);
   REQUIRE(allowed.verdict == Verdict::allow);
   REQUIRE(allowed.reason.contains("default by mode=permissive"));
 }
@@ -111,11 +111,11 @@ TEST_CASE("No-input evaluate skips input-pattern rules unless the pattern accept
   RuleSet rs;
   rs.add(Rule{
       .verdict = Verdict::deny,
-      .tool_pattern = "shell.exec",
+      .tool_pattern = "ShellExec",
       .input_pattern = std::move(*strict),
   });
 
-  REQUIRE(rs.evaluate("shell.exec", Mode::permissive).verdict == Verdict::allow);
+  REQUIRE(rs.evaluate("ShellExec", Mode::permissive).verdict == Verdict::allow);
 
   // A pattern that accepts the empty string (re2 .* on "") DOES fire on the
   // no-input path — the semantics are honest about what "empty input" means.
@@ -125,11 +125,11 @@ TEST_CASE("No-input evaluate skips input-pattern rules unless the pattern accept
   RuleSet rs2;
   rs2.add(Rule{
       .verdict = Verdict::deny,
-      .tool_pattern = "shell.exec",
+      .tool_pattern = "ShellExec",
       .input_pattern = std::move(*loose),
   });
 
-  REQUIRE(rs2.evaluate("shell.exec", Mode::permissive).verdict == Verdict::deny);
+  REQUIRE(rs2.evaluate("ShellExec", Mode::permissive).verdict == Verdict::deny);
 }
 
 TEST_CASE("Capability + input_pattern compose on a single rule", "[unit][permission][rule_set][input_pattern]") {
@@ -148,7 +148,7 @@ TEST_CASE("Capability + input_pattern compose on a single rule", "[unit][permiss
   const std::array caps_read{orangutan::core::Capability::read_memory};
 
   // Both axes match -> deny.
-  REQUIRE(rs.evaluate("memory.exec",
+  REQUIRE(rs.evaluate("MemoryExec",
                       "UPDATE x; DROP TABLE y;",
                       std::span<const orangutan::core::Capability>{caps_write},
                       Mode::permissive)
@@ -156,11 +156,11 @@ TEST_CASE("Capability + input_pattern compose on a single rule", "[unit][permiss
 
   // Input doesn't match -> rule misses.
   REQUIRE(
-      rs.evaluate("memory.exec", "SELECT 1", std::span<const orangutan::core::Capability>{caps_write}, Mode::permissive)
+      rs.evaluate("MemoryExec", "SELECT 1", std::span<const orangutan::core::Capability>{caps_write}, Mode::permissive)
           .verdict == Verdict::allow);
 
   // Capability doesn't match -> rule misses (input alone is not enough).
-  REQUIRE(rs.evaluate("memory.exec",
+  REQUIRE(rs.evaluate("MemoryExec",
                       "UPDATE x; DROP TABLE y;",
                       std::span<const orangutan::core::Capability>{caps_read},
                       Mode::permissive)

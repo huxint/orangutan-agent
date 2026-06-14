@@ -48,7 +48,7 @@ tests/
   hot-reload; `tests/automation/` for deterministic periodic schedule and
   memory-retention planning; `tests/channel/` for the channel foundation
   manager/trait boundary; `tests/tool/` and `tests/bootstrap/` cover the
-  `skill.invoke` dispatch path plus runner prompt-boundary refresh.
+  `SkillInvoke` dispatch path plus runner prompt-boundary refresh.
 - See [`../docs/rules/testing-and-bench.md`](../docs/rules/testing-and-bench.md) for
   the full convention.
 

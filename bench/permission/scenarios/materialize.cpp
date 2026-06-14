@@ -47,12 +47,12 @@ rule(cfg::PermissionVerdict v, std::string pattern, std::optional<Capability> ca
 [[nodiscard]] cfg::PermissionsConfig make_global_fixture() {
   cfg::PermissionsConfig out;
   out.rules.reserve(8);
-  out.rules.push_back(rule(cfg::PermissionVerdict::allow, "file.read", std::nullopt));
-  out.rules.push_back(rule(cfg::PermissionVerdict::allow, "file.search", std::nullopt));
+  out.rules.push_back(rule(cfg::PermissionVerdict::allow, "FileRead", std::nullopt));
+  out.rules.push_back(rule(cfg::PermissionVerdict::allow, "FileSearch", std::nullopt));
   out.rules.push_back(rule(cfg::PermissionVerdict::allow, "*", Capability::read_memory));
   out.rules.push_back(rule(cfg::PermissionVerdict::deny, "*", Capability::runtime_loader));
-  out.rules.push_back(rule(cfg::PermissionVerdict::deny, "shell.exec(rm:*)", std::nullopt));
-  out.rules.push_back(rule(cfg::PermissionVerdict::ask, "file.write", std::nullopt));
+  out.rules.push_back(rule(cfg::PermissionVerdict::deny, "ShellExec(rm:*)", std::nullopt));
+  out.rules.push_back(rule(cfg::PermissionVerdict::ask, "FileWrite", std::nullopt));
   out.rules.push_back(rule(cfg::PermissionVerdict::ask, "*", Capability::spawn_subprocess));
   out.rules.push_back(rule(cfg::PermissionVerdict::ask, "*", Capability::egress_websocket));
   return out;
@@ -62,7 +62,7 @@ rule(cfg::PermissionVerdict v, std::string pattern, std::optional<Capability> ca
   cfg::PermissionsConfig out;
   out.rules.reserve(2);
   out.rules.push_back(rule(cfg::PermissionVerdict::allow, "*", Capability::egress_http));
-  out.rules.push_back(rule(cfg::PermissionVerdict::deny, "shell.exec(git push *)", std::nullopt));
+  out.rules.push_back(rule(cfg::PermissionVerdict::deny, "ShellExec(git push *)", std::nullopt));
   return out;
 }
 

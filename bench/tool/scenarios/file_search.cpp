@@ -1,6 +1,6 @@
 // bench/tool/scenarios/file_search.cpp
 //
-// A-vs-B comparisons for `file.search`:
+// A-vs-B comparisons for `FileSearch`:
 //
 //   1. `single_file_one_match` vs. `recursive_dir_many_matches` — full dispatch
 //      on a single-file path vs. a directory-rooted walk over a 4-file / 14-line

@@ -81,11 +81,11 @@ permission::AuditEvent make_event(std::size_t i) {
   permission::AuditEvent event;
   event.scope_key = "scope-bench";
   event.agent_key = "bench-agent";
-  event.tool_name = "file.read";
+  event.tool_name = "FileRead";
   event.identity = "bench-identity";
   event.verdict = permission::Verdict::allow;
   event.outcome = permission::AuditOutcome::allow;
-  event.reason = "rule #1 (allow: file.*)";
+  event.reason = "rule #1 (allow: File*)";
   std::array<std::byte, 32> hash{};
   for (std::size_t j = 0; j < hash.size(); ++j) {
     hash[j] = std::byte{static_cast<std::uint8_t>((i + j) & 0xFF)};

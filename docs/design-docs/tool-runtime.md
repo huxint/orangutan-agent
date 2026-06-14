@@ -5,7 +5,7 @@ The tool registry is the agent's hand. It is the place where:
 - The agent decides what it *can* do (the catalog presented to the LLM).
 - The runtime checks whether it *may* do something (permissions).
 - The runtime observes when it does (hooks).
-- The runtime knows when it's *deferred* (`tool.search`-style discovery).
+- The runtime knows when it's *deferred* (`ToolSearch`-style discovery).
 
 This doc covers the v2 design. The legacy `ToolRuntimeContext` sprawl is explicitly
 replaced.
@@ -17,7 +17,7 @@ replaced.
 namespace orangutan::core {
 
 struct ToolDef {
-  std::string                 name;        // dotted: "file.read", "shell.exec"
+  std::string                 name;        // PascalCase: "FileRead", "ShellExec"
   std::string                 description; // for the LLM
   nlohmann::json_fwd          input_schema; // JSON Schema for tool args
   std::vector<Capability>     required_capabilities; // spelled `required_capabilities` in code — `requires` is a reserved C++20 keyword
@@ -27,6 +27,12 @@ struct ToolDef {
 
 }  // namespace orangutan::core
 ```
+
+Tool names are the public names sent to providers, shown in prompt catalogs,
+matched by permission rules, and recorded in audit/trace rows. They use
+PascalCase (`FileRead`, `MemoryRecall`, `SkillInvoke`) rather than dotted
+namespace-style names so Anthropic-compatible providers can receive them
+without an adapter-only alias layer.
 
 `Capability` is the v2 mechanism that ties tools to permissions. Examples:
 
@@ -65,13 +71,13 @@ enum class Capability {
 > via `core::ToolDef::required_capabilities` — that field is the
 > in-code realisation of the `requires` field below (renamed because
 > `requires` is a reserved C++20 keyword). Built-ins shipped so far:
-> `file.read` (slice 17, `Capability::read_file`), `file.write`
+> `FileRead` (slice 17, `Capability::read_file`), `FileWrite`
 > (slice 18, `Capability::write_file`, input
 > `{path, content, mode?, create_parents?, max_bytes?,
 > expected_version?}` with
 > `mode ∈ {truncate, append, fail_if_exists}` and `max_bytes`
 > capped at 16 MiB; slice 61 fills `Output::usage.bytes_written`
-> and `files_touched` on success), `file.edit` (slice 19,
+> and `files_touched` on success), `FileEdit` (slice 19,
 > `Capability::edit_file`, input
 > `{path, old_string, new_string, replace_all?, max_bytes?,
 > expected_version?}` —
@@ -81,7 +87,7 @@ enum class Capability {
 > (default / hard ceiling 16 MiB); truncating rewrite via
 > `io::write_text_file`; slice 61 fills `Output::usage.bytes_read`,
 > `bytes_written`, `files_touched`, and `match_count` on success),
-> and `file.search` (slice 20,
+> and `FileSearch` (slice 20,
 > `Capability::read_file`, input
 > `{path, pattern, max_matches?, include_hidden?, regex?,
 > max_output_bytes?, respect_ignore?}` — literal substring match by
@@ -96,14 +102,14 @@ enum class Capability {
 > mmap / extension-binary-skip / parallel-walk optimisations are deferred
 > to follow-up slices tracked in
 > [`exec-plans/tech-debt-tracker.md`](../exec-plans/tech-debt-tracker.md)).
-> Slice 168 adds the first memory built-in: `memory.recall`
+> Slice 168 adds the first memory built-in: `MemoryRecall`
 > (`Capability::read_memory`, deferred, category `memory`). Input
 > `{query, limit?, kinds?}` recalls long-term records through
 > `DispatchContext::memory_recall`, keeping `oran-tool` independent of
 > `oran-memory`; successful output carries deterministic recall text,
 > `data_json.kind = "memory_recall"`, recalled record metadata, and
 > `usage.match_count`.
-> Slice 169 adds the first write-side memory built-in: `memory.remember`
+> Slice 169 adds the first write-side memory built-in: `MemoryRemember`
 > (`Capability::write_memory`, deferred, category `memory`). Input
 > `{id, kind, title, body, importance?, tags?, linked_record_ids?, shadow?}`
 > upserts one long-term memory record through
@@ -112,7 +118,7 @@ enum class Capability {
 > `oran-memory`; successful output carries confirmation text,
 > `data_json.kind = "memory_remember"`, saved record metadata, and
 > `usage.bytes_written`.
-> Slice 170 adds the delete-side memory built-in: `memory.forget`
+> Slice 170 adds the delete-side memory built-in: `MemoryForget`
 > (`Capability::write_memory`, deferred, category `memory`). Input `{id}`
 > removes one scoped long-term memory record through
 > `DispatchContext::memory_forget`, keeping `oran-tool` independent of
@@ -189,7 +195,7 @@ enum class Capability {
 > (`tool::Runtime` accessor surface) and binary binding of the CLI sink stay
 > on future slices.
 > Slice 29 (2026-05-20) extends the built-in catalog with
-> `directory.list` (`tool::register_directory_list`, capability
+> `DirectoryList` (`tool::register_directory_list`, capability
 > `list_directory` — a new `core::Capability` enumerator so a
 > permission rule can distinguish "list a directory" from "read a
 > file"; useful in sandbox modes where the agent should see the
@@ -204,7 +210,7 @@ enum class Capability {
 > truncate on overflow because that would require either calling
 > `oran-io` twice or extending the helper's contract for every
 > other caller).
-> Slice 30 (2026-05-20) adds `file.delete`
+> Slice 30 (2026-05-20) adds `FileDelete`
 > (`tool::register_file_delete`, capability `delete_path` — the
 > first built-in that exercises this slice-7 capability), built on
 > a new `oran-io::delete_file` coroutine helper. Input
@@ -222,21 +228,21 @@ enum class Capability {
 > folders, and a recursive whole-project list (not a separate
 > `directory.remove` / single-level enumeration). The v1
 > narrowings here are the entry point, not the dead end.
-> Slice 32 (2026-05-21) routes `file.edit` and the dominant
-> `file.write` mode (`truncate`) through the new
+> Slice 32 (2026-05-21) routes `FileEdit` and the dominant
+> `FileWrite` mode (`truncate`) through the new
 > `oran-io::WriteTextOptions::atomic` opt-in: the rewrite is
 > staged to a sibling `.<name>.orangutan.tmp.<seq>` and committed
 > via `std::filesystem::rename`, so a crash or partial write
 > leaves the original target intact instead of truncated. The
-> deep-review BUG-4.1.1 footgun (`file.edit` composing
+> deep-review BUG-4.1.1 footgun (`FileEdit` composing
 > `read_text_file` + `write_text_file` with no rollback) is
-> closed; `file.write` keeps its current semantics for `append`
+> closed; `FileWrite` keeps its current semantics for `append`
 > and `fail_if_exists` because the atomic helper is incompatible
 > with both and rejects them with `invalid_argument`. See
 > `docs/design-docs/io-runtime.md` "Atomic Writes" for the
 > contract.
 > Slice 33 (2026-05-21) closes the deep-review SMELL-4.1.3
-> cancellation footgun: `file.search`'s `walk_and_scan` and
+> cancellation footgun: `FileSearch`'s `walk_and_scan` and
 > `read_text_capped` now poll `asio::cancellation_state` once per
 > directory entry and once per 8 KiB read chunk. The handler
 > previously checked cancellation only before and after the
@@ -247,10 +253,10 @@ enum class Capability {
 > regression test arms the chunk-read polling on an 8 MiB file
 > read driven from a worker `std::jthread`.
 > Slice 34 (2026-05-22) closes the deep-review content-size cap
-> P0 item for `file.write` / `file.edit`: both tools now expose an
+> P0 item for `FileWrite` / `FileEdit`: both tools now expose an
 > optional `max_bytes` positive integer whose default and hard
-> ceiling are 16 MiB. `file.write` refuses `content` over the cap
-> before touching the path; `file.edit` passes the cap into
+> ceiling are 16 MiB. `FileWrite` refuses `content` over the cap
+> before touching the path; `FileEdit` passes the cap into
 > `io::read_text_file` and preflights the final replacement size
 > before allocating / writing the replacement. The same slice also
 > fixes the `tests/tool/test_registry.cpp`
@@ -283,33 +289,33 @@ enum class Capability {
 > `reason=outside_workspace`, read/list symlink escapes with
 > `reason=symlink_escape`, and mutating symlink paths with
 > `reason=symlink_target`. `DispatchContext` now carries an optional
-> non-owning `Workspace*`; `file.read` resolves its input through
+> non-owning `Workspace*`; `FileRead` resolves its input through
 > `resolve_read` when that pointer is supplied. The remaining filesystem
 > built-ins, bootstrap config ownership, audit metadata, and pre-permission
 > resolution moved in later workspace slices.
 > Slice 38 (2026-05-22) migrates the mutating built-ins through the same
-> interim seam: `file.write` calls `resolve_write` with the current write
-> mode and parent-creation intent before the `oran-io` write, `file.edit`
+> interim seam: `FileWrite` calls `resolve_write` with the current write
+> mode and parent-creation intent before the `oran-io` write, `FileEdit`
 > resolves through `resolve_write` before its read+atomic rewrite, and
-> `file.delete` resolves through `resolve_delete` before unlinking. When
+> `FileDelete` resolves through `resolve_delete` before unlinking. When
 > a workspace is supplied, relative in-workspace mutations work while
 > traversal rejects with `reason=outside_workspace` and mutating symlink
-> targets reject with `reason=symlink_target`. `file.search`,
-> `directory.list`, bootstrap ownership, audit metadata, and the
+> targets reject with `reason=symlink_target`. `FileSearch`,
+> `DirectoryList`, bootstrap ownership, audit metadata, and the
 > pre-permission resolver boundary moved in later workspace slices.
-> Slice 39 (2026-05-22) migrates `file.search` through the same interim
+> Slice 39 (2026-05-22) migrates `FileSearch` through the same interim
 > seam: the handler resolves its input through `tool::Workspace::resolve_list`
 > when `DispatchContext::workspace` is supplied, before the executor hop
 > that drives the blocking walk. The root-path symlink behaviour now matches
-> the workspace policy that already governs `file.read` (follow inside-
+> the workspace policy that already governs `FileRead` (follow inside-
 > workspace, reject `symlink_escape`); nested entries continue to skip
 > symlinks wholesale during the walk, a stricter form of the same rule.
-> `directory.list`, bootstrap ownership, audit metadata, and the
+> `DirectoryList`, bootstrap ownership, audit metadata, and the
 > pre-permission resolver boundary moved in later workspace slices.
-> Slice 40 (2026-05-22) migrates `directory.list` through the same interim
+> Slice 40 (2026-05-22) migrates `DirectoryList` through the same interim
 > seam via `Workspace::resolve_list`, closing the per-tool half of the
-> workspace migration: every filesystem built-in (`file.read`, `file.write`,
-> `file.edit`, `file.delete`, `file.search`, `directory.list`) now resolves
+> workspace migration: every filesystem built-in (`FileRead`, `FileWrite`,
+> `FileEdit`, `FileDelete`, `FileSearch`, `DirectoryList`) now resolves
 > at the handler entry. Bootstrap/config ownership for the override roots,
 > audit metadata, and moving resolution to the pre-permission dispatch
 > boundary moved in later workspace slices.
@@ -331,8 +337,8 @@ enum class Capability {
 > replay is spent. Handlers keep their in-handler fallback for callers that
 > dispatch without a workspace.
 > Slice 147 (2026-06-03) adds the second `oran-tool-skill` built-in,
-> `skill.deactivate` (capability `deactivate_skill`, input `{"name": <string>}`,
-> non-deferred). Like `skill.invoke` it delegates the concrete lookup through a
+> `SkillDeactivate` (capability `deactivate_skill`, input `{"name": <string>}`,
+> non-deferred). Like `SkillInvoke` it delegates the concrete lookup through a
 > `DispatchContext::skill_deactivate` callback so `oran-tool` stays independent
 > of `oran-skill`; bootstrap returns a versioned `skill_deactivation` record in
 > `Output::data_json` that the next prompt boundary nets against prior
@@ -472,7 +478,7 @@ Note that `dispatch` *takes* the permission evaluator and hook bus by reference.
 registry does **not** own them; bootstrap does. The current implementation also sets
 `DispatchContext::registry` to the dispatching `Registry` for the duration of a call
 and restores the previous pointer on exit. Normal handlers ignore this non-owning
-pointer; metadata tools such as `tool.search` use it to inspect the live catalog
+pointer; metadata tools such as `ToolSearch` use it to inspect the live catalog
 without capturing a self-reference inside a movable registry value.
 
 ## Built-in Tool Categories
@@ -482,17 +488,17 @@ Each category is a small library that calls `Registry::add` from a single
 
 | Library                       | Tools                                                   |
 | ----------------------------- | ------------------------------------------------------- |
-| `oran-tool-file`              | `file.read`, `file.write`, `file.edit`, `file.search`   |
-| `oran-tool-shell`             | `shell.exec`, `shell.glob`, `shell.ls`, `shell.move`    |
-| `oran-tool-memory`            | `memory.recall`, `memory.remember`, `memory.forget`     |
-| `oran-tool-orchestration`     | `agent.spawn`, `agent.stop`, `agent.send_message`, …    |
+| `oran-tool-file`              | `FileRead`, `FileWrite`, `FileEdit`, `FileSearch`   |
+| `oran-tool-shell`             | `ShellExec`, `ShellGlob`, `ShellLs`, `ShellMove`    |
+| `oran-tool-memory`            | `MemoryRecall`, `MemoryRemember`, `MemoryForget`     |
+| `oran-tool-orchestration`     | `AgentSpawn`, `agent.stop`, `agent.send_message`, …    |
 | `oran-tool-automation`        | `automation.schedule`, `automation.list`, …             |
 | `oran-tool-mcp`               | external MCP client (one tool per external MCP server)  |
-| `oran-tool-skill`             | `skill.invoke`, `skill.deactivate`                      |
+| `oran-tool-skill`             | `SkillInvoke`, `SkillDeactivate`                      |
 | `oran-tool-background`        | async job orchestration                                  |
 | `oran-tool-attachments`       | message attachment management                           |
 | `oran-tool-runtime-loader`    | dynamic tool reloading                                  |
-| `oran-tool` core built-in     | `tool.search` deferred tool discovery / metadata lookup |
+| `oran-tool` core built-in     | `ToolSearch` deferred tool discovery / metadata lookup |
 | `oran-tool-script`            | scriptable batch tool                                   |
 
 Each tool library is **independent** — adding a new category does not recompile the
@@ -505,12 +511,12 @@ glob / ls / mkdir / move logic. v2 split:
 
 - **`oran-tool-shell`** owns process execution, glob/ls/mkdir/mv as the *raw* surface
   with subprocess semantics and tty-style output.
-- **`oran-tool-file`** owns **structured** operations: `file.read` returns content +
-  line numbers + checksum; `file.edit` performs patch-style edits with conflict
-  detection; `file.search` returns ripgrep-style structured matches.
+- **`oran-tool-file`** owns **structured** operations: `FileRead` returns content +
+  line numbers + checksum; `FileEdit` performs patch-style edits with conflict
+  detection; `FileSearch` returns ripgrep-style structured matches.
 
 Operations that exist in both libraries (`glob`, `ls`, `mkdir`, `move`) are **only**
-in `oran-tool-shell`. `oran-tool-file::file.search` may call into shell glob
+in `oran-tool-shell`. `oran-tool-file::FileSearch` may call into shell glob
 internally, but the public surface is distinct.
 
 ## Permission Ordering
@@ -545,7 +551,7 @@ their handler.
 ## Deferred Tools
 
 Some tools are **deferred** — present in the catalog but not surfaced to the LLM until
-explicitly looked up via `tool.search`. This pattern compresses the prompt without
+explicitly looked up via `ToolSearch`. This pattern compresses the prompt without
 losing capability.
 
 > **Status (slice 72, 2026-05-24):** `core::ToolDef` carries
@@ -553,7 +559,7 @@ losing capability.
 > `Registry::catalog()` snapshot into sorted active full-schema blocks and
 > sorted deferred name/description rows. `Registry::catalog()` still returns
 > all registered tools; there is no `deferred_catalog()` API yet. `oran-tool`
-> now also registers the non-deferred `tool.search` metadata lookup, which
+> now also registers the non-deferred `ToolSearch` metadata lookup, which
 > searches the current registry snapshot by exact name, category, and/or
 > required capability and returns text plus structured `Output::data_json`
 > containing matched tool definitions. `oran-config` now parses
@@ -563,7 +569,7 @@ losing capability.
 > ships `prompt::PromotionState`, a session-owned 16-entry / 24-hour LRU+TTL
 > promotion set whose sorted snapshot lets the next builder call move selected
 > deferred tools into the active catalog. `agent::SessionState` now wires
-> successful `tool.search` results into that state by promoting deferred matches
+> successful `ToolSearch` results into that state by promoting deferred matches
 > and ignoring failed or non-search outputs.
 
 Implementation:
@@ -573,9 +579,9 @@ Implementation:
   `deferred_catalog()` convenience may expose the filtered snapshot.
 - `prompt::Builder` lists the deferred tool *names + one-line descriptions*
   in section 3's compact deferred-tool index.
-- `tool.search` is a non-deferred tool that returns the full schema on demand.
+- `ToolSearch` is a non-deferred tool that returns the full schema on demand.
 - `agent::SessionState` owns `prompt::PromotionState` and calls `promote`
-  after successful `tool.search` results. The prompt builder honors the
+  after successful `ToolSearch` results. The prompt builder honors the
   resulting snapshot by rendering promoted tools with full schemas.
 
 `async::Channel<Promotion>` could push promotions across iterations if needed; for now
@@ -599,7 +605,7 @@ Tool lifecycle hooks:
 - `tool.after(name, input, output, identity, duration)` — always.
 - `tool.error(name, input, error, identity)` — if handler returned an error.
 
-For `file.write` and `file.edit`, default/non-trusted hook sinks receive a
+For `FileWrite` and `FileEdit`, default/non-trusted hook sinks receive a
 sanitized `input_json` view instead of the raw mutation input. The sanitized
 view carries `kind=redacted_tool_input`, `tool_name`, the full input SHA-256,
 the input byte count, and the redacted string byte counts; sinks whose
@@ -615,13 +621,13 @@ See `permissions-and-hooks.md` for sink kinds.
   cancellation token.
 - Tools that ignore the `Capability` declaration and use a service anyway.
 - Tools that call `provider::System::send` themselves to "ask another model". That's
-  agent territory; use `agent.spawn` or the orchestration tools.
+  agent territory; use `AgentSpawn` or the orchestration tools.
 
 ## Workspace Handle
 
 Slices 37-40 closed the per-tool half of the workspace migration: every
-filesystem built-in (`file.read`, `file.write`, `file.edit`, `file.delete`,
-`file.search`, `directory.list`) resolves its input through the workspace
+filesystem built-in (`FileRead`, `FileWrite`, `FileEdit`, `FileDelete`,
+`FileSearch`, `DirectoryList`) resolves its input through the workspace
 seam when `DispatchContext::workspace` is supplied. Slice 41 lands the
 bootstrap-owned half: `bootstrap::RuntimeAssembly` constructs and owns the
 `tool::Workspace`, and `oran-config` recognises
@@ -662,7 +668,7 @@ Current surface and forward shape:
   follow inside-workspace symlinks for `resolve_read` / `resolve_list`
   (rejecting `symlink_escape` when the target leaves the root), and refuse
   symlinks for `resolve_write` / `resolve_delete` (`symlink_target`).
-  Nested entries during a `file.search` walk continue to skip symlinks
+  Nested entries during a `FileSearch` walk continue to skip symlinks
   wholesale, a stricter form of the same rule that defers the
   workspace-aware "follow if it stays inside" enhancement to a future
   walker.
@@ -846,7 +852,7 @@ renderer version, never tool schemas or cache keys. `oran-prompt` consumes
 this renderer for sections 2 and 3; it owns the active/deferred selection
 from `runtime.prompt.active_tools` plus the promoted-tool snapshot consumed by
 `prompt::Builder`. The registry-owned lookup half of the
-deferred-tool design is shipped as `tool.search`: it accepts
+deferred-tool design is shipped as `ToolSearch`: it accepts
 `{name?, category?, capability?}`, requires at least one selector, ANDs
 provided selectors, and returns `{kind:"tool_search", query,
 match_count, matches[]}` in `Output::data_json`. Each match carries
@@ -937,13 +943,13 @@ Current and future policy:
   cost, wall time in milliseconds, and cap flags when present. Slice 79 scopes
   that update by `parent_turn_id` as well as the existing identity/hash fields
   so two concurrent turns cannot enrich each other's same-tool audit row.
-- Built-ins migrate one at a time. `file.read` still keeps the stable
+- Built-ins migrate one at a time. `FileRead` still keeps the stable
   spec-0011 text fallback
   `<path>:<start_line>-<end_line> fingerprint=<token> bytes=<n>[ truncated]`
   followed by the requested body, and slice 62 also stores a serialized JSON
   object in `Output::data_json` with `kind=file_read`, `path`, requested
   `text`, `fingerprint`, `start_line`, `end_line`, `returned_bytes`, and
-  `truncated`. Slice 63 migrates `file.search` next: handlers keep the
+  `truncated`. Slice 63 migrates `FileSearch` next: handlers keep the
   `path:line:text` text rendering plus the trailing truncation summary, and
   also store a serialized JSON object in `Output::data_json` with
   `kind=file_search`, `path`, `pattern`, `regex`, `matches[]` (one
@@ -952,7 +958,7 @@ Current and future policy:
   `files_scanned`, and `bytes_read`. `Output::usage` carries
   `bytes_read` (cumulative scanned file bytes), `files_touched`
   (non-binary scanned files), `match_count` (post-truncation), and the
-  `truncated` cap flag. Slice 64 migrates `directory.list`: handlers
+  `truncated` cap flag. Slice 64 migrates `DirectoryList`: handlers
   keep the `<path>:<kind>:<size_bytes or '-'>` text rendering, and also
   store a serialized JSON object in `Output::data_json` with
   `kind=directory_list`, `path`, `include_hidden`, `max_entries`,
@@ -962,9 +968,9 @@ Current and future policy:
   `match_count=entry_count`. Every filesystem built-in in `oran-tool`
   has now completed its v1 migration to the structured envelope.
 - Slice 61 migrates the current mutation built-ins to fill counters:
-  `file.write` reports `bytes_written` and `files_touched`; `file.edit`
+  `FileWrite` reports `bytes_written` and `files_touched`; `FileEdit`
   reports `bytes_read`, `bytes_written`, `files_touched`, and
-  `match_count`; `file.delete` reports `bytes_written=0` and
+  `match_count`; `FileDelete` reports `bytes_written=0` and
   `files_touched=1`. Their model-facing summaries stay unchanged and
   `data_json` remains empty.
 - Provider adapters consume `data_json` only when the target protocol supports
@@ -984,7 +990,7 @@ Current and future policy:
   `SinkKind::trusted_local`; default sinks receive the text fallback and usage
   metrics with `data_json` cleared.
 - Raw mutation-input hook redaction shipped in slice 152: the
-  `file.write` / `file.edit` dispatch path fills
+  `FileWrite` / `FileEdit` dispatch path fills
   `redacted_input_json` with a hash-and-byte-count summary, and `hook::Bus`
   substitutes that value for every non-trusted sink across
   `tool_before`, `tool_dispatched`, `tool_after`, `tool_error`, and
@@ -1021,4 +1027,4 @@ Current and future policy:
   and dropping oversized structured data.
 
 `compare.cpp` reports the dispatch overhead as a percentage of typical tool latency
-(file.read of 4 KB; shell.exec of `/bin/true`).
+(FileRead of 4 KB; ShellExec of `/bin/true`).

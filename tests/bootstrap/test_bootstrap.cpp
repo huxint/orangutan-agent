@@ -1159,7 +1159,7 @@ TEST_CASE("run applies --mode to configured provider tool permissions", "[unit][
   ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
   ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
   OneShotHttpServer server{std::vector<std::string>{
-      anthropic_sse_tool_use_response("toolu_read", "file.read", R"({"path":"readable.txt"})"),
+      anthropic_sse_tool_use_response("toolu_read", "FileRead", R"({"path":"readable.txt"})"),
       anthropic_sse_response("strict handled"),
   }};
   TempDir temp{"oran-bootstrap-provider-mode-selector"};
@@ -1509,7 +1509,7 @@ constexpr auto kExplainConfigText = R"json(
 {
   "permissions": {
     "allow": [
-      {"tool_pattern": "file.read"}
+      {"tool_pattern": "FileRead"}
     ],
     "deny": [
       {"tool_pattern": "*", "capability": "runtime_loader"}
@@ -1697,11 +1697,11 @@ void populate_trace_fixture(const std::filesystem::path& audit_db, const core::T
     auto first_audit = storage::AppendAuditEventRequest{
         .scope_key = "scope-A",
         .agent_key = "coder",
-        .tool_name = "file.read",
+        .tool_name = "FileRead",
         .identity = "operator-1",
         .verdict = "allow",
         .outcome = "allow",
-        .reason = "rule #1 (allow: file.*)",
+        .reason = "rule #1 (allow: File*)",
         .parent_turn_id = turn_id,
     };
     auto first_audit_row = co_await audit_repo.append_event(std::move(first_audit));
@@ -1711,7 +1711,7 @@ void populate_trace_fixture(const std::filesystem::path& audit_db, const core::T
         .event_kind = "hook_publish",
         .scope_key = "scope-A",
         .agent_key = "coder",
-        .tool_name = "file.write",
+        .tool_name = "FileWrite",
         .identity = "operator-1",
         .verdict = "allow",
         .outcome = "allow",
@@ -1725,11 +1725,11 @@ void populate_trace_fixture(const std::filesystem::path& audit_db, const core::T
     auto second_audit = storage::AppendAuditEventRequest{
         .scope_key = "scope-A",
         .agent_key = "coder",
-        .tool_name = "file.write",
+        .tool_name = "FileWrite",
         .identity = "operator-1",
         .verdict = "allow",
         .outcome = "allow",
-        .reason = "rule #1 (allow: file.*)",
+        .reason = "rule #1 (allow: File*)",
         .parent_turn_id = turn_id,
     };
     auto second_audit_row = co_await audit_repo.append_event(std::move(second_audit));
@@ -1756,7 +1756,7 @@ void populate_trace_export_list_fixture(const std::filesystem::path& audit_db) {
     auto newest_coder_audit = co_await audit_repo.append_event(storage::AppendAuditEventRequest{
         .scope_key = "scope-list",
         .agent_key = "coder",
-        .tool_name = "file.read",
+        .tool_name = "FileRead",
         .identity = "operator-1",
         .verdict = "allow",
         .outcome = "allow",
@@ -1771,7 +1771,7 @@ void populate_trace_export_list_fixture(const std::filesystem::path& audit_db) {
     auto reviewer_audit = co_await audit_repo.append_event(storage::AppendAuditEventRequest{
         .scope_key = "scope-list",
         .agent_key = "reviewer",
-        .tool_name = "file.read",
+        .tool_name = "FileRead",
         .identity = "operator-1",
         .verdict = "allow",
         .outcome = "allow",
@@ -1786,7 +1786,7 @@ void populate_trace_export_list_fixture(const std::filesystem::path& audit_db) {
     auto older_coder_audit = co_await audit_repo.append_event(storage::AppendAuditEventRequest{
         .scope_key = "scope-list",
         .agent_key = "coder",
-        .tool_name = "file.write",
+        .tool_name = "FileWrite",
         .identity = "operator-1",
         .verdict = "allow",
         .outcome = "allow",
@@ -2079,12 +2079,12 @@ TEST_CASE("run --trace-export prints one JSON Lines trace object", "[unit][boots
   REQUIRE(exported["audit_rows"].is_array());
   REQUIRE(exported["audit_rows"].size() == 3);
   REQUIRE(exported["audit_rows"][0]["event_kind"] == "permission_decision");
-  REQUIRE(exported["audit_rows"][0]["tool_name"] == "file.read");
+  REQUIRE(exported["audit_rows"][0]["tool_name"] == "FileRead");
   REQUIRE(exported["audit_rows"][0]["input_hash_hex"].is_null());
   REQUIRE(exported["audit_rows"][1]["event_kind"] == "hook_publish");
   REQUIRE(exported["audit_rows"][1]["metadata_json"]["event"] == "tool_before");
   REQUIRE(exported["audit_rows"][1]["metadata_json"]["decision_kind"] == "veto");
-  REQUIRE(exported["audit_rows"][2]["tool_name"] == "file.write");
+  REQUIRE(exported["audit_rows"][2]["tool_name"] == "FileWrite");
 }
 
 TEST_CASE("run --trace-export lists bounded JSON Lines turns by agent", "[unit][bootstrap][trace]") {
@@ -2110,13 +2110,13 @@ TEST_CASE("run --trace-export lists bounded JSON Lines turns by agent", "[unit][
   REQUIRE(rows[0]["trace"]["agent_key"] == "coder");
   REQUIRE(rows[0]["trace"]["started_at_ns"] == 3000);
   REQUIRE(rows[0]["audit_rows"].size() == 1);
-  REQUIRE(rows[0]["audit_rows"][0]["tool_name"] == "file.read");
+  REQUIRE(rows[0]["audit_rows"][0]["tool_name"] == "FileRead");
 
   REQUIRE(rows[1]["trace"]["turn_id"] == "505152535455565758595a5b5c5d5e5f");
   REQUIRE(rows[1]["trace"]["agent_key"] == "coder");
   REQUIRE(rows[1]["trace"]["started_at_ns"] == 1000);
   REQUIRE(rows[1]["audit_rows"].size() == 1);
-  REQUIRE(rows[1]["audit_rows"][0]["tool_name"] == "file.write");
+  REQUIRE(rows[1]["audit_rows"][0]["tool_name"] == "FileWrite");
 }
 
 TEST_CASE("run --trace-export writes one JSON Lines trace object to a file", "[unit][bootstrap][trace]") {
@@ -2185,11 +2185,11 @@ TEST_CASE("run --trace-export writes bounded JSON Lines turns to a file", "[unit
   REQUIRE(rows[0]["kind"] == "trace_turn");
   REQUIRE(rows[0]["trace"]["turn_id"] == "303132333435363738393a3b3c3d3e3f");
   REQUIRE(rows[0]["trace"]["agent_key"] == "coder");
-  REQUIRE(rows[0]["audit_rows"][0]["tool_name"] == "file.read");
+  REQUIRE(rows[0]["audit_rows"][0]["tool_name"] == "FileRead");
 
   REQUIRE(rows[1]["trace"]["turn_id"] == "505152535455565758595a5b5c5d5e5f");
   REQUIRE(rows[1]["trace"]["agent_key"] == "coder");
-  REQUIRE(rows[1]["audit_rows"][0]["tool_name"] == "file.write");
+  REQUIRE(rows[1]["audit_rows"][0]["tool_name"] == "FileWrite");
 }
 
 TEST_CASE("run --trace-export posts one JSON Lines trace object", "[unit][bootstrap][trace]") {
@@ -2267,9 +2267,9 @@ TEST_CASE("run --trace-export posts bounded JSON Lines turns", "[unit][bootstrap
   REQUIRE(rows.size() == 2);
   REQUIRE(rows[0]["trace"]["turn_id"] == "303132333435363738393a3b3c3d3e3f");
   REQUIRE(rows[0]["trace"]["agent_key"] == "coder");
-  REQUIRE(rows[0]["audit_rows"][0]["tool_name"] == "file.read");
+  REQUIRE(rows[0]["audit_rows"][0]["tool_name"] == "FileRead");
   REQUIRE(rows[1]["trace"]["turn_id"] == "505152535455565758595a5b5c5d5e5f");
-  REQUIRE(rows[1]["audit_rows"][0]["tool_name"] == "file.write");
+  REQUIRE(rows[1]["audit_rows"][0]["tool_name"] == "FileWrite");
 }
 
 TEST_CASE("run --trace-export reports HTTP POST sink failures", "[unit][bootstrap][trace]") {
