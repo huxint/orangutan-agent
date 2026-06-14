@@ -7,6 +7,7 @@
 #include <charconv>
 #include <chrono>
 #include <cstddef>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -198,6 +199,67 @@ public:
 
 private:
   int saved_fd_{-1};
+};
+
+class ScopedStdoutCapture {
+public:
+  ScopedStdoutCapture() {
+    int pipe_fds[2] = {-1, -1};
+    REQUIRE(::pipe(pipe_fds) == 0);
+
+    saved_fd_ = ::dup(STDOUT_FILENO);
+    REQUIRE(saved_fd_ >= 0);
+
+    read_fd_ = pipe_fds[0];
+    REQUIRE(::dup2(pipe_fds[1], STDOUT_FILENO) >= 0);
+    REQUIRE(::close(pipe_fds[1]) == 0);
+  }
+
+  ~ScopedStdoutCapture() {
+    restore_stdout();
+    if (read_fd_ >= 0) {
+      (void)::close(read_fd_);
+    }
+  }
+
+  [[nodiscard]] std::string finish() {
+    REQUIRE(std::fflush(stdout) == 0);
+    restore_stdout();
+
+    auto captured = std::string{};
+    auto buffer = std::array<char, 4096>{};
+    while (true) {
+      const auto bytes = ::read(read_fd_, buffer.data(), buffer.size());
+      if (bytes < 0 && errno == EINTR) {
+        continue;
+      }
+      REQUIRE(bytes >= 0);
+      if (bytes == 0) {
+        break;
+      }
+      captured.append(buffer.data(), static_cast<std::size_t>(bytes));
+    }
+    REQUIRE(::close(read_fd_) == 0);
+    read_fd_ = -1;
+    return captured;
+  }
+
+  ScopedStdoutCapture(const ScopedStdoutCapture&) = delete;
+  ScopedStdoutCapture& operator=(const ScopedStdoutCapture&) = delete;
+  ScopedStdoutCapture(ScopedStdoutCapture&&) = delete;
+  ScopedStdoutCapture& operator=(ScopedStdoutCapture&&) = delete;
+
+private:
+  void restore_stdout() {
+    if (saved_fd_ >= 0) {
+      (void)::dup2(saved_fd_, STDOUT_FILENO);
+      (void)::close(saved_fd_);
+      saved_fd_ = -1;
+    }
+  }
+
+  int saved_fd_{-1};
+  int read_fd_{-1};
 };
 
 class OneShotHttpServer {
@@ -1339,6 +1401,18 @@ TEST_CASE("run rejects duplicate bootstrap flags", "[unit][bootstrap]") {
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
   }
+  SECTION("duplicate --trace-export") {
+    auto args = std::vector<std::string_view>{"--trace-export", "abc", "--trace-export", "def"};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+  SECTION("--trace and --trace-export together") {
+    auto args = std::vector<std::string_view>{"--trace", "abc", "--trace-export", "def"};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
 }
 
 TEST_CASE("parse_explain_rules_selector defaults to default-mode, no agent", "[unit][bootstrap][explain_rules]") {
@@ -1717,6 +1791,37 @@ TEST_CASE("run --trace reports not_found for unknown turn ids", "[unit][bootstra
   REQUIRE(result.error().kind() == core::ErrorKind::not_found);
 }
 
+TEST_CASE("run --trace-export rejects missing or empty turn id", "[unit][bootstrap][trace]") {
+  TempDir temp{"oran-bootstrap-trace-export-no-id"};
+
+  SECTION("--trace-export without value") {
+    auto args = std::vector<std::string_view>{"--trace-export"};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+
+  SECTION("--trace-export= empty value") {
+    auto args = std::vector<std::string_view>{"--trace-export="};
+    auto result = bootstrap::run(options(args, temp.path()));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  }
+}
+
+TEST_CASE("run --trace-export reports not_found for unknown turn ids", "[unit][bootstrap][trace]") {
+  TempDir temp{"oran-bootstrap-trace-export-missing-turn"};
+  auto init_args = std::vector<std::string_view>{"--audit-init"};
+  auto init_result = bootstrap::run(options(init_args, temp.path()));
+  REQUIRE(init_result.has_value());
+
+  auto args = std::vector<std::string_view>{"--trace-export", std::string_view{kSampleTurnHex}};
+  auto result = bootstrap::run(options(args, temp.path()));
+
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(result.error().kind() == core::ErrorKind::not_found);
+}
+
 TEST_CASE("run --trace returns 0 when the turn row and joined audit rows exist", "[unit][bootstrap][trace]") {
   TempDir temp{"oran-bootstrap-trace-happy"};
   const auto audit_db = temp.path() / ".orangutan" / "audit.db";
@@ -1738,4 +1843,44 @@ TEST_CASE("run --trace returns 0 when the turn row and joined audit rows exist",
     REQUIRE(result.has_value());
     REQUIRE(*result == 0);
   }
+}
+
+TEST_CASE("run --trace-export prints one JSON Lines trace object", "[unit][bootstrap][trace]") {
+  TempDir temp{"oran-bootstrap-trace-export-happy"};
+  const auto audit_db = temp.path() / ".orangutan" / "audit.db";
+  std::filesystem::create_directories(audit_db.parent_path());
+
+  populate_trace_fixture(audit_db, sample_turn_id());
+
+  auto args = std::vector<std::string_view>{"--trace-export", std::string_view{kSampleTurnHex}};
+  auto stdout_capture = ScopedStdoutCapture{};
+  auto result = bootstrap::run(options(args, temp.path()));
+  auto output = stdout_capture.finish();
+
+  REQUIRE(result.has_value());
+  REQUIRE(*result == 0);
+  REQUIRE(std::ranges::count(output, '\n') == 1);
+
+  const auto exported = nlohmann::json::parse(output);
+  REQUIRE(exported["kind"] == "trace_turn");
+  REQUIRE(exported["trace"]["turn_id"] == kSampleTurnHex);
+  REQUIRE(exported["trace"]["session_id"] == "808182838485868788898a8b8c8d8e8f");
+  REQUIRE(exported["trace"]["agent_key"] == "coder");
+  REQUIRE(exported["trace"]["route_profile"] == "fake-main");
+  REQUIRE(exported["trace"]["route_model"] == "fake-model");
+  REQUIRE(exported["trace"]["duration_ns"] == 1500);
+  REQUIRE(exported["trace"]["prompt_prefix_hash"] == "0xfeedface12345678");
+  REQUIRE(exported["trace"]["usage"]["input_tokens"] == 1500);
+  REQUIRE(exported["trace"]["usage"]["cache_read_tokens"] == 1024);
+  REQUIRE(exported["trace"]["context_json"]["source"] == "trace-inspector-test");
+
+  REQUIRE(exported["audit_rows"].is_array());
+  REQUIRE(exported["audit_rows"].size() == 3);
+  REQUIRE(exported["audit_rows"][0]["event_kind"] == "permission_decision");
+  REQUIRE(exported["audit_rows"][0]["tool_name"] == "file.read");
+  REQUIRE(exported["audit_rows"][0]["input_hash_hex"].is_null());
+  REQUIRE(exported["audit_rows"][1]["event_kind"] == "hook_publish");
+  REQUIRE(exported["audit_rows"][1]["metadata_json"]["event"] == "tool_before");
+  REQUIRE(exported["audit_rows"][1]["metadata_json"]["decision_kind"] == "veto");
+  REQUIRE(exported["audit_rows"][2]["tool_name"] == "file.write");
 }

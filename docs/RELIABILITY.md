@@ -28,6 +28,13 @@ trust the audit log. This doc captures the operational expectations.
 - v1: counters are surfaced in the desktop app's status panel and emitted to structured
   logs; there is no HTTP metrics endpoint (an `orangutan-server`-only `GET /metrics` in
   Prometheus exposition format is a possible future option).
+- Trace inspection is SQLite-native today: `orangutan --trace <turn-id>` prints a
+  human-readable `trace_turns` row plus joined audit rows, and
+  `orangutan --trace-export <turn-id>` emits the same single turn as one JSON
+  Lines object to stdout for log/SIEM ingestion. Both commands read
+  `<workspace>/.orangutan/audit.db`, run the idempotent audit migration first,
+  and preserve the redacted trace/audit contract: no raw prompt bytes, tool
+  inputs, provider bodies, or secrets are added by the exporter.
 - v1.1: distributed tracing via OpenTelemetry (stretch — adds a dependency; gate it
   behind `--obs_otel=y`).
 

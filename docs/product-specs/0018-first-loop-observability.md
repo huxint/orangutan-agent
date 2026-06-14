@@ -258,6 +258,14 @@ makes the existing audit rows joinable. Nothing else.
 - **Trace export**. JSON Lines emitter for an external SIEM. One
   line per turn; trace row + joined audit rows + joined hook
   publishes. Output to stdout, file, or `oran-http` POST endpoint.
+  **Status (slice 239):** the first stdout-only, single-turn slice
+  shipped as `orangutan --trace-export <turn-id>`. It reuses the
+  `--trace` read path, validates the same 32-character lowercase hex
+  turn id, runs the idempotent audit migration, reads one
+  `trace_turns` row plus `audit_events.parent_turn_id` matches, and
+  emits a single JSON Lines object with parsed `context_json` and
+  `metadata_json` fields. Bounded multi-turn export, file output, and
+  HTTP posting remain downstream.
 - **Provider streaming phase rollup**. The `cancellation_phase`
   field grows to record `provider_stream`,
   `provider_initial`, `provider_complete` so a cancellation during
@@ -416,6 +424,17 @@ makes the existing audit rows joinable. Nothing else.
     overlapping-sum encoding broke the trace PRIMARY KEY guard the
     moment nanobench advanced past the first epoch; both batch
     scenarios now run alongside the new single-insert pair.
+13. **Trace JSONL export.** A known `<turn_id>` passed to
+    `orangutan --trace-export <turn_id>` prints exactly one JSON
+    Lines object with `kind="trace_turn"`, the trace row, and every
+    joined audit row in deterministic `id ASC` order. Unknown ids
+    return `Error::not_found`; malformed ids use the same validation
+    as `--trace`.
+    **Status (slice 239):** shipped for single-turn stdout export.
+    `test-bootstrap` pins missing-value handling, unknown turn ids,
+    mutual exclusion with `--trace`, parsed trace context JSON, parsed
+    hook-publish metadata JSON, NULL input hashes, and the one-line
+    output shape.
 
 ## Design Doc Cross-References
 
@@ -482,9 +501,11 @@ xmake run test-storage                        # trace_turns migration + insert +
 xmake run test-agent                          # trace rows joined to spec 0017 scenarios
 xmake run test-tool                           # direct tool_before hook_publish rows
 xmake run test-bootstrap                      # --trace inspector output over mixed rows
+xmake run test-bootstrap "[trace]"            # --trace + --trace-export paths
 xmake build bench-oran-storage
 xmake run bench-oran-storage trace_turn_insert
 xmake run orangutan -- --trace <turn-id>      # CLI inspector
+xmake run orangutan -- --trace-export <turn-id> # JSON Lines trace export
 ```
 
 ## Out-of-Band Cross-Cuts

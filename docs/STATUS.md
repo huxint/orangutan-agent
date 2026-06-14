@@ -9,35 +9,33 @@
 
 ## Snapshot
 
-- **Slice:** 238 (`xmake run orangutan -- --help` reports slice 238)
+- **Slice:** 239 (`xmake run orangutan -- --help` reports slice 239)
 - **Last completed history:**
-  [`histories/2026-06/20260614-1551-channel-qq-gateway-discovery.md`](histories/2026-06/20260614-1551-channel-qq-gateway-discovery.md)
+  [`histories/2026-06/20260614-1612-trace-jsonl-export.md`](histories/2026-06/20260614-1612-trace-jsonl-export.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
-    — the current main line; spun off from the completed channel-ingress
-    plan ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-- **Latest completed slice:** slice 238 reduces the QQ real-smoke setup
-  burden without claiming the credentialed smoke passed. `oran-channel-qq` now
-  exposes a typed `GET /gateway/bot` discovery helper
-  (`discover_gateway_bot(...)` / `parse_gateway_bot_response(...)`) that
-  validates the WebSocket URL, shard count, and optional
-  `session_start_limit` fields without leaking JSON parser types through the
-  public header. The hidden registered-path real-smoke test now treats
-  `ORAN_TEST_QQ_GATEWAY_URL` as an override: when it is absent, the test uses
-  the QQ app credentials plus `ORAN_TEST_QQ_API_BASE_URL` /
-  `ORAN_TEST_QQ_TOKEN_URL` overrides to discover the gateway URL before
-  building the existing config. Ordinary CI remains secret-free/network-free
-  because the case is still hidden and no-ops without opt-in/credentials. The
-  local environment still has no QQ real-smoke variables, so 4b-ii remains open
-  and `channel_qq` remains default-off. Focused results: `test-config` **55
-  cases / 519 assertions**, default `test-bootstrap` **146 cases / 1312
-  assertions**, gated `test-bootstrap` **148 cases / 1352 assertions**,
-  `test-channel` **25 cases / 191 assertions**, and gated `test-channel-qq`
-  **58 cases / 369 assertions**.
-- **Next intended slice:** QQ-port milestone 4b-ii — run the hidden real QQ
-  smoke gate with real credentials and a sendable operator conversation, then
-  record the result before considering `channel_qq` default-on
-  ([`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)).
+    — remains active, but its next gate is externally blocked on real QQ
+    credentials plus a sendable operator conversation; it was spun off from the
+    completed channel-ingress plan
+    ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
+- **Latest completed slice:** slice 239 advances the unblocked
+  Observability/trace line while QQ 4b-ii remains credential-blocked. The
+  bootstrap trace inspector now has a sibling `--trace-export <turn-id>`
+  command that reads the same `<workspace>/.orangutan/audit.db` row and joined
+  audit cause chain as `--trace`, then emits one JSON Lines object to stdout:
+  `kind=trace_turn`, the trace row, parsed `context_json`, and ordered joined
+  audit rows with parsed `metadata_json`. The export stays read-only, keeps the
+  same lowercase 32-hex turn-id validation and missing-row errors, and does not
+  expose raw prompt/tool/provider bodies beyond the already persisted
+  redacted audit/trace fields. Focused results: default `test-bootstrap` **149
+  cases / 1361 assertions** and `[trace]` **12 cases / 107 assertions**; gated
+  QQ counts remain gated `test-bootstrap` **148 cases / 1352 assertions** and
+  gated `test-channel-qq` **58 cases / 369 assertions** from slice 238.
+- **Next intended slice:** Observability v1.1 — extend trace export from a
+  single turn-id inspector/export into a bounded multi-turn operator surface
+  (for example `--trace-export --agent <name> --limit <n>`) before adding file
+  or HTTP sinks. QQ-port 4b-ii remains waiting on real QQ credentials and an
+  operator conversation.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 
@@ -50,8 +48,8 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 | ----- | ----- |
 | **A** | *(none yet — pre-v1)* |
 | **B** | Architecture docs, Build system, Async model, Security defaults, Supply chain |
-| **C** | Compile-time discipline, Tests, Benches, IO, Storage, Config, Bootstrap, Provider system, Tool registry, Prompt builder, Memory tiers, Permissions, Hooks, Channels, Orchestration, Automation, Desktop App, CLI, Skills, Static analysis |
-| **D** | Observability |
+| **C** | Compile-time discipline, Tests, Benches, IO, Storage, Config, Bootstrap, Provider system, Tool registry, Prompt builder, Memory tiers, Permissions, Hooks, Channels, Orchestration, Automation, Desktop App, CLI, Skills, Observability, Static analysis |
+| **D** | *(none)* |
 
 ## Latest Library Surfaces
 
@@ -73,7 +71,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 86 cases / 652 assertions.
 - `oran-agent`: 56 cases / 10 744 assertions.
 - `oran-cli`: 26 cases / 205 assertions.
-- `oran-bootstrap`: 146 cases / 1312 assertions (gated `--channel_qq=y`: 148 /
+- `oran-bootstrap`: 149 cases / 1361 assertions (gated `--channel_qq=y`: 148 /
   1352).
 
 ## Open Tech-Debt Rows

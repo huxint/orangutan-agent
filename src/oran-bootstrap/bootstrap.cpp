@@ -9,6 +9,7 @@
 #include <exception>
 #include <expected>
 #include <filesystem>
+#include <format>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -22,6 +23,8 @@
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
+
+#include <nlohmann/json.hpp>
 
 #include <oran/async.hpp>
 #include <oran/bootstrap/automation_cron.hpp>
@@ -48,7 +51,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice238";
+constexpr std::string_view kVersion = "2.0.0-slice239";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 constexpr std::string_view kLongtermTextEmbeddingModel = "oran-local-text-v1";
@@ -64,6 +67,7 @@ struct ParsedArgs {
   bool has_audit_init_path{false};
   std::string audit_init_path{};
   bool trace_inspect{false};
+  bool trace_export{false};
   std::string trace_turn_id_hex{};
   bool has_explicit_config{false};
   std::string explicit_config_path{};
@@ -301,8 +305,8 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
 
     constexpr auto kTracePrefix = std::string_view{"--trace="};
     if (arg.starts_with(kTracePrefix)) {
-      if (parsed.trace_inspect) {
-        return std::unexpected(arg_error("--trace may be provided only once"));
+      if (parsed.trace_inspect || parsed.trace_export) {
+        return std::unexpected(arg_error("--trace and --trace-export are mutually exclusive"));
       }
       parsed.trace_inspect = true;
       parsed.trace_turn_id_hex = std::string{arg.substr(kTracePrefix.size())};
@@ -313,8 +317,8 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
     }
 
     if (arg == "--trace") {
-      if (parsed.trace_inspect) {
-        return std::unexpected(arg_error("--trace may be provided only once"));
+      if (parsed.trace_inspect || parsed.trace_export) {
+        return std::unexpected(arg_error("--trace and --trace-export are mutually exclusive"));
       }
       parsed.trace_inspect = true;
       if (index + 1 >= args.size()) {
@@ -323,6 +327,34 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
       parsed.trace_turn_id_hex = std::string{args[++index]};
       if (parsed.trace_turn_id_hex.empty()) {
         return std::unexpected(arg_error("--trace requires a non-empty turn id"));
+      }
+      continue;
+    }
+
+    constexpr auto kTraceExportPrefix = std::string_view{"--trace-export="};
+    if (arg.starts_with(kTraceExportPrefix)) {
+      if (parsed.trace_inspect || parsed.trace_export) {
+        return std::unexpected(arg_error("--trace and --trace-export are mutually exclusive"));
+      }
+      parsed.trace_export = true;
+      parsed.trace_turn_id_hex = std::string{arg.substr(kTraceExportPrefix.size())};
+      if (parsed.trace_turn_id_hex.empty()) {
+        return std::unexpected(arg_error("--trace-export requires a non-empty turn id"));
+      }
+      continue;
+    }
+
+    if (arg == "--trace-export") {
+      if (parsed.trace_inspect || parsed.trace_export) {
+        return std::unexpected(arg_error("--trace and --trace-export are mutually exclusive"));
+      }
+      parsed.trace_export = true;
+      if (index + 1 >= args.size()) {
+        return std::unexpected(arg_error("--trace-export requires a turn id"));
+      }
+      parsed.trace_turn_id_hex = std::string{args[++index]};
+      if (parsed.trace_turn_id_hex.empty()) {
+        return std::unexpected(arg_error("--trace-export requires a non-empty turn id"));
       }
       continue;
     }
@@ -393,7 +425,8 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
 void print_usage() {
   std::println("orangutan v{}", kVersion);
   std::println("usage: orangutan [--config <path>] [--mode <m>] [--agent <name>] [--explain-rules]");
-  std::println("                  [--audit-init [<path>]] [--trace <turn-id>] [--prompt <text>] [--help]");
+  std::println("                  [--audit-init [<path>]] [--trace <turn-id>] [--trace-export <turn-id>]");
+  std::println("                  [--prompt <text>] [--help]");
   std::println();
   std::println(
       "The current bootstrap slice loads config, builds configured provider backends, then hands prompts to oran-cli.");
@@ -404,6 +437,7 @@ void print_usage() {
   std::println("--audit-init applies the audit.db schema (defaults to <workspace>/.orangutan/audit.db) and exits.");
   std::println("--trace prints the trace_turns row and joined audit rows, including hook_publish, for <turn-id>");
   std::println("        (32 lowercase hex characters); reads <workspace>/.orangutan/audit.db.");
+  std::println("--trace-export prints the same trace row plus joined audit rows as one JSON Lines object.");
 }
 
 [[nodiscard]] Result<int> print_materialized_rules(const config::Config& cfg, const ExplainRulesSelector& selector) {
@@ -501,11 +535,11 @@ void print_usage() {
 /// lowercase hex that `format_turn_id_hex` emits. Rejects empty strings,
 /// wrong-length inputs, uppercase / non-hex characters, and the all-zero
 /// turn id (which `TraceRepository::append_turn` already rejects).
-[[nodiscard]] Result<core::TurnId> parse_turn_id_hex(std::string_view text) {
+[[nodiscard]] Result<core::TurnId> parse_turn_id_hex(std::string_view text, std::string_view flag) {
   constexpr auto kExpectedSize = core::TurnId{}.size() * 2;
   if (text.size() != kExpectedSize) {
-    return std::unexpected(
-        arg_error("--trace turn id must be 32 lowercase hex characters").with("length", std::to_string(text.size())));
+    return std::unexpected(arg_error(std::string{flag} + " turn id must be 32 lowercase hex characters")
+                               .with("length", std::to_string(text.size())));
   }
 
   auto decode_nibble = [](char c) -> Result<unsigned char> {
@@ -515,7 +549,7 @@ void print_usage() {
     if (c >= 'a' && c <= 'f') {
       return static_cast<unsigned char>(10 + (c - 'a'));
     }
-    return std::unexpected(arg_error("--trace turn id must be lowercase hex").with("char", std::string{1, c}));
+    return std::unexpected(arg_error("turn id must be lowercase hex").with("char", std::string{1, c}));
   };
 
   core::TurnId id{};
@@ -531,7 +565,7 @@ void print_usage() {
     id[i] = static_cast<std::byte>(static_cast<unsigned char>((*high << 4) | *low));
   }
   if (core::is_zero_turn_id(id)) {
-    return std::unexpected(arg_error("--trace turn id must not be all zero"));
+    return std::unexpected(arg_error(std::string{flag} + " turn id must not be all zero"));
   }
   return id;
 }
@@ -548,19 +582,27 @@ void print_usage() {
   return out;
 }
 
-/// Spec 0018 AC10 — read-only operator inspector. Resolves the workspace
-/// audit DB, opens a single-reader `Pool`, runs the idempotent migration
+[[nodiscard]] std::string format_u64_hex(std::uint64_t value) {
+  return std::format("0x{:016x}", value);
+}
+
+struct TraceInspectRows {
+  storage::TraceTurnRecord trace;
+  std::vector<storage::AuditEventRecord> audits;
+};
+
+/// Shared read-only trace lookup for `--trace` and `--trace-export`.
+/// Resolves the workspace audit DB, opens a single-reader `Pool`, runs the idempotent migration
 /// so the inspector tolerates a fresh DB that has not yet seen
-/// `--audit-init`, then prints the matching `trace_turns` row plus every
-/// `audit_events` row whose `parent_turn_id` matches the turn id. Audit
-/// rows are returned in `id ASC` order so the original `tool_use`
-/// sequence from a spec-0017 multi-tool turn survives the join.
-[[nodiscard]] Result<int> run_trace_inspect(std::string_view workspace, std::string_view turn_id_hex) {
+/// `--audit-init`, then returns the matching `trace_turns` row plus every
+/// `audit_events` row whose `parent_turn_id` matches the turn id.
+[[nodiscard]] Result<TraceInspectRows>
+load_trace_inspect_rows(std::string_view workspace, std::string_view turn_id_hex, std::string_view flag) {
   if (workspace.empty()) {
     return std::unexpected(Error::invalid_argument("workspace path is empty"));
   }
 
-  auto turn_id = parse_turn_id_hex(turn_id_hex);
+  auto turn_id = parse_turn_id_hex(turn_id_hex, flag);
   if (!turn_id) {
     return std::unexpected(std::move(turn_id).error());
   }
@@ -636,7 +678,102 @@ void print_usage() {
     return std::unexpected(Error::not_found("trace turn not found").with("turn_id", std::string{turn_id_hex}));
   }
 
-  const auto& row = *trace_row;
+  return TraceInspectRows{.trace = std::move(*trace_row), .audits = std::move(audit_rows)};
+}
+
+[[nodiscard]] nlohmann::ordered_json parse_json_value_or_string(std::string_view text) {
+  auto parsed = nlohmann::ordered_json::parse(text, nullptr, /*allow_exceptions=*/false);
+  if (parsed.is_discarded()) {
+    return std::string{text};
+  }
+  return parsed;
+}
+
+[[nodiscard]] nlohmann::ordered_json optional_turn_id_json(const std::optional<core::TurnId>& id) {
+  if (!id) {
+    return nullptr;
+  }
+  return format_turn_id_hex(*id);
+}
+
+[[nodiscard]] nlohmann::ordered_json optional_string_json(const std::optional<std::string>& value) {
+  if (!value) {
+    return nullptr;
+  }
+  return *value;
+}
+
+[[nodiscard]] nlohmann::ordered_json trace_turn_json(const storage::TraceTurnRecord& row) {
+  auto usage = nlohmann::ordered_json{
+      {"cache_creation_tokens", row.cache_creation_tokens},
+      {"cache_read_tokens", row.cache_read_tokens},
+      {"input_tokens", row.input_tokens},
+      {"output_tokens", row.output_tokens},
+      {"cost_estimate_usd", row.cost_estimate_usd},
+  };
+  return nlohmann::ordered_json{
+      {"turn_id", format_turn_id_hex(row.turn_id)},
+      {"parent_turn_id", optional_turn_id_json(row.parent_turn_id)},
+      {"session_id", format_turn_id_hex(row.session_id)},
+      {"agent_key", row.agent_key},
+      {"origin", row.origin},
+      {"route_profile", row.route_profile},
+      {"route_model", row.route_model},
+      {"started_at_ns", row.started_at_ns},
+      {"finished_at_ns", row.finished_at_ns},
+      {"duration_ns", row.finished_at_ns - row.started_at_ns},
+      {"stop_reason", row.stop_reason},
+      {"iteration_count", row.iteration_count},
+      {"prompt_prefix_hash", format_u64_hex(row.prompt_prefix_hash)},
+      {"prompt_prefix_bytes", row.prompt_prefix_bytes},
+      {"active_catalog_hash", format_u64_hex(row.active_catalog_hash)},
+      {"deferred_catalog_hash", format_u64_hex(row.deferred_catalog_hash)},
+      {"usage", std::move(usage)},
+      {"cancellation_phase",
+       row.cancellation_phase.has_value() ? nlohmann::ordered_json{*row.cancellation_phase}
+                                          : nlohmann::ordered_json{nullptr}},
+      {"schema_version", row.schema_version},
+      {"context_json", parse_json_value_or_string(row.context_json)},
+  };
+}
+
+[[nodiscard]] nlohmann::ordered_json audit_event_json(const storage::AuditEventRecord& audit) {
+  return nlohmann::ordered_json{
+      {"id", audit.id},
+      {"event_kind", audit.event_kind},
+      {"scope_key", audit.scope_key},
+      {"agent_key", audit.agent_key},
+      {"tool_name", audit.tool_name},
+      {"identity", audit.identity},
+      {"verdict", audit.verdict},
+      {"outcome", audit.outcome},
+      {"reason", audit.reason},
+      {"input_hash_hex", optional_string_json(audit.input_hash_hex)},
+      {"parent_turn_id", optional_turn_id_json(audit.parent_turn_id)},
+      {"metadata_json", parse_json_value_or_string(audit.metadata_json)},
+      {"created_at", audit.created_at},
+  };
+}
+
+[[nodiscard]] nlohmann::ordered_json trace_export_json(const TraceInspectRows& rows) {
+  auto audits = nlohmann::ordered_json::array();
+  for (const auto& audit : rows.audits) {
+    audits.push_back(audit_event_json(audit));
+  }
+  return nlohmann::ordered_json{
+      {"kind", "trace_turn"},
+      {"trace", trace_turn_json(rows.trace)},
+      {"audit_rows", std::move(audits)},
+  };
+}
+
+[[nodiscard]] Result<int> run_trace_inspect(std::string_view workspace, std::string_view turn_id_hex) {
+  auto rows = load_trace_inspect_rows(workspace, turn_id_hex, "--trace");
+  if (!rows) {
+    return std::unexpected(std::move(rows).error());
+  }
+
+  const auto& row = rows->trace;
   std::println("trace turn {}:", format_turn_id_hex(row.turn_id));
   std::println("  session_id={} agent={} origin={}", format_turn_id_hex(row.session_id), row.agent_key, row.origin);
   std::println("  route={}/{} stop_reason={} iterations={}",
@@ -664,9 +801,9 @@ void print_usage() {
                row.parent_turn_id.has_value() ? format_turn_id_hex(*row.parent_turn_id) : std::string{"none"});
   std::println("  schema_version={} context_json_bytes={}", row.schema_version, row.context_json.size());
 
-  std::println("audit rows: {}", audit_rows.size());
+  std::println("audit rows: {}", rows->audits.size());
   std::size_t audit_index = 0;
-  for (const auto& audit : audit_rows) {
+  for (const auto& audit : rows->audits) {
     std::println("  #{:<3} kind={} verdict={} outcome={} tool={} scope={} agent={} identity={} reason={}",
                  audit_index,
                  audit.event_kind,
@@ -679,6 +816,15 @@ void print_usage() {
                  audit.reason);
     ++audit_index;
   }
+  return 0;
+}
+
+[[nodiscard]] Result<int> run_trace_export(std::string_view workspace, std::string_view turn_id_hex) {
+  auto rows = load_trace_inspect_rows(workspace, turn_id_hex, "--trace-export");
+  if (!rows) {
+    return std::unexpected(std::move(rows).error());
+  }
+  std::println("{}", trace_export_json(*rows).dump());
   return 0;
 }
 
@@ -861,6 +1007,17 @@ core::Result<int> run(BootstrapOptions options) {
 
   if (parsed->trace_inspect) {
     auto trace_result = run_trace_inspect(options.workspace, parsed->trace_turn_id_hex);
+    if (!trace_result && trace_result.error().kind() == core::ErrorKind::cancelled) {
+      if (auto signum = signum_from_error(trace_result.error()); signum) {
+        std::println(stderr, "orangutan: interrupted by {} ({})", signal_name(*signum), *signum);
+        return 128 + *signum;
+      }
+    }
+    return trace_result;
+  }
+
+  if (parsed->trace_export) {
+    auto trace_result = run_trace_export(options.workspace, parsed->trace_turn_id_hex);
     if (!trace_result && trace_result.error().kind() == core::ErrorKind::cancelled) {
       if (auto signum = signum_from_error(trace_result.error()); signum) {
         std::println(stderr, "orangutan: interrupted by {} ({})", signal_name(*signum), *signum);
