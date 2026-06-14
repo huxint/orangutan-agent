@@ -67,8 +67,9 @@ registered QQ path under mock gateway/API coverage: one configured QQ message
 flows through `ChannelManager`, the routed agent bridge, trace/audit storage,
 and the QQ passive-reply API. Real-credential smoke remains the gate before the
 adapter can default on. Slice 237 adds the hidden opt-in real-smoke entrypoint
-for that gate, but the pass/fail credentialed run remains open; the QQ port is
-managed by its own exec plan.
+for that gate; slice 238 lets that smoke discover the bot gateway through
+`GET /gateway/bot` when no override URL is supplied. The pass/fail
+credentialed run remains open; the QQ port is managed by its own exec plan.
 
 ## Inbound / Outbound Envelopes
 
@@ -319,7 +320,11 @@ manual/nightly gate: enabled `test-bootstrap` builds include a hidden
 When opted in, it registers the configured adapter against real QQ, waits for
 one operator message, sends a deterministic fake-provider reply through the QQ
 passive API, verifies trace/audit state, and shuts down. The credentialed run
-result itself remains 4b-ii before any default-on decision.
+result itself remains 4b-ii before any default-on decision. **4b-ii prep
+(slice 238)** adds the typed gateway discovery helper (`GET /gateway/bot`) and
+has the smoke use it when `ORAN_TEST_QQ_GATEWAY_URL` is unset, so operators do
+not need to copy a transient WebSocket URL into the environment before running
+the real smoke.
 
 ## New Adapter Recipe
 

@@ -16,6 +16,7 @@
 #include <catch2/catch_test_macros.hpp>
 #if defined(ORAN_ENABLE_CHANNEL_QQ)
 #include <array>
+#include <asio/thread_pool.hpp>
 #include <charconv>
 #include <nlohmann/json.hpp>
 #endif
@@ -34,6 +35,9 @@
 #include "../test-helpers/run_async.hpp"
 
 #if defined(ORAN_ENABLE_CHANNEL_QQ)
+#include <oran/channel-qq/api_client.hpp>
+#include <oran/http.hpp>
+
 #include "../channel-qq/scripted_http_server.hpp"
 #include "../test-helpers/ws_test_server.hpp"
 #endif
@@ -47,6 +51,8 @@ namespace provider = orangutan::provider;
 namespace storage = orangutan::storage;
 namespace test = orangutan::tests;
 #if defined(ORAN_ENABLE_CHANNEL_QQ)
+namespace http = orangutan::http;
+namespace qq = orangutan::channel::qq;
 namespace ws = orangutan::tests::ws;
 using json = nlohmann::json;
 #endif
@@ -293,10 +299,22 @@ constexpr std::string_view kTwoChannelConfig = R"json({
 }
 
 constexpr std::string_view kQqRealSmokeOptIn = "ORAN_TEST_QQ_REAL_SMOKE";
-constexpr std::array<std::string_view, 3> kRequiredQqRealSmokeEnv{
+constexpr std::array<std::string_view, 2> kRequiredQqRealSmokeEnv{
     "ORAN_TEST_QQ_APP_ID",
     "ORAN_TEST_QQ_CLIENT_SECRET",
-    "ORAN_TEST_QQ_GATEWAY_URL",
+};
+
+struct BlockingHttpPool {
+  BlockingHttpPool() = default;
+
+  asio::thread_pool pool{1};
+
+  ~BlockingHttpPool() {
+    pool.join();
+  }
+
+  BlockingHttpPool(const BlockingHttpPool&) = delete;
+  BlockingHttpPool& operator=(const BlockingHttpPool&) = delete;
 };
 
 [[nodiscard]] std::optional<std::string> env_value(std::string_view name) {
@@ -328,7 +346,7 @@ constexpr std::array<std::string_view, 3> kRequiredQqRealSmokeEnv{
   return std::chrono::milliseconds{parsed};
 }
 
-[[nodiscard]] config::Config qq_real_smoke_config() {
+[[nodiscard]] config::Config qq_real_smoke_config(std::string gateway_url) {
   const auto channel_id = env_value("ORAN_TEST_QQ_CHANNEL_ID").value_or("qq-real-smoke");
   const auto agent_key = env_value("ORAN_TEST_QQ_AGENT_KEY").value_or("qq-smoke");
 
@@ -338,7 +356,7 @@ constexpr std::array<std::string_view, 3> kRequiredQqRealSmokeEnv{
       {"agent_key", agent_key},
       {"qq_app_id_env", "ORAN_TEST_QQ_APP_ID"},
       {"qq_client_secret_env", "ORAN_TEST_QQ_CLIENT_SECRET"},
-      {"qq_gateway_url", *env_value("ORAN_TEST_QQ_GATEWAY_URL")},
+      {"qq_gateway_url", std::move(gateway_url)},
   };
   if (auto token_url = env_value("ORAN_TEST_QQ_TOKEN_URL"); token_url) {
     channel_entry["qq_token_url"] = *std::move(token_url);
@@ -353,6 +371,45 @@ constexpr std::array<std::string_view, 3> kRequiredQqRealSmokeEnv{
        json{{agent_key, json{{"prompt_overlay", "QQ real-smoke route. Reply with the supplied smoke text."}}}}},
   };
   return parse_config(root.dump());
+}
+
+[[nodiscard]] async::Awaitable<core::Result<std::string>> qq_real_smoke_gateway_url() {
+  if (auto configured = env_value("ORAN_TEST_QQ_GATEWAY_URL"); configured) {
+    co_return *configured;
+  }
+
+  const auto app_id = env_value("ORAN_TEST_QQ_APP_ID");
+  const auto client_secret = env_value("ORAN_TEST_QQ_CLIENT_SECRET");
+  if (!app_id || !client_secret) {
+    co_return std::unexpected(core::Error::config("qq real-smoke gateway discovery requires credentials"));
+  }
+
+  BlockingHttpPool blocking;
+  http::Client client{blocking.pool.get_executor()};
+
+  auto token_options = qq::TokenStoreOptions{};
+  token_options.request_timeout = qq_real_smoke_timeout();
+  if (auto token_url = env_value("ORAN_TEST_QQ_TOKEN_URL"); token_url) {
+    token_options.token_url = *std::move(token_url);
+  }
+  qq::TokenStore tokens{
+      client,
+      qq::Credentials{.app_id = *app_id, .client_secret = *client_secret},
+      std::move(token_options),
+  };
+
+  auto api_options = qq::ApiClientOptions{};
+  api_options.request_timeout = qq_real_smoke_timeout();
+  if (auto api_base_url = env_value("ORAN_TEST_QQ_API_BASE_URL"); api_base_url) {
+    api_options.base_url = *std::move(api_base_url);
+  }
+  qq::ApiClient api{client, tokens, std::move(api_options)};
+
+  auto discovered = co_await qq::discover_gateway_bot(api);
+  if (!discovered) {
+    co_return std::unexpected(std::move(discovered).error().with("stage", "qq_gateway_discovery"));
+  }
+  co_return discovered->url;
 }
 #endif
 
@@ -601,10 +658,13 @@ TEST_CASE("registered QQ channels real-smoke one operator message through the ro
   const auto reply_text = env_value("ORAN_TEST_QQ_REPLY_TEXT").value_or("orangutan qq real smoke ok");
   const auto timeout = qq_real_smoke_timeout();
   TempDir temp{"oran-bootstrap-channel-qq-real-smoke"};
-  auto cfg = qq_real_smoke_config();
 
   test::run_async(
-      [&temp, &cfg, &channel_id, &agent_key, &reply_text](asio::io_context& io) -> async::Awaitable<void> {
+      [&temp, &channel_id, &agent_key, &reply_text](asio::io_context& io) -> async::Awaitable<void> {
+        auto gateway_url = co_await qq_real_smoke_gateway_url();
+        REQUIRE(gateway_url.has_value());
+        auto cfg = qq_real_smoke_config(std::move(*gateway_url));
+
         auto assembly_options = bootstrap::RuntimeAssemblyOptions{};
         assembly_options.audit_enabled = true;
         assembly_options.session_memory_enabled = false;

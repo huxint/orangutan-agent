@@ -9,8 +9,10 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/core/result.hpp>
@@ -35,10 +37,31 @@ struct ApiResponse {
   friend bool operator==(const ApiResponse&, const ApiResponse&) = default;
 };
 
+struct GatewaySessionStartLimit {
+  std::int64_t total{0};
+  std::int64_t remaining{0};
+  std::chrono::milliseconds reset_after{0};
+  std::int64_t max_concurrency{0};
+
+  friend bool operator==(const GatewaySessionStartLimit&, const GatewaySessionStartLimit&) = default;
+};
+
+struct GatewayBotInfo {
+  std::string url;
+  std::int64_t shards{1};
+  std::optional<GatewaySessionStartLimit> session_start_limit;
+
+  friend bool operator==(const GatewayBotInfo&, const GatewayBotInfo&) = default;
+};
+
 /// Pure normalization seam: capture `x-tps-trace-id` / `retry-after` headers
 /// (case-insensitively) and extract the business-error envelope from the
 /// body when one is present.
 [[nodiscard]] ApiResponse normalize_api_response(http::BodyResponse response);
+
+/// Decode `GET /gateway/bot` response bodies without exposing JSON types in the
+/// public header. The returned URL is suitable for `GatewayTransportOptions`.
+[[nodiscard]] core::Result<GatewayBotInfo> parse_gateway_bot_response(std::string_view body);
 
 struct ApiClientOptions {
   /// QQ open-platform API base; paths passed to the client are joined onto it
@@ -82,5 +105,8 @@ private:
   TokenStore* tokens_;
   ApiClientOptions options_;
 };
+
+/// Discover the current bot gateway URL through `GET /gateway/bot`.
+[[nodiscard]] async::Awaitable<core::Result<GatewayBotInfo>> discover_gateway_bot(ApiClient& api);
 
 }  // namespace orangutan::channel::qq

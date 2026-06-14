@@ -29,6 +29,10 @@ namespace {
   return url.starts_with("https://") || url.starts_with("http://");
 }
 
+[[nodiscard]] bool is_websocket_url(std::string_view url) noexcept {
+  return url.starts_with("wss://") || url.starts_with("ws://");
+}
+
 [[nodiscard]] bool iequals(std::string_view lhs, std::string_view rhs) noexcept {
   return std::ranges::equal(lhs, rhs, [](unsigned char a, unsigned char b) {
     return std::tolower(a) == std::tolower(b);
@@ -55,6 +59,39 @@ namespace {
 
 [[nodiscard]] bool is_retryable_gateway_status(int status) noexcept {
   return status == 502 || status == 503 || status == 504;
+}
+
+[[nodiscard]] core::Error gateway_parse_error(std::string message, std::string field) {
+  return core::Error::parsing(std::move(message)).with("field", std::move(field));
+}
+
+[[nodiscard]] core::Result<std::int64_t>
+optional_nonnegative_i64(const nlohmann::json& payload, std::string_view field, std::int64_t fallback) {
+  const auto field_text = std::string{field};
+  const auto entry = payload.find(field_text);
+  if (entry == payload.end()) {
+    return fallback;
+  }
+  if (!entry->is_number_integer()) {
+    return std::unexpected(gateway_parse_error("qq gateway discovery field is not an integer", field_text));
+  }
+  const auto value = entry->get<std::int64_t>();
+  if (value < 0) {
+    return std::unexpected(gateway_parse_error("qq gateway discovery field is negative", field_text));
+  }
+  return value;
+}
+
+[[nodiscard]] core::Result<std::int64_t>
+optional_positive_i64(const nlohmann::json& payload, std::string_view field, std::int64_t fallback) {
+  auto parsed = optional_nonnegative_i64(payload, field, fallback);
+  if (!parsed) {
+    return parsed;
+  }
+  if (*parsed <= 0) {
+    return std::unexpected(gateway_parse_error("qq gateway discovery field is not positive", std::string{field}));
+  }
+  return parsed;
 }
 
 /// Status-class mapping mirrors `oran-provider`'s transport mapping. Context
@@ -128,6 +165,68 @@ ApiResponse normalize_api_response(http::BodyResponse response) {
     }
   }
   return normalized;
+}
+
+core::Result<GatewayBotInfo> parse_gateway_bot_response(std::string_view body) {
+  const auto payload = nlohmann::json::parse(body, nullptr, /*allow_exceptions=*/false);
+  if (!payload.is_object()) {
+    return std::unexpected(core::Error::parsing("qq gateway discovery response is not a JSON object"));
+  }
+
+  const auto url = payload.find("url");
+  if (url == payload.end() || !url->is_string()) {
+    return std::unexpected(gateway_parse_error("qq gateway discovery response is missing url", "url"));
+  }
+  const auto url_text = url->get<std::string>();
+  if (url_text.empty()) {
+    return std::unexpected(gateway_parse_error("qq gateway discovery response is missing url", "url"));
+  }
+  if (!is_websocket_url(url_text)) {
+    return std::unexpected(gateway_parse_error("qq gateway discovery url is not a websocket URL", "url"));
+  }
+
+  auto shards = optional_positive_i64(payload, "shards", 1);
+  if (!shards) {
+    return std::unexpected(std::move(shards).error());
+  }
+
+  auto info = GatewayBotInfo{
+      .url = url_text,
+      .shards = *shards,
+      .session_start_limit = std::nullopt,
+  };
+
+  const auto limit = payload.find("session_start_limit");
+  if (limit != payload.end()) {
+    if (!limit->is_object()) {
+      return std::unexpected(
+          gateway_parse_error("qq gateway discovery session_start_limit is not an object", "session_start_limit"));
+    }
+    auto total = optional_nonnegative_i64(*limit, "total", 0);
+    auto remaining = optional_nonnegative_i64(*limit, "remaining", 0);
+    auto reset_after = optional_nonnegative_i64(*limit, "reset_after", 0);
+    auto max_concurrency = optional_nonnegative_i64(*limit, "max_concurrency", 0);
+    if (!total) {
+      return std::unexpected(std::move(total).error());
+    }
+    if (!remaining) {
+      return std::unexpected(std::move(remaining).error());
+    }
+    if (!reset_after) {
+      return std::unexpected(std::move(reset_after).error());
+    }
+    if (!max_concurrency) {
+      return std::unexpected(std::move(max_concurrency).error());
+    }
+    info.session_start_limit = GatewaySessionStartLimit{
+        .total = *total,
+        .remaining = *remaining,
+        .reset_after = std::chrono::milliseconds{*reset_after},
+        .max_concurrency = *max_concurrency,
+    };
+  }
+
+  return info;
 }
 
 ApiClient::ApiClient(const http::Client& client, TokenStore& tokens, ApiClientOptions options)
@@ -212,6 +311,18 @@ ApiClient::request(std::string method, std::string path, std::optional<std::stri
 
     co_return response;
   }
+}
+
+async::Awaitable<core::Result<GatewayBotInfo>> discover_gateway_bot(ApiClient& api) {
+  auto response = co_await api.get("/gateway/bot");
+  if (!response) {
+    co_return std::unexpected(std::move(response).error());
+  }
+  auto parsed = parse_gateway_bot_response(response->body);
+  if (!parsed) {
+    co_return std::unexpected(std::move(parsed).error().with("path", "/gateway/bot"));
+  }
+  co_return parsed;
 }
 
 }  // namespace orangutan::channel::qq

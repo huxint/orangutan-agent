@@ -9,33 +9,34 @@
 
 ## Snapshot
 
-- **Slice:** 237 (`xmake run orangutan -- --help` reports slice 237)
+- **Slice:** 238 (`xmake run orangutan -- --help` reports slice 238)
 - **Last completed history:**
-  [`histories/2026-06/20260614-1523-channel-qq-real-smoke-gate.md`](histories/2026-06/20260614-1523-channel-qq-real-smoke-gate.md)
+  [`histories/2026-06/20260614-1551-channel-qq-gateway-discovery.md`](histories/2026-06/20260614-1551-channel-qq-gateway-discovery.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — the current main line; spun off from the completed channel-ingress
     plan ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-- **Latest completed slice:** slice 237 ships QQ-port milestone 4b-i: an
-  executable real-credential smoke gate for the registered QQ path. Enabled
-  `--channel_qq=y` `test-bootstrap` builds now include a hidden
-  `[.][manual][channel-qq]` case that requires `ORAN_TEST_QQ_REAL_SMOKE=1` and
-  QQ smoke env vars, then drives the same registered path against real QQ:
-  bootstrap registration, `ChannelManager::start_all`, one operator message
-  via `receive_one`, routed prompt dispatch with a deterministic fake provider
-  reply, trace/audit observation, passive QQ send, and shutdown. Ordinary CI
-  remains secret-free/network-free because the case is hidden by default; when
-  explicitly selected without opt-in or credentials, it returns a no-op success.
-  The local environment has no QQ real-smoke variables, so this slice does not
-  claim the real smoke passed and `channel_qq` remains default-off. Focused
-  results remain: `test-config` **55 cases / 519
-  assertions**, default `test-bootstrap` **146 cases / 1312 assertions**,
-  gated `test-bootstrap` **148 cases / 1352 assertions**, `test-channel`
-  **25 cases / 191 assertions**, and gated `test-channel-qq` **55 cases / 344
-  assertions**.
+- **Latest completed slice:** slice 238 reduces the QQ real-smoke setup
+  burden without claiming the credentialed smoke passed. `oran-channel-qq` now
+  exposes a typed `GET /gateway/bot` discovery helper
+  (`discover_gateway_bot(...)` / `parse_gateway_bot_response(...)`) that
+  validates the WebSocket URL, shard count, and optional
+  `session_start_limit` fields without leaking JSON parser types through the
+  public header. The hidden registered-path real-smoke test now treats
+  `ORAN_TEST_QQ_GATEWAY_URL` as an override: when it is absent, the test uses
+  the QQ app credentials plus `ORAN_TEST_QQ_API_BASE_URL` /
+  `ORAN_TEST_QQ_TOKEN_URL` overrides to discover the gateway URL before
+  building the existing config. Ordinary CI remains secret-free/network-free
+  because the case is still hidden and no-ops without opt-in/credentials. The
+  local environment still has no QQ real-smoke variables, so 4b-ii remains open
+  and `channel_qq` remains default-off. Focused results: `test-config` **55
+  cases / 519 assertions**, default `test-bootstrap` **146 cases / 1312
+  assertions**, gated `test-bootstrap` **148 cases / 1352 assertions**,
+  `test-channel` **25 cases / 191 assertions**, and gated `test-channel-qq`
+  **58 cases / 369 assertions**.
 - **Next intended slice:** QQ-port milestone 4b-ii — run the hidden real QQ
-  smoke gate with real credentials and record the result before considering
-  `channel_qq` default-on
+  smoke gate with real credentials and a sendable operator conversation, then
+  record the result before considering `channel_qq` default-on
   ([`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)).
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
@@ -65,7 +66,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-memory`: 38 cases / 841 assertions.
 - `oran-automation`: 106 cases / 1849 assertions.
 - `oran-channel`: 25 cases / 191 assertions.
-- `oran-channel-qq` (gated, `--channel_qq=y`): 55 cases / 344 assertions.
+- `oran-channel-qq` (gated, `--channel_qq=y`): 58 cases / 369 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 208 cases / 2181 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.

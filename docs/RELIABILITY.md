@@ -62,7 +62,6 @@ xmake build test-bootstrap
 ORAN_TEST_QQ_REAL_SMOKE=1 \
 ORAN_TEST_QQ_APP_ID=... \
 ORAN_TEST_QQ_CLIENT_SECRET=... \
-ORAN_TEST_QQ_GATEWAY_URL=wss://... \
 build/linux/x86_64/release/test-bootstrap \
   "registered QQ channels real-smoke one operator message through the routed prompt path"
 ```
@@ -72,9 +71,9 @@ build/linux/x86_64/release/test-bootstrap \
 | `ORAN_TEST_QQ_REAL_SMOKE` | Yes (`1`) | unset | Opts into the hidden real QQ smoke test. Without it, an explicitly selected smoke command returns a no-op success. |
 | `ORAN_TEST_QQ_APP_ID` | Yes | — | QQ bot app id consumed through `channels[].qq_app_id_env`; do not log the value. |
 | `ORAN_TEST_QQ_CLIENT_SECRET` | Yes | — | QQ bot client secret consumed through `channels[].qq_client_secret_env`; do not log the value. |
-| `ORAN_TEST_QQ_GATEWAY_URL` | Yes | — | Real QQ gateway WebSocket URL for the current bot/account. Gateway discovery is not implemented yet. |
+| `ORAN_TEST_QQ_GATEWAY_URL` | No | discovered through `GET /gateway/bot` | Optional real QQ gateway WebSocket URL override. Leave unset for the smoke to discover the current bot gateway through the QQ API. |
 | `ORAN_TEST_QQ_TOKEN_URL` | No | `https://bots.qq.com/app/getAppAccessToken` | Override token endpoint for platform staging or diagnostics. |
-| `ORAN_TEST_QQ_API_BASE_URL` | No | `https://api.sgroup.qq.com` | Override QQ API base URL for platform staging or diagnostics. |
+| `ORAN_TEST_QQ_API_BASE_URL` | No | `https://api.sgroup.qq.com` | Override QQ API base URL for gateway discovery, platform staging, or diagnostics. |
 | `ORAN_TEST_QQ_CHANNEL_ID` | No | `qq-real-smoke` | Configured channel id used by the smoke. |
 | `ORAN_TEST_QQ_AGENT_KEY` | No | `qq-smoke` | Configured agent key used for the trace row. |
 | `ORAN_TEST_QQ_REPLY_TEXT` | No | `orangutan qq real smoke ok` | Deterministic fake-provider reply text sent through QQ passive reply. |

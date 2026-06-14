@@ -178,11 +178,19 @@ only — v2 makes channels pluggable.
 - Slice 237: QQ-port milestone 4b-i — hidden opt-in real-smoke gate for the
   same registered QQ path. Enabled `test-bootstrap` builds now carry a
   `[.][manual][channel-qq]` case that requires `ORAN_TEST_QQ_REAL_SMOKE=1`,
-  QQ credential env vars, and a real gateway URL. The smoke keeps the provider
+  QQ credential env vars, and a gateway URL. The smoke keeps the provider
   deterministic, waits for one real operator message, sends the configured
   passive reply through QQ, verifies trace/audit state, and shuts down. This is
   the executable gate for acceptance criterion 2, not the pass result; the
   credentialed run remains open and `channel_qq` remains default-off.
+- Slice 238: QQ-port 4b-ii prep — gateway discovery is now a reusable
+  `oran-channel-qq` helper. `parse_gateway_bot_response(...)` validates
+  `GET /gateway/bot` response bodies into typed gateway URL, shard, and
+  session-start-limit values, and `discover_gateway_bot(...)` requests the
+  endpoint through the authenticated QQ API client. The hidden real-smoke test
+  now treats `ORAN_TEST_QQ_GATEWAY_URL` as an override and discovers the URL
+  when it is absent. Focused validation: gated `test-channel-qq` 58 / 369 and
+  gated `test-bootstrap` 148 / 1352. The credentialed run itself remains open.
 
 ## Design Doc Cross-References
 

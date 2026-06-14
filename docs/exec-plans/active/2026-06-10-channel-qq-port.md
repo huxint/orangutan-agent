@@ -196,6 +196,14 @@ Migration"), which reserves a dedicated plan for the port.
     - [ ] Milestone 4b-ii: run the hidden smoke with real QQ credentials and
       record the pass/fail evidence before considering `channel_qq`
       default-on.
+      - [x] 4b-ii prep: gateway discovery helper and smoke setup reduction —
+        slice 238
+        ([`../../histories/2026-06/20260614-1551-channel-qq-gateway-discovery.md`](../../histories/2026-06/20260614-1551-channel-qq-gateway-discovery.md)).
+        `oran-channel-qq` now parses `GET /gateway/bot` into typed
+        `GatewayBotInfo` / `GatewaySessionStartLimit` values, and the hidden
+        smoke uses that helper when `ORAN_TEST_QQ_GATEWAY_URL` is absent. This
+        reduces operator setup for the credentialed run, but is not pass/fail
+        evidence.
 
 ## Decision Log
 
@@ -333,6 +341,14 @@ Migration"), which reserves a dedicated plan for the port.
   slice can prove the gate compiles, remains hidden by default, and no-ops
   successfully when explicitly selected without credentials, but cannot
   honestly mark the platform smoke complete.
+- 2026-06-14 (slice 238): did **not** run 4b-ii because the agent environment
+  still has no QQ credentials or operator conversation. Instead, removed one
+  avoidable setup requirement for that run: operators no longer need to copy a
+  gateway WebSocket URL into `ORAN_TEST_QQ_GATEWAY_URL` because the smoke can
+  discover it through the same authenticated QQ API client. Bootstrap config
+  still stores an explicit `qq_gateway_url`; production async discovery remains
+  a later ownership question because `register_configured_channels(...)` is a
+  synchronous boundary.
 
 ## Linked Artifacts
 
@@ -361,3 +377,5 @@ Migration"), which reserves a dedicated plan for the port.
     (milestone 4a, slice 236)
   - `docs/histories/2026-06/20260614-1523-channel-qq-real-smoke-gate.md`
     (milestone 4b-i, slice 237)
+  - `docs/histories/2026-06/20260614-1551-channel-qq-gateway-discovery.md`
+    (milestone 4b-ii prep, slice 238)

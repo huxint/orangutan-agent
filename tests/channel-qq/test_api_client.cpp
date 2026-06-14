@@ -113,6 +113,66 @@ TEST_CASE("api client sends authenticated GET requests", "[unit][channel-qq][api
   fixture.blocking.join();
 }
 
+TEST_CASE("api client discovers the gateway bot endpoint", "[unit][channel-qq][api]") {
+  test::ScriptedHttpServer server{{
+      token_ok("tok-1"),
+      api_response(
+          200,
+          R"({"url":"wss://gateway.qq.example","shards":2,"session_start_limit":{"total":1000,"remaining":999,"reset_after":14400000,"max_concurrency":16}})"),
+  }};
+  ClientFixture fixture{server};
+
+  test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
+    auto endpoint = co_await qq::discover_gateway_bot(fixture.api);
+    REQUIRE(endpoint.has_value());
+    REQUIRE(endpoint->url == "wss://gateway.qq.example");
+    REQUIRE(endpoint->shards == 2);
+    REQUIRE(endpoint->session_start_limit.has_value());
+    REQUIRE(endpoint->session_start_limit->total == 1000);
+    REQUIRE(endpoint->session_start_limit->remaining == 999);
+    REQUIRE(endpoint->session_start_limit->reset_after == 14'400'000ms);
+    REQUIRE(endpoint->session_start_limit->max_concurrency == 16);
+  });
+
+  REQUIRE(server.served_count() == 2);
+  const auto request = server.request_text(1);
+  REQUIRE(request.starts_with("GET /gateway/bot HTTP/1.1"));
+  REQUIRE(request.contains("Authorization: QQBot tok-1"));
+  fixture.blocking.join();
+}
+
+TEST_CASE("gateway bot response parser defaults optional fields", "[unit][channel-qq][api]") {
+  auto endpoint = qq::parse_gateway_bot_response(R"({"url":"ws://127.0.0.1/gateway"})");
+  REQUIRE(endpoint.has_value());
+  REQUIRE(endpoint->url == "ws://127.0.0.1/gateway");
+  REQUIRE(endpoint->shards == 1);
+  REQUIRE_FALSE(endpoint->session_start_limit.has_value());
+}
+
+TEST_CASE("gateway bot response parser rejects unusable discovery payloads", "[unit][channel-qq][api]") {
+  SECTION("missing url") {
+    auto endpoint = qq::parse_gateway_bot_response(R"({"shards":1})");
+    REQUIRE_FALSE(endpoint.has_value());
+    REQUIRE(endpoint.error().kind() == core::ErrorKind::parsing);
+    REQUIRE(context_value(endpoint.error(), "field") == "url");
+  }
+
+  SECTION("non-websocket url") {
+    auto endpoint = qq::parse_gateway_bot_response(R"({"url":"https://gateway.qq.example"})");
+    REQUIRE_FALSE(endpoint.has_value());
+    REQUIRE(endpoint.error().kind() == core::ErrorKind::parsing);
+    REQUIRE(context_value(endpoint.error(), "field") == "url");
+  }
+
+  SECTION("invalid session limit") {
+    auto endpoint =
+        qq::parse_gateway_bot_response(R"({"url":"wss://gateway.qq.example","session_start_limit":{"remaining":-1}})");
+    REQUIRE_FALSE(endpoint.has_value());
+    REQUIRE(endpoint.error().kind() == core::ErrorKind::parsing);
+    REQUIRE(context_value(endpoint.error(), "field") == "remaining");
+  }
+}
+
 TEST_CASE("api client posts serialized JSON bodies", "[unit][channel-qq][api]") {
   test::ScriptedHttpServer server{{token_ok("tok-1"), api_response(200, R"({"id":"msg-1"})")}};
   ClientFixture fixture{server};
