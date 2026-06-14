@@ -141,7 +141,11 @@ void AnthropicSseDecoder::consume(std::string_view event, std::string_view data)
       const auto text = string_or_empty(*delta, "text");
       open_.text.append(text);
       if (sink_ != nullptr) {
-        sink_->on_text_delta(text);
+        if (open_.kind == OpenBlock::Kind::thinking) {
+          sink_->on_thinking_delta(text);
+        } else {
+          sink_->on_text_delta(text);
+        }
       }
     } else if (type == "thinking_delta") {
       const auto thinking = string_or_empty(*delta, "thinking");

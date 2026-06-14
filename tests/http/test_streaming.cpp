@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <expected>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -192,6 +193,75 @@ TEST_CASE("Client streams SSE events and resolves with an empty body", "[unit][h
   REQUIRE(events[1] == http::SseEvent{.event = "message", .data = "hello"});
   REQUIRE(events[2] == http::SseEvent{.event = "message_stop", .data = "{}"});
   REQUIRE(callback_thread == main_thread);
+  blocking.join();
+}
+
+TEST_CASE("Client streaming serializes event callbacks on a multi-worker executor", "[unit][http][streaming]") {
+  ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
+  ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
+
+  std::string body = "HTTP/1.1 200 OK\r\n"
+                     "Content-Type: text/event-stream\r\n"
+                     "Connection: close\r\n"
+                     "\r\n";
+  for (int i = 0; i < 32; ++i) {
+    body.append("data: ").append(std::to_string(i)).append("\r\n\r\n");
+  }
+
+  SseTestServer server{std::move(body)};
+  asio::io_context io{2};
+  asio::thread_pool blocking{1};
+  auto client = http::Client{blocking.get_executor()};
+  std::atomic_int active_callbacks{0};
+  std::atomic_int max_active_callbacks{0};
+  std::mutex events_mutex;
+  std::vector<std::string> events;
+  std::optional<core::Result<http::BodyResponse>> result;
+  std::exception_ptr failure;
+
+  asio::co_spawn(
+      io,
+      [&]() -> async::Awaitable<core::Result<http::BodyResponse>> {
+        auto request = http::BodyRequest{};
+        request.method = "POST";
+        request.url = server.url("/v1/messages");
+        request.body = "{}";
+        request.timeout = 2s;
+
+        co_return co_await client.send_streaming(std::move(request), [&](const http::SseEvent& event) {
+          const auto active = active_callbacks.fetch_add(1) + 1;
+          auto observed = max_active_callbacks.load();
+          while (active > observed && !max_active_callbacks.compare_exchange_weak(observed, active)) {}
+          std::this_thread::sleep_for(1ms);
+          {
+            const std::scoped_lock lock{events_mutex};
+            events.push_back(event.data);
+          }
+          active_callbacks.fetch_sub(1);
+        });
+      },
+      [&](std::exception_ptr ep, core::Result<http::BodyResponse> r) {
+        failure = ep;
+        result = std::move(r);
+        io.stop();
+      });
+
+  std::jthread first{[&] { io.run(); }};
+  std::jthread second{[&] { io.run(); }};
+  first.join();
+  second.join();
+
+  if (failure) {
+    std::rethrow_exception(failure);
+  }
+  REQUIRE(result.has_value());
+  REQUIRE(result->has_value());
+  REQUIRE((*result)->status_code == 200);
+  REQUIRE(max_active_callbacks.load() == 1);
+  REQUIRE(events.size() == 32);
+  for (int i = 0; i < 32; ++i) {
+    REQUIRE(events[static_cast<std::size_t>(i)] == std::to_string(i));
+  }
   blocking.join();
 }
 

@@ -18,8 +18,8 @@ single-threaded web server — full audit in
 - **C++26 on GCC 16.1** — modules + PCH, with a per-TU **compile budget** enforced in CI.
 - **One async model** — asio standalone + C++20 coroutines, no `stdexec` fork.
 - **Channel trait** — QQ, Discord, Slack, Telegram, Webhook and more; each is one library.
-- **Provider trait** — Anthropic, OpenAI (Chat & Responses), Gemini, DeepSeek behind a
-  single capability matrix.
+- **Provider trait** — Anthropic, OpenAI (Chat & Responses), Gemini, and
+  compatible endpoints behind a single capability matrix.
 - **Tiered memory** — working / session / long-term / shared, each with a hookable lifecycle.
 - **Hooks everywhere** — tool, agent, provider, memory, channel, and orchestration points.
 - **`bench/` beside `tests/`** for every library; A-vs-B comparisons are the default.

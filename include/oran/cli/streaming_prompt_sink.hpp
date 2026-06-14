@@ -16,10 +16,11 @@ namespace orangutan::cli {
 /// `out` selects the destination stream; `nullptr` renders to `std::cout` (the
 /// production terminal). Tests and other non-terminal drivers inject their own
 /// `std::ostream`. `render_thinking` controls whether extended-thinking deltas
-/// are echoed live alongside the answer text.
+/// are echoed live alongside the answer text; the terminal default suppresses
+/// them so reasoning streams do not mix into the visible answer.
 struct StreamingPromptSinkOptions {
   std::ostream* out{nullptr};
-  bool render_thinking{true};
+  bool render_thinking{false};
 };
 
 /// `provider::EventSink` that renders streaming deltas to a terminal as they

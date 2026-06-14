@@ -19,6 +19,7 @@
 #include <asio/cancellation_type.hpp>
 #include <asio/executor_work_guard.hpp>
 #include <asio/post.hpp>
+#include <asio/strand.hpp>
 #include <asio/this_coro.hpp>
 #include <asio/use_awaitable.hpp>
 
@@ -411,12 +412,13 @@ auto async_send_streaming_on(asio::any_io_executor completion_executor,
        request = std::move(request),
        on_event = std::move(on_event),
        cancellation](auto handler) mutable {
-        auto work = asio::make_work_guard(completion_executor);
+        auto event_executor = asio::any_io_executor{asio::make_strand(completion_executor)};
+        auto work = asio::make_work_guard(event_executor);
         asio::post(blocking_executor,
                    [impl = std::move(impl),
                     request = std::move(request),
                     on_event = std::move(on_event),
-                    completion_executor = std::move(completion_executor),
+                    completion_executor = std::move(event_executor),
                     cancellation,
                     handler = std::move(handler),
                     work = std::move(work)]() mutable {

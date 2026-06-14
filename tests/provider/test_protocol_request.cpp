@@ -120,7 +120,7 @@ TEST_CASE("protocol request maps Anthropic Messages payloads", "[unit][provider]
   REQUIRE(body.at("messages")[2].at("role") == "user");
   REQUIRE(body.at("messages")[2].at("content")[0].at("type") == "tool_result");
   REQUIRE(body.at("messages")[2].at("content")[0].at("tool_use_id") == "call-1");
-  REQUIRE(body.at("messages")[2].at("content")[0].at("content")[0].at("kind") == "file_read");
+  REQUIRE(body.at("messages")[2].at("content")[0].at("content") == "README text fallback");
 }
 
 TEST_CASE("protocol request maps OpenAI Responses payloads", "[unit][provider][protocol]") {
@@ -192,6 +192,28 @@ TEST_CASE("protocol request preserves text-only tool results", "[unit][provider]
   REQUIRE(openai_body.at("input")[2].at("output") == "README text fallback");
 }
 
+TEST_CASE("protocol request maps Anthropic structured tool results to text content", "[unit][provider][protocol]") {
+  auto request = tool_request();
+  auto& result = std::get<core::ToolResultContent>(request.messages[2].blocks[0]);
+
+  auto encoded = provider::make_protocol_request(request, target(provider::ProtocolKind::anthropic_messages));
+
+  REQUIRE(encoded.has_value());
+  auto body = json::parse(encoded->body_json);
+  const auto& block = body.at("messages")[2].at("content")[0];
+  REQUIRE(block.at("type") == "tool_result");
+  REQUIRE(block.at("content") == "README text fallback");
+  REQUIRE_FALSE(block.at("content").is_array());
+
+  result.output.clear();
+  encoded = provider::make_protocol_request(request, target(provider::ProtocolKind::anthropic_messages));
+
+  REQUIRE(encoded.has_value());
+  body = json::parse(encoded->body_json);
+  REQUIRE(body.at("messages")[2].at("content")[0].at("content") ==
+          R"({"kind":"file_read","path":"README.md","text":"README body"})");
+}
+
 TEST_CASE("protocol request rejects malformed opaque JSON fields", "[unit][provider][protocol]") {
   SECTION("tool schema") {
     auto request = tool_request();
@@ -227,6 +249,17 @@ TEST_CASE("protocol request rejects malformed opaque JSON fields", "[unit][provi
     REQUIRE(encoded.error().kind() == core::ErrorKind::parsing);
     REQUIRE(context_value(encoded.error(), "field") == std::optional<std::string_view>{"tool_result.data_json"});
     REQUIRE(context_value(encoded.error(), "tool_use_id") == std::optional<std::string_view>{"call-1"});
+  }
+
+  SECTION("anthropic structured tool result fallback") {
+    auto request = tool_request();
+    std::get<core::ToolResultContent>(request.messages[2].blocks[0]).data_json = "{";
+
+    auto encoded = provider::make_protocol_request(request, target(provider::ProtocolKind::anthropic_messages));
+
+    REQUIRE(encoded.has_value());
+    auto body = json::parse(encoded->body_json);
+    REQUIRE(body.at("messages")[2].at("content")[0].at("content") == "README text fallback");
   }
 }
 

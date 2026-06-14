@@ -75,8 +75,8 @@ ordinary binary prompts switch from the deterministic no-runner shell to
   decoding, then a non-streaming injected transport seam before SSE streaming.
 - Risk: structured tool output silently falls back to text.
   Mitigation: add provider protocol tests that prove `ToolResultContent::data_json`
-  reaches Anthropic/OpenAI tool-result fields and an agent-loop test that proves
-  `tool::Output::data_json` reaches the provider-facing transcript.
+  reaches each protocol's supported tool-result shape and an agent-loop test
+  that proves `tool::Output::data_json` reaches the provider-facing transcript.
 
 ## Milestones
 
@@ -119,7 +119,8 @@ ordinary binary prompts switch from the deterministic no-runner shell to
 - [x] Slice 105: resolve adapter credentials from configured environment variables.
 - [x] Slice 106: dispatch resolved credentials through registered adapter factories.
 - [x] Slice 107: serialize Anthropic Messages / OpenAI Responses request JSON bytes
-      offline and preserve structured tool-result bytes through the agent loop.
+      offline and preserve structured tool-result data through the agent loop
+      before protocol-specific request mapping.
 - [x] Slice 108: decode Anthropic Messages / OpenAI Responses response JSON bytes
       offline into `provider::Response`.
 - [x] Slice 109: build Anthropic/OpenAI protocol factories over an injected

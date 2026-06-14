@@ -88,9 +88,12 @@ struct Response {
 > That offline mapper converts the typed `provider::Request` /
 > `core::Message` / `core::Content` contract into vendor JSON body bytes,
 > validates opaque tool schema, tool input, and structured tool-result JSON in
-> the provider implementation TU, preserves text-only tool-result fallbacks,
-> and maps `ToolResultContent::data_json` into the structured Anthropic/OpenAI
-> tool-result channels. Slice 108 adds
+> the provider implementation TU for protocols that consume those JSON bytes,
+> preserves text-only tool-result fallbacks, maps
+> `ToolResultContent::data_json` into OpenAI Responses'
+> `function_call_output.output` JSON string, and keeps Anthropic Messages
+> `tool_result.content` provider-compatible by sending the text fallback (or the
+> structured JSON bytes as plain text only when no fallback exists). Slice 108 adds
 > `<oran/provider/protocol_response.hpp>` with
 > `provider::decode_protocol_response(body_json, target)`, supporting the same
 > Anthropic Messages and OpenAI Responses protocol families. That offline
@@ -126,7 +129,10 @@ struct Response {
 > `oran-http` (`http::SseEvent`, `Client::send_streaming(BodyRequest,
 > SseEventCallback)`, an incremental `text/event-stream` parser, and the
 > blocking-executor→coroutine-executor event handoff so the decoder/sink never
-> run on the curl thread). Slice 122 adds the provider-side Anthropic streaming:
+> run on the curl thread). Slice 247 serializes that event handoff through a
+> strand on the completion executor, preserving SSE callback order and preventing
+> multi-worker decoders or terminal sinks from racing each other. Slice 122 adds
+> the provider-side Anthropic streaming:
 > a stateful `AnthropicSseDecoder` (the incremental sibling of
 > `decode_protocol_response`), `ProtocolTransport::send_streaming(ProtocolHttpRequest,
 > ProtocolSseCallback)` plus a `ProtocolTransport::supports_streaming()`
@@ -147,10 +153,11 @@ struct Response {
 > `stream_already_emitted`. Slice 123 wires the path into the binary: bootstrap's
 > `HttpProtocolTransport` overrides `supports_streaming()` to `true` and
 > implements `send_streaming` over `http::Client::send_streaming`, and
-> `cli::StreamingPromptSink` renders the provider's `EventSink` deltas live to the
-> terminal while `AgentPromptRunner` wires it into non-quiet streaming runs — so
-> ordinary configured-route `orangutan --prompt` over Anthropic now streams tokens
-> character-by-character (spec 0001 AC3), and the same transport capability now
+> `cli::StreamingPromptSink` renders the provider's answer deltas live to the
+> terminal while suppressing thinking deltas by default, and `AgentPromptRunner`
+> wires it into non-quiet streaming runs — so ordinary configured-route
+> `orangutan --prompt` over Anthropic now streams tokens character-by-character
+> (spec 0001 AC3), and the same transport capability now
 > lets configured-route OpenAI Responses prompts stream through the provider
 > boundary when selected. Slice 126 ships metadata-only provider lifecycle hooks
 > from `agent::Loop`; slice 127 ships trace-derived usage/cost rollup reads over
@@ -398,13 +405,21 @@ provider decoder/System (slice 122) to the binary + terminal (slice 123).
   status + headers and an **empty** body (events already delivered); any other
   response returns the body for the caller to decode through the same
   HTTP-status→category path the body `send` uses.
+- **Callback serialization.** `oran-http::Client::send_streaming` posts SSE event
+  callbacks and final completion through a strand on the caller's completion
+  executor. Provider streaming decoders are stateful and terminal sinks are
+  visible side-effect consumers, so event order and single-callback-at-a-time
+  delivery are part of the transport contract even when the runtime has multiple
+  workers.
 - **Decoders.** `AnthropicSseDecoder` and `OpenAiResponsesSseDecoder` (both in
   `src/oran-provider/_impl/`, `nlohmann` private to their `.cpp`s) are the
   stateful siblings of `decode_protocol_response`. Anthropic runs a strict
   state machine — `message_start`→usage/model;
   `content_block_start`→open text/thinking/tool_use (+`on_tool_start`);
-  `content_block_delta`→append + `on_text_delta`/`on_thinking_delta`/`on_tool_delta`;
-  `content_block_stop`→finalize (parse accumulated tool-input JSON);
+  `content_block_delta`→append + `on_text_delta`/`on_thinking_delta`/`on_tool_delta`
+  based on the open block kind (including thinking blocks whose delta payload uses
+  Anthropic's `text_delta` shape); `content_block_stop`→finalize (parse
+  accumulated tool-input JSON);
   `message_delta`→stop_reason + output usage; `message_stop`→assemble `Response`
   + `on_done`; `ping` ignored. OpenAI forwards
   `response.output_text.delta`, reasoning deltas, and
@@ -432,17 +447,20 @@ provider decoder/System (slice 122) to the binary + terminal (slice 123).
 protocol families. Bootstrap's
 `HttpProtocolTransport` overrides `supports_streaming()` to `true` and implements
 `send_streaming` over `http::Client::send_streaming`, translating each
-`http::SseEvent` into the provider `ProtocolSseCallback`. `cli::StreamingPromptSink`
-(a `provider::EventSink`) renders answer and thinking deltas to the terminal as
-they arrive — flushing per delta for character-by-character output — plus a
-one-line `[tool: <name>]` marker per tool call. `AgentPromptRunner` constructs the
-sink for non-quiet streaming runs, passes it to `agent::Loop::run_turn`, and clears
-the assembled `PromptRunResult::text` once the answer streamed live so the CLI does
-not print it twice. Ordinary configured-route `orangutan --prompt` over Anthropic
-now renders tokens character-by-character (spec 0001 AC3); a mid-stream Ctrl-C
-surfaces as `Error::cancelled` with `cancellation_phase=provider_stream` (spec 0018,
-reused). Slice 124 adds the OpenAI Responses SSE decoder and lifts the provider
-gate so OpenAI Responses can use the same streaming transport when configured.
+`http::SseEvent` into the provider `ProtocolSseCallback` on the serialized callback
+strand. `cli::StreamingPromptSink` (a `provider::EventSink`) renders answer deltas
+to the terminal as they arrive — flushing per delta for character-by-character
+output — suppresses thinking deltas by default, and prints a one-line
+`[tool: <name>]` marker per tool call. `AgentPromptRunner` constructs the sink for
+non-quiet streaming runs, passes it to `agent::Loop::run_turn`, and clears the
+assembled `PromptRunResult::text` once the answer streamed live so the CLI does not
+print it twice. Ordinary configured-route `orangutan --prompt` over Anthropic now
+renders tokens character-by-character (spec 0001 AC3); a mid-stream Ctrl-C surfaces
+as `Error::cancelled` with `cancellation_phase=provider_stream` (spec 0018, reused).
+Slice 124 adds the OpenAI Responses SSE decoder and lifts the provider gate so
+OpenAI Responses can use the same streaming transport when configured. Slice 247
+adds live configured-route smoke evidence for an Anthropic-compatible single-shot
+prompt and a `DirectoryList` tool round-trip.
 
 ## Caching
 
@@ -538,9 +556,12 @@ Responses backends over an injected `ProtocolTransport`; slice 110 adds
 `bootstrap::HttpProviderBackend` binds that client into `ProtocolTransport` for
 explicit backend construction. Slice 112 uses that backend for configured-route
 ordinary binary prompts. Slices 121-124 add the HTTP SSE transport, provider
-streaming decoders, and CLI streaming sink; slice 126 adds metadata-only
-provider lifecycle hooks from `agent::Loop` while keeping `oran-provider`
-hook-free. Slice 127 adds storage-owned provider usage rollup reads over existing
+streaming decoders, and CLI streaming sink; slice 247 serializes streaming event
+callbacks, suppresses terminal thinking by default, and records live
+configured-route tool-round-trip evidence for an Anthropic-compatible endpoint;
+slice 126 adds metadata-only provider lifecycle hooks from `agent::Loop` while
+keeping `oran-provider` hook-free. Slice 127 adds storage-owned provider usage
+rollup reads over existing
 trace rows; slice 129 adds profile cost fields to typed config and computes
 missing response cost estimates from resolved route pricing. Slices 107-108 add
 offline request-body

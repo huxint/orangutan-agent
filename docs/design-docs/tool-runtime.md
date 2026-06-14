@@ -974,12 +974,13 @@ Current and future policy:
   `files_touched=1`. Their model-facing summaries stay unchanged and
   `data_json` remains empty.
 - Provider adapters consume `data_json` only when the target protocol supports
-  structured tool-result bytes. Slice 107 ships the first request-side mapping:
+  structured tool-result data. Slice 107 ships the first request-side mapping:
   `agent::Loop` copies successful `tool::Output::data_json` into
-  `core::ToolResultContent`, and `provider::make_protocol_request` maps those
-  bytes into Anthropic Messages `tool_result.content[]` or serialized OpenAI
-  Responses `function_call_output.output` while preserving text-only fallback
-  behavior. Slices 108-109 add response decoding and an injected
+  `core::ToolResultContent`; `provider::make_protocol_request` maps those
+  bytes into serialized OpenAI Responses `function_call_output.output`, while
+  Anthropic Messages preserves provider-compatible text content by sending the
+  fallback output (or serialized data bytes as plain text only when no fallback
+  exists). Slices 108-109 add response decoding and an injected
   `ProtocolTransport` factory seam for Anthropic/OpenAI systems, slice 110 adds the
   `oran-http` body client, slice 111 adds the bootstrap-owned
   `http::Client`-backed `ProtocolTransport` adapter, and slice 112 wires that

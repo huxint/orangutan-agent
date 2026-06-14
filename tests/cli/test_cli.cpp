@@ -688,6 +688,17 @@ TEST_CASE("StreamingPromptSink announces tool calls on their own line", "[unit][
   REQUIRE(sink.text_deltas_rendered() == 0);
 }
 
+TEST_CASE("StreamingPromptSink suppresses thinking deltas by default", "[unit][cli][streaming]") {
+  std::ostringstream out;
+  cli::StreamingPromptSink sink{cli::StreamingPromptSinkOptions{.out = &out}};
+
+  sink.on_thinking_delta("hidden reasoning");
+  sink.on_done(core::StopReason::end_turn);
+
+  REQUIRE(out.str().empty());
+  REQUIRE_FALSE(sink.rendered_answer_text());
+}
+
 TEST_CASE("StreamingPromptSink streams thinking deltas when enabled", "[unit][cli][streaming]") {
   std::ostringstream out;
   cli::StreamingPromptSink sink{cli::StreamingPromptSinkOptions{.out = &out, .render_thinking = true}};

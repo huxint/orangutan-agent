@@ -128,15 +128,7 @@ parse_object_document(std::string_view text, std::string field, const ModelTarge
   }
   const auto& result = std::get<core::ToolResultContent>(content);
   auto block = json{{"type", "tool_result"}, {"tool_use_id", result.tool_use_id}};
-  if (result.data_json.has_value()) {
-    auto data = tool_result_data_json(result, target);
-    if (!data) {
-      return std::unexpected(std::move(data).error());
-    }
-    block["content"] = json::array({std::move(*data)});
-  } else {
-    block["content"] = result.output;
-  }
+  block["content"] = !result.output.empty() || !result.data_json.has_value() ? result.output : *result.data_json;
   if (result.is_error) {
     block["is_error"] = true;
   }

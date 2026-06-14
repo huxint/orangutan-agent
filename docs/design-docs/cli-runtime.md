@@ -73,6 +73,25 @@ class OperatorPromptSink final : public hook::Sink {
   std::size_t answers_consumed() const noexcept;
 };
 
+struct StreamingPromptSinkOptions {
+  std::ostream* out = nullptr;
+  bool render_thinking = false;
+};
+
+class StreamingPromptSink final : public provider::EventSink {
+ public:
+  explicit StreamingPromptSink(StreamingPromptSinkOptions options = {});
+
+  void on_text_delta(std::string_view delta) override;
+  void on_thinking_delta(std::string_view delta) override;
+  void on_tool_start(std::string_view id, std::string_view name) override;
+  void on_done(core::StopReason stop_reason) override;
+
+  std::size_t text_deltas_rendered() const noexcept;
+  std::size_t tool_starts_rendered() const noexcept;
+  bool rendered_answer_text() const noexcept;
+};
+
 }  // namespace orangutan::cli
 ```
 
@@ -134,13 +153,29 @@ sink to the assembly-owned process bus when a caller supplies a provider backend
 configured-route `bootstrap::run` now supplies the HTTP-backed provider runner from the
 ordinary binary path.
 
+## Streaming Prompt Sink
+
+`cli::StreamingPromptSink` is the terminal `provider::EventSink` used by
+configured-route prompt runs. It writes answer text deltas to the configured
+`std::ostream` (or `std::cout` when `out=nullptr`) and flushes per delta so
+single-shot prompts and REPL turns render as the provider streams. Tool calls render as
+one `[tool: <name>]` marker when the provider opens the tool block. `on_done` terminates
+the streamed answer line, and `rendered_answer_text()` lets `AgentPromptRunner` suppress
+the assembled final answer so the CLI does not print the same answer twice.
+
+Thinking deltas are suppressed by default (`render_thinking=false`). This keeps
+provider reasoning streams out of the visible answer path even when an
+Anthropic-compatible stream sends thinking content as text-shaped deltas. Tests and
+future explicitly diagnostic drivers can opt in with `render_thinking=true`.
+
 ## Bootstrap Handoff
 
 `oran-bootstrap` consumes `--config`, `--config=...`, and global help. Arguments that are
 not bootstrap-owned are forwarded unchanged to `cli::run` only when no provider route is
 configured; that fallback is a local shell and now reports the missing route
-directly instead of implying that `agent::Loop` is absent. When config declares a `default` route, bootstrap constructs the
-HTTP-backed provider backend, creates `AgentPromptRunner`, and calls
+directly instead of implying that `agent::Loop` is absent. When config declares a
+`default` route, bootstrap constructs the HTTP-backed provider backend, creates
+`AgentPromptRunner`, and calls
 `cli::run_async` with `interactive_repl=true`. This keeps config discovery,
 provider-route validation, provider construction, and terminal mode selection separate
 while preserving one process entry point. `AgentPromptRunner` wraps the supplied provider backend in

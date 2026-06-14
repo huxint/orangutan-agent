@@ -84,8 +84,9 @@ own library, its own tests, its own bench, its own design doc."
 > 105-106 add the provider credential-resolution API and adapter-factory
 > dispatch seam for concrete factories; slices 107-108 add offline
 > Anthropic/OpenAI Responses request serialization and response decoding, slice
-> 107 preserves structured tool-result bytes from direct dispatch through the
-> provider-facing transcript, slice 109 adds injected Anthropic/OpenAI protocol
+> 107 preserves structured tool-result data through the provider-facing
+> transcript and maps it into each protocol's supported request shape, slice 109
+> adds injected Anthropic/OpenAI protocol
 > systems through `ProtocolTransportAdapterFactory`, slice 110 adds the platform
 > `oran-http` body client, and slice 111 adds the bootstrap-owned
 > `HttpProviderBackend` construction seam over that client.

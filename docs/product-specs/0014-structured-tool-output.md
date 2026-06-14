@@ -100,9 +100,9 @@ handlers can adopt without churning every callsite at once.
 > mapping step: `core::ToolResultContent` now preserves optional
 > `data_json`, `agent::Loop` copies successful `tool::Output::data_json`
 > into provider-facing tool-result blocks, and
-> `provider::make_protocol_request` maps those bytes into Anthropic Messages
-> `tool_result.content[]` or serialized OpenAI Responses
-> `function_call_output.output` while keeping text-only fallback behavior.
+> `provider::make_protocol_request` maps those bytes into serialized OpenAI
+> Responses `function_call_output.output`, while Anthropic Messages keeps
+> provider-compatible text `tool_result.content` fallback.
 > Response decoding and the first injected transport-backed Anthropic/OpenAI
 > factories now land in slices 108-109, slice 110 adds the `oran-http`
 > body client, slice 111 adds the bootstrap-owned
@@ -162,9 +162,9 @@ handlers can adopt without churning every callsite at once.
   construct the value directly.
 - **Provider adapter contract.** Each `protocol::Adapter` decides how to
   carry `Output::data_json` into its vendor format:
-  - Anthropic Messages tool-result: `data_json` rides as the JSON `content`
-    array when present; otherwise the adapter sends `text` as a single
-    text block.
+  - Anthropic Messages tool-result: the adapter sends `text` as provider-
+    compatible content when present, or serialized `data_json` bytes as plain
+    text only when no fallback text exists.
   - OpenAI Responses tool-result: `data_json` is serialised as JSON in the
     `output` field; otherwise the rendered `text`.
   - Gemini, custom-OpenAI-compatible: same pattern — JSON when
@@ -292,14 +292,15 @@ handlers can adopt without churning every callsite at once.
    against a fixture.
 2. **Structured payload visibility.** A handler that returns
    `Output{ .text = "matched 3 files", .data_json = R"([...])" }`
-   reaches the Anthropic adapter as a JSON `content` array, the OpenAI
-   Responses adapter as a JSON `output` field, and a fake-provider
-   (spec 0017) test sink as the preserved `data_json`. Slice 107 ships this
-   for the offline request-serialization boundary: the agent transcript keeps
-   both `output` and `data_json`, Anthropic/OpenAI protocol request tests prove
-   text-only and structured tool-result shapes, and malformed structured bytes
-   fail before transport. Response decoding and HTTP-backed adapter factories
-   remain downstream.
+   reaches the OpenAI Responses adapter as a JSON `output` string and a
+   fake-provider (spec 0017) test sink as the preserved `data_json`; Anthropic
+   Messages receives the text fallback so arbitrary local JSON objects are not
+   placed in `tool_result.content`. Slice 107 ships this for the offline
+   request-serialization boundary: the agent transcript keeps both `output`
+   and `data_json`, protocol request tests prove text-only and structured
+   tool-result shapes where supported, and malformed structured bytes fail
+   before transport for protocols that parse them. Response decoding and
+   HTTP-backed adapter factories remain downstream.
 3. **Usage propagation.** Shipped for direct dispatch in slice 67. A handler that fills
    `usage = { .bytes_read = 4096, .files_touched = 1 }` produces an
    audit row whose `metadata_json.usage` carries those keys, a
@@ -381,8 +382,8 @@ handlers can adopt without churning every callsite at once.
   `scripts/check-banned-includes.sh` rule (already stubbed in
   `xmake/checks.lua`) flags any `nlohmann/json.hpp` inclusion from
   `include/oran/tool/*.hpp`.
-- **Adapter divergence on `data_json`.** Anthropic's tool-result
-  `content` array, OpenAI Responses' `output`, and Gemini's
+- **Adapter divergence on `data_json`.** Anthropic Messages text
+  `tool_result.content`, OpenAI Responses' JSON-string `output`, and Gemini's
   `functionResponse.response` are not byte-equivalent. Mitigation: the
   agent loop sends the same `Output` value to every adapter; the
   adapter owns its serialisation. Cross-adapter A/B tests will extend

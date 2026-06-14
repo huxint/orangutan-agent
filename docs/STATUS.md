@@ -9,28 +9,34 @@
 
 ## Snapshot
 
-- **Slice:** 246 (`xmake run orangutan -- --help` reports slice 246)
+- **Slice:** 247 (`xmake run orangutan -- --help` reports slice 247)
 - **Last completed history:**
-  [`histories/2026-06/20260614-1936-cli-provider-route-message.md`](histories/2026-06/20260614-1936-cli-provider-route-message.md)
+  [`histories/2026-06/20260614-2033-streaming-tool-roundtrip.md`](histories/2026-06/20260614-2033-streaming-tool-roundtrip.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — remains active, but its next gate is externally blocked on real QQ
     credentials plus a sendable operator conversation; it was spun off from the
     completed channel-ingress plan
     ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-- **Latest completed slice:** slice 246 corrects the no-provider-route CLI
-  fallback text. Configured provider routes already run prompts through
-  `AgentPromptRunner` / `agent::Loop`; the built-in empty-defaults path now says
-  `no provider route configured` instead of the stale `agent loop is not
-  implemented yet` placeholder. API portability docs also clarify that
-  Anthropic-compatible endpoints use `protocol: "anthropic_messages"`; the
-  provider label is not the protocol. Focused validation: `test-cli` **27 cases
-  / 219 assertions**.
+- **Latest completed slice:** slice 247 stabilizes configured-route
+  Anthropic-compatible streaming and tool round-trips. `oran-http` now delivers
+  SSE event callbacks through a strand so multi-worker runtimes cannot race the
+  provider decoder or terminal sink; the Anthropic decoder keeps thinking deltas
+  on the thinking stream even when providers send them as `text_delta`;
+  `cli::StreamingPromptSink` suppresses thinking by default so reasoning bytes
+  do not mix into the visible answer; and Anthropic tool-result requests now send
+  text content rather than arbitrary local structured JSON objects. Live
+  configured-route validation covered a Chinese single-shot prompt and a
+  `DirectoryList` tool round-trip with no stream corruption, heap error, or
+  provider 400. Focused validation: `test-http` **28 cases / 185 assertions**,
+  `test-provider` **88 cases / 664 assertions**, `test-cli` **28 cases / 221
+  assertions**.
 - **Next intended slice:** Re-read this snapshot and [`ROADMAP.md`](ROADMAP.md)
-  before scoping the next slice. Provider/tool naming is aligned with
-  Anthropic-family tool-name constraints; broader live-provider smoke evidence
-  still requires secret-safe real-provider credentials. QQ-port 4b-ii remains
-  waiting on real QQ credentials and an operator conversation.
+  before scoping the next slice. Provider/tool naming and one
+  Anthropic-compatible live CLI tool round-trip now have secret-safe evidence;
+  the next slice should still be selected from current project pressure rather
+  than from this line. QQ-port 4b-ii remains waiting on real QQ credentials and
+  an operator conversation.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 
@@ -50,7 +56,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 - `oran-core`: 71 cases / 459 assertions.
 - `oran-async`: 14 cases / 76 assertions.
-- `oran-http`: 27 cases / 148 assertions.
+- `oran-http`: 28 cases / 185 assertions.
 - `oran-io`: 54 cases / 311 assertions.
 - `oran-storage`: 79 cases / 1047 assertions.
 - `oran-config`: 55 cases / 519 assertions.
@@ -63,9 +69,9 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 208 cases / 2181 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
-- `oran-provider`: 86 cases / 652 assertions.
+- `oran-provider`: 88 cases / 664 assertions.
 - `oran-agent`: 57 cases / 10 786 assertions.
-- `oran-cli`: 27 cases / 219 assertions.
+- `oran-cli`: 28 cases / 221 assertions.
 - `oran-bootstrap`: 156 cases / 1573 assertions (gated `--channel_qq=y`: 148 /
   1352).
 

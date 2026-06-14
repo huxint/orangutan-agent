@@ -191,6 +191,29 @@ TEST_CASE("anthropic sse decoder assembles thinking with a signature", "[unit][p
   REQUIRE(sink.log == std::vector<std::string>{"thinking:reasoning", "done"});
 }
 
+TEST_CASE("anthropic sse decoder treats text deltas in thinking blocks as thinking", "[unit][provider][sse]") {
+  RecordingSink sink;
+  Decoder decoder{target(), &sink};
+  feed(decoder,
+       {
+           message_start(R"({"input_tokens":1,"output_tokens":1})"),
+           {"content_block_start",
+            R"({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}})"},
+           {"content_block_delta",
+            R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hidden reasoning"}})"},
+           {"content_block_stop", R"({"type":"content_block_stop","index":0})"},
+           message_delta("end_turn", R"({"output_tokens":5})"),
+           kMessageStop,
+       });
+
+  const auto streamed = decoder.result();
+  REQUIRE(streamed.has_value());
+
+  REQUIRE(streamed->blocks.size() == 1);
+  REQUIRE(std::get<core::ThinkingContent>(streamed->blocks.front()).thinking == "hidden reasoning");
+  REQUIRE(sink.log == std::vector<std::string>{"thinking:hidden reasoning", "done"});
+}
+
 TEST_CASE("anthropic sse decoder ignores ping events", "[unit][provider][sse]") {
   RecordingSink sink;
   Decoder decoder{target(), &sink};

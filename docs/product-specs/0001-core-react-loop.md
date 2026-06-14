@@ -37,9 +37,11 @@ with persistent session history and a CLI surface. The first deliverable is "I c
     execution. Built-in no-route startup still reads no provider credentials.
   - `oran-provider` also exposes the offline `make_protocol_request(request,
     target)` and `decode_protocol_response(body_json, target)` mappers for
-    Anthropic Messages and OpenAI Responses JSON. Request serialization includes
-    structured tool-result bytes from the agent transcript; response decoding
-    maps vendor text/thinking/tool-use blocks, usage, model ids, and stop
+    Anthropic Messages and OpenAI Responses JSON. Request serialization maps
+    tool-result data into each protocol's supported shape: OpenAI Responses
+    consumes structured bytes as a JSON string, while Anthropic Messages keeps
+    provider-compatible text content. Response decoding maps vendor
+    text/thinking/tool-use blocks, usage, model ids, and stop
     reasons back into `provider::Response`. Slice 109 adds
     `ProtocolTransportAdapterFactory`, which builds Anthropic or OpenAI
     `provider::System` backends over an injected `ProtocolTransport`. Slice 110
