@@ -47,7 +47,6 @@ Each entry contains:
 | --- | --- | --- | --- | --- | --- | --- |
 | `cli11` | 2.6.1 | bootstrap | CLI flag parsing | low | BSD-3-Clause | `oran-bootstrap` only |
 | `replxx` | 2021.11.25 | cli | REPL line editor | low | BSD-3-Clause | `oran-cli` only |
-| `slint` | 1.x (pin at adoption) | desktop | declarative GUI toolkit (`.slint` → C++) | med | GPLv3 / royalty-free / commercial | `oran-desktop` only |
 
 ### Test / Bench
 
@@ -62,6 +61,7 @@ Each entry contains:
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `sol2` | 3.5.0 | `--hook_lua=y` | hook | Lua hook sink | med | MIT | `oran-hook` only |
 | `sqlite-vec` | 0.1.9 | `--vector_memory=y` | memory | Vector search backend | low-med | Apache-2.0 | `oran-memory` only |
+| `slint` | 1.16.1 | `--desktop=y` | desktop | declarative GUI toolkit (`.slint` → C++), consumed as prebuilt C++ binaries (sha256-pinned, no Rust toolchain) | med | GPL-3.0-or-later (triple-licensed: GPLv3 / royalty-free / commercial) | `oran-desktop` shell sources only (gated) |
 
 ## Removed vs. Legacy
 

@@ -39,7 +39,7 @@
 | **Automation** | Library-level retention/cron/triggered with durable state, leases, queues, caller-owned finite loops (187–225, plus 183–186 retention prework); bootstrap intentionally does not open `automation.db` or run loops. | Service-loop/daemon ownership above `AutomationService::run(...)`; the cron-category plan is complete and archived. | Daemon / runtime-service owner decision (Dependency Frontier #2). | [`design-docs/automation-runtime.md`](design-docs/automation-runtime.md) · [spec 0006](product-specs/0006-automation.md) · [completed plan](exec-plans/completed/2026-06-07-automation-cron-category.md) |
 | **Skills** | Full v1 arc (135–149): catalog renderer, loader + hot reload, `SkillInvoke` / `SkillDeactivate`, activation policy with config deactivation/expiration, durable session activations, event extraction. | Other runtime owners (channels / automation) persist and replay the same activation events. | Those runtime surfaces existing. | [spec 0009](product-specs/0009-skills.md) |
 | **CLI** | Streaming render (123), interactive REPL (125), slash commands (128), operator approval sink (95). | Incremental growth as features demand; no open track-local slice. | — | [`design-docs/cli-runtime.md`](design-docs/cli-runtime.md) |
-| **Desktop app** | Docs repivot from web UI to an in-process Slint app complete (plan archived); no `oran-desktop` code. | First `oran-desktop` slice (window + streaming view over the CLI event sink). | Slint package + compile-budget row; `web` → `desktop` config-block migration decision. | [spec 0007](product-specs/0007-web-ui.md) · [`DESKTOP.md`](DESKTOP.md) · [completed plan](exec-plans/completed/2026-06-06-replace-webui-with-desktop.md) |
+| **Desktop app** | Slice A shipped (248): custom prebuilt `slint` package, `--desktop` build option, gated `oran-desktop` shell + `.slint`→C++ codegen rule, always-built bridge surface + `test-desktop`, and a skeleton `orangutan --desktop` window (default builds error gracefully). | Slice B — `web` → `desktop` config-block migration (`DesktopConfig{enabled,theme,reduce_motion}`), clearing the legacy `WebConfig` tech-debt row. | None blocking: Slint package + compile-budget row resolved; Slice C/D (bridge + chat tracer) follow B. | [spec 0007](product-specs/0007-web-ui.md) · [`DESKTOP.md`](DESKTOP.md) · [active plan](exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md) |
 | **Agent teams** | Design/spec only; no code. | First orchestration seam; channel routing shipped (slice 228), so design work can start. | A runtime owner for non-CLI entry helps but does not block the first seam (Dependency Frontier #2). | [`design-docs/team-collaboration.md`](design-docs/team-collaboration.md) · [spec 0004](product-specs/0004-agent-team.md) |
 | **Observability & trace** | Slice 244 refines spec-0018 provider cancellation observability on the existing `trace_turns.cancellation_phase` field: parent-cancelled provider awaits now distinguish `provider_initial`, `provider_stream`, and `provider_complete`, and `agent::Loop` returns the same phase in the cancellation error context. | No pre-selected observability slice; broader trace query language or metrics endpoints need a concrete operator/runtime consumer before scoping. | — | [spec 0018](product-specs/0018-first-loop-observability.md) · [`RELIABILITY.md`](RELIABILITY.md) |
 | **Build & CI** | `make ci` gates docs/hygiene/docs-sync/status/deps/preamble; supply-chain action pinning; `check-compile-budget.sh` exists but is unwired. | Wire `check-compile-budget.sh` plus xmake build/test into CI. | Reference hardware provisioning (Dependency Frontier #3). | [`BUILD_SYSTEM.md`](BUILD_SYSTEM.md) · [`CICD.md`](CICD.md) · [`rules/compile-budget.md`](rules/compile-budget.md) |
@@ -69,9 +69,10 @@ update every row that references it.
    provider-backed one; gates hybrid ranking policy/wiring beyond the
    current `oran-local-text-v1`.
 6. **Desktop docs-plan completion** — *resolved 2026-06-10*: the docs
-   repivot plan is complete and archived; the first `oran-desktop` slice is
-   gated only by the Desktop row's pre-dependencies (Slint package +
-   compile-budget row, config-block migration decision).
+   repivot plan is complete and archived. Slice A (slice 248) then shipped the
+   prebuilt `slint` package and the gated `oran-desktop` shell; the remaining
+   desktop work (config migration → bridge → chat tracer) is tracked on the
+   Desktop row and its active plan, with no cross-track blocker.
 
 ## See Also
 

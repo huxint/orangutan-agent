@@ -177,7 +177,14 @@ over that same dependency set; slice 235 also adds an enabled-build
 through bootstrap, while default builds still omit every adapter target and
 bootstrap branch; default off until the QQ port's round-trip acceptance passes,
 per
-`docs/exec-plans/active/2026-06-10-channel-qq-port.md`).
+`docs/exec-plans/active/2026-06-10-channel-qq-port.md`). `desktop` (slice 248 —
+gates the `oran-desktop` Slint UI shell sources under `src/oran-desktop/shell/`,
+the prebuilt `slint` package, the `.slint`→C++ codegen `before_build` rule on the
+`oran-desktop` target, the `ORAN_ENABLE_DESKTOP` define, and the
+`orangutan --desktop` launch; the always-built `oran-desktop` bridge surface plus
+`test-desktop` compile in every build, while the GUI toolkit and generated code
+cost zero unless `--desktop=y`, per `docs/rules/libraries.md` L4 and
+`docs/exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md`).
 
 ## Packages
 
@@ -384,6 +391,21 @@ same option is enabled, publishing `ORAN_ENABLE_CHANNEL_QQ` so bootstrap can
 compile the QQ registration branch; default builds still skip QQ config entries
 without compiling or linking the adapter. `oran-channel-webhook` remains a
 future target.
+
+`oran-desktop` is the interface-layer desktop app target (peer of `oran-cli`),
+shipped as of slice 248's first desktop slice. Its always-built half compiles only
+`src/oran-desktop/*.cpp` (the bridge/view-model surface, currently the
+`desktop::gui_compiled()` build-config accessor) and depends on `oran-core`, so
+`test-desktop` runs in every `xmake test`. Under `xmake f --desktop=y` the same
+target additionally compiles the Slint UI shell under `src/oran-desktop/shell/`,
+adds the `slint` package, publishes the `ORAN_ENABLE_DESKTOP` define, and runs a
+`before_build` step that invokes `slint-compiler` on each
+`src/oran-desktop/ui/*.slint` into the target's autogen dir (incremental via
+`depend.on_changed`); the generated C++ stays confined to this target.
+`oran-bootstrap` and the `orangutan` binary depend on `oran-desktop` so
+`orangutan --desktop` opens the window in gated builds and prints a "rebuild with
+`--desktop=y`" error otherwise. See `docs/DESKTOP.md` and the chat-tracer
+exec-plan.
 
 **Key compile-time wins from this shape:**
 

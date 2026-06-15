@@ -1,0 +1,30 @@
+// ui/app_window.slint — Orangutan desktop window (Slice A skeleton).
+//
+// Compiled to app_window.h by slint-compiler. The chat tracer slice replaces
+// this static placeholder with the live transcript, prompt input, and stop
+// control bound to the runtime bridge.
+
+import { VerticalBox } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    title: "Orangutan";
+    preferred-width: 760px;
+    preferred-height: 560px;
+
+    VerticalBox {
+        alignment: center;
+        spacing: 8px;
+
+        Text {
+            text: "Orangutan Desktop";
+            font-size: 22px;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: "Chat view arrives in the next slice.";
+            horizontal-alignment: center;
+            color: gray;
+        }
+    }
+}

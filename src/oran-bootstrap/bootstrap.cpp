@@ -40,6 +40,7 @@
 #include <oran/core/error.hpp>
 #include <oran/core/time.hpp>
 #include <oran/core/turn_id.hpp>
+#include <oran/desktop/shell.hpp>
 #include <oran/hook.hpp>
 #include <oran/http.hpp>
 #include <oran/memory/longterm.hpp>
@@ -54,7 +55,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice247";
+constexpr std::string_view kVersion = "2.0.0-slice248";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 constexpr std::size_t kTraceExportDefaultLimit = 50;
@@ -64,6 +65,7 @@ constexpr std::int64_t kNanosecondsPerDay = 86'400'000'000'000;
 
 struct ParsedArgs {
   bool help{false};
+  bool desktop{false};
   bool explain_rules{false};
   bool selector_mode_supplied{false};
   bool selector_agent_supplied{false};
@@ -267,6 +269,11 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
 
     if (arg == "--explain-rules") {
       parsed.explain_rules = true;
+      continue;
+    }
+
+    if (arg == "--desktop") {
+      parsed.desktop = true;
       continue;
     }
 
@@ -520,7 +527,7 @@ void print_usage() {
   std::println("                  [--audit-init [<path>]] [--trace <turn-id>]");
   std::println("                  [--trace-export [<turn-id>] [--agent <name>] [--limit <n>]");
   std::println("                                  [--trace-export-file <path>|--trace-export-post <url>]]");
-  std::println("                  [--prompt <text>] [--help]");
+  std::println("                  [--desktop] [--prompt <text>] [--help]");
   std::println();
   std::println(
       "The current bootstrap slice loads config, builds configured provider backends, then hands prompts to oran-cli.");
@@ -529,6 +536,7 @@ void print_usage() {
   std::println("                --agent picks an `agents.<name>` overlay.");
   std::println("--mode/--agent also select configured provider-route prompt runs.");
   std::println("--audit-init applies the audit.db schema (defaults to <workspace>/.orangutan/audit.db) and exits.");
+  std::println("--desktop opens the in-process Slint desktop app (requires a build configured with --desktop=y).");
   std::println("--trace prints the trace_turns row and joined audit rows, including hook_publish, for <turn-id>");
   std::println("        (32 lowercase hex characters); reads <workspace>/.orangutan/audit.db.");
   std::println("--trace-export prints trace rows plus joined audit rows as JSON Lines; a turn id prints one");
@@ -1330,6 +1338,21 @@ core::Result<int> run(BootstrapOptions options) {
       }
     }
     return trace_result;
+  }
+
+  if (parsed->desktop) {
+#if defined(ORAN_ENABLE_DESKTOP)
+    // Slice A: open the skeleton window and run the Slint event loop. The chat
+    // tracer slice grows this into a runtime-bridged launch (config, runner,
+    // executor) — see exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md.
+    auto code = desktop::shell::run();
+    if (!code) {
+      return std::unexpected(std::move(code).error());
+    }
+    return *code;
+#else
+    return std::unexpected(arg_error("--desktop requires a build configured with --desktop=y (see docs/DESKTOP.md)"));
+#endif
   }
 
   auto loaded = load_config(options);

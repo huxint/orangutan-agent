@@ -53,9 +53,16 @@ that ships native binaries.
   system packages on production hosts; requested `xmake` source-build versions
   stay in `xmake/packages.lua` plus `docs/rules/libraries.md`.
 - **Optional native extensions**: `sqlite-vec` is resolved only when
-  `--vector_memory=y` is configured. Default builds do not download or link it;
-  gated builds must keep the package pin and license entry in sync with
-  `docs/rules/libraries.md`.
+  `--vector_memory=y` is configured, and `slint` only when `--desktop=y` is
+  configured. Default builds do not download or link either; gated builds must
+  keep the package pin and license entry in sync with `docs/rules/libraries.md`.
+- **Prebuilt binary packages**: `slint` is consumed from the official upstream
+  GitHub release as a prebuilt C++ tarball (headers + `libslint_cpp.so` +
+  `slint-compiler`), not built from source, so no Rust toolchain enters any build
+  path. The download URL is canonical (`slint-ui/slint` releases) and the archive
+  is pinned by sha256 in `xmake/packages.lua`. License is GPL-3.0-or-later (Slint
+  is triple-licensed: GPLv3 / royalty-free / commercial); a Slint-linked desktop
+  build is therefore declared GPL-3.0 at the target level.
 - **Random hashing libraries**: `rapidhash` is a small inline lib; `simdutf` is a
   larger native code dep — both are listed in the SBOM.
 
