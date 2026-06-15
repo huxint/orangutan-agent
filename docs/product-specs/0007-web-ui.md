@@ -64,17 +64,16 @@ networked web server.
 
 ## Config
 
-The desktop app introduces a small UI-preferences config block when `oran-desktop` is
-implemented:
+The desktop app uses a small UI-preferences config block (shipped in slice 249):
 
 ```json
 "desktop": { "enabled": false, "theme": "system", "reduce_motion": false }
 ```
 
-Until then, `oran-config` still parses the legacy networked `web` block
-(`WebConfig { enabled, bind, port }`); replacing it with the `desktop` block above is
-tracked in [`../exec-plans/tech-debt-tracker.md`](../exec-plans/tech-debt-tracker.md)
-and lands with the `oran-desktop` slice.
+`oran-config` parses this as `DesktopConfig { enabled, theme, reduce_motion }`
+(`theme` ∈ {`system`, `light`, `dark`}; unknown fields warn). It replaced the legacy
+networked `web` block (`WebConfig { enabled, bind, port }`) from the removed browser
+Web UI, which is gone.
 
 ## Acceptance Criteria
 

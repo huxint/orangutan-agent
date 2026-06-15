@@ -141,10 +141,10 @@
       ]
     }
   },
-  "web": {
+  "desktop": {
     "enabled": false,
-    "bind": "127.0.0.1",
-    "port": 8787
+    "theme": "system",
+    "reduce_motion": false
   },
   "session": {
     "auto_save": true,

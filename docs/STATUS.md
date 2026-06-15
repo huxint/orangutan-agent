@@ -9,39 +9,35 @@
 
 ## Snapshot
 
-- **Slice:** 248 (`xmake run orangutan -- --help` reports slice 248)
+- **Slice:** 249 (`xmake run orangutan -- --help` reports slice 249)
 - **Last completed history:**
-  [`histories/2026-06/20260615-2300-oran-desktop-slice-a.md`](histories/2026-06/20260615-2300-oran-desktop-slice-a.md)
+  [`histories/2026-06/20260616-0015-desktop-config-migration.md`](histories/2026-06/20260616-0015-desktop-config-migration.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md)
-    — Slice A (Slint packaging + gated skeleton window) landed in slice 248;
-    Slice B (`web`→`desktop` config migration) is next, then C/D (bridge + chat
-    tracer).
+    — Slices A (Slint packaging + skeleton window, slice 248) and B
+    (`web`→`desktop` config migration, slice 249) landed; Slice C (bridge +
+    view-model) is next, then Slice D (chat tracer end-to-end).
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — remains active, but its next gate is externally blocked on real QQ
     credentials plus a sendable operator conversation; it was spun off from the
     completed channel-ingress plan
     ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-- **Latest completed slice:** slice 248 ships Desktop App **Slice A** — the first
-  `oran-desktop` slice. A custom `slint` package consumes the official prebuilt
-  C++ binary release (v1.16.1, sha256-pinned; no Rust toolchain), a new `--desktop`
-  build option (default off) gates the Slint UI shell + a `.slint`→C++ codegen
-  rule, and the always-built `oran-desktop` bridge surface
-  (`desktop::gui_compiled()`) plus `test-desktop` compile in every build.
-  `orangutan --desktop` opens a skeleton window in `--desktop=y` builds and errors
-  with "rebuild with `--desktop=y`" otherwise. Verified both paths: default build
-  green + `test-desktop` passes + graceful error; gated build runs codegen,
-  compiles the shell, links `libslint_cpp.so`, and `test-desktop` passes. The
-  skeleton window launches: `orangutan --desktop` runs the Slint event loop on
-  WSLg/Xwayland under both the default and `winit-software` renderers with no
-  backend/font errors.
-- **Next intended slice:** Desktop **Slice B** — the `web` → `desktop` config
-  migration: replace `oran-config::WebConfig` with
-  `DesktopConfig{enabled,theme,reduce_motion}` (+ `parse_desktop`,
-  `config.example.json`, `tests/config`, drop the bootstrap `web=` summary line),
-  clearing the 2026-06-06 tech-debt row. Slices C/D (bridge + view-model, then the
-  end-to-end chat tracer) follow. QQ-port 4b-ii remains waiting on real QQ
-  credentials and an operator conversation.
+- **Latest completed slice:** slice 249 completes Desktop App **Slice B** — the
+  `web` → `desktop` config migration. `oran-config` replaces the legacy networked
+  `WebConfig { enabled, bind, port }` with `DesktopConfig { enabled, theme,
+  reduce_motion }` (`theme` ∈ {system, light, dark}; unknown fields warn);
+  `config.example.json`, `tests/config`, and the bootstrap startup summary
+  (`desktop=…`) move with it, and `web` is no longer a recognized root field. Built
+  test-first: `test-config` **56 cases / 537 assertions**, `test-bootstrap` 156 /
+  1573. (Slice A, slice 248, shipped the gated Slint shell + skeleton window, which
+  launches on WSLg/Xwayland.)
+- **Next intended slice:** Desktop **Slice C** — the always-built `oran-desktop`
+  bridge + view-model: bounded UI↔runtime queues, a `DesktopEventSink :
+  provider::EventSink`, a `ChatViewModel`, and injecting an optional
+  `provider::EventSink*` into `bootstrap::AgentPromptRunner` so the desktop reuses
+  the full loop runner. `tests/desktop` ≥60% coverage with a fake provider; no
+  Slint. QQ-port 4b-ii remains waiting on real QQ credentials and an operator
+  conversation.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 
@@ -64,7 +60,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-http`: 28 cases / 185 assertions.
 - `oran-io`: 54 cases / 311 assertions.
 - `oran-storage`: 79 cases / 1047 assertions.
-- `oran-config`: 55 cases / 519 assertions.
+- `oran-config`: 56 cases / 537 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 38 cases / 313 assertions.
 - `oran-memory`: 38 cases / 841 assertions.
@@ -116,10 +112,6 @@ Closed entries do *not* live here — the tracker is canonical.
   implemented.
 - 2026-05-14 — bench A-vs-B scenarios listed in
   `bench/<lib>/README.md` are placeholders.
-- 2026-06-06 — Desktop: Slice A (slice 248) built the gated `oran-desktop` Slint
-  shell + always-built bridge surface and pinned Slint at `1.16.1`. Still open:
-  the `web` → `desktop` config-block migration (`WebConfig` → `DesktopConfig`),
-  scheduled as Slice B.
 
 ## How To Update
 

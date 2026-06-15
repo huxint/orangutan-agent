@@ -143,7 +143,10 @@ docs synced in the same commit (Prime Directive).
       compile + `libslint_cpp.so` link + test passes). Live window confirmed:
       `orangutan --desktop` runs the Slint event loop on WSLg/Xwayland under both the
       default and `winit-software` renderers, no backend/font errors.
-- [ ] Slice B: `web`→`desktop` config migration; clear tech-debt row.
+- [x] 2026-06-16 (slice 249): `web`→`desktop` config migration — `DesktopConfig{enabled,
+      theme, reduce_motion}` + `parse_desktop` (theme ∈ {system,light,dark}, unknown-field
+      warnings) replacing `WebConfig`/`parse_web`; `config.example.json`; `tests/config`
+      (56 cases / 537 assertions); bootstrap `desktop=` summary line. Tech-debt row closed.
 - [ ] Slice C: bridge + view-model + sink injection; `tests/desktop` ≥60%; `bench/desktop`.
 - [ ] Slice D: chat tracer end-to-end; spec 0007 acceptance 1–3; manual `--desktop=y` run.
 - [ ] Per slice: update invalidated docs in the same commit (`docs/rules/docs-in-sync.md`).
@@ -176,5 +179,6 @@ docs synced in the same commit (Prime Directive).
 - Related product spec: `docs/product-specs/0007-web-ui.md` (Desktop App).
 - Brainstorm/origin: this session (2026-06-14).
 - PRs: _(filled per slice)_
-- History entry: Slice A — `docs/histories/2026-06/20260615-2300-oran-desktop-slice-a.md`.
+- History entry: Slice A — `docs/histories/2026-06/20260615-2300-oran-desktop-slice-a.md`;
+  Slice B — `docs/histories/2026-06/20260616-0015-desktop-config-migration.md`.
 - Release note: _(Slice D)_

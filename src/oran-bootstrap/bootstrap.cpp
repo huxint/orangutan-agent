@@ -55,7 +55,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice248";
+constexpr std::string_view kVersion = "2.0.0-slice249";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 constexpr std::size_t kTraceExportDefaultLimit = 50;
@@ -1367,11 +1367,11 @@ core::Result<int> run(BootstrapOptions options) {
   std::println("orangutan v{}", kVersion);
   std::println("core, async, io, storage, migration, config, and bootstrap foundations are assembled;");
   std::println("config source: {} ({})", to_string_view(loaded->source), loaded->path);
-  std::println("config summary: profiles={}, routes={}, workers={}, web={}",
+  std::println("config summary: profiles={}, routes={}, workers={}, desktop={}",
                loaded->value.profiles().size(),
                loaded->value.routes().size(),
                loaded->value.runtime().workers,
-               loaded->value.web().enabled ? "enabled" : "disabled");
+               loaded->value.desktop().enabled ? "enabled" : "disabled");
   if (!loaded->value.warnings().empty()) {
     std::println("config warnings: {}", loaded->value.warnings().size());
   }

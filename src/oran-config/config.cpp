@@ -48,8 +48,20 @@ constexpr auto kRecognizedRootFields = std::array<std::string_view, 14>{
     "hooks",
     "memory",
     "automation",
-    "web",
+    "desktop",
     "session",
+};
+
+constexpr auto kRecognizedDesktopFields = std::array<std::string_view, 3>{
+    "enabled",
+    "theme",
+    "reduce_motion",
+};
+
+constexpr auto kRecognizedDesktopThemes = std::array<std::string_view, 3>{
+    "system",
+    "light",
+    "dark",
 };
 
 constexpr auto kRecognizedAgentFields = std::array<std::string_view, 5>{
@@ -1525,43 +1537,52 @@ parse_routes(const json& root, bool strict, std::vector<ConfigWarning>& warnings
   return session;
 }
 
-[[nodiscard]] Result<WebConfig> parse_web(const json& root) {
-  auto web = WebConfig{};
-  const auto it = root.find("web");
+[[nodiscard]] Result<DesktopConfig> parse_desktop(const json& root, bool strict, std::vector<ConfigWarning>& warnings) {
+  auto desktop = DesktopConfig{};
+  const auto it = root.find("desktop");
   if (it == root.end()) {
-    return web;
+    return desktop;
   }
-  auto object = require_object(*it, "$.web");
+  auto object = require_object(*it, "$.desktop");
   if (!object) {
     return std::unexpected(std::move(object.error()));
   }
 
   if (const auto enabled = it->find("enabled"); enabled != it->end()) {
     if (!enabled->is_boolean()) {
-      return std::unexpected(config_error("expected boolean", "$.web.enabled"));
+      return std::unexpected(config_error("expected boolean", "$.desktop.enabled"));
     }
-    web.enabled = enabled->get<bool>();
+    desktop.enabled = enabled->get<bool>();
   }
 
-  if (const auto bind = it->find("bind"); bind != it->end()) {
-    if (!bind->is_string()) {
-      return std::unexpected(config_error("expected string", "$.web.bind"));
+  if (const auto theme = it->find("theme"); theme != it->end()) {
+    if (!theme->is_string()) {
+      return std::unexpected(config_error("expected string", "$.desktop.theme"));
     }
-    web.bind = bind->get<std::string>();
-  }
-
-  if (const auto port = it->find("port"); port != it->end()) {
-    auto parsed = integer_value(*port, "$.web.port");
-    if (!parsed) {
-      return std::unexpected(std::move(parsed.error()));
-    }
-    web.port = *parsed;
-    if (web.port <= 0 || web.port > std::numeric_limits<std::uint16_t>::max()) {
-      return std::unexpected(config_error("expected TCP port in range 1..65535", "$.web.port"));
+    desktop.theme = theme->get<std::string>();
+    if (!std::ranges::contains(kRecognizedDesktopThemes, desktop.theme)) {
+      return std::unexpected(config_error("expected one of: system, light, dark", "$.desktop.theme"));
     }
   }
 
-  return web;
+  if (const auto reduce_motion = it->find("reduce_motion"); reduce_motion != it->end()) {
+    if (!reduce_motion->is_boolean()) {
+      return std::unexpected(config_error("expected boolean", "$.desktop.reduce_motion"));
+    }
+    desktop.reduce_motion = reduce_motion->get<bool>();
+  }
+
+  auto unknowns = collect_unknown_object_fields(*it,
+                                                "$.desktop",
+                                                kRecognizedDesktopFields,
+                                                "unknown desktop field",
+                                                strict,
+                                                warnings);
+  if (!unknowns) {
+    return std::unexpected(std::move(unknowns.error()));
+  }
+
+  return desktop;
 }
 
 [[nodiscard]] Result<std::vector<ConfigWarning>> collect_unknown_root_fields(const json& root, bool strict) {
@@ -1930,9 +1951,9 @@ core::Result<Config> Config::parse(std::string_view contents, LoadOptions option
     if (!session) {
       return std::unexpected(std::move(session.error()));
     }
-    auto web = parse_web(root);
-    if (!web) {
-      return std::unexpected(std::move(web.error()));
+    auto desktop = parse_desktop(root, strict_effective, warnings);
+    if (!desktop) {
+      return std::unexpected(std::move(desktop.error()));
     }
     auto trace = parse_trace(root);
     if (!trace) {
@@ -1969,7 +1990,7 @@ core::Result<Config> Config::parse(std::string_view contents, LoadOptions option
     config.profiles_ = std::move(*profiles);
     config.routes_ = std::move(*routes);
     config.session_ = std::move(*session);
-    config.web_ = std::move(*web);
+    config.desktop_ = std::move(*desktop);
     config.trace_ = std::move(*trace);
     config.hooks_ = std::move(*hooks);
     config.memory_ = *memory;
