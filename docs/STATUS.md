@@ -18,7 +18,7 @@
     credentials plus a sendable operator conversation; it was spun off from the
     completed channel-ingress plan
     ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-  - _Recently completed:_ the desktop chat-tracer plan closed 2026-06-16
+  - *Recently completed:* the desktop chat-tracer plan closed 2026-06-16
     (slices 248–252 — spec 0007 acceptance 1–3) and moved to
     [`exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md).
 - **Latest completed slice:** slice 252 ships Desktop **Slice D** — the chat
