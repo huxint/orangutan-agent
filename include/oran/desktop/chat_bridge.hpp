@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -194,10 +195,13 @@ struct ChatBridgeOptions {
 /// is full are dropped and counted (`updates_dropped`) rather than blocking the
 /// provider coroutine — a deliberate backpressure choice for a live tracer.
 ///
-/// Cancellation. `request_stop` emits a terminal signal; a turn whose awaitable
-/// is bound to `cancellation_slot()` observes `Error::cancelled`. The single
-/// signal models one in-flight turn; per-turn signal lifecycle is the shell's
-/// concern (Slice D).
+/// Cancellation. `request_stop` posts a terminal cancellation onto the runtime
+/// executor so a UI-thread caller emits safely on the runtime side; a turn whose
+/// awaitable is bound to the current turn's slot observes `Error::cancelled`.
+/// `begin_turn()` installs a fresh per-turn signal and returns its slot, so each
+/// turn is independently cancellable and a stop ends one turn, not the session.
+/// `cancellation_slot()` returns the current signal's slot (e.g. to cancel an
+/// idle `next_prompt` wait).
 class ChatBridge {
 public:
   explicit ChatBridge(ChatBridgeOptions options);
@@ -215,13 +219,20 @@ public:
   /// queue is full, `cancelled` if the bridge is closed.
   [[nodiscard]] core::Result<void> submit(std::string prompt);
 
-  /// Emit a terminal cancellation on the in-flight turn's signal.
-  void request_stop() noexcept;
+  /// Request cancellation of the in-flight turn. Posts the terminal emit onto
+  /// the runtime executor, so it is safe to call from the UI thread.
+  void request_stop();
 
-  /// Slot to bind onto the spawned turn so `request_stop` cancels it.
+  /// Slot for the current turn's signal (e.g. to bind an idle `next_prompt`
+  /// wait so a stop unblocks it).
   [[nodiscard]] asio::cancellation_slot cancellation_slot() noexcept;
 
   // Runtime side.
+
+  /// Install a fresh per-turn cancellation signal and return its slot. The
+  /// session driver calls this before each turn so `request_stop` cancels just
+  /// that turn. Must be called on the runtime executor.
+  [[nodiscard]] asio::cancellation_slot begin_turn() noexcept;
 
   /// Await the next submitted prompt. Cancel-aware via `cancellation_slot()`.
   [[nodiscard]] async::Awaitable<core::Result<std::string>> next_prompt();
@@ -242,15 +253,33 @@ public:
     return dropped_;
   }
 
-  /// Close both queues; pending and future sends/receives fail with `cancelled`.
+  /// Close the prompt (input) channel: any queued prompts drain, then
+  /// `next_prompt` and `submit` fail with `cancelled`, winding the session loop
+  /// down. The update (output) channel stays open so a final in-flight turn's
+  /// buffered deltas remain drainable into the view-model; it is freed when the
+  /// bridge is destroyed. (A graceful shutdown pairs this with `request_stop`.)
   void close() noexcept;
 
 private:
+  asio::any_io_executor executor_;
   async::Channel<std::string> prompts_;
   async::Channel<UiUpdate> updates_;
-  asio::cancellation_signal cancel_;
+  std::optional<asio::cancellation_signal> turn_cancel_;
   std::size_t dropped_{0};
   DesktopEventSink sink_;
 };
+
+/// Runs one agent turn for `prompt`, streaming deltas into `sink`, returning
+/// when the turn completes or is cancelled. Supplied by the embedder
+/// (`oran-bootstrap` adapts `AgentPromptRunner`) so `oran-desktop` drives the
+/// loop without depending on the agent/bootstrap libraries.
+using TurnRunner = std::function<async::Awaitable<core::Result<void>>(std::string prompt, provider::EventSink* sink)>;
+
+/// Drive the chat session on the runtime side: repeatedly take the next prompt
+/// from `bridge` and run it through `run_turn` (streaming into the bridge's sink,
+/// cancellable per-turn by `bridge.request_stop()`), until the prompt queue
+/// closes. A turn error (including cancellation) ends that turn, not the
+/// session. Returns when the queue is closed.
+[[nodiscard]] async::Awaitable<core::Result<void>> run_chat_session(ChatBridge& bridge, TurnRunner run_turn);
 
 }  // namespace orangutan::desktop

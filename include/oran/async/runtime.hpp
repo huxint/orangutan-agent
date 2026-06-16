@@ -32,6 +32,15 @@ public:
   [[nodiscard]] asio::strand<asio::any_io_executor> make_strand() const;
 
   [[nodiscard]] core::Result<void> run();
+
+  /// Spawn the io workers and return immediately, leaving the runtime running
+  /// on its own threads. Use this when another event loop owns the calling
+  /// thread (e.g. the Slint desktop UI): `start()` then drive the UI, and
+  /// `stop()` on teardown. Returns a `conflict` error if already running or
+  /// stopped. Unlike `run()`, errors raised by a worker after `start()` are not
+  /// surfaced here; detached coroutines must catch their own (async A8).
+  [[nodiscard]] core::Result<void> start();
+
   void stop() noexcept;
 
 private:

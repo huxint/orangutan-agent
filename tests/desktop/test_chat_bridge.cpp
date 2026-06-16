@@ -9,6 +9,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <chrono>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -20,6 +21,8 @@
 #include <asio/co_spawn.hpp>
 #include <asio/io_context.hpp>
 #include <asio/post.hpp>
+#include <asio/steady_timer.hpp>
+#include <asio/use_awaitable.hpp>
 
 #include <oran/async.hpp>
 #include <oran/core/error.hpp>
@@ -29,6 +32,8 @@
 #include <oran/provider/types.hpp>
 
 #include "../test-helpers/run_async.hpp"
+
+using namespace std::chrono_literals;
 
 namespace orangutan::desktop {
 
@@ -280,6 +285,75 @@ TEST_CASE("ChatBridge streams a fake provider turn end-to-end into the view-mode
     REQUIRE(vm.tool_calls().size() == 1);
     REQUIRE(vm.tool_calls().front() == "FileRead");
     REQUIRE(vm.status() == TurnStatus::done);
+  });
+}
+
+TEST_CASE("run_chat_session runs each submitted prompt through the turn runner", "[desktop][session]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    ChatBridge bridge{ChatBridgeOptions{.executor = io.get_executor()}};
+    std::vector<std::string> seen;
+
+    auto run_turn = [&](std::string prompt, prov::EventSink* sink) -> async::Awaitable<core::Result<void>> {
+      seen.push_back(prompt);
+      sink->on_text_delta("ok:" + prompt);
+      sink->on_done(core::StopReason::end_turn);
+      co_return core::Result<void>{};
+    };
+
+    REQUIRE(bridge.submit("one").has_value());
+    REQUIRE(bridge.submit("two").has_value());
+    bridge.close();  // queued prompts drain first, then the loop sees the close
+
+    auto outcome = co_await run_chat_session(bridge, run_turn);
+    REQUIRE(outcome.has_value());
+
+    REQUIRE(seen.size() == 2);
+    REQUIRE(seen[0] == "one");
+    REQUIRE(seen[1] == "two");
+
+    ChatViewModel vm;
+    REQUIRE(bridge.drain(vm) == 4);  // two text deltas + two dones
+  });
+}
+
+TEST_CASE("run_chat_session stop cancels the in-flight turn", "[desktop][session]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    ChatBridge bridge{ChatBridgeOptions{.executor = io.get_executor()}};
+    bool cancelled = false;
+
+    auto run_turn = [&](std::string /*prompt*/, prov::EventSink* sink) -> async::Awaitable<core::Result<void>> {
+      auto executor = co_await asio::this_coro::executor;
+      sink->on_text_delta("partial");  // a visible delta before stop
+      auto slept = co_await async::sleep_for(executor, 2s);
+      if (!slept) {
+        cancelled = true;
+        co_return std::unexpected(slept.error());
+      }
+      co_return core::Result<void>{};
+    };
+
+    REQUIRE(bridge.submit("go").has_value());
+
+    asio::co_spawn(io.get_executor(),
+                   run_chat_session(bridge, run_turn),
+                   [](std::exception_ptr ep, core::Result<void> /*result*/) {
+                     if (ep) {
+                       std::rethrow_exception(ep);
+                     }
+                   });
+
+    // Let the turn reach its sleep, then stop it; close so the loop ends after.
+    asio::steady_timer wait_for_turn{io};
+    wait_for_turn.expires_after(40ms);
+    co_await wait_for_turn.async_wait(asio::use_awaitable);
+    bridge.request_stop();
+    bridge.close();
+
+    asio::steady_timer settle{io};
+    settle.expires_after(40ms);
+    co_await settle.async_wait(asio::use_awaitable);
+
+    REQUIRE(cancelled);
   });
 }
 

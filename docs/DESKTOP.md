@@ -17,9 +17,13 @@ testing strategy.
   the always-built `oran-desktop` bridge / view-model — `ChatViewModel`,
   `DesktopEventSink`, and a `ChatBridge` with bounded UI↔runtime queues and
   per-turn cancellation, plus an injected `provider::EventSink*` on
-  `AgentPromptRunner` (C, `<oran/desktop/chat_bridge.hpp>`). The live chat view
-  (Slint UI binding input, streamed transcript, and stop to the bridge) lands in
-  Slice D. See [`product-specs/0007-web-ui.md`](product-specs/0007-web-ui.md)
+  `AgentPromptRunner` (C, `<oran/desktop/chat_bridge.hpp>`). Slice 251 adds the
+  always-built runtime-side glue — `run_chat_session` (the session loop) with
+  per-turn `begin_turn()` cancellation, and `async::Runtime::start()` so the
+  runtime runs alongside the Slint loop. The live chat view (Slint UI binding
+  input, streamed transcript, and stop to the bridge) plus the `orangutan
+  --desktop` launch wiring land in Slice D. See
+  [`product-specs/0007-web-ui.md`](product-specs/0007-web-ui.md)
   and [`exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md).
 
 ## Architecture

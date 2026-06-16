@@ -9,37 +9,40 @@
 
 ## Snapshot
 
-- **Slice:** 250 (`xmake run orangutan -- --help` reports slice 250)
+- **Slice:** 251 (`xmake run orangutan -- --help` reports slice 251)
 - **Last completed history:**
-  [`histories/2026-06/20260616-0200-desktop-bridge-view-model.md`](histories/2026-06/20260616-0200-desktop-bridge-view-model.md)
+  [`histories/2026-06/20260616-1448-async-runtime-start-desktop-session.md`](histories/2026-06/20260616-1448-async-runtime-start-desktop-session.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md)
     — Slices A (Slint packaging + skeleton window, slice 248), B
     (`web`→`desktop` config migration, slice 249), and C (always-built bridge +
-    view-model, slice 250) landed; Slice D (chat tracer end-to-end) is next.
+    view-model, slice 250) landed; slice 251 adds the always-built Slice-D core
+    (`async::Runtime::start()` + `run_chat_session`); the gated Slint shell
+    completing Slice D (chat tracer end-to-end) is next.
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — remains active, but its next gate is externally blocked on real QQ
     credentials plus a sendable operator conversation; it was spun off from the
     completed channel-ingress plan
     ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-- **Latest completed slice:** slice 250 ships Desktop App **Slice C** — the
-  always-built `oran-desktop` bridge + view-model. A `ChatViewModel` folds a
-  stream of `UiUpdate`s into renderable transcript state; a `DesktopEventSink :
-  provider::EventSink` translates streamed deltas into `UiUpdate`s through a
-  delivery hook; a `ChatBridge` owns the bounded UI↔runtime queues
-  (`async::Channel<std::string>` prompts, `async::Channel<UiUpdate>` updates) and
-  a per-turn `asio::cancellation_signal`, wiring the sink's delivery into the
-  runtime→UI queue with overflow-drop accounting. `bootstrap::AgentPromptRunner`
-  gains an optional injected `provider::EventSink*` so the desktop reuses the
-  full loop runner. All pure C++ — no Slint — and built test-first against a fake
-  provider: `test-desktop` **15 cases / 59 assertions**, `test-bootstrap` 157 /
-  1581.
-- **Next intended slice:** Desktop **Slice D** — the chat tracer end-to-end: the
-  Slint chat UI (input, live transcript, stop) bound to the `ChatBridge`, with
-  `orangutan --desktop` building the runner + bridge and opening the working
-  chat. Satisfies spec 0007 acceptance criteria 1–3; manual `--desktop=y` run
-  recorded. QQ-port 4b-ii remains waiting on real QQ credentials and an operator
-  conversation.
+- **Latest completed slice:** slice 251 lands the always-built **Slice D core**.
+  `async::Runtime::start()` spawns the io workers and returns (vs the blocking
+  `run()`), so the runtime can run alongside a foreign event loop — the Slint
+  desktop shell — while keeping threads inside `Runtime` (A3); `run()`/`start()`
+  share one idle→running→stopped state machine. `desktop::run_chat_session` is
+  the runtime-side session loop (take `next_prompt` → run the embedder's
+  `TurnRunner` streaming into the bridge sink → repeat until input closes), with
+  a fresh per-turn `begin_turn()` cancellation slot so a stop ends one turn and
+  `request_stop()` posting its emit onto the runtime executor. A root-cause fix
+  made `ChatBridge::close()` input-only so a final turn's deltas stay drainable.
+  All pure C++ — no Slint — test-first: `test-async` **16 cases / 83 assertions**,
+  `test-desktop` **17 / 70**.
+- **Next intended slice:** Desktop **Slice D** completion — the gated Slint chat
+  UI (input, live transcript, stop) bound to the `ChatBridge`, plus the
+  `orangutan --desktop` launch wiring config→runtime+provider (scripted
+  `FakeProvider` fallback) + the `TurnRunner` adapting `AgentPromptRunner`,
+  calling `Runtime::start()` and co-spawning `run_chat_session`. Satisfies spec
+  0007 acceptance criteria 1–3; manual `--desktop=y` run recorded. QQ-port 4b-ii
+  remains waiting on real QQ credentials and an operator conversation.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 
@@ -58,7 +61,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 ## Latest Library Surfaces
 
 - `oran-core`: 71 cases / 459 assertions.
-- `oran-async`: 14 cases / 76 assertions.
+- `oran-async`: 16 cases / 83 assertions.
 - `oran-http`: 28 cases / 185 assertions.
 - `oran-io`: 54 cases / 311 assertions.
 - `oran-storage`: 79 cases / 1047 assertions.
@@ -75,7 +78,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 88 cases / 664 assertions.
 - `oran-agent`: 57 cases / 10 786 assertions.
 - `oran-cli`: 28 cases / 221 assertions.
-- `oran-desktop`: 15 cases / 59 assertions.
+- `oran-desktop`: 17 cases / 70 assertions.
 - `oran-bootstrap`: 157 cases / 1581 assertions (gated `--channel_qq=y`: 149 /
   1360).
 

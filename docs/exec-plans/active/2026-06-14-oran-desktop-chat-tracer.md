@@ -161,7 +161,20 @@ docs synced in the same commit (Prime Directive).
       roundtrip, delta marshalling, overflow-drop, stop-cancels-wait, and a
       `FakeProvider` end-to-end stream), `test-bootstrap` 157 / 1581;
       `bench/desktop` gains a delta-marshalling microbench. No Slint.
-- [ ] Slice D: chat tracer end-to-end; spec 0007 acceptance 1–3; manual `--desktop=y` run.
+- [x] 2026-06-16 (slice 251): Slice D always-built core — `async::Runtime::start()`
+      (non-blocking launch sharing `run()`'s worker-spawn + idle→running→stopped
+      state machine, so the runtime coexists with the Slint loop; threads stay
+      inside `Runtime`, A3) and `desktop::run_chat_session` (runtime-side session
+      loop: `next_prompt` → embedder `TurnRunner` → stream, with a fresh per-turn
+      `begin_turn()` cancellation slot and `request_stop()` posting its emit onto
+      the runtime executor). Root-cause fix: `ChatBridge::close()` is input-only so
+      a final in-flight turn's deltas stay drainable. Test-first: `test-async`
+      16/83, `test-desktop` 17/70; full `xmake test` 19/19. Docs synced
+      (async-model, ARCHITECTURE, DESKTOP, STATUS, ROADMAP).
+- [ ] Slice D (gated shell): Slint chat UI (input, live transcript, stop) bound to
+      `ChatBridge` + `orangutan --desktop` launch wiring (config→runtime+provider,
+      scripted fake fallback, `TurnRunner` adapting `AgentPromptRunner`); spec 0007
+      acceptance 1–3; manual `--desktop=y` run.
 - [ ] Per slice: update invalidated docs in the same commit (`docs/rules/docs-in-sync.md`).
 - [ ] Per slice: `make new-history`, bump `STATUS.md`, refresh `ROADMAP.md` Desktop row.
 - [ ] Update `docs/QUALITY_SCORE.md` Desktop App row when the library lands.
@@ -194,5 +207,6 @@ docs synced in the same commit (Prime Directive).
 - PRs: _(filled per slice)_
 - History entry: Slice A — `docs/histories/2026-06/20260615-2300-oran-desktop-slice-a.md`;
   Slice B — `docs/histories/2026-06/20260616-0015-desktop-config-migration.md`;
-  Slice C — `docs/histories/2026-06/20260616-0200-desktop-bridge-view-model.md`.
+  Slice C — `docs/histories/2026-06/20260616-0200-desktop-bridge-view-model.md`;
+  Slice D core — `docs/histories/2026-06/20260616-1448-async-runtime-start-desktop-session.md`.
 - Release note: _(Slice D)_
