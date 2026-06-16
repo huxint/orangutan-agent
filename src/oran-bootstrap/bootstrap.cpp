@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <future>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -40,12 +41,14 @@
 #include <oran/core/error.hpp>
 #include <oran/core/time.hpp>
 #include <oran/core/turn_id.hpp>
+#include <oran/desktop/chat_bridge.hpp>
 #include <oran/desktop/shell.hpp>
 #include <oran/hook.hpp>
 #include <oran/http.hpp>
 #include <oran/memory/longterm.hpp>
 #include <oran/permission.hpp>
 #include <oran/provider.hpp>
+#include <oran/provider/fake.hpp>
 #include <oran/storage.hpp>
 #include <oran/tool/workspace.hpp>
 
@@ -55,7 +58,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice251";
+constexpr std::string_view kVersion = "2.0.0-slice252";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 constexpr std::size_t kTraceExportDefaultLimit = 50;
@@ -1206,6 +1209,180 @@ run_cli_async_on_runtime(async::Runtime& runtime, cli::CliOptions options, cli::
   return cli_result->exit_code;
 }
 
+#if defined(ORAN_ENABLE_DESKTOP)
+// Scripted offline reply for the desktop demo fallback — used only when no
+// provider route resolves, so `orangutan --desktop` still streams *something*
+// (and `stop` is demonstrable during the per-turn latency window) without a
+// configured model. A real route drives the live provider through the same
+// runner. The plan supplies several identical turns so a short smoke session of
+// a few prompts works before the fake reports "plan exhausted" (surfaced as an
+// error line in the transcript).
+[[nodiscard]] std::vector<provider::ScriptedTurn> desktop_demo_plan() {
+  std::vector<provider::ScriptedTurn> plan;
+  for (int turn = 0; turn < 16; ++turn) {
+    plan.push_back(provider::ScriptedTurn{
+        .response = std::nullopt,
+        .deltas =
+            {
+                provider::TextDelta{.text = "No provider route is configured, so this is a scripted "},
+                provider::TextDelta{.text = "offline reply. Add a route to your config to chat with a "},
+                provider::TextDelta{.text = "real model."},
+                provider::StreamEnd{.stop_reason = core::StopReason::end_turn,
+                                    .usage = std::nullopt,
+                                    .model_used = std::nullopt},
+            },
+        .error = std::nullopt,
+        .latency = std::chrono::milliseconds{1500},
+    });
+  }
+  return plan;
+}
+
+[[nodiscard]] provider::Route desktop_demo_route() {
+  return provider::Route{
+      .primary = provider::ModelTarget{.profile = "desktop-demo",
+                                       .model = "scripted-1",
+                                       .protocol = provider::ProtocolKind::anthropic_messages,
+                                       .thinking_budget = std::nullopt,
+                                       .cache = std::nullopt},
+      .fallbacks = {},
+  };
+}
+
+// `orangutan --desktop` launch: assemble the same runtime / provider / runner
+// the CLI prompt path uses, but drive it from the desktop `ChatBridge` + Slint
+// shell instead of the terminal REPL. The agent runs on the `async::Runtime`'s
+// own workers (`Runtime::start`) while Slint owns the main thread; the bridge's
+// lock-guarded channels cross between them. When no route resolves we fall back
+// to a scripted `FakeProvider` so the window still demonstrates streaming + stop
+// offline.
+[[nodiscard]] Result<int> run_desktop(const BootstrapOptions& options) {
+  auto loaded = load_config(options);
+  if (!loaded) {
+    return std::unexpected(std::move(loaded).error());
+  }
+  const auto& cfg = loaded->value;
+
+  auto provider_route = resolve_default_provider_route(cfg);
+  if (!provider_route) {
+    return std::unexpected(std::move(provider_route).error());
+  }
+
+  auto runtime = async::Runtime{async::RuntimeConfig{
+      .io_workers = static_cast<std::size_t>(std::max<std::int64_t>(1, cfg.runtime().workers)),
+      .cpu_workers = 1,
+  }};
+
+  auto assembly_options = RuntimeAssemblyOptions{};
+  assembly_options.workspace_options = tool::WorkspaceOptions{
+      .extra_read_roots = cfg.permissions().workspace.extra_read_roots,
+      .extra_write_roots = cfg.permissions().workspace.extra_write_roots,
+  };
+  assembly_options.trace_enabled = cfg.trace().enabled;
+  assembly_options.hook_blocking_timeout = std::chrono::milliseconds{cfg.hooks().timeout_ms};
+  assembly_options.session_memory_enabled = provider_route->has_value();
+  assembly_options.longterm_memory_enabled = provider_route->has_value();
+  auto assembly = RuntimeAssembly::build(options.workspace, runtime.executor(), std::move(assembly_options));
+  if (!assembly) {
+    return std::unexpected(std::move(assembly).error());
+  }
+
+  // The bridge the UI and runtime share. Built before the runner so the runner
+  // borrows its sink (`event_sink`) as the streaming observer.
+  desktop::ChatBridge bridge{desktop::ChatBridgeOptions{.executor = runtime.executor()}};
+  const bool dark = cfg.desktop().theme == "dark";
+
+  // Shared launch body. Kept as a lambda so the live backend / scripted fake
+  // each stay alive for the whole window lifetime (the runner borrows the
+  // provider). `runtime.stop()` does not join the io workers — only the runtime
+  // destructor does — so the session coroutine (which borrows the runner via the
+  // turn runner) MUST finish before this returns. We wait on a completion
+  // promise after closing the bridge input, then stop and let `runner` drop.
+  auto launch = [&](provider::System& system, const provider::Route& route) -> Result<int> {
+    auto runner = AgentPromptRunner::create(AgentPromptRunnerOptions{
+        .executor = runtime.executor(),
+        .assembly = &*assembly,
+        .config = &cfg,
+        .provider = &system,
+        .route = route,
+        .scope_key = "desktop",
+        .agent_key = "default",
+        .identity = "desktop",
+        .origin = "desktop",
+        .max_tokens = 1024,
+        .quiet = true,
+        .event_sink = bridge.event_sink(),
+    });
+    if (!runner) {
+      return std::unexpected(std::move(runner).error());
+    }
+
+    desktop::TurnRunner turn_runner =
+        [runner_ptr = runner->get()](std::string prompt,
+                                     provider::EventSink* sink) -> async::Awaitable<core::Result<void>> {
+      auto outcome = co_await runner_ptr->run_prompt(cli::PromptRunRequest{.prompt = std::move(prompt)});
+      if (!outcome) {
+        // Cancellation / provider error ended the turn without a terminal delta;
+        // synthesize one so the view-model leaves the streaming state.
+        if (sink != nullptr) {
+          sink->on_done(core::StopReason::end_turn);
+        }
+        co_return std::unexpected(std::move(outcome).error());
+      }
+      co_return core::Result<void>{};
+    };
+
+    if (auto started = runtime.start(); !started) {
+      return std::unexpected(std::move(started).error());
+    }
+
+    std::promise<void> session_done;
+    auto session_done_future = session_done.get_future();
+    asio::co_spawn(runtime.executor(),
+                   desktop::run_chat_session(bridge, std::move(turn_runner)),
+                   [done = std::move(session_done)](std::exception_ptr /*ep*/, core::Result<void> /*result*/) mutable {
+                     done.set_value();
+                   });
+
+    auto code = desktop::shell::run(desktop::shell::RunOptions{
+        .bridge = &bridge,
+        .dark = dark,
+        .reduce_motion = cfg.desktop().reduce_motion,
+    });
+
+    // Window closed: close the input (idempotent — the shell already did), cancel
+    // any in-flight turn, wait for the session loop to finish (so the runner is no
+    // longer borrowed), then stop the runtime.
+    bridge.close();
+    bridge.request_stop();
+    session_done_future.wait();
+    runtime.stop();
+
+    if (!code) {
+      return std::unexpected(std::move(code).error());
+    }
+    return *code;
+  };
+
+  if (provider_route->has_value()) {
+    auto backend =
+        HttpProviderBackend::build(cfg,
+                                   HttpProviderBackendOptions{
+                                       .blocking_executor = runtime.cpu_executor(),
+                                       .request_timeout = std::chrono::milliseconds{cfg.runtime().request_timeout_ms},
+                                       .route_name = "default",
+                                   });
+    if (!backend) {
+      return std::unexpected(std::move(backend).error());
+    }
+    return launch(backend->system(), backend->route());
+  }
+
+  provider::FakeProvider fake{desktop_demo_plan()};
+  return launch(fake, desktop_demo_route());
+}
+#endif  // ORAN_ENABLE_DESKTOP
+
 }  // namespace
 
 std::string_view to_string_view(ConfigSource source) noexcept {
@@ -1342,14 +1519,7 @@ core::Result<int> run(BootstrapOptions options) {
 
   if (parsed->desktop) {
 #if defined(ORAN_ENABLE_DESKTOP)
-    // Slice A: open the skeleton window and run the Slint event loop. The chat
-    // tracer slice grows this into a runtime-bridged launch (config, runner,
-    // executor) — see exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md.
-    auto code = desktop::shell::run();
-    if (!code) {
-      return std::unexpected(std::move(code).error());
-    }
-    return *code;
+    return run_desktop(options);
 #else
     return std::unexpected(arg_error("--desktop requires a build configured with --desktop=y (see docs/DESKTOP.md)"));
 #endif

@@ -171,14 +171,21 @@ docs synced in the same commit (Prime Directive).
       a final in-flight turn's deltas stay drainable. Test-first: `test-async`
       16/83, `test-desktop` 17/70; full `xmake test` 19/19. Docs synced
       (async-model, ARCHITECTURE, DESKTOP, STATUS, ROADMAP).
-- [ ] Slice D (gated shell): Slint chat UI (input, live transcript, stop) bound to
-      `ChatBridge` + `orangutan --desktop` launch wiring (config→runtime+provider,
-      scripted fake fallback, `TurnRunner` adapting `AgentPromptRunner`); spec 0007
-      acceptance 1–3; manual `--desktop=y` run.
+- [x] 2026-06-16 (slice 252): Slice D gated shell — `ui/app_window.slint` chat UI
+      (transcript, input, Send/Stop) bound to `ChatBridge` via `shell::run` (a
+      `slint::Timer` drains the runtime→UI queue into a `ChatViewModel`);
+      `orangutan --desktop` launch (`bootstrap::run_desktop`): config → runtime +
+      `RuntimeAssembly` → provider (live `HttpProviderBackend`, else scripted
+      `FakeProvider` fallback) → `AgentPromptRunner` (injected `event_sink`) →
+      bridge → `Runtime::start()` → co-spawn `run_chat_session` → window;
+      deterministic teardown via a completion-promise wait. Gated `--desktop=y`
+      build clean; default build + `xmake test` 19/19; startup smoke opens the
+      window (acceptance 1). Operator smoke of live streaming + stop (acceptance
+      2–3) pending, after which this plan moves to `completed/`.
 - [ ] Per slice: update invalidated docs in the same commit (`docs/rules/docs-in-sync.md`).
 - [ ] Per slice: `make new-history`, bump `STATUS.md`, refresh `ROADMAP.md` Desktop row.
-- [ ] Update `docs/QUALITY_SCORE.md` Desktop App row when the library lands.
-- [ ] Release note when `orangutan --desktop` becomes user-visible (Slice D).
+- [x] Update `docs/QUALITY_SCORE.md` Desktop App row when the library lands.
+- [x] Release note when `orangutan --desktop` becomes user-visible (Slice D, slice 252).
 
 ## Decision Log
 
@@ -208,5 +215,6 @@ docs synced in the same commit (Prime Directive).
 - History entry: Slice A — `docs/histories/2026-06/20260615-2300-oran-desktop-slice-a.md`;
   Slice B — `docs/histories/2026-06/20260616-0015-desktop-config-migration.md`;
   Slice C — `docs/histories/2026-06/20260616-0200-desktop-bridge-view-model.md`;
-  Slice D core — `docs/histories/2026-06/20260616-1448-async-runtime-start-desktop-session.md`.
+  Slice D core — `docs/histories/2026-06/20260616-1448-async-runtime-start-desktop-session.md`;
+  Slice D shell — `docs/histories/2026-06/20260616-1625-desktop-chat-tracer-shell.md`.
 - Release note: _(Slice D)_

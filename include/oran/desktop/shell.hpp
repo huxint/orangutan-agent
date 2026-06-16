@@ -10,17 +10,29 @@
 
 #include <oran/core/result.hpp>
 
+namespace orangutan::desktop {
+class ChatBridge;
+}  // namespace orangutan::desktop
+
 namespace orangutan::desktop::shell {
 
-/// Options for the desktop window run. Slice A (skeleton window) takes none; the
-/// chat tracer slice adds the prompt runner, runtime executor, and the
-/// config-derived UI preferences (theme / reduce-motion).
-struct RunOptions {};
+/// Inputs for the desktop window run. The window binds to a `ChatBridge` the
+/// caller already wired to a runtime-side `run_chat_session`: the UI raises
+/// `submit` / `request_stop` on it and a drain timer folds its streamed updates
+/// into the transcript. `bridge` is borrowed for the window's lifetime; the UI
+/// preferences come from `DesktopConfig` (theme / reduce-motion).
+struct RunOptions {
+  ChatBridge* bridge{nullptr};
+  bool dark{false};
+  bool reduce_motion{false};
+};
 
 /// Open the desktop window and drive the Slint event loop until the window is
 /// closed, returning the process exit code. Blocks the calling thread for the
-/// lifetime of the window (Slint owns the UI thread; the agent runtime is
-/// bridged onto its own executor in a later slice — see `docs/DESKTOP.md`).
+/// lifetime of the window (Slint owns the UI thread; the agent runtime runs on
+/// its own `async::Runtime` workers via `Runtime::start()`, bridged through
+/// `options.bridge` — see `docs/DESKTOP.md`). On close the bridge's input is
+/// closed so the session loop winds down. A null `bridge` opens an inert window.
 [[nodiscard]] core::Result<int> run(RunOptions options = {});
 
 }  // namespace orangutan::desktop::shell

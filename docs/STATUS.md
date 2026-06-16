@@ -9,40 +9,39 @@
 
 ## Snapshot
 
-- **Slice:** 251 (`xmake run orangutan -- --help` reports slice 251)
+- **Slice:** 252 (`xmake run orangutan -- --help` reports slice 252)
 - **Last completed history:**
-  [`histories/2026-06/20260616-1448-async-runtime-start-desktop-session.md`](histories/2026-06/20260616-1448-async-runtime-start-desktop-session.md)
+  [`histories/2026-06/20260616-1625-desktop-chat-tracer-shell.md`](histories/2026-06/20260616-1625-desktop-chat-tracer-shell.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md)
-    — Slices A (Slint packaging + skeleton window, slice 248), B
-    (`web`→`desktop` config migration, slice 249), and C (always-built bridge +
-    view-model, slice 250) landed; slice 251 adds the always-built Slice-D core
-    (`async::Runtime::start()` + `run_chat_session`); the gated Slint shell
-    completing Slice D (chat tracer end-to-end) is next.
+    — Slices A (slice 248), B (slice 249), C (slice 250), and the Slice-D core
+    (slice 251) landed; slice 252 ships the gated Slint chat tracer — the chat UI
+    bound to the `ChatBridge` + the `orangutan --desktop` launch. The window opens
+    and builds clean; an operator smoke of live streaming + stop closes acceptance
+    2–3, after which the plan moves to `completed/`.
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — remains active, but its next gate is externally blocked on real QQ
     credentials plus a sendable operator conversation; it was spun off from the
     completed channel-ingress plan
     ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-- **Latest completed slice:** slice 251 lands the always-built **Slice D core**.
-  `async::Runtime::start()` spawns the io workers and returns (vs the blocking
-  `run()`), so the runtime can run alongside a foreign event loop — the Slint
-  desktop shell — while keeping threads inside `Runtime` (A3); `run()`/`start()`
-  share one idle→running→stopped state machine. `desktop::run_chat_session` is
-  the runtime-side session loop (take `next_prompt` → run the embedder's
-  `TurnRunner` streaming into the bridge sink → repeat until input closes), with
-  a fresh per-turn `begin_turn()` cancellation slot so a stop ends one turn and
-  `request_stop()` posting its emit onto the runtime executor. A root-cause fix
-  made `ChatBridge::close()` input-only so a final turn's deltas stay drainable.
-  All pure C++ — no Slint — test-first: `test-async` **16 cases / 83 assertions**,
-  `test-desktop` **17 / 70**.
-- **Next intended slice:** Desktop **Slice D** completion — the gated Slint chat
-  UI (input, live transcript, stop) bound to the `ChatBridge`, plus the
-  `orangutan --desktop` launch wiring config→runtime+provider (scripted
-  `FakeProvider` fallback) + the `TurnRunner` adapting `AgentPromptRunner`,
-  calling `Runtime::start()` and co-spawning `run_chat_session`. Satisfies spec
-  0007 acceptance criteria 1–3; manual `--desktop=y` run recorded. QQ-port 4b-ii
-  remains waiting on real QQ credentials and an operator conversation.
+- **Latest completed slice:** slice 252 ships Desktop **Slice D** — the chat
+  tracer end-to-end. The gated Slint chat UI (`ui/app_window.slint`: transcript,
+  input, Send/Stop) binds to the `ChatBridge` through `shell::run` (a
+  `slint::Timer` drains the runtime→UI queue into a `ChatViewModel` on the UI
+  thread); `orangutan --desktop` (`bootstrap::run_desktop`) assembles the runtime
+  + `RuntimeAssembly` + provider (live `HttpProviderBackend`, else a scripted
+  `FakeProvider` fallback) + `AgentPromptRunner` (injected `event_sink`) + bridge,
+  `Runtime::start()`s, co-spawns `run_chat_session`, and opens the window —
+  tearing down via a completion-promise wait so the session finishes before the
+  runner drops. Gated `--desktop=y` build clean; default build + `xmake test`
+  19/19 unaffected. The window opens (criterion 1 verified); live streaming + stop
+  are the operator's smoke.
+- **Next intended slice:** operator smoke of the desktop chat tracer (live token
+  streaming + stop on a display with a configured provider) closes spec 0007
+  acceptance 2–3 and retires the chat-tracer plan; the next desktop build-out is
+  the post-chat panels (sessions / audit / orchestration DAG) per spec 0007 v1.
+  QQ-port 4b-ii remains waiting on real QQ credentials and an operator
+  conversation.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 

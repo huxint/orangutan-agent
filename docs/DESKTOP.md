@@ -11,19 +11,19 @@ testing strategy.
 - **Model**: **in-process, local-only.** `oran-desktop` links into the `orangutan`
   binary and drives `agent::Loop` directly — no HTTP server, no SSE over the wire, no
   auth token. (The old browser Web UI / `cpp-httplib` server is gone.)
-- **Status**: in progress (chat-tracer plan). Slices A–C have shipped: the gated
-  prebuilt `slint` package, the `.slint`→C++ codegen rule, a skeleton
-  `orangutan --desktop` window (A), the `web`→`desktop` config migration (B), and
-  the always-built `oran-desktop` bridge / view-model — `ChatViewModel`,
-  `DesktopEventSink`, and a `ChatBridge` with bounded UI↔runtime queues and
-  per-turn cancellation, plus an injected `provider::EventSink*` on
-  `AgentPromptRunner` (C, `<oran/desktop/chat_bridge.hpp>`). Slice 251 adds the
-  always-built runtime-side glue — `run_chat_session` (the session loop) with
-  per-turn `begin_turn()` cancellation, and `async::Runtime::start()` so the
-  runtime runs alongside the Slint loop. The live chat view (Slint UI binding
-  input, streamed transcript, and stop to the bridge) plus the `orangutan
-  --desktop` launch wiring land in Slice D. See
-  [`product-specs/0007-web-ui.md`](product-specs/0007-web-ui.md)
+- **Status**: chat tracer shipped (slice 252). Slices A–C built the gated
+  prebuilt `slint` package + `.slint`→C++ codegen + skeleton window (A), the
+  `web`→`desktop` config migration (B), and the always-built `oran-desktop`
+  bridge / view-model — `ChatViewModel`, `DesktopEventSink`, `ChatBridge` (bounded
+  UI↔runtime queues + per-turn cancellation) + an injected `provider::EventSink*`
+  on `AgentPromptRunner` (C). Slice 251 added the always-built runtime-side glue
+  (`run_chat_session`, `async::Runtime::start()`). **Slice D (slice 252)** wires
+  it together: the gated Slint chat UI (transcript, input, Send/Stop) bound to the
+  bridge, and the `orangutan --desktop` launch that assembles
+  runtime/provider/runner/bridge (live route, else a scripted `FakeProvider`
+  fallback) and opens the working chat. The window opens and the loop runs; live
+  token streaming + stop are confirmed by an operator smoke (a display +
+  configured provider). See [`product-specs/0007-web-ui.md`](product-specs/0007-web-ui.md)
   and [`exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md).
 
 ## Architecture

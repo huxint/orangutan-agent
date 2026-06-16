@@ -81,6 +81,15 @@ Web UI, which is gone.
 2. A submitted prompt renders streamed tokens in real time; the stop control cancels the
    in-flight turn (`Error::cancelled`, `cancellation_phase=provider_stream` after visible deltas).
 3. The streamed view survives a slow tool call without dropping output.
+
+> **Status (slice 252):** implemented. `orangutan --desktop` (`bootstrap::run_desktop`)
+> opens the Slint chat window bound to the always-built `ChatBridge`, with the agent
+> running on the `async::Runtime` workers (`Runtime::start()`) and the same
+> `AgentPromptRunner` the CLI uses (UI-marshalling `DesktopEventSink` injected). With
+> no route configured it streams a scripted `FakeProvider` demo. Criterion 1 (window
+> opens → chat view) is verified by the build's startup smoke; criteria 2–3 (live
+> streaming + stop + slow-tool resilience) are confirmed by an operator smoke on a
+> display with a configured provider.
 4. The audit view shows recent tool calls + permission decisions with timestamps and
    identity.
 5. Resident memory stays within the documented low-footprint target for an idle app
