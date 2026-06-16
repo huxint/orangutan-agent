@@ -24,7 +24,7 @@ testing strategy.
   fallback) and opens the working chat. The window opens and the loop runs; live
   token streaming + stop are confirmed by an operator smoke (a display +
   configured provider). See [`product-specs/0007-web-ui.md`](product-specs/0007-web-ui.md)
-  and [`exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md).
+  and [`exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md).
 
 ## Architecture
 

@@ -13,17 +13,14 @@
 - **Last completed history:**
   [`histories/2026-06/20260616-1625-desktop-chat-tracer-shell.md`](histories/2026-06/20260616-1625-desktop-chat-tracer-shell.md)
 - **Active exec-plans:**
-  - [`exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md)
-    — Slices A (slice 248), B (slice 249), C (slice 250), and the Slice-D core
-    (slice 251) landed; slice 252 ships the gated Slint chat tracer — the chat UI
-    bound to the `ChatBridge` + the `orangutan --desktop` launch. The window opens
-    and builds clean; an operator smoke of live streaming + stop closes acceptance
-    2–3, after which the plan moves to `completed/`.
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — remains active, but its next gate is externally blocked on real QQ
     credentials plus a sendable operator conversation; it was spun off from the
     completed channel-ingress plan
     ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
+  - _Recently completed:_ the desktop chat-tracer plan closed 2026-06-16
+    (slices 248–252 — spec 0007 acceptance 1–3) and moved to
+    [`exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md).
 - **Latest completed slice:** slice 252 ships Desktop **Slice D** — the chat
   tracer end-to-end. The gated Slint chat UI (`ui/app_window.slint`: transcript,
   input, Send/Stop) binds to the `ChatBridge` through `shell::run` (a
@@ -35,13 +32,12 @@
   tearing down via a completion-promise wait so the session finishes before the
   runner drops. Gated `--desktop=y` build clean; default build + `xmake test`
   19/19 unaffected. The window opens (criterion 1 verified); live streaming + stop
-  are the operator's smoke.
-- **Next intended slice:** operator smoke of the desktop chat tracer (live token
-  streaming + stop on a display with a configured provider) closes spec 0007
-  acceptance 2–3 and retires the chat-tracer plan; the next desktop build-out is
-  the post-chat panels (sessions / audit / orchestration DAG) per spec 0007 v1.
-  QQ-port 4b-ii remains waiting on real QQ credentials and an operator
-  conversation.
+  confirmed by the operator smoke (acceptance 2–3).
+- **Next intended slice:** the desktop chat tracer is complete — the operator
+  smoke closed spec 0007 acceptance 2–3 and the chat-tracer plan is archived; the
+  next desktop build-out is the post-chat panels (sessions / audit / orchestration
+  DAG) per spec 0007 v1. QQ-port 4b-ii remains waiting on real QQ credentials and
+  an operator conversation.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 

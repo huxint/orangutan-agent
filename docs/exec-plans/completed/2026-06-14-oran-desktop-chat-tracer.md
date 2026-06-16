@@ -1,6 +1,14 @@
 # oran-desktop — First Slice: Slint Chat Tracer
 
-> Status: **active** · Date: 2026-06-14 · Type: new-library + new-dependency ·
+> **Closed 2026-06-16 (complete).** All five milestones shipped in slices 248–252:
+> Slint packaging + gated skeleton (248), `web`→`desktop` config migration (249),
+> always-built bridge + view-model + sink injection (250), `Runtime::start()` +
+> session driver (251), and the gated Slint chat tracer + `orangutan --desktop`
+> launch (252). Spec 0007 acceptance 1 (window opens → chat view) is verified by
+> the build's startup smoke; acceptance 2–3 (live streaming + stop) were closed by
+> the operator smoke that gated this archival.
+>
+> Status: **completed** · Date: 2026-06-14 · Type: new-library + new-dependency ·
 > Owner: huxint
 >
 > First implementation slice of the Desktop App track
@@ -181,9 +189,10 @@ docs synced in the same commit (Prime Directive).
       deterministic teardown via a completion-promise wait. Gated `--desktop=y`
       build clean; default build + `xmake test` 19/19; startup smoke opens the
       window (acceptance 1). Operator smoke of live streaming + stop (acceptance
-      2–3) pending, after which this plan moves to `completed/`.
-- [ ] Per slice: update invalidated docs in the same commit (`docs/rules/docs-in-sync.md`).
-- [ ] Per slice: `make new-history`, bump `STATUS.md`, refresh `ROADMAP.md` Desktop row.
+      2–3) confirmed; spec 0007 acceptance 1–3 closed and this plan archived to
+      `completed/`.
+- [x] Per slice: update invalidated docs in the same commit (`docs/rules/docs-in-sync.md`).
+- [x] Per slice: `make new-history`, bump `STATUS.md`, refresh `ROADMAP.md` Desktop row.
 - [x] Update `docs/QUALITY_SCORE.md` Desktop App row when the library lands.
 - [x] Release note when `orangutan --desktop` becomes user-visible (Slice D, slice 252).
 

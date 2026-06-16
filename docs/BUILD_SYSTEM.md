@@ -184,7 +184,7 @@ the prebuilt `slint` package, the `.slint`→C++ codegen `before_build` rule on 
 `orangutan --desktop` launch; the always-built `oran-desktop` bridge surface plus
 `test-desktop` compile in every build, while the GUI toolkit and generated code
 cost zero unless `--desktop=y`, per `docs/rules/libraries.md` L4 and
-`docs/exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md`).
+`docs/exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md`).
 
 ## Packages
 
