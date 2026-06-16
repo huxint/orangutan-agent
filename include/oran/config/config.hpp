@@ -108,10 +108,10 @@ struct SessionConfig {
   bool persistence{true};
 };
 
-struct WebConfig {
+struct DesktopConfig {
   bool enabled{false};
-  std::string bind{"127.0.0.1"};
-  std::int64_t port{8787};
+  std::string theme{"system"};
+  bool reduce_motion{false};
 };
 
 struct TraceConfig {
@@ -350,8 +350,8 @@ public:
   [[nodiscard]] const SessionConfig& session() const noexcept {
     return session_;
   }
-  [[nodiscard]] const WebConfig& web() const noexcept {
-    return web_;
+  [[nodiscard]] const DesktopConfig& desktop() const noexcept {
+    return desktop_;
   }
   [[nodiscard]] const TraceConfig& trace() const noexcept {
     return trace_;
@@ -384,7 +384,7 @@ private:
   std::vector<ProfileConfig> profiles_{};
   std::vector<RouteConfig> routes_{};
   SessionConfig session_{};
-  WebConfig web_{};
+  DesktopConfig desktop_{};
   TraceConfig trace_{};
   HooksConfig hooks_{};
   MemoryConfig memory_{};

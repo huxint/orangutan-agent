@@ -1,4 +1,4 @@
-# [2026-06-07 18:00] | Task: Automation Cron Schedule
+## [2026-06-07 18:00] | Task: Automation Cron Schedule
 
 ### Execution Context
 

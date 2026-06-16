@@ -5,6 +5,7 @@
 #include <chrono>
 #include <exception>
 #include <expected>
+#include <future>
 #include <optional>
 #include <stdexcept>
 #include <vector>
@@ -47,6 +48,39 @@ TEST_CASE("Runtime runs work on its executor until stopped", "[unit][async][runt
   auto result = runtime.run();
   REQUIRE(result.has_value());
   REQUIRE(ran.load());
+}
+
+TEST_CASE("Runtime::start runs work off the calling thread without blocking", "[unit][async][runtime]") {
+  async::Runtime runtime{async::RuntimeConfig{.io_workers = 1, .cpu_workers = 1}};
+
+  std::promise<void> ran;
+  auto ran_future = ran.get_future();
+
+  // start() spawns the io workers and returns immediately (unlike run(), which
+  // blocks). The posted work therefore runs on a Runtime-owned worker thread.
+  auto started = runtime.start();
+  REQUIRE(started.has_value());
+
+  asio::post(runtime.executor(), [&] { ran.set_value(); });
+  REQUIRE(ran_future.wait_for(1s) == std::future_status::ready);
+
+  runtime.stop();
+}
+
+TEST_CASE("Runtime::start rejects a second start and a later run", "[unit][async][runtime]") {
+  async::Runtime runtime{async::RuntimeConfig{.io_workers = 1, .cpu_workers = 1}};
+
+  REQUIRE(runtime.start().has_value());
+
+  auto again = runtime.start();
+  REQUIRE_FALSE(again.has_value());
+  REQUIRE(again.error().kind() == core::ErrorKind::conflict);
+
+  auto blocking = runtime.run();
+  REQUIRE_FALSE(blocking.has_value());
+  REQUIRE(blocking.error().kind() == core::ErrorKind::conflict);
+
+  runtime.stop();
 }
 
 TEST_CASE("Runtime rejects a second run after stop", "[unit][async][runtime]") {

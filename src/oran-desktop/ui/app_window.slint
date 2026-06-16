@@ -1,0 +1,82 @@
+// ui/app_window.slint — Orangutan desktop chat tracer (Slice D).
+//
+// Compiled to app_window.h by slint-compiler. The C++ shell
+// (src/oran-desktop/shell/shell.cpp) binds the `send` / `stop` callbacks to the
+// runtime `ChatBridge` and folds streamed updates into `lines` / `status-text`
+// through a drain timer. Pure markup — no business logic lives here.
+
+import { VerticalBox, HorizontalBox, LineEdit, Button, ScrollView } from "std-widgets.slint";
+
+// One rendered transcript line. Mirrors desktop::ChatLine (role + text); the
+// generated C++ struct is `ChatLineData { bool is_user; slint::SharedString text; }`.
+export struct ChatLineData {
+    is-user: bool,
+    text: string,
+}
+
+export component AppWindow inherits Window {
+    title: "Orangutan";
+    preferred-width: 760px;
+    preferred-height: 560px;
+
+    // Driven from C++ (the drain timer / send handler).
+    in property <[ChatLineData]> lines;
+    in property <string> status-text: "Ready.";
+    in property <bool> streaming: false;
+    in property <bool> dark: false;
+    // Two-way bound to the input field so C++ can read and clear it.
+    in-out property <string> input-text;
+
+    // Raised toward C++: send the current input / cancel the in-flight turn.
+    callback send();
+    callback stop();
+
+    background: root.dark ? #1e1e1e : #fafafa;
+
+    VerticalBox {
+        padding: 10px;
+        spacing: 8px;
+
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                spacing: 6px;
+                for line in root.lines: Text {
+                    text: (line.is-user ? "you   " : "oran  ") + line.text;
+                    color: line.is-user
+                        ? (root.dark ? #8ab4f8 : #1a73e8)
+                        : (root.dark ? #e8e8e8 : #202020);
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        Text {
+            text: root.status-text;
+            color: gray;
+            font-size: 12px;
+        }
+
+        HorizontalBox {
+            padding: 0px;
+            spacing: 6px;
+
+            LineEdit {
+                placeholder-text: "Type a prompt and press Enter…";
+                text <=> root.input-text;
+                horizontal-stretch: 1;
+                accepted => { root.send(); }
+            }
+            Button {
+                text: "Send";
+                enabled: !root.streaming;
+                clicked => { root.send(); }
+            }
+            Button {
+                text: "Stop";
+                enabled: root.streaming;
+                clicked => { root.stop(); }
+            }
+        }
+    }
+}

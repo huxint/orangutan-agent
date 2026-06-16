@@ -11,8 +11,20 @@ testing strategy.
 - **Model**: **in-process, local-only.** `oran-desktop` links into the `orangutan`
   binary and drives `agent::Loop` directly — no HTTP server, no SSE over the wire, no
   auth token. (The old browser Web UI / `cpp-httplib` server is gone.)
-- **Status**: planned — `oran-desktop` is not yet implemented. See
-  [`product-specs/0007-web-ui.md`](product-specs/0007-web-ui.md).
+- **Status**: chat tracer shipped (slice 252). Slices A–C built the gated
+  prebuilt `slint` package + `.slint`→C++ codegen + skeleton window (A), the
+  `web`→`desktop` config migration (B), and the always-built `oran-desktop`
+  bridge / view-model — `ChatViewModel`, `DesktopEventSink`, `ChatBridge` (bounded
+  UI↔runtime queues + per-turn cancellation) + an injected `provider::EventSink*`
+  on `AgentPromptRunner` (C). Slice 251 added the always-built runtime-side glue
+  (`run_chat_session`, `async::Runtime::start()`). **Slice D (slice 252)** wires
+  it together: the gated Slint chat UI (transcript, input, Send/Stop) bound to the
+  bridge, and the `orangutan --desktop` launch that assembles
+  runtime/provider/runner/bridge (live route, else a scripted `FakeProvider`
+  fallback) and opens the working chat. The window opens and the loop runs; live
+  token streaming + stop are confirmed by an operator smoke (a display +
+  configured provider). See [`product-specs/0007-web-ui.md`](product-specs/0007-web-ui.md)
+  and [`exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md).
 
 ## Architecture
 
@@ -31,17 +43,30 @@ The one genuinely new design seam is the **Slint event loop ↔ asio executor br
 - Backpressure: the bridge uses bounded queues for UI→runtime and runtime→UI traffic,
   per the platform's "bounded queues are the default" rule.
 
-`oran-desktop` depends on `oran-agent` and `oran-orchestration` (for the
-conversation-DAG view). It does **not** depend on `oran-http` (that is an outbound
-client, irrelevant to an in-process GUI).
+At the target state `oran-desktop` depends on `oran-agent` and
+`oran-orchestration` (for the conversation-DAG view); it does **not** depend on
+`oran-http` (that is an outbound client, irrelevant to an in-process GUI). The
+Slice-A skeleton depended only on `oran-core`; Slice C added `oran-async` (the
+bounded `async::Channel` queues) and `oran-provider` (the `EventSink` the bridge
+implements). The agent runtime couples in through `oran-bootstrap`, which depends
+on `oran-desktop` and injects the bridge's `DesktopEventSink` into its own
+`AgentPromptRunner` — so the desktop library never depends on `oran-bootstrap`
+(no cycle), and the `agent::Loop` drive stays on bootstrap's side of the seam.
 
 ## Local Dev
 
 ```sh
+# Configure with the desktop shell on (downloads + installs the prebuilt Slint
+# package the first time; off by default so a normal build pays nothing for it).
+xmake f -m release --desktop=y
 # Build and run the app
 xmake build orangutan
 xmake run orangutan -- --desktop
 ```
+
+A build configured without `--desktop=y` still compiles the always-built
+`oran-desktop` surface and `test-desktop`, and `orangutan --desktop` exits with a
+"rebuild with `--desktop=y`" error instead of opening a window.
 
 For UI-only iteration, edit the `.slint` markup under `src/oran-desktop/ui/` and rebuild;
 the Slint compiler regenerates the C++ the library includes.

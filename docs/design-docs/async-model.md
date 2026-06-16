@@ -67,6 +67,10 @@ class Runtime {
 
   // Run the runtime once, until stop() is called or signal received.
   core::Result<void> run();
+  // Spawn the io workers and return immediately, leaving the runtime running on
+  // its own threads — for embedding under a foreign event loop (e.g. the Slint
+  // desktop shell). Pair with stop() on teardown.
+  core::Result<void> start();
   void stop() noexcept;
 
   // Strand factory: serializes work for one agent.
@@ -89,6 +93,15 @@ contained inside the IO worker, the runtime stops, and `run()` returns the first
 failure as `ErrorKind::internal` with the thrown reason in structured context. The
 later config/bootstrap slice decides the production default (for example
 `min(8, hardware_concurrency)`) without making `oran-async` include `<thread>`.
+
+Slice 251 adds `start()`: it spawns the io workers and returns immediately
+(sharing the worker-spawn path with `run()`) so a foreign event loop — the Slint
+desktop shell — can own the calling thread while the runtime drives its
+coroutines on its own pool. It shares the same idle→running→stopped state
+machine, so a second `start()` or a later `run()` returns `ErrorKind::conflict`,
+and `stop()` plus destruction tear the pool down. Unlike `run()`, a worker
+exception after `start()` is contained in the worker (the runtime stops) but is
+not surfaced to any caller — detached coroutines must catch their own (A8).
 
 ## Awaitable Alias
 

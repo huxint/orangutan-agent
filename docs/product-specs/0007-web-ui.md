@@ -64,17 +64,16 @@ networked web server.
 
 ## Config
 
-The desktop app introduces a small UI-preferences config block when `oran-desktop` is
-implemented:
+The desktop app uses a small UI-preferences config block (shipped in slice 249):
 
 ```json
 "desktop": { "enabled": false, "theme": "system", "reduce_motion": false }
 ```
 
-Until then, `oran-config` still parses the legacy networked `web` block
-(`WebConfig { enabled, bind, port }`); replacing it with the `desktop` block above is
-tracked in [`../exec-plans/tech-debt-tracker.md`](../exec-plans/tech-debt-tracker.md)
-and lands with the `oran-desktop` slice.
+`oran-config` parses this as `DesktopConfig { enabled, theme, reduce_motion }`
+(`theme` ∈ {`system`, `light`, `dark`}; unknown fields warn). It replaced the legacy
+networked `web` block (`WebConfig { enabled, bind, port }`) from the removed browser
+Web UI, which is gone.
 
 ## Acceptance Criteria
 
@@ -82,6 +81,15 @@ and lands with the `oran-desktop` slice.
 2. A submitted prompt renders streamed tokens in real time; the stop control cancels the
    in-flight turn (`Error::cancelled`, `cancellation_phase=provider_stream` after visible deltas).
 3. The streamed view survives a slow tool call without dropping output.
+
+> **Status (slice 252):** implemented. `orangutan --desktop` (`bootstrap::run_desktop`)
+> opens the Slint chat window bound to the always-built `ChatBridge`, with the agent
+> running on the `async::Runtime` workers (`Runtime::start()`) and the same
+> `AgentPromptRunner` the CLI uses (UI-marshalling `DesktopEventSink` injected). With
+> no route configured it streams a scripted `FakeProvider` demo. Criterion 1 (window
+> opens → chat view) is verified by the build's startup smoke; criteria 2–3 (live
+> streaming + stop + slow-tool resilience) are confirmed by an operator smoke on a
+> display with a configured provider.
 4. The audit view shows recent tool calls + permission decisions with timestamps and
    identity.
 5. Resident memory stays within the documented low-footprint target for an idle app

@@ -39,3 +39,8 @@ option("channel_qq")
     set_default(false)
     set_description("Enable the optional QQ channel adapter library (oran-channel-qq). Off until the port's round-trip acceptance passes (exec-plans/active/2026-06-10-channel-qq-port.md).")
 option_end()
+
+option("desktop")
+    set_default(false)
+    set_description("Build the Slint desktop UI shell (oran-desktop GUI + `orangutan --desktop`). Off by default so the heavy GUI toolkit costs zero on a normal build (docs/rules/libraries.md L4).")
+option_end()

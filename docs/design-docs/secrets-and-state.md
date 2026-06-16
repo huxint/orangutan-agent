@@ -26,7 +26,7 @@ successfully. The config file contains:
   "hooks":       { /* sinks + bindings */ },
   "memory":      { /* tier policies */ },
   "automation":  { /* job seeds */ },
-  "web":         { /* server config */ },
+  "desktop":     { /* UI preferences */ },
   "session":     { /* auto-save, persistence */ }
 }
 ```
@@ -43,7 +43,7 @@ Current implementation status:
   `prompt.active_tools`), top-level `trace` policy
   (`enabled`, `store_raw_bodies`, `retention_days`), top-level hook timeout
   policy (`hooks.timeout_ms`, default 2000), `profiles` (including optional
-  per-profile `protocol` and `pricing`), `routes`, `session`, `web`,
+  per-profile `protocol` and `pricing`), `routes`, `session`, `desktop`,
   `permissions`, and `agents.<name>.permissions`, optional
   `agents.<name>.prompt_overlay` stable section-6 prompt text, optional
   `agents.<name>.skills_enabled` skill allowlists, and optional

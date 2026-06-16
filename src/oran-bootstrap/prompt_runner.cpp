@@ -602,12 +602,12 @@ public:
         trace_context_json_{std::move(options.trace_context_json)}, tool_choice_{std::move(options.tool_choice)},
         max_tokens_{options.max_tokens}, thinking_budget_{options.thinking_budget}, retry_{options.retry},
         stream_{options.stream}, quiet_{options.quiet}, stream_out_{options.stream_out},
-        operator_sink_{cli::OperatorPromptSinkOptions{
-            .sink_id = "cli-operator-prompt",
-            .operator_identity = identity_,
-            .scripted_answers = std::move(options.approval_answers),
-            .quiet = options.quiet,
-        }},
+        event_sink_{options.event_sink}, operator_sink_{cli::OperatorPromptSinkOptions{
+                                             .sink_id = "cli-operator-prompt",
+                                             .operator_identity = identity_,
+                                             .scripted_answers = std::move(options.approval_answers),
+                                             .quiet = options.quiet,
+                                         }},
         bind_operator_prompt_sink_{options.bind_operator_prompt_sink} {
     if (!options.skills_directory.empty() && skills_catalog_.catalog().section_text.empty()) {
       skill_snapshot_.emplace(executor_, std::move(options.skills_directory));
@@ -733,12 +733,15 @@ public:
       };
     }
 
-    // Render streaming deltas live to the terminal when the operator can see
-    // them. A quiet or non-streaming run passes no sink, so the loop still
-    // assembles the same Response and the runner returns its text below.
+    // An injected sink (e.g. the desktop bridge's DesktopEventSink) is the
+    // output surface, so it takes priority over terminal rendering and runs
+    // even when quiet. Otherwise render streaming deltas live to the terminal
+    // when the operator can see them. A quiet, non-streaming, no-sink run
+    // passes nullptr, so the loop still assembles the same Response and the
+    // runner returns its text below.
     std::optional<cli::StreamingPromptSink> streaming_sink;
-    provider::EventSink* sink = nullptr;
-    if (stream_ && !quiet_) {
+    provider::EventSink* sink = event_sink_;
+    if (sink == nullptr && stream_ && !quiet_) {
       streaming_sink.emplace(cli::StreamingPromptSinkOptions{.out = stream_out_});
       sink = &*streaming_sink;
     }
@@ -1380,6 +1383,7 @@ private:
   bool stream_{true};
   bool quiet_{false};
   std::ostream* stream_out_{nullptr};
+  provider::EventSink* event_sink_{nullptr};
   cli::OperatorPromptSink operator_sink_;
   std::vector<core::Message> transcript_;
   std::size_t prompts_processed_{0};

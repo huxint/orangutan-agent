@@ -54,14 +54,8 @@ struct Runtime::Impl {
   std::optional<core::Error> run_error;
 
   [[nodiscard]] core::Result<void> run() {
-    auto expected = RunState::idle;
-    if (!state.compare_exchange_strong(expected, RunState::running)) {
-      const auto message = expected == RunState::running ? "runtime is already running" : "runtime has already stopped";
-      return std::unexpected(core::Error{core::ErrorKind::conflict, message});
-    }
-
-    for (std::size_t i = 0; i < config.io_workers; ++i) {
-      asio::post(io_workers, [this] { run_io_context_worker(); });
+    if (auto spawned = spawn_workers(); !spawned) {
+      return std::unexpected(std::move(spawned).error());
     }
 
     io_workers.join();
@@ -71,6 +65,10 @@ struct Runtime::Impl {
       return std::unexpected(std::move(*error));
     }
     return {};
+  }
+
+  [[nodiscard]] core::Result<void> start() {
+    return spawn_workers();
   }
 
   void stop() noexcept {
@@ -83,6 +81,23 @@ struct Runtime::Impl {
   }
 
 private:
+  // Move idle -> running and post one io_context driver per worker onto the
+  // io thread pool. Shared by run() (which then joins) and start() (which
+  // returns, leaving the pool running). The thread pool is joined by its own
+  // destructor, so start() callers tear down through stop() + destruction.
+  [[nodiscard]] core::Result<void> spawn_workers() {
+    auto expected = RunState::idle;
+    if (!state.compare_exchange_strong(expected, RunState::running)) {
+      const auto message = expected == RunState::running ? "runtime is already running" : "runtime has already stopped";
+      return std::unexpected(core::Error{core::ErrorKind::conflict, message});
+    }
+
+    for (std::size_t i = 0; i < config.io_workers; ++i) {
+      asio::post(io_workers, [this] { run_io_context_worker(); });
+    }
+    return {};
+  }
+
   void run_io_context_worker() {
     try {
       io_context.run();
@@ -130,6 +145,10 @@ asio::strand<asio::any_io_executor> Runtime::make_strand() const {
 
 core::Result<void> Runtime::run() {
   return impl_->run();
+}
+
+core::Result<void> Runtime::start() {
+  return impl_->start();
 }
 
 void Runtime::stop() noexcept {

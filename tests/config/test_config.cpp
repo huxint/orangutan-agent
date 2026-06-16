@@ -124,10 +124,10 @@ constexpr auto kMinimalConfig = R"json(
     "auto_save": false,
     "persistence": true
   },
-  "web": {
+  "desktop": {
     "enabled": true,
-    "bind": "0.0.0.0",
-    "port": 8787
+    "theme": "dark",
+    "reduce_motion": true
   }
 }
 )json";
@@ -189,9 +189,48 @@ TEST_CASE("Config::parse returns typed config values", "[unit][config]") {
 
   REQUIRE_FALSE(result->session().auto_save);
   REQUIRE(result->session().persistence);
-  REQUIRE(result->web().enabled);
-  REQUIRE(result->web().bind == "0.0.0.0");
-  REQUIRE(result->web().port == 8787);
+  REQUIRE(result->desktop().enabled);
+  REQUIRE(result->desktop().theme == "dark");
+  REQUIRE(result->desktop().reduce_motion);
+}
+
+TEST_CASE("Config::parse handles the desktop block", "[unit][config]") {
+  SECTION("absent desktop block yields defaults") {
+    auto result = config::Config::parse(R"json({})json");
+    REQUIRE(result.has_value());
+    REQUIRE_FALSE(result->desktop().enabled);
+    REQUIRE(result->desktop().theme == "system");
+    REQUIRE_FALSE(result->desktop().reduce_motion);
+  }
+
+  SECTION("explicit values parse") {
+    auto result =
+        config::Config::parse(R"json({"desktop": {"enabled": true, "theme": "light", "reduce_motion": true}})json");
+    REQUIRE(result.has_value());
+    REQUIRE(result->desktop().enabled);
+    REQUIRE(result->desktop().theme == "light");
+    REQUIRE(result->desktop().reduce_motion);
+  }
+
+  SECTION("unknown theme is rejected") {
+    auto result = config::Config::parse(R"json({"desktop": {"theme": "solarized"}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-boolean reduce_motion is rejected") {
+    auto result = config::Config::parse(R"json({"desktop": {"reduce_motion": "yes"}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("unknown desktop field warns in loose mode") {
+    auto result = config::Config::parse(R"json({"desktop": {"opacity": 0.5}})json");
+    REQUIRE(result.has_value());
+    REQUIRE(result->warnings().size() == 1);
+    REQUIRE(result->warnings()[0].path == "$.desktop.opacity");
+    REQUIRE(result->warnings()[0].message == "unknown desktop field");
+  }
 }
 
 TEST_CASE("Config::parse recursively substitutes environment variables", "[unit][config]") {
@@ -246,7 +285,7 @@ TEST_CASE("Config::parse reports config errors without throwing", "[unit][config
   }
 
   SECTION("typed value mismatch") {
-    auto result = config::Config::parse(R"json({"web": {"port": 70000}})json");
+    auto result = config::Config::parse(R"json({"desktop": {"enabled": "yes"}})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }
@@ -523,7 +562,9 @@ TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][con
   REQUIRE(result->profiles()[0].pricing.cache_creation_per_million_usd == std::optional<double>{3.75});
   REQUIRE(result->profiles()[0].pricing.cache_read_per_million_usd == std::optional<double>{0.3});
   REQUIRE(result->routes().size() == 1);
-  REQUIRE(result->web().port == 8787);
+  REQUIRE_FALSE(result->desktop().enabled);
+  REQUIRE(result->desktop().theme == "system");
+  REQUIRE_FALSE(result->desktop().reduce_motion);
   REQUIRE(result->runtime().tool_output.max_text_bytes == 262144);
   REQUIRE(result->runtime().tool_output.max_data_bytes == 1048576);
   REQUIRE(result->runtime().tool_scheduler.max_parallel_tools == 4);

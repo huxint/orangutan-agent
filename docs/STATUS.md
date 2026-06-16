@@ -9,33 +9,34 @@
 
 ## Snapshot
 
-- **Slice:** 247 (`xmake run orangutan -- --help` reports slice 247)
+- **Slice:** 252 (`xmake run orangutan -- --help` reports slice 252)
 - **Last completed history:**
-  [`histories/2026-06/20260614-2033-streaming-tool-roundtrip.md`](histories/2026-06/20260614-2033-streaming-tool-roundtrip.md)
+  [`histories/2026-06/20260616-1625-desktop-chat-tracer-shell.md`](histories/2026-06/20260616-1625-desktop-chat-tracer-shell.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — remains active, but its next gate is externally blocked on real QQ
     credentials plus a sendable operator conversation; it was spun off from the
     completed channel-ingress plan
     ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-- **Latest completed slice:** slice 247 stabilizes configured-route
-  Anthropic-compatible streaming and tool round-trips. `oran-http` now delivers
-  SSE event callbacks through a strand so multi-worker runtimes cannot race the
-  provider decoder or terminal sink; the Anthropic decoder keeps thinking deltas
-  on the thinking stream even when providers send them as `text_delta`;
-  `cli::StreamingPromptSink` suppresses thinking by default so reasoning bytes
-  do not mix into the visible answer; and Anthropic tool-result requests now send
-  text content rather than arbitrary local structured JSON objects. Live
-  configured-route validation covered a Chinese single-shot prompt and a
-  `DirectoryList` tool round-trip with no stream corruption, heap error, or
-  provider 400. Focused validation: `test-http` **28 cases / 185 assertions**,
-  `test-provider` **88 cases / 664 assertions**, `test-cli` **28 cases / 221
-  assertions**.
-- **Next intended slice:** Re-read this snapshot and [`ROADMAP.md`](ROADMAP.md)
-  before scoping the next slice. Provider/tool naming and one
-  Anthropic-compatible live CLI tool round-trip now have secret-safe evidence;
-  the next slice should still be selected from current project pressure rather
-  than from this line. QQ-port 4b-ii remains waiting on real QQ credentials and
+  - *Recently completed:* the desktop chat-tracer plan closed 2026-06-16
+    (slices 248–252 — spec 0007 acceptance 1–3) and moved to
+    [`exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md).
+- **Latest completed slice:** slice 252 ships Desktop **Slice D** — the chat
+  tracer end-to-end. The gated Slint chat UI (`ui/app_window.slint`: transcript,
+  input, Send/Stop) binds to the `ChatBridge` through `shell::run` (a
+  `slint::Timer` drains the runtime→UI queue into a `ChatViewModel` on the UI
+  thread); `orangutan --desktop` (`bootstrap::run_desktop`) assembles the runtime
+  + `RuntimeAssembly` + provider (live `HttpProviderBackend`, else a scripted
+  `FakeProvider` fallback) + `AgentPromptRunner` (injected `event_sink`) + bridge,
+  `Runtime::start()`s, co-spawns `run_chat_session`, and opens the window —
+  tearing down via a completion-promise wait so the session finishes before the
+  runner drops. Gated `--desktop=y` build clean; default build + `xmake test`
+  19/19 unaffected. The window opens (criterion 1 verified); live streaming + stop
+  confirmed by the operator smoke (acceptance 2–3).
+- **Next intended slice:** the desktop chat tracer is complete — the operator
+  smoke closed spec 0007 acceptance 2–3 and the chat-tracer plan is archived; the
+  next desktop build-out is the post-chat panels (sessions / audit / orchestration
+  DAG) per spec 0007 v1. QQ-port 4b-ii remains waiting on real QQ credentials and
   an operator conversation.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
@@ -55,11 +56,11 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 ## Latest Library Surfaces
 
 - `oran-core`: 71 cases / 459 assertions.
-- `oran-async`: 14 cases / 76 assertions.
+- `oran-async`: 16 cases / 83 assertions.
 - `oran-http`: 28 cases / 185 assertions.
 - `oran-io`: 54 cases / 311 assertions.
 - `oran-storage`: 79 cases / 1047 assertions.
-- `oran-config`: 55 cases / 519 assertions.
+- `oran-config`: 56 cases / 537 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 38 cases / 313 assertions.
 - `oran-memory`: 38 cases / 841 assertions.
@@ -72,8 +73,9 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 88 cases / 664 assertions.
 - `oran-agent`: 57 cases / 10 786 assertions.
 - `oran-cli`: 28 cases / 221 assertions.
-- `oran-bootstrap`: 156 cases / 1573 assertions (gated `--channel_qq=y`: 148 /
-  1352).
+- `oran-desktop`: 17 cases / 70 assertions.
+- `oran-bootstrap`: 157 cases / 1581 assertions (gated `--channel_qq=y`: 149 /
+  1360).
 
 ## Open Tech-Debt Rows
 
@@ -110,9 +112,6 @@ Closed entries do *not* live here — the tracker is canonical.
   implemented.
 - 2026-05-14 — bench A-vs-B scenarios listed in
   `bench/<lib>/README.md` are placeholders.
-- 2026-06-06 — Frontend stack choice for the desktop app shell is settled
-  (Slint); the `oran-desktop` library and the `web` → `desktop` config-block
-  migration are still open.
 
 ## How To Update
 
