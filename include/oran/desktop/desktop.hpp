@@ -2,9 +2,9 @@
 //
 // The bridge / view-model layer (bounded UI<->runtime queues, the
 // `provider::EventSink` that marshals streamed deltas onto the Slint UI thread,
-// and the chat view-model) lands in a later slice of
-// `docs/exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md`. This first
-// slice ships only the always-built surface plus the gated window entry
+// and the chat view-model) lives in `<oran/desktop/chat_bridge.hpp>` (Slice C of
+// `docs/exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md`). This header
+// carries the build-config accessor plus the gated window entry
 // (`<oran/desktop/shell.hpp>`).
 
 #pragma once

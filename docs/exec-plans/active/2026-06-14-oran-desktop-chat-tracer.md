@@ -147,7 +147,20 @@ docs synced in the same commit (Prime Directive).
       theme, reduce_motion}` + `parse_desktop` (theme ∈ {system,light,dark}, unknown-field
       warnings) replacing `WebConfig`/`parse_web`; `config.example.json`; `tests/config`
       (56 cases / 537 assertions); bootstrap `desktop=` summary line. Tech-debt row closed.
-- [ ] Slice C: bridge + view-model + sink injection; `tests/desktop` ≥60%; `bench/desktop`.
+- [x] 2026-06-16 (slice 250): bridge + view-model + sink injection — always-built
+      `oran-desktop` gains `ChatViewModel` (folds `UiUpdate`s into transcript
+      state), `DesktopEventSink : provider::EventSink` (translates streamed deltas
+      into `UiUpdate`s through a delivery hook), and `ChatBridge` (bounded
+      `async::Channel<std::string>` prompts + `async::Channel<UiUpdate>` updates
+      queues, per-turn `asio::cancellation_signal`, overflow-drop accounting,
+      sink delivery wired into the runtime→UI queue); `AgentPromptRunnerOptions`
+      gains an optional injected `provider::EventSink*` (priority over the
+      terminal sink, runs even when quiet). `oran-desktop` deps grow to
+      `oran-core`/`oran-async`/`oran-provider`. Built test-first vs a fake
+      provider: `test-desktop` 15 cases / 59 assertions (incl. submit→prompt
+      roundtrip, delta marshalling, overflow-drop, stop-cancels-wait, and a
+      `FakeProvider` end-to-end stream), `test-bootstrap` 157 / 1581;
+      `bench/desktop` gains a delta-marshalling microbench. No Slint.
 - [ ] Slice D: chat tracer end-to-end; spec 0007 acceptance 1–3; manual `--desktop=y` run.
 - [ ] Per slice: update invalidated docs in the same commit (`docs/rules/docs-in-sync.md`).
 - [ ] Per slice: `make new-history`, bump `STATUS.md`, refresh `ROADMAP.md` Desktop row.
@@ -180,5 +193,6 @@ docs synced in the same commit (Prime Directive).
 - Brainstorm/origin: this session (2026-06-14).
 - PRs: _(filled per slice)_
 - History entry: Slice A — `docs/histories/2026-06/20260615-2300-oran-desktop-slice-a.md`;
-  Slice B — `docs/histories/2026-06/20260616-0015-desktop-config-migration.md`.
+  Slice B — `docs/histories/2026-06/20260616-0015-desktop-config-migration.md`;
+  Slice C — `docs/histories/2026-06/20260616-0200-desktop-bridge-view-model.md`.
 - Release note: _(Slice D)_

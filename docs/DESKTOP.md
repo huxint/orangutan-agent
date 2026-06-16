@@ -11,11 +11,15 @@ testing strategy.
 - **Model**: **in-process, local-only.** `oran-desktop` links into the `orangutan`
   binary and drives `agent::Loop` directly — no HTTP server, no SSE over the wire, no
   auth token. (The old browser Web UI / `cpp-httplib` server is gone.)
-- **Status**: in progress (Slice A of the chat-tracer plan). The always-built
-  `oran-desktop` bridge surface, the gated prebuilt `slint` package, the
-  `.slint`→C++ codegen rule, and a skeleton `orangutan --desktop` window all ship;
-  the live chat view (prompt input, streamed transcript, stop) lands in the
-  following slices. See [`product-specs/0007-web-ui.md`](product-specs/0007-web-ui.md)
+- **Status**: in progress (chat-tracer plan). Slices A–C have shipped: the gated
+  prebuilt `slint` package, the `.slint`→C++ codegen rule, a skeleton
+  `orangutan --desktop` window (A), the `web`→`desktop` config migration (B), and
+  the always-built `oran-desktop` bridge / view-model — `ChatViewModel`,
+  `DesktopEventSink`, and a `ChatBridge` with bounded UI↔runtime queues and
+  per-turn cancellation, plus an injected `provider::EventSink*` on
+  `AgentPromptRunner` (C, `<oran/desktop/chat_bridge.hpp>`). The live chat view
+  (Slint UI binding input, streamed transcript, and stop to the bridge) lands in
+  Slice D. See [`product-specs/0007-web-ui.md`](product-specs/0007-web-ui.md)
   and [`exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md).
 
 ## Architecture
@@ -38,8 +42,12 @@ The one genuinely new design seam is the **Slint event loop ↔ asio executor br
 At the target state `oran-desktop` depends on `oran-agent` and
 `oran-orchestration` (for the conversation-DAG view); it does **not** depend on
 `oran-http` (that is an outbound client, irrelevant to an in-process GUI). The
-Slice-A skeleton depends only on `oran-core`; the `oran-agent` runtime bridge
-couples in with the chat-tracer slice that drives `agent::Loop`.
+Slice-A skeleton depended only on `oran-core`; Slice C added `oran-async` (the
+bounded `async::Channel` queues) and `oran-provider` (the `EventSink` the bridge
+implements). The agent runtime couples in through `oran-bootstrap`, which depends
+on `oran-desktop` and injects the bridge's `DesktopEventSink` into its own
+`AgentPromptRunner` — so the desktop library never depends on `oran-bootstrap`
+(no cycle), and the `agent::Loop` drive stays on bootstrap's side of the seam.
 
 ## Local Dev
 

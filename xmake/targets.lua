@@ -71,7 +71,7 @@ target("oran-desktop")
     set_group("oran-libs")
     add_includedirs(path.join(root, "include"), { public = true })
     add_files(path.join(root, "src", "oran-desktop", "*.cpp"))  -- top level only (bridge surface)
-    add_deps("oran-core")
+    add_deps("oran-core", "oran-async", "oran-provider")
     set_pcxxheader(path.join(root, "include/oran/_pch.hpp"))
 target_end()
 if has_config("desktop") then

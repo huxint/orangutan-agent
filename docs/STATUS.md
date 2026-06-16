@@ -9,34 +9,36 @@
 
 ## Snapshot
 
-- **Slice:** 249 (`xmake run orangutan -- --help` reports slice 249)
+- **Slice:** 250 (`xmake run orangutan -- --help` reports slice 250)
 - **Last completed history:**
-  [`histories/2026-06/20260616-0015-desktop-config-migration.md`](histories/2026-06/20260616-0015-desktop-config-migration.md)
+  [`histories/2026-06/20260616-0200-desktop-bridge-view-model.md`](histories/2026-06/20260616-0200-desktop-bridge-view-model.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/active/2026-06-14-oran-desktop-chat-tracer.md)
-    — Slices A (Slint packaging + skeleton window, slice 248) and B
-    (`web`→`desktop` config migration, slice 249) landed; Slice C (bridge +
-    view-model) is next, then Slice D (chat tracer end-to-end).
+    — Slices A (Slint packaging + skeleton window, slice 248), B
+    (`web`→`desktop` config migration, slice 249), and C (always-built bridge +
+    view-model, slice 250) landed; Slice D (chat tracer end-to-end) is next.
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — remains active, but its next gate is externally blocked on real QQ
     credentials plus a sendable operator conversation; it was spun off from the
     completed channel-ingress plan
     ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-- **Latest completed slice:** slice 249 completes Desktop App **Slice B** — the
-  `web` → `desktop` config migration. `oran-config` replaces the legacy networked
-  `WebConfig { enabled, bind, port }` with `DesktopConfig { enabled, theme,
-  reduce_motion }` (`theme` ∈ {system, light, dark}; unknown fields warn);
-  `config.example.json`, `tests/config`, and the bootstrap startup summary
-  (`desktop=…`) move with it, and `web` is no longer a recognized root field. Built
-  test-first: `test-config` **56 cases / 537 assertions**, `test-bootstrap` 156 /
-  1573. (Slice A, slice 248, shipped the gated Slint shell + skeleton window, which
-  launches on WSLg/Xwayland.)
-- **Next intended slice:** Desktop **Slice C** — the always-built `oran-desktop`
-  bridge + view-model: bounded UI↔runtime queues, a `DesktopEventSink :
-  provider::EventSink`, a `ChatViewModel`, and injecting an optional
-  `provider::EventSink*` into `bootstrap::AgentPromptRunner` so the desktop reuses
-  the full loop runner. `tests/desktop` ≥60% coverage with a fake provider; no
-  Slint. QQ-port 4b-ii remains waiting on real QQ credentials and an operator
+- **Latest completed slice:** slice 250 ships Desktop App **Slice C** — the
+  always-built `oran-desktop` bridge + view-model. A `ChatViewModel` folds a
+  stream of `UiUpdate`s into renderable transcript state; a `DesktopEventSink :
+  provider::EventSink` translates streamed deltas into `UiUpdate`s through a
+  delivery hook; a `ChatBridge` owns the bounded UI↔runtime queues
+  (`async::Channel<std::string>` prompts, `async::Channel<UiUpdate>` updates) and
+  a per-turn `asio::cancellation_signal`, wiring the sink's delivery into the
+  runtime→UI queue with overflow-drop accounting. `bootstrap::AgentPromptRunner`
+  gains an optional injected `provider::EventSink*` so the desktop reuses the
+  full loop runner. All pure C++ — no Slint — and built test-first against a fake
+  provider: `test-desktop` **15 cases / 59 assertions**, `test-bootstrap` 157 /
+  1581.
+- **Next intended slice:** Desktop **Slice D** — the chat tracer end-to-end: the
+  Slint chat UI (input, live transcript, stop) bound to the `ChatBridge`, with
+  `orangutan --desktop` building the runner + bridge and opening the working
+  chat. Satisfies spec 0007 acceptance criteria 1–3; manual `--desktop=y` run
+  recorded. QQ-port 4b-ii remains waiting on real QQ credentials and an operator
   conversation.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
@@ -73,9 +75,9 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-provider`: 88 cases / 664 assertions.
 - `oran-agent`: 57 cases / 10 786 assertions.
 - `oran-cli`: 28 cases / 221 assertions.
-- `oran-desktop`: 1 case / 1 assertion.
-- `oran-bootstrap`: 156 cases / 1573 assertions (gated `--channel_qq=y`: 148 /
-  1352).
+- `oran-desktop`: 15 cases / 59 assertions.
+- `oran-bootstrap`: 157 cases / 1581 assertions (gated `--channel_qq=y`: 149 /
+  1360).
 
 ## Open Tech-Debt Rows
 

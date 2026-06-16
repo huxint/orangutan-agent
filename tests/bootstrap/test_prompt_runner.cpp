@@ -58,6 +58,20 @@ struct MemoryHookCapture {
   hook::Payload payload;
 };
 
+struct CapturingEventSink final : provider::EventSink {
+  std::size_t text_deltas{0};
+  std::size_t done_calls{0};
+  std::string text;
+
+  void on_text_delta(std::string_view delta) override {
+    ++text_deltas;
+    text += std::string{delta};
+  }
+  void on_done(core::StopReason /*stop_reason*/) override {
+    ++done_calls;
+  }
+};
+
 class TempDir {
 public:
   explicit TempDir(std::string name)
@@ -348,6 +362,41 @@ TEST_CASE("AgentPromptRunner drives CLI prompts through the agent loop and trace
     auto count = co_await assembly.trace_repository()->count_turns();
     REQUIRE(count.has_value());
     REQUIRE(*count == 1);
+  });
+}
+
+TEST_CASE("AgentPromptRunner streams deltas to an injected event sink", "[unit][bootstrap][prompt_runner]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-injected-sink"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false);
+    std::vector<provider::ScriptedTurn> plan;
+    plan.push_back(provider::ScriptedTurn{
+        .response = std::nullopt,
+        .deltas = {provider::TextDelta{.text = "Hel"},
+                   provider::TextDelta{.text = "lo"},
+                   provider::StreamEnd{.stop_reason = core::StopReason::end_turn,
+                                       .usage = std::nullopt,
+                                       .model_used = std::nullopt}},
+        .error = std::nullopt,
+        .latency = {},
+    });
+    provider::FakeProvider fake{std::move(plan)};
+
+    CapturingEventSink sink;
+    auto options = base_runner_options(io, assembly, cfg, fake);
+    options.event_sink = &sink;
+    auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+    REQUIRE(runner.has_value());
+
+    auto args = std::vector<std::string_view>{"--prompt", "hello"};
+    auto result = co_await cli::run_async(cli_options(args), runner->get());
+
+    REQUIRE(result.has_value());
+    REQUIRE(sink.text_deltas == 2);
+    REQUIRE(sink.text == "Hello");
+    REQUIRE(sink.done_calls == 1);
+    REQUIRE(fake.turns_consumed() == 1);
   });
 }
 

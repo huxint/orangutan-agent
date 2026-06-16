@@ -109,6 +109,13 @@ struct AgentPromptRunnerOptions {
   /// false. `nullptr` renders to `std::cout` (the production terminal); tests
   /// inject their own `std::ostream`.
   std::ostream* stream_out{nullptr};
+  /// Optional streaming observer. When non-null the runner hands this sink to
+  /// the agent loop instead of building the terminal `cli::StreamingPromptSink`,
+  /// and it does so regardless of `quiet`/`stream_out` (the sink, not stdout, is
+  /// the output surface). The desktop bridge injects its `DesktopEventSink` here
+  /// so streamed deltas marshal onto the UI; `nullptr` keeps the CLI terminal
+  /// rendering path. The sink is borrowed for the runner's lifetime.
+  provider::EventSink* event_sink{nullptr};
   /// When `false`, `AgentPromptRunner` does not bind `cli::OperatorPromptSink`
   /// to the process hook bus, so `ask` permissions fail through the existing
   /// no-sink path instead of reading terminal stdin. This keeps noninteractive
