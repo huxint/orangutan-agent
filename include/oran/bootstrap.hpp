@@ -11,4 +11,5 @@
 #include <oran/bootstrap/prompt_runner.hpp>
 #include <oran/bootstrap/provider_backend.hpp>
 #include <oran/bootstrap/runtime_assembly.hpp>
+#include <oran/bootstrap/serve.hpp>
 #include <oran/bootstrap/signal_drain.hpp>

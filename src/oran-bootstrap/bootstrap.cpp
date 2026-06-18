@@ -35,6 +35,7 @@
 #include <oran/bootstrap/prompt_runner.hpp>
 #include <oran/bootstrap/provider_backend.hpp>
 #include <oran/bootstrap/runtime_assembly.hpp>
+#include <oran/bootstrap/serve.hpp>
 #include <oran/bootstrap/signal_drain.hpp>
 #include <oran/cli.hpp>
 #include <oran/core/enum_names.hpp>
@@ -58,7 +59,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice252";
+constexpr std::string_view kVersion = "2.0.0-slice254";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 constexpr std::size_t kTraceExportDefaultLimit = 50;
@@ -69,6 +70,7 @@ constexpr std::int64_t kNanosecondsPerDay = 86'400'000'000'000;
 struct ParsedArgs {
   bool help{false};
   bool desktop{false};
+  bool serve{false};
   bool explain_rules{false};
   bool selector_mode_supplied{false};
   bool selector_agent_supplied{false};
@@ -277,6 +279,11 @@ consume_value(std::span<const std::string_view> args, std::size_t& index, std::s
 
     if (arg == "--desktop") {
       parsed.desktop = true;
+      continue;
+    }
+
+    if (arg == "--serve") {
+      parsed.serve = true;
       continue;
     }
 
@@ -530,7 +537,7 @@ void print_usage() {
   std::println("                  [--audit-init [<path>]] [--trace <turn-id>]");
   std::println("                  [--trace-export [<turn-id>] [--agent <name>] [--limit <n>]");
   std::println("                                  [--trace-export-file <path>|--trace-export-post <url>]]");
-  std::println("                  [--desktop] [--prompt <text>] [--help]");
+  std::println("                  [--desktop] [--serve] [--prompt <text>] [--help]");
   std::println();
   std::println(
       "The current bootstrap slice loads config, builds configured provider backends, then hands prompts to oran-cli.");
@@ -540,6 +547,9 @@ void print_usage() {
   std::println("--mode/--agent also select configured provider-route prompt runs.");
   std::println("--audit-init applies the audit.db schema (defaults to <workspace>/.orangutan/audit.db) and exits.");
   std::println("--desktop opens the in-process Slint desktop app (requires a build configured with --desktop=y).");
+  std::println("--serve runs the long-lived service: it auto-starts the IO file-view watcher and, when the");
+  std::println("        config has automation.cron.jobs[], the automation cron/triggered loop, until");
+  std::println("        SIGINT/SIGTERM (exit code 128 + signum). Scheduler idle-lock upkeep lands later.");
   std::println("--trace prints the trace_turns row and joined audit rows, including hook_publish, for <turn-id>");
   std::println("        (32 lowercase hex characters); reads <workspace>/.orangutan/audit.db.");
   std::println("--trace-export prints trace rows plus joined audit rows as JSON Lines; a turn id prints one");
@@ -1523,6 +1533,17 @@ core::Result<int> run(BootstrapOptions options) {
 #else
     return std::unexpected(arg_error("--desktop requires a build configured with --desktop=y (see docs/DESKTOP.md)"));
 #endif
+  }
+
+  if (parsed->serve) {
+    auto serve_result = run_serve(options);
+    if (!serve_result && serve_result.error().kind() == core::ErrorKind::cancelled) {
+      if (auto signum = signum_from_error(serve_result.error()); signum) {
+        std::println(stderr, "orangutan: interrupted by {} ({})", signal_name(*signum), *signum);
+        return 128 + *signum;
+      }
+    }
+    return serve_result;
   }
 
   auto loaded = load_config(options);

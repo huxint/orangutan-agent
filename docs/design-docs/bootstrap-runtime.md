@@ -501,7 +501,75 @@ code. The trace DB lookup still shares the same idempotent migration and
 signal-aware one-shot drain, while single-turn export keeps the `--trace`
 turn-id validation and missing-row behavior.
 
+## Service Mode (`--serve`)
+
+`orangutan --serve` is the long-lived runtime-service owner — a mode of the main
+binary, parallel to `--desktop`, **not** a separate `orangutan-server` (see the
+[runtime-service-owner plan](../exec-plans/active/2026-06-18-runtime-service-owner.md)).
+It exists to drive the periodic concerns that `oran-automation`, `oran-io`, and the
+tool scheduler were built to expect but which nothing started.
+
+`bootstrap::run_serve` (`src/oran-bootstrap/serve.cpp`):
+
+1. loads config and builds `async::Runtime`;
+2. creates a runtime strand, an `asio::cancellation_signal`, and an
+   `asio::signal_set{strand, SIGINT, SIGTERM}` whose handler records the signum and
+   emits `cancellation_type::terminal` on that signal — the handler and the service
+   coroutine share the strand, so the cross-thread emit is serialized with slot
+   consumption regardless of io-worker count;
+3. co-spawns the service body (the watcher concern always, plus the automation
+   concern when cron jobs are configured — see below) bound to the cancellation
+   slot, with a completion handler that fulfils a `std::promise<core::Result<void>>`;
+4. `Runtime::start()`s (non-blocking), then blocks the calling thread on the
+   completion future until a signal stops the service;
+5. on completion, `Runtime::stop()`s and returns a `cancelled` error carrying
+   `signal`/`signum`, which `bootstrap::run` maps to `128 + signum` (the same seam
+   as `--audit-init`/`--trace`).
+
+`serve_run(executor, ServeOptions)` is the file-view **watcher** concern — drivable
+from tests with a plain `io_context` + `cancellation_signal` (no real process or
+signal). It runs the watcher and idles until its cancellation slot fires, returning
+`core::Result<void>{}` (a graceful stop is not an error). `serve_automation(executor,
+service, cron_handler, triggered_handler, options, stop_requested)` is the **automation**
+concern: it drives `automation::AutomationService::run` in a cancel-aware poll loop,
+firing any cron job due at the current UTC minute and draining buffered triggered
+work each tick. A file-local `serve_body` races the two with the awaitable-operators
+`||` under one cancellation slot, so a single signal stops both. The whole thing is
+built on a fine-grained `asio::cancellation_signal` rather than
+`SignalScope`/`io.stop()` deliberately, so the automation loop's SQLite writes and
+in-flight agent turns are never blunt-dropped — the evolution `signal_drain.hpp`
+anticipates.
+
+**Slice A (slice 253)** shipped the lifecycle plus the IO file-view cache watcher
+(`io::watch_read_text_file_ranged_cache`, `max_events = 0` = run-until-cancelled). A
+watcher that cannot initialize (e.g. inotify unavailable, a missing root) is
+non-fatal — reported once, then the service keeps idling until signalled.
+
+**Slice B (slice 254)** adds the automation cron/triggered loop. The presence of
+config-authored `automation.cron.jobs[]` gates it: with none, `--serve` is exactly the
+slice-A watcher (no provider, no `automation.db`, CI-identical). With cron jobs,
+`run_serve` builds a `RuntimeAssembly` and a provider — `HttpProviderBackend` for a
+configured `default` route, otherwise an offline scripted `FakeProvider` so the loop
+stays usable without credentials (the same offline posture as `--desktop`) — then
+`serve_body` opens `<workspace>/.orangutan/automation.db` (`AutomationRuntime::open`),
+applies the mapped seeds once (`cron_jobs_from` → `apply_cron_job_seeds`; applying
+them once, not per tick, is what keeps stored `last_fired_at` from resetting), builds
+a prompt-backed handler (`make_automation_agent_prompt_runner` →
+`make_cron_prompt_handler` / `make_triggered_prompt_handler`), and races
+`serve_automation` beside the watcher. A database that cannot open, or seeds that
+cannot apply, is non-fatal — reported once, then the service serves the watcher
+alone. The automation service disables cancellation around its durable lease/run-row
+writes, so a firing tick can swallow a parent cancellation; `serve_automation`'s
+`stop_requested` predicate (tied to the trapped signum) is therefore the
+authoritative, guaranteed stop, checked before and after each tick, and `run_serve`
+always supplies it. Slice C (scheduler idle-lock reaping tick) adds another concern
+inside `serve_body` under the same lifecycle.
+
 ## Next Steps
 
+- Slice C: add the scheduler idle-lock reaping tick (hoist `ToolScheduler` ownership
+  out of `AgentPromptRunner` first).
+- Wire a triggered-work ingress (channel/webhook → `AutomationService::enqueue_triggered`)
+  so the triggered half of the `--serve` loop has a producer.
 - Bind configured hook sinks to the assembly-owned bus once the hook sink models land.
 - Add CLI line editor/history on top of the interactive REPL handoff.

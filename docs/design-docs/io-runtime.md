@@ -105,8 +105,9 @@ performs the requested operation and returns `core::Result<T>`.
 > `invalidate_read_text_file_ranged_cache(path)`. The public result is
 > aggregate health only (`ReadTextFileWatchStats`). If inotify reports a
 > queue overflow, the watcher conservatively invalidates all private
-> range-read caches. Bootstrap/config wiring for a long-lived process
-> watcher remains downstream.
+> range-read caches. Slice 253 (2026-06-18) wires this as a runtime service:
+> `orangutan --serve` (`bootstrap::run_serve`) auto-starts the watcher over the
+> workspace root and cancels it gracefully on SIGINT/SIGTERM.
 
 ## Public Surface
 
@@ -319,8 +320,8 @@ surface for effectful agent actions.
   `watch_read_text_file_ranged_cache(executor, root, options)` can watch
   one directory or a recursive tree, returns aggregate
   `ReadTextFileWatchStats`, and is cancel-aware for the production
-  run-until-cancelled shape. Bootstrap/config wiring that starts it as a
-  runtime service is still a later slice.
+  run-until-cancelled shape. Slice 253 (2026-06-18) wires it as a runtime
+  service: `orangutan --serve` auto-starts it over the workspace root.
   Slice 53 (2026-05-24) adds the bounded singleflight table for cold
   `read_text_file_ranged` calls and the
   `ReadTextSingleflightStats` observability snapshot. Slice 54

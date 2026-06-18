@@ -466,6 +466,19 @@ owner-local state for later explicit cycles, and reports held-vs-dropped
 triggered outcomes through `AutomationServiceTriggeredCycleResult` without
 starting a detached service loop or automatic wakeup path.
 
+Slice 254 gives the composed owner its first long-lived driver **without** changing
+this library's caller-owned posture. `oran-bootstrap`'s `orangutan --serve` (see
+[`bootstrap-runtime.md`](bootstrap-runtime.md) "Service Mode") opens
+`<workspace>/.orangutan/automation.db` via `AutomationRuntime::open`, applies
+config-authored cron seeds once with `apply_cron_job_seeds`, and drives
+`AutomationService::run(...)` in a cancel-aware poll loop over a prompt-backed handler
+(`make_cron_prompt_handler` / `make_triggered_prompt_handler` on a configured — or
+offline fake — provider route). The library still does not open `automation.db`, start
+a detached loop, or call agents itself; the owner does, and supplies the signal-tied
+`stop_requested` predicate `AutomationService::run` already exposes. Because the
+service disables cancellation around its durable lease/run-row writes, that predicate
+(not parent cancellation alone) is the owner's guaranteed stop.
+
 ## Public API
 
 ```cpp

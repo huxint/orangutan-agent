@@ -9,10 +9,15 @@
 
 ## Snapshot
 
-- **Slice:** 252 (`xmake run orangutan -- --help` reports slice 252)
+- **Slice:** 254 (`xmake run orangutan -- --help` reports slice 254)
 - **Last completed history:**
-  [`histories/2026-06/20260616-1625-desktop-chat-tracer-shell.md`](histories/2026-06/20260616-1625-desktop-chat-tracer-shell.md)
+  [`histories/2026-06/20260618-1719-serve-automation-cron-loop.md`](histories/2026-06/20260618-1719-serve-automation-cron-loop.md)
 - **Active exec-plans:**
+  - [`exec-plans/active/2026-06-18-runtime-service-owner.md`](exec-plans/active/2026-06-18-runtime-service-owner.md)
+    — the current main line. Slice A (slice 253) shipped the `--serve` skeleton
+    + IO file-view watcher auto-start; Slice B (slice 254) shipped the automation
+    cron/triggered loop under `--serve`; only Slice C (scheduler idle-lock reaping)
+    remains. Resolves ROADMAP Dependency Frontier #2.
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — remains active, but its next gate is externally blocked on real QQ
     credentials plus a sendable operator conversation; it was spun off from the
@@ -21,23 +26,23 @@
   - *Recently completed:* the desktop chat-tracer plan closed 2026-06-16
     (slices 248–252 — spec 0007 acceptance 1–3) and moved to
     [`exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md).
-- **Latest completed slice:** slice 252 ships Desktop **Slice D** — the chat
-  tracer end-to-end. The gated Slint chat UI (`ui/app_window.slint`: transcript,
-  input, Send/Stop) binds to the `ChatBridge` through `shell::run` (a
-  `slint::Timer` drains the runtime→UI queue into a `ChatViewModel` on the UI
-  thread); `orangutan --desktop` (`bootstrap::run_desktop`) assembles the runtime
-  + `RuntimeAssembly` + provider (live `HttpProviderBackend`, else a scripted
-  `FakeProvider` fallback) + `AgentPromptRunner` (injected `event_sink`) + bridge,
-  `Runtime::start()`s, co-spawns `run_chat_session`, and opens the window —
-  tearing down via a completion-promise wait so the session finishes before the
-  runner drops. Gated `--desktop=y` build clean; default build + `xmake test`
-  19/19 unaffected. The window opens (criterion 1 verified); live streaming + stop
-  confirmed by the operator smoke (acceptance 2–3).
-- **Next intended slice:** the desktop chat tracer is complete — the operator
-  smoke closed spec 0007 acceptance 2–3 and the chat-tracer plan is archived; the
-  next desktop build-out is the post-chat panels (sessions / audit / orchestration
-  DAG) per spec 0007 v1. QQ-port 4b-ii remains waiting on real QQ credentials and
-  an operator conversation.
+- **Latest completed slice:** slice 254 ships the runtime-service owner **Slice B**
+  — the automation cron/triggered loop under `--serve`. When the loaded config carries
+  `automation.cron.jobs[]`, `bootstrap::run_serve` builds a `RuntimeAssembly` + provider
+  (live `HttpProviderBackend`, else an offline scripted `FakeProvider`), opens
+  `<workspace>/.orangutan/automation.db` (`AutomationRuntime::open`), applies the mapped
+  cron seeds once, builds a prompt-backed handler, and races a new
+  `bootstrap::serve_automation` concern (a cancel-aware poll loop over
+  `automation::AutomationService::run`) beside the IO watcher under one cancellation
+  signal. With no cron jobs configured, `--serve` is exactly the slice-A watcher
+  (no provider, no DB — CI-identical). `test-bootstrap` 164 cases / 1603 assertions
+  (+3 / +13); release `[serve]` 7/7, full suite green under `--sanitizers=y`; offline
+  smoke fires a cron job (recorded success) and exits 130 (SIGINT) / 143 (SIGTERM).
+- **Next intended slice:** runtime-service owner **Slice C** — the tool-scheduler
+  idle-lock reaping tick (first hoist `ToolScheduler` ownership out of
+  `AgentPromptRunner`, then add a periodic `reap_idle_locks` concern inside
+  `serve_body`). QQ-port 4b-ii still waits on real QQ credentials and an operator
+  conversation.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 
@@ -74,8 +79,8 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-agent`: 57 cases / 10 786 assertions.
 - `oran-cli`: 28 cases / 221 assertions.
 - `oran-desktop`: 17 cases / 70 assertions.
-- `oran-bootstrap`: 157 cases / 1581 assertions (gated `--channel_qq=y`: 149 /
-  1360).
+- `oran-bootstrap`: 164 cases / 1603 assertions (gated `--channel_qq=y`: 156 /
+  1382).
 
 ## Open Tech-Debt Rows
 

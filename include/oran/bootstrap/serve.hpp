@@ -1,0 +1,114 @@
+// include/oran/bootstrap/serve.hpp — long-lived service mode (`--serve`).
+//
+// Slice A of the runtime-service owner (ROADMAP Dependency Frontier #2). The
+// owner is a mode of the main binary, parallel to `--desktop`: `run_serve`
+// starts `async::Runtime`, traps SIGINT/SIGTERM, co-spawns the long-lived
+// `serve_run` coroutine, blocks until a signal arrives, then gracefully cancels
+// it and tears the runtime down. Unlike `--desktop` it is not build-gated.
+//
+// This slice auto-starts the IO file-view cache watcher
+// (`io::watch_read_text_file_ranged_cache`) and, when the loaded config carries
+// `automation.cron.jobs[]`, the automation cron/triggered service loop
+// (`automation::AutomationService::run` over a configured — or offline fake —
+// provider route). The tool-scheduler idle-lock reaping tick lands in a later
+// slice as another concern under the same lifecycle. Building on
+// `async::Runtime` plus a fine-grained `asio::cancellation_signal` (rather than
+// the one-shot `SignalScope`/`io.stop()` drain) is deliberate so the
+// automation loop's SQLite writes and in-flight agent turns are never
+// blunt-dropped — see `signal_drain.hpp` for the anticipated evolution.
+
+#pragma once
+
+#include <chrono>
+#include <cstddef>
+#include <functional>
+#include <string>
+
+#include <asio/any_io_executor.hpp>
+
+#include <oran/async/awaitable_fwd.hpp>
+#include <oran/automation.hpp>
+#include <oran/bootstrap/bootstrap.hpp>
+#include <oran/core/result.hpp>
+
+namespace orangutan::bootstrap {
+
+/// Inputs for the long-lived service coroutine. Kept separate from
+/// `BootstrapOptions` so `serve_run` is drivable from tests with a plain
+/// `asio::io_context` and an `asio::cancellation_signal`, without a real
+/// process, signal, or config file.
+struct ServeOptions {
+  /// Directory the IO file-view watcher observes recursively. Empty (or
+  /// `watch_enabled == false`) disables the watcher; the service then simply
+  /// idles until cancelled.
+  std::string watch_root{};
+  bool watch_enabled{true};
+};
+
+/// The reusable service body. Runs the enabled concerns — in slice A the IO
+/// file-view watcher — and idles until its bound cancellation slot fires, then
+/// returns `Result<void>{}` (a graceful stop is not an error). A watcher that
+/// fails to initialize (for example, inotify unavailable) is non-fatal: the
+/// failure is reported once and the service keeps idling until cancelled.
+///
+/// Co-spawn it with `asio::bind_cancellation_slot(stop.slot(), ...)` and emit
+/// `asio::cancellation_type::terminal` on `stop` to stop it; every await inside
+/// is cancel-aware (C11).
+[[nodiscard]] async::Awaitable<core::Result<void>> serve_run(asio::any_io_executor executor, ServeOptions options);
+
+/// Tunables for the automation service concern under `--serve`.
+struct ServeAutomationOptions {
+  /// Idle gap between automation ticks once a tick finds no immediately-due
+  /// work. Each tick fires any cron job due at the current UTC minute and
+  /// drains buffered triggered work, so this bounds how promptly a newly-due
+  /// job is noticed. A cancellation interrupts the wait immediately.
+  std::chrono::steady_clock::duration poll_interval{std::chrono::seconds{1}};
+  /// Per-tick cap on cron jobs scanned and executed.
+  std::size_t cron_job_limit{100};
+  /// Per-tick cap on buffered triggered jobs drained.
+  std::size_t triggered_max_jobs{100};
+};
+
+/// The automation service concern. Drives `automation::AutomationService::run`
+/// (a finite, caller-clocked cycle) in a cancel-aware poll loop until stopped,
+/// then returns `Result<void>{}` (a graceful stop is not an error). Cron seeds
+/// must already be applied to `service`'s repository: this loop only *executes*
+/// due work, so it never rewrites stored `last_fired_at`. A non-cancellation
+/// error from a tick (for example, a repository failure) is reported once and
+/// the loop then idles until cancelled — the same degraded-but-alive posture as
+/// the watcher. A handler failure is recorded as a run row by the service and
+/// does not stop the loop.
+///
+/// Stopping: `stop_requested` (checked before and after each tick) is the
+/// authoritative, guaranteed stop. Parent cancellation promptly interrupts the
+/// idle wait between ticks, but a *firing* tick runs the automation service's
+/// cancellation-disabled durable-write path, which can swallow a cancellation
+/// that arrives mid-tick — so a long-lived owner must supply `stop_requested`
+/// (tied to the same signal as the cancellation) for a guaranteed, prompt stop.
+/// `run_serve` does exactly this.
+///
+/// Exposed (rather than file-local) so it can be driven from tests with a real
+/// `AutomationRuntime` over a temp database and fake handlers — no provider,
+/// process, or signal required.
+[[nodiscard]] async::Awaitable<core::Result<void>> serve_automation(asio::any_io_executor executor,
+                                                                    automation::AutomationService& service,
+                                                                    automation::CronJobHandler cron_handler,
+                                                                    automation::TriggeredJobHandler triggered_handler,
+                                                                    ServeAutomationOptions options = {},
+                                                                    std::function<bool()> stop_requested = {});
+
+/// `orangutan --serve` entry. Loads config, starts `async::Runtime`, traps
+/// SIGINT/SIGTERM on a runtime strand, co-spawns the service body, blocks the
+/// calling thread until a signal arrives, then gracefully cancels the service
+/// and stops the runtime. The service body always runs the IO file-view
+/// watcher; when the config carries `automation.cron.jobs[]` it also opens
+/// `<workspace>/.orangutan/automation.db`, applies those seeds once, and races
+/// the automation loop beside the watcher (a configured `default` route drives
+/// a live provider, otherwise an offline scripted fake keeps the loop usable).
+/// On a trapped signal it returns a `cancelled` error carrying `signal`/`signum`
+/// context, which `bootstrap::run` maps to the shell-conventional `128 + signum`
+/// exit code (the same seam as `--audit-init`/`--trace`). Returns `0` if the
+/// service ever stops without a signal.
+[[nodiscard]] core::Result<int> run_serve(const BootstrapOptions& options);
+
+}  // namespace orangutan::bootstrap
