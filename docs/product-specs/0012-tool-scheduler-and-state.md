@@ -16,8 +16,13 @@
 > preserving the current-clock approval contract. `agent::Loop` routes every
 > production tool batch through `ToolScheduler::run_batch`, and
 > `bootstrap::AgentPromptRunner` owns the scheduler built from
-> `runtime.tool_scheduler.*` config. The v1.1 items below (dispatch
-> singleflight, persisted index caches) and a periodic `reap_idle_locks` tick
+> `runtime.tool_scheduler.*` config — or, since slice 255, *borrows* an
+> externally-owned `{registry, scheduler}` pair so a long-lived owner can share
+> one scheduler across runners. Slice 255 also lands the periodic
+> `reap_idle_locks` tick (AC10's "background tick"): `orangutan --serve` drives a
+> single strand-hosted scheduler shared across automation jobs and races a
+> `serve_scheduler_reaping` concern that reaps its lock table on the same strand.
+> The remaining v1.1 items below (dispatch singleflight, persisted index caches)
 > remain future work.
 
 ## User Problem

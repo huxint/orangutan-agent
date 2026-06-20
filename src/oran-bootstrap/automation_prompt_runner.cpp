@@ -132,6 +132,8 @@ using ::orangutan::core::Result;
       .quiet = true,
       .stream_out = nullptr,
       .bind_operator_prompt_sink = base.bind_operator_prompt_sink,
+      .registry = base.registry,
+      .scheduler = base.scheduler,
   };
 }
 

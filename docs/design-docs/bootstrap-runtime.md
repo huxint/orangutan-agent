@@ -505,7 +505,7 @@ turn-id validation and missing-row behavior.
 
 `orangutan --serve` is the long-lived runtime-service owner — a mode of the main
 binary, parallel to `--desktop`, **not** a separate `orangutan-server` (see the
-[runtime-service-owner plan](../exec-plans/active/2026-06-18-runtime-service-owner.md)).
+[runtime-service-owner plan](../exec-plans/completed/2026-06-18-runtime-service-owner.md)).
 It exists to drive the periodic concerns that `oran-automation`, `oran-io`, and the
 tool scheduler were built to expect but which nothing started.
 
@@ -533,12 +533,15 @@ signal). It runs the watcher and idles until its cancellation slot fires, return
 service, cron_handler, triggered_handler, options, stop_requested)` is the **automation**
 concern: it drives `automation::AutomationService::run` in a cancel-aware poll loop,
 firing any cron job due at the current UTC minute and draining buffered triggered
-work each tick. A file-local `serve_body` races the two with the awaitable-operators
-`||` under one cancellation slot, so a single signal stops both. The whole thing is
-built on a fine-grained `asio::cancellation_signal` rather than
-`SignalScope`/`io.stop()` deliberately, so the automation loop's SQLite writes and
-in-flight agent turns are never blunt-dropped — the evolution `signal_drain.hpp`
-anticipates.
+work each tick. `serve_scheduler_reaping(executor, scheduler, options, stop_requested)`
+is the **scheduler idle-lock reaping** concern: a cancel-aware loop that periodically
+calls `agent::ToolScheduler::reap_idle_locks(now)` to bound the shared scheduler's
+per-path lock table (spec 0012 AC10). A file-local `serve_body` races the enabled
+concerns with the awaitable-operators `||` under one cancellation slot, so a single
+signal stops all of them. The whole thing is built on a fine-grained
+`asio::cancellation_signal` rather than `SignalScope`/`io.stop()` deliberately, so the
+automation loop's SQLite writes and in-flight agent turns are never blunt-dropped —
+the evolution `signal_drain.hpp` anticipates.
 
 **Slice A (slice 253)** shipped the lifecycle plus the IO file-view cache watcher
 (`io::watch_read_text_file_ranged_cache`, `max_events = 0` = run-until-cancelled). A
@@ -562,14 +565,34 @@ alone. The automation service disables cancellation around its durable lease/run
 writes, so a firing tick can swallow a parent cancellation; `serve_automation`'s
 `stop_requested` predicate (tied to the trapped signum) is therefore the
 authoritative, guaranteed stop, checked before and after each tick, and `run_serve`
-always supplies it. Slice C (scheduler idle-lock reaping tick) adds another concern
-inside `serve_body` under the same lifecycle.
+always supplies it.
+
+**Slice C (slice 255)** adds the tool-scheduler idle-lock reaping tick and the
+ownership hoist it required. `AgentPromptRunnerOptions` gained an optional
+`{registry, scheduler}` pair (both-or-neither): when set, the runner borrows them
+instead of building its own, so a long-lived owner can share one
+`agent::ToolScheduler` across many short-lived per-job runners. When automation is
+enabled, `run_serve` builds one `tool::Registry` + `agent::ToolScheduler` on its
+stack, drives them on the **runtime strand** (not the multi-worker
+`runtime.executor()`), and injects them into `make_automation_agent_prompt_runner`;
+the per-job runners then accumulate path locks into that one shared table, and
+`serve_body` races `serve_scheduler_reaping` beside the watcher and automation loop to
+sweep it on the same strand. The single-strand choice is deliberate: the scheduler's
+lock table is single-strand by contract (`src/oran-agent/_impl/path_lock_table.hpp`),
+so reaping must not race in-flight dispatch — sharing the strand satisfies that and
+also corrects the slice-B per-job scheduler, which ran on the multi-worker executor.
+Reaping is a synchronous in-memory sweep that never disables cancellation, so unlike
+the automation tick it cannot swallow a parent cancellation; the `stop_requested`
+predicate is still honored for symmetry.
 
 ## Next Steps
 
-- Slice C: add the scheduler idle-lock reaping tick (hoist `ToolScheduler` ownership
-  out of `AgentPromptRunner` first).
 - Wire a triggered-work ingress (channel/webhook → `AutomationService::enqueue_triggered`)
   so the triggered half of the `--serve` loop has a producer.
+- Slice D (optional): a typed `serve` config block (toggles/intervals) once more than
+  one concern wants tuning — the reaping interval is a fixed 1-minute default today.
+- Drive the CLI / channel agent loops on a per-agent strand too, so the scheduler's
+  single-strand lock-table contract holds there as it now does under `--serve` (see
+  the tech-debt tracker).
 - Bind configured hook sinks to the assembly-owned bus once the hook sink models land.
 - Add CLI line editor/history on top of the interactive REPL handoff.

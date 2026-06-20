@@ -59,7 +59,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice254";
+constexpr std::string_view kVersion = "2.0.0-slice255";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 constexpr std::size_t kTraceExportDefaultLimit = 50;
@@ -548,8 +548,8 @@ void print_usage() {
   std::println("--audit-init applies the audit.db schema (defaults to <workspace>/.orangutan/audit.db) and exits.");
   std::println("--desktop opens the in-process Slint desktop app (requires a build configured with --desktop=y).");
   std::println("--serve runs the long-lived service: it auto-starts the IO file-view watcher and, when the");
-  std::println("        config has automation.cron.jobs[], the automation cron/triggered loop, until");
-  std::println("        SIGINT/SIGTERM (exit code 128 + signum). Scheduler idle-lock upkeep lands later.");
+  std::println("        config has automation.cron.jobs[], the automation cron/triggered loop plus the");
+  std::println("        tool-scheduler idle-lock reaping tick, until SIGINT/SIGTERM (exit code 128 + signum).");
   std::println("--trace prints the trace_turns row and joined audit rows, including hook_publish, for <turn-id>");
   std::println("        (32 lowercase hex characters); reads <workspace>/.orangutan/audit.db.");
   std::println("--trace-export prints trace rows plus joined audit rows as JSON Lines; a turn id prints one");

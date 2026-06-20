@@ -17,6 +17,7 @@
 #include <asio/io_context.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <oran/agent.hpp>
 #include <oran/async.hpp>
 #include <oran/bootstrap.hpp>
 #include <oran/cli.hpp>
@@ -30,9 +31,11 @@
 #include <oran/provider.hpp>
 #include <oran/skill.hpp>
 #include <oran/storage.hpp>
+#include <oran/tool.hpp>
 
 #include "../test-helpers/run_async.hpp"
 
+namespace agent = orangutan::agent;
 namespace async = orangutan::async;
 namespace bootstrap = orangutan::bootstrap;
 namespace cli = orangutan::cli;
@@ -45,6 +48,7 @@ namespace provider = orangutan::provider;
 namespace skill = orangutan::skill;
 namespace storage = orangutan::storage;
 namespace test = orangutan::tests;
+namespace tool = orangutan::tool;
 
 namespace {
 
@@ -2455,5 +2459,85 @@ TEST_CASE("AgentPromptRunner keeps assembled text when nothing streamed",
     // assembled text for the CLI to print itself.
     REQUIRE(captured.str().empty());
     REQUIRE(result->text == "not streamed");
+  });
+}
+
+TEST_CASE("AgentPromptRunner dispatches through an injected shared scheduler",
+          "[unit][bootstrap][prompt_runner][scheduler]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-injected-scheduler"};
+  write_file(temp.path() / "note.txt", "injected scheduler fixture\n");
+  test::run_async(
+      [&temp](asio::io_context& io) -> async::Awaitable<void> {
+        auto cfg = config::Config{};
+        auto assembly = build_assembly(temp.path(), io, false);
+
+        // One registry + scheduler owned by the test and injected into the
+        // runner — exactly how `--serve` shares them across per-job runners.
+        tool::Registry registry;
+        REQUIRE(tool::register_builtins(registry).has_value());
+        agent::ToolScheduler scheduler{io.get_executor(), registry};
+
+        RecordingProvider recording{{
+            provider::Response{
+                .blocks = {core::ToolUseContent{
+                    .id = "read-1",
+                    .name = "FileRead",
+                    .input_json = R"({"path":"note.txt"})",
+                }},
+                .stop_reason = core::StopReason::tool_use,
+                .usage = provider::Usage{.input_tokens = 1,
+                                         .output_tokens = 1,
+                                         .cache_creation_tokens = 0,
+                                         .cache_read_tokens = 0,
+                                         .cost_estimate = std::nullopt},
+                .model_used = std::string{"fake-1"},
+                .route_profile_used = std::nullopt,
+            },
+            text_response("read"),
+        }};
+
+        auto options = base_runner_options(io, assembly, cfg, recording);
+        options.registry = &registry;
+        options.scheduler = &scheduler;
+        auto runner = bootstrap::AgentPromptRunner::create(std::move(options));
+        REQUIRE(runner.has_value());
+
+        auto result =
+            co_await (*runner)->run_prompt(cli::PromptRunRequest{.prompt = "read", .mode = cli::CliMode::single_shot});
+        REQUIRE(result.has_value());
+        REQUIRE(result->text == "read");
+
+        // The FileRead ran through the *injected* scheduler, so its shared
+        // (read) lock acquire is visible on the scheduler the test owns —
+        // proof the runner borrowed it instead of building its own.
+        REQUIRE(scheduler.lock_stats().shared_acquires >= 1);
+      },
+      std::chrono::seconds{3});
+}
+
+TEST_CASE("AgentPromptRunner::create rejects a registry/scheduler supplied without its pair",
+          "[unit][bootstrap][prompt_runner][scheduler]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-injection-validate"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false);
+    provider::FakeProvider fake{std::vector<provider::ScriptedTurn>{}};
+
+    tool::Registry registry;
+    REQUIRE(tool::register_builtins(registry).has_value());
+    agent::ToolScheduler scheduler{io.get_executor(), registry};
+
+    // A scheduler without its registry (and vice versa) is rejected up front:
+    // the runner's `.tools` and the scheduler's registry must be the same
+    // instance, so the pair is all-or-nothing.
+    auto only_scheduler = base_runner_options(io, assembly, cfg, fake);
+    only_scheduler.scheduler = &scheduler;
+    REQUIRE_FALSE(bootstrap::AgentPromptRunner::create(std::move(only_scheduler)).has_value());
+
+    auto only_registry = base_runner_options(io, assembly, cfg, fake);
+    only_registry.registry = &registry;
+    REQUIRE_FALSE(bootstrap::AgentPromptRunner::create(std::move(only_registry)).has_value());
+
+    co_return;
   });
 }

@@ -48,6 +48,14 @@ struct AutomationAgentPromptRunnerOptions {
   provider::RetryPolicy retry{};
   std::vector<std::string> approval_answers{};
   bool bind_operator_prompt_sink{false};
+  /// Optional externally-owned tool registry + scheduler, forwarded verbatim to
+  /// every per-job `AgentPromptRunner`. Default (both null) lets each job own
+  /// its scheduler. The `--serve` owner sets both to one shared, strand-driven
+  /// scheduler so a single idle-lock reaping tick bounds the lock table across
+  /// all jobs (see `AgentPromptRunnerOptions::scheduler`). Borrowed for the
+  /// bridge's lifetime; must outlive every job execution.
+  tool::Registry* registry{nullptr};
+  agent::ToolScheduler* scheduler{nullptr};
 };
 
 /// Build a bootstrap-owned bridge from automation prompt requests to

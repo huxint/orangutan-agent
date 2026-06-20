@@ -248,22 +248,6 @@ filter_skill_documents(std::span<const skill::SkillDocument> documents,
   };
 }
 
-[[nodiscard]] Result<agent::ToolSchedulerOptions> scheduler_options_from(const config::Config& cfg) {
-  const auto& sched = cfg.runtime().tool_scheduler;
-  auto max_parallel = checked_cap(sched.max_parallel_tools, "runtime.tool_scheduler.max_parallel_tools");
-  if (!max_parallel) {
-    return std::unexpected(std::move(max_parallel).error());
-  }
-  if (*max_parallel == 0) {
-    return std::unexpected(option_error("runtime.tool_scheduler.max_parallel_tools must be positive"));
-  }
-  return agent::ToolSchedulerOptions{
-      .max_parallel_tools = *max_parallel,
-      .per_call_timeout = std::chrono::milliseconds{sched.per_call_timeout_ms},
-      .idle_lock_ttl = std::chrono::milliseconds{sched.idle_lock_ttl_ms},
-  };
-}
-
 [[nodiscard]] agent::SystemPreamble make_system_preamble(std::string text) {
   if (text.empty()) {
     return agent::default_system_preamble();
@@ -510,6 +494,10 @@ skill_activation_updates_from_events(std::span<const skill::SkillActivationEvent
   if (!options.executor) {
     return std::unexpected(option_error("agent prompt runner requires an executor"));
   }
+  if ((options.registry == nullptr) != (options.scheduler == nullptr)) {
+    return std::unexpected(
+        option_error("agent prompt runner registry and scheduler must be supplied together (both or neither)"));
+  }
   if (options.route.primary.profile.empty()) {
     return std::unexpected(option_error("agent prompt runner route primary profile must not be empty"));
   }
@@ -572,10 +560,26 @@ skill_activation_updates_from_events(std::span<const skill::SkillActivationEvent
 
 }  // namespace
 
+core::Result<agent::ToolSchedulerOptions> scheduler_options_from(const config::Config& config) {
+  const auto& sched = config.runtime().tool_scheduler;
+  auto max_parallel = checked_cap(sched.max_parallel_tools, "runtime.tool_scheduler.max_parallel_tools");
+  if (!max_parallel) {
+    return std::unexpected(std::move(max_parallel).error());
+  }
+  if (*max_parallel == 0) {
+    return std::unexpected(option_error("runtime.tool_scheduler.max_parallel_tools must be positive"));
+  }
+  return agent::ToolSchedulerOptions{
+      .max_parallel_tools = *max_parallel,
+      .per_call_timeout = std::chrono::milliseconds{sched.per_call_timeout_ms},
+      .idle_lock_ttl = std::chrono::milliseconds{sched.idle_lock_ttl_ms},
+  };
+}
+
 class AgentPromptRunner::Impl {
 public:
   Impl(AgentPromptRunnerOptions options,
-       tool::Registry registry,
+       std::optional<tool::Registry> owned_registry,
        permission::RuleSet rules,
        config::PromptActiveToolsConfig active_tools,
        tool::OutputCapOptions output_caps,
@@ -586,12 +590,12 @@ public:
        std::vector<memory::longterm::RecordKind> longterm_recall_kinds,
        core::TurnId session_id)
       : executor_{std::move(options.executor)}, assembly_{options.assembly}, execution_runtime_{*options.provider},
-        loop_{execution_runtime_, std::move(options.route)}, registry_{std::move(registry)},
-        scheduler_{executor_, registry_, scheduler_options}, rules_{std::move(rules)},
-        active_tools_{std::move(active_tools)}, output_caps_{output_caps}, session_id_{session_id},
-        session_id_text_{format_session_id(session_id_)}, mode_{options.mode}, scope_key_{std::move(options.scope_key)},
-        agent_key_{std::move(options.agent_key)}, identity_{std::move(options.identity)},
-        origin_{std::move(options.origin)}, system_preamble_{make_system_preamble(std::move(options.system_preamble))},
+        loop_{execution_runtime_, std::move(options.route)}, owned_registry_{std::move(owned_registry)},
+        rules_{std::move(rules)}, active_tools_{std::move(active_tools)}, output_caps_{output_caps},
+        session_id_{session_id}, session_id_text_{format_session_id(session_id_)}, mode_{options.mode},
+        scope_key_{std::move(options.scope_key)}, agent_key_{std::move(options.agent_key)},
+        identity_{std::move(options.identity)}, origin_{std::move(options.origin)},
+        system_preamble_{make_system_preamble(std::move(options.system_preamble))},
         skills_catalog_{skill::RenderedCatalog{.section_text = std::move(options.skills_catalog)}},
         skills_enabled_{std::move(skills_enabled)}, skills_deactivated_{std::move(skills_deactivated)},
         skills_expirations_{std::move(skills_expirations)}, longterm_recall_{options.longterm_recall},
@@ -609,6 +613,18 @@ public:
                                              .quiet = options.quiet,
                                          }},
         bind_operator_prompt_sink_{options.bind_operator_prompt_sink} {
+    // Borrow an externally-owned registry + scheduler when both were injected
+    // (the `--serve` shared-scheduler path); otherwise own them. `create`
+    // guarantees the both-or-neither invariant and builds `owned_registry_`
+    // exactly when self-owning, so the owned scheduler always has a registry.
+    if (options.scheduler != nullptr) {
+      registry_ = options.registry;
+      scheduler_ = options.scheduler;
+    } else {
+      registry_ = &owned_registry_.value();
+      owned_scheduler_.emplace(executor_, *registry_, scheduler_options);
+      scheduler_ = &owned_scheduler_.value();
+    }
     if (!options.skills_directory.empty() && skills_catalog_.catalog().section_text.empty()) {
       skill_snapshot_.emplace(executor_, std::move(options.skills_directory));
     }
@@ -629,7 +645,7 @@ public:
   Impl& operator=(Impl&&) = delete;
 
   [[nodiscard]] async::Awaitable<Result<cli::PromptRunResult>> run_prompt(cli::PromptRunRequest request) {
-    auto catalog = registry_.catalog();
+    auto catalog = registry_->catalog();
     auto conversation_tail = std::vector<core::Message>{};
     auto session_skill_activations = std::vector<memory::session::SkillActivationRecord>{};
     memory::session::Store* session_store = assembly_->session_store();
@@ -718,9 +734,9 @@ public:
         .agent_key = agent_key_,
         .identity = identity_,
         .origin = origin_,
-        .tools = &registry_,
+        .tools = registry_,
         .dispatch_context = &dispatch_context,
-        .scheduler = &scheduler_,
+        .scheduler = scheduler_,
     };
 
     if (auto* trace = assembly_->trace_repository(); trace != nullptr) {
@@ -1350,8 +1366,13 @@ private:
   RuntimeAssembly* assembly_{};
   provider::execution::Runtime execution_runtime_;
   agent::Loop loop_;
-  tool::Registry registry_;
-  agent::ToolScheduler scheduler_;
+  // Owned only when self-owning (the common CLI / channel / desktop path);
+  // empty when the caller injected a shared registry + scheduler. `registry_`
+  // and `scheduler_` point at whichever is live and are the only access path.
+  std::optional<tool::Registry> owned_registry_;
+  std::optional<agent::ToolScheduler> owned_scheduler_;
+  tool::Registry* registry_{nullptr};
+  agent::ToolScheduler* scheduler_{nullptr};
   permission::RuleSet rules_;
   agent::SessionState session_state_;
   config::PromptActiveToolsConfig active_tools_;
@@ -1401,9 +1422,15 @@ core::Result<std::unique_ptr<AgentPromptRunner>> AgentPromptRunner::create(Agent
     return std::unexpected(std::move(longterm_recall_kinds.error()));
   }
 
-  auto registry = tool::Registry{};
-  if (auto registered = tool::register_builtins(registry); !registered) {
-    return std::unexpected(std::move(registered).error());
+  // Self-owned path builds its own builtin registry; an injected scheduler
+  // brings its own (the same registry it dispatches through), so skip it.
+  auto owned_registry = std::optional<tool::Registry>{};
+  if (options.scheduler == nullptr) {
+    auto registry = tool::Registry{};
+    if (auto registered = tool::register_builtins(registry); !registered) {
+      return std::unexpected(std::move(registered).error());
+    }
+    owned_registry.emplace(std::move(registry));
   }
 
   auto rules = materialize_runner_rules(*options.config, options.mode, options.permission_agent_name);
@@ -1453,7 +1480,7 @@ core::Result<std::unique_ptr<AgentPromptRunner>> AgentPromptRunner::create(Agent
 
   auto active_tools = options.config->runtime().prompt.active_tools;
   auto impl = std::make_unique<Impl>(std::move(options),
-                                     std::move(registry),
+                                     std::move(owned_registry),
                                      std::move(*rules),
                                      std::move(active_tools),
                                      *output_caps,

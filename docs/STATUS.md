@@ -9,40 +9,41 @@
 
 ## Snapshot
 
-- **Slice:** 254 (`xmake run orangutan -- --help` reports slice 254)
+- **Slice:** 255 (`xmake run orangutan -- --help` reports slice 255)
 - **Last completed history:**
-  [`histories/2026-06/20260618-1719-serve-automation-cron-loop.md`](histories/2026-06/20260618-1719-serve-automation-cron-loop.md)
+  [`histories/2026-06/20260620-1059-serve-scheduler-idle-lock-reaping.md`](histories/2026-06/20260620-1059-serve-scheduler-idle-lock-reaping.md)
 - **Active exec-plans:**
-  - [`exec-plans/active/2026-06-18-runtime-service-owner.md`](exec-plans/active/2026-06-18-runtime-service-owner.md)
-    — the current main line. Slice A (slice 253) shipped the `--serve` skeleton
-    + IO file-view watcher auto-start; Slice B (slice 254) shipped the automation
-    cron/triggered loop under `--serve`; only Slice C (scheduler idle-lock reaping)
-    remains. Resolves ROADMAP Dependency Frontier #2.
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
-    — remains active, but its next gate is externally blocked on real QQ
-    credentials plus a sendable operator conversation; it was spun off from the
+    — the only active plan; its next gate is externally blocked on real QQ
+    credentials plus a sendable operator conversation. It was spun off from the
     completed channel-ingress plan
     ([`exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`](exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md)).
-  - *Recently completed:* the desktop chat-tracer plan closed 2026-06-16
-    (slices 248–252 — spec 0007 acceptance 1–3) and moved to
-    [`exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md).
-- **Latest completed slice:** slice 254 ships the runtime-service owner **Slice B**
-  — the automation cron/triggered loop under `--serve`. When the loaded config carries
-  `automation.cron.jobs[]`, `bootstrap::run_serve` builds a `RuntimeAssembly` + provider
-  (live `HttpProviderBackend`, else an offline scripted `FakeProvider`), opens
-  `<workspace>/.orangutan/automation.db` (`AutomationRuntime::open`), applies the mapped
-  cron seeds once, builds a prompt-backed handler, and races a new
-  `bootstrap::serve_automation` concern (a cancel-aware poll loop over
-  `automation::AutomationService::run`) beside the IO watcher under one cancellation
-  signal. With no cron jobs configured, `--serve` is exactly the slice-A watcher
-  (no provider, no DB — CI-identical). `test-bootstrap` 164 cases / 1603 assertions
-  (+3 / +13); release `[serve]` 7/7, full suite green under `--sanitizers=y`; offline
-  smoke fires a cron job (recorded success) and exits 130 (SIGINT) / 143 (SIGTERM).
-- **Next intended slice:** runtime-service owner **Slice C** — the tool-scheduler
-  idle-lock reaping tick (first hoist `ToolScheduler` ownership out of
-  `AgentPromptRunner`, then add a periodic `reap_idle_locks` concern inside
-  `serve_body`). QQ-port 4b-ii still waits on real QQ credentials and an operator
-  conversation.
+  - *Recently completed:* the runtime-service-owner plan closed 2026-06-20
+    (slices 253–255 — `--serve` watcher + automation loop + scheduler idle-lock
+    reaping; ROADMAP Dependency Frontier #2) and moved to
+    [`exec-plans/completed/2026-06-18-runtime-service-owner.md`](exec-plans/completed/2026-06-18-runtime-service-owner.md).
+    The desktop chat-tracer plan closed 2026-06-16
+    ([`exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md)).
+- **Latest completed slice:** slice 255 ships the runtime-service owner **Slice C**
+  — the tool-scheduler idle-lock reaping tick, the final leg of Dependency Frontier #2.
+  `AgentPromptRunnerOptions` gained an optional both-or-neither `{registry, scheduler}`
+  pair the runner borrows instead of building its own; when the loaded config carries
+  `automation.cron.jobs[]`, `bootstrap::run_serve` builds one `tool::Registry` +
+  `agent::ToolScheduler` on the runtime **strand**, injects them into every per-job
+  automation runner, and races a new `bootstrap::serve_scheduler_reaping` concern (a
+  cancel-aware `reap_idle_locks` poll loop, default 60 s) beside the watcher and
+  automation loop. The single strand satisfies the lock table's single-strand contract
+  and corrects the slice-B per-job scheduler (which ran on the multi-worker executor).
+  With no cron jobs, `--serve` is unchanged (watcher only; no provider/DB/scheduler).
+  `test-bootstrap` 169 cases / 1632 assertions (+5 / +29); release `[serve]` 10/10,
+  `[prompt_runner]` 37/37, full suite green under `--sanitizers=y`; offline smoke shows
+  the reaping banner line and exits 130 (SIGINT) / 143 (SIGTERM).
+- **Next intended slice:** no track-local main-line slice is pre-selected. Candidates:
+  a triggered-work ingress (channel/webhook → `AutomationService::enqueue_triggered`) so
+  the triggered half of the `--serve` loop has a producer; driving the CLI/channel agent
+  loops on a per-agent strand (tech-debt: the scheduler's single-strand lock-table
+  contract); or QQ-port milestone 4b-ii once real QQ credentials and an operator
+  conversation exist.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 
@@ -79,8 +80,8 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-agent`: 57 cases / 10 786 assertions.
 - `oran-cli`: 28 cases / 221 assertions.
 - `oran-desktop`: 17 cases / 70 assertions.
-- `oran-bootstrap`: 164 cases / 1603 assertions (gated `--channel_qq=y`: 156 /
-  1382).
+- `oran-bootstrap`: 169 cases / 1632 assertions (gated `--channel_qq=y`: 161 /
+  1411).
 
 ## Open Tech-Debt Rows
 

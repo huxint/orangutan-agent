@@ -32,9 +32,11 @@
 #include <asio/experimental/awaitable_operators.hpp>
 #include <asio/signal_set.hpp>
 
+#include <oran/agent/scheduler.hpp>
 #include <oran/async.hpp>
 #include <oran/bootstrap/automation_cron.hpp>
 #include <oran/bootstrap/automation_prompt_runner.hpp>
+#include <oran/bootstrap/prompt_runner.hpp>
 #include <oran/bootstrap/provider_backend.hpp>
 #include <oran/bootstrap/runtime_assembly.hpp>
 #include <oran/bootstrap/signal_drain.hpp>
@@ -45,6 +47,8 @@
 #include <oran/io.hpp>
 #include <oran/provider.hpp>
 #include <oran/provider/fake.hpp>
+#include <oran/tool/builtins.hpp>
+#include <oran/tool/registry.hpp>
 
 namespace orangutan::bootstrap {
 namespace {
@@ -107,7 +111,8 @@ async::Awaitable<void> wait_until_cancelled(asio::any_io_executor executor) {
 /// lambda) so its inputs are moved into the coroutine frame and cannot dangle
 /// after the spawning full-expression. Opens automation persistence on the
 /// runtime, applies the config cron seeds once, then races the watcher beside
-/// the automation loop under the caller's cancellation slot. A database that
+/// the automation loop and the scheduler idle-lock reaping tick (over the
+/// shared `scheduler`) under the caller's cancellation slot. A database that
 /// cannot open (or seeds that cannot apply) is non-fatal: report once and serve
 /// the watcher alone so a signal still stops cleanly.
 async::Awaitable<Result<void>> serve_body(asio::any_io_executor executor,
@@ -118,6 +123,8 @@ async::Awaitable<Result<void>> serve_body(asio::any_io_executor executor,
                                           automation::CronJobHandler cron_handler,
                                           automation::TriggeredJobHandler triggered_handler,
                                           ServeAutomationOptions automation_options,
+                                          agent::ToolScheduler* scheduler,
+                                          ServeSchedulerReapOptions reap_options,
                                           std::function<bool()> stop_requested) {
   if (!automation_enabled) {
     co_return co_await serve_run(executor, std::move(watch_options));
@@ -141,12 +148,31 @@ async::Awaitable<Result<void>> serve_body(asio::any_io_executor executor,
   auto service = automation_runtime->automation_service();
 
   using namespace asio::experimental::awaitable_operators;
-  co_await (serve_run(executor, std::move(watch_options)) || serve_automation(executor,
-                                                                              service,
-                                                                              std::move(cron_handler),
-                                                                              std::move(triggered_handler),
-                                                                              automation_options,
-                                                                              std::move(stop_requested)));
+  // The automation jobs and the reaping tick share `scheduler`, so race all
+  // three concerns under one cancellation slot. `scheduler` is non-null
+  // whenever automation is enabled (run_serve builds it); the guard keeps the
+  // body robust if a future caller enables automation without a shared
+  // scheduler.
+  if (scheduler != nullptr) {
+    // Pass `stop_requested` by copy to both predicate consumers: the evaluation
+    // order of `||` operands is unspecified, so moving into one while copying
+    // into the other could hand the copy a moved-from (empty) function.
+    co_await (serve_run(executor, std::move(watch_options)) ||
+              serve_automation(executor,
+                               service,
+                               std::move(cron_handler),
+                               std::move(triggered_handler),
+                               automation_options,
+                               stop_requested) ||
+              serve_scheduler_reaping(executor, *scheduler, reap_options, stop_requested));
+  } else {
+    co_await (serve_run(executor, std::move(watch_options)) || serve_automation(executor,
+                                                                                service,
+                                                                                std::move(cron_handler),
+                                                                                std::move(triggered_handler),
+                                                                                automation_options,
+                                                                                std::move(stop_requested)));
+  }
   co_return Result<void>{};
 }
 
@@ -234,6 +260,31 @@ async::Awaitable<Result<void>> serve_automation(asio::any_io_executor executor,
   }
 }
 
+async::Awaitable<Result<void>> serve_scheduler_reaping(asio::any_io_executor executor,
+                                                       agent::ToolScheduler& scheduler,
+                                                       ServeSchedulerReapOptions options,
+                                                       std::function<bool()> stop_requested) {
+  for (;;) {
+    if (stop_requested && stop_requested()) {
+      co_return Result<void>{};  // cooperative stop before the next tick.
+    }
+
+    auto slept = co_await async::sleep_for(executor, options.reap_interval);
+    if (!slept) {
+      co_return Result<void>{};  // cancelled during the idle gap — graceful stop.
+    }
+
+    // Reaping is a synchronous in-memory sweep of the per-path lock table; it
+    // does not await or disable cancellation, so — unlike the automation tick —
+    // it can never swallow a parent cancellation. The clock matches the lock
+    // table's acquire/release stamp (`core::time::now_utc()`), so idle ages are
+    // compared on the same basis. The returned reap count is intentionally
+    // dropped: pre-`oran-log` there is no structured sink, and `lock_stats()`
+    // already exposes the cumulative `reaped_entries` for `--explain-rules`.
+    static_cast<void>(scheduler.reap_idle_locks(core::time::now_utc()));
+  }
+}
+
 Result<int> run_serve(const BootstrapOptions& options) {
   auto loaded = load_config(options);
   if (!loaded) {
@@ -275,13 +326,16 @@ Result<int> run_serve(const BootstrapOptions& options) {
 
   const auto watch_root = options.workspace;
 
-  // Automation wiring lives on this stack so the runtime assembly and provider
-  // backend (which the per-job prompt runner borrows) outlive the service
-  // coroutine — the coroutine, and the `AutomationService` it opens, completes
-  // before `service_future.get()` returns, i.e. before these are destroyed.
+  // Automation wiring lives on this stack so the runtime assembly, provider
+  // backend, and the shared tool registry + scheduler (all borrowed by the
+  // per-job prompt runner) outlive the service coroutine — the coroutine, and
+  // the `AutomationService` it opens, completes before `service_future.get()`
+  // returns, i.e. before these are destroyed.
   std::optional<RuntimeAssembly> assembly;
   std::optional<HttpProviderBackend> live_backend;
   std::optional<provider::FakeProvider> offline_provider;
+  std::optional<tool::Registry> shared_registry;
+  std::optional<agent::ToolScheduler> shared_scheduler;
   automation::CronJobHandler cron_handler;
   automation::TriggeredJobHandler triggered_handler;
   std::string automation_db;
@@ -304,6 +358,20 @@ Result<int> run_serve(const BootstrapOptions& options) {
       return std::unexpected(std::move(built).error());
     }
     assembly.emplace(std::move(*built));
+
+    // One registry + scheduler shared across every per-job runner. Driving them
+    // on `strand` (not the multi-worker `runtime.executor()`) honors the
+    // scheduler's single-strand lock-table contract and lets the reaping tick
+    // sweep that table without racing in-flight dispatch.
+    shared_registry.emplace();
+    if (auto registered = tool::register_builtins(*shared_registry); !registered) {
+      return std::unexpected(std::move(registered).error());
+    }
+    auto scheduler_opts = scheduler_options_from(cfg);
+    if (!scheduler_opts) {
+      return std::unexpected(std::move(scheduler_opts).error());
+    }
+    shared_scheduler.emplace(strand, *shared_registry, *scheduler_opts);
 
     provider::System* system = nullptr;
     provider::Route route{};
@@ -329,12 +397,14 @@ Result<int> run_serve(const BootstrapOptions& options) {
     }
 
     auto prompt_runner = make_automation_agent_prompt_runner(AutomationAgentPromptRunnerOptions{
-        .executor = runtime.executor(),
+        .executor = strand,
         .assembly = &*assembly,
         .config = &cfg,
         .provider = system,
         .route = std::move(route),
         .max_tokens = 1024,
+        .registry = &*shared_registry,
+        .scheduler = &*shared_scheduler,
     });
     if (!prompt_runner) {
       return std::unexpected(std::move(prompt_runner).error());
@@ -361,6 +431,8 @@ Result<int> run_serve(const BootstrapOptions& options) {
                             std::move(cron_handler),
                             std::move(triggered_handler),
                             ServeAutomationOptions{},
+                            automation_enabled ? &*shared_scheduler : nullptr,
+                            ServeSchedulerReapOptions{},
                             stop_predicate),
                  asio::bind_cancellation_slot(stop.slot(), [&service_done](std::exception_ptr ep, Result<void> result) {
                    if (ep) {
@@ -382,6 +454,8 @@ Result<int> run_serve(const BootstrapOptions& options) {
                  automation_db,
                  cron_job_count,
                  automation_live ? "live" : "offline");
+    std::println("  scheduler:  idle-lock reaping every {}s",
+                 std::chrono::duration_cast<std::chrono::seconds>(ServeSchedulerReapOptions{}.reap_interval).count());
   }
   std::println("  stop with Ctrl-C (SIGINT) or SIGTERM");
 

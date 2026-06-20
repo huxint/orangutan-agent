@@ -12,6 +12,7 @@
 
 #include <asio/any_io_executor.hpp>
 
+#include <oran/agent/scheduler.hpp>
 #include <oran/cli/cli.hpp>
 #include <oran/core/result.hpp>
 #include <oran/core/turn_id.hpp>
@@ -121,7 +122,27 @@ struct AgentPromptRunnerOptions {
   /// no-sink path instead of reading terminal stdin. This keeps noninteractive
   /// automation callers fail-closed by default.
   bool bind_operator_prompt_sink{true};
+  /// Optional externally-owned tool registry + scheduler. Default (both null)
+  /// keeps the runner self-owned: it builds its own builtin `tool::Registry`
+  /// and an `agent::ToolScheduler` over it (the CLI / channel / desktop path).
+  /// When BOTH are set the runner borrows them instead, so a long-lived owner
+  /// (e.g. `orangutan --serve`) can share one scheduler across many short-lived
+  /// per-job runners and drive its idle-lock reaping centrally. They must be
+  /// set together (`create` rejects exactly one), must reference the same
+  /// registry the scheduler dispatches through, and must outlive every runner
+  /// built from these options. The scheduler's per-path lock table is
+  /// single-strand by contract, so `executor` must be the one strand the owner
+  /// also reaps on. Borrowed for the runner's lifetime.
+  tool::Registry* registry{nullptr};
+  agent::ToolScheduler* scheduler{nullptr};
 };
+
+/// Map `runtime.tool_scheduler.*` config into `agent::ToolSchedulerOptions`,
+/// rejecting a non-positive `max_parallel_tools`. Shared between
+/// `AgentPromptRunner::create` (the self-owned scheduler) and the `--serve`
+/// owner that builds one shared scheduler to reap; keeping it here is the one
+/// place the config→options mapping lives.
+[[nodiscard]] core::Result<agent::ToolSchedulerOptions> scheduler_options_from(const config::Config& config);
 
 /// Adapter-neutral bridge from `cli::run_async` into `agent::Loop`.
 ///

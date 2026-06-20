@@ -64,11 +64,16 @@ resolves ROADMAP Dependency Frontier #2.
    scripted `FakeProvider` when none resolves — and drive `automation::AutomationService::run`
    as a new `serve_automation` concern (a cancel-aware poll loop), raced beside the
    watcher by a file-local `serve_body`, with a signal-tied `stop_requested` predicate.
-3. **Slice C — scheduler idle-lock reaping.** Resolve the scheduler-ownership gap
-   (`ToolScheduler` is currently private to `AgentPromptRunner`) and add a periodic
-   `reap_idle_locks` tick concern.
+3. **Slice C — scheduler idle-lock reaping (shipped, slice 255).** Resolved the
+   scheduler-ownership gap: `AgentPromptRunnerOptions` gained an optional
+   `{registry, scheduler}` pair (both-or-neither) the runner borrows instead of
+   building its own. `run_serve` now builds one strand-hosted `tool::Registry` +
+   `agent::ToolScheduler`, injects them into every per-job automation runner, and
+   races a new `serve_scheduler_reaping` concern (a cancel-aware `reap_idle_locks`
+   poll loop) beside the watcher and automation loop.
 4. **Slice D (optional) — typed `serve` config block.** Toggles/intervals for the
-   concerns once more than one exists.
+   concerns once more than one needs tuning (the reaping interval is a fixed
+   1-minute default today). Deferred — not warranted yet.
 
 ## Validation
 
@@ -92,8 +97,14 @@ resolves ROADMAP Dependency Frontier #2.
   `test-bootstrap` 164/1603 (+3 cases / +13 assertions); release `[serve]` 7/7,
   full suite 19/19, bootstrap clean under `--sanitizers=y`; offline smoke records a
   cron success row and exits 130/143. Docs synced (this PR).
-- [ ] Slice C: scheduler idle-lock reaping tick.
-- [ ] Slice D: typed `serve` config block (if warranted).
+- [x] Slice C: scheduler idle-lock reaping tick (slice 255). Hoisted the
+  registry+scheduler ownership out of `AgentPromptRunner` (optional both-or-neither
+  injection), built one strand-hosted shared scheduler in `run_serve`, and raced a
+  `serve_scheduler_reaping` concern beside the watcher + automation loop.
+  `test-bootstrap` 169/1632 (+5 cases / +29 assertions vs slice 254); release `[serve]`
+  10/10, `[prompt_runner]` 37/37, full suite 19/19, clean under `--sanitizers=y`;
+  offline smoke shows the reaping banner line and exits 130/143. Docs synced (this PR).
+- [ ] Slice D: typed `serve` config block — deferred (optional; not warranted yet).
 
 ## Decision Log
 
@@ -135,12 +146,42 @@ resolves ROADMAP Dependency Frontier #2.
   `--serve` automation demonstrable without credentials and CI secret-free.
   Consequence: an offline deployment fires scripted replies; a real route swaps in
   through the identical `make_automation_agent_prompt_runner` bridge.
+- 2026-06-20 (Slice C): the **scheduler is hoisted via optional both-or-neither
+  `{registry, scheduler}` injection** on `AgentPromptRunnerOptions`, not a mandatory
+  parameter. Rationale: the CLI / channel / desktop callers keep the self-owned path
+  unchanged (zero behavior change); only `--serve` needs a shared scheduler. The pair
+  is all-or-nothing because the runner's `.tools` and the scheduler's internal
+  registry must be the *same* `tool::Registry` instance. Consequence: `create`
+  rejects exactly one of the two.
+- 2026-06-20 (Slice C): the shared scheduler and the per-job automation runners run
+  on the **runtime strand**, not the multi-worker `runtime.executor()`. Rationale:
+  the per-path lock table is single-strand by contract
+  (`src/oran-agent/_impl/path_lock_table.hpp`), so `run_batch`'s lock acquire/release,
+  its `async::Channel`s, and the reaping `reap_idle_locks` must all be serialized on
+  one executor. Consequence: this also *corrects* the slice-B per-job scheduler, which
+  ran on the 4-worker executor and could race the lock table on a multi-tool batch;
+  automation tool dispatch is now single-threaded coordination (IO still offloads to
+  oran-io's pool, so effective parallelism is preserved).
+- 2026-06-20 (Slice C): reaping deliberately **drops its reap count and never disables
+  cancellation**. Rationale: it is a synchronous in-memory sweep, so unlike the
+  automation tick it cannot swallow a parent cancellation; pre-`oran-log` there is no
+  structured sink, and `lock_stats().reaped_entries` already exposes the cumulative
+  total. Consequence: the `stop_requested` predicate is honored for symmetry but the
+  idle-wait cancel is the primary stop.
+- 2026-06-20 (Slice C): the CLI / channel agent loops still drive their scheduler on
+  the multi-worker `runtime.executor()` (this slice fixed only the `--serve`
+  automation path). Logged as tech-debt (single-strand lock-table contract) rather
+  than fixed here to keep the slice scoped.
 
 ## Linked Artifacts
 
 - Related design doc: `docs/design-docs/bootstrap-runtime.md` (Service Mode),
   `docs/design-docs/automation-runtime.md`, `docs/design-docs/io-runtime.md`.
-- Related product spec: — (no dedicated spec; tracked via this plan + ROADMAP).
-- PRs: (this PR — slice A).
-- History entry: `docs/histories/2026-06/20260618-1554-serve-mode-skeleton-io-watcher.md`.
+- Related product spec: `docs/product-specs/0012-tool-scheduler-and-state.md` (AC10
+  reaping tick); no dedicated spec for `--serve` (tracked via this plan + ROADMAP).
+- PRs: slice A (skeleton + watcher), slice B (automation loop), slice C (this PR —
+  scheduler reaping + ownership hoist).
+- History entries: `docs/histories/2026-06/20260618-1554-serve-mode-skeleton-io-watcher.md`,
+  `docs/histories/2026-06/20260618-1719-serve-automation-cron-loop.md`,
+  `docs/histories/2026-06/20260620-1059-serve-scheduler-idle-lock-reaping.md`.
 - Release note: `docs/releases/feature-release-notes.md` (`orangutan --serve`).

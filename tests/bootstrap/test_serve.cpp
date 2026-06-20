@@ -12,9 +12,12 @@
 #include <chrono>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include <asio/bind_cancellation_slot.hpp>
 #include <asio/cancellation_signal.hpp>
@@ -25,19 +28,27 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <oran/agent.hpp>
 #include <oran/async.hpp>
 #include <oran/automation.hpp>
 #include <oran/bootstrap/serve.hpp>
+#include <oran/core/capability.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/time.hpp>
+#include <oran/core/tool_def.hpp>
+#include <oran/permission.hpp>
+#include <oran/tool.hpp>
 
 #include "../test-helpers/run_async.hpp"
 
+namespace agent = orangutan::agent;
 namespace async = orangutan::async;
 namespace automation = orangutan::automation;
 namespace bootstrap = orangutan::bootstrap;
 namespace core = orangutan::core;
+namespace permission = orangutan::permission;
 namespace test = orangutan::tests;
+namespace tool = orangutan::tool;
 
 namespace {
 
@@ -276,5 +287,164 @@ TEST_CASE("serve_automation honors an immediate stop predicate without firing",
 
     REQUIRE(outcome.has_value());
     REQUIRE(cron_calls == 0);
+  });
+}
+
+namespace {
+
+/// A tool that takes an exclusive per-path lock (via `write_file`) and returns
+/// immediately. Running it through the scheduler leaves one idle lock-table
+/// entry behind — the input the reaping concern is built to bound.
+[[nodiscard]] core::ToolDef lock_write_tool_def(std::string name) {
+  return core::ToolDef{
+      .name = std::move(name),
+      .description = "exclusive-lock test tool",
+      .input_schema_json = R"({"type":"object","properties":{"path":{"type":"string"}},"additionalProperties":true})",
+      .required_capabilities = {core::Capability::write_file},
+      .deferred = false,
+      .category = "test",
+  };
+}
+
+void add_lock_write_tool(tool::Registry& registry, std::string name) {
+  auto handler = [](std::string_view, tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
+    co_return tool::Output::text_only("written");
+  };
+  REQUIRE(registry.add(lock_write_tool_def(std::move(name)), std::move(handler)).has_value());
+}
+
+[[nodiscard]] tool::Workspace make_workspace(const std::filesystem::path& root) {
+  auto workspace = tool::Workspace::create(root.string());
+  REQUIRE(workspace.has_value());
+  return std::move(*workspace);
+}
+
+[[nodiscard]] permission::RuleSet allow_all_rules() {
+  permission::RuleSet rules;
+  rules.add(permission::Rule{.verdict = permission::Verdict::allow, .tool_pattern = "*", .capability = std::nullopt});
+  return rules;
+}
+
+[[nodiscard]] tool::DispatchContext make_prototype(asio::io_context& io,
+                                                   permission::RuleSet& rules,
+                                                   permission::AuditSink& audit,
+                                                   tool::Workspace& workspace) {
+  return tool::DispatchContext{
+      .executor = io.get_executor(),
+      .mode = permission::Mode::default_,
+      .rules = rules,
+      .audit = audit,
+      .workspace = &workspace,
+      .scope_key = "serve",
+      .agent_key = "automation",
+      .identity = "automation",
+  };
+}
+
+[[nodiscard]] agent::ToolBatchCall lock_call(std::string name, std::string_view rel_path) {
+  return agent::ToolBatchCall{
+      .tool_use_id = "call-0",
+      .name = std::move(name),
+      .input_json = std::string{R"({"path":")"} + std::string{rel_path} + R"("})",
+  };
+}
+
+/// Acquire one idle lock-table entry by running a single write-lock tool call
+/// through `scheduler`, so the reaping cases start from a populated table.
+[[nodiscard]] async::Awaitable<void> populate_one_lock(agent::ToolScheduler& scheduler,
+                                                       tool::DispatchContext& prototype) {
+  std::vector<agent::ToolBatchCall> batch;
+  batch.push_back(lock_call("FakeLockWrite", "d.txt"));
+  auto result = co_await scheduler.run_batch(std::move(batch), prototype);
+  REQUIRE(result.has_value());
+  REQUIRE(scheduler.lock_stats().current_entries == 1);
+}
+
+}  // namespace
+
+TEST_CASE("serve_scheduler_reaping reaps idle locks across ticks, then stops on predicate",
+          "[unit][bootstrap][serve][scheduler]") {
+  TempDir temp{"oran-serve-reap-due"};
+  std::ofstream{temp.path() / "d.txt"} << "x";
+  test::run_async(
+      [&temp](asio::io_context& io) -> async::Awaitable<void> {
+        tool::Registry registry;
+        add_lock_write_tool(registry, "FakeLockWrite");
+        auto workspace = make_workspace(temp.path());
+        auto rules = allow_all_rules();
+        permission::NullAuditSink audit;
+        auto prototype = make_prototype(io, rules, audit, workspace);
+
+        // A 1 ms idle TTL makes the lone entry reapable a tick later.
+        agent::ToolScheduler scheduler{
+            io.get_executor(),
+            registry,
+            agent::ToolSchedulerOptions{.max_parallel_tools = 4, .per_call_timeout = 5s, .idle_lock_ttl = 1ms}};
+        co_await populate_one_lock(scheduler, prototype);
+
+        using namespace asio::experimental::awaitable_operators;
+        [[maybe_unused]] auto raced = co_await (
+            bootstrap::serve_scheduler_reaping(io.get_executor(),
+                                               scheduler,
+                                               bootstrap::ServeSchedulerReapOptions{.reap_interval = 10ms},
+                                               [&scheduler] { return scheduler.lock_stats().reaped_entries >= 1; }) ||
+            async::sleep_for(io.get_executor(), 1s));
+
+        // A tick fired the reap (entry idle past its 1 ms TTL), then the
+        // cooperative predicate stopped the loop.
+        REQUIRE(scheduler.lock_stats().reaped_entries >= 1);
+        REQUIRE(scheduler.lock_stats().current_entries == 0);
+      },
+      3s);
+}
+
+TEST_CASE("serve_scheduler_reaping honors an immediate stop predicate without reaping",
+          "[unit][bootstrap][serve][scheduler]") {
+  TempDir temp{"oran-serve-reap-stop"};
+  std::ofstream{temp.path() / "d.txt"} << "x";
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    add_lock_write_tool(registry, "FakeLockWrite");
+    auto workspace = make_workspace(temp.path());
+    auto rules = allow_all_rules();
+    permission::NullAuditSink audit;
+    auto prototype = make_prototype(io, rules, audit, workspace);
+
+    agent::ToolScheduler scheduler{
+        io.get_executor(),
+        registry,
+        agent::ToolSchedulerOptions{.max_parallel_tools = 4, .per_call_timeout = 5s, .idle_lock_ttl = 1ms}};
+    co_await populate_one_lock(scheduler, prototype);
+
+    // An already-true predicate must return at the loop's first guard, before
+    // any tick runs — so the otherwise-reapable entry survives untouched.
+    auto outcome =
+        co_await bootstrap::serve_scheduler_reaping(io.get_executor(),
+                                                    scheduler,
+                                                    bootstrap::ServeSchedulerReapOptions{.reap_interval = 5ms},
+                                                    [] { return true; });
+
+    REQUIRE(outcome.has_value());
+    REQUIRE(scheduler.lock_stats().reaped_entries == 0);
+    REQUIRE(scheduler.lock_stats().current_entries == 1);
+  });
+}
+
+TEST_CASE("serve_scheduler_reaping stops gracefully on cancel", "[unit][bootstrap][serve][scheduler]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    agent::ToolScheduler scheduler{io.get_executor(), registry};
+
+    // A long reap interval keeps the concern parked in its first idle wait; the
+    // racing sleep fires the cancellation, which must end the wait gracefully.
+    using namespace asio::experimental::awaitable_operators;
+    [[maybe_unused]] auto raced =
+        co_await (bootstrap::serve_scheduler_reaping(io.get_executor(),
+                                                     scheduler,
+                                                     bootstrap::ServeSchedulerReapOptions{.reap_interval = 1s}) ||
+                  async::sleep_for(io.get_executor(), 20ms));
+
+    // Cancelled while still in the first interval, so no tick ever reaped.
+    REQUIRE(scheduler.lock_stats().reaped_entries == 0);
   });
 }

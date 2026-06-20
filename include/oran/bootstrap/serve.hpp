@@ -10,12 +10,14 @@
 // (`io::watch_read_text_file_ranged_cache`) and, when the loaded config carries
 // `automation.cron.jobs[]`, the automation cron/triggered service loop
 // (`automation::AutomationService::run` over a configured — or offline fake —
-// provider route). The tool-scheduler idle-lock reaping tick lands in a later
-// slice as another concern under the same lifecycle. Building on
-// `async::Runtime` plus a fine-grained `asio::cancellation_signal` (rather than
-// the one-shot `SignalScope`/`io.stop()` drain) is deliberate so the
-// automation loop's SQLite writes and in-flight agent turns are never
-// blunt-dropped — see `signal_drain.hpp` for the anticipated evolution.
+// provider route) plus the tool-scheduler idle-lock reaping tick
+// (`agent::ToolScheduler::reap_idle_locks`). The automation jobs share one
+// strand-driven `agent::ToolScheduler`, so the reaping concern bounds its
+// per-path lock table while the jobs run. Building on `async::Runtime` plus a
+// fine-grained `asio::cancellation_signal` (rather than the one-shot
+// `SignalScope`/`io.stop()` drain) is deliberate so the automation loop's
+// SQLite writes and in-flight agent turns are never blunt-dropped — see
+// `signal_drain.hpp` for the anticipated evolution.
 
 #pragma once
 
@@ -30,6 +32,10 @@
 #include <oran/automation.hpp>
 #include <oran/bootstrap/bootstrap.hpp>
 #include <oran/core/result.hpp>
+
+namespace orangutan::agent {
+class ToolScheduler;
+}  // namespace orangutan::agent
 
 namespace orangutan::bootstrap {
 
@@ -97,14 +103,48 @@ struct ServeAutomationOptions {
                                                                     ServeAutomationOptions options = {},
                                                                     std::function<bool()> stop_requested = {});
 
+/// Tunables for the tool-scheduler idle-lock reaping concern under `--serve`.
+struct ServeSchedulerReapOptions {
+  /// Gap between reap ticks. Each tick drops lock-table entries idle longer
+  /// than the scheduler's configured `idle_lock_ttl`, bounding the table for a
+  /// long-lived shared scheduler (spec 0012 AC10). A cancellation interrupts
+  /// the wait immediately. The default trails the 5-minute default TTL closely
+  /// enough that a pathological per-path workload cannot grow unbounded.
+  std::chrono::steady_clock::duration reap_interval{std::chrono::minutes{1}};
+};
+
+/// The tool-scheduler idle-lock reaping concern. Periodically calls
+/// `scheduler.reap_idle_locks(now)` in a cancel-aware loop until stopped, then
+/// returns `Result<void>{}` (a graceful stop is not an error). Reaping is an
+/// in-memory, cancellation-safe synchronous call, so — unlike the automation
+/// loop — a tick never swallows a parent cancellation; `stop_requested` is
+/// still honored (checked before each tick) for callers that prefer a
+/// predicate-driven stop, and `run_serve` supplies the same signal-tied one it
+/// gives the automation loop.
+///
+/// `scheduler` must be the same `agent::ToolScheduler` the automation jobs
+/// dispatch through, and `executor` must be the single strand both run on: its
+/// per-path lock table is single-strand by contract, so reaping and dispatch
+/// must not race across threads.
+///
+/// Exposed (rather than file-local) so it can be driven from tests against a
+/// real `ToolScheduler` with a populated lock table — no provider, process, or
+/// signal required.
+[[nodiscard]] async::Awaitable<core::Result<void>> serve_scheduler_reaping(asio::any_io_executor executor,
+                                                                           agent::ToolScheduler& scheduler,
+                                                                           ServeSchedulerReapOptions options = {},
+                                                                           std::function<bool()> stop_requested = {});
+
 /// `orangutan --serve` entry. Loads config, starts `async::Runtime`, traps
 /// SIGINT/SIGTERM on a runtime strand, co-spawns the service body, blocks the
 /// calling thread until a signal arrives, then gracefully cancels the service
 /// and stops the runtime. The service body always runs the IO file-view
 /// watcher; when the config carries `automation.cron.jobs[]` it also opens
 /// `<workspace>/.orangutan/automation.db`, applies those seeds once, and races
-/// the automation loop beside the watcher (a configured `default` route drives
-/// a live provider, otherwise an offline scripted fake keeps the loop usable).
+/// the automation loop and the tool-scheduler idle-lock reaping tick beside the
+/// watcher (a configured `default` route drives a live provider, otherwise an
+/// offline scripted fake keeps the loop usable; the automation jobs and the
+/// reaping tick share one strand-driven `agent::ToolScheduler`).
 /// On a trapped signal it returns a `cancelled` error carrying `signal`/`signum`
 /// context, which `bootstrap::run` maps to the shell-conventional `128 + signum`
 /// exit code (the same seam as `--audit-init`/`--trace`). Returns `0` if the
