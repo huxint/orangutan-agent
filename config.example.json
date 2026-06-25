@@ -139,6 +139,16 @@
           "first_fire_at": "2026-06-08T09:00:00Z"
         }
       ]
+    },
+    "triggered": {
+      "jobs": [
+        {
+          "job_key": "ci-webhook",
+          "trigger_key": "webhook:ci",
+          "agent_key": "researcher",
+          "agent_prompt": "Investigate the incoming CI webhook and summarize required action."
+        }
+      ]
     }
   },
   "desktop": {

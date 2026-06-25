@@ -196,8 +196,24 @@ struct AutomationCronConfig {
   friend bool operator==(const AutomationCronConfig&, const AutomationCronConfig&) = default;
 };
 
+struct AutomationTriggeredJobConfig {
+  std::string job_key;
+  std::string trigger_key;
+  std::string agent_key{"automation"};
+  std::string agent_prompt;
+
+  friend bool operator==(const AutomationTriggeredJobConfig&, const AutomationTriggeredJobConfig&) = default;
+};
+
+struct AutomationTriggeredConfig {
+  std::vector<AutomationTriggeredJobConfig> jobs{};
+
+  friend bool operator==(const AutomationTriggeredConfig&, const AutomationTriggeredConfig&) = default;
+};
+
 struct AutomationConfig {
   AutomationCronConfig cron{};
+  AutomationTriggeredConfig triggered{};
 
   friend bool operator==(const AutomationConfig&, const AutomationConfig&) = default;
 };

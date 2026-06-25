@@ -5,9 +5,10 @@
 // graceful cancel, stop) and races four concerns under one cancellation slot:
 // the IO file-view cache watcher (always); the automation cron/triggered
 // service loop plus the tool-scheduler idle-lock reaping tick (when the loaded
-// config carries `automation.cron.jobs[]`); and the channel ingress/dispatch
-// loop (when the config carries `channels[]`). A disabled concern is replaced by
-// an idle placeholder so the race always has a fixed operand set.
+// config carries `automation.cron.jobs[]` or `automation.triggered.jobs[]`); and
+// the channel ingress/dispatch loop (when the config carries `channels[]`). A
+// disabled concern is replaced by an idle placeholder so the race always has a
+// fixed operand set.
 
 #include <oran/bootstrap/serve.hpp>
 
@@ -204,6 +205,7 @@ async::Awaitable<Result<void>> serve_body(asio::any_io_executor executor,
                                           bool automation_enabled,
                                           std::string automation_db,
                                           std::vector<automation::UpsertCronJobRequest> cron_seeds,
+                                          std::vector<automation::UpsertTriggeredJobRequest> triggered_seeds,
                                           automation::CronJobHandler cron_handler,
                                           automation::TriggeredJobHandler triggered_handler,
                                           ServeAutomationOptions automation_options,
@@ -229,6 +231,12 @@ async::Awaitable<Result<void>> serve_body(asio::any_io_executor executor,
       automation_runtime.emplace(std::move(*opened));
       if (auto seeded = co_await automation_runtime->apply_cron_job_seeds(std::move(cron_seeds)); !seeded) {
         std::println(stderr, "orangutan: automation cron seeds failed, serving without automation: {}", seeded.error());
+      } else if (auto triggered_seeded =
+                     co_await automation_runtime->apply_triggered_job_seeds(std::move(triggered_seeds));
+                 !triggered_seeded) {
+        std::println(stderr,
+                     "orangutan: automation triggered seeds failed, serving without automation: {}",
+                     triggered_seeded.error());
       } else {
         automation_service.emplace(automation_runtime->automation_service());
         automation_active = true;
@@ -457,14 +465,20 @@ Result<int> run_serve(const BootstrapOptions& options) {
   }
   const auto& cfg = loaded->value;
 
-  // Config-authored cron seeds gate the automation concern: with none, `--serve`
-  // is exactly the watcher (no provider, no `automation.db`, CI-identical).
+  // Config-authored cron/triggered seeds gate the automation concern: with none,
+  // `--serve` avoids the provider and `automation.db` unless channels need an
+  // agent.
   auto cron_seeds = cron_jobs_from(cfg);
   if (!cron_seeds) {
     return std::unexpected(std::move(cron_seeds).error());
   }
-  const bool automation_enabled = !cron_seeds->empty();
+  auto triggered_seeds = triggered_jobs_from(cfg);
+  if (!triggered_seeds) {
+    return std::unexpected(std::move(triggered_seeds).error());
+  }
+  const bool automation_enabled = !cron_seeds->empty() || !triggered_seeds->empty();
   const auto cron_job_count = cron_seeds->size();
+  const auto triggered_job_count = triggered_seeds->size();
 
   // Config-authored `channels[]` gate the channel ingress/dispatch concern, the
   // same way cron jobs gate automation: with none, `--serve` builds no channel
@@ -653,6 +667,7 @@ Result<int> run_serve(const BootstrapOptions& options) {
                             automation_enabled,
                             automation_db,
                             std::move(*cron_seeds),
+                            std::move(*triggered_seeds),
                             std::move(cron_handler),
                             std::move(triggered_handler),
                             ServeAutomationOptions{},
@@ -679,9 +694,10 @@ Result<int> run_serve(const BootstrapOptions& options) {
   std::println("orangutan: service mode started");
   std::println("  io watcher: {} (recursive)", watch_root);
   if (automation_enabled) {
-    std::println("  automation: {} ({} cron job(s), {} provider)",
+    std::println("  automation: {} ({} cron job(s), {} triggered job(s), {} provider)",
                  automation_db,
                  cron_job_count,
+                 triggered_job_count,
                  provider_live ? "live" : "offline");
     std::println("  scheduler:  idle-lock reaping every {}s",
                  std::chrono::duration_cast<std::chrono::seconds>(ServeSchedulerReapOptions{}.reap_interval).count());

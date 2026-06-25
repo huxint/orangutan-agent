@@ -38,6 +38,12 @@ struct CronSeedApplyResult {
   std::vector<CronJobRecord> jobs{};
 };
 
+struct TriggeredSeedApplyResult {
+  std::size_t requested_count{0};
+  std::size_t upserted_count{0};
+  std::vector<TriggeredJobRecord> jobs{};
+};
+
 struct CronServiceCycleRequest {
   std::vector<UpsertCronJobRequest> seeds{};
   CronServiceOptions service_options{};
@@ -210,6 +216,9 @@ public:
 
   [[nodiscard]] async::Awaitable<core::Result<CronSeedApplyResult>>
   apply_cron_job_seeds(std::vector<UpsertCronJobRequest> seeds);
+
+  [[nodiscard]] async::Awaitable<core::Result<TriggeredSeedApplyResult>>
+  apply_triggered_job_seeds(std::vector<UpsertTriggeredJobRequest> seeds);
 
   [[nodiscard]] async::Awaitable<core::Result<CronServiceCycleResult>>
   run_cron_service_cycle(CronServiceCycleRequest request);

@@ -178,6 +178,10 @@ struct RuntimeAssemblyOptions {
   /// RuntimeAssembly stores them as future repository seeds only; build() does
   /// not open `automation.db`, upsert rows, start cron timers, or execute jobs.
   std::vector<automation::UpsertCronJobRequest> cron_jobs{};
+  /// Optional automation-owned triggered descriptors parsed from config.
+  /// RuntimeAssembly stores them as future repository seeds only; build() does
+  /// not open `automation.db`, upsert rows, enqueue work, or execute jobs.
+  std::vector<automation::UpsertTriggeredJobRequest> triggered_jobs{};
   /// When `true`, the assembly also opens the optional sqlite-vec vector index
   /// over a separate DB and constructs a `memory::longterm::HybridRuntime`.
   /// Requires an xmake build configured with `--vector_memory=y`.
@@ -326,6 +330,11 @@ public:
   /// These are stored only for diagnostics/future runtime owners; the assembly
   /// does not persist or execute them.
   [[nodiscard]] const std::vector<automation::UpsertCronJobRequest>& cron_jobs() const noexcept;
+
+  /// Automation-owned triggered repository seeds supplied at build time.
+  /// These are stored only for diagnostics/future runtime owners; the assembly
+  /// does not persist, enqueue, or execute them.
+  [[nodiscard]] const std::vector<automation::UpsertTriggeredJobRequest>& triggered_jobs() const noexcept;
 
   /// `true` iff the vector-memory DB pool/backend/hybrid runtime were
   /// constructed at build time.

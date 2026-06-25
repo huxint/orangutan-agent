@@ -1003,11 +1003,46 @@ TEST_CASE("Config::parse extracts automation cron jobs", "[unit][config][automat
           "2026-06-08T03:15:00.250Z");
 }
 
+TEST_CASE("Config::parse extracts automation triggered jobs", "[unit][config][automation]") {
+  auto result = config::Config::parse(R"json({
+  "automation": {
+    "triggered": {
+      "jobs": [
+        {
+          "job_key": "triggered-ci",
+          "trigger_key": "webhook:ci",
+          "agent_key": "researcher",
+          "agent_prompt": "Investigate the incoming CI webhook."
+        },
+        {
+          "job_key": "triggered-alert",
+          "trigger_key": "channel:mock-main:ops",
+          "agent_prompt": "Handle the operator alert."
+        }
+      ]
+    }
+  }
+})json");
+
+  REQUIRE(result.has_value());
+  REQUIRE(result->automation().triggered.jobs.size() == 2);
+  REQUIRE(result->automation().triggered.jobs[0].job_key == "triggered-ci");
+  REQUIRE(result->automation().triggered.jobs[0].trigger_key == "webhook:ci");
+  REQUIRE(result->automation().triggered.jobs[0].agent_key == "researcher");
+  REQUIRE(result->automation().triggered.jobs[0].agent_prompt == "Investigate the incoming CI webhook.");
+
+  REQUIRE(result->automation().triggered.jobs[1].job_key == "triggered-alert");
+  REQUIRE(result->automation().triggered.jobs[1].trigger_key == "channel:mock-main:ops");
+  REQUIRE(result->automation().triggered.jobs[1].agent_key == "automation");
+  REQUIRE(result->automation().triggered.jobs[1].agent_prompt == "Handle the operator alert.");
+}
+
 TEST_CASE("Config::parse defaults automation config when absent", "[unit][config][automation]") {
   auto result = config::Config::parse(R"json({"automation": {}})json");
 
   REQUIRE(result.has_value());
   REQUIRE(result->automation().cron.jobs.empty());
+  REQUIRE(result->automation().triggered.jobs.empty());
 }
 
 TEST_CASE("Config::parse rejects malformed automation cron jobs", "[unit][config][automation]") {
@@ -1159,6 +1194,102 @@ TEST_CASE("Config::parse rejects malformed automation cron jobs", "[unit][config
     "cron": {
       "jobs": [],
       "timezone": "UTC"
+    }
+  }
+})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+}
+
+TEST_CASE("Config::parse rejects malformed automation triggered jobs", "[unit][config][automation]") {
+  SECTION("non-object triggered block") {
+    auto result = config::Config::parse(R"json({"automation": {"triggered": []}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-array jobs") {
+    auto result = config::Config::parse(R"json({"automation": {"triggered": {"jobs": {}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("empty trigger key") {
+    auto result = config::Config::parse(R"json({
+  "automation": {
+    "triggered": {
+      "jobs": [{
+        "job_key": "triggered-ci",
+        "trigger_key": "",
+        "agent_prompt": "Handle triggered automation."
+      }]
+    }
+  }
+})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("empty agent key") {
+    auto result = config::Config::parse(R"json({
+  "automation": {
+    "triggered": {
+      "jobs": [{
+        "job_key": "triggered-ci",
+        "trigger_key": "webhook:ci",
+        "agent_key": "",
+        "agent_prompt": "Handle triggered automation."
+      }]
+    }
+  }
+})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("missing agent prompt") {
+    auto result = config::Config::parse(R"json({
+  "automation": {
+    "triggered": {
+      "jobs": [{"job_key": "triggered-ci", "trigger_key": "webhook:ci"}]
+    }
+  }
+})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("duplicate job key") {
+    auto result = config::Config::parse(R"json({
+  "automation": {
+    "triggered": {
+      "jobs": [
+        {
+          "job_key": "triggered-ci",
+          "trigger_key": "webhook:ci",
+          "agent_prompt": "Handle triggered automation."
+        },
+        {
+          "job_key": "triggered-ci",
+          "trigger_key": "webhook:deploy",
+          "agent_prompt": "Handle deploy automation."
+        }
+      ]
+    }
+  }
+})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("unknown triggered field fails under strict config") {
+    auto result = config::Config::parse(R"json({
+  "strict_config": true,
+  "automation": {
+    "triggered": {
+      "jobs": [],
+      "retry": true
     }
   }
 })json");

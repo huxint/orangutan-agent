@@ -8,9 +8,10 @@
 //
 // The service body auto-starts the IO file-view cache watcher
 // (`io::watch_read_text_file_ranged_cache`); when the loaded config carries
-// `automation.cron.jobs[]`, it also runs the automation cron/triggered service
-// loop (`automation::AutomationService::run` over a configured — or offline
-// fake — provider route) plus the tool-scheduler idle-lock reaping tick
+// `automation.cron.jobs[]` or `automation.triggered.jobs[]`, it also runs the
+// automation cron/triggered service loop (`automation::AutomationService::run`
+// over a configured — or offline fake — provider route) plus the
+// tool-scheduler idle-lock reaping tick
 // (`agent::ToolScheduler::reap_idle_locks`); when the config carries buildable
 // `channels[]`, it starts those adapters, pumps inbound messages through the
 // `ChannelManager` fan-in, dispatches them through the routed agent bridge, and
@@ -176,7 +177,8 @@ struct ServeSchedulerReapOptions {
 /// SIGINT/SIGTERM on a runtime strand, co-spawns the service body, blocks the
 /// calling thread until a signal arrives, then gracefully cancels the service
 /// and stops the runtime. The service body always runs the IO file-view
-/// watcher; when the config carries `automation.cron.jobs[]` it also opens
+/// watcher; when the config carries `automation.cron.jobs[]` or
+/// `automation.triggered.jobs[]` it also opens
 /// `<workspace>/.orangutan/automation.db`, applies those seeds once, and races
 /// the automation loop and the tool-scheduler idle-lock reaping tick beside the
 /// watcher (a configured `default` route drives a live provider, otherwise an

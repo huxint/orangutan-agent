@@ -111,8 +111,9 @@ constexpr auto kRecognizedLongtermRetentionFields = std::array<std::string_view,
     "decay_check_interval_hours",
 };
 
-constexpr auto kRecognizedAutomationFields = std::array<std::string_view, 1>{
+constexpr auto kRecognizedAutomationFields = std::array<std::string_view, 2>{
     "cron",
+    "triggered",
 };
 
 constexpr auto kRecognizedAutomationCronFields = std::array<std::string_view, 1>{
@@ -126,6 +127,17 @@ constexpr auto kRecognizedAutomationCronJobFields = std::array<std::string_view,
     "expression",
     "first_fire_at",
     "last_fired_at",
+};
+
+constexpr auto kRecognizedAutomationTriggeredFields = std::array<std::string_view, 1>{
+    "jobs",
+};
+
+constexpr auto kRecognizedAutomationTriggeredJobFields = std::array<std::string_view, 4>{
+    "job_key",
+    "trigger_key",
+    "agent_key",
+    "agent_prompt",
 };
 
 constexpr auto kRecognizedChannelFields = std::array<std::string_view, 9>{
@@ -1162,6 +1174,134 @@ parse_automation_cron(const json& automation, bool strict, std::vector<ConfigWar
   return cron;
 }
 
+[[nodiscard]] Result<AutomationTriggeredJobConfig>
+parse_automation_triggered_job(const json& value,
+                               std::string_view path,
+                               bool strict,
+                               std::vector<ConfigWarning>& warnings) {
+  if (!value.is_object()) {
+    return std::unexpected(config_error("automation triggered job must be an object", std::string{path}));
+  }
+
+  auto job_key = required_string(value, "job_key", path);
+  if (!job_key) {
+    return std::unexpected(std::move(job_key.error()));
+  }
+  if (job_key->empty()) {
+    return std::unexpected(config_error("automation triggered job key must be non-empty", child_path(path, "job_key")));
+  }
+
+  auto trigger_key = required_string(value, "trigger_key", path);
+  if (!trigger_key) {
+    return std::unexpected(std::move(trigger_key.error()));
+  }
+  if (trigger_key->empty()) {
+    return std::unexpected(
+        config_error("automation triggered trigger_key must be non-empty", child_path(path, "trigger_key")));
+  }
+
+  auto agent_key = std::string{"automation"};
+  if (const auto it = value.find("agent_key"); it != value.end()) {
+    if (!it->is_string()) {
+      return std::unexpected(config_error("expected string", child_path(path, "agent_key")));
+    }
+    agent_key = it->get<std::string>();
+    if (agent_key.empty()) {
+      return std::unexpected(
+          config_error("automation triggered agent_key must be non-empty", child_path(path, "agent_key")));
+    }
+  }
+
+  auto agent_prompt = required_string(value, "agent_prompt", path);
+  if (!agent_prompt) {
+    return std::unexpected(std::move(agent_prompt.error()));
+  }
+  if (agent_prompt->empty()) {
+    return std::unexpected(
+        config_error("automation triggered agent_prompt must be non-empty", child_path(path, "agent_prompt")));
+  }
+
+  auto unknowns = collect_unknown_object_fields(value,
+                                                path,
+                                                kRecognizedAutomationTriggeredJobFields,
+                                                "unknown automation triggered job field",
+                                                strict,
+                                                warnings);
+  if (!unknowns) {
+    return std::unexpected(std::move(unknowns.error()));
+  }
+
+  return AutomationTriggeredJobConfig{
+      .job_key = std::move(*job_key),
+      .trigger_key = std::move(*trigger_key),
+      .agent_key = std::move(agent_key),
+      .agent_prompt = std::move(*agent_prompt),
+  };
+}
+
+[[nodiscard]] Result<std::vector<AutomationTriggeredJobConfig>>
+parse_automation_triggered_jobs(const json& value, bool strict, std::vector<ConfigWarning>& warnings) {
+  constexpr std::string_view kPath = "$.automation.triggered.jobs";
+  if (!value.is_array()) {
+    return std::unexpected(config_error("expected array of automation triggered jobs", std::string{kPath}));
+  }
+
+  auto jobs = std::vector<AutomationTriggeredJobConfig>{};
+  auto seen_keys = std::vector<std::string>{};
+  jobs.reserve(value.size());
+  seen_keys.reserve(value.size());
+  auto index = std::size_t{0};
+  for (const auto& item : value) {
+    const auto item_path = element_path(kPath, index);
+    auto job = parse_automation_triggered_job(item, item_path, strict, warnings);
+    if (!job) {
+      return std::unexpected(std::move(job.error()));
+    }
+    if (std::ranges::contains(seen_keys, job->job_key)) {
+      return std::unexpected(
+          config_error("automation triggered job_key must be unique", child_path(item_path, "job_key")));
+    }
+    seen_keys.push_back(job->job_key);
+    jobs.push_back(std::move(*job));
+    ++index;
+  }
+  return jobs;
+}
+
+[[nodiscard]] Result<AutomationTriggeredConfig>
+parse_automation_triggered(const json& automation, bool strict, std::vector<ConfigWarning>& warnings) {
+  auto triggered = AutomationTriggeredConfig{};
+  const auto it = automation.find("triggered");
+  if (it == automation.end()) {
+    return triggered;
+  }
+  constexpr std::string_view kPath = "$.automation.triggered";
+  auto object = require_object(*it, kPath);
+  if (!object) {
+    return std::unexpected(std::move(object.error()));
+  }
+
+  if (const auto jobs = it->find("jobs"); jobs != it->end()) {
+    auto parsed = parse_automation_triggered_jobs(*jobs, strict, warnings);
+    if (!parsed) {
+      return std::unexpected(std::move(parsed.error()));
+    }
+    triggered.jobs = std::move(*parsed);
+  }
+
+  auto unknowns = collect_unknown_object_fields(*it,
+                                                kPath,
+                                                kRecognizedAutomationTriggeredFields,
+                                                "unknown automation triggered field",
+                                                strict,
+                                                warnings);
+  if (!unknowns) {
+    return std::unexpected(std::move(unknowns.error()));
+  }
+
+  return triggered;
+}
+
 [[nodiscard]] Result<AutomationConfig>
 parse_automation(const json& root, bool strict, std::vector<ConfigWarning>& warnings) {
   auto automation = AutomationConfig{};
@@ -1179,6 +1319,12 @@ parse_automation(const json& root, bool strict, std::vector<ConfigWarning>& warn
     return std::unexpected(std::move(cron.error()));
   }
   automation.cron = std::move(*cron);
+
+  auto triggered = parse_automation_triggered(*it, strict, warnings);
+  if (!triggered) {
+    return std::unexpected(std::move(triggered.error()));
+  }
+  automation.triggered = std::move(*triggered);
 
   auto unknowns = collect_unknown_object_fields(*it,
                                                 "$.automation",

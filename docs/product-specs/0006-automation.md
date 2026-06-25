@@ -79,8 +79,13 @@ first owner-local blocked-agent hold/retry policy by keeping same-agent
 triggered conflicts for later explicit cycles without broadening the public
 queue drain boundary. Slice 225 adds the finite caller-owned loop policy above
 that owner, so one caller can repeat explicit service cycles and sleep within a
-retry-wait budget before any detached/background startup exists. The current
-API evaluates
+retry-wait budget before any detached/background startup exists. Slice 257 adds
+typed `automation.triggered.jobs[]` config seeds, bootstrap mapping into
+`UpsertTriggeredJobRequest` descriptors, `RuntimeAssembly` storage for those
+descriptors without opening `automation.db`, explicit
+`AutomationRuntime::apply_triggered_job_seeds(...)` persistence, and `--serve`
+seed application when either cron or triggered descriptors are configured. The
+current API evaluates
 periodic and cron schedules from caller-supplied state, maps a long-term memory
 retention policy into a due-only `memory::longterm::DecayRequest`, persists the
 configured retention job plus run history and lease state through
@@ -104,10 +109,10 @@ execution iterations while defaulting to repository-backed cron execution
 leases,
 publishes advisory cron job lifecycle metadata when the caller supplies a hook
 bus,
-parses and maps config-authored cron schedule seeds without starting a
-scheduler,
-lets a caller-owned automation runtime explicitly apply those cron seeds into
-`automation.db`,
+parses and maps config-authored cron schedule seeds and triggered descriptor
+seeds without starting a scheduler,
+lets a caller-owned automation runtime explicitly apply those cron or triggered
+seeds into `automation.db`,
 lets a caller-owned automation runtime run one explicit cron service cycle that
 applies seeds and drives the finite cron loop with a supplied handler plus the
 same cooperative stop policy,
@@ -142,13 +147,16 @@ and can wait once within a caller budget for a stored retention job to become
 due while leasing due execution or run a finite caller-owned loop over that
 step. Bootstrap maps configured-route `memory.longterm.retention` into a stored
 `MemoryRetentionJob` descriptor whose first fire is after the one-shot startup
-decay pass, and maps `automation.cron.jobs[]` into
-`UpsertCronJobRequest` descriptors including `agent_key` and `agent_prompt`,
+decay pass, maps `automation.cron.jobs[]` into `UpsertCronJobRequest`
+descriptors including `agent_key` and `agent_prompt`, and maps
+`automation.triggered.jobs[]` into `UpsertTriggeredJobRequest` descriptors
+including `trigger_key`, `agent_key`, and `agent_prompt`,
 and can now adapt stored automation prompt requests into one-job-at-a-time
 configured-route `AgentPromptRunner` execution with stable per-job session
-continuity and fail-closed noninteractive approvals. Bootstrap still does not
-open `automation.db`, apply those rows automatically, or run a background
-service.
+continuity and fail-closed noninteractive approvals. Ordinary bootstrap still
+does not open `automation.db`, apply those rows automatically, or run a
+background service; `--serve` is the explicit long-running owner that applies
+configured seeds before its automation loop.
 
 Current implementation:
 
@@ -172,10 +180,24 @@ Current implementation:
 - `RuntimeAssembly::cron_jobs()` exposes those mapped cron seeds for diagnostics
   and future persistence ownership; it is not persisted or run by
   `RuntimeAssembly::build`.
+- `config::Config::automation().triggered.jobs` exposes typed triggered
+  descriptor seeds from `automation.triggered.jobs[]`, with non-empty
+  `job_key`, `trigger_key`, optional non-empty `agent_key` defaulting to
+  `automation`, and required `agent_prompt`. `bootstrap::triggered_jobs_from(...)`
+  maps them into repository upsert requests while keeping `oran-automation`
+  independent of `oran-config`.
+- `RuntimeAssembly::triggered_jobs()` exposes those mapped triggered seeds for
+  diagnostics and future persistence ownership; it is not persisted, enqueued,
+  or run by `RuntimeAssembly::build`.
 - `AutomationRuntime::apply_cron_job_seeds(...)` is the explicit persistence
   handoff. It upserts mapped cron seed rows through the caller-owned runtime
   repository, returns requested/upserted counts plus stored rows, and annotates
   failures with `seed_index` / `job_key` context.
+- `AutomationRuntime::apply_triggered_job_seeds(...)` mirrors that explicit
+  persistence handoff for triggered descriptors. It upserts mapped triggered seed
+  rows through the caller-owned runtime repository, returns requested/upserted
+  counts plus stored rows, and annotates failures with `seed_index` / `job_key`
+  context.
 - `AutomationRuntime::run_cron_service_cycle(...)` validates explicit
   service-cycle policy before repository mutation, applies supplied cron seeds,
   and delegates to `CronLoop::run(...)`. It returns both seed-apply and loop
@@ -205,8 +227,8 @@ Current implementation:
 - `AutomationRuntime::open(...)` validates an explicit database path, creates
   parent directories, opens `automation.db` through an owned `storage::Pool`,
   runs automation migrations, exposes the migration report and repository, can
-  explicitly apply cron seed descriptors or run one cron service cycle, and can
-  construct `AutomationService`, `CronService`, `CronLoop`,
+  explicitly apply cron or triggered seed descriptors or run one cron service
+  cycle, and can construct `AutomationService`, `CronService`, `CronLoop`,
   `TriggeredService`, `MemoryRetentionService`, or `MemoryRetentionLoop` over
   that stable state.
 - `MemoryRetentionService::tick(...)` loads one stored job, skips not-due work
@@ -353,23 +375,24 @@ Current implementation:
   `held_jobs_remaining` reasons.
 - `test-async` reports 14 cases / 76 assertions for the bounded channel
   polling primitive consumed by triggered queues.
-- `test-automation` reports 106 cases / 1849 assertions.
+- `test-automation` reports 107 cases / 1868 assertions.
 - `test-hook` reports 38 cases / 313 assertions for the hook payload surface.
-- `test-config` reports 51 cases / 468 assertions for the consuming config
-  boundary, and `test-bootstrap` reports 134 cases / 1160 assertions for mapped
-  cron seeds plus bootstrap-owned automation prompt bridge coverage.
+- `test-config` reports 58 cases / 562 assertions for the consuming config
+  boundary, and `test-bootstrap` reports 176 cases / 1707 assertions for mapped
+  cron/triggered seeds plus bootstrap-owned automation prompt bridge and
+  `--serve` automation coverage.
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 
-Still open: detached/background service-loop startup over `AutomationRuntime`,
-process service/timer shutdown policy, concrete cli/channel/desktop notifier
-routing, agent firing, long-running startup/shutdown ownership above
-`AutomationService::run(...)`, and the scheduler tick performance criterion. Triggered
+Still open: a channel/webhook producer that turns external events into
+`AutomationService::enqueue_triggered(...)` calls, concrete cli/channel/desktop
+notifier routing, broader agent-firing policy, typed `serve` tuning for timer and
+shutdown policy, and the scheduler tick performance criterion. Triggered
 descriptor intake, explicit one-item queue draining, finite available-batch
-draining, drop-on-conflict handling for active triggered-agent leases, and the
-owner-local blocked-agent hold/retry path plus the finite explicit loop policy
-above it exist, but full
-scheduler/category lifecycle ownership remains downstream.
+draining, drop-on-conflict handling for active triggered-agent leases, config-authored
+triggered descriptors, and the owner-local blocked-agent hold/retry path plus the
+finite explicit loop policy above it exist, but full category lifecycle ownership
+remains downstream.
 
 ## Scope (v1.1)
 
@@ -410,8 +433,12 @@ scheduler/category lifecycle ownership remains downstream.
    same owner retry previously held blocked triggered work before newer queued
    items while keeping public queue drains execute-or-drop only, and slice 225
    lets one caller repeat those explicit cycles within bounded retry-wait and
-   iteration budgets. Concrete notifier routing and actual agent firing latency
-   remain downstream.
+   iteration budgets. Slice 257 lets operators author triggered descriptors in
+   `automation.triggered.jobs[]`, lets bootstrap map them into repository seed
+   descriptors, lets explicit runtime owners persist them, and lets `--serve`
+   apply them before its automation loop starts. A channel/webhook producer that
+   calls `AutomationService::enqueue_triggered(...)`, concrete notifier routing,
+   and actual agent firing latency remain downstream.
 4. Per-agent lease prevents two concurrent runs of the same agent_key; the queued
    firing is held or dropped per policy. Current status: slice 210 prevents
    overlapping explicit cron execution for the same stored `agent_key` through
@@ -433,9 +460,9 @@ scheduler/category lifecycle ownership remains downstream.
    attach to, slice 224 lets that owner hold same-agent triggered conflicts for
    later explicit retry cycles through `requeue_on_conflict` while public queue
    drains still drop or fail, and slice 225 adds the finite explicit loop
-   policy above the owner. Concrete notifier routing, long-running
-   startup/shutdown ownership above that loop, and actual agent firing remain
-   downstream.
+   policy above the owner. Slice 257 adds config-authored triggered descriptors
+   plus explicit seed persistence, but external trigger producers and concrete
+   notifier routing remain downstream.
 5. A failing job is recorded with the failure reason; the next firing happens on
    schedule. Current status: slice 206 records explicit cron handler failures
    with the failure reason and leaves stored state due for retry, while slice

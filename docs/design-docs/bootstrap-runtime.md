@@ -99,6 +99,8 @@ struct RuntimeAssemblyOptions {
   std::size_t longterm_memory_statement_cache_capacity{16};
   std::optional<LongtermMemoryStartupDecayOptions> longterm_memory_startup_decay{};
   std::optional<automation::MemoryRetentionJob> longterm_memory_retention_job{};
+  std::vector<automation::UpsertCronJobRequest> cron_jobs{};
+  std::vector<automation::UpsertTriggeredJobRequest> triggered_jobs{};
   bool longterm_vector_memory_enabled = false;
   std::string longterm_vector_memory_db_path{};
   std::size_t longterm_vector_memory_dimensions{64};
@@ -131,6 +133,10 @@ class RuntimeAssembly {
   longterm_memory_startup_decay_shadowed_count() const noexcept;
   const std::optional<automation::MemoryRetentionJob>&
   longterm_memory_retention_job() const noexcept;
+  const std::vector<automation::UpsertCronJobRequest>&
+  cron_jobs() const noexcept;
+  const std::vector<automation::UpsertTriggeredJobRequest>&
+  triggered_jobs() const noexcept;
   bool longterm_vector_memory_enabled() const noexcept;
   std::string_view longterm_memory_path() const noexcept;
   std::string_view longterm_vector_memory_path() const noexcept;
@@ -177,8 +183,12 @@ the assembly as `longterm_memory_startup_decay_shadowed_count()`: `std::nullopt`
 means no startup pass was configured or run, while `0` or higher means the pass
 ran and reports how many records were shadowed. It also stores the periodic seed
 as `longterm_memory_retention_job()` for diagnostics and future scheduler
-ownership. `RuntimeAssembly::build` does not evaluate, persist, lease, or run
-that job; it is not a startup-loop timer.
+ownership. Bootstrap also maps `automation.cron.jobs[]` and
+`automation.triggered.jobs[]` into automation repository seed descriptors and
+stores them as `cron_jobs()` / `triggered_jobs()` for diagnostics and later
+runtime owners. `RuntimeAssembly::build` does not evaluate, persist, lease, run,
+enqueue, or execute any of those automation descriptors; it is not a startup-loop
+timer.
 `startup_hook_bindings` are installed immediately after the bus is constructed
 and before startup producers run; null sinks are rejected with
 `reason=null_sink`, and every startup-only observer is unbound before the
@@ -191,7 +201,8 @@ checkout can run the deterministic CLI shell without opening `sessions.db` or
 `trace=<enabled|disabled>`, `sessions=<enabled|disabled> (<path|disabled>)`,
 `longterm-memory=<enabled|disabled> (<path|disabled>)`,
 `startup-decay=<disabled|N>`,
-`vector-memory=<enabled|disabled> (<path|disabled>)`, and `hook-timeout=<ms>`.
+`vector-memory=<enabled|disabled> (<path|disabled>)`, `hook-timeout=<ms>`,
+`automation-cron-jobs=<N>`, and `automation-triggered-jobs=<N>`.
 
 `<oran/bootstrap/prompt_runner.hpp>` exposes the bootstrap-owned CLI runner used by
 tests and the ordinary binary handoff for configured routes. `AgentPromptRunner::create`
@@ -553,21 +564,25 @@ the evolution `signal_drain.hpp` anticipates.
 watcher that cannot initialize (e.g. inotify unavailable, a missing root) is
 non-fatal — reported once, then the service keeps idling until signalled.
 
-**Slice B (slice 254)** adds the automation cron/triggered loop. The presence of
-config-authored `automation.cron.jobs[]` gates it: with none, `--serve` is exactly the
-slice-A watcher (no provider, no `automation.db`, CI-identical). With cron jobs,
+**Slice B (slice 254, extended by slice 257)** adds the automation
+cron/triggered loop. The presence of config-authored `automation.cron.jobs[]` or
+`automation.triggered.jobs[]` gates it: with neither, `--serve` is exactly the
+slice-A watcher (no provider, no `automation.db`, CI-identical). With automation jobs,
 `run_serve` builds a `RuntimeAssembly` and a provider — `HttpProviderBackend` for a
 configured `default` route, otherwise an offline scripted `FakeProvider` so the loop
 stays usable without credentials (the same offline posture as `--desktop`) — then
 `serve_body` opens `<workspace>/.orangutan/automation.db` (`AutomationRuntime::open`),
-applies the mapped seeds once (`cron_jobs_from` → `apply_cron_job_seeds`; applying
-them once, not per tick, is what keeps stored `last_fired_at` from resetting), builds
-a prompt-backed handler (`make_automation_agent_prompt_runner` →
+applies the mapped seeds once (`cron_jobs_from` → `apply_cron_job_seeds`, then
+`triggered_jobs_from` → `apply_triggered_job_seeds`; applying cron seeds once, not per
+tick, is what keeps stored `last_fired_at` from resetting), builds a prompt-backed
+handler (`make_automation_agent_prompt_runner` →
 `make_cron_prompt_handler` / `make_triggered_prompt_handler`), and races
 `serve_automation` beside the watcher. A database that cannot open, or seeds that
 cannot apply, is non-fatal — reported once, then the service serves the watcher
-alone. The automation service disables cancellation around its durable lease/run-row
-writes, so a firing tick can swallow a parent cancellation; `serve_automation`'s
+alone. Triggered descriptor seeds are durable descriptions only; until a future
+channel/webhook owner calls `AutomationService::enqueue_triggered(...)`, the triggered
+half of the loop has no external producer. The automation service disables cancellation
+around its durable lease/run-row writes, so a firing tick can swallow a parent cancellation; `serve_automation`'s
 `stop_requested` predicate (tied to the trapped signum) is therefore the
 authoritative, guaranteed stop, checked before and after each tick, and `run_serve`
 always supplies it.

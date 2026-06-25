@@ -5,9 +5,9 @@ still intentionally narrow: deterministic periodic schedule and POSIX cron
 evaluation, long-term memory retention request planning, a bootstrap-owned
 mapping from configured retention policy into that job descriptor,
 automation-owned retention job/run/lease persistence, durable prompt-bearing
-cron job state, config-authored cron schedule seeds mapped by bootstrap into
-stored descriptors, a caller-owned runtime state handle, explicit cron seed
-application, a caller-awaited cron service cycle over the existing finite cron
+cron job state, config-authored cron schedule seeds and triggered descriptor
+seeds mapped by bootstrap into stored descriptors, a caller-owned runtime state
+handle, explicit cron and triggered seed application, a caller-awaited cron service cycle over the existing finite cron
 loop, a caller-owned composed automation service owner that drains buffered
 triggered work before one explicit cron cycle, a caller-driven cron
 scan/wait/execute-due boundary plus finite caller-owned cron loop policy,
@@ -26,8 +26,8 @@ handler output text, and a caller-driven retention service tick with optional ad
 plus a caller-started retention loop step that can wait within a caller budget
 for one stored job to become due and lease due execution, plus a finite
 caller-owned loop policy over that step. It does not start detached background
-work, own a long-running process service loop, persist configured cron seeds
-from bootstrap automatically, run a detached queue-drain loop, route concrete
+work, own a long-running process service loop, persist configured seeds from
+bootstrap automatically, run a detached queue-drain loop, route concrete
 cli/channel/desktop notifications, or call an agent loop.
 
 ## Current Status
@@ -478,6 +478,23 @@ a detached loop, or call agents itself; the owner does, and supplies the signal-
 `stop_requested` predicate `AutomationService::run` already exposes. Because the
 service disables cancellation around its durable lease/run-row writes, that predicate
 (not parent cancellation alone) is the owner's guaranteed stop.
+
+Slice 257 adds config-authored triggered descriptor seeds to the same
+caller-owned handoff. `oran-config` parses `automation.triggered.jobs[]` with
+non-empty `job_key`, `trigger_key`, optional `agent_key` (defaulting to
+`automation`), and required `agent_prompt`; `bootstrap::triggered_jobs_from(...)`
+maps those rows into `automation::UpsertTriggeredJobRequest` descriptors.
+`RuntimeAssemblyOptions::triggered_jobs` and `RuntimeAssembly::triggered_jobs()`
+store the mapped descriptors for diagnostics and future owners without opening
+`automation.db`, enqueuing work, or executing handlers. Runtime owners that have
+already opened automation state can now call
+`AutomationRuntime::apply_triggered_job_seeds(...)`, which upserts the descriptors
+through the owned repository and reports requested/upserted counts plus stored
+rows, annotating failures with `seed_index` and `job_key` context. `--serve`
+applies cron seeds and triggered seeds once before starting `AutomationService`
+and now starts the automation concern when either seed kind is configured. This
+does not add a trigger producer yet: external channel/webhook events still need a
+future owner to call `AutomationService::enqueue_triggered(...)`.
 
 ## Public API
 
@@ -1207,6 +1224,12 @@ struct CronSeedApplyResult {
   std::vector<CronJobRecord> jobs;
 };
 
+struct TriggeredSeedApplyResult {
+  std::size_t requested_count;
+  std::size_t upserted_count;
+  std::vector<TriggeredJobRecord> jobs;
+};
+
 struct CronServiceCycleRequest {
   std::vector<UpsertCronJobRequest> seeds;
   CronServiceOptions service_options;
@@ -1337,6 +1360,9 @@ class AutomationRuntime {
   async::Awaitable<core::Result<CronSeedApplyResult>>
   apply_cron_job_seeds(std::vector<UpsertCronJobRequest>);
 
+  async::Awaitable<core::Result<TriggeredSeedApplyResult>>
+  apply_triggered_job_seeds(std::vector<UpsertTriggeredJobRequest>);
+
   async::Awaitable<core::Result<CronServiceCycleResult>>
   run_cron_service_cycle(CronServiceCycleRequest);
 
@@ -1448,7 +1474,7 @@ class MemoryRetentionLoop {
 }  // namespace orangutan::automation
 ```
 
-Config/bootstrap-facing cron seed surface:
+Config/bootstrap-facing cron/triggered seed surface:
 
 ```cpp
 namespace orangutan::config {
@@ -1466,8 +1492,20 @@ struct AutomationCronConfig {
   std::vector<AutomationCronJobConfig> jobs;
 };
 
+struct AutomationTriggeredJobConfig {
+  std::string job_key;
+  std::string trigger_key;
+  std::string agent_key;
+  std::string agent_prompt;
+};
+
+struct AutomationTriggeredConfig {
+  std::vector<AutomationTriggeredJobConfig> jobs;
+};
+
 struct AutomationConfig {
   AutomationCronConfig cron;
+  AutomationTriggeredConfig triggered;
 };
 
 }  // namespace orangutan::config
@@ -1477,14 +1515,20 @@ namespace orangutan::bootstrap {
 core::Result<std::vector<automation::UpsertCronJobRequest>>
 cron_jobs_from(const config::Config&);
 
+core::Result<std::vector<automation::UpsertTriggeredJobRequest>>
+triggered_jobs_from(const config::Config&);
+
 struct RuntimeAssemblyOptions {
   std::vector<automation::UpsertCronJobRequest> cron_jobs;
+  std::vector<automation::UpsertTriggeredJobRequest> triggered_jobs;
 };
 
 class RuntimeAssembly {
  public:
   const std::vector<automation::UpsertCronJobRequest>&
   cron_jobs() const noexcept;
+  const std::vector<automation::UpsertTriggeredJobRequest>&
+  triggered_jobs() const noexcept;
 };
 
 }  // namespace orangutan::bootstrap

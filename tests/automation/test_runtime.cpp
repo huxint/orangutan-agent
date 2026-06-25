@@ -368,6 +368,64 @@ TEST_CASE("AutomationRuntime constructs triggered service execution over owned s
   });
 }
 
+TEST_CASE("AutomationRuntime applies triggered job seeds explicitly", "[unit][automation][runtime][triggered]") {
+  TempWorkspace workspace{"oran-automation-runtime-triggered-seeds"};
+  test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {
+    auto runtime = co_await automation::AutomationRuntime::open(
+        io.get_executor(),
+        automation::AutomationRuntimeOptions{.database_path = automation_db_path(workspace)});
+    REQUIRE(runtime.has_value());
+
+    auto seeds = std::vector<automation::UpsertTriggeredJobRequest>{
+        automation::UpsertTriggeredJobRequest{
+            .job_key = "triggered:webhook-ci",
+            .trigger_key = "webhook:ci",
+            .agent_key = "researcher",
+            .agent_prompt = "Investigate the incoming CI webhook.",
+        },
+        automation::UpsertTriggeredJobRequest{
+            .job_key = "triggered:webhook-alert",
+            .trigger_key = "webhook:alert",
+            .agent_prompt = "Handle the alert webhook.",
+        },
+    };
+
+    auto applied = co_await runtime->apply_triggered_job_seeds(seeds);
+
+    REQUIRE(applied.has_value());
+    REQUIRE(applied->requested_count == 2);
+    REQUIRE(applied->upserted_count == 2);
+    REQUIRE(applied->jobs.size() == 2);
+    REQUIRE(applied->jobs[0].job_key == "triggered:webhook-ci");
+    REQUIRE(applied->jobs[0].trigger_key == "webhook:ci");
+    REQUIRE(applied->jobs[0].agent_key == "researcher");
+    REQUIRE(applied->jobs[1].agent_key == "automation");
+
+    seeds[0].agent_prompt = "Updated CI webhook prompt.";
+    auto reapplied = co_await runtime->apply_triggered_job_seeds(seeds);
+    REQUIRE(reapplied.has_value());
+    REQUIRE(reapplied->upserted_count == 2);
+
+    auto loaded = co_await runtime->repository().get_triggered_job("triggered:webhook-ci");
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->has_value());
+    REQUIRE((*loaded)->agent_prompt == "Updated CI webhook prompt.");
+
+    auto bad_seeds = std::vector<automation::UpsertTriggeredJobRequest>{
+        automation::UpsertTriggeredJobRequest{
+            .job_key = "triggered:bad",
+            .trigger_key = "",
+            .agent_prompt = "Invalid trigger seed.",
+        },
+    };
+    auto invalid = co_await runtime->apply_triggered_job_seeds(bad_seeds);
+    REQUIRE_FALSE(invalid.has_value());
+    REQUIRE(invalid.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(has_context(invalid.error(), "seed_index", "0"));
+    REQUIRE(has_context(invalid.error(), "job_key", "triggered:bad"));
+  });
+}
+
 TEST_CASE("AutomationRuntime runs a caller-awaited cron service cycle", "[unit][automation][runtime][cron][service]") {
   TempWorkspace workspace{"oran-automation-runtime-cron-service-cycle"};
   test::run_async([&workspace](asio::io_context& io) -> async::Awaitable<void> {

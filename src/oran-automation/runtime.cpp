@@ -183,6 +183,33 @@ async::Awaitable<core::Result<CronSeedApplyResult>> apply_cron_job_seeds_impl(Au
   co_return result;
 }
 
+async::Awaitable<core::Result<TriggeredSeedApplyResult>>
+apply_triggered_job_seeds_impl(AutomationRepository& repository, std::vector<UpsertTriggeredJobRequest> seeds) {
+  auto result = TriggeredSeedApplyResult{
+      .requested_count = seeds.size(),
+  };
+  result.jobs.reserve(seeds.size());
+
+  std::size_t index = 0;
+  for (auto& seed : seeds) {
+    auto job_key = seed.job_key;
+    auto upserted = co_await repository.upsert_triggered_job(std::move(seed));
+    if (!upserted) {
+      auto error = std::move(upserted.error());
+      error.with("seed_index", std::to_string(index));
+      if (!job_key.empty()) {
+        error.with("job_key", std::move(job_key));
+      }
+      co_return std::unexpected(std::move(error));
+    }
+    result.jobs.push_back(std::move(*upserted));
+    ++result.upserted_count;
+    ++index;
+  }
+
+  co_return result;
+}
+
 async::Awaitable<core::Result<CronServiceCycleResult>> run_cron_service_cycle_impl(asio::any_io_executor executor,
                                                                                    AutomationRepository& repository,
                                                                                    CronServiceCycleRequest request) {
@@ -581,6 +608,11 @@ std::size_t AutomationService::triggered_queue_size() const {
 async::Awaitable<core::Result<CronSeedApplyResult>>
 AutomationRuntime::apply_cron_job_seeds(std::vector<UpsertCronJobRequest> seeds) {
   co_return co_await apply_cron_job_seeds_impl(impl_->repository, std::move(seeds));
+}
+
+async::Awaitable<core::Result<TriggeredSeedApplyResult>>
+AutomationRuntime::apply_triggered_job_seeds(std::vector<UpsertTriggeredJobRequest> seeds) {
+  co_return co_await apply_triggered_job_seeds_impl(impl_->repository, std::move(seeds));
 }
 
 async::Awaitable<core::Result<CronServiceCycleResult>>

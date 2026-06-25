@@ -139,3 +139,41 @@ TEST_CASE("cron_jobs_from rejects invalid cron expressions at bootstrap composit
   REQUIRE_FALSE(jobs.has_value());
   REQUIRE(jobs.error().kind() == core::ErrorKind::config);
 }
+
+TEST_CASE("triggered_jobs_from maps automation triggered config into repository seeds",
+          "[unit][bootstrap][automation]") {
+  auto cfg = config::Config::parse(R"json({
+  "automation": {
+    "triggered": {
+      "jobs": [
+        {
+          "job_key": "triggered-ci",
+          "trigger_key": "webhook:ci",
+          "agent_key": "researcher",
+          "agent_prompt": "Investigate the incoming CI webhook."
+        },
+        {
+          "job_key": "triggered-alert",
+          "trigger_key": "channel:mock-main:ops",
+          "agent_prompt": "Handle the operator alert."
+        }
+      ]
+    }
+  }
+})json");
+  REQUIRE(cfg.has_value());
+
+  auto jobs = bootstrap::triggered_jobs_from(*cfg);
+
+  REQUIRE(jobs.has_value());
+  REQUIRE(jobs->size() == 2);
+  REQUIRE((*jobs)[0].job_key == "triggered-ci");
+  REQUIRE((*jobs)[0].trigger_key == "webhook:ci");
+  REQUIRE((*jobs)[0].agent_key == "researcher");
+  REQUIRE((*jobs)[0].agent_prompt == "Investigate the incoming CI webhook.");
+
+  REQUIRE((*jobs)[1].job_key == "triggered-alert");
+  REQUIRE((*jobs)[1].trigger_key == "channel:mock-main:ops");
+  REQUIRE((*jobs)[1].agent_key == "automation");
+  REQUIRE((*jobs)[1].agent_prompt == "Handle the operator alert.");
+}

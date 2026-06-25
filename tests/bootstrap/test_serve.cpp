@@ -179,6 +179,16 @@ seed_cron_job(automation::AutomationRuntime& runtime, std::string job_key, std::
   });
 }
 
+[[nodiscard]] async::Awaitable<core::Result<automation::TriggeredJobRecord>>
+seed_triggered_job(automation::AutomationRuntime& runtime, std::string job_key, std::string trigger_key) {
+  co_return co_await runtime.repository().upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+      .job_key = std::move(job_key),
+      .trigger_key = std::move(trigger_key),
+      .agent_key = "automation",
+      .agent_prompt = "trigger",
+  });
+}
+
 }  // namespace
 
 TEST_CASE("serve_automation fires a due cron job, then stops gracefully on cancel",
@@ -217,6 +227,63 @@ TEST_CASE("serve_automation fires a due cron job, then stops gracefully on cance
     // The due job fired at least once; the cooperative predicate then stopped
     // the loop (the racing sleep is only a safety net against a hang).
     REQUIRE(cron_calls >= 1);
+  });
+}
+
+TEST_CASE("serve_automation drains queued triggered work before cron",
+          "[unit][bootstrap][serve][automation][triggered]") {
+  TempDir temp{"oran-serve-automation-triggered"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    const auto db = (temp.path() / ".orangutan" / "automation.db").string();
+    auto runtime =
+        co_await automation::AutomationRuntime::open(io.get_executor(),
+                                                     automation::AutomationRuntimeOptions{.database_path = db});
+    REQUIRE(runtime.has_value());
+    REQUIRE((co_await seed_triggered_job(*runtime, "triggered:webhook-ci", "webhook:ci")).has_value());
+
+    auto service = runtime->automation_service();
+    auto enqueued = co_await service.enqueue_triggered(automation::TriggeredQueueEnqueueRequest{
+        .trigger_key = "webhook:ci",
+        .received_at = core::time::now_utc(),
+        .job_limit = 10,
+    });
+    REQUIRE(enqueued.has_value());
+    REQUIRE(enqueued->enqueued_count == 1);
+
+    int cron_calls{};
+    int triggered_calls{};
+    automation::CronJobHandler cron_handler =
+        [&cron_calls](automation::CronDueJob) -> async::Awaitable<core::Result<void>> {
+      ++cron_calls;
+      co_return core::Result<void>{};
+    };
+    automation::TriggeredJobHandler triggered_handler =
+        [&triggered_calls](automation::TriggeredExecutionJob execution) -> async::Awaitable<core::Result<void>> {
+      ++triggered_calls;
+      REQUIRE(execution.job.job_key == "triggered:webhook-ci");
+      REQUIRE(execution.trigger_key == "webhook:ci");
+      co_return core::Result<void>{};
+    };
+
+    using namespace asio::experimental::awaitable_operators;
+    [[maybe_unused]] auto raced =
+        co_await (bootstrap::serve_automation(io.get_executor(),
+                                              service,
+                                              std::move(cron_handler),
+                                              std::move(triggered_handler),
+                                              bootstrap::ServeAutomationOptions{.poll_interval = 5ms},
+                                              [&triggered_calls] { return triggered_calls >= 1; }) ||
+                  async::sleep_for(io.get_executor(), 500ms));
+
+    REQUIRE(triggered_calls == 1);
+    REQUIRE(cron_calls == 0);
+    auto runs = co_await runtime->repository().list_triggered_runs(automation::ListTriggeredRunsOptions{
+        .job_key = "triggered:webhook-ci",
+        .limit = 10,
+    });
+    REQUIRE(runs.has_value());
+    REQUIRE(runs->size() == 1);
+    REQUIRE(runs->front().outcome == automation::TriggeredRunOutcome::success);
   });
 }
 

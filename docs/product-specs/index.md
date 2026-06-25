@@ -12,7 +12,7 @@ ship*). For per-track frontier / next-step / pre-dependency detail, see
 | 0003 | [Multi-platform channels](0003-multi-platform-channels.md) | in progress — foundation shipped (slice 226); adapters/routing next |
 | 0004 | [Agent team collaboration](0004-agent-team.md) | drafted — no code yet |
 | 0005 | [Memory system](0005-memory-system.md) | v1 shipped — session + long-term + retention (slices 130–196) |
-| 0006 | [Automation engine](0006-automation.md) | in progress — library-level retention/cron/triggered shipped (slices 187–225); runtime ownership pending |
+| 0006 | [Automation engine](0006-automation.md) | in progress — library-level retention/cron/triggered shipped (slices 187–225); `--serve` owns cron/triggered seed application (254, 257); triggered event producer pending |
 | 0007 | [Desktop App](0007-web-ui.md) | drafted — docs repivoted from web UI; no code yet |
 | 0008 | [Permissions engine](0008-permissions.md) | v1 shipped — rules, signed approval broker, operator ask round-trip (through slice 96) |
 | 0009 | [Skills](0009-skills.md) | v1 shipped — catalog / loader / invoke / activation-policy arc (slices 135–149) |

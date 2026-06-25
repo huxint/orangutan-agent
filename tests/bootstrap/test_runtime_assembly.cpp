@@ -533,6 +533,73 @@ TEST_CASE("RuntimeAssembly cron seeds persist only through caller-owned automati
   });
 }
 
+TEST_CASE("RuntimeAssembly stores triggered automation seeds without opening automation state",
+          "[unit][bootstrap][runtime_assembly][automation]") {
+  TempDir temp{"oran-assembly-triggered-job-seeds"};
+  asio::io_context io;
+
+  auto options = bootstrap::RuntimeAssemblyOptions{};
+  options.audit_enabled = false;
+  options.session_memory_enabled = false;
+  options.longterm_memory_enabled = false;
+  options.triggered_jobs.push_back(automation::UpsertTriggeredJobRequest{
+      .job_key = "triggered-ci",
+      .trigger_key = "webhook:ci",
+      .agent_prompt = "Handle triggered automation job.",
+  });
+
+  auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
+
+  REQUIRE(built.has_value());
+  REQUIRE_FALSE(built->longterm_memory_enabled());
+  REQUIRE(built->triggered_jobs().size() == 1);
+  REQUIRE(built->triggered_jobs()[0].job_key == "triggered-ci");
+  REQUIRE(built->triggered_jobs()[0].trigger_key == "webhook:ci");
+  REQUIRE(built->triggered_jobs()[0].agent_key == "automation");
+  REQUIRE(built->triggered_jobs()[0].agent_prompt == "Handle triggered automation job.");
+  REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan" / "automation.db"));
+}
+
+TEST_CASE("RuntimeAssembly triggered seeds persist only through caller-owned automation runtime",
+          "[unit][bootstrap][runtime_assembly][automation]") {
+  TempDir temp{"oran-assembly-triggered-job-seed-apply"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto options = bootstrap::RuntimeAssemblyOptions{};
+    options.audit_enabled = false;
+    options.session_memory_enabled = false;
+    options.longterm_memory_enabled = false;
+    options.triggered_jobs.push_back(automation::UpsertTriggeredJobRequest{
+        .job_key = "triggered-ci",
+        .trigger_key = "webhook:ci",
+        .agent_prompt = "Handle triggered automation job.",
+    });
+
+    auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
+
+    REQUIRE(built.has_value());
+    REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan" / "automation.db"));
+
+    auto runtime = co_await automation::AutomationRuntime::open(
+        io.get_executor(),
+        automation::AutomationRuntimeOptions{
+            .database_path = (temp.path() / ".orangutan" / "automation.db").string(),
+        });
+    REQUIRE(runtime.has_value());
+
+    auto applied = co_await runtime->apply_triggered_job_seeds(built->triggered_jobs());
+
+    REQUIRE(applied.has_value());
+    REQUIRE(applied->requested_count == 1);
+    REQUIRE(applied->upserted_count == 1);
+    auto loaded = co_await runtime->repository().get_triggered_job("triggered-ci");
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->has_value());
+    REQUIRE((*loaded)->trigger_key == "webhook:ci");
+    REQUIRE((*loaded)->agent_key == "automation");
+    REQUIRE((*loaded)->agent_prompt == "Handle triggered automation job.");
+  });
+}
+
 TEST_CASE("RuntimeAssembly::build rejects long-term startup decay when long-term memory is disabled",
           "[unit][bootstrap][runtime_assembly][memory]") {
   TempDir temp{"oran-assembly-longterm-startup-decay-disabled"};

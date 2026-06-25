@@ -9,9 +9,9 @@
 
 ## Snapshot
 
-- **Slice:** 256 (`xmake run orangutan -- --help` reports slice 256)
+- **Slice:** 257 (`xmake run orangutan -- --help` reports slice 257)
 - **Last completed history:**
-  [`histories/2026-06/20260625-2222-serve-channel-ingress-dispatch.md`](histories/2026-06/20260625-2222-serve-channel-ingress-dispatch.md)
+  [`histories/2026-06/20260625-2303-automation-triggered-config-seeds.md`](histories/2026-06/20260625-2303-automation-triggered-config-seeds.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — the only active plan; its next gate is externally blocked on real QQ
@@ -24,28 +24,26 @@
     [`exec-plans/completed/2026-06-18-runtime-service-owner.md`](exec-plans/completed/2026-06-18-runtime-service-owner.md).
     The desktop chat-tracer plan closed 2026-06-16
     ([`exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md)).
-- **Latest completed slice:** slice 256 extends `orangutan --serve` with the first
-  long-lived configured-channel ingress/dispatch owner. When buildable
-  `config.channels[]` entries exist, `bootstrap::run_serve` builds the shared runtime
-  assembly/provider once, registers adapters into a strand-owned
-  `channel::ChannelManager`, logs skipped disabled/unknown kinds, builds the routed
-  channel prompt runner, and passes registered ids into the service body. The body
-  starts adapters, pumps each adapter's `next_message()` into the manager fan-in,
-  dispatches messages through `channel::dispatch_one`, replies via the owning adapter,
-  then marks pumps stopping, calls `stop_all()`, emits child cancellations, and drains
-  them before returning. With no registered channels, `--serve` remains
-  watcher/automation/scheduler-only. `MockChannel::stop()` now closes its bounded
-  inbound queue so pending `next_message()` waits unblock as cancelled, and `start()`
-  reopens a fresh queue for loopback reuse. `test-channel` 26 cases / 205 assertions
-  (+1 / +14); `test-bootstrap` 172 cases / 1664 assertions (+3 / +32); focused
-  release `[serve]` 13/13 and `[mock]` 8/8 passed; full `xmake test` 19/19 and
-  `make ci` passed.
-- **Next intended slice:** no track-local main-line slice is pre-selected. Candidates:
-  a triggered-work ingress (channel/webhook → `AutomationService::enqueue_triggered`) so
-  the triggered half of the `--serve` loop has a producer; per-conversation channel
-  serialization/deadlines plus per-agent strand hardening where the coarse service strand
-  is too limiting; or QQ-port milestone 4b-ii once real QQ credentials and an operator
-  conversation exist.
+- **Latest completed slice:** slice 257 adds config-authored triggered automation
+  descriptors. `oran-config` parses strict `automation.triggered.jobs[]` rows with
+  `job_key`, `trigger_key`, optional `agent_key`, and required `agent_prompt`;
+  `bootstrap::triggered_jobs_from(...)` maps them into
+  `automation::UpsertTriggeredJobRequest`; `RuntimeAssembly` stores those descriptors
+  for diagnostics without opening `automation.db`; and
+  `AutomationRuntime::apply_triggered_job_seeds(...)` explicitly persists them through
+  a caller-owned runtime. `orangutan --serve` now enables the automation concern when
+  either cron or triggered jobs are configured, applies cron seeds then triggered
+  seeds once, and reports both counts. No channel/webhook producer is wired yet, so
+  external events still do not enqueue triggered work. `test-config` 58 cases / 562
+  assertions; `test-automation` 107 cases / 1868 assertions; `test-bootstrap` 176
+  cases / 1707 assertions; focused `[automation]`, `[runtime][triggered]`, and
+  `[serve][automation]` coverage passed; full `xmake test` 19/19 and `make ci`
+  passed.
+- **Next intended slice:** triggered-work ingress (channel/webhook →
+  `AutomationService::enqueue_triggered`) so the configured triggered descriptors now
+  persisted by `--serve` have an external producer. Other viable follow-ups remain
+  per-conversation channel serialization/deadlines plus per-agent strand hardening, or
+  QQ-port milestone 4b-ii once real QQ credentials and an operator conversation exist.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 
@@ -68,11 +66,11 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-http`: 28 cases / 185 assertions.
 - `oran-io`: 54 cases / 311 assertions.
 - `oran-storage`: 79 cases / 1047 assertions.
-- `oran-config`: 56 cases / 537 assertions.
+- `oran-config`: 58 cases / 562 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 38 cases / 313 assertions.
 - `oran-memory`: 38 cases / 841 assertions.
-- `oran-automation`: 106 cases / 1849 assertions.
+- `oran-automation`: 107 cases / 1868 assertions.
 - `oran-channel`: 26 cases / 205 assertions.
 - `oran-channel-qq` (gated, `--channel_qq=y`): 58 cases / 369 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
@@ -82,7 +80,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-agent`: 57 cases / 10 786 assertions.
 - `oran-cli`: 28 cases / 221 assertions.
 - `oran-desktop`: 17 cases / 70 assertions.
-- `oran-bootstrap`: 172 cases / 1664 assertions (gated `--channel_qq=y`: 161 /
+- `oran-bootstrap`: 176 cases / 1707 assertions (gated `--channel_qq=y`: 161 /
   1411).
 
 ## Open Tech-Debt Rows

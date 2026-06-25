@@ -1,4 +1,4 @@
-// src/oran-bootstrap/automation_cron.cpp - config-to-automation cron mapping.
+// src/oran-bootstrap/automation_cron.cpp - config-to-automation seed mapping.
 
 #include <oran/bootstrap/automation_cron.hpp>
 
@@ -50,6 +50,20 @@ core::Result<std::vector<automation::UpsertCronJobRequest>> cron_jobs_from(const
                                  .with("reason", std::string{evaluated.error().message()}));
     }
     seeds.push_back(std::move(request));
+  }
+  return seeds;
+}
+
+core::Result<std::vector<automation::UpsertTriggeredJobRequest>> triggered_jobs_from(const config::Config& cfg) {
+  auto seeds = std::vector<automation::UpsertTriggeredJobRequest>{};
+  seeds.reserve(cfg.automation().triggered.jobs.size());
+  for (const auto& job : cfg.automation().triggered.jobs) {
+    seeds.push_back(automation::UpsertTriggeredJobRequest{
+        .job_key = job.job_key,
+        .trigger_key = job.trigger_key,
+        .agent_key = job.agent_key,
+        .agent_prompt = job.agent_prompt,
+    });
   }
   return seeds;
 }

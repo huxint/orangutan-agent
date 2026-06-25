@@ -59,7 +59,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice256";
+constexpr std::string_view kVersion = "2.0.0-slice257";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 constexpr std::size_t kTraceExportDefaultLimit = 50;
@@ -548,9 +548,10 @@ void print_usage() {
   std::println("--audit-init applies the audit.db schema (defaults to <workspace>/.orangutan/audit.db) and exits.");
   std::println("--desktop opens the in-process Slint desktop app (requires a build configured with --desktop=y).");
   std::println("--serve runs the long-lived service: it auto-starts the IO file-view watcher and, when the");
-  std::println("        config has automation.cron.jobs[], the automation cron/triggered loop plus the");
-  std::println("        tool-scheduler idle-lock reaping tick; when the config has channels[], the channel");
-  std::println("        ingress/dispatch loop. Runs until SIGINT/SIGTERM (exit code 128 + signum).");
+  std::println("        config has automation.cron.jobs[] or automation.triggered.jobs[], the automation");
+  std::println("        cron/triggered loop plus the tool-scheduler idle-lock reaping tick; when the");
+  std::println("        config has channels[], the channel ingress/dispatch loop. Runs until");
+  std::println("        SIGINT/SIGTERM (exit code 128 + signum).");
   std::println("--trace prints the trace_turns row and joined audit rows, including hook_publish, for <turn-id>");
   std::println("        (32 lowercase hex characters); reads <workspace>/.orangutan/audit.db.");
   std::println("--trace-export prints trace rows plus joined audit rows as JSON Lines; a turn id prints one");
@@ -1624,6 +1625,11 @@ core::Result<int> run(BootstrapOptions options) {
     return std::unexpected(std::move(cron_jobs.error()));
   }
   assembly_options.cron_jobs = std::move(*cron_jobs);
+  auto triggered_jobs = triggered_jobs_from(loaded->value);
+  if (!triggered_jobs) {
+    return std::unexpected(std::move(triggered_jobs.error()));
+  }
+  assembly_options.triggered_jobs = std::move(*triggered_jobs);
   if (provider_route->has_value()) {
     const auto retention_now = core::time::now_utc();
     const auto retention_first_fire_at =
@@ -1643,7 +1649,8 @@ core::Result<int> run(BootstrapOptions options) {
   }
   std::println(
       "runtime assembly ready: audit={} ({}), approval-broker=fresh, workspace={}, trace={}, sessions={} ({}), "
-      "longterm-memory={} ({}), startup-decay={}, vector-memory={} ({}), hook-timeout={}ms, automation-cron-jobs={}",
+      "longterm-memory={} ({}), startup-decay={}, vector-memory={} ({}), hook-timeout={}ms, automation-cron-jobs={}, "
+      "automation-triggered-jobs={}",
       assembly->audit_enabled() ? "enabled" : "disabled",
       assembly->audit_enabled() ? assembly->audit_path() : std::string_view{"<null sink>"},
       assembly->workspace().root(),
@@ -1657,7 +1664,8 @@ core::Result<int> run(BootstrapOptions options) {
       assembly->longterm_vector_memory_enabled() ? assembly->longterm_vector_memory_path()
                                                  : std::string_view{"<disabled>"},
       assembly->hook_bus().options().blocking_timeout.count(),
-      assembly->cron_jobs().size());
+      assembly->cron_jobs().size(),
+      assembly->triggered_jobs().size());
 
   if (!provider_route->has_value()) {
     auto cli_result = cli::run(cli::CliOptions{.args = std::span<const std::string_view>{parsed->cli_args}});
