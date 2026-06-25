@@ -2,11 +2,12 @@
 //
 // See include/oran/bootstrap/serve.hpp for the design. This TU owns the
 // lifecycle (start the runtime, trap signals, co-spawn the service body, block,
-// graceful cancel, stop) and two concerns: the IO file-view cache watcher
-// (always) and the automation cron/triggered service loop (when the loaded
-// config carries `automation.cron.jobs[]`). The tool-scheduler idle-lock
-// reaping tick lands later as another `serve_body` concern under the same
-// lifecycle.
+// graceful cancel, stop) and races four concerns under one cancellation slot:
+// the IO file-view cache watcher (always); the automation cron/triggered
+// service loop plus the tool-scheduler idle-lock reaping tick (when the loaded
+// config carries `automation.cron.jobs[]`); and the channel ingress/dispatch
+// loop (when the config carries `channels[]`). A disabled concern is replaced by
+// an idle placeholder so the race always has a fixed operand set.
 
 #include <oran/bootstrap/serve.hpp>
 
@@ -16,30 +17,43 @@
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <exception>
+#include <expected>
 #include <filesystem>
 #include <functional>
 #include <future>
+#include <memory>
 #include <optional>
 #include <print>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <asio/bind_cancellation_slot.hpp>
 #include <asio/cancellation_signal.hpp>
+#include <asio/cancellation_state.hpp>
+#include <asio/cancellation_type.hpp>
 #include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
 #include <asio/experimental/awaitable_operators.hpp>
 #include <asio/signal_set.hpp>
+#include <asio/this_coro.hpp>
 
 #include <oran/agent/scheduler.hpp>
 #include <oran/async.hpp>
+#include <oran/async/channel.hpp>
 #include <oran/bootstrap/automation_cron.hpp>
 #include <oran/bootstrap/automation_prompt_runner.hpp>
+#include <oran/bootstrap/channel_ingress.hpp>
+#include <oran/bootstrap/channel_prompt_runner.hpp>
 #include <oran/bootstrap/prompt_runner.hpp>
 #include <oran/bootstrap/provider_backend.hpp>
 #include <oran/bootstrap/runtime_assembly.hpp>
 #include <oran/bootstrap/signal_drain.hpp>
+#include <oran/channel/dispatch.hpp>
+#include <oran/channel/manager.hpp>
 #include <oran/config.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/stop_reason.hpp>
@@ -107,14 +121,84 @@ async::Awaitable<void> wait_until_cancelled(asio::any_io_executor executor) {
   };
 }
 
+/// Idle until cancelled, then report a graceful stop. Used as the placeholder
+/// operand for a disabled concern so `serve_body` can race a fixed four-operand
+/// set regardless of which concerns the loaded config enables.
+async::Awaitable<Result<void>> serve_idle(asio::any_io_executor executor) {
+  co_await wait_until_cancelled(executor);
+  co_return Result<void>{};
+}
+
+/// Pump one adapter's inbound messages into the manager fan-in until cancelled.
+/// `receive_one` awaits the adapter's cancel-aware `next_message()` and forwards
+/// it to the shared fan-in. A cancelled receive (this pump's own cancellation,
+/// or the adapter closing) ends the loop gracefully; any other receive error is
+/// reported once and ends this pump so the dispatcher keeps serving the
+/// remaining adapters.
+async::Awaitable<Result<void>> serve_channel_pump(channel::ChannelManager& manager,
+                                                  std::string channel_id,
+                                                  std::shared_ptr<std::atomic_bool> stopping) {
+  for (;;) {
+    if (stopping->load(std::memory_order_acquire)) {
+      co_return Result<void>{};
+    }
+    auto pumped = co_await manager.receive_one(channel_id);
+    if (!pumped) {
+      if (pumped.error().kind() != core::ErrorKind::cancelled) {
+        std::println(stderr, "orangutan: channel '{}' ingress ended: {}", channel_id, pumped.error());
+      }
+      co_return Result<void>{};
+    }
+  }
+}
+
+/// The dispatch loop: consume the manager fan-in through `channel::dispatch_one`
+/// (run the routed runner, reply via the owning adapter) until stopped. A
+/// cancelled receive (parent stop or a closed fan-in) ends it gracefully; any
+/// other failure is per-message (a malformed inbound, an agent-path error, or a
+/// send failure), and since `dispatch_one` consumes the fan-in message before
+/// those, reporting and continuing cannot hot-spin on the same message.
+async::Awaitable<Result<void>> serve_channel_dispatch(channel::ChannelManager& manager,
+                                                      const channel::ChannelPromptRunner& runner,
+                                                      std::function<bool()> stop_requested) {
+  for (;;) {
+    if (stop_requested && stop_requested()) {
+      co_return Result<void>{};  // cooperative early-out before the next receive.
+    }
+    auto receipt = co_await channel::dispatch_one(manager, runner);
+    if (!receipt && receipt.error().kind() == core::ErrorKind::cancelled) {
+      co_return Result<void>{};  // parent stop or closed fan-in — graceful.
+    }
+    if (!receipt) {
+      std::println(stderr, "orangutan: channel dispatch failed: {}", receipt.error());
+    }
+  }
+}
+
+/// Spawn wrapper around `serve_channel_pump`: run it to completion, then — with
+/// cancellation disabled, so a parent cancellation that already fired cannot
+/// abandon this coroutine — signal completion so `serve_channels` can drain it
+/// before returning. `manager` and `done` are borrowed and must outlive it;
+/// `serve_channels` guarantees this by draining `done` before it returns.
+async::Awaitable<void> serve_channel_pump_tracked(channel::ChannelManager& manager,
+                                                  std::string channel_id,
+                                                  std::shared_ptr<std::atomic_bool> stopping,
+                                                  async::Channel<std::monostate>& done) {
+  [[maybe_unused]] auto pumped = co_await serve_channel_pump(manager, std::move(channel_id), std::move(stopping));
+  co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+  [[maybe_unused]] auto sent = co_await done.send(std::monostate{});
+}
+
 /// The composed service body. A free coroutine (not a capture-by-reference
 /// lambda) so its inputs are moved into the coroutine frame and cannot dangle
-/// after the spawning full-expression. Opens automation persistence on the
-/// runtime, applies the config cron seeds once, then races the watcher beside
-/// the automation loop and the scheduler idle-lock reaping tick (over the
-/// shared `scheduler`) under the caller's cancellation slot. A database that
-/// cannot open (or seeds that cannot apply) is non-fatal: report once and serve
-/// the watcher alone so a signal still stops cleanly.
+/// after the spawning full-expression. Opens automation persistence and starts
+/// channel adapters as configured, then races a fixed four-operand set — the
+/// watcher, the automation loop, the scheduler reaping tick, and the channel
+/// ingress/dispatch loop — each replaced by an idle placeholder when its concern
+/// is disabled, all under the caller's cancellation slot. Automation persistence
+/// that cannot open (or seeds that cannot apply) and channel adapters that
+/// cannot start are non-fatal: report once and degrade that concern to idle so a
+/// signal still stops the rest cleanly.
 async::Awaitable<Result<void>> serve_body(asio::any_io_executor executor,
                                           ServeOptions watch_options,
                                           bool automation_enabled,
@@ -125,54 +209,75 @@ async::Awaitable<Result<void>> serve_body(asio::any_io_executor executor,
                                           ServeAutomationOptions automation_options,
                                           agent::ToolScheduler* scheduler,
                                           ServeSchedulerReapOptions reap_options,
+                                          bool channels_enabled,
+                                          channel::ChannelManager* channel_manager,
+                                          channel::ChannelPromptRunner channel_runner,
+                                          std::vector<std::string> channel_ids,
                                           std::function<bool()> stop_requested) {
-  if (!automation_enabled) {
-    co_return co_await serve_run(executor, std::move(watch_options));
+  // Open automation persistence (non-fatal). On any failure the automation and
+  // reaping concerns degrade to idle, but the watcher and channels keep serving.
+  std::optional<automation::AutomationRuntime> automation_runtime;
+  std::optional<automation::AutomationService> automation_service;
+  bool automation_active = false;
+  if (automation_enabled) {
+    auto opened = co_await automation::AutomationRuntime::open(
+        executor,
+        automation::AutomationRuntimeOptions{.database_path = std::move(automation_db)});
+    if (!opened) {
+      std::println(stderr, "orangutan: automation runtime unavailable, serving without it: {}", opened.error());
+    } else {
+      automation_runtime.emplace(std::move(*opened));
+      if (auto seeded = co_await automation_runtime->apply_cron_job_seeds(std::move(cron_seeds)); !seeded) {
+        std::println(stderr, "orangutan: automation cron seeds failed, serving without automation: {}", seeded.error());
+      } else {
+        automation_service.emplace(automation_runtime->automation_service());
+        automation_active = true;
+      }
+    }
   }
 
-  auto automation_runtime = co_await automation::AutomationRuntime::open(
-      executor,
-      automation::AutomationRuntimeOptions{.database_path = std::move(automation_db)});
-  if (!automation_runtime) {
-    std::println(stderr,
-                 "orangutan: automation runtime unavailable, serving file-view watcher only: {}",
-                 automation_runtime.error());
-    co_return co_await serve_run(executor, std::move(watch_options));
+  // Start channel adapters (non-fatal). On failure the channel concern degrades
+  // to idle while the rest of the service keeps running.
+  bool channels_active = false;
+  if (channels_enabled && channel_manager != nullptr) {
+    if (auto started = co_await channel_manager->start_all(); !started) {
+      if (auto stopped = co_await channel_manager->stop_all(); !stopped) {
+        std::println(stderr, "orangutan: channel adapters failed to stop after start failure: {}", stopped.error());
+      }
+      std::println(stderr,
+                   "orangutan: channel adapters failed to start, serving without channels: {}",
+                   started.error());
+    } else {
+      channels_active = true;
+    }
   }
-
-  if (auto seeded = co_await automation_runtime->apply_cron_job_seeds(std::move(cron_seeds)); !seeded) {
-    std::println(stderr, "orangutan: automation cron seeds failed, serving file-view watcher only: {}", seeded.error());
-    co_return co_await serve_run(executor, std::move(watch_options));
-  }
-
-  auto service = automation_runtime->automation_service();
 
   using namespace asio::experimental::awaitable_operators;
-  // The automation jobs and the reaping tick share `scheduler`, so race all
-  // three concerns under one cancellation slot. `scheduler` is non-null
-  // whenever automation is enabled (run_serve builds it); the guard keeps the
-  // body robust if a future caller enables automation without a shared
-  // scheduler.
-  if (scheduler != nullptr) {
-    // Pass `stop_requested` by copy to both predicate consumers: the evaluation
-    // order of `||` operands is unspecified, so moving into one while copying
-    // into the other could hand the copy a moved-from (empty) function.
-    co_await (serve_run(executor, std::move(watch_options)) ||
-              serve_automation(executor,
-                               service,
-                               std::move(cron_handler),
-                               std::move(triggered_handler),
-                               automation_options,
-                               stop_requested) ||
-              serve_scheduler_reaping(executor, *scheduler, reap_options, stop_requested));
-  } else {
-    co_await (serve_run(executor, std::move(watch_options)) || serve_automation(executor,
-                                                                                service,
-                                                                                std::move(cron_handler),
-                                                                                std::move(triggered_handler),
-                                                                                automation_options,
-                                                                                std::move(stop_requested)));
-  }
+  // A fixed four-operand race under one cancellation slot: the watcher plus each
+  // optional concern (or an idle placeholder when disabled), so a single signal
+  // — or any concern's self-stop — ends them together. `stop_requested` is
+  // copied into each predicate consumer because the evaluation order of `||`
+  // operands is unspecified, so moving into one could hand another a moved-from
+  // (empty) function. Each conditional operand only evaluates the taken branch,
+  // so the real concern's borrowed state is touched only when it is active.
+  co_await (serve_run(executor, std::move(watch_options)) ||
+            (automation_active ? serve_automation(executor,
+                                                  *automation_service,
+                                                  std::move(cron_handler),
+                                                  std::move(triggered_handler),
+                                                  automation_options,
+                                                  stop_requested)
+                               : serve_idle(executor)) ||
+            (automation_active && scheduler != nullptr
+                 ? serve_scheduler_reaping(executor, *scheduler, reap_options, stop_requested)
+                 : serve_idle(executor)) ||
+            (channels_active ? serve_channels(executor,
+                                              *channel_manager,
+                                              std::move(channel_runner),
+                                              std::move(channel_ids),
+                                              stop_requested)
+                             : serve_idle(executor)));
+
   co_return Result<void>{};
 }
 
@@ -285,6 +390,66 @@ async::Awaitable<Result<void>> serve_scheduler_reaping(asio::any_io_executor exe
   }
 }
 
+async::Awaitable<Result<void>> serve_channels(asio::any_io_executor executor,
+                                              channel::ChannelManager& manager,
+                                              channel::ChannelPromptRunner runner,
+                                              std::vector<std::string> channel_ids,
+                                              std::function<bool()> stop_requested) {
+  // Reject a null runner up front: `dispatch_one` returns `invalid_argument`
+  // for a null runner *without* consuming a fan-in message, which would hot-spin
+  // the dispatch loop. run_serve and the tests always supply a real runner.
+  if (!runner) {
+    co_return std::unexpected(Error::invalid_argument("channel prompt runner is null"));
+  }
+
+  // Own the background fan-in loop (design-docs/channel-abstraction.md): one
+  // pump coroutine per adapter forwards `next_message()` into the shared fan-in
+  // while the dispatcher consumes it. Each pump gets its own cancellation signal
+  // because an asio cancellation slot targets a single coroutine; a completion
+  // channel (capacity == pump count) lets us drain every pump before returning,
+  // so no spawned pump outlives this frame (each borrows `manager`).
+  const std::size_t pump_count = channel_ids.size();
+  std::deque<asio::cancellation_signal> pump_cancels(pump_count);
+  async::Channel<std::monostate> pumps_done{executor, pump_count == 0 ? std::size_t{1} : pump_count};
+  auto stopping = std::make_shared<std::atomic_bool>(false);
+
+  for (std::size_t i = 0; i < pump_count; ++i) {
+    asio::co_spawn(executor,
+                   serve_channel_pump_tracked(manager, std::move(channel_ids[i]), stopping, pumps_done),
+                   asio::bind_cancellation_slot(pump_cancels[i].slot(), asio::detached));
+  }
+
+  // The dispatcher is the awaited body. When the parent cancels this coroutine
+  // (the serve_body `||` race), this await's fan-in receive returns `cancelled`
+  // and control returns here for cleanup.
+  auto dispatched = co_await serve_channel_dispatch(manager, runner, std::move(stop_requested));
+
+  // Stop adapters and drain the pumps with cancellation disabled, so an
+  // already-fired parent cancellation cannot abandon the spawned coroutines
+  // mid-drain. `cancellation_signal` is not sticky; the explicit stopping flag
+  // covers the window where a pump has just finished one `next_message()` and
+  // has not yet installed the cancellation handler for the next one, while
+  // `stop_all()` wakes adapter-owned receives (QQ closes its gateway transport;
+  // MockChannel closes its bounded inbound queue).
+  co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+  stopping->store(true, std::memory_order_release);
+  auto stopped = co_await manager.stop_all();
+  if (!stopped) {
+    std::println(stderr, "orangutan: channel adapters failed to stop cleanly: {}", stopped.error());
+  }
+  for (auto& signal : pump_cancels) {
+    signal.emit(asio::cancellation_type::all);
+  }
+  for (std::size_t drained = 0; drained < pump_count; ++drained) {
+    [[maybe_unused]] auto received = co_await pumps_done.receive();
+  }
+
+  if (!dispatched) {
+    co_return dispatched;
+  }
+  co_return stopped;
+}
+
 Result<int> run_serve(const BootstrapOptions& options) {
   auto loaded = load_config(options);
   if (!loaded) {
@@ -300,6 +465,11 @@ Result<int> run_serve(const BootstrapOptions& options) {
   }
   const bool automation_enabled = !cron_seeds->empty();
   const auto cron_job_count = cron_seeds->size();
+
+  // Config-authored `channels[]` gate the channel ingress/dispatch concern, the
+  // same way cron jobs gate automation: with none, `--serve` builds no channel
+  // manager and that concern stays idle (CI-identical).
+  const bool channels_enabled = !cfg.channels().empty();
 
   auto runtime = async::Runtime{async::RuntimeConfig{
       .io_workers = static_cast<std::size_t>(std::max<std::int64_t>(1, cfg.runtime().workers)),
@@ -326,11 +496,10 @@ Result<int> run_serve(const BootstrapOptions& options) {
 
   const auto watch_root = options.workspace;
 
-  // Automation wiring lives on this stack so the runtime assembly, provider
-  // backend, and the shared tool registry + scheduler (all borrowed by the
-  // per-job prompt runner) outlive the service coroutine — the coroutine, and
-  // the `AutomationService` it opens, completes before `service_future.get()`
-  // returns, i.e. before these are destroyed.
+  // Runtime wiring lives on this stack so the runtime assembly, provider
+  // backend, the shared tool registry + scheduler, and the channel manager (all
+  // borrowed by the service coroutine) outlive it — the coroutine completes
+  // before `service_future.get()` returns, i.e. before these are destroyed.
   std::optional<RuntimeAssembly> assembly;
   std::optional<HttpProviderBackend> live_backend;
   std::optional<provider::FakeProvider> offline_provider;
@@ -339,9 +508,18 @@ Result<int> run_serve(const BootstrapOptions& options) {
   automation::CronJobHandler cron_handler;
   automation::TriggeredJobHandler triggered_handler;
   std::string automation_db;
-  bool automation_live = false;
+  bool provider_live = false;
 
-  if (automation_enabled) {
+  std::optional<channel::ChannelManager> channel_manager;
+  channel::ChannelPromptRunner channel_runner;
+  std::vector<std::string> channel_ids;
+
+  // Automation and channels both run agents, so both need the runtime assembly
+  // and a provider. Build them once and share when both are enabled.
+  const bool needs_runtime = automation_enabled || channels_enabled;
+  provider::System* system = nullptr;
+  provider::Route route{};
+  if (needs_runtime) {
     const bool has_route = !cfg.routes().empty();
 
     auto assembly_options = RuntimeAssemblyOptions{};
@@ -359,22 +537,9 @@ Result<int> run_serve(const BootstrapOptions& options) {
     }
     assembly.emplace(std::move(*built));
 
-    // One registry + scheduler shared across every per-job runner. Driving them
-    // on `strand` (not the multi-worker `runtime.executor()`) honors the
-    // scheduler's single-strand lock-table contract and lets the reaping tick
-    // sweep that table without racing in-flight dispatch.
-    shared_registry.emplace();
-    if (auto registered = tool::register_builtins(*shared_registry); !registered) {
-      return std::unexpected(std::move(registered).error());
-    }
-    auto scheduler_opts = scheduler_options_from(cfg);
-    if (!scheduler_opts) {
-      return std::unexpected(std::move(scheduler_opts).error());
-    }
-    shared_scheduler.emplace(strand, *shared_registry, *scheduler_opts);
-
-    provider::System* system = nullptr;
-    provider::Route route{};
+    // A configured `default` route drives a live provider; otherwise an offline
+    // scripted fake keeps the loops usable without credentials (the same offline
+    // posture as `--desktop`), so CI stays secret-free.
     if (has_route) {
       auto backend =
           HttpProviderBackend::build(cfg,
@@ -389,19 +554,35 @@ Result<int> run_serve(const BootstrapOptions& options) {
       live_backend.emplace(std::move(*backend));
       system = &live_backend->system();
       route = live_backend->route();
-      automation_live = true;
+      provider_live = true;
     } else {
       offline_provider.emplace(serve_offline_plan());
       system = &*offline_provider;
       route = serve_offline_route();
     }
+  }
+
+  if (automation_enabled) {
+    // One registry + scheduler shared across every per-job runner. Driving them
+    // on `strand` (not the multi-worker `runtime.executor()`) honors the
+    // scheduler's single-strand lock-table contract and lets the reaping tick
+    // sweep that table without racing in-flight dispatch.
+    shared_registry.emplace();
+    if (auto registered = tool::register_builtins(*shared_registry); !registered) {
+      return std::unexpected(std::move(registered).error());
+    }
+    auto scheduler_opts = scheduler_options_from(cfg);
+    if (!scheduler_opts) {
+      return std::unexpected(std::move(scheduler_opts).error());
+    }
+    shared_scheduler.emplace(strand, *shared_registry, *scheduler_opts);
 
     auto prompt_runner = make_automation_agent_prompt_runner(AutomationAgentPromptRunnerOptions{
         .executor = strand,
         .assembly = &*assembly,
         .config = &cfg,
         .provider = system,
-        .route = std::move(route),
+        .route = route,
         .max_tokens = 1024,
         .registry = &*shared_registry,
         .scheduler = &*shared_scheduler,
@@ -414,6 +595,50 @@ Result<int> run_serve(const BootstrapOptions& options) {
 
     automation_db = (std::filesystem::path{options.workspace} / ".orangutan" / "automation.db").string();
   }
+
+  if (channels_enabled) {
+    // Construct the configured adapters into a strand-owned manager (the pumps
+    // and dispatcher run on `strand`). register_configured_channels is
+    // construction-only: serve_body starts the adapters and serve_channels
+    // drives receive/dispatch.
+    channel_manager.emplace(strand);
+    auto report = register_configured_channels(*channel_manager, strand, cfg);
+    if (!report) {
+      return std::unexpected(std::move(report).error());
+    }
+    for (const auto& skipped : report->skipped) {
+      std::println(stderr,
+                   "orangutan: channel '{}' (kind '{}') has no adapter in this build; skipping",
+                   skipped.id,
+                   skipped.kind);
+    }
+    // Drive only the adapters that actually registered (unknown/disabled kinds
+    // were skipped above).
+    for (const auto& configured : cfg.channels()) {
+      if (channel_manager->contains(configured.id)) {
+        channel_ids.push_back(configured.id);
+      }
+    }
+    if (!channel_ids.empty()) {
+      auto routed = make_routed_channel_prompt_runner(ChannelAgentPromptRunnerOptions{
+          .executor = strand,
+          .assembly = &*assembly,
+          .config = &cfg,
+          .provider = system,
+          .route = route,
+          .max_tokens = 1024,
+      });
+      if (!routed) {
+        return std::unexpected(std::move(routed).error());
+      }
+      channel_runner = std::move(*routed);
+    }
+  }
+
+  // Serve channels only when at least one configured adapter registered in this
+  // build (e.g. a `qq`-only config in a non-`--channel_qq` build registers none).
+  const bool serve_channels_enabled = !channel_ids.empty();
+  const auto channel_count = channel_ids.size();
 
   auto stop_predicate = [&caught_signum]() -> bool {
     return caught_signum.load(std::memory_order_acquire) != 0;
@@ -433,6 +658,10 @@ Result<int> run_serve(const BootstrapOptions& options) {
                             ServeAutomationOptions{},
                             automation_enabled ? &*shared_scheduler : nullptr,
                             ServeSchedulerReapOptions{},
+                            serve_channels_enabled,
+                            channel_manager ? &*channel_manager : nullptr,
+                            std::move(channel_runner),
+                            std::move(channel_ids),
                             stop_predicate),
                  asio::bind_cancellation_slot(stop.slot(), [&service_done](std::exception_ptr ep, Result<void> result) {
                    if (ep) {
@@ -453,9 +682,12 @@ Result<int> run_serve(const BootstrapOptions& options) {
     std::println("  automation: {} ({} cron job(s), {} provider)",
                  automation_db,
                  cron_job_count,
-                 automation_live ? "live" : "offline");
+                 provider_live ? "live" : "offline");
     std::println("  scheduler:  idle-lock reaping every {}s",
                  std::chrono::duration_cast<std::chrono::seconds>(ServeSchedulerReapOptions{}.reap_interval).count());
+  }
+  if (serve_channels_enabled) {
+    std::println("  channels:   {} adapter(s), {} provider", channel_count, provider_live ? "live" : "offline");
   }
   std::println("  stop with Ctrl-C (SIGINT) or SIGTERM");
 

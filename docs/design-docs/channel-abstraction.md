@@ -70,6 +70,11 @@ adapter can default on. Slice 237 adds the hidden opt-in real-smoke entrypoint
 for that gate; slice 238 lets that smoke discover the bot gateway through
 `GET /gateway/bot` when no override URL is supplied. The pass/fail
 credentialed run remains open; the QQ port is managed by its own exec plan.
+Slice 256 adds the first long-lived channel fan-in owner: `orangutan --serve`
+now starts buildable `config.channels[]` adapters, runs one pump per adapter
+into `ChannelManager`, dispatches fan-in messages through
+`dispatch_one(manager, make_routed_channel_prompt_runner(...))`, replies through
+the owning adapter, and stops/drains the adapters on shutdown.
 
 ## Inbound / Outbound Envelopes
 
@@ -215,9 +220,12 @@ The manager:
 - Rejects null, unnamed, duplicate, or missing channel ids with `core::Error`
   instead of relying on adapter-specific failure modes.
 
-It does **not** yet spawn a background fan-in loop or own per-conversation
-serialization. That ownership lands with the first daemon/dispatcher slice so
-cancellation and shutdown policy can be tested at the actual caller boundary.
+The manager itself does **not** spawn a background fan-in loop or own
+per-conversation serialization. Slice 256 lands the first background fan-in
+owner at the actual caller boundary: `bootstrap::serve_channels(...)` under
+`orangutan --serve` starts already-registered adapters, runs one pump per
+adapter, dispatches from the shared fan-in, and owns cancellation/shutdown
+drain. Per-conversation serialization remains downstream.
 
 ## Per-Conversation Serialization
 

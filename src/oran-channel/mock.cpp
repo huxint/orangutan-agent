@@ -30,8 +30,9 @@ namespace {
 
 struct MockChannel::Impl {
   Impl(asio::any_io_executor ex, MockChannelOptions opts)
-      : options{normalize(std::move(opts))}, inbound{std::move(ex), options.inbound_capacity} {}
+      : executor{std::move(ex)}, options{normalize(std::move(opts))}, inbound{executor, options.inbound_capacity} {}
 
+  asio::any_io_executor executor;
   MockChannelOptions options;
   async::Channel<InboundMessage> inbound;
   std::vector<OutboundMessage> sent;
@@ -57,12 +58,16 @@ Capabilities MockChannel::capabilities() const noexcept {
 }
 
 async::Awaitable<core::Result<void>> MockChannel::start() {
+  if (impl_->inbound.closed()) {
+    impl_->inbound = async::Channel<InboundMessage>{impl_->executor, impl_->options.inbound_capacity};
+  }
   impl_->started = true;
   co_return core::Result<void>{};
 }
 
 async::Awaitable<core::Result<void>> MockChannel::stop() {
   impl_->started = false;
+  impl_->inbound.close();
   co_return core::Result<void>{};
 }
 

@@ -13,6 +13,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -32,7 +33,9 @@
 #include <oran/async.hpp>
 #include <oran/automation.hpp>
 #include <oran/bootstrap/serve.hpp>
+#include <oran/channel.hpp>
 #include <oran/core/capability.hpp>
+#include <oran/core/content.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/time.hpp>
 #include <oran/core/tool_def.hpp>
@@ -45,6 +48,7 @@ namespace agent = orangutan::agent;
 namespace async = orangutan::async;
 namespace automation = orangutan::automation;
 namespace bootstrap = orangutan::bootstrap;
+namespace channel = orangutan::channel;
 namespace core = orangutan::core;
 namespace permission = orangutan::permission;
 namespace test = orangutan::tests;
@@ -446,5 +450,112 @@ TEST_CASE("serve_scheduler_reaping stops gracefully on cancel", "[unit][bootstra
 
     // Cancelled while still in the first interval, so no tick ever reaped.
     REQUIRE(scheduler.lock_stats().reaped_entries == 0);
+  });
+}
+
+namespace {
+
+[[nodiscard]] channel::InboundMessage text_inbound(std::string text) {
+  return channel::InboundMessage{
+      .channel_id = "mock-main",
+      .conversation_id = "conv-1",
+      .user_id = "user-1",
+      .display_name = "User One",
+      .content = {core::TextContent{.text = std::move(text)}},
+      .replies_to = {channel::Reference{.message_id = "msg-0", .thread_id = "thread-1"}},
+      .received_at = core::Time::epoch(),
+      .origin = channel::Origin{.kind = "channel", .source = "mock"},
+      .caps = {},
+  };
+}
+
+}  // namespace
+
+TEST_CASE("serve_channels dispatches mock inbound messages and replies", "[unit][bootstrap][serve][channels]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    channel::ChannelManager manager{io.get_executor()};
+    auto adapter =
+        std::make_unique<channel::MockChannel>(io.get_executor(),
+                                               channel::MockChannelOptions{.id = "mock-main", .kind = "mock"});
+    auto* mock = adapter.get();
+    REQUIRE(manager.register_adapter(std::move(adapter)).has_value());
+    REQUIRE((co_await manager.start_all()).has_value());
+    REQUIRE(mock->started());
+    REQUIRE(mock->push_inbound(text_inbound("hello from channel")).has_value());
+
+    std::vector<channel::ChannelPromptRunRequest> seen;
+    auto runner = channel::ChannelPromptRunner{[&seen](channel::ChannelPromptRunRequest request)
+                                                   -> async::Awaitable<core::Result<channel::ChannelPromptRunResult>> {
+      seen.push_back(std::move(request));
+      co_return channel::ChannelPromptRunResult{.text = "reply from agent"};
+    }};
+
+    auto outcome =
+        co_await bootstrap::serve_channels(io.get_executor(),
+                                           manager,
+                                           std::move(runner),
+                                           std::vector<std::string>{"mock-main"},
+                                           [&seen, mock] { return !seen.empty() && !mock->sent_messages().empty(); });
+
+    REQUIRE(outcome.has_value());
+    REQUIRE(seen.size() == 1);
+    CHECK(seen.front().channel_id == "mock-main");
+    CHECK(seen.front().conversation_id == "conv-1");
+    CHECK(seen.front().user_id == "user-1");
+    CHECK(seen.front().display_name == "User One");
+    CHECK(seen.front().prompt == "hello from channel");
+
+    REQUIRE(mock->sent_messages().size() == 1);
+    const auto& sent = mock->sent_messages().front();
+    REQUIRE(sent.content.size() == 1);
+    auto sent_text = core::text_view(sent.content.front());
+    REQUIRE(sent_text.has_value());
+    CHECK(*sent_text == "reply from agent");
+    CHECK(sent.conversation_id == "conv-1");
+    REQUIRE(sent.reply_to_message_id.has_value());
+    CHECK(*sent.reply_to_message_id == "msg-0");
+    REQUIRE(sent.thread_id.has_value());
+    CHECK(*sent.thread_id == "thread-1");
+    CHECK_FALSE(mock->started());
+  });
+}
+
+TEST_CASE("serve_channels stops gracefully on parent cancellation", "[unit][bootstrap][serve][channels]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    channel::ChannelManager manager{io.get_executor()};
+    auto adapter =
+        std::make_unique<channel::MockChannel>(io.get_executor(),
+                                               channel::MockChannelOptions{.id = "mock-main", .kind = "mock"});
+    auto* mock = adapter.get();
+    REQUIRE(manager.register_adapter(std::move(adapter)).has_value());
+    REQUIRE((co_await manager.start_all()).has_value());
+    REQUIRE(mock->started());
+
+    int runner_calls{};
+    auto runner = channel::ChannelPromptRunner{[&runner_calls](channel::ChannelPromptRunRequest)
+                                                   -> async::Awaitable<core::Result<channel::ChannelPromptRunResult>> {
+      ++runner_calls;
+      co_return channel::ChannelPromptRunResult{.text = "unexpected"};
+    }};
+
+    using namespace asio::experimental::awaitable_operators;
+    [[maybe_unused]] auto raced = co_await (bootstrap::serve_channels(io.get_executor(),
+                                                                      manager,
+                                                                      std::move(runner),
+                                                                      std::vector<std::string>{"mock-main"}) ||
+                                            async::sleep_for(io.get_executor(), 20ms));
+
+    CHECK(runner_calls == 0);
+    CHECK(mock->sent_messages().empty());
+    CHECK_FALSE(mock->started());
+  });
+}
+
+TEST_CASE("serve_channels rejects a null prompt runner", "[unit][bootstrap][serve][channels]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    channel::ChannelManager manager{io.get_executor()};
+    auto outcome = co_await bootstrap::serve_channels(io.get_executor(), manager, {}, {});
+    REQUIRE_FALSE(outcome.has_value());
+    CHECK(outcome.error().kind() == core::ErrorKind::invalid_argument);
   });
 }

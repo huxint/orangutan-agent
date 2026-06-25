@@ -191,6 +191,17 @@ only — v2 makes channels pluggable.
   now treats `ORAN_TEST_QQ_GATEWAY_URL` as an override and discovers the URL
   when it is absent. Focused validation: gated `test-channel-qq` 58 / 369 and
   gated `test-bootstrap` 148 / 1352. The credentialed run itself remains open.
+- Slice 256: `orangutan --serve` is now the first long-lived owner for
+  configured channel ingress. When buildable `config.channels[]` entries are
+  present, `run_serve` builds the shared runtime assembly/provider once,
+  registers those adapters into a strand-owned `ChannelManager`, starts them in
+  the service body, pumps each adapter's `next_message()` into the manager
+  fan-in, dispatches messages through the routed agent bridge, replies through
+  the owning adapter, and stops/drains adapters on shutdown. With no registered
+  channels, `--serve` stays watcher/automation/scheduler-only; skipped
+  disabled adapters are reported once. Focused validation: `test-channel` 26 /
+  205 and `test-bootstrap` 172 / 1664. Per-conversation serialization and
+  webhook ingress remain open.
 
 ## Design Doc Cross-References
 

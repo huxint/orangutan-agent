@@ -517,9 +517,10 @@ tool scheduler were built to expect but which nothing started.
    emits `cancellation_type::terminal` on that signal — the handler and the service
    coroutine share the strand, so the cross-thread emit is serialized with slot
    consumption regardless of io-worker count;
-3. co-spawns the service body (the watcher concern always, plus the automation
-   concern when cron jobs are configured — see below) bound to the cancellation
-   slot, with a completion handler that fulfils a `std::promise<core::Result<void>>`;
+3. co-spawns the service body (the watcher concern always, plus automation,
+   scheduler reaping, and channel concerns when their config gates are present
+   — see below) bound to the cancellation slot, with a completion handler that
+   fulfils a `std::promise<core::Result<void>>`;
 4. `Runtime::start()`s (non-blocking), then blocks the calling thread on the
    completion future until a signal stops the service;
 5. on completion, `Runtime::stop()`s and returns a `cancelled` error carrying
@@ -536,9 +537,13 @@ firing any cron job due at the current UTC minute and draining buffered triggere
 work each tick. `serve_scheduler_reaping(executor, scheduler, options, stop_requested)`
 is the **scheduler idle-lock reaping** concern: a cancel-aware loop that periodically
 calls `agent::ToolScheduler::reap_idle_locks(now)` to bound the shared scheduler's
-per-path lock table (spec 0012 AC10). A file-local `serve_body` races the enabled
-concerns with the awaitable-operators `||` under one cancellation slot, so a single
-signal stops all of them. The whole thing is built on a fine-grained
+per-path lock table (spec 0012 AC10). `serve_channels(executor, manager, runner,
+channel_ids, stop_requested)` is the **channel ingress/dispatch** concern: it
+drives already-started configured adapters by spawning one pump per adapter into
+the manager fan-in, dispatching messages through the routed agent bridge, replying
+through the owning adapter, and stopping/draining adapters before returning. A
+file-local `serve_body` races the enabled concerns with the awaitable-operators `||`
+under one cancellation slot, so a single signal stops all of them. The whole thing is built on a fine-grained
 `asio::cancellation_signal` rather than `SignalScope`/`io.stop()` deliberately, so the
 automation loop's SQLite writes and in-flight agent turns are never blunt-dropped —
 the evolution `signal_drain.hpp` anticipates.
@@ -585,14 +590,30 @@ Reaping is a synchronous in-memory sweep that never disables cancellation, so un
 the automation tick it cannot swallow a parent cancellation; the `stop_requested`
 predicate is still honored for symmetry.
 
+**Slice 256** adds the configured-channel ingress/dispatch concern. The presence of
+buildable `config.channels[]` entries gates it: with none, `--serve` is unchanged
+from the watcher/automation/scheduler shape; with channels, `run_serve` shares the
+same `RuntimeAssembly` and provider used by automation (or a scripted offline
+`FakeProvider` when no default route exists), registers configured adapters into a
+strand-owned `ChannelManager`, logs skipped disabled/unknown kinds, builds
+`make_routed_channel_prompt_runner(...)`, and passes registered channel ids into
+`serve_body`. The body calls `ChannelManager::start_all()` before racing the
+concern. Shutdown is explicit: `serve_channels` marks its pumps stopping, calls
+`ChannelManager::stop_all()` to wake adapter-owned receives, emits each pump's
+child cancellation signal, and drains the pump completion channel before returning.
+The in-process `MockChannel::stop()` now closes its bounded inbound queue and
+`start()` reopens a fresh one, matching the QQ adapter's transport-close behavior
+for pending `next_message()` waits.
+
 ## Next Steps
 
 - Wire a triggered-work ingress (channel/webhook → `AutomationService::enqueue_triggered`)
   so the triggered half of the `--serve` loop has a producer.
 - Slice D (optional): a typed `serve` config block (toggles/intervals) once more than
-  one concern wants tuning — the reaping interval is a fixed 1-minute default today.
-- Drive the CLI / channel agent loops on a per-agent strand too, so the scheduler's
-  single-strand lock-table contract holds there as it now does under `--serve` (see
-  the tech-debt tracker).
+  one concern wants tuning — the reaping interval is a fixed 1-minute default today
+  and channel dispatch has no per-conversation deadline knobs yet.
+- Drive the CLI agent loop on a per-agent strand too, and add per-conversation
+  channel serialization/deadlines, so scheduler and channel ordering contracts do
+  not rely on coarse service-level serialization.
 - Bind configured hook sinks to the assembly-owned bus once the hook sink models land.
 - Add CLI line editor/history on top of the interactive REPL handoff.

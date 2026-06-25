@@ -132,6 +132,45 @@ TEST_CASE("MockChannel next_message awaits a push that arrives later", "[unit][c
   });
 }
 
+TEST_CASE("MockChannel stop cancels a pending receive and start resets the inbound queue",
+          "[unit][channel][mock][async]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    channel::MockChannel mock{io.get_executor()};
+    REQUIRE((co_await mock.start()).has_value());
+
+    std::optional<core::Result<channel::InboundMessage>> pending_result;
+    std::exception_ptr pending_failure;
+    asio::co_spawn(io, mock.next_message(), [&](std::exception_ptr ep, core::Result<channel::InboundMessage> result) {
+      pending_failure = ep;
+      pending_result = std::move(result);
+    });
+    auto slept = co_await async::sleep_for(io.get_executor(), std::chrono::milliseconds{1});
+    REQUIRE(slept.has_value());
+
+    auto stopped = co_await mock.stop();
+    REQUIRE(stopped.has_value());
+    REQUIRE_FALSE(mock.started());
+
+    for (int attempt = 0; !pending_result.has_value() && attempt < 10; ++attempt) {
+      REQUIRE((co_await async::sleep_for(io.get_executor(), std::chrono::milliseconds{1})).has_value());
+    }
+    if (pending_failure) {
+      std::rethrow_exception(pending_failure);
+    }
+    REQUIRE(pending_result.has_value());
+    REQUIRE_FALSE(pending_result->has_value());
+    REQUIRE(pending_result->error().kind() == core::ErrorKind::cancelled);
+
+    REQUIRE((co_await mock.start()).has_value());
+    REQUIRE(mock.started());
+    REQUIRE(mock.push_inbound(inbound("after restart")).has_value());
+
+    auto received = co_await mock.next_message();
+    REQUIRE(received.has_value());
+    REQUIRE(core::text_view(received->content.front()) == "after restart");
+  });
+}
+
 TEST_CASE("MockChannel reports overflow when the inbound queue is full", "[unit][channel][mock]") {
   asio::io_context io;
   channel::MockChannel mock{io.get_executor(), channel::MockChannelOptions{.inbound_capacity = 1}};

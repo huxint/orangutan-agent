@@ -9,9 +9,9 @@
 
 ## Snapshot
 
-- **Slice:** 255 (`xmake run orangutan -- --help` reports slice 255)
+- **Slice:** 256 (`xmake run orangutan -- --help` reports slice 256)
 - **Last completed history:**
-  [`histories/2026-06/20260620-1059-serve-scheduler-idle-lock-reaping.md`](histories/2026-06/20260620-1059-serve-scheduler-idle-lock-reaping.md)
+  [`histories/2026-06/20260625-2222-serve-channel-ingress-dispatch.md`](histories/2026-06/20260625-2222-serve-channel-ingress-dispatch.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — the only active plan; its next gate is externally blocked on real QQ
@@ -24,25 +24,27 @@
     [`exec-plans/completed/2026-06-18-runtime-service-owner.md`](exec-plans/completed/2026-06-18-runtime-service-owner.md).
     The desktop chat-tracer plan closed 2026-06-16
     ([`exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md)).
-- **Latest completed slice:** slice 255 ships the runtime-service owner **Slice C**
-  — the tool-scheduler idle-lock reaping tick, the final leg of Dependency Frontier #2.
-  `AgentPromptRunnerOptions` gained an optional both-or-neither `{registry, scheduler}`
-  pair the runner borrows instead of building its own; when the loaded config carries
-  `automation.cron.jobs[]`, `bootstrap::run_serve` builds one `tool::Registry` +
-  `agent::ToolScheduler` on the runtime **strand**, injects them into every per-job
-  automation runner, and races a new `bootstrap::serve_scheduler_reaping` concern (a
-  cancel-aware `reap_idle_locks` poll loop, default 60 s) beside the watcher and
-  automation loop. The single strand satisfies the lock table's single-strand contract
-  and corrects the slice-B per-job scheduler (which ran on the multi-worker executor).
-  With no cron jobs, `--serve` is unchanged (watcher only; no provider/DB/scheduler).
-  `test-bootstrap` 169 cases / 1632 assertions (+5 / +29); release `[serve]` 10/10,
-  `[prompt_runner]` 37/37, full suite green under `--sanitizers=y`; offline smoke shows
-  the reaping banner line and exits 130 (SIGINT) / 143 (SIGTERM).
+- **Latest completed slice:** slice 256 extends `orangutan --serve` with the first
+  long-lived configured-channel ingress/dispatch owner. When buildable
+  `config.channels[]` entries exist, `bootstrap::run_serve` builds the shared runtime
+  assembly/provider once, registers adapters into a strand-owned
+  `channel::ChannelManager`, logs skipped disabled/unknown kinds, builds the routed
+  channel prompt runner, and passes registered ids into the service body. The body
+  starts adapters, pumps each adapter's `next_message()` into the manager fan-in,
+  dispatches messages through `channel::dispatch_one`, replies via the owning adapter,
+  then marks pumps stopping, calls `stop_all()`, emits child cancellations, and drains
+  them before returning. With no registered channels, `--serve` remains
+  watcher/automation/scheduler-only. `MockChannel::stop()` now closes its bounded
+  inbound queue so pending `next_message()` waits unblock as cancelled, and `start()`
+  reopens a fresh queue for loopback reuse. `test-channel` 26 cases / 205 assertions
+  (+1 / +14); `test-bootstrap` 172 cases / 1664 assertions (+3 / +32); focused
+  release `[serve]` 13/13 and `[mock]` 8/8 passed; full `xmake test` 19/19 and
+  `make ci` passed.
 - **Next intended slice:** no track-local main-line slice is pre-selected. Candidates:
   a triggered-work ingress (channel/webhook → `AutomationService::enqueue_triggered`) so
-  the triggered half of the `--serve` loop has a producer; driving the CLI/channel agent
-  loops on a per-agent strand (tech-debt: the scheduler's single-strand lock-table
-  contract); or QQ-port milestone 4b-ii once real QQ credentials and an operator
+  the triggered half of the `--serve` loop has a producer; per-conversation channel
+  serialization/deadlines plus per-agent strand hardening where the coarse service strand
+  is too limiting; or QQ-port milestone 4b-ii once real QQ credentials and an operator
   conversation exist.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
@@ -71,7 +73,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-hook`: 38 cases / 313 assertions.
 - `oran-memory`: 38 cases / 841 assertions.
 - `oran-automation`: 106 cases / 1849 assertions.
-- `oran-channel`: 25 cases / 191 assertions.
+- `oran-channel`: 26 cases / 205 assertions.
 - `oran-channel-qq` (gated, `--channel_qq=y`): 58 cases / 369 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
 - `oran-tool`: 208 cases / 2181 assertions.
@@ -80,7 +82,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-agent`: 57 cases / 10 786 assertions.
 - `oran-cli`: 28 cases / 221 assertions.
 - `oran-desktop`: 17 cases / 70 assertions.
-- `oran-bootstrap`: 169 cases / 1632 assertions (gated `--channel_qq=y`: 161 /
+- `oran-bootstrap`: 172 cases / 1664 assertions (gated `--channel_qq=y`: 161 /
   1411).
 
 ## Open Tech-Debt Rows

@@ -1,23 +1,26 @@
 // include/oran/bootstrap/serve.hpp — long-lived service mode (`--serve`).
 //
-// Slice A of the runtime-service owner (ROADMAP Dependency Frontier #2). The
-// owner is a mode of the main binary, parallel to `--desktop`: `run_serve`
-// starts `async::Runtime`, traps SIGINT/SIGTERM, co-spawns the long-lived
-// `serve_run` coroutine, blocks until a signal arrives, then gracefully cancels
-// it and tears the runtime down. Unlike `--desktop` it is not build-gated.
+// The runtime-service owner (ROADMAP Dependency Frontier #2). The owner is a
+// mode of the main binary, parallel to `--desktop`: `run_serve` starts
+// `async::Runtime`, traps SIGINT/SIGTERM, co-spawns the long-lived service body,
+// blocks until a signal arrives, then gracefully cancels it and tears the
+// runtime down. Unlike `--desktop` it is not build-gated.
 //
-// This slice auto-starts the IO file-view cache watcher
-// (`io::watch_read_text_file_ranged_cache`) and, when the loaded config carries
-// `automation.cron.jobs[]`, the automation cron/triggered service loop
-// (`automation::AutomationService::run` over a configured — or offline fake —
-// provider route) plus the tool-scheduler idle-lock reaping tick
-// (`agent::ToolScheduler::reap_idle_locks`). The automation jobs share one
+// The service body auto-starts the IO file-view cache watcher
+// (`io::watch_read_text_file_ranged_cache`); when the loaded config carries
+// `automation.cron.jobs[]`, it also runs the automation cron/triggered service
+// loop (`automation::AutomationService::run` over a configured — or offline
+// fake — provider route) plus the tool-scheduler idle-lock reaping tick
+// (`agent::ToolScheduler::reap_idle_locks`); when the config carries buildable
+// `channels[]`, it starts those adapters, pumps inbound messages through the
+// `ChannelManager` fan-in, dispatches them through the routed agent bridge, and
+// stops the adapters before returning. The automation jobs share one
 // strand-driven `agent::ToolScheduler`, so the reaping concern bounds its
 // per-path lock table while the jobs run. Building on `async::Runtime` plus a
 // fine-grained `asio::cancellation_signal` (rather than the one-shot
-// `SignalScope`/`io.stop()` drain) is deliberate so the automation loop's
-// SQLite writes and in-flight agent turns are never blunt-dropped — see
-// `signal_drain.hpp` for the anticipated evolution.
+// `SignalScope`/`io.stop()` drain) is deliberate so durable writes and in-flight
+// agent turns are never blunt-dropped — see `signal_drain.hpp` for the
+// anticipated evolution.
 
 #pragma once
 
@@ -25,12 +28,14 @@
 #include <cstddef>
 #include <functional>
 #include <string>
+#include <vector>
 
 #include <asio/any_io_executor.hpp>
 
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/automation.hpp>
 #include <oran/bootstrap/bootstrap.hpp>
+#include <oran/channel/dispatch.hpp>
 #include <oran/core/result.hpp>
 
 namespace orangutan::agent {
@@ -134,6 +139,38 @@ struct ServeSchedulerReapOptions {
                                                                            agent::ToolScheduler& scheduler,
                                                                            ServeSchedulerReapOptions options = {},
                                                                            std::function<bool()> stop_requested = {});
+
+/// The channel ingress/dispatch concern — the first daemon owner of the channel
+/// fan-in loop (`design-docs/channel-abstraction.md`: "That ownership lands with
+/// the first daemon/dispatcher slice"). For every id in `channel_ids` it spawns
+/// one cancel-aware *pump* coroutine that forwards that adapter's
+/// `next_message()` results into the manager fan-in (`receive_one`), while a
+/// single *dispatch* loop consumes the fan-in through `channel::dispatch_one`,
+/// runs the routed agent `runner`, and replies via the owning adapter. The
+/// adapters in `manager` must already be started (`start_all`).
+///
+/// A per-message dispatch failure (a malformed inbound, an agent-path error, or
+/// a send failure) is reported and the loop continues — one bad message must not
+/// kill the daemon. `dispatch_one` consumes the fan-in message before those
+/// failures, so reporting-and-continuing cannot hot-spin on the same message.
+///
+/// Stopping: parent cancellation is the authoritative stop — the dispatcher and
+/// every pump park on cancel-aware channel receives, so the shared signal
+/// unblocks the dispatcher. `stop_requested` is a cooperative early-out checked
+/// at the top of the dispatch loop. On either stop the concern marks the pumps
+/// stopping, calls `manager.stop_all()` to wake adapter-owned receives, emits
+/// each pump's cancellation, and drains them before returning, so no spawned
+/// pump outlives this coroutine (each borrows `manager`). A null `runner` is
+/// rejected up front.
+///
+/// Exposed (rather than file-local) so it can be driven from tests with a real
+/// `ChannelManager` + `MockChannel` and a fake `ChannelPromptRunner` — no
+/// provider, process, or signal required.
+[[nodiscard]] async::Awaitable<core::Result<void>> serve_channels(asio::any_io_executor executor,
+                                                                  channel::ChannelManager& manager,
+                                                                  channel::ChannelPromptRunner runner,
+                                                                  std::vector<std::string> channel_ids,
+                                                                  std::function<bool()> stop_requested = {});
 
 /// `orangutan --serve` entry. Loads config, starts `async::Runtime`, traps
 /// SIGINT/SIGTERM on a runtime strand, co-spawns the service body, blocks the
