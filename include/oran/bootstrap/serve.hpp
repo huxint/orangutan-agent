@@ -27,6 +27,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
@@ -141,6 +142,21 @@ struct ServeSchedulerReapOptions {
                                                                            ServeSchedulerReapOptions options = {},
                                                                            std::function<bool()> stop_requested = {});
 
+/// Structured snapshot for the channel conversation-worker table under
+/// `--serve`. The counters are monotonic for one `serve_channels(...)` run
+/// except `active_workers`, which is the current worker-table size.
+struct ServeChannelWorkerMetrics {
+  std::size_t active_workers{};
+  std::size_t max_active_workers{};
+  std::uint64_t workers_created{};
+  std::uint64_t workers_completed{};
+  std::uint64_t workers_evicted_idle{};
+  std::uint64_t messages_enqueued{};
+  std::uint64_t replies_sent{};
+  std::uint64_t dispatch_failures{};
+  std::uint64_t enqueue_failures{};
+};
+
 /// Tunables for the channel ingress/dispatch concern under `--serve`.
 struct ServeChannelOptions {
   /// Capacity of each per-channel+conversation queue. This bounds how far one
@@ -151,6 +167,10 @@ struct ServeChannelOptions {
   /// a fresh worker; this bounds long-lived services by active conversations
   /// instead of all historical conversations.
   std::chrono::steady_clock::duration conversation_idle_ttl{std::chrono::minutes{5}};
+  /// Optional observer for worker-table metrics. Called synchronously on the
+  /// dispatcher executor after worker creation/erasure, message enqueue, or a
+  /// worker progress wake. The callback must be cheap and non-blocking.
+  std::function<void(const ServeChannelWorkerMetrics&)> metrics_observer{};
 };
 
 /// The channel ingress/dispatch concern — the first daemon owner of the channel

@@ -228,6 +228,16 @@ only — v2 makes channels pluggable.
   historical conversation. Focused validation: `test-bootstrap` 180 / 1746 with
   new `[serve][channels][idle]` and invalid-options cases. Per-message deadlines,
   webhook ingress, concrete delivery hooks, and worker metrics remain open.
+- Slice 261: the `--serve` conversation-worker owner now exposes structured
+  metrics snapshots. `ServeChannelWorkerMetrics` reports current/max active
+  workers, created/completed workers, idle evictions, message enqueues, sent
+  replies, dispatch failures, and enqueue failures; `ServeChannelOptions` takes
+  an optional synchronous C++ observer for embedders/tests. Observer exceptions
+  are caught and reported so metrics collection cannot kill the daemon. No JSON
+  config field or operator-facing metrics sink is added yet. Focused validation:
+  `test-bootstrap` 182 / 1772 with new `[serve][channels][metrics]` coverage.
+  Per-message deadlines, webhook ingress, concrete delivery hooks, and the
+  operator-facing metrics sink remain open.
 
 ## Design Doc Cross-References
 

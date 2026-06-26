@@ -17,6 +17,7 @@
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -690,6 +691,94 @@ TEST_CASE("serve_channels evicts idle conversation workers before cooperative st
     REQUIRE(outcome.has_value());
     REQUIRE(mock->sent_messages().size() == 1);
     CHECK(driver_done.load(std::memory_order_acquire));
+    CHECK_FALSE(mock->started());
+  });
+}
+
+TEST_CASE("serve_channels reports conversation worker metrics", "[unit][bootstrap][serve][channels][metrics]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    channel::ChannelManager manager{io.get_executor()};
+    auto adapter =
+        std::make_unique<channel::MockChannel>(io.get_executor(),
+                                               channel::MockChannelOptions{.id = "mock-main", .kind = "mock"});
+    auto* mock = adapter.get();
+    REQUIRE(manager.register_adapter(std::move(adapter)).has_value());
+    REQUIRE((co_await manager.start_all()).has_value());
+    REQUIRE(mock->push_inbound(text_inbound("first", "conv-1")).has_value());
+    REQUIRE(mock->push_inbound(text_inbound("second", "conv-2")).has_value());
+
+    std::vector<bootstrap::ServeChannelWorkerMetrics> snapshots;
+    auto runner = channel::ChannelPromptRunner{[](channel::ChannelPromptRunRequest request)
+                                                   -> async::Awaitable<core::Result<channel::ChannelPromptRunResult>> {
+      co_return channel::ChannelPromptRunResult{.text = request.prompt + " reply"};
+    }};
+
+    auto outcome = co_await bootstrap::serve_channels(
+        io.get_executor(),
+        manager,
+        std::move(runner),
+        std::vector<std::string>{"mock-main"},
+        [&] { return !snapshots.empty() && snapshots.back().workers_evicted_idle >= 2; },
+        nullptr,
+        bootstrap::ServeChannelOptions{
+            .conversation_idle_ttl = 25ms,
+            .metrics_observer =
+                [&](const bootstrap::ServeChannelWorkerMetrics& snapshot) { snapshots.push_back(snapshot); },
+        });
+
+    REQUIRE(outcome.has_value());
+    REQUIRE(mock->sent_messages().size() == 2);
+    REQUIRE_FALSE(snapshots.empty());
+    const auto final = snapshots.back();
+    CHECK(final.active_workers == 0);
+    CHECK(final.max_active_workers == 2);
+    CHECK(final.workers_created == 2);
+    CHECK(final.workers_completed == 2);
+    CHECK(final.workers_evicted_idle == 2);
+    CHECK(final.messages_enqueued == 2);
+    CHECK(final.replies_sent == 2);
+    CHECK(final.dispatch_failures == 0);
+    CHECK(final.enqueue_failures == 0);
+    CHECK_FALSE(mock->started());
+  });
+}
+
+TEST_CASE("serve_channels keeps serving when worker metrics observer throws",
+          "[unit][bootstrap][serve][channels][metrics]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    channel::ChannelManager manager{io.get_executor()};
+    auto adapter =
+        std::make_unique<channel::MockChannel>(io.get_executor(),
+                                               channel::MockChannelOptions{.id = "mock-main", .kind = "mock"});
+    auto* mock = adapter.get();
+    REQUIRE(manager.register_adapter(std::move(adapter)).has_value());
+    REQUIRE((co_await manager.start_all()).has_value());
+    REQUIRE(mock->push_inbound(text_inbound("hello", "conv-1")).has_value());
+
+    std::size_t observer_calls{};
+    auto runner = channel::ChannelPromptRunner{[](channel::ChannelPromptRunRequest request)
+                                                   -> async::Awaitable<core::Result<channel::ChannelPromptRunResult>> {
+      co_return channel::ChannelPromptRunResult{.text = request.prompt + " reply"};
+    }};
+
+    auto outcome = co_await bootstrap::serve_channels(
+        io.get_executor(),
+        manager,
+        std::move(runner),
+        std::vector<std::string>{"mock-main"},
+        [mock] { return mock->sent_messages().size() == 1; },
+        nullptr,
+        bootstrap::ServeChannelOptions{
+            .metrics_observer =
+                [&](const bootstrap::ServeChannelWorkerMetrics&) {
+                  ++observer_calls;
+                  throw std::runtime_error{"metrics unavailable"};
+                },
+        });
+
+    REQUIRE(outcome.has_value());
+    REQUIRE(mock->sent_messages().size() == 1);
+    CHECK(observer_calls > 0);
     CHECK_FALSE(mock->started());
   });
 }

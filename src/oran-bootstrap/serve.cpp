@@ -179,6 +179,17 @@ struct ChannelConversationKeyHash {
   return ChannelConversationKey{.channel_id = message.channel_id, .conversation_id = message.conversation_id};
 }
 
+enum class ChannelConversationWorkerCompletion : int {
+  running,
+  idle,
+  stopped,
+};
+
+struct ChannelWorkerSharedMetrics {
+  std::atomic_uint64_t replies_sent{0};
+  std::atomic_uint64_t dispatch_failures{0};
+};
+
 async::Awaitable<Result<channel::DeliveryReceipt>> dispatch_channel_message(channel::ChannelManager& manager,
                                                                             const channel::ChannelPromptRunner& runner,
                                                                             channel::InboundMessage message) {
@@ -200,15 +211,18 @@ async::Awaitable<Result<channel::DeliveryReceipt>> dispatch_channel_message(chan
 /// concurrently. The owning dispatch loop observes the completion flag and uses
 /// `progress` as a lossy wakeup channel for message completion, idle eviction,
 /// and shutdown drain.
-async::Awaitable<void> serve_channel_conversation_worker(channel::ChannelManager& manager,
-                                                         asio::any_io_executor executor,
-                                                         channel::ChannelPromptRunner runner,
-                                                         std::shared_ptr<async::Channel<channel::InboundMessage>> inbox,
-                                                         ChannelConversationKey key,
-                                                         std::chrono::steady_clock::duration idle_ttl,
-                                                         std::shared_ptr<async::Channel<std::monostate>> progress,
-                                                         std::shared_ptr<std::atomic_bool> completed) {
+async::Awaitable<void>
+serve_channel_conversation_worker(channel::ChannelManager& manager,
+                                  asio::any_io_executor executor,
+                                  channel::ChannelPromptRunner runner,
+                                  std::shared_ptr<async::Channel<channel::InboundMessage>> inbox,
+                                  ChannelConversationKey key,
+                                  std::chrono::steady_clock::duration idle_ttl,
+                                  std::shared_ptr<async::Channel<std::monostate>> progress,
+                                  std::shared_ptr<std::atomic<ChannelConversationWorkerCompletion>> completion,
+                                  std::shared_ptr<ChannelWorkerSharedMetrics> metrics) {
   using namespace asio::experimental::awaitable_operators;
+  auto reason = ChannelConversationWorkerCompletion::stopped;
   for (;;) {
     std::optional<channel::InboundMessage> message;
     auto event = co_await (inbox->receive() || async::sleep_for(executor, idle_ttl));
@@ -218,8 +232,12 @@ async::Awaitable<void> serve_channel_conversation_worker(channel::ChannelManager
         break;  // cancelled while idle.
       }
       auto ready = inbox->try_receive();
-      if (!ready || !ready->has_value()) {
-        break;  // closed or truly idle.
+      if (!ready) {
+        break;  // closed while the idle timer won the race.
+      }
+      if (!ready->has_value()) {
+        reason = ChannelConversationWorkerCompletion::idle;
+        break;  // truly idle.
       }
       message = std::move(**ready);
     } else {
@@ -237,24 +255,27 @@ async::Awaitable<void> serve_channel_conversation_worker(channel::ChannelManager
           cancellation.cancelled() != asio::cancellation_type::none) {
         break;
       }
+      metrics->dispatch_failures.fetch_add(1, std::memory_order_relaxed);
       std::println(stderr,
                    "orangutan: channel dispatch failed for channel '{}' conversation '{}': {}",
                    key.channel_id,
                    key.conversation_id,
                    dispatched.error());
+    } else {
+      metrics->replies_sent.fetch_add(1, std::memory_order_relaxed);
     }
 
     [[maybe_unused]] auto signaled = progress->try_send(std::monostate{});
   }
 
-  completed->store(true, std::memory_order_release);
+  completion->store(reason, std::memory_order_release);
   [[maybe_unused]] auto signaled = progress->try_send(std::monostate{});
 }
 
 struct ChannelConversationWorker {
   std::shared_ptr<async::Channel<channel::InboundMessage>> inbox;
   std::shared_ptr<asio::cancellation_signal> cancel;
-  std::shared_ptr<std::atomic_bool> completed;
+  std::shared_ptr<std::atomic<ChannelConversationWorkerCompletion>> completion;
 };
 
 /// The dispatch loop consumes the manager fan-in and assigns each message to a
@@ -270,13 +291,52 @@ async::Awaitable<Result<void>> serve_channel_dispatch(channel::ChannelManager& m
                                                       ServeChannelOptions options) {
   std::unordered_map<ChannelConversationKey, ChannelConversationWorker, ChannelConversationKeyHash> workers;
   auto progress = std::make_shared<async::Channel<std::monostate>>(executor, 1);
+  auto shared_metrics = std::make_shared<ChannelWorkerSharedMetrics>();
+  auto metrics = ServeChannelWorkerMetrics{};
+
+  auto snapshot_metrics = [&] {
+    auto snapshot = metrics;
+    snapshot.active_workers = workers.size();
+    snapshot.replies_sent = shared_metrics->replies_sent.load(std::memory_order_relaxed);
+    snapshot.dispatch_failures = shared_metrics->dispatch_failures.load(std::memory_order_relaxed);
+    return snapshot;
+  };
+
+  auto publish_metrics = [&] {
+    if (!options.metrics_observer) {
+      return;
+    }
+    try {
+      const auto snapshot = snapshot_metrics();
+      options.metrics_observer(snapshot);
+    } catch (const std::exception& error) {
+      std::println(stderr, "orangutan: channel worker metrics observer failed: {}", error.what());
+    } catch (...) {
+      std::println(stderr, "orangutan: channel worker metrics observer failed: unknown exception");
+    }
+  };
 
   auto erase_completed_workers = [&] {
-    std::erase_if(workers, [](const auto& entry) { return entry.second.completed->load(std::memory_order_acquire); });
+    auto removed = false;
+    std::erase_if(workers, [&](const auto& entry) {
+      const auto completion = entry.second.completion->load(std::memory_order_acquire);
+      if (completion == ChannelConversationWorkerCompletion::running) {
+        return false;
+      }
+      ++metrics.workers_completed;
+      if (completion == ChannelConversationWorkerCompletion::idle) {
+        ++metrics.workers_evicted_idle;
+      }
+      removed = true;
+      return true;
+    });
+    return removed;
   };
 
   auto worker_for = [&](const channel::InboundMessage& message) -> ChannelConversationWorker& {
-    erase_completed_workers();
+    if (erase_completed_workers()) {
+      publish_metrics();
+    }
     auto key = conversation_dispatch_key(message);
     if (auto found = workers.find(key); found != workers.end()) {
       return found->second;
@@ -286,10 +346,14 @@ async::Awaitable<Result<void>> serve_channel_dispatch(channel::ChannelManager& m
     auto inbox =
         std::make_shared<async::Channel<channel::InboundMessage>>(executor, options.conversation_queue_capacity);
     auto cancel = std::make_shared<asio::cancellation_signal>();
-    auto completed = std::make_shared<std::atomic_bool>(false);
+    auto completion = std::make_shared<std::atomic<ChannelConversationWorkerCompletion>>(
+        ChannelConversationWorkerCompletion::running);
     auto [inserted, _] =
         workers.emplace(std::move(key),
-                        ChannelConversationWorker{.inbox = inbox, .cancel = cancel, .completed = completed});
+                        ChannelConversationWorker{.inbox = inbox, .cancel = cancel, .completion = completion});
+    ++metrics.workers_created;
+    metrics.max_active_workers = std::max(metrics.max_active_workers, workers.size());
+    publish_metrics();
     asio::co_spawn(executor,
                    serve_channel_conversation_worker(manager,
                                                      executor,
@@ -298,7 +362,8 @@ async::Awaitable<Result<void>> serve_channel_dispatch(channel::ChannelManager& m
                                                      std::move(worker_key),
                                                      options.conversation_idle_ttl,
                                                      progress,
-                                                     std::move(completed)),
+                                                     std::move(completion),
+                                                     shared_metrics),
                    asio::bind_cancellation_slot(cancel->slot(), asio::detached));
     return inserted->second;
   };
@@ -314,7 +379,8 @@ async::Awaitable<Result<void>> serve_channel_dispatch(channel::ChannelManager& m
       if (!seen_progress && seen_progress.error().kind() == core::ErrorKind::cancelled) {
         break;
       }
-      erase_completed_workers();
+      [[maybe_unused]] auto erased = erase_completed_workers();
+      publish_metrics();
       continue;  // A worker completed one message; re-check stop_requested.
     }
 
@@ -333,7 +399,12 @@ async::Awaitable<Result<void>> serve_channel_dispatch(channel::ChannelManager& m
       break;
     }
     if (!sent) {
+      ++metrics.enqueue_failures;
+      publish_metrics();
       std::println(stderr, "orangutan: channel conversation enqueue failed: {}", sent.error());
+    } else {
+      ++metrics.messages_enqueued;
+      publish_metrics();
     }
   }
 
@@ -343,9 +414,12 @@ async::Awaitable<Result<void>> serve_channel_dispatch(channel::ChannelManager& m
     worker.cancel->emit(asio::cancellation_type::all);
   }
   while (std::ranges::any_of(workers, [](const auto& entry) {
-    return !entry.second.completed->load(std::memory_order_acquire);
+    return entry.second.completion->load(std::memory_order_acquire) == ChannelConversationWorkerCompletion::running;
   })) {
     [[maybe_unused]] auto received = co_await progress->receive();
+  }
+  if (erase_completed_workers()) {
+    publish_metrics();
   }
 
   co_return Result<void>{};

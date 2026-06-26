@@ -554,7 +554,8 @@ concern: it drives already-started configured adapters by spawning one pump per
 adapter into the manager fan-in, assigning messages to bounded
 per-channel+conversation worker queues, dispatching each conversation in order
 through the routed agent bridge while unrelated conversations can run
-concurrently, evicting empty conversation workers after their idle TTL,
+concurrently, evicting empty conversation workers after their idle TTL, publishing
+structured worker metrics snapshots to an optional C++ observer,
 optionally enqueueing `channel:<channel_id>` triggered automation work when
 `triggered_service` is supplied, replying through the owning adapter, and
 stopping/draining adapters before returning. A
@@ -653,12 +654,28 @@ completion flags rather than a total completed count, so previously evicted
 workers cannot make active shutdown waits look complete. Deadlines remain
 downstream.
 
+Slice 261 adds the first structured worker metrics boundary without adding an
+operator-facing sink yet. `ServeChannelWorkerMetrics` snapshots report the
+current worker table size, max observed worker table size, created/completed
+workers, idle evictions, message enqueue count, sent replies, dispatch failures,
+and enqueue failures. `ServeChannelOptions::metrics_observer` is an optional
+C++ observer called synchronously on the dispatcher executor after worker
+creation/erasure, message enqueue, or worker progress wakes. Worker-side reply
+and dispatch-failure counters are atomic because workers can run concurrently
+when an embedding supplies a non-strand executor; worker-table counters stay
+dispatcher-owned. Observer exceptions are caught and reported to stderr so an
+embedding/test callback cannot terminate the long-lived service. No JSON config,
+daemon metrics endpoint, or hook payload was added in this slice; the observer
+is the owner/test seam that a later operator-facing metrics sink can consume.
+
 ## Next Steps
 
 - Add the webhook adapter/producer path for non-chat triggers.
 - Slice D (optional): a typed `serve` config block (toggles/intervals) once more than
   one concern wants tuning — the reaping interval is a fixed 1-minute default today
   and channel dispatch has no per-message deadline knobs yet.
+- Bind channel worker metrics to an operator-facing sink once the daemon metrics
+  surface is designed.
 - Drive the CLI agent loop on a per-agent strand too, and split channel agent
   runs onto per-agent strands where the service-level strand is still too coarse.
 - Bind configured hook sinks to the assembly-owned bus once the hook sink models land.

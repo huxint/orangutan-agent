@@ -88,6 +88,9 @@ letting unrelated conversations await agent runs concurrently.
 Slice 260 bounds that table for long-lived services: empty conversation workers
 exit and are erased after their idle TTL, so later messages create fresh workers
 instead of keeping one record forever for every historical conversation.
+Slice 261 exposes structured worker metrics at the same owner boundary through
+`ServeChannelWorkerMetrics` snapshots and an optional `ServeChannelOptions`
+observer; the low-level manager still does not own scheduling or metrics policy.
 
 ## Inbound / Outbound Envelopes
 
@@ -263,12 +266,14 @@ policy.
 Slice 259 fixes the first downside of the legacy approach: one slow response no
 longer blocks the entire channel queue. Slice 260 fixes the second operational
 downside: a long-lived process no longer keeps one worker record forever for
-every historical conversation. Remaining mitigation work:
+every historical conversation. Slice 261 adds a structured owner/test metrics
+seam for active/max workers, worker lifecycle counts, idle evictions, enqueued
+messages, sent replies, and failures. Remaining mitigation work:
 
 - Per-message deadline (`config.channel.<id>.message_deadline_seconds`).
 - On deadline, the in-flight tool calls are cancelled; the agent emits a "still
   working" message and rejoins later.
-- Worker metrics so operators can observe active/evicted conversation workers.
+- An operator-facing metrics sink for the existing worker metrics snapshots.
 
 ## QQ Adapter Migration
 
