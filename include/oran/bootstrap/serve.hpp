@@ -141,6 +141,18 @@ struct ServeSchedulerReapOptions {
                                                                            ServeSchedulerReapOptions options = {},
                                                                            std::function<bool()> stop_requested = {});
 
+/// Tunables for the channel ingress/dispatch concern under `--serve`.
+struct ServeChannelOptions {
+  /// Capacity of each per-channel+conversation queue. This bounds how far one
+  /// conversation can backlog while preserving in-order dispatch.
+  std::size_t conversation_queue_capacity{64};
+  /// Idle gap after which an empty per-channel+conversation worker exits and is
+  /// erased from the dispatcher table. A later message for the same key creates
+  /// a fresh worker; this bounds long-lived services by active conversations
+  /// instead of all historical conversations.
+  std::chrono::steady_clock::duration conversation_idle_ttl{std::chrono::minutes{5}};
+};
+
 /// The channel ingress/dispatch concern — the first daemon owner of the channel
 /// fan-in loop (`design-docs/channel-abstraction.md`: "That ownership lands with
 /// the first daemon/dispatcher slice"). For every id in `channel_ids` it spawns
@@ -149,8 +161,10 @@ struct ServeSchedulerReapOptions {
 /// dispatcher assigns fan-in messages to bounded per-channel+conversation worker
 /// queues. Each worker runs the routed agent `runner` and replies via the owning
 /// adapter in message order for that one conversation; different conversations
-/// can run concurrently. The adapters in `manager` must already be started
-/// (`start_all`). When `triggered_service` is non-null, each
+/// can run concurrently. Empty workers exit after `options.conversation_idle_ttl`
+/// and are erased before a later message for the same key is enqueued. The
+/// adapters in `manager` must already be started (`start_all`). When
+/// `triggered_service` is non-null, each
 /// successfully-normalized inbound message is also enqueued as an automation
 /// trigger with key `channel:<channel_id>` before the direct channel reply path
 /// runs; enqueue failures are reported but do not block the direct reply.
@@ -178,7 +192,8 @@ serve_channels(asio::any_io_executor executor,
                channel::ChannelPromptRunner runner,
                std::vector<std::string> channel_ids,
                std::function<bool()> stop_requested = {},
-               automation::AutomationService* triggered_service = nullptr);
+               automation::AutomationService* triggered_service = nullptr,
+               ServeChannelOptions options = {});
 
 /// `orangutan --serve` entry. Loads config, starts `async::Runtime`, traps
 /// SIGINT/SIGTERM on a runtime strand, co-spawns the service body, blocks the

@@ -549,14 +549,15 @@ work each tick. `serve_scheduler_reaping(executor, scheduler, options, stop_requ
 is the **scheduler idle-lock reaping** concern: a cancel-aware loop that periodically
 calls `agent::ToolScheduler::reap_idle_locks(now)` to bound the shared scheduler's
 per-path lock table (spec 0012 AC10). `serve_channels(executor, manager, runner,
-channel_ids, stop_requested, triggered_service)` is the **channel ingress/dispatch**
+channel_ids, stop_requested, triggered_service, options)` is the **channel ingress/dispatch**
 concern: it drives already-started configured adapters by spawning one pump per
 adapter into the manager fan-in, assigning messages to bounded
 per-channel+conversation worker queues, dispatching each conversation in order
 through the routed agent bridge while unrelated conversations can run
-concurrently, optionally enqueueing `channel:<channel_id>` triggered automation
-work when `triggered_service` is supplied, replying through the owning adapter,
-and stopping/draining adapters before returning. A
+concurrently, evicting empty conversation workers after their idle TTL,
+optionally enqueueing `channel:<channel_id>` triggered automation work when
+`triggered_service` is supplied, replying through the owning adapter, and
+stopping/draining adapters before returning. A
 file-local `serve_body` races the enabled concerns with the awaitable-operators `||`
 under one cancellation slot, so a single signal stops all of them. The whole thing is built on a fine-grained
 `asio::cancellation_signal` rather than `SignalScope`/`io.stop()` deliberately, so the
@@ -628,16 +629,29 @@ The in-process `MockChannel::stop()` now closes its bounded inbound queue and
 `start()` reopens a fresh one, matching the QQ adapter's transport-close behavior
 for pending `next_message()` waits.
 
-Slice 259 hardens that concern's dispatch side without changing the public
-`serve_channels(...)` signature. The dispatch loop now consumes manager fan-in
+Slice 259 hardens that concern's dispatch side. The dispatch loop now consumes manager fan-in
 messages and assigns each one to a bounded worker queue keyed by
 `(channel_id, conversation_id)`. Each worker runs the same routed
 `ChannelPromptRunner` and sends replies sequentially for that one conversation,
-while unrelated conversations can await their agent runs concurrently. Worker
-completion is tracked through an atomic counter plus a non-blocking progress
-signal rather than an awaited done send, so shutdown can close worker queues,
-emit child cancellation, and wait for workers without racing their cancellation
-slot cleanup. Deadlines and idle worker eviction remain downstream.
+while unrelated conversations can await their agent runs concurrently. That
+slice used a total worker-completion counter plus a non-blocking progress signal
+rather than an awaited done send, so shutdown could close worker queues, emit
+child cancellation, and wait for workers without racing their cancellation slot
+cleanup.
+
+Slice 260 bounds that worker table for long-lived services. `ServeChannelOptions`
+adds a public C++ test/embedding knob for `conversation_queue_capacity` (default
+64) and `conversation_idle_ttl` (default 5 minutes); no JSON config field was
+added, because the typed `serve` config block is still deferred until more than
+one concern needs operator tuning. A worker now races its inbox receive against
+the idle TTL. When the TTL wins and the inbox is still empty, the worker exits,
+sets a completion flag, and sends a non-blocking progress wake. The dispatcher
+erases completed workers on progress wakes and before enqueueing a new message,
+so a later message for the same `(channel_id, conversation_id)` gets a fresh
+worker instead of landing in an exited inbox. Shutdown waits on per-worker
+completion flags rather than a total completed count, so previously evicted
+workers cannot make active shutdown waits look complete. Deadlines remain
+downstream.
 
 ## Next Steps
 

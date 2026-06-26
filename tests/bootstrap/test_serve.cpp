@@ -10,6 +10,7 @@
 // tests/bootstrap/test_signal_drain.cpp's shared `signum_from_error` seam.
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <exception>
 #include <filesystem>
@@ -24,6 +25,7 @@
 #include <asio/bind_cancellation_slot.hpp>
 #include <asio/cancellation_signal.hpp>
 #include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
 #include <asio/experimental/awaitable_operators.hpp>
 #include <asio/io_context.hpp>
 #include <asio/steady_timer.hpp>
@@ -636,6 +638,62 @@ TEST_CASE("serve_channels serializes each conversation without blocking others",
   });
 }
 
+TEST_CASE("serve_channels evicts idle conversation workers before cooperative stop",
+          "[unit][bootstrap][serve][channels][idle]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    channel::ChannelManager manager{io.get_executor()};
+    auto adapter =
+        std::make_unique<channel::MockChannel>(io.get_executor(),
+                                               channel::MockChannelOptions{.id = "mock-main", .kind = "mock"});
+    auto* mock = adapter.get();
+    REQUIRE(manager.register_adapter(std::move(adapter)).has_value());
+    REQUIRE((co_await manager.start_all()).has_value());
+    REQUIRE(mock->push_inbound(text_inbound("first", "conv-1")).has_value());
+
+    std::atomic_bool saw_post_reply_check{false};
+    std::atomic_bool request_stop{false};
+    std::atomic_bool driver_done{false};
+
+    asio::co_spawn(
+        io,
+        [&]() -> async::Awaitable<void> {
+          while (mock->sent_messages().empty()) {
+            [[maybe_unused]] auto slept = co_await async::sleep_for(io.get_executor(), 1ms);
+          }
+          while (!saw_post_reply_check.load(std::memory_order_acquire)) {
+            [[maybe_unused]] auto slept = co_await async::sleep_for(io.get_executor(), 1ms);
+          }
+          request_stop.store(true, std::memory_order_release);
+          driver_done.store(true, std::memory_order_release);
+        },
+        asio::detached);
+
+    auto runner = channel::ChannelPromptRunner{[](channel::ChannelPromptRunRequest request)
+                                                   -> async::Awaitable<core::Result<channel::ChannelPromptRunResult>> {
+      co_return channel::ChannelPromptRunResult{.text = request.prompt + " reply"};
+    }};
+
+    auto outcome = co_await bootstrap::serve_channels(
+        io.get_executor(),
+        manager,
+        std::move(runner),
+        std::vector<std::string>{"mock-main"},
+        [&] {
+          if (mock->sent_messages().size() == 1) {
+            saw_post_reply_check.store(true, std::memory_order_release);
+          }
+          return request_stop.load(std::memory_order_acquire);
+        },
+        nullptr,
+        bootstrap::ServeChannelOptions{.conversation_idle_ttl = 50ms});
+
+    REQUIRE(outcome.has_value());
+    REQUIRE(mock->sent_messages().size() == 1);
+    CHECK(driver_done.load(std::memory_order_acquire));
+    CHECK_FALSE(mock->started());
+  });
+}
+
 TEST_CASE("serve_channels enqueues matching automation triggers before replying",
           "[unit][bootstrap][serve][channels][automation][triggered]") {
   TempDir temp{"oran-serve-channel-triggered"};
@@ -718,5 +776,37 @@ TEST_CASE("serve_channels rejects a null prompt runner", "[unit][bootstrap][serv
     auto outcome = co_await bootstrap::serve_channels(io.get_executor(), manager, {}, {});
     REQUIRE_FALSE(outcome.has_value());
     CHECK(outcome.error().kind() == core::ErrorKind::invalid_argument);
+  });
+}
+
+TEST_CASE("serve_channels rejects invalid channel worker options", "[unit][bootstrap][serve][channels]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    channel::ChannelManager manager{io.get_executor()};
+    auto runner = channel::ChannelPromptRunner{
+        [](channel::ChannelPromptRunRequest) -> async::Awaitable<core::Result<channel::ChannelPromptRunResult>> {
+          co_return channel::ChannelPromptRunResult{.text = "unused"};
+        }};
+
+    auto zero_capacity =
+        co_await bootstrap::serve_channels(io.get_executor(),
+                                           manager,
+                                           runner,
+                                           {},
+                                           {},
+                                           nullptr,
+                                           bootstrap::ServeChannelOptions{.conversation_queue_capacity = 0});
+    REQUIRE_FALSE(zero_capacity.has_value());
+    CHECK(zero_capacity.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto negative_ttl =
+        co_await bootstrap::serve_channels(io.get_executor(),
+                                           manager,
+                                           std::move(runner),
+                                           {},
+                                           {},
+                                           nullptr,
+                                           bootstrap::ServeChannelOptions{.conversation_idle_ttl = -1ms});
+    REQUIRE_FALSE(negative_ttl.has_value());
+    CHECK(negative_ttl.error().kind() == core::ErrorKind::invalid_argument);
   });
 }

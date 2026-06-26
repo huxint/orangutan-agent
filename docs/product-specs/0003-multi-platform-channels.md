@@ -219,6 +219,15 @@ only — v2 makes channels pluggable.
   validation: `test-bootstrap` 178 / 1733 with the new
   `[serve][channels][ordering]` case. Per-message deadlines, idle worker
   eviction, webhook ingress, and concrete delivery hooks remain open.
+- Slice 260: those conversation workers now have a bounded idle lifetime.
+  `ServeChannelOptions` exposes the 64-message queue capacity and 5-minute idle
+  TTL as C++ owner/test tunables; no JSON config field is added yet. When an
+  empty worker idles past its TTL, it exits and is erased from the dispatcher
+  table before a later message for the same key is enqueued, so a long-lived
+  `--serve` process is bounded by active/recent conversations instead of every
+  historical conversation. Focused validation: `test-bootstrap` 180 / 1746 with
+  new `[serve][channels][idle]` and invalid-options cases. Per-message deadlines,
+  webhook ingress, concrete delivery hooks, and worker metrics remain open.
 
 ## Design Doc Cross-References
 

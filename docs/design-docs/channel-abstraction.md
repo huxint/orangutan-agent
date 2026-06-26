@@ -85,6 +85,9 @@ Slice 259 adds the first per-conversation dispatch boundary at that same owner:
 fan-in messages are assigned to bounded worker queues keyed by
 `(channel_id, conversation_id)`, preserving order inside one conversation while
 letting unrelated conversations await agent runs concurrently.
+Slice 260 bounds that table for long-lived services: empty conversation workers
+exit and are erased after their idle TTL, so later messages create fresh workers
+instead of keeping one record forever for every historical conversation.
 
 ## Inbound / Outbound Envelopes
 
@@ -236,9 +239,9 @@ the first background fan-in owner at the actual caller boundary:
 already-registered adapters, runs one pump per adapter, dispatches from the
 shared fan-in, can enqueue `channel:<channel_id>` triggered automation events
 when `--serve` also owns automation state, and owns cancellation/shutdown drain.
-Slice 259 keeps that ownership at the caller boundary and adds the first
-per-conversation dispatch queues there instead of moving policy into
-`ChannelManager`.
+Slices 259-260 keep that ownership at the caller boundary and add the first
+per-conversation dispatch queues plus idle worker eviction there instead of
+moving policy into `ChannelManager`.
 
 ## Per-Conversation Serialization
 
@@ -258,13 +261,14 @@ stays a caller-owned fan-in/send primitive rather than the owner of scheduling
 policy.
 
 Slice 259 fixes the first downside of the legacy approach: one slow response no
-longer blocks the entire channel queue. Remaining mitigation work:
+longer blocks the entire channel queue. Slice 260 fixes the second operational
+downside: a long-lived process no longer keeps one worker record forever for
+every historical conversation. Remaining mitigation work:
 
 - Per-message deadline (`config.channel.<id>.message_deadline_seconds`).
 - On deadline, the in-flight tool calls are cancelled; the agent emits a "still
   working" message and rejoins later.
-- Idle worker eviction / metrics so a very long-lived service does not keep one
-  worker record forever for every historical conversation.
+- Worker metrics so operators can observe active/evicted conversation workers.
 
 ## QQ Adapter Migration
 
