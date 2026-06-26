@@ -9,9 +9,9 @@
 
 ## Snapshot
 
-- **Slice:** 258 (`xmake run orangutan -- --help` reports slice 258)
+- **Slice:** 259 (`xmake run orangutan -- --help` reports slice 259)
 - **Last completed history:**
-  [`histories/2026-06/20260626-1415-serve-channel-triggered-ingress.md`](histories/2026-06/20260626-1415-serve-channel-triggered-ingress.md)
+  [`histories/2026-06/20260626-1446-serve-channel-conversation-dispatch.md`](histories/2026-06/20260626-1446-serve-channel-conversation-dispatch.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — the only active plan; its next gate is externally blocked on real QQ
@@ -24,25 +24,27 @@
     [`exec-plans/completed/2026-06-18-runtime-service-owner.md`](exec-plans/completed/2026-06-18-runtime-service-owner.md).
     The desktop chat-tracer plan closed 2026-06-16
     ([`exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md)).
-- **Latest completed slice:** slice 258 wires configured channel ingress into
-  triggered automation under `orangutan --serve`. When both the channel concern
-  and automation concern are active, `serve_channels(...)` wraps the routed
-  `ChannelPromptRunner` with a non-fatal producer that calls
-  `AutomationService::enqueue_triggered(...)` using trigger key
-  `channel:<channel_id>` before the direct channel reply path runs. This gives
-  config-authored `automation.triggered.jobs[]` descriptors a concrete channel
-  event producer while keeping `oran-channel` and `oran-automation` caller-owned.
-  Webhook ingress, per-conversation channel serialization/deadlines, and concrete
-  automation notifier routing remain open. `test-config` 58 cases / 562
-  assertions; `test-automation` 107 cases / 1868 assertions; `test-bootstrap` 177
-  cases / 1719 assertions; focused `[serve][channels][automation][triggered]`
-  coverage passed; full `xmake test` 19/19 and `make ci` passed.
-- **Next intended slice:** generic channel hardening remains the best unblocked
-  follow-up: per-conversation serialization/deadlines plus per-agent strand
-  ownership where the service-level strand is too coarse. Other viable follow-ups
-  are the webhook adapter/producer path for non-chat triggers, concrete automation
-  notifier routing, or QQ-port milestone 4b-ii once real QQ credentials and an
-  operator conversation exist.
+- **Latest completed slice:** slice 259 hardens configured channel ingress under
+  `orangutan --serve` with a per-channel+conversation dispatcher. The channel
+  concern still pumps configured adapters into `ChannelManager`, but the dispatch
+  side now assigns each inbound message to a bounded worker queue keyed by
+  `(channel_id, conversation_id)`: one conversation's messages run in order, while
+  a slow conversation no longer blocks unrelated conversations. The slice keeps
+  `oran-channel` caller-owned, preserves the slice-258 `channel:<channel_id>`
+  triggered automation producer, and uses explicit child cancellation plus a
+  non-awaiting completion counter so shutdown still drains spawned workers before
+  returning. Per-message deadlines, idle worker eviction, per-agent strand
+  splitting, webhook ingress, and concrete automation notifier routing remain
+  open. `test-bootstrap` 178 cases / 1733 assertions; focused
+  `[serve][channels][ordering]` coverage passed; full `xmake test` 19/19 and
+  `make ci` passed.
+- **Next intended slice:** continue generic channel hardening by adding
+  per-message deadlines and/or idle eviction for the new conversation workers, or
+  split the routed agent path onto per-agent strands where the service-level
+  strand is still too coarse. Other viable follow-ups are the webhook
+  adapter/producer path for non-chat triggers, concrete automation notifier
+  routing, or QQ-port milestone 4b-ii once real QQ credentials and an operator
+  conversation exist.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 
@@ -79,8 +81,8 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-agent`: 57 cases / 10 786 assertions.
 - `oran-cli`: 28 cases / 221 assertions.
 - `oran-desktop`: 17 cases / 70 assertions.
-- `oran-bootstrap`: 177 cases / 1719 assertions (gated `--channel_qq=y`: 161 /
-  1411).
+- `oran-bootstrap`: 178 cases / 1733 assertions (gated `--channel_qq=y`: 180 /
+  1773).
 
 ## Open Tech-Debt Rows
 

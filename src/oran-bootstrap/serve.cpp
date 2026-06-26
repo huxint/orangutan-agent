@@ -29,6 +29,7 @@
 #include <print>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -71,6 +72,14 @@ namespace {
 
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
+
+constexpr std::size_t kChannelConversationQueueCapacity = 64;
+
+template <typename T>
+[[nodiscard]] std::size_t hash_combine(std::size_t seed, const T& value) noexcept {
+  const auto h = std::hash<T>{}(value);
+  return seed ^ (h + 0x9e3779b97f4a7c15ULL + (seed << 6U) + (seed >> 2U));
+}
 
 /// Idle in a cancel-aware loop until the calling coroutine's cancellation slot
 /// fires. `async::sleep_for` yields a `cancelled` result when the awaiting
@@ -154,27 +163,160 @@ async::Awaitable<Result<void>> serve_channel_pump(channel::ChannelManager& manag
   }
 }
 
-/// The dispatch loop: consume the manager fan-in through `channel::dispatch_one`
-/// (run the routed runner, reply via the owning adapter) until stopped. A
-/// cancelled receive (parent stop or a closed fan-in) ends it gracefully; any
-/// other failure is per-message (a malformed inbound, an agent-path error, or a
-/// send failure), and since `dispatch_one` consumes the fan-in message before
-/// those, reporting and continuing cannot hot-spin on the same message.
+struct ChannelConversationKey {
+  std::string channel_id;
+  std::string conversation_id;
+
+  friend bool operator==(const ChannelConversationKey&, const ChannelConversationKey&) = default;
+};
+
+struct ChannelConversationKeyHash {
+  [[nodiscard]] std::size_t operator()(const ChannelConversationKey& key) const noexcept {
+    auto seed = std::hash<std::string>{}(key.channel_id);
+    return hash_combine(seed, key.conversation_id);
+  }
+};
+
+[[nodiscard]] ChannelConversationKey conversation_dispatch_key(const channel::InboundMessage& message) {
+  return ChannelConversationKey{.channel_id = message.channel_id, .conversation_id = message.conversation_id};
+}
+
+async::Awaitable<Result<channel::DeliveryReceipt>> dispatch_channel_message(channel::ChannelManager& manager,
+                                                                            const channel::ChannelPromptRunner& runner,
+                                                                            channel::InboundMessage message) {
+  auto request = channel::make_prompt_run_request(message);
+  if (!request) {
+    co_return std::unexpected(std::move(request).error());
+  }
+
+  auto result = co_await runner(std::move(*request));
+  if (!result) {
+    co_return std::unexpected(std::move(result).error());
+  }
+
+  co_return co_await manager.send(message.channel_id, channel::make_reply_message(message, std::move(result->text)));
+}
+
+/// One per-channel+conversation worker. It serializes messages for a single
+/// conversation while other conversation workers can await their own agent runs
+/// concurrently. `progress` is borrowed; the owning dispatch loop closes/cancels
+/// every worker and waits for the shared completion count before returning.
+async::Awaitable<void> serve_channel_conversation_worker(channel::ChannelManager& manager,
+                                                         channel::ChannelPromptRunner runner,
+                                                         std::shared_ptr<async::Channel<channel::InboundMessage>> inbox,
+                                                         ChannelConversationKey key,
+                                                         async::Channel<std::monostate>& progress,
+                                                         std::shared_ptr<std::atomic_size_t> completed_workers) {
+  for (;;) {
+    auto message = co_await inbox->receive();
+    if (!message) {
+      break;
+    }
+
+    auto dispatched = co_await dispatch_channel_message(manager, runner, std::move(*message));
+    if (!dispatched) {
+      auto cancellation = co_await asio::this_coro::cancellation_state;
+      if (dispatched.error().kind() == core::ErrorKind::cancelled &&
+          cancellation.cancelled() != asio::cancellation_type::none) {
+        break;
+      }
+      std::println(stderr,
+                   "orangutan: channel dispatch failed for channel '{}' conversation '{}': {}",
+                   key.channel_id,
+                   key.conversation_id,
+                   dispatched.error());
+    }
+
+    [[maybe_unused]] auto signaled = progress.try_send(std::monostate{});
+  }
+
+  completed_workers->fetch_add(1, std::memory_order_release);
+  [[maybe_unused]] auto signaled = progress.try_send(std::monostate{});
+}
+
+struct ChannelConversationWorker {
+  std::shared_ptr<async::Channel<channel::InboundMessage>> inbox;
+  std::shared_ptr<asio::cancellation_signal> cancel;
+};
+
+/// The dispatch loop consumes the manager fan-in and assigns each message to a
+/// bounded per-channel+conversation worker queue. A single worker processes one
+/// conversation in order; different conversations can await their routed agent
+/// runs and sends concurrently. A per-message failure is reported and that
+/// worker continues, so a malformed inbound, agent-path error, or send failure
+/// does not kill the daemon.
 async::Awaitable<Result<void>> serve_channel_dispatch(channel::ChannelManager& manager,
+                                                      asio::any_io_executor executor,
                                                       const channel::ChannelPromptRunner& runner,
                                                       std::function<bool()> stop_requested) {
+  std::unordered_map<ChannelConversationKey, ChannelConversationWorker, ChannelConversationKeyHash> workers;
+  async::Channel<std::monostate> progress{executor, 1};
+  auto completed_workers = std::make_shared<std::atomic_size_t>(0);
+
+  auto worker_for = [&](const channel::InboundMessage& message) -> ChannelConversationWorker& {
+    auto key = conversation_dispatch_key(message);
+    if (auto found = workers.find(key); found != workers.end()) {
+      return found->second;
+    }
+
+    auto worker_key = key;
+    auto inbox = std::make_shared<async::Channel<channel::InboundMessage>>(executor, kChannelConversationQueueCapacity);
+    auto cancel = std::make_shared<asio::cancellation_signal>();
+    auto [inserted, _] = workers.emplace(std::move(key), ChannelConversationWorker{.inbox = inbox, .cancel = cancel});
+    asio::co_spawn(executor,
+                   serve_channel_conversation_worker(manager,
+                                                     runner,
+                                                     std::move(inbox),
+                                                     std::move(worker_key),
+                                                     progress,
+                                                     completed_workers),
+                   asio::bind_cancellation_slot(cancel->slot(), asio::detached));
+    return inserted->second;
+  };
+
+  using namespace asio::experimental::awaitable_operators;
   for (;;) {
     if (stop_requested && stop_requested()) {
-      co_return Result<void>{};  // cooperative early-out before the next receive.
+      break;  // cooperative early-out before the next receive.
     }
-    auto receipt = co_await channel::dispatch_one(manager, runner);
-    if (!receipt && receipt.error().kind() == core::ErrorKind::cancelled) {
-      co_return Result<void>{};  // parent stop or closed fan-in — graceful.
+    auto event = co_await (manager.inbound().receive() || progress.receive());
+    if (event.index() == 1) {
+      auto seen_progress = std::get<1>(std::move(event));
+      if (!seen_progress && seen_progress.error().kind() == core::ErrorKind::cancelled) {
+        break;
+      }
+      continue;  // A worker completed one message; re-check stop_requested.
     }
-    if (!receipt) {
-      std::println(stderr, "orangutan: channel dispatch failed: {}", receipt.error());
+
+    auto message = std::get<0>(std::move(event));
+    if (!message && message.error().kind() == core::ErrorKind::cancelled) {
+      break;  // parent stop or closed fan-in — graceful.
+    }
+    if (!message) {
+      std::println(stderr, "orangutan: channel dispatch receive failed: {}", message.error());
+      continue;
+    }
+
+    auto& worker = worker_for(*message);
+    auto sent = co_await worker.inbox->send(std::move(*message));
+    if (!sent && sent.error().kind() == core::ErrorKind::cancelled) {
+      break;
+    }
+    if (!sent) {
+      std::println(stderr, "orangutan: channel conversation enqueue failed: {}", sent.error());
     }
   }
+
+  co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+  for (auto& [_, worker] : workers) {
+    worker.inbox->close();
+    worker.cancel->emit(asio::cancellation_type::all);
+  }
+  while (completed_workers->load(std::memory_order_acquire) < workers.size()) {
+    [[maybe_unused]] auto received = co_await progress.receive();
+  }
+
+  co_return Result<void>{};
 }
 
 [[nodiscard]] std::string channel_trigger_key(std::string_view channel_id) {
@@ -470,7 +612,7 @@ async::Awaitable<Result<void>> serve_channels(asio::any_io_executor executor,
   // The dispatcher is the awaited body. When the parent cancels this coroutine
   // (the serve_body `||` race), this await's fan-in receive returns `cancelled`
   // and control returns here for cleanup.
-  auto dispatched = co_await serve_channel_dispatch(manager, dispatch_runner, std::move(stop_requested));
+  auto dispatched = co_await serve_channel_dispatch(manager, executor, dispatch_runner, std::move(stop_requested));
 
   // Stop adapters and drain the pumps with cancellation disabled, so an
   // already-fired parent cancellation cannot abandon the spawned coroutines

@@ -209,7 +209,16 @@ only — v2 makes channels pluggable.
   `channel:<channel_id>` before the normal routed agent reply is sent. Enqueue
   failures are reported and do not block the direct reply. Focused validation:
   `test-bootstrap` 177 / 1719 with the new `[serve][channels][automation]`
-  producer case. Webhook ingress and per-conversation serialization remain open.
+  producer case. Webhook ingress and per-conversation serialization remained
+  open at this slice.
+- Slice 259: `serve_channels(...)` now dispatches configured channel fan-in
+  through bounded per-channel+conversation worker queues. Messages with the
+  same `(channel_id, conversation_id)` run through the routed agent bridge and
+  reply path in order, while unrelated conversations can run concurrently; the
+  slice preserves the slice-258 triggered automation enqueue wrapper. Focused
+  validation: `test-bootstrap` 178 / 1733 with the new
+  `[serve][channels][ordering]` case. Per-message deadlines, idle worker
+  eviction, webhook ingress, and concrete delivery hooks remain open.
 
 ## Design Doc Cross-References
 

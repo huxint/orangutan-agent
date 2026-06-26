@@ -80,7 +80,11 @@ when the automation concern is active, `serve_channels(...)` wraps the routed
 runner and enqueues a matching triggered automation event with key
 `channel:<channel_id>` before continuing to the direct reply path. Enqueue
 failures are reported and do not prevent the channel reply; webhook and
-per-conversation scheduling remain downstream.
+deadline scheduling remain downstream.
+Slice 259 adds the first per-conversation dispatch boundary at that same owner:
+fan-in messages are assigned to bounded worker queues keyed by
+`(channel_id, conversation_id)`, preserving order inside one conversation while
+letting unrelated conversations await agent runs concurrently.
 
 ## Inbound / Outbound Envelopes
 
@@ -226,36 +230,41 @@ The manager:
 - Rejects null, unnamed, duplicate, or missing channel ids with `core::Error`
   instead of relying on adapter-specific failure modes.
 
-The manager itself does **not** spawn a background fan-in loop or own
-per-conversation serialization. Slice 256 lands the first background fan-in
-owner at the actual caller boundary: `bootstrap::serve_channels(...)` under
-`orangutan --serve` starts already-registered adapters, runs one pump per
-adapter, dispatches from the shared fan-in, can enqueue `channel:<channel_id>`
-triggered automation events when `--serve` also owns automation state, and owns
-cancellation/shutdown drain. Per-conversation serialization remains downstream.
+The manager itself does **not** spawn a background fan-in loop. Slice 256 lands
+the first background fan-in owner at the actual caller boundary:
+`bootstrap::serve_channels(...)` under `orangutan --serve` starts
+already-registered adapters, runs one pump per adapter, dispatches from the
+shared fan-in, can enqueue `channel:<channel_id>` triggered automation events
+when `--serve` also owns automation state, and owns cancellation/shutdown drain.
+Slice 259 keeps that ownership at the caller boundary and adds the first
+per-conversation dispatch queues there instead of moving policy into
+`ChannelManager`.
 
 ## Per-Conversation Serialization
 
 Inside one channel, messages for the same `conversation_id` should be handled in order.
-The legacy code's `JidTaskRunner` is the right idea; v2 generalizes it via a
-`PerKeyStrand<conversation_id>`:
+The legacy code's `JidTaskRunner` is the right idea; slice 259 lands the first
+version under `bootstrap::serve_channels(...)` as one bounded worker queue per
+`(channel_id, conversation_id)`:
 
 ```cpp
-// inside ChannelManager
-strands_.for_key(msg.conversation_id, [&]() {
-  asio::co_spawn(strand_, dispatcher.handle(std::move(msg)), asio::detached);
-});
+// inside bootstrap::serve_channels
+workers.for_key(msg.channel_id, msg.conversation_id).enqueue(std::move(msg));
 ```
 
 Multiple conversations on the same channel adapter run in parallel; a single
-conversation's messages are strictly ordered.
+conversation's messages are strictly ordered. The low-level `ChannelManager`
+stays a caller-owned fan-in/send primitive rather than the owner of scheduling
+policy.
 
-Downside of the legacy approach: one slow response blocked the entire JID queue. v2
-mitigates by:
+Slice 259 fixes the first downside of the legacy approach: one slow response no
+longer blocks the entire channel queue. Remaining mitigation work:
 
 - Per-message deadline (`config.channel.<id>.message_deadline_seconds`).
 - On deadline, the in-flight tool calls are cancelled; the agent emits a "still
   working" message and rejoins later.
+- Idle worker eviction / metrics so a very long-lived service does not keep one
+  worker record forever for every historical conversation.
 
 ## QQ Adapter Migration
 

@@ -145,14 +145,15 @@ struct ServeSchedulerReapOptions {
 /// fan-in loop (`design-docs/channel-abstraction.md`: "That ownership lands with
 /// the first daemon/dispatcher slice"). For every id in `channel_ids` it spawns
 /// one cancel-aware *pump* coroutine that forwards that adapter's
-/// `next_message()` results into the manager fan-in (`receive_one`), while a
-/// single *dispatch* loop consumes the fan-in through `channel::dispatch_one`,
-/// runs the routed agent `runner`, and replies via the owning adapter. The
-/// adapters in `manager` must already be started (`start_all`). When
-/// `triggered_service` is non-null, each successfully-normalized inbound message
-/// is also enqueued as an automation trigger with key `channel:<channel_id>`
-/// before the direct channel reply path runs; enqueue failures are reported but
-/// do not block the direct reply.
+/// `next_message()` results into the manager fan-in (`receive_one`), while the
+/// dispatcher assigns fan-in messages to bounded per-channel+conversation worker
+/// queues. Each worker runs the routed agent `runner` and replies via the owning
+/// adapter in message order for that one conversation; different conversations
+/// can run concurrently. The adapters in `manager` must already be started
+/// (`start_all`). When `triggered_service` is non-null, each
+/// successfully-normalized inbound message is also enqueued as an automation
+/// trigger with key `channel:<channel_id>` before the direct channel reply path
+/// runs; enqueue failures are reported but do not block the direct reply.
 ///
 /// A per-message dispatch failure (a malformed inbound, an agent-path error, or
 /// a send failure) is reported and the loop continues — one bad message must not

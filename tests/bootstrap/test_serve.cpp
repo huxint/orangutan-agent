@@ -9,6 +9,7 @@
 // process signals: the signal -> 128+signum translation is covered by
 // tests/bootstrap/test_signal_drain.cpp's shared `signum_from_error` seam.
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <filesystem>
@@ -522,10 +523,10 @@ TEST_CASE("serve_scheduler_reaping stops gracefully on cancel", "[unit][bootstra
 
 namespace {
 
-[[nodiscard]] channel::InboundMessage text_inbound(std::string text) {
+[[nodiscard]] channel::InboundMessage text_inbound(std::string text, std::string conversation_id = "conv-1") {
   return channel::InboundMessage{
       .channel_id = "mock-main",
-      .conversation_id = "conv-1",
+      .conversation_id = std::move(conversation_id),
       .user_id = "user-1",
       .display_name = "User One",
       .content = {core::TextContent{.text = std::move(text)}},
@@ -583,6 +584,54 @@ TEST_CASE("serve_channels dispatches mock inbound messages and replies", "[unit]
     CHECK(*sent.reply_to_message_id == "msg-0");
     REQUIRE(sent.thread_id.has_value());
     CHECK(*sent.thread_id == "thread-1");
+    CHECK_FALSE(mock->started());
+  });
+}
+
+TEST_CASE("serve_channels serializes each conversation without blocking others",
+          "[unit][bootstrap][serve][channels][ordering]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    channel::ChannelManager manager{io.get_executor()};
+    auto adapter =
+        std::make_unique<channel::MockChannel>(io.get_executor(),
+                                               channel::MockChannelOptions{.id = "mock-main", .kind = "mock"});
+    auto* mock = adapter.get();
+    REQUIRE(manager.register_adapter(std::move(adapter)).has_value());
+    REQUIRE((co_await manager.start_all()).has_value());
+    REQUIRE(mock->push_inbound(text_inbound("first", "conv-1")).has_value());
+    REQUIRE(mock->push_inbound(text_inbound("second", "conv-1")).has_value());
+    REQUIRE(mock->push_inbound(text_inbound("other", "conv-2")).has_value());
+
+    std::vector<std::string> started;
+    auto runner =
+        channel::ChannelPromptRunner{[&started, executor = io.get_executor()](channel::ChannelPromptRunRequest request)
+                                         -> async::Awaitable<core::Result<channel::ChannelPromptRunResult>> {
+          started.push_back(request.conversation_id + ":" + request.prompt);
+          if (request.conversation_id == "conv-1" && request.prompt == "first") {
+            auto slept = co_await async::sleep_for(executor, 25ms);
+            if (!slept) {
+              co_return std::unexpected(std::move(slept).error());
+            }
+          }
+          co_return channel::ChannelPromptRunResult{.text = request.prompt + " reply"};
+        }};
+
+    auto outcome = co_await bootstrap::serve_channels(io.get_executor(),
+                                                      manager,
+                                                      std::move(runner),
+                                                      std::vector<std::string>{"mock-main"},
+                                                      [mock] { return mock->sent_messages().size() >= 3; });
+
+    REQUIRE(outcome.has_value());
+    REQUIRE(mock->sent_messages().size() == 3);
+    auto first = std::ranges::find(started, std::string{"conv-1:first"});
+    auto second = std::ranges::find(started, std::string{"conv-1:second"});
+    auto other = std::ranges::find(started, std::string{"conv-2:other"});
+    REQUIRE(first != started.end());
+    REQUIRE(second != started.end());
+    REQUIRE(other != started.end());
+    CHECK(first < second);
+    CHECK(other < second);
     CHECK_FALSE(mock->started());
   });
 }
