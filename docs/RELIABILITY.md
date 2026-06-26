@@ -28,6 +28,11 @@ trust the audit log. This doc captures the operational expectations.
 - v1: counters are surfaced in the desktop app's status panel and emitted to structured
   logs; there is no HTTP metrics endpoint (an `orangutan-server`-only `GET /metrics` in
   Prometheus exposition format is a possible future option).
+- `orangutan --serve` emits configured-channel worker snapshots to stderr when
+  channel adapters are active: `ServeChannelMetricsLogSink` writes deduplicated
+  one-line records for active/max workers, lifecycle counts, enqueue/reply
+  counts, timeouts, and failures. This is a log sink, not a config-toggleable
+  metrics endpoint.
 - Trace inspection is SQLite-native today: `orangutan --trace <turn-id>` prints a
   human-readable `trace_turns` row plus joined audit rows, and
   `orangutan --trace-export <turn-id>` emits that same single turn as one JSON

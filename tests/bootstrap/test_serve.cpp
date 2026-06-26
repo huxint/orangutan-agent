@@ -542,6 +542,46 @@ namespace {
 
 }  // namespace
 
+TEST_CASE("ServeChannelMetricsLogSink emits deduplicated channel worker metrics",
+          "[unit][bootstrap][serve][channels][metrics]") {
+  std::vector<std::string> lines;
+  auto sink = bootstrap::ServeChannelMetricsLogSink{bootstrap::ServeChannelMetricsLogSinkOptions{
+      .emit_line = [&](std::string line) { lines.push_back(std::move(line)); }}};
+
+  auto snapshot = bootstrap::ServeChannelWorkerMetrics{
+      .active_workers = 1,
+      .max_active_workers = 2,
+      .workers_created = 3,
+      .workers_completed = 4,
+      .workers_evicted_idle = 5,
+      .messages_enqueued = 6,
+      .replies_sent = 7,
+      .message_timeouts = 8,
+      .dispatch_failures = 9,
+      .enqueue_failures = 10,
+  };
+  sink(snapshot);
+  sink(snapshot);
+  ++snapshot.replies_sent;
+  sink(snapshot);
+
+  REQUIRE(lines.size() == 2);
+  CHECK(lines.front() == bootstrap::format_serve_channel_worker_metrics(bootstrap::ServeChannelWorkerMetrics{
+                             .active_workers = 1,
+                             .max_active_workers = 2,
+                             .workers_created = 3,
+                             .workers_completed = 4,
+                             .workers_evicted_idle = 5,
+                             .messages_enqueued = 6,
+                             .replies_sent = 7,
+                             .message_timeouts = 8,
+                             .dispatch_failures = 9,
+                             .enqueue_failures = 10,
+                         }));
+  CHECK(lines.back().contains("replies=8"));
+  CHECK(lines.back().contains("timeouts=8"));
+}
+
 TEST_CASE("serve_channels dispatches mock inbound messages and replies", "[unit][bootstrap][serve][channels]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     channel::ChannelManager manager{io.get_executor()};
@@ -766,6 +806,9 @@ TEST_CASE("serve_channels reports conversation worker metrics", "[unit][bootstra
     REQUIRE(mock->push_inbound(text_inbound("second", "conv-2")).has_value());
 
     std::vector<bootstrap::ServeChannelWorkerMetrics> snapshots;
+    std::vector<std::string> metric_lines;
+    auto sink = bootstrap::ServeChannelMetricsLogSink{bootstrap::ServeChannelMetricsLogSinkOptions{
+        .emit_line = [&](std::string line) { metric_lines.push_back(std::move(line)); }}};
     auto runner = channel::ChannelPromptRunner{[](channel::ChannelPromptRunRequest request)
                                                    -> async::Awaitable<core::Result<channel::ChannelPromptRunResult>> {
       co_return channel::ChannelPromptRunResult{.text = request.prompt + " reply"};
@@ -781,7 +824,10 @@ TEST_CASE("serve_channels reports conversation worker metrics", "[unit][bootstra
         bootstrap::ServeChannelOptions{
             .conversation_idle_ttl = 25ms,
             .metrics_observer =
-                [&](const bootstrap::ServeChannelWorkerMetrics& snapshot) { snapshots.push_back(snapshot); },
+                [&](const bootstrap::ServeChannelWorkerMetrics& snapshot) mutable {
+                  snapshots.push_back(snapshot);
+                  sink(snapshot);
+                },
         });
 
     REQUIRE(outcome.has_value());
@@ -798,6 +844,8 @@ TEST_CASE("serve_channels reports conversation worker metrics", "[unit][bootstra
     CHECK(final.message_timeouts == 0);
     CHECK(final.dispatch_failures == 0);
     CHECK(final.enqueue_failures == 0);
+    REQUIRE_FALSE(metric_lines.empty());
+    CHECK(metric_lines.back() == bootstrap::format_serve_channel_worker_metrics(final));
     CHECK_FALSE(mock->started());
   });
 }

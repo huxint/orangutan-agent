@@ -22,6 +22,7 @@
 #include <exception>
 #include <expected>
 #include <filesystem>
+#include <format>
 #include <functional>
 #include <future>
 #include <memory>
@@ -560,6 +561,7 @@ async::Awaitable<Result<void>> serve_body(asio::any_io_executor executor,
                                           channel::ChannelManager* channel_manager,
                                           channel::ChannelPromptRunner channel_runner,
                                           std::vector<std::string> channel_ids,
+                                          ServeChannelOptions channel_options,
                                           std::function<bool()> stop_requested) {
   // Open automation persistence (non-fatal). On any failure the automation and
   // reaping concerns degrade to idle, but the watcher and channels keep serving.
@@ -629,13 +631,45 @@ async::Awaitable<Result<void>> serve_body(asio::any_io_executor executor,
                                               std::move(channel_runner),
                                               std::move(channel_ids),
                                               stop_requested,
-                                              automation_active ? &*automation_service : nullptr)
+                                              automation_active ? &*automation_service : nullptr,
+                                              std::move(channel_options))
                              : serve_idle(executor)));
 
   co_return Result<void>{};
 }
 
 }  // namespace
+
+std::string format_serve_channel_worker_metrics(const ServeChannelWorkerMetrics& snapshot) {
+  return std::format("orangutan: channel worker metrics active={} max={} created={} completed={} idle_evicted={} "
+                     "enqueued={} replies={} timeouts={} dispatch_failures={} enqueue_failures={}",
+                     snapshot.active_workers,
+                     snapshot.max_active_workers,
+                     snapshot.workers_created,
+                     snapshot.workers_completed,
+                     snapshot.workers_evicted_idle,
+                     snapshot.messages_enqueued,
+                     snapshot.replies_sent,
+                     snapshot.message_timeouts,
+                     snapshot.dispatch_failures,
+                     snapshot.enqueue_failures);
+}
+
+ServeChannelMetricsLogSink::ServeChannelMetricsLogSink(ServeChannelMetricsLogSinkOptions options)
+    : options_(std::move(options)) {}
+
+void ServeChannelMetricsLogSink::operator()(const ServeChannelWorkerMetrics& snapshot) {
+  if (last_snapshot_.has_value() && *last_snapshot_ == snapshot) {
+    return;
+  }
+  last_snapshot_ = snapshot;
+  auto line = format_serve_channel_worker_metrics(snapshot);
+  if (options_.emit_line) {
+    options_.emit_line(std::move(line));
+    return;
+  }
+  std::println(stderr, "{}", line);
+}
 
 async::Awaitable<Result<void>> serve_run(asio::any_io_executor executor, ServeOptions options) {
   if (options.watch_enabled && !options.watch_root.empty()) {
@@ -1016,6 +1050,10 @@ Result<int> run_serve(const BootstrapOptions& options) {
   // build (e.g. a `qq`-only config in a non-`--channel_qq` build registers none).
   const bool serve_channels_enabled = !channel_ids.empty();
   const auto channel_count = channel_ids.size();
+  auto channel_options = ServeChannelOptions{};
+  if (serve_channels_enabled) {
+    channel_options.metrics_observer = ServeChannelMetricsLogSink{};
+  }
 
   auto stop_predicate = [&caught_signum]() -> bool {
     return caught_signum.load(std::memory_order_acquire) != 0;
@@ -1040,6 +1078,7 @@ Result<int> run_serve(const BootstrapOptions& options) {
                             channel_manager ? &*channel_manager : nullptr,
                             std::move(channel_runner),
                             std::move(channel_ids),
+                            std::move(channel_options),
                             stop_predicate),
                  asio::bind_cancellation_slot(stop.slot(), [&service_done](std::exception_ptr ep, Result<void> result) {
                    if (ep) {
@@ -1067,6 +1106,7 @@ Result<int> run_serve(const BootstrapOptions& options) {
   }
   if (serve_channels_enabled) {
     std::println("  channels:   {} adapter(s), {} provider", channel_count, provider_live ? "live" : "offline");
+    std::println("  channel metrics: stderr snapshots");
   }
   std::println("  stop with Ctrl-C (SIGINT) or SIGTERM");
 

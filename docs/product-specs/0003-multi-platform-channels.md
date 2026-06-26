@@ -248,6 +248,16 @@ only — v2 makes channels pluggable.
   `[serve][channels][deadline]` coverage. Webhook ingress, concrete delivery
   hooks, typed deadline config, durable rejoin, and the operator-facing metrics
   sink remain open.
+- Slice 263: `run_serve` now installs the first operator-facing sink for those
+  worker metrics when configured channel adapters are active. The public
+  `ServeChannelMetricsLogSink` formats one-line
+  `orangutan: channel worker metrics ...` records, suppresses repeated identical
+  snapshots, and defaults to stderr while tests/embedders can inject a line
+  callback. No JSON toggle or HTTP metrics endpoint is added. Focused
+  validation: `test-bootstrap` 184 / 1799 with extended
+  `[serve][channels][metrics]` coverage. Webhook ingress, concrete delivery
+  hooks, typed deadline config, durable rejoin, and richer metrics endpoints
+  remain open.
 
 ## Design Doc Cross-References
 

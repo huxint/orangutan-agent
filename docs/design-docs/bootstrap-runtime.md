@@ -555,8 +555,8 @@ adapter into the manager fan-in, assigning messages to bounded
 per-channel+conversation worker queues, dispatching each conversation in order
 through the routed agent bridge while unrelated conversations can run
 concurrently, evicting empty conversation workers after their idle TTL, publishing
-structured worker metrics snapshots to an optional C++ observer, applying an
-optional per-message deadline with a still-working fallback reply,
+structured worker metrics snapshots to an optional C++ observer and the default
+daemon stderr sink, applying an optional per-message deadline with a still-working fallback reply,
 optionally enqueueing `channel:<channel_id>` triggered automation work when
 `triggered_service` is supplied, replying through the owning adapter, and
 stopping/draining adapters before returning. A
@@ -655,8 +655,7 @@ completion flags rather than a total completed count, so previously evicted
 workers cannot make active shutdown waits look complete. Deadlines remain
 downstream.
 
-Slice 261 adds the first structured worker metrics boundary without adding an
-operator-facing sink yet. `ServeChannelWorkerMetrics` snapshots report the
+Slice 261 adds the first structured worker metrics boundary. `ServeChannelWorkerMetrics` snapshots report the
 current worker table size, max observed worker table size, created/completed
 workers, idle evictions, message enqueue count, sent replies, dispatch failures,
 and enqueue failures. `ServeChannelOptions::metrics_observer` is an optional
@@ -666,8 +665,8 @@ and dispatch-failure counters are atomic because workers can run concurrently
 when an embedding supplies a non-strand executor; worker-table counters stay
 dispatcher-owned. Observer exceptions are caught and reported to stderr so an
 embedding/test callback cannot terminate the long-lived service. No JSON config,
-daemon metrics endpoint, or hook payload was added in this slice; the observer
-is the owner/test seam that a later operator-facing metrics sink can consume.
+daemon metrics endpoint, or hook payload was added in this slice; the observer is
+the owner/test seam later consumed by the daemon sink.
 
 Slice 262 adds the first per-message deadline at that same owner/test boundary.
 `ServeChannelOptions::message_deadline` is optional and must be positive when
@@ -680,6 +679,15 @@ failed fallback send counts as a dispatch failure. This slice deliberately does
 not add a JSON config field or a durable background rejoin path, because both
 need the deferred typed `serve`/channel config and later-reply policy.
 
+Slice 263 binds the worker metrics seam into the `run_serve` daemon path without
+adding a new config surface. `ServeChannelMetricsLogSink` formats
+`ServeChannelWorkerMetrics` snapshots as one-line `orangutan: channel worker
+metrics ...` records, suppresses repeated identical snapshots, and writes to
+stderr by default; tests can inject a callback to capture the same formatted
+lines. `run_serve` installs this sink whenever at least one configured channel
+adapter registers, so channel-worker state is visible in ordinary daemon logs.
+There is still no HTTP metrics endpoint or JSON toggle.
+
 ## Next Steps
 
 - Add the webhook adapter/producer path for non-chat triggers.
@@ -687,8 +695,7 @@ need the deferred typed `serve`/channel config and later-reply policy.
   one concern wants tuning — the reaping interval is a fixed 1-minute default today
   and the channel deadline is only a C++ owner/test knob.
 - Add the durable later-reply/rejoin path for over-deadline channel messages.
-- Bind channel worker metrics to an operator-facing sink once the daemon metrics
-  surface is designed.
+- Add a daemon metrics endpoint only once there is a concrete operator consumer.
 - Drive the CLI agent loop on a per-agent strand too, and split channel agent
   runs onto per-agent strands where the service-level strand is still too coarse.
 - Bind configured hook sinks to the assembly-owned bus once the hook sink models land.

@@ -157,6 +157,34 @@ struct ServeChannelWorkerMetrics {
   std::uint64_t message_timeouts{};
   std::uint64_t dispatch_failures{};
   std::uint64_t enqueue_failures{};
+
+  friend bool operator==(const ServeChannelWorkerMetrics&, const ServeChannelWorkerMetrics&) = default;
+};
+
+/// Options for the default channel worker metrics log sink. `emit_line`, when
+/// set, receives already-formatted one-line status records; otherwise the sink
+/// writes each record to stderr. Intended for `run_serve` plus tests/embedders
+/// that want the same formatting without a process-level stderr dependency.
+struct ServeChannelMetricsLogSinkOptions {
+  std::function<void(std::string)> emit_line{};
+};
+
+/// Format one channel worker metrics snapshot as the operator-facing log line
+/// emitted by `ServeChannelMetricsLogSink`.
+[[nodiscard]] std::string format_serve_channel_worker_metrics(const ServeChannelWorkerMetrics& snapshot);
+
+/// Deduplicating metrics observer for the channel concern under `--serve`.
+/// Repeated identical snapshots are suppressed; changed snapshots are emitted
+/// through `options.emit_line` or stderr when no callback is supplied.
+class ServeChannelMetricsLogSink {
+public:
+  explicit ServeChannelMetricsLogSink(ServeChannelMetricsLogSinkOptions options = {});
+
+  void operator()(const ServeChannelWorkerMetrics& snapshot);
+
+private:
+  ServeChannelMetricsLogSinkOptions options_{};
+  std::optional<ServeChannelWorkerMetrics> last_snapshot_{};
 };
 
 /// Tunables for the channel ingress/dispatch concern under `--serve`.
