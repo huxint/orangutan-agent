@@ -84,8 +84,10 @@ typed `automation.triggered.jobs[]` config seeds, bootstrap mapping into
 `UpsertTriggeredJobRequest` descriptors, `RuntimeAssembly` storage for those
 descriptors without opening `automation.db`, explicit
 `AutomationRuntime::apply_triggered_job_seeds(...)` persistence, and `--serve`
-seed application when either cron or triggered descriptors are configured. The
-current API evaluates
+seed application when either cron or triggered descriptors are configured. Slice
+258 adds the first `--serve` producer for those descriptors by enqueueing channel
+messages as `channel:<channel_id>` triggers before the direct channel reply path
+runs. The current API evaluates
 periodic and cron schedules from caller-supplied state, maps a long-term memory
 retention policy into a due-only `memory::longterm::DecayRequest`, persists the
 configured retention job plus run history and lease state through
@@ -384,10 +386,13 @@ Current implementation:
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 
-Still open: a channel/webhook producer that turns external events into
+Still open: a webhook/non-chat producer that turns external events into
 `AutomationService::enqueue_triggered(...)` calls, concrete cli/channel/desktop
 notifier routing, broader agent-firing policy, typed `serve` tuning for timer and
-shutdown policy, and the scheduler tick performance criterion. Triggered
+shutdown policy, and the scheduler tick performance criterion. Slice 258 adds
+the first configured-channel producer under `--serve`: channel messages enqueue
+matching triggered jobs with key `channel:<channel_id>` before the direct channel
+reply path runs. Triggered
 descriptor intake, explicit one-item queue draining, finite available-batch
 draining, drop-on-conflict handling for active triggered-agent leases, config-authored
 triggered descriptors, and the owner-local blocked-agent hold/retry path plus the
@@ -436,9 +441,12 @@ remains downstream.
    iteration budgets. Slice 257 lets operators author triggered descriptors in
    `automation.triggered.jobs[]`, lets bootstrap map them into repository seed
    descriptors, lets explicit runtime owners persist them, and lets `--serve`
-   apply them before its automation loop starts. A channel/webhook producer that
-   calls `AutomationService::enqueue_triggered(...)`, concrete notifier routing,
-   and actual agent firing latency remain downstream.
+   apply them before its automation loop starts. Slice 258 adds the first
+   process-owned producer for configured channel ingress: a message received by
+   `serve_channels(...)` enqueues matching triggered work with trigger key
+   `channel:<channel_id>` before the direct channel reply path runs. Webhook
+   producers, concrete notifier routing, and actual end-to-end triggered firing
+   latency remain downstream.
 4. Per-agent lease prevents two concurrent runs of the same agent_key; the queued
    firing is held or dropped per policy. Current status: slice 210 prevents
    overlapping explicit cron execution for the same stored `agent_key` through
@@ -461,8 +469,9 @@ remains downstream.
    later explicit retry cycles through `requeue_on_conflict` while public queue
    drains still drop or fail, and slice 225 adds the finite explicit loop
    policy above the owner. Slice 257 adds config-authored triggered descriptors
-   plus explicit seed persistence, but external trigger producers and concrete
-   notifier routing remain downstream.
+   plus explicit seed persistence, and slice 258 adds configured channel
+   messages as the first external trigger producer. Webhook producers and
+   concrete notifier routing remain downstream.
 5. A failing job is recorded with the failure reason; the next firing happens on
    schedule. Current status: slice 206 records explicit cron handler failures
    with the failure reason and leaves stored state due for retry, while slice

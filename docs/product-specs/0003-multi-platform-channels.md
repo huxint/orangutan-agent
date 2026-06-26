@@ -202,6 +202,14 @@ only — v2 makes channels pluggable.
   disabled adapters are reported once. Focused validation: `test-channel` 26 /
   205 and `test-bootstrap` 172 / 1664. Per-conversation serialization and
   webhook ingress remain open.
+- Slice 258: the same `--serve` channel owner can now produce triggered
+  automation work. When the automation concern is active, each successfully
+  normalized channel message is enqueued through
+  `AutomationService::enqueue_triggered(...)` using trigger key
+  `channel:<channel_id>` before the normal routed agent reply is sent. Enqueue
+  failures are reported and do not block the direct reply. Focused validation:
+  `test-bootstrap` 177 / 1719 with the new `[serve][channels][automation]`
+  producer case. Webhook ingress and per-conversation serialization remain open.
 
 ## Design Doc Cross-References
 

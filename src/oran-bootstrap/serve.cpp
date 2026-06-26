@@ -28,6 +28,7 @@
 #include <optional>
 #include <print>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -176,6 +177,39 @@ async::Awaitable<Result<void>> serve_channel_dispatch(channel::ChannelManager& m
   }
 }
 
+[[nodiscard]] std::string channel_trigger_key(std::string_view channel_id) {
+  auto key = std::string{"channel:"};
+  key += channel_id;
+  return key;
+}
+
+[[nodiscard]] channel::ChannelPromptRunner with_channel_trigger_enqueue(channel::ChannelPromptRunner runner,
+                                                                        automation::AutomationService& service) {
+  return channel::ChannelPromptRunner{
+      [runner = std::move(runner), service = &service](channel::ChannelPromptRunRequest request) mutable
+          -> async::Awaitable<core::Result<channel::ChannelPromptRunResult>> {
+        auto trigger_key = channel_trigger_key(request.channel_id);
+        auto enqueued = co_await service->enqueue_triggered(automation::TriggeredQueueEnqueueRequest{
+            .trigger_key = std::move(trigger_key),
+            .received_at = request.received_at,
+            .job_limit = 100,
+        });
+        if (!enqueued) {
+          std::println(stderr,
+                       "orangutan: channel automation trigger enqueue failed for '{}': {}",
+                       request.channel_id,
+                       enqueued.error());
+        } else if (enqueued->dropped_count > 0) {
+          std::println(stderr,
+                       "orangutan: channel automation trigger '{}' dropped {} job(s)",
+                       enqueued->intake.trigger_key,
+                       enqueued->dropped_count);
+        }
+
+        co_return co_await runner(std::move(request));
+      }};
+}
+
 /// Spawn wrapper around `serve_channel_pump`: run it to completion, then — with
 /// cancellation disabled, so a parent cancellation that already fired cannot
 /// abandon this coroutine — signal completion so `serve_channels` can drain it
@@ -283,7 +317,8 @@ async::Awaitable<Result<void>> serve_body(asio::any_io_executor executor,
                                               *channel_manager,
                                               std::move(channel_runner),
                                               std::move(channel_ids),
-                                              stop_requested)
+                                              stop_requested,
+                                              automation_active ? &*automation_service : nullptr)
                              : serve_idle(executor)));
 
   co_return Result<void>{};
@@ -402,12 +437,17 @@ async::Awaitable<Result<void>> serve_channels(asio::any_io_executor executor,
                                               channel::ChannelManager& manager,
                                               channel::ChannelPromptRunner runner,
                                               std::vector<std::string> channel_ids,
-                                              std::function<bool()> stop_requested) {
+                                              std::function<bool()> stop_requested,
+                                              automation::AutomationService* triggered_service) {
   // Reject a null runner up front: `dispatch_one` returns `invalid_argument`
   // for a null runner *without* consuming a fan-in message, which would hot-spin
   // the dispatch loop. run_serve and the tests always supply a real runner.
   if (!runner) {
     co_return std::unexpected(Error::invalid_argument("channel prompt runner is null"));
+  }
+  auto dispatch_runner = std::move(runner);
+  if (triggered_service != nullptr) {
+    dispatch_runner = with_channel_trigger_enqueue(std::move(dispatch_runner), *triggered_service);
   }
 
   // Own the background fan-in loop (design-docs/channel-abstraction.md): one
@@ -430,7 +470,7 @@ async::Awaitable<Result<void>> serve_channels(asio::any_io_executor executor,
   // The dispatcher is the awaited body. When the parent cancels this coroutine
   // (the serve_body `||` race), this await's fan-in receive returns `cancelled`
   // and control returns here for cleanup.
-  auto dispatched = co_await serve_channel_dispatch(manager, runner, std::move(stop_requested));
+  auto dispatched = co_await serve_channel_dispatch(manager, dispatch_runner, std::move(stop_requested));
 
   // Stop adapters and drain the pumps with cancellation disabled, so an
   // already-fired parent cancellation cannot abandon the spawned coroutines

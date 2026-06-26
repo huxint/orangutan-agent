@@ -148,7 +148,11 @@ struct ServeSchedulerReapOptions {
 /// `next_message()` results into the manager fan-in (`receive_one`), while a
 /// single *dispatch* loop consumes the fan-in through `channel::dispatch_one`,
 /// runs the routed agent `runner`, and replies via the owning adapter. The
-/// adapters in `manager` must already be started (`start_all`).
+/// adapters in `manager` must already be started (`start_all`). When
+/// `triggered_service` is non-null, each successfully-normalized inbound message
+/// is also enqueued as an automation trigger with key `channel:<channel_id>`
+/// before the direct channel reply path runs; enqueue failures are reported but
+/// do not block the direct reply.
 ///
 /// A per-message dispatch failure (a malformed inbound, an agent-path error, or
 /// a send failure) is reported and the loop continues — one bad message must not
@@ -167,11 +171,13 @@ struct ServeSchedulerReapOptions {
 /// Exposed (rather than file-local) so it can be driven from tests with a real
 /// `ChannelManager` + `MockChannel` and a fake `ChannelPromptRunner` — no
 /// provider, process, or signal required.
-[[nodiscard]] async::Awaitable<core::Result<void>> serve_channels(asio::any_io_executor executor,
-                                                                  channel::ChannelManager& manager,
-                                                                  channel::ChannelPromptRunner runner,
-                                                                  std::vector<std::string> channel_ids,
-                                                                  std::function<bool()> stop_requested = {});
+[[nodiscard]] async::Awaitable<core::Result<void>>
+serve_channels(asio::any_io_executor executor,
+               channel::ChannelManager& manager,
+               channel::ChannelPromptRunner runner,
+               std::vector<std::string> channel_ids,
+               std::function<bool()> stop_requested = {},
+               automation::AutomationService* triggered_service = nullptr);
 
 /// `orangutan --serve` entry. Loads config, starts `async::Runtime`, traps
 /// SIGINT/SIGTERM on a runtime strand, co-spawns the service body, blocks the

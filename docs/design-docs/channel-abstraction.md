@@ -75,6 +75,12 @@ now starts buildable `config.channels[]` adapters, runs one pump per adapter
 into `ChannelManager`, dispatches fan-in messages through
 `dispatch_one(manager, make_routed_channel_prompt_runner(...))`, replies through
 the owning adapter, and stops/drains the adapters on shutdown.
+Slice 258 lets that same owner act as the first automation trigger producer:
+when the automation concern is active, `serve_channels(...)` wraps the routed
+runner and enqueues a matching triggered automation event with key
+`channel:<channel_id>` before continuing to the direct reply path. Enqueue
+failures are reported and do not prevent the channel reply; webhook and
+per-conversation scheduling remain downstream.
 
 ## Inbound / Outbound Envelopes
 
@@ -224,8 +230,9 @@ The manager itself does **not** spawn a background fan-in loop or own
 per-conversation serialization. Slice 256 lands the first background fan-in
 owner at the actual caller boundary: `bootstrap::serve_channels(...)` under
 `orangutan --serve` starts already-registered adapters, runs one pump per
-adapter, dispatches from the shared fan-in, and owns cancellation/shutdown
-drain. Per-conversation serialization remains downstream.
+adapter, dispatches from the shared fan-in, can enqueue `channel:<channel_id>`
+triggered automation events when `--serve` also owns automation state, and owns
+cancellation/shutdown drain. Per-conversation serialization remains downstream.
 
 ## Per-Conversation Serialization
 

@@ -493,8 +493,17 @@ through the owned repository and reports requested/upserted counts plus stored
 rows, annotating failures with `seed_index` and `job_key` context. `--serve`
 applies cron seeds and triggered seeds once before starting `AutomationService`
 and now starts the automation concern when either seed kind is configured. This
-does not add a trigger producer yet: external channel/webhook events still need a
-future owner to call `AutomationService::enqueue_triggered(...)`.
+keeps the descriptors durable before a producer arrives.
+
+Slice 258 adds the first trigger producer at the existing process-owner boundary
+without changing `oran-automation`'s caller-owned posture. When `orangutan
+--serve` has both active automation state and buildable configured channels,
+`bootstrap::serve_channels(...)` wraps the routed channel prompt runner and
+calls `AutomationService::enqueue_triggered(...)` for each successfully
+normalized inbound message using trigger key `channel:<channel_id>`. The direct
+channel reply path still runs through `channel::dispatch_one`; enqueue failures
+or drop-newest backpressure are reported and do not block that reply. Webhook and
+other non-chat producers remain downstream owners.
 
 ## Public API
 

@@ -587,6 +587,51 @@ TEST_CASE("serve_channels dispatches mock inbound messages and replies", "[unit]
   });
 }
 
+TEST_CASE("serve_channels enqueues matching automation triggers before replying",
+          "[unit][bootstrap][serve][channels][automation][triggered]") {
+  TempDir temp{"oran-serve-channel-triggered"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    const auto db = (temp.path() / ".orangutan" / "automation.db").string();
+    auto runtime =
+        co_await automation::AutomationRuntime::open(io.get_executor(),
+                                                     automation::AutomationRuntimeOptions{.database_path = db});
+    REQUIRE(runtime.has_value());
+    REQUIRE((co_await seed_triggered_job(*runtime, "triggered:mock-main", "channel:mock-main")).has_value());
+    auto service = runtime->automation_service();
+
+    channel::ChannelManager manager{io.get_executor()};
+    auto adapter =
+        std::make_unique<channel::MockChannel>(io.get_executor(),
+                                               channel::MockChannelOptions{.id = "mock-main", .kind = "mock"});
+    auto* mock = adapter.get();
+    REQUIRE(manager.register_adapter(std::move(adapter)).has_value());
+    REQUIRE((co_await manager.start_all()).has_value());
+    REQUIRE(mock->push_inbound(text_inbound("start triggered work")).has_value());
+
+    std::vector<channel::ChannelPromptRunRequest> seen;
+    auto runner = channel::ChannelPromptRunner{[&seen](channel::ChannelPromptRunRequest request)
+                                                   -> async::Awaitable<core::Result<channel::ChannelPromptRunResult>> {
+      seen.push_back(std::move(request));
+      co_return channel::ChannelPromptRunResult{.text = "direct reply"};
+    }};
+
+    auto outcome = co_await bootstrap::serve_channels(
+        io.get_executor(),
+        manager,
+        std::move(runner),
+        std::vector<std::string>{"mock-main"},
+        [&seen, mock] { return !seen.empty() && !mock->sent_messages().empty(); },
+        &service);
+
+    REQUIRE(outcome.has_value());
+    REQUIRE(seen.size() == 1);
+    CHECK(seen.front().channel_id == "mock-main");
+    REQUIRE(mock->sent_messages().size() == 1);
+    CHECK_FALSE(mock->started());
+    CHECK(service.triggered_queue_size() == 1);
+  });
+}
+
 TEST_CASE("serve_channels stops gracefully on parent cancellation", "[unit][bootstrap][serve][channels]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     channel::ChannelManager manager{io.get_executor()};

@@ -549,10 +549,12 @@ work each tick. `serve_scheduler_reaping(executor, scheduler, options, stop_requ
 is the **scheduler idle-lock reaping** concern: a cancel-aware loop that periodically
 calls `agent::ToolScheduler::reap_idle_locks(now)` to bound the shared scheduler's
 per-path lock table (spec 0012 AC10). `serve_channels(executor, manager, runner,
-channel_ids, stop_requested)` is the **channel ingress/dispatch** concern: it
-drives already-started configured adapters by spawning one pump per adapter into
-the manager fan-in, dispatching messages through the routed agent bridge, replying
-through the owning adapter, and stopping/draining adapters before returning. A
+channel_ids, stop_requested, triggered_service)` is the **channel ingress/dispatch**
+concern: it drives already-started configured adapters by spawning one pump per
+adapter into the manager fan-in, dispatching messages through the routed agent
+bridge, optionally enqueueing `channel:<channel_id>` triggered automation work
+when `triggered_service` is supplied, replying through the owning adapter, and
+stopping/draining adapters before returning. A
 file-local `serve_body` races the enabled concerns with the awaitable-operators `||`
 under one cancellation slot, so a single signal stops all of them. The whole thing is built on a fine-grained
 `asio::cancellation_signal` rather than `SignalScope`/`io.stop()` deliberately, so the
@@ -564,7 +566,7 @@ the evolution `signal_drain.hpp` anticipates.
 watcher that cannot initialize (e.g. inotify unavailable, a missing root) is
 non-fatal — reported once, then the service keeps idling until signalled.
 
-**Slice B (slice 254, extended by slice 257)** adds the automation
+**Slice B (slice 254, extended by slices 257-258)** adds the automation
 cron/triggered loop. The presence of config-authored `automation.cron.jobs[]` or
 `automation.triggered.jobs[]` gates it: with neither, `--serve` is exactly the
 slice-A watcher (no provider, no `automation.db`, CI-identical). With automation jobs,
@@ -579,9 +581,13 @@ handler (`make_automation_agent_prompt_runner` →
 `make_cron_prompt_handler` / `make_triggered_prompt_handler`), and races
 `serve_automation` beside the watcher. A database that cannot open, or seeds that
 cannot apply, is non-fatal — reported once, then the service serves the watcher
-alone. Triggered descriptor seeds are durable descriptions only; until a future
-channel/webhook owner calls `AutomationService::enqueue_triggered(...)`, the triggered
-half of the loop has no external producer. The automation service disables cancellation
+alone. Slice 258 adds the first external producer for those durable triggered
+descriptors: when configured channels are also active, `serve_channels` wraps the
+routed channel prompt runner and calls `AutomationService::enqueue_triggered(...)`
+with trigger key `channel:<channel_id>` before the direct channel reply path runs.
+The enqueue path is report-and-continue, so a queue/repository failure does not
+block the user-visible channel reply. Webhook/non-chat producers remain downstream.
+The automation service disables cancellation
 around its durable lease/run-row writes, so a firing tick can swallow a parent cancellation; `serve_automation`'s
 `stop_requested` predicate (tied to the trapped signum) is therefore the
 authoritative, guaranteed stop, checked before and after each tick, and `run_serve`
@@ -622,8 +628,7 @@ for pending `next_message()` waits.
 
 ## Next Steps
 
-- Wire a triggered-work ingress (channel/webhook → `AutomationService::enqueue_triggered`)
-  so the triggered half of the `--serve` loop has a producer.
+- Add the webhook adapter/producer path for non-chat triggers.
 - Slice D (optional): a typed `serve` config block (toggles/intervals) once more than
   one concern wants tuning — the reaping interval is a fixed 1-minute default today
   and channel dispatch has no per-conversation deadline knobs yet.

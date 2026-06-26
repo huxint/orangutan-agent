@@ -143,10 +143,10 @@
     "triggered": {
       "jobs": [
         {
-          "job_key": "ci-webhook",
-          "trigger_key": "webhook:ci",
+          "job_key": "mock-channel-message",
+          "trigger_key": "channel:mock-main",
           "agent_key": "researcher",
-          "agent_prompt": "Investigate the incoming CI webhook and summarize required action."
+          "agent_prompt": "Review the latest mock channel message and summarize required action."
         }
       ]
     }
