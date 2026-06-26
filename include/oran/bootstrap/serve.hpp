@@ -29,6 +29,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -153,6 +154,7 @@ struct ServeChannelWorkerMetrics {
   std::uint64_t workers_evicted_idle{};
   std::uint64_t messages_enqueued{};
   std::uint64_t replies_sent{};
+  std::uint64_t message_timeouts{};
   std::uint64_t dispatch_failures{};
   std::uint64_t enqueue_failures{};
 };
@@ -167,6 +169,11 @@ struct ServeChannelOptions {
   /// a fresh worker; this bounds long-lived services by active conversations
   /// instead of all historical conversations.
   std::chrono::steady_clock::duration conversation_idle_ttl{std::chrono::minutes{5}};
+  /// Optional per-message deadline for the routed agent/reply send attempt.
+  /// When set, the current attempt is cancelled on expiry and the worker sends
+  /// a short still-working reply for that inbound message. A later durable
+  /// rejoin path is not implemented yet.
+  std::optional<std::chrono::steady_clock::duration> message_deadline{};
   /// Optional observer for worker-table metrics. Called synchronously on the
   /// dispatcher executor after worker creation/erasure, message enqueue, or a
   /// worker progress wake. The callback must be cheap and non-blocking.
@@ -182,7 +189,9 @@ struct ServeChannelOptions {
 /// queues. Each worker runs the routed agent `runner` and replies via the owning
 /// adapter in message order for that one conversation; different conversations
 /// can run concurrently. Empty workers exit after `options.conversation_idle_ttl`
-/// and are erased before a later message for the same key is enqueued. The
+/// and are erased before a later message for the same key is enqueued. When
+/// `options.message_deadline` is set, one routed agent/reply send attempt is
+/// cancelled on expiry and replaced with a short still-working reply. The
 /// adapters in `manager` must already be started (`start_all`). When
 /// `triggered_service` is non-null, each
 /// successfully-normalized inbound message is also enqueued as an automation

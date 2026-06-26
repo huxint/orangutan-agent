@@ -113,7 +113,8 @@ build/linux/x86_64/release/test-bootstrap \
 - Provider request: `provider.request_timeout_seconds` (default 90).
 - Tool execution: per-tool `timeout_seconds` (default 60).
 - Hook execution: `hooks.timeout_ms` (default 2000).
-- Channel inbound: `channel.<id>.message_deadline_seconds` (default 300).
+- Channel inbound under `--serve`: optional C++ owner/test
+  `ServeChannelOptions::message_deadline`; no JSON/operator config field yet.
 
 ## Cancellation
 

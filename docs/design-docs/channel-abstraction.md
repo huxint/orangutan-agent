@@ -91,6 +91,9 @@ instead of keeping one record forever for every historical conversation.
 Slice 261 exposes structured worker metrics at the same owner boundary through
 `ServeChannelWorkerMetrics` snapshots and an optional `ServeChannelOptions`
 observer; the low-level manager still does not own scheduling or metrics policy.
+Slice 262 adds the first per-message deadline there too: the bootstrap worker
+cancels an over-budget routed agent/reply attempt and emits a still-working
+fallback reply, while durable later-reply rejoin remains downstream.
 
 ## Inbound / Outbound Envelopes
 
@@ -268,11 +271,12 @@ longer blocks the entire channel queue. Slice 260 fixes the second operational
 downside: a long-lived process no longer keeps one worker record forever for
 every historical conversation. Slice 261 adds a structured owner/test metrics
 seam for active/max workers, worker lifecycle counts, idle evictions, enqueued
-messages, sent replies, and failures. Remaining mitigation work:
+messages, sent replies, and failures. Slice 262 adds a C++ owner/test
+per-message deadline that cancels an over-budget attempt and sends a
+still-working fallback reply. Remaining mitigation work:
 
-- Per-message deadline (`config.channel.<id>.message_deadline_seconds`).
-- On deadline, the in-flight tool calls are cancelled; the agent emits a "still
-  working" message and rejoins later.
+- JSON/typed config for `config.channel.<id>.message_deadline_seconds`.
+- Durable later-reply rejoin after the still-working fallback.
 - An operator-facing metrics sink for the existing worker metrics snapshots.
 
 ## QQ Adapter Migration

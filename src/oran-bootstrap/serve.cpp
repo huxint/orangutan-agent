@@ -73,6 +73,9 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
+constexpr std::string_view kChannelDeadlineReply =
+    "Still working on that. This request is taking longer than expected.";
+
 template <typename T>
 [[nodiscard]] std::size_t hash_combine(std::size_t seed, const T& value) noexcept {
   const auto h = std::hash<T>{}(value);
@@ -187,6 +190,7 @@ enum class ChannelConversationWorkerCompletion : int {
 
 struct ChannelWorkerSharedMetrics {
   std::atomic_uint64_t replies_sent{0};
+  std::atomic_uint64_t message_timeouts{0};
   std::atomic_uint64_t dispatch_failures{0};
 };
 
@@ -206,6 +210,44 @@ async::Awaitable<Result<channel::DeliveryReceipt>> dispatch_channel_message(chan
   co_return co_await manager.send(message.channel_id, channel::make_reply_message(message, std::move(result->text)));
 }
 
+async::Awaitable<Result<channel::DeliveryReceipt>>
+dispatch_channel_message_with_deadline(channel::ChannelManager& manager,
+                                       const channel::ChannelPromptRunner& runner,
+                                       channel::InboundMessage message,
+                                       std::optional<std::chrono::steady_clock::duration> deadline) {
+  if (!deadline.has_value()) {
+    co_return co_await dispatch_channel_message(manager, runner, std::move(message));
+  }
+
+  const auto channel_id = message.channel_id;
+  const auto conversation_id = message.conversation_id;
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(*deadline);
+  auto executor = co_await asio::this_coro::executor;
+
+  using namespace asio::experimental::awaitable_operators;
+  auto raced =
+      co_await (dispatch_channel_message(manager, runner, std::move(message)) || async::sleep_for(executor, *deadline));
+  if (auto* receipt = std::get_if<Result<channel::DeliveryReceipt>>(&raced); receipt != nullptr) {
+    co_return std::move(*receipt);
+  }
+
+  auto timer = std::get<Result<void>>(std::move(raced));
+  if (!timer) {
+    co_return std::unexpected(std::move(timer).error());
+  }
+
+  co_return std::unexpected(Error::timeout(elapsed)
+                                .with("source", "channel_message_deadline")
+                                .with("channel_id", channel_id)
+                                .with("conversation_id", conversation_id));
+}
+
+async::Awaitable<Result<channel::DeliveryReceipt>> send_channel_deadline_reply(channel::ChannelManager& manager,
+                                                                               const channel::InboundMessage& message) {
+  co_return co_await manager.send(message.channel_id,
+                                  channel::make_reply_message(message, std::string{kChannelDeadlineReply}));
+}
+
 /// One per-channel+conversation worker. It serializes messages for a single
 /// conversation while other conversation workers can await their own agent runs
 /// concurrently. The owning dispatch loop observes the completion flag and uses
@@ -220,7 +262,8 @@ serve_channel_conversation_worker(channel::ChannelManager& manager,
                                   std::chrono::steady_clock::duration idle_ttl,
                                   std::shared_ptr<async::Channel<std::monostate>> progress,
                                   std::shared_ptr<std::atomic<ChannelConversationWorkerCompletion>> completion,
-                                  std::shared_ptr<ChannelWorkerSharedMetrics> metrics) {
+                                  std::shared_ptr<ChannelWorkerSharedMetrics> metrics,
+                                  std::optional<std::chrono::steady_clock::duration> message_deadline) {
   using namespace asio::experimental::awaitable_operators;
   auto reason = ChannelConversationWorkerCompletion::stopped;
   for (;;) {
@@ -248,12 +291,30 @@ serve_channel_conversation_worker(channel::ChannelManager& manager,
       message = std::move(*received);
     }
 
-    auto dispatched = co_await dispatch_channel_message(manager, runner, std::move(*message));
+    auto dispatch_message = *message;
+    auto dispatched =
+        co_await dispatch_channel_message_with_deadline(manager, runner, std::move(dispatch_message), message_deadline);
     if (!dispatched) {
       auto cancellation = co_await asio::this_coro::cancellation_state;
       if (dispatched.error().kind() == core::ErrorKind::cancelled &&
           cancellation.cancelled() != asio::cancellation_type::none) {
         break;
+      }
+      if (dispatched.error().kind() == core::ErrorKind::timeout) {
+        metrics->message_timeouts.fetch_add(1, std::memory_order_relaxed);
+        auto fallback = co_await send_channel_deadline_reply(manager, *message);
+        if (fallback) {
+          metrics->replies_sent.fetch_add(1, std::memory_order_relaxed);
+        } else {
+          metrics->dispatch_failures.fetch_add(1, std::memory_order_relaxed);
+          std::println(stderr,
+                       "orangutan: channel deadline reply failed for channel '{}' conversation '{}': {}",
+                       key.channel_id,
+                       key.conversation_id,
+                       fallback.error());
+        }
+        [[maybe_unused]] auto signaled = progress->try_send(std::monostate{});
+        continue;
       }
       metrics->dispatch_failures.fetch_add(1, std::memory_order_relaxed);
       std::println(stderr,
@@ -298,6 +359,7 @@ async::Awaitable<Result<void>> serve_channel_dispatch(channel::ChannelManager& m
     auto snapshot = metrics;
     snapshot.active_workers = workers.size();
     snapshot.replies_sent = shared_metrics->replies_sent.load(std::memory_order_relaxed);
+    snapshot.message_timeouts = shared_metrics->message_timeouts.load(std::memory_order_relaxed);
     snapshot.dispatch_failures = shared_metrics->dispatch_failures.load(std::memory_order_relaxed);
     return snapshot;
   };
@@ -363,7 +425,8 @@ async::Awaitable<Result<void>> serve_channel_dispatch(channel::ChannelManager& m
                                                      options.conversation_idle_ttl,
                                                      progress,
                                                      std::move(completion),
-                                                     shared_metrics),
+                                                     shared_metrics,
+                                                     options.message_deadline),
                    asio::bind_cancellation_slot(cancel->slot(), asio::detached));
     return inserted->second;
   };
@@ -699,6 +762,10 @@ async::Awaitable<Result<void>> serve_channels(asio::any_io_executor executor,
   }
   if (options.conversation_idle_ttl < std::chrono::steady_clock::duration::zero()) {
     co_return std::unexpected(Error::invalid_argument("channel conversation idle ttl must be non-negative"));
+  }
+  if (options.message_deadline.has_value() &&
+      *options.message_deadline <= std::chrono::steady_clock::duration::zero()) {
+    co_return std::unexpected(Error::invalid_argument("channel message deadline must be positive"));
   }
   auto dispatch_runner = std::move(runner);
   if (triggered_service != nullptr) {

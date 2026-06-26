@@ -238,6 +238,16 @@ only — v2 makes channels pluggable.
   `test-bootstrap` 182 / 1772 with new `[serve][channels][metrics]` coverage.
   Per-message deadlines, webhook ingress, concrete delivery hooks, and the
   operator-facing metrics sink remain open.
+- Slice 262: the same owner now has a C++ owner/test per-message deadline.
+  `ServeChannelOptions::message_deadline` cancels an over-budget routed
+  agent/reply send attempt and sends a fixed still-working fallback reply on the
+  same inbound envelope. `ServeChannelWorkerMetrics` adds `message_timeouts`;
+  fallback sends count as replies when delivered and as dispatch failures when
+  the fallback send fails. No JSON config field or durable later-reply rejoin is
+  added yet. Focused validation: `test-bootstrap` 183 / 1793 with new
+  `[serve][channels][deadline]` coverage. Webhook ingress, concrete delivery
+  hooks, typed deadline config, durable rejoin, and the operator-facing metrics
+  sink remain open.
 
 ## Design Doc Cross-References
 

@@ -555,7 +555,8 @@ adapter into the manager fan-in, assigning messages to bounded
 per-channel+conversation worker queues, dispatching each conversation in order
 through the routed agent bridge while unrelated conversations can run
 concurrently, evicting empty conversation workers after their idle TTL, publishing
-structured worker metrics snapshots to an optional C++ observer,
+structured worker metrics snapshots to an optional C++ observer, applying an
+optional per-message deadline with a still-working fallback reply,
 optionally enqueueing `channel:<channel_id>` triggered automation work when
 `triggered_service` is supplied, replying through the owning adapter, and
 stopping/draining adapters before returning. A
@@ -668,12 +669,24 @@ embedding/test callback cannot terminate the long-lived service. No JSON config,
 daemon metrics endpoint, or hook payload was added in this slice; the observer
 is the owner/test seam that a later operator-facing metrics sink can consume.
 
+Slice 262 adds the first per-message deadline at that same owner/test boundary.
+`ServeChannelOptions::message_deadline` is optional and must be positive when
+set. Each conversation worker races one routed agent/reply send attempt against
+that deadline; when the timer wins, the in-flight attempt is cancelled through
+the coroutine cancellation slot and the worker sends a fixed still-working reply
+using the same inbound message envelope. `ServeChannelWorkerMetrics` adds
+`message_timeouts`; successful fallback sends count as sent replies, while a
+failed fallback send counts as a dispatch failure. This slice deliberately does
+not add a JSON config field or a durable background rejoin path, because both
+need the deferred typed `serve`/channel config and later-reply policy.
+
 ## Next Steps
 
 - Add the webhook adapter/producer path for non-chat triggers.
 - Slice D (optional): a typed `serve` config block (toggles/intervals) once more than
   one concern wants tuning — the reaping interval is a fixed 1-minute default today
-  and channel dispatch has no per-message deadline knobs yet.
+  and the channel deadline is only a C++ owner/test knob.
+- Add the durable later-reply/rejoin path for over-deadline channel messages.
 - Bind channel worker metrics to an operator-facing sink once the daemon metrics
   surface is designed.
 - Drive the CLI agent loop on a per-agent strand too, and split channel agent

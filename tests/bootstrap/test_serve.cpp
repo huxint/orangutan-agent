@@ -695,6 +695,64 @@ TEST_CASE("serve_channels evicts idle conversation workers before cooperative st
   });
 }
 
+TEST_CASE("serve_channels sends still-working reply when message deadline expires",
+          "[unit][bootstrap][serve][channels][deadline]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    channel::ChannelManager manager{io.get_executor()};
+    auto adapter =
+        std::make_unique<channel::MockChannel>(io.get_executor(),
+                                               channel::MockChannelOptions{.id = "mock-main", .kind = "mock"});
+    auto* mock = adapter.get();
+    REQUIRE(manager.register_adapter(std::move(adapter)).has_value());
+    REQUIRE((co_await manager.start_all()).has_value());
+    REQUIRE(mock->push_inbound(text_inbound("slow request", "conv-1")).has_value());
+
+    std::atomic_bool runner_cancelled{false};
+    std::vector<bootstrap::ServeChannelWorkerMetrics> snapshots;
+    auto runner = channel::ChannelPromptRunner{
+        [executor = io.get_executor(), &runner_cancelled](channel::ChannelPromptRunRequest request)
+            -> async::Awaitable<core::Result<channel::ChannelPromptRunResult>> {
+          auto slept = co_await async::sleep_for(executor, 250ms);
+          if (!slept) {
+            if (slept.error().kind() == core::ErrorKind::cancelled) {
+              runner_cancelled.store(true, std::memory_order_release);
+            }
+            co_return std::unexpected(std::move(slept).error());
+          }
+          co_return channel::ChannelPromptRunResult{.text = request.prompt + " late reply"};
+        }};
+
+    auto outcome = co_await bootstrap::serve_channels(
+        io.get_executor(),
+        manager,
+        std::move(runner),
+        std::vector<std::string>{"mock-main"},
+        [mock] { return mock->sent_messages().size() == 1; },
+        nullptr,
+        bootstrap::ServeChannelOptions{
+            .message_deadline = 5ms,
+            .metrics_observer =
+                [&](const bootstrap::ServeChannelWorkerMetrics& snapshot) { snapshots.push_back(snapshot); },
+        });
+
+    REQUIRE(outcome.has_value());
+    REQUIRE(mock->sent_messages().size() == 1);
+    const auto& sent = mock->sent_messages().front();
+    REQUIRE(sent.content.size() == 1);
+    auto sent_text = core::text_view(sent.content.front());
+    REQUIRE(sent_text.has_value());
+    CHECK(*sent_text == "Still working on that. This request is taking longer than expected.");
+    CHECK(sent.conversation_id == "conv-1");
+    CHECK(runner_cancelled.load(std::memory_order_acquire));
+    REQUIRE_FALSE(snapshots.empty());
+    const auto final = snapshots.back();
+    CHECK(final.message_timeouts == 1);
+    CHECK(final.replies_sent == 1);
+    CHECK(final.dispatch_failures == 0);
+    CHECK_FALSE(mock->started());
+  });
+}
+
 TEST_CASE("serve_channels reports conversation worker metrics", "[unit][bootstrap][serve][channels][metrics]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     channel::ChannelManager manager{io.get_executor()};
@@ -737,6 +795,7 @@ TEST_CASE("serve_channels reports conversation worker metrics", "[unit][bootstra
     CHECK(final.workers_evicted_idle == 2);
     CHECK(final.messages_enqueued == 2);
     CHECK(final.replies_sent == 2);
+    CHECK(final.message_timeouts == 0);
     CHECK(final.dispatch_failures == 0);
     CHECK(final.enqueue_failures == 0);
     CHECK_FALSE(mock->started());
@@ -897,5 +956,26 @@ TEST_CASE("serve_channels rejects invalid channel worker options", "[unit][boots
                                            bootstrap::ServeChannelOptions{.conversation_idle_ttl = -1ms});
     REQUIRE_FALSE(negative_ttl.has_value());
     CHECK(negative_ttl.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto zero_deadline = co_await bootstrap::serve_channels(io.get_executor(),
+                                                            manager,
+                                                            runner,
+                                                            {},
+                                                            {},
+                                                            nullptr,
+                                                            bootstrap::ServeChannelOptions{.message_deadline = 0ms});
+    REQUIRE_FALSE(zero_deadline.has_value());
+    CHECK(zero_deadline.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto negative_deadline =
+        co_await bootstrap::serve_channels(io.get_executor(),
+                                           manager,
+                                           std::move(runner),
+                                           {},
+                                           {},
+                                           nullptr,
+                                           bootstrap::ServeChannelOptions{.message_deadline = -1ms});
+    REQUIRE_FALSE(negative_deadline.has_value());
+    CHECK(negative_deadline.error().kind() == core::ErrorKind::invalid_argument);
   });
 }

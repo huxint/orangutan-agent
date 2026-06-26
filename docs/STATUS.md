@@ -9,9 +9,9 @@
 
 ## Snapshot
 
-- **Slice:** 261 (`xmake run orangutan -- --help` reports slice 261)
+- **Slice:** 262 (`xmake run orangutan -- --help` reports slice 262)
 - **Last completed history:**
-  [`histories/2026-06/20260626-1548-serve-channel-worker-metrics.md`](histories/2026-06/20260626-1548-serve-channel-worker-metrics.md)
+  [`histories/2026-06/20260626-1626-serve-channel-message-deadline.md`](histories/2026-06/20260626-1626-serve-channel-message-deadline.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — the only active plan; its next gate is externally blocked on real QQ
@@ -24,24 +24,24 @@
     [`exec-plans/completed/2026-06-18-runtime-service-owner.md`](exec-plans/completed/2026-06-18-runtime-service-owner.md).
     The desktop chat-tracer plan closed 2026-06-16
     ([`exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md)).
-- **Latest completed slice:** slice 261 makes configured channel dispatch state
-  observable under `orangutan --serve` by adding a structured
-  `ServeChannelWorkerMetrics` snapshot and optional `ServeChannelOptions`
-  observer. The dispatcher now publishes monotonic worker/message counters plus
-  current/max active worker counts after worker creation/erasure, message
-  enqueue, and worker progress wakes; worker-side reply/failure counters are
-  atomic, while worker-table accounting remains owned by the dispatcher. Observer
-  exceptions are caught and reported so an embedding callback cannot terminate
-  the daemon. No JSON config field or operator-facing metrics sink was added; a
-  typed `serve` config/metrics surface remains deferred. Per-message deadlines,
-  per-agent strand splitting, webhook ingress, concrete automation notifier
-  routing, and an operator-facing metrics sink remain open. `test-bootstrap` 182
-  cases / 1772 assertions; focused `[serve][channels][metrics]`, idle, and
-  ordering coverage passed; full `xmake test` 19/19 and `make ci` passed.
-- **Next intended slice:** continue generic channel hardening with per-message
-  deadlines and the "still working" recovery path, or split the routed agent
-  path onto per-agent strands where the service-level strand is still too coarse.
-  Other viable follow-ups are an operator-facing metrics sink, the webhook
+- **Latest completed slice:** slice 262 adds a C++ owner/test per-message
+  deadline for configured channel dispatch under `orangutan --serve`.
+  `ServeChannelOptions::message_deadline` bounds one routed agent/reply send
+  attempt; on expiry, the in-flight attempt is cancelled and the worker sends a
+  fixed still-working fallback reply on the same inbound envelope. Worker metrics
+  now include `message_timeouts`, while successful fallback sends still count as
+  replies and failed fallback sends count as dispatch failures. No JSON config
+  field, durable background rejoin, or operator-facing deadline policy was added;
+  those remain deferred to a typed `serve`/channel config surface. Per-agent
+  strand splitting, webhook ingress, concrete automation notifier routing, a
+  durable later-reply path, and an operator-facing metrics sink remain open.
+  `test-bootstrap` 183 cases / 1793 assertions; focused
+  `[serve][channels][deadline]`, metrics, ordering, and invalid-options coverage
+  passed; full `xmake test` 19/19 and `make ci` passed.
+- **Next intended slice:** continue generic channel hardening with a durable
+  deadline rejoin/later-reply path, or split the routed agent path onto per-agent
+  strands where the service-level strand is still too coarse. Other viable
+  follow-ups are an operator-facing metrics sink, the webhook
   adapter/producer path for non-chat triggers, concrete automation notifier
   routing, or QQ-port milestone 4b-ii once real QQ credentials and an operator
   conversation exist.
@@ -81,8 +81,8 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-agent`: 57 cases / 10 786 assertions.
 - `oran-cli`: 28 cases / 221 assertions.
 - `oran-desktop`: 17 cases / 70 assertions.
-- `oran-bootstrap`: 182 cases / 1772 assertions (gated `--channel_qq=y`: 184 /
-  1812).
+- `oran-bootstrap`: 183 cases / 1793 assertions (gated `--channel_qq=y`: 185 /
+  1833).
 
 ## Open Tech-Debt Rows
 
