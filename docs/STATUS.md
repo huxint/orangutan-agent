@@ -9,9 +9,9 @@
 
 ## Snapshot
 
-- **Slice:** 263 (`xmake run orangutan -- --help` reports slice 263)
+- **Slice:** 264 (`xmake run orangutan -- --help` reports slice 264)
 - **Last completed history:**
-  [`histories/2026-06/20260626-1702-serve-channel-metrics-log-sink.md`](histories/2026-06/20260626-1702-serve-channel-metrics-log-sink.md)
+  [`histories/2026-06/20260628-0231-directory-list-recursive.md`](histories/2026-06/20260628-0231-directory-list-recursive.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — the only active plan; its next gate is externally blocked on real QQ
@@ -24,23 +24,24 @@
     [`exec-plans/completed/2026-06-18-runtime-service-owner.md`](exec-plans/completed/2026-06-18-runtime-service-owner.md).
     The desktop chat-tracer plan closed 2026-06-16
     ([`exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md)).
-- **Latest completed slice:** slice 263 binds the existing channel worker metrics
-  seam into the `orangutan --serve` daemon path. `ServeChannelMetricsLogSink`
-  formats `ServeChannelWorkerMetrics` as one-line operator-facing status records,
-  suppresses repeated identical snapshots, and defaults to stderr; `run_serve`
-  installs that sink whenever at least one configured channel adapter registers.
-  The C++ `ServeChannelOptions::metrics_observer` seam remains available for
-  embedders/tests, and no JSON config field or HTTP metrics endpoint was added.
-  `test-bootstrap` 184 cases / 1799 assertions; focused
-  `[serve][channels][metrics]` and `[serve][channels][deadline]` coverage passed;
-  gated `--channel_qq=y` `test-bootstrap` 186 / 1839, full `xmake test` 19/19,
-  and `make ci` passed.
-- **Next intended slice:** rebalance away from the recently-heavy channel track.
-  Good small candidates are the Tools row's recursive project-list / unified
-  delete reshape, the Automation row's webhook/non-chat producer path, or an
-  Observability/trace slice with a concrete operator consumer. Channel-local
-  durable deadline rejoin/later-reply and per-agent strand splitting remain
-  valid follow-ups, but should wait unless they become the clearest next blocker.
+- **Latest completed slice:** slice 264 extends the existing `DirectoryList`
+  built-in with `recursive=true` for bounded whole-project tree listings. The
+  default remains single-level; recursive calls keep the same permission and
+  workspace root resolution, skip nested symlinks, skip dot-prefixed entries
+  unless `include_hidden=true`, always skip `.git`, `.xmake`, `.orangutan`,
+  `build`, and `node_modules`, and add `recursive` to structured
+  `data_json`. Recursive usage reports root-plus-entry `files_touched` while
+  single-level calls keep `files_touched=1`. `test-tool` reports 212 cases /
+  2228 assertions with focused DirectoryList coverage passed; full `xmake test`
+  passed 19/19 when rerun outside the sandbox for loopback HTTP/WebSocket
+  tests, `xmake run orangutan -- --help` reports `2.0.0-slice264`, and
+  `make ci` passed.
+- **Next intended slice:** continue the now-active Tools/Workspace frontier.
+  Good small candidates are the unified `FileDelete` reshape (file/folder delete
+  with explicit recursion intent) or the Workspace v1.1 shared ignore/display
+  helper now that recursive `DirectoryList` supplies the second recursive
+  consumer. Automation webhook/non-chat producer work remains a good
+  non-channel alternative if Tools pauses.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 
@@ -71,7 +72,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-channel`: 26 cases / 205 assertions.
 - `oran-channel-qq` (gated, `--channel_qq=y`): 58 cases / 369 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
-- `oran-tool`: 208 cases / 2181 assertions.
+- `oran-tool`: 212 cases / 2228 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 88 cases / 664 assertions.
 - `oran-agent`: 57 cases / 10 786 assertions.

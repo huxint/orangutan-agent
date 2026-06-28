@@ -22,6 +22,9 @@ the surface where these capabilities are presented, gated, observed, and extende
 > **Status (slice 170):** the current built-in catalog ships the filesystem
 > set, `ToolSearch`, `SkillInvoke`, `SkillDeactivate`, and deferred
 > `MemoryRecall` / `MemoryRemember` / `MemoryForget`.
+> Slice 264 extends `DirectoryList` with `recursive=true` so the existing
+> directory-listing tool can produce a whole-project tree without adding a
+> separate per-kind scan tool.
 
 ## Scope (v1.1)
 

@@ -200,7 +200,8 @@ enum class Capability {
 > permission rule can distinguish "list a directory" from "read a
 > file"; useful in sandbox modes where the agent should see the
 > shape of a tree without reading content). Input
-> `{path, include_hidden?, max_entries?}`; output is one
+> `{path, include_hidden?, recursive?, max_entries?}`; default
+> `recursive=false` output is one
 > `<path>:<kind>:<size_bytes or '-'>` line per entry sorted by
 > path (the order `oran-io::list_directory` already enforces),
 > the literal text `no entries` for an empty directory after the
@@ -209,7 +210,14 @@ enum class Capability {
 > `max_entries` (raise the cap and retry — the tool does not
 > truncate on overflow because that would require either calling
 > `oran-io` twice or extending the helper's contract for every
-> other caller).
+> other caller). Slice 264 adds `recursive=true` for whole-project
+> tree listings under the same tool name. Recursive listings keep
+> workspace `resolve_list` at the root, do not follow nested
+> symlinks, skip dot-prefixed entries unless `include_hidden=true`,
+> and always skip `.git`, `.xmake`, `.orangutan`, `build`, and
+> `node_modules` directories. The source-controlled `.gitignore` /
+> `.ignore` rule stack remains private to `FileSearch` until the
+> workspace-owned shared ignore predicate lands.
 > Slice 30 (2026-05-20) adds `FileDelete`
 > (`tool::register_file_delete`, capability `delete_path` — the
 > first built-in that exercises this slice-7 capability), built on
@@ -225,9 +233,8 @@ enum class Capability {
 > literal text `deleted <path>`. The future direction for
 > filesystem mutation built-ins is *consolidation*, not more
 > per-kind splits: a single delete tool covering files AND
-> folders, and a recursive whole-project list (not a separate
-> `directory.remove` / single-level enumeration). The v1
-> narrowings here are the entry point, not the dead end.
+> folders, not separate `file.remove` / `directory.remove` tools.
+> The v1 narrowings here are the entry point, not the dead end.
 > Slice 32 (2026-05-21) routes `FileEdit` and the dominant
 > `FileWrite` mode (`truncate`) through the new
 > `oran-io::WriteTextOptions::atomic` opt-in: the rewrite is
@@ -965,8 +972,11 @@ Current and future policy:
   `entry_count`, and an `entries[]` array of `{name, path, kind,
   size_bytes}` (JSON null `size_bytes` for non-regular kinds);
   `Output::usage` carries `files_touched=1` (the directory itself) and
-  `match_count=entry_count`. Every filesystem built-in in `oran-tool`
-  has now completed its v1 migration to the structured envelope.
+  `match_count=entry_count`. Slice 264 extends the same payload with
+  `recursive`; recursive calls keep the same entries shape and report
+  `files_touched` as the listed entry count plus the root directory.
+  Every filesystem built-in in `oran-tool` has now completed its v1
+  migration to the structured envelope.
 - Slice 61 migrates the current mutation built-ins to fill counters:
   `FileWrite` reports `bytes_written` and `files_touched`; `FileEdit`
   reports `bytes_read`, `bytes_written`, `files_touched`, and

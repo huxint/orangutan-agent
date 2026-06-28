@@ -78,8 +78,10 @@ handlers can adopt without churning every callsite at once.
 > truncated, truncation_reason, files_scanned, bytes_read}` plus usage
 > `bytes_read` / `files_touched` / `match_count` / `truncated`, and
 > `DirectoryList` fills serialized `data_json` with
-> `{kind:"directory_list", path, include_hidden, max_entries, entry_count,
-> entries[]}` plus usage `files_touched=1` and `match_count=entry_count`.
+> `{kind:"directory_list", path, include_hidden, recursive, max_entries,
+> entry_count, entries[]}` plus usage `files_touched=1` for single-level
+> listings or root-plus-entry count for recursive listings, and
+> `match_count=entry_count`.
 > Slice 168 adds `MemoryRecall`, which fills `data_json` with
 > `{kind:"memory_recall", match_count, records[]}` plus
 > `usage.match_count`, while keeping deterministic recall text as the
@@ -218,10 +220,12 @@ handlers can adopt without churning every callsite at once.
   3. `DirectoryList` — shipped in slice 64: keeps the existing
      `<path>:<kind>:<size_bytes or '-'>` text rendering, and fills
      `data_json` with `{kind:"directory_list", path, include_hidden,
-     max_entries, entry_count, entries[]}` where each entry is
+     recursive, max_entries, entry_count, entries[]}` where each entry is
      `{name, path, kind, size_bytes}` (JSON null `size_bytes` for
      non-regular kinds) plus `usage.files_touched=1` and
-     `usage.match_count=entry_count`.
+     `usage.match_count=entry_count`. Slice 264 adds the `recursive`
+     flag and sets `usage.files_touched` to root-plus-entry count for
+     recursive listings.
   4. `FileWrite` / `FileEdit` / `FileDelete` — shipped in slice 61:
      `FileWrite` fills `usage.bytes_written` and `files_touched`;
      `FileEdit` fills `bytes_read`, `bytes_written`, `files_touched`,

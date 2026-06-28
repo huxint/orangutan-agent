@@ -121,24 +121,26 @@ inline constexpr std::string_view kMemoryForgetName{"MemoryForget"};
 [[nodiscard]] core::Result<void> register_file_search(Registry& registry);
 
 /// Register the `DirectoryList` tool. Enumerates the immediate children of
-/// a directory through `oran-io::list_directory`; capability
-/// `list_directory` is required. Input shape:
+/// a directory through `oran-io::list_directory` by default, or walks the
+/// whole tree when `recursive=true`; capability `list_directory` is
+/// required. Input shape:
 /// `{"path": <string>, "include_hidden"?: bool (default false),
-/// "max_entries"?: uint (default 256)}`. Returns one
-/// `<path>:<kind>:<size_bytes or '-'>` line per entry, sorted by path
-/// (the order `oran-io::list_directory` already enforces); the literal
-/// text `no entries` (non-error) when the directory is empty after the
-/// hidden filter. `kind` is the `io::DirectoryEntryKind` wire spelling
-/// (`regular_file` | `directory` | `symlink` | `other`); `size_bytes`
-/// is a decimal integer for regular files and the literal `-` for every
-/// other kind. The call returns an `io` error when the directory has
-/// strictly more than `max_entries` entries — raise the cap and retry.
-/// Successful calls also fill `Output::data_json` with `kind`, `path`,
-/// `include_hidden`, `max_entries`, `entry_count`, and an `entries[]`
-/// array of `{name, path, kind, size_bytes}` (size_bytes is JSON null
-/// for non-regular files), and fill `Output::usage` with
-/// `files_touched=1` (the directory itself) and `match_count`
-/// (the entry count).
+/// "recursive"?: bool (default false), "max_entries"?: uint (default
+/// 256)}`. Recursive listings skip nested symlinks plus `.git`, `.xmake`,
+/// `.orangutan`, `build`, and `node_modules` directories. Returns one
+/// `<path>:<kind>:<size_bytes or '-'>` line per entry, sorted by path;
+/// the literal text `no entries` (non-error) when the directory is empty
+/// after the filters. `kind` is the `io::DirectoryEntryKind` wire spelling
+/// (`regular_file` | `directory` | `symlink` | `other`); `size_bytes` is a
+/// decimal integer for regular files and the literal `-` for every other
+/// kind. The call returns an `io` error when the directory has strictly
+/// more than `max_entries` entries — raise the cap and retry. Successful
+/// calls also fill `Output::data_json` with `kind`, `path`,
+/// `include_hidden`, `recursive`, `max_entries`, `entry_count`, and an
+/// `entries[]` array of `{name, path, kind, size_bytes}` (size_bytes is
+/// JSON null for non-regular files), and fill `Output::usage` with
+/// `files_touched=1` for single-level listings or root-plus-entry count
+/// for recursive listings, and `match_count` (the entry count).
 [[nodiscard]] core::Result<void> register_directory_list(Registry& registry);
 
 /// Register the `FileDelete` tool. Deletes the regular file at `path`

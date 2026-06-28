@@ -32,13 +32,14 @@ Current seams and future work:
   dispatch without a workspace.
 - Root paths for `FileSearch` and `DirectoryList` use
   `Workspace::resolve_list` and therefore follow symlinks only when the
-  canonical target remains in an allowed root. Nested entries during a
-  recursive `FileSearch` walk still skip symlinks wholesale, a stricter
-  policy that avoids recursive escape complexity until a shared directory
-  scanner exists.
-- `FileSearch`'s hidden / ignored-entry predicate is still private to that
-  tool. The shared `Workspace::is_ignored(...)` predicate waits for a second
-  recursive consumer such as `DirectoryScan`.
+  canonical target remains in an allowed root. Nested entries during
+  recursive `FileSearch` and `DirectoryList` walks still skip symlinks
+  wholesale, a stricter policy that avoids recursive escape complexity until
+  a shared directory scanner exists.
+- `FileSearch`'s source-controlled ignore-file stack is still private to that
+  tool, while `DirectoryList recursive=true` has only the built-in low-signal
+  skip list. Slice 264 supplies the second recursive consumer, so the shared
+  `Workspace::is_ignored(...)` predicate is now unblocked.
 - The future `tool::Runtime::workspace()` capability-gated accessor is
   described in [`../design-docs/tool-runtime.md`](../design-docs/tool-runtime.md)
   "ToolRuntime" but unbuilt.
@@ -105,8 +106,8 @@ escaped leading marker literals, negation, directory-only rules,
 slash-relative patterns, basename patterns, and fnmatch-style globs) on
 top of the slice-48 built-in skip list. This
 closes the immediate `FileSearch` product need in spec 0011, but the
-workspace-owned sharing point described below is still pending for the
-future `DirectoryScan`.
+workspace-owned sharing point described below stayed pending until the
+slice-264 recursive `DirectoryList` consumer arrived.
 
 **Slice 55 (2026-05-24):** The registry pre-permission boundary lands for
 current filesystem built-ins. `Registry::dispatch` now clears
@@ -125,9 +126,17 @@ resolves record `resolved_relative_path`, `symlink_followed`,
 missing `path`, and malformed `FileWrite` `mode` / `create_parents` fields
 skip pre-resolution so each handler keeps its existing schema-error contract.
 
+**Slice 264 (2026-06-28):** `DirectoryList` now accepts
+`recursive=true` and becomes the second recursive filesystem consumer after
+`FileSearch`. The recursive listing keeps root `resolve_list` workspace
+confinement, skips nested symlinks, skips dot-prefixed entries unless
+`include_hidden=true`, and always skips `.git`, `.xmake`, `.orangutan`,
+`build`, and `node_modules` directories. It does not yet share
+`FileSearch`'s `.gitignore` / `.ignore` parser.
+
 Still pending: The shared
-`Workspace::is_ignored(...)` predicate remains a v1.1 structure task once a
-second consumer (`DirectoryScan`) exists. The future capability-gated
+`Workspace::is_ignored(...)` predicate remains a v1.1 structure task now that
+the second recursive consumer exists. The future capability-gated
 `tool::Runtime::workspace()` accessor still lands with `tool::Runtime`; the
 current dispatch context remains the interim service seam.
 
@@ -189,11 +198,11 @@ creation is allowed for this resolve call.
 
 ## Scope (v1.1)
 
-- Lift the shipped `FileSearch` ignore predicate into a workspace-owned
-  predicate (`Workspace::is_ignored(ResolvedPath)`) once `DirectoryScan`
-  exists. The current implementation lives in `FileSearch` only; the shared
-  predicate will carry the built-in skip list plus `.gitignore` / `.ignore`
-  rule stack so both recursive tools make the same decision.
+- Lift the shipped `FileSearch` ignore predicate and the slice-264 recursive
+  `DirectoryList` built-in skip list into a workspace-owned predicate
+  (`Workspace::is_ignored(ResolvedPath)`). The shared predicate will carry the
+  built-in skip list plus `.gitignore` / `.ignore` rule stack so both
+  recursive tools make the same decision.
 - Per-call override field for `FileRead` / `FileSearch` /
   `DirectoryList`: `allow_outside_workspace=true` requires an `ask`
   permission verdict at runtime and records the resolved path in audit

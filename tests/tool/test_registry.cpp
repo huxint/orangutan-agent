@@ -5287,6 +5287,7 @@ TEST_CASE("register_directory_list advertises a `list_directory` capability and 
   REQUIRE(def->required_capabilities[0] == core::Capability::list_directory);
   REQUIRE(def->input_schema_json.contains("\"path\""));
   REQUIRE(def->input_schema_json.contains("\"include_hidden\""));
+  REQUIRE(def->input_schema_json.contains("\"recursive\""));
   REQUIRE(def->input_schema_json.contains("\"max_entries\""));
 }
 
@@ -5321,6 +5322,136 @@ TEST_CASE("DirectoryList happy path renders one entry per line, sorted by path",
 
     REQUIRE(sink.events().size() == 1);
     REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
+  });
+}
+
+TEST_CASE("DirectoryList recursive=true renders nested project entries", "[unit][tool][directory_list]") {
+  TempDir dir{"list-recursive"};
+  dir.write_file("top.txt", "top");
+  dir.write_file("nested/inner.txt", "inner");
+  dir.write_file("nested/deeper/z.txt", "z");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_directory_list(registry).has_value());
+    auto rules = directory_list_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"(","recursive":true})";
+    auto result = co_await registry.dispatch(tool::kDirectoryListName, input, ctx);
+    REQUIRE(result.has_value());
+
+    REQUIRE(result->text.contains(dir.child("top.txt").string() + ":regular_file:3"));
+    REQUIRE(result->text.contains(dir.child("nested").string() + ":directory:-"));
+    REQUIRE(result->text.contains(dir.child("nested/inner.txt").string() + ":regular_file:5"));
+    REQUIRE(result->text.contains(dir.child("nested/deeper").string() + ":directory:-"));
+    REQUIRE(result->text.contains(dir.child("nested/deeper/z.txt").string() + ":regular_file:1"));
+
+    REQUIRE(result->data_json.has_value());
+    const auto data = nlohmann::json::parse(*result->data_json);
+    REQUIRE(data["recursive"] == true);
+    REQUIRE(data["entry_count"] == 5);
+    REQUIRE(data["entries"].is_array());
+    REQUIRE(data["entries"].size() == 5);
+
+    REQUIRE(result->usage.files_touched.has_value());
+    REQUIRE(*result->usage.files_touched == std::uint32_t{6});
+    REQUIRE(result->usage.match_count.has_value());
+    REQUIRE(*result->usage.match_count == std::uint64_t{5});
+  });
+}
+
+TEST_CASE("DirectoryList recursive=true skips low-signal directories even with hidden opt-in",
+          "[unit][tool][directory_list]") {
+  TempDir dir{"list-recursive-skips"};
+  dir.write_file("visible.txt", "v");
+  dir.write_file(".env", "secret");
+  dir.write_file(".git/config", "git internals");
+  dir.write_file("node_modules/pkg/index.js", "package internals");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_directory_list(registry).has_value());
+    auto rules = directory_list_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"(","recursive":true,"include_hidden":true})";
+    auto result = co_await registry.dispatch(tool::kDirectoryListName, input, ctx);
+    REQUIRE(result.has_value());
+
+    REQUIRE(result->text.contains(".env"));
+    REQUIRE(result->text.contains("visible.txt"));
+    REQUIRE_FALSE(result->text.contains(".git"));
+    REQUIRE_FALSE(result->text.contains("node_modules"));
+
+    REQUIRE(result->data_json.has_value());
+    const auto data = nlohmann::json::parse(*result->data_json);
+    REQUIRE(data["recursive"] == true);
+    REQUIRE(data["include_hidden"] == true);
+    REQUIRE(data["entry_count"] == 2);
+  });
+}
+
+TEST_CASE("DirectoryList recursive=true skips nested symlinks", "[unit][tool][directory_list]") {
+  TempDir dir{"list-recursive-symlinks"};
+  TempDir outside{"list-recursive-symlink-targets"};
+  dir.write_file("visible.txt", "v");
+  outside.write_file("target-dir/secret.txt", "secret");
+  outside.write_file("target-file.txt", "secret");
+
+  std::error_code dir_link_ec;
+  std::filesystem::create_directory_symlink(outside.child("target-dir"), dir.child("alias-dir"), dir_link_ec);
+  std::error_code file_link_ec;
+  std::filesystem::create_symlink(outside.child("target-file.txt"), dir.child("alias-file"), file_link_ec);
+  if (dir_link_ec || file_link_ec) {
+    SUCCEED("symlink creation not supported on this filesystem: " << (dir_link_ec ? dir_link_ec.message()
+                                                                                  : file_link_ec.message()));
+    return;
+  }
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_directory_list(registry).has_value());
+    auto rules = directory_list_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"(","recursive":true})";
+    auto result = co_await registry.dispatch(tool::kDirectoryListName, input, ctx);
+    REQUIRE(result.has_value());
+
+    REQUIRE(result->text.contains("visible.txt"));
+    REQUIRE_FALSE(result->text.contains("alias-dir"));
+    REQUIRE_FALSE(result->text.contains("alias-file"));
+    REQUIRE_FALSE(result->text.contains("secret.txt"));
+
+    REQUIRE(result->data_json.has_value());
+    const auto data = nlohmann::json::parse(*result->data_json);
+    REQUIRE(data["entry_count"] == 1);
+    REQUIRE(data["entries"].size() == 1);
+    REQUIRE(data["entries"][0]["name"] == "visible.txt");
+  });
+}
+
+TEST_CASE("DirectoryList recursive=true enforces max_entries across the tree", "[unit][tool][directory_list]") {
+  TempDir dir{"list-recursive-overflow"};
+  dir.write_file("a.txt", "a");
+  dir.write_file("nested/b.txt", "b");
+  dir.write_file("nested/c.txt", "c");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_directory_list(registry).has_value());
+    auto rules = directory_list_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"(","recursive":true,"max_entries":2})";
+    auto result = co_await registry.dispatch(tool::kDirectoryListName, input, ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::io);
   });
 }
 
@@ -5461,10 +5592,15 @@ TEST_CASE("DirectoryList rejects malformed input as invalid_argument", "[unit][t
     REQUIRE_FALSE(zero_max.has_value());
     REQUIRE(zero_max.error().kind() == core::ErrorKind::invalid_argument);
 
-    // All six malformed calls passed the permission gate (the parser runs
+    auto wrong_recursive =
+        co_await registry.dispatch(tool::kDirectoryListName, R"({"path":"/tmp/x","recursive":"yes"})", ctx);
+    REQUIRE_FALSE(wrong_recursive.has_value());
+    REQUIRE(wrong_recursive.error().kind() == core::ErrorKind::invalid_argument);
+
+    // All seven malformed calls passed the permission gate (the parser runs
     // after the rule evaluation in the registry), so audit recorded one
     // allow row per attempt.
-    REQUIRE(sink.events().size() == 6);
+    REQUIRE(sink.events().size() == 7);
     for (const auto& event : sink.events()) {
       REQUIRE(event.outcome == permission::AuditOutcome::allow);
     }
