@@ -5394,6 +5394,41 @@ TEST_CASE("DirectoryList recursive=true skips low-signal directories even with h
   });
 }
 
+TEST_CASE("DirectoryList recursive=true honors source-controlled ignore files", "[unit][tool][directory_list]") {
+  TempDir dir{"list-recursive-ignore-files"};
+  dir.write_file(".gitignore", "*.log\nignored/\ndocs/secret.txt\n!keep.log\n");
+  dir.write_file("src/a.txt", "visible");
+  dir.write_file("a.log", "ignored log");
+  dir.write_file("keep.log", "visible log");
+  dir.write_file("ignored/b.txt", "ignored directory");
+  dir.write_file("docs/secret.txt", "ignored relative file");
+  dir.write_file("docs/public.txt", "visible docs");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_directory_list(registry).has_value());
+    auto rules = directory_list_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"(","recursive":true})";
+    auto result = co_await registry.dispatch(tool::kDirectoryListName, input, ctx);
+    REQUIRE(result.has_value());
+
+    REQUIRE(result->text.contains(dir.child("src/a.txt").string()));
+    REQUIRE(result->text.contains(dir.child("keep.log").string()));
+    REQUIRE(result->text.contains(dir.child("docs/public.txt").string()));
+    REQUIRE_FALSE(result->text.contains(dir.child("a.log").string()));
+    REQUIRE_FALSE(result->text.contains(dir.child("ignored").string()));
+    REQUIRE_FALSE(result->text.contains(dir.child("docs/secret.txt").string()));
+
+    REQUIRE(result->data_json.has_value());
+    const auto data = nlohmann::json::parse(*result->data_json);
+    REQUIRE(data["recursive"] == true);
+    REQUIRE(data["entry_count"] == 5);
+  });
+}
+
 TEST_CASE("DirectoryList recursive=true skips nested symlinks", "[unit][tool][directory_list]") {
   TempDir dir{"list-recursive-symlinks"};
   TempDir outside{"list-recursive-symlink-targets"};

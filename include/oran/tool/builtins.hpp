@@ -117,7 +117,9 @@ inline constexpr std::string_view kMemoryForgetName{"MemoryForget"};
 /// `truncation_reason`, `files_scanned`, and `bytes_read`, and fill
 /// `Output::usage` with `bytes_read` (cumulative scanned file bytes),
 /// `files_touched` (non-binary scanned file count), `match_count`
-/// (post-truncation), and the `truncated` cap flag.
+/// (post-truncation), and the `truncated` cap flag. When a `Workspace` is
+/// supplied, output paths use stable display labels such as
+/// `<workspace>/src/main.cpp` instead of raw absolute paths.
 [[nodiscard]] core::Result<void> register_file_search(Registry& registry);
 
 /// Register the `DirectoryList` tool. Enumerates the immediate children of
@@ -127,7 +129,8 @@ inline constexpr std::string_view kMemoryForgetName{"MemoryForget"};
 /// `{"path": <string>, "include_hidden"?: bool (default false),
 /// "recursive"?: bool (default false), "max_entries"?: uint (default
 /// 256)}`. Recursive listings skip nested symlinks plus `.git`, `.xmake`,
-/// `.orangutan`, `build`, and `node_modules` directories. Returns one
+/// `.orangutan`, `build`, and `node_modules` directories, and honour
+/// `.gitignore` / `.ignore` files from the listing root downward. Returns one
 /// `<path>:<kind>:<size_bytes or '-'>` line per entry, sorted by path;
 /// the literal text `no entries` (non-error) when the directory is empty
 /// after the filters. `kind` is the `io::DirectoryEntryKind` wire spelling
@@ -140,7 +143,9 @@ inline constexpr std::string_view kMemoryForgetName{"MemoryForget"};
 /// `entries[]` array of `{name, path, kind, size_bytes}` (size_bytes is
 /// JSON null for non-regular files), and fill `Output::usage` with
 /// `files_touched=1` for single-level listings or root-plus-entry count
-/// for recursive listings, and `match_count` (the entry count).
+/// for recursive listings, and `match_count` (the entry count). When a
+/// `Workspace` is supplied, output paths use stable display labels such as
+/// `<workspace>/src/main.cpp` instead of raw absolute paths.
 [[nodiscard]] core::Result<void> register_directory_list(Registry& registry);
 
 /// Register the `FileDelete` tool. Deletes a regular file, or a directory

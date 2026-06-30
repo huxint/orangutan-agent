@@ -29,6 +29,10 @@ the surface where these capabilities are presented, gated, observed, and extende
 > name: input `{path, recursive?}` deletes files directly and deletes
 > directories only when `recursive=true`, keeping symlink refusal and avoiding
 > a separate directory-specific delete tool.
+> Slice 266 moves recursive filesystem filtering/display into Workspace:
+> `FileSearch` and `DirectoryList recursive=true` share the same
+> `.gitignore` / `.ignore` handling, and workspace-backed output paths use
+> stable labels such as `<workspace>/...`.
 
 ## Scope (v1.1)
 

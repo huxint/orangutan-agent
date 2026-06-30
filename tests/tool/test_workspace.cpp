@@ -280,6 +280,51 @@ TEST_CASE("Workspace extra roots widen only the configured direction", "[unit][t
   REQUIRE(*write_to_write_root->override_root_index == 0U);
 }
 
+TEST_CASE("Workspace walk filter shares hidden, built-in, and ignore-file decisions", "[unit][tool][workspace]") {
+  TempDir root{"oran-workspace-walk-filter"};
+  write_text(root.path() / ".gitignore", "*.log\nignored/\ndocs/secret.txt\n!keep.log\n");
+  write_text(root.path() / "src" / ".ignore", "local.txt\n");
+  write_text(root.path() / "src" / "local.txt", "ignored by nested rule");
+  write_text(root.path() / "docs" / "secret.txt", "ignored by slash rule");
+
+  auto workspace = make_workspace(root.path());
+  auto filter = workspace.walk_filter(root.path().string());
+
+  REQUIRE(filter.should_skip((root.path() / ".hidden.txt").string(), false));
+  REQUIRE(filter.should_skip((root.path() / ".git").string(), true));
+  REQUIRE(filter.should_skip((root.path() / "build").string(), true));
+  REQUIRE(filter.should_skip((root.path() / "a.log").string(), false));
+  REQUIRE_FALSE(filter.should_skip((root.path() / "keep.log").string(), false));
+  REQUIRE(filter.should_skip((root.path() / "ignored").string(), true));
+  REQUIRE(filter.should_skip((root.path() / "src" / "local.txt").string(), false));
+  REQUIRE(filter.should_skip((root.path() / "docs" / "secret.txt").string(), false));
+
+  auto forensic_filter = workspace.walk_filter(root.path().string(),
+                                               tool::WorkspaceWalkOptions{
+                                                   .include_hidden = true,
+                                                   .respect_ignore = false,
+                                               });
+  REQUIRE_FALSE(forensic_filter.should_skip((root.path() / ".hidden.txt").string(), false));
+  REQUIRE_FALSE(forensic_filter.should_skip((root.path() / "build").string(), true));
+  REQUIRE_FALSE(forensic_filter.should_skip((root.path() / "a.log").string(), false));
+}
+
+TEST_CASE("Workspace display_path renders stable root-relative labels", "[unit][tool][workspace]") {
+  TempDir root{"oran-workspace-display"};
+  TempDir readable{"oran-workspace-display-readable"};
+  write_text(root.path() / "src" / "main.cpp", "int main() {}\n");
+  write_text(readable.path() / "logs" / "audit.txt", "audit\n");
+  auto workspace = make_workspace(root.path(),
+                                  tool::WorkspaceOptions{
+                                      .extra_read_roots = {readable.path().string()},
+                                  });
+
+  REQUIRE(workspace.display_path(root.path().string()) == "<workspace>");
+  REQUIRE(workspace.display_path((root.path() / "src" / "main.cpp").string()) == "<workspace>/src/main.cpp");
+  REQUIRE(workspace.display_path((readable.path() / "logs" / "audit.txt").string()) == "<read-root-0>/logs/audit.txt");
+  REQUIRE(workspace.display_path("/tmp/oran-outside-display.txt") == "/tmp/oran-outside-display.txt");
+}
+
 TEST_CASE("Workspace instances keep independent roots", "[unit][tool][workspace]") {
   TempDir left{"oran-workspace-left"};
   TempDir right{"oran-workspace-right"};
@@ -660,7 +705,11 @@ TEST_CASE("FileSearch uses DispatchContext workspace for relative searches and t
     auto found =
         co_await registry.dispatch(tool::kFileSearchName, R"({"path":"nested/note.txt","pattern":"needle"})", ctx);
     REQUIRE(found.has_value());
-    REQUIRE(found->text.contains("needle here"));
+    REQUIRE(found->text.contains("<workspace>/nested/note.txt:2:needle here"));
+    REQUIRE(found->data_json.has_value());
+    const auto found_data = nlohmann::json::parse(*found->data_json);
+    REQUIRE(found_data["path"] == "<workspace>/nested/note.txt");
+    REQUIRE(found_data["matches"][0]["path"] == "<workspace>/nested/note.txt");
 
     std::error_code ec;
     const auto outside_relative_path = std::filesystem::relative(outside.path() / "secret.txt", root.path(), ec);
@@ -740,8 +789,12 @@ TEST_CASE("DirectoryList uses DispatchContext workspace for relative listings an
 
     auto listed = co_await registry.dispatch(tool::kDirectoryListName, R"({"path":"nested"})", ctx);
     REQUIRE(listed.has_value());
-    REQUIRE(listed->text.contains("a.txt"));
-    REQUIRE(listed->text.contains("b.txt"));
+    REQUIRE(listed->text.contains("<workspace>/nested/a.txt:regular_file:1"));
+    REQUIRE(listed->text.contains("<workspace>/nested/b.txt:regular_file:2"));
+    REQUIRE(listed->data_json.has_value());
+    const auto listed_data = nlohmann::json::parse(*listed->data_json);
+    REQUIRE(listed_data["path"] == "<workspace>/nested");
+    REQUIRE(listed_data["entries"][0]["path"].get<std::string>().starts_with("<workspace>/nested/"));
 
     std::error_code ec;
     const auto outside_relative_path = std::filesystem::relative(outside.path(), root.path(), ec);

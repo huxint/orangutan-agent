@@ -8,6 +8,7 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -32,6 +33,36 @@ enum class WriteDisposition {
 struct WriteIntent {
   WriteDisposition disposition{WriteDisposition::truncate};
   bool create_parent_directories{false};
+};
+
+struct WorkspaceWalkOptions {
+  /// Dot-prefixed names are skipped unless callers opt in.
+  bool include_hidden{false};
+  /// Built-in low-signal directories plus .gitignore/.ignore rules are applied
+  /// when this flag is true. Hidden filtering remains independent.
+  bool respect_ignore{true};
+};
+
+class WorkspaceWalkFilter {
+public:
+  [[nodiscard]] static WorkspaceWalkFilter create(std::string_view root, WorkspaceWalkOptions options = {});
+
+  WorkspaceWalkFilter(WorkspaceWalkFilter&&) noexcept;
+  WorkspaceWalkFilter& operator=(WorkspaceWalkFilter&&) noexcept;
+  WorkspaceWalkFilter(const WorkspaceWalkFilter&) = delete;
+  WorkspaceWalkFilter& operator=(const WorkspaceWalkFilter&) = delete;
+  ~WorkspaceWalkFilter();
+
+  /// Return true when a recursive filesystem consumer should skip `path`.
+  /// `path` is expected to be an absolute path under the filter root.
+  [[nodiscard]] bool should_skip(std::string_view path, bool is_directory);
+
+private:
+  struct Impl;
+
+  explicit WorkspaceWalkFilter(std::unique_ptr<Impl> impl);
+
+  std::unique_ptr<Impl> impl_;
 };
 
 struct ResolvedPath {
@@ -69,6 +100,15 @@ public:
   [[nodiscard]] core::Result<ResolvedPath> resolve_list(std::string_view path) const;
   [[nodiscard]] core::Result<ResolvedPath> resolve_write(std::string_view path, WriteIntent intent) const;
   [[nodiscard]] core::Result<ResolvedPath> resolve_delete(std::string_view path) const;
+
+  /// Create the shared recursive-walk filter rooted at an already resolved
+  /// directory. The filter owns only lightweight strings and lazy ignore-rule
+  /// state; it does not expose filesystem types in this public header.
+  [[nodiscard]] WorkspaceWalkFilter walk_filter(std::string_view root, WorkspaceWalkOptions options = {}) const;
+
+  /// Render an absolute path as a stable workspace display name when possible,
+  /// e.g. `<workspace>/src/main.cpp`. Paths outside known roots pass through.
+  [[nodiscard]] std::string display_path(std::string_view absolute_path) const;
 
 private:
   std::string root_;

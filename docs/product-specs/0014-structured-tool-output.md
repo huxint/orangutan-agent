@@ -216,7 +216,9 @@ handlers can adopt without churning every callsite at once.
      matches[], match_count, truncated, truncation_reason, files_scanned,
      bytes_read}` plus `usage.bytes_read` (cumulative scanned file bytes),
      `files_touched` (non-binary scanned files), `match_count`
-     (post-truncation), and the `truncated` cap flag.
+     (post-truncation), and the `truncated` cap flag. Slice 266 makes
+     workspace-backed path fields use `Workspace::display_path(...)` labels
+     such as `<workspace>/src/main.cpp`.
   3. `DirectoryList` — shipped in slice 64: keeps the existing
      `<path>:<kind>:<size_bytes or '-'>` text rendering, and fills
      `data_json` with `{kind:"directory_list", path, include_hidden,
@@ -225,7 +227,9 @@ handlers can adopt without churning every callsite at once.
      non-regular kinds) plus `usage.files_touched=1` and
      `usage.match_count=entry_count`. Slice 264 adds the `recursive`
      flag and sets `usage.files_touched` to root-plus-entry count for
-     recursive listings.
+     recursive listings. Slice 266 makes workspace-backed root/entry path
+     fields use `Workspace::display_path(...)` labels and makes recursive
+     listings honor the shared workspace ignore predicate.
   4. `FileWrite` / `FileEdit` / `FileDelete` — shipped in slice 61:
      `FileWrite` fills `usage.bytes_written` and `files_touched`;
      `FileEdit` fills `bytes_read`, `bytes_written`, `files_touched`,

@@ -2,9 +2,16 @@
 
 #include <oran/tool/workspace.hpp>
 
+#include <fnmatch.h>
+
+#include <algorithm>
+#include <array>
 #include <expected>
 #include <filesystem>
 #include <format>
+#include <fstream>
+#include <iterator>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -24,6 +31,52 @@ using ::orangutan::core::Result;
 struct RootMatch {
   std::filesystem::path root;
   std::optional<std::size_t> override_index{};
+};
+
+constexpr std::array<std::string_view, 5> kIgnoredDirectoryNames{
+    ".git",
+    ".xmake",
+    ".orangutan",
+    "build",
+    "node_modules",
+};
+
+[[nodiscard]] bool is_hidden_path(const std::filesystem::path& path) {
+  const auto name = path.filename().string();
+  return !name.empty() && name.front() == '.';
+}
+
+[[nodiscard]] bool is_builtin_ignored_directory(const std::filesystem::path& path) {
+  const auto name = path.filename().string();
+  return std::ranges::contains(kIgnoredDirectoryNames, std::string_view{name});
+}
+
+[[nodiscard]] bool is_ascii_space(char ch) noexcept {
+  return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' || ch == '\f' || ch == '\v';
+}
+
+[[nodiscard]] std::string trim_ascii(std::string_view text) {
+  while (!text.empty() && is_ascii_space(text.front())) {
+    text.remove_prefix(1);
+  }
+  while (!text.empty() && is_ascii_space(text.back())) {
+    text.remove_suffix(1);
+  }
+  return std::string{text};
+}
+
+struct IgnoreRule {
+  std::filesystem::path base_directory;
+  std::string pattern;
+  bool negated{false};
+  bool directory_only{false};
+  bool anchored{false};
+  bool contains_slash{false};
+};
+
+struct IgnoreScope {
+  std::filesystem::path directory;
+  std::vector<IgnoreRule> rules;
 };
 
 [[nodiscard]] Error path_error(std::string message, std::string_view input, std::string_view reason) {
@@ -147,6 +200,133 @@ filesystem_error(std::string message, const std::filesystem::path& path, const s
     return ".";
   }
   return relative.string();
+}
+
+[[nodiscard]] std::string relative_display_path(const std::filesystem::path& candidate,
+                                                const std::filesystem::path& root) {
+  auto relative = candidate.lexically_normal().lexically_relative(root.lexically_normal());
+  if (relative.empty()) {
+    return ".";
+  }
+  return relative.generic_string();
+}
+
+[[nodiscard]] std::optional<std::string> relative_generic_string(const std::filesystem::path& path,
+                                                                 const std::filesystem::path& base) {
+  const auto relative = path.lexically_normal().lexically_relative(base.lexically_normal());
+  if (relative.empty()) {
+    return std::string{"."};
+  }
+  for (const auto& part : relative) {
+    if (part == "..") {
+      return std::nullopt;
+    }
+  }
+  return relative.generic_string();
+}
+
+[[nodiscard]] std::optional<IgnoreRule> parse_ignore_line(std::string_view raw_line,
+                                                          const std::filesystem::path& base_directory) {
+  auto text = trim_ascii(raw_line);
+  if (text.empty()) {
+    return std::nullopt;
+  }
+  bool escaped_leading_marker = false;
+  if (text.starts_with("\\#") || text.starts_with("\\!")) {
+    text.erase(text.begin());
+    escaped_leading_marker = true;
+  } else if (text.front() == '#') {
+    return std::nullopt;
+  }
+
+  bool negated = false;
+  if (!escaped_leading_marker && !text.empty() && text.front() == '!') {
+    negated = true;
+    text.erase(text.begin());
+  }
+
+  bool anchored = false;
+  while (!text.empty() && text.front() == '/') {
+    anchored = true;
+    text.erase(text.begin());
+  }
+
+  bool directory_only = false;
+  while (!text.empty() && text.back() == '/') {
+    directory_only = true;
+    text.pop_back();
+  }
+  if (text.empty()) {
+    return std::nullopt;
+  }
+  const bool contains_slash = text.contains('/');
+
+  return IgnoreRule{
+      .base_directory = base_directory.lexically_normal(),
+      .pattern = std::move(text),
+      .negated = negated,
+      .directory_only = directory_only,
+      .anchored = anchored,
+      .contains_slash = contains_slash,
+  };
+}
+
+[[nodiscard]] std::vector<IgnoreRule> load_ignore_rules(const std::filesystem::path& directory) {
+  constexpr std::array<std::string_view, 2> kIgnoreFiles{".gitignore", ".ignore"};
+
+  std::vector<IgnoreRule> rules;
+  for (const auto name : kIgnoreFiles) {
+    std::ifstream input{directory / name, std::ios::binary};
+    if (!input) {
+      continue;
+    }
+    std::string line;
+    while (std::getline(input, line)) {
+      if (auto rule = parse_ignore_line(line, directory); rule.has_value()) {
+        rules.push_back(std::move(*rule));
+      }
+    }
+  }
+  return rules;
+}
+
+[[nodiscard]] bool path_pattern_matches(std::string_view pattern, std::string_view candidate, bool path_mode) {
+  const int flags = path_mode ? FNM_PATHNAME : 0;
+  return fnmatch(std::string{pattern}.c_str(), std::string{candidate}.c_str(), flags) == 0;
+}
+
+[[nodiscard]] bool ignore_rule_matches(const IgnoreRule& rule, const std::filesystem::path& path, bool is_directory) {
+  if (rule.directory_only && !is_directory) {
+    return false;
+  }
+
+  if (rule.anchored || rule.contains_slash) {
+    const auto relative = relative_generic_string(path, rule.base_directory);
+    return relative.has_value() && path_pattern_matches(rule.pattern, *relative, true);
+  }
+
+  return path_pattern_matches(rule.pattern, path.filename().generic_string(), false);
+}
+
+[[nodiscard]] std::vector<std::filesystem::path> directories_to(const std::filesystem::path& root,
+                                                                const std::filesystem::path& parent) {
+  std::vector<std::filesystem::path> directories;
+  directories.push_back(root);
+
+  auto relative = parent.lexically_normal().lexically_relative(root);
+  if (relative.empty()) {
+    return directories;
+  }
+
+  auto current = root;
+  for (const auto& part : relative) {
+    if (part == "." || part == "..") {
+      continue;
+    }
+    current /= part;
+    directories.push_back(current.lexically_normal());
+  }
+  return directories;
 }
 
 [[nodiscard]] Result<ResolvedPath> build_resolved(const std::filesystem::path& candidate,
@@ -275,6 +455,69 @@ canonical_existing_path(const std::filesystem::path& candidate, std::string_view
 
 }  // namespace
 
+struct WorkspaceWalkFilter::Impl {
+  std::filesystem::path root;
+  WorkspaceWalkOptions options;
+  std::vector<IgnoreScope> scopes;
+
+  explicit Impl(std::string_view raw_root, WorkspaceWalkOptions raw_options)
+      : root{std::filesystem::path{std::string{raw_root}}.lexically_normal()}, options{raw_options} {}
+
+  void sync_for_parent(const std::filesystem::path& parent) {
+    const auto directories = directories_to(root, parent);
+    std::size_t common = 0;
+    while (common < scopes.size() && common < directories.size() && scopes[common].directory == directories[common]) {
+      ++common;
+    }
+    scopes.resize(common);
+    for (std::size_t index = common; index < directories.size(); ++index) {
+      scopes.push_back(IgnoreScope{
+          .directory = directories[index],
+          .rules = load_ignore_rules(directories[index]),
+      });
+    }
+  }
+
+  [[nodiscard]] bool ignore_files_match(const std::filesystem::path& path, bool is_directory) const {
+    bool ignored = false;
+    for (const auto& scope : scopes) {
+      for (const auto& rule : scope.rules) {
+        if (ignore_rule_matches(rule, path, is_directory)) {
+          ignored = !rule.negated;
+        }
+      }
+    }
+    return ignored;
+  }
+};
+
+WorkspaceWalkFilter::WorkspaceWalkFilter(std::unique_ptr<Impl> impl) : impl_{std::move(impl)} {}
+
+WorkspaceWalkFilter WorkspaceWalkFilter::create(std::string_view root, WorkspaceWalkOptions options) {
+  return WorkspaceWalkFilter{std::make_unique<Impl>(root, options)};
+}
+
+WorkspaceWalkFilter::WorkspaceWalkFilter(WorkspaceWalkFilter&&) noexcept = default;
+
+WorkspaceWalkFilter& WorkspaceWalkFilter::operator=(WorkspaceWalkFilter&&) noexcept = default;
+
+WorkspaceWalkFilter::~WorkspaceWalkFilter() = default;
+
+bool WorkspaceWalkFilter::should_skip(std::string_view path, bool is_directory) {
+  const auto entry_path = std::filesystem::path{std::string{path}}.lexically_normal();
+  if (!impl_->options.include_hidden && is_hidden_path(entry_path)) {
+    return true;
+  }
+  if (!impl_->options.respect_ignore) {
+    return false;
+  }
+  if (is_directory && is_builtin_ignored_directory(entry_path)) {
+    return true;
+  }
+  impl_->sync_for_parent(entry_path.parent_path());
+  return impl_->ignore_files_match(entry_path, is_directory);
+}
+
 Workspace::Workspace(std::string root,
                      std::vector<std::string> extra_read_roots,
                      std::vector<std::string> extra_write_roots)
@@ -313,6 +556,39 @@ core::Result<ResolvedPath> Workspace::resolve_write(std::string_view path, Write
 
 core::Result<ResolvedPath> Workspace::resolve_delete(std::string_view path) const {
   return resolve_mutating(path, root_, extra_write_roots_, false, "delete");
+}
+
+WorkspaceWalkFilter Workspace::walk_filter(std::string_view root, WorkspaceWalkOptions options) const {
+  return WorkspaceWalkFilter::create(root, options);
+}
+
+std::string Workspace::display_path(std::string_view absolute_path) const {
+  const auto candidate = std::filesystem::path{std::string{absolute_path}}.lexically_normal();
+  const auto workspace_root = std::filesystem::path{root_};
+  const auto render = [&](std::string_view label, const std::filesystem::path& root) {
+    const auto relative = relative_display_path(candidate, root);
+    if (relative == ".") {
+      return std::string{label};
+    }
+    return std::format("{}/{}", label, relative);
+  };
+
+  if (is_under_root(candidate, workspace_root)) {
+    return render("<workspace>", workspace_root);
+  }
+  for (std::size_t index = 0; index < extra_read_roots_.size(); ++index) {
+    const auto root = std::filesystem::path{extra_read_roots_[index]};
+    if (is_under_root(candidate, root)) {
+      return render(std::format("<read-root-{}>", index), root);
+    }
+  }
+  for (std::size_t index = 0; index < extra_write_roots_.size(); ++index) {
+    const auto root = std::filesystem::path{extra_write_roots_[index]};
+    if (is_under_root(candidate, root)) {
+      return render(std::format("<write-root-{}>", index), root);
+    }
+  }
+  return std::string{absolute_path};
 }
 
 }  // namespace orangutan::tool

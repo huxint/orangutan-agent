@@ -215,9 +215,16 @@ enum class Capability {
 > workspace `resolve_list` at the root, do not follow nested
 > symlinks, skip dot-prefixed entries unless `include_hidden=true`,
 > and always skip `.git`, `.xmake`, `.orangutan`, `build`, and
-> `node_modules` directories. The source-controlled `.gitignore` /
-> `.ignore` rule stack remains private to `FileSearch` until the
-> workspace-owned shared ignore predicate lands.
+> `node_modules` directories. Slice 266 moves the recursive-walk
+> predicate into `WorkspaceWalkFilter`, so `DirectoryList
+> recursive=true` also honors `.gitignore` / `.ignore` files from
+> the listing root downward and shares that behavior with
+> `FileSearch`.
+> Slice 266 also adds `Workspace::display_path(...)`; when a
+> `Workspace` is supplied, `FileSearch` and `DirectoryList` render
+> paths in text/data output as stable labels such as
+> `<workspace>/src/main.cpp`, `<read-root-0>/...`, or
+> `<write-root-0>/...` instead of raw absolute roots.
 > Slice 30 (2026-05-20) adds `FileDelete`
 > (`tool::register_file_delete`, capability `delete_path` — the
 > first built-in that exercises this slice-7 capability), built on

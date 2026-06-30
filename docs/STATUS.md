@@ -9,9 +9,9 @@
 
 ## Snapshot
 
-- **Slice:** 265 (`xmake run orangutan -- --help` reports slice 265)
+- **Slice:** 266 (`xmake run orangutan -- --help` reports slice 266)
 - **Last completed history:**
-  [`histories/2026-06/20260628-1934-file-delete-recursive-directories.md`](histories/2026-06/20260628-1934-file-delete-recursive-directories.md)
+  [`histories/2026-06/20260630-1150-workspace-walk-filter-display.md`](histories/2026-06/20260630-1150-workspace-walk-filter-display.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — the only active plan; its next gate is externally blocked on real QQ
@@ -24,25 +24,23 @@
     [`exec-plans/completed/2026-06-18-runtime-service-owner.md`](exec-plans/completed/2026-06-18-runtime-service-owner.md).
     The desktop chat-tracer plan closed 2026-06-16
     ([`exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md)).
-- **Latest completed slice:** slice 265 completes the Tools delete reshape:
-  `FileDelete` remains one public tool and now accepts `{path, recursive?}`.
-  Regular files delete directly; directories require explicit
-  `recursive=true`; symlinks remain refused through the existing workspace/IO
-  policy. The underlying `oran-io::delete_path` returns a removed-path count,
-  `delete_file` remains the regular-file compatibility wrapper, and recursive
-  directory deletes clear private range-read caches so child file views cannot
-  survive the mutation. Successful `FileDelete` calls keep the text fallback
-  `deleted <path>`, keep `data_json=nullopt`, and report
-  `usage.files_touched` from the removed-path count. Focused validation passed:
-  `test-io` 58 cases / 328 assertions and `test-tool` 213 cases / 2246
-  assertions; full `xmake test` passed 19/19 when rerun outside the sandbox for
-  loopback HTTP/WebSocket tests, `xmake run orangutan -- --help` reports
-  `2.0.0-slice265`, and `make ci` passed.
-- **Next intended slice:** continue the now-active Tools/Workspace frontier.
-  The best small follow-up is Workspace v1.1's shared ignore/display helper now
-  that recursive `DirectoryList` and `FileSearch` are both recursive consumers.
-  Automation webhook/non-chat producer work remains a good non-channel
-  alternative if Tools pauses.
+- **Latest completed slice:** slice 266 closes the Workspace v1.1 shared
+  recursive-walk structure task. `tool::WorkspaceWalkFilter` now owns the
+  common hidden-name, built-in low-signal directory, and `.gitignore` /
+  `.ignore` rule-stack decisions used by recursive filesystem tools.
+  `FileSearch` consumes that shared filter instead of its private ignore-stack
+  copy, while `DirectoryList recursive=true` now honors the same
+  source-controlled ignore files as search. `Workspace::display_path` supplies
+  stable display labels (`<workspace>/...`, `<read-root-N>/...`,
+  `<write-root-N>/...`) for workspace-backed `FileSearch` and `DirectoryList`
+  text/data paths so tool output no longer leaks temp absolute roots in those
+  paths. Focused validation passed: `test-tool` 216 cases / 2287 assertions.
+  Full validation passed: `xmake test` 19/19, `xmake run orangutan -- --help`
+  reports `2.0.0-slice266`, and `make ci` passed.
+- **Next intended slice:** the best small follow-up inside Workspace is the
+  remaining v1.1 per-call read/list outside-workspace override with an ask
+  verdict and explicit audit display. If Workspace pauses, Automation
+  webhook/non-chat producer work remains the best non-channel alternative.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 
@@ -73,7 +71,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-channel`: 26 cases / 205 assertions.
 - `oran-channel-qq` (gated, `--channel_qq=y`): 58 cases / 369 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
-- `oran-tool`: 213 cases / 2246 assertions.
+- `oran-tool`: 216 cases / 2287 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 88 cases / 664 assertions.
 - `oran-agent`: 57 cases / 10 786 assertions.

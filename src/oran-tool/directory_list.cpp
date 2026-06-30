@@ -21,12 +21,14 @@
 // filled with `files_touched=1` for single-level listings, root-plus-entry
 // count for recursive listings, and `match_count` (entry count) so audit
 // fan-out and the future scheduler can see directory-walk cost without
-// parsing prose.
+// parsing prose. Slice 266 moves recursive filtering into
+// `WorkspaceWalkFilter`, so recursive listings now share `FileSearch`'s
+// hidden-name, built-in low-signal directory, and `.gitignore` / `.ignore`
+// decisions.
 
 #include <oran/tool/builtins.hpp>
 
 #include <algorithm>
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -68,19 +70,13 @@ constexpr std::string_view kDirectoryListSchema =
     R"("max_entries":{"type":"integer","minimum":1}},"required":["path"],"additionalProperties":false})";
 
 constexpr std::size_t kDirectoryListDefaultMax = 256;
-constexpr std::array<std::string_view, 5> kRecursiveSkippedDirectoryNames{
-    ".git",
-    ".xmake",
-    ".orangutan",
-    "build",
-    "node_modules",
-};
 
 struct ParsedInput {
   std::string path;
   bool include_hidden{false};
   bool recursive{false};
   std::size_t max_entries{kDirectoryListDefaultMax};
+  const Workspace* workspace{nullptr};
 };
 
 [[nodiscard]] core::Result<ParsedInput> parse_input(std::string_view input_json) {
@@ -129,14 +125,6 @@ struct ParsedInput {
   return cancellation.cancelled() != asio::cancellation_type::none;
 }
 
-[[nodiscard]] bool is_hidden_name(std::string_view name) noexcept {
-  return name.starts_with('.');
-}
-
-[[nodiscard]] bool is_recursive_skip_directory(std::string_view name) {
-  return std::ranges::contains(kRecursiveSkippedDirectoryNames, name);
-}
-
 [[nodiscard]] io::DirectoryEntryKind classify(const std::filesystem::file_status& status) noexcept {
   if (std::filesystem::is_symlink(status)) {
     return io::DirectoryEntryKind::symlink;
@@ -175,6 +163,22 @@ struct ParsedInput {
   return static_cast<std::uint32_t>(entry_count + 1U);
 }
 
+[[nodiscard]] std::string display_path(const ParsedInput& parsed, const std::filesystem::path& path) {
+  if (parsed.workspace == nullptr) {
+    return path.string();
+  }
+  return parsed.workspace->display_path(path.string());
+}
+
+void apply_display_paths(const ParsedInput& parsed, std::vector<io::DirectoryEntry>& entries) {
+  if (parsed.workspace == nullptr) {
+    return;
+  }
+  for (auto& entry : entries) {
+    entry.path = parsed.workspace->display_path(entry.path);
+  }
+}
+
 [[nodiscard]] core::Result<std::vector<io::DirectoryEntry>>
 list_directory_recursive(const ParsedInput& parsed, const asio::cancellation_state& cancellation) {
   if (parsed.max_entries == 0) {
@@ -205,6 +209,11 @@ list_directory_recursive(const ParsedInput& parsed, const asio::cancellation_sta
     const auto walk_options = std::filesystem::directory_options::skip_permission_denied;
     const std::filesystem::recursive_directory_iterator end{};
     auto it = std::filesystem::recursive_directory_iterator{root, walk_options};
+    auto walk_filter = WorkspaceWalkFilter::create(root.string(),
+                                                   WorkspaceWalkOptions{
+                                                       .include_hidden = parsed.include_hidden,
+                                                       .respect_ignore = true,
+                                                   });
     while (it != end) {
       if (is_cancelled(cancellation)) {
         return std::unexpected(core::Error::cancelled());
@@ -228,15 +237,10 @@ list_directory_recursive(const ParsedInput& parsed, const asio::cancellation_sta
         continue;
       }
 
-      if (!parsed.include_hidden && is_hidden_name(name)) {
+      if (walk_filter.should_skip(entry.path().string(), is_directory)) {
         if (is_directory) {
           it.disable_recursion_pending();
         }
-        ++it;
-        continue;
-      }
-      if (is_directory && is_recursive_skip_directory(name)) {
-        it.disable_recursion_pending();
         ++it;
         continue;
       }
@@ -246,7 +250,7 @@ list_directory_recursive(const ParsedInput& parsed, const asio::cancellation_sta
 
       entries.push_back(io::DirectoryEntry{
           .name = name,
-          .path = entry.path().string(),
+          .path = display_path(parsed, entry.path()),
           .kind = kind,
           .size_bytes = kind == io::DirectoryEntryKind::regular_file ? regular_file_size(entry) : std::nullopt,
       });
@@ -323,6 +327,7 @@ format_data_json(std::string_view path, const ParsedInput& parsed, const std::ve
   if (!parsed) {
     co_return std::unexpected(std::move(parsed).error());
   }
+  parsed->workspace = ctx.workspace;
 
   if (ctx.resolved_path.has_value()) {
     parsed->path = ctx.resolved_path->absolute_path;
@@ -352,13 +357,18 @@ format_data_json(std::string_view path, const ParsedInput& parsed, const std::ve
         .max_entries = parsed->max_entries,
     };
     entries = co_await io::list_directory(ctx.executor, std::move(parsed->path), options);
+    if (entries) {
+      apply_display_paths(*parsed, *entries);
+    }
   }
   if (!entries) {
     co_return std::unexpected(std::move(entries).error());
   }
 
   auto text = render(*entries);
-  auto data_json = format_data_json(resolved_path, *parsed, *entries);
+  const auto display_root =
+      parsed->workspace == nullptr ? resolved_path : parsed->workspace->display_path(resolved_path);
+  auto data_json = format_data_json(display_root, *parsed, *entries);
   const auto match_count = static_cast<std::uint64_t>(entries->size());
   const auto files_touched = parsed->recursive ? recursive_files_touched(entries->size()) : std::uint32_t{1};
   co_return Output{
@@ -381,7 +391,8 @@ core::Result<void> register_directory_list(Registry& registry) {
                      "\"include_hidden\"?: bool (default false), \"recursive\"?: bool (default false), "
                      "\"max_entries\"?: positive integer (default 256)}. With `recursive=true`, walks the whole "
                      "tree while skipping nested symlinks plus `.git`, `.xmake`, `.orangutan`, `build`, and "
-                     "`node_modules` directories. Returns one `<path>:<kind>:<size_bytes or '-'>` line per entry, "
+                     "`node_modules` directories and honoring `.gitignore` / `.ignore` files from the listing root "
+                     "downward. Returns one `<path>:<kind>:<size_bytes or '-'>` line per entry, "
                      "sorted by path; `no entries` when the directory is empty. `kind` is one of "
                      "`regular_file` | `directory` | `symlink` | `other`. Errors with `io` if the "
                      "directory has more entries than `max_entries`; raise the cap and retry. "
@@ -389,7 +400,9 @@ core::Result<void> register_directory_list(Registry& registry) {
                      "max_entries, entry_count, and an `entries[]` array of "
                      "`{name, path, kind, size_bytes}` (size_bytes is null for non-regular files); "
                      "`usage` reports `files_touched=1` for single-level listings or root-plus-entry count for "
-                     "recursive listings, and `match_count` (entry count).",
+                     "recursive listings, and `match_count` (entry count). When a Workspace is supplied, output "
+                     "paths use stable display labels such as `<workspace>/src/main.cpp` instead of raw absolute "
+                     "paths.",
       .input_schema_json = std::string{kDirectoryListSchema},
       .required_capabilities = {core::Capability::list_directory},
       .deferred = false,

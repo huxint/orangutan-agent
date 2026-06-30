@@ -36,10 +36,11 @@ Current seams and future work:
   recursive `FileSearch` and `DirectoryList` walks still skip symlinks
   wholesale, a stricter policy that avoids recursive escape complexity until
   a shared directory scanner exists.
-- `FileSearch`'s source-controlled ignore-file stack is still private to that
-  tool, while `DirectoryList recursive=true` has only the built-in low-signal
-  skip list. Slice 264 supplies the second recursive consumer, so the shared
-  `Workspace::is_ignored(...)` predicate is now unblocked.
+- Slice 266 moves recursive filesystem filtering into `WorkspaceWalkFilter`.
+  `FileSearch` and `DirectoryList recursive=true` now share dotfile filtering,
+  the built-in low-signal directory skip list, and `.gitignore` / `.ignore`
+  rule-stack semantics. The same slice adds `Workspace::display_path(...)` so
+  workspace-backed output paths use stable labels such as `<workspace>/...`.
 - The future `tool::Runtime::workspace()` capability-gated accessor is
   described in [`../design-docs/tool-runtime.md`](../design-docs/tool-runtime.md)
   "ToolRuntime" but unbuilt.
@@ -140,11 +141,24 @@ confinement, skips nested symlinks, skips dot-prefixed entries unless
 `build`, and `node_modules` directories. It does not yet share
 `FileSearch`'s `.gitignore` / `.ignore` parser.
 
-Still pending: The shared
-`Workspace::is_ignored(...)` predicate remains a v1.1 structure task now that
-the second recursive consumer exists. The future capability-gated
-`tool::Runtime::workspace()` accessor still lands with `tool::Runtime`; the
-current dispatch context remains the interim service seam.
+**Slice 266 (2026-06-30):** `WorkspaceWalkFilter` is the shipped shared
+recursive-walk predicate. It owns hidden-name filtering, the built-in
+low-signal directory list (`.git`, `.xmake`, `.orangutan`, `build`,
+`node_modules`), and lazy `.gitignore` / `.ignore` scope loading with the same
+rule subset that `FileSearch` already shipped. Recursive `FileSearch` now
+consumes this filter instead of a private ignore-stack copy, and
+`DirectoryList recursive=true` honors the same source-controlled ignore files.
+`Workspace::display_path(...)` is the paired display helper: paths under the
+primary workspace root render as `<workspace>/...`, extra read roots render as
+`<read-root-N>/...`, extra write roots render as `<write-root-N>/...`, and
+unknown paths pass through unchanged. Workspace-backed `FileSearch` and
+`DirectoryList` use those labels in text fallbacks and structured `data_json`
+paths.
+
+Still pending: The v1.1 per-call read/list outside-workspace override remains
+unbuilt, and the future capability-gated `tool::Runtime::workspace()` accessor
+still lands with `tool::Runtime`; the current dispatch context remains the
+interim service seam.
 
 ## Scope (v1)
 
@@ -204,18 +218,18 @@ creation is allowed for this resolve call.
 
 ## Scope (v1.1)
 
-- Lift the shipped `FileSearch` ignore predicate and the slice-264 recursive
-  `DirectoryList` built-in skip list into a workspace-owned predicate
-  (`Workspace::is_ignored(ResolvedPath)`). The shared predicate will carry the
-  built-in skip list plus `.gitignore` / `.ignore` rule stack so both
-  recursive tools make the same decision.
+- Shipped in slice 266: lift the `FileSearch` ignore predicate and the
+  slice-264 recursive `DirectoryList` built-in skip list into
+  `WorkspaceWalkFilter`, carrying the built-in skip list plus `.gitignore` /
+  `.ignore` rule stack so both recursive tools make the same decision.
 - Per-call override field for `FileRead` / `FileSearch` /
   `DirectoryList`: `allow_outside_workspace=true` requires an `ask`
   permission verdict at runtime and records the resolved path in audit
   verbatim (no override exists for write/delete — that gate stays config-only).
-- Path display helper: `Workspace::display(const ResolvedPath&)` produces the
-  `<root>/...` short form for tool output and audit. Lifts the current ad-hoc
-  rendering across `FileSearch` / `DirectoryList`.
+- Shipped in slice 266: `Workspace::display_path(...)` produces stable
+  `<workspace>/...`, `<read-root-N>/...`, and `<write-root-N>/...` labels for
+  tool output paths. `FileSearch` and `DirectoryList` use it when a Workspace
+  is supplied.
 
 ## Scope (v2)
 
