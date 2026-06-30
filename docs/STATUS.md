@@ -9,9 +9,9 @@
 
 ## Snapshot
 
-- **Slice:** 266 (`xmake run orangutan -- --help` reports slice 266)
+- **Slice:** 267 (`xmake run orangutan -- --help` reports slice 267)
 - **Last completed history:**
-  [`histories/2026-06/20260630-1150-workspace-walk-filter-display.md`](histories/2026-06/20260630-1150-workspace-walk-filter-display.md)
+  [`histories/2026-06/20260630-1259-workspace-outside-read-override.md`](histories/2026-06/20260630-1259-workspace-outside-read-override.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — the only active plan; its next gate is externally blocked on real QQ
@@ -24,23 +24,20 @@
     [`exec-plans/completed/2026-06-18-runtime-service-owner.md`](exec-plans/completed/2026-06-18-runtime-service-owner.md).
     The desktop chat-tracer plan closed 2026-06-16
     ([`exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md)).
-- **Latest completed slice:** slice 266 closes the Workspace v1.1 shared
-  recursive-walk structure task. `tool::WorkspaceWalkFilter` now owns the
-  common hidden-name, built-in low-signal directory, and `.gitignore` /
-  `.ignore` rule-stack decisions used by recursive filesystem tools.
-  `FileSearch` consumes that shared filter instead of its private ignore-stack
-  copy, while `DirectoryList recursive=true` now honors the same
-  source-controlled ignore files as search. `Workspace::display_path` supplies
-  stable display labels (`<workspace>/...`, `<read-root-N>/...`,
-  `<write-root-N>/...`) for workspace-backed `FileSearch` and `DirectoryList`
-  text/data paths so tool output no longer leaks temp absolute roots in those
-  paths. Focused validation passed: `test-tool` 216 cases / 2287 assertions.
-  Full validation passed: `xmake test` 19/19, `xmake run orangutan -- --help`
-  reports `2.0.0-slice266`, and `make ci` passed.
-- **Next intended slice:** the best small follow-up inside Workspace is the
-  remaining v1.1 per-call read/list outside-workspace override with an ask
-  verdict and explicit audit display. If Workspace pauses, Automation
-  webhook/non-chat producer work remains the best non-channel alternative.
+- **Latest completed slice:** slice 267 closes the remaining Workspace v1.1
+  per-call read/list outside-workspace override. `FileRead`, `FileSearch`, and
+  `DirectoryList` accept `allow_outside_workspace=true`; when ordinary
+  workspace resolution rejects the read/list path as `outside_workspace` or
+  `symlink_escape`, the registry resolves the existing outside target, promotes
+  an otherwise-allow decision to `ask`, and records explicit audit display
+  metadata with the resolved absolute path. Mutating tools still have no
+  per-call escape; write/delete remain limited to workspace plus configured
+  extra roots. Focused validation passed: `test-tool` 219 cases / 2379
+  assertions. Full validation passed: `xmake test` 19/19, binary help reports
+  `2.0.0-slice267`, and `make ci` passed.
+- **Next intended slice:** Automation webhook/non-chat producer work is the
+  best non-channel follow-up. Workspace can pause unless `tool::Runtime` work
+  needs the future capability-gated workspace accessor.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 
@@ -71,7 +68,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-channel`: 26 cases / 205 assertions.
 - `oran-channel-qq` (gated, `--channel_qq=y`): 58 cases / 369 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
-- `oran-tool`: 216 cases / 2287 assertions.
+- `oran-tool`: 219 cases / 2379 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 88 cases / 664 assertions.
 - `oran-agent`: 57 cases / 10 786 assertions.

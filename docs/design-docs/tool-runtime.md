@@ -71,7 +71,9 @@ enum class Capability {
 > via `core::ToolDef::required_capabilities` — that field is the
 > in-code realisation of the `requires` field below (renamed because
 > `requires` is a reserved C++20 keyword). Built-ins shipped so far:
-> `FileRead` (slice 17, `Capability::read_file`), `FileWrite`
+> `FileRead` (slice 17, `Capability::read_file`; slice 267 adds
+> optional `allow_outside_workspace` for approved one-off outside reads),
+> `FileWrite`
 > (slice 18, `Capability::write_file`, input
 > `{path, content, mode?, create_parents?, max_bytes?,
 > expected_version?}` with
@@ -90,7 +92,8 @@ enum class Capability {
 > and `FileSearch` (slice 20,
 > `Capability::read_file`, input
 > `{path, pattern, max_matches?, include_hidden?, regex?,
-> max_output_bytes?, respect_ignore?}` — literal substring match by
+> max_output_bytes?, respect_ignore?, allow_outside_workspace?}` —
+> literal substring match by
 > default; `regex=true` (slice 24) routes through
 > `permission::InputPattern`; slice 51 keeps compiled patterns in a
 > bounded process-local `core::BoundedCache` (64 entries / 64 KiB /
@@ -200,7 +203,8 @@ enum class Capability {
 > permission rule can distinguish "list a directory" from "read a
 > file"; useful in sandbox modes where the agent should see the
 > shape of a tree without reading content). Input
-> `{path, include_hidden?, recursive?, max_entries?}`; default
+> `{path, include_hidden?, recursive?, max_entries?,
+> allow_outside_workspace?}`; default
 > `recursive=false` output is one
 > `<path>:<kind>:<size_bytes or '-'>` line per entry sorted by
 > path (the order `oran-io::list_directory` already enforces),
@@ -225,6 +229,15 @@ enum class Capability {
 > paths in text/data output as stable labels such as
 > `<workspace>/src/main.cpp`, `<read-root-0>/...`, or
 > `<write-root-0>/...` instead of raw absolute roots.
+> Slice 267 adds the read/list-only per-call outside-workspace
+> escape. `FileRead`, `FileSearch`, and `DirectoryList` accept
+> `allow_outside_workspace=true`; when normal workspace resolution
+> rejects the path as `outside_workspace` or `symlink_escape`, the
+> registry resolves the existing outside target, promotes an
+> otherwise-allow decision to `ask` with reason
+> `outside_workspace_override`, and records the resolved absolute path
+> under `metadata_json.path_resolution.resolved_display_path`. Write,
+> edit, and delete built-ins do not have this per-call escape.
 > Slice 30 (2026-05-20) adds `FileDelete`
 > (`tool::register_file_delete`, capability `delete_path` — the
 > first built-in that exercises this slice-7 capability), built on

@@ -69,14 +69,20 @@ struct ResolvedPath {
   /// Canonical absolute path to pass to `oran-io`.
   std::string absolute_path;
   /// Path relative to the matching root, for audit/display metadata.
+  /// Empty when a per-call read/list override resolves outside the permitted
+  /// read/list roots; audit uses the explicit display path for that case.
   std::string relative_path;
   /// True when an existing symlink was encountered during resolution.
   bool symlink_followed{false};
   /// True when `resolve_write` accepted a missing parent because the caller
   /// explicitly allowed parent creation.
   bool created_parents{false};
-  /// True when the match came from an extra root instead of the workspace root.
+  /// True when resolution used an explicit escape from the primary workspace
+  /// root: either a configured extra root or a per-call read/list override.
   bool outside_workspace_explicit_override{false};
+  /// True when a read/list call explicitly requested one-off outside-workspace
+  /// access. Mutating resolves never set this flag.
+  bool per_call_outside_workspace_override{false};
   /// Zero-based index inside the matching extra-root list; `nullopt` for the
   /// primary workspace root.
   std::optional<std::size_t> override_root_index{};
@@ -98,6 +104,8 @@ public:
 
   [[nodiscard]] core::Result<ResolvedPath> resolve_read(std::string_view path) const;
   [[nodiscard]] core::Result<ResolvedPath> resolve_list(std::string_view path) const;
+  [[nodiscard]] core::Result<ResolvedPath> resolve_read_outside_workspace(std::string_view path) const;
+  [[nodiscard]] core::Result<ResolvedPath> resolve_list_outside_workspace(std::string_view path) const;
   [[nodiscard]] core::Result<ResolvedPath> resolve_write(std::string_view path, WriteIntent intent) const;
   [[nodiscard]] core::Result<ResolvedPath> resolve_delete(std::string_view path) const;
 

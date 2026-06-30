@@ -1,14 +1,14 @@
 // src/oran-tool/file_read.cpp — `FileRead` built-in (spec 0011 v1).
 //
 // v2 input shape: `{"path": <string>, "start_line"?, "line_count"?,
-// "offset_bytes"?, "length_bytes"?, "max_bytes"?, "if_version"?}`. The
-// line/byte range pair is mutually exclusive (caught both at schema
-// validation in `Registry::add` and at handler time by
-// `io::FileRange` itself). The response wraps the returned text in a
-// single header line carrying the version token, the covered span, the
-// returned byte count, and the truncated flag. Since slice 62, the same
-// facts also ride in `Output::data_json` so downstream adapters and UIs do
-// not have to re-parse the header line.
+// "offset_bytes"?, "length_bytes"?, "max_bytes"?, "if_version"?,
+// "allow_outside_workspace"?}`. The line/byte range pair is mutually
+// exclusive (caught both at schema validation in `Registry::add` and at
+// handler time by `io::FileRange` itself). The response wraps the returned
+// text in a single header line carrying the version token, the covered span,
+// the returned byte count, and the truncated flag. Since slice 62, the same
+// facts also ride in `Output::data_json` so downstream adapters and UIs do not
+// have to re-parse the header line.
 // `if_version` short-circuits to `Error::not_modified` (carrying the
 // current token in context) when the supplied token matches the current
 // fingerprint, so a cached caller does not re-pay the body bytes.
@@ -47,7 +47,7 @@ constexpr std::string_view kFileReadSchema =
     R"("start_line":{"type":"integer","minimum":1},"line_count":{"type":"integer","minimum":1},)"
     R"("offset_bytes":{"type":"integer","minimum":1},"length_bytes":{"type":"integer","minimum":1},)"
     R"("max_bytes":{"type":"integer","minimum":1,"maximum":16777216},)"
-    R"("if_version":{"type":"string"}},)"
+    R"("if_version":{"type":"string"},"allow_outside_workspace":{"type":"boolean"}},)"
     R"("required":["path"],"additionalProperties":false})";
 
 constexpr std::uintmax_t kMaxReadBytes = 16U * 1024U * 1024U;
@@ -205,6 +205,9 @@ format_header(std::string_view path, const io::ReadTextResult& result, const std
     }
     if_version = (*parsed)["if_version"].get<std::string>();
   }
+  if (parsed->contains("allow_outside_workspace") && !(*parsed)["allow_outside_workspace"].is_boolean()) {
+    co_return std::unexpected(core::Error::invalid_argument("FileRead: `allow_outside_workspace` must be a boolean"));
+  }
 
   auto path = ctx.resolved_path.has_value() ? ctx.resolved_path->absolute_path : *std::move(path_field);
   if (!ctx.resolved_path.has_value() && ctx.workspace != nullptr) {
@@ -265,7 +268,8 @@ core::Result<void> register_file_read(Registry& registry) {
                      "{\"path\": <string>, \"start_line\"?: positive integer, \"line_count\"?: positive integer, "
                      "\"offset_bytes\"?: positive integer, \"length_bytes\"?: positive integer, "
                      "\"max_bytes\"?: positive integer <= 16777216 (default 16777216), "
-                     "\"if_version\"?: <version token from a prior read>}. The line range "
+                     "\"if_version\"?: <version token from a prior read>, "
+                     "\"allow_outside_workspace\"?: bool (default false; requires approval)}. The line range "
                      "(start_line/line_count) and byte range (offset_bytes/length_bytes) "
                      "are mutually exclusive. When `if_version` matches the current file "
                      "fingerprint the call short-circuits with `not_modified`; otherwise "

@@ -15,6 +15,7 @@ namespace orangutan::tool::detail {
 struct PathResolutionReport {
   std::string metadata_json{"{}"};
   std::optional<core::Error> error{};
+  bool requires_approval{false};
 };
 
 /// Resolve the current call's path at the registry boundary when the call is a

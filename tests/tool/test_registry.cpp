@@ -228,6 +228,7 @@ TEST_CASE("DispatchContext::for_now clones a prototype and clears dispatch-local
   prototype.resolved_path = tool::ResolvedToolPath{
       .absolute_path = "/tmp/a",
       .relative_path = "a",
+      .display_path = "<workspace>/a",
       .input_path_hash = "input-hash",
       .workspace_root_hash = "root-hash",
   };

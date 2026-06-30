@@ -280,6 +280,34 @@ TEST_CASE("Workspace extra roots widen only the configured direction", "[unit][t
   REQUIRE(*write_to_write_root->override_root_index == 0U);
 }
 
+TEST_CASE("Workspace per-call outside read/list override resolves existing paths only for read-side intents",
+          "[unit][tool][workspace]") {
+  TempDir root{"oran-workspace-per-call-primary"};
+  TempDir outside{"oran-workspace-per-call-outside"};
+  write_text(outside.path() / "audit.log", "audit");
+
+  auto workspace = make_workspace(root.path());
+
+  auto read = workspace.resolve_read_outside_workspace((outside.path() / "audit.log").string());
+  REQUIRE(read.has_value());
+  REQUIRE(read->absolute_path == (outside.path() / "audit.log").string());
+  REQUIRE(read->relative_path.empty());
+  REQUIRE(read->outside_workspace_explicit_override);
+  REQUIRE(read->per_call_outside_workspace_override);
+  REQUIRE_FALSE(read->override_root_index.has_value());
+
+  auto list = workspace.resolve_list_outside_workspace(outside.path().string());
+  REQUIRE(list.has_value());
+  REQUIRE(list->absolute_path == outside.path().string());
+  REQUIRE(list->outside_workspace_explicit_override);
+  REQUIRE(list->per_call_outside_workspace_override);
+
+  auto write = workspace.resolve_write((outside.path() / "created.txt").string(), tool::WriteIntent{});
+  REQUIRE_FALSE(write.has_value());
+  REQUIRE(write.error().kind() == core::ErrorKind::permission_denied);
+  REQUIRE(context_has(write.error(), "reason", "outside_workspace"));
+}
+
 TEST_CASE("Workspace walk filter shares hidden, built-in, and ignore-file decisions", "[unit][tool][workspace]") {
   TempDir root{"oran-workspace-walk-filter"};
   write_text(root.path() / ".gitignore", "*.log\nignored/\ndocs/secret.txt\n!keep.log\n");
@@ -422,7 +450,10 @@ TEST_CASE("Registry audits path policy failures before ask approval and does not
     tool::Registry registry;
     REQUIRE(tool::register_file_read(registry).has_value());
 
-    auto workspace = make_workspace(root.path());
+    auto workspace = make_workspace(root.path(),
+                                    tool::WorkspaceOptions{
+                                        .extra_write_roots = {outside.path().string()},
+                                    });
     auto rules = ask_tool_rules(std::string{tool::kFileReadName}, core::Capability::read_file);
     permission::RecordingAuditSink sink;
     auto ctx = make_workspace_ctx(io, rules, sink, workspace);
@@ -459,6 +490,126 @@ TEST_CASE("Registry audits path policy failures before ask approval and does not
     auto now_spent = broker.check(token, tool::kFileReadName, input, "operator-1", now);
     REQUIRE_FALSE(now_spent.has_value());
     REQUIRE(context_has(now_spent.error(), "reason", "replay_exhausted"));
+  });
+}
+
+TEST_CASE("Read-side outside-workspace override forces approval and records explicit audit display",
+          "[unit][tool][workspace][audit][approval]") {
+  TempDir root{"oran-workspace-readside-override-primary"};
+  TempDir outside{"oran-workspace-readside-override-outside"};
+  write_text(outside.path() / "secret.txt", "outside");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_read(registry).has_value());
+
+    auto workspace = make_workspace(root.path(),
+                                    tool::WorkspaceOptions{
+                                        .extra_write_roots = {outside.path().string()},
+                                    });
+    auto rules = allow_file_read_rules();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+
+    const auto input =
+        std::format(R"({{"path":"{}","allow_outside_workspace":true}})", (outside.path() / "secret.txt").string());
+    auto denied = co_await registry.dispatch(tool::kFileReadName, input, ctx);
+    REQUIRE_FALSE(denied.has_value());
+    REQUIRE(denied.error().kind() == core::ErrorKind::permission_denied);
+    REQUIRE(context_has(denied.error(), "reason", "approval_required"));
+    REQUIRE(context_has(denied.error(), "decision_reason", "outside_workspace_override"));
+
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].verdict == permission::Verdict::ask);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::ask);
+    REQUIRE(sink.events()[0].reason == "outside_workspace_override");
+    const auto metadata = path_resolution_metadata(sink.events()[0]);
+    REQUIRE(metadata["resolved_relative_path"].is_null());
+    REQUIRE(metadata["resolved_display_path"] == (outside.path() / "secret.txt").string());
+    REQUIRE(metadata["outside_workspace_explicit_override"] == true);
+    REQUIRE(metadata["per_call_outside_workspace_override"] == true);
+    REQUIRE(metadata["override_root_index"].is_null());
+  });
+}
+
+TEST_CASE("Approved read-side outside-workspace override runs read search and list tools",
+          "[unit][tool][workspace][audit][approval]") {
+  TempDir root{"oran-workspace-readside-approved-primary"};
+  TempDir outside{"oran-workspace-readside-approved-outside"};
+  write_text(outside.path() / "secret.txt", "outside needle");
+  write_text(outside.path() / "tree" / "a.txt", "a");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_read(registry).has_value());
+    REQUIRE(tool::register_file_search(registry).has_value());
+    REQUIRE(tool::register_directory_list(registry).has_value());
+
+    permission::RuleSet rules;
+    rules.add(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kFileReadName},
+        .capability = core::Capability::read_file,
+    });
+    rules.add(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kFileSearchName},
+        .capability = core::Capability::read_file,
+    });
+    rules.add(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kDirectoryListName},
+        .capability = core::Capability::list_directory,
+    });
+
+    auto workspace = make_workspace(root.path());
+    permission::RecordingAuditSink sink;
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+    auto broker = make_broker();
+    const auto now = fixed_now();
+    ctx.approval_broker = &broker;
+    ctx.now = now;
+
+    const auto read_input =
+        std::format(R"({{"path":"{}","allow_outside_workspace":true}})", (outside.path() / "secret.txt").string());
+    auto read_token = grant(broker, tool::kFileReadName, read_input, "operator-1", now);
+    ctx.approval_token = &read_token;
+    auto read = co_await registry.dispatch(tool::kFileReadName, read_input, ctx);
+    REQUIRE(read.has_value());
+    REQUIRE(read->text.contains("outside needle"));
+
+    const auto search_input = std::format(R"({{"path":"{}","pattern":"needle","allow_outside_workspace":true}})",
+                                          (outside.path() / "secret.txt").string());
+    auto search_token = grant(broker, tool::kFileSearchName, search_input, "operator-1", now);
+    ctx.approval_token = &search_token;
+    auto searched = co_await registry.dispatch(tool::kFileSearchName, search_input, ctx);
+    REQUIRE(searched.has_value());
+    REQUIRE(searched->text.contains("outside needle"));
+
+    const auto list_input =
+        std::format(R"({{"path":"{}","allow_outside_workspace":true}})", (outside.path() / "tree").string());
+    auto list_token = grant(broker, tool::kDirectoryListName, list_input, "operator-1", now);
+    ctx.approval_token = &list_token;
+    auto listed = co_await registry.dispatch(tool::kDirectoryListName, list_input, ctx);
+    REQUIRE(listed.has_value());
+    REQUIRE(listed->text.contains((outside.path() / "tree" / "a.txt").string()));
+
+    REQUIRE(sink.events().size() == 3);
+    for (const auto& event : sink.events()) {
+      REQUIRE(event.verdict == permission::Verdict::ask);
+      REQUIRE(event.outcome == permission::AuditOutcome::approved);
+      REQUIRE(event.reason == "outside_workspace_override");
+      const auto metadata = path_resolution_metadata(event);
+      REQUIRE(metadata["resolved_relative_path"].is_null());
+      REQUIRE(metadata["outside_workspace_explicit_override"] == true);
+      REQUIRE(metadata["per_call_outside_workspace_override"] == true);
+      REQUIRE(metadata["override_root_index"].is_null());
+    }
+    REQUIRE(path_resolution_metadata(sink.events()[0])["resolved_display_path"] ==
+            (outside.path() / "secret.txt").string());
+    REQUIRE(path_resolution_metadata(sink.events()[1])["resolved_display_path"] ==
+            (outside.path() / "secret.txt").string());
+    REQUIRE(path_resolution_metadata(sink.events()[2])["resolved_display_path"] == (outside.path() / "tree").string());
   });
 }
 

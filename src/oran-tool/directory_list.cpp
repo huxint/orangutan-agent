@@ -67,7 +67,8 @@ namespace {
 constexpr std::string_view kDirectoryListSchema =
     R"({"type":"object","properties":{"path":{"type":"string"},"include_hidden":{"type":"boolean"},)"
     R"("recursive":{"type":"boolean"},)"
-    R"("max_entries":{"type":"integer","minimum":1}},"required":["path"],"additionalProperties":false})";
+    R"("max_entries":{"type":"integer","minimum":1},"allow_outside_workspace":{"type":"boolean"}},)"
+    R"("required":["path"],"additionalProperties":false})";
 
 constexpr std::size_t kDirectoryListDefaultMax = 256;
 
@@ -116,6 +117,9 @@ struct ParsedInput {
       return std::unexpected(core::Error::invalid_argument("DirectoryList: `max_entries` must be greater than zero"));
     }
     result.max_entries = static_cast<std::size_t>(raw);
+  }
+  if (parsed->contains("allow_outside_workspace") && !(*parsed)["allow_outside_workspace"].is_boolean()) {
+    return std::unexpected(core::Error::invalid_argument("DirectoryList: `allow_outside_workspace` must be a boolean"));
   }
 
   return result;
@@ -389,7 +393,9 @@ core::Result<void> register_directory_list(Registry& registry) {
       .name = std::string{kDirectoryListName},
       .description = "List the immediate children of a directory. Input: {\"path\": <string>, "
                      "\"include_hidden\"?: bool (default false), \"recursive\"?: bool (default false), "
-                     "\"max_entries\"?: positive integer (default 256)}. With `recursive=true`, walks the whole "
+                     "\"max_entries\"?: positive integer (default 256), "
+                     "\"allow_outside_workspace\"?: bool (default false; requires approval)}. With `recursive=true`, "
+                     "walks the whole "
                      "tree while skipping nested symlinks plus `.git`, `.xmake`, `.orangutan`, `build`, and "
                      "`node_modules` directories and honoring `.gitignore` / `.ignore` files from the listing root "
                      "downward. Returns one `<path>:<kind>:<size_bytes or '-'>` line per entry, "

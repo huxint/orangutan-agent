@@ -106,7 +106,7 @@ constexpr std::string_view kFileSearchSchema =
     R"({"type":"object","properties":{"path":{"type":"string"},"pattern":{"type":"string"},)"
     R"("max_matches":{"type":"integer","minimum":1},"include_hidden":{"type":"boolean"},)"
     R"("regex":{"type":"boolean"},"max_output_bytes":{"type":"integer","minimum":1},)"
-    R"("respect_ignore":{"type":"boolean"}},)"
+    R"("respect_ignore":{"type":"boolean"},"allow_outside_workspace":{"type":"boolean"}},)"
     R"("required":["path","pattern"],"additionalProperties":false})";
 
 /// Default cap on how many matches a single call returns. Keeps responses
@@ -290,6 +290,9 @@ struct LineMatcher {
       return std::unexpected(core::Error::invalid_argument("FileSearch: `respect_ignore` must be a boolean"));
     }
     options.respect_ignore = (*parsed)["respect_ignore"].get<bool>();
+  }
+  if (parsed->contains("allow_outside_workspace") && !(*parsed)["allow_outside_workspace"].is_boolean()) {
+    return std::unexpected(core::Error::invalid_argument("FileSearch: `allow_outside_workspace` must be a boolean"));
   }
 
   return options;
@@ -697,7 +700,8 @@ core::Result<void> register_file_search(Registry& registry) {
       .description = "Search a UTF-8 text file or (recursively) a directory for matches. "
                      "Input: {\"path\": <string>, \"pattern\": <string>, \"max_matches\"?: uint (default 100), "
                      "\"include_hidden\"?: bool (default false), \"regex\"?: bool (default false), "
-                     "\"max_output_bytes\"?: uint (default 1048576), \"respect_ignore\"?: bool (default true)}. "
+                     "\"max_output_bytes\"?: uint (default 1048576), \"respect_ignore\"?: bool (default true), "
+                     "\"allow_outside_workspace\"?: bool (default false; requires approval)}. "
                      "Default mode treats `pattern` as a literal substring (no-escape). When `regex=true`, "
                      "`pattern` is compiled as a re2 expression and matched against each line via partial match; "
                      "an invalid pattern returns `invalid_argument` with the re2 error attached. "

@@ -56,7 +56,9 @@ inline constexpr std::string_view kMemoryForgetName{"MemoryForget"};
 /// coroutine helper; when `DispatchContext::workspace` is set, the input path
 /// is first resolved through `tool::Workspace`. Capability `read_file` is
 /// required. Input shape: `{"path": <string>, "start_line"?, "line_count"?,
-/// "offset_bytes"?, "length_bytes"?, "max_bytes"? (<= 16 MiB), "if_version"?}`.
+/// "offset_bytes"?, "length_bytes"?, "max_bytes"? (<= 16 MiB), "if_version"?,
+/// "allow_outside_workspace"?: bool}`. `allow_outside_workspace=true` is a
+/// one-off read/list escape that must be approved at dispatch time.
 /// Line and byte ranges are mutually exclusive. Output is a header line
 /// `<path>:<start>-<end> fingerprint=<token> bytes=<n>[ truncated]` followed
 /// by the requested file slice on the next line. `if_version` matching the
@@ -97,7 +99,9 @@ inline constexpr std::string_view kMemoryForgetName{"MemoryForget"};
 /// required. Input shape: `{"path": <string>, "pattern": <string>,
 /// "max_matches"?: uint (default 100), "include_hidden"?: bool (default
 /// false), "regex"?: bool (default false), "max_output_bytes"?: uint
-/// (default 1048576), "respect_ignore"?: bool (default true)}`.
+/// (default 1048576), "respect_ignore"?: bool (default true),
+/// "allow_outside_workspace"?: bool}`. `allow_outside_workspace=true` is a
+/// one-off read/list escape that must be approved at dispatch time.
 /// `regex=true` compiles through `permission::InputPattern` and reuses a
 /// bounded process-local compiled-pattern cache across dispatches.
 /// Returns one
@@ -128,7 +132,9 @@ inline constexpr std::string_view kMemoryForgetName{"MemoryForget"};
 /// required. Input shape:
 /// `{"path": <string>, "include_hidden"?: bool (default false),
 /// "recursive"?: bool (default false), "max_entries"?: uint (default
-/// 256)}`. Recursive listings skip nested symlinks plus `.git`, `.xmake`,
+/// 256), "allow_outside_workspace"?: bool}`.
+/// `allow_outside_workspace=true` is a one-off read/list escape that must be
+/// approved at dispatch time. Recursive listings skip nested symlinks plus `.git`, `.xmake`,
 /// `.orangutan`, `build`, and `node_modules` directories, and honour
 /// `.gitignore` / `.ignore` files from the listing root downward. Returns one
 /// `<path>:<kind>:<size_bytes or '-'>` line per entry, sorted by path;

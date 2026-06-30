@@ -41,6 +41,14 @@ Current seams and future work:
   the built-in low-signal directory skip list, and `.gitignore` / `.ignore`
   rule-stack semantics. The same slice adds `Workspace::display_path(...)` so
   workspace-backed output paths use stable labels such as `<workspace>/...`.
+- Slice 267 ships the read/list-only per-call outside-workspace override.
+  `FileRead`, `FileSearch`, and `DirectoryList` accept
+  `allow_outside_workspace=true`; when ordinary workspace resolution rejects
+  the path as `outside_workspace` or `symlink_escape`, the registry resolves
+  the existing outside target, promotes an otherwise-allow decision to `ask`
+  with reason `outside_workspace_override`, and records the resolved absolute
+  path as audit display metadata. No per-call override exists for write,
+  edit, or delete.
 - The future `tool::Runtime::workspace()` capability-gated accessor is
   described in [`../design-docs/tool-runtime.md`](../design-docs/tool-runtime.md)
   "ToolRuntime" but unbuilt.
@@ -155,10 +163,25 @@ unknown paths pass through unchanged. Workspace-backed `FileSearch` and
 `DirectoryList` use those labels in text fallbacks and structured `data_json`
 paths.
 
-Still pending: The v1.1 per-call read/list outside-workspace override remains
-unbuilt, and the future capability-gated `tool::Runtime::workspace()` accessor
-still lands with `tool::Runtime`; the current dispatch context remains the
-interim service seam.
+**Slice 267 (2026-06-30):** The v1.1 per-call read/list
+outside-workspace override is shipped. `FileRead`, `FileSearch`, and
+`DirectoryList` schemas now include `allow_outside_workspace`; handler
+validation accepts only booleans. The registry first attempts the normal
+workspace resolver, so ordinary in-workspace reads and configured
+extra-read-root accesses do not need a one-off approval. If that resolver
+rejects a read/list call with `reason=outside_workspace` or
+`reason=symlink_escape` and the flag is true, the registry resolves the
+existing target outside every known root, stores it on
+`DispatchContext::resolved_path`, and requires approval by promoting an
+otherwise-allow decision to `Verdict::ask`. Audit metadata records
+`resolved_display_path` as the absolute target,
+`resolved_relative_path=null`, and
+`per_call_outside_workspace_override=true`. Mutating built-ins ignore this
+surface and remain limited to the workspace plus configured extra write roots.
+
+Still pending: The future capability-gated `tool::Runtime::workspace()`
+accessor still lands with `tool::Runtime`; the current dispatch context
+remains the interim service seam.
 
 ## Scope (v1)
 
@@ -222,10 +245,12 @@ creation is allowed for this resolve call.
   slice-264 recursive `DirectoryList` built-in skip list into
   `WorkspaceWalkFilter`, carrying the built-in skip list plus `.gitignore` /
   `.ignore` rule stack so both recursive tools make the same decision.
-- Per-call override field for `FileRead` / `FileSearch` /
-  `DirectoryList`: `allow_outside_workspace=true` requires an `ask`
-  permission verdict at runtime and records the resolved path in audit
-  verbatim (no override exists for write/delete — that gate stays config-only).
+- Shipped in slice 267: per-call override field for `FileRead` /
+  `FileSearch` / `DirectoryList`. `allow_outside_workspace=true` requires an
+  `ask` permission verdict at runtime when it is used to resolve an existing
+  target outside every known root, and records the resolved path in audit
+  verbatim (no override exists for write/edit/delete — that gate stays
+  config-only).
 - Shipped in slice 266: `Workspace::display_path(...)` produces stable
   `<workspace>/...`, `<read-root-N>/...`, and `<write-root-N>/...` labels for
   tool output paths. `FileSearch` and `DirectoryList` use it when a Workspace
@@ -284,9 +309,12 @@ audit / approval-replay edge cases. Criterion 7 remains tied to the future
    path.
 4. **Audit fields.** Every dispatch on a filesystem built-in with a supplied
    workspace records `(input_hash, resolved_relative_path,
-   workspace_root_hash, symlink_followed, created_parents,
-   outside_workspace_explicit_override, override_root_index)` in the existing
-   `permission::AuditEvent::metadata_json` extension column. Resolver failures
+   workspace_root_hash, resolved_display_path, symlink_followed,
+   created_parents, outside_workspace_explicit_override,
+   per_call_outside_workspace_override, override_root_index)` in the existing
+   `permission::AuditEvent::metadata_json` extension column. Per-call
+   outside-workspace overrides record `resolved_relative_path=null` and the
+   resolved absolute target in `resolved_display_path`. Resolver failures
    record hashed input/root plus `error_kind` and `error_reason` instead of a
    resolved path. The `audit.db` schema stays compatible.
 5. **Single resolver.** `FileSearch`'s root path goes through
@@ -307,7 +335,8 @@ audit / approval-replay edge cases. Criterion 7 remains tied to the future
 8. **`tests/tool/test_workspace.cpp` ≥ 90% coverage** of the resolve-method
    matrix (intent × symlink-or-not × inside-or-outside × override-list), plus
    dispatch regressions for pre-permission audit metadata, override-root
-   metadata, path-policy failures before ask approval, and malformed write
+   metadata, path-policy failures before ask approval, read/list-only
+   per-call outside-workspace ask/approval metadata, and malformed write
    options staying on the handler validation path.
 
 ## Design Doc Cross-References

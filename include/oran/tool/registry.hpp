@@ -164,11 +164,18 @@ using MemoryForgetHandler =
 struct ResolvedToolPath {
   std::string absolute_path;
   std::string relative_path;
+  /// Stable label used in audit metadata. For ordinary workspace paths this is
+  /// `<workspace>/...` or an extra-root label; for per-call outside overrides
+  /// this is the resolved absolute path.
+  std::string display_path;
   std::string input_path_hash;
   std::string workspace_root_hash;
   bool symlink_followed{false};
   bool created_parents{false};
+  /// True for configured extra-root matches and per-call outside read/list
+  /// overrides.
   bool outside_workspace_explicit_override{false};
+  bool per_call_outside_workspace_override{false};
   std::optional<std::size_t> override_root_index{};
 };
 

@@ -339,7 +339,21 @@ filesystem_error(std::string message, const std::filesystem::path& path, const s
       .symlink_followed = symlink_followed,
       .created_parents = created_parents,
       .outside_workspace_explicit_override = match.override_index.has_value(),
+      .per_call_outside_workspace_override = false,
       .override_root_index = match.override_index,
+  };
+}
+
+[[nodiscard]] Result<ResolvedPath> build_per_call_outside_resolved(const std::filesystem::path& candidate,
+                                                                   bool symlink_followed) {
+  return ResolvedPath{
+      .absolute_path = candidate.lexically_normal().string(),
+      .relative_path = {},
+      .symlink_followed = symlink_followed,
+      .created_parents = false,
+      .outside_workspace_explicit_override = true,
+      .per_call_outside_workspace_override = true,
+      .override_root_index = std::nullopt,
   };
 }
 
@@ -391,6 +405,24 @@ canonical_existing_path(const std::filesystem::path& candidate, std::string_view
   }
 
   return build_resolved(*canonical, *match, symlink_followed, false);
+}
+
+[[nodiscard]] Result<ResolvedPath>
+resolve_existing_readable_outside_workspace(std::string_view input, const std::string& root, std::string_view action) {
+  if (input.empty()) {
+    return std::unexpected(Error::invalid_argument("workspace path must not be empty"));
+  }
+
+  const auto workspace_root = std::filesystem::path{root};
+  const auto candidate = join_input(workspace_root, input);
+  const bool symlink_followed = has_symlink_component(candidate);
+
+  auto canonical = canonical_existing_path(candidate, input, action);
+  if (!canonical) {
+    return std::unexpected(std::move(canonical).error());
+  }
+
+  return build_per_call_outside_resolved(*canonical, symlink_followed);
 }
 
 [[nodiscard]] Result<ResolvedPath> resolve_mutating(std::string_view input,
@@ -548,6 +580,14 @@ core::Result<ResolvedPath> Workspace::resolve_read(std::string_view path) const 
 
 core::Result<ResolvedPath> Workspace::resolve_list(std::string_view path) const {
   return resolve_existing_readable(path, root_, extra_read_roots_, "list");
+}
+
+core::Result<ResolvedPath> Workspace::resolve_read_outside_workspace(std::string_view path) const {
+  return resolve_existing_readable_outside_workspace(path, root_, "read");
+}
+
+core::Result<ResolvedPath> Workspace::resolve_list_outside_workspace(std::string_view path) const {
+  return resolve_existing_readable_outside_workspace(path, root_, "list");
 }
 
 core::Result<ResolvedPath> Workspace::resolve_write(std::string_view path, WriteIntent intent) const {

@@ -180,6 +180,16 @@ require_approval_decision(permission::Decision decision, const hook::HookDecisio
   return decision;
 }
 
+[[nodiscard]] permission::Decision require_workspace_override_approval(permission::Decision decision) {
+  if (decision.verdict != permission::Verdict::allow) {
+    return decision;
+  }
+  decision.verdict = permission::Verdict::ask;
+  decision.reason = "outside_workspace_override";
+  decision.replay_max = 1;
+  return decision;
+}
+
 /// Extract the `reason` context entry the approval broker stamps onto every
 /// rejection. Returns an empty view when no such entry exists — callers
 /// fall back to the rule's decision reason on that path.
@@ -504,6 +514,9 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
     auto decision = ctx.rules.evaluate(name, effective_input, entry.def.required_capabilities, ctx.mode);
     if (hook_requires_approval) {
       decision = require_approval_decision(std::move(decision), hook_decision, ctx.now);
+    }
+    if (path_resolution.requires_approval) {
+      decision = require_workspace_override_approval(std::move(decision));
     }
 
     auto metadata_json = std::move(path_resolution.metadata_json);
