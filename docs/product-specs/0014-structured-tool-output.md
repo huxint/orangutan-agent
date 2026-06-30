@@ -230,7 +230,9 @@ handlers can adopt without churning every callsite at once.
      `FileWrite` fills `usage.bytes_written` and `files_touched`;
      `FileEdit` fills `bytes_read`, `bytes_written`, `files_touched`,
      and `match_count`; `FileDelete` fills `bytes_written=0` and
-     `files_touched=1`; `data_json` stays `nullopt` for v1.
+     `files_touched` from the removed path count as of slice 265 (one
+     for a regular file, root-plus-entries for recursive directory
+     deletes); `data_json` stays `nullopt` for v1.
   5. `MemoryRecall` — shipped in slice 168: keeps a deterministic text
      fallback (`MemoryRecall: <n> match(es)` plus recall framing), fills
      `data_json` with `{kind:"memory_recall", match_count, records[]}`, and

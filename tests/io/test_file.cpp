@@ -285,6 +285,47 @@ TEST_CASE("delete_file removes the file at path", "[unit][io][file]") {
   });
 }
 
+TEST_CASE("delete_path recursively removes a directory tree when requested", "[unit][io][file]") {
+  TempDir temp{"oran-io-delete-tree"};
+  const auto tree = temp.path() / "tree";
+  std::filesystem::create_directories(tree / "nested");
+  write_direct(tree / "top.txt", "bye");
+  write_direct(tree / "nested" / "leaf.txt", "bye");
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto result =
+        co_await io::delete_path(context.get_executor(), tree.string(), io::DeletePathOptions{.recursive = true});
+    REQUIRE(result.has_value());
+    REQUIRE(result->paths_removed == std::uintmax_t{4});
+    REQUIRE_FALSE(std::filesystem::exists(tree));
+  });
+}
+
+TEST_CASE("delete_path recursive tree delete does not follow nested symlinks", "[unit][io][file]") {
+  TempDir temp{"oran-io-delete-tree-symlink"};
+  TempDir outside{"oran-io-delete-tree-symlink-target"};
+  const auto tree = temp.path() / "tree";
+  const auto target = outside.path() / "target";
+  std::filesystem::create_directories(tree);
+  std::filesystem::create_directories(target);
+  write_direct(target / "survives.txt", "still here");
+  const auto link = tree / "outside-link";
+  std::error_code link_ec;
+  std::filesystem::create_directory_symlink(target, link, link_ec);
+  if (link_ec) {
+    SUCCEED("symlink creation not supported on this filesystem: " << link_ec.message());
+    return;
+  }
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto result =
+        co_await io::delete_path(context.get_executor(), tree.string(), io::DeletePathOptions{.recursive = true});
+    REQUIRE(result.has_value());
+    REQUIRE_FALSE(std::filesystem::exists(tree));
+    REQUIRE(std::filesystem::exists(target / "survives.txt"));
+  });
+}
+
 TEST_CASE("delete_file rejects empty path", "[unit][io][file]") {
   test::run_async([](asio::io_context& context) -> async::Awaitable<void> {
     auto result = co_await io::delete_file(context.get_executor(), "");
@@ -318,6 +359,19 @@ TEST_CASE("delete_file refuses directories with invalid_argument", "[unit][io][f
   });
 }
 
+TEST_CASE("delete_path refuses directories without recursive intent", "[unit][io][file]") {
+  TempDir temp{"oran-io-delete-dir-nonrecursive"};
+  const auto subdir = temp.path() / "subdir";
+  std::filesystem::create_directory(subdir);
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto result = co_await io::delete_path(context.get_executor(), subdir.string());
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(std::filesystem::exists(subdir));
+  });
+}
+
 TEST_CASE("delete_file refuses symlinks with invalid_argument and leaves them intact", "[unit][io][file]") {
   TempDir temp{"oran-io-delete-symlink"};
   const auto target = temp.path() / "target.txt";
@@ -334,6 +388,28 @@ TEST_CASE("delete_file refuses symlinks with invalid_argument and leaves them in
 
   test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
     auto result = co_await io::delete_file(context.get_executor(), link.string());
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(std::filesystem::is_symlink(link));
+    REQUIRE(std::filesystem::exists(target));
+  });
+}
+
+TEST_CASE("delete_path refuses symlinks even with recursive intent", "[unit][io][file]") {
+  TempDir temp{"oran-io-delete-symlink-recursive"};
+  const auto target = temp.path() / "target";
+  std::filesystem::create_directory(target);
+  const auto link = temp.path() / "link";
+  std::error_code link_ec;
+  std::filesystem::create_directory_symlink(target, link, link_ec);
+  if (link_ec) {
+    SUCCEED("symlink creation not supported on this filesystem: " << link_ec.message());
+    return;
+  }
+
+  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
+    auto result =
+        co_await io::delete_path(context.get_executor(), link.string(), io::DeletePathOptions{.recursive = true});
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
     REQUIRE(std::filesystem::is_symlink(link));

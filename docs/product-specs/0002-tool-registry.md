@@ -25,6 +25,10 @@ the surface where these capabilities are presented, gated, observed, and extende
 > Slice 264 extends `DirectoryList` with `recursive=true` so the existing
 > directory-listing tool can produce a whole-project tree without adding a
 > separate per-kind scan tool.
+> Slice 265 completes the delete reshape under the existing `FileDelete`
+> name: input `{path, recursive?}` deletes files directly and deletes
+> directories only when `recursive=true`, keeping symlink refusal and avoiding
+> a separate directory-specific delete tool.
 
 ## Scope (v1.1)
 

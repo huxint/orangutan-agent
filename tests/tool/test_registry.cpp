@@ -5786,6 +5786,7 @@ TEST_CASE("register_file_delete advertises a `delete_path` capability and a path
   REQUIRE(def->required_capabilities.size() == 1);
   REQUIRE(def->required_capabilities[0] == core::Capability::delete_path);
   REQUIRE(def->input_schema_json.contains("\"path\""));
+  REQUIRE(def->input_schema_json.contains("\"recursive\""));
 }
 
 TEST_CASE("FileDelete happy path removes the file and reports the deletion", "[unit][tool][file_delete]") {
@@ -5852,6 +5853,32 @@ TEST_CASE("FileDelete refuses directories with invalid_argument and leaves them 
   });
 }
 
+TEST_CASE("FileDelete recursive=true removes directory trees and reports touched paths", "[unit][tool][file_delete]") {
+  TempDir dir{"delete-dir-recursive"};
+  dir.write_file("top.txt", "gone");
+  dir.write_file("nested/leaf.txt", "gone");
+
+  test::run_async([&dir](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_delete(registry).has_value());
+    auto rules = file_delete_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::string{R"({"path":")"} + dir.string() + R"(","recursive":true})";
+    auto result = co_await registry.dispatch(tool::kFileDeleteName, input, ctx);
+    REQUIRE(result.has_value());
+    REQUIRE(result->text == "deleted " + dir.string());
+    REQUIRE(result->usage.bytes_written.has_value());
+    REQUIRE(*result->usage.bytes_written == std::uintmax_t{0});
+    REQUIRE(result->usage.files_touched.has_value());
+    REQUIRE(*result->usage.files_touched == std::uint32_t{4});
+    REQUIRE_FALSE(std::filesystem::exists(dir.string()));
+    REQUIRE(sink.events().size() == 1);
+    REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
+  });
+}
+
 TEST_CASE("FileDelete refuses symlinks with invalid_argument and leaves the target intact",
           "[unit][tool][file_delete]") {
   TempDir dir{"delete-symlink-refused"};
@@ -5902,9 +5929,14 @@ TEST_CASE("FileDelete rejects malformed input as invalid_argument", "[unit][tool
     REQUIRE_FALSE(wrong_path.has_value());
     REQUIRE(wrong_path.error().kind() == core::ErrorKind::invalid_argument);
 
-    // All three malformed calls passed the permission gate; audit recorded
+    auto wrong_recursive =
+        co_await registry.dispatch(tool::kFileDeleteName, R"({"path":"/tmp/x","recursive":"yes"})", ctx);
+    REQUIRE_FALSE(wrong_recursive.has_value());
+    REQUIRE(wrong_recursive.error().kind() == core::ErrorKind::invalid_argument);
+
+    // All malformed calls passed the permission gate; audit recorded
     // one allow row per attempt.
-    REQUIRE(sink.events().size() == 3);
+    REQUIRE(sink.events().size() == 4);
     for (const auto& event : sink.events()) {
       REQUIRE(event.outcome == permission::AuditOutcome::allow);
     }

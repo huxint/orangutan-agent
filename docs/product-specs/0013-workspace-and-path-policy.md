@@ -65,6 +65,12 @@ Relative in-workspace paths work, traversal outside the workspace rejects with
 `reason=outside_workspace`, and mutating symlink targets reject with
 `reason=symlink_target`.
 
+**Slice 265 (2026-06-28):** `FileDelete` keeps the same workspace
+`resolve_delete` boundary while expanding the handler input to
+`{path, recursive?}`. Regular files delete directly; directories require
+`recursive=true`; symlink targets still reject at workspace resolution before
+the handler reaches `oran-io::delete_path`.
+
 **Slice 39 (2026-05-22):** `FileSearch` now resolves its input through
 `Workspace::resolve_list` when `DispatchContext::workspace` is supplied, before
 the executor hop that drives the blocking walk. Single-file and recursive-walk

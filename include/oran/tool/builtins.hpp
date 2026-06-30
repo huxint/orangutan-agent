@@ -143,15 +143,15 @@ inline constexpr std::string_view kMemoryForgetName{"MemoryForget"};
 /// for recursive listings, and `match_count` (the entry count).
 [[nodiscard]] core::Result<void> register_directory_list(Registry& registry);
 
-/// Register the `FileDelete` tool. Deletes the regular file at `path`
-/// through `oran-io::delete_file`; capability `delete_path` is required.
-/// Input shape: `{"path": <string>}`. Returns `invalid_argument` when the
-/// path is a directory or a symlink (the v1 surface refuses anything but
-/// a regular file so an LLM-driven delete cannot recursively destroy a
-/// tree or unlink a symlink to a directory outside the workspace);
-/// `not_found` when no file exists at `path`. Successful deletes return
-/// the literal text `deleted <path>` and fill
-/// `Output::usage.bytes_written=0` plus `files_touched=1`.
+/// Register the `FileDelete` tool. Deletes a regular file, or a directory
+/// tree when `recursive=true`, through `oran-io::delete_path`; capability
+/// `delete_path` is required. Input shape:
+/// `{"path": <string>, "recursive"?: bool}`. Returns `invalid_argument`
+/// when the path is a directory and recursion intent is absent, or when the
+/// path is a symlink; `not_found` when no path exists. Successful deletes
+/// return the literal text `deleted <path>` and fill
+/// `Output::usage.bytes_written=0` plus `files_touched` equal to the
+/// removed path count.
 [[nodiscard]] core::Result<void> register_file_delete(Registry& registry);
 
 /// Register the `ToolSearch` tool. Searches the current registry catalog by

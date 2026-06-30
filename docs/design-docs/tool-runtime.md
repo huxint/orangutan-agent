@@ -235,6 +235,12 @@ enum class Capability {
 > per-kind splits: a single delete tool covering files AND
 > folders, not separate `file.remove` / `directory.remove` tools.
 > The v1 narrowings here are the entry point, not the dead end.
+> Slice 265 completes that consolidation under the same public tool
+> name: `FileDelete` input is now `{path, recursive?}`. Regular files
+> delete directly, directories require explicit `recursive=true`, and
+> symlinks still reject. The tool calls `oran-io::delete_path`, returns
+> the same text fallback `deleted <path>`, and fills
+> `usage.files_touched` from the removed path count.
 > Slice 32 (2026-05-21) routes `FileEdit` and the dominant
 > `FileWrite` mode (`truncate`) through the new
 > `oran-io::WriteTextOptions::atomic` opt-in: the rewrite is
@@ -981,8 +987,9 @@ Current and future policy:
   `FileWrite` reports `bytes_written` and `files_touched`; `FileEdit`
   reports `bytes_read`, `bytes_written`, `files_touched`, and
   `match_count`; `FileDelete` reports `bytes_written=0` and
-  `files_touched=1`. Their model-facing summaries stay unchanged and
-  `data_json` remains empty.
+  `files_touched` equal to the removed path count (one for a regular
+  file, root-plus-entries for recursive directory deletes). Its
+  model-facing summary stays unchanged and `data_json` remains empty.
 - Provider adapters consume `data_json` only when the target protocol supports
   structured tool-result data. Slice 107 ships the first request-side mapping:
   `agent::Loop` copies successful `tool::Output::data_json` into

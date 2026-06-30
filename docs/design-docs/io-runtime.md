@@ -14,9 +14,14 @@ performs the requested operation and returns `core::Result<T>`.
 > for regular-file removal. Directories and symlinks reject as
 > `invalid_argument` so the v1 surface cannot be used to recursively
 > destroy a tree or unlink a symlink that points outside the workspace.
-> The future direction for filesystem mutation is consolidation into a
-> single delete helper that handles files AND folders (with recursion
-> intent expressed by the caller), not separate per-kind helpers.
+>
+> **Slice-265 status (2026-06-28):** `delete_path(executor, path, options)`
+> is the unified delete helper for files and folders. Regular files delete
+> directly, directory deletion requires `DeletePathOptions::recursive=true`,
+> symlinks always reject, and the result reports the removed path count.
+> `delete_file` remains as the regular-file compatibility wrapper.
+> Recursive directory deletion conservatively invalidates all private
+> range-read caches so removed child-file views cannot survive the mutation.
 >
 > **Slice-32 status (2026-05-21):** `WriteTextOptions` grows an opt-in
 > `atomic` flag. When set on a `WriteMode::truncate` write, the helper
@@ -63,7 +68,7 @@ performs the requested operation and returns `core::Result<T>`.
 > maps 1-based line numbers to byte offsets, lives in a bounded
 > `core::BoundedCache` (32 entries / 8 MiB / 10-minute TTL), and is
 > keyed by canonical path plus the cheap `(size_bytes, mtime_ns)`
-> fingerprint. `write_text_file` and `delete_file` invalidate the
+> fingerprint. `write_text_file` and file deletes invalidate the
 > matching canonical path after successful mutations so an agent cannot
 > reuse stale offsets after an in-process write/delete.
 >
@@ -72,7 +77,7 @@ performs the requested operation and returns `core::Result<T>`.
 > by canonical path, range, `max_bytes`, and the cheap
 > `(size_bytes, mtime_ns)` fingerprint, capped at 64 entries / 16 MiB /
 > 10 minutes, and revalidated with `stat` before every hit. Successful
-> `write_text_file` and `delete_file` calls invalidate the matching
+> `write_text_file` and file delete calls invalidate the matching
 > canonical path in both the file-view cache and the line-offset index
 > synchronously.
 >
@@ -93,9 +98,10 @@ performs the requested operation and returns `core::Result<T>`.
 > **Slice-57 status (2026-05-24):** `oran-io` exposes
 > `invalidate_read_text_file_ranged_cache(path)` as the public path-stale
 > seam for future watcher callbacks. Successful `write_text_file` and
-> `delete_file` calls reuse the same seam, so in-process mutations evict
+> regular-file deletes reuse the same seam, so in-process mutations evict
 > only entries for the affected canonical path instead of clearing unrelated
-> range-read cache entries.
+> range-read cache entries; recursive directory deletes clear the private
+> range-read caches because every child path under the removed tree is stale.
 >
 > **Slice-58 status (2026-05-24):** `oran-io` now ships the concrete
 > Linux/inotify watcher event source for those caches:
@@ -234,6 +240,9 @@ write_text_file(asio::any_io_executor executor,
 async::Awaitable<core::Result<std::vector<DirectoryEntry>>>
 list_directory(asio::any_io_executor executor, std::string path, ListDirectoryOptions = {});
 
+async::Awaitable<core::Result<DeletePathResult>>
+delete_path(asio::any_io_executor executor, std::string path, DeletePathOptions = {});
+
 async::Awaitable<core::Result<void>>
 delete_file(asio::any_io_executor executor, std::string path);
 
@@ -261,7 +270,7 @@ starts threading that service through the system.
 
 | Condition | Error kind |
 | --- | --- |
-| Empty path, invalid limit, non-file read target, non-directory list target, `delete_file` on a non-regular file | `invalid_argument` |
+| Empty path, invalid limit, non-file read target, non-directory list target, directory delete without `recursive=true`, symlink delete | `invalid_argument` |
 | Missing file or directory | `not_found` |
 | Existing destination with `WriteMode::fail_if_exists` | `conflict` |
 | Permission denied | `permission_denied` |

@@ -78,6 +78,18 @@ struct ReadTextFileWatchStats {
   std::uint64_t invalidations{0};
 };
 
+struct DeletePathOptions {
+  /// Directory deletion requires explicit recursion intent. Regular files
+  /// delete regardless of this flag; a symlink target path is refused.
+  bool recursive{false};
+};
+
+struct DeletePathResult {
+  /// Number of filesystem entries removed. For recursive directory deletes
+  /// this is the `std::filesystem::remove_all` count, including the root.
+  std::uintmax_t paths_removed{0};
+};
+
 /// Process-local singleflight stats for `read_text_file_ranged`. The
 /// numbers expose bounded-state health without leaking cache keys or file
 /// paths. Lifetime counters are monotonic; `current_*` fields describe the
@@ -174,13 +186,14 @@ write_text_file(asio::any_io_executor executor, std::string path, std::string co
 [[nodiscard]] async::Awaitable<core::Result<std::vector<DirectoryEntry>>>
 list_directory(asio::any_io_executor executor, std::string path, ListDirectoryOptions options = {});
 
-/// Delete the regular file at `path`. Refuses directories and symlinks with
-/// `invalid_argument` — the v1 surface is deliberately narrow so an LLM-driven
-/// delete cannot recursively destroy a tree or unlink a symlink to a directory
-/// outside the workspace. Returns `not_found` when no file exists at `path`.
-/// The future direction for filesystem mutation is consolidation into a single
-/// delete helper that handles files AND folders (with recursion intent
-/// expressed by the caller), not separate per-kind helpers.
+/// Delete a file or, when `options.recursive=true`, a directory tree at
+/// `path`. Directories without explicit recursion intent and target-path
+/// symlinks reject with `invalid_argument`; missing paths return `not_found`.
+[[nodiscard]] async::Awaitable<core::Result<DeletePathResult>>
+delete_path(asio::any_io_executor executor, std::string path, DeletePathOptions options = {});
+
+/// Backward-compatible regular-file delete wrapper. Refuses directories and
+/// symlinks with `invalid_argument`; missing paths return `not_found`.
 [[nodiscard]] async::Awaitable<core::Result<void>> delete_file(asio::any_io_executor executor, std::string path);
 
 }  // namespace orangutan::io

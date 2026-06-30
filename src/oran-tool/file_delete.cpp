@@ -1,15 +1,17 @@
 // src/oran-tool/file_delete.cpp — `FileDelete` built-in.
 //
-// Thin wrapper around `oran-io::delete_file`. Refuses anything but a regular
-// file (directories, symlinks, and unknown kinds reject with
-// `invalid_argument` from the io layer) so an LLM-driven delete cannot
-// recursively destroy a tree or follow a symlink outside the workspace.
+// Thin wrapper around `oran-io::delete_path`. Regular files delete directly;
+// directories require explicit `recursive=true`; symlinks reject with
+// `invalid_argument` from the io layer so an LLM-driven delete cannot follow a
+// link outside the workspace.
 // Capability `delete_path` was already in the slice-7 `core::Capability`
 // vocabulary; this slice is the first built-in that actually requires it.
 
 #include <oran/tool/builtins.hpp>
 
+#include <cstdint>
 #include <expected>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -29,21 +31,48 @@ namespace orangutan::tool {
 namespace {
 
 constexpr std::string_view kFileDeleteSchema =
-    R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false})";
+    R"({"type":"object","properties":{"path":{"type":"string"},"recursive":{"type":"boolean"}},"required":["path"],"additionalProperties":false})";
 
-[[nodiscard]] async::Awaitable<core::Result<Output>> file_delete_handler(std::string_view input_json,
-                                                                         DispatchContext& ctx) {
+struct ParsedInput {
+  std::string path;
+  bool recursive{false};
+};
+
+[[nodiscard]] core::Result<ParsedInput> parse_file_delete_input(std::string_view input_json) {
   auto parsed = detail::parse_input_object(input_json, kFileDeleteName);
   if (!parsed) {
-    co_return std::unexpected(std::move(parsed).error());
+    return std::unexpected(std::move(parsed).error());
   }
 
   auto path_field = detail::require_string_field(*parsed, kFileDeleteName, "path");
   if (!path_field) {
-    co_return std::unexpected(std::move(path_field).error());
+    return std::unexpected(std::move(path_field).error());
   }
 
-  auto path = ctx.resolved_path.has_value() ? ctx.resolved_path->absolute_path : *std::move(path_field);
+  auto result = ParsedInput{.path = *std::move(path_field)};
+  if (parsed->contains("recursive")) {
+    if (!(*parsed)["recursive"].is_boolean()) {
+      return std::unexpected(core::Error::invalid_argument("FileDelete: `recursive` must be a boolean"));
+    }
+    result.recursive = (*parsed)["recursive"].get<bool>();
+  }
+  return result;
+}
+
+[[nodiscard]] std::uint32_t files_touched(std::uintmax_t paths_removed) noexcept {
+  constexpr auto max_touched = static_cast<std::uintmax_t>(std::numeric_limits<std::uint32_t>::max());
+  return paths_removed > max_touched ? std::numeric_limits<std::uint32_t>::max()
+                                     : static_cast<std::uint32_t>(paths_removed);
+}
+
+[[nodiscard]] async::Awaitable<core::Result<Output>> file_delete_handler(std::string_view input_json,
+                                                                         DispatchContext& ctx) {
+  auto parsed = parse_file_delete_input(input_json);
+  if (!parsed) {
+    co_return std::unexpected(std::move(parsed).error());
+  }
+
+  auto path = ctx.resolved_path.has_value() ? ctx.resolved_path->absolute_path : std::move(parsed->path);
   if (!ctx.resolved_path.has_value() && ctx.workspace != nullptr) {
     auto resolved = ctx.workspace->resolve_delete(path);
     if (!resolved) {
@@ -51,7 +80,7 @@ constexpr std::string_view kFileDeleteSchema =
     }
     path = std::move(resolved->absolute_path);
   }
-  auto deleted = co_await io::delete_file(ctx.executor, path);
+  auto deleted = co_await io::delete_path(ctx.executor, path, io::DeletePathOptions{.recursive = parsed->recursive});
   if (!deleted) {
     co_return std::unexpected(std::move(deleted).error());
   }
@@ -60,7 +89,7 @@ constexpr std::string_view kFileDeleteSchema =
       .usage =
           ToolUsage{
               .bytes_written = 0,
-              .files_touched = 1,
+              .files_touched = files_touched(deleted->paths_removed),
           },
   };
 }
@@ -70,11 +99,11 @@ constexpr std::string_view kFileDeleteSchema =
 core::Result<void> register_file_delete(Registry& registry) {
   core::ToolDef def{
       .name = std::string{kFileDeleteName},
-      .description = "Delete a regular file. Input: {\"path\": <string>}. Refuses directories and symlinks with "
-                     "`invalid_argument` (the v1 surface is deliberately narrow so a recursive delete or a "
-                     "symlink-follow cannot escape the workspace). Returns `not_found` when no file exists at the "
-                     "path. On success returns the literal text `deleted <path>` and fills usage with "
-                     "bytes_written=0 plus files_touched=1.",
+      .description = "Delete a file or, with explicit recursion intent, a directory tree. Input: "
+                     "{\"path\": <string>, \"recursive\"?: <bool default false>}. Directories require "
+                     "`recursive=true`; symlinks are refused with `invalid_argument`. Returns `not_found` when no "
+                     "path exists. On success returns the literal text `deleted <path>` and fills usage with "
+                     "bytes_written=0 plus files_touched equal to removed path count.",
       .input_schema_json = std::string{kFileDeleteSchema},
       .required_capabilities = {core::Capability::delete_path},
       .deferred = false,

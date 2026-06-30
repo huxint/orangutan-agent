@@ -161,8 +161,11 @@ straight to the requested line span instead of streaming from line 1.
 The in-memory index stores only line-start byte offsets (`O(lines * 8
 bytes)` plus vector overhead), is capped at 32 entries / 8 MiB / 10
 minutes, and is invalidated after successful `io::write_text_file` or
-`io::delete_file` calls so mutations cannot keep stale offsets alive;
-slice 57 narrows that invalidation to the affected canonical path.
+file delete calls so mutations cannot keep stale offsets alive;
+slice 57 narrows regular-file invalidation to the affected canonical
+path, while slice 265's recursive directory delete clears the private
+range-read caches because every child path under the removed tree is
+stale.
 Tests cover indexed reads of large files plus write/delete
 invalidation regressions where size and mtime are restored to the old
 fingerprint but the content changes. v1.1's remaining items are the
@@ -190,9 +193,11 @@ explicit mutex because callers can hop onto arbitrary executors. A hit
 still revalidates metadata with `stat` before returning; if the
 metadata changed or cannot be trusted, the call misses and falls back to
 the existing mid-read pre/post fingerprint path. Successful
-`io::write_text_file` and `io::delete_file` calls synchronously clear
-both the file-view cache and the line-offset index. Slice 57 narrows
-that invalidation to the affected canonical path. Tests cover
+`io::write_text_file` and file delete calls synchronously clear stale
+entries from both the file-view cache and the line-offset index. Slice
+57 narrows regular-file invalidation to the affected canonical path;
+slice 265's recursive directory delete clears the private range-read
+caches. Tests cover
 external rewrites refreshing the cache plus an in-process write
 invalidation regression where size and mtime are restored to the old
 fingerprint but the body changes. v1.1's remaining items are
@@ -228,9 +233,10 @@ for watcher-backed external-edit awareness now ships in `oran-io`.
 supplied path through the same private key helper used by reads and
 erases matching entries from both the line-offset index and the
 file-view cache without exposing keys or file contents. Successful
-`io::write_text_file` and `io::delete_file` calls now reuse that seam,
-so in-process mutations invalidate only the affected canonical path
-instead of clearing unrelated file views. The underlying
+`io::write_text_file` and regular-file deletes now reuse that seam, so
+in-process mutations invalidate only the affected canonical path instead
+of clearing unrelated file views. Recursive directory deletes clear the
+private range-read caches after success. The underlying
 `core::BoundedCache` adds `erase_if` for this exact-key invalidation
 without counting the removal as LRU / TTL / byte-budget eviction.
 Tests cover direct invalidation of one file-view path, direct

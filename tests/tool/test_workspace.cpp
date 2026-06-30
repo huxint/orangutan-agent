@@ -586,6 +586,7 @@ TEST_CASE("FileDelete uses DispatchContext workspace for relative deletes and tr
   TempDir root{"oran-workspace-file-delete"};
   TempDir outside{"oran-workspace-file-delete-outside"};
   write_text(root.path() / "doomed.txt", "remove");
+  write_text(root.path() / "tree" / "leaf.txt", "remove");
   write_text(outside.path() / "secret.txt", "keep");
 
   test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
@@ -600,6 +601,10 @@ TEST_CASE("FileDelete uses DispatchContext workspace for relative deletes and tr
     auto deleted = co_await registry.dispatch(tool::kFileDeleteName, R"({"path":"doomed.txt"})", ctx);
     REQUIRE(deleted.has_value());
     REQUIRE_FALSE(std::filesystem::exists(root.path() / "doomed.txt"));
+
+    auto deleted_tree = co_await registry.dispatch(tool::kFileDeleteName, R"({"path":"tree","recursive":true})", ctx);
+    REQUIRE(deleted_tree.has_value());
+    REQUIRE_FALSE(std::filesystem::exists(root.path() / "tree"));
 
     std::error_code ec;
     const auto outside_relative_path = std::filesystem::relative(outside.path() / "secret.txt", root.path(), ec);
