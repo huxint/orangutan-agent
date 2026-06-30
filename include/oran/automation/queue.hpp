@@ -63,6 +63,7 @@ struct TriggeredQueueOptions {
 
 struct TriggeredQueueEnqueueRequest {
   std::string trigger_key;
+  std::optional<std::string> trigger_payload{};
   core::Time received_at{core::Time::epoch()};
   std::size_t job_limit{100};
 };

@@ -66,7 +66,9 @@ struct AutomationAgentPromptRunnerOptions {
 /// Instead it builds one `AgentPromptRunner` per automation job execution using
 /// the supplied provider backend and runtime assembly. The durable automation
 /// job identity derives a stable per-job session id so later executions can
-/// reuse persisted transcript state when session memory is enabled.
+/// reuse persisted transcript state when session memory is enabled. Triggered
+/// prompt requests with non-empty payloads append that payload under a stable
+/// `Trigger payload:` label in the dynamic user prompt.
 [[nodiscard]] core::Result<automation::AutomationPromptRunner>
 make_automation_agent_prompt_runner(AutomationAgentPromptRunnerOptions options);
 

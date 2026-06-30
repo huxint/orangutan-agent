@@ -417,6 +417,7 @@ TEST_CASE("automation prompt bridge drives triggered execution through Triggered
 
     auto request = automation::TriggeredExecuteRequest{};
     request.trigger_key = "webhook:ci";
+    request.trigger_payload = std::string{R"({"workflow":"build","status":"failed"})"};
     request.received_at = at(std::chrono::minutes{2});
     request.job_limit = 10;
     request.handler = automation::make_triggered_prompt_handler(*bridge);
@@ -430,7 +431,10 @@ TEST_CASE("automation prompt bridge drives triggered execution through Triggered
     const auto requests = recording.requests();
     REQUIRE(requests.size() == 1);
     REQUIRE(requests[0].messages.size() == 1);
-    REQUIRE(requests[0].messages[0].blocks == core::Message::user_text("Investigate the webhook payload.").blocks);
+    REQUIRE(requests[0].messages[0].blocks ==
+            core::Message::user_text("Investigate the webhook payload.\n\nTrigger payload:\n"
+                                     R"({"workflow":"build","status":"failed"})")
+                .blocks);
 
     auto runs = co_await runtime->repository().list_triggered_runs(automation::ListTriggeredRunsOptions{
         .job_key = "triggered:webhook-ci",

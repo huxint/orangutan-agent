@@ -36,6 +36,7 @@ AutomationPromptRunRequest make_triggered_prompt_run_request(const TriggeredExec
       .prompt = execution.job.agent_prompt,
       .fired_at = execution.received_at,
       .trigger_key = execution.trigger_key,
+      .trigger_payload = execution.trigger_payload,
   };
 }
 

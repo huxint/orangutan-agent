@@ -87,7 +87,11 @@ descriptors without opening `automation.db`, explicit
 seed application when either cron or triggered descriptors are configured. Slice
 258 adds the first `--serve` producer for those descriptors by enqueueing channel
 messages as `channel:<channel_id>` triggers before the direct channel reply path
-runs. The current API evaluates
+runs. Slice 268 adds optional triggered payload propagation plus the first
+webhook producer seam: `WebhookProducer` maps a webhook id to
+`webhook:<id>`, enqueues through `AutomationService::enqueue_triggered(...)`,
+and preserves optional payload bytes through queue execution, notifier callbacks,
+and the automation prompt bridge. The current API evaluates
 periodic and cron schedules from caller-supplied state, maps a long-term memory
 retention policy into a due-only `memory::longterm::DecayRequest`, persists the
 configured retention job plus run history and lease state through
@@ -142,6 +146,10 @@ queue beside stable runtime state, enqueue matched triggered descriptors, and
 run one explicit cycle that retries previously held blocked triggered work,
 then drains buffered triggered work before applying cron seeds and awaiting the
 existing finite cron service cycle,
+lets a caller preserve optional triggered event payload bytes through intake,
+queueing, handler execution, notifier metadata, and prompt-runner requests,
+offers a caller-owned `WebhookProducer` that normalizes webhook ids to
+`webhook:<id>` trigger keys and feeds the same composed service queue,
 lets a runtime owner tick one stored retention job against a supplied long-term
 memory backend, publishes advisory retention metadata when the caller supplies a
 hook bus, can wait once within a caller budget for the earliest stored cron fire,
@@ -353,8 +361,10 @@ Current implementation:
   handler factories. Runtime owners can inject any prompt runner and reuse the
   existing `CronService`, `TriggeredService`, or `TriggeredQueue` execution
   paths, and successful prompt-backed handlers preserve returned text through
-  `AutomationJobHandlerResult`; automation still does not construct
-  `AgentPromptRunner` itself.
+  `AutomationJobHandlerResult`. Triggered prompt requests also carry optional
+  payload bytes; bootstrap's `AgentPromptRunner` bridge appends non-empty
+  payloads under `Trigger payload:` in the dynamic user prompt. Automation still
+  does not construct `AgentPromptRunner` itself.
 - `AutomationRuntime::triggered_queue(...)` constructs that queue over the
   caller-owned automation repository and runtime executor.
 - `AutomationRuntime::automation_service(...)` constructs the first composed
@@ -377,7 +387,7 @@ Current implementation:
   `held_jobs_remaining` reasons.
 - `test-async` reports 14 cases / 76 assertions for the bounded channel
   polling primitive consumed by triggered queues.
-- `test-automation` reports 107 cases / 1868 assertions.
+- `test-automation` reports 108 cases / 1886 assertions.
 - `test-hook` reports 38 cases / 313 assertions for the hook payload surface.
 - `test-config` reports 58 cases / 562 assertions for the consuming config
   boundary, and `test-bootstrap` reports 176 cases / 1707 assertions for mapped
@@ -386,13 +396,14 @@ Current implementation:
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 
-Still open: a webhook/non-chat producer that turns external events into
-`AutomationService::enqueue_triggered(...)` calls, concrete cli/channel/desktop
-notifier routing, broader agent-firing policy, typed `serve` tuning for timer and
-shutdown policy, and the scheduler tick performance criterion. Slice 258 adds
-the first configured-channel producer under `--serve`: channel messages enqueue
-matching triggered jobs with key `channel:<channel_id>` before the direct channel
-reply path runs. Triggered
+Still open: the HTTP listener/config binding that turns real webhook requests
+into `WebhookProducer::trigger(...)` calls, concrete cli/channel/desktop
+notifier routing, broader agent-firing policy, typed `serve` tuning for timer
+and shutdown policy, and the scheduler tick performance criterion. Slice 258
+adds the first configured-channel producer under `--serve`: channel messages
+enqueue matching triggered jobs with key `channel:<channel_id>` before the
+direct channel reply path runs. Slice 268 adds the non-chat webhook producer
+seam and payload propagation, but not the HTTP listener. Triggered
 descriptor intake, explicit one-item queue draining, finite available-batch
 draining, drop-on-conflict handling for active triggered-agent leases, config-authored
 triggered descriptors, and the owner-local blocked-agent hold/retry path plus the
@@ -444,9 +455,12 @@ remains downstream.
    apply them before its automation loop starts. Slice 258 adds the first
    process-owned producer for configured channel ingress: a message received by
    `serve_channels(...)` enqueues matching triggered work with trigger key
-   `channel:<channel_id>` before the direct channel reply path runs. Webhook
-   producers, concrete notifier routing, and actual end-to-end triggered firing
-   latency remain downstream.
+   `channel:<channel_id>` before the direct channel reply path runs. Slice 268
+   adds the non-chat `WebhookProducer` seam and optional payload propagation:
+   a caller can map webhook id `ci` to trigger key `webhook:ci`, enqueue matching
+   descriptors, and expose the payload to handlers / prompt runners. The HTTP
+   webhook listener/config binding, concrete notifier routing, and actual
+   end-to-end triggered firing latency remain downstream.
 4. Per-agent lease prevents two concurrent runs of the same agent_key; the queued
    firing is held or dropped per policy. Current status: slice 210 prevents
    overlapping explicit cron execution for the same stored `agent_key` through

@@ -170,6 +170,7 @@ TriggeredQueue::enqueue(TriggeredQueueEnqueueRequest request) {
 
   auto intake = co_await impl_->service.intake(TriggeredIntakeRequest{
       .trigger_key = request.trigger_key,
+      .trigger_payload = std::move(request.trigger_payload),
       .received_at = request.received_at,
       .job_limit = request.job_limit,
   });
@@ -184,6 +185,7 @@ TriggeredQueue::enqueue(TriggeredQueueEnqueueRequest request) {
             TriggeredExecutionJob{
                 .job = job,
                 .trigger_key = result.intake.trigger_key,
+                .trigger_payload = result.intake.trigger_payload,
                 .received_at = result.intake.received_at,
             },
         .enqueued_at = result.intake.received_at,

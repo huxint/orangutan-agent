@@ -26,6 +26,7 @@ struct AutomationPromptRunRequest {
   std::string prompt;
   core::Time fired_at{core::Time::epoch()};
   std::optional<std::string> trigger_key{};
+  std::optional<std::string> trigger_payload{};
 };
 
 struct AutomationPromptRunResult {

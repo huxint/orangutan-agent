@@ -505,6 +505,19 @@ channel reply path still runs through `channel::dispatch_one`; enqueue failures
 or drop-newest backpressure are reported and do not block that reply. Webhook and
 other non-chat producers remain downstream owners.
 
+Slice 268 adds the first webhook/non-chat producer seam inside
+`oran-automation` without adding an HTTP listener. Triggered intake, execution,
+queue, notifier, and prompt-runner request shapes now carry optional
+`trigger_payload` bytes alongside the durable `trigger_key`; existing channel
+producers leave it empty. `<oran/automation/webhook.hpp>` exports
+`webhook_trigger_key(webhook_key)` and `WebhookProducer`, which maps a webhook id
+to `webhook:<webhook_key>` and calls `AutomationService::enqueue_triggered(...)`
+with the optional payload. The bootstrap automation prompt bridge appends a
+non-empty payload to the job prompt under a stable `Trigger payload:` label
+before calling `AgentPromptRunner`. A later interface slice still owns the HTTP
+server/config binding that receives real webhook requests and feeds this
+producer.
+
 ## Public API
 
 ```cpp
@@ -778,6 +791,7 @@ struct AutomationJobNotification {
   AutomationJobType job_type;
   std::string agent_key;
   std::optional<std::string> trigger_key;
+  std::optional<std::string> trigger_payload;
   core::Time fired_at;
   core::Time finished_at;
   AutomationJobOutcome outcome;
@@ -807,6 +821,7 @@ struct AutomationPromptRunRequest {
   std::string prompt;
   core::Time fired_at;
   std::optional<std::string> trigger_key;
+  std::optional<std::string> trigger_payload;
 };
 
 struct AutomationPromptRunResult {
@@ -1014,12 +1029,14 @@ struct CronServiceOptions {
 
 struct TriggeredIntakeRequest {
   std::string trigger_key;
+  std::optional<std::string> trigger_payload;
   core::Time received_at;
   std::size_t job_limit;
 };
 
 struct TriggeredIntakeResult {
   std::string trigger_key;
+  std::optional<std::string> trigger_payload;
   core::Time received_at;
   std::size_t matched_count;
   std::vector<TriggeredJobRecord> jobs;
@@ -1028,6 +1045,7 @@ struct TriggeredIntakeResult {
 struct TriggeredExecutionJob {
   TriggeredJobRecord job;
   std::string trigger_key;
+  std::optional<std::string> trigger_payload;
   core::Time received_at;
 };
 
@@ -1039,6 +1057,7 @@ TriggeredJobHandler make_triggered_prompt_handler(AutomationPromptRunner);
 
 struct TriggeredExecuteRequest {
   std::string trigger_key;
+  std::optional<std::string> trigger_payload;
   core::Time received_at;
   std::size_t job_limit;
   TriggeredJobHandler handler;
@@ -1129,6 +1148,7 @@ struct TriggeredQueueOptions {
 
 struct TriggeredQueueEnqueueRequest {
   std::string trigger_key;
+  std::optional<std::string> trigger_payload;
   core::Time received_at;
   std::size_t job_limit;
 };
@@ -1354,6 +1374,28 @@ class AutomationService {
 
   std::size_t triggered_queue_capacity() const noexcept;
   std::size_t triggered_queue_size() const;
+};
+
+core::Result<std::string> webhook_trigger_key(std::string_view webhook_key);
+
+struct WebhookTriggerRequest {
+  std::string webhook_key;
+  std::optional<std::string> payload;
+  core::Time received_at;
+  std::size_t job_limit;
+};
+
+struct WebhookTriggerResult {
+  std::string trigger_key;
+  TriggeredQueueEnqueueResult enqueue;
+};
+
+class WebhookProducer {
+ public:
+  explicit WebhookProducer(AutomationService&) noexcept;
+
+  async::Awaitable<core::Result<WebhookTriggerResult>>
+  trigger(WebhookTriggerRequest);
 };
 
 class AutomationRuntime {

@@ -511,6 +511,7 @@ TEST_CASE("Triggered prompt handler runs stored triggered job prompt", "[unit][a
     automation::TriggeredService service{repo};
     auto result = co_await service.execute(automation::TriggeredExecuteRequest{
         .trigger_key = "webhook:ci",
+        .trigger_payload = std::string{R"({"repository":"orangutan","status":"failed"})"},
         .received_at = at(120s),
         .job_limit = 10,
         .handler = automation::make_triggered_prompt_handler(runner.handler()),
@@ -535,6 +536,7 @@ TEST_CASE("Triggered prompt handler runs stored triggered job prompt", "[unit][a
     REQUIRE(runner.requests[0].prompt == "Investigate the webhook payload.");
     REQUIRE(runner.requests[0].fired_at == at(120s));
     REQUIRE(runner.requests[0].trigger_key == "webhook:ci");
+    REQUIRE(runner.requests[0].trigger_payload == R"({"repository":"orangutan","status":"failed"})");
   });
 }
 

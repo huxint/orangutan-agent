@@ -9,9 +9,9 @@
 
 ## Snapshot
 
-- **Slice:** 267 (`xmake run orangutan -- --help` reports slice 267)
+- **Slice:** 268 (`xmake run orangutan -- --help` reports slice 268)
 - **Last completed history:**
-  [`histories/2026-06/20260630-1259-workspace-outside-read-override.md`](histories/2026-06/20260630-1259-workspace-outside-read-override.md)
+  [`histories/2026-07/20260701-0208-automation-webhook-payload-producer.md`](histories/2026-07/20260701-0208-automation-webhook-payload-producer.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — the only active plan; its next gate is externally blocked on real QQ
@@ -24,20 +24,21 @@
     [`exec-plans/completed/2026-06-18-runtime-service-owner.md`](exec-plans/completed/2026-06-18-runtime-service-owner.md).
     The desktop chat-tracer plan closed 2026-06-16
     ([`exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md)).
-- **Latest completed slice:** slice 267 closes the remaining Workspace v1.1
-  per-call read/list outside-workspace override. `FileRead`, `FileSearch`, and
-  `DirectoryList` accept `allow_outside_workspace=true`; when ordinary
-  workspace resolution rejects the read/list path as `outside_workspace` or
-  `symlink_escape`, the registry resolves the existing outside target, promotes
-  an otherwise-allow decision to `ask`, and records explicit audit display
-  metadata with the resolved absolute path. Mutating tools still have no
-  per-call escape; write/delete remain limited to workspace plus configured
-  extra roots. Focused validation passed: `test-tool` 219 cases / 2379
-  assertions. Full validation passed: `xmake test` 19/19, binary help reports
-  `2.0.0-slice267`, and `make ci` passed.
-- **Next intended slice:** Automation webhook/non-chat producer work is the
-  best non-channel follow-up. Workspace can pause unless `tool::Runtime` work
-  needs the future capability-gated workspace accessor.
+- **Latest completed slice:** slice 268 adds the first Automation
+  webhook/non-chat producer seam plus triggered payload propagation.
+  `TriggeredQueueEnqueueRequest`, triggered intake/execution, queued jobs,
+  notifier metadata, and `AutomationPromptRunRequest` can now carry optional
+  payload bytes. `WebhookProducer` maps webhook ids to `webhook:<id>` trigger
+  keys and enqueues through `AutomationService`; the bootstrap automation prompt
+  bridge appends non-empty payloads under a stable `Trigger payload:` label
+  before running the configured agent. No HTTP listener or config block is added
+  yet. Focused validation passed: `test-automation` 108 cases / 1886
+  assertions and `test-bootstrap` 184 cases / 1799 assertions. Full validation
+  passed: `xmake test` 19/19, binary help reports `2.0.0-slice268`, and
+  `make ci` passed.
+- **Next intended slice:** Add the HTTP webhook listener/config binding that
+  feeds `WebhookProducer`, or pivot to concrete automation notifier routing if
+  interface balance needs it.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 
@@ -64,7 +65,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 38 cases / 313 assertions.
 - `oran-memory`: 38 cases / 841 assertions.
-- `oran-automation`: 107 cases / 1868 assertions.
+- `oran-automation`: 108 cases / 1886 assertions.
 - `oran-channel`: 26 cases / 205 assertions.
 - `oran-channel-qq` (gated, `--channel_qq=y`): 58 cases / 369 assertions.
 - `oran-skill`: 27 cases / 168 assertions.

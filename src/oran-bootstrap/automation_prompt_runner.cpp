@@ -137,6 +137,15 @@ using ::orangutan::core::Result;
   };
 }
 
+[[nodiscard]] std::string prompt_text_for(automation::AutomationPromptRunRequest request) {
+  auto prompt = std::move(request.prompt);
+  if (request.trigger_payload.has_value() && !request.trigger_payload->empty()) {
+    prompt += "\n\nTrigger payload:\n";
+    prompt += *request.trigger_payload;
+  }
+  return prompt;
+}
+
 }  // namespace
 
 core::Result<automation::AutomationPromptRunner>
@@ -157,8 +166,9 @@ make_automation_agent_prompt_runner(AutomationAgentPromptRunnerOptions options) 
           co_return std::unexpected(std::move(runner).error());
         }
 
+        auto prompt = prompt_text_for(std::move(request));
         auto prompt_result = co_await (*runner)->run_prompt(
-            cli::PromptRunRequest{.prompt = std::move(request.prompt), .mode = cli::CliMode::single_shot});
+            cli::PromptRunRequest{.prompt = std::move(prompt), .mode = cli::CliMode::single_shot});
         if (!prompt_result) {
           co_return std::unexpected(std::move(prompt_result).error());
         }

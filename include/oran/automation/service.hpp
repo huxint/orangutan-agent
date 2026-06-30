@@ -55,6 +55,7 @@ struct AutomationJobNotification {
   AutomationJobType job_type{AutomationJobType::cron};
   std::string agent_key{"automation"};
   std::optional<std::string> trigger_key{};
+  std::optional<std::string> trigger_payload{};
   core::Time fired_at{core::Time::epoch()};
   core::Time finished_at{core::Time::epoch()};
   AutomationJobOutcome outcome{AutomationJobOutcome::success};
@@ -241,12 +242,14 @@ struct CronExecuteResult {
 
 struct TriggeredIntakeRequest {
   std::string trigger_key;
+  std::optional<std::string> trigger_payload{};
   core::Time received_at{core::Time::epoch()};
   std::size_t job_limit{100};
 };
 
 struct TriggeredIntakeResult {
   std::string trigger_key;
+  std::optional<std::string> trigger_payload{};
   core::Time received_at{core::Time::epoch()};
   std::size_t matched_count{0};
   std::vector<TriggeredJobRecord> jobs{};
@@ -255,6 +258,7 @@ struct TriggeredIntakeResult {
 struct TriggeredExecutionJob {
   TriggeredJobRecord job{};
   std::string trigger_key;
+  std::optional<std::string> trigger_payload{};
   core::Time received_at{core::Time::epoch()};
 };
 
@@ -262,6 +266,7 @@ using TriggeredJobHandler = detail::AutomationJobHandler<TriggeredExecutionJob>;
 
 struct TriggeredExecuteRequest {
   std::string trigger_key;
+  std::optional<std::string> trigger_payload{};
   core::Time received_at{core::Time::epoch()};
   std::size_t job_limit{100};
   TriggeredJobHandler handler{};

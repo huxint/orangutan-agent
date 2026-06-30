@@ -482,6 +482,7 @@ make_triggered_notification(const TriggeredExecutionJob& execution,
       .job_type = AutomationJobType::triggered,
       .agent_key = execution.job.agent_key,
       .trigger_key = execution.trigger_key,
+      .trigger_payload = execution.trigger_payload,
       .fired_at = execution.received_at,
       .finished_at = finished_at,
       .outcome = outcome,
@@ -577,6 +578,7 @@ async::Awaitable<core::Result<TriggeredIntakeResult>> TriggeredService::intake(T
   auto matched_count = jobs->size();
   co_return TriggeredIntakeResult{
       .trigger_key = std::move(request.trigger_key),
+      .trigger_payload = std::move(request.trigger_payload),
       .received_at = request.received_at,
       .matched_count = matched_count,
       .jobs = std::move(*jobs),
@@ -712,6 +714,7 @@ async::Awaitable<core::Result<TriggeredExecuteResult>> TriggeredService::execute
 
   auto intake = co_await this->intake(TriggeredIntakeRequest{
       .trigger_key = request.trigger_key,
+      .trigger_payload = std::move(request.trigger_payload),
       .received_at = request.received_at,
       .job_limit = request.job_limit,
   });
@@ -727,6 +730,7 @@ async::Awaitable<core::Result<TriggeredExecuteResult>> TriggeredService::execute
             TriggeredExecutionJob{
                 .job = job,
                 .trigger_key = result.intake.trigger_key,
+                .trigger_payload = result.intake.trigger_payload,
                 .received_at = result.intake.received_at,
             },
         .handler =

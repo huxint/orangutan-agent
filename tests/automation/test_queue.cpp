@@ -105,6 +105,7 @@ TEST_CASE("TriggeredQueue enqueues matched triggered jobs for explicit receive",
                                      automation::TriggeredQueueOptions{.capacity = 4}};
     auto enqueued = co_await queue.enqueue(automation::TriggeredQueueEnqueueRequest{
         .trigger_key = "webhook:ci",
+        .trigger_payload = std::string{R"({"status":"failed"})"},
         .received_at = at(120s),
         .job_limit = 10,
     });
@@ -126,6 +127,8 @@ TEST_CASE("TriggeredQueue enqueues matched triggered jobs for explicit receive",
     REQUIRE(contains_job(received, "triggered:webhook-ci-secondary"));
     REQUIRE(first->execution.trigger_key == "webhook:ci");
     REQUIRE(second->execution.trigger_key == "webhook:ci");
+    REQUIRE(first->execution.trigger_payload == R"({"status":"failed"})");
+    REQUIRE(second->execution.trigger_payload == R"({"status":"failed"})");
     REQUIRE(first->execution.job.agent_prompt == "Handle triggered automation job.");
     REQUIRE(second->execution.job.agent_prompt == "Handle triggered automation job.");
     REQUIRE(first->execution.received_at == at(120s));
@@ -139,6 +142,61 @@ TEST_CASE("TriggeredQueue enqueues matched triggered jobs for explicit receive",
     });
     REQUIRE(runs.has_value());
     REQUIRE(runs->empty());
+  });
+}
+
+TEST_CASE("WebhookProducer normalizes webhook triggers and preserves payload",
+          "[unit][automation][queue][triggered][webhook]") {
+  TempDb db{"oran-automation-webhook-producer"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto runtime = co_await automation::AutomationRuntime::open(
+        io.get_executor(),
+        automation::AutomationRuntimeOptions{.database_path = db.string()});
+    REQUIRE(runtime.has_value());
+    REQUIRE((co_await runtime->repository().upsert_triggered_job(automation::UpsertTriggeredJobRequest{
+                 .job_key = "triggered:webhook-ci",
+                 .trigger_key = "webhook:ci",
+                 .agent_key = "researcher",
+                 .agent_prompt = "Handle triggered automation job.",
+             }))
+                .has_value());
+
+    auto service = runtime->automation_service();
+    automation::WebhookProducer producer{service};
+    auto produced = co_await producer.trigger(automation::WebhookTriggerRequest{
+        .webhook_key = "ci",
+        .payload = std::string{R"({"workflow":"build","status":"failed"})"},
+        .received_at = at(180s),
+        .job_limit = 10,
+    });
+
+    REQUIRE(produced.has_value());
+    REQUIRE(produced->trigger_key == "webhook:ci");
+    REQUIRE(produced->enqueue.intake.trigger_key == "webhook:ci");
+    REQUIRE(produced->enqueue.intake.trigger_payload == R"({"workflow":"build","status":"failed"})");
+    REQUIRE(produced->enqueue.enqueued_count == 1);
+    REQUIRE(service.triggered_queue_size() == 1);
+
+    auto run = co_await service.run_cycle(automation::AutomationServiceCycleRequest{
+        .now = at(240s),
+        .max_iterations = 1,
+        .cron_handler = [](automation::CronDueJob) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        },
+        .triggered_handler = [](automation::TriggeredExecutionJob execution) -> async::Awaitable<core::Result<void>> {
+          REQUIRE(execution.trigger_key == "webhook:ci");
+          REQUIRE(execution.trigger_payload == R"({"workflow":"build","status":"failed"})");
+          co_return core::Result<void>{};
+        },
+        .triggered_max_jobs = 10,
+    });
+
+    REQUIRE(run.has_value());
+    REQUIRE(run->triggered.completed_count == 1);
+
+    auto prefixed = automation::webhook_trigger_key("webhook:ci");
+    REQUIRE_FALSE(prefixed.has_value());
+    REQUIRE(prefixed.error().kind() == core::ErrorKind::invalid_argument);
   });
 }
 

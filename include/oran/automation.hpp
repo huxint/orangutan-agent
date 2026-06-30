@@ -9,11 +9,12 @@
 // tick/execute owners, explicit cron wait/run loop steps, caller-driven
 // triggered intake/execution plus bounded triggered queue/backpressure,
 // non-blocking queue polling, finite batch draining with optional triggered
-// agent leases, retention/cron/triggered hook metadata, caller-owned
-// cron/triggered notifier callbacks, and caller-started leased retention loop
-// steps plus finite loop policy. Concrete cli/channel/desktop notifier
-// routing, agent firing, and detached background service loops land behind
-// this boundary in later slices.
+// agent leases, optional triggered payload propagation, retention/cron/triggered
+// hook metadata, caller-owned cron/triggered notifier callbacks, the
+// caller-owned webhook producer seam, and caller-started leased retention loop
+// steps plus finite loop policy. Concrete HTTP listener/config wiring,
+// cli/channel/desktop notifier routing, agent firing, and detached background
+// service loops land behind this boundary in later slices.
 
 #pragma once
 
@@ -24,3 +25,4 @@
 #include <oran/automation/repository.hpp>
 #include <oran/automation/runtime.hpp>
 #include <oran/automation/service.hpp>
+#include <oran/automation/webhook.hpp>
