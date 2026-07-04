@@ -12,9 +12,10 @@
 // agent leases, optional triggered payload propagation, retention/cron/triggered
 // hook metadata, caller-owned cron/triggered notifier callbacks, the
 // caller-owned webhook producer seam, and caller-started leased retention loop
-// steps plus finite loop policy. Concrete HTTP listener/config wiring,
-// cli/channel/desktop notifier routing, agent firing, and detached background
-// service loops land behind this boundary in later slices.
+// steps plus finite loop policy. Concrete HTTP listener/config wiring is owned
+// by oran-bootstrap's `--serve` boundary; cli/channel/desktop notifier routing,
+// agent firing, and detached background service loops land behind this boundary
+// in later slices.
 
 #pragma once
 

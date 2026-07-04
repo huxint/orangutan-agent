@@ -36,8 +36,8 @@ struct WebhookTriggerResult {
 /// This is intentionally only the automation boundary: it validates and
 /// normalizes a webhook id, preserves the optional payload for handlers, and
 /// enqueues matching triggered job descriptors through the supplied
-/// `AutomationService`. HTTP listener ownership stays with a future interface
-/// slice.
+/// `AutomationService`. HTTP listener/config ownership stays outside
+/// `oran-automation` and is currently provided by `oran-bootstrap` service mode.
 class WebhookProducer {
 public:
   explicit WebhookProducer(AutomationService& service) noexcept;

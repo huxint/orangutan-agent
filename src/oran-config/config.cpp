@@ -111,9 +111,10 @@ constexpr auto kRecognizedLongtermRetentionFields = std::array<std::string_view,
     "decay_check_interval_hours",
 };
 
-constexpr auto kRecognizedAutomationFields = std::array<std::string_view, 2>{
+constexpr auto kRecognizedAutomationFields = std::array<std::string_view, 3>{
     "cron",
     "triggered",
+    "webhooks",
 };
 
 constexpr auto kRecognizedAutomationCronFields = std::array<std::string_view, 1>{
@@ -138,6 +139,19 @@ constexpr auto kRecognizedAutomationTriggeredJobFields = std::array<std::string_
     "trigger_key",
     "agent_key",
     "agent_prompt",
+};
+
+constexpr auto kRecognizedAutomationWebhooksFields = std::array<std::string_view, 1>{
+    "listener",
+};
+
+constexpr auto kRecognizedAutomationWebhookListenerFields = std::array<std::string_view, 6>{
+    "enabled",
+    "bind_host",
+    "port",
+    "path_prefix",
+    "max_payload_bytes",
+    "job_limit",
 };
 
 constexpr auto kRecognizedChannelFields = std::array<std::string_view, 9>{
@@ -1302,6 +1316,101 @@ parse_automation_triggered(const json& automation, bool strict, std::vector<Conf
   return triggered;
 }
 
+[[nodiscard]] Result<AutomationWebhookListenerConfig>
+parse_automation_webhook_listener(const json& value, bool strict, std::vector<ConfigWarning>& warnings) {
+  constexpr std::string_view kPath = "$.automation.webhooks.listener";
+  auto object = require_object(value, kPath);
+  if (!object) {
+    return std::unexpected(std::move(object.error()));
+  }
+
+  auto listener = AutomationWebhookListenerConfig{};
+  if (const auto enabled = value.find("enabled"); enabled != value.end()) {
+    if (!enabled->is_boolean()) {
+      return std::unexpected(config_error("expected boolean", child_path(kPath, "enabled")));
+    }
+    listener.enabled = enabled->get<bool>();
+  }
+
+  if (auto parsed = parse_optional_non_empty_string(value, "bind_host", kPath, listener.bind_host); !parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+
+  if (const auto port = value.find("port"); port != value.end()) {
+    auto parsed = integer_value(*port, child_path(kPath, "port"));
+    if (!parsed) {
+      return std::unexpected(std::move(parsed.error()));
+    }
+    if (*parsed < 0 || *parsed > static_cast<std::int64_t>(std::numeric_limits<std::uint16_t>::max())) {
+      return std::unexpected(
+          config_error("automation webhook listener port must be between 0 and 65535", child_path(kPath, "port")));
+    }
+    listener.port = static_cast<std::uint16_t>(*parsed);
+  }
+
+  if (auto parsed = parse_optional_non_empty_string(value, "path_prefix", kPath, listener.path_prefix); !parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+  if (!listener.path_prefix.starts_with('/') || !listener.path_prefix.ends_with('/')) {
+    return std::unexpected(config_error("automation webhook listener path_prefix must start and end with /",
+                                        child_path(kPath, "path_prefix")));
+  }
+
+  if (auto parsed = parse_optional_positive_integer(value, "max_payload_bytes", kPath, listener.max_payload_bytes);
+      !parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+  if (auto parsed = parse_optional_positive_integer(value, "job_limit", kPath, listener.job_limit); !parsed) {
+    return std::unexpected(std::move(parsed.error()));
+  }
+
+  auto unknowns = collect_unknown_object_fields(value,
+                                                kPath,
+                                                kRecognizedAutomationWebhookListenerFields,
+                                                "unknown automation webhook listener field",
+                                                strict,
+                                                warnings);
+  if (!unknowns) {
+    return std::unexpected(std::move(unknowns.error()));
+  }
+
+  return listener;
+}
+
+[[nodiscard]] Result<AutomationWebhooksConfig>
+parse_automation_webhooks(const json& automation, bool strict, std::vector<ConfigWarning>& warnings) {
+  auto webhooks = AutomationWebhooksConfig{};
+  const auto it = automation.find("webhooks");
+  if (it == automation.end()) {
+    return webhooks;
+  }
+  constexpr std::string_view kPath = "$.automation.webhooks";
+  auto object = require_object(*it, kPath);
+  if (!object) {
+    return std::unexpected(std::move(object.error()));
+  }
+
+  if (const auto listener = it->find("listener"); listener != it->end()) {
+    auto parsed = parse_automation_webhook_listener(*listener, strict, warnings);
+    if (!parsed) {
+      return std::unexpected(std::move(parsed.error()));
+    }
+    webhooks.listener = std::move(*parsed);
+  }
+
+  auto unknowns = collect_unknown_object_fields(*it,
+                                                kPath,
+                                                kRecognizedAutomationWebhooksFields,
+                                                "unknown automation webhooks field",
+                                                strict,
+                                                warnings);
+  if (!unknowns) {
+    return std::unexpected(std::move(unknowns.error()));
+  }
+
+  return webhooks;
+}
+
 [[nodiscard]] Result<AutomationConfig>
 parse_automation(const json& root, bool strict, std::vector<ConfigWarning>& warnings) {
   auto automation = AutomationConfig{};
@@ -1325,6 +1434,12 @@ parse_automation(const json& root, bool strict, std::vector<ConfigWarning>& warn
     return std::unexpected(std::move(triggered.error()));
   }
   automation.triggered = std::move(*triggered);
+
+  auto webhooks = parse_automation_webhooks(*it, strict, warnings);
+  if (!webhooks) {
+    return std::unexpected(std::move(webhooks.error()));
+  }
+  automation.webhooks = std::move(*webhooks);
 
   auto unknowns = collect_unknown_object_fields(*it,
                                                 "$.automation",

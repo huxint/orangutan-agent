@@ -211,9 +211,27 @@ struct AutomationTriggeredConfig {
   friend bool operator==(const AutomationTriggeredConfig&, const AutomationTriggeredConfig&) = default;
 };
 
+struct AutomationWebhookListenerConfig {
+  bool enabled{false};
+  std::string bind_host{"127.0.0.1"};
+  std::uint16_t port{8787};
+  std::string path_prefix{"/automation/webhooks/"};
+  std::int64_t max_payload_bytes{256 * 1024};
+  std::int64_t job_limit{100};
+
+  friend bool operator==(const AutomationWebhookListenerConfig&, const AutomationWebhookListenerConfig&) = default;
+};
+
+struct AutomationWebhooksConfig {
+  AutomationWebhookListenerConfig listener{};
+
+  friend bool operator==(const AutomationWebhooksConfig&, const AutomationWebhooksConfig&) = default;
+};
+
 struct AutomationConfig {
   AutomationCronConfig cron{};
   AutomationTriggeredConfig triggered{};
+  AutomationWebhooksConfig webhooks{};
 
   friend bool operator==(const AutomationConfig&, const AutomationConfig&) = default;
 };

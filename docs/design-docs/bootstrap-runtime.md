@@ -592,8 +592,11 @@ routed channel prompt runner and calls `AutomationService::enqueue_triggered(...
 with trigger key `channel:<channel_id>` before the direct channel reply path runs.
 The enqueue path is report-and-continue, so a queue/repository failure does not
 block the user-visible channel reply. Slice 268 adds the automation-side
-`WebhookProducer` seam plus triggered payload propagation; the HTTP listener/config
-binding that feeds it remains downstream.
+`WebhookProducer` seam plus triggered payload propagation, and slice 269 binds it
+to `--serve`: `automation.webhooks.listener` can enable a narrow local HTTP
+listener for `POST <path_prefix><id>`, which preserves a bounded
+`Content-Length` body as triggered payload bytes and feeds the same
+`AutomationService` queue through `WebhookProducer`.
 The automation service disables cancellation
 around its durable lease/run-row writes, so a firing tick can swallow a parent cancellation; `serve_automation`'s
 `stop_requested` predicate (tied to the trapped signum) is therefore the
@@ -692,7 +695,10 @@ There is still no HTTP metrics endpoint or JSON toggle.
 
 ## Next Steps
 
-- Add the HTTP webhook listener/config binding for non-chat triggers.
+- Route concrete automation notifier output back to CLI/channel/desktop.
+- Harden webhook listener shutdown/HTTP semantics once operator feedback names
+  the next edge (for example chunked transfer, auth, or a broader HTTP server
+  abstraction).
 - Slice D (optional): a typed `serve` config block (toggles/intervals) once more than
   one concern wants tuning — the reaping interval is a fixed 1-minute default today
   and the channel deadline is only a C++ owner/test knob.

@@ -9,9 +9,9 @@
 
 ## Snapshot
 
-- **Slice:** 268 (`xmake run orangutan -- --help` reports slice 268)
+- **Slice:** 269 (`xmake run orangutan -- --help` reports slice 269)
 - **Last completed history:**
-  [`histories/2026-07/20260701-0208-automation-webhook-payload-producer.md`](histories/2026-07/20260701-0208-automation-webhook-payload-producer.md)
+  [`histories/2026-07/20260701-1227-automation-webhook-http-listener.md`](histories/2026-07/20260701-1227-automation-webhook-http-listener.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — the only active plan; its next gate is externally blocked on real QQ
@@ -24,21 +24,18 @@
     [`exec-plans/completed/2026-06-18-runtime-service-owner.md`](exec-plans/completed/2026-06-18-runtime-service-owner.md).
     The desktop chat-tracer plan closed 2026-06-16
     ([`exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md)).
-- **Latest completed slice:** slice 268 adds the first Automation
-  webhook/non-chat producer seam plus triggered payload propagation.
-  `TriggeredQueueEnqueueRequest`, triggered intake/execution, queued jobs,
-  notifier metadata, and `AutomationPromptRunRequest` can now carry optional
-  payload bytes. `WebhookProducer` maps webhook ids to `webhook:<id>` trigger
-  keys and enqueues through `AutomationService`; the bootstrap automation prompt
-  bridge appends non-empty payloads under a stable `Trigger payload:` label
-  before running the configured agent. No HTTP listener or config block is added
-  yet. Focused validation passed: `test-automation` 108 cases / 1886
-  assertions and `test-bootstrap` 184 cases / 1799 assertions. Full validation
-  passed: `xmake test` 19/19, binary help reports `2.0.0-slice268`, and
-  `make ci` passed.
-- **Next intended slice:** Add the HTTP webhook listener/config binding that
-  feeds `WebhookProducer`, or pivot to concrete automation notifier routing if
-  interface balance needs it.
+- **Latest completed slice:** slice 269 adds the first `--serve` HTTP webhook
+  listener/config binding for Automation. `automation.webhooks.listener` now
+  parses `enabled`, numeric bind host/port, path prefix, payload byte cap, and
+  per-request job limit. When enabled, `--serve` opens the existing
+  `AutomationService`, accepts `POST <path_prefix><id>` requests, maps the id
+  through `WebhookProducer` to `webhook:<id>`, preserves the `Content-Length`
+  body as triggered payload bytes, and lets the existing automation loop drain
+  the queued jobs. Validation passed: `test-config` 60 cases / 583 assertions
+  and `test-bootstrap` 186 cases / 1824 assertions.
+- **Next intended slice:** Route concrete automation notifier output back to
+  CLI/channel/desktop, or harden webhook listener shutdown/HTTP semantics if
+  operational feedback demands it.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 
@@ -61,7 +58,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-http`: 28 cases / 185 assertions.
 - `oran-io`: 58 cases / 328 assertions.
 - `oran-storage`: 79 cases / 1047 assertions.
-- `oran-config`: 58 cases / 562 assertions.
+- `oran-config`: 60 cases / 583 assertions.
 - `oran-permission`: 89 cases / 426 assertions.
 - `oran-hook`: 38 cases / 313 assertions.
 - `oran-memory`: 38 cases / 841 assertions.
@@ -75,8 +72,8 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-agent`: 57 cases / 10 786 assertions.
 - `oran-cli`: 28 cases / 221 assertions.
 - `oran-desktop`: 17 cases / 70 assertions.
-- `oran-bootstrap`: 184 cases / 1799 assertions (gated `--channel_qq=y`: 186 /
-  1839).
+- `oran-bootstrap`: 186 cases / 1824 assertions (gated `--channel_qq=y`: 187 /
+  1849).
 
 ## Open Tech-Debt Rows
 

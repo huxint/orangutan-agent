@@ -1037,12 +1037,42 @@ TEST_CASE("Config::parse extracts automation triggered jobs", "[unit][config][au
   REQUIRE(result->automation().triggered.jobs[1].agent_prompt == "Handle the operator alert.");
 }
 
+TEST_CASE("Config::parse extracts automation webhook listener", "[unit][config][automation]") {
+  auto result = config::Config::parse(R"json({
+  "automation": {
+    "webhooks": {
+      "listener": {
+        "enabled": true,
+        "bind_host": "127.0.0.1",
+        "port": 9090,
+        "path_prefix": "/hooks/",
+        "max_payload_bytes": 4096,
+        "job_limit": 7
+      }
+    }
+  }
+})json");
+
+  REQUIRE(result.has_value());
+  const auto& listener = result->automation().webhooks.listener;
+  REQUIRE(listener.enabled);
+  REQUIRE(listener.bind_host == "127.0.0.1");
+  REQUIRE(listener.port == 9090);
+  REQUIRE(listener.path_prefix == "/hooks/");
+  REQUIRE(listener.max_payload_bytes == 4096);
+  REQUIRE(listener.job_limit == 7);
+}
+
 TEST_CASE("Config::parse defaults automation config when absent", "[unit][config][automation]") {
   auto result = config::Config::parse(R"json({"automation": {}})json");
 
   REQUIRE(result.has_value());
   REQUIRE(result->automation().cron.jobs.empty());
   REQUIRE(result->automation().triggered.jobs.empty());
+  REQUIRE_FALSE(result->automation().webhooks.listener.enabled);
+  REQUIRE(result->automation().webhooks.listener.bind_host == "127.0.0.1");
+  REQUIRE(result->automation().webhooks.listener.port == 8787);
+  REQUIRE(result->automation().webhooks.listener.path_prefix == "/automation/webhooks/");
 }
 
 TEST_CASE("Config::parse rejects malformed automation cron jobs", "[unit][config][automation]") {
@@ -1290,6 +1320,49 @@ TEST_CASE("Config::parse rejects malformed automation triggered jobs", "[unit][c
     "triggered": {
       "jobs": [],
       "retry": true
+    }
+  }
+})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+}
+
+TEST_CASE("Config::parse rejects malformed automation webhook listener", "[unit][config][automation]") {
+  SECTION("non-object webhooks block") {
+    auto result = config::Config::parse(R"json({"automation": {"webhooks": []}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("non-object listener block") {
+    auto result = config::Config::parse(R"json({"automation": {"webhooks": {"listener": []}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("invalid port") {
+    auto result = config::Config::parse(R"json({"automation": {"webhooks": {"listener": {"port": 70000}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("invalid path prefix") {
+    auto result =
+        config::Config::parse(R"json({"automation": {"webhooks": {"listener": {"path_prefix": "hooks/"}}}})json");
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::config);
+  }
+
+  SECTION("unknown listener field fails under strict config") {
+    auto result = config::Config::parse(R"json({
+  "strict_config": true,
+  "automation": {
+    "webhooks": {
+      "listener": {
+        "enabled": true,
+        "extra": true
+      }
     }
   }
 })json");

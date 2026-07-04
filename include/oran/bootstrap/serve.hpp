@@ -143,6 +143,38 @@ struct ServeSchedulerReapOptions {
                                                                            ServeSchedulerReapOptions options = {},
                                                                            std::function<bool()> stop_requested = {});
 
+/// Tunables for the HTTP webhook listener concern under `--serve`.
+struct ServeWebhookOptions {
+  /// Local address to bind. The first listener slice accepts numeric addresses
+  /// only (for example `127.0.0.1` or `::1`) and intentionally avoids DNS.
+  std::string bind_host{"127.0.0.1"};
+  /// TCP port to bind. `0` is accepted for tests/embedders that want an
+  /// ephemeral port; `run_serve` prints the bound endpoint after startup.
+  std::uint16_t port{8787};
+  /// Path prefix for `POST` requests. The webhook id is the single path segment
+  /// after this prefix; `/automation/webhooks/ci` maps to `webhook:ci`.
+  std::string path_prefix{"/automation/webhooks/"};
+  /// Maximum accepted request body size. The listener reads only
+  /// `Content-Length` bodies and rejects larger payloads before queueing.
+  std::size_t max_payload_bytes{256 * 1024};
+  /// Maximum triggered descriptors matched per webhook request.
+  std::size_t job_limit{100};
+  /// Optional observer for the actual port after bind. Useful when `port == 0`.
+  std::function<void(std::uint16_t)> bound_observer{};
+};
+
+/// The HTTP webhook listener concern. It owns a small localhost HTTP intake
+/// loop for `POST <path_prefix><webhook-id>` requests, validates a
+/// `Content-Length` body under `max_payload_bytes`, and feeds the existing
+/// `automation::WebhookProducer`. It deliberately does not expose a generic
+/// HTTP router or support chunked transfer; this is the narrow external trigger
+/// binding for automation. Each request is handled in its own coroutine and
+/// the listener stops gracefully on parent cancellation or `stop_requested`.
+[[nodiscard]] async::Awaitable<core::Result<void>> serve_webhooks(asio::any_io_executor executor,
+                                                                  automation::AutomationService& service,
+                                                                  ServeWebhookOptions options = {},
+                                                                  std::function<bool()> stop_requested = {});
+
 /// Structured snapshot for the channel conversation-worker table under
 /// `--serve`. The counters are monotonic for one `serve_channels(...)` run
 /// except `active_workers`, which is the current worker-table size.

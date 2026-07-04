@@ -14,6 +14,7 @@
 #include <chrono>
 #include <exception>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <memory>
 #include <optional>
@@ -29,7 +30,14 @@
 #include <asio/detached.hpp>
 #include <asio/experimental/awaitable_operators.hpp>
 #include <asio/io_context.hpp>
+#include <asio/ip/tcp.hpp>
+#include <asio/read.hpp>
+#include <asio/read_until.hpp>
+#include <asio/redirect_error.hpp>
 #include <asio/steady_timer.hpp>
+#include <asio/streambuf.hpp>
+#include <asio/use_awaitable.hpp>
+#include <asio/write.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -193,6 +201,74 @@ seed_triggered_job(automation::AutomationRuntime& runtime, std::string job_key, 
   });
 }
 
+[[nodiscard]] async::Awaitable<std::string>
+post_webhook(asio::io_context& io, std::uint16_t port, std::string path, std::string body) {
+  using asio::ip::tcp;
+  tcp::socket socket{io};
+  asio::error_code ec;
+  co_await socket.async_connect(tcp::endpoint{asio::ip::make_address("127.0.0.1"), port},
+                                asio::redirect_error(asio::use_awaitable, ec));
+  REQUIRE_FALSE(ec);
+
+  auto request = std::format("POST {} HTTP/1.1\r\n"
+                             "Host: 127.0.0.1\r\n"
+                             "Content-Type: application/json\r\n"
+                             "Content-Length: {}\r\n"
+                             "Connection: close\r\n"
+                             "\r\n"
+                             "{}",
+                             path,
+                             body.size(),
+                             body);
+  co_await asio::async_write(socket, asio::buffer(request), asio::redirect_error(asio::use_awaitable, ec));
+  REQUIRE_FALSE(ec);
+
+  asio::streambuf response;
+  co_await asio::async_read_until(socket, response, "\r\n\r\n", asio::redirect_error(asio::use_awaitable, ec));
+  REQUIRE_FALSE(ec);
+
+  std::istream input{&response};
+  auto status_line = std::string{};
+  REQUIRE(static_cast<bool>(std::getline(input, status_line)));
+  auto content_length = std::size_t{0};
+  for (auto line = std::string{}; std::getline(input, line);) {
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
+    if (line.empty()) {
+      break;
+    }
+    if (line.starts_with("Content-Length: ")) {
+      content_length = static_cast<std::size_t>(std::stoull(line.substr(std::string_view{"Content-Length: "}.size())));
+    }
+  }
+
+  if (response.size() < content_length) {
+    co_await asio::async_read(socket,
+                              response,
+                              asio::transfer_exactly(content_length - response.size()),
+                              asio::redirect_error(asio::use_awaitable, ec));
+    REQUIRE_FALSE(ec);
+  }
+
+  auto response_body = std::string(content_length, '\0');
+  if (content_length > 0) {
+    input.read(response_body.data(), static_cast<std::streamsize>(content_length));
+  }
+  co_return status_line + "\n" + response_body;
+}
+
+[[nodiscard]] async::Awaitable<void> run_webhook_listener_for_test(asio::io_context& io,
+                                                                   automation::AutomationService& service,
+                                                                   bootstrap::ServeWebhookOptions options,
+                                                                   std::atomic_bool& stop_requested,
+                                                                   async::Channel<bool>& done) {
+  auto result = co_await bootstrap::serve_webhooks(io.get_executor(), service, std::move(options), [&stop_requested] {
+    return stop_requested.load(std::memory_order_acquire);
+  });
+  [[maybe_unused]] auto sent = done.try_send(result.has_value());
+}
+
 }  // namespace
 
 TEST_CASE("serve_automation fires a due cron job, then stops gracefully on cancel",
@@ -289,6 +365,141 @@ TEST_CASE("serve_automation drains queued triggered work before cron",
     REQUIRE(runs->size() == 1);
     REQUIRE(runs->front().outcome == automation::TriggeredRunOutcome::success);
   });
+}
+
+TEST_CASE("serve_webhooks accepts POST payloads and enqueues triggered work",
+          "[unit][bootstrap][serve][automation][webhook]") {
+  TempDir temp{"oran-serve-webhook"};
+  test::run_async(
+      [&temp](asio::io_context& io) -> async::Awaitable<void> {
+        const auto db = (temp.path() / ".orangutan" / "automation.db").string();
+        auto runtime =
+            co_await automation::AutomationRuntime::open(io.get_executor(),
+                                                         automation::AutomationRuntimeOptions{.database_path = db});
+        REQUIRE(runtime.has_value());
+        REQUIRE((co_await seed_triggered_job(*runtime, "triggered:webhook-ci", "webhook:ci")).has_value());
+
+        auto service = runtime->automation_service();
+        std::atomic_bool stop_requested{false};
+        async::Channel<std::uint16_t> bound_port{io.get_executor(), 1};
+        async::Channel<bool> listener_done{io.get_executor(), 1};
+
+        auto options = bootstrap::ServeWebhookOptions{
+            .bind_host = "127.0.0.1",
+            .port = 0,
+            .path_prefix = "/automation/webhooks/",
+            .max_payload_bytes = 4096,
+            .job_limit = 10,
+            .bound_observer =
+                [&bound_port](std::uint16_t port) { [[maybe_unused]] auto sent = bound_port.try_send(port); },
+        };
+        asio::co_spawn(io,
+                       run_webhook_listener_for_test(io, service, std::move(options), stop_requested, listener_done),
+                       asio::detached);
+
+        auto port = co_await bound_port.receive();
+        REQUIRE(port.has_value());
+        auto response = co_await post_webhook(io, *port, "/automation/webhooks/ci", R"({"status":"failed"})");
+        CHECK(response.starts_with("HTTP/1.1 202 Accepted"));
+        CHECK(response.contains(R"("trigger_key":"webhook:ci")"));
+        CHECK(response.contains(R"("enqueued":1)"));
+
+        stop_requested.store(true, std::memory_order_release);
+        auto listener_stopped = co_await listener_done.receive();
+        REQUIRE(listener_stopped.has_value());
+        REQUIRE(*listener_stopped);
+
+        std::optional<std::string> captured_payload;
+        automation::CronJobHandler cron_handler = [](automation::CronDueJob) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        };
+        automation::TriggeredJobHandler triggered_handler =
+            [&captured_payload](automation::TriggeredExecutionJob execution) -> async::Awaitable<core::Result<void>> {
+          REQUIRE(execution.job.job_key == "triggered:webhook-ci");
+          REQUIRE(execution.trigger_key == "webhook:ci");
+          captured_payload = execution.trigger_payload;
+          co_return core::Result<void>{};
+        };
+        auto ran = co_await service.run(automation::AutomationServiceRunRequest{
+            .cycle =
+                automation::AutomationServiceCycleRequest{
+                    .now = core::time::now_utc(),
+                    .max_total_wait = std::chrono::steady_clock::duration::zero(),
+                    .max_iterations = 1,
+                    .cron_job_limit = 10,
+                    .cron_handler = std::move(cron_handler),
+                    .triggered_handler = std::move(triggered_handler),
+                    .triggered_max_jobs = 10,
+                },
+            .max_iterations = 1,
+            .retry_wait = std::chrono::steady_clock::duration::zero(),
+        });
+        REQUIRE(ran.has_value());
+        REQUIRE(captured_payload == std::optional<std::string>{R"({"status":"failed"})"});
+      },
+      3s);
+}
+
+TEST_CASE("serve_webhooks drains open connections on cooperative stop",
+          "[unit][bootstrap][serve][automation][webhook]") {
+  TempDir temp{"oran-serve-webhook-drain"};
+  test::run_async(
+      [&temp](asio::io_context& io) -> async::Awaitable<void> {
+        const auto db = (temp.path() / ".orangutan" / "automation.db").string();
+        auto runtime =
+            co_await automation::AutomationRuntime::open(io.get_executor(),
+                                                         automation::AutomationRuntimeOptions{.database_path = db});
+        REQUIRE(runtime.has_value());
+
+        auto service = runtime->automation_service();
+        std::atomic_bool stop_requested{false};
+        async::Channel<std::uint16_t> bound_port{io.get_executor(), 1};
+        async::Channel<bool> listener_done{io.get_executor(), 1};
+
+        auto options = bootstrap::ServeWebhookOptions{
+            .bind_host = "127.0.0.1",
+            .port = 0,
+            .path_prefix = "/automation/webhooks/",
+            .max_payload_bytes = 4096,
+            .job_limit = 10,
+            .bound_observer =
+                [&bound_port](std::uint16_t port) { [[maybe_unused]] auto sent = bound_port.try_send(port); },
+        };
+        asio::co_spawn(io,
+                       run_webhook_listener_for_test(io, service, std::move(options), stop_requested, listener_done),
+                       asio::detached);
+
+        auto port = co_await bound_port.receive();
+        REQUIRE(port.has_value());
+
+        using asio::ip::tcp;
+        tcp::socket socket{io};
+        asio::error_code ec;
+        co_await socket.async_connect(tcp::endpoint{asio::ip::make_address("127.0.0.1"), *port},
+                                      asio::redirect_error(asio::use_awaitable, ec));
+        REQUIRE_FALSE(ec);
+
+        auto partial_request = std::string{"POST /automation/webhooks/ci HTTP/1.1\r\n"
+                                           "Host: 127.0.0.1\r\n"
+                                           "Content-Length: 4\r\n"};
+        co_await asio::async_write(socket,
+                                   asio::buffer(partial_request),
+                                   asio::redirect_error(asio::use_awaitable, ec));
+        REQUIRE_FALSE(ec);
+
+        [[maybe_unused]] auto accepted = co_await async::sleep_for(io.get_executor(), 20ms);
+        stop_requested.store(true, std::memory_order_release);
+
+        using namespace asio::experimental::awaitable_operators;
+        auto done = co_await (listener_done.receive() || async::sleep_for(io.get_executor(), 1s));
+        REQUIRE(done.index() == 0);
+        auto stopped = std::get<0>(std::move(done));
+        REQUIRE(stopped.has_value());
+        REQUIRE(*stopped);
+
+        socket.close(ec);
+      },
+      3s);
 }
 
 TEST_CASE("serve_automation idles when no cron job is due and stops on cancel",

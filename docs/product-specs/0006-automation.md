@@ -91,7 +91,10 @@ runs. Slice 268 adds optional triggered payload propagation plus the first
 webhook producer seam: `WebhookProducer` maps a webhook id to
 `webhook:<id>`, enqueues through `AutomationService::enqueue_triggered(...)`,
 and preserves optional payload bytes through queue execution, notifier callbacks,
-and the automation prompt bridge. The current API evaluates
+and the automation prompt bridge. Slice 269 adds the first HTTP listener/config
+binding for that seam under `--serve`: `automation.webhooks.listener` enables a
+bounded `POST <path_prefix><id>` intake that feeds `WebhookProducer` and
+preserves the request body as triggered payload bytes. The current API evaluates
 periodic and cron schedules from caller-supplied state, maps a long-term memory
 retention policy into a due-only `memory::longterm::DecayRequest`, persists the
 configured retention job plus run history and lease state through
@@ -150,6 +153,8 @@ lets a caller preserve optional triggered event payload bytes through intake,
 queueing, handler execution, notifier metadata, and prompt-runner requests,
 offers a caller-owned `WebhookProducer` that normalizes webhook ids to
 `webhook:<id>` trigger keys and feeds the same composed service queue,
+lets `--serve` expose a config-gated HTTP webhook listener that accepts bounded
+`Content-Length` POST bodies and feeds `WebhookProducer`,
 lets a runtime owner tick one stored retention job against a supplied long-term
 memory backend, publishes advisory retention metadata when the caller supplies a
 hook bus, can wait once within a caller budget for the earliest stored cron fire,
@@ -389,21 +394,22 @@ Current implementation:
   polling primitive consumed by triggered queues.
 - `test-automation` reports 108 cases / 1886 assertions.
 - `test-hook` reports 38 cases / 313 assertions for the hook payload surface.
-- `test-config` reports 58 cases / 562 assertions for the consuming config
-  boundary, and `test-bootstrap` reports 176 cases / 1707 assertions for mapped
+- `test-config` reports 60 cases / 583 assertions for the consuming config
+  boundary, and `test-bootstrap` reports 186 cases / 1824 assertions for mapped
   cron/triggered seeds plus bootstrap-owned automation prompt bridge and
   `--serve` automation coverage.
 - `bench-automation` compares periodic schedule evaluation with retention
   request planning over a 1024-job batch.
 
-Still open: the HTTP listener/config binding that turns real webhook requests
-into `WebhookProducer::trigger(...)` calls, concrete cli/channel/desktop
-notifier routing, broader agent-firing policy, typed `serve` tuning for timer
-and shutdown policy, and the scheduler tick performance criterion. Slice 258
+Still open: concrete cli/channel/desktop notifier routing, broader
+agent-firing policy, typed `serve` tuning for timer and shutdown policy,
+webhook listener hardening beyond the first bounded `Content-Length` POST
+surface, and the scheduler tick performance criterion. Slice 258
 adds the first configured-channel producer under `--serve`: channel messages
 enqueue matching triggered jobs with key `channel:<channel_id>` before the
 direct channel reply path runs. Slice 268 adds the non-chat webhook producer
-seam and payload propagation, but not the HTTP listener. Triggered
+seam and payload propagation, and slice 269 adds the `--serve`
+HTTP listener/config binding that feeds it. Triggered
 descriptor intake, explicit one-item queue draining, finite available-batch
 draining, drop-on-conflict handling for active triggered-agent leases, config-authored
 triggered descriptors, and the owner-local blocked-agent hold/retry path plus the
@@ -458,8 +464,10 @@ remains downstream.
    `channel:<channel_id>` before the direct channel reply path runs. Slice 268
    adds the non-chat `WebhookProducer` seam and optional payload propagation:
    a caller can map webhook id `ci` to trigger key `webhook:ci`, enqueue matching
-   descriptors, and expose the payload to handlers / prompt runners. The HTTP
-   webhook listener/config binding, concrete notifier routing, and actual
+   descriptors, and expose the payload to handlers / prompt runners. Slice 269
+   adds the first `--serve` HTTP listener/config binding for those requests:
+   `automation.webhooks.listener` accepts bounded `POST <path_prefix><id>`
+   requests and feeds `WebhookProducer`. Concrete notifier routing and measured
    end-to-end triggered firing latency remain downstream.
 4. Per-agent lease prevents two concurrent runs of the same agent_key; the queued
    firing is held or dropped per policy. Current status: slice 210 prevents

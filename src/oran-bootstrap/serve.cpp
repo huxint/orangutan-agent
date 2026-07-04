@@ -2,11 +2,12 @@
 //
 // See include/oran/bootstrap/serve.hpp for the design. This TU owns the
 // lifecycle (start the runtime, trap signals, co-spawn the service body, block,
-// graceful cancel, stop) and races four concerns under one cancellation slot:
+// graceful cancel, stop) and races five concerns under one cancellation slot:
 // the IO file-view cache watcher (always); the automation cron/triggered
 // service loop plus the tool-scheduler idle-lock reaping tick (when the loaded
-// config carries `automation.cron.jobs[]` or `automation.triggered.jobs[]`); and
-// the channel ingress/dispatch loop (when the config carries `channels[]`). A
+// config carries automation jobs or an enabled webhook listener); the webhook
+// listener; and the channel ingress/dispatch loop (when the config carries
+// `channels[]`). A
 // disabled concern is replaced by an idle placeholder so the race always has a
 // fixed operand set.
 
@@ -14,6 +15,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
+#include <charconv>
 #include <chrono>
 #include <csignal>
 #include <cstddef>
@@ -25,11 +28,14 @@
 #include <format>
 #include <functional>
 #include <future>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <print>
+#include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -42,8 +48,16 @@
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/experimental/awaitable_operators.hpp>
+#include <asio/ip/address.hpp>
+#include <asio/ip/tcp.hpp>
+#include <asio/read.hpp>
+#include <asio/read_until.hpp>
+#include <asio/redirect_error.hpp>
 #include <asio/signal_set.hpp>
+#include <asio/streambuf.hpp>
 #include <asio/this_coro.hpp>
+#include <asio/use_awaitable.hpp>
+#include <asio/write.hpp>
 
 #include <oran/agent/scheduler.hpp>
 #include <oran/async.hpp>
@@ -536,16 +550,341 @@ async::Awaitable<void> serve_channel_pump_tracked(channel::ChannelManager& manag
   [[maybe_unused]] auto sent = co_await done.send(std::monostate{});
 }
 
+[[nodiscard]] std::string trim_http_line_suffix(std::string line) {
+  if (!line.empty() && line.back() == '\r') {
+    line.pop_back();
+  }
+  return line;
+}
+
+[[nodiscard]] std::string ascii_lower(std::string text) {
+  std::ranges::transform(text, text.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  return text;
+}
+
+[[nodiscard]] std::string trim_http_ows(std::string_view text) {
+  const auto first = text.find_first_not_of(" \t");
+  if (first == std::string_view::npos) {
+    return {};
+  }
+  const auto last = text.find_last_not_of(" \t");
+  return std::string{text.substr(first, last - first + 1)};
+}
+
+struct ParsedWebhookHttpRequest {
+  std::string method;
+  std::string target;
+  std::string body;
+};
+
+[[nodiscard]] Result<std::size_t> parse_content_length(std::string_view value) {
+  auto length = std::uint64_t{};
+  auto parsed = std::from_chars(value.data(), value.data() + value.size(), length);
+  if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) {
+    return std::unexpected(Error::invalid_argument("invalid Content-Length header"));
+  }
+  if (length > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+    return std::unexpected(Error::invalid_argument("Content-Length is too large"));
+  }
+  return static_cast<std::size_t>(length);
+}
+
+[[nodiscard]] async::Awaitable<Result<ParsedWebhookHttpRequest>>
+read_webhook_http_request(asio::ip::tcp::socket& socket, std::size_t max_payload_bytes) {
+  asio::streambuf buffer;
+  asio::error_code ec;
+  [[maybe_unused]] auto header_bytes =
+      co_await asio::async_read_until(socket, buffer, "\r\n\r\n", asio::redirect_error(asio::use_awaitable, ec));
+  if (ec) {
+    co_return std::unexpected(Error::io("failed to read webhook request headers").with("asio_error", ec.message()));
+  }
+
+  std::istream input{&buffer};
+  auto request_line = std::string{};
+  if (!std::getline(input, request_line)) {
+    co_return std::unexpected(Error::invalid_argument("missing HTTP request line"));
+  }
+  request_line = trim_http_line_suffix(std::move(request_line));
+
+  auto parsed = std::istringstream{request_line};
+  auto request = ParsedWebhookHttpRequest{};
+  auto version = std::string{};
+  parsed >> request.method >> request.target >> version;
+  if (request.method.empty() || request.target.empty() || !version.starts_with("HTTP/")) {
+    co_return std::unexpected(Error::invalid_argument("malformed HTTP request line"));
+  }
+
+  auto content_length = std::size_t{0};
+  for (auto line = std::string{}; std::getline(input, line);) {
+    line = trim_http_line_suffix(std::move(line));
+    if (line.empty()) {
+      break;
+    }
+    const auto colon = line.find(':');
+    if (colon == std::string::npos) {
+      continue;
+    }
+    const auto name = ascii_lower(line.substr(0, colon));
+    if (name != "content-length") {
+      continue;
+    }
+    auto length = parse_content_length(trim_http_ows(std::string_view{line}.substr(colon + 1)));
+    if (!length) {
+      co_return std::unexpected(std::move(length.error()));
+    }
+    content_length = *length;
+  }
+
+  if (content_length > max_payload_bytes) {
+    co_return std::unexpected(Error::invalid_argument("webhook payload exceeds max_payload_bytes")
+                                  .with("content_length", std::to_string(content_length))
+                                  .with("max_payload_bytes", std::to_string(max_payload_bytes)));
+  }
+
+  if (buffer.size() < content_length) {
+    [[maybe_unused]] auto body_bytes = co_await asio::async_read(socket,
+                                                                 buffer,
+                                                                 asio::transfer_exactly(content_length - buffer.size()),
+                                                                 asio::redirect_error(asio::use_awaitable, ec));
+    if (ec) {
+      co_return std::unexpected(Error::io("failed to read webhook request body").with("asio_error", ec.message()));
+    }
+  }
+
+  request.body.resize(content_length);
+  if (content_length > 0) {
+    input.read(request.body.data(), static_cast<std::streamsize>(content_length));
+    if (input.gcount() != static_cast<std::streamsize>(content_length)) {
+      co_return std::unexpected(Error::io("short webhook request body"));
+    }
+  }
+
+  co_return request;
+}
+
+[[nodiscard]] std::optional<std::string> webhook_key_from_target(std::string target, std::string_view path_prefix) {
+  if (const auto query = target.find('?'); query != std::string::npos) {
+    target.erase(query);
+  }
+  if (!target.starts_with(path_prefix)) {
+    return std::nullopt;
+  }
+  auto webhook_key = target.substr(path_prefix.size());
+  if (webhook_key.empty() || webhook_key.contains('/')) {
+    return std::nullopt;
+  }
+  return webhook_key;
+}
+
+[[nodiscard]] std::string json_string_literal(std::string_view text) {
+  auto escaped = std::string{};
+  escaped.reserve(text.size() + 2);
+  escaped.push_back('"');
+  for (const auto ch : text) {
+    switch (ch) {
+      case '"':
+        escaped += "\\\"";
+        break;
+      case '\\':
+        escaped += "\\\\";
+        break;
+      case '\b':
+        escaped += "\\b";
+        break;
+      case '\f':
+        escaped += "\\f";
+        break;
+      case '\n':
+        escaped += "\\n";
+        break;
+      case '\r':
+        escaped += "\\r";
+        break;
+      case '\t':
+        escaped += "\\t";
+        break;
+      default:
+        if (static_cast<unsigned char>(ch) < 0x20U) {
+          escaped += std::format("\\u{:04x}", static_cast<unsigned>(static_cast<unsigned char>(ch)));
+        } else {
+          escaped.push_back(ch);
+        }
+        break;
+    }
+  }
+  escaped.push_back('"');
+  return escaped;
+}
+
+[[nodiscard]] std::string webhook_http_response(unsigned status, std::string_view reason, std::string body) {
+  return std::format("HTTP/1.1 {} {}\r\n"
+                     "Content-Type: application/json\r\n"
+                     "Content-Length: {}\r\n"
+                     "Connection: close\r\n"
+                     "\r\n"
+                     "{}",
+                     status,
+                     reason,
+                     body.size(),
+                     body);
+}
+
+async::Awaitable<void>
+write_webhook_http_response(asio::ip::tcp::socket& socket, unsigned status, std::string_view reason, std::string body) {
+  auto response = webhook_http_response(status, reason, std::move(body));
+  asio::error_code ec;
+  [[maybe_unused]] auto written =
+      co_await asio::async_write(socket, asio::buffer(response), asio::redirect_error(asio::use_awaitable, ec));
+  socket.shutdown(asio::ip::tcp::socket::shutdown_both, ec);
+  socket.close(ec);
+}
+
+async::Awaitable<void> handle_webhook_connection(asio::ip::tcp::socket socket,
+                                                 automation::AutomationService& service,
+                                                 ServeWebhookOptions options) {
+  auto request = co_await read_webhook_http_request(socket, options.max_payload_bytes);
+  if (!request) {
+    const auto status = request.error().message().contains("max_payload_bytes") ? 413U : 400U;
+    co_await write_webhook_http_response(socket,
+                                         status,
+                                         status == 413U ? "Payload Too Large" : "Bad Request",
+                                         R"({"ok":false})");
+    co_return;
+  }
+
+  if (request->method != "POST") {
+    co_await write_webhook_http_response(socket, 405, "Method Not Allowed", R"({"ok":false})");
+    co_return;
+  }
+
+  auto webhook_key = webhook_key_from_target(request->target, options.path_prefix);
+  if (!webhook_key) {
+    co_await write_webhook_http_response(socket, 404, "Not Found", R"({"ok":false})");
+    co_return;
+  }
+
+  auto producer = automation::WebhookProducer{service};
+  auto triggered = co_await producer.trigger(automation::WebhookTriggerRequest{
+      .webhook_key = std::move(*webhook_key),
+      .payload = request->body.empty() ? std::nullopt : std::optional<std::string>{std::move(request->body)},
+      .received_at = core::time::now_utc(),
+      .job_limit = options.job_limit,
+  });
+  if (!triggered) {
+    const auto status = triggered.error().kind() == core::ErrorKind::invalid_argument ? 400U : 500U;
+    co_await write_webhook_http_response(socket,
+                                         status,
+                                         status == 400U ? "Bad Request" : "Internal Server Error",
+                                         R"({"ok":false})");
+    co_return;
+  }
+
+  auto body = std::format(R"({{"ok":true,"trigger_key":{},"matched":{},"enqueued":{},"dropped":{}}})",
+                          json_string_literal(triggered->trigger_key),
+                          triggered->enqueue.intake.matched_count,
+                          triggered->enqueue.enqueued_count,
+                          triggered->enqueue.dropped_count);
+  co_await write_webhook_http_response(socket, 202, "Accepted", std::move(body));
+}
+
+struct WebhookConnectionWorker {
+  std::shared_ptr<asio::cancellation_signal> cancel;
+  std::shared_ptr<std::atomic_bool> done;
+};
+
+[[nodiscard]] async::Awaitable<Result<asio::ip::tcp::socket>>
+accept_webhook_connection(asio::ip::tcp::acceptor& acceptor) {
+  asio::error_code ec;
+  auto socket = co_await acceptor.async_accept(asio::redirect_error(asio::use_awaitable, ec));
+  if (!ec) {
+    co_return socket;
+  }
+  if (ec == asio::error::operation_aborted || ec == asio::error::bad_descriptor) {
+    co_return std::unexpected(Error::cancelled().with("source", "webhook_accept").with("asio_error", ec.message()));
+  }
+  co_return std::unexpected(Error::io("failed to accept webhook connection").with("asio_error", ec.message()));
+}
+
+async::Awaitable<void> handle_webhook_connection_tracked(asio::ip::tcp::socket socket,
+                                                         automation::AutomationService& service,
+                                                         ServeWebhookOptions options,
+                                                         std::shared_ptr<async::Channel<std::monostate>> progress,
+                                                         std::shared_ptr<std::atomic_bool> done) {
+  try {
+    co_await handle_webhook_connection(std::move(socket), service, std::move(options));
+  } catch (const std::system_error& error) {
+    if (error.code() != asio::error::operation_aborted) {
+      std::println(stderr, "orangutan: webhook connection handler failed: {}", error.what());
+    }
+  } catch (const std::exception& error) {
+    std::println(stderr, "orangutan: webhook connection handler failed: {}", error.what());
+  } catch (...) {
+    std::println(stderr, "orangutan: webhook connection handler failed: unknown exception");
+  }
+  co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+  done->store(true, std::memory_order_release);
+  [[maybe_unused]] auto signaled = progress->try_send(std::monostate{});
+}
+
+void erase_completed_webhook_workers(std::vector<WebhookConnectionWorker>& workers) {
+  std::erase_if(workers,
+                [](const WebhookConnectionWorker& worker) { return worker.done->load(std::memory_order_acquire); });
+}
+
+async::Awaitable<void> cancel_and_drain_webhook_workers(std::vector<WebhookConnectionWorker>& workers,
+                                                        async::Channel<std::monostate>& progress) {
+  co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+  for (auto& worker : workers) {
+    worker.cancel->emit(asio::cancellation_type::all);
+  }
+  for (;;) {
+    erase_completed_webhook_workers(workers);
+    if (workers.empty()) {
+      co_return;
+    }
+    [[maybe_unused]] auto signaled = co_await progress.receive();
+  }
+}
+
+async::Awaitable<Result<void>> stop_webhook_listener(std::shared_ptr<asio::ip::tcp::acceptor> acceptor,
+                                                     std::shared_ptr<std::atomic_bool> stop_watcher_done,
+                                                     std::vector<WebhookConnectionWorker>& workers,
+                                                     async::Channel<std::monostate>& progress) {
+  stop_watcher_done->store(true, std::memory_order_release);
+  asio::error_code ignored;
+  acceptor->close(ignored);
+  co_await cancel_and_drain_webhook_workers(workers, progress);
+  co_return Result<void>{};
+}
+
+async::Awaitable<void> poke_webhook_acceptor_on_stop(asio::any_io_executor executor,
+                                                     asio::ip::tcp::endpoint endpoint,
+                                                     std::function<bool()> stop_requested,
+                                                     std::shared_ptr<std::atomic_bool> done) {
+  while (!done->load(std::memory_order_acquire)) {
+    if (stop_requested && stop_requested()) {
+      auto socket = asio::ip::tcp::socket{executor};
+      asio::error_code ignored;
+      socket.connect(endpoint, ignored);
+      co_return;
+    }
+    auto slept = co_await async::sleep_for(executor, std::chrono::milliseconds{50});
+    if (!slept) {
+      co_return;
+    }
+  }
+}
+
 /// The composed service body. A free coroutine (not a capture-by-reference
 /// lambda) so its inputs are moved into the coroutine frame and cannot dangle
 /// after the spawning full-expression. Opens automation persistence and starts
-/// channel adapters as configured, then races a fixed four-operand set — the
-/// watcher, the automation loop, the scheduler reaping tick, and the channel
-/// ingress/dispatch loop — each replaced by an idle placeholder when its concern
-/// is disabled, all under the caller's cancellation slot. Automation persistence
-/// that cannot open (or seeds that cannot apply) and channel adapters that
-/// cannot start are non-fatal: report once and degrade that concern to idle so a
-/// signal still stops the rest cleanly.
+/// channel adapters as configured, then races the watcher, the automation loop,
+/// the scheduler reaping tick, the webhook listener, and the channel
+/// ingress/dispatch loop — each replaced by an idle placeholder when its
+/// concern is disabled, all under the caller's cancellation slot. Automation
+/// persistence that cannot open (or seeds that cannot apply) and channel
+/// adapters that cannot start are non-fatal: report once and degrade that
+/// concern to idle so a signal still stops the rest cleanly.
 async::Awaitable<Result<void>> serve_body(asio::any_io_executor executor,
                                           ServeOptions watch_options,
                                           bool automation_enabled,
@@ -557,6 +896,8 @@ async::Awaitable<Result<void>> serve_body(asio::any_io_executor executor,
                                           ServeAutomationOptions automation_options,
                                           agent::ToolScheduler* scheduler,
                                           ServeSchedulerReapOptions reap_options,
+                                          bool webhooks_enabled,
+                                          ServeWebhookOptions webhook_options,
                                           bool channels_enabled,
                                           channel::ChannelManager* channel_manager,
                                           channel::ChannelPromptRunner channel_runner,
@@ -608,7 +949,7 @@ async::Awaitable<Result<void>> serve_body(asio::any_io_executor executor,
   }
 
   using namespace asio::experimental::awaitable_operators;
-  // A fixed four-operand race under one cancellation slot: the watcher plus each
+  // A fixed five-operand race under one cancellation slot: the watcher plus each
   // optional concern (or an idle placeholder when disabled), so a single signal
   // — or any concern's self-stop — ends them together. `stop_requested` is
   // copied into each predicate consumer because the evaluation order of `||`
@@ -625,6 +966,9 @@ async::Awaitable<Result<void>> serve_body(asio::any_io_executor executor,
                                : serve_idle(executor)) ||
             (automation_active && scheduler != nullptr
                  ? serve_scheduler_reaping(executor, *scheduler, reap_options, stop_requested)
+                 : serve_idle(executor)) ||
+            (automation_active && webhooks_enabled
+                 ? serve_webhooks(executor, *automation_service, std::move(webhook_options), stop_requested)
                  : serve_idle(executor)) ||
             (channels_active ? serve_channels(executor,
                                               *channel_manager,
@@ -778,6 +1122,107 @@ async::Awaitable<Result<void>> serve_scheduler_reaping(asio::any_io_executor exe
   }
 }
 
+async::Awaitable<Result<void>> serve_webhooks(asio::any_io_executor executor,
+                                              automation::AutomationService& service,
+                                              ServeWebhookOptions options,
+                                              std::function<bool()> stop_requested) {
+  if (options.bind_host.empty()) {
+    co_return std::unexpected(Error::invalid_argument("webhook listener bind_host must be non-empty"));
+  }
+  if (options.path_prefix.empty() || !options.path_prefix.starts_with('/') || !options.path_prefix.ends_with('/')) {
+    co_return std::unexpected(Error::invalid_argument("webhook listener path_prefix must start and end with /"));
+  }
+  if (options.job_limit == 0) {
+    co_return std::unexpected(Error::invalid_argument("webhook listener job_limit must be positive"));
+  }
+  if (options.max_payload_bytes == 0) {
+    co_return std::unexpected(Error::invalid_argument("webhook listener max_payload_bytes must be positive"));
+  }
+
+  asio::error_code ec;
+  const auto address = asio::ip::make_address(options.bind_host, ec);
+  if (ec) {
+    co_return std::unexpected(
+        Error::config("webhook listener bind_host must be a numeric IP address").with("bind_host", options.bind_host));
+  }
+
+  auto acceptor = std::make_shared<asio::ip::tcp::acceptor>(executor);
+  const auto endpoint = asio::ip::tcp::endpoint{address, options.port};
+  acceptor->open(endpoint.protocol(), ec);
+  if (ec) {
+    co_return std::unexpected(Error::io("failed to open webhook listener").with("asio_error", ec.message()));
+  }
+  acceptor->set_option(asio::ip::tcp::acceptor::reuse_address(true), ec);
+  if (ec) {
+    co_return std::unexpected(Error::io("failed to configure webhook listener").with("asio_error", ec.message()));
+  }
+  acceptor->bind(endpoint, ec);
+  if (ec) {
+    co_return std::unexpected(Error::io("failed to bind webhook listener").with("asio_error", ec.message()));
+  }
+  acceptor->listen(asio::socket_base::max_listen_connections, ec);
+  if (ec) {
+    co_return std::unexpected(Error::io("failed to listen for webhooks").with("asio_error", ec.message()));
+  }
+  if (options.bound_observer) {
+    try {
+      options.bound_observer(acceptor->local_endpoint().port());
+    } catch (const std::exception& error) {
+      std::println(stderr, "orangutan: webhook bound observer failed: {}", error.what());
+    } catch (...) {
+      std::println(stderr, "orangutan: webhook bound observer failed: unknown exception");
+    }
+  }
+
+  const auto local_endpoint = acceptor->local_endpoint();
+  auto stop_watcher_done = std::make_shared<std::atomic_bool>(false);
+  asio::co_spawn(executor,
+                 poke_webhook_acceptor_on_stop(executor, local_endpoint, stop_requested, stop_watcher_done),
+                 asio::detached);
+
+  std::vector<WebhookConnectionWorker> workers;
+  auto progress = std::make_shared<async::Channel<std::monostate>>(executor, 1);
+
+  using namespace asio::experimental::awaitable_operators;
+  for (;;) {
+    erase_completed_webhook_workers(workers);
+    if (stop_requested && stop_requested()) {
+      co_return co_await stop_webhook_listener(acceptor, stop_watcher_done, workers, *progress);
+    }
+
+    auto event = co_await (accept_webhook_connection(*acceptor) || progress->receive());
+    if (event.index() == 1) {
+      auto seen_progress = std::get<1>(std::move(event));
+      if (!seen_progress && seen_progress.error().kind() == core::ErrorKind::cancelled) {
+        co_return co_await stop_webhook_listener(acceptor, stop_watcher_done, workers, *progress);
+      }
+      continue;
+    }
+
+    auto accepted = std::get<0>(std::move(event));
+    if (!accepted) {
+      if (accepted.error().kind() == core::ErrorKind::cancelled) {
+        co_return co_await stop_webhook_listener(acceptor, stop_watcher_done, workers, *progress);
+      }
+      std::println(stderr, "orangutan: webhook accept failed: {}", accepted.error());
+      continue;
+    }
+
+    if (stop_requested && stop_requested()) {
+      asio::error_code ignored;
+      accepted->close(ignored);
+      co_return co_await stop_webhook_listener(acceptor, stop_watcher_done, workers, *progress);
+    }
+
+    auto cancel = std::make_shared<asio::cancellation_signal>();
+    auto done = std::make_shared<std::atomic_bool>(false);
+    workers.push_back(WebhookConnectionWorker{.cancel = cancel, .done = done});
+    asio::co_spawn(executor,
+                   handle_webhook_connection_tracked(std::move(*accepted), service, options, progress, std::move(done)),
+                   asio::bind_cancellation_slot(cancel->slot(), asio::detached));
+  }
+}
+
 async::Awaitable<Result<void>> serve_channels(asio::any_io_executor executor,
                                               channel::ChannelManager& manager,
                                               channel::ChannelPromptRunner runner,
@@ -873,7 +1318,8 @@ Result<int> run_serve(const BootstrapOptions& options) {
   if (!triggered_seeds) {
     return std::unexpected(std::move(triggered_seeds).error());
   }
-  const bool automation_enabled = !cron_seeds->empty() || !triggered_seeds->empty();
+  const bool webhooks_enabled = cfg.automation().webhooks.listener.enabled;
+  const bool automation_enabled = !cron_seeds->empty() || !triggered_seeds->empty() || webhooks_enabled;
   const auto cron_job_count = cron_seeds->size();
   const auto triggered_job_count = triggered_seeds->size();
 
@@ -920,6 +1366,15 @@ Result<int> run_serve(const BootstrapOptions& options) {
   automation::TriggeredJobHandler triggered_handler;
   std::string automation_db;
   bool provider_live = false;
+  auto webhook_options = ServeWebhookOptions{};
+  if (webhooks_enabled) {
+    const auto& listener = cfg.automation().webhooks.listener;
+    webhook_options.bind_host = listener.bind_host;
+    webhook_options.port = listener.port;
+    webhook_options.path_prefix = listener.path_prefix;
+    webhook_options.max_payload_bytes = static_cast<std::size_t>(listener.max_payload_bytes);
+    webhook_options.job_limit = static_cast<std::size_t>(listener.job_limit);
+  }
 
   std::optional<channel::ChannelManager> channel_manager;
   channel::ChannelPromptRunner channel_runner;
@@ -1074,6 +1529,8 @@ Result<int> run_serve(const BootstrapOptions& options) {
                             ServeAutomationOptions{},
                             automation_enabled ? &*shared_scheduler : nullptr,
                             ServeSchedulerReapOptions{},
+                            webhooks_enabled,
+                            std::move(webhook_options),
                             serve_channels_enabled,
                             channel_manager ? &*channel_manager : nullptr,
                             std::move(channel_runner),
@@ -1103,6 +1560,10 @@ Result<int> run_serve(const BootstrapOptions& options) {
                  provider_live ? "live" : "offline");
     std::println("  scheduler:  idle-lock reaping every {}s",
                  std::chrono::duration_cast<std::chrono::seconds>(ServeSchedulerReapOptions{}.reap_interval).count());
+  }
+  if (webhooks_enabled) {
+    const auto& listener = cfg.automation().webhooks.listener;
+    std::println("  webhooks:   http://{}:{}{}<id>", listener.bind_host, listener.port, listener.path_prefix);
   }
   if (serve_channels_enabled) {
     std::println("  channels:   {} adapter(s), {} provider", channel_count, provider_live ? "live" : "offline");

@@ -59,7 +59,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice268";
+constexpr std::string_view kVersion = "2.0.0-slice269";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 constexpr std::size_t kTraceExportDefaultLimit = 50;
@@ -548,9 +548,9 @@ void print_usage() {
   std::println("--audit-init applies the audit.db schema (defaults to <workspace>/.orangutan/audit.db) and exits.");
   std::println("--desktop opens the in-process Slint desktop app (requires a build configured with --desktop=y).");
   std::println("--serve runs the long-lived service: it auto-starts the IO file-view watcher and, when the");
-  std::println("        config has automation.cron.jobs[] or automation.triggered.jobs[], the automation");
-  std::println("        cron/triggered loop plus the tool-scheduler idle-lock reaping tick; when the");
-  std::println("        config has channels[], the channel ingress/dispatch loop. Runs until");
+  std::println("        config has automation.cron.jobs[], automation.triggered.jobs[], or an enabled");
+  std::println("        automation.webhooks.listener, the automation loop plus the tool-scheduler idle-lock");
+  std::println("        reaping tick; when the config has channels[], the channel ingress/dispatch loop. Runs until");
   std::println("        SIGINT/SIGTERM (exit code 128 + signum).");
   std::println("--trace prints the trace_turns row and joined audit rows, including hook_publish, for <turn-id>");
   std::println("        (32 lowercase hex characters); reads <workspace>/.orangutan/audit.db.");

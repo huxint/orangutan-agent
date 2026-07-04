@@ -149,6 +149,16 @@
           "agent_prompt": "Review the latest mock channel message and summarize required action."
         }
       ]
+    },
+    "webhooks": {
+      "listener": {
+        "enabled": false,
+        "bind_host": "127.0.0.1",
+        "port": 8787,
+        "path_prefix": "/automation/webhooks/",
+        "max_payload_bytes": 262144,
+        "job_limit": 100
+      }
     }
   },
   "desktop": {

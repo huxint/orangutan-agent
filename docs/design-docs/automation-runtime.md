@@ -518,6 +518,16 @@ before calling `AgentPromptRunner`. A later interface slice still owns the HTTP
 server/config binding that receives real webhook requests and feeds this
 producer.
 
+Slice 269 adds that first interface binding in `oran-bootstrap`, not
+`oran-automation`. `config::AutomationWebhooksConfig` parses
+`automation.webhooks.listener`, and `bootstrap::serve_webhooks(...)` owns a
+narrow `--serve` HTTP intake loop for `POST <path_prefix><webhook-id>`.
+Requests are intentionally `Content-Length` only and bounded by
+`max_payload_bytes`; the body is passed unchanged to `WebhookProducer`, which
+normalizes the id to `webhook:<id>` and enqueues matching triggered descriptors
+through the existing `AutomationService`. `oran-automation` still does not read
+config, own sockets, or start hidden background work.
+
 ## Public API
 
 ```cpp
