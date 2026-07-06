@@ -14,7 +14,11 @@
 #include <utility>
 #include <vector>
 
+#include <asio/any_io_executor.hpp>
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
 #include <asio/io_context.hpp>
+#include <asio/steady_timer.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <oran/agent.hpp>
@@ -172,7 +176,7 @@ config::Config parse_config(std::string_view json) {
 }
 
 bootstrap::RuntimeAssembly build_assembly(const std::filesystem::path& workspace,
-                                          asio::io_context& io,
+                                          asio::any_io_executor executor,
                                           bool audit_enabled,
                                           bool session_memory_enabled = false,
                                           bool longterm_memory_enabled = true,
@@ -182,9 +186,23 @@ bootstrap::RuntimeAssembly build_assembly(const std::filesystem::path& workspace
   options.session_memory_enabled = session_memory_enabled;
   options.longterm_memory_enabled = longterm_memory_enabled;
   options.longterm_vector_memory_enabled = longterm_vector_memory_enabled;
-  auto assembly = bootstrap::RuntimeAssembly::build(workspace.string(), io.get_executor(), std::move(options));
+  auto assembly = bootstrap::RuntimeAssembly::build(workspace.string(), std::move(executor), std::move(options));
   REQUIRE(assembly.has_value());
   return std::move(*assembly);
+}
+
+bootstrap::RuntimeAssembly build_assembly(const std::filesystem::path& workspace,
+                                          asio::io_context& io,
+                                          bool audit_enabled,
+                                          bool session_memory_enabled = false,
+                                          bool longterm_memory_enabled = true,
+                                          bool longterm_vector_memory_enabled = false) {
+  return build_assembly(workspace,
+                        io.get_executor(),
+                        audit_enabled,
+                        session_memory_enabled,
+                        longterm_memory_enabled,
+                        longterm_vector_memory_enabled);
 }
 
 memory::longterm::Record make_longterm_record(std::string id, std::string body) {
@@ -204,12 +222,12 @@ memory::longterm::Record make_longterm_record(std::string id, std::string body) 
   };
 }
 
-bootstrap::AgentPromptRunnerOptions base_runner_options(asio::io_context& io,
+bootstrap::AgentPromptRunnerOptions base_runner_options(asio::any_io_executor executor,
                                                         bootstrap::RuntimeAssembly& assembly,
                                                         config::Config& cfg,
                                                         provider::System& provider_system) {
   auto options = bootstrap::AgentPromptRunnerOptions{};
-  options.executor = io.get_executor();
+  options.executor = std::move(executor);
   options.assembly = &assembly;
   options.config = &cfg;
   options.provider = &provider_system;
@@ -220,6 +238,13 @@ bootstrap::AgentPromptRunnerOptions base_runner_options(asio::io_context& io,
   options.origin = "cli";
   options.quiet = true;
   return options;
+}
+
+bootstrap::AgentPromptRunnerOptions base_runner_options(asio::io_context& io,
+                                                        bootstrap::RuntimeAssembly& assembly,
+                                                        config::Config& cfg,
+                                                        provider::System& provider_system) {
+  return base_runner_options(io.get_executor(), assembly, cfg, provider_system);
 }
 
 hook::InProcessSink provider_capture_sink(std::vector<ProviderHookCapture>& captures) {
@@ -2540,4 +2565,91 @@ TEST_CASE("AgentPromptRunner::create rejects a registry/scheduler supplied witho
 
     co_return;
   });
+}
+
+// Regression for the 2026-06-20 scheduler-executor race: the CLI/desktop
+// wiring now hosts the agent loop and its runner-owned `ToolScheduler` on one
+// `Runtime::make_strand()` while the runtime itself keeps several io workers.
+// Multi-tool batches must complete correctly there — under `--sanitizers=y`
+// this case is also the thread-safety probe for the strand contract.
+TEST_CASE("AgentPromptRunner multi-tool batches complete on a multi-worker runtime",
+          "[unit][bootstrap][prompt_runner][scheduler][concurrency]") {
+  TempDir temp{"oran-bootstrap-prompt-runner-multiworker"};
+  write_file(temp.path() / "left.txt", "left fixture\n");
+  write_file(temp.path() / "right.txt", "right fixture\n");
+
+  auto runtime = async::Runtime{async::RuntimeConfig{.io_workers = 4, .cpu_workers = 1}};
+  auto agent_strand = runtime.make_strand();
+
+  auto cfg = config::Config{};
+  auto assembly = build_assembly(temp.path(), runtime.executor(), false);
+
+  // Each scripted turn fans two parallel FileRead calls through the
+  // scheduler before the terminal text turn ends the loop (16-iteration cap).
+  constexpr int kToolTurns = 8;
+  std::vector<provider::ScriptedTurn> plan;
+  for (int turn = 0; turn < kToolTurns; ++turn) {
+    plan.push_back(provider::ScriptedTurn{
+        .response =
+            provider::Response{
+                .blocks = {core::ToolUseContent{.id = "read-left-" + std::to_string(turn),
+                                                .name = "FileRead",
+                                                .input_json = R"({"path":"left.txt"})"},
+                           core::ToolUseContent{.id = "read-right-" + std::to_string(turn),
+                                                .name = "FileRead",
+                                                .input_json = R"({"path":"right.txt"})"}},
+                .stop_reason = core::StopReason::tool_use,
+                .usage = provider::Usage{.input_tokens = 1,
+                                         .output_tokens = 1,
+                                         .cache_creation_tokens = 0,
+                                         .cache_read_tokens = 0,
+                                         .cost_estimate = std::nullopt},
+                .model_used = std::string{"fake-1"},
+                .route_profile_used = std::nullopt,
+            },
+        .deltas = {},
+        .error = std::nullopt,
+        .latency = std::chrono::milliseconds{1},
+    });
+  }
+  plan.push_back(provider::ScriptedTurn{
+      .response = text_response("multiworker done"),
+      .deltas = {},
+      .error = std::nullopt,
+      .latency = {},
+  });
+  provider::FakeProvider fake{std::move(plan)};
+
+  auto runner = bootstrap::AgentPromptRunner::create(base_runner_options(agent_strand, assembly, cfg, fake));
+  REQUIRE(runner.has_value());
+
+  // Watchdog so a lost completion fails loudly instead of hanging the bucket.
+  bool timed_out = false;
+  asio::steady_timer watchdog{runtime.executor()};
+  watchdog.expires_after(std::chrono::seconds{20});
+  watchdog.async_wait([&](const asio::error_code& ec) {
+    if (!ec) {
+      timed_out = true;
+      runtime.stop();
+    }
+  });
+
+  auto result = std::optional<core::Result<cli::PromptRunResult>>{};
+  asio::co_spawn(
+      agent_strand,
+      [&]() -> async::Awaitable<void> {
+        result = co_await (*runner)->run_prompt(
+            cli::PromptRunRequest{.prompt = "read both", .mode = cli::CliMode::single_shot});
+        watchdog.cancel();
+        runtime.stop();
+        co_return;
+      },
+      asio::detached);
+
+  REQUIRE(runtime.run().has_value());
+  REQUIRE_FALSE(timed_out);
+  REQUIRE(result.has_value());
+  REQUIRE(result->has_value());
+  REQUIRE((*result)->text == "multiworker done");
+  REQUIRE(fake.turns_consumed() == kToolTurns + 1);
 }

@@ -735,6 +735,16 @@ Do **not** add internal locks to `tool::Registry` as a first move. The
 registry runs on the agent strand; the scheduler hops to worker executors at
 dispatch time.
 
+> **Status (slice 270, 2026-07-05):** every production entry point now
+> honours that agent-strand contract. `--serve` has hosted its shared
+> scheduler + loops on the service strand since slice 255; slice 270 moves
+> the configured-route CLI path and the `--desktop` session onto one
+> `Runtime::make_strand()` per run (loop, runner-owned scheduler, and the
+> desktop `ChatBridge` share it), closing the 2026-06-20 tracker row. A
+> multi-worker regression test
+> (`tests/bootstrap/test_prompt_runner.cpp`, tag `[concurrency]`) fans
+> parallel `FileRead` batches through a 4-io-worker runtime.
+
 > **Status (slice 116, 2026-05-27):** the skeleton ships in
 > `oran-agent` as `agent::ToolScheduler` (`<oran/agent/scheduler.hpp>`,
 > `src/oran-agent/scheduler.cpp`). The skeleton lands:

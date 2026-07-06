@@ -7,13 +7,11 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <exception>
 #include <expected>
 #include <format>
 #include <iterator>
 #include <limits>
 #include <optional>
-#include <random>
 #include <ranges>
 #include <span>
 #include <string>
@@ -148,38 +146,6 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
     return std::unexpected(option_error("tool output cap exceeds platform size range").with("field", std::move(field)));
   }
   return static_cast<std::size_t>(value);
-}
-
-[[nodiscard]] Result<core::TurnId> generate_session_id() {
-  try {
-    std::random_device random;
-    core::TurnId id{};
-    for (auto& byte : id) {
-      byte = static_cast<std::byte>(static_cast<unsigned char>(random() & 0xffU));
-    }
-    if (core::is_zero_turn_id(id)) {
-      id.back() = std::byte{0x01};
-    }
-    return id;
-  } catch (const std::exception& error) {
-    return std::unexpected(
-        Error::internal("agent prompt runner: failed to generate session id").with("reason", error.what()));
-  } catch (...) {
-    return std::unexpected(
-        Error::internal("agent prompt runner: failed to generate session id").with("reason", "unknown"));
-  }
-}
-
-[[nodiscard]] std::string format_session_id(const core::TurnId& id) {
-  constexpr std::string_view kHexDigits{"0123456789abcdef"};
-  std::string out;
-  out.reserve(id.size() * 2);
-  for (auto byte : id) {
-    const auto value = static_cast<unsigned char>(byte);
-    out.push_back(kHexDigits[value >> 4]);
-    out.push_back(kHexDigits[value & 0x0fu]);
-  }
-  return out;
 }
 
 [[nodiscard]] Result<permission::RuleSet>
@@ -592,7 +558,7 @@ public:
       : executor_{std::move(options.executor)}, assembly_{options.assembly}, execution_runtime_{*options.provider},
         loop_{execution_runtime_, std::move(options.route)}, owned_registry_{std::move(owned_registry)},
         rules_{std::move(rules)}, active_tools_{std::move(active_tools)}, output_caps_{output_caps},
-        session_id_{session_id}, session_id_text_{format_session_id(session_id_)}, mode_{options.mode},
+        session_id_{session_id}, session_id_text_{core::format_turn_id_hex(session_id_)}, mode_{options.mode},
         scope_key_{std::move(options.scope_key)}, agent_key_{std::move(options.agent_key)},
         identity_{std::move(options.identity)}, origin_{std::move(options.origin)},
         system_preamble_{make_system_preamble(std::move(options.system_preamble))},
@@ -1471,7 +1437,7 @@ core::Result<std::unique_ptr<AgentPromptRunner>> AgentPromptRunner::create(Agent
 
   auto session_id = options.session_id;
   if (core::is_zero_turn_id(session_id)) {
-    auto generated = generate_session_id();
+    auto generated = core::generate_turn_id();
     if (!generated) {
       return std::unexpected(std::move(generated).error());
     }

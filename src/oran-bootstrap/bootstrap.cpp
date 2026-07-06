@@ -59,7 +59,7 @@ namespace {
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr std::string_view kVersion = "2.0.0-slice269";
+constexpr std::string_view kVersion = "2.0.0-slice272";
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSkillsDirectoryRelative = ".orangutan/skills";
 constexpr std::size_t kTraceExportDefaultLimit = 50;
@@ -586,6 +586,55 @@ void print_usage() {
   return 0;
 }
 
+/// One-shot audit-DB operator command (`--audit-init`, `--trace`,
+/// `--trace-export`): opens `audit_path` as a single-reader `Pool` on a fresh
+/// io_context with `SignalScope` SIGINT/SIGTERM handling, runs the idempotent
+/// audit migration, then drives `body(audit_repo, trace_repo, migration)` to
+/// completion. The full `async::Runtime` thread pool exists for the agent
+/// loop; a single io_context is the right shape for a one-shot operator
+/// command. A delivered signal wins over the body outcome and maps to
+/// `Error::cancelled` with `signal` / `signum` context.
+template <typename T, typename Body>
+[[nodiscard]] Result<T> run_audit_db_command(const std::string& audit_path, Body body) {
+  asio::io_context io;
+  SignalScope signals{io};
+
+  auto pool_result =
+      storage::Pool::open(io.get_executor(),
+                          storage::PoolOptions{.path = audit_path, .reader_count = 1, .statement_cache_capacity = 4});
+  if (!pool_result) {
+    return std::unexpected(std::move(pool_result).error());
+  }
+  auto pool = std::move(*pool_result);
+  storage::AuditRepository audit_repo{pool};
+  storage::TraceRepository trace_repo{pool};
+
+  auto outcome = std::optional<Result<T>>{};
+  asio::co_spawn(
+      io,
+      [&]() -> async::Awaitable<void> {
+        auto migrated = co_await audit_repo.migrate();
+        if (!migrated) {
+          outcome = std::unexpected(std::move(migrated).error());
+        } else {
+          outcome = co_await body(audit_repo, trace_repo, *migrated);
+        }
+        signals.release();
+        co_return;
+      },
+      asio::detached);
+  io.run();
+
+  if (const auto sig = signals.signum(); sig != 0) {
+    return std::unexpected(
+        core::Error::cancelled().with("signal", std::string{signal_name(sig)}).with("signum", std::to_string(sig)));
+  }
+  if (!outcome.has_value()) {
+    return std::unexpected(Error::internal("audit db command did not complete"));
+  }
+  return std::move(*outcome);
+}
+
 [[nodiscard]] Result<int> run_audit_init(std::string audit_path) {
   if (audit_path.empty()) {
     return std::unexpected(arg_error("audit init path must not be empty"));
@@ -601,58 +650,25 @@ void print_usage() {
     }
   }
 
-  // Drive the migration on a one-shot io_context. The full
-  // `async::Runtime` thread pool exists for the agent loop; a single
-  // io_context is the right shape for a one-shot operator command.
-  asio::io_context io;
-  SignalScope signals{io};
-
-  auto pool_result =
-      storage::Pool::open(io.get_executor(),
-                          storage::PoolOptions{.path = audit_path, .reader_count = 1, .statement_cache_capacity = 4});
-  if (!pool_result) {
-    return std::unexpected(std::move(pool_result).error());
-  }
-  auto pool = std::move(*pool_result);
-  storage::AuditRepository repo{pool};
-
-  auto report = storage::MigrationReport{};
-  auto migrate_error = std::optional<core::Error>{};
-  asio::co_spawn(
-      io,
-      [&]() -> async::Awaitable<void> {
-        auto migrated = co_await repo.migrate();
-        if (!migrated) {
-          migrate_error = std::move(migrated).error();
-        } else {
-          report = std::move(*migrated);
-        }
-        signals.release();
-        co_return;
-      },
-      asio::detached);
-  io.run();
-
-  if (const auto sig = signals.signum(); sig != 0) {
-    return std::unexpected(
-        core::Error::cancelled().with("signal", std::string{signal_name(sig)}).with("signum", std::to_string(sig)));
-  }
-
-  if (migrate_error) {
-    return std::unexpected(std::move(*migrate_error));
+  auto report = run_audit_db_command<storage::MigrationReport>(
+      audit_path,
+      [](storage::AuditRepository&, storage::TraceRepository&, const storage::MigrationReport& migration)
+          -> async::Awaitable<Result<storage::MigrationReport>> { co_return migration; });
+  if (!report) {
+    return std::unexpected(std::move(report).error());
   }
 
   std::println("audit schema ready: version {} at {} ({} migrations applied)",
-               report.current_version,
+               report->current_version,
                audit_path,
-               report.applied_versions.size());
+               report->applied_versions.size());
   return 0;
 }
 
 /// Decode a 32-char lowercase hex string into a `core::TurnId`. The
 /// inspector takes the operator-visible spelling produced by the storage
 /// boundary's BLOB round-trip, so the only accepted shape is the same
-/// lowercase hex that `format_turn_id_hex` emits. Rejects empty strings,
+/// lowercase hex that `core::format_turn_id_hex` emits. Rejects empty strings,
 /// wrong-length inputs, uppercase / non-hex characters, and the all-zero
 /// turn id (which `TraceRepository::append_turn` already rejects).
 [[nodiscard]] Result<core::TurnId> parse_turn_id_hex(std::string_view text, std::string_view flag) {
@@ -690,18 +706,6 @@ void print_usage() {
   return id;
 }
 
-[[nodiscard]] std::string format_turn_id_hex(const core::TurnId& id) {
-  constexpr std::string_view kHexDigits{"0123456789abcdef"};
-  std::string out;
-  out.reserve(id.size() * 2);
-  for (auto byte : id) {
-    const auto value = static_cast<unsigned char>(byte);
-    out.push_back(kHexDigits[value >> 4]);
-    out.push_back(kHexDigits[value & 0x0fu]);
-  }
-  return out;
-}
-
 [[nodiscard]] std::string format_u64_hex(std::uint64_t value) {
   return std::format("0x{:016x}", value);
 }
@@ -717,10 +721,10 @@ struct TraceExportListQuery {
 };
 
 /// Shared read-only trace lookup for `--trace` and `--trace-export`.
-/// Resolves the workspace audit DB, opens a single-reader `Pool`, runs the idempotent migration
-/// so the inspector tolerates a fresh DB that has not yet seen
-/// `--audit-init`, then returns the matching `trace_turns` row plus every
-/// `audit_events` row whose `parent_turn_id` matches the turn id.
+/// Resolves the workspace audit DB, then loads the matching `trace_turns` row
+/// plus every `audit_events` row whose `parent_turn_id` matches the turn id
+/// through `run_audit_db_command` (whose idempotent migration lets the
+/// inspector tolerate a fresh DB that has not yet seen `--audit-init`).
 [[nodiscard]] Result<TraceInspectRows>
 load_trace_inspect_rows(std::string_view workspace, std::string_view turn_id_hex, std::string_view flag) {
   if (workspace.empty()) {
@@ -742,68 +746,25 @@ load_trace_inspect_rows(std::string_view workspace, std::string_view turn_id_hex
         Error::not_found("audit database not found; run --audit-init first").with("path", audit_path));
   }
 
-  asio::io_context io;
-  SignalScope signals{io};
-
-  auto pool_result =
-      storage::Pool::open(io.get_executor(),
-                          storage::PoolOptions{.path = audit_path, .reader_count = 1, .statement_cache_capacity = 4});
-  if (!pool_result) {
-    return std::unexpected(std::move(pool_result).error());
-  }
-  auto pool = std::move(*pool_result);
-  storage::AuditRepository audit_repo{pool};
-  storage::TraceRepository trace_repo{pool};
-
-  auto inspect_error = std::optional<core::Error>{};
-  auto trace_row = std::optional<storage::TraceTurnRecord>{};
-  auto audit_rows = std::vector<storage::AuditEventRecord>{};
-
-  asio::co_spawn(
-      io,
-      [&]() -> async::Awaitable<void> {
-        auto migrated = co_await audit_repo.migrate();
-        if (!migrated) {
-          inspect_error = std::move(migrated).error();
-          signals.release();
-          co_return;
-        }
-
+  return run_audit_db_command<TraceInspectRows>(
+      audit_path,
+      [&turn_id, turn_id_hex](storage::AuditRepository& audit_repo,
+                              storage::TraceRepository& trace_repo,
+                              const storage::MigrationReport&) -> async::Awaitable<Result<TraceInspectRows>> {
         auto trace = co_await trace_repo.get_turn(*turn_id);
         if (!trace) {
-          inspect_error = std::move(trace).error();
-          signals.release();
-          co_return;
+          co_return std::unexpected(std::move(trace).error());
         }
-        trace_row = std::move(*trace);
+        if (!trace->has_value()) {
+          co_return std::unexpected(Error::not_found("trace turn not found").with("turn_id", std::string{turn_id_hex}));
+        }
 
         auto audits = co_await audit_repo.list_events_for_turn(*turn_id);
         if (!audits) {
-          inspect_error = std::move(audits).error();
-          signals.release();
-          co_return;
+          co_return std::unexpected(std::move(audits).error());
         }
-        audit_rows = std::move(*audits);
-        signals.release();
-        co_return;
-      },
-      asio::detached);
-  io.run();
-
-  if (const auto sig = signals.signum(); sig != 0) {
-    return std::unexpected(
-        core::Error::cancelled().with("signal", std::string{signal_name(sig)}).with("signum", std::to_string(sig)));
-  }
-
-  if (inspect_error) {
-    return std::unexpected(std::move(*inspect_error));
-  }
-
-  if (!trace_row) {
-    return std::unexpected(Error::not_found("trace turn not found").with("turn_id", std::string{turn_id_hex}));
-  }
-
-  return TraceInspectRows{.trace = std::move(*trace_row), .audits = std::move(audit_rows)};
+        co_return TraceInspectRows{.trace = std::move(**trace), .audits = std::move(*audits)};
+      });
 }
 
 [[nodiscard]] Result<std::vector<TraceInspectRows>> load_trace_export_list_rows(std::string_view workspace,
@@ -822,66 +783,28 @@ load_trace_inspect_rows(std::string_view workspace, std::string_view turn_id_hex
         Error::not_found("audit database not found; run --audit-init first").with("path", audit_path));
   }
 
-  asio::io_context io;
-  SignalScope signals{io};
-
-  auto pool_result =
-      storage::Pool::open(io.get_executor(),
-                          storage::PoolOptions{.path = audit_path, .reader_count = 1, .statement_cache_capacity = 4});
-  if (!pool_result) {
-    return std::unexpected(std::move(pool_result).error());
-  }
-  auto pool = std::move(*pool_result);
-  storage::AuditRepository audit_repo{pool};
-  storage::TraceRepository trace_repo{pool};
-
-  auto export_error = std::optional<core::Error>{};
-  auto export_rows = std::vector<TraceInspectRows>{};
-
-  asio::co_spawn(
-      io,
-      [&]() -> async::Awaitable<void> {
-        auto migrated = co_await audit_repo.migrate();
-        if (!migrated) {
-          export_error = std::move(migrated).error();
-          signals.release();
-          co_return;
-        }
-
+  return run_audit_db_command<std::vector<TraceInspectRows>>(
+      audit_path,
+      [&query](storage::AuditRepository& audit_repo,
+               storage::TraceRepository& trace_repo,
+               const storage::MigrationReport&) -> async::Awaitable<Result<std::vector<TraceInspectRows>>> {
         auto traces = co_await trace_repo.list_turns(
             storage::ListTraceTurnsOptions{.agent_key = query.agent_key, .limit = query.limit});
         if (!traces) {
-          export_error = std::move(traces).error();
-          signals.release();
-          co_return;
+          co_return std::unexpected(std::move(traces).error());
         }
 
+        auto export_rows = std::vector<TraceInspectRows>{};
         export_rows.reserve(traces->size());
         for (auto& trace : *traces) {
           auto audits = co_await audit_repo.list_events_for_turn(trace.turn_id);
           if (!audits) {
-            export_error = std::move(audits).error();
-            signals.release();
-            co_return;
+            co_return std::unexpected(std::move(audits).error());
           }
           export_rows.push_back(TraceInspectRows{.trace = std::move(trace), .audits = std::move(*audits)});
         }
-        signals.release();
-        co_return;
-      },
-      asio::detached);
-  io.run();
-
-  if (const auto sig = signals.signum(); sig != 0) {
-    return std::unexpected(
-        core::Error::cancelled().with("signal", std::string{signal_name(sig)}).with("signum", std::to_string(sig)));
-  }
-
-  if (export_error) {
-    return std::unexpected(std::move(*export_error));
-  }
-
-  return export_rows;
+        co_return export_rows;
+      });
 }
 
 [[nodiscard]] nlohmann::ordered_json parse_json_value_or_string(std::string_view text) {
@@ -896,7 +819,7 @@ load_trace_inspect_rows(std::string_view workspace, std::string_view turn_id_hex
   if (!id) {
     return nullptr;
   }
-  return format_turn_id_hex(*id);
+  return core::format_turn_id_hex(*id);
 }
 
 [[nodiscard]] nlohmann::ordered_json optional_string_json(const std::optional<std::string>& value) {
@@ -915,9 +838,9 @@ load_trace_inspect_rows(std::string_view workspace, std::string_view turn_id_hex
       {"cost_estimate_usd", row.cost_estimate_usd},
   };
   return nlohmann::ordered_json{
-      {"turn_id", format_turn_id_hex(row.turn_id)},
+      {"turn_id", core::format_turn_id_hex(row.turn_id)},
       {"parent_turn_id", optional_turn_id_json(row.parent_turn_id)},
-      {"session_id", format_turn_id_hex(row.session_id)},
+      {"session_id", core::format_turn_id_hex(row.session_id)},
       {"agent_key", row.agent_key},
       {"origin", row.origin},
       {"route_profile", row.route_profile},
@@ -1085,8 +1008,11 @@ load_trace_inspect_rows(std::string_view workspace, std::string_view turn_id_hex
   }
 
   const auto& row = rows->trace;
-  std::println("trace turn {}:", format_turn_id_hex(row.turn_id));
-  std::println("  session_id={} agent={} origin={}", format_turn_id_hex(row.session_id), row.agent_key, row.origin);
+  std::println("trace turn {}:", core::format_turn_id_hex(row.turn_id));
+  std::println("  session_id={} agent={} origin={}",
+               core::format_turn_id_hex(row.session_id),
+               row.agent_key,
+               row.origin);
   std::println("  route={}/{} stop_reason={} iterations={}",
                row.route_profile,
                row.route_model,
@@ -1109,7 +1035,7 @@ load_trace_inspect_rows(std::string_view workspace, std::string_view turn_id_hex
                row.cost_estimate_usd);
   std::println("  cancellation_phase={}", row.cancellation_phase.value_or(std::string{"none"}));
   std::println("  parent_turn_id={}",
-               row.parent_turn_id.has_value() ? format_turn_id_hex(*row.parent_turn_id) : std::string{"none"});
+               row.parent_turn_id.has_value() ? core::format_turn_id_hex(*row.parent_turn_id) : std::string{"none"});
   std::println("  schema_version={} context_json_bytes={}", row.schema_version, row.context_json.size());
 
   std::println("audit rows: {}", rows->audits.size());
@@ -1188,11 +1114,18 @@ void print_provider_route_summary(const provider::AdapterConstructionPlan& route
   }
 }
 
-[[nodiscard]] Result<int>
-run_cli_async_on_runtime(async::Runtime& runtime, cli::CliOptions options, cli::PromptRunner* runner) {
+// `loop_executor` must be the strand that also owns the runner's
+// `ToolScheduler` (`AgentPromptRunnerOptions::executor`): the scheduler's
+// lock table and per-batch cancellation signals are single-strand by
+// contract, and the CLI turn coroutine is the `run_batch` caller whose
+// phase-2 cancellation emits must serialize with the spawned tool calls.
+[[nodiscard]] Result<int> run_cli_async_on_runtime(async::Runtime& runtime,
+                                                   asio::any_io_executor loop_executor,
+                                                   cli::CliOptions options,
+                                                   cli::PromptRunner* runner) {
   auto result = std::make_shared<std::optional<core::Result<cli::CliResult>>>();
   asio::co_spawn(
-      runtime.executor(),
+      std::move(loop_executor),
       [options, runner, &runtime, result]() mutable -> async::Awaitable<void> {
         try {
           *result = co_await cli::run_async(options, runner);
@@ -1299,9 +1232,14 @@ run_cli_async_on_runtime(async::Runtime& runtime, cli::CliOptions options, cli::
     return std::unexpected(std::move(assembly).error());
   }
 
-  // The bridge the UI and runtime share. Built before the runner so the runner
-  // borrows its sink (`event_sink`) as the streaming observer.
-  desktop::ChatBridge bridge{desktop::ChatBridgeOptions{.executor = runtime.executor()}};
+  // One strand hosts the chat session loop, the runner-owned `ToolScheduler`
+  // (single-strand lock table / cancellation contract), and the bridge whose
+  // `request_stop` posts its per-turn cancellation emit — so a UI stop is
+  // serialized with `begin_turn`'s signal replacement even with several io
+  // workers. The bridge the UI and runtime share is built before the runner so
+  // the runner borrows its sink (`event_sink`) as the streaming observer.
+  auto agent_strand = runtime.make_strand();
+  desktop::ChatBridge bridge{desktop::ChatBridgeOptions{.executor = agent_strand}};
   const bool dark = cfg.desktop().theme == "dark";
 
   // Shared launch body. Kept as a lambda so the live backend / scripted fake
@@ -1312,7 +1250,7 @@ run_cli_async_on_runtime(async::Runtime& runtime, cli::CliOptions options, cli::
   // promise after closing the bridge input, then stop and let `runner` drop.
   auto launch = [&](provider::System& system, const provider::Route& route) -> Result<int> {
     auto runner = AgentPromptRunner::create(AgentPromptRunnerOptions{
-        .executor = runtime.executor(),
+        .executor = agent_strand,
         .assembly = &*assembly,
         .config = &cfg,
         .provider = &system,
@@ -1350,7 +1288,7 @@ run_cli_async_on_runtime(async::Runtime& runtime, cli::CliOptions options, cli::
 
     std::promise<void> session_done;
     auto session_done_future = session_done.get_future();
-    asio::co_spawn(runtime.executor(),
+    asio::co_spawn(agent_strand,
                    desktop::run_chat_session(bridge, std::move(turn_runner)),
                    [done = std::move(session_done)](std::exception_ptr /*ep*/, core::Result<void> /*result*/) mutable {
                      done.set_value();
@@ -1484,6 +1422,19 @@ core::Result<LoadedConfig> load_config(BootstrapOptions options) {
 }
 
 core::Result<int> run(BootstrapOptions options) {
+  // Operator commands surface SIGINT/SIGTERM as `Error::cancelled` with
+  // signal context; report the interruption and map it to the conventional
+  // `128 + signum` exit code instead of surfacing it as a failure.
+  auto exit_code_for_interrupted = [](Result<int> result) -> Result<int> {
+    if (!result && result.error().kind() == core::ErrorKind::cancelled) {
+      if (auto signum = signum_from_error(result.error()); signum) {
+        std::println(stderr, "orangutan: interrupted by {} ({})", signal_name(*signum), *signum);
+        return 128 + *signum;
+      }
+    }
+    return result;
+  };
+
   auto parsed = parse_args(options.args);
   if (!parsed) {
     return std::unexpected(std::move(parsed.error()));
@@ -1497,36 +1448,15 @@ core::Result<int> run(BootstrapOptions options) {
   if (parsed->audit_init) {
     auto audit_path =
         parsed->has_audit_init_path ? std::move(parsed->audit_init_path) : default_audit_path(options.workspace);
-    auto audit_result = run_audit_init(std::move(audit_path));
-    if (!audit_result && audit_result.error().kind() == core::ErrorKind::cancelled) {
-      if (auto signum = signum_from_error(audit_result.error()); signum) {
-        std::println(stderr, "orangutan: interrupted by {} ({})", signal_name(*signum), *signum);
-        return 128 + *signum;
-      }
-    }
-    return audit_result;
+    return exit_code_for_interrupted(run_audit_init(std::move(audit_path)));
   }
 
   if (parsed->trace_inspect) {
-    auto trace_result = run_trace_inspect(options.workspace, parsed->trace_turn_id_hex);
-    if (!trace_result && trace_result.error().kind() == core::ErrorKind::cancelled) {
-      if (auto signum = signum_from_error(trace_result.error()); signum) {
-        std::println(stderr, "orangutan: interrupted by {} ({})", signal_name(*signum), *signum);
-        return 128 + *signum;
-      }
-    }
-    return trace_result;
+    return exit_code_for_interrupted(run_trace_inspect(options.workspace, parsed->trace_turn_id_hex));
   }
 
   if (parsed->trace_export) {
-    auto trace_result = run_trace_export(options.workspace, *parsed);
-    if (!trace_result && trace_result.error().kind() == core::ErrorKind::cancelled) {
-      if (auto signum = signum_from_error(trace_result.error()); signum) {
-        std::println(stderr, "orangutan: interrupted by {} ({})", signal_name(*signum), *signum);
-        return 128 + *signum;
-      }
-    }
-    return trace_result;
+    return exit_code_for_interrupted(run_trace_export(options.workspace, *parsed));
   }
 
   if (parsed->desktop) {
@@ -1538,14 +1468,7 @@ core::Result<int> run(BootstrapOptions options) {
   }
 
   if (parsed->serve) {
-    auto serve_result = run_serve(options);
-    if (!serve_result && serve_result.error().kind() == core::ErrorKind::cancelled) {
-      if (auto signum = signum_from_error(serve_result.error()); signum) {
-        std::println(stderr, "orangutan: interrupted by {} ({})", signal_name(*signum), *signum);
-        return 128 + *signum;
-      }
-    }
-    return serve_result;
+    return exit_code_for_interrupted(run_serve(options));
   }
 
   auto loaded = load_config(options);
@@ -1691,8 +1614,15 @@ core::Result<int> run(BootstrapOptions options) {
     return std::unexpected(std::move(longterm_recall.error()));
   }
 
+  // One strand hosts the CLI agent loop and its runner-owned `ToolScheduler`
+  // (whose lock table and batch cancellation signals are single-strand by
+  // contract) while `runtime.workers` io workers still drive everything else.
+  // Tool handlers and provider transport keep hopping to `cpu_executor()` for
+  // blocking work, so bounded-parallel tool batches still overlap.
+  auto agent_strand = runtime.make_strand();
+
   auto runner = AgentPromptRunner::create(AgentPromptRunnerOptions{
-      .executor = runtime.executor(),
+      .executor = agent_strand,
       .assembly = &*assembly,
       .config = &loaded->value,
       .provider = &provider_backend->system(),
@@ -1715,6 +1645,7 @@ core::Result<int> run(BootstrapOptions options) {
   }
 
   auto cli_result = run_cli_async_on_runtime(runtime,
+                                             agent_strand,
                                              cli::CliOptions{
                                                  .args = std::span<const std::string_view>{parsed->cli_args},
                                                  .interactive_repl = true,

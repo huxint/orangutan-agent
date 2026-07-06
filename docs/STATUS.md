@@ -9,9 +9,9 @@
 
 ## Snapshot
 
-- **Slice:** 269 (`xmake run orangutan -- --help` reports slice 269)
+- **Slice:** 272 (`xmake run orangutan -- --help` reports slice 272)
 - **Last completed history:**
-  [`histories/2026-07/20260701-1227-automation-webhook-http-listener.md`](histories/2026-07/20260701-1227-automation-webhook-http-listener.md)
+  [`histories/2026-07/20260705-0315-core-turn-id-identity-owner.md`](histories/2026-07/20260705-0315-core-turn-id-identity-owner.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — the only active plan; its next gate is externally blocked on real QQ
@@ -24,15 +24,20 @@
     [`exec-plans/completed/2026-06-18-runtime-service-owner.md`](exec-plans/completed/2026-06-18-runtime-service-owner.md).
     The desktop chat-tracer plan closed 2026-06-16
     ([`exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md)).
-- **Latest completed slice:** slice 269 adds the first `--serve` HTTP webhook
-  listener/config binding for Automation. `automation.webhooks.listener` now
-  parses `enabled`, numeric bind host/port, path prefix, payload byte cap, and
-  per-request job limit. When enabled, `--serve` opens the existing
-  `AutomationService`, accepts `POST <path_prefix><id>` requests, maps the id
-  through `WebhookProducer` to `webhook:<id>`, preserves the `Content-Length`
-  body as triggered payload bytes, and lets the existing automation loop drain
-  the queued jobs. Validation passed: `test-config` 60 cases / 583 assertions
-  and `test-bootstrap` 186 cases / 1824 assertions.
+- **Latest completed slice:** slices 270-272 are one hardening/refactor
+  session. Slice 270 closed the 2026-06-20 tech-debt row by hosting the CLI
+  and `--desktop` agent loops, their runner-owned `ToolScheduler`s, and the
+  desktop `ChatBridge` on per-run `Runtime::make_strand()`s (multi-worker
+  regression test included). Slice 271 concentrated the three copy-pasted
+  one-shot operator-command bridges into `run_audit_db_command<T>` and the
+  four interrupted-signal exit-code blocks into one helper (net −59 lines in
+  `bootstrap.cpp`, behavior identical). Slice 272 made `core::TurnId` own its
+  identity operations: `core::format_turn_id_hex` (canonical 32-char lowercase
+  spelling) and `core::generate_turn_id` (UUIDv4-shaped) replace two duplicate
+  formatters and two divergent generators in `oran-agent` / `oran-bootstrap`.
+  Validation passed: `test-core` 73 / 471, `test-agent` 57 / 10 786,
+  `test-bootstrap` 187 / 1832 (gated `--channel_qq=y`: 189 / 1872), full
+  `xmake test` 19/19.
 - **Next intended slice:** Route concrete automation notifier output back to
   CLI/channel/desktop, or harden webhook listener shutdown/HTTP semantics if
   operational feedback demands it.
@@ -53,7 +58,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 ## Latest Library Surfaces
 
-- `oran-core`: 71 cases / 459 assertions.
+- `oran-core`: 73 cases / 471 assertions.
 - `oran-async`: 16 cases / 83 assertions.
 - `oran-http`: 28 cases / 185 assertions.
 - `oran-io`: 58 cases / 328 assertions.
@@ -72,8 +77,8 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-agent`: 57 cases / 10 786 assertions.
 - `oran-cli`: 28 cases / 221 assertions.
 - `oran-desktop`: 17 cases / 70 assertions.
-- `oran-bootstrap`: 186 cases / 1824 assertions (gated `--channel_qq=y`: 187 /
-  1849).
+- `oran-bootstrap`: 187 cases / 1832 assertions (gated `--channel_qq=y`: 189 /
+  1872).
 
 ## Open Tech-Debt Rows
 
