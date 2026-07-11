@@ -166,7 +166,7 @@ read_text_file_ranged(asio::any_io_executor executor, ReadOnlyFile file, ReadTex
 /// Invalidate every process-local `read_text_file_ranged` cache entry for
 /// `path`. The path is canonicalised through the same private key helper as
 /// reads; no cache keys or file contents are exposed. This is the public seam
-/// for in-process mutations and watcher callbacks.
+/// for pathname deletes, explicit callers, and watcher callbacks.
 void invalidate_read_text_file_ranged_cache(std::string_view path);
 
 /// Watch `root` for local filesystem changes and invalidate

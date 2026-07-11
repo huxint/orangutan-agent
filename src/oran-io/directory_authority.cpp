@@ -478,11 +478,7 @@ core::Result<void> FileMutation::write_text(std::string_view contents, WriteText
         return std::unexpected(stale_mutation_error("anchored append target changed before write", impl_->display));
       }
     }
-    auto result = write_all(opened.get(), contents, impl_->display);
-    if (result) {
-      invalidate_read_text_file_ranged_cache(impl_->display);
-    }
-    return result;
+    return write_all(opened.get(), contents, impl_->display);
   }
 
   if (options.mode == WriteMode::fail_if_exists) {
@@ -505,7 +501,6 @@ core::Result<void> FileMutation::write_text(std::string_view contents, WriteText
       }
       return std::unexpected(errno_error("failed to commit anchored exclusive create", {}, impl_->display, errno));
     }
-    invalidate_read_text_file_ranged_cache(impl_->display);
     return {};
   }
 
@@ -544,9 +539,6 @@ core::Result<void> FileMutation::write_text(std::string_view contents, WriteText
     return std::unexpected(errno_error("failed to commit anchored write", {}, impl_->display, errno));
   }
   (*temp)->committed();
-  // The namespace mutation has committed even if the optional parent fsync
-  // below fails, so process-local views must become stale immediately.
-  invalidate_read_text_file_ranged_cache(impl_->display);
   if (options.durability == WriteTextDurability::fsync_file_and_parent) {
     if (auto synced = sync_fd(impl_->parent.get(), impl_->display, "failed to sync anchored parent directory");
         !synced) {

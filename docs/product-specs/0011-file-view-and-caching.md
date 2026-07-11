@@ -192,16 +192,14 @@ cache is capped at 64 entries / 16 MiB / 10 minutes and protected by an
 explicit mutex because callers can hop onto arbitrary executors. A hit
 still revalidates metadata with `stat` before returning; if the
 metadata changed or cannot be trusted, the call misses and falls back to
-the existing mid-read pre/post fingerprint path. Successful
-`io::write_text_file` and file delete calls synchronously clear stale
-entries from both the file-view cache and the line-offset index. Slice
-57 narrows regular-file invalidation to the affected canonical path;
+the existing mid-read pre/post fingerprint path. Pathname deletes clear
+stale entries from both the file-view cache and the line-offset index;
 slice 265's recursive directory delete clears the private range-read
-caches. Tests cover
-external rewrites refreshing the cache plus an in-process write
-invalidation regression where size and mtime are restored to the old
-fingerprint but the body changes. v1.1's remaining items are
-singleflight reads and watcher-backed external-edit awareness.
+caches. Authority-backed reads bypass these pathname caches, while watcher
+events cover external pathname mutations. Tests cover metadata-refresh,
+explicit invalidation, delete invalidation, and watcher invalidation. v1.1's
+remaining items are singleflight reads and watcher-backed external-edit
+awareness.
 
 **Status (slice 53, 2026-05-24):** the v1.1 singleflight read path
 ships inside `oran-io`. Concurrent cold `read_text_file_ranged` calls
@@ -232,16 +230,17 @@ for watcher-backed external-edit awareness now ships in `oran-io`.
 `io::invalidate_read_text_file_ranged_cache(path)` canonicalises the
 supplied path through the same private key helper used by reads and
 erases matching entries from both the line-offset index and the
-file-view cache without exposing keys or file contents. Successful
-`io::write_text_file` and regular-file deletes now reuse that seam, so
-in-process mutations invalidate only the affected canonical path instead
-of clearing unrelated file views. Recursive directory deletes clear the
-private range-read caches after success. The underlying
+file-view cache without exposing keys or file contents. Regular-file deletes
+reuse that seam, so pathname mutations invalidate only the affected canonical
+path instead of clearing unrelated file views. Recursive directory deletes
+clear the private range-read caches after success. Authority-backed reads
+bypass these caches, and `FileMutation` display strings remain diagnostics
+rather than invalidation keys. The underlying
 `core::BoundedCache` adds `erase_if` for this exact-key invalidation
 without counting the removal as LRU / TTL / byte-budget eviction.
-Tests cover direct invalidation of one file-view path, direct
-invalidation of one line-offset-index path, and write invalidation
-preserving hot cache entries for other files. The remaining v1.1 item is
+Tests cover direct invalidation of one file-view path and direct invalidation
+of one line-offset-index path while preserving hot entries for other files.
+The remaining v1.1 item is
 the concrete watcher registration / event source that calls this seam.
 
 **Status (slice 58, 2026-05-24):** the concrete watcher registration /
@@ -398,10 +397,11 @@ correctness is anchored:
   `read_text_file_ranged` results are held in a process-local
   `BoundedCache` keyed by `(canonical_path, range, max_bytes,
   size_bytes, mtime_ns)` and capped at 64 entries / 16 MiB / 10
-  minutes. Hits re-stat before returning; successful in-process
-  writes/deletes call `invalidate_read_text_file_ranged_cache(path)` so
-  stale bodies cannot survive a mutation made through `oran-io` while
-  unrelated file views stay hot. Slice 54 adds the public
+  minutes. Hits re-stat before returning; pathname deletes call
+  `invalidate_read_text_file_ranged_cache(path)` so stale bodies cannot
+  survive those mutations while unrelated file views stay hot. Authority-backed
+  reads bypass this cache, and `FileMutation` does not use its diagnostics-only
+  display string as an invalidation key. Slice 54 adds the public
   `ReadTextFileCacheStats` snapshot covering both this cache and the
   line-offset index without exposing private keys; slice 57 adds the
   public path-invalidation seam and slice 58 adds the Linux watcher event
@@ -498,11 +498,12 @@ correctness is anchored:
    long fails with `truncated=true` when `max_bytes` is below the line
    size; the prompt never receives the over-cap bytes. Tested at boundary
    and boundary+1.
-7. **Cache safety.** Every `FileRead` cache hit still records an
-   `AuditEvent` and publishes `hook::Event::tool_after`. A `FileWrite` /
-   `FileEdit` / `FileDelete` invalidates affected cache + line-offset
-   entries *synchronously* before returning success. Pinned via a test
-   that interleaves cached read → write → cached read on the same path.
+7. **Cache safety.** Every pathname-backed cache hit still records an
+   `AuditEvent` and publishes `hook::Event::tool_after`. Authority-backed
+   `FileRead` bypasses pathname caches, while `FileDelete`, watcher events,
+   and explicit invalidation remove affected cache + line-offset entries
+   synchronously. `FileMutation` diagnostic display strings are never cache
+   identities.
 8. **Bounded growth.** `BoundedCache` rejects no inserts but evicts oldest
    on capacity, then refuses to cache items larger than its byte budget.
    Capacity, byte budget, and TTL are observable via a stats accessor for

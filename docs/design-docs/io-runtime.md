@@ -81,18 +81,16 @@ performs the requested operation and returns `core::Result<T>`.
 > maps 1-based line numbers to byte offsets, lives in a bounded
 > `core::BoundedCache` (32 entries / 8 MiB / 10-minute TTL), and is
 > keyed by canonical path plus the cheap `(size_bytes, mtime_ns)`
-> fingerprint. `write_text_file` and file deletes invalidate the
-> matching canonical path after successful mutations so an agent cannot
-> reuse stale offsets after an in-process write/delete.
+> fingerprint. Pathname deletes and watcher events invalidate the matching
+> canonical path so cached pathname reads cannot reuse stale offsets.
 >
 > **Slice-52 status (2026-05-24):** `read_text_file_ranged` now keeps a
 > bounded in-memory file-view cache for successful reads. Entries are keyed
 > by canonical path, range, `max_bytes`, and the cheap
 > `(size_bytes, mtime_ns)` fingerprint, capped at 64 entries / 16 MiB /
-> 10 minutes, and revalidated with `stat` before every hit. Successful
-> `write_text_file` and file delete calls invalidate the matching
-> canonical path in both the file-view cache and the line-offset index
-> synchronously.
+> 10 minutes, and revalidated with `stat` before every hit. Pathname deletes
+> and watcher events invalidate the matching canonical path in both the
+> file-view cache and the line-offset index synchronously.
 >
 > **Slice-53 status (2026-05-24):** concurrent cold
 > `read_text_file_ranged` calls now share a bounded process-local
@@ -110,11 +108,12 @@ performs the requested operation and returns `core::Result<T>`.
 >
 > **Slice-57 status (2026-05-24):** `oran-io` exposes
 > `invalidate_read_text_file_ranged_cache(path)` as the public path-stale
-> seam for future watcher callbacks. Successful `write_text_file` and
-> regular-file deletes reuse the same seam, so in-process mutations evict
-> only entries for the affected canonical path instead of clearing unrelated
-> range-read cache entries; recursive directory deletes clear the private
-> range-read caches because every child path under the removed tree is stale.
+> seam for future watcher callbacks. Regular-file deletes reuse the same seam,
+> so pathname mutations evict only entries for the affected canonical path;
+> recursive directory deletes clear the private range-read caches because
+> every child path under the removed tree is stale. Handle-backed reads bypass
+> these pathname caches, and `FileMutation` diagnostic display strings are not
+> treated as cache identities.
 >
 > **Slice-58 status (2026-05-24):** `oran-io` now ships the concrete
 > Linux/inotify watcher event source for those caches:
@@ -329,11 +328,12 @@ surface for effectful agent actions.
   Slice 50 (2026-05-23) adds the first bounded cache consumer in this
   library: large-file line ranges use a `core::BoundedCache`-backed
   line-offset index keyed by canonical path + cheap fingerprint and
-  invalidated for the affected canonical path after successful in-process
-  writes/deletes. Slice 52 (2026-05-24) adds the bounded file-view cache
+  invalidated for the affected canonical path after pathname deletes and
+  watcher events. Slice 52 (2026-05-24) adds the bounded file-view cache
   for `read_text_file_ranged`, with metadata validation before hits and
-  synchronous invalidation for the affected canonical path after successful
-  in-process writes/deletes.
+  synchronous invalidation for pathname deletes and watcher events. Authorized
+  descriptor reads bypass both pathname-keyed caches, so `FileMutation` does
+  not attempt invalidation through its diagnostics-only display string.
   Slice 57 (2026-05-24) narrows that invalidation to the affected
   canonical path and exposes
   `invalidate_read_text_file_ranged_cache(path)` for watcher
@@ -380,9 +380,9 @@ parent directory:
    pinned parent. The rename is atomic because temp and target share that
    directory and filesystem.
 4. When durability is `fsync_file_and_parent`, fsync the target's parent
-   directory after the rename so the directory entry is durable. The file-view
-   caches are invalidated immediately after a successful rename, before the
-   parent fsync, because the target bytes have already changed.
+   directory after the rename so the directory entry is durable. Authorized
+   descriptor reads bypass the pathname-keyed caches; mutation display strings
+   are diagnostics only and do not drive cache invalidation.
 5. Any error before or during rename is followed by a best-effort `unlinkat`
    from the pinned parent so a failed commit never leaves the
    `.orangutan.tmp` leftover behind.
