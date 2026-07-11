@@ -109,6 +109,97 @@ TEST_CASE("DirectoryAuthority retains the opened root across pathname replacemen
   REQUIRE(redirected_text == "outside");
 }
 
+TEST_CASE("list_directory through an authority returns sorted visible entry metadata",
+          "[unit][io][authority][directory]") {
+  TempDir temp{"oran-io-authority-list"};
+  const auto workspace = temp.path() / "workspace";
+  std::filesystem::create_directories(workspace / "a-dir");
+  write_direct(workspace / "b.txt", "bb");
+  write_direct(workspace / ".hidden", "hidden");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+
+  test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
+    auto listed = co_await io::list_directory(context.get_executor(), *authority);
+    REQUIRE(listed.has_value());
+    REQUIRE(listed->size() == 2);
+    REQUIRE((*listed)[0].name == "a-dir");
+    REQUIRE((*listed)[0].kind == io::DirectoryEntryKind::directory);
+    REQUIRE_FALSE((*listed)[0].size_bytes.has_value());
+    REQUIRE((*listed)[1].name == "b.txt");
+    REQUIRE((*listed)[1].kind == io::DirectoryEntryKind::regular_file);
+    REQUIRE((*listed)[1].size_bytes == 2);
+  });
+}
+
+TEST_CASE("list_directory through an authority can include hidden entries", "[unit][io][authority][directory]") {
+  TempDir temp{"oran-io-authority-list-hidden"};
+  const auto workspace = temp.path() / "workspace";
+  std::filesystem::create_directory(workspace);
+  write_direct(workspace / ".hidden", "hidden");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+
+  test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
+    auto listed = co_await io::list_directory(context.get_executor(),
+                                              *authority,
+                                              io::ListDirectoryOptions{.include_hidden = true});
+    REQUIRE(listed.has_value());
+    REQUIRE(listed->size() == 1);
+    REQUIRE((*listed)[0].name == ".hidden");
+    REQUIRE((*listed)[0].kind == io::DirectoryEntryKind::regular_file);
+    REQUIRE((*listed)[0].size_bytes == 6);
+  });
+}
+
+TEST_CASE("list_directory through an authority enforces max_entries", "[unit][io][authority][directory]") {
+  TempDir temp{"oran-io-authority-list-limit"};
+  const auto workspace = temp.path() / "workspace";
+  std::filesystem::create_directory(workspace);
+  write_direct(workspace / "a.txt", "a");
+  write_direct(workspace / "b.txt", "b");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+
+  test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
+    auto listed =
+        co_await io::list_directory(context.get_executor(), *authority, io::ListDirectoryOptions{.max_entries = 1});
+    REQUIRE_FALSE(listed.has_value());
+    REQUIRE(listed.error().kind() == core::ErrorKind::io);
+  });
+}
+
+TEST_CASE("list_directory keeps the authority root across pathname replacement", "[unit][io][authority][directory]") {
+  TempDir temp{"oran-io-authority-list-root-replacement"};
+  const auto workspace = temp.path() / "workspace";
+  const auto moved_workspace = temp.path() / "workspace-moved";
+  const auto outside = temp.path() / "outside";
+  std::filesystem::create_directory(workspace);
+  std::filesystem::create_directory(outside);
+  write_direct(workspace / "inside.txt", "inside");
+  write_direct(outside / "outside.txt", "outside");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+
+  std::filesystem::rename(workspace, moved_workspace);
+  std::filesystem::create_directory_symlink(outside, workspace);
+
+  test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
+    auto listed = co_await io::list_directory(context.get_executor(), *authority);
+    REQUIRE(listed.has_value());
+    REQUIRE(listed->size() == 1);
+    REQUIRE((*listed)[0].name == "inside.txt");
+    REQUIRE((*listed)[0].kind == io::DirectoryEntryKind::regular_file);
+    REQUIRE((*listed)[0].size_bytes == 6);
+  });
+
+  REQUIRE(std::filesystem::exists(outside / "outside.txt"));
+}
+
 TEST_CASE("DirectoryAuthority rejects traversal and symlink escapes", "[unit][io][authority]") {
   TempDir temp{"oran-io-authority-confinement"};
   const auto workspace = temp.path() / "workspace";

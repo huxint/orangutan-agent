@@ -138,6 +138,9 @@ public:
   /// Original trusted root spelling, retained for diagnostics only.
   [[nodiscard]] std::string_view display_root() const noexcept;
 
+  /// Borrow the pinned directory descriptor; ownership remains here.
+  [[nodiscard]] int native_handle() const noexcept;
+
   /// True when `path` still directly names the directory held by this authority.
   /// A missing/replaced pathname or final symlink returns false; descriptor
   /// errors propagate.
@@ -147,7 +150,6 @@ private:
   struct Impl;
 
   explicit DirectoryAuthority(std::shared_ptr<const Impl> impl);
-
   std::shared_ptr<const Impl> impl_;
 };
 

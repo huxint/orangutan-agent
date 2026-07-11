@@ -985,6 +985,10 @@ std::string_view DirectoryAuthority::display_root() const noexcept {
   return impl_ == nullptr ? std::string_view{} : std::string_view{impl_->display_root};
 }
 
+int DirectoryAuthority::native_handle() const noexcept {
+  return impl_ == nullptr ? -1 : impl_->fd.get();
+}
+
 core::Result<bool> DirectoryAuthority::refers_to_path(std::string_view path) const {
   if (impl_ == nullptr) {
     return std::unexpected(core::Error::internal("directory authority is empty"));

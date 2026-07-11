@@ -20,6 +20,7 @@ namespace orangutan::io {
 class ReadOnlyFile;
 class FileMutation;
 class DeleteMutation;
+class DirectoryAuthority;
 
 enum class WriteMode : std::uint8_t {
   truncate,
@@ -200,6 +201,12 @@ watch_read_text_file_ranged_cache(asio::any_io_executor executor,
 
 [[nodiscard]] async::Awaitable<core::Result<std::vector<DirectoryEntry>>>
 list_directory(asio::any_io_executor executor, std::string path, ListDirectoryOptions options = {});
+
+/// Enumerate one pinned directory without reopening its diagnostic pathname.
+/// Entry metadata is read relative to the directory descriptor and symlinks
+/// are classified without being followed.
+[[nodiscard]] async::Awaitable<core::Result<std::vector<DirectoryEntry>>>
+list_directory(asio::any_io_executor executor, DirectoryAuthority directory, ListDirectoryOptions options = {});
 
 /// Consume a pinned delete capability. Regular files delete directly;
 /// directories require `options.recursive=true` and are walked relative to

@@ -58,6 +58,12 @@ performs the requested operation and returns `core::Result<T>`.
 > parent. This metadata guard narrows same-inode races but is not a content
 > identity check or filesystem CAS; the underlying timestamp granularity and
 > final validation-to-rename window remain acknowledged limits.
+> The same authority supports single-level enumeration through
+> `list_directory(executor, DirectoryAuthority, options)`. It opens `.` from
+> the pinned dirfd and uses `readdir` plus `fstatat(AT_SYMLINK_NOFOLLOW)`, so
+> root pathname replacement cannot redirect the listing and symlinks are
+> classified without being followed. The pathname overload remains temporarily
+> for callers not yet migrated.
 >
 > **Slice-43 status (2026-05-22):** `oran-io` adds the range-aware
 > `read_text_file_ranged(executor, path, options)` returning
@@ -251,6 +257,11 @@ write_text_file(asio::any_io_executor executor,
 
 async::Awaitable<core::Result<std::vector<DirectoryEntry>>>
 list_directory(asio::any_io_executor executor, std::string path, ListDirectoryOptions = {});
+
+async::Awaitable<core::Result<std::vector<DirectoryEntry>>>
+list_directory(asio::any_io_executor executor,
+               DirectoryAuthority directory,
+               ListDirectoryOptions = {});
 
 async::Awaitable<core::Result<DeletePathResult>>
 delete_path(asio::any_io_executor executor, DeleteMutation mutation, DeletePathOptions = {});
