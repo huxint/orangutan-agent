@@ -192,7 +192,7 @@ docs synced in the same commit (Prime Directive).
       2–3) confirmed; spec 0007 acceptance 1–3 closed and this plan archived to
       `completed/`.
 - [x] Per slice: update invalidated docs in the same commit (`docs/rules/docs-in-sync.md`).
-- [x] Per slice: `make new-history`, bump `STATUS.md`, refresh `ROADMAP.md` Desktop row.
+- [x] Per milestone: verify the affected targets and refresh current-contract docs.
 - [x] Update `docs/QUALITY_SCORE.md` Desktop App row when the library lands.
 - [x] Release note when `orangutan --desktop` becomes user-visible (Slice D, slice 252).
 

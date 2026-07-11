@@ -55,8 +55,8 @@ Forbidden shapes:
   this branch" — the subagent has no more context than you do and the
   overhead is pure loss.
 
-After the subagent(s) return, **pick one and execute**. Record the choice
-in the matching design doc or history entry; the rejected alternative
+After the subagent(s) return, **pick one and execute**. Record durable choices
+in the matching current design/spec/rule; the rejected alternative
 gets a one-line "tried, rejected because …" so the next agent does not
 re-litigate.
 
@@ -79,8 +79,9 @@ silent and your training cutoff is too old. The discipline:
   rarely an exact match. Identify the load-bearing insight (e.g.
   "use a strand to serialize access to the registry"), apply it,
   drop the rest.
-- **Cite the source in the history entry.** When a non-obvious shape
-  comes from prior art, record where it came from. Future agents and
+- **Cite the source in the owning design doc.** When a non-obvious shape
+  comes from prior art, record where it came from when the source remains
+  relevant to the current contract. Future agents and
   reviewers should be able to reproduce the reasoning.
 
 For library docs specifically, prefer **`Context7`** over `WebSearch`:
@@ -124,9 +125,9 @@ re-grounded.
 
 ## What To Record
 
-Investigation that produces a decision belongs in the history entry's
-**Design Intent** section: which alternatives were considered, which was
-picked, why. Investigation that produces a rule (e.g. "do not use library
+Investigation that produces a durable decision belongs in the current
+design/spec/rule that owns it: which alternatives were considered, which was
+picked, and why. Investigation that produces a rule (e.g. "do not use library
 X because Y") belongs in the matching rule file under `docs/rules/`.
 Investigation that produces a follow-up task belongs in
 `docs/exec-plans/tech-debt-tracker.md`. Investigation that produces
@@ -153,7 +154,7 @@ durable artifact.
 No mechanical check today — this is a review-time rule. PR reviewers
 flag investigation deficits when:
 
-- A history entry's *Design Intent* says "tried X, didn't work, used Y"
+- A design decision says "tried X, didn't work, used Y"
   without naming what was tried or why X failed.
 - A subagent fan-out > 2 appears in the agent's transcript and the
   decision was made by "voting".
@@ -171,5 +172,3 @@ flag investigation deficits when:
   or proposes adding to it.
 - [`docs-in-sync.md`](docs-in-sync.md) — the Prime Directive: research
   outcomes that change behavior require docs in the same PR.
-- [`../HISTORY_GUIDE.md`](../HISTORY_GUIDE.md) — where investigation
-  decisions land.

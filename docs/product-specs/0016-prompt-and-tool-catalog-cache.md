@@ -450,5 +450,4 @@ xmake run orangutan -- --explain-prompt   # planned debug surface; lands with ag
 - `docs/exec-plans/tech-debt-tracker.md` — the 2026-05-17
   prompt-cache bench row closes in slice 72 because `bench-agent` now owns
   the SessionState fixture; `bench-prompt` remains the prompt-owned precursor.
-- `docs/STATUS.md` — `oran-prompt` reaches `C` (per
-  [`QUALITY_SCORE.md`](../QUALITY_SCORE.md)) when v1 lands.
+- `docs/STATUS.md` — update the operational baseline when v1 lands.

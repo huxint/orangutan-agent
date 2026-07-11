@@ -96,7 +96,7 @@ docs that will outlast the review:
 | Future-feature recommendation (new tool, new API shape) | A new or extended [`product-specs/*.md`](../product-specs/) |
 | Cross-cutting design decision (module boundary, error model) | The matching [`design-docs/*.md`](../design-docs/) |
 | New invariant the project must follow | A new or extended [`rules/*.md`](.) |
-| User-visible behavior fixed by absorption | A row in [`releases/feature-release-notes.md`](../releases/feature-release-notes.md) |
+| User-visible contract correction | The owning product spec or operator doc, when its current claim changed |
 
 Every absorbed row should cite the review §number (or anchor) as
 **provenance only** — never as a live link, since the source file is
@@ -108,8 +108,7 @@ once the artifact has been deleted.
 
 Once *every* actionable finding from a review has been absorbed (or
 explicitly rejected with a recorded reason), the review artifact is
-**deleted in the same slice** that closes the last finding. The history
-entry for that slice notes the deletion. No archived `.bak` / `.old` /
+**deleted in the same change** that closes the last finding. No archived `.bak` / `.old` /
 `.review-N` variants are kept — `git log` is the archive.
 
 This is the load-bearing half of the rule. A review that lingers is
@@ -133,9 +132,7 @@ Two practical consequences for `STATUS.md`,
   cycle.** Cite by date + slug ("the 2026-05-21 deep review"), and let
   the absorbed rows carry the real content.
 
-History entries (`docs/histories/YYYY-MM/...`) are immutable provenance
-and *may* reference deleted artifacts — they record what was true at
-the time of the slice, not the current state.
+Git history is the immutable provenance for deleted artifacts.
 
 ## Enforcement
 
@@ -179,8 +176,6 @@ lands in the repo.
   blind-copy, stale-knowledge).
 - [`docs-in-sync.md`](docs-in-sync.md) — the Prime Directive. The
   deletion clause above is its corollary for review artifacts.
-- [`../HISTORY_GUIDE.md`](../HISTORY_GUIDE.md) — the slice that closes a
-  review records the deletion in its history entry.
 - [`../PLANS_GUIDE.md`](../PLANS_GUIDE.md) — when a review's follow-up
   is multi-slice, an exec-plan is the right next artifact, not a
   longer review.

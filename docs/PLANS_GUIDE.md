@@ -5,18 +5,14 @@ through short chat context.
 
 ## When To Create A Plan
 
-The default is **no plan**. A single-session slice whose intent fits inside the
-[`STATUS.md`](STATUS.md) `Next intended slice` bullet *and* lands as one history
-entry does not need an exec-plan — the bullet + the history together carry the
-same information a one-shot plan would, with less ceremony.
+The default is **no plan**. A contained, single-session change does not need an
+exec-plan; the code, tests, and commit message carry enough context.
 
 Create a plan when **any** of these apply:
 
 - The work spans **multiple sessions** (i.e., another agent must pick it up from
   a cold start without the current chat).
-- The work spans **multiple slices** — i.e., more than one history file is
-  expected before the goal is reached. A 3-commit slice that lands one history
-  is not "multiple slices"; a refactor that needs 3 separate slices is.
+- The work spans multiple independently shippable milestones.
 - The intent does not fit on the `Next intended slice` line — alternatives have
   to be compared, milestones staged, or measurement checkpoints scheduled
   (compile-time improvements, perf changes, staged rollouts).
@@ -27,26 +23,21 @@ Create a plan when **any** of these apply:
   with > 1 caller landing later, dependency change that ripples through
   multiple libraries).
 
-A rough proxy: if the slice closes in *this* session with *one* history file,
-and the `Next intended slice` bullet correctly described it before you started,
-the plan would just duplicate the bullet — skip it.
+A rough proxy: if the work closes in this session and has one obvious validation
+path, a plan would duplicate the commit message — skip it.
 
 ## When NOT To Create A Plan
 
-- Single-slice work pre-described by `STATUS.md` `Next intended slice`.
+- Single-session work with a narrow owner and obvious validation path.
 - Targeted bug fix, even multi-commit, when the fix is mechanical.
-- Doc-only sweeps (those are recorded in a history entry, not a plan).
-- Anything where you would write the plan and the history in the same minute —
-  the history is the canonical record; the plan would be empty ceremony.
-
-If you skipped a plan, the matching history's `Linked plan: none` line must say
-**why** — typically a one-liner pointing at the `Next intended slice` bullet
-it executed against.
+- Doc-only sweeps.
+- Anything where the plan would merely restate the requested change.
 
 ## Storage
 
 - Active plans: `docs/exec-plans/active/`.
-- Completed plans: `docs/exec-plans/completed/`.
+- Completed plans are deleted after durable decisions and remaining work have been
+  absorbed into current contracts or the tech-debt tracker; Git keeps the archive.
 - Template: `docs/exec-plans/templates/execution-plan.md`.
 - Ongoing tech debt: `docs/exec-plans/tech-debt-tracker.md`.
 
@@ -75,9 +66,7 @@ The template encodes:
 
 - Update the plan as decisions change. Reviewers and the next agent will read the
   *current* state, not the original.
-- Move to `completed/` when shipping. Do not delete; the history is valuable.
-- If the plan goes stale (no progress in 30 days, no longer relevant) archive it to
-  `completed/` with a closing note.
+- Delete a completed or abandoned plan after absorbing remaining decisions and debt.
 
 ## Anti-Patterns
 
@@ -90,4 +79,3 @@ The template encodes:
 ## See Also
 
 - [`exec-plans/README.md`](exec-plans/README.md)
-- [`HISTORY_GUIDE.md`](HISTORY_GUIDE.md)

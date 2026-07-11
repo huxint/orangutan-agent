@@ -16,10 +16,8 @@ required_files=(
   "docs/FAST_COMPILATION.md"
   "docs/CICD.md"
   "docs/DESKTOP.md"
-  "docs/HISTORY_GUIDE.md"
   "docs/PLANS_GUIDE.md"
   "docs/PRODUCT_SENSE.md"
-  "docs/QUALITY_SCORE.md"
   "docs/STATUS.md"
   "docs/ROADMAP.md"
   "docs/RELIABILITY.md"
@@ -63,13 +61,10 @@ required_files=(
   "docs/exec-plans/README.md"
   "docs/exec-plans/templates/execution-plan.md"
   "docs/exec-plans/tech-debt-tracker.md"
-  "docs/histories/template.md"
   "docs/references/README.md"
   "docs/references/orangutan-legacy-audit.md"
   "docs/references/harness-template-distill.md"
   "docs/references/third-party-libs.md"
-  "docs/releases/README.md"
-  "docs/releases/feature-release-notes.md"
   "docs/generated/README.md"
 )
 
@@ -82,7 +77,7 @@ for path in "${required_files[@]}"; do
   fi
 done
 
-for dir in docs/exec-plans/active docs/exec-plans/completed docs/histories; do
+for dir in docs/exec-plans/active docs/exec-plans/completed; do
   if [[ ! -d "${repo_root}/${dir}" ]]; then
     echo "missing required directory: ${dir}"
     missing=1

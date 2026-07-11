@@ -399,5 +399,4 @@ When this spec ships, the following companion edits land in the same slice:
   documents `DispatchContext::workspace` as the interim seam.
 - `docs/exec-plans/tech-debt-tracker.md`: the deep-review §Workspace row closes
   in this spec's first slice.
-- `docs/histories/2026-05/`: one entry per migration slice, naming which
-  built-ins moved to the resolved-path resolver in that slice.
+- The active execution plan records migration state; Git records completed changes.

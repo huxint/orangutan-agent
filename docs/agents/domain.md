@@ -10,7 +10,7 @@ mappings below instead.
 
 Read in this order, stopping when you have enough to act:
 
-1. **`docs/STATUS.md`** — one-screen project snapshot: current slice, last completed history, active exec-plan, open tech-debt. **Always read first.**
+1. **`docs/STATUS.md`** — one-screen project snapshot: current focus, verified baseline, active plans, open tech-debt. **Always read first.**
 2. **`AGENTS.md`** (root) — the routing index. It tells you which design-doc / rule / product-spec applies to the area you're about to touch.
 3. **`docs/ARCHITECTURE.md`** — target architecture map, library boundaries, binary inventory. The closest equivalent to a system-wide CONTEXT.md.
 4. **`docs/design-docs/core-beliefs.md`** — non-negotiable operating principles. Read before proposing architectural change.
@@ -37,7 +37,7 @@ rule for prompt text that Orangutan itself will emit at runtime.
 | Glossary / domain language        | The `AGENTS.md` "Conventions At A Glance" table and the relevant `docs/rules/*.md`   |
 | `docs/adr/`                       | `docs/design-docs/` (architectural decisions) + `docs/rules/` (binding constraints)  |
 | ADR-0007 (or any numbered ADR)    | The matching design-doc filename, e.g. `docs/design-docs/async-model.md`             |
-| Past decisions / "why we do X"    | `docs/design-docs/core-beliefs.md`, `docs/histories/`, `docs/references/`; deleted review artifacts are provenance only |
+| Past decisions / "why we do X"    | current rationale in `docs/design-docs/` and `docs/rules/`; Git for superseded decisions |
 
 ## Layout
 
@@ -52,7 +52,7 @@ Single-context repo. There is no `CONTEXT-MAP.md` and there are no per-area `CON
 │   ├── design-docs/               ← per-area architecture (≈ context-scoped ADRs)
 │   ├── rules/                     ← binding constraints (≈ ADRs that say "must")
 │   ├── product-specs/             ← product surface
-│   ├── histories/                 ← what was done and why
+│   ├── exec-plans/                ← active multi-session work and live debt
 │   └── references/                ← external prior art and legacy audit
 └── src/
 ```

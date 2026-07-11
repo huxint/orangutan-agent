@@ -3,7 +3,8 @@
 This directory holds long-lived plans for complex work.
 
 - Put active work in `active/`.
-- Move finished plans to `completed/`.
+- Delete finished plans after durable decisions and open work have been absorbed;
+  Git keeps the archive.
 - Start from `templates/execution-plan.md` (or use `make new-plan SLUG=<slug>`).
 - Record deferred cleanup in `tech-debt-tracker.md`.
 

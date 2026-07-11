@@ -113,29 +113,25 @@ Migration"), which reserves a dedicated plan for the port.
 
 - [x] 2026-06-10: Plan created at the channel-ingress plan's close; no code
   yet.
-- [x] Milestone 1: API client + TokenStore — slice 229
-  ([`../../histories/2026-06/20260610-1325-channel-qq-api-client.md`](../../histories/2026-06/20260610-1325-channel-qq-api-client.md)).
+- [x] Milestone 1: API client + TokenStore — slice 229.
   Gated `oran-channel-qq` target plus `test-channel-qq` (21 cases / 129
   assertions against a scripted loopback HTTP server) and
   `bench-channel-qq`; request/response shapes validated offline.
 - [x] Milestone 2: receive transport.
-  - [x] Milestone 2a: pure gateway protocol/session state machine — slice 230
-    ([`../../histories/2026-06/20260612-1631-channel-qq-gateway-protocol.md`](../../histories/2026-06/20260612-1631-channel-qq-gateway-protocol.md)).
+  - [x] Milestone 2a: pure gateway protocol/session state machine — slice 230.
     `qq::GatewaySession` (`consume(frame_json)` → `GatewayReaction`,
     Identify-vs-Resume, seq/session-id continuity,
     `build_identify`/`build_resume`/`build_heartbeat`, `classify_close_code`),
     offline-tested (`test-channel-qq` +19 cases → 40 / 209) with no new
     dependency.
   - [x] Milestone 2b: `wss://` network transport.
-    - [x] Milestone 2b-i: the `oran-http` WebSocket primitive — slice 231
-      ([`../../histories/2026-06/20260613-1357-http-websocket-boundary.md`](../../histories/2026-06/20260613-1357-http-websocket-boundary.md)).
+    - [x] Milestone 2b-i: the `oran-http` WebSocket primitive — slice 231.
       `http::WebSocket` (`connect`/`receive`/`send_text`/`close` over libcurl
       connect-only mode), cancel-aware without a thread; shared libcurl RAII
       wrappers extracted to `src/oran-http/_impl/curl_common.hpp`; `test-http`
       +12 cases → 27 / 148, clean under ASan/UBSan, no new dependency.
     - [x] Milestone 2b-ii: drive `qq::GatewaySession` over `http::WebSocket`
-      in `oran-channel-qq` — slice 232
-      ([`../../histories/2026-06/20260613-2258-channel-qq-gateway-transport.md`](../../histories/2026-06/20260613-2258-channel-qq-gateway-transport.md)).
+      in `oran-channel-qq` — slice 232.
       `qq::GatewayTransport` owns the caller-driven persistent read loop under
       the trait adapter, races receives against the heartbeat timer over
       `async::sleep_for`, sends Identify/Resume/heartbeat payloads with tokens
@@ -143,8 +139,7 @@ Migration"), which reserves a dedicated plan for the port.
       and returns one non-lifecycle `GatewayDispatch` per `next_dispatch()`
       resume; `test-channel-qq` +5 cases → 45 / 249.
 - [ ] Milestone 3: trait adapter + gated registration.
-  - [x] Milestone 3a: inbound trait adapter — slice 233
-    ([`../../histories/2026-06/20260613-2321-channel-qq-inbound-adapter.md`](../../histories/2026-06/20260613-2321-channel-qq-inbound-adapter.md)).
+  - [x] Milestone 3a: inbound trait adapter — slice 233.
     `qq::QqChannel` now implements the receive side of the generic
     `Channel` trait over `GatewayTransport`; `normalize_gateway_dispatch(...)`
     maps C2C/group message dispatches into `channel::InboundMessage` with QQ
@@ -152,8 +147,7 @@ Migration"), which reserves a dedicated plan for the port.
     stripping. Outbound sends intentionally return `capability_not_granted`
     until the passive-reply builder lands; `test-channel-qq` +6 cases → 51 /
     309, and `oran-channel-qq` now depends on `oran-channel`.
-  - [x] Milestone 3b: outbound text/passive reply over `ApiClient` — slice 234
-    ([`../../histories/2026-06/20260613-2347-channel-qq-outbound-text.md`](../../histories/2026-06/20260613-2347-channel-qq-outbound-text.md)).
+  - [x] Milestone 3b: outbound text/passive reply over `ApiClient` — slice 234.
     `QqChannel::send(...)` now implements the smallest passive text reply path:
     it requires `reply_to_message_id`, maps `c2c:` / `group:` conversation ids
     onto the QQ v2 C2C/group message endpoints, serializes text replies with
@@ -163,8 +157,7 @@ Migration"), which reserves a dedicated plan for the port.
     so `dispatch_one(...)` can preserve QQ inbound `msg_id`; `test-channel` +1
     case → 25 / 191 and `test-channel-qq` +4 cases → 55 / 344.
   - [x] Milestone 3c: bootstrap registration for `channels[].kind == "qq"` —
-    slice 235
-    ([`../../histories/2026-06/20260614-0015-channel-qq-bootstrap-registration.md`](../../histories/2026-06/20260614-0015-channel-qq-bootstrap-registration.md)).
+    slice 235.
     `oran-config` now validates QQ channel credential env-name and endpoint
     metadata, and enabled `--channel_qq=y` bootstrap builds register QQ
     channels through an internal owning wrapper that keeps `http::Client`,
@@ -173,8 +166,7 @@ Migration"), which reserves a dedicated plan for the port.
     builds still skip/report QQ entries without linking adapter code; focused
     validation covers both build options.
 - [ ] Milestone 4: round-trip acceptance.
-  - [x] Milestone 4a: CI mock registered-path round-trip — slice 236
-    ([`../../histories/2026-06/20260614-1507-channel-qq-registered-round-trip.md`](../../histories/2026-06/20260614-1507-channel-qq-registered-round-trip.md)).
+  - [x] Milestone 4a: CI mock registered-path round-trip — slice 236.
     `test-bootstrap` now proves a configured QQ channel can be registered by
     bootstrap under `--channel_qq=y`, started by `ChannelManager`, receive one
     scripted WebSocket gateway C2C message, route through
@@ -184,8 +176,7 @@ Migration"), which reserves a dedicated plan for the port.
     and skip/report QQ entries without linking adapter code.
   - [ ] Milestone 4b: manual/nightly real-credential smoke over the same
     registered path before considering `channel_qq` default-on.
-    - [x] Milestone 4b-i: hidden opt-in real-smoke gate — slice 237
-      ([`../../histories/2026-06/20260614-1523-channel-qq-real-smoke-gate.md`](../../histories/2026-06/20260614-1523-channel-qq-real-smoke-gate.md)).
+    - [x] Milestone 4b-i: hidden opt-in real-smoke gate — slice 237.
       Enabled `test-bootstrap` builds now include a hidden
       `[.][manual][channel-qq]` test that requires
       `ORAN_TEST_QQ_REAL_SMOKE=1` plus QQ app/gateway env vars, then drives
@@ -197,8 +188,7 @@ Migration"), which reserves a dedicated plan for the port.
       record the pass/fail evidence before considering `channel_qq`
       default-on.
       - [x] 4b-ii prep: gateway discovery helper and smoke setup reduction —
-        slice 238
-        ([`../../histories/2026-06/20260614-1551-channel-qq-gateway-discovery.md`](../../histories/2026-06/20260614-1551-channel-qq-gateway-discovery.md)).
+        slice 238.
         `oran-channel-qq` now parses `GET /gateway/bot` into typed
         `GatewayBotInfo` / `GatewaySessionStartLimit` values, and the hidden
         smoke uses that helper when `ORAN_TEST_QQ_GATEWAY_URL` is absent. This
@@ -358,24 +348,3 @@ Migration"), which reserves a dedicated plan for the port.
 - Related product spec: `docs/product-specs/0003-multi-platform-channels.md`
 - Predecessor plan:
   `docs/exec-plans/completed/2026-06-09-channel-ingress-and-adapters.md`
-- History entries:
-  - `docs/histories/2026-06/20260610-1325-channel-qq-api-client.md`
-    (milestone 1, slice 229)
-  - `docs/histories/2026-06/20260612-1631-channel-qq-gateway-protocol.md`
-    (milestone 2a, slice 230)
-  - `docs/histories/2026-06/20260613-1357-http-websocket-boundary.md`
-    (milestone 2b-i, slice 231)
-  - `docs/histories/2026-06/20260613-2258-channel-qq-gateway-transport.md`
-    (milestone 2b-ii, slice 232)
-  - `docs/histories/2026-06/20260613-2321-channel-qq-inbound-adapter.md`
-    (milestone 3a, slice 233)
-  - `docs/histories/2026-06/20260613-2347-channel-qq-outbound-text.md`
-    (milestone 3b, slice 234)
-  - `docs/histories/2026-06/20260614-0015-channel-qq-bootstrap-registration.md`
-    (milestone 3c, slice 235)
-  - `docs/histories/2026-06/20260614-1507-channel-qq-registered-round-trip.md`
-    (milestone 4a, slice 236)
-  - `docs/histories/2026-06/20260614-1523-channel-qq-real-smoke-gate.md`
-    (milestone 4b-i, slice 237)
-  - `docs/histories/2026-06/20260614-1551-channel-qq-gateway-discovery.md`
-    (milestone 4b-ii prep, slice 238)

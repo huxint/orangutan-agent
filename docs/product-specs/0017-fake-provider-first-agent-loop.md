@@ -493,5 +493,4 @@ xmake run test-agent
   v1 acceptance criteria above.
 - `docs/design-docs/api-portability.md` "See Also" — gains a row
   pointing at this spec as the consumer of the domain model.
-- `docs/STATUS.md` — `oran-agent` reaches `C` (per
-  [`QUALITY_SCORE.md`](../QUALITY_SCORE.md)) when v1 ships.
+- `docs/STATUS.md` — update the operational baseline when v1 ships.

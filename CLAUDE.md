@@ -4,7 +4,10 @@
 
 This file is a **routing index**. Rules → `docs/rules/`. Architecture → `docs/design-docs/`. Product → `docs/product-specs/`. Current state → `docs/STATUS.md`. It points; it does not restate.
 
-> **Prime Directive — docs match reality.** Any PR that changes behavior, build, config, deps, interfaces, layout, commands, or conventions **must** update the matching docs in the same change. Canonical statement: [`docs/rules/docs-in-sync.md`](docs/rules/docs-in-sync.md) ([`critical-rules.md#C16`](docs/rules/critical-rules.md)). If a rule can't be honored, propose editing the rule first.
+> **Prime Directive — current contracts match reality.** Changes to public behavior,
+> interfaces, configuration, build commands, or architectural invariants update the
+> document that owns that contract. We do not maintain per-change narrative ledgers;
+> Git is the archive. Canonical statement: [`docs/rules/docs-in-sync.md`](docs/rules/docs-in-sync.md).
 
 ---
 
@@ -16,14 +19,14 @@ Start to commit; the sections below hold the detail.
 2. **Scope** — one small slice; beyond ~600 LoC / ~6 files wants a plan first ([`PLANS_GUIDE.md`](docs/PLANS_GUIDE.md)).
 3. **Build to the rules** — [`critical-rules.md`](docs/rules/critical-rules.md) + [`compile-budget.md`](docs/rules/compile-budget.md).
 4. **Verify** — add or tighten a test/bench ([`testing-and-bench.md`](docs/rules/testing-and-bench.md)).
-5. **Sync docs** — matching docs in the same commit (Prime Directive above).
-6. **Record + gate** — `make new-history`, bump `STATUS.md`, then `make ci`.
+5. **Sync contracts** — update only docs whose current claims changed.
+6. **Gate** — run the affected build/tests, then `make ci`.
 
 ## Read At The Start Of Every Task
 
 | File | Why |
 | --- | --- |
-| `docs/STATUS.md` | Project snapshot: current slice, last history, active exec-plans, tech-debt. **Read first.** |
+| `docs/STATUS.md` | Project snapshot: current focus, active exec-plans, tech-debt. **Read first.** |
 | `docs/ROADMAP.md` | Per-track progress matrix: frontier, next step, pre-dependencies. Read your track's row before scoping. |
 | `docs/REPO_COLLAB_GUIDE.md` | Commit / PR / test expectations. |
 | `docs/ARCHITECTURE.md` | Library boundaries, binary inventory. |
@@ -35,7 +38,7 @@ Start to commit; the sections below hold the detail.
 
 ## Read Before Finishing A Code Change
 
-`docs/HISTORY_GUIDE.md` · `docs/QUALITY_SCORE.md` · `docs/rules/testing-and-bench.md`
+`docs/rules/testing-and-bench.md` and the current-contract docs touched by the change.
 
 ## Module Routing — Read The Row For The Area You're Touching
 
@@ -89,8 +92,7 @@ Start to commit; the sections below hold the detail.
 Repo gates — docs, hygiene, scaffolding. No C++ build/test (that lives below):
 
 ```sh
-make ci                    # docs + hygiene + docs-sync + STATUS.md freshness + dep graph (pre-PR gate)
-make new-history SLUG=...  # scaffold a history entry
+make ci                    # docs + hygiene + docs-sync + dep graph (pre-PR gate)
 make new-plan SLUG=...     # scaffold an execution plan
 make check-docs            # verify required docs exist
 ```

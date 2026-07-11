@@ -137,8 +137,8 @@ build/linux/x86_64/release/test-bootstrap \
 
 ## Incident Notes
 
-A `docs/histories/YYYY-MM/incidents-*.md` slot is appropriate for postmortems of
-production incidents. Keep them short, technical, and blameless.
+Focused postmortems for production incidents belong in the owning reliability
+contract or issue tracker. Keep them short, technical, and blameless.
 
 ## Failure Modes
 

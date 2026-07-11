@@ -482,8 +482,7 @@ own test bucket, its own bench bucket, and its own public header set under
 > are implemented.
 > Rows whose purpose still says "planned" will land per `docs/exec-plans/` as
 > future slices are scheduled. The build system, PCH, tests bucket, and bench
-> bucket conventions are live; see the history entries under
-> `docs/histories/2026-05/`.
+> bucket conventions are live; Git records the migration sequence.
 
 | Library              | Purpose                                         | Depends on (allowed)                          |
 | -------------------- | ----------------------------------------------- | --------------------------------------------- |

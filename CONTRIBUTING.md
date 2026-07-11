@@ -8,11 +8,9 @@ form.
 
 - Start from `AGENTS.md`, then read the linked docs that match the task.
 - Keep repository knowledge in versioned files, not only in chat or ticket comments.
-- **Docs match reality, always.** If behavior, build, config, dependencies, interfaces,
-  file layout, commands, or conventions change, **update the matching docs in the same
-  PR**. See [`docs/rules/docs-in-sync.md`](docs/rules/docs-in-sync.md) and
-  [`docs/rules/critical-rules.md#C16`](docs/rules/critical-rules.md). There is no
-  "doc update follow-up PR".
+- Keep current public contracts accurate. If a change invalidates an architecture,
+  interface, configuration, build, or operator document, update that owner in the
+  same PR. Do not create narrative change ledgers; Git is the archive.
 - For large or risky work, create an execution plan under `docs/exec-plans/active/`
   before writing code.
 - Follow `docs/rules/*.md`; if a rule blocks legitimate work, edit the rule in the
@@ -28,9 +26,6 @@ form.
 - **Every doc that the change invalidates is updated** — see
   [`docs/rules/docs-in-sync.md`](docs/rules/docs-in-sync.md) for the
   change-type → docs-to-update map.
-- Add or update a history entry under `docs/histories/YYYY-MM/` if the task
-  changed repository code or workflow. Use `make new-history SLUG=...`.
-- Update `docs/releases/feature-release-notes.md` if the change is user-visible.
 - Verify examples and scripts still match the current behavior.
 - Re-read the rule files that apply to the area you touched.
 
@@ -38,7 +33,7 @@ form.
 
 - Prefer small, scoped pull requests (≤ ~600 lines / ~6 files).
 - Call out risks, migrations, and deferred follow-ups explicitly.
-- Link to the relevant plan, design doc, spec, or history file when context is
+- Link to the relevant plan, design doc, spec, or code when context is
   important.
 - Reviewers cite repository paths, not chat context.
 - Style nits are deferred to formatters; review for correctness, architecture,

@@ -152,17 +152,17 @@ temporarily; an open issue is required to fill it).
 
 **Enforcement:** `scripts/check-lib-parity.sh`.
 
-## C13. Histories required for every code-change task
+## C13. Durable rationale belongs with the contract
 
-Behavior-changing tasks add a history entry under `docs/histories/YYYY-MM/`. See
-[`../HISTORY_GUIDE.md`](../HISTORY_GUIDE.md).
+Record architectural rationale in the design/rule/spec that owns the current
+contract. Do not create per-change narrative files, duplicate test counts, or a
+parallel release ledger; commit messages and Git history are the archive.
 
-**Why:** the next agent will want to know why a change exists; git log alone is
-not enough.
+**Why:** manually synchronized ledgers drift and hide the documents that actually
+govern the runtime. A future contributor needs the current invariant and its
+rationale, not a second changelog.
 
-**Enforcement:** PR template checklist + `scripts/check-history-touched.sh` flags PRs
-that change code without a history file (overridable in PR description with a
-`History-Skip: <reason>` trailer).
+**Enforcement:** review rejects stale current-contract docs and unnecessary ledgers.
 
 ## C14. PRs ≤ 600 lines / 6 files when possible
 
@@ -274,16 +274,10 @@ nightly job. Suppressions without an explaining comment fail review.
 
 ## C16. Docs match reality — The Prime Directive
 
-Every change to behavior, build, configuration, dependencies, interfaces, file
-layout, commands, or conventions **must update the corresponding documentation in
-the same PR**. There is no "I'll update the doc later".
+Every change that invalidates a documented public behavior, build/configuration
+contract, interface, or architectural invariant **must update that owning document
+in the same PR**. Internal refactors do not require ceremonial doc churn.
 
-Canonical mechanics — including the change-type → docs-to-update mapping table,
-the `STATUS.md` freshness gate, and the rationale (the legacy `orangutan/`
-project shipped with `CLAUDE.md` referencing files that did not exist) — live
-in [`docs-in-sync.md`](docs-in-sync.md). This entry is the rule line; the
-mechanics are not duplicated here.
+Canonical scope and enforcement live in [`docs-in-sync.md`](docs-in-sync.md).
 
-**Enforcement:** `scripts/check-docs-sync.sh`, `scripts/check-status-fresh.sh`,
-and `scripts/check-history-touched.sh` plus the PR-template "docs updated"
-checkbox.
+**Enforcement:** `scripts/check-docs-sync.sh` plus review of the affected contract.

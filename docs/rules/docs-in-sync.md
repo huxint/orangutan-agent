@@ -1,159 +1,59 @@
-# Docs In Sync — The Prime Directive
+# Current Contracts Stay In Sync
 
-> **Every change updates the docs that describe it. Same PR. No exceptions.**
+Documentation is a map of the runtime as it exists now, not a second version-control
+system. Git records what changed; current-contract docs explain what callers,
+operators, and maintainers may rely on.
 
-This is the most-broken rule in C++ projects: code drifts, docs lag, the next person
-opens a five-year-old README and trusts it. We refuse to repeat that pattern.
+## Update A Doc When Its Claim Changes
 
-## The Rule
+| Change | Contract owner |
+| --- | --- |
+| Library boundary, dependency direction, binary, or repository layout | `docs/ARCHITECTURE.md` and the relevant design doc |
+| Public API or lifecycle invariant | the relevant `docs/design-docs/` document; product behavior also updates its spec |
+| Configuration field, environment variable, CLI command, or operator workflow | example config plus the owning design/spec/operator doc |
+| Build target, option, dependency, toolchain, CI, or compile budget | `docs/BUILD_SYSTEM.md`, `docs/CICD.md`, and the applicable rule |
+| Permission, hook, prompt, channel, provider, memory, or tool contract | the owning design doc/spec listed in `AGENTS.md` |
+| Binding engineering convention | the owning `docs/rules/` file and rule index |
+| Multi-session work state or unresolved finding | the active execution plan or `docs/exec-plans/tech-debt-tracker.md` |
 
-If a PR changes any of the following, it **must** update the matching docs in the
-same change:
+Internal refactors, test additions, and bug fixes whose documented contract already
+describes the correct behavior need no ceremonial doc edit. Do not add histories,
+manually copied test/assertion counts, release ledgers, or completed-plan archives.
 
-| Change                                              | Docs to update (at minimum)                          |
-| --------------------------------------------------- | ---------------------------------------------------- |
-| New / removed library                               | `docs/ARCHITECTURE.md` (library inventory), `docs/rules/libraries.md` if 3rd-party, `docs/rules/compile-budget.md` (category row), `docs/QUALITY_SCORE.md` row |
-| New / changed public API on an existing library     | matching `docs/design-docs/<area>.md`, the library's umbrella header docstring, and (if user-visible) `docs/product-specs/<id>.md` |
-| New / changed configuration field                    | `config.example.json`, the relevant `docs/design-docs/secrets-and-state.md` or `docs/design-docs/<area>.md`, and `docs/RELIABILITY.md` if it affects ops |
-| New / removed CLI flag or subcommand                 | `docs/product-specs/0001-core-react-loop.md` (or the relevant spec), README quick-start if user-visible, `docs/CICD.md` if CI-impacting |
-| New / removed environment variable                   | `docs/RELIABILITY.md` "Required environment" table |
-| Build system change (xmake target, package bump, option) | `docs/BUILD_SYSTEM.md`, `docs/rules/libraries.md` (versions), `docs/rules/compile-budget.md` if compile cost shifts |
-| Compile-time budget movement                          | `compile_budget.json` and a paragraph in `docs/rules/compile-budget.md` if the cap moved |
-| Module / PCH change                                    | `docs/rules/module-and-pch.md`, `docs/generated/pch-spec.json` |
-| New / changed hook lifecycle event                     | `docs/design-docs/permissions-and-hooks.md` (canonical event list) |
-| New / changed permission capability                    | `docs/design-docs/tool-runtime.md`, `docs/design-docs/permissions-and-hooks.md`, `docs/product-specs/0008-permissions.md` |
-| New / changed prompt surface (system preamble, tool-catalog rendering, skill body template, memory framing, deferred-tool index, approval-prompt template) | `docs/rules/prompt-design.md` (if a new invariant is introduced), `docs/design-docs/api-portability.md` (if cache layout shifts), and the design / spec doc owning the surface (`agent-platform.md`, `tool-runtime.md`, `0009-skills.md`, …) |
-| New / changed memory tier, backend, or kind            | `docs/design-docs/memory-system.md`, `docs/product-specs/0005-memory-system.md` |
-| New / changed channel adapter or capability            | `docs/design-docs/channel-abstraction.md` (capability matrix), `docs/product-specs/0003-multi-platform-channels.md`, optionally `docs/design-docs/channel-<name>.md` |
-| New / changed provider protocol adapter                | `docs/design-docs/api-portability.md`, `docs/product-specs/0001-core-react-loop.md` if scope-affecting |
-| New / changed orchestration strategy                   | `docs/design-docs/team-collaboration.md`, `docs/product-specs/0004-agent-team.md` |
-| New / changed automation category                      | `docs/design-docs/<area>.md`, `docs/product-specs/0006-automation.md` |
-| New / changed file layout convention                   | `docs/ARCHITECTURE.md` "Intended Repository Shape", relevant README under `include/`, `src/`, `tests/`, `bench/`, `skeleton/` |
-| New / changed test or bench bucket                      | `tests/README.md` or `bench/README.md`, plus `docs/rules/testing-and-bench.md` if conventions shift |
-| New rule, removed rule, or relaxed enforcement         | the affected `docs/rules/*.md`, `docs/rules/README.md` table |
-| New / closed deep-review absorption                    | `docs/rules/deep-review.md` (lifecycle), `docs/exec-plans/tech-debt-tracker.md` (the `review/deep-<YYYY-MM-DD>` row), and the deletion of the review artifact in the same slice that closes the last absorbed finding |
-| New script under `scripts/`                              | The README that references it, plus `Makefile` if it's a make target |
-| New CI workflow / job                                    | `docs/CICD.md`, `docs/SUPPLY_CHAIN_SECURITY.md` if applicable |
-| Anything user-visible                                    | `docs/releases/feature-release-notes.md` |
-| Any behavior change at all                               | `docs/histories/YYYY-MM/YYYYMMDD-HHmm-<slug>.md` |
-| Any history entry that completes a slice or moves a `QUALITY_SCORE` row | `docs/STATUS.md` (bump `Slice`, repoint `Last completed history`, refresh test/assertion counts and the open-tech-debt list) |
-| Any slice that moves a subsystem's frontier (new capability, new "next step", resolved or added pre-dependency) | `docs/ROADMAP.md` (refresh the touched track's row and, if a cross-track blocker changed, the Dependency Frontier list) |
+## Quality Bar
 
-If the table doesn't list your change, ask "what doc would a new agent want to read
-about this in six months?" — and update *that* doc.
+- Describe observable behavior and invariants, not implementation narration.
+- Prefer one owning document over repeating the same statement in several indexes.
+- Examples, command names, paths, config shapes, and public symbols must exist.
+- Active plans may describe a future state, but must clearly distinguish it from the
+  shipped contract.
+- If code and a current contract disagree, fix them together or explicitly change the
+  contract before relying on the new behavior.
 
-## What "Same PR" Means
+## Enforcement
 
-- Code and doc edits land in the same commit, or at minimum in the same PR.
-- A doc-only follow-up PR is not acceptable as the close-out for a code PR.
-- Reviewers must reject PRs that change behavior without matching doc edits.
+`make ci` runs structural checks that can be made reliable without heuristics:
 
-## What "Match Reality" Means
+- required current-contract files exist;
+- rule/design/spec indexes cover their owned files;
+- documented scripts, Make targets, libraries, and dependency versions match the repo;
+- every library has its required test and benchmark bucket;
+- the runtime prompt preamble retains its cache-safety invariants.
 
-- A doc that *describes* a class signature must list the actual signature in code.
-- A doc that *enumerates* lifecycle events must list every event the code fires.
-- A doc that *quotes* configuration shape must match `config.example.json`.
-- A doc that *names* a script, target, env var, or path must match what exists.
-- A doc that *promises* a budget, behavior, or metric must reflect what CI measures.
+Semantic parity for public headers, config schemas, hook events, and capability enums
+should become generated checks where practical. Until then, review the affected owner
+directly. CI must not require touching an unrelated timestamp, ledger, or narrative
+file merely to prove that work occurred.
 
-If you cannot honor the description, **change the description**, do not leave it
-broken.
+## Historical Material
 
-## Mechanical Enforcement
-
-- `scripts/check-docs.sh` — required-file existence (already runs in CI).
-- `scripts/check-repo-hygiene.sh` — hygiene files (already runs in CI).
-- `scripts/check-status-fresh.sh` — fails if `docs/STATUS.md`'s
-  `Last completed history` pointer is older than the newest file under
-  `docs/histories/` (already runs in CI).
-- `scripts/check-docs-sync.sh` — additional drift checks (this rule's enforcer):
-  - Every rule/design/spec file appears in its canonical index.
-  - Backticked script and Make targets referenced by docs exist.
-  - Library names in `docs/ARCHITECTURE.md` inventory must match `xmake/targets.lua`.
-  - Package versions in `docs/rules/libraries.md` must match `xmake/packages.lua`.
-  - Every `src/oran-*` library has matching test and bench directories.
-- Public-header symbol, config-shape, hook-event, and capability-enum parity are
-  planned checks, not active gates yet. They are tracked under the 2026-07-11
-  deep-review row in `docs/exec-plans/tech-debt-tracker.md`; until they land,
-  reviewers must verify those pairs directly.
-- `scripts/check-prompt-preamble.sh` — guards the default `oran-agent`
-  section-1 preamble against clocks, ids, randomness, and prompt bytes owned by
-  other sections.
-- CI fails any PR that fails an active check above.
-
-The script reports each drift with the exact pair of files that disagree and a
-suggested fix.
-
-## What An Acceptable PR Looks Like
-
-```text
-git status (typical)
-  modified:   src/oran-tool/registry.cpp
-  modified:   include/oran/tool/registry.hpp
-  modified:   docs/design-docs/tool-runtime.md            # API doc updated
-  modified:   docs/product-specs/0002-tool-registry.md    # acceptance criterion updated
-  modified:   tests/tool/registry_lookup.cpp              # test added
-  modified:   bench/tool/dispatch_overhead.cpp            # bench added
-  new file:   docs/histories/2026-05/20260520-1430-tool-batch-dispatch.md
-  modified:   docs/releases/feature-release-notes.md      # user-visible behavior change
-```
-
-If your `git status` doesn't include doc edits when the code edits invalidate them,
-the PR is incomplete.
-
-## Counter-Examples (Rejected At Review)
-
-- Code adds a new `provider.cost_threshold` hook event, but
-  `docs/design-docs/permissions-and-hooks.md` still lists the old enum.
-- A package version bump in `xmake/packages.lua` without updating
-  `docs/rules/libraries.md`.
-- A new `--strict-config` CLI flag without a paragraph in the relevant spec / README.
-- Renaming `oran-tool-orchestration` → `oran-tool-team` without updating
-  `docs/ARCHITECTURE.md` and `docs/rules/libraries.md` and the dependency tables.
-- Removing the `oran-channel-discord` adapter without removing it from
-  `docs/design-docs/channel-abstraction.md` and `docs/product-specs/0003-multi-platform-channels.md`.
-
-## What Counts As An Exception?
-
-There are *no* exceptions for code drift. There is *one* limited exception for
-*scaffolding work that has not yet shipped*: changes inside `docs/exec-plans/active/`
-may legitimately describe a future state. Once the plan moves to
-`docs/exec-plans/completed/`, the production docs **must** describe the actually-shipped
-state.
-
-## What If The Right Doc Doesn't Exist Yet?
-
-Create it in the same PR. The right time to write the doc that describes a feature is
-when the feature lands. Waiting for a "docs sprint" is how docs rot.
-
-If you don't know where to put the new doc, default to `docs/design-docs/` for a
-design topic, `docs/product-specs/` for a user-visible feature, or
-`docs/references/` for distilled external material.
-
-## What If The Change Is Trivial?
-
-A pure typo fix in code, or a single-line refactor that doesn't change any externally
-visible behavior, does not need a doc edit beyond a history entry — and even that is
-overridable with `History-Skip: <reason>` in the PR description. **Behavior change of
-any kind** requires the matching doc edit.
-
-## Why The Rule Exists
-
-The previous `orangutan/` codebase had:
-
-- A `CLAUDE.md` that referenced `.claude/rules/` files that didn't exist.
-- A `tools/runtime-loader/` mentioned in code comments that had been removed.
-- A `qq_channel` option whose semantics differed between the option doc and the actual
-  build.
-- A "SQLite migration to expected API" goal stated in the docs and only half done in
-  code (~120 throwing callsites unmigrated).
-
-Every one of those is a *normal* outcome of an "I'll update the doc later" culture.
-The Prime Directive is the only known cure.
+Git history is the archive. Once information is absorbed into a current contract or
+live debt row, delete redundant review notes, slice histories, release-note ledgers,
+and completed execution-plan narratives. Retain external references only when they
+still inform a current design decision.
 
 ## See Also
 
-- [`critical-rules.md#C16`](critical-rules.md) — the rule line.
-- [`../REPO_COLLAB_GUIDE.md`](../REPO_COLLAB_GUIDE.md) — "Documentation Discipline".
-- [`../HISTORY_GUIDE.md`](../HISTORY_GUIDE.md) — finished-task records.
-- [`../PLANS_GUIDE.md`](../PLANS_GUIDE.md) — when intent precedes code.
+- [`critical-rules.md#c13-durable-rationale-belongs-with-the-contract`](critical-rules.md#c13-durable-rationale-belongs-with-the-contract)
+- [`../PLANS_GUIDE.md`](../PLANS_GUIDE.md)
+- [`../REPO_COLLAB_GUIDE.md`](../REPO_COLLAB_GUIDE.md)

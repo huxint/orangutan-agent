@@ -26,7 +26,7 @@ Describe the desired end state in one paragraph.
 1. Discovery and design alignment.
 2. Implementation slices.
 3. Verification (tests + benches).
-4. Rollout / release notes / histories.
+4. Rollout and cleanup.
 
 ## Validation
 
@@ -41,9 +41,6 @@ Describe the desired end state in one paragraph.
 - [ ] Example: implement the first planned slice.
 - [ ] Example: **update the docs that this slice invalidates in the same PR** (`docs/rules/docs-in-sync.md`).
 - [ ] Example: run validation and record results.
-- [ ] Example: update `docs/QUALITY_SCORE.md` row.
-- [ ] Example: write history entry (including the "Docs Updated In This PR" section).
-- [ ] Example: add release note if user-visible.
 
 ## Decision Log
 
@@ -54,5 +51,3 @@ Describe the desired end state in one paragraph.
 - Related design doc:
 - Related product spec:
 - PRs:
-- History entry:
-- Release note:

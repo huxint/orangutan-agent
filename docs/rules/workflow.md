@@ -114,8 +114,8 @@ broader repository checks than the hook.
 - v1.x:           channel adapters, hook sinks, agent team v1.
 - v2:             modules everywhere; vector memory; stretch goals.
 
-Release process is documented in `docs/CICD.md` once the binary is real. Until then,
-`docs/releases/feature-release-notes.md` is the canonical record.
+Release process is documented in `docs/CICD.md`. Git tags and hosted release artifacts
+are the release record; do not maintain a parallel hand-written ledger.
 
 ## When Things Are Broken
 
@@ -128,5 +128,4 @@ Release process is documented in `docs/CICD.md` once the binary is real. Until t
 ## See Also
 
 - [`testing-and-bench.md`](testing-and-bench.md)
-- [`../HISTORY_GUIDE.md`](../HISTORY_GUIDE.md)
 - [`../PLANS_GUIDE.md`](../PLANS_GUIDE.md)

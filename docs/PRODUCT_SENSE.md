@@ -58,4 +58,4 @@ without constant prompting.
 ## See Also
 
 - [`design-docs/agent-platform.md`](design-docs/agent-platform.md) — vision.
-- [`QUALITY_SCORE.md`](QUALITY_SCORE.md) — current state.
+- [`STATUS.md`](STATUS.md) — current focus and verified baseline.

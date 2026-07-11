@@ -6,7 +6,6 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 "${repo_root}/scripts/check-docs.sh"
 "${repo_root}/scripts/check-repo-hygiene.sh"
 "${repo_root}/scripts/check-docs-sync.sh"
-"${repo_root}/scripts/check-status-fresh.sh"
 "${repo_root}/scripts/check-deps.sh"
 "${repo_root}/scripts/check-prompt-preamble.sh"
 

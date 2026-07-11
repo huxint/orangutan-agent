@@ -28,8 +28,8 @@ single-threaded web server — full audit in
 
 ```
 CLAUDE.md            routing index (read first); AGENTS.md is a symlink to it
-Makefile             init / check / new-plan / new-history / bench
-docs/                system of record — design, rules, specs, status, histories
+Makefile             init / check / new-plan / bench
+docs/                current contracts — design, rules, specs, status, plans
   STATUS.md          one-screen project snapshot — read first
   ARCHITECTURE.md    library boundaries + binary inventory
   rules/             non-negotiable C++ / build / workflow rules

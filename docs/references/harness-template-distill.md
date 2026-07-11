@@ -90,7 +90,8 @@ The template is generic; we extend it for a C++23 agent runtime:
 
 - The `AGENTS.md` / `CLAUDE.md` / `README.md` / `CONTRIBUTING.md` / `SECURITY.md`
   / `Makefile` shape.
-- The `make new-plan` / `make new-history` / `make ci` workflow.
+- The source template used plan/history scaffolding plus `make ci`;
+  Orangutan retains only plan scaffolding and CI because Git is the change archive.
 - The exec-plan / history templates.
 - The supply-chain workflows + pinning rule.
 - The "mechanical checks over soft conventions" enforcement style.

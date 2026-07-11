@@ -3,8 +3,7 @@
 > **The handoff surface.** One row per runtime track: where the shipped
 > frontier is, what the next slice should be, and what must exist first.
 > Read together with [`STATUS.md`](STATUS.md) (the point-in-time snapshot).
-> Per-slice detail is canonical under [`histories/`](histories/); this file
-> only aggregates frontiers and never restates slice narratives.
+> Git records per-change detail; this file aggregates current frontiers.
 >
 > **Update rule (Prime Directive).** Any slice that moves a track's frontier
 > updates that track's row — same commit, no exceptions. See
@@ -102,11 +101,8 @@ update every row that references it.
 
 ## See Also
 
-- [`STATUS.md`](STATUS.md) — point-in-time snapshot: current slice, last
-  history, active exec-plans, library health, open tech-debt.
-- [`histories/`](histories/) — canonical per-slice record (what/why/files).
+- [`STATUS.md`](STATUS.md) — point-in-time focus and verified baseline.
 - [`product-specs/index.md`](product-specs/index.md) — per-spec shipping
   status.
 - [`exec-plans/tech-debt-tracker.md`](exec-plans/tech-debt-tracker.md) —
   open debt rows backing several pre-dependencies above.
-- [`QUALITY_SCORE.md`](QUALITY_SCORE.md) — per-area health scores.
