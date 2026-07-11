@@ -3,6 +3,7 @@
 #include <oran/http/client.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <expected>
@@ -14,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include <asio/associated_cancellation_slot.hpp>
 #include <asio/associated_executor.hpp>
 #include <asio/async_result.hpp>
 #include <asio/cancellation_type.hpp>
@@ -42,9 +44,44 @@ using detail::CurlEasy;
 using detail::CurlEasyRegistration;
 using detail::CurlHeaders;
 using detail::CurlMulti;
-using detail::is_cancelled;
-
 constexpr long kPollTimeoutMs = 50;
+
+class CancellationFlag {
+public:
+  explicit CancellationFlag(bool requested = false) noexcept : requested_{requested} {}
+
+  void request() noexcept {
+    requested_.store(true, std::memory_order_relaxed);
+  }
+
+  [[nodiscard]] bool requested() const noexcept {
+    return requested_.load(std::memory_order_relaxed);
+  }
+
+private:
+  std::atomic_bool requested_;
+};
+
+struct CancellationBridge {
+  std::shared_ptr<CancellationFlag> flag;
+  asio::cancellation_slot slot;
+};
+
+template <typename Handler>
+[[nodiscard]] CancellationBridge make_cancellation_bridge(Handler& handler, bool initially_cancelled) {
+  auto bridge = CancellationBridge{
+      .flag = std::make_shared<CancellationFlag>(initially_cancelled),
+      .slot = asio::get_associated_cancellation_slot(handler),
+  };
+  if (bridge.slot.is_connected()) {
+    bridge.slot.assign([flag = bridge.flag](asio::cancellation_type_t type) {
+      if (type != asio::cancellation_type::none) {
+        flag->request();
+      }
+    });
+  }
+  return bridge;
+}
 
 [[nodiscard]] bool is_http_url(std::string_view url) noexcept {
   return url.starts_with("http://") || url.starts_with("https://");
@@ -214,7 +251,7 @@ std::size_t write_stream(char* data, std::size_t size, std::size_t count, void* 
   return {};
 }
 
-[[nodiscard]] core::Result<void> run_multi(CURLM* multi, CURL* easy, const asio::cancellation_state& cancellation) {
+[[nodiscard]] core::Result<void> run_multi(CURLM* multi, CURL* easy, const CancellationFlag& cancellation) {
   auto add = curl_multi_add_handle(multi, easy);
   if (add != CURLM_OK) {
     return std::unexpected(curl_multi_error(add, "add_handle"));
@@ -228,7 +265,7 @@ std::size_t write_stream(char* data, std::size_t size, std::size_t count, void* 
   }
 
   while (running != 0) {
-    if (is_cancelled(cancellation)) {
+    if (cancellation.requested()) {
       return std::unexpected(Error::cancelled());
     }
     int active_fds = 0;
@@ -277,14 +314,14 @@ struct Client::Impl {
   asio::any_io_executor blocking_executor;
 
   [[nodiscard]] core::Result<BodyResponse> send_blocking(const BodyRequest& request,
-                                                         const asio::cancellation_state& cancellation) const {
+                                                         const CancellationFlag& cancellation) const {
     if (!curl_global().ok()) {
       return std::unexpected(Error::internal("curl global initialization failed"));
     }
     if (auto valid = validate_request(request); !valid) {
       return std::unexpected(std::move(valid).error());
     }
-    if (is_cancelled(cancellation)) {
+    if (cancellation.requested()) {
       return std::unexpected(Error::cancelled());
     }
 
@@ -318,14 +355,14 @@ struct Client::Impl {
   [[nodiscard]] core::Result<BodyResponse> send_streaming_blocking(const BodyRequest& request,
                                                                    SseEventCallback on_event,
                                                                    asio::any_io_executor completion_executor,
-                                                                   const asio::cancellation_state& cancellation) const {
+                                                                   const CancellationFlag& cancellation) const {
     if (!curl_global().ok()) {
       return std::unexpected(Error::internal("curl global initialization failed"));
     }
     if (auto valid = validate_request(request); !valid) {
       return std::unexpected(std::move(valid).error());
     }
-    if (is_cancelled(cancellation)) {
+    if (cancellation.requested()) {
       return std::unexpected(Error::cancelled());
     }
 
@@ -371,27 +408,34 @@ auto async_send_on(asio::any_io_executor completion_executor,
                    asio::any_io_executor blocking_executor,
                    ImplPtr impl,
                    BodyRequest request,
-                   asio::cancellation_state cancellation,
+                   bool initially_cancelled,
                    CompletionToken&& token) {
   return asio::async_initiate<CompletionToken, void(core::Result<BodyResponse>)>(
       [completion_executor = std::move(completion_executor),
        blocking_executor = std::move(blocking_executor),
        impl = std::move(impl),
        request = std::move(request),
-       cancellation](auto handler) mutable {
+       initially_cancelled](auto handler) mutable {
+        auto cancellation = make_cancellation_bridge(handler, initially_cancelled);
         auto work = asio::make_work_guard(completion_executor);
         asio::post(blocking_executor,
                    [impl = std::move(impl),
                     request = std::move(request),
-                    cancellation,
+                    cancellation = std::move(cancellation),
                     handler = std::move(handler),
                     work = std::move(work)]() mutable {
-                     auto result = impl->send_blocking(request, cancellation);
+                     auto result = impl->send_blocking(request, *cancellation.flag);
                      auto completion_executor = work.get_executor();
                      asio::post(completion_executor,
                                 [handler = std::move(handler),
                                  result = std::move(result),
-                                 work = std::move(work)]() mutable { handler(std::move(result)); });
+                                 cancellation = std::move(cancellation),
+                                 work = std::move(work)]() mutable {
+                                  if (cancellation.slot.is_connected()) {
+                                    cancellation.slot.clear();
+                                  }
+                                  handler(std::move(result));
+                                });
                    });
       },
       token);
@@ -403,7 +447,7 @@ auto async_send_streaming_on(asio::any_io_executor completion_executor,
                              ImplPtr impl,
                              BodyRequest request,
                              SseEventCallback on_event,
-                             asio::cancellation_state cancellation,
+                             bool initially_cancelled,
                              CompletionToken&& token) {
   return asio::async_initiate<CompletionToken, void(core::Result<BodyResponse>)>(
       [completion_executor = std::move(completion_executor),
@@ -411,25 +455,33 @@ auto async_send_streaming_on(asio::any_io_executor completion_executor,
        impl = std::move(impl),
        request = std::move(request),
        on_event = std::move(on_event),
-       cancellation](auto handler) mutable {
+       initially_cancelled](auto handler) mutable {
+        auto cancellation = make_cancellation_bridge(handler, initially_cancelled);
         auto event_executor = asio::any_io_executor{asio::make_strand(completion_executor)};
         auto work = asio::make_work_guard(event_executor);
-        asio::post(blocking_executor,
-                   [impl = std::move(impl),
-                    request = std::move(request),
-                    on_event = std::move(on_event),
-                    completion_executor = std::move(event_executor),
-                    cancellation,
-                    handler = std::move(handler),
-                    work = std::move(work)]() mutable {
-                     auto result =
-                         impl->send_streaming_blocking(request, std::move(on_event), completion_executor, cancellation);
-                     auto resume_executor = work.get_executor();
-                     asio::post(resume_executor,
-                                [handler = std::move(handler),
-                                 result = std::move(result),
-                                 work = std::move(work)]() mutable { handler(std::move(result)); });
-                   });
+        asio::post(
+            blocking_executor,
+            [impl = std::move(impl),
+             request = std::move(request),
+             on_event = std::move(on_event),
+             completion_executor = std::move(event_executor),
+             cancellation = std::move(cancellation),
+             handler = std::move(handler),
+             work = std::move(work)]() mutable {
+              auto result =
+                  impl->send_streaming_blocking(request, std::move(on_event), completion_executor, *cancellation.flag);
+              auto resume_executor = work.get_executor();
+              asio::post(resume_executor,
+                         [handler = std::move(handler),
+                          result = std::move(result),
+                          cancellation = std::move(cancellation),
+                          work = std::move(work)]() mutable {
+                           if (cancellation.slot.is_connected()) {
+                             cancellation.slot.clear();
+                           }
+                           handler(std::move(result));
+                         });
+            });
       },
       token);
 }
@@ -446,7 +498,8 @@ async::Awaitable<core::Result<BodyResponse>> Client::send(BodyRequest request) c
   co_await asio::this_coro::throw_if_cancelled(false);
   auto completion_executor = co_await asio::this_coro::executor;
   const auto cancellation = co_await asio::this_coro::cancellation_state;
-  if (is_cancelled(cancellation)) {
+  const bool initially_cancelled = cancellation.cancelled() != asio::cancellation_type::none;
+  if (initially_cancelled) {
     co_return std::unexpected(Error::cancelled());
   }
 
@@ -455,7 +508,7 @@ async::Awaitable<core::Result<BodyResponse>> Client::send(BodyRequest request) c
                                    impl->blocking_executor,
                                    std::move(impl),
                                    std::move(request),
-                                   cancellation,
+                                   initially_cancelled,
                                    asio::use_awaitable);
 }
 
@@ -464,7 +517,8 @@ async::Awaitable<core::Result<BodyResponse>> Client::send_streaming(BodyRequest 
   co_await asio::this_coro::throw_if_cancelled(false);
   auto completion_executor = co_await asio::this_coro::executor;
   const auto cancellation = co_await asio::this_coro::cancellation_state;
-  if (is_cancelled(cancellation)) {
+  const bool initially_cancelled = cancellation.cancelled() != asio::cancellation_type::none;
+  if (initially_cancelled) {
     co_return std::unexpected(Error::cancelled());
   }
 
@@ -475,7 +529,7 @@ async::Awaitable<core::Result<BodyResponse>> Client::send_streaming(BodyRequest 
                                              std::move(impl),
                                              std::move(request),
                                              std::move(on_event),
-                                             cancellation,
+                                             initially_cancelled,
                                              asio::use_awaitable);
 }
 

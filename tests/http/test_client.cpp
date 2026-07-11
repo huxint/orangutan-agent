@@ -62,14 +62,15 @@ private:
 
 class OneShotHttpServer {
 public:
-  explicit OneShotHttpServer(std::string response) : response_{std::move(response)} {
+  explicit OneShotHttpServer(std::string response, bool stall_response = false)
+      : response_{std::move(response)}, stall_response_{stall_response} {
     tcp::endpoint endpoint{asio::ip::make_address("127.0.0.1"), 0};
     acceptor_.open(endpoint.protocol());
     acceptor_.set_option(tcp::acceptor::reuse_address(true));
     acceptor_.bind(endpoint);
     acceptor_.listen(1);
     port_ = acceptor_.local_endpoint().port();
-    worker_ = std::jthread{[this] { serve(); }};
+    worker_ = std::jthread{[this](std::stop_token stop) { serve(stop); }};
   }
 
   ~OneShotHttpServer() {
@@ -95,8 +96,12 @@ public:
     return served_.load();
   }
 
+  [[nodiscard]] bool request_received() const noexcept {
+    return request_received_.load(std::memory_order_acquire);
+  }
+
 private:
-  void serve() {
+  void serve(std::stop_token stop) {
     std::error_code ec;
     auto socket = acceptor_.accept(ec);
     if (ec) {
@@ -122,6 +127,14 @@ private:
       }
     }
 
+    request_received_.store(true, std::memory_order_release);
+    while (stall_response_ && !stop.stop_requested()) {
+      std::this_thread::sleep_for(5ms);
+    }
+    if (stop.stop_requested()) {
+      return;
+    }
+
     asio::write(socket, asio::buffer(response_), ec);
     served_ = !ec;
   }
@@ -130,8 +143,10 @@ private:
   tcp::acceptor acceptor_{io_};
   std::uint16_t port_{0};
   std::string response_;
+  bool stall_response_{false};
   std::string request_;
   std::atomic_bool served_{false};
+  std::atomic_bool request_received_{false};
   std::jthread worker_;
 };
 
@@ -257,5 +272,59 @@ TEST_CASE("Client observes cancellation before dispatch", "[unit][http][client]"
   REQUIRE(result.has_value());
   REQUIRE_FALSE(result->has_value());
   REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
+  blocking.join();
+}
+
+TEST_CASE("Client bridges in-flight cancellation to the blocking transport thread", "[unit][http][client]") {
+  ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
+  ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
+  OneShotHttpServer server{"", true};
+  asio::io_context io;
+  asio::thread_pool blocking{1};
+  asio::cancellation_signal signal;
+  auto client = http::Client{blocking.get_executor()};
+  auto result = std::optional<core::Result<http::BodyResponse>>{};
+  auto failure = std::exception_ptr{};
+  const auto started_at = std::chrono::steady_clock::now();
+
+  asio::co_spawn(
+      io,
+      client.send(http::BodyRequest{
+          .method = "GET",
+          .url = server.url("/stalled"),
+          .headers = {},
+          .body = {},
+          .timeout = 10s,
+      }),
+      asio::bind_cancellation_slot(signal.slot(), [&](std::exception_ptr ep, core::Result<http::BodyResponse> r) {
+        failure = ep;
+        result = std::move(r);
+        io.stop();
+      }));
+
+  auto cancellation_poll = asio::steady_timer{io};
+  cancellation_poll.expires_after(5ms);
+  std::function<void(const std::error_code&)> cancel_when_started;
+  cancel_when_started = [&](const std::error_code& ec) {
+    if (ec) {
+      return;
+    }
+    if (server.request_received()) {
+      signal.emit(asio::cancellation_type::terminal);
+      return;
+    }
+    cancellation_poll.expires_after(5ms);
+    cancellation_poll.async_wait(cancel_when_started);
+  };
+  cancellation_poll.async_wait(cancel_when_started);
+  io.run();
+
+  if (failure) {
+    std::rethrow_exception(failure);
+  }
+  REQUIRE(result.has_value());
+  REQUIRE_FALSE(result->has_value());
+  REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
+  REQUIRE(std::chrono::steady_clock::now() - started_at < 1s);
   blocking.join();
 }
