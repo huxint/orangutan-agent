@@ -271,6 +271,8 @@ struct DirectoryAuthority::Impl {
 
 struct FileMutation::Impl {
   UniqueFd parent;
+  // Pins the snapshotted inode for the mutation lifetime. Identity validation
+  // relies on this descriptor preventing inode-number reuse after unlink.
   UniqueFd existing;
   std::string name;
   std::string display;
@@ -279,7 +281,23 @@ struct FileMutation::Impl {
   ino_t inode{};
   off_t size{};
   timespec mtime{};
+  timespec ctime{};
 };
+
+namespace {
+
+[[nodiscard]] bool same_identity(dev_t device,
+                                 ino_t inode,
+                                 off_t size,
+                                 timespec mtime,
+                                 timespec ctime,
+                                 const struct stat& status) noexcept {
+  return status.st_dev == device && status.st_ino == inode && status.st_size == size &&
+         status.st_mtim.tv_sec == mtime.tv_sec && status.st_mtim.tv_nsec == mtime.tv_nsec &&
+         status.st_ctim.tv_sec == ctime.tv_sec && status.st_ctim.tv_nsec == ctime.tv_nsec;
+}
+
+}  // namespace
 
 FileMutation::FileMutation(std::unique_ptr<Impl> impl) : impl_{std::move(impl)} {}
 FileMutation::FileMutation(FileMutation&&) noexcept = default;
@@ -308,10 +326,7 @@ core::Result<ReadOnlyFile> FileMutation::open_existing() const {
   if (::fstat(opened.get(), &status) != 0) {
     return std::unexpected(errno_error("failed to validate mutation read target", {}, impl_->display, errno));
   }
-  const bool unchanged = status.st_dev == impl_->device && status.st_ino == impl_->inode &&
-                         status.st_size == impl_->size && status.st_mtim.tv_sec == impl_->mtime.tv_sec &&
-                         status.st_mtim.tv_nsec == impl_->mtime.tv_nsec;
-  if (!unchanged) {
+  if (!same_identity(impl_->device, impl_->inode, impl_->size, impl_->mtime, impl_->ctime, status)) {
     return std::unexpected(core::Error{core::ErrorKind::conflict, "anchored mutation target changed before read"}
                                .with("reason", "stale_fingerprint")
                                .with("path", impl_->display));
@@ -339,12 +354,6 @@ core::Result<void> write_all(int fd, std::string_view contents, std::string_view
     offset += static_cast<std::size_t>(count);
   }
   return {};
-}
-
-[[nodiscard]] bool
-same_identity(dev_t device, ino_t inode, off_t size, timespec mtime, const struct stat& status) noexcept {
-  return status.st_dev == device && status.st_ino == inode && status.st_size == size &&
-         status.st_mtim.tv_sec == mtime.tv_sec && status.st_mtim.tv_nsec == mtime.tv_nsec;
 }
 
 [[nodiscard]] core::Error stale_mutation_error(std::string message, std::string_view path) {
@@ -465,7 +474,7 @@ core::Result<void> FileMutation::write_text(std::string_view contents, WriteText
       if (::fstat(opened.get(), &opened_status) != 0) {
         return std::unexpected(errno_error("failed to validate anchored append target", {}, impl_->display, errno));
       }
-      if (!same_identity(impl_->device, impl_->inode, impl_->size, impl_->mtime, opened_status)) {
+      if (!same_identity(impl_->device, impl_->inode, impl_->size, impl_->mtime, impl_->ctime, opened_status)) {
         return std::unexpected(stale_mutation_error("anchored append target changed before write", impl_->display));
       }
     }
@@ -521,7 +530,7 @@ core::Result<void> FileMutation::write_text(std::string_view contents, WriteText
     if (::fstat(current_fd.get(), &current) != 0) {
       return std::unexpected(errno_error("failed to validate anchored mutation target", {}, impl_->display, errno));
     }
-    if (!same_identity(impl_->device, impl_->inode, impl_->size, impl_->mtime, current)) {
+    if (!same_identity(impl_->device, impl_->inode, impl_->size, impl_->mtime, impl_->ctime, current)) {
       return std::unexpected(stale_mutation_error("anchored mutation target changed before commit", impl_->display));
     }
   } else if (current_fd.get() >= 0) {
@@ -614,10 +623,14 @@ core::Result<DirectoryAuthority> DirectoryAuthority::open_directory(const Anchor
   return DirectoryAuthority{std::make_shared<Impl>(std::move(*opened), std::move(display))};
 }
 
-core::Result<FileMutation> DirectoryAuthority::begin_file_mutation(const AnchoredPath& path,
+core::Result<FileMutation> DirectoryAuthority::begin_file_mutation(std::string_view relative_path,
                                                                    bool create_parent_directories) const {
   if (impl_ == nullptr)
     return std::unexpected(core::Error::internal("directory authority is empty"));
+  const auto path = AnchoredPath{
+      .relative_path = std::string{relative_path},
+      .symlink_policy = AnchoredSymlinkPolicy::reject_all,
+  };
   if (auto valid = validate_anchored_path(path); !valid)
     return std::unexpected(std::move(valid).error());
 
@@ -688,6 +701,7 @@ core::Result<FileMutation> DirectoryAuthority::begin_file_mutation(const Anchore
     mutation->inode = status.st_ino;
     mutation->size = status.st_size;
     mutation->mtime = status.st_mtim;
+    mutation->ctime = status.st_ctim;
   }
   return FileMutation{std::move(mutation)};
 }
@@ -711,7 +725,7 @@ core::Result<bool> DirectoryAuthority::refers_to_path(std::string_view path) con
 
   struct stat path_status{};
   const auto path_string = std::string{path};
-  if (::stat(path_string.c_str(), &path_status) != 0) {
+  if (::lstat(path_string.c_str(), &path_status) != 0) {
     if (errno == ENOENT || errno == ENOTDIR) {
       return false;
     }

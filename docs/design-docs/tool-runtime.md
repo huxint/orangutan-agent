@@ -697,12 +697,14 @@ Current surface and forward shape:
   workspace temporarily retain pathname execution while the remaining
   filesystem handlers migrate.
 - `FileWrite` and `FileEdit` begin a dirfd-backed mutation after approval.
-  The parent directory stays pinned across executor hops; edits read the
-  snapshotted file descriptor; truncate commits revalidate the target identity
-  immediately before rename. A replacement detected at that validation point
-  returns `conflict/reason=stale_fingerprint`; Linux does not provide a
-  conditional rename CAS, so the final validation-to-rename window remains an
-  acknowledged external-writer race.
+  Mutation resolution always rejects symlink components and therefore accepts
+  an authority-relative name rather than the read-side symlink-policy type. The
+  parent directory and any existing target inode stay pinned across executor
+  hops; edits read the snapshotted file descriptor; truncate commits revalidate
+  device, inode, size, mtime, and ctime immediately before rename. A mismatch
+  returns `conflict/reason=stale_fingerprint`. This is a metadata guard, not
+  content identity or conditional rename CAS, so timestamp granularity and the
+  final validation-to-rename window remain acknowledged external-writer races.
 - Audit rows carry path-resolution metadata under
   `permission::AuditEvent::metadata_json`. Successful resolves include hashed
   input/root values, `resolved_relative_path`, symlink / parent-creation /

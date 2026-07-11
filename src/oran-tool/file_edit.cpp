@@ -182,10 +182,7 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
       co_return std::unexpected(core::Error::internal("FileEdit: resolved workspace path is missing authority"));
     }
     path = ctx.resolved_path->absolute_path;
-    auto mutation = ctx.resolved_path->authority->begin_file_mutation(io::AnchoredPath{
-        .relative_path = ctx.resolved_path->authority_relative_path,
-        .symlink_policy = io::AnchoredSymlinkPolicy::reject_all,
-    });
+    auto mutation = ctx.resolved_path->authority->begin_file_mutation(ctx.resolved_path->authority_relative_path);
     if (!mutation) {
       co_return std::unexpected(std::move(mutation).error());
     }

@@ -47,13 +47,17 @@ performs the requested operation and returns `core::Result<T>`.
 > cross-process temp collisions.
 >
 > **Authority refactor (2026-07-12):** `DirectoryAuthority` can begin a
-> move-only `FileMutation` that pins the target parent directory, rejects
-> symlink components, and snapshots the existing regular file or its absence.
+> move-only `FileMutation` from an authority-relative name. Mutation resolution
+> always rejects symlink components; unlike read resolution, it exposes no
+> permissive symlink-policy input. The mutation pins the target parent directory
+> and any snapshotted inode, then records the existing regular file or its absence.
 > Workspace-backed truncate writes stage a sibling temp, revalidate that
-> snapshot immediately before `renameat`, and return
+> snapshot's device, inode, size, mtime, and ctime immediately before `renameat`, and return
 > `conflict/reason=stale_fingerprint` if another writer won. Append and
 > fail-if-exists preserve their public semantics through the same pinned
-> parent. This is final pre-commit validation, not a claim of filesystem CAS.
+> parent. This metadata guard narrows same-inode races but is not a content
+> identity check or filesystem CAS; the underlying timestamp granularity and
+> final validation-to-rename window remain acknowledged limits.
 >
 > **Slice-43 status (2026-05-22):** `oran-io` adds the range-aware
 > `read_text_file_ranged(executor, path, options)` returning

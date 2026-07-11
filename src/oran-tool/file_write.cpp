@@ -137,12 +137,8 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
       co_return std::unexpected(core::Error::internal("FileWrite: resolved workspace path is missing authority"));
     }
     path = ctx.resolved_path->absolute_path;
-    auto mutation = ctx.resolved_path->authority->begin_file_mutation(
-        io::AnchoredPath{
-            .relative_path = ctx.resolved_path->authority_relative_path,
-            .symlink_policy = io::AnchoredSymlinkPolicy::reject_all,
-        },
-        options.create_parent_directories);
+    auto mutation = ctx.resolved_path->authority->begin_file_mutation(ctx.resolved_path->authority_relative_path,
+                                                                      options.create_parent_directories);
     if (!mutation) {
       co_return std::unexpected(std::move(mutation).error());
     }

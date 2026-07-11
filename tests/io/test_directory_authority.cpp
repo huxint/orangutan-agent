@@ -7,6 +7,8 @@
 #include <string>
 #include <string_view>
 
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <catch2/catch_test_macros.hpp>
@@ -148,6 +150,44 @@ TEST_CASE("DirectoryAuthority reject-all policy refuses an in-root symlink", "[u
   REQUIRE(rejected.error().kind() == core::ErrorKind::permission_denied);
 }
 
+TEST_CASE("FileMutation refuses symlink components and targets", "[unit][io][authority][mutation][symlink]") {
+  TempDir temp{"oran-io-mutation-symlinks"};
+  const auto workspace = temp.path() / "workspace";
+  std::filesystem::create_directories(workspace / "real");
+  write_direct(workspace / "real" / "note.txt", "inside");
+  std::filesystem::create_directory_symlink("real", workspace / "parent-link");
+  std::filesystem::create_symlink("real/note.txt", workspace / "target-link.txt");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+
+  auto parent_symlink = authority->begin_file_mutation("parent-link/note.txt");
+  REQUIRE_FALSE(parent_symlink.has_value());
+  REQUIRE(parent_symlink.error().kind() == core::ErrorKind::permission_denied);
+
+  auto target_symlink = authority->begin_file_mutation("target-link.txt");
+  REQUIRE_FALSE(target_symlink.has_value());
+  REQUIRE(target_symlink.error().kind() == core::ErrorKind::permission_denied);
+}
+
+TEST_CASE("DirectoryAuthority pathname identity does not follow a final symlink", "[unit][io][authority][identity]") {
+  TempDir temp{"oran-io-authority-path-identity"};
+  const auto workspace = temp.path() / "workspace";
+  const auto moved_workspace = temp.path() / "workspace-moved";
+  std::filesystem::create_directory(workspace);
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+  REQUIRE(authority->refers_to_path(workspace.string()).value());
+
+  std::filesystem::rename(workspace, moved_workspace);
+  REQUIRE(authority->refers_to_path(moved_workspace.string()).value());
+  REQUIRE_FALSE(authority->refers_to_path(workspace.string()).value());
+
+  std::filesystem::create_directory_symlink(moved_workspace, workspace);
+  REQUIRE_FALSE(authority->refers_to_path(workspace.string()).value());
+}
+
 TEST_CASE("FileMutation retains its parent authority across root replacement", "[unit][io][authority][mutation]") {
   TempDir temp{"oran-io-mutation-root-replacement"};
   const auto workspace = temp.path() / "workspace";
@@ -160,10 +200,7 @@ TEST_CASE("FileMutation retains its parent authority across root replacement", "
 
   auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
   REQUIRE(authority.has_value());
-  auto mutation = authority->begin_file_mutation(io::AnchoredPath{
-      .relative_path = "note.txt",
-      .symlink_policy = io::AnchoredSymlinkPolicy::reject_all,
-  });
+  auto mutation = authority->begin_file_mutation("note.txt");
   REQUIRE(mutation.has_value());
 
   std::filesystem::rename(workspace, moved_workspace);
@@ -193,10 +230,7 @@ TEST_CASE("FileMutation rejects a target change before commit and cleans its tem
 
   auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
   REQUIRE(authority.has_value());
-  auto mutation = authority->begin_file_mutation(io::AnchoredPath{
-      .relative_path = "note.txt",
-      .symlink_policy = io::AnchoredSymlinkPolicy::reject_all,
-  });
+  auto mutation = authority->begin_file_mutation("note.txt");
   REQUIRE(mutation.has_value());
 
   const auto replacement = workspace / "replacement.txt";
@@ -219,6 +253,49 @@ TEST_CASE("FileMutation rejects a target change before commit and cleans its tem
   }
 }
 
+TEST_CASE("FileMutation detects same-size rewrites with restored mtime", "[unit][io][authority][mutation][conflict]") {
+  TempDir temp{"oran-io-mutation-ctime-conflict"};
+  const auto workspace = temp.path() / "workspace";
+  const auto target = workspace / "note.txt";
+  std::filesystem::create_directories(workspace);
+  write_direct(target, "original");
+
+  struct stat before{};
+  REQUIRE(::stat(target.c_str(), &before) == 0);
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+  auto mutation = authority->begin_file_mutation("note.txt");
+  REQUIRE(mutation.has_value());
+
+  struct stat changed{};
+  bool ctime_changed = false;
+  for (std::size_t attempt = 0; attempt < 32U && !ctime_changed; ++attempt) {
+    write_direct(target, "external");
+    const timespec times[] = {before.st_atim, before.st_mtim};
+    REQUIRE(::utimensat(AT_FDCWD, target.c_str(), times, 0) == 0);
+    REQUIRE(::stat(target.c_str(), &changed) == 0);
+    ctime_changed =
+        changed.st_ctim.tv_sec != before.st_ctim.tv_sec || changed.st_ctim.tv_nsec != before.st_ctim.tv_nsec;
+  }
+  REQUIRE(ctime_changed);
+  REQUIRE(changed.st_size == before.st_size);
+  REQUIRE(changed.st_mtim.tv_sec == before.st_mtim.tv_sec);
+  REQUIRE(changed.st_mtim.tv_nsec == before.st_mtim.tv_nsec);
+
+  test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
+    auto written = co_await io::write_text_file(context.get_executor(),
+                                                std::move(*mutation),
+                                                "agent-v",
+                                                io::WriteTextOptions{.atomic = true});
+    REQUIRE_FALSE(written.has_value());
+    REQUIRE(written.error().kind() == core::ErrorKind::conflict);
+  });
+
+  std::ifstream current{target, std::ios::binary};
+  REQUIRE(std::string{std::istreambuf_iterator<char>{current}, std::istreambuf_iterator<char>{}} == "external");
+}
+
 TEST_CASE("FileMutation can replace a writable target without read permission",
           "[unit][io][authority][mutation][permissions]") {
   TempDir temp{"oran-io-mutation-write-only"};
@@ -230,10 +307,7 @@ TEST_CASE("FileMutation can replace a writable target without read permission",
 
   auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
   REQUIRE(authority.has_value());
-  auto mutation = authority->begin_file_mutation(io::AnchoredPath{
-      .relative_path = "note.txt",
-      .symlink_policy = io::AnchoredSymlinkPolicy::reject_all,
-  });
+  auto mutation = authority->begin_file_mutation("note.txt");
   REQUIRE(mutation.has_value());
 
   test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
@@ -256,10 +330,7 @@ TEST_CASE("FileMutation temp naming supports near-limit target names", "[unit][i
 
   auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
   REQUIRE(authority.has_value());
-  auto mutation = authority->begin_file_mutation(io::AnchoredPath{
-      .relative_path = name,
-      .symlink_policy = io::AnchoredSymlinkPolicy::reject_all,
-  });
+  auto mutation = authority->begin_file_mutation(name);
   REQUIRE(mutation.has_value());
 
   test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {

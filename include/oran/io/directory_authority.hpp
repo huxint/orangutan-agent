@@ -98,15 +98,18 @@ public:
   [[nodiscard]] core::Result<DirectoryAuthority> open_directory(const AnchoredPath& path) const;
 
   /// Pin the target's parent directory and snapshot its current regular-file
-  /// identity (or absence) for a later anchored mutation.
-  [[nodiscard]] core::Result<FileMutation> begin_file_mutation(const AnchoredPath& path,
+  /// identity (or absence) for a later anchored mutation. Mutation resolution
+  /// always rejects symlink components, so this surface intentionally accepts
+  /// only the relative name rather than a read-side symlink policy.
+  [[nodiscard]] core::Result<FileMutation> begin_file_mutation(std::string_view relative_path,
                                                                bool create_parent_directories = false) const;
 
   /// Original trusted root spelling, retained for diagnostics only.
   [[nodiscard]] std::string_view display_root() const noexcept;
 
-  /// True when `path` still names the directory held by this authority.
-  /// A missing/replaced pathname returns false; descriptor errors propagate.
+  /// True when `path` still directly names the directory held by this authority.
+  /// A missing/replaced pathname or final symlink returns false; descriptor
+  /// errors propagate.
   [[nodiscard]] core::Result<bool> refers_to_path(std::string_view path) const;
 
 private:
