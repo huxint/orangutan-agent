@@ -1332,6 +1332,70 @@ TEST_CASE("DirectoryList uses DispatchContext workspace for relative listings an
   });
 }
 
+TEST_CASE("DirectoryList retains workspace authority across the approval window",
+          "[unit][tool][workspace][directory_list][approval][race]") {
+  TempDir sandbox{"oran-workspace-directory-list-approval-race"};
+  const auto root = sandbox.path() / "workspace";
+  const auto moved_root = sandbox.path() / "workspace-moved";
+  const auto outside = sandbox.path() / "outside";
+  write_text(root / "inside.txt", "pinned");
+  write_text(outside / "outside.txt", "replacement");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_directory_list(registry).has_value());
+
+    auto workspace = make_workspace(root);
+    auto rules = ask_tool_rules(std::string{tool::kDirectoryListName}, core::Capability::list_directory);
+    permission::RecordingAuditSink sink;
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+    auto broker = make_broker();
+    ctx.approval_broker = &broker;
+    ctx.now = fixed_now();
+
+    orangutan::hook::Bus bus;
+    orangutan::hook::InProcessSink prompt{
+        "directory-list-root-replacement-prompt",
+        [](orangutan::hook::Event, orangutan::hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        }};
+    prompt.set_blocking_handler([&](orangutan::hook::Event, orangutan::hook::PayloadPtr)
+                                    -> async::Awaitable<core::Result<orangutan::hook::HookDecision>> {
+      std::error_code ec;
+      std::filesystem::rename(root, moved_root, ec);
+      if (ec) {
+        co_return std::unexpected(core::Error::io("test failed to rename workspace root").with("detail", ec.message()));
+      }
+      std::filesystem::create_directory_symlink(outside, root, ec);
+      if (ec) {
+        co_return std::unexpected(
+            core::Error::io("test failed to replace workspace root").with("detail", ec.message()));
+      }
+      co_return orangutan::hook::HookDecision{
+          .reason = "operator_approved:operator-1",
+          .rewritten_input_json = std::nullopt,
+          .approval_expires_at = std::nullopt,
+          .trace = {},
+      };
+    });
+    bus.bind(prompt, {orangutan::hook::Event::permission_ask_rendered});
+    ctx.bus = &bus;
+
+    auto listed = co_await registry.dispatch(tool::kDirectoryListName, R"({"path":"."})", ctx);
+    REQUIRE(listed.has_value());
+    REQUIRE(listed->text.contains("inside.txt:regular_file:6"));
+    REQUIRE_FALSE(listed->text.contains("outside.txt"));
+    REQUIRE(listed->data_json.has_value());
+    const auto data = nlohmann::json::parse(*listed->data_json);
+    REQUIRE(data["entry_count"] == 1);
+    REQUIRE(data["entries"][0]["name"] == "inside.txt");
+    REQUIRE(data["entries"][0]["path"] == "<workspace>/inside.txt");
+  });
+
+  REQUIRE(std::filesystem::exists(moved_root / "inside.txt"));
+  REQUIRE(std::filesystem::exists(outside / "outside.txt"));
+}
+
 TEST_CASE("DirectoryList rejects symlink roots that escape the workspace", "[unit][tool][workspace][directory_list]") {
   TempDir root{"oran-workspace-directory-list-symlink"};
   TempDir outside{"oran-workspace-directory-list-symlink-outside"};

@@ -97,6 +97,8 @@ external contract or a previously reproduced failure.
   executes recursive no-follow deletion through dirfds, and has no pathname API.
 - [x] `oran-io` exposes pinned single-directory enumeration as the base primitive
   for migrating `DirectoryList` and `FileSearch` recursive walkers.
+- [x] Non-recursive `DirectoryList` consumes pinned authority across approval;
+  recursive listing remains coupled to the pathname-based ignore walker.
 - [x] Atomic HTTP cancellation bridge, strict provider terminal states, bounded
   channel conversations, and bounded/deadline-limited webhook intake landed.
 - [x] Bounded named `async::TaskGroup` foundation landed; runtime owners are migrating.

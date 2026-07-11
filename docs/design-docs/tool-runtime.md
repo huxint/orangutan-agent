@@ -682,8 +682,10 @@ Current surface and forward shape:
     reopening the absolute pathname. FileDelete's target inode is pinned before
     approval; write/edit create their mutation after approval beneath the pinned
     directory authority. These mutation tools reject direct dispatch without a
-    workspace authority. `FileSearch` and `DirectoryList` retain temporary
-    pathname execution while those handlers migrate.
+    workspace authority. Non-recursive `DirectoryList` now opens and enumerates
+    the resolved directory authority after approval; its recursive walker and
+    `FileSearch` retain temporary pathname execution while the shared walker
+    migrates.
 - `FileWrite` and `FileEdit` begin a dirfd-backed mutation after approval.
   Mutation resolution always rejects symlink components and therefore accepts
   an authority-relative name rather than the read-side symlink-policy type. The

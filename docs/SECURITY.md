@@ -84,7 +84,8 @@ Planned secret slice:
   execute through directory capabilities rather than treating a validated path
   string as authorization across an await. FileDelete also pins the approved
   target inode before approval and never follows symlinks during recursive
-  traversal. `FileSearch` and `DirectoryList` remain the pathname-execution
+  traversal. Non-recursive `DirectoryList` also enumerates a pinned directory;
+  `FileSearch` and recursive `DirectoryList` remain the pathname-execution
   migration backlog, along with the future capability-gated
   `tool::Runtime::workspace()` accessor.
 - Hardening flags compiled in by default:

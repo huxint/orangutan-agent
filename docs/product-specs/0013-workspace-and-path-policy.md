@@ -29,8 +29,10 @@ Current seams and future work:
   `FileDelete`, `FileSearch`, `DirectoryList`) consumes
   `DispatchContext::workspace` through `Registry::dispatch` when supplied.
   `FileWrite`, `FileEdit`, and `FileDelete` require the resulting authority,
-  including for direct registry dispatch. `FileSearch` and `DirectoryList` keep
-  their temporary pathname paths while the handle migration continues.
+  including for direct registry dispatch. Non-recursive `DirectoryList` consumes
+  the authority-backed directory enumeration primitive; `FileSearch` and
+  recursive `DirectoryList` keep temporary pathname walks while the shared
+  handle walker migration continues.
 - The handle migration is active: `FileRead` executes through a pinned
   `DirectoryAuthority`, while `FileWrite` and `FileEdit` use a pinned-parent
   `FileMutation`. `FileDelete` materializes a pinned-parent, pinned-target
@@ -39,7 +41,7 @@ Current seams and future work:
   symlink; replacing the approved delete target produces `conflict`.
   Mutation commits revalidate the snapshotted target immediately before
   rename and surface a stale-fingerprint conflict on detected lost updates.
-  Delete/list/search remain on the staged migration backlog.
+  Recursive list/search remain on the staged migration backlog.
 - Root paths for `FileSearch` and `DirectoryList` use
   `Workspace::resolve_list` and therefore follow symlinks only when the
   canonical target remains in an allowed root. Nested entries during

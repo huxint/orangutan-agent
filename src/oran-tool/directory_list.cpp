@@ -54,6 +54,7 @@
 #include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/tool_def.hpp>
+#include <oran/io/directory_authority.hpp>
 #include <oran/io/file.hpp>
 #include <oran/tool/registry.hpp>
 #include <oran/tool/workspace.hpp>
@@ -174,12 +175,9 @@ struct ParsedInput {
   return parsed.workspace->display_path(path.string());
 }
 
-void apply_display_paths(const ParsedInput& parsed, std::vector<io::DirectoryEntry>& entries) {
-  if (parsed.workspace == nullptr) {
-    return;
-  }
+void apply_display_paths(std::string_view display_root, std::vector<io::DirectoryEntry>& entries) {
   for (auto& entry : entries) {
-    entry.path = parsed.workspace->display_path(entry.path);
+    entry.path = std::format("{}/{}", display_root, entry.name);
   }
 }
 
@@ -344,6 +342,7 @@ format_data_json(std::string_view path, const ParsedInput& parsed, const std::ve
   }
 
   const auto resolved_path = parsed->path;
+  const auto resolved_display_root = ctx.resolved_path.has_value() ? ctx.resolved_path->display_path : std::string{};
   core::Result<std::vector<io::DirectoryEntry>> entries;
   if (parsed->recursive) {
     auto cancellation = co_await asio::this_coro::cancellation_state;
@@ -360,9 +359,23 @@ format_data_json(std::string_view path, const ParsedInput& parsed, const std::ve
         .include_hidden = parsed->include_hidden,
         .max_entries = parsed->max_entries,
     };
-    entries = co_await io::list_directory(ctx.executor, std::move(parsed->path), options);
-    if (entries) {
-      apply_display_paths(*parsed, *entries);
+    if (ctx.resolved_path.has_value()) {
+      if (!ctx.resolved_path->authority.has_value()) {
+        co_return std::unexpected(core::Error::internal("DirectoryList requires a resolved workspace authority"));
+      }
+      auto directory = ctx.resolved_path->authority->open_directory(io::AnchoredPath{
+          .relative_path = ctx.resolved_path->authority_relative_path,
+          .symlink_policy = io::AnchoredSymlinkPolicy::allow_beneath,
+      });
+      if (!directory) {
+        co_return std::unexpected(std::move(directory).error());
+      }
+      entries = co_await io::list_directory(ctx.executor, std::move(*directory), options);
+      if (entries) {
+        apply_display_paths(resolved_display_root, *entries);
+      }
+    } else {
+      entries = co_await io::list_directory(ctx.executor, std::move(parsed->path), options);
     }
   }
   if (!entries) {
@@ -371,7 +384,9 @@ format_data_json(std::string_view path, const ParsedInput& parsed, const std::ve
 
   auto text = render(*entries);
   const auto display_root =
-      parsed->workspace == nullptr ? resolved_path : parsed->workspace->display_path(resolved_path);
+      ctx.resolved_path.has_value()
+          ? resolved_display_root
+          : (parsed->workspace == nullptr ? resolved_path : parsed->workspace->display_path(resolved_path));
   auto data_json = format_data_json(display_root, *parsed, *entries);
   const auto match_count = static_cast<std::uint64_t>(entries->size());
   const auto files_touched = parsed->recursive ? recursive_files_touched(entries->size()) : std::uint32_t{1};
