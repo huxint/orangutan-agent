@@ -82,6 +82,7 @@
 #include <oran/core/tool_def.hpp>
 #include <oran/core/turn_id.hpp>
 #include <oran/hook/bus.hpp>
+#include <oran/io/directory_authority.hpp>
 #include <oran/permission/approval.hpp>
 #include <oran/permission/approval_broker.hpp>
 #include <oran/permission/audit.hpp>
@@ -158,10 +159,15 @@ using MemoryRememberHandler =
 using MemoryForgetHandler =
     std::function<async::Awaitable<core::Result<Output>>(MemoryForgetRequest request, DispatchContext& ctx)>;
 
-/// Registry-pre-resolved filesystem target for a built-in tool call.
-/// `absolute_path` is the path handlers pass to `oran-io`; the rest is
-/// audit/display metadata. Raw input paths are not stored here.
+/// Registry-pre-resolved filesystem target for a built-in tool call. The
+/// `authority` plus `relative_path` is the executable capability for migrated
+/// handlers. It is optional only during the staged migration so legacy direct
+/// registry callers remain representable; migrated handlers must reject a
+/// missing authority. `absolute_path` remains non-authoritative compatibility
+/// metadata until the remaining filesystem built-ins migrate.
 struct ResolvedToolPath {
+  std::optional<io::DirectoryAuthority> authority{};
+  std::string authority_relative_path;
   std::string absolute_path;
   std::string relative_path;
   /// Stable label used in audit metadata. For ordinary workspace paths this is

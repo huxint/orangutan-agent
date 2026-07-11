@@ -252,9 +252,10 @@ open_beneath(int root_fd, std::string_view root, const AnchoredPath& path, int f
 }  // namespace
 
 struct ReadOnlyFile::Impl {
-  explicit Impl(UniqueFd opened_fd) : fd{std::move(opened_fd)} {}
+  Impl(UniqueFd opened_fd, std::string opened_path) : fd{std::move(opened_fd)}, display_path{std::move(opened_path)} {}
 
   UniqueFd fd;
+  std::string display_path;
 };
 
 struct DirectoryAuthority::Impl {
@@ -274,6 +275,10 @@ ReadOnlyFile::~ReadOnlyFile() = default;
 
 int ReadOnlyFile::native_handle() const noexcept {
   return impl_ == nullptr ? -1 : impl_->fd.get();
+}
+
+std::string_view ReadOnlyFile::display_path() const noexcept {
+  return impl_ == nullptr ? std::string_view{} : std::string_view{impl_->display_path};
 }
 
 DirectoryAuthority::DirectoryAuthority(std::shared_ptr<const Impl> impl) : impl_{std::move(impl)} {}
@@ -308,7 +313,9 @@ core::Result<ReadOnlyFile> DirectoryAuthority::open_file(const AnchoredPath& pat
   if (auto regular = require_regular_file(opened->get(), impl_->display_root, path.relative_path); !regular) {
     return std::unexpected(std::move(regular).error());
   }
-  return ReadOnlyFile{std::make_unique<ReadOnlyFile::Impl>(std::move(*opened))};
+  return ReadOnlyFile{
+      std::make_unique<ReadOnlyFile::Impl>(std::move(*opened),
+                                           std::format("{}/{}", impl_->display_root, path.relative_path))};
 }
 
 core::Result<DirectoryAuthority> DirectoryAuthority::open_directory(const AnchoredPath& path) const {

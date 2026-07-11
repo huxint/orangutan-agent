@@ -12,6 +12,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <oran/io/directory_authority.hpp>
+#include <oran/io/fingerprint.hpp>
 
 namespace core = orangutan::core;
 namespace io = orangutan::io;
@@ -81,6 +82,9 @@ TEST_CASE("DirectoryAuthority retains the opened root across pathname replacemen
   });
   REQUIRE(opened.has_value());
   REQUIRE(read_handle(*opened) == "inside");
+  auto fingerprint = io::compute_file_fingerprint(*opened);
+  REQUIRE(fingerprint.has_value());
+  CHECK(fingerprint->size_bytes == 6);
 
   std::ifstream redirected{workspace / "nested" / "note.txt", std::ios::binary};
   std::string redirected_text;

@@ -37,6 +37,7 @@ public:
   ~ReadOnlyFile();
 
   [[nodiscard]] int native_handle() const noexcept;
+  [[nodiscard]] std::string_view display_path() const noexcept;
 
 private:
   struct Impl;

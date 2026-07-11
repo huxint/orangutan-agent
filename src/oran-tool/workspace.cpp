@@ -141,6 +141,20 @@ filesystem_error(std::string message, const std::filesystem::path& path, const s
   return out;
 }
 
+[[nodiscard]] Result<std::vector<io::DirectoryAuthority>> open_root_authorities(std::span<const std::string> roots,
+                                                                                std::string_view field_name) {
+  std::vector<io::DirectoryAuthority> out;
+  out.reserve(roots.size());
+  for (std::size_t index = 0; index < roots.size(); ++index) {
+    auto authority = io::DirectoryAuthority::open_trusted(roots[index]);
+    if (!authority) {
+      return std::unexpected(std::move(authority).error().with("field", std::format("{}[{}]", field_name, index)));
+    }
+    out.push_back(std::move(*authority));
+  }
+  return out;
+}
+
 [[nodiscard]] bool is_under_root(const std::filesystem::path& candidate, const std::filesystem::path& root) {
   const auto normalized_candidate = candidate.lexically_normal();
   const auto normalized_root = root.lexically_normal();
@@ -331,9 +345,15 @@ filesystem_error(std::string message, const std::filesystem::path& path, const s
 
 [[nodiscard]] Result<ResolvedPath> build_resolved(const std::filesystem::path& candidate,
                                                   const RootMatch& match,
+                                                  const io::DirectoryAuthority& primary_authority,
+                                                  std::span<const io::DirectoryAuthority> extra_authorities,
                                                   bool symlink_followed,
                                                   bool created_parents) {
+  const auto& authority =
+      match.override_index.has_value() ? extra_authorities[*match.override_index] : primary_authority;
   return ResolvedPath{
+      .authority = authority,
+      .authority_relative_path = relative_path(candidate, match.root),
       .absolute_path = candidate.lexically_normal().string(),
       .relative_path = relative_path(candidate, match.root),
       .symlink_followed = symlink_followed,
@@ -346,7 +366,19 @@ filesystem_error(std::string message, const std::filesystem::path& path, const s
 
 [[nodiscard]] Result<ResolvedPath> build_per_call_outside_resolved(const std::filesystem::path& candidate,
                                                                    bool symlink_followed) {
+  auto authority_root = candidate.parent_path();
+  auto relative = candidate.filename().string();
+  if (authority_root.empty() || relative.empty()) {
+    authority_root = candidate;
+    relative = ".";
+  }
+  auto authority = io::DirectoryAuthority::open_trusted(authority_root.string());
+  if (!authority) {
+    return std::unexpected(std::move(authority).error());
+  }
   return ResolvedPath{
+      .authority = std::move(*authority),
+      .authority_relative_path = std::move(relative),
       .absolute_path = candidate.lexically_normal().string(),
       .relative_path = {},
       .symlink_followed = symlink_followed,
@@ -379,6 +411,8 @@ canonical_existing_path(const std::filesystem::path& candidate, std::string_view
 [[nodiscard]] Result<ResolvedPath> resolve_existing_readable(std::string_view input,
                                                              const std::string& root,
                                                              std::span<const std::string> extra_roots,
+                                                             const io::DirectoryAuthority& primary_authority,
+                                                             std::span<const io::DirectoryAuthority> extra_authorities,
                                                              std::string_view action) {
   if (input.empty()) {
     return std::unexpected(Error::invalid_argument("workspace path must not be empty"));
@@ -404,7 +438,7 @@ canonical_existing_path(const std::filesystem::path& candidate, std::string_view
                                       symlink_followed ? "symlink_escape" : "outside_workspace"));
   }
 
-  return build_resolved(*canonical, *match, symlink_followed, false);
+  return build_resolved(*canonical, *match, primary_authority, extra_authorities, symlink_followed, false);
 }
 
 [[nodiscard]] Result<ResolvedPath>
@@ -428,6 +462,8 @@ resolve_existing_readable_outside_workspace(std::string_view input, const std::s
 [[nodiscard]] Result<ResolvedPath> resolve_mutating(std::string_view input,
                                                     const std::string& root,
                                                     std::span<const std::string> extra_roots,
+                                                    const io::DirectoryAuthority& primary_authority,
+                                                    std::span<const io::DirectoryAuthority> extra_authorities,
                                                     bool allow_missing_parent,
                                                     std::string_view action) {
   if (input.empty()) {
@@ -482,7 +518,7 @@ resolve_existing_readable_outside_workspace(std::string_view input, const std::s
     return std::unexpected(path_error("path is outside workspace", input, "outside_workspace"));
   }
 
-  return build_resolved(canonical, *match, false, created_parents);
+  return build_resolved(canonical, *match, primary_authority, extra_authorities, false, created_parents);
 }
 
 }  // namespace
@@ -552,9 +588,14 @@ bool WorkspaceWalkFilter::should_skip(std::string_view path, bool is_directory) 
 
 Workspace::Workspace(std::string root,
                      std::vector<std::string> extra_read_roots,
-                     std::vector<std::string> extra_write_roots)
+                     std::vector<std::string> extra_write_roots,
+                     io::DirectoryAuthority root_authority,
+                     std::vector<io::DirectoryAuthority> extra_read_authorities,
+                     std::vector<io::DirectoryAuthority> extra_write_authorities)
     : root_{std::move(root)}, extra_read_roots_{std::move(extra_read_roots)},
-      extra_write_roots_{std::move(extra_write_roots)} {}
+      extra_write_roots_{std::move(extra_write_roots)}, root_authority_{std::move(root_authority)},
+      extra_read_authorities_{std::move(extra_read_authorities)},
+      extra_write_authorities_{std::move(extra_write_authorities)} {}
 
 core::Result<Workspace> Workspace::create(std::string_view root, WorkspaceOptions options) {
   auto canonical_root = canonical_directory(root, "workspace");
@@ -571,15 +612,33 @@ core::Result<Workspace> Workspace::create(std::string_view root, WorkspaceOption
     return std::unexpected(std::move(write_roots).error());
   }
 
-  return Workspace{canonical_root->string(), std::move(*read_roots), std::move(*write_roots)};
+  auto root_authority = io::DirectoryAuthority::open_trusted(canonical_root->string());
+  if (!root_authority) {
+    return std::unexpected(std::move(root_authority).error().with("field", "workspace"));
+  }
+  auto read_authorities = open_root_authorities(*read_roots, "permissions.workspace.extra_read_roots");
+  if (!read_authorities) {
+    return std::unexpected(std::move(read_authorities).error());
+  }
+  auto write_authorities = open_root_authorities(*write_roots, "permissions.workspace.extra_write_roots");
+  if (!write_authorities) {
+    return std::unexpected(std::move(write_authorities).error());
+  }
+
+  return Workspace{canonical_root->string(),
+                   std::move(*read_roots),
+                   std::move(*write_roots),
+                   std::move(*root_authority),
+                   std::move(*read_authorities),
+                   std::move(*write_authorities)};
 }
 
 core::Result<ResolvedPath> Workspace::resolve_read(std::string_view path) const {
-  return resolve_existing_readable(path, root_, extra_read_roots_, "read");
+  return resolve_existing_readable(path, root_, extra_read_roots_, root_authority_, extra_read_authorities_, "read");
 }
 
 core::Result<ResolvedPath> Workspace::resolve_list(std::string_view path) const {
-  return resolve_existing_readable(path, root_, extra_read_roots_, "list");
+  return resolve_existing_readable(path, root_, extra_read_roots_, root_authority_, extra_read_authorities_, "list");
 }
 
 core::Result<ResolvedPath> Workspace::resolve_read_outside_workspace(std::string_view path) const {
@@ -591,11 +650,17 @@ core::Result<ResolvedPath> Workspace::resolve_list_outside_workspace(std::string
 }
 
 core::Result<ResolvedPath> Workspace::resolve_write(std::string_view path, WriteIntent intent) const {
-  return resolve_mutating(path, root_, extra_write_roots_, intent.create_parent_directories, "write");
+  return resolve_mutating(path,
+                          root_,
+                          extra_write_roots_,
+                          root_authority_,
+                          extra_write_authorities_,
+                          intent.create_parent_directories,
+                          "write");
 }
 
 core::Result<ResolvedPath> Workspace::resolve_delete(std::string_view path) const {
-  return resolve_mutating(path, root_, extra_write_roots_, false, "delete");
+  return resolve_mutating(path, root_, extra_write_roots_, root_authority_, extra_write_authorities_, false, "delete");
 }
 
 WorkspaceWalkFilter Workspace::walk_filter(std::string_view root, WorkspaceWalkOptions options) const {

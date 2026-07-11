@@ -17,6 +17,8 @@
 
 namespace orangutan::io {
 
+class ReadOnlyFile;
+
 /// Stable, byte-cheap file identity. `size_bytes` and `mtime_ns` are
 /// populated unconditionally; `sha256` is reserved for a future slice
 /// (`compute_file_fingerprint(path, ComputeFingerprintOptions{.compute_hash=true})`)
@@ -35,5 +37,9 @@ struct FileFingerprint {
 ///   * `Error::not_found` — `path` does not exist.
 ///   * `Error::io` — `path` is not a regular file, or `stat` failed.
 [[nodiscard]] core::Result<FileFingerprint> compute_file_fingerprint(std::string_view path);
+
+/// Read metadata from an already-authorized file descriptor without
+/// re-resolving its pathname.
+[[nodiscard]] core::Result<FileFingerprint> compute_file_fingerprint(const ReadOnlyFile& file);
 
 }  // namespace orangutan::io

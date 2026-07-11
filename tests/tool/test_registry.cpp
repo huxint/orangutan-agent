@@ -226,6 +226,7 @@ TEST_CASE("DispatchContext::for_now clones a prototype and clears dispatch-local
   auto prototype = make_ctx(io, rules, audit, permission::Mode::strict);
   prototype.registry = &registry;
   prototype.resolved_path = tool::ResolvedToolPath{
+      .authority_relative_path = "a",
       .absolute_path = "/tmp/a",
       .relative_path = "a",
       .display_path = "<workspace>/a",

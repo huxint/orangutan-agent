@@ -16,6 +16,7 @@
 #include <vector>
 
 #include <oran/core/result.hpp>
+#include <oran/io/directory_authority.hpp>
 
 namespace orangutan::tool {
 
@@ -66,7 +67,15 @@ private:
 };
 
 struct ResolvedPath {
-  /// Canonical absolute path to pass to `oran-io`.
+  /// Stable directory capability selected for this path.
+  io::DirectoryAuthority authority;
+  /// Path interpreted relative to `authority` for filesystem execution. This
+  /// remains populated for per-call outside overrides even though the audit
+  /// `relative_path` below is intentionally empty.
+  std::string authority_relative_path;
+  /// Canonical absolute spelling retained for audit/display and for built-ins
+  /// that have not yet migrated to dirfd-relative execution. It is not the
+  /// execution authority for migrated callers.
   std::string absolute_path;
   /// Path relative to the matching root, for audit/display metadata.
   /// Empty when a per-call read/list override resolves outside the permitted
@@ -122,8 +131,16 @@ private:
   std::string root_;
   std::vector<std::string> extra_read_roots_;
   std::vector<std::string> extra_write_roots_;
+  io::DirectoryAuthority root_authority_;
+  std::vector<io::DirectoryAuthority> extra_read_authorities_;
+  std::vector<io::DirectoryAuthority> extra_write_authorities_;
 
-  Workspace(std::string root, std::vector<std::string> extra_read_roots, std::vector<std::string> extra_write_roots);
+  Workspace(std::string root,
+            std::vector<std::string> extra_read_roots,
+            std::vector<std::string> extra_write_roots,
+            io::DirectoryAuthority root_authority,
+            std::vector<io::DirectoryAuthority> extra_read_authorities,
+            std::vector<io::DirectoryAuthority> extra_write_authorities);
 };
 
 }  // namespace orangutan::tool

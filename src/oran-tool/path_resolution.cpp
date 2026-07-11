@@ -192,6 +192,8 @@ to_tool_path(const Workspace& workspace, std::string_view input_path, ResolvedPa
   auto display_path = resolved.per_call_outside_workspace_override ? resolved.absolute_path
                                                                    : workspace.display_path(resolved.absolute_path);
   return ResolvedToolPath{
+      .authority = std::move(resolved.authority),
+      .authority_relative_path = std::move(resolved.authority_relative_path),
       .absolute_path = std::move(resolved.absolute_path),
       .relative_path = std::move(resolved.relative_path),
       .display_path = std::move(display_path),

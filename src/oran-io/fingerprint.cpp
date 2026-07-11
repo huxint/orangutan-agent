@@ -2,6 +2,7 @@
 
 #include <oran/io/fingerprint.hpp>
 
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <expected>
@@ -10,7 +11,10 @@
 #include <string_view>
 #include <system_error>
 
+#include <sys/stat.h>
+
 #include <oran/core/error.hpp>
+#include <oran/io/directory_authority.hpp>
 
 namespace orangutan::io {
 namespace {
@@ -31,6 +35,21 @@ filesystem_error(std::string message, const std::filesystem::path& path, const s
   const auto sys = std::chrono::clock_cast<std::chrono::system_clock>(ftt);
   const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(sys.time_since_epoch()).count();
   return ns < 0 ? std::uint64_t{0} : static_cast<std::uint64_t>(ns);
+}
+
+[[nodiscard]] std::uint64_t stat_mtime_nanoseconds(const struct stat& status) noexcept {
+#if defined(__APPLE__)
+  const auto seconds = status.st_mtimespec.tv_sec;
+  const auto nanoseconds = status.st_mtimespec.tv_nsec;
+#else
+  const auto seconds = status.st_mtim.tv_sec;
+  const auto nanoseconds = status.st_mtim.tv_nsec;
+#endif
+  if (seconds < 0) {
+    return 0;
+  }
+  constexpr auto kNanosecondsPerSecond = std::uint64_t{1'000'000'000};
+  return static_cast<std::uint64_t>(seconds) * kNanosecondsPerSecond + static_cast<std::uint64_t>(nanoseconds);
 }
 
 }  // namespace
@@ -66,6 +85,31 @@ Result<FileFingerprint> compute_file_fingerprint(std::string_view path) {
   return FileFingerprint{
       .size_bytes = size,
       .mtime_ns = to_unix_nanoseconds(mtime),
+      .sha256 = std::nullopt,
+  };
+}
+
+Result<FileFingerprint> compute_file_fingerprint(const ReadOnlyFile& file) {
+  if (file.native_handle() < 0) {
+    return std::unexpected(Error::invalid_argument("fingerprint file handle must be valid"));
+  }
+
+  struct stat status{};
+  errno = 0;
+  if (::fstat(file.native_handle(), &status) != 0) {
+    return std::unexpected(Error::io("failed to inspect file descriptor for fingerprint")
+                               .with("path", std::string{file.display_path()})
+                               .with("errno", std::to_string(errno))
+                               .with("detail", std::generic_category().message(errno)));
+  }
+  if (!S_ISREG(status.st_mode)) {
+    return std::unexpected(
+        Error::io("fingerprint target is not a regular file").with("path", std::string{file.display_path()}));
+  }
+
+  return FileFingerprint{
+      .size_bytes = static_cast<std::uintmax_t>(status.st_size),
+      .mtime_ns = stat_mtime_nanoseconds(status),
       .sha256 = std::nullopt,
   };
 }
