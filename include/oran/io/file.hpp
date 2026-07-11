@@ -19,6 +19,7 @@ namespace orangutan::io {
 
 class ReadOnlyFile;
 class FileMutation;
+class DeleteMutation;
 
 enum class WriteMode : std::uint8_t {
   truncate,
@@ -88,8 +89,8 @@ struct DeletePathOptions {
 };
 
 struct DeletePathResult {
-  /// Number of filesystem entries removed. For recursive directory deletes
-  /// this is the `std::filesystem::remove_all` count, including the root.
+  /// Number of directory entries removed, including a recursively deleted
+  /// root directory.
   std::uintmax_t paths_removed{0};
 };
 
@@ -166,7 +167,7 @@ read_text_file_ranged(asio::any_io_executor executor, ReadOnlyFile file, ReadTex
 /// Invalidate every process-local `read_text_file_ranged` cache entry for
 /// `path`. The path is canonicalised through the same private key helper as
 /// reads; no cache keys or file contents are exposed. This is the public seam
-/// for pathname deletes, explicit callers, and watcher callbacks.
+/// for explicit callers and watcher callbacks.
 void invalidate_read_text_file_ranged_cache(std::string_view path);
 
 /// Watch `root` for local filesystem changes and invalidate
@@ -200,14 +201,12 @@ watch_read_text_file_ranged_cache(asio::any_io_executor executor,
 [[nodiscard]] async::Awaitable<core::Result<std::vector<DirectoryEntry>>>
 list_directory(asio::any_io_executor executor, std::string path, ListDirectoryOptions options = {});
 
-/// Delete a file or, when `options.recursive=true`, a directory tree at
-/// `path`. Directories without explicit recursion intent and target-path
-/// symlinks reject with `invalid_argument`; missing paths return `not_found`.
+/// Consume a pinned delete capability. Regular files delete directly;
+/// directories require `options.recursive=true` and are walked relative to
+/// pinned descriptors without following symlinks. Changes observed by the
+/// final identity check return `conflict`; POSIX does not provide a conditional
+/// unlink, so an external writer can still race the final check-to-unlink gap.
 [[nodiscard]] async::Awaitable<core::Result<DeletePathResult>>
-delete_path(asio::any_io_executor executor, std::string path, DeletePathOptions options = {});
-
-/// Backward-compatible regular-file delete wrapper. Refuses directories and
-/// symlinks with `invalid_argument`; missing paths return `not_found`.
-[[nodiscard]] async::Awaitable<core::Result<void>> delete_file(asio::any_io_executor executor, std::string path);
+delete_path(asio::any_io_executor executor, DeleteMutation mutation, DeletePathOptions options = {});
 
 }  // namespace orangutan::io

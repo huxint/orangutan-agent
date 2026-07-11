@@ -80,8 +80,12 @@ Planned secret slice:
   55 moves known filesystem built-ins to registry-boundary pre-resolution:
   path policy runs before permission evaluation, resolver failures are audited
   under `permission::AuditEvent::metadata_json`, and handlers do not run on
-  path-policy failures. The remaining workspace work is v1.1 structure
-  (`Workspace::is_ignored` / display helper) and the future capability-gated
+  path-policy failures. `FileRead`, `FileWrite`, `FileEdit`, and `FileDelete`
+  execute through directory capabilities rather than treating a validated path
+  string as authorization across an await. FileDelete also pins the approved
+  target inode before approval and never follows symlinks during recursive
+  traversal. `FileSearch` and `DirectoryList` remain the pathname-execution
+  migration backlog, along with the future capability-gated
   `tool::Runtime::workspace()` accessor.
 - Hardening flags compiled in by default:
   - `_FORTIFY_SOURCE=3`

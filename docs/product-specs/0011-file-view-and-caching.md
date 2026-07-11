@@ -397,7 +397,7 @@ correctness is anchored:
   `read_text_file_ranged` results are held in a process-local
   `BoundedCache` keyed by `(canonical_path, range, max_bytes,
   size_bytes, mtime_ns)` and capped at 64 entries / 16 MiB / 10
-  minutes. Hits re-stat before returning; pathname deletes call
+  minutes. Hits re-stat before returning; explicit mutation owners may call
   `invalidate_read_text_file_ranged_cache(path)` so stale bodies cannot
   survive those mutations while unrelated file views stay hot. Authority-backed
   reads bypass this cache, and `FileMutation` does not use its diagnostics-only
@@ -500,10 +500,9 @@ correctness is anchored:
    and boundary+1.
 7. **Cache safety.** Every pathname-backed cache hit still records an
    `AuditEvent` and publishes `hook::Event::tool_after`. Authority-backed
-   `FileRead` bypasses pathname caches, while `FileDelete`, watcher events,
-   and explicit invalidation remove affected cache + line-offset entries
-   synchronously. `FileMutation` diagnostic display strings are never cache
-   identities.
+   `FileRead` bypasses pathname caches. Watcher events and explicit invalidation
+   remove affected cache + line-offset entries synchronously; handle-backed
+   mutations do not guess pathname cache keys from diagnostic display strings.
 8. **Bounded growth.** `BoundedCache` rejects no inserts but evicts oldest
    on capacity, then refuses to cache items larger than its byte budget.
    Capacity, byte budget, and TTL are observable via a stats accessor for

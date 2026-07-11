@@ -1,9 +1,8 @@
 // src/oran-tool/file_delete.cpp — `FileDelete` built-in.
 //
-// Thin wrapper around `oran-io::delete_path`. Regular files delete directly;
-// directories require explicit `recursive=true`; symlinks reject with
-// `invalid_argument` from the io layer so an LLM-driven delete cannot follow a
-// link outside the workspace.
+// Executes through a pinned workspace authority. Regular files delete
+// directly; directories require explicit `recursive=true`; target symlinks
+// reject so an LLM-driven delete cannot follow a link outside the workspace.
 // Capability `delete_path` was already in the slice-7 `core::Capability`
 // vocabulary; this slice is the first built-in that actually requires it.
 
@@ -20,6 +19,7 @@
 #include <oran/core/capability.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/tool_def.hpp>
+#include <oran/io/directory_authority.hpp>
 #include <oran/io/file.hpp>
 #include <oran/tool/registry.hpp>
 #include <oran/tool/workspace.hpp>
@@ -72,18 +72,16 @@ struct ParsedInput {
     co_return std::unexpected(std::move(parsed).error());
   }
 
-  auto path = ctx.resolved_path.has_value() ? ctx.resolved_path->absolute_path : std::move(parsed->path);
-  if (!ctx.resolved_path.has_value() && ctx.workspace != nullptr) {
-    auto resolved = ctx.workspace->resolve_delete(path);
-    if (!resolved) {
-      co_return std::unexpected(std::move(resolved).error());
-    }
-    path = std::move(resolved->absolute_path);
+  if (!ctx.resolved_path.has_value() || !ctx.resolved_path->delete_mutation.has_value()) {
+    co_return std::unexpected(core::Error::internal("FileDelete requires a pre-approved delete mutation"));
   }
-  auto deleted = co_await io::delete_path(ctx.executor, path, io::DeletePathOptions{.recursive = parsed->recursive});
+  auto deleted = co_await io::delete_path(ctx.executor,
+                                          std::move(*ctx.resolved_path->delete_mutation),
+                                          io::DeletePathOptions{.recursive = parsed->recursive});
   if (!deleted) {
     co_return std::unexpected(std::move(deleted).error());
   }
+  const auto& path = ctx.resolved_path->absolute_path;
   co_return Output{
       .text = "deleted " + path,
       .usage =
@@ -99,11 +97,12 @@ struct ParsedInput {
 core::Result<void> register_file_delete(Registry& registry) {
   core::ToolDef def{
       .name = std::string{kFileDeleteName},
-      .description = "Delete a file or, with explicit recursion intent, a directory tree. Input: "
-                     "{\"path\": <string>, \"recursive\"?: <bool default false>}. Directories require "
-                     "`recursive=true`; symlinks are refused with `invalid_argument`. Returns `not_found` when no "
-                     "path exists. On success returns the literal text `deleted <path>` and fills usage with "
-                     "bytes_written=0 plus files_touched equal to removed path count.",
+      .description =
+          "Delete a file or, with explicit recursion intent, a directory tree. Input: "
+          "{\"path\": <string>, \"recursive\"?: <bool default false>}. Directories require "
+          "`recursive=true`; workspace symlink targets are refused with `permission_denied`. Returns "
+          "`not_found` when no path exists. On success returns the literal text `deleted <path>` and fills usage with "
+          "bytes_written=0 plus files_touched equal to removed path count.",
       .input_schema_json = std::string{kFileDeleteSchema},
       .required_capabilities = {core::Capability::delete_path},
       .deferred = false,

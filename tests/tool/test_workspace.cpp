@@ -65,6 +65,11 @@ void write_text(const std::filesystem::path& path, std::string_view contents) {
   out.write(contents.data(), static_cast<std::streamsize>(contents.size()));
 }
 
+[[nodiscard]] std::string read_text(const std::filesystem::path& path) {
+  std::ifstream input{path, std::ios::binary};
+  return std::string{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+}
+
 [[nodiscard]] bool context_has(const core::Error& error, std::string_view key, std::string_view value) {
   return std::ranges::any_of(error.context(),
                              [&](const auto& entry) { return entry.first == key && entry.second == value; });
@@ -1078,6 +1083,109 @@ TEST_CASE("FileDelete uses DispatchContext workspace for relative deletes and tr
     REQUIRE(context_has(escaped.error(), "reason", "outside_workspace"));
     REQUIRE(std::filesystem::exists(outside.path() / "secret.txt"));
   });
+}
+
+TEST_CASE("FileDelete retains workspace authority across the approval window",
+          "[unit][tool][workspace][file_delete][approval][race]") {
+  TempDir sandbox{"oran-workspace-file-delete-approval-race"};
+  const auto root = sandbox.path() / "workspace";
+  const auto moved_root = sandbox.path() / "workspace-moved";
+  const auto outside = sandbox.path() / "outside";
+  write_text(root / "note.txt", "inside-target");
+  write_text(outside / "note.txt", "outside-target");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_delete(registry).has_value());
+
+    auto workspace = make_workspace(root);
+    auto rules = ask_tool_rules(std::string{tool::kFileDeleteName}, core::Capability::delete_path);
+    permission::RecordingAuditSink sink;
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+    auto broker = make_broker();
+    ctx.approval_broker = &broker;
+    ctx.now = fixed_now();
+
+    orangutan::hook::Bus bus;
+    orangutan::hook::InProcessSink prompt{
+        "delete-root-replacement-prompt",
+        [](orangutan::hook::Event, orangutan::hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        }};
+    prompt.set_blocking_handler([&](orangutan::hook::Event, orangutan::hook::PayloadPtr)
+                                    -> async::Awaitable<core::Result<orangutan::hook::HookDecision>> {
+      std::error_code ec;
+      std::filesystem::rename(root, moved_root, ec);
+      if (ec) {
+        co_return std::unexpected(core::Error::io("test failed to rename workspace root").with("detail", ec.message()));
+      }
+      std::filesystem::create_directory_symlink(outside, root, ec);
+      if (ec) {
+        co_return std::unexpected(
+            core::Error::io("test failed to replace workspace root").with("detail", ec.message()));
+      }
+      co_return orangutan::hook::HookDecision{
+          .reason = "operator_approved:operator-1",
+          .rewritten_input_json = std::nullopt,
+          .approval_expires_at = std::nullopt,
+          .trace = {},
+      };
+    });
+    bus.bind(prompt, {orangutan::hook::Event::permission_ask_rendered});
+    ctx.bus = &bus;
+
+    auto deleted = co_await registry.dispatch(tool::kFileDeleteName, R"({"path":"note.txt"})", ctx);
+    REQUIRE(deleted.has_value());
+  });
+
+  REQUIRE_FALSE(std::filesystem::exists(moved_root / "note.txt"));
+  REQUIRE(std::filesystem::exists(outside / "note.txt"));
+}
+
+TEST_CASE("FileDelete rejects target replacement during the approval window",
+          "[unit][tool][workspace][file_delete][approval][race]") {
+  TempDir root{"oran-workspace-file-delete-target-race"};
+  write_text(root.path() / "note.txt", "approved-target");
+  write_text(root.path() / "replacement.txt", "replacement");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_delete(registry).has_value());
+
+    auto workspace = make_workspace(root.path());
+    auto rules = ask_tool_rules(std::string{tool::kFileDeleteName}, core::Capability::delete_path);
+    permission::RecordingAuditSink sink;
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+    auto broker = make_broker();
+    ctx.approval_broker = &broker;
+    ctx.now = fixed_now();
+
+    orangutan::hook::Bus bus;
+    orangutan::hook::InProcessSink prompt{
+        "delete-target-replacement-prompt",
+        [](orangutan::hook::Event, orangutan::hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        }};
+    prompt.set_blocking_handler(
+        [&](orangutan::hook::Event,
+            orangutan::hook::PayloadPtr) -> async::Awaitable<core::Result<orangutan::hook::HookDecision>> {
+          std::filesystem::rename(root.path() / "replacement.txt", root.path() / "note.txt");
+          co_return orangutan::hook::HookDecision{
+              .reason = "operator_approved:operator-1",
+              .rewritten_input_json = std::nullopt,
+              .approval_expires_at = std::nullopt,
+              .trace = {},
+          };
+        });
+    bus.bind(prompt, {orangutan::hook::Event::permission_ask_rendered});
+    ctx.bus = &bus;
+
+    auto deleted = co_await registry.dispatch(tool::kFileDeleteName, R"({"path":"note.txt"})", ctx);
+    REQUIRE_FALSE(deleted.has_value());
+    REQUIRE(deleted.error().kind() == core::ErrorKind::conflict);
+  });
+
+  REQUIRE(read_text(root.path() / "note.txt") == "replacement");
 }
 
 TEST_CASE("FileDelete rejects workspace symlink mutation targets", "[unit][tool][workspace][file_delete]") {

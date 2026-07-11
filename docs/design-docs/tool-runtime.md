@@ -238,29 +238,14 @@ enum class Capability {
 > `outside_workspace_override`, and records the resolved absolute path
 > under `metadata_json.path_resolution.resolved_display_path`. Write,
 > edit, and delete built-ins do not have this per-call escape.
-> Slice 30 (2026-05-20) adds `FileDelete`
-> (`tool::register_file_delete`, capability `delete_path` — the
-> first built-in that exercises this slice-7 capability), built on
-> a new `oran-io::delete_file` coroutine helper. Input
-> `{path}`; the io helper refuses every path that is not a
-> regular file with `invalid_argument` (covers both directories
-> AND symlinks even when the symlink points at a regular file —
-> the v1 surface is deliberately narrow so a recursive delete or
-> a symlink-follow cannot escape the workspace), returns
-> `not_found` when no entry exists at `path` (and on the rare
-> "vanished between stat and unlink" race so the caller sees a
-> single end-state error kind), and on success returns the
-> literal text `deleted <path>`. The future direction for
-> filesystem mutation built-ins is *consolidation*, not more
-> per-kind splits: a single delete tool covering files AND
-> folders, not separate `file.remove` / `directory.remove` tools.
-> The v1 narrowings here are the entry point, not the dead end.
-> Slice 265 completes that consolidation under the same public tool
-> name: `FileDelete` input is now `{path, recursive?}`. Regular files
-> delete directly, directories require explicit `recursive=true`, and
-> symlinks still reject. The tool calls `oran-io::delete_path`, returns
-> the same text fallback `deleted <path>`, and fills
-> `usage.files_touched` from the removed path count.
+> `FileDelete` (capability `delete_path`) accepts `{path, recursive?}`.
+> Registry pre-resolution creates a pinned `io::DeleteMutation` before
+> permission approval, so replacing the workspace pathname or target name
+> during the approval window cannot redirect the effect. Regular files delete
+> directly; directories require explicit `recursive=true`; parent and target
+> symlinks reject through workspace/authority policy. Recursive traversal is
+> dirfd-relative and unlinks nested symlinks without following them. Success
+> returns `deleted <path>` and fills `usage.files_touched` from the removed count.
 > Slice 32 (2026-05-21) routes `FileEdit` and the dominant
 > `FileWrite` mode (`truncate`) through the new
 > `oran-io::WriteTextOptions::atomic` opt-in: the rewrite is
@@ -692,21 +677,28 @@ Current surface and forward shape:
   via `Workspace::resolve_read` / `resolve_write` / `resolve_delete` /
   `resolve_list`. The intent is encoded in the method name; callers cannot
   mix them up at the type level. `Registry::dispatch` stores the successful
-  result in `DispatchContext::resolved_path`. `FileRead`, `FileWrite`, and
-  `FileEdit` consume the authority plus relative path after approval rather
-  than reopening the absolute pathname. `FileWrite` and `FileEdit` reject a
-  direct dispatch that does not provide a workspace authority; read/list and
-  the remaining filesystem handlers retain their temporary pathname paths
-  while those handlers migrate.
+    result in `DispatchContext::resolved_path`. `FileRead`, `FileWrite`,
+    `FileEdit`, and `FileDelete` consume handle capabilities rather than
+    reopening the absolute pathname. FileDelete's target inode is pinned before
+    approval; write/edit create their mutation after approval beneath the pinned
+    directory authority. These mutation tools reject direct dispatch without a
+    workspace authority. `FileSearch` and `DirectoryList` retain temporary
+    pathname execution while those handlers migrate.
 - `FileWrite` and `FileEdit` begin a dirfd-backed mutation after approval.
   Mutation resolution always rejects symlink components and therefore accepts
   an authority-relative name rather than the read-side symlink-policy type. The
   parent directory and any existing target inode stay pinned across executor
   hops; edits read the snapshotted file descriptor; truncate commits revalidate
-  device, inode, size, mtime, and ctime immediately before rename. A mismatch
-  returns `conflict/reason=stale_fingerprint`. This is a metadata guard, not
-  content identity or conditional rename CAS, so timestamp granularity and the
-  final validation-to-rename window remain acknowledged external-writer races.
+    device, inode, size, mtime, and ctime immediately before rename. A mismatch
+    returns `conflict/reason=stale_fingerprint`. This is a metadata guard, not
+    content identity or conditional rename CAS, so timestamp granularity and the
+    final validation-to-rename window remain acknowledged external-writer races.
+- `FileDelete` pins the target inode before approval and revalidates device/inode
+  identity before removal. This closes approval-time pathname replacement but,
+  like replacement writes, cannot make POSIX's final check-to-`unlinkat` window a
+  conditional CAS. Recursive failures expose partial removed-entry counts in the
+  error context; the first synchronous dirfd walker observes cancellation before
+  traversal rather than between entries.
 - Audit rows carry path-resolution metadata under
   `permission::AuditEvent::metadata_json`. Successful resolves include hashed
   input/root values, `resolved_relative_path`, symlink / parent-creation /

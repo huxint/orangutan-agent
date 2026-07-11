@@ -113,6 +113,9 @@ struct PathRequest {
     };
   }
   if (tool_name == kFileDeleteName) {
+    if (auto it = parsed.find("recursive"); it != parsed.end() && !it->is_boolean()) {
+      return std::nullopt;
+    }
     return PathRequest{.intent = PathIntent::delete_, .path = std::move(*path)};
   }
   if (tool_name == kFileEditName) {
@@ -280,6 +283,22 @@ pre_resolve_tool_path(std::string_view tool_name, std::string_view input_json, D
   }
 
   ctx.resolved_path = to_tool_path(*ctx.workspace, request->path, std::move(*resolved));
+  if (request->intent == PathIntent::delete_) {
+    if (!ctx.resolved_path->authority.has_value()) {
+      return PathResolutionReport{
+          .metadata_json = path_resolution_metadata_json(ctx.resolved_path),
+          .error = core::Error::internal("FileDelete path resolution did not produce an authority"),
+      };
+    }
+    auto mutation = ctx.resolved_path->authority->begin_delete(ctx.resolved_path->authority_relative_path);
+    if (!mutation) {
+      return PathResolutionReport{
+          .metadata_json = path_resolution_metadata_json(ctx.resolved_path),
+          .error = std::move(mutation).error(),
+      };
+    }
+    ctx.resolved_path->delete_mutation = std::move(*mutation);
+  }
   return PathResolutionReport{
       .metadata_json = path_resolution_metadata_json(ctx.resolved_path),
       .requires_approval = requires_approval,

@@ -1101,65 +1101,6 @@ dispatch_read(const std::string& path, const ReadTextOptions& options, const Fil
   }
 }
 
-[[nodiscard]] core::Result<DeletePathResult> delete_path_blocking(const std::string& path, DeletePathOptions options) {
-  if (auto valid = validate_path(path); !valid) {
-    return std::unexpected(valid.error());
-  }
-
-  try {
-    const auto fs_path = to_path(path);
-    std::error_code ec;
-    const auto status = std::filesystem::symlink_status(fs_path, ec);
-    if (ec) {
-      return std::unexpected(system_io_error("failed to stat file", path, ec));
-    }
-    if (!std::filesystem::status_known(status) || status.type() == std::filesystem::file_type::not_found) {
-      return std::unexpected(core::Error::not_found("path does not exist").with("path", path));
-    }
-    if (std::filesystem::is_symlink(status)) {
-      return std::unexpected(core::Error::invalid_argument("path is a symlink").with("path", path));
-    }
-
-    if (std::filesystem::is_directory(status)) {
-      if (!options.recursive) {
-        return std::unexpected(
-            core::Error::invalid_argument("directory delete requires recursive=true").with("path", path));
-      }
-
-      const auto removed = std::filesystem::remove_all(fs_path, ec);
-      if (ec) {
-        return std::unexpected(system_io_error("failed to delete directory tree", path, ec));
-      }
-      if (removed == 0U) {
-        return std::unexpected(core::Error::not_found("path disappeared before delete").with("path", path));
-      }
-      invalidate_all_read_text_file_ranged_caches();
-      return DeletePathResult{.paths_removed = removed};
-    }
-
-    if (!std::filesystem::is_regular_file(status)) {
-      return std::unexpected(
-          core::Error::invalid_argument("path is not a regular file or directory").with("path", path));
-    }
-
-    if (!std::filesystem::remove(fs_path, ec)) {
-      if (ec) {
-        return std::unexpected(system_io_error("failed to delete path", path, ec));
-      }
-      // remove() returned false without an error_code: the file vanished
-      // between the stat and the unlink — surface it as a race-condition
-      // not_found so the caller sees a consistent end state.
-      return std::unexpected(core::Error::not_found("path disappeared before delete").with("path", path));
-    }
-    invalidate_read_text_file_ranged_cache_blocking(path);
-    return DeletePathResult{.paths_removed = 1};
-  } catch (const std::filesystem::filesystem_error& e) {
-    return std::unexpected(system_io_error("filesystem delete failed", path, e.code()));
-  } catch (const std::exception& e) {
-    return std::unexpected(io_error("path delete failed", path).with("exception", e.what()));
-  }
-}
-
 [[nodiscard]] async::Awaitable<core::Result<PreparedReadTextFile>>
 prepare_read_text_file_async(asio::any_io_executor executor, std::string path, ReadTextOptions options) {
   co_return co_await run_blocking(std::move(executor), [path = std::move(path), options] {
@@ -1368,20 +1309,6 @@ async::Awaitable<core::Result<std::vector<DirectoryEntry>>>
 list_directory(asio::any_io_executor executor, std::string path, ListDirectoryOptions options) {
   co_return co_await run_blocking(std::move(executor),
                                   [path = std::move(path), options] { return list_directory_blocking(path, options); });
-}
-
-async::Awaitable<core::Result<DeletePathResult>>
-delete_path(asio::any_io_executor executor, std::string path, DeletePathOptions options) {
-  co_return co_await run_blocking(std::move(executor),
-                                  [path = std::move(path), options] { return delete_path_blocking(path, options); });
-}
-
-async::Awaitable<core::Result<void>> delete_file(asio::any_io_executor executor, std::string path) {
-  auto deleted = co_await delete_path(std::move(executor), std::move(path), DeletePathOptions{.recursive = false});
-  if (!deleted) {
-    co_return std::unexpected(std::move(deleted).error());
-  }
-  co_return core::Result<void>{};
 }
 
 }  // namespace orangutan::io

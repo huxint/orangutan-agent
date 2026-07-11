@@ -10,18 +10,18 @@ performs the requested operation and returns `core::Result<T>`.
 > and permission/hook integration are planned future slices; watcher-backed
 > range-read cache invalidation lands later in slices 57-58.
 >
-> **Slice-30 status (2026-05-20):** `oran-io` adds `delete_file(executor, path)`
-> for regular-file removal. Directories and symlinks reject as
-> `invalid_argument` so the v1 surface cannot be used to recursively
-> destroy a tree or unlink a symlink that points outside the workspace.
->
-> **Slice-265 status (2026-06-28):** `delete_path(executor, path, options)`
-> is the unified delete helper for files and folders. Regular files delete
-> directly, directory deletion requires `DeletePathOptions::recursive=true`,
-> symlinks always reject, and the result reports the removed path count.
-> `delete_file` remains as the regular-file compatibility wrapper.
-> Recursive directory deletion conservatively invalidates all private
-> range-read caches so removed child-file views cannot survive the mutation.
+> **Delete status:** deletion is handle-authorized. `DirectoryAuthority::begin_delete`
+> resolves beneath a pinned root, rejects parent and target symlinks, and pins
+> both the parent directory and approved target inode. The registry materializes
+> this `DeleteMutation` before an approval await; `delete_path(executor, mutation,
+> options)` therefore cannot be redirected by replacing the workspace pathname or
+> target name during approval. Regular files delete directly; directories require
+> `DeletePathOptions::recursive=true` and are walked with dirfd-relative operations
+> that unlink nested symlinks without following them. Pathname delete overloads and
+> the old `delete_file` compatibility wrapper no longer exist. Recursive failure
+> errors carry `partial` and `paths_removed` context. The current POSIX backend is
+> cancel-aware before traversal but cannot interrupt an in-progress synchronous
+> walk, and its final identity-check-to-`unlinkat` window is not a conditional CAS.
 >
 > **Slice-32 status (2026-05-21):** `WriteTextOptions` grows an opt-in
 > `atomic` flag. When set on a `WriteMode::truncate` write, the helper
@@ -253,10 +253,7 @@ async::Awaitable<core::Result<std::vector<DirectoryEntry>>>
 list_directory(asio::any_io_executor executor, std::string path, ListDirectoryOptions = {});
 
 async::Awaitable<core::Result<DeletePathResult>>
-delete_path(asio::any_io_executor executor, std::string path, DeletePathOptions = {});
-
-async::Awaitable<core::Result<void>>
-delete_file(asio::any_io_executor executor, std::string path);
+delete_path(asio::any_io_executor executor, DeleteMutation mutation, DeletePathOptions = {});
 
 }  // namespace orangutan::io
 ```
@@ -282,10 +279,10 @@ starts threading that service through the system.
 
 | Condition | Error kind |
 | --- | --- |
-| Empty path, invalid limit, non-file read target, non-directory list target, directory delete without `recursive=true`, symlink delete | `invalid_argument` |
+| Empty path, invalid limit, non-file read target, non-directory list target, directory delete without `recursive=true` | `invalid_argument` |
 | Missing file or directory | `not_found` |
-| Existing destination with `WriteMode::fail_if_exists` | `conflict` |
-| Permission denied | `permission_denied` |
+| Existing destination with `WriteMode::fail_if_exists`, or a pinned mutation target that disappeared/changed | `conflict` |
+| Permission denied, including delete symlink rejection during authority creation | `permission_denied` |
 | Other file-system or stream failure | `io` |
 
 Every returned error includes a `path` context field when a concrete path is known.
@@ -328,10 +325,10 @@ surface for effectful agent actions.
   Slice 50 (2026-05-23) adds the first bounded cache consumer in this
   library: large-file line ranges use a `core::BoundedCache`-backed
   line-offset index keyed by canonical path + cheap fingerprint and
-  invalidated for the affected canonical path after pathname deletes and
+  invalidated for the affected canonical path after explicit invalidation and
   watcher events. Slice 52 (2026-05-24) adds the bounded file-view cache
   for `read_text_file_ranged`, with metadata validation before hits and
-  synchronous invalidation for pathname deletes and watcher events. Authorized
+  synchronous invalidation for explicit callers and watcher events. Authorized
   descriptor reads bypass both pathname-keyed caches, so `FileMutation` does
   not attempt invalidation through its diagnostics-only display string.
   Slice 57 (2026-05-24) narrows that invalidation to the affected

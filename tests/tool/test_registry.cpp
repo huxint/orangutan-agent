@@ -5903,7 +5903,7 @@ TEST_CASE("DirectoryList max_entries=1 honors the cap before failing on the seco
 }
 
 // ---------------------------------------------------------------------------
-// Slice 30 — `FileDelete` built-in. Thin wrapper over `oran-io::delete_file`.
+// `FileDelete` built-in authority and output contracts.
 // Capability is the existing `core::Capability::delete_path` (first built-in
 // that actually requires it). Tests cover: registration surface, happy
 // delete with the `deleted <path>` success message, missing path,
@@ -5942,7 +5942,7 @@ TEST_CASE("FileDelete happy path removes the file and reports the deletion", "[u
     REQUIRE(tool::register_file_delete(registry).has_value());
     auto rules = file_delete_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     const auto path = file.string();
     const auto input = std::string{R"({"path":")"} + path + R"("})";
@@ -5966,7 +5966,7 @@ TEST_CASE("FileDelete returns not_found when the file does not exist", "[unit][t
     REQUIRE(tool::register_file_delete(registry).has_value());
     auto rules = file_delete_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     const auto path = std::string{"/tmp/oran-tool-delete-no-such-"} +
                       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
@@ -5986,7 +5986,7 @@ TEST_CASE("FileDelete refuses directories with invalid_argument and leaves them 
     REQUIRE(tool::register_file_delete(registry).has_value());
     auto rules = file_delete_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     const auto input = std::string{R"({"path":")"} + dir.string() + R"("})";
     auto result = co_await registry.dispatch(tool::kFileDeleteName, input, ctx);
@@ -6007,7 +6007,7 @@ TEST_CASE("FileDelete recursive=true removes directory trees and reports touched
     REQUIRE(tool::register_file_delete(registry).has_value());
     auto rules = file_delete_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     const auto input = std::string{R"({"path":")"} + dir.string() + R"(","recursive":true})";
     auto result = co_await registry.dispatch(tool::kFileDeleteName, input, ctx);
@@ -6023,7 +6023,7 @@ TEST_CASE("FileDelete recursive=true removes directory trees and reports touched
   });
 }
 
-TEST_CASE("FileDelete refuses symlinks with invalid_argument and leaves the target intact",
+TEST_CASE("FileDelete refuses symlinks through workspace policy and leaves the target intact",
           "[unit][tool][file_delete]") {
   TempDir dir{"delete-symlink-refused"};
   dir.write_file("target.txt", "untouched");
@@ -6041,12 +6041,12 @@ TEST_CASE("FileDelete refuses symlinks with invalid_argument and leaves the targ
     REQUIRE(tool::register_file_delete(registry).has_value());
     auto rules = file_delete_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     const auto input = std::string{R"({"path":")"} + link.string() + R"("})";
     auto result = co_await registry.dispatch(tool::kFileDeleteName, input, ctx);
     REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+    REQUIRE(result.error().kind() == core::ErrorKind::permission_denied);
     REQUIRE(std::filesystem::is_symlink(link));
     REQUIRE(std::filesystem::exists(target));
     (void)dir;
@@ -6059,7 +6059,7 @@ TEST_CASE("FileDelete rejects malformed input as invalid_argument", "[unit][tool
     REQUIRE(tool::register_file_delete(registry).has_value());
     auto rules = file_delete_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     auto bad_json = co_await registry.dispatch(tool::kFileDeleteName, "{not-json}", ctx);
     REQUIRE_FALSE(bad_json.has_value());
@@ -6101,7 +6101,7 @@ TEST_CASE("FileDelete deny verdict short-circuits and does not unlink the file",
         .capability = core::Capability::delete_path,
     });
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     const auto input = std::string{R"({"path":")"} + file.string() + R"("})";
     auto result = co_await registry.dispatch(tool::kFileDeleteName, input, ctx);

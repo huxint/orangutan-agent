@@ -167,6 +167,9 @@ using MemoryForgetHandler =
 /// metadata until the remaining filesystem built-ins migrate.
 struct ResolvedToolPath {
   std::optional<io::DirectoryAuthority> authority{};
+  /// Effect capability materialized before permission approval for FileDelete.
+  /// This pins the approved target inode across the approval window.
+  std::optional<io::DeleteMutation> delete_mutation{};
   std::string authority_relative_path;
   std::string absolute_path;
   std::string relative_path;
@@ -298,8 +301,9 @@ struct DispatchContext {
   /// non-owning; bootstrap/agent runtime owns the workspace value and keeps it
   /// alive for the dispatch. Dispatch pre-resolves current filesystem
   /// built-ins through this seam before permission evaluation and stores the
-  /// result in `resolved_path`. FileWrite and FileEdit require this authority;
-  /// direct callers of those mutation tools must provide a workspace.
+  /// result in `resolved_path`. FileWrite, FileEdit, and FileDelete require
+  /// this authority; direct callers of those mutation tools must provide a
+  /// workspace.
   Workspace* workspace{nullptr};
   /// Resolved path for the currently executing filesystem built-in. Set by
   /// `Registry::dispatch` after `tool_before` and before permission

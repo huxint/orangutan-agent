@@ -28,13 +28,15 @@ Current seams and future work:
 - Every filesystem built-in (`FileRead`, `FileWrite`, `FileEdit`,
   `FileDelete`, `FileSearch`, `DirectoryList`) consumes
   `DispatchContext::workspace` through `Registry::dispatch` when supplied.
-  `FileWrite` and `FileEdit` require the resulting authority, including for
-  direct registry dispatch; read/list and the remaining mutation handlers keep
+  `FileWrite`, `FileEdit`, and `FileDelete` require the resulting authority,
+  including for direct registry dispatch. `FileSearch` and `DirectoryList` keep
   their temporary pathname paths while the handle migration continues.
 - The handle migration is active: `FileRead` executes through a pinned
   `DirectoryAuthority`, while `FileWrite` and `FileEdit` use a pinned-parent
-  `FileMutation`. Approval and executor awaits cannot redirect these three
-  handlers through a replaced workspace pathname or newly introduced symlink.
+  `FileMutation`. `FileDelete` materializes a pinned-parent, pinned-target
+  `DeleteMutation` before approval. Approval and executor awaits cannot redirect
+  these four handlers through a replaced workspace pathname or newly introduced
+  symlink; replacing the approved delete target produces `conflict`.
   Mutation commits revalidate the snapshotted target immediately before
   rename and surface a stale-fingerprint conflict on detected lost updates.
   Delete/list/search remain on the staged migration backlog.
@@ -85,8 +87,9 @@ Relative in-workspace paths work, traversal outside the workspace rejects with
 **Slice 265 (2026-06-28):** `FileDelete` keeps the same workspace
 `resolve_delete` boundary while expanding the handler input to
 `{path, recursive?}`. Regular files delete directly; directories require
-`recursive=true`; symlink targets still reject at workspace resolution before
-the handler reaches `oran-io::delete_path`.
+`recursive=true`; symlink targets reject at workspace resolution. The current
+handler consumes a `DeleteMutation` created by registry pre-resolution before
+approval, and recursive traversal stays beneath pinned directory descriptors.
 
 **Slice 39 (2026-05-22):** `FileSearch` now resolves its input through
 `Workspace::resolve_list` when `DispatchContext::workspace` is supplied, before

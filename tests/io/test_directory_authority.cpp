@@ -181,6 +181,201 @@ TEST_CASE("FileMutation refuses symlink components and targets", "[unit][io][aut
   REQUIRE(target_symlink.error().kind() == core::ErrorKind::permission_denied);
 }
 
+TEST_CASE("DeleteMutation removes an anchored regular file", "[unit][io][authority][delete]") {
+  TempDir temp{"oran-io-delete-file"};
+  const auto workspace = temp.path() / "workspace";
+  const auto target = workspace / "removable.txt";
+  std::filesystem::create_directory(workspace);
+  write_direct(target, "bye");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+  auto mutation = authority->begin_delete("removable.txt");
+  REQUIRE(mutation.has_value());
+
+  test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
+    auto deleted = co_await io::delete_path(context.get_executor(), std::move(*mutation));
+    REQUIRE(deleted.has_value());
+    REQUIRE(deleted->paths_removed == std::uintmax_t{1});
+  });
+
+  REQUIRE_FALSE(std::filesystem::exists(target));
+}
+
+TEST_CASE("DeleteMutation recursively removes an anchored directory tree", "[unit][io][authority][delete]") {
+  TempDir temp{"oran-io-delete-tree"};
+  const auto workspace = temp.path() / "workspace";
+  const auto tree = workspace / "tree";
+  std::filesystem::create_directories(tree / "nested");
+  write_direct(tree / "top.txt", "bye");
+  write_direct(tree / "nested" / "leaf.txt", "bye");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+  auto mutation = authority->begin_delete("tree");
+  REQUIRE(mutation.has_value());
+
+  test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
+    auto deleted = co_await io::delete_path(context.get_executor(),
+                                            std::move(*mutation),
+                                            io::DeletePathOptions{.recursive = true});
+    REQUIRE(deleted.has_value());
+    REQUIRE(deleted->paths_removed == std::uintmax_t{4});
+  });
+
+  REQUIRE_FALSE(std::filesystem::exists(tree));
+}
+
+TEST_CASE("DeleteMutation refuses a directory without recursive intent", "[unit][io][authority][delete]") {
+  TempDir temp{"oran-io-delete-no-recursive"};
+  const auto workspace = temp.path() / "workspace";
+  const auto tree = workspace / "tree";
+  std::filesystem::create_directories(tree);
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+  auto mutation = authority->begin_delete("tree");
+  REQUIRE(mutation.has_value());
+
+  test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
+    auto deleted = co_await io::delete_path(context.get_executor(), std::move(*mutation));
+    REQUIRE_FALSE(deleted.has_value());
+    REQUIRE(deleted.error().kind() == core::ErrorKind::invalid_argument);
+  });
+
+  REQUIRE(std::filesystem::is_directory(tree));
+}
+
+TEST_CASE("DeleteMutation refuses a top-level symlink", "[unit][io][authority][delete][symlink]") {
+  TempDir temp{"oran-io-delete-top-symlink"};
+  const auto workspace = temp.path() / "workspace";
+  const auto target = workspace / "target";
+  const auto link = workspace / "link";
+  std::filesystem::create_directories(target);
+  write_direct(target / "survives.txt", "still here");
+  std::error_code link_ec;
+  std::filesystem::create_directory_symlink("target", link, link_ec);
+  if (link_ec) {
+    SUCCEED("symlink creation not supported on this filesystem: " << link_ec.message());
+    return;
+  }
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+  auto mutation = authority->begin_delete("link");
+  REQUIRE_FALSE(mutation.has_value());
+  REQUIRE(mutation.error().kind() == core::ErrorKind::permission_denied);
+  REQUIRE(std::filesystem::is_symlink(link));
+  REQUIRE(std::filesystem::exists(target / "survives.txt"));
+}
+
+TEST_CASE("DeleteMutation recursive delete does not follow nested symlinks", "[unit][io][authority][delete][symlink]") {
+  TempDir temp{"oran-io-delete-nested-symlink"};
+  TempDir outside{"oran-io-delete-nested-symlink-target"};
+  const auto workspace = temp.path() / "workspace";
+  const auto tree = workspace / "tree";
+  const auto outside_target = outside.path() / "target";
+  std::filesystem::create_directories(tree);
+  std::filesystem::create_directories(outside_target);
+  write_direct(outside_target / "survives.txt", "still here");
+  std::error_code link_ec;
+  std::filesystem::create_directory_symlink(outside_target, tree / "outside-link", link_ec);
+  if (link_ec) {
+    SUCCEED("symlink creation not supported on this filesystem: " << link_ec.message());
+    return;
+  }
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+  auto mutation = authority->begin_delete("tree");
+  REQUIRE(mutation.has_value());
+
+  test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
+    auto deleted = co_await io::delete_path(context.get_executor(),
+                                            std::move(*mutation),
+                                            io::DeletePathOptions{.recursive = true});
+    REQUIRE(deleted.has_value());
+  });
+
+  REQUIRE_FALSE(std::filesystem::exists(tree));
+  REQUIRE(std::filesystem::exists(outside_target / "survives.txt"));
+}
+
+TEST_CASE("DeleteMutation recursively removes non-directory special entries", "[unit][io][authority][delete]") {
+  TempDir temp{"oran-io-delete-special-entry"};
+  const auto workspace = temp.path() / "workspace";
+  const auto tree = workspace / "tree";
+  const auto fifo = tree / "events.fifo";
+  std::filesystem::create_directories(tree);
+  REQUIRE(::mkfifo(fifo.c_str(), 0600) == 0);
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+  auto mutation = authority->begin_delete("tree");
+  REQUIRE(mutation.has_value());
+
+  test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
+    auto deleted = co_await io::delete_path(context.get_executor(),
+                                            std::move(*mutation),
+                                            io::DeletePathOptions{.recursive = true});
+    REQUIRE(deleted.has_value());
+    REQUIRE(deleted->paths_removed == std::uintmax_t{2});
+  });
+
+  REQUIRE_FALSE(std::filesystem::exists(tree));
+}
+
+TEST_CASE("DeleteMutation retains its authority across root replacement", "[unit][io][authority][delete]") {
+  TempDir temp{"oran-io-delete-root-replacement"};
+  const auto workspace = temp.path() / "workspace";
+  const auto moved_workspace = temp.path() / "workspace-moved";
+  const auto outside = temp.path() / "outside";
+  std::filesystem::create_directory(workspace);
+  std::filesystem::create_directory(outside);
+  write_direct(workspace / "note.txt", "inside");
+  write_direct(outside / "note.txt", "outside");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+  std::filesystem::rename(workspace, moved_workspace);
+  std::filesystem::create_directory_symlink(outside, workspace);
+
+  auto mutation = authority->begin_delete("note.txt");
+  REQUIRE(mutation.has_value());
+  test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
+    auto deleted = co_await io::delete_path(context.get_executor(), std::move(*mutation));
+    REQUIRE(deleted.has_value());
+  });
+
+  REQUIRE_FALSE(std::filesystem::exists(moved_workspace / "note.txt"));
+  REQUIRE(read_direct(outside / "note.txt") == "outside");
+}
+
+TEST_CASE("DeleteMutation rejects target replacement before commit", "[unit][io][authority][delete][conflict]") {
+  TempDir temp{"oran-io-delete-target-replacement"};
+  const auto workspace = temp.path() / "workspace";
+  const auto target = workspace / "note.txt";
+  std::filesystem::create_directory(workspace);
+  write_direct(target, "original");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+  auto mutation = authority->begin_delete("note.txt");
+  REQUIRE(mutation.has_value());
+
+  const auto replacement = workspace / "replacement.txt";
+  write_direct(replacement, "external-version");
+  std::filesystem::rename(replacement, target);
+
+  test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
+    auto deleted = co_await io::delete_path(context.get_executor(), std::move(*mutation));
+    REQUIRE_FALSE(deleted.has_value());
+    REQUIRE(deleted.error().kind() == core::ErrorKind::conflict);
+  });
+
+  REQUIRE(read_direct(target) == "external-version");
+}
+
 TEST_CASE("FileMutation creates parent directories and appends", "[unit][io][authority][mutation]") {
   TempDir temp{"oran-io-mutation-write"};
   const auto workspace = temp.path() / "workspace";

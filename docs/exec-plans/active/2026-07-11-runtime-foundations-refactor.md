@@ -93,6 +93,8 @@ external contract or a previously reproduced failure.
   carries a capability across approval; individual file handlers are migrating.
 - [x] `FileRead`, `FileWrite`, and `FileEdit` execute through pinned authorities;
   write/edit replacement commits perform final target-identity validation.
+- [x] `FileDelete` materializes a pinned target capability before approval,
+  executes recursive no-follow deletion through dirfds, and has no pathname API.
 - [x] Atomic HTTP cancellation bridge, strict provider terminal states, bounded
   channel conversations, and bounded/deadline-limited webhook intake landed.
 - [x] Bounded named `async::TaskGroup` foundation landed; runtime owners are migrating.

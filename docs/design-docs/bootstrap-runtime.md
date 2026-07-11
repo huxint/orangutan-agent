@@ -534,7 +534,7 @@ tool scheduler were built to expect but which nothing started.
    fulfils a `std::promise<core::Result<void>>`;
 4. `Runtime::start()`s (non-blocking), then blocks the calling thread on the
    completion future until a signal stops the service;
-5. on completion, `Runtime::stop()`s and returns a `cancelled` error carrying
+5. on completion, `Runtime::stop_and_join()`s and returns a `cancelled` error carrying
    `signal`/`signum`, which `bootstrap::run` maps to `128 + signum` (the same seam
    as `--audit-init`/`--trace`).
 

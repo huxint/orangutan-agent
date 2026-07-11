@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -284,6 +285,18 @@ struct FileMutation::Impl {
   timespec ctime{};
 };
 
+struct DeleteMutation::Impl {
+  UniqueFd parent;
+  // Pins the approved inode so a removed target cannot recycle its inode
+  // number before the final namespace identity check.
+  UniqueFd target;
+  std::string name;
+  std::string display;
+  dev_t device{};
+  ino_t inode{};
+  mode_t mode{};
+};
+
 namespace {
 
 [[nodiscard]] bool same_identity(dev_t device,
@@ -303,6 +316,15 @@ FileMutation::FileMutation(std::unique_ptr<Impl> impl) : impl_{std::move(impl)} 
 FileMutation::FileMutation(FileMutation&&) noexcept = default;
 FileMutation& FileMutation::operator=(FileMutation&&) noexcept = default;
 FileMutation::~FileMutation() = default;
+
+DeleteMutation::DeleteMutation(std::unique_ptr<Impl> impl) : impl_{std::move(impl)} {}
+DeleteMutation::DeleteMutation(DeleteMutation&&) noexcept = default;
+DeleteMutation& DeleteMutation::operator=(DeleteMutation&&) noexcept = default;
+DeleteMutation::~DeleteMutation() = default;
+
+std::string_view DeleteMutation::display_path() const noexcept {
+  return impl_ ? std::string_view{impl_->display} : std::string_view{};
+}
 
 std::string_view FileMutation::display_path() const noexcept {
   return impl_ ? std::string_view{impl_->display} : std::string_view{};
@@ -360,6 +382,120 @@ core::Result<void> write_all(int fd, std::string_view contents, std::string_view
   return core::Error{core::ErrorKind::conflict, std::move(message)}
       .with("reason", "stale_fingerprint")
       .with("path", std::string{path});
+}
+
+[[nodiscard]] bool same_object(dev_t device, ino_t inode, const struct stat& status) noexcept {
+  return status.st_dev == device && status.st_ino == inode;
+}
+
+class UniqueDir {
+public:
+  explicit UniqueDir(DIR* directory = nullptr) noexcept : directory_{directory} {}
+  UniqueDir(const UniqueDir&) = delete;
+  UniqueDir& operator=(const UniqueDir&) = delete;
+  UniqueDir(UniqueDir&& other) noexcept : directory_{std::exchange(other.directory_, nullptr)} {}
+  UniqueDir& operator=(UniqueDir&& other) noexcept {
+    if (this != &other) {
+      if (directory_ != nullptr) {
+        static_cast<void>(::closedir(directory_));
+      }
+      directory_ = std::exchange(other.directory_, nullptr);
+    }
+    return *this;
+  }
+  ~UniqueDir() {
+    if (directory_ != nullptr) {
+      static_cast<void>(::closedir(directory_));
+    }
+  }
+
+  [[nodiscard]] DIR* get() const noexcept {
+    return directory_;
+  }
+
+private:
+  DIR* directory_;
+};
+
+[[nodiscard]] core::Result<UniqueDir> open_directory_stream(int directory_fd, std::string_view path) {
+  auto duplicate = UniqueFd{duplicate_fd(directory_fd)};
+  if (duplicate.get() < 0) {
+    return std::unexpected(errno_error("failed to duplicate anchored delete directory", {}, path, errno));
+  }
+  errno = 0;
+  auto* stream = ::fdopendir(duplicate.get());
+  if (stream == nullptr) {
+    return std::unexpected(errno_error("failed to enumerate anchored delete directory", {}, path, errno));
+  }
+  static_cast<void>(duplicate.release());
+  return UniqueDir{stream};
+}
+
+[[nodiscard]] core::Result<void>
+delete_directory_contents(int directory_fd, std::string_view display_path, std::uintmax_t& removed) {
+  auto stream = open_directory_stream(directory_fd, display_path);
+  if (!stream) {
+    return std::unexpected(std::move(stream).error());
+  }
+
+  while (true) {
+    errno = 0;
+    const auto* entry = ::readdir(stream->get());
+    if (entry == nullptr) {
+      if (errno != 0) {
+        return std::unexpected(
+            errno_error("failed while enumerating anchored delete directory", {}, display_path, errno));
+      }
+      return {};
+    }
+    const auto name = std::string_view{entry->d_name};
+    if (name == "." || name == "..") {
+      continue;
+    }
+
+    struct stat status{};
+    if (::fstatat(directory_fd, entry->d_name, &status, AT_SYMLINK_NOFOLLOW) != 0) {
+      return std::unexpected(errno_error("failed to inspect anchored delete entry", {}, display_path, errno));
+    }
+    if (S_ISDIR(status.st_mode)) {
+      auto child =
+          UniqueFd{::openat(directory_fd, entry->d_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)};
+      if (child.get() < 0) {
+        return std::unexpected(errno_error("failed to open anchored delete child directory", {}, display_path, errno));
+      }
+      struct stat opened_status{};
+      if (::fstat(child.get(), &opened_status) != 0) {
+        return std::unexpected(
+            errno_error("failed to validate anchored delete child directory", {}, display_path, errno));
+      }
+      if (!same_object(status.st_dev, status.st_ino, opened_status)) {
+        return std::unexpected(stale_mutation_error("anchored delete child changed before traversal", display_path));
+      }
+      if (auto nested = delete_directory_contents(child.get(), display_path, removed); !nested) {
+        return nested;
+      }
+      struct stat current{};
+      if (::fstatat(directory_fd, entry->d_name, &current, AT_SYMLINK_NOFOLLOW) != 0) {
+        return std::unexpected(stale_mutation_error("anchored delete child changed before removal", display_path));
+      }
+      if (!S_ISDIR(current.st_mode) || !same_object(opened_status.st_dev, opened_status.st_ino, current)) {
+        return std::unexpected(stale_mutation_error("anchored delete child changed before removal", display_path));
+      }
+      if (::unlinkat(directory_fd, entry->d_name, AT_REMOVEDIR) != 0) {
+        return std::unexpected(
+            errno_error("failed to remove anchored delete child directory", {}, display_path, errno));
+      }
+      ++removed;
+      continue;
+    }
+    // Every non-directory entry is removed as a leaf. In particular, a
+    // symlink is unlinked rather than followed, and FIFOs/sockets/devices do
+    // not make an otherwise removable directory tree undeletable.
+    if (::unlinkat(directory_fd, entry->d_name, 0) != 0) {
+      return std::unexpected(errno_error("failed to remove anchored delete entry", {}, display_path, errno));
+    }
+    ++removed;
+  }
 }
 
 [[nodiscard]] core::Result<void> sync_fd(int fd, std::string_view path, std::string message) {
@@ -441,6 +577,77 @@ private:
 }
 
 }  // namespace
+
+core::Result<DeletePathResult> DeleteMutation::delete_path(DeletePathOptions options) {
+  if (!impl_) {
+    return std::unexpected(core::Error::internal("delete mutation is empty"));
+  }
+
+  errno = 0;
+  auto current = UniqueFd{::openat(impl_->parent.get(), impl_->name.c_str(), O_PATH | O_CLOEXEC | O_NOFOLLOW)};
+  if (current.get() < 0) {
+    if (errno == ENOENT) {
+      return std::unexpected(stale_mutation_error("anchored delete target disappeared", impl_->display));
+    }
+    return std::unexpected(errno_error("failed to reopen anchored delete target", {}, impl_->display, errno));
+  }
+  struct stat current_status{};
+  if (::fstat(current.get(), &current_status) != 0) {
+    return std::unexpected(errno_error("failed to validate anchored delete target", {}, impl_->display, errno));
+  }
+  if (!same_object(impl_->device, impl_->inode, current_status)) {
+    return std::unexpected(stale_mutation_error("anchored delete target changed before removal", impl_->display));
+  }
+
+  if (S_ISREG(impl_->mode)) {
+    if (::unlinkat(impl_->parent.get(), impl_->name.c_str(), 0) != 0) {
+      return std::unexpected(errno_error("failed to remove anchored file", {}, impl_->display, errno));
+    }
+    return DeletePathResult{.paths_removed = 1};
+  }
+  if (!S_ISDIR(impl_->mode)) {
+    return std::unexpected(
+        core::Error::invalid_argument("anchored delete target has unsupported type").with("path", impl_->display));
+  }
+  if (!options.recursive) {
+    return std::unexpected(
+        core::Error::invalid_argument("directory delete requires recursive=true").with("path", impl_->display));
+  }
+
+  auto directory = UniqueFd{
+      ::openat(impl_->parent.get(), impl_->name.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)};
+  if (directory.get() < 0) {
+    return std::unexpected(errno_error("failed to open anchored delete directory", {}, impl_->display, errno));
+  }
+  struct stat directory_status{};
+  if (::fstat(directory.get(), &directory_status) != 0) {
+    return std::unexpected(errno_error("failed to validate anchored delete directory", {}, impl_->display, errno));
+  }
+  if (!same_object(impl_->device, impl_->inode, directory_status)) {
+    return std::unexpected(stale_mutation_error("anchored delete directory changed before traversal", impl_->display));
+  }
+
+  std::uintmax_t removed = 0;
+  if (auto contents = delete_directory_contents(directory.get(), impl_->display, removed); !contents) {
+    return std::unexpected(std::move(contents)
+                               .error()
+                               .with("partial", removed == 0U ? "false" : "true")
+                               .with("paths_removed", std::to_string(removed)));
+  }
+  struct stat final_status{};
+  if (::fstatat(impl_->parent.get(), impl_->name.c_str(), &final_status, AT_SYMLINK_NOFOLLOW) != 0 ||
+      !S_ISDIR(final_status.st_mode) || !same_object(impl_->device, impl_->inode, final_status)) {
+    return std::unexpected(stale_mutation_error("anchored delete directory changed before removal", impl_->display)
+                               .with("partial", removed == 0U ? "false" : "true")
+                               .with("paths_removed", std::to_string(removed)));
+  }
+  if (::unlinkat(impl_->parent.get(), impl_->name.c_str(), AT_REMOVEDIR) != 0) {
+    return std::unexpected(errno_error("failed to remove anchored directory", {}, impl_->display, errno)
+                               .with("partial", removed == 0U ? "false" : "true")
+                               .with("paths_removed", std::to_string(removed)));
+  }
+  return DeletePathResult{.paths_removed = removed + 1U};
+}
 
 core::Result<void> FileMutation::write_text(std::string_view contents, WriteTextOptions options) {
   if (!impl_) {
@@ -696,6 +903,82 @@ core::Result<FileMutation> DirectoryAuthority::begin_file_mutation(std::string_v
     mutation->ctime = status.st_ctim;
   }
   return FileMutation{std::move(mutation)};
+}
+
+core::Result<DeleteMutation> DirectoryAuthority::begin_delete(std::string_view relative_path) const {
+  if (impl_ == nullptr) {
+    return std::unexpected(core::Error::internal("directory authority is empty"));
+  }
+  const auto path = AnchoredPath{
+      .relative_path = std::string{relative_path},
+      .symlink_policy = AnchoredSymlinkPolicy::reject_all,
+  };
+  if (auto valid = validate_anchored_path(path); !valid) {
+    return std::unexpected(std::move(valid).error());
+  }
+
+  auto components = path_components(path.relative_path);
+  if (components.empty()) {
+    return std::unexpected(core::Error::invalid_argument("delete target must name a path"));
+  }
+  auto parent = UniqueFd{::openat(impl_->fd.get(), ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC)};
+  if (parent.get() < 0) {
+    return std::unexpected(
+        errno_error("failed to duplicate directory authority", impl_->display_root, path.relative_path, errno));
+  }
+  for (std::size_t index = 0; index + 1U < components.size(); ++index) {
+    auto next =
+        UniqueFd{::openat(parent.get(), components[index].c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)};
+    if (next.get() < 0) {
+      const auto open_error = errno;
+      struct stat component_status{};
+      if ((open_error == ELOOP || open_error == ENOTDIR) &&
+          ::fstatat(parent.get(), components[index].c_str(), &component_status, AT_SYMLINK_NOFOLLOW) == 0 &&
+          S_ISLNK(component_status.st_mode)) {
+        return std::unexpected(path_error("anchored delete parent must not be a symlink",
+                                          impl_->display_root,
+                                          path.relative_path,
+                                          "symlink_component"));
+      }
+      return std::unexpected(
+          errno_error("failed to open anchored delete parent", impl_->display_root, path.relative_path, open_error));
+    }
+    parent = std::move(next);
+  }
+
+  const auto& name = components.back();
+  errno = 0;
+  auto target = UniqueFd{::openat(parent.get(), name.c_str(), O_PATH | O_CLOEXEC | O_NOFOLLOW)};
+  if (target.get() < 0) {
+    return std::unexpected(
+        errno_error("failed to open anchored delete target", impl_->display_root, path.relative_path, errno));
+  }
+  struct stat status{};
+  if (::fstat(target.get(), &status) != 0) {
+    return std::unexpected(
+        errno_error("failed to inspect anchored delete target", impl_->display_root, path.relative_path, errno));
+  }
+  if (S_ISLNK(status.st_mode)) {
+    return std::unexpected(path_error("anchored delete target must not be a symlink",
+                                      impl_->display_root,
+                                      path.relative_path,
+                                      "symlink_component"));
+  }
+  if (!S_ISREG(status.st_mode) && !S_ISDIR(status.st_mode)) {
+    return std::unexpected(core::Error::invalid_argument("anchored delete target is not a regular file or directory")
+                               .with("root", impl_->display_root)
+                               .with("path", path.relative_path));
+  }
+
+  auto mutation = std::make_unique<DeleteMutation::Impl>();
+  mutation->parent = std::move(parent);
+  mutation->target = std::move(target);
+  mutation->name = name;
+  mutation->display = std::format("{}/{}", impl_->display_root, path.relative_path);
+  mutation->device = status.st_dev;
+  mutation->inode = status.st_ino;
+  mutation->mode = status.st_mode;
+  return DeleteMutation{std::move(mutation)};
 }
 
 std::string_view DirectoryAuthority::display_root() const noexcept {

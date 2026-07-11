@@ -160,10 +160,11 @@ inline constexpr std::string_view kMemoryForgetName{"MemoryForget"};
 /// Register the `FileDelete` tool. Deletes a regular file, or a directory
 /// tree when `recursive=true`, through `oran-io::delete_path`; capability
 /// `delete_path` is required. Input shape:
-/// `{"path": <string>, "recursive"?: bool}`. Returns `invalid_argument`
-/// when the path is a directory and recursion intent is absent, or when the
-/// path is a symlink; `not_found` when no path exists. Successful deletes
-/// return the literal text `deleted <path>` and fill
+/// `{"path": <string>, "recursive"?: bool}`. The registry pins the target
+/// before approval. A directory without recursion intent returns
+/// `invalid_argument`; workspace symlink targets return `permission_denied`;
+/// a missing path returns `not_found`. Successful deletes return the literal
+/// text `deleted <path>` and fill
 /// `Output::usage.bytes_written=0` plus `files_touched` equal to the
 /// removed path count.
 [[nodiscard]] core::Result<void> register_file_delete(Registry& registry);
