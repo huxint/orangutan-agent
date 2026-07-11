@@ -190,6 +190,7 @@ struct ServeChannelWorkerMetrics {
   std::uint64_t message_timeouts{};
   std::uint64_t dispatch_failures{};
   std::uint64_t enqueue_failures{};
+  std::uint64_t conversation_overloads{};
 
   friend bool operator==(const ServeChannelWorkerMetrics&, const ServeChannelWorkerMetrics&) = default;
 };
@@ -225,6 +226,12 @@ struct ServeChannelOptions {
   /// Capacity of each per-channel+conversation queue. This bounds how far one
   /// conversation can backlog while preserving in-order dispatch.
   std::size_t conversation_queue_capacity{64};
+  /// Maximum number of spawned conversation workers that have not completed,
+  /// including workers finishing an idle retirement. A message for a new
+  /// conversation is rejected when this limit is reached; existing
+  /// conversations continue normally and the rejection increments
+  /// `conversation_overloads` plus `enqueue_failures`.
+  std::size_t max_active_conversations{256};
   /// Idle gap after which an empty per-channel+conversation worker exits and is
   /// erased from the dispatcher table. A later message for the same key creates
   /// a fresh worker; this bounds long-lived services by active conversations

@@ -792,6 +792,7 @@ TEST_CASE("ServeChannelMetricsLogSink emits deduplicated channel worker metrics"
       .message_timeouts = 8,
       .dispatch_failures = 9,
       .enqueue_failures = 10,
+      .conversation_overloads = 11,
   };
   sink(snapshot);
   sink(snapshot);
@@ -810,9 +811,11 @@ TEST_CASE("ServeChannelMetricsLogSink emits deduplicated channel worker metrics"
                              .message_timeouts = 8,
                              .dispatch_failures = 9,
                              .enqueue_failures = 10,
+                             .conversation_overloads = 11,
                          }));
   CHECK(lines.back().contains("replies=8"));
   CHECK(lines.back().contains("timeouts=8"));
+  CHECK(lines.back().contains("overloads=11"));
 }
 
 TEST_CASE("serve_channels dispatches mock inbound messages and replies", "[unit][bootstrap][serve][channels]") {
@@ -964,6 +967,112 @@ TEST_CASE("serve_channels evicts idle conversation workers before cooperative st
     REQUIRE(outcome.has_value());
     REQUIRE(mock->sent_messages().size() == 1);
     CHECK(driver_done.load(std::memory_order_acquire));
+    CHECK_FALSE(mock->started());
+  });
+}
+
+TEST_CASE("serve_channels accepts an enqueue at the idle-retirement boundary",
+          "[unit][bootstrap][serve][channels][idle]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    channel::ChannelManager manager{io.get_executor()};
+    auto adapter =
+        std::make_unique<channel::MockChannel>(io.get_executor(),
+                                               channel::MockChannelOptions{.id = "mock-main", .kind = "mock"});
+    auto* mock = adapter.get();
+    REQUIRE(manager.register_adapter(std::move(adapter)).has_value());
+    REQUIRE((co_await manager.start_all()).has_value());
+    REQUIRE(mock->push_inbound(text_inbound("first", "conv-1")).has_value());
+
+    bool injected_at_retirement = false;
+    bool injection_succeeded = false;
+    std::vector<bootstrap::ServeChannelWorkerMetrics> snapshots;
+    auto runner = channel::ChannelPromptRunner{[](channel::ChannelPromptRunRequest request)
+                                                   -> async::Awaitable<core::Result<channel::ChannelPromptRunResult>> {
+      co_return channel::ChannelPromptRunResult{.text = request.prompt + " reply"};
+    }};
+
+    auto outcome = co_await bootstrap::serve_channels(
+        io.get_executor(),
+        manager,
+        std::move(runner),
+        std::vector<std::string>{"mock-main"},
+        [mock] { return mock->sent_messages().size() == 2; },
+        nullptr,
+        bootstrap::ServeChannelOptions{
+            .max_active_conversations = 1,
+            .conversation_idle_ttl = 10ms,
+            .metrics_observer =
+                [&](const bootstrap::ServeChannelWorkerMetrics& snapshot) {
+                  snapshots.push_back(snapshot);
+                  if (!injected_at_retirement && snapshot.workers_evicted_idle == 1) {
+                    injected_at_retirement = true;
+                    injection_succeeded = manager.inbound().try_send(text_inbound("second", "conv-1")).has_value();
+                  }
+                },
+        });
+
+    REQUIRE(outcome.has_value());
+    CHECK(injected_at_retirement);
+    CHECK(injection_succeeded);
+    REQUIRE(mock->sent_messages().size() == 2);
+    CHECK(snapshots.back().messages_enqueued == 2);
+    CHECK(snapshots.back().conversation_overloads == 0);
+    CHECK_FALSE(mock->started());
+  });
+}
+
+TEST_CASE("serve_channels rejects only new conversations at the active-worker cap",
+          "[unit][bootstrap][serve][channels][capacity]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    channel::ChannelManager manager{io.get_executor()};
+    auto adapter =
+        std::make_unique<channel::MockChannel>(io.get_executor(),
+                                               channel::MockChannelOptions{.id = "mock-main", .kind = "mock"});
+    auto* mock = adapter.get();
+    REQUIRE(manager.register_adapter(std::move(adapter)).has_value());
+    REQUIRE((co_await manager.start_all()).has_value());
+    REQUIRE(mock->push_inbound(text_inbound("first", "conv-1")).has_value());
+    REQUIRE(mock->push_inbound(text_inbound("overload", "conv-2")).has_value());
+    REQUIRE(mock->push_inbound(text_inbound("second", "conv-1")).has_value());
+
+    std::vector<bootstrap::ServeChannelWorkerMetrics> snapshots;
+    auto runner = channel::ChannelPromptRunner{[executor = io.get_executor()](channel::ChannelPromptRunRequest request)
+                                                   -> async::Awaitable<core::Result<channel::ChannelPromptRunResult>> {
+      if (request.prompt == "first") {
+        auto slept = co_await async::sleep_for(executor, 25ms);
+        if (!slept) {
+          co_return std::unexpected(std::move(slept).error());
+        }
+      }
+      co_return channel::ChannelPromptRunResult{.text = request.prompt + " reply"};
+    }};
+
+    auto outcome = co_await bootstrap::serve_channels(
+        io.get_executor(),
+        manager,
+        std::move(runner),
+        std::vector<std::string>{"mock-main"},
+        [&] {
+          return mock->sent_messages().size() == 2 && !snapshots.empty() &&
+                 snapshots.back().conversation_overloads == 1;
+        },
+        nullptr,
+        bootstrap::ServeChannelOptions{
+            .max_active_conversations = 1,
+            .metrics_observer =
+                [&](const bootstrap::ServeChannelWorkerMetrics& snapshot) { snapshots.push_back(snapshot); },
+        });
+
+    REQUIRE(outcome.has_value());
+    REQUIRE(mock->sent_messages().size() == 2);
+    CHECK(mock->sent_messages()[0].conversation_id == "conv-1");
+    CHECK(mock->sent_messages()[1].conversation_id == "conv-1");
+    REQUIRE_FALSE(snapshots.empty());
+    const auto final = snapshots.back();
+    CHECK(final.max_active_workers == 1);
+    CHECK(final.messages_enqueued == 2);
+    CHECK(final.enqueue_failures == 1);
+    CHECK(final.conversation_overloads == 1);
     CHECK_FALSE(mock->started());
   });
 }
@@ -1226,6 +1335,17 @@ TEST_CASE("serve_channels rejects invalid channel worker options", "[unit][boots
                                            bootstrap::ServeChannelOptions{.conversation_queue_capacity = 0});
     REQUIRE_FALSE(zero_capacity.has_value());
     CHECK(zero_capacity.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto zero_workers =
+        co_await bootstrap::serve_channels(io.get_executor(),
+                                           manager,
+                                           runner,
+                                           {},
+                                           {},
+                                           nullptr,
+                                           bootstrap::ServeChannelOptions{.max_active_conversations = 0});
+    REQUIRE_FALSE(zero_workers.has_value());
+    CHECK(zero_workers.error().kind() == core::ErrorKind::invalid_argument);
 
     auto negative_ttl =
         co_await bootstrap::serve_channels(io.get_executor(),
