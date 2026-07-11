@@ -72,6 +72,7 @@ class Runtime {
   // desktop shell). Pair with stop() on teardown.
   core::Result<void> start();
   void stop() noexcept;
+  core::Result<void> stop_and_join();
 
   // Strand factory: serializes work for one agent.
   asio::strand<asio::any_io_executor> make_strand() const;
@@ -101,7 +102,9 @@ coroutines on its own pool. It shares the same idle→running→stopped state
 machine, so a second `start()` or a later `run()` returns `ErrorKind::conflict`,
 and `stop()` plus destruction tear the pool down. Unlike `run()`, a worker
 exception after `start()` is contained in the worker (the runtime stops) but is
-not surfaced to any caller — detached coroutines must catch their own (A8).
+surfaced by `stop_and_join()`. Start-mode owners call that boundary before
+destroying any state borrowed by runtime tasks; `stop()` alone only requests
+shutdown and does not establish a worker-lifetime join.
 
 ## Awaitable Alias
 

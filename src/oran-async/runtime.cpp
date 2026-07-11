@@ -50,6 +50,7 @@ struct Runtime::Impl {
   asio::thread_pool io_workers;
   asio::thread_pool cpu_workers;
   std::atomic<RunState> state{RunState::idle};
+  bool joined{false};
   std::mutex run_error_mutex;
   std::optional<core::Error> run_error;
 
@@ -58,13 +59,7 @@ struct Runtime::Impl {
       return std::unexpected(std::move(spawned).error());
     }
 
-    io_workers.join();
-    cpu_workers.stop();
-    cpu_workers.join();
-    if (auto error = take_run_error(); error) {
-      return std::unexpected(std::move(*error));
-    }
-    return {};
+    return join_workers();
   }
 
   [[nodiscard]] core::Result<void> start() {
@@ -78,6 +73,11 @@ struct Runtime::Impl {
     work_guard.reset();
     io_context.stop();
     cpu_workers.stop();
+  }
+
+  [[nodiscard]] core::Result<void> stop_and_join() {
+    stop();
+    return join_workers();
   }
 
 private:
@@ -94,6 +94,19 @@ private:
 
     for (std::size_t i = 0; i < config.io_workers; ++i) {
       asio::post(io_workers, [this] { run_io_context_worker(); });
+    }
+    return {};
+  }
+
+  [[nodiscard]] core::Result<void> join_workers() {
+    if (!joined) {
+      io_workers.join();
+      cpu_workers.stop();
+      cpu_workers.join();
+      joined = true;
+    }
+    if (auto error = take_run_error(); error) {
+      return std::unexpected(std::move(*error));
     }
     return {};
   }
@@ -153,6 +166,10 @@ core::Result<void> Runtime::start() {
 
 void Runtime::stop() noexcept {
   impl_->stop();
+}
+
+core::Result<void> Runtime::stop_and_join() {
+  return impl_->stop_and_join();
 }
 
 }  // namespace orangutan::async

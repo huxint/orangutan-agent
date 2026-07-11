@@ -1746,7 +1746,10 @@ Result<int> run_serve(const BootstrapOptions& options) {
   std::println("  stop with Ctrl-C (SIGINT) or SIGTERM");
 
   auto result = service_future.get();  // blocks until a signal stops the service
-  runtime.stop();
+  auto stopped = runtime.stop_and_join();
+  if (!stopped) {
+    return std::unexpected(std::move(stopped).error());
+  }
 
   if (const auto signum = caught_signum.load(std::memory_order_acquire); signum != 0) {
     return std::unexpected(

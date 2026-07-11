@@ -1244,10 +1244,9 @@ void print_provider_route_summary(const provider::AdapterConstructionPlan& route
 
   // Shared launch body. Kept as a lambda so the live backend / scripted fake
   // each stay alive for the whole window lifetime (the runner borrows the
-  // provider). `runtime.stop()` does not join the io workers — only the runtime
-  // destructor does — so the session coroutine (which borrows the runner via the
-  // turn runner) MUST finish before this returns. We wait on a completion
-  // promise after closing the bridge input, then stop and let `runner` drop.
+  // provider). The session coroutine must finish before the runner drops; the
+  // explicit runtime join then proves no Runtime-owned worker can retain a
+  // borrow into the runner/provider/assembly during teardown.
   auto launch = [&](provider::System& system, const provider::Route& route) -> Result<int> {
     auto runner = AgentPromptRunner::create(AgentPromptRunnerOptions{
         .executor = agent_strand,
@@ -1306,7 +1305,10 @@ void print_provider_route_summary(const provider::AdapterConstructionPlan& route
     bridge.close();
     bridge.request_stop();
     session_done_future.wait();
-    runtime.stop();
+    auto stopped = runtime.stop_and_join();
+    if (!stopped) {
+      return std::unexpected(std::move(stopped).error());
+    }
 
     if (!code) {
       return std::unexpected(std::move(code).error());

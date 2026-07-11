@@ -35,13 +35,17 @@ public:
 
   /// Spawn the io workers and return immediately, leaving the runtime running
   /// on its own threads. Use this when another event loop owns the calling
-  /// thread (e.g. the Slint desktop UI): `start()` then drive the UI, and
-  /// `stop()` on teardown. Returns a `conflict` error if already running or
-  /// stopped. Unlike `run()`, errors raised by a worker after `start()` are not
-  /// surfaced here; detached coroutines must catch their own (async A8).
+  /// thread (e.g. the Slint desktop UI): `start()` then drive the UI, and pair
+  /// teardown with `stop_and_join()`. Returns a `conflict` error if already
+  /// running or stopped.
   [[nodiscard]] core::Result<void> start();
 
   void stop() noexcept;
+
+  /// Request stop and wait for every Runtime-owned IO/CPU worker to exit.
+  /// Start-mode owners must call this before destroying state borrowed by
+  /// runtime tasks. Any exception captured from an IO worker is returned.
+  [[nodiscard]] core::Result<void> stop_and_join();
 
 private:
   struct Impl;

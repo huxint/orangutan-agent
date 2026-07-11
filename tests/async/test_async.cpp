@@ -8,6 +8,7 @@
 #include <future>
 #include <optional>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 #include <asio/bind_cancellation_slot.hpp>
@@ -81,6 +82,44 @@ TEST_CASE("Runtime::start rejects a second start and a later run", "[unit][async
   REQUIRE(blocking.error().kind() == core::ErrorKind::conflict);
 
   runtime.stop();
+}
+
+TEST_CASE("Runtime::stop_and_join waits for active workers", "[unit][async][runtime]") {
+  async::Runtime runtime{async::RuntimeConfig{.io_workers = 1, .cpu_workers = 1}};
+  std::promise<void> entered;
+  auto entered_future = entered.get_future();
+  std::atomic_bool finished = false;
+
+  REQUIRE(runtime.start().has_value());
+  asio::post(runtime.executor(), [&] {
+    entered.set_value();
+    std::this_thread::sleep_for(20ms);
+    finished.store(true);
+  });
+  REQUIRE(entered_future.wait_for(1s) == std::future_status::ready);
+
+  REQUIRE(runtime.stop_and_join().has_value());
+  REQUIRE(finished.load());
+}
+
+TEST_CASE("Runtime::stop_and_join reports start-mode worker exceptions", "[unit][async][runtime]") {
+  async::Runtime runtime{async::RuntimeConfig{.io_workers = 1, .cpu_workers = 1}};
+  std::promise<void> entered;
+  auto entered_future = entered.get_future();
+
+  asio::post(runtime.executor(), [&] {
+    entered.set_value();
+    throw std::runtime_error{"start boom"};
+  });
+  REQUIRE(runtime.start().has_value());
+  REQUIRE(entered_future.wait_for(1s) == std::future_status::ready);
+
+  auto stopped = runtime.stop_and_join();
+  REQUIRE_FALSE(stopped.has_value());
+  REQUIRE(stopped.error().kind() == core::ErrorKind::internal);
+  REQUIRE(std::ranges::any_of(stopped.error().context(), [](const auto& entry) {
+    return entry.first == "reason" && entry.second == "start boom";
+  }));
 }
 
 TEST_CASE("Runtime rejects a second run after stop", "[unit][async][runtime]") {

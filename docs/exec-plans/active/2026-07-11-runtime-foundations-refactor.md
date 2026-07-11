@@ -96,6 +96,8 @@ external contract or a previously reproduced failure.
 - [x] Atomic HTTP cancellation bridge, strict provider terminal states, bounded
   channel conversations, and bounded/deadline-limited webhook intake landed.
 - [x] Bounded named `async::TaskGroup` foundation landed; runtime owners are migrating.
+- [x] `Runtime::stop_and_join()` landed; start-mode serve/desktop owners now join
+  Runtime workers before borrowed assembly/provider state can be destroyed.
 - [ ] Filesystem authority migration landed; old string-authority path removed.
 - [ ] Structured task ownership migrated across runtime surfaces.
 - [ ] Network/provider/UI correctness milestone landed.
