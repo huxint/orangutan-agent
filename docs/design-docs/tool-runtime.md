@@ -676,8 +676,9 @@ Current surface and forward shape:
 - `tool::Workspace` is a value type with a canonical root, extra read roots,
   extra write roots, and four intent-specific methods:
   `resolve_read`, `resolve_write`, `resolve_delete`, and `resolve_list`.
-- `ResolvedPath` carries the canonical absolute path string, a path relative
-  to the matching root, and resolution flags (`symlink_followed`,
+- `ResolvedPath` carries the selected directory authority, its
+  authority-relative execution path, the canonical absolute diagnostic path,
+  a path relative to the matching root, and resolution flags (`symlink_followed`,
   `created_parents`, `outside_workspace_explicit_override`,
   `override_root_index`).
 - Bootstrap ownership ships in slice 41 — `RuntimeAssembly::build` now
@@ -690,9 +691,18 @@ Current surface and forward shape:
   via `Workspace::resolve_read` / `resolve_write` / `resolve_delete` /
   `resolve_list`. The intent is encoded in the method name; callers cannot
   mix them up at the type level. `Registry::dispatch` stores the successful
-  result in `DispatchContext::resolved_path`; built-in handlers consume that
-  absolute path and fall back to in-handler resolution only when a caller did
-  not supply a workspace.
+  result in `DispatchContext::resolved_path`. `FileRead`, `FileWrite`, and
+  `FileEdit` consume the authority plus relative path after approval rather
+  than reopening the absolute pathname. Direct trusted calls without a
+  workspace temporarily retain pathname execution while the remaining
+  filesystem handlers migrate.
+- `FileWrite` and `FileEdit` begin a dirfd-backed mutation after approval.
+  The parent directory stays pinned across executor hops; edits read the
+  snapshotted file descriptor; truncate commits revalidate the target identity
+  immediately before rename. A replacement detected at that validation point
+  returns `conflict/reason=stale_fingerprint`; Linux does not provide a
+  conditional rename CAS, so the final validation-to-rename window remains an
+  acknowledged external-writer race.
 - Audit rows carry path-resolution metadata under
   `permission::AuditEvent::metadata_json`. Successful resolves include hashed
   input/root values, `resolved_relative_path`, symlink / parent-creation /

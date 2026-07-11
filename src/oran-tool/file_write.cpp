@@ -17,10 +17,10 @@
 #include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/tool_def.hpp>
+#include <oran/io/directory_authority.hpp>
 #include <oran/io/file.hpp>
 #include <oran/io/fingerprint.hpp>
 #include <oran/tool/registry.hpp>
-#include <oran/tool/workspace.hpp>
 
 #include "_impl/parse_input.hpp"
 #include "version_token.hpp"
@@ -40,18 +40,6 @@ constexpr std::string_view kFileWriteSchema =
 /// `io::ReadTextOptions::max_bytes` default so write/edit tools cannot create
 /// files larger than the read side is willing to ingest in a later turn.
 constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
-
-[[nodiscard]] WriteDisposition to_write_disposition(io::WriteMode mode) noexcept {
-  switch (mode) {
-    case io::WriteMode::truncate:
-      return WriteDisposition::truncate;
-    case io::WriteMode::append:
-      return WriteDisposition::append;
-    case io::WriteMode::fail_if_exists:
-      return WriteDisposition::fail_if_exists;
-  }
-  return WriteDisposition::truncate;
-}
 
 [[nodiscard]] core::Result<std::uintmax_t> parse_max_bytes(const nlohmann::json& parsed) {
   if (!parsed.contains("max_bytes")) {
@@ -133,7 +121,7 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
     expected_version = (*parsed)["expected_version"].get<std::string>();
   }
 
-  auto path = ctx.resolved_path.has_value() ? ctx.resolved_path->absolute_path : *std::move(path_field);
+  auto path = *std::move(path_field);
   auto content = *std::move(content_field);
   const auto byte_count = content.size();
   if (static_cast<std::uintmax_t>(byte_count) > *max_bytes) {
@@ -142,16 +130,26 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
                                   .with("content_bytes", std::to_string(byte_count))
                                   .with("max_bytes", std::to_string(*max_bytes)));
   }
-  if (!ctx.resolved_path.has_value() && ctx.workspace != nullptr) {
-    auto resolved = ctx.workspace->resolve_write(path,
-                                                 WriteIntent{
-                                                     .disposition = to_write_disposition(options.mode),
-                                                     .create_parent_directories = options.create_parent_directories,
-                                                 });
-    if (!resolved) {
-      co_return std::unexpected(std::move(resolved).error());
+
+  std::optional<io::FileMutation> authorized_mutation;
+  if (ctx.resolved_path.has_value()) {
+    if (!ctx.resolved_path->authority.has_value()) {
+      co_return std::unexpected(core::Error::internal("FileWrite: resolved workspace path is missing authority"));
     }
-    path = std::move(resolved->absolute_path);
+    path = ctx.resolved_path->absolute_path;
+    auto mutation = ctx.resolved_path->authority->begin_file_mutation(
+        io::AnchoredPath{
+            .relative_path = ctx.resolved_path->authority_relative_path,
+            .symlink_policy = io::AnchoredSymlinkPolicy::reject_all,
+        },
+        options.create_parent_directories);
+    if (!mutation) {
+      co_return std::unexpected(std::move(mutation).error());
+    }
+    authorized_mutation.emplace(std::move(*mutation));
+  } else if (ctx.workspace != nullptr) {
+    co_return std::unexpected(
+        core::Error::internal("FileWrite: workspace dispatch did not provide a resolved authority"));
   }
 
   // Pre-write fingerprint check: a stale `expected_version` aborts the
@@ -161,7 +159,17 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
   // is meant to be paired with a recent `FileRead`, so vanishing-from-disk
   // is the same "your token is stale, re-read" outcome.
   if (expected_version) {
-    auto pre = io::compute_file_fingerprint(path);
+    core::Result<io::FileFingerprint> pre = std::unexpected(core::Error::internal("unreachable fingerprint state"));
+    if (authorized_mutation.has_value()) {
+      auto opened = authorized_mutation->open_existing();
+      if (opened) {
+        pre = io::compute_file_fingerprint(*opened);
+      } else {
+        pre = std::unexpected(std::move(opened).error());
+      }
+    } else {
+      pre = io::compute_file_fingerprint(path);
+    }
     if (!pre) {
       co_return std::unexpected(core::Error{core::ErrorKind::conflict, "FileWrite: expected_version cannot be verified"}
                                     .with("path", path)
@@ -184,7 +192,10 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
   // the temp-then-rename atomic path. Append and fail_if_exists keep their
   // existing semantics because the atomic path is incompatible with both.
   options.atomic = options.mode == io::WriteMode::truncate;
-  auto written = co_await io::write_text_file(ctx.executor, path, std::move(content), options);
+  auto written =
+      authorized_mutation.has_value()
+          ? co_await io::write_text_file(ctx.executor, std::move(*authorized_mutation), std::move(content), options)
+          : co_await io::write_text_file(ctx.executor, path, std::move(content), options);
   if (!written) {
     co_return std::unexpected(std::move(written).error());
   }

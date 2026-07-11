@@ -826,6 +826,18 @@ TEST_CASE("FileWrite uses DispatchContext workspace for relative writes and trav
     REQUIRE(written.has_value());
     REQUIRE(std::filesystem::exists(root.path() / "nested" / "out.txt"));
 
+    auto appended = co_await registry.dispatch(tool::kFileWriteName,
+                                               R"({"path":"nested/out.txt","content":"-tail","mode":"append"})",
+                                               ctx);
+    REQUIRE(appended.has_value());
+
+    auto refused =
+        co_await registry.dispatch(tool::kFileWriteName,
+                                   R"({"path":"nested/out.txt","content":"clobber","mode":"fail_if_exists"})",
+                                   ctx);
+    REQUIRE_FALSE(refused.has_value());
+    REQUIRE(refused.error().kind() == core::ErrorKind::conflict);
+
     std::error_code ec;
     const auto outside_relative_path = std::filesystem::relative(outside.path() / "blocked.txt", root.path(), ec);
     REQUIRE(ec.value() == 0);
@@ -839,7 +851,68 @@ TEST_CASE("FileWrite uses DispatchContext workspace for relative writes and trav
   });
 
   std::ifstream written{root.path() / "nested" / "out.txt", std::ios::binary};
-  REQUIRE(std::string{std::istreambuf_iterator<char>{written}, std::istreambuf_iterator<char>{}} == "inside");
+  REQUIRE(std::string{std::istreambuf_iterator<char>{written}, std::istreambuf_iterator<char>{}} == "inside-tail");
+}
+
+TEST_CASE("FileWrite retains workspace authority across the approval window",
+          "[unit][tool][workspace][file_write][approval][race]") {
+  TempDir sandbox{"oran-workspace-file-write-approval-race"};
+  const auto root = sandbox.path() / "workspace";
+  const auto moved_root = sandbox.path() / "workspace-moved";
+  const auto outside = sandbox.path() / "outside";
+  write_text(root / "note.txt", "inside-old");
+  write_text(outside / "note.txt", "outside-old");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_write(registry).has_value());
+
+    auto workspace = make_workspace(root);
+    auto rules = ask_tool_rules(std::string{tool::kFileWriteName}, core::Capability::write_file);
+    permission::RecordingAuditSink sink;
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+    auto broker = make_broker();
+    ctx.approval_broker = &broker;
+    ctx.now = fixed_now();
+
+    orangutan::hook::Bus bus;
+    orangutan::hook::InProcessSink prompt{
+        "write-root-replacement-prompt",
+        [](orangutan::hook::Event, orangutan::hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        }};
+    prompt.set_blocking_handler([&](orangutan::hook::Event, orangutan::hook::PayloadPtr)
+                                    -> async::Awaitable<core::Result<orangutan::hook::HookDecision>> {
+      std::error_code ec;
+      std::filesystem::rename(root, moved_root, ec);
+      if (ec) {
+        co_return std::unexpected(core::Error::io("test failed to rename workspace root").with("detail", ec.message()));
+      }
+      std::filesystem::create_directory_symlink(outside, root, ec);
+      if (ec) {
+        co_return std::unexpected(
+            core::Error::io("test failed to replace workspace root").with("detail", ec.message()));
+      }
+      co_return orangutan::hook::HookDecision{
+          .reason = "operator_approved:operator-1",
+          .rewritten_input_json = std::nullopt,
+          .approval_expires_at = std::nullopt,
+          .trace = {},
+      };
+    });
+    bus.bind(prompt, {orangutan::hook::Event::permission_ask_rendered});
+    ctx.bus = &bus;
+
+    auto written =
+        co_await registry.dispatch(tool::kFileWriteName, R"({"path":"note.txt","content":"inside-new"})", ctx);
+    REQUIRE(written.has_value());
+  });
+
+  std::ifstream inside{moved_root / "note.txt", std::ios::binary};
+  std::ifstream outside_input{outside / "note.txt", std::ios::binary};
+  REQUIRE(std::string{std::istreambuf_iterator<char>{inside}, std::istreambuf_iterator<char>{}} == "inside-new");
+  REQUIRE(std::string{std::istreambuf_iterator<char>{outside_input}, std::istreambuf_iterator<char>{}} ==
+          "outside-old");
 }
 
 TEST_CASE("FileEdit uses DispatchContext workspace for relative edits and traversal refusal",
@@ -878,6 +951,69 @@ TEST_CASE("FileEdit uses DispatchContext workspace for relative edits and traver
   REQUIRE(std::string{std::istreambuf_iterator<char>{inside}, std::istreambuf_iterator<char>{}} == "alpha BETA");
   std::ifstream outside_file{outside.path() / "secret.txt", std::ios::binary};
   REQUIRE(std::string{std::istreambuf_iterator<char>{outside_file}, std::istreambuf_iterator<char>{}} == "do not edit");
+}
+
+TEST_CASE("FileEdit rejects a symlink escape introduced during approval",
+          "[unit][tool][workspace][file_edit][approval][race]") {
+  TempDir sandbox{"oran-workspace-file-edit-approval-race"};
+  const auto root = sandbox.path() / "workspace";
+  const auto moved_safe = root / "moved-safe";
+  const auto outside = sandbox.path() / "outside";
+  write_text(root / "safe" / "note.txt", "inside alpha");
+  write_text(outside / "note.txt", "outside alpha");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_edit(registry).has_value());
+
+    auto workspace = make_workspace(root);
+    auto rules = ask_tool_rules(std::string{tool::kFileEditName}, core::Capability::edit_file);
+    permission::RecordingAuditSink sink;
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+    auto broker = make_broker();
+    ctx.approval_broker = &broker;
+    ctx.now = fixed_now();
+
+    orangutan::hook::Bus bus;
+    orangutan::hook::InProcessSink prompt{
+        "edit-symlink-race-prompt",
+        [](orangutan::hook::Event, orangutan::hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        }};
+    prompt.set_blocking_handler([&](orangutan::hook::Event, orangutan::hook::PayloadPtr)
+                                    -> async::Awaitable<core::Result<orangutan::hook::HookDecision>> {
+      std::error_code ec;
+      std::filesystem::rename(root / "safe", moved_safe, ec);
+      if (ec) {
+        co_return std::unexpected(core::Error::io("test failed to rename safe directory").with("detail", ec.message()));
+      }
+      std::filesystem::create_directory_symlink(outside, root / "safe", ec);
+      if (ec) {
+        co_return std::unexpected(
+            core::Error::io("test failed to introduce escaping symlink").with("detail", ec.message()));
+      }
+      co_return orangutan::hook::HookDecision{
+          .reason = "operator_approved:operator-1",
+          .rewritten_input_json = std::nullopt,
+          .approval_expires_at = std::nullopt,
+          .trace = {},
+      };
+    });
+    bus.bind(prompt, {orangutan::hook::Event::permission_ask_rendered});
+    ctx.bus = &bus;
+
+    auto edited = co_await registry.dispatch(tool::kFileEditName,
+                                             R"({"path":"safe/note.txt","old_string":"alpha","new_string":"ALPHA"})",
+                                             ctx);
+    REQUIRE_FALSE(edited.has_value());
+    REQUIRE(context_has(edited.error(), "reason", "symlink_component"));
+  });
+
+  std::ifstream inside{moved_safe / "note.txt", std::ios::binary};
+  std::ifstream outside_input{outside / "note.txt", std::ios::binary};
+  REQUIRE(std::string{std::istreambuf_iterator<char>{inside}, std::istreambuf_iterator<char>{}} == "inside alpha");
+  REQUIRE(std::string{std::istreambuf_iterator<char>{outside_input}, std::istreambuf_iterator<char>{}} ==
+          "outside alpha");
 }
 
 TEST_CASE("FileEdit rejects workspace symlink mutation targets", "[unit][tool][workspace][file_edit]") {

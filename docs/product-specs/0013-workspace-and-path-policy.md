@@ -30,6 +30,13 @@ Current seams and future work:
   `DispatchContext::workspace` through `Registry::dispatch` when supplied;
   handlers retain an in-handler fallback for tests and legacy callers that
   dispatch without a workspace.
+- The handle migration is active: `FileRead` executes through a pinned
+  `DirectoryAuthority`, while `FileWrite` and `FileEdit` use a pinned-parent
+  `FileMutation`. Approval and executor awaits cannot redirect these three
+  handlers through a replaced workspace pathname or newly introduced symlink.
+  Mutation commits revalidate the snapshotted target immediately before
+  rename and surface a stale-fingerprint conflict on detected lost updates.
+  Delete/list/search remain on the staged migration backlog.
 - Root paths for `FileSearch` and `DirectoryList` use
   `Workspace::resolve_list` and therefore follow symlinks only when the
   canonical target remains in an allowed root. Nested entries during

@@ -46,6 +46,15 @@ performs the requested operation and returns `core::Result<T>`.
 > exclusive create/retry instead of a process-local counter, avoiding
 > cross-process temp collisions.
 >
+> **Authority refactor (2026-07-12):** `DirectoryAuthority` can begin a
+> move-only `FileMutation` that pins the target parent directory, rejects
+> symlink components, and snapshots the existing regular file or its absence.
+> Workspace-backed truncate writes stage a sibling temp, revalidate that
+> snapshot immediately before `renameat`, and return
+> `conflict/reason=stale_fingerprint` if another writer won. Append and
+> fail-if-exists preserve their public semantics through the same pinned
+> parent. This is final pre-commit validation, not a claim of filesystem CAS.
+>
 > **Slice-43 status (2026-05-22):** `oran-io` adds the range-aware
 > `read_text_file_ranged(executor, path, options)` returning
 > `ReadTextResult { text, fingerprint, start_line, end_line,
@@ -234,6 +243,12 @@ run_blocking(asio::any_io_executor executor, Fn fn);
 async::Awaitable<core::Result<void>>
 write_text_file(asio::any_io_executor executor,
                 std::string path,
+                std::string contents,
+                WriteTextOptions = {});
+
+async::Awaitable<core::Result<void>>
+write_text_file(asio::any_io_executor executor,
+                FileMutation mutation,
                 std::string contents,
                 WriteTextOptions = {});
 

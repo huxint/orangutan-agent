@@ -6,9 +6,14 @@
 #include <string>
 #include <string_view>
 
+#include <asio/any_io_executor.hpp>
+
+#include <oran/async/awaitable_fwd.hpp>
 #include <oran/core/result.hpp>
 
 namespace orangutan::io {
+
+struct WriteTextOptions;
 
 /// Symlink policy applied while resolving every component beneath a directory
 /// authority. The permissive mode still forbids escapes from the authority;
@@ -47,6 +52,29 @@ private:
   std::unique_ptr<Impl> impl_;
 
   friend class DirectoryAuthority;
+  friend class FileMutation;
+};
+
+class FileMutation {
+public:
+  FileMutation(FileMutation&&) noexcept;
+  FileMutation& operator=(FileMutation&&) noexcept;
+  FileMutation(const FileMutation&) = delete;
+  FileMutation& operator=(const FileMutation&) = delete;
+  ~FileMutation();
+
+  [[nodiscard]] core::Result<ReadOnlyFile> open_existing() const;
+  [[nodiscard]] std::string_view display_path() const noexcept;
+
+private:
+  struct Impl;
+  explicit FileMutation(std::unique_ptr<Impl> impl);
+  [[nodiscard]] core::Result<void> write_text(std::string_view contents, WriteTextOptions options);
+
+  std::unique_ptr<Impl> impl_;
+  friend class DirectoryAuthority;
+  friend async::Awaitable<core::Result<void>>
+      write_text_file(asio::any_io_executor, FileMutation, std::string, WriteTextOptions);
 };
 
 /// A stable capability for one trusted directory. Operations are resolved
@@ -68,6 +96,11 @@ public:
 
   /// Open a child directory as another stable authority.
   [[nodiscard]] core::Result<DirectoryAuthority> open_directory(const AnchoredPath& path) const;
+
+  /// Pin the target's parent directory and snapshot its current regular-file
+  /// identity (or absence) for a later anchored mutation.
+  [[nodiscard]] core::Result<FileMutation> begin_file_mutation(const AnchoredPath& path,
+                                                               bool create_parent_directories = false) const;
 
   /// Original trusted root spelling, retained for diagnostics only.
   [[nodiscard]] std::string_view display_root() const noexcept;

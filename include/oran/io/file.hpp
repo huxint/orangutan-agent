@@ -18,6 +18,7 @@
 namespace orangutan::io {
 
 class ReadOnlyFile;
+class FileMutation;
 
 enum class WriteMode : std::uint8_t {
   truncate,
@@ -190,6 +191,14 @@ watch_read_text_file_ranged_cache(asio::any_io_executor executor,
 
 [[nodiscard]] async::Awaitable<core::Result<void>>
 write_text_file(asio::any_io_executor executor, std::string path, std::string contents, WriteTextOptions options = {});
+
+/// Write through a pinned directory authority. Truncate stages a sibling
+/// temporary file and revalidates the target identity immediately before
+/// rename; append and fail-if-exists remain anchored to the pinned parent.
+[[nodiscard]] async::Awaitable<core::Result<void>> write_text_file(asio::any_io_executor executor,
+                                                                   FileMutation mutation,
+                                                                   std::string contents,
+                                                                   WriteTextOptions options = {});
 
 [[nodiscard]] async::Awaitable<core::Result<std::vector<DirectoryEntry>>>
 list_directory(asio::any_io_executor executor, std::string path, ListDirectoryOptions options = {});

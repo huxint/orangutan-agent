@@ -91,6 +91,8 @@ external contract or a previously reproduced failure.
   and their freshness scaffolding were removed; `make ci` now gates current contracts.
 - [x] Dirfd/openat2 authority foundation landed and Workspace resolution now
   carries a capability across approval; individual file handlers are migrating.
+- [x] `FileRead`, `FileWrite`, and `FileEdit` execute through pinned authorities;
+  write/edit replacement commits perform final target-identity validation.
 - [x] Atomic HTTP cancellation bridge, strict provider terminal states, bounded
   channel conversations, and bounded/deadline-limited webhook intake landed.
 - [x] Bounded named `async::TaskGroup` foundation landed; runtime owners are migrating.

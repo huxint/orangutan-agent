@@ -2,12 +2,15 @@
 
 #include <oran/io/directory_authority.hpp>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstddef>
 #include <expected>
 #include <filesystem>
 #include <format>
+#include <limits>
 #include <memory>
+#include <random>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -25,6 +28,7 @@
 #endif
 
 #include <oran/core/error.hpp>
+#include <oran/io/file.hpp>
 
 namespace orangutan::io {
 namespace {
@@ -265,6 +269,284 @@ struct DirectoryAuthority::Impl {
   std::string display_root;
 };
 
+struct FileMutation::Impl {
+  UniqueFd parent;
+  UniqueFd existing;
+  std::string name;
+  std::string display;
+  bool existed{false};
+  dev_t device{};
+  ino_t inode{};
+  off_t size{};
+  timespec mtime{};
+};
+
+FileMutation::FileMutation(std::unique_ptr<Impl> impl) : impl_{std::move(impl)} {}
+FileMutation::FileMutation(FileMutation&&) noexcept = default;
+FileMutation& FileMutation::operator=(FileMutation&&) noexcept = default;
+FileMutation::~FileMutation() = default;
+
+std::string_view FileMutation::display_path() const noexcept {
+  return impl_ ? std::string_view{impl_->display} : std::string_view{};
+}
+
+core::Result<ReadOnlyFile> FileMutation::open_existing() const {
+  if (!impl_ || !impl_->existed) {
+    auto error = core::Error::not_found("anchored mutation target does not exist");
+    if (impl_) {
+      error = std::move(error).with("path", impl_->display);
+    }
+    return std::unexpected(std::move(error));
+  }
+  errno = 0;
+  auto opened =
+      UniqueFd{::openat(impl_->parent.get(), impl_->name.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)};
+  if (opened.get() < 0) {
+    return std::unexpected(errno_error("failed to open mutation target for reading", {}, impl_->display, errno));
+  }
+  struct stat status{};
+  if (::fstat(opened.get(), &status) != 0) {
+    return std::unexpected(errno_error("failed to validate mutation read target", {}, impl_->display, errno));
+  }
+  const bool unchanged = status.st_dev == impl_->device && status.st_ino == impl_->inode &&
+                         status.st_size == impl_->size && status.st_mtim.tv_sec == impl_->mtime.tv_sec &&
+                         status.st_mtim.tv_nsec == impl_->mtime.tv_nsec;
+  if (!unchanged) {
+    return std::unexpected(core::Error{core::ErrorKind::conflict, "anchored mutation target changed before read"}
+                               .with("reason", "stale_fingerprint")
+                               .with("path", impl_->display));
+  }
+  return ReadOnlyFile{std::make_unique<ReadOnlyFile::Impl>(std::move(opened), impl_->display)};
+}
+
+namespace {
+core::Result<void> write_all(int fd, std::string_view contents, std::string_view path) {
+  std::size_t offset = 0;
+  while (offset < contents.size()) {
+    const auto remaining = contents.size() - offset;
+    const auto chunk = std::min(remaining, static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
+    errno = 0;
+    const auto count = ::write(fd, contents.data() + offset, chunk);
+    if (count < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return std::unexpected(errno_error("failed to write anchored file", {}, path, errno));
+    }
+    if (count == 0) {
+      return std::unexpected(core::Error::io("anchored file write made no progress").with("path", std::string{path}));
+    }
+    offset += static_cast<std::size_t>(count);
+  }
+  return {};
+}
+
+[[nodiscard]] bool
+same_identity(dev_t device, ino_t inode, off_t size, timespec mtime, const struct stat& status) noexcept {
+  return status.st_dev == device && status.st_ino == inode && status.st_size == size &&
+         status.st_mtim.tv_sec == mtime.tv_sec && status.st_mtim.tv_nsec == mtime.tv_nsec;
+}
+
+[[nodiscard]] core::Error stale_mutation_error(std::string message, std::string_view path) {
+  return core::Error{core::ErrorKind::conflict, std::move(message)}
+      .with("reason", "stale_fingerprint")
+      .with("path", std::string{path});
+}
+
+[[nodiscard]] core::Result<void> sync_fd(int fd, std::string_view path, std::string message) {
+  while (true) {
+    errno = 0;
+    if (::fsync(fd) == 0) {
+      return {};
+    }
+    if (errno != EINTR) {
+      return std::unexpected(errno_error(std::move(message), {}, path, errno));
+    }
+  }
+}
+
+class SiblingTempFile {
+public:
+  SiblingTempFile(int parent_fd, std::string name, UniqueFd fd)
+      : parent_fd_{parent_fd}, name_{std::move(name)}, fd_{std::move(fd)} {}
+
+  SiblingTempFile(const SiblingTempFile&) = delete;
+  SiblingTempFile& operator=(const SiblingTempFile&) = delete;
+  SiblingTempFile(SiblingTempFile&&) = delete;
+  SiblingTempFile& operator=(SiblingTempFile&&) = delete;
+
+  ~SiblingTempFile() {
+    if (!name_.empty()) {
+      static_cast<void>(::unlinkat(parent_fd_, name_.c_str(), 0));
+    }
+  }
+
+  [[nodiscard]] int fd() const noexcept {
+    return fd_.get();
+  }
+
+  [[nodiscard]] const std::string& name() const noexcept {
+    return name_;
+  }
+
+  void committed() noexcept {
+    name_.clear();
+  }
+
+private:
+  int parent_fd_;
+  std::string name_;
+  UniqueFd fd_;
+};
+
+[[nodiscard]] core::Result<std::unique_ptr<SiblingTempFile>> create_sibling_temp(int parent_fd,
+                                                                                 std::string_view display_path) {
+  std::random_device random;
+  for (std::size_t attempt = 0; attempt < 32U; ++attempt) {
+    auto name = std::format(".orangutan.tmp.{}.{}", ::getpid(), random());
+    errno = 0;
+    auto fd = UniqueFd{::openat(parent_fd, name.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0666)};
+    if (fd.get() >= 0) {
+      return std::make_unique<SiblingTempFile>(parent_fd, std::move(name), std::move(fd));
+    }
+    if (errno != EEXIST) {
+      return std::unexpected(errno_error("failed to create anchored temporary file", {}, display_path, errno));
+    }
+  }
+  return std::unexpected(core::Error::io("failed to allocate anchored temporary file")
+                             .with("path", std::string{display_path})
+                             .with("attempts", "32"));
+}
+
+[[nodiscard]] core::Result<void> write_and_sync_temp(SiblingTempFile& temp,
+                                                     std::string_view contents,
+                                                     std::string_view display_path,
+                                                     WriteTextDurability durability) {
+  if (auto written = write_all(temp.fd(), contents, display_path); !written) {
+    return written;
+  }
+  if (durability != WriteTextDurability::rename_only) {
+    return sync_fd(temp.fd(), display_path, "failed to sync anchored temporary file");
+  }
+  return {};
+}
+
+}  // namespace
+
+core::Result<void> FileMutation::write_text(std::string_view contents, WriteTextOptions options) {
+  if (!impl_) {
+    return std::unexpected(core::Error::internal("file mutation is empty"));
+  }
+  if (options.mode != WriteMode::truncate && options.atomic) {
+    return std::unexpected(core::Error::invalid_argument("atomic writes require truncate mode"));
+  }
+  if (!options.atomic && options.durability != WriteTextDurability::rename_only) {
+    return std::unexpected(core::Error::invalid_argument("write durability requires atomic mode"));
+  }
+
+  if (options.mode == WriteMode::append) {
+    const auto create_flags = impl_->existed ? 0 : O_CREAT | O_EXCL;
+    errno = 0;
+    auto opened = UniqueFd{::openat(impl_->parent.get(),
+                                    impl_->name.c_str(),
+                                    O_WRONLY | O_APPEND | create_flags | O_CLOEXEC | O_NOFOLLOW,
+                                    0666)};
+    if (opened.get() < 0) {
+      if (!impl_->existed && errno == EEXIST) {
+        return std::unexpected(stale_mutation_error("anchored append target appeared before write", impl_->display));
+      }
+      return std::unexpected(errno_error("failed to open anchored append target", {}, impl_->display, errno));
+    }
+    if (auto regular = require_regular_file(opened.get(), {}, impl_->display); !regular) {
+      return regular;
+    }
+    if (impl_->existed) {
+      struct stat opened_status{};
+      if (::fstat(opened.get(), &opened_status) != 0) {
+        return std::unexpected(errno_error("failed to validate anchored append target", {}, impl_->display, errno));
+      }
+      if (!same_identity(impl_->device, impl_->inode, impl_->size, impl_->mtime, opened_status)) {
+        return std::unexpected(stale_mutation_error("anchored append target changed before write", impl_->display));
+      }
+    }
+    auto result = write_all(opened.get(), contents, impl_->display);
+    if (result) {
+      invalidate_read_text_file_ranged_cache(impl_->display);
+    }
+    return result;
+  }
+
+  if (options.mode == WriteMode::fail_if_exists) {
+    if (impl_->existed) {
+      return std::unexpected(
+          core::Error{core::ErrorKind::conflict, "file already exists"}.with("path", impl_->display));
+    }
+    auto temp = create_sibling_temp(impl_->parent.get(), impl_->display);
+    if (!temp) {
+      return std::unexpected(std::move(temp).error());
+    }
+    if (auto written = write_and_sync_temp(**temp, contents, impl_->display, options.durability); !written) {
+      return written;
+    }
+    errno = 0;
+    if (::linkat(impl_->parent.get(), (*temp)->name().c_str(), impl_->parent.get(), impl_->name.c_str(), 0) != 0) {
+      if (errno == EEXIST) {
+        return std::unexpected(
+            core::Error{core::ErrorKind::conflict, "file already exists"}.with("path", impl_->display));
+      }
+      return std::unexpected(errno_error("failed to commit anchored exclusive create", {}, impl_->display, errno));
+    }
+    invalidate_read_text_file_ranged_cache(impl_->display);
+    return {};
+  }
+
+  auto temp = create_sibling_temp(impl_->parent.get(), impl_->display);
+  if (!temp) {
+    return std::unexpected(std::move(temp).error());
+  }
+  if (auto written = write_and_sync_temp(**temp, contents, impl_->display, options.durability); !written) {
+    return written;
+  }
+
+  struct stat current{};
+  errno = 0;
+  const auto current_fd = UniqueFd{::openat(impl_->parent.get(), impl_->name.c_str(), O_PATH | O_CLOEXEC | O_NOFOLLOW)};
+  if (impl_->existed) {
+    if (current_fd.get() < 0) {
+      if (errno == ENOENT) {
+        return std::unexpected(stale_mutation_error("anchored mutation target changed before commit", impl_->display));
+      }
+      return std::unexpected(errno_error("failed to reopen anchored mutation target", {}, impl_->display, errno));
+    }
+    if (::fstat(current_fd.get(), &current) != 0) {
+      return std::unexpected(errno_error("failed to validate anchored mutation target", {}, impl_->display, errno));
+    }
+    if (!same_identity(impl_->device, impl_->inode, impl_->size, impl_->mtime, current)) {
+      return std::unexpected(stale_mutation_error("anchored mutation target changed before commit", impl_->display));
+    }
+  } else if (current_fd.get() >= 0) {
+    return std::unexpected(stale_mutation_error("anchored mutation target appeared before commit", impl_->display));
+  } else if (errno != ENOENT) {
+    return std::unexpected(errno_error("failed to verify absent anchored mutation target", {}, impl_->display, errno));
+  }
+
+  errno = 0;
+  if (::renameat(impl_->parent.get(), (*temp)->name().c_str(), impl_->parent.get(), impl_->name.c_str()) != 0) {
+    return std::unexpected(errno_error("failed to commit anchored write", {}, impl_->display, errno));
+  }
+  (*temp)->committed();
+  // The namespace mutation has committed even if the optional parent fsync
+  // below fails, so process-local views must become stale immediately.
+  invalidate_read_text_file_ranged_cache(impl_->display);
+  if (options.durability == WriteTextDurability::fsync_file_and_parent) {
+    if (auto synced = sync_fd(impl_->parent.get(), impl_->display, "failed to sync anchored parent directory");
+        !synced) {
+      return synced;
+    }
+  }
+  return {};
+}
+
 ReadOnlyFile::ReadOnlyFile(std::unique_ptr<Impl> impl) : impl_{std::move(impl)} {}
 
 ReadOnlyFile::ReadOnlyFile(ReadOnlyFile&&) noexcept = default;
@@ -330,6 +612,84 @@ core::Result<DirectoryAuthority> DirectoryAuthority::open_directory(const Anchor
 
   auto display = std::format("{}/{}", impl_->display_root, path.relative_path);
   return DirectoryAuthority{std::make_shared<Impl>(std::move(*opened), std::move(display))};
+}
+
+core::Result<FileMutation> DirectoryAuthority::begin_file_mutation(const AnchoredPath& path,
+                                                                   bool create_parent_directories) const {
+  if (impl_ == nullptr)
+    return std::unexpected(core::Error::internal("directory authority is empty"));
+  if (auto valid = validate_anchored_path(path); !valid)
+    return std::unexpected(std::move(valid).error());
+
+  auto components = path_components(path.relative_path);
+  if (components.empty())
+    return std::unexpected(core::Error::invalid_argument("mutation target must name a file"));
+  auto parent = UniqueFd{::openat(impl_->fd.get(), ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC)};
+  if (parent.get() < 0)
+    return std::unexpected(
+        errno_error("failed to duplicate directory authority", impl_->display_root, path.relative_path, errno));
+
+  for (std::size_t index = 0; index + 1 < components.size(); ++index) {
+    auto next =
+        UniqueFd{::openat(parent.get(), components[index].c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)};
+    if (next.get() < 0 && errno == ENOENT && create_parent_directories) {
+      if (::mkdirat(parent.get(), components[index].c_str(), 0755) != 0 && errno != EEXIST)
+        return std::unexpected(
+            errno_error("failed to create anchored parent directory", impl_->display_root, path.relative_path, errno));
+      next =
+          UniqueFd{::openat(parent.get(), components[index].c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)};
+    }
+    if (next.get() < 0) {
+      const auto open_error = errno;
+      struct stat component_status{};
+      if ((open_error == ELOOP || open_error == ENOTDIR) &&
+          ::fstatat(parent.get(), components[index].c_str(), &component_status, AT_SYMLINK_NOFOLLOW) == 0 &&
+          S_ISLNK(component_status.st_mode)) {
+        return std::unexpected(path_error("anchored mutation parent must not be a symlink",
+                                          impl_->display_root,
+                                          path.relative_path,
+                                          "symlink_component"));
+      }
+      return std::unexpected(
+          errno_error("failed to open anchored parent directory", impl_->display_root, path.relative_path, open_error));
+    }
+    parent = std::move(next);
+  }
+
+  const auto& name = components.back();
+  errno = 0;
+  auto existing = UniqueFd{::openat(parent.get(), name.c_str(), O_PATH | O_CLOEXEC | O_NOFOLLOW)};
+  const bool existed = existing.get() >= 0;
+  if (!existed && errno != ENOENT)
+    return std::unexpected(
+        errno_error("failed to inspect anchored mutation target", impl_->display_root, path.relative_path, errno));
+  struct stat status{};
+  if (existed) {
+    if (::fstat(existing.get(), &status) != 0)
+      return std::unexpected(
+          errno_error("failed to snapshot anchored mutation target", impl_->display_root, path.relative_path, errno));
+    if (S_ISLNK(status.st_mode)) {
+      return std::unexpected(path_error("anchored mutation target must not be a symlink",
+                                        impl_->display_root,
+                                        path.relative_path,
+                                        "symlink_component"));
+    }
+    if (auto regular = require_regular_file(existing.get(), impl_->display_root, path.relative_path); !regular)
+      return std::unexpected(std::move(regular).error());
+  }
+  auto mutation = std::make_unique<FileMutation::Impl>();
+  mutation->parent = std::move(parent);
+  mutation->existing = std::move(existing);
+  mutation->name = name;
+  mutation->display = std::format("{}/{}", impl_->display_root, path.relative_path);
+  mutation->existed = existed;
+  if (existed) {
+    mutation->device = status.st_dev;
+    mutation->inode = status.st_ino;
+    mutation->size = status.st_size;
+    mutation->mtime = status.st_mtim;
+  }
+  return FileMutation{std::move(mutation)};
 }
 
 std::string_view DirectoryAuthority::display_root() const noexcept {
