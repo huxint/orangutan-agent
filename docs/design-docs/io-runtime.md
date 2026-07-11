@@ -246,12 +246,6 @@ run_blocking(asio::any_io_executor executor, Fn fn);
 
 async::Awaitable<core::Result<void>>
 write_text_file(asio::any_io_executor executor,
-                std::string path,
-                std::string contents,
-                WriteTextOptions = {});
-
-async::Awaitable<core::Result<void>>
-write_text_file(asio::any_io_executor executor,
                 FileMutation mutation,
                 std::string contents,
                 WriteTextOptions = {});
@@ -369,30 +363,32 @@ surface for effectful agent actions.
 
 ## Atomic Writes
 
-`WriteTextOptions::atomic` selects a temp-then-rename commit path:
+`write_text_file(executor, FileMutation, ...)` owns the text-write surface.
+For truncate mode it stages a sibling temp and commits through the pinned
+parent directory:
 
-1. Compute a sibling temp leaf `.<basename>.orangutan.tmp.<pid>.<random>` under the
+1. Compute a sibling temp leaf `.orangutan.tmp.<pid>.<random>` under the
    target's parent directory. The leading `.` keeps the temp out of LLM-facing
    directory listings (which hide dotfiles by default). The implementation
-   opens the candidate with exclusive creation and retries on the unlikely
+   uses `openat` with exclusive creation and retries on the unlikely
    collision, so separate `orangutan` processes cannot overwrite each other's
    temp files.
-2. Open the temp with exclusive create, write `contents`, and close it. When
+2. Write `contents` through the temp descriptor. When
    `WriteTextOptions::durability` is `fsync_file` or
-   `fsync_file_and_parent`, fsync the temp file before close.
-3. `std::filesystem::rename(temp, target)` - atomic on POSIX when temp and
-   target sit on the same filesystem, which is always true because the temp
-   lives in the target's parent.
+   `fsync_file_and_parent`, fsync the temp file before commit.
+3. Revalidate the snapshotted target metadata, then call `renameat` within the
+   pinned parent. The rename is atomic because temp and target share that
+   directory and filesystem.
 4. When durability is `fsync_file_and_parent`, fsync the target's parent
    directory after the rename so the directory entry is durable. The file-view
    caches are invalidated immediately after a successful rename, before the
    parent fsync, because the target bytes have already changed.
-5. Any error before or during rename is followed by a best-effort
-   `std::filesystem::remove(temp)` so a failed commit never leaves the
+5. Any error before or during rename is followed by a best-effort `unlinkat`
+   from the pinned parent so a failed commit never leaves the
    `.orangutan.tmp` leftover behind.
 
 `mode = append` and `mode = fail_if_exists` are incompatible with this pattern
-and reject as `invalid_argument` before any I/O — surfacing the contract
-mismatch up-front beats silently overwriting whichever side wins the race.
+and reject when `atomic=true`; the mutation surface implements their distinct
+anchored append and exclusive-create semantics without the rename pattern.
 Non-default durability also rejects unless `atomic=true`; ordinary truncate /
 append / fail-if-exists writes keep their existing no-fsync behavior.

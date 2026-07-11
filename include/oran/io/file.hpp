@@ -189,9 +189,6 @@ watch_read_text_file_ranged_cache(asio::any_io_executor executor,
 /// cannot mutate or inspect the private in-flight keys.
 [[nodiscard]] ReadTextSingleflightStats read_text_file_ranged_singleflight_stats();
 
-[[nodiscard]] async::Awaitable<core::Result<void>>
-write_text_file(asio::any_io_executor executor, std::string path, std::string contents, WriteTextOptions options = {});
-
 /// Write through a pinned directory authority. Truncate stages a sibling
 /// temporary file and revalidates the target identity immediately before
 /// rename; append and fail-if-exists remain anchored to the pinned parent.

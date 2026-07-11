@@ -51,6 +51,17 @@ void write_direct(const std::filesystem::path& path, std::string_view contents) 
   output << contents;
 }
 
+[[nodiscard]] std::string read_direct(const std::filesystem::path& path) {
+  std::ifstream input{path, std::ios::binary};
+  return std::string{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+}
+
+void require_no_mutation_temp(const std::filesystem::path& directory) {
+  for (const auto& entry : std::filesystem::directory_iterator{directory}) {
+    REQUIRE_FALSE(entry.path().filename().string().starts_with(".orangutan.tmp."));
+  }
+}
+
 [[nodiscard]] std::string read_handle(const io::ReadOnlyFile& file) {
   std::array<char, 64> buffer{};
   const auto count = ::read(file.native_handle(), buffer.data(), buffer.size());
@@ -168,6 +179,203 @@ TEST_CASE("FileMutation refuses symlink components and targets", "[unit][io][aut
   auto target_symlink = authority->begin_file_mutation("target-link.txt");
   REQUIRE_FALSE(target_symlink.has_value());
   REQUIRE(target_symlink.error().kind() == core::ErrorKind::permission_denied);
+}
+
+TEST_CASE("FileMutation creates parent directories and appends", "[unit][io][authority][mutation]") {
+  TempDir temp{"oran-io-mutation-write"};
+  const auto workspace = temp.path() / "workspace";
+  const auto target = workspace / "nested" / "output.txt";
+  std::filesystem::create_directory(workspace);
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+  auto created = authority->begin_file_mutation("nested/output.txt", true);
+  REQUIRE(created.has_value());
+
+  test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
+    auto first = co_await io::write_text_file(context.get_executor(),
+                                              std::move(*created),
+                                              "one",
+                                              io::WriteTextOptions{.atomic = true});
+    REQUIRE(first.has_value());
+
+    auto appended = authority->begin_file_mutation("nested/output.txt");
+    REQUIRE(appended.has_value());
+    auto second = co_await io::write_text_file(context.get_executor(),
+                                               std::move(*appended),
+                                               "\ntwo",
+                                               io::WriteTextOptions{.mode = io::WriteMode::append});
+    REQUIRE(second.has_value());
+  });
+
+  REQUIRE(read_direct(target) == "one\ntwo");
+}
+
+TEST_CASE("FileMutation refuses fail-if-exists overwrites", "[unit][io][authority][mutation]") {
+  TempDir temp{"oran-io-mutation-exclusive"};
+  const auto workspace = temp.path() / "workspace";
+  const auto target = workspace / "output.txt";
+  std::filesystem::create_directory(workspace);
+  write_direct(target, "existing");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+  auto mutation = authority->begin_file_mutation("output.txt");
+  REQUIRE(mutation.has_value());
+
+  test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
+    auto result = co_await io::write_text_file(context.get_executor(),
+                                               std::move(*mutation),
+                                               "new",
+                                               io::WriteTextOptions{.mode = io::WriteMode::fail_if_exists});
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::conflict);
+  });
+
+  REQUIRE(read_direct(target) == "existing");
+}
+
+TEST_CASE("FileMutation atomically replaces a file without leaving a temp", "[unit][io][authority][mutation][atomic]") {
+  TempDir temp{"oran-io-mutation-atomic"};
+  const auto workspace = temp.path() / "workspace";
+  const auto target = workspace / "data.txt";
+  std::filesystem::create_directory(workspace);
+  write_direct(target, "old contents");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+  auto mutation = authority->begin_file_mutation("data.txt");
+  REQUIRE(mutation.has_value());
+
+  test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
+    auto result = co_await io::write_text_file(context.get_executor(),
+                                               std::move(*mutation),
+                                               "new contents",
+                                               io::WriteTextOptions{.atomic = true});
+    REQUIRE(result.has_value());
+  });
+
+  REQUIRE(read_direct(target) == "new contents");
+  require_no_mutation_temp(workspace);
+}
+
+TEST_CASE("FileMutation does not reuse legacy counter temp names", "[unit][io][authority][mutation][atomic]") {
+  TempDir temp{"oran-io-mutation-temp-name"};
+  const auto workspace = temp.path() / "workspace";
+  const auto target = workspace / "data.txt";
+  const auto legacy_temp = workspace / ".data.txt.orangutan.tmp.0";
+  std::filesystem::create_directory(workspace);
+  write_direct(target, "old contents");
+  write_direct(legacy_temp, "legacy marker");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+  auto mutation = authority->begin_file_mutation("data.txt");
+  REQUIRE(mutation.has_value());
+
+  test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
+    auto result = co_await io::write_text_file(context.get_executor(),
+                                               std::move(*mutation),
+                                               "new contents",
+                                               io::WriteTextOptions{.atomic = true});
+    REQUIRE(result.has_value());
+  });
+
+  REQUIRE(read_direct(target) == "new contents");
+  REQUIRE(read_direct(legacy_temp) == "legacy marker");
+}
+
+TEST_CASE("FileMutation supports atomic durability modes", "[unit][io][authority][mutation][atomic]") {
+  TempDir temp{"oran-io-mutation-durable"};
+  const auto workspace = temp.path() / "workspace";
+  const auto file_only = workspace / "file-only.txt";
+  const auto file_and_parent = workspace / "file-and-parent.txt";
+  std::filesystem::create_directory(workspace);
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+  auto file_mutation = authority->begin_file_mutation("file-only.txt");
+  auto parent_mutation = authority->begin_file_mutation("file-and-parent.txt");
+  REQUIRE(file_mutation.has_value());
+  REQUIRE(parent_mutation.has_value());
+
+  test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
+    auto synced_file = co_await io::write_text_file(
+        context.get_executor(),
+        std::move(*file_mutation),
+        "file durable",
+        io::WriteTextOptions{.atomic = true, .durability = io::WriteTextDurability::fsync_file});
+    REQUIRE(synced_file.has_value());
+
+    auto synced_parent = co_await io::write_text_file(
+        context.get_executor(),
+        std::move(*parent_mutation),
+        "parent durable",
+        io::WriteTextOptions{.atomic = true, .durability = io::WriteTextDurability::fsync_file_and_parent});
+    REQUIRE(synced_parent.has_value());
+  });
+
+  REQUIRE(read_direct(file_only) == "file durable");
+  REQUIRE(read_direct(file_and_parent) == "parent durable");
+}
+
+TEST_CASE("FileMutation rejects durability without atomic mode before I/O", "[unit][io][authority][mutation][atomic]") {
+  TempDir temp{"oran-io-mutation-durable-reject"};
+  const auto workspace = temp.path() / "workspace";
+  const auto target = workspace / "data.txt";
+  std::filesystem::create_directory(workspace);
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+  auto mutation = authority->begin_file_mutation("data.txt");
+  REQUIRE(mutation.has_value());
+
+  test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
+    auto result = co_await io::write_text_file(context.get_executor(),
+                                               std::move(*mutation),
+                                               "contents",
+                                               io::WriteTextOptions{.durability = io::WriteTextDurability::fsync_file});
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
+  });
+
+  REQUIRE_FALSE(std::filesystem::exists(target));
+  require_no_mutation_temp(workspace);
+}
+
+TEST_CASE("FileMutation rejects atomic append and fail-if-exists before I/O",
+          "[unit][io][authority][mutation][atomic]") {
+  TempDir temp{"oran-io-mutation-bad-mode"};
+  const auto workspace = temp.path() / "workspace";
+  const auto target = workspace / "data.txt";
+  std::filesystem::create_directory(workspace);
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+  auto append_mutation = authority->begin_file_mutation("data.txt");
+  REQUIRE(append_mutation.has_value());
+
+  test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
+    auto appended = co_await io::write_text_file(context.get_executor(),
+                                                 std::move(*append_mutation),
+                                                 "x",
+                                                 io::WriteTextOptions{.mode = io::WriteMode::append, .atomic = true});
+    REQUIRE_FALSE(appended.has_value());
+    REQUIRE(appended.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto exclusive_mutation = authority->begin_file_mutation("data.txt");
+    REQUIRE(exclusive_mutation.has_value());
+    auto fail_if_exists =
+        co_await io::write_text_file(context.get_executor(),
+                                     std::move(*exclusive_mutation),
+                                     "x",
+                                     io::WriteTextOptions{.mode = io::WriteMode::fail_if_exists, .atomic = true});
+    REQUIRE_FALSE(fail_if_exists.has_value());
+    REQUIRE(fail_if_exists.error().kind() == core::ErrorKind::invalid_argument);
+  });
+
+  REQUIRE_FALSE(std::filesystem::exists(target));
+  require_no_mutation_temp(workspace);
 }
 
 TEST_CASE("DirectoryAuthority pathname identity does not follow a final symlink", "[unit][io][authority][identity]") {

@@ -119,45 +119,6 @@ TEST_CASE("read_text_file enforces max_bytes", "[unit][io][file]") {
   });
 }
 
-TEST_CASE("write_text_file creates parents and supports append", "[unit][io][file]") {
-  TempDir temp{"oran-io-write"};
-  const auto file = temp.path() / "nested" / "output.txt";
-
-  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
-    auto first = co_await io::write_text_file(
-        context.get_executor(),
-        file.string(),
-        "one",
-        io::WriteTextOptions{.mode = io::WriteMode::truncate, .create_parent_directories = true});
-    auto second = co_await io::write_text_file(context.get_executor(),
-                                               file.string(),
-                                               "\ntwo",
-                                               io::WriteTextOptions{.mode = io::WriteMode::append});
-    auto read_back = co_await io::read_text_file(context.get_executor(), file.string());
-
-    REQUIRE(first.has_value());
-    REQUIRE(second.has_value());
-    REQUIRE(read_back.has_value());
-    REQUIRE(*read_back == "one\ntwo");
-  });
-}
-
-TEST_CASE("write_text_file can refuse overwrites", "[unit][io][file]") {
-  TempDir temp{"oran-io-conflict"};
-  const auto file = temp.path() / "output.txt";
-  write_direct(file, "existing");
-
-  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
-    auto result = co_await io::write_text_file(context.get_executor(),
-                                               file.string(),
-                                               "new",
-                                               io::WriteTextOptions{.mode = io::WriteMode::fail_if_exists});
-
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::conflict);
-  });
-}
-
 TEST_CASE("list_directory returns sorted visible entries", "[unit][io][directory]") {
   TempDir temp{"oran-io-list"};
   write_direct(temp.path() / "b.txt", "bb");
@@ -417,158 +378,6 @@ TEST_CASE("delete_path refuses symlinks even with recursive intent", "[unit][io]
   });
 }
 
-TEST_CASE("write_text_file atomic mode commits via rename and leaves no temp behind", "[unit][io][file][atomic]") {
-  TempDir temp{"oran-io-atomic-ok"};
-  const auto file = temp.path() / "data.txt";
-  write_direct(file, "old contents");
-
-  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
-    auto result = co_await io::write_text_file(context.get_executor(),
-                                               file.string(),
-                                               "new contents",
-                                               io::WriteTextOptions{.atomic = true});
-    REQUIRE(result.has_value());
-
-    auto read_back = co_await io::read_text_file(context.get_executor(), file.string());
-    REQUIRE(read_back.has_value());
-    REQUIRE(*read_back == "new contents");
-
-    // No stray sibling `.<name>.orangutan.tmp.<seq>` file should survive a
-    // successful atomic commit.
-    auto listing = co_await io::list_directory(context.get_executor(),
-                                               temp.path().string(),
-                                               io::ListDirectoryOptions{.include_hidden = true});
-    REQUIRE(listing.has_value());
-    REQUIRE(listing->size() == 1);
-    REQUIRE((*listing)[0].name == "data.txt");
-  });
-}
-
-TEST_CASE("write_text_file atomic mode does not reuse process-local counter temp names", "[unit][io][file][atomic]") {
-  TempDir temp{"oran-io-atomic-temp-name"};
-  const auto file = temp.path() / "data.txt";
-  const auto legacy_temp = temp.path() / ".data.txt.orangutan.tmp.0";
-  write_direct(file, "old contents");
-  write_direct(legacy_temp, "legacy marker");
-
-  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
-    auto result = co_await io::write_text_file(context.get_executor(),
-                                               file.string(),
-                                               "new contents",
-                                               io::WriteTextOptions{.atomic = true});
-    REQUIRE(result.has_value());
-
-    auto read_back = co_await io::read_text_file(context.get_executor(), file.string());
-    REQUIRE(read_back.has_value());
-    REQUIRE(*read_back == "new contents");
-
-    auto marker = co_await io::read_text_file(context.get_executor(), legacy_temp.string());
-    REQUIRE(marker.has_value());
-    REQUIRE(*marker == "legacy marker");
-  });
-}
-
-TEST_CASE("write_text_file atomic durability modes commit successfully", "[unit][io][file][atomic]") {
-  TempDir temp{"oran-io-atomic-durable"};
-  const auto file_only = temp.path() / "file-only.txt";
-  const auto file_and_parent = temp.path() / "file-and-parent.txt";
-
-  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
-    auto synced_file = co_await io::write_text_file(
-        context.get_executor(),
-        file_only.string(),
-        "file durable",
-        io::WriteTextOptions{.atomic = true, .durability = io::WriteTextDurability::fsync_file});
-    REQUIRE(synced_file.has_value());
-
-    auto synced_parent = co_await io::write_text_file(
-        context.get_executor(),
-        file_and_parent.string(),
-        "parent durable",
-        io::WriteTextOptions{.atomic = true, .durability = io::WriteTextDurability::fsync_file_and_parent});
-    REQUIRE(synced_parent.has_value());
-
-    auto read_file = co_await io::read_text_file(context.get_executor(), file_only.string());
-    auto read_parent = co_await io::read_text_file(context.get_executor(), file_and_parent.string());
-    REQUIRE(read_file.has_value());
-    REQUIRE(read_parent.has_value());
-    REQUIRE(*read_file == "file durable");
-    REQUIRE(*read_parent == "parent durable");
-  });
-}
-
-TEST_CASE("write_text_file durability rejects non-atomic writes before I/O", "[unit][io][file][atomic]") {
-  TempDir temp{"oran-io-atomic-durable-reject"};
-  const auto file = temp.path() / "data.txt";
-
-  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
-    auto result = co_await io::write_text_file(context.get_executor(),
-                                               file.string(),
-                                               "contents",
-                                               io::WriteTextOptions{.durability = io::WriteTextDurability::fsync_file});
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
-    REQUIRE_FALSE(std::filesystem::exists(file));
-  });
-}
-
-TEST_CASE("write_text_file atomic mode rejects append and fail_if_exists", "[unit][io][file][atomic]") {
-  TempDir temp{"oran-io-atomic-bad-mode"};
-  const auto file = temp.path() / "data.txt";
-
-  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
-    auto appended = co_await io::write_text_file(context.get_executor(),
-                                                 file.string(),
-                                                 "x",
-                                                 io::WriteTextOptions{.mode = io::WriteMode::append, .atomic = true});
-    REQUIRE_FALSE(appended.has_value());
-    REQUIRE(appended.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto fail_if_exists =
-        co_await io::write_text_file(context.get_executor(),
-                                     file.string(),
-                                     "x",
-                                     io::WriteTextOptions{.mode = io::WriteMode::fail_if_exists, .atomic = true});
-    REQUIRE_FALSE(fail_if_exists.has_value());
-    REQUIRE(fail_if_exists.error().kind() == core::ErrorKind::invalid_argument);
-
-    // The rejection must happen before any I/O — the destination file stays
-    // unborn.
-    REQUIRE_FALSE(std::filesystem::exists(file));
-  });
-}
-
-TEST_CASE("write_text_file atomic mode preserves original when commit fails", "[unit][io][file][atomic]") {
-  TempDir temp{"oran-io-atomic-fail"};
-  const auto file = temp.path() / "data.txt";
-  write_direct(file, "original");
-
-  // Replace the target with a directory of the same name. The atomic write
-  // will produce a valid sibling temp file, but `std::filesystem::rename` will
-  // refuse to overwrite a directory with a regular file — exercising the
-  // commit-failure cleanup path.
-  std::filesystem::remove(file);
-  std::filesystem::create_directory(file);
-
-  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
-    auto result = co_await io::write_text_file(context.get_executor(),
-                                               file.string(),
-                                               "new",
-                                               io::WriteTextOptions{.atomic = true});
-    REQUIRE_FALSE(result.has_value());
-
-    // The pre-existing directory is still in place, and no `.<name>.orangutan.tmp.*`
-    // leftover survives the failed commit.
-    REQUIRE(std::filesystem::is_directory(file));
-    auto listing = co_await io::list_directory(context.get_executor(),
-                                               temp.path().string(),
-                                               io::ListDirectoryOptions{.include_hidden = true});
-    REQUIRE(listing.has_value());
-    REQUIRE(listing->size() == 1);
-    REQUIRE((*listing)[0].name == "data.txt");
-  });
-}
-
 TEST_CASE("read_text_file_ranged returns whole file with fingerprint and line span", "[unit][io][range]") {
   TempDir temp{"oran-io-range-whole"};
   const auto file = temp.path() / "lines.txt";
@@ -616,36 +425,6 @@ TEST_CASE("read_text_file_ranged refreshes the file-view cache after an external
     REQUIRE(second.has_value());
     REQUIRE(second->text == "second-body");
     REQUIRE(second->fingerprint != first->fingerprint);
-  });
-}
-
-TEST_CASE("write_text_file invalidates the file-view cache even when the fingerprint is restored",
-          "[unit][io][range][cache]") {
-  TempDir temp{"oran-io-range-cache-write"};
-  const auto file = temp.path() / "cached.txt";
-  write_direct(file, "alpha");
-
-  const auto original_mtime = std::filesystem::last_write_time(file);
-  const auto original_fingerprint = io::compute_file_fingerprint(file.string());
-  REQUIRE(original_fingerprint.has_value());
-
-  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
-    auto first = co_await io::read_text_file_ranged(context.get_executor(), file.string());
-    REQUIRE(first.has_value());
-    REQUIRE(first->text == "alpha");
-
-    auto written = co_await io::write_text_file(context.get_executor(), file.string(), "bravo");
-    REQUIRE(written.has_value());
-    std::filesystem::last_write_time(file, original_mtime);
-
-    const auto restored_fingerprint = io::compute_file_fingerprint(file.string());
-    REQUIRE(restored_fingerprint.has_value());
-    REQUIRE(restored_fingerprint->size_bytes == original_fingerprint->size_bytes);
-    REQUIRE(restored_fingerprint->mtime_ns == original_fingerprint->mtime_ns);
-
-    auto second = co_await io::read_text_file_ranged(context.get_executor(), file.string());
-    REQUIRE(second.has_value());
-    REQUIRE(second->text == "bravo");
   });
 }
 
@@ -758,46 +537,6 @@ TEST_CASE("invalidate_read_text_file_ranged_cache removes one line-offset path o
     const auto after = io::read_text_file_ranged_cache_stats();
     REQUIRE(after.line_offset_index.misses == before.line_offset_index.misses + 1);
     REQUIRE(after.line_offset_index.hits == before.line_offset_index.hits + 1);
-  });
-}
-
-TEST_CASE("write_text_file invalidates only the changed read-cache path", "[unit][io][range][cache]") {
-  TempDir temp{"oran-io-range-cache-write-one-path"};
-  const auto changed_file = temp.path() / "changed.txt";
-  const auto retained_file = temp.path() / "retained.txt";
-  write_direct(changed_file, "alpha");
-  write_direct(retained_file, "bravo");
-
-  const auto original_mtime = std::filesystem::last_write_time(changed_file);
-  const auto original_fingerprint = io::compute_file_fingerprint(changed_file.string());
-  REQUIRE(original_fingerprint.has_value());
-
-  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
-    auto changed_cold = co_await io::read_text_file_ranged(context.get_executor(), changed_file.string());
-    auto retained_cold = co_await io::read_text_file_ranged(context.get_executor(), retained_file.string());
-    REQUIRE(changed_cold.has_value());
-    REQUIRE(retained_cold.has_value());
-
-    auto written = co_await io::write_text_file(context.get_executor(), changed_file.string(), "omega");
-    REQUIRE(written.has_value());
-    std::filesystem::last_write_time(changed_file, original_mtime);
-
-    const auto restored_fingerprint = io::compute_file_fingerprint(changed_file.string());
-    REQUIRE(restored_fingerprint.has_value());
-    REQUIRE(restored_fingerprint->size_bytes == original_fingerprint->size_bytes);
-    REQUIRE(restored_fingerprint->mtime_ns == original_fingerprint->mtime_ns);
-
-    const auto before = io::read_text_file_ranged_cache_stats();
-    auto changed_hot = co_await io::read_text_file_ranged(context.get_executor(), changed_file.string());
-    auto retained_hot = co_await io::read_text_file_ranged(context.get_executor(), retained_file.string());
-    REQUIRE(changed_hot.has_value());
-    REQUIRE(retained_hot.has_value());
-    REQUIRE(changed_hot->text == "omega");
-    REQUIRE(retained_hot->text == "bravo");
-
-    const auto after = io::read_text_file_ranged_cache_stats();
-    REQUIRE(after.file_view.misses == before.file_view.misses + 1);
-    REQUIRE(after.file_view.hits == before.file_view.hits + 1);
   });
 }
 
@@ -1077,43 +816,6 @@ TEST_CASE("read_text_file_ranged uses a line-offset index for large line ranges"
     REQUIRE(result->end_line == 3003);
     REQUIRE(result->returned_bytes == result->text.size());
     REQUIRE_FALSE(result->truncated);
-  });
-}
-
-TEST_CASE("write_text_file invalidates the large-file line-offset index", "[unit][io][range][lines]") {
-  TempDir temp{"oran-io-range-lines-index-write"};
-  const auto file = temp.path() / "large-lines.txt";
-  const auto original = large_numbered_file('a');
-  auto replacement = large_numbered_file('b');
-  replacement.replace(0, numbered_line(1, 'b').size(), numbered_line(1, 'b', 160U));
-  const auto final_line = numbered_line(4096, 'b');
-  replacement.replace(replacement.size() - final_line.size(), final_line.size(), numbered_line(4096, 'b', 0U));
-  REQUIRE(replacement.size() == original.size());
-  write_direct(file, original);
-
-  const auto original_mtime = std::filesystem::last_write_time(file);
-  const auto original_fingerprint = io::compute_file_fingerprint(file.string());
-  REQUIRE(original_fingerprint.has_value());
-
-  test::run_async([&](asio::io_context& context) -> async::Awaitable<void> {
-    io::ReadTextOptions options;
-    options.range = io::FileRange{.lines = io::FileRange::LineSpan{.start_line = 3000, .line_count = 1}};
-    auto first = co_await io::read_text_file_ranged(context.get_executor(), file.string(), options);
-    REQUIRE(first.has_value());
-    REQUIRE(first->text == numbered_line(3000, 'a'));
-
-    auto written = co_await io::write_text_file(context.get_executor(), file.string(), replacement);
-    REQUIRE(written.has_value());
-    std::filesystem::last_write_time(file, original_mtime);
-
-    const auto restored_fingerprint = io::compute_file_fingerprint(file.string());
-    REQUIRE(restored_fingerprint.has_value());
-    REQUIRE(restored_fingerprint->size_bytes == original_fingerprint->size_bytes);
-    REQUIRE(restored_fingerprint->mtime_ns == original_fingerprint->mtime_ns);
-
-    auto second = co_await io::read_text_file_ranged(context.get_executor(), file.string(), options);
-    REQUIRE(second.has_value());
-    REQUIRE(second->text == numbered_line(3000, 'b'));
   });
 }
 
