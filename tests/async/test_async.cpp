@@ -143,6 +143,172 @@ TEST_CASE("sleep_for reports cancellation", "[unit][async][sleep]") {
   REQUIRE(result->error().kind() == core::ErrorKind::cancelled);
 }
 
+TEST_CASE("TaskGroup enforces active capacity and releases it on completion", "[unit][async][task-group]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    auto created = async::TaskGroup::create(io.get_executor(), async::TaskGroupOptions{.max_tasks = 1});
+    REQUIRE(created.has_value());
+    auto group = std::move(*created);
+    async::Channel<std::monostate> gate{io.get_executor(), 1};
+
+    REQUIRE(group
+                .spawn("first",
+                       [&]() -> async::Awaitable<core::Result<void>> {
+                         auto opened = co_await gate.receive();
+                         if (!opened) {
+                           co_return std::unexpected(std::move(opened).error());
+                         }
+                         co_return core::Result<void>{};
+                       })
+                .has_value());
+
+    auto full = group.spawn("second", []() -> async::Awaitable<core::Result<void>> { co_return core::Result<void>{}; });
+    REQUIRE_FALSE(full.has_value());
+    CHECK(full.error().kind() == core::ErrorKind::mailbox_overflowed);
+
+    REQUIRE(gate.try_send(std::monostate{}).has_value());
+    while (group.active_tasks() != 0) {
+      co_await asio::post(io, asio::use_awaitable);
+    }
+    REQUIRE(group.spawn("second", []() -> async::Awaitable<core::Result<void>> { co_return core::Result<void>{}; })
+                .has_value());
+
+    auto report = co_await group.join();
+    REQUIRE(report.has_value());
+    CHECK(report->tasks.size() == 2);
+    CHECK(report->succeeded() == 2);
+  });
+}
+
+TEST_CASE("TaskGroup reports child errors and exceptions in spawn order", "[unit][async][task-group]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    auto created = async::TaskGroup::create(io.get_executor());
+    REQUIRE(created.has_value());
+    auto group = std::move(*created);
+
+    REQUIRE(group.spawn("ok", []() -> async::Awaitable<core::Result<void>> { co_return core::Result<void>{}; })
+                .has_value());
+    REQUIRE(group
+                .spawn("error",
+                       []() -> async::Awaitable<core::Result<void>> {
+                         co_return std::unexpected(core::Error::invalid_argument("bad child"));
+                       })
+                .has_value());
+    REQUIRE(group
+                .spawn("exception",
+                       []() -> async::Awaitable<core::Result<void>> {
+                         throw std::runtime_error{"boom"};
+                         co_return core::Result<void>{};
+                       })
+                .has_value());
+
+    auto report = co_await group.join();
+    REQUIRE(report.has_value());
+    REQUIRE(report->tasks.size() == 3);
+    CHECK(report->tasks[0].name == "ok");
+    CHECK(report->tasks[0].status == async::TaskOutcomeStatus::succeeded);
+    CHECK(report->tasks[1].name == "error");
+    CHECK(report->tasks[1].status == async::TaskOutcomeStatus::failed);
+    REQUIRE(report->tasks[1].error.has_value());
+    CHECK(report->tasks[1].error->kind() == core::ErrorKind::invalid_argument);
+    CHECK(report->tasks[2].name == "exception");
+    CHECK(report->tasks[2].status == async::TaskOutcomeStatus::failed);
+    REQUIRE(report->tasks[2].error.has_value());
+    CHECK(report->tasks[2].error->kind() == core::ErrorKind::internal);
+    CHECK(report->failed() == 2);
+    CHECK_FALSE(report->all_succeeded());
+  });
+}
+
+TEST_CASE("TaskGroup request_stop cancels children and join drains them", "[unit][async][task-group]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    auto created = async::TaskGroup::create(io.get_executor());
+    REQUIRE(created.has_value());
+    auto group = std::move(*created);
+    std::atomic_bool started{false};
+
+    REQUIRE(group
+                .spawn("waiting",
+                       [&]() -> async::Awaitable<core::Result<void>> {
+                         started.store(true, std::memory_order_release);
+                         co_return co_await async::sleep_for(io.get_executor(), 1s);
+                       })
+                .has_value());
+    while (!started.load(std::memory_order_acquire)) {
+      co_await asio::post(io, asio::use_awaitable);
+    }
+
+    group.request_stop();
+    auto rejected =
+        group.spawn("late", []() -> async::Awaitable<core::Result<void>> { co_return core::Result<void>{}; });
+    REQUIRE_FALSE(rejected.has_value());
+    CHECK(rejected.error().kind() == core::ErrorKind::conflict);
+    auto report = co_await group.join();
+    REQUIRE(report.has_value());
+    REQUIRE(report->tasks.size() == 1);
+    CHECK(report->tasks.front().name == "waiting");
+    CHECK(report->tasks.front().status == async::TaskOutcomeStatus::cancelled);
+    CHECK(report->cancelled() == 1);
+    CHECK(group.active_tasks() == 0);
+  });
+}
+
+TEST_CASE("TaskGroup state outlives a destroyed facade until its cancellation laggard finishes",
+          "[unit][async][task-group]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    auto created = async::TaskGroup::create(io.get_executor());
+    REQUIRE(created.has_value());
+    auto group = std::optional<async::TaskGroup>{std::move(*created)};
+    async::Channel<std::monostate> release{io.get_executor(), 1};
+    bool laggard_started = false;
+    bool laggard_finished = false;
+
+    REQUIRE(group
+                ->spawn("laggard",
+                        [&]() -> async::Awaitable<core::Result<void>> {
+                          co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+                          laggard_started = true;
+                          auto released = co_await release.receive();
+                          if (!released) {
+                            co_return std::unexpected(std::move(released).error());
+                          }
+                          laggard_finished = true;
+                          co_return core::Result<void>{};
+                        })
+                .has_value());
+
+    while (!laggard_started) {
+      co_await asio::post(io, asio::use_awaitable);
+    }
+    group.reset();
+    CHECK_FALSE(laggard_finished);
+    REQUIRE(release.try_send(std::monostate{}).has_value());
+    while (!laggard_finished) {
+      co_await asio::post(io, asio::use_awaitable);
+    }
+    CHECK(laggard_finished);
+  });
+}
+
+TEST_CASE("TaskGroup accepts move-only child ownership", "[unit][async][task-group]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    auto created = async::TaskGroup::create(io.get_executor());
+    REQUIRE(created.has_value());
+    auto group = std::move(*created);
+    auto owned = std::make_unique<int>(42);
+
+    REQUIRE(group
+                .spawn("move-only",
+                       [owned = std::move(owned)]() -> async::Awaitable<core::Result<void>> {
+                         CHECK(*owned == 42);
+                         co_return core::Result<void>{};
+                       })
+                .has_value());
+    auto report = co_await group.join();
+    REQUIRE(report.has_value());
+    CHECK(report->succeeded() == 1);
+  });
+}
+
 TEST_CASE("Channel sends and receives FIFO values", "[unit][async][channel]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     async::Channel<int> channel{io.get_executor(), 2};
