@@ -1145,6 +1145,11 @@ async::Awaitable<Result<void>> serve_webhooks(asio::any_io_executor executor,
     co_return std::unexpected(
         Error::config("webhook listener bind_host must be a numeric IP address").with("bind_host", options.bind_host));
   }
+  if (!address.is_loopback()) {
+    co_return std::unexpected(
+        Error::config("webhook listener bind_host must be loopback until authentication is configured")
+            .with("bind_host", options.bind_host));
+  }
 
   auto acceptor = std::make_shared<asio::ip::tcp::acceptor>(executor);
   const auto endpoint = asio::ip::tcp::endpoint{address, options.port};

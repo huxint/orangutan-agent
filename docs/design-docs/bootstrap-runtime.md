@@ -593,10 +593,12 @@ with trigger key `channel:<channel_id>` before the direct channel reply path run
 The enqueue path is report-and-continue, so a queue/repository failure does not
 block the user-visible channel reply. Slice 268 adds the automation-side
 `WebhookProducer` seam plus triggered payload propagation, and slice 269 binds it
-to `--serve`: `automation.webhooks.listener` can enable a narrow local HTTP
+to `--serve`: `automation.webhooks.listener` can enable a narrow loopback HTTP
 listener for `POST <path_prefix><id>`, which preserves a bounded
 `Content-Length` body as triggered payload bytes and feeds the same
-`AutomationService` queue through `WebhookProducer`.
+`AutomationService` queue through `WebhookProducer`. Slice 273 rejects
+wildcard/public `bind_host` values before opening the acceptor because this
+first listener has no authentication surface.
 The automation service disables cancellation
 around its durable lease/run-row writes, so a firing tick can swallow a parent cancellation; `serve_automation`'s
 `stop_requested` predicate (tied to the trapped signum) is therefore the

@@ -638,11 +638,13 @@ Tool lifecycle hooks:
 - `tool.after(name, input, output, identity, duration)` — always.
 - `tool.error(name, input, error, identity)` — if handler returned an error.
 
-For `FileWrite` and `FileEdit`, default/non-trusted hook sinks receive a
-sanitized `input_json` view instead of the raw mutation input. The sanitized
-view carries `kind=redacted_tool_input`, `tool_name`, the full input SHA-256,
-the input byte count, and the redacted string byte counts; sinks whose
-`Sink::kind()` is `trusted_local` receive the original input.
+For `FileWrite`, `FileEdit`, and `MemoryRemember`, default/non-trusted hook
+sinks receive a sanitized `input_json` view instead of the raw mutation input.
+The sanitized view carries `kind=redacted_tool_input`, `tool_name`, the full
+input SHA-256, and the input byte count; file mutations also carry redacted
+string byte counts. `MemoryRemember` exposes no record fields through generic
+tool lifecycle hooks. Sinks whose `Sink::kind()` is `trusted_local` receive the
+original input.
 
 See `permissions-and-hooks.md` for sink kinds.
 
@@ -846,9 +848,12 @@ dispatch time.
 > group cancels the loser but still awaits it) — so the scheduler stops
 > awaiting at the deadline, records a `cancellation_lag` audit row
 > (`event_kind=cancellation_lag`, `metadata_json.error_kind=cancellation_lag`)
-> naming the offending tool, and lets the laggard wind down on its own (the
-> shared `BatchState` keeps it alive). A batch of purely cancel-aware tools
-> records no such row. Closes AC5.
+> naming the offending tool, and lets the laggard wind down on its own. Slice
+> 273 makes each detached child retain the scheduler `Impl` as well as its
+> `BatchState`, so a path-lock guard can release safely after `run_batch`
+> returns and the public scheduler owner is destroyed. Registry and dispatch
+> services remain borrowed and must outlive in-flight calls. A batch of purely
+> cancel-aware tools records no such row. Closes AC5.
 >
 > **Status (slice 120, 2026-05-29):** the scheduler is the production
 > tool-dispatch path. `agent::Loop` dispatches every batch (including N=1)

@@ -7,7 +7,7 @@ GitHub Actions jobs.
 ## What Exists By Default
 
 - `.github/workflows/ci.yml` — repository hygiene + docs + shell lint + markdown lint
-  + (once C++ exists) `xmake build` + `xmake test`.
+  today. C++ build/test jobs remain unprovisioned.
 - `.github/workflows/release.yml` — placeholder release pipeline; replace once a real
   binary exists.
 - `.github/workflows/supply-chain-security.yml` — opt-in dependency review + OSV
@@ -65,7 +65,7 @@ for PRs, scheduled runs, and manual dispatch, using a SHA-pinned upstream action
 
 ## CI Matrix
 
-Once C++ code lands, the matrix targets:
+The target C++ matrix (not active today) is:
 
 | Compiler  | Mode    | Modules | LTO  | Sanitizers |
 | --------- | ------- | ------- | ---- | ---------- |

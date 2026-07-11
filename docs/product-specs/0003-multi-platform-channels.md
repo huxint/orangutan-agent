@@ -115,6 +115,12 @@ only — v2 makes channels pluggable.
   `test-http` 27 cases / 148 assertions (12 new WebSocket cases, clean under
   ASan/UBSan), no new dependency. Driving `qq::GatewaySession` over the
   primitive is milestone 2b-ii.
+- Slice 273 hardens that primitive across newer libcurl releases: builds with
+  `CURLWS_NOAUTOPONG` explicitly echo ping payloads as deadline-bounded pong
+  frames instead of relying on an automatic pong that may remain pending while
+  the receive loop waits only for readable data. The ping/pong regression now
+  verifies two consecutive transparent exchanges; `test-http` reports 28 cases
+  / 187 assertions.
 - Slice 232: QQ-port milestone 2b-ii — `qq::GatewayTransport`, the
   caller-owned WebSocket-gateway driver under the `QqChannel` trait adapter.
   It keeps one persistent `http::WebSocket`, drives

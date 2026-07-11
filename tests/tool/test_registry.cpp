@@ -3860,6 +3860,17 @@ void require_redacted_file_edit_input(const std::string& redacted_input,
   REQUIRE(redacted["redaction_status"] == "ok");
 }
 
+void require_redacted_memory_remember_input(const std::string& redacted_input, const std::string& original_input) {
+  const auto redacted = nlohmann::json::parse(redacted_input);
+  REQUIRE(redacted == nlohmann::json{
+                          {"kind", "redacted_tool_input"},
+                          {"tool_name", std::string{tool::kMemoryRememberName}},
+                          {"input_hash", input_hash_hex(original_input)},
+                          {"input_bytes", original_input.size()},
+                          {"redaction_status", "ok"},
+                      });
+}
+
 }  // namespace
 
 TEST_CASE("dispatch publishes tool_before + tool_after on the allow path", "[unit][tool][hook]") {
@@ -4497,6 +4508,50 @@ TEST_CASE("dispatch redacts FileEdit input for non-trusted hook sinks", "[unit][
       REQUIRE_FALSE(capture.input_json.contains("old-secret"));
       REQUIRE_FALSE(capture.input_json.contains("new-secret"));
       require_redacted_file_edit_input(capture.input_json, input, "old-secret", "new-secret");
+    }
+
+    REQUIRE(trusted_sink.captures().size() == 3);
+    for (const auto& capture : trusted_sink.captures()) {
+      REQUIRE(capture.input_json == input);
+    }
+  });
+}
+
+TEST_CASE("dispatch redacts MemoryRemember input for non-trusted hook sinks",
+          "[unit][tool][hook][redaction][memory_remember]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(registry.add(named_noop_tool_def(tool::kMemoryRememberName), &noop_ok_handler).has_value());
+
+    auto rules = allow_rule_set(std::string{tool::kMemoryRememberName});
+    permission::RecordingAuditSink audit;
+
+    orangutan::hook::Bus bus;
+    CaptureSink default_sink{"capture-default"};
+    CaptureSink trusted_sink{"capture-trusted", orangutan::hook::SinkKind::trusted_local};
+    bus.bind(default_sink,
+             {orangutan::hook::Event::tool_before,
+              orangutan::hook::Event::tool_dispatched,
+              orangutan::hook::Event::tool_after});
+    bus.bind(trusted_sink,
+             {orangutan::hook::Event::tool_before,
+              orangutan::hook::Event::tool_dispatched,
+              orangutan::hook::Event::tool_after});
+
+    const std::string input =
+        R"({"id":"private-id","kind":"fact","title":"Sensitive title","body":"Sensitive body","tags":["private-tag"],"linked_record_ids":["linked-private-id"]})";
+    auto ctx = make_hooked_ctx(io, rules, audit, &bus);
+    auto result = co_await registry.dispatch(tool::kMemoryRememberName, input, ctx);
+    REQUIRE(result.has_value());
+
+    REQUIRE(default_sink.captures().size() == 3);
+    for (const auto& capture : default_sink.captures()) {
+      REQUIRE_FALSE(capture.input_json.contains("private-id"));
+      REQUIRE_FALSE(capture.input_json.contains("Sensitive title"));
+      REQUIRE_FALSE(capture.input_json.contains("Sensitive body"));
+      REQUIRE_FALSE(capture.input_json.contains("private-tag"));
+      REQUIRE_FALSE(capture.input_json.contains("linked-private-id"));
+      require_redacted_memory_remember_input(capture.input_json, input);
     }
 
     REQUIRE(trusted_sink.captures().size() == 3);

@@ -9,9 +9,9 @@
 
 ## Snapshot
 
-- **Slice:** 272 (`xmake run orangutan -- --help` reports slice 272)
+- **Slice:** 273 (`xmake run orangutan -- --help` reports slice 273)
 - **Last completed history:**
-  [`histories/2026-07/20260705-0315-core-turn-id-identity-owner.md`](histories/2026-07/20260705-0315-core-turn-id-identity-owner.md)
+  [`histories/2026-07/20260711-1032-deep-review-hardening.md`](histories/2026-07/20260711-1032-deep-review-hardening.md)
 - **Active exec-plans:**
   - [`exec-plans/active/2026-06-10-channel-qq-port.md`](exec-plans/active/2026-06-10-channel-qq-port.md)
     — the only active plan; its next gate is externally blocked on real QQ
@@ -24,23 +24,21 @@
     [`exec-plans/completed/2026-06-18-runtime-service-owner.md`](exec-plans/completed/2026-06-18-runtime-service-owner.md).
     The desktop chat-tracer plan closed 2026-06-16
     ([`exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md`](exec-plans/completed/2026-06-14-oran-desktop-chat-tracer.md)).
-- **Latest completed slice:** slices 270-272 are one hardening/refactor
-  session. Slice 270 closed the 2026-06-20 tech-debt row by hosting the CLI
-  and `--desktop` agent loops, their runner-owned `ToolScheduler`s, and the
-  desktop `ChatBridge` on per-run `Runtime::make_strand()`s (multi-worker
-  regression test included). Slice 271 concentrated the three copy-pasted
-  one-shot operator-command bridges into `run_audit_db_command<T>` and the
-  four interrupted-signal exit-code blocks into one helper (net −59 lines in
-  `bootstrap.cpp`, behavior identical). Slice 272 made `core::TurnId` own its
-  identity operations: `core::format_turn_id_hex` (canonical 32-char lowercase
-  spelling) and `core::generate_turn_id` (UUIDv4-shaped) replace two duplicate
-  formatters and two divergent generators in `oran-agent` / `oran-bootstrap`.
-  Validation passed: `test-core` 73 / 471, `test-agent` 57 / 10 786,
-  `test-bootstrap` 187 / 1832 (gated `--channel_qq=y`: 189 / 1872), full
-  `xmake test` 19/19.
-- **Next intended slice:** Route concrete automation notifier output back to
-  CLI/channel/desktop, or harden webhook listener shutdown/HTTP semantics if
-  operational feedback demands it.
+- **Latest completed slice:** slice 273 absorbs the immediately safe findings
+  from a repository-wide deep review. Detached scheduler cancellation laggards
+  retain scheduler-owned path-lock state until they finish; unauthenticated
+  automation webhook listeners reject non-loopback binds; newer-libcurl
+  WebSocket pings receive explicit deadline-bounded pongs; and non-trusted
+  generic tool hooks receive only hash/size metadata for `MemoryRemember`
+  input. The same review corrected CI/rule docs that overstated inactive
+  enforcement and absorbed the larger findings into the tech-debt tracker.
+  Validation: `test-http` 28 / 187, `test-tool` 220 / 2405, `test-agent` 58 /
+  10 796, `test-bootstrap` 188 / 1840 (gated count expected 190 / 1880), full
+  `xmake test` 19/19, binary help, and `make ci`.
+- **Next intended slice:** Replace path-string workspace authority with
+  dirfd-relative read/mutation primitives to close the deep-review's
+  symlink/rename TOCTOU confinement gap; if that design needs staging, fix the
+  channel idle-eviction message-loss race first.
 - **Cross-track progress:** [`ROADMAP.md`](ROADMAP.md) — per-track frontier,
   next step, and pre-dependencies.
 
@@ -60,7 +58,7 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 
 - `oran-core`: 73 cases / 471 assertions.
 - `oran-async`: 16 cases / 83 assertions.
-- `oran-http`: 28 cases / 185 assertions.
+- `oran-http`: 28 cases / 187 assertions.
 - `oran-io`: 58 cases / 328 assertions.
 - `oran-storage`: 79 cases / 1047 assertions.
 - `oran-config`: 60 cases / 583 assertions.
@@ -71,20 +69,27 @@ Lifted from [`QUALITY_SCORE.md`](QUALITY_SCORE.md). `STATUS.md` summarizes;
 - `oran-channel`: 26 cases / 205 assertions.
 - `oran-channel-qq` (gated, `--channel_qq=y`): 58 cases / 369 assertions.
 - `oran-skill`: 27 cases / 168 assertions.
-- `oran-tool`: 219 cases / 2379 assertions.
+- `oran-tool`: 220 cases / 2405 assertions.
 - `oran-prompt`: 10 cases / 98 assertions.
 - `oran-provider`: 88 cases / 664 assertions.
-- `oran-agent`: 57 cases / 10 786 assertions.
+- `oran-agent`: 58 cases / 10 796 assertions.
 - `oran-cli`: 28 cases / 221 assertions.
 - `oran-desktop`: 17 cases / 70 assertions.
-- `oran-bootstrap`: 187 cases / 1832 assertions (gated `--channel_qq=y`: 189 /
-  1872).
+- `oran-bootstrap`: 188 cases / 1840 assertions (gated `--channel_qq=y`: 190 /
+  1880 expected; gated suite not rerun in slice 273).
 
 ## Open Tech-Debt Rows
 
 Lifted from [`exec-plans/tech-debt-tracker.md`](exec-plans/tech-debt-tracker.md).
 Closed entries do *not* live here — the tracker is canonical.
 
+- 2026-07-11 — Deep-review backlog `review/deep-2026-07-11`: slice 273
+  closed four high-severity contained findings (scheduler laggard lifetime,
+  public unauthenticated webhook bind, WebSocket pong deadlock, and raw
+  `MemoryRemember` tool-hook input). Remaining work is ranked in the tracker;
+  the first targets are dirfd-relative workspace confinement, channel worker
+  retirement/caps, provider failure-state decoding, HTTP cancellation and
+  webhook connection bounds, then storage/hook/UI/hosted-CI gaps.
 - 2026-05-26 — Deep-review backlog `review/deep-2026-05-26`: slices 113 and
   114 absorbed the high/medium bullets and most low-severity items.
   Remaining: a future regression test for the oran-io singleflight

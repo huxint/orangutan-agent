@@ -203,16 +203,26 @@ struct BatchState {
 
 class ToolScheduler::Impl {
 public:
+  struct SharedState {
+    SharedState(asio::any_io_executor executor, tool::Registry& registry, ToolSchedulerOptions options)
+        : executor{std::move(executor)}, registry{&registry}, options{options},
+          locks{detail::PathLockTableOptions{.idle_ttl = options.idle_lock_ttl}} {}
+
+    asio::any_io_executor executor;
+    tool::Registry* registry;
+    ToolSchedulerOptions options;
+    detail::PathLockTable locks;
+  };
+
   Impl(asio::any_io_executor executor, tool::Registry& registry, ToolSchedulerOptions options)
-      : executor_{std::move(executor)}, registry_{&registry}, options_{options},
-        locks_{detail::PathLockTableOptions{.idle_ttl = options.idle_lock_ttl}} {}
+      : state_{std::make_shared<SharedState>(std::move(executor), registry, options)} {}
 
   [[nodiscard]] const ToolSchedulerOptions& options() const noexcept {
-    return options_;
+    return state_->options;
   }
 
   [[nodiscard]] ToolSchedulerLockStats lock_stats() const noexcept {
-    const auto inner = locks_.stats();
+    const auto inner = state_->locks.stats();
     return ToolSchedulerLockStats{
         .shared_acquires = inner.shared_acquires,
         .exclusive_acquires = inner.exclusive_acquires,
@@ -225,11 +235,19 @@ public:
   }
 
   std::size_t reap_idle_locks(core::Time now) {
-    return locks_.reap(now);
+    return state_->locks.reap(now);
   }
 
   [[nodiscard]] async::Awaitable<core::Result<std::vector<ToolBatchResult>>>
   run_batch(std::vector<ToolBatchCall> batch, tool::DispatchContext& prototype) {
+    return run_batch_shared(state_, std::move(batch), prototype);
+  }
+
+private:
+  [[nodiscard]] static async::Awaitable<core::Result<std::vector<ToolBatchResult>>>
+  run_batch_shared(std::shared_ptr<SharedState> shared,
+                   std::vector<ToolBatchCall> batch,
+                   tool::DispatchContext& prototype) {
     if (batch.empty()) {
       co_return std::vector<ToolBatchResult>{};
     }
@@ -239,13 +257,13 @@ public:
       co_return std::unexpected(parent_cancelled_error());
     }
 
-    auto state = std::make_shared<BatchState>(executor_, batch.size(), options_);
+    auto state = std::make_shared<BatchState>(shared->executor, batch.size(), shared->options);
 
     // Fill the channel-as-semaphore with one permit per concurrency slot. The
     // `try_send` calls cannot fail because we just constructed the channel
     // with capacity == max_parallel_tools; they are documented to discard
     // their result on the happy path.
-    for (std::size_t i = 0; i < options_.max_parallel_tools; ++i) {
+    for (std::size_t i = 0; i < shared->options.max_parallel_tools; ++i) {
       [[maybe_unused]] auto permit = state->semaphore.try_send(std::monostate{});
     }
 
@@ -253,8 +271,8 @@ public:
     names.reserve(batch.size());
     for (std::size_t i = 0; i < batch.size(); ++i) {
       names.push_back(batch[i].name);
-      asio::co_spawn(executor_,
-                     run_call(state, registry_, &locks_, std::move(batch[i]), i, std::ref(prototype)),
+      asio::co_spawn(shared->executor,
+                     run_call(state, shared, std::move(batch[i]), i, std::ref(prototype)),
                      asio::bind_cancellation_slot(state->child_cancels[i].slot(), asio::detached));
     }
 
@@ -299,7 +317,7 @@ public:
     // awaiting at the deadline instead of stalling the whole batch.
     if (completed < state->total_calls) {
       using namespace asio::experimental::awaitable_operators;
-      co_await (drain_remaining(state, reported, completed) || async::sleep_for(executor_, kCancellationGrace));
+      co_await (drain_remaining(state, reported, completed) || async::sleep_for(shared->executor, kCancellationGrace));
     }
 
     // Name every call that missed the grace window. A laggard keeps running
@@ -308,17 +326,16 @@ public:
     // the offending handler is identifiable.
     for (std::size_t i = 0; i < state->total_calls; ++i) {
       if (!reported[i]) {
-        [[maybe_unused]] auto recorded = co_await record_cancellation_lag(prototype, names[i]);
+        [[maybe_unused]] auto recorded =
+            co_await record_cancellation_lag(prototype, names[i], shared->options.per_call_timeout);
       }
     }
 
     co_return std::unexpected(parent_cancelled_error());
   }
 
-private:
   [[nodiscard]] static async::Awaitable<void> run_call(std::shared_ptr<BatchState> state,
-                                                       tool::Registry* registry,
-                                                       detail::PathLockTable* locks,
+                                                       std::shared_ptr<SharedState> shared,
                                                        ToolBatchCall call,
                                                        std::size_t index,
                                                        std::reference_wrapper<tool::DispatchContext> prototype_ref) {
@@ -348,11 +365,12 @@ private:
     // without the scheduler.
     detail::PathLockGuard lock_guard{};
     auto& prototype = prototype_ref.get();
-    if (const core::ToolDef* def = registry->find(call.name); def != nullptr) {
+    if (const core::ToolDef* def = shared->registry->find(call.name); def != nullptr) {
       if (auto mode = classify_lock_mode(def->required_capabilities); mode.has_value()) {
         if (auto key = derive_lock_key(prototype.workspace, call.input_json, *mode, def->required_capabilities);
             key.has_value()) {
-          auto acquired_lock = co_await locks->acquire(state->executor, *std::move(key), *mode, core::time::now_utc());
+          auto acquired_lock =
+              co_await shared->locks.acquire(state->executor, *std::move(key), *mode, core::time::now_utc());
           if (!acquired_lock) {
             state->results[index] = ToolBatchResult{
                 .tool_use_id = std::move(call.tool_use_id),
@@ -375,7 +393,7 @@ private:
         std::unexpected(core::Error::internal("scheduler: race did not produce a result"));
     {
       using namespace asio::experimental::awaitable_operators;
-      auto raced = co_await (registry->dispatch(call.name, call.input_json, per_call_ctx) ||
+      auto raced = co_await (shared->registry->dispatch(call.name, call.input_json, per_call_ctx) ||
                              async::sleep_for(state->executor, state->options.per_call_timeout));
       if (auto* dispatched = std::get_if<core::Result<tool::Output>>(&raced); dispatched != nullptr) {
         output = std::move(*dispatched);
@@ -436,8 +454,10 @@ private:
   /// so `--explain-rules`-style and `--trace` consumers see it beside the
   /// call's permission-decision row. Best-effort: a failed record is discarded
   /// by the caller and never masks the `parent_cancelled` result.
-  [[nodiscard]] async::Awaitable<core::Result<void>> record_cancellation_lag(tool::DispatchContext& prototype,
-                                                                             std::string_view tool_name) {
+  [[nodiscard]] static async::Awaitable<core::Result<void>>
+  record_cancellation_lag(tool::DispatchContext& prototype,
+                          std::string_view tool_name,
+                          std::chrono::milliseconds per_call_timeout) {
     permission::AuditEvent event;
     event.event_kind = "cancellation_lag";
     event.scope_key = prototype.scope_key;
@@ -448,14 +468,11 @@ private:
     event.outcome = permission::AuditOutcome::allow;
     event.reason = "cancellation_lag";
     event.parent_turn_id = prototype.parent_turn_id;
-    event.metadata_json = cancellation_lag_metadata_json(options_.per_call_timeout);
+    event.metadata_json = cancellation_lag_metadata_json(per_call_timeout);
     co_return co_await prototype.audit.record(std::move(event));
   }
 
-  asio::any_io_executor executor_;
-  tool::Registry* registry_;
-  ToolSchedulerOptions options_;
-  detail::PathLockTable locks_;
+  std::shared_ptr<SharedState> state_;
 };
 
 ToolScheduler::ToolScheduler(asio::any_io_executor executor, tool::Registry& registry, ToolSchedulerOptions options)

@@ -440,6 +440,28 @@ TEST_CASE("serve_webhooks accepts POST payloads and enqueues triggered work",
       3s);
 }
 
+TEST_CASE("serve_webhooks refuses unauthenticated non-loopback binds",
+          "[unit][bootstrap][serve][automation][webhook][security]") {
+  TempDir temp{"oran-serve-webhook-bind"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    const auto db = (temp.path() / ".orangutan" / "automation.db").string();
+    auto runtime =
+        co_await automation::AutomationRuntime::open(io.get_executor(),
+                                                     automation::AutomationRuntimeOptions{.database_path = db});
+    REQUIRE(runtime.has_value());
+    auto service = runtime->automation_service();
+
+    for (const auto host : {"0.0.0.0", "::"}) {
+      auto result = co_await bootstrap::serve_webhooks(io.get_executor(),
+                                                       service,
+                                                       bootstrap::ServeWebhookOptions{.bind_host = host, .port = 0});
+      REQUIRE_FALSE(result.has_value());
+      CHECK(result.error().kind() == core::ErrorKind::config);
+      CHECK(result.error().message().contains("must be loopback"));
+    }
+  });
+}
+
 TEST_CASE("serve_webhooks drains open connections on cooperative stop",
           "[unit][bootstrap][serve][automation][webhook]") {
   TempDir temp{"oran-serve-webhook-drain"};

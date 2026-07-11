@@ -387,13 +387,15 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > payloads that carry `input_json` also carry an optional
 > `redacted_input_json`, and both advisory and blocking bus
 > publishes substitute that sanitized view for non-trusted
-> sinks. `Registry::dispatch` fills the field for `FileWrite`
-> and `FileEdit` with a compact JSON object containing
+> sinks. `Registry::dispatch` fills the field for `FileWrite`,
+> `FileEdit`, and (as of slice 273) `MemoryRemember` with a compact JSON object containing
 > `kind=redacted_tool_input`, `tool_name`, the full
 > SHA-256 `input_hash`, `input_bytes`, and the redacted string
 > byte counts (`content_bytes` or `old_string_bytes` /
-> `new_string_bytes`). Malformed JSON still receives a hash-only
-> redacted view; trusted-local sinks receive the original input.
+> `new_string_bytes`) where applicable. `MemoryRemember` generic
+> tool events expose only the hash/size envelope, never
+> id/title/body/tags/linked ids. Malformed file-mutation JSON still receives a
+> hash-only redacted view; trusted-local sinks receive the original input.
 > Slice 179 adds the same trust boundary for long-term memory writes:
 > `MemoryWritePayload` carries the raw `record` plus
 > `redacted_record` size/count metadata, and the bus clears

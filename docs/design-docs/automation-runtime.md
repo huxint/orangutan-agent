@@ -526,7 +526,11 @@ Requests are intentionally `Content-Length` only and bounded by
 `max_payload_bytes`; the body is passed unchanged to `WebhookProducer`, which
 normalizes the id to `webhook:<id>` and enqueues matching triggered descriptors
 through the existing `AutomationService`. `oran-automation` still does not read
-config, own sockets, or start hidden background work.
+config, own sockets, or start hidden background work. Slice 273 makes the
+listener's unauthenticated boundary explicit: `bind_host` must parse as a
+loopback IP address (`127.0.0.0/8` or `::1`); wildcard/public interface binds
+fail before the acceptor opens. Authenticated non-loopback intake remains a
+future design, not an accidental option.
 
 ## Public API
 

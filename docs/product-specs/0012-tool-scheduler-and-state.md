@@ -22,6 +22,11 @@
 > `reap_idle_locks` tick (AC10's "background tick"): `orangutan --serve` drives a
 > single strand-hosted scheduler shared across automation jobs and races a
 > `serve_scheduler_reaping` concern that reaps its lock table on the same strand.
+> Slice 273 closes a cancellation-laggard lifetime hole: detached calls retain a
+> shared scheduler implementation until their path-lock guards release, so the
+> public scheduler may be destroyed after the 100 ms grace return without a
+> use-after-free of its lock table. Borrowed registry/dispatch services still
+> must outlive in-flight calls.
 > The remaining v1.1 items below (dispatch singleflight, persisted index caches)
 > remain future work.
 

@@ -90,9 +90,10 @@ disable the analyzer.
 
 ## Interaction With clang-tidy
 
-- clang-tidy runs on every CI build and enforces `core-guidelines-*`,
-  `cppcoreguidelines-*`, and our project-specific checks
-  ([`critical-rules.md#C9`](critical-rules.md)).
+- clang-tidy is required by [`critical-rules.md#C9`](critical-rules.md), but the
+  hosted CI job is not provisioned yet. The activation gap is tracked under the
+  2026-07-11 deep-review row in the tech-debt tracker; local/editor findings do
+  not substitute for the missing gate.
 - The analyzer covers a different shape of bug (path-sensitive dataflow). Both are
   required; one does not substitute for the other.
 - Where clang-tidy and `-fanalyzer` overlap (e.g., null-deref), the analyzer's
@@ -101,9 +102,9 @@ disable the analyzer.
 ## Enforcement
 
 - `xmake f --analyze=y` exits non-zero if any required warning fires.
-- `scripts/check-analyzer-coverage.sh` (TBD; lands with the first lib that opts in)
-  parses each `src/oran-*/README.md` and asserts that the TU list there matches
-  reality.
+- `scripts/check-analyzer-coverage.sh` is currently a success stub. Its real TU
+  manifest/check plus nightly analyzer job are tracked under the 2026-07-11
+  deep-review row.
 
 ## See Also
 

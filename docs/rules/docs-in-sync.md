@@ -67,21 +67,19 @@ broken.
   `Last completed history` pointer is older than the newest file under
   `docs/histories/` (already runs in CI).
 - `scripts/check-docs-sync.sh` — additional drift checks (this rule's enforcer):
-  - Public-header symbol names referenced in `docs/design-docs/*.md` must exist in
-    `include/oran/`.
-  - Config fields named in `docs/design-docs/secrets-and-state.md` must appear in
-    `config.example.json`.
-  - Lifecycle event names enumerated in `docs/design-docs/permissions-and-hooks.md`
-    must match the code's `Event` enum.
-  - Capability names enumerated in `docs/design-docs/tool-runtime.md` must match the
-    code's `Capability` enum.
+  - Every rule/design/spec file appears in its canonical index.
+  - Backticked script and Make targets referenced by docs exist.
   - Library names in `docs/ARCHITECTURE.md` inventory must match `xmake/targets.lua`.
   - Package versions in `docs/rules/libraries.md` must match `xmake/packages.lua`.
-  - Required files listed in `docs/rules/README.md` must exist.
+  - Every `src/oran-*` library has matching test and bench directories.
+- Public-header symbol, config-shape, hook-event, and capability-enum parity are
+  planned checks, not active gates yet. They are tracked under the 2026-07-11
+  deep-review row in `docs/exec-plans/tech-debt-tracker.md`; until they land,
+  reviewers must verify those pairs directly.
 - `scripts/check-prompt-preamble.sh` — guards the default `oran-agent`
   section-1 preamble against clocks, ids, randomness, and prompt bytes owned by
   other sections.
-- CI fails any PR that fails the above.
+- CI fails any PR that fails an active check above.
 
 The script reports each drift with the exact pair of files that disagree and a
 suggested fix.

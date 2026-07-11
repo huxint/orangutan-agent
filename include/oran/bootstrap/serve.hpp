@@ -145,8 +145,9 @@ struct ServeSchedulerReapOptions {
 
 /// Tunables for the HTTP webhook listener concern under `--serve`.
 struct ServeWebhookOptions {
-  /// Local address to bind. The first listener slice accepts numeric addresses
-  /// only (for example `127.0.0.1` or `::1`) and intentionally avoids DNS.
+  /// Loopback address to bind. The unauthenticated first listener slice accepts
+  /// numeric loopback addresses only (for example `127.0.0.1` or `::1`) and
+  /// intentionally avoids DNS or public-interface exposure.
   std::string bind_host{"127.0.0.1"};
   /// TCP port to bind. `0` is accepted for tests/embedders that want an
   /// ephemeral port; `run_serve` prints the bound endpoint after startup.
@@ -163,7 +164,7 @@ struct ServeWebhookOptions {
   std::function<void(std::uint16_t)> bound_observer{};
 };
 
-/// The HTTP webhook listener concern. It owns a small localhost HTTP intake
+/// The HTTP webhook listener concern. It owns a small loopback-only HTTP intake
 /// loop for `POST <path_prefix><webhook-id>` requests, validates a
 /// `Content-Length` body under `max_payload_bytes`, and feeds the existing
 /// `automation::WebhookProducer`. It deliberately does not expose a generic

@@ -291,10 +291,12 @@ benchmark suite and updates the file via PR.
 ## CI Wiring
 
 - `make ci` (docs + hygiene + shell-lint) on every PR.
-- `xmake test` on every PR.
-- `xmake build bench-*` smoke-built on every PR (compile-only; does not run benches).
-- **Nightly**: full bench run, compile-budget recheck, real-provider integration
-  (gated).
+- `xmake test` and `xmake build bench-*` are required author-side gates today,
+  but hosted PR CI does not run them until the documented xmake/reference-host
+  provisioning debt closes.
+- **Target nightly state**: full bench run, analyzer coverage, compile-budget
+  recheck, and gated real-provider integration. Those hosted jobs are not active
+  today.
 - **Pre-merge**: maintainer manually triggers a bench compare for `perf-impact` PRs.
 
 ## Expectations Per Change

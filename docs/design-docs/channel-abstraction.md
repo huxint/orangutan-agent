@@ -321,7 +321,10 @@ dedicated `std::thread`, which C2/C6 forbid). Milestone 2b is itself split:
 thread, the handshake driven by non-blocking `curl_multi_perform` rounds and
 receive/send suspending on asio socket readiness; `close()` completes the RFC
 6455 closing handshake), with the shared libcurl RAII wrappers extracted to
-`src/oran-http/_impl/curl_common.hpp`. **2b-ii (slice 232)** adds
+`src/oran-http/_impl/curl_common.hpp`. Slice 273 makes ping handling explicit
+on libcurl releases that expose `CURLWS_NOAUTOPONG`: `receive(timeout)` sends
+the matching pong itself under the same deadline, avoiding an auto-pong flush
+deadlock while keeping control frames transparent. **2b-ii (slice 232)** adds
 `qq::GatewayTransport`, the caller-owned driver that keeps a persistent
 `http::WebSocket`, drives `GatewaySession` lifecycle frames, sends
 Identify/Resume/heartbeat payloads with tokens from `TokenStore`, races

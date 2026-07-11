@@ -180,6 +180,31 @@ void add_uncancellable_tool(tool::Registry& registry, std::string name, std::chr
   REQUIRE(registry.add(tool_def(std::move(name)), std::move(handler)).has_value());
 }
 
+/// Register a mutating handler whose completion is controlled by the test.
+/// It deliberately ignores cancellation so the scheduler returns after its
+/// grace window while the handler still owns a per-path lock guard.
+void add_gated_uncancellable_write_tool(tool::Registry& registry,
+                                        std::string name,
+                                        std::shared_ptr<async::Channel<bool>> release_gate,
+                                        std::shared_ptr<std::atomic<bool>> started,
+                                        std::shared_ptr<std::atomic<bool>> finished) {
+  auto handler = [release_gate = std::move(release_gate), started = std::move(started), finished = std::move(finished)](
+                     std::string_view,
+                     tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
+    co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+    started->store(true, std::memory_order_release);
+    auto released = co_await release_gate->receive();
+    if (!released) {
+      co_return std::unexpected(released.error());
+    }
+    finished->store(true, std::memory_order_release);
+    co_return tool::Output::text_only("done-uncancellable-write");
+  };
+  auto def = tool_def(std::move(name));
+  def.required_capabilities = {core::Capability::write_file};
+  REQUIRE(registry.add(std::move(def), std::move(handler)).has_value());
+}
+
 [[nodiscard]] permission::ApprovalBroker make_broker() {
   auto broker = permission::ApprovalBroker::with_random_secret();
   REQUIRE(broker.has_value());
@@ -1198,6 +1223,74 @@ TEST_CASE("ToolScheduler: a cancellation-ignoring tool is named as cancellation_
     return e.event_kind == "cancellation_lag" && e.metadata_json.contains("cancellation_lag");
   });
   REQUIRE(marked);
+}
+
+TEST_CASE("ToolScheduler: a detached cancellation laggard outlives scheduler-owned path locks safely",
+          "[unit][agent][scheduler][cancellation][lock]") {
+  asio::io_context io;
+  asio::cancellation_signal signal;
+
+  TempDir root{"oran-sched-laggard-lifetime"};
+  const auto rel = std::string{"held.txt"};
+  touch_file(root.path() / rel);
+
+  auto release_gate = std::make_shared<async::Channel<bool>>(io.get_executor(), 1);
+  auto started = std::make_shared<std::atomic<bool>>(false);
+  auto finished = std::make_shared<std::atomic<bool>>(false);
+  tool::Registry registry;
+  add_gated_uncancellable_write_tool(registry, "FakeStuckWrite", release_gate, started, finished);
+  auto workspace = make_workspace(root.path());
+  auto rules = allow_all_rules();
+  permission::RecordingAuditSink audit;
+  auto prototype = make_prototype_with_workspace(io, rules, audit, workspace);
+
+  std::optional<agent::ToolScheduler> scheduler;
+  scheduler.emplace(io.get_executor(),
+                    registry,
+                    agent::ToolSchedulerOptions{.max_parallel_tools = 1, .per_call_timeout = 30s});
+  std::vector<agent::ToolBatchCall> batch;
+  batch.push_back(call(0, "FakeStuckWrite", write_call_input(rel)));
+
+  std::optional<core::Result<std::vector<agent::ToolBatchResult>>> result;
+  std::exception_ptr failure;
+  asio::co_spawn(
+      io,
+      [&]() -> async::Awaitable<core::Result<std::vector<agent::ToolBatchResult>>> {
+        co_return co_await scheduler->run_batch(std::move(batch), prototype);
+      },
+      asio::bind_cancellation_slot(signal.slot(),
+                                   [&](std::exception_ptr ep, core::Result<std::vector<agent::ToolBatchResult>> r) {
+                                     failure = ep;
+                                     result = std::move(r);
+                                   }));
+
+  const auto start_deadline = std::chrono::steady_clock::now() + 2s;
+  while (!started->load(std::memory_order_acquire) && !failure && std::chrono::steady_clock::now() < start_deadline) {
+    io.run_one();
+  }
+  REQUIRE(started->load(std::memory_order_acquire));
+
+  signal.emit(asio::cancellation_type::terminal);
+  const auto result_deadline = std::chrono::steady_clock::now() + 2s;
+  while (!result.has_value() && !failure && std::chrono::steady_clock::now() < result_deadline) {
+    io.run_one();
+  }
+  if (failure) {
+    std::rethrow_exception(failure);
+  }
+  REQUIRE(result.has_value());
+  REQUIRE_FALSE(result->has_value());
+  REQUIRE(error_has_context(result->error(), "reason", "parent_cancelled"));
+  REQUIRE_FALSE(finished->load(std::memory_order_acquire));
+
+  // Destroy the public owner while the detached child still holds the path
+  // lock, then let the child finish and release its guard. The child-held state
+  // keeps the lock table alive until this release completes.
+  scheduler.reset();
+  REQUIRE(release_gate->try_send(true).has_value());
+  io.restart();
+  io.run();
+  REQUIRE(finished->load(std::memory_order_acquire));
 }
 
 TEST_CASE("ToolScheduler: cancel-aware tools record no cancellation_lag rows on parent cancel (AC5)",

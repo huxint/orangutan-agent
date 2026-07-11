@@ -51,8 +51,9 @@ enum class PathLockMode : std::uint8_t {
 class PathLockTable;
 
 /// Move-only RAII handle that releases its lock on destruction. The guard does
-/// not extend the lifetime of the owning `PathLockTable`; the scheduler owns
-/// the table for as long as any spawned dispatch may hold a guard.
+/// not extend the lifetime of the owning `PathLockTable`; each spawned
+/// scheduler child retains the shared scheduler state that owns the table until
+/// its guard has been released.
 class PathLockGuard {
 public:
   PathLockGuard() noexcept = default;

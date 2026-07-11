@@ -227,8 +227,10 @@ TEST_CASE("WebSocket reassembles a message larger than one receive chunk", "[uni
 
 TEST_CASE("WebSocket keeps ping/pong transparent to the caller", "[unit][http][websocket]") {
   ws::ScriptedWsServer server{{{
-      ws::SendPing{"keepalive"},
-      ws::RecvFrame{},  // libcurl's automatic pong
+      ws::SendPing{"keepalive-1"},
+      ws::RecvFrame{},
+      ws::SendPing{"keepalive-2"},
+      ws::RecvFrame{},
       ws::SendText{"after-ping"},
   }}};
 
@@ -244,9 +246,11 @@ TEST_CASE("WebSocket keeps ping/pong transparent to the caller", "[unit][http][w
   });
 
   const auto frames = server.recorded_frames();
-  REQUIRE(frames.size() == 1);
+  REQUIRE(frames.size() == 2);
   REQUIRE(frames[0].opcode == 0xA);
-  REQUIRE(frames[0].payload == "keepalive");
+  REQUIRE(frames[0].payload == "keepalive-1");
+  REQUIRE(frames[1].opcode == 0xA);
+  REQUIRE(frames[1].payload == "keepalive-2");
 }
 
 TEST_CASE("WebSocket surfaces binary messages with the binary kind", "[unit][http][websocket]") {

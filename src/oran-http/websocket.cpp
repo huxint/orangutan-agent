@@ -184,6 +184,14 @@ drive_handshake(CURLM* multi, CURL* easy, std::chrono::milliseconds timeout) {
                                     static_cast<std::uint8_t>(payload[1]));
 }
 
+[[nodiscard]] async::Awaitable<core::Result<void>>
+send_frame(CURL* easy,
+           curl_socket_t socket,
+           std::string_view payload,
+           unsigned int kind_flags,
+           const asio::cancellation_state& cancellation,
+           std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
+
 }  // namespace
 
 struct WebSocket::Impl {
@@ -260,6 +268,14 @@ async::Awaitable<core::Result<WebSocket>> WebSocket::connect(WsConnectRequest re
           CURLE_OK) {
     co_return std::unexpected(Error::internal("failed to configure curl websocket handle"));
   }
+#if defined(CURLWS_NOAUTOPONG)
+  // Newer libcurl releases can leave an automatic pong pending while the
+  // caller waits for more readable data. Own the control-frame write so the
+  // receive loop can wait for writability and preserve its overall deadline.
+  if (curl_easy_setopt(easy.get(), CURLOPT_WS_OPTIONS, CURLWS_NOAUTOPONG) != CURLE_OK) {
+    co_return std::unexpected(Error::internal("failed to configure curl websocket pong handling"));
+  }
+#endif
 
   auto multi = CurlMulti{};
   if (multi.get() == nullptr) {
@@ -342,9 +358,19 @@ async::Awaitable<core::Result<std::optional<WsMessage>>> WebSocket::receive(std:
     }
 
     const auto payload = std::string_view{impl_->chunk.data(), received};
-    if ((meta->flags & CURLWS_PING) != 0 || (meta->flags & CURLWS_PONG) != 0) {
-      // libcurl answers pings itself (CURLWS_NOAUTOPONG is not set); pongs
-      // carry nothing the protocol layer needs.
+    if ((meta->flags & CURLWS_PING) != 0) {
+#if defined(CURLWS_NOAUTOPONG)
+      auto pong = co_await send_frame(impl_->easy.get(), impl_->socket, payload, CURLWS_PONG, cancellation, deadline);
+      if (!pong) {
+        co_return std::unexpected(std::move(pong).error());
+      }
+#endif
+      // Older libcurl releases answer pings automatically. In either mode the
+      // control frame stays transparent to the caller.
+      continue;
+    }
+    if ((meta->flags & CURLWS_PONG) != 0) {
+      // Pong payloads carry nothing the protocol layer needs.
       continue;
     }
     if ((meta->flags & CURLWS_CLOSE) != 0) {
@@ -381,15 +407,27 @@ namespace {
 /// Send one complete frame of `kind_flags`, suspending on writability for
 /// CURLE_AGAIN / partial sends. Per curl_ws_send's contract, retries pass the
 /// remaining payload with the same type flag and curl continues the frame.
-[[nodiscard]] async::Awaitable<core::Result<void>> send_frame(CURL* easy,
-                                                              curl_socket_t socket,
-                                                              std::string_view payload,
-                                                              unsigned int kind_flags,
-                                                              const asio::cancellation_state& cancellation) {
+[[nodiscard]] async::Awaitable<core::Result<void>>
+send_frame(CURL* easy,
+           curl_socket_t socket,
+           std::string_view payload,
+           unsigned int kind_flags,
+           const asio::cancellation_state& cancellation,
+           std::optional<std::chrono::steady_clock::time_point> deadline) {
   std::size_t offset = 0;
   for (;;) {
     if (is_cancelled(cancellation)) {
       co_return std::unexpected(Error::cancelled());
+    }
+    auto wait_duration = std::chrono::steady_clock::duration{kSendWaitTick};
+    if (deadline.has_value()) {
+      const auto remaining = *deadline - std::chrono::steady_clock::now();
+      if (remaining <= std::chrono::steady_clock::duration::zero()) {
+        co_return std::unexpected(Error{core::ErrorKind::timeout, "websocket frame send timed out"});
+      }
+      if (remaining < wait_duration) {
+        wait_duration = remaining;
+      }
     }
 
     std::size_t sent = 0;
@@ -405,7 +443,7 @@ namespace {
       co_return std::unexpected(curl_error(code, "ws_send"));
     }
 
-    auto writable = co_await wait_socket(socket, asio::posix::stream_descriptor::wait_write, kSendWaitTick);
+    auto writable = co_await wait_socket(socket, asio::posix::stream_descriptor::wait_write, wait_duration);
     if (!writable) {
       co_return std::unexpected(std::move(writable).error());
     }

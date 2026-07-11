@@ -103,15 +103,19 @@ in RAII wrappers.
 **Enforcement:** clang-tidy `cppcoreguidelines-owning-memory`,
 `cppcoreguidelines-no-malloc`.
 
-## C9. clang-tidy / clangd warnings are errors
+## C9. clang-tidy / clangd warnings are errors when checked
 
-CI runs clang-tidy with the project's `.clang-tidy` config. Any warning fails the
-build. Disabling a check at-site requires a comment with a justification.
+The project requires clang-tidy findings to be treated as errors. Hosted CI does
+not run that gate yet; the missing job/config is tracked under the 2026-07-11
+deep-review row. When clang-tidy is run locally or in the future hosted job, any
+warning fails the check. Disabling a check at-site requires a comment with a
+justification.
 
 **Why:** treating warnings as advisory is how legacy projects accumulate them by the
 hundreds.
 
-**Enforcement:** CI step `xmake check clang.tidy` (TBD with build skeleton).
+**Enforcement:** planned hosted `xmake check clang.tidy` step; currently review
+plus local/editor analysis.
 
 ## C10. Every effectful action is permissioned
 
@@ -256,16 +260,17 @@ list for `src/oran-*/`. `xmake.lua` pins `c++26` and warnings include
 
 GCC 16.1's `-fanalyzer` is wired into the build via `xmake f --analyze=y`. The
 analyzer is **opt-in** because it triples compile time on heavy TUs (see
-[`compile-budget.md`](compile-budget.md)), but it is **mandatory for nightly CI** on
-every TU once the library that owns memory or descriptors lands. Suppression policy
-and the required warning set live in [`static-analysis.md`](static-analysis.md).
+[`compile-budget.md`](compile-budget.md)). The intended nightly gate is mandatory
+for covered memory/descriptor TUs, but hosted analyzer coverage is not active yet;
+the gap is tracked under the 2026-07-11 deep-review row. Suppression policy and
+the required warning set live in [`static-analysis.md`](static-analysis.md).
 
 **Why:** legacy `orangutan/` accumulated null-deref / use-after-free shapes the
-analyzer would have caught; we wire it in on day one and put it on the path that
-runs nightly.
+analyzer would have caught; the build wiring exists so the missing hosted gate
+can be activated without redesigning the toolchain.
 
-**Enforcement:** `xmake f --analyze=y && xmake` in the nightly job. Suppressions
-without an explaining comment fail review.
+**Enforcement:** `xmake f --analyze=y && xmake` locally and in the planned
+nightly job. Suppressions without an explaining comment fail review.
 
 ## C16. Docs match reality — The Prime Directive
 

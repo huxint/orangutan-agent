@@ -93,7 +93,7 @@ webhook producer seam: `WebhookProducer` maps a webhook id to
 and preserves optional payload bytes through queue execution, notifier callbacks,
 and the automation prompt bridge. Slice 269 adds the first HTTP listener/config
 binding for that seam under `--serve`: `automation.webhooks.listener` enables a
-bounded `POST <path_prefix><id>` intake that feeds `WebhookProducer` and
+bounded loopback-only `POST <path_prefix><id>` intake that feeds `WebhookProducer` and
 preserves the request body as triggered payload bytes. The current API evaluates
 periodic and cron schedules from caller-supplied state, maps a long-term memory
 retention policy into a due-only `memory::longterm::DecayRequest`, persists the
@@ -466,7 +466,7 @@ remains downstream.
    a caller can map webhook id `ci` to trigger key `webhook:ci`, enqueue matching
    descriptors, and expose the payload to handlers / prompt runners. Slice 269
    adds the first `--serve` HTTP listener/config binding for those requests:
-   `automation.webhooks.listener` accepts bounded `POST <path_prefix><id>`
+   `automation.webhooks.listener` accepts bounded loopback-only `POST <path_prefix><id>`
    requests and feeds `WebhookProducer`. Concrete notifier routing and measured
    end-to-end triggered firing latency remain downstream.
 4. Per-agent lease prevents two concurrent runs of the same agent_key; the queued

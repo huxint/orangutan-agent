@@ -61,7 +61,8 @@ made the legacy project unbuildable on 16 GB; we will not regress.
 
 ### Mechanical Checks
 
-`scripts/check-compile-budget.sh` (build skeleton, to be implemented):
+`scripts/check-compile-budget.sh` (implemented locally; hosted-CI wiring remains
+tracked debt):
 
 ```sh
 xmake clean
@@ -92,7 +93,9 @@ python3 scripts/check-tu-budget.py tu-times.json compile_budget.json
 
 ### CI
 
-CI runs `check-compile-budget.sh` on every PR. Outcomes:
+The intended reference-hardware CI runs `check-compile-budget.sh` on every PR.
+That hosted job is not active yet; authors can run the implemented script on
+matching hardware. Intended outcomes:
 
 - All within median / p95 → green.
 - Within hard cap but > p95 → yellow (warning comment on the PR).
