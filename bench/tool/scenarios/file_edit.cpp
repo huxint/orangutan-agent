@@ -30,6 +30,7 @@
 #include <oran/permission/rule_set.hpp>
 #include <oran/tool/builtins.hpp>
 #include <oran/tool/registry.hpp>
+#include <oran/tool/workspace.hpp>
 
 namespace orangutan::bench {
 
@@ -122,12 +123,18 @@ void register_tool_file_edit(ankerl::nanobench::Bench& bench) {
   });
   permission::RecordingAuditSink sink;
 
+  auto workspace = tool::Workspace::create(std::filesystem::temp_directory_path().string());
+  if (!workspace) {
+    std::abort();
+  }
+
   asio::io_context io;
   tool::DispatchContext ctx{
       .executor = io.get_executor(),
       .mode = permission::Mode::strict,
       .rules = rules,
       .audit = sink,
+      .workspace = &*workspace,
       .scope_key = "scope-A",
       .agent_key = "bencher",
       .identity = "operator-1",

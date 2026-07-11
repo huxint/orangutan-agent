@@ -27,9 +27,10 @@ Current seams and future work:
 
 - Every filesystem built-in (`FileRead`, `FileWrite`, `FileEdit`,
   `FileDelete`, `FileSearch`, `DirectoryList`) consumes
-  `DispatchContext::workspace` through `Registry::dispatch` when supplied;
-  handlers retain an in-handler fallback for tests and legacy callers that
-  dispatch without a workspace.
+  `DispatchContext::workspace` through `Registry::dispatch` when supplied.
+  `FileWrite` and `FileEdit` require the resulting authority, including for
+  direct registry dispatch; read/list and the remaining mutation handlers keep
+  their temporary pathname paths while the handle migration continues.
 - The handle migration is active: `FileRead` executes through a pinned
   `DirectoryAuthority`, while `FileWrite` and `FileEdit` use a pinned-parent
   `FileMutation`. Approval and executor awaits cannot redirect these three

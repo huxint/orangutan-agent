@@ -176,28 +176,17 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
     co_return std::unexpected(core::Error::invalid_argument("FileEdit: `old_string` and `new_string` are identical"));
   }
 
-  std::optional<io::FileMutation> authorized_mutation;
-  if (ctx.resolved_path.has_value()) {
-    if (!ctx.resolved_path->authority.has_value()) {
-      co_return std::unexpected(core::Error::internal("FileEdit: resolved workspace path is missing authority"));
-    }
-    path = ctx.resolved_path->absolute_path;
-    auto mutation = ctx.resolved_path->authority->begin_file_mutation(ctx.resolved_path->authority_relative_path);
-    if (!mutation) {
-      co_return std::unexpected(std::move(mutation).error());
-    }
-    authorized_mutation.emplace(std::move(*mutation));
-  } else if (ctx.workspace != nullptr) {
-    co_return std::unexpected(
-        core::Error::internal("FileEdit: workspace dispatch did not provide a resolved authority"));
+  if (!ctx.resolved_path.has_value() || !ctx.resolved_path->authority.has_value()) {
+    co_return std::unexpected(core::Error::internal("FileEdit requires a resolved workspace authority"));
   }
-  std::optional<io::ReadOnlyFile> authorized_file;
-  if (authorized_mutation.has_value()) {
-    auto opened = authorized_mutation->open_existing();
-    if (!opened) {
-      co_return std::unexpected(std::move(opened).error());
-    }
-    authorized_file.emplace(std::move(*opened));
+  path = ctx.resolved_path->absolute_path;
+  auto mutation = ctx.resolved_path->authority->begin_file_mutation(ctx.resolved_path->authority_relative_path);
+  if (!mutation) {
+    co_return std::unexpected(std::move(mutation).error());
+  }
+  auto authorized_file = mutation->open_existing();
+  if (!authorized_file) {
+    co_return std::unexpected(std::move(authorized_file).error());
   }
 
   // Pre-edit fingerprint check: a stale `expected_version` aborts before
@@ -205,8 +194,7 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
   // read still re-fingerprints internally for mid-read race detection;
   // this guard is the *intentional* freshness contract the agent asked for.
   if (expected_version) {
-    auto pre = authorized_file.has_value() ? io::compute_file_fingerprint(*authorized_file)
-                                           : io::compute_file_fingerprint(path);
+    auto pre = io::compute_file_fingerprint(*authorized_file);
     if (!pre) {
       co_return std::unexpected(core::Error{core::ErrorKind::conflict, "FileEdit: expected_version cannot be verified"}
                                     .with("path", path)
@@ -224,22 +212,18 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
     }
   }
 
-  core::Result<std::string> contents = std::unexpected(core::Error::internal("unreachable file read state"));
-  if (authorized_file.has_value()) {
-    auto read = co_await io::read_text_file_ranged(ctx.executor,
-                                                   std::move(*authorized_file),
-                                                   io::ReadTextOptions{.max_bytes = *max_bytes});
-    if (read && read->truncated) {
-      contents = std::unexpected(core::Error::invalid_argument("file exceeds max_bytes")
-                                     .with("path", path)
-                                     .with("max_bytes", std::to_string(*max_bytes)));
-    } else if (read) {
-      contents = std::move(read->text);
-    } else {
-      contents = std::unexpected(std::move(read).error());
-    }
+  core::Result<std::string> contents;
+  auto read = co_await io::read_text_file_ranged(ctx.executor,
+                                                 std::move(*authorized_file),
+                                                 io::ReadTextOptions{.max_bytes = *max_bytes});
+  if (read && read->truncated) {
+    contents = std::unexpected(core::Error::invalid_argument("file exceeds max_bytes")
+                                   .with("path", path)
+                                   .with("max_bytes", std::to_string(*max_bytes)));
+  } else if (read) {
+    contents = std::move(read->text);
   } else {
-    contents = co_await io::read_text_file(ctx.executor, path, io::ReadTextOptions{.max_bytes = *max_bytes});
+    contents = std::unexpected(std::move(read).error());
   }
   if (!contents) {
     co_return std::unexpected(std::move(contents).error());
@@ -280,10 +264,7 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
   auto replaced = apply_replacements(*contents, old_string, new_string, target_positions);
   const auto replaced_bytes = replaced.size();
   io::WriteTextOptions write_opts{.mode = io::WriteMode::truncate, .atomic = true};
-  auto written =
-      authorized_mutation.has_value()
-          ? co_await io::write_text_file(ctx.executor, std::move(*authorized_mutation), std::move(replaced), write_opts)
-          : co_await io::write_text_file(ctx.executor, std::move(path), std::move(replaced), write_opts);
+  auto written = co_await io::write_text_file(ctx.executor, std::move(*mutation), std::move(replaced), write_opts);
   if (!written) {
     co_return std::unexpected(std::move(written).error());
   }

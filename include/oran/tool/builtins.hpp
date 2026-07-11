@@ -68,8 +68,9 @@ inline constexpr std::string_view kMemoryForgetName{"MemoryForget"};
 /// `files_touched`, and `truncated`.
 [[nodiscard]] core::Result<void> register_file_read(Registry& registry);
 
-/// Register the `FileWrite` tool. Writes UTF-8 content to a path using
-/// `oran-io`'s coroutine helper; capability `write_file` is required.
+/// Register the `FileWrite` tool. Writes UTF-8 content through the resolved
+/// workspace authority; capability `write_file` is required and direct
+/// dispatch callers must provide `DispatchContext::workspace`.
 /// Input shape: `{"path": <string>, "content": <string>, "mode"?:
 /// "truncate"|"append"|"fail_if_exists", "create_parents"?: bool,
 /// "max_bytes"?: positive integer <= 16777216,
@@ -81,7 +82,9 @@ inline constexpr std::string_view kMemoryForgetName{"MemoryForget"};
 [[nodiscard]] core::Result<void> register_file_write(Registry& registry);
 
 /// Register the `FileEdit` tool. Replaces `old_string` with `new_string` in
-/// a UTF-8 text file; capability `edit_file` is required. Input shape:
+/// a UTF-8 text file through the resolved workspace authority; capability
+/// `edit_file` is required and direct dispatch callers must provide
+/// `DispatchContext::workspace`. Input shape:
 /// `{"path": <string>, "old_string": <string>, "new_string": <string>,
 /// "replace_all"?: bool, "max_bytes"?: positive integer <= 16777216,
 /// "expected_version"?: <version token from a prior `FileRead`>}`.

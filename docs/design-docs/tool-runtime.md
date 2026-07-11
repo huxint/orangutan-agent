@@ -367,8 +367,9 @@ enum class Capability {
 > `DispatchContext::resolved_path` for handlers and writes redacted
 > `metadata_json.path_resolution` audit fields; resolver failures are audited
 > with the permission verdict but return before handlers run or ask-approval
-> replay is spent. Handlers keep their in-handler fallback for callers that
-> dispatch without a workspace.
+> replay is spent. Mutation handlers (`FileWrite` and `FileEdit`) require the
+> resulting workspace authority; direct dispatch callers must supply a
+> workspace instead of falling back to pathname execution.
 > Slice 147 (2026-06-03) adds the second `oran-tool-skill` built-in,
 > `SkillDeactivate` (capability `deactivate_skill`, input `{"name": <string>}`,
 > non-deferred). Like `SkillInvoke` it delegates the concrete lookup through a
@@ -693,9 +694,10 @@ Current surface and forward shape:
   mix them up at the type level. `Registry::dispatch` stores the successful
   result in `DispatchContext::resolved_path`. `FileRead`, `FileWrite`, and
   `FileEdit` consume the authority plus relative path after approval rather
-  than reopening the absolute pathname. Direct trusted calls without a
-  workspace temporarily retain pathname execution while the remaining
-  filesystem handlers migrate.
+  than reopening the absolute pathname. `FileWrite` and `FileEdit` reject a
+  direct dispatch that does not provide a workspace authority; read/list and
+  the remaining filesystem handlers retain their temporary pathname paths
+  while those handlers migrate.
 - `FileWrite` and `FileEdit` begin a dirfd-backed mutation after approval.
   Mutation resolution always rejects symlink components and therefore accepts
   an authority-relative name rather than the read-side symlink-policy type. The

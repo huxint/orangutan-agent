@@ -298,8 +298,8 @@ struct DispatchContext {
   /// non-owning; bootstrap/agent runtime owns the workspace value and keeps it
   /// alive for the dispatch. Dispatch pre-resolves current filesystem
   /// built-ins through this seam before permission evaluation and stores the
-  /// result in `resolved_path`; handlers keep an in-handler fallback for
-  /// callers that do not supply a workspace.
+  /// result in `resolved_path`. FileWrite and FileEdit require this authority;
+  /// direct callers of those mutation tools must provide a workspace.
   Workspace* workspace{nullptr};
   /// Resolved path for the currently executing filesystem built-in. Set by
   /// `Registry::dispatch` after `tool_before` and before permission

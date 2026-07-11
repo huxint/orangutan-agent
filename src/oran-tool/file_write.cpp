@@ -131,21 +131,14 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
                                   .with("max_bytes", std::to_string(*max_bytes)));
   }
 
-  std::optional<io::FileMutation> authorized_mutation;
-  if (ctx.resolved_path.has_value()) {
-    if (!ctx.resolved_path->authority.has_value()) {
-      co_return std::unexpected(core::Error::internal("FileWrite: resolved workspace path is missing authority"));
-    }
-    path = ctx.resolved_path->absolute_path;
-    auto mutation = ctx.resolved_path->authority->begin_file_mutation(ctx.resolved_path->authority_relative_path,
-                                                                      options.create_parent_directories);
-    if (!mutation) {
-      co_return std::unexpected(std::move(mutation).error());
-    }
-    authorized_mutation.emplace(std::move(*mutation));
-  } else if (ctx.workspace != nullptr) {
-    co_return std::unexpected(
-        core::Error::internal("FileWrite: workspace dispatch did not provide a resolved authority"));
+  if (!ctx.resolved_path.has_value() || !ctx.resolved_path->authority.has_value()) {
+    co_return std::unexpected(core::Error::internal("FileWrite requires a resolved workspace authority"));
+  }
+  path = ctx.resolved_path->absolute_path;
+  auto mutation = ctx.resolved_path->authority->begin_file_mutation(ctx.resolved_path->authority_relative_path,
+                                                                    options.create_parent_directories);
+  if (!mutation) {
+    co_return std::unexpected(std::move(mutation).error());
   }
 
   // Pre-write fingerprint check: a stale `expected_version` aborts the
@@ -155,16 +148,12 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
   // is meant to be paired with a recent `FileRead`, so vanishing-from-disk
   // is the same "your token is stale, re-read" outcome.
   if (expected_version) {
-    core::Result<io::FileFingerprint> pre = std::unexpected(core::Error::internal("unreachable fingerprint state"));
-    if (authorized_mutation.has_value()) {
-      auto opened = authorized_mutation->open_existing();
-      if (opened) {
-        pre = io::compute_file_fingerprint(*opened);
-      } else {
-        pre = std::unexpected(std::move(opened).error());
-      }
+    auto opened = mutation->open_existing();
+    core::Result<io::FileFingerprint> pre;
+    if (opened) {
+      pre = io::compute_file_fingerprint(*opened);
     } else {
-      pre = io::compute_file_fingerprint(path);
+      pre = std::unexpected(std::move(opened).error());
     }
     if (!pre) {
       co_return std::unexpected(core::Error{core::ErrorKind::conflict, "FileWrite: expected_version cannot be verified"}
@@ -188,10 +177,7 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
   // the temp-then-rename atomic path. Append and fail_if_exists keep their
   // existing semantics because the atomic path is incompatible with both.
   options.atomic = options.mode == io::WriteMode::truncate;
-  auto written =
-      authorized_mutation.has_value()
-          ? co_await io::write_text_file(ctx.executor, std::move(*authorized_mutation), std::move(content), options)
-          : co_await io::write_text_file(ctx.executor, path, std::move(content), options);
+  auto written = co_await io::write_text_file(ctx.executor, std::move(*mutation), std::move(content), options);
   if (!written) {
     co_return std::unexpected(std::move(written).error());
   }

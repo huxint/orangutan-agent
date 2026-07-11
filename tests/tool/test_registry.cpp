@@ -134,6 +134,23 @@ tool::DispatchContext make_ctx(asio::io_context& io,
   };
 }
 
+tool::DispatchContext make_temp_workspace_ctx(asio::io_context& io,
+                                              permission::RuleSet& rules,
+                                              permission::AuditSink& sink,
+                                              permission::Mode mode = permission::Mode::default_) {
+  static auto workspace = [] {
+    auto created = tool::Workspace::create(std::filesystem::temp_directory_path().string());
+    if (!created) {
+      throw std::runtime_error{"failed to create temporary-directory workspace"};
+    }
+    return std::move(*created);
+  }();
+
+  auto ctx = make_ctx(io, rules, sink, mode);
+  ctx.workspace = &workspace;
+  return ctx;
+}
+
 core::TurnId turn_id_with(unsigned char seed) {
   core::TurnId id{};
   for (std::size_t i = 0; i < id.size(); ++i) {
@@ -1552,6 +1569,23 @@ permission::RuleSet write_rule_set() {
 
 }  // namespace
 
+TEST_CASE("FileWrite requires a workspace authority", "[unit][tool][file_write][workspace]") {
+  TempFile file{"write-no-workspace"};
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_write(registry).has_value());
+    auto rules = write_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::format(R"({{"path":"{}","content":"blocked"}})", file.string());
+    auto result = co_await registry.dispatch(tool::kFileWriteName, input, ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::internal);
+    REQUIRE_FALSE(std::filesystem::exists(file.string()));
+  });
+}
+
 TEST_CASE("FileWrite happy path writes the bytes verbatim and reports the size", "[unit][tool][file_write]") {
   TempFile file{"happy-write"};
 
@@ -1560,7 +1594,7 @@ TEST_CASE("FileWrite happy path writes the bytes verbatim and reports the size",
     REQUIRE(tool::register_file_write(registry).has_value());
     auto rules = write_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     nlohmann::json input{{"path", file.string()}, {"content", "hello, slice 18"}};
     auto result = co_await registry.dispatch(tool::kFileWriteName, input.dump(), ctx);
@@ -1589,7 +1623,7 @@ TEST_CASE("FileWrite default mode overwrites an existing file", "[unit][tool][fi
     REQUIRE(tool::register_file_write(registry).has_value());
     auto rules = write_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     nlohmann::json input{{"path", file.string()}, {"content", "replaced"}};
     auto result = co_await registry.dispatch(tool::kFileWriteName, input.dump(), ctx);
@@ -1608,7 +1642,7 @@ TEST_CASE("FileWrite mode=append appends to existing content", "[unit][tool][fil
     REQUIRE(tool::register_file_write(registry).has_value());
     auto rules = write_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     nlohmann::json input{{"path", file.string()}, {"content", "-tail"}, {"mode", "append"}};
     auto result = co_await registry.dispatch(tool::kFileWriteName, input.dump(), ctx);
@@ -1627,7 +1661,7 @@ TEST_CASE("FileWrite mode=fail_if_exists returns conflict when the path already 
     REQUIRE(tool::register_file_write(registry).has_value());
     auto rules = write_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     nlohmann::json input{{"path", file.string()}, {"content", "replacement"}, {"mode", "fail_if_exists"}};
     auto result = co_await registry.dispatch(tool::kFileWriteName, input.dump(), ctx);
@@ -1648,7 +1682,7 @@ TEST_CASE("FileWrite create_parents=true creates missing directories", "[unit][t
     REQUIRE(tool::register_file_write(registry).has_value());
     auto rules = write_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     nlohmann::json input{{"path", target.string()}, {"content", "deep"}, {"create_parents", true}};
     auto result = co_await registry.dispatch(tool::kFileWriteName, input.dump(), ctx);
@@ -1671,7 +1705,7 @@ TEST_CASE("FileWrite enforces max_bytes and leaves existing content untouched", 
     REQUIRE(tool::register_file_write(registry).has_value());
     auto rules = write_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     nlohmann::json boundary{{"path", file.string()}, {"content", "1234"}, {"max_bytes", 4}};
     auto boundary_result = co_await registry.dispatch(tool::kFileWriteName, boundary.dump(), ctx);
@@ -1697,7 +1731,7 @@ TEST_CASE("FileWrite rejects malformed input as invalid_argument", "[unit][tool]
     REQUIRE(tool::register_file_write(registry).has_value());
     auto rules = write_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     auto bad_json = co_await registry.dispatch(tool::kFileWriteName, "{not-json}", ctx);
     REQUIRE_FALSE(bad_json.has_value());
@@ -1810,7 +1844,7 @@ TEST_CASE("FileWrite expected_version succeeds when the token matches", "[unit][
     REQUIRE(tool::register_file_write(registry).has_value());
     auto rules = read_and_write_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     const auto token = co_await dispatch_read_and_extract_token(registry, ctx, file.string());
     const auto input =
@@ -1832,7 +1866,7 @@ TEST_CASE("FileWrite expected_version returns conflict when the token is stale",
     REQUIRE(tool::register_file_write(registry).has_value());
     auto rules = read_and_write_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     const auto stale = std::string{"v1:0000000000000000000000000000000000000000000000000000000000000000:4:0"};
     const auto input =
@@ -1859,7 +1893,7 @@ TEST_CASE("FileWrite expected_version on a missing file surfaces conflict", "[un
     REQUIRE(tool::register_file_write(registry).has_value());
     auto rules = write_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     const auto stale = std::string{"v1:0000000000000000000000000000000000000000000000000000000000000000:0:0"};
     const auto input = std::format(R"({{"path":"{}","content":"new","expected_version":"{}"}})", file.string(), stale);
@@ -1898,6 +1932,24 @@ permission::RuleSet edit_rule_set() {
 
 }  // namespace
 
+TEST_CASE("FileEdit requires a workspace authority", "[unit][tool][file_edit][workspace]") {
+  TempFile file{"edit-no-workspace"};
+  file.write("alpha beta gamma");
+  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_edit(registry).has_value());
+    auto rules = edit_rule_set();
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+
+    const auto input = std::format(R"({{"path":"{}","old_string":"beta","new_string":"BETA"}})", file.string());
+    auto result = co_await registry.dispatch(tool::kFileEditName, input, ctx);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::internal);
+    REQUIRE(slurp(file.string()) == "alpha beta gamma");
+  });
+}
+
 TEST_CASE("FileEdit happy path replaces a unique occurrence and reports a count", "[unit][tool][file_edit]") {
   TempFile file{"edit-unique"};
   file.write("alpha beta gamma");
@@ -1907,7 +1959,7 @@ TEST_CASE("FileEdit happy path replaces a unique occurrence and reports a count"
     REQUIRE(tool::register_file_edit(registry).has_value());
     auto rules = edit_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     nlohmann::json input{{"path", file.string()}, {"old_string", "beta"}, {"new_string", "BETA"}};
     auto result = co_await registry.dispatch(tool::kFileEditName, input.dump(), ctx);
@@ -1940,7 +1992,7 @@ TEST_CASE("FileEdit replace_all=true rewrites every occurrence", "[unit][tool][f
     REQUIRE(tool::register_file_edit(registry).has_value());
     auto rules = edit_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     nlohmann::json input{{"path", file.string()}, {"old_string", "foo"}, {"new_string", "qux"}, {"replace_all", true}};
     auto result = co_await registry.dispatch(tool::kFileEditName, input.dump(), ctx);
@@ -1970,7 +2022,7 @@ TEST_CASE("FileEdit returns conflict when old_string is not unique and replace_a
     REQUIRE(tool::register_file_edit(registry).has_value());
     auto rules = edit_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     nlohmann::json input{{"path", file.string()}, {"old_string", "dup"}, {"new_string", "x"}};
     auto result = co_await registry.dispatch(tool::kFileEditName, input.dump(), ctx);
@@ -1992,7 +2044,7 @@ TEST_CASE("FileEdit returns not_found when old_string does not appear", "[unit][
     REQUIRE(tool::register_file_edit(registry).has_value());
     auto rules = edit_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     nlohmann::json input{{"path", file.string()}, {"old_string", "absent"}, {"new_string", "present"}};
     auto result = co_await registry.dispatch(tool::kFileEditName, input.dump(), ctx);
@@ -2013,7 +2065,7 @@ TEST_CASE("FileEdit enforces max_bytes on replacement output and leaves the file
     REQUIRE(tool::register_file_edit(registry).has_value());
     auto rules = edit_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     nlohmann::json input{
         {"path", file.string()},
@@ -2039,7 +2091,7 @@ TEST_CASE("FileEdit propagates not_found when the file is missing", "[unit][tool
     REQUIRE(tool::register_file_edit(registry).has_value());
     auto rules = edit_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     const auto path = std::string{"/tmp/oran-tool-edit-missing-"} +
                       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
@@ -2060,7 +2112,7 @@ TEST_CASE("FileEdit expected_version succeeds when the token matches", "[unit][t
     REQUIRE(tool::register_file_edit(registry).has_value());
     auto rules = read_and_edit_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     const auto token = co_await dispatch_read_and_extract_token(registry, ctx, file.string());
     const auto input = std::format(R"({{"path":"{}","old_string":"beta","new_string":"BETA","expected_version":"{}"}})",
@@ -2081,7 +2133,7 @@ TEST_CASE("FileEdit expected_version returns conflict when the token is stale", 
     REQUIRE(tool::register_file_edit(registry).has_value());
     auto rules = edit_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     const auto stale = std::string{"v1:0000000000000000000000000000000000000000000000000000000000000000:16:0"};
     const auto input = std::format(R"({{"path":"{}","old_string":"beta","new_string":"BETA","expected_version":"{}"}})",
@@ -2107,7 +2159,7 @@ TEST_CASE("FileEdit rejects malformed input as invalid_argument", "[unit][tool][
     REQUIRE(tool::register_file_edit(registry).has_value());
     auto rules = edit_rule_set();
     permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
 
     auto bad_json = co_await registry.dispatch(tool::kFileEditName, "{not-json}", ctx);
     REQUIRE_FALSE(bad_json.has_value());
