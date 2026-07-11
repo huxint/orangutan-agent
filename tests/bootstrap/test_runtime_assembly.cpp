@@ -625,6 +625,28 @@ TEST_CASE("RuntimeAssembly::build rejects long-term startup decay when long-term
   }));
 }
 
+TEST_CASE("RuntimeAssembly::build propagates invalid startup decay requests",
+          "[unit][bootstrap][runtime_assembly][memory]") {
+  TempDir temp{"oran-assembly-longterm-startup-decay-invalid"};
+  asio::io_context io;
+
+  auto options = bootstrap::RuntimeAssemblyOptions{};
+  options.audit_enabled = false;
+  options.session_memory_enabled = false;
+  options.longterm_memory_enabled = true;
+  options.longterm_memory_startup_decay = bootstrap::LongtermMemoryStartupDecayOptions{
+      .scope_key = "cli",
+      .unused_before = core::Time{core::Time::time_point{10s}},
+      .importance_floor = 2.0,
+      .limit = 10,
+      .decay_at = core::Time{core::Time::time_point{30s}},
+  };
+  auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
+
+  REQUIRE_FALSE(built.has_value());
+  REQUIRE(built.error().kind() == core::ErrorKind::invalid_argument);
+}
+
 TEST_CASE("RuntimeAssembly::build rejects long-term retention jobs when long-term memory is disabled",
           "[unit][bootstrap][runtime_assembly][memory]") {
   TempDir temp{"oran-assembly-longterm-retention-job-disabled"};

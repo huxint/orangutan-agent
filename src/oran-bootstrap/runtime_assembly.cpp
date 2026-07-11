@@ -17,7 +17,6 @@
 
 #include <asio/any_io_executor.hpp>
 #include <asio/co_spawn.hpp>
-#include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 
 #include <oran/async.hpp>
@@ -45,6 +44,70 @@ struct StartupDecayResult {
   core::Time finished_at{};
   std::chrono::nanoseconds duration{0};
 };
+
+template <typename T>
+[[nodiscard]] Result<T>
+run_result_inline(asio::io_context& io, async::Awaitable<Result<T>> operation, std::string_view operation_name) {
+  auto completed = std::optional<Result<T>>{};
+  auto failure = std::exception_ptr{};
+  asio::co_spawn(io, std::move(operation), [&](std::exception_ptr error, Result<T> result) {
+    failure = error;
+    if (error == nullptr) {
+      completed.emplace(std::move(result));
+    }
+  });
+  io.run();
+
+  if (failure != nullptr) {
+    try {
+      std::rethrow_exception(failure);
+    } catch (const std::exception& error) {
+      return std::unexpected(Error::internal("inline coroutine terminated by exception")
+                                 .with("operation", std::string{operation_name})
+                                 .with("detail", error.what()));
+    } catch (...) {
+      return std::unexpected(
+          Error::internal("inline coroutine terminated by exception").with("operation", std::string{operation_name}));
+    }
+  }
+  if (!completed.has_value()) {
+    return std::unexpected(
+        Error::internal("inline coroutine did not complete").with("operation", std::string{operation_name}));
+  }
+  return std::move(*completed);
+}
+
+template <typename T>
+[[nodiscard]] Result<T>
+run_value_inline(asio::io_context& io, async::Awaitable<T> operation, std::string_view operation_name) {
+  auto completed = std::optional<T>{};
+  auto failure = std::exception_ptr{};
+  asio::co_spawn(io, std::move(operation), [&](std::exception_ptr error, T result) {
+    failure = error;
+    if (error == nullptr) {
+      completed.emplace(std::move(result));
+    }
+  });
+  io.run();
+
+  if (failure != nullptr) {
+    try {
+      std::rethrow_exception(failure);
+    } catch (const std::exception& error) {
+      return std::unexpected(Error::internal("inline coroutine terminated by exception")
+                                 .with("operation", std::string{operation_name})
+                                 .with("detail", error.what()));
+    } catch (...) {
+      return std::unexpected(
+          Error::internal("inline coroutine terminated by exception").with("operation", std::string{operation_name}));
+    }
+  }
+  if (!completed.has_value()) {
+    return std::unexpected(
+        Error::internal("inline coroutine did not complete").with("operation", std::string{operation_name}));
+  }
+  return std::move(*completed);
+}
 
 [[nodiscard]] std::string
 resolve_database_path(std::string_view workspace, std::string_view override_path, std::string_view relative_path) {
@@ -90,26 +153,7 @@ resolve_database_path(std::string_view workspace, std::string_view override_path
   auto temp_pool = std::move(*temp_pool_result);
   storage::AuditRepository repo{temp_pool};
 
-  auto report = storage::MigrationReport{};
-  auto migrate_error = std::optional<Error>{};
-  asio::co_spawn(
-      io,
-      [&]() -> async::Awaitable<void> {
-        auto migrated = co_await repo.migrate();
-        if (!migrated) {
-          migrate_error = std::move(migrated).error();
-          co_return;
-        }
-        report = std::move(*migrated);
-        co_return;
-      },
-      asio::detached);
-  io.run();
-
-  if (migrate_error) {
-    return std::unexpected(std::move(*migrate_error));
-  }
-  return report;
+  return run_result_inline(io, repo.migrate(), "audit migration");
 }
 
 /// Run trace retention against the migrated audit DB before the long-lived pool
@@ -131,26 +175,7 @@ resolve_database_path(std::string_view workspace, std::string_view override_path
   auto temp_pool = std::move(*temp_pool_result);
   storage::TraceRepository repo{temp_pool};
 
-  auto deleted = std::int64_t{0};
-  auto purge_error = std::optional<Error>{};
-  asio::co_spawn(
-      io,
-      [&]() -> async::Awaitable<void> {
-        auto purged = co_await repo.purge_turns_started_before(started_before_ns);
-        if (!purged) {
-          purge_error = std::move(purged).error();
-          co_return;
-        }
-        deleted = *purged;
-        co_return;
-      },
-      asio::detached);
-  io.run();
-
-  if (purge_error) {
-    return std::unexpected(std::move(*purge_error));
-  }
-  return deleted;
+  return run_result_inline(io, repo.purge_turns_started_before(started_before_ns), "trace retention");
 }
 
 /// Drive the session repository migration to completion before the long-lived
@@ -171,26 +196,7 @@ resolve_database_path(std::string_view workspace, std::string_view override_path
   auto temp_pool = std::move(*temp_pool_result);
   storage::SessionRepository repo{temp_pool};
 
-  auto report = storage::MigrationReport{};
-  auto migrate_error = std::optional<Error>{};
-  asio::co_spawn(
-      io,
-      [&]() -> async::Awaitable<void> {
-        auto migrated = co_await repo.migrate();
-        if (!migrated) {
-          migrate_error = std::move(migrated).error();
-          co_return;
-        }
-        report = std::move(*migrated);
-        co_return;
-      },
-      asio::detached);
-  io.run();
-
-  if (migrate_error) {
-    return std::unexpected(std::move(*migrate_error));
-  }
-  return report;
+  return run_result_inline(io, repo.migrate(), "session migration");
 }
 
 /// Drive the long-term memory migration to completion before the long-lived
@@ -212,26 +218,7 @@ run_longterm_memory_migration_inline(const std::string& memory_path,
   auto temp_pool = std::move(*temp_pool_result);
   memory::longterm::Fts5Backend backend{temp_pool};
 
-  auto report = storage::MigrationReport{};
-  auto migrate_error = std::optional<Error>{};
-  asio::co_spawn(
-      io,
-      [&]() -> async::Awaitable<void> {
-        auto migrated = co_await backend.migrate();
-        if (!migrated) {
-          migrate_error = std::move(migrated).error();
-          co_return;
-        }
-        report = std::move(*migrated);
-        co_return;
-      },
-      asio::detached);
-  io.run();
-
-  if (migrate_error) {
-    return std::unexpected(std::move(*migrate_error));
-  }
-  return report;
+  return run_result_inline(io, backend.migrate(), "long-term memory migration");
 }
 
 /// Run one startup decay pass after long-term memory migration and before the
@@ -282,21 +269,15 @@ void unbind_startup_hooks(hook::Bus& bus, std::span<const RuntimeStartupHookBind
   }
 }
 
-[[nodiscard]] hook::PublishOutcome publish_startup_memory_decay_inline(hook::Bus& bus,
-                                                                       const LongtermMemoryStartupDecayOptions& options,
-                                                                       const StartupDecayResult& result) {
+[[nodiscard]] Result<hook::PublishOutcome>
+publish_startup_memory_decay_inline(hook::Bus& bus,
+                                    const LongtermMemoryStartupDecayOptions& options,
+                                    const StartupDecayResult& result) {
   asio::io_context io;
-  auto outcome = hook::PublishOutcome{};
-  asio::co_spawn(
+  return run_value_inline(
       io,
-      [&]() -> async::Awaitable<void> {
-        outcome = co_await bus.publish_advisory(hook::Event::memory_decay,
-                                                make_startup_memory_decay_payload(options, result));
-        co_return;
-      },
-      asio::detached);
-  io.run();
-  return outcome;
+      bus.publish_advisory(hook::Event::memory_decay, make_startup_memory_decay_payload(options, result)),
+      "startup memory decay hook");
 }
 
 [[nodiscard]] Result<StartupDecayResult>
@@ -317,34 +298,22 @@ run_longterm_memory_startup_decay_inline(const std::string& memory_path,
   auto temp_pool = std::move(*temp_pool_result);
   memory::longterm::Fts5Backend backend{temp_pool};
 
-  auto result = StartupDecayResult{};
-  auto decay_error = std::optional<Error>{};
-  asio::co_spawn(
-      io,
-      [&]() -> async::Awaitable<void> {
-        result.started_at = core::time::now_utc();
-        auto decayed = co_await backend.decay(memory::longterm::DecayRequest{
-            .scope_key = options.scope_key,
-            .unused_before = options.unused_before,
-            .importance_floor = options.importance_floor,
-            .limit = options.limit,
-            .decay_at = options.decay_at,
-        });
-        if (!decayed) {
-          decay_error = std::move(decayed).error();
-          co_return;
-        }
-        result.finished_at = core::time::now_utc();
-        result.duration = duration_between(result.started_at, result.finished_at);
-        result.shadowed_count = decayed->shadowed_records.size();
-        co_return;
-      },
-      asio::detached);
-  io.run();
-
-  if (decay_error) {
-    return std::unexpected(std::move(*decay_error));
+  auto result = StartupDecayResult{.started_at = core::time::now_utc()};
+  auto decayed = run_result_inline(io,
+                                   backend.decay(memory::longterm::DecayRequest{
+                                       .scope_key = options.scope_key,
+                                       .unused_before = options.unused_before,
+                                       .importance_floor = options.importance_floor,
+                                       .limit = options.limit,
+                                       .decay_at = options.decay_at,
+                                   }),
+                                   "startup memory decay");
+  if (!decayed) {
+    return std::unexpected(std::move(decayed).error());
   }
+  result.finished_at = core::time::now_utc();
+  result.duration = duration_between(result.started_at, result.finished_at);
+  result.shadowed_count = decayed->shadowed_records.size();
   return result;
 }
 
@@ -372,24 +341,7 @@ run_longterm_memory_startup_decay_inline(const std::string& memory_path,
                                                  .dimensions = dimensions,
                                              }};
 
-  auto migrate_error = std::optional<Error>{};
-  asio::co_spawn(
-      io,
-      [&]() -> async::Awaitable<void> {
-        auto migrated = co_await backend.migrate();
-        if (!migrated) {
-          migrate_error = std::move(migrated).error();
-          co_return;
-        }
-        co_return;
-      },
-      asio::detached);
-  io.run();
-
-  if (migrate_error) {
-    return std::unexpected(std::move(*migrate_error));
-  }
-  return {};
+  return run_result_inline(io, backend.migrate(), "long-term vector memory migration");
 }
 
 }  // namespace
@@ -634,8 +586,11 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
         return std::unexpected(std::move(decayed).error());
       }
       impl->longterm_memory_startup_decay_shadowed_count = decayed->shadowed_count;
-      [[maybe_unused]] auto outcome =
+      auto outcome =
           publish_startup_memory_decay_inline(*impl->hook_bus, *options.longterm_memory_startup_decay, *decayed);
+      if (!outcome) {
+        return std::unexpected(std::move(outcome).error());
+      }
     }
 
     auto memory_pool =
