@@ -42,6 +42,7 @@
 #include <vector>
 
 #include <asio/bind_cancellation_slot.hpp>
+#include <asio/buffer.hpp>
 #include <asio/cancellation_signal.hpp>
 #include <asio/cancellation_state.hpp>
 #include <asio/cancellation_type.hpp>
@@ -54,8 +55,8 @@
 #include <asio/read_until.hpp>
 #include <asio/redirect_error.hpp>
 #include <asio/signal_set.hpp>
+#include <asio/steady_timer.hpp>
 #include <asio/strand.hpp>
-#include <asio/streambuf.hpp>
 #include <asio/this_coro.hpp>
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
@@ -663,6 +664,33 @@ struct ParsedWebhookHttpRequest {
   std::string body;
 };
 
+class WebhookSocketDeadline {
+public:
+  WebhookSocketDeadline(const std::shared_ptr<asio::ip::tcp::socket>& socket, std::chrono::milliseconds timeout)
+      : timer_{socket->get_executor()}, expired_{std::make_shared<std::atomic_bool>(false)} {
+    timer_.expires_after(timeout);
+    timer_.async_wait([socket = std::weak_ptr{socket}, expired = expired_](const asio::error_code& ec) {
+      if (ec) {
+        return;
+      }
+      expired->store(true, std::memory_order_release);
+      if (auto locked = socket.lock()) {
+        asio::error_code ignored;
+        locked->cancel(ignored);
+      }
+    });
+  }
+
+  [[nodiscard]] bool finish() {
+    static_cast<void>(timer_.cancel());
+    return expired_->load(std::memory_order_acquire);
+  }
+
+private:
+  asio::steady_timer timer_;
+  std::shared_ptr<std::atomic_bool> expired_;
+};
+
 [[nodiscard]] Result<std::size_t> parse_content_length(std::string_view value) {
   auto length = std::uint64_t{};
   auto parsed = std::from_chars(value.data(), value.data() + value.size(), length);
@@ -676,16 +704,38 @@ struct ParsedWebhookHttpRequest {
 }
 
 [[nodiscard]] async::Awaitable<Result<ParsedWebhookHttpRequest>>
-read_webhook_http_request(asio::ip::tcp::socket& socket, std::size_t max_payload_bytes) {
-  asio::streambuf buffer;
-  asio::error_code ec;
-  [[maybe_unused]] auto header_bytes =
-      co_await asio::async_read_until(socket, buffer, "\r\n\r\n", asio::redirect_error(asio::use_awaitable, ec));
-  if (ec) {
+read_webhook_http_request(const std::shared_ptr<asio::ip::tcp::socket>& socket,
+                          std::size_t max_payload_bytes,
+                          std::size_t max_header_bytes,
+                          std::chrono::milliseconds header_timeout,
+                          std::chrono::milliseconds read_timeout) {
+  auto received = std::string{};
+  auto read_headers = [&]() -> async::Awaitable<Result<std::size_t>> {
+    asio::error_code ec;
+    auto bytes = co_await asio::async_read_until(*socket,
+                                                 asio::dynamic_buffer(received, max_header_bytes),
+                                                 "\r\n\r\n",
+                                                 asio::redirect_error(asio::use_awaitable, ec));
+    if (!ec) {
+      co_return bytes;
+    }
+    if (ec == asio::error::not_found) {
+      co_return std::unexpected(Error::invalid_argument("webhook headers exceed max_header_bytes")
+                                    .with("max_header_bytes", std::to_string(max_header_bytes)));
+    }
     co_return std::unexpected(Error::io("failed to read webhook request headers").with("asio_error", ec.message()));
+  };
+
+  auto header_deadline = WebhookSocketDeadline{socket, header_timeout};
+  auto header_bytes = co_await read_headers();
+  if (header_deadline.finish()) {
+    co_return std::unexpected(Error::timeout(header_timeout).with("phase", "webhook_headers"));
+  }
+  if (!header_bytes) {
+    co_return std::unexpected(std::move(header_bytes).error());
   }
 
-  std::istream input{&buffer};
+  auto input = std::istringstream{received.substr(0, *header_bytes)};
   auto request_line = std::string{};
   if (!std::getline(input, request_line)) {
     co_return std::unexpected(Error::invalid_argument("missing HTTP request line"));
@@ -727,21 +777,33 @@ read_webhook_http_request(asio::ip::tcp::socket& socket, std::size_t max_payload
                                   .with("max_payload_bytes", std::to_string(max_payload_bytes)));
   }
 
-  if (buffer.size() < content_length) {
-    [[maybe_unused]] auto body_bytes = co_await asio::async_read(socket,
-                                                                 buffer,
-                                                                 asio::transfer_exactly(content_length - buffer.size()),
-                                                                 asio::redirect_error(asio::use_awaitable, ec));
-    if (ec) {
-      co_return std::unexpected(Error::io("failed to read webhook request body").with("asio_error", ec.message()));
-    }
+  auto request_body_bytes = received.size() - *header_bytes;
+  if (request_body_bytes > content_length) {
+    request_body_bytes = content_length;
   }
+  request.body.assign(received.data() + *header_bytes, request_body_bytes);
 
-  request.body.resize(content_length);
-  if (content_length > 0) {
-    input.read(request.body.data(), static_cast<std::streamsize>(content_length));
-    if (input.gcount() != static_cast<std::streamsize>(content_length)) {
-      co_return std::unexpected(Error::io("short webhook request body"));
+  if (request.body.size() < content_length) {
+    const auto body_bytes_received = request.body.size();
+    request.body.resize(content_length);
+    auto read_body = [&]() -> async::Awaitable<Result<std::size_t>> {
+      asio::error_code ec;
+      auto bytes = co_await asio::async_read(
+          *socket,
+          asio::buffer(request.body.data() + body_bytes_received, content_length - body_bytes_received),
+          asio::redirect_error(asio::use_awaitable, ec));
+      if (ec) {
+        co_return std::unexpected(Error::io("failed to read webhook request body").with("asio_error", ec.message()));
+      }
+      co_return bytes;
+    };
+    auto body_deadline = WebhookSocketDeadline{socket, read_timeout};
+    auto body_bytes = co_await read_body();
+    if (body_deadline.finish()) {
+      co_return std::unexpected(Error::timeout(read_timeout).with("phase", "webhook_body"));
+    }
+    if (!body_bytes) {
+      co_return std::unexpected(std::move(body_bytes).error());
     }
   }
 
@@ -815,37 +877,58 @@ read_webhook_http_request(asio::ip::tcp::socket& socket, std::size_t max_payload
                      body);
 }
 
-async::Awaitable<void>
-write_webhook_http_response(asio::ip::tcp::socket& socket, unsigned status, std::string_view reason, std::string body) {
+async::Awaitable<void> write_webhook_http_response(const std::shared_ptr<asio::ip::tcp::socket>& socket,
+                                                   unsigned status,
+                                                   std::string_view reason,
+                                                   std::string body,
+                                                   std::chrono::milliseconds timeout) {
   auto response = webhook_http_response(status, reason, std::move(body));
+  auto deadline = WebhookSocketDeadline{socket, timeout};
   asio::error_code ec;
   [[maybe_unused]] auto written =
-      co_await asio::async_write(socket, asio::buffer(response), asio::redirect_error(asio::use_awaitable, ec));
-  socket.shutdown(asio::ip::tcp::socket::shutdown_both, ec);
-  socket.close(ec);
+      co_await asio::async_write(*socket, asio::buffer(response), asio::redirect_error(asio::use_awaitable, ec));
+  static_cast<void>(deadline.finish());
+  socket->shutdown(asio::ip::tcp::socket::shutdown_both, ec);
+  socket->close(ec);
 }
 
 async::Awaitable<void> handle_webhook_connection(asio::ip::tcp::socket socket,
                                                  automation::AutomationService& service,
                                                  ServeWebhookOptions options) {
-  auto request = co_await read_webhook_http_request(socket, options.max_payload_bytes);
+  auto connection = std::make_shared<asio::ip::tcp::socket>(std::move(socket));
+  auto request = co_await read_webhook_http_request(connection,
+                                                    options.max_payload_bytes,
+                                                    options.max_header_bytes,
+                                                    options.header_timeout,
+                                                    options.read_timeout);
   if (!request) {
-    const auto status = request.error().message().contains("max_payload_bytes") ? 413U : 400U;
-    co_await write_webhook_http_response(socket,
+    const auto status = request.error().kind() == core::ErrorKind::timeout        ? 408U
+                        : request.error().message().contains("max_payload_bytes") ? 413U
+                        : request.error().message().contains("max_header_bytes")  ? 431U
+                                                                                  : 400U;
+    co_await write_webhook_http_response(connection,
                                          status,
-                                         status == 413U ? "Payload Too Large" : "Bad Request",
-                                         R"({"ok":false})");
+                                         status == 408U   ? "Request Timeout"
+                                         : status == 413U ? "Payload Too Large"
+                                         : status == 431U ? "Request Header Fields Too Large"
+                                                          : "Bad Request",
+                                         R"({"ok":false})",
+                                         options.write_timeout);
     co_return;
   }
 
   if (request->method != "POST") {
-    co_await write_webhook_http_response(socket, 405, "Method Not Allowed", R"({"ok":false})");
+    co_await write_webhook_http_response(connection,
+                                         405,
+                                         "Method Not Allowed",
+                                         R"({"ok":false})",
+                                         options.write_timeout);
     co_return;
   }
 
   auto webhook_key = webhook_key_from_target(request->target, options.path_prefix);
   if (!webhook_key) {
-    co_await write_webhook_http_response(socket, 404, "Not Found", R"({"ok":false})");
+    co_await write_webhook_http_response(connection, 404, "Not Found", R"({"ok":false})", options.write_timeout);
     co_return;
   }
 
@@ -858,10 +941,11 @@ async::Awaitable<void> handle_webhook_connection(asio::ip::tcp::socket socket,
   });
   if (!triggered) {
     const auto status = triggered.error().kind() == core::ErrorKind::invalid_argument ? 400U : 500U;
-    co_await write_webhook_http_response(socket,
+    co_await write_webhook_http_response(connection,
                                          status,
                                          status == 400U ? "Bad Request" : "Internal Server Error",
-                                         R"({"ok":false})");
+                                         R"({"ok":false})",
+                                         options.write_timeout);
     co_return;
   }
 
@@ -870,7 +954,7 @@ async::Awaitable<void> handle_webhook_connection(asio::ip::tcp::socket socket,
                           triggered->enqueue.intake.matched_count,
                           triggered->enqueue.enqueued_count,
                           triggered->enqueue.dropped_count);
-  co_await write_webhook_http_response(socket, 202, "Accepted", std::move(body));
+  co_await write_webhook_http_response(connection, 202, "Accepted", std::move(body), options.write_timeout);
 }
 
 struct WebhookConnectionWorker {
@@ -1225,6 +1309,17 @@ async::Awaitable<Result<void>> serve_webhooks(asio::any_io_executor executor,
   if (options.max_payload_bytes == 0) {
     co_return std::unexpected(Error::invalid_argument("webhook listener max_payload_bytes must be positive"));
   }
+  if (options.max_header_bytes == 0) {
+    co_return std::unexpected(Error::invalid_argument("webhook listener max_header_bytes must be positive"));
+  }
+  if (options.max_connections == 0) {
+    co_return std::unexpected(Error::invalid_argument("webhook listener max_connections must be positive"));
+  }
+  if (options.header_timeout <= std::chrono::milliseconds::zero() ||
+      options.read_timeout <= std::chrono::milliseconds::zero() ||
+      options.write_timeout <= std::chrono::milliseconds::zero()) {
+    co_return std::unexpected(Error::invalid_argument("webhook listener deadlines must be positive"));
+  }
 
   asio::error_code ec;
   const auto address = asio::ip::make_address(options.bind_host, ec);
@@ -1304,6 +1399,16 @@ async::Awaitable<Result<void>> serve_webhooks(asio::any_io_executor executor,
       asio::error_code ignored;
       accepted->close(ignored);
       co_return co_await stop_webhook_listener(acceptor, stop_watcher_done, workers, *progress);
+    }
+
+    if (workers.size() >= options.max_connections) {
+      auto overloaded = std::make_shared<asio::ip::tcp::socket>(std::move(*accepted));
+      co_await write_webhook_http_response(overloaded,
+                                           503,
+                                           "Service Unavailable",
+                                           R"({"ok":false})",
+                                           options.write_timeout);
+      continue;
     }
 
     auto cancel = std::make_shared<asio::cancellation_signal>();

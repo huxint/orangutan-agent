@@ -158,6 +158,17 @@ struct ServeWebhookOptions {
   /// Maximum accepted request body size. The listener reads only
   /// `Content-Length` bodies and rejects larger payloads before queueing.
   std::size_t max_payload_bytes{256 * 1024};
+  /// Maximum bytes accepted before the terminating empty header line.
+  std::size_t max_header_bytes{16 * 1024};
+  /// Maximum number of connection handlers owned at once. Excess connections
+  /// receive `503 Service Unavailable` without starting another handler.
+  std::size_t max_connections{64};
+  /// Deadline for receiving the complete request line and headers.
+  std::chrono::milliseconds header_timeout{5000};
+  /// Deadline for receiving the declared request body after headers complete.
+  std::chrono::milliseconds read_timeout{10000};
+  /// Deadline for writing the terminal HTTP response and closing the socket.
+  std::chrono::milliseconds write_timeout{5000};
   /// Maximum triggered descriptors matched per webhook request.
   std::size_t job_limit{100};
   /// Optional observer for the actual port after bind. Useful when `port == 0`.

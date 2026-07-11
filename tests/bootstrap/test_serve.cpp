@@ -18,6 +18,7 @@
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <print>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -31,6 +32,7 @@
 #include <asio/experimental/awaitable_operators.hpp>
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/post.hpp>
 #include <asio/read.hpp>
 #include <asio/read_until.hpp>
 #include <asio/redirect_error.hpp>
@@ -201,13 +203,52 @@ seed_triggered_job(automation::AutomationRuntime& runtime, std::string job_key, 
   });
 }
 
+[[nodiscard]] async::Awaitable<std::string> read_webhook_response(asio::ip::tcp::socket& socket) {
+  asio::error_code ec;
+  asio::streambuf response;
+  co_await asio::async_read_until(socket, response, "\r\n\r\n", asio::redirect_error(asio::use_awaitable, ec));
+  REQUIRE_FALSE(ec);
+
+  std::istream input{&response};
+  auto status_line = std::string{};
+  REQUIRE(static_cast<bool>(std::getline(input, status_line)));
+  auto content_length = std::size_t{0};
+  for (auto line = std::string{}; std::getline(input, line);) {
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
+    if (line.empty()) {
+      break;
+    }
+    if (line.starts_with("Content-Length: ")) {
+      content_length = static_cast<std::size_t>(std::stoull(line.substr(std::string_view{"Content-Length: "}.size())));
+    }
+  }
+
+  if (response.size() < content_length) {
+    co_await asio::async_read(socket,
+                              response,
+                              asio::transfer_exactly(content_length - response.size()),
+                              asio::redirect_error(asio::use_awaitable, ec));
+    REQUIRE_FALSE(ec);
+  }
+
+  auto response_body = std::string(content_length, '\0');
+  if (content_length > 0) {
+    input.read(response_body.data(), static_cast<std::streamsize>(content_length));
+  }
+  co_return status_line + "\n" + response_body;
+}
+
 [[nodiscard]] async::Awaitable<std::string>
 post_webhook(asio::io_context& io, std::uint16_t port, std::string path, std::string body) {
   using asio::ip::tcp;
   tcp::socket socket{io};
   asio::error_code ec;
+  std::println(stderr, "DBG client connect");
   co_await socket.async_connect(tcp::endpoint{asio::ip::make_address("127.0.0.1"), port},
                                 asio::redirect_error(asio::use_awaitable, ec));
+  std::println(stderr, "DBG client connected {}", ec.message());
   REQUIRE_FALSE(ec);
 
   auto request = std::format("POST {} HTTP/1.1\r\n"
@@ -221,10 +262,12 @@ post_webhook(asio::io_context& io, std::uint16_t port, std::string path, std::st
                              body.size(),
                              body);
   co_await asio::async_write(socket, asio::buffer(request), asio::redirect_error(asio::use_awaitable, ec));
+  std::println(stderr, "DBG client wrote {}", ec.message());
   REQUIRE_FALSE(ec);
 
   asio::streambuf response;
   co_await asio::async_read_until(socket, response, "\r\n\r\n", asio::redirect_error(asio::use_awaitable, ec));
+  std::println(stderr, "DBG client response {}", ec.message());
   REQUIRE_FALSE(ec);
 
   std::istream input{&response};
@@ -389,6 +432,11 @@ TEST_CASE("serve_webhooks accepts POST payloads and enqueues triggered work",
             .port = 0,
             .path_prefix = "/automation/webhooks/",
             .max_payload_bytes = 4096,
+            .max_header_bytes = 256,
+            .max_connections = 64,
+            .header_timeout = 5s,
+            .read_timeout = 10s,
+            .write_timeout = 5s,
             .job_limit = 10,
             .bound_observer =
                 [&bound_port](std::uint16_t port) { [[maybe_unused]] auto sent = bound_port.try_send(port); },
@@ -399,7 +447,8 @@ TEST_CASE("serve_webhooks accepts POST payloads and enqueues triggered work",
 
         auto port = co_await bound_port.receive();
         REQUIRE(port.has_value());
-        auto response = co_await post_webhook(io, *port, "/automation/webhooks/ci", R"({"status":"failed"})");
+        const auto payload = std::string(512, 'x');
+        auto response = co_await post_webhook(io, *port, "/automation/webhooks/ci", payload);
         CHECK(response.starts_with("HTTP/1.1 202 Accepted"));
         CHECK(response.contains(R"("trigger_key":"webhook:ci")"));
         CHECK(response.contains(R"("enqueued":1)"));
@@ -435,7 +484,133 @@ TEST_CASE("serve_webhooks accepts POST payloads and enqueues triggered work",
             .retry_wait = std::chrono::steady_clock::duration::zero(),
         });
         REQUIRE(ran.has_value());
-        REQUIRE(captured_payload == std::optional<std::string>{R"({"status":"failed"})"});
+        REQUIRE(captured_payload == std::optional<std::string>{payload});
+      },
+      10s);
+}
+
+TEST_CASE("serve_webhooks bounds concurrent incomplete connections",
+          "[unit][bootstrap][serve][automation][webhook][security]") {
+  TempDir temp{"oran-serve-webhook-connection-cap"};
+  test::run_async(
+      [&temp](asio::io_context& io) -> async::Awaitable<void> {
+        const auto db = (temp.path() / ".orangutan" / "automation.db").string();
+        auto runtime =
+            co_await automation::AutomationRuntime::open(io.get_executor(),
+                                                         automation::AutomationRuntimeOptions{.database_path = db});
+        REQUIRE(runtime.has_value());
+
+        auto service = runtime->automation_service();
+        std::atomic_bool stop_requested{false};
+        async::Channel<std::uint16_t> bound_port{io.get_executor(), 1};
+        async::Channel<bool> listener_done{io.get_executor(), 1};
+        auto options = bootstrap::ServeWebhookOptions{
+            .bind_host = "127.0.0.1",
+            .port = 0,
+            .path_prefix = "/automation/webhooks/",
+            .max_payload_bytes = 4096,
+            .max_connections = 1,
+            .header_timeout = 1s,
+            .job_limit = 10,
+            .bound_observer =
+                [&bound_port](std::uint16_t port) { [[maybe_unused]] auto sent = bound_port.try_send(port); },
+        };
+        asio::co_spawn(io,
+                       run_webhook_listener_for_test(io, service, std::move(options), stop_requested, listener_done),
+                       asio::detached);
+
+        auto port = co_await bound_port.receive();
+        REQUIRE(port.has_value());
+        using asio::ip::tcp;
+        auto connect_incomplete = [&](tcp::socket& socket) -> async::Awaitable<void> {
+          asio::error_code ec;
+          socket.connect(tcp::endpoint{asio::ip::make_address("127.0.0.1"), *port}, ec);
+          REQUIRE_FALSE(ec);
+          const auto partial = std::string{"POST /automation/webhooks/ci HTTP/1.1\r\n"};
+          asio::write(socket, asio::buffer(partial), ec);
+          REQUIRE_FALSE(ec);
+          co_await asio::post(io, asio::use_awaitable);
+          co_await asio::post(io, asio::use_awaitable);
+        };
+
+        tcp::socket first{io};
+        co_await connect_incomplete(first);
+
+        auto overloaded = co_await post_webhook(io, *port, "/automation/webhooks/ci", "{}");
+        CHECK(overloaded.starts_with("HTTP/1.1 503 Service Unavailable"));
+
+        asio::error_code ignored;
+        first.close(ignored);
+        stop_requested.store(true, std::memory_order_release);
+        auto listener_stopped = co_await listener_done.receive();
+        REQUIRE(listener_stopped.has_value());
+        REQUIRE(*listener_stopped);
+      },
+      3s);
+}
+
+TEST_CASE("serve_webhooks caps and times out incomplete request headers",
+          "[unit][bootstrap][serve][automation][webhook][security]") {
+  TempDir temp{"oran-serve-webhook-header-timeout"};
+  test::run_async(
+      [&temp](asio::io_context& io) -> async::Awaitable<void> {
+        const auto db = (temp.path() / ".orangutan" / "automation.db").string();
+        auto runtime =
+            co_await automation::AutomationRuntime::open(io.get_executor(),
+                                                         automation::AutomationRuntimeOptions{.database_path = db});
+        REQUIRE(runtime.has_value());
+
+        auto service = runtime->automation_service();
+        std::atomic_bool stop_requested{false};
+        async::Channel<std::uint16_t> bound_port{io.get_executor(), 1};
+        async::Channel<bool> listener_done{io.get_executor(), 1};
+        auto options = bootstrap::ServeWebhookOptions{
+            .bind_host = "127.0.0.1",
+            .port = 0,
+            .path_prefix = "/automation/webhooks/",
+            .max_payload_bytes = 4096,
+            .max_header_bytes = 128,
+            .header_timeout = 30ms,
+            .job_limit = 10,
+            .bound_observer =
+                [&bound_port](std::uint16_t port) { [[maybe_unused]] auto sent = bound_port.try_send(port); },
+        };
+        asio::co_spawn(io,
+                       run_webhook_listener_for_test(io, service, std::move(options), stop_requested, listener_done),
+                       asio::detached);
+
+        auto port = co_await bound_port.receive();
+        REQUIRE(port.has_value());
+        using asio::ip::tcp;
+        tcp::socket oversized{io};
+        asio::error_code ec;
+        co_await oversized.async_connect(tcp::endpoint{asio::ip::make_address("127.0.0.1"), *port},
+                                         asio::redirect_error(asio::use_awaitable, ec));
+        REQUIRE_FALSE(ec);
+        const auto oversized_headers =
+            std::format("POST /automation/webhooks/ci HTTP/1.1\r\nX-Oversized: {}\r\n\r\n", std::string(200, 'x'));
+        co_await asio::async_write(oversized,
+                                   asio::buffer(oversized_headers),
+                                   asio::redirect_error(asio::use_awaitable, ec));
+        REQUIRE_FALSE(ec);
+        auto rejected = co_await read_webhook_response(oversized);
+        CHECK(rejected.starts_with("HTTP/1.1 431 Request Header Fields Too Large"));
+
+        tcp::socket socket{io};
+        co_await socket.async_connect(tcp::endpoint{asio::ip::make_address("127.0.0.1"), *port},
+                                      asio::redirect_error(asio::use_awaitable, ec));
+        REQUIRE_FALSE(ec);
+        const auto partial = std::string{"POST /automation/webhooks/ci HTTP/1.1\r\nHost: 127.0.0.1\r\n"};
+        co_await asio::async_write(socket, asio::buffer(partial), asio::redirect_error(asio::use_awaitable, ec));
+        REQUIRE_FALSE(ec);
+
+        auto timed_out = co_await read_webhook_response(socket);
+        CHECK(timed_out.starts_with("HTTP/1.1 408 Request Timeout"));
+
+        stop_requested.store(true, std::memory_order_release);
+        auto listener_stopped = co_await listener_done.receive();
+        REQUIRE(listener_stopped.has_value());
+        REQUIRE(*listener_stopped);
       },
       3s);
 }
