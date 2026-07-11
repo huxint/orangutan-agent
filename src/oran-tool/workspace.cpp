@@ -343,14 +343,20 @@ filesystem_error(std::string message, const std::filesystem::path& path, const s
   return directories;
 }
 
+[[nodiscard]] const io::DirectoryAuthority&
+authority_for_match(const RootMatch& match,
+                    const io::DirectoryAuthority& primary_authority,
+                    std::span<const io::DirectoryAuthority> extra_authorities) {
+  return match.override_index.has_value() ? extra_authorities[*match.override_index] : primary_authority;
+}
+
 [[nodiscard]] Result<ResolvedPath> build_resolved(const std::filesystem::path& candidate,
                                                   const RootMatch& match,
                                                   const io::DirectoryAuthority& primary_authority,
                                                   std::span<const io::DirectoryAuthority> extra_authorities,
                                                   bool symlink_followed,
                                                   bool created_parents) {
-  const auto& authority =
-      match.override_index.has_value() ? extra_authorities[*match.override_index] : primary_authority;
+  const auto& authority = authority_for_match(match, primary_authority, extra_authorities);
   return ResolvedPath{
       .authority = authority,
       .authority_relative_path = relative_path(candidate, match.root),
@@ -521,6 +527,58 @@ resolve_existing_readable_outside_workspace(std::string_view input, const std::s
   return build_resolved(canonical, *match, primary_authority, extra_authorities, false, created_parents);
 }
 
+[[nodiscard]] Result<ResolvedPath>
+resolve_read_through_authority(std::string_view input,
+                               const std::string& root,
+                               std::span<const std::string> extra_roots,
+                               const io::DirectoryAuthority& primary_authority,
+                               std::span<const io::DirectoryAuthority> extra_authorities) {
+  if (input.empty()) {
+    return std::unexpected(Error::invalid_argument("workspace path must not be empty"));
+  }
+
+  const auto workspace_root = std::filesystem::path{root};
+  const auto candidate = join_input(workspace_root, input);
+  auto match = find_matching_root(candidate, workspace_root, extra_roots);
+  if (!match) {
+    return std::unexpected(path_error("path is outside workspace", input, "outside_workspace"));
+  }
+
+  const auto& authority = authority_for_match(*match, primary_authority, extra_authorities);
+  auto root_still_named = authority.refers_to_path(match->root.string());
+  if (!root_still_named) {
+    return std::unexpected(std::move(root_still_named).error());
+  }
+
+  // Preserve the existing canonical audit/display spelling while the trusted
+  // root pathname still names the held directory. If that name was replaced,
+  // skip pathname resolution entirely and continue through the pinned root.
+  if (*root_still_named) {
+    auto canonical = resolve_existing_readable(input, root, extra_roots, primary_authority, extra_authorities, "read");
+    if (canonical) {
+      return canonical;
+    }
+  }
+
+  const auto relative = relative_path(candidate, match->root);
+  auto opened = authority.open_file(io::AnchoredPath{
+      .relative_path = relative,
+      .symlink_policy = io::AnchoredSymlinkPolicy::allow_beneath,
+  });
+  if (!opened) {
+    auto error = std::move(opened).error();
+    const auto reason =
+        std::ranges::find_if(error.context(), [](const auto& entry) { return entry.first == "reason"; });
+    if (reason != error.context().end() &&
+        (reason->second == "outside_authority" || reason->second == "symlink_component")) {
+      return std::unexpected(path_error("path symlink escapes workspace", input, "symlink_escape"));
+    }
+    return std::unexpected(std::move(error));
+  }
+
+  return build_resolved(candidate, *match, primary_authority, extra_authorities, false, false);
+}
+
 }  // namespace
 
 struct WorkspaceWalkFilter::Impl {
@@ -634,7 +692,7 @@ core::Result<Workspace> Workspace::create(std::string_view root, WorkspaceOption
 }
 
 core::Result<ResolvedPath> Workspace::resolve_read(std::string_view path) const {
-  return resolve_existing_readable(path, root_, extra_read_roots_, root_authority_, extra_read_authorities_, "read");
+  return resolve_read_through_authority(path, root_, extra_read_roots_, root_authority_, extra_read_authorities_);
 }
 
 core::Result<ResolvedPath> Workspace::resolve_list(std::string_view path) const {

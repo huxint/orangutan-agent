@@ -20,6 +20,7 @@
 #include <oran/async.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/time.hpp>
+#include <oran/hook.hpp>
 #include <oran/permission.hpp>
 #include <oran/tool.hpp>
 
@@ -673,6 +674,135 @@ TEST_CASE("FileRead uses DispatchContext workspace when supplied", "[unit][tool]
     REQUIRE_FALSE(escaped.has_value());
     REQUIRE(escaped.error().kind() == core::ErrorKind::permission_denied);
     REQUIRE(context_has(escaped.error(), "reason", "outside_workspace"));
+  });
+}
+
+TEST_CASE("FileRead retains workspace authority across the approval window",
+          "[unit][tool][workspace][file_read][approval][race]") {
+  TempDir sandbox{"oran-workspace-file-read-approval-race"};
+  const auto root = sandbox.path() / "workspace";
+  const auto moved_root = sandbox.path() / "workspace-moved";
+  const auto outside = sandbox.path() / "outside";
+  write_text(root / "note.txt", "inside-original");
+  write_text(outside / "note.txt", "outside-target");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_read(registry).has_value());
+
+    auto workspace = make_workspace(root);
+    auto rules = ask_tool_rules(std::string{tool::kFileReadName}, core::Capability::read_file);
+    permission::RecordingAuditSink sink;
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+    auto broker = make_broker();
+    ctx.approval_broker = &broker;
+    ctx.now = fixed_now();
+
+    orangutan::hook::Bus bus;
+    orangutan::hook::InProcessSink prompt{
+        "root-replacement-prompt",
+        [](orangutan::hook::Event, orangutan::hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        }};
+    prompt.set_blocking_handler([&](orangutan::hook::Event, orangutan::hook::PayloadPtr)
+                                    -> async::Awaitable<core::Result<orangutan::hook::HookDecision>> {
+      std::error_code ec;
+      std::filesystem::rename(root, moved_root, ec);
+      if (ec) {
+        co_return std::unexpected(core::Error::io("test failed to rename workspace root").with("detail", ec.message()));
+      }
+      std::filesystem::create_directory_symlink(outside, root, ec);
+      if (ec) {
+        co_return std::unexpected(
+            core::Error::io("test failed to replace workspace root").with("detail", ec.message()));
+      }
+      co_return orangutan::hook::HookDecision{
+          .reason = "operator_approved:operator-1",
+          .rewritten_input_json = std::nullopt,
+          .approval_expires_at = std::nullopt,
+          .trace = {},
+      };
+    });
+    bus.bind(prompt, {orangutan::hook::Event::permission_ask_rendered});
+    ctx.bus = &bus;
+
+    auto read = co_await registry.dispatch(tool::kFileReadName, R"({"path":"note.txt"})", ctx);
+    REQUIRE(read.has_value());
+    REQUIRE(read->text.contains("\ninside-original"));
+    REQUIRE_FALSE(read->text.contains("outside-target"));
+
+    std::ifstream outside_input{outside / "note.txt", std::ios::binary};
+    std::string outside_text;
+    std::getline(outside_input, outside_text);
+    REQUIRE(outside_text == "outside-target");
+
+    REQUIRE(sink.events().size() == 1U);
+    const auto metadata = path_resolution_metadata(sink.events()[0]);
+    REQUIRE(metadata["resolved_relative_path"] == "note.txt");
+    REQUIRE(metadata["resolved_display_path"] == "<workspace>/note.txt");
+  });
+}
+
+TEST_CASE("FileRead rejects a symlink escape introduced during approval",
+          "[unit][tool][workspace][file_read][approval][race]") {
+  TempDir sandbox{"oran-workspace-file-read-symlink-race"};
+  const auto root = sandbox.path() / "workspace";
+  const auto moved_directory = sandbox.path() / "workspace" / "moved-safe";
+  const auto outside = sandbox.path() / "outside";
+  write_text(root / "safe" / "note.txt", "inside-original");
+  write_text(outside / "note.txt", "outside-target");
+
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_read(registry).has_value());
+
+    auto workspace = make_workspace(root);
+    auto rules = ask_tool_rules(std::string{tool::kFileReadName}, core::Capability::read_file);
+    permission::RecordingAuditSink sink;
+    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
+    auto broker = make_broker();
+    ctx.approval_broker = &broker;
+    ctx.now = fixed_now();
+
+    orangutan::hook::Bus bus;
+    orangutan::hook::InProcessSink prompt{
+        "symlink-race-prompt",
+        [](orangutan::hook::Event, orangutan::hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
+          co_return core::Result<void>{};
+        }};
+    prompt.set_blocking_handler([&](orangutan::hook::Event, orangutan::hook::PayloadPtr)
+                                    -> async::Awaitable<core::Result<orangutan::hook::HookDecision>> {
+      std::error_code ec;
+      std::filesystem::rename(root / "safe", moved_directory, ec);
+      if (ec) {
+        co_return std::unexpected(core::Error::io("test failed to rename safe directory").with("detail", ec.message()));
+      }
+      std::filesystem::create_directory_symlink(outside, root / "safe", ec);
+      if (ec) {
+        co_return std::unexpected(
+            core::Error::io("test failed to introduce escaping symlink").with("detail", ec.message()));
+      }
+      co_return orangutan::hook::HookDecision{
+          .reason = "operator_approved:operator-1",
+          .rewritten_input_json = std::nullopt,
+          .approval_expires_at = std::nullopt,
+          .trace = {},
+      };
+    });
+    bus.bind(prompt, {orangutan::hook::Event::permission_ask_rendered});
+    ctx.bus = &bus;
+
+    auto read = co_await registry.dispatch(tool::kFileReadName, R"({"path":"safe/note.txt"})", ctx);
+    REQUIRE_FALSE(read.has_value());
+    const auto reason =
+        std::ranges::find_if(read.error().context(), [](const auto& entry) { return entry.first == "reason"; });
+    REQUIRE(reason != read.error().context().end());
+    REQUIRE(reason->second == "outside_authority");
+
+    std::ifstream outside_input{outside / "note.txt", std::ios::binary};
+    std::string outside_text;
+    std::getline(outside_input, outside_text);
+    REQUIRE(outside_text == "outside-target");
   });
 }
 

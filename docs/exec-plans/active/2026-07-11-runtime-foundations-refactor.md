@@ -89,6 +89,11 @@ external contract or a previously reproduced failure.
 - [x] 2026-07-11: refactor scope and milestone order established.
 - [x] Governance reset landed: historical ledgers, manual quality/test totals,
   and their freshness scaffolding were removed; `make ci` now gates current contracts.
+- [x] Dirfd/openat2 authority foundation landed and Workspace resolution now
+  carries a capability across approval; individual file handlers are migrating.
+- [x] Atomic HTTP cancellation bridge, strict provider terminal states, bounded
+  channel conversations, and bounded/deadline-limited webhook intake landed.
+- [x] Bounded named `async::TaskGroup` foundation landed; runtime owners are migrating.
 - [ ] Filesystem authority migration landed; old string-authority path removed.
 - [ ] Structured task ownership migrated across runtime surfaces.
 - [ ] Network/provider/UI correctness milestone landed.

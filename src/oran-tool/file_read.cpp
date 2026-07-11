@@ -209,13 +209,24 @@ format_header(std::string_view path, const io::ReadTextResult& result, const std
     co_return std::unexpected(core::Error::invalid_argument("FileRead: `allow_outside_workspace` must be a boolean"));
   }
 
-  auto path = ctx.resolved_path.has_value() ? ctx.resolved_path->absolute_path : *std::move(path_field);
-  if (!ctx.resolved_path.has_value() && ctx.workspace != nullptr) {
-    auto resolved = ctx.workspace->resolve_read(path);
-    if (!resolved) {
-      co_return std::unexpected(std::move(resolved).error());
+  auto path = *std::move(path_field);
+  std::optional<io::ReadOnlyFile> authorized_file;
+  if (ctx.resolved_path.has_value()) {
+    if (!ctx.resolved_path->authority.has_value()) {
+      co_return std::unexpected(core::Error::internal("FileRead: resolved workspace path is missing authority"));
     }
-    path = std::move(resolved->absolute_path);
+    path = ctx.resolved_path->absolute_path;
+    auto opened = ctx.resolved_path->authority->open_file(io::AnchoredPath{
+        .relative_path = ctx.resolved_path->authority_relative_path,
+        .symlink_policy = io::AnchoredSymlinkPolicy::allow_beneath,
+    });
+    if (!opened) {
+      co_return std::unexpected(std::move(opened).error());
+    }
+    authorized_file.emplace(std::move(*opened));
+  } else if (ctx.workspace != nullptr) {
+    co_return std::unexpected(
+        core::Error::internal("FileRead: workspace dispatch did not provide a resolved authority"));
   }
 
   // Short-circuit on `if_version` before the body read so cached callers
@@ -223,7 +234,8 @@ format_header(std::string_view path, const io::ReadTextResult& result, const std
   // call; the full read still re-fingerprints internally for mid-read
   // race detection.
   if (if_version) {
-    auto pre = io::compute_file_fingerprint(path);
+    auto pre = authorized_file.has_value() ? io::compute_file_fingerprint(*authorized_file)
+                                           : io::compute_file_fingerprint(path);
     if (!pre) {
       co_return std::unexpected(std::move(pre).error());
     }
@@ -235,7 +247,9 @@ format_header(std::string_view path, const io::ReadTextResult& result, const std
     }
   }
 
-  auto result = co_await io::read_text_file_ranged(ctx.executor, path, *options);
+  auto result = authorized_file.has_value()
+                    ? co_await io::read_text_file_ranged(ctx.executor, std::move(*authorized_file), *options)
+                    : co_await io::read_text_file_ranged(ctx.executor, path, *options);
   if (!result) {
     co_return std::unexpected(std::move(result).error());
   }

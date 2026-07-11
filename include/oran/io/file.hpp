@@ -17,6 +17,8 @@
 
 namespace orangutan::io {
 
+class ReadOnlyFile;
+
 enum class WriteMode : std::uint8_t {
   truncate,
   append,
@@ -153,6 +155,12 @@ read_text_file(asio::any_io_executor executor, std::string path, ReadTextOptions
 /// ranged reads). Spec 0011 v1 (file-view system) is the contract.
 [[nodiscard]] async::Awaitable<core::Result<ReadTextResult>>
 read_text_file_ranged(asio::any_io_executor executor, std::string path, ReadTextOptions options = {});
+
+/// Range-aware read from an already-authorized regular file. This overload
+/// never reopens the diagnostic pathname and intentionally bypasses the
+/// pathname-keyed caches; the held descriptor is the file identity.
+[[nodiscard]] async::Awaitable<core::Result<ReadTextResult>>
+read_text_file_ranged(asio::any_io_executor executor, ReadOnlyFile file, ReadTextOptions options = {});
 
 /// Invalidate every process-local `read_text_file_ranged` cache entry for
 /// `path`. The path is canonicalised through the same private key helper as

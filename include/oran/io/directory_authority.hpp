@@ -72,6 +72,10 @@ public:
   /// Original trusted root spelling, retained for diagnostics only.
   [[nodiscard]] std::string_view display_root() const noexcept;
 
+  /// True when `path` still names the directory held by this authority.
+  /// A missing/replaced pathname returns false; descriptor errors propagate.
+  [[nodiscard]] core::Result<bool> refers_to_path(std::string_view path) const;
+
 private:
   struct Impl;
 

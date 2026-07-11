@@ -336,4 +336,28 @@ std::string_view DirectoryAuthority::display_root() const noexcept {
   return impl_ == nullptr ? std::string_view{} : std::string_view{impl_->display_root};
 }
 
+core::Result<bool> DirectoryAuthority::refers_to_path(std::string_view path) const {
+  if (impl_ == nullptr) {
+    return std::unexpected(core::Error::internal("directory authority is empty"));
+  }
+  if (path.empty() || path.contains('\0')) {
+    return std::unexpected(core::Error::invalid_argument("directory comparison path is invalid"));
+  }
+
+  struct stat authority_status{};
+  if (::fstat(impl_->fd.get(), &authority_status) != 0) {
+    return std::unexpected(errno_error("failed to inspect directory authority", impl_->display_root, ".", errno));
+  }
+
+  struct stat path_status{};
+  const auto path_string = std::string{path};
+  if (::stat(path_string.c_str(), &path_status) != 0) {
+    if (errno == ENOENT || errno == ENOTDIR) {
+      return false;
+    }
+    return std::unexpected(errno_error("failed to inspect directory comparison path", path, ".", errno));
+  }
+  return authority_status.st_dev == path_status.st_dev && authority_status.st_ino == path_status.st_ino;
+}
+
 }  // namespace orangutan::io
