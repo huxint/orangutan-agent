@@ -2,7 +2,7 @@
 
 #include <oran/storage/pool.hpp>
 
-#include <atomic>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -17,6 +17,7 @@
 #include <asio/any_io_executor.hpp>
 #include <asio/associated_cancellation_slot.hpp>
 #include <asio/async_result.hpp>
+#include <asio/cancellation_state.hpp>
 #include <asio/cancellation_type.hpp>
 #include <asio/post.hpp>
 #include <asio/this_coro.hpp>
@@ -43,13 +44,19 @@ struct Pool::State : std::enable_shared_from_this<Pool::State> {
   using ReaderCompletion = std::move_only_function<void(core::Result<ReaderLease>)>;
   using DeferredAction = std::move_only_function<void()>;
 
+  enum class WaiterStatus : std::uint8_t {
+    pending,
+    cancelled,
+    granted,
+  };
+
   struct WriterWaiter {
-    std::uint64_t id{};
     WriterCompletion complete;
+    WaiterStatus status{WaiterStatus::pending};
   };
   struct ReaderWaiter {
-    std::uint64_t id{};
     ReaderCompletion complete;
+    WaiterStatus status{WaiterStatus::pending};
   };
 
   asio::any_io_executor executor;
@@ -62,68 +69,96 @@ struct Pool::State : std::enable_shared_from_this<Pool::State> {
 
   bool writer_busy{false};
   std::deque<std::size_t> free_readers;
-  std::deque<WriterWaiter> writer_waiters;
-  std::deque<ReaderWaiter> reader_waiters;
-  std::atomic_uint64_t next_id{1};
-
-  [[nodiscard]] std::uint64_t allocate_id() noexcept {
-    return next_id.fetch_add(1, std::memory_order_relaxed);
-  }
-
+  std::deque<std::shared_ptr<WriterWaiter>> writer_waiters;
+  std::deque<std::shared_ptr<ReaderWaiter>> reader_waiters;
   [[nodiscard]] WriterLease make_writer_lease();
   [[nodiscard]] ReaderLease make_reader_lease(std::size_t slot);
 
   void release_writer() {
-    WriterCompletion completion;
+    std::shared_ptr<WriterWaiter> waiter;
     {
       const std::scoped_lock lock{mutex};
       if (!writer_waiters.empty()) {
-        auto waiter = std::move(writer_waiters.front());
+        waiter = std::move(writer_waiters.front());
         writer_waiters.pop_front();
-        completion = std::move(waiter.complete);
       } else {
         writer_busy = false;
       }
     }
+    if (waiter) {
+      const auto self = shared_from_this();
+      asio::post(executor, [self, waiter = std::move(waiter)]() mutable { self->grant_writer_waiter(waiter); });
+    }
+  }
+
+  void grant_writer_waiter(const std::shared_ptr<WriterWaiter>& waiter) {
+    WriterCompletion completion;
+    bool return_reserved_writer = false;
+    {
+      const std::scoped_lock lock{mutex};
+      if (waiter->status == WaiterStatus::pending) {
+        waiter->status = WaiterStatus::granted;
+        completion = std::move(waiter->complete);
+      } else {
+        return_reserved_writer = true;
+      }
+    }
     if (completion) {
-      auto lease = make_writer_lease();
-      asio::post(executor, [completion = std::move(completion), lease = std::move(lease)]() mutable {
-        completion(core::Result<WriterLease>{std::move(lease)});
-      });
+      completion(core::Result<WriterLease>{make_writer_lease()});
+    } else if (return_reserved_writer) {
+      release_writer();
     }
   }
 
   void release_reader(std::size_t slot) {
-    ReaderCompletion completion;
+    std::shared_ptr<ReaderWaiter> waiter;
     {
       const std::scoped_lock lock{mutex};
       if (!reader_waiters.empty()) {
-        auto waiter = std::move(reader_waiters.front());
+        waiter = std::move(reader_waiters.front());
         reader_waiters.pop_front();
-        completion = std::move(waiter.complete);
       } else {
         free_readers.push_back(slot);
         return;
       }
     }
-    if (completion) {
-      auto lease = make_reader_lease(slot);
-      asio::post(executor, [completion = std::move(completion), lease = std::move(lease)]() mutable {
-        completion(core::Result<ReaderLease>{std::move(lease)});
-      });
+    if (waiter) {
+      const auto self = shared_from_this();
+      asio::post(executor,
+                 [self, waiter = std::move(waiter), slot]() mutable { self->grant_reader_waiter(waiter, slot); });
     }
   }
 
-  void cancel_writer_waiter(std::uint64_t id) {
+  void grant_reader_waiter(const std::shared_ptr<ReaderWaiter>& waiter, std::size_t slot) {
+    ReaderCompletion completion;
+    bool return_reserved_reader = false;
+    {
+      const std::scoped_lock lock{mutex};
+      if (waiter->status == WaiterStatus::pending) {
+        waiter->status = WaiterStatus::granted;
+        completion = std::move(waiter->complete);
+      } else {
+        return_reserved_reader = true;
+      }
+    }
+    if (completion) {
+      completion(core::Result<ReaderLease>{make_reader_lease(slot)});
+    } else if (return_reserved_reader) {
+      release_reader(slot);
+    }
+  }
+
+  void cancel_writer_waiter(const std::shared_ptr<WriterWaiter>& waiter) {
     WriterCompletion completion;
     {
       const std::scoped_lock lock{mutex};
-      for (auto it = writer_waiters.begin(); it != writer_waiters.end(); ++it) {
-        if (it->id == id) {
-          completion = std::move(it->complete);
-          writer_waiters.erase(it);
-          break;
-        }
+      if (waiter->status != WaiterStatus::pending) {
+        return;
+      }
+      waiter->status = WaiterStatus::cancelled;
+      completion = std::move(waiter->complete);
+      if (const auto queued = std::ranges::find(writer_waiters, waiter); queued != writer_waiters.end()) {
+        writer_waiters.erase(queued);
       }
     }
     if (completion) {
@@ -133,16 +168,17 @@ struct Pool::State : std::enable_shared_from_this<Pool::State> {
     }
   }
 
-  void cancel_reader_waiter(std::uint64_t id) {
+  void cancel_reader_waiter(const std::shared_ptr<ReaderWaiter>& waiter) {
     ReaderCompletion completion;
     {
       const std::scoped_lock lock{mutex};
-      for (auto it = reader_waiters.begin(); it != reader_waiters.end(); ++it) {
-        if (it->id == id) {
-          completion = std::move(it->complete);
-          reader_waiters.erase(it);
-          break;
-        }
+      if (waiter->status != WaiterStatus::pending) {
+        return;
+      }
+      waiter->status = WaiterStatus::cancelled;
+      completion = std::move(waiter->complete);
+      if (const auto queued = std::ranges::find(reader_waiters, waiter); queued != reader_waiters.end()) {
+        reader_waiters.erase(queued);
       }
     }
     if (completion) {
@@ -153,9 +189,8 @@ struct Pool::State : std::enable_shared_from_this<Pool::State> {
   }
 
   template <typename Handler>
-  void async_acquire_writer(Handler&& handler) {
+  void async_acquire_writer(asio::cancellation_state cancellation, Handler&& handler) {
     auto cancel_slot = asio::get_associated_cancellation_slot(handler);
-    const auto id = allocate_id();
 
     DeferredAction action;
     {
@@ -167,24 +202,35 @@ struct Pool::State : std::enable_shared_from_this<Pool::State> {
           std::move(handler)(core::Result<WriterLease>{std::move(lease)});
         };
       } else {
-        writer_waiters.push_back(WriterWaiter{
-            .id = id,
+        auto waiter = std::make_shared<WriterWaiter>(WriterWaiter{
             .complete = WriterCompletion{std::forward<Handler>(handler)},
         });
+        writer_waiters.push_back(waiter);
         // Install the cancel handler after the waiter is in the queue, under
         // the same mutex. Installing earlier would leave a window where a
         // cancellation could fire, scan an empty queue, and be silently
         // dropped while the waiter is later pushed and never cancelled.
         if (cancel_slot.is_connected()) {
           const std::weak_ptr<State> weak = weak_from_this();
-          cancel_slot.assign([weak, id](asio::cancellation_type type) {
+          const std::weak_ptr<WriterWaiter> weak_waiter = waiter;
+          cancel_slot.assign([weak, weak_waiter](asio::cancellation_type type) {
             if (type == asio::cancellation_type::none) {
               return;
             }
-            if (auto state = weak.lock()) {
-              state->cancel_writer_waiter(id);
+            if (auto state = weak.lock(); state) {
+              if (auto locked_waiter = weak_waiter.lock()) {
+                state->cancel_writer_waiter(locked_waiter);
+              }
             }
           });
+        }
+        if (cancellation.cancelled() != asio::cancellation_type::none && waiter->status == WaiterStatus::pending) {
+          waiter->status = WaiterStatus::cancelled;
+          writer_waiters.pop_back();
+          auto completion = std::move(waiter->complete);
+          action = [completion = std::move(completion)]() mutable {
+            completion(std::unexpected(core::Error::cancelled()));
+          };
         }
       }
     }
@@ -194,9 +240,8 @@ struct Pool::State : std::enable_shared_from_this<Pool::State> {
   }
 
   template <typename Handler>
-  void async_acquire_reader(Handler&& handler) {
+  void async_acquire_reader(asio::cancellation_state cancellation, Handler&& handler) {
     auto cancel_slot = asio::get_associated_cancellation_slot(handler);
-    const auto id = allocate_id();
 
     DeferredAction action;
     {
@@ -209,20 +254,31 @@ struct Pool::State : std::enable_shared_from_this<Pool::State> {
           std::move(handler)(core::Result<ReaderLease>{std::move(lease)});
         };
       } else {
-        reader_waiters.push_back(ReaderWaiter{
-            .id = id,
+        auto waiter = std::make_shared<ReaderWaiter>(ReaderWaiter{
             .complete = ReaderCompletion{std::forward<Handler>(handler)},
         });
+        reader_waiters.push_back(waiter);
         if (cancel_slot.is_connected()) {
           const std::weak_ptr<State> weak = weak_from_this();
-          cancel_slot.assign([weak, id](asio::cancellation_type type) {
+          const std::weak_ptr<ReaderWaiter> weak_waiter = waiter;
+          cancel_slot.assign([weak, weak_waiter](asio::cancellation_type type) {
             if (type == asio::cancellation_type::none) {
               return;
             }
-            if (auto state = weak.lock()) {
-              state->cancel_reader_waiter(id);
+            if (auto state = weak.lock(); state) {
+              if (auto locked_waiter = weak_waiter.lock()) {
+                state->cancel_reader_waiter(locked_waiter);
+              }
             }
           });
+        }
+        if (cancellation.cancelled() != asio::cancellation_type::none && waiter->status == WaiterStatus::pending) {
+          waiter->status = WaiterStatus::cancelled;
+          reader_waiters.pop_back();
+          auto completion = std::move(waiter->complete);
+          action = [completion = std::move(completion)]() mutable {
+            completion(std::unexpected(core::Error::cancelled()));
+          };
         }
       }
     }
@@ -469,8 +525,8 @@ async::Awaitable<core::Result<WriterLease>> Pool::acquire_writer() {
 
   auto state = state_;
   co_return co_await asio::async_initiate<decltype(asio::use_awaitable), void(core::Result<WriterLease>)>(
-      [state]<typename Handler>(Handler&& handler) mutable {
-        state->async_acquire_writer(std::forward<Handler>(handler));
+      [state, cancellation]<typename Handler>(Handler&& handler) mutable {
+        state->async_acquire_writer(cancellation, std::forward<Handler>(handler));
       },
       asio::use_awaitable);
 }
@@ -486,8 +542,8 @@ async::Awaitable<core::Result<ReaderLease>> Pool::acquire_reader() {
 
   auto state = state_;
   co_return co_await asio::async_initiate<decltype(asio::use_awaitable), void(core::Result<ReaderLease>)>(
-      [state]<typename Handler>(Handler&& handler) mutable {
-        state->async_acquire_reader(std::forward<Handler>(handler));
+      [state, cancellation]<typename Handler>(Handler&& handler) mutable {
+        state->async_acquire_reader(cancellation, std::forward<Handler>(handler));
       },
       asio::use_awaitable);
 }

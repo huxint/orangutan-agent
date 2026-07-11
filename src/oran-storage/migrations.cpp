@@ -239,9 +239,64 @@ constexpr std::uintmax_t kMaxMigrationFileBytes = 8ULL * 1024 * 1024;
   return {};
 }
 
-[[nodiscard]] core::Result<void> apply_migration(Connection& connection, const Migration& migration) {
+[[nodiscard]] core::Result<std::optional<std::string>> recorded_migration_name(Connection& connection,
+                                                                               std::int64_t version) {
+  auto query = connection.prepare("SELECT name FROM schema_versions WHERE version = ?");
+  if (!query) {
+    return std::unexpected(query.error());
+  }
+  if (auto bound = query->bind_int64(1, version); !bound) {
+    return std::unexpected(bound.error());
+  }
+  auto stepped = query->step();
+  if (!stepped) {
+    return std::unexpected(stepped.error());
+  }
+  if (*stepped == StepResult::done) {
+    return std::nullopt;
+  }
+  auto name = query->column_text(0);
+  if (!name) {
+    return std::unexpected(name.error());
+  }
+  if (!*name) {
+    return std::unexpected(core::Error::storage("schema_versions row is missing migration name")
+                               .with("migration_version", std::to_string(version)));
+  }
+  return std::move(**name);
+}
+
+[[nodiscard]] core::Result<bool>
+apply_migration(Connection& connection, const Migration& migration, std::size_t migration_count) {
   if (auto begun = connection.execute("BEGIN IMMEDIATE"); !begun) {
     return std::unexpected(attach_migration_context(begun.error(), migration));
+  }
+
+  auto applied_versions = read_applied_versions(connection);
+  if (!applied_versions) {
+    return std::unexpected(rollback_error(applied_versions.error(), migration, connection));
+  }
+  auto current_version = validate_applied_versions(*applied_versions, migration_count);
+  if (!current_version) {
+    return std::unexpected(rollback_error(current_version.error(), migration, connection));
+  }
+
+  auto recorded_name = recorded_migration_name(connection, migration.version);
+  if (!recorded_name) {
+    return std::unexpected(rollback_error(recorded_name.error(), migration, connection));
+  }
+  if (recorded_name->has_value()) {
+    if (**recorded_name != migration.name) {
+      auto conflict =
+          core::Error{core::ErrorKind::conflict, "migration version was applied with a different name"}.with(
+              "recorded_name",
+              **recorded_name);
+      return std::unexpected(rollback_error(std::move(conflict), migration, connection));
+    }
+    if (auto committed = connection.execute("COMMIT"); !committed) {
+      return std::unexpected(rollback_error(committed.error(), migration, connection));
+    }
+    return false;
   }
 
   if (auto applied = connection.execute(migration.sql); !applied) {
@@ -255,7 +310,7 @@ constexpr std::uintmax_t kMaxMigrationFileBytes = 8ULL * 1024 * 1024;
   if (auto committed = connection.execute("COMMIT"); !committed) {
     return std::unexpected(rollback_error(committed.error(), migration, connection));
   }
-  return {};
+  return true;
 }
 
 }  // namespace
@@ -289,11 +344,14 @@ core::Result<MigrationReport> run_migrations(Connection& connection, std::span<c
     if (migration.version <= report.current_version) {
       continue;
     }
-    if (auto applied = apply_migration(connection, migration); !applied) {
+    auto applied = apply_migration(connection, migration, migrations.size());
+    if (!applied) {
       return std::unexpected(applied.error());
     }
     report.current_version = migration.version;
-    report.applied_versions.push_back(migration.version);
+    if (*applied) {
+      report.applied_versions.push_back(migration.version);
+    }
   }
 
   return report;

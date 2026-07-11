@@ -473,6 +473,82 @@ TEST_CASE("Pool reader acquire observes coroutine cancellation", "[unit][storage
   REQUIRE(held_pool->readers_available() == 0);
 }
 
+TEST_CASE("Pool cancelled writer waiter cannot consume the released writer", "[unit][storage][pool]") {
+  TempDb db{"oran-pool-cancel-writer"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = storage::Pool::open(io.get_executor(), storage::PoolOptions{.path = db.string(), .reader_count = 1});
+    REQUIRE(pool.has_value());
+    auto held = co_await pool->acquire_writer();
+    REQUIRE(held.has_value());
+
+    asio::cancellation_signal signal;
+    std::optional<core::Result<storage::WriterLease>> cancelled_result;
+    asio::co_spawn(
+        io,
+        [&]() -> async::Awaitable<core::Result<storage::WriterLease>> { co_return co_await pool->acquire_writer(); },
+        asio::bind_cancellation_slot(signal.slot(),
+                                     [&](std::exception_ptr ep, core::Result<storage::WriterLease> result) {
+                                       REQUIRE_FALSE(ep);
+                                       cancelled_result = std::move(result);
+                                     }));
+    co_await asio::post(io, asio::use_awaitable);
+
+    held->release();
+    signal.emit(asio::cancellation_type::terminal);
+    for (int i = 0; i < 4; ++i) {
+      co_await asio::post(io, asio::use_awaitable);
+    }
+
+    REQUIRE(cancelled_result.has_value());
+    REQUIRE_FALSE(cancelled_result->has_value());
+    REQUIRE(cancelled_result->error().kind() == core::ErrorKind::cancelled);
+
+    auto next = co_await pool->acquire_writer();
+    REQUIRE(next.has_value());
+    REQUIRE(next->valid());
+    next->release();
+    REQUIRE_FALSE(pool->writer_busy());
+  });
+}
+
+TEST_CASE("Pool cancelled reader waiter cannot consume the released reader", "[unit][storage][pool]") {
+  TempDb db{"oran-pool-cancel-reader-release"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = storage::Pool::open(io.get_executor(), storage::PoolOptions{.path = db.string(), .reader_count = 1});
+    REQUIRE(pool.has_value());
+    auto held = co_await pool->acquire_reader();
+    REQUIRE(held.has_value());
+
+    asio::cancellation_signal signal;
+    std::optional<core::Result<storage::ReaderLease>> cancelled_result;
+    asio::co_spawn(
+        io,
+        [&]() -> async::Awaitable<core::Result<storage::ReaderLease>> { co_return co_await pool->acquire_reader(); },
+        asio::bind_cancellation_slot(signal.slot(),
+                                     [&](std::exception_ptr ep, core::Result<storage::ReaderLease> result) {
+                                       REQUIRE_FALSE(ep);
+                                       cancelled_result = std::move(result);
+                                     }));
+    co_await asio::post(io, asio::use_awaitable);
+
+    held->release();
+    signal.emit(asio::cancellation_type::terminal);
+    for (int i = 0; i < 4; ++i) {
+      co_await asio::post(io, asio::use_awaitable);
+    }
+
+    REQUIRE(cancelled_result.has_value());
+    REQUIRE_FALSE(cancelled_result->has_value());
+    REQUIRE(cancelled_result->error().kind() == core::ErrorKind::cancelled);
+
+    auto next = co_await pool->acquire_reader();
+    REQUIRE(next.has_value());
+    REQUIRE(next->valid());
+    next->release();
+    REQUIRE(pool->readers_available() == 1);
+  });
+}
+
 TEST_CASE("Pool lease release is idempotent", "[unit][storage][pool]") {
   TempDb db{"oran-pool-release"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {

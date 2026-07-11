@@ -1,11 +1,13 @@
 // tests/storage/test_migrations.cpp — storage migration runner coverage.
 
+#include <barrier>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -259,6 +261,54 @@ TEST_CASE("run_migrations reruns as an idempotent no-op", "[unit][storage][migra
   REQUIRE(report->previous_version == 2);
   REQUIRE(report->current_version == 2);
   REQUIRE(report->applied_versions.empty());
+}
+
+TEST_CASE("run_migrations reconciles concurrent runners on the same database", "[unit][storage][migrations]") {
+  TempDb db{"oran-storage-migration-concurrent"};
+  auto first = storage::Connection::open(storage::ConnectionOptions{.path = db.string(), .busy_timeout_ms = 5000});
+  auto second = storage::Connection::open(storage::ConnectionOptions{.path = db.string(), .busy_timeout_ms = 5000});
+  REQUIRE(first.has_value());
+  REQUIRE(second.has_value());
+
+  const std::vector<storage::Migration> migrations{
+      storage::Migration{
+          .version = 1,
+          .name = "create-items",
+          .sql = R"sql(
+            CREATE TABLE items(id INTEGER PRIMARY KEY);
+            WITH RECURSIVE ids(value) AS (
+              SELECT 1 UNION ALL SELECT value + 1 FROM ids WHERE value < 20000
+            ) INSERT INTO items(id) SELECT value FROM ids;
+          )sql",
+      },
+      storage::Migration{.version = 2, .name = "add-name", .sql = "ALTER TABLE items ADD COLUMN name TEXT"},
+  };
+
+  std::barrier start{3};
+  std::optional<core::Result<storage::MigrationReport>> first_result;
+  std::optional<core::Result<storage::MigrationReport>> second_result;
+  std::jthread first_runner{[&] {
+    start.arrive_and_wait();
+    first_result = storage::run_migrations(*first, migrations);
+  }};
+  std::jthread second_runner{[&] {
+    start.arrive_and_wait();
+    second_result = storage::run_migrations(*second, migrations);
+  }};
+  start.arrive_and_wait();
+  first_runner.join();
+  second_runner.join();
+
+  REQUIRE(first_result.has_value());
+  REQUIRE(second_result.has_value());
+  REQUIRE(first_result->has_value());
+  REQUIRE(second_result->has_value());
+  REQUIRE((*first_result)->current_version == 2);
+  REQUIRE((*second_result)->current_version == 2);
+
+  auto versions = first->query("SELECT version FROM schema_versions ORDER BY version");
+  REQUIRE(versions.has_value());
+  REQUIRE(versions->rows.size() == 2);
 }
 
 TEST_CASE("run_migrations rejects invalid migration lists before applying", "[unit][storage][migrations]") {
