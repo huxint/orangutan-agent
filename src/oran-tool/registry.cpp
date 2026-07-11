@@ -25,6 +25,7 @@
 #include <oran/permission/audit.hpp>
 #include <oran/permission/rule_set.hpp>
 
+#include "_impl/approval_resolution.hpp"
 #include "_impl/audit_metadata.hpp"
 #include "_impl/input_redaction.hpp"
 #include "_impl/path_resolution.hpp"
@@ -130,42 +131,6 @@ namespace {
       .with("hook_reason", std::move(reason));
 }
 
-[[nodiscard]] core::Error operator_denied_error(std::string reason) {
-  if (reason.empty()) {
-    reason = "permission_ask_veto";
-  }
-  return core::Error::permission_denied("operator denied approval")
-      .with("reason", "operator_denied")
-      .with("hook_reason", std::move(reason));
-}
-
-[[nodiscard]] core::Error unsupported_permission_ask_decision_error(const hook::HookDecision& decision) {
-  return core::Error::permission_denied("permission approval prompt returned an unsupported decision")
-      .with("reason", "operator_denied")
-      .with("decision_kind", std::string{core::enum_name(decision.kind)})
-      .with("hook_reason", hook_decision_reason(decision, "unsupported_permission_ask_decision"));
-}
-
-[[nodiscard]] core::Error missing_permission_ask_reason_error() {
-  return core::Error::permission_denied("permission approval prompt returned proceed without operator identity")
-      .with("reason", "operator_denied")
-      .with("decision_kind", std::string{core::enum_name(hook::HookDecisionKind::proceed)})
-      .with("hook_reason", "permission_ask_missing_operator_reason");
-}
-
-[[nodiscard]] std::string_view permission_ask_operator_reason(const hook::HookDecision& decision) {
-  if (!decision.reason.empty()) {
-    return decision.reason;
-  }
-  auto reversed_trace = decision.trace | std::views::reverse;
-  const auto it =
-      std::ranges::find_if(reversed_trace, [](const hook::HookDecisionTrace& trace) { return !trace.reason.empty(); });
-  if (it == reversed_trace.end()) {
-    return {};
-  }
-  return it->reason;
-}
-
 [[nodiscard]] permission::Decision
 require_approval_decision(permission::Decision decision, const hook::HookDecision& hook_decision, core::Time now) {
   if (decision.verdict != permission::Verdict::allow) {
@@ -188,15 +153,6 @@ require_approval_decision(permission::Decision decision, const hook::HookDecisio
   decision.reason = "outside_workspace_override";
   decision.replay_max = 1;
   return decision;
-}
-
-/// Extract the `reason` context entry the approval broker stamps onto every
-/// rejection. Returns an empty view when no such entry exists — callers
-/// fall back to the rule's decision reason on that path.
-[[nodiscard]] std::string_view broker_reason(const core::Error& error) noexcept {
-  const auto entries = error.context();
-  const auto it = std::ranges::find_if(entries, [](const auto& kv) { return kv.first == "reason"; });
-  return it != entries.end() ? std::string_view{it->second} : std::string_view{};
 }
 
 [[nodiscard]] bool has_context(const core::Error& error, std::string_view key, std::string_view value) noexcept {
@@ -539,81 +495,31 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
     // rejected) rather than the pre-approval `ask`. A caller-supplied token
     // is the replay path; otherwise a subscribed `permission_ask_rendered`
     // blocking sink can approve/deny this dispatch in-place.
-    std::optional<core::Error> broker_rejection;
-    bool broker_consulted = false;
+    auto approval = detail::ApprovalResolution{};
     const bool approval_possible = !path_resolution.error.has_value() && decision.verdict == permission::Verdict::ask &&
                                    ctx.approval_broker != nullptr;
-    if (approval_possible && ctx.approval_token != nullptr) {
-      broker_consulted = true;
-      auto checked = ctx.approval_broker->check(*ctx.approval_token, name, effective_input, ctx.identity, ctx.now);
-      if (checked) {
-        event.outcome = permission::AuditOutcome::approved;
-      } else {
-        event.outcome = permission::AuditOutcome::rejected;
-        // The audit row's `reason` swaps from the rule reason to the broker
-        // reason so a forensic query can tell apart "rule said ask" from
-        // "broker said this specific failure". The pre-broker rule reason
-        // is still recoverable from `verdict` plus the rule set.
-        if (const auto reason = broker_reason(checked.error()); !reason.empty()) {
-          event.reason = std::string{reason};
-        }
-        broker_rejection = std::move(checked).error();
+    if (approval_possible) {
+      approval = co_await detail::resolve_ask(detail::ApprovalRequest{
+          .tool_name = name,
+          .input = effective_input,
+          .identity = ctx.identity,
+          .decision = decision,
+          .now = ctx.now,
+          .broker = ctx.approval_broker,
+          .token = ctx.approval_token,
+          .token_output = ctx.approval_token_output,
+          .bus = ctx.bus,
+          .payload = build_permission_ask_payload(name, effective_input, ctx, decision),
+      });
+      if (!approval.trace.empty()) {
+        event.metadata_json = detail::with_permission_ask_metadata(event.metadata_json, approval.trace);
       }
-    } else if (approval_possible && ctx.bus != nullptr) {
-      auto ask_decision = co_await ctx.bus->publish_blocking<hook::Event::permission_ask_rendered>(
-          build_permission_ask_payload(name, effective_input, ctx, decision));
-      if (!ask_decision) {
+      if (approval.state == detail::ApprovalState::approved) {
+        event.outcome = permission::AuditOutcome::approved;
+      } else if (approval.state == detail::ApprovalState::rejected) {
         event.outcome = permission::AuditOutcome::rejected;
-        event.reason = "operator_denied";
-        broker_rejection = std::move(ask_decision).error();
-      } else if (!ask_decision->trace.empty()) {
-        event.metadata_json = detail::with_permission_ask_metadata(event.metadata_json, ask_decision->trace);
-        switch (ask_decision->kind) {
-          case hook::HookDecisionKind::proceed: {
-            if (permission_ask_operator_reason(*ask_decision).empty()) {
-              event.outcome = permission::AuditOutcome::rejected;
-              event.reason = "operator_denied";
-              broker_rejection = missing_permission_ask_reason_error();
-              break;
-            }
-            broker_consulted = true;
-            auto issued = ctx.approval_broker->approve(
-                permission::ApprovalGrant{
-                    .tool_name = name,
-                    .input = effective_input,
-                    .identity = ctx.identity,
-                    .ttl = decision.approval_ttl,
-                    .replay_max = decision.replay_max,
-                },
-                ctx.now);
-            const auto* token_to_check = &issued;
-            if (ctx.approval_token_output != nullptr) {
-              *ctx.approval_token_output = std::move(issued);
-              token_to_check = ctx.approval_token_output;
-            }
-            auto checked = ctx.approval_broker->check(*token_to_check, name, effective_input, ctx.identity, ctx.now);
-            if (checked) {
-              event.outcome = permission::AuditOutcome::approved;
-            } else {
-              event.outcome = permission::AuditOutcome::rejected;
-              if (const auto reason = broker_reason(checked.error()); !reason.empty()) {
-                event.reason = std::string{reason};
-              }
-              broker_rejection = std::move(checked).error();
-            }
-            break;
-          }
-          case hook::HookDecisionKind::veto:
-            event.outcome = permission::AuditOutcome::rejected;
-            event.reason = "operator_denied";
-            broker_rejection = operator_denied_error(ask_decision->reason);
-            break;
-          case hook::HookDecisionKind::rewrite:
-          case hook::HookDecisionKind::require_approval:
-            event.outcome = permission::AuditOutcome::rejected;
-            event.reason = "operator_denied";
-            broker_rejection = unsupported_permission_ask_decision_error(*ask_decision);
-            break;
+        if (approval.audit_reason.has_value() && !approval.audit_reason->empty()) {
+          event.reason = *approval.audit_reason;
         }
       }
     }
@@ -624,7 +530,7 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
     const bool handler_about_to_run =
         !path_resolution.error.has_value() &&
         (decision.verdict == permission::Verdict::allow ||
-         (decision.verdict == permission::Verdict::ask && broker_consulted && !broker_rejection.has_value()));
+         (decision.verdict == permission::Verdict::ask && approval.state == detail::ApprovalState::approved));
     if (handler_about_to_run) {
       audit_metadata_update = build_metadata_update(event);
     }
@@ -651,19 +557,22 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
                                        .with("reason", decision.reason));
           break;
         case permission::Verdict::ask:
-          if (broker_rejection.has_value()) {
-            result = std::unexpected(std::move(*broker_rejection).with("tool", std::string{name}));
-          } else if (broker_consulted) {
-            // Broker accepted — run handler. The audit row already records
-            // `approved`.
-            result = co_await entry.handler(effective_input, ctx);
-          } else {
-            result = std::unexpected(core::Error::permission_denied("tool requires approval")
-                                         .with("tool", std::string{name})
-                                         .with("reason", "approval_required")
-                                         .with("decision_reason", decision.reason)
-                                         .with("replay_max", std::to_string(decision.replay_max))
-                                         .with("approval_ttl_seconds", std::to_string(decision.approval_ttl.count())));
+          switch (approval.state) {
+            case detail::ApprovalState::approved:
+              result = co_await entry.handler(effective_input, ctx);
+              break;
+            case detail::ApprovalState::rejected:
+              result = std::unexpected(std::move(*approval.rejection).with("tool", std::string{name}));
+              break;
+            case detail::ApprovalState::pending:
+              result =
+                  std::unexpected(core::Error::permission_denied("tool requires approval")
+                                      .with("tool", std::string{name})
+                                      .with("reason", "approval_required")
+                                      .with("decision_reason", decision.reason)
+                                      .with("replay_max", std::to_string(decision.replay_max))
+                                      .with("approval_ttl_seconds", std::to_string(decision.approval_ttl.count())));
+              break;
           }
           break;
         case permission::Verdict::allow:
