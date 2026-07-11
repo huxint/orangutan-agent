@@ -3,6 +3,7 @@
 #include <oran/async/task_group.hpp>
 
 #include <algorithm>
+#include <deque>
 #include <exception>
 #include <expected>
 #include <mutex>
@@ -28,9 +29,14 @@ namespace orangutan::async {
 namespace {
 
 struct ChildRecord {
+  std::uint64_t sequence{};
   std::string name;
   std::shared_ptr<asio::cancellation_signal> cancellation;
-  std::optional<TaskOutcome> outcome{};
+};
+
+struct CompletedRecord {
+  std::uint64_t sequence{};
+  TaskOutcome outcome;
 };
 
 [[nodiscard]] TaskOutcome failed_outcome(std::string name, core::Error error) {
@@ -49,8 +55,10 @@ struct TaskGroup::Impl : std::enable_shared_from_this<TaskGroup::Impl> {
   TaskGroupOptions options;
   Channel<std::monostate> completion;
   mutable std::mutex mutex;
-  std::vector<ChildRecord> children;
-  std::size_t active{};
+  std::vector<std::shared_ptr<ChildRecord>> active;
+  std::deque<CompletedRecord> completed;
+  std::uint64_t next_sequence{};
+  std::size_t completed_dropped{};
   bool closed{false};
   bool stop_requested{false};
   bool join_started{false};
@@ -63,35 +71,35 @@ struct TaskGroup::Impl : std::enable_shared_from_this<TaskGroup::Impl> {
       return std::unexpected(core::Error::invalid_argument("task group child task is empty"));
     }
 
-    std::size_t index{};
-    auto cancellation = std::make_shared<asio::cancellation_signal>();
+    auto child = std::make_shared<ChildRecord>();
+    child->name = std::move(name);
+    child->cancellation = std::make_shared<asio::cancellation_signal>();
     {
       const std::scoped_lock lock{mutex};
       if (closed) {
         return std::unexpected(core::Error{core::ErrorKind::conflict, "task group is closed"});
       }
-      if (active >= options.max_tasks) {
+      if (active.size() >= options.max_tasks) {
         return std::unexpected(core::Error{core::ErrorKind::mailbox_overflowed, "task group capacity reached"}.with(
             "max_tasks",
             std::to_string(options.max_tasks)));
       }
-      index = children.size();
-      children.push_back(ChildRecord{.name = std::move(name), .cancellation = cancellation});
-      ++active;
+      child->sequence = next_sequence++;
+      active.push_back(child);
     }
 
     auto self = shared_from_this();
     try {
       asio::co_spawn(executor,
-                     run_child(std::move(self), index, std::move(task)),
-                     asio::bind_cancellation_slot(cancellation->slot(), asio::detached));
+                     run_child(std::move(self), child, std::move(task)),
+                     asio::bind_cancellation_slot(child->cancellation->slot(), asio::detached));
     } catch (const std::exception& error) {
-      finish(index,
-             failed_outcome(child_name(index),
+      finish(child,
+             failed_outcome(child->name,
                             core::Error::internal("task group failed to spawn child").with("reason", error.what())));
     } catch (...) {
-      finish(index,
-             failed_outcome(child_name(index),
+      finish(child,
+             failed_outcome(child->name,
                             core::Error::internal("task group failed to spawn child").with("reason", "unknown")));
     }
     return {};
@@ -111,11 +119,9 @@ struct TaskGroup::Impl : std::enable_shared_from_this<TaskGroup::Impl> {
         return;
       }
       stop_requested = true;
-      signals.reserve(active);
-      for (const auto& child : children) {
-        if (!child.outcome.has_value()) {
-          signals.push_back(child.cancellation);
-        }
+      signals.reserve(active.size());
+      for (const auto& child : active) {
+        signals.push_back(child->cancellation);
       }
     }
 
@@ -126,7 +132,7 @@ struct TaskGroup::Impl : std::enable_shared_from_this<TaskGroup::Impl> {
 
   [[nodiscard]] std::size_t active_tasks() const noexcept {
     const std::scoped_lock lock{mutex};
-    return active;
+    return active.size();
   }
 
   [[nodiscard]] core::Result<void> begin_join() {
@@ -139,39 +145,40 @@ struct TaskGroup::Impl : std::enable_shared_from_this<TaskGroup::Impl> {
     return {};
   }
 
-  [[nodiscard]] TaskGroupReport report() const {
+  [[nodiscard]] TaskGroupReport drain_completed() {
     const std::scoped_lock lock{mutex};
     auto report = TaskGroupReport{};
-    report.tasks.reserve(children.size());
-    for (const auto& child : children) {
-      if (child.outcome.has_value()) {
-        report.tasks.push_back(*child.outcome);
-      }
+    report.tasks.reserve(completed.size());
+    std::ranges::sort(completed, {}, &CompletedRecord::sequence);
+    for (auto& child : completed) {
+      report.tasks.push_back(std::move(child.outcome));
     }
+    completed.clear();
+    report.outcomes_dropped = std::exchange(completed_dropped, 0);
     return report;
   }
 
 private:
-  [[nodiscard]] std::string child_name(std::size_t index) const {
-    const std::scoped_lock lock{mutex};
-    return children[index].name;
-  }
-
-  void finish(std::size_t index, TaskOutcome outcome) {
+  void finish(const std::shared_ptr<ChildRecord>& child, TaskOutcome outcome) {
     {
       const std::scoped_lock lock{mutex};
-      auto& child = children[index];
-      if (child.outcome.has_value()) {
+      const auto found = std::ranges::find(active, child);
+      if (found == active.end()) {
         return;
       }
-      child.outcome = std::move(outcome);
-      --active;
+      active.erase(found);
+      if (completed.size() == options.max_completed) {
+        completed.pop_front();
+        ++completed_dropped;
+      }
+      completed.push_back(CompletedRecord{.sequence = child->sequence, .outcome = std::move(outcome)});
     }
     static_cast<void>(completion.try_send(std::monostate{}));
   }
 
-  [[nodiscard]] static Awaitable<void> run_child(std::shared_ptr<Impl> state, std::size_t index, Task task) {
-    auto outcome = TaskOutcome{.name = state->child_name(index)};
+  [[nodiscard]] static Awaitable<void>
+  run_child(std::shared_ptr<Impl> state, std::shared_ptr<ChildRecord> child, Task task) {
+    auto outcome = TaskOutcome{.name = child->name};
     try {
       auto result = co_await task();
       if (!result) {
@@ -194,7 +201,7 @@ private:
                                core::Error::internal("task group child threw").with("reason", "unknown"));
     }
 
-    state->finish(index, std::move(outcome));
+    state->finish(child, std::move(outcome));
   }
 };
 
@@ -211,12 +218,15 @@ std::size_t TaskGroupReport::cancelled() const noexcept {
 }
 
 bool TaskGroupReport::all_succeeded() const noexcept {
-  return failed() == 0 && cancelled() == 0;
+  return outcomes_dropped == 0 && failed() == 0 && cancelled() == 0;
 }
 
 core::Result<TaskGroup> TaskGroup::create(asio::any_io_executor executor, TaskGroupOptions options) {
   if (options.max_tasks == 0) {
     return std::unexpected(core::Error::invalid_argument("task group max_tasks must be positive"));
+  }
+  if (options.max_completed == 0) {
+    return std::unexpected(core::Error::invalid_argument("task group max_completed must be positive"));
   }
   return TaskGroup{std::make_shared<Impl>(std::move(executor), options)};
 }
@@ -248,6 +258,10 @@ core::Result<void> TaskGroup::spawn(std::string name, Task task) {
   return impl_->spawn(std::move(name), std::move(task));
 }
 
+TaskGroupReport TaskGroup::drain_completed() {
+  return impl_ ? impl_->drain_completed() : TaskGroupReport{};
+}
+
 void TaskGroup::close() noexcept {
   if (impl_) {
     impl_->close();
@@ -276,7 +290,7 @@ Awaitable<core::Result<TaskGroupReport>> TaskGroup::join() {
       co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
     }
   }
-  co_return impl_->report();
+  co_return impl_->drain_completed();
 }
 
 std::size_t TaskGroup::active_tasks() const noexcept {

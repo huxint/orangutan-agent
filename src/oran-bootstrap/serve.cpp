@@ -957,11 +957,6 @@ async::Awaitable<void> handle_webhook_connection(asio::ip::tcp::socket socket,
   co_await write_webhook_http_response(connection, 202, "Accepted", std::move(body), options.write_timeout);
 }
 
-struct WebhookConnectionWorker {
-  std::shared_ptr<asio::cancellation_signal> cancel;
-  std::shared_ptr<std::atomic_bool> done;
-};
-
 [[nodiscard]] async::Awaitable<Result<asio::ip::tcp::socket>>
 accept_webhook_connection(asio::ip::tcp::acceptor& acceptor) {
   asio::error_code ec;
@@ -975,55 +970,31 @@ accept_webhook_connection(asio::ip::tcp::acceptor& acceptor) {
   co_return std::unexpected(Error::io("failed to accept webhook connection").with("asio_error", ec.message()));
 }
 
-async::Awaitable<void> handle_webhook_connection_tracked(asio::ip::tcp::socket socket,
-                                                         automation::AutomationService& service,
-                                                         ServeWebhookOptions options,
-                                                         std::shared_ptr<async::Channel<std::monostate>> progress,
-                                                         std::shared_ptr<std::atomic_bool> done) {
-  try {
-    co_await handle_webhook_connection(std::move(socket), service, std::move(options));
-  } catch (const std::system_error& error) {
-    if (error.code() != asio::error::operation_aborted) {
-      std::println(stderr, "orangutan: webhook connection handler failed: {}", error.what());
-    }
-  } catch (const std::exception& error) {
-    std::println(stderr, "orangutan: webhook connection handler failed: {}", error.what());
-  } catch (...) {
-    std::println(stderr, "orangutan: webhook connection handler failed: unknown exception");
+void report_webhook_worker_outcomes(async::TaskGroupReport report) {
+  if (report.outcomes_dropped > 0) {
+    std::println(stderr,
+                 "orangutan: webhook connection outcome retention dropped {} completed rows",
+                 report.outcomes_dropped);
   }
-  co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
-  done->store(true, std::memory_order_release);
-  [[maybe_unused]] auto signaled = progress->try_send(std::monostate{});
-}
-
-void erase_completed_webhook_workers(std::vector<WebhookConnectionWorker>& workers) {
-  std::erase_if(workers,
-                [](const WebhookConnectionWorker& worker) { return worker.done->load(std::memory_order_acquire); });
-}
-
-async::Awaitable<void> cancel_and_drain_webhook_workers(std::vector<WebhookConnectionWorker>& workers,
-                                                        async::Channel<std::monostate>& progress) {
-  co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
-  for (auto& worker : workers) {
-    worker.cancel->emit(asio::cancellation_type::all);
-  }
-  for (;;) {
-    erase_completed_webhook_workers(workers);
-    if (workers.empty()) {
-      co_return;
+  for (const auto& task : report.tasks) {
+    if (task.status == async::TaskOutcomeStatus::failed && task.error.has_value()) {
+      std::println(stderr, "orangutan: webhook connection '{}' failed: {}", task.name, *task.error);
     }
-    [[maybe_unused]] auto signaled = co_await progress.receive();
   }
 }
 
 async::Awaitable<Result<void>> stop_webhook_listener(std::shared_ptr<asio::ip::tcp::acceptor> acceptor,
                                                      std::shared_ptr<std::atomic_bool> stop_watcher_done,
-                                                     std::vector<WebhookConnectionWorker>& workers,
-                                                     async::Channel<std::monostate>& progress) {
+                                                     async::TaskGroup& workers) {
   stop_watcher_done->store(true, std::memory_order_release);
   asio::error_code ignored;
   acceptor->close(ignored);
-  co_await cancel_and_drain_webhook_workers(workers, progress);
+  workers.request_stop();
+  auto report = co_await workers.join();
+  if (!report) {
+    co_return std::unexpected(std::move(report).error());
+  }
+  report_webhook_worker_outcomes(std::move(*report));
   co_return Result<void>{};
 }
 
@@ -1367,29 +1338,25 @@ async::Awaitable<Result<void>> serve_webhooks(asio::any_io_executor executor,
                  poke_webhook_acceptor_on_stop(executor, local_endpoint, stop_requested, stop_watcher_done),
                  asio::detached);
 
-  std::vector<WebhookConnectionWorker> workers;
-  auto progress = std::make_shared<async::Channel<std::monostate>>(executor, 1);
+  auto workers_result = async::TaskGroup::create(
+      executor,
+      async::TaskGroupOptions{.max_tasks = options.max_connections, .max_completed = options.max_connections});
+  if (!workers_result) {
+    co_return std::unexpected(std::move(workers_result).error());
+  }
+  auto workers = std::move(*workers_result);
+  auto next_connection_id = std::uint64_t{};
 
-  using namespace asio::experimental::awaitable_operators;
   for (;;) {
-    erase_completed_webhook_workers(workers);
+    report_webhook_worker_outcomes(workers.drain_completed());
     if (stop_requested && stop_requested()) {
-      co_return co_await stop_webhook_listener(acceptor, stop_watcher_done, workers, *progress);
+      co_return co_await stop_webhook_listener(acceptor, stop_watcher_done, workers);
     }
 
-    auto event = co_await (accept_webhook_connection(*acceptor) || progress->receive());
-    if (event.index() == 1) {
-      auto seen_progress = std::get<1>(std::move(event));
-      if (!seen_progress && seen_progress.error().kind() == core::ErrorKind::cancelled) {
-        co_return co_await stop_webhook_listener(acceptor, stop_watcher_done, workers, *progress);
-      }
-      continue;
-    }
-
-    auto accepted = std::get<0>(std::move(event));
+    auto accepted = co_await accept_webhook_connection(*acceptor);
     if (!accepted) {
       if (accepted.error().kind() == core::ErrorKind::cancelled) {
-        co_return co_await stop_webhook_listener(acceptor, stop_watcher_done, workers, *progress);
+        co_return co_await stop_webhook_listener(acceptor, stop_watcher_done, workers);
       }
       std::println(stderr, "orangutan: webhook accept failed: {}", accepted.error());
       continue;
@@ -1398,10 +1365,10 @@ async::Awaitable<Result<void>> serve_webhooks(asio::any_io_executor executor,
     if (stop_requested && stop_requested()) {
       asio::error_code ignored;
       accepted->close(ignored);
-      co_return co_await stop_webhook_listener(acceptor, stop_watcher_done, workers, *progress);
+      co_return co_await stop_webhook_listener(acceptor, stop_watcher_done, workers);
     }
 
-    if (workers.size() >= options.max_connections) {
+    if (workers.active_tasks() >= options.max_connections) {
       auto overloaded = std::make_shared<asio::ip::tcp::socket>(std::move(*accepted));
       co_await write_webhook_http_response(overloaded,
                                            503,
@@ -1411,12 +1378,16 @@ async::Awaitable<Result<void>> serve_webhooks(asio::any_io_executor executor,
       continue;
     }
 
-    auto cancel = std::make_shared<asio::cancellation_signal>();
-    auto done = std::make_shared<std::atomic_bool>(false);
-    workers.push_back(WebhookConnectionWorker{.cancel = cancel, .done = done});
-    asio::co_spawn(executor,
-                   handle_webhook_connection_tracked(std::move(*accepted), service, options, progress, std::move(done)),
-                   asio::bind_cancellation_slot(cancel->slot(), asio::detached));
+    auto task_name = std::format("connection-{}", next_connection_id++);
+    auto spawned = workers.spawn(
+        std::move(task_name),
+        [socket = std::move(*accepted), service = &service, options]() mutable -> async::Awaitable<Result<void>> {
+          co_await handle_webhook_connection(std::move(socket), *service, std::move(options));
+          co_return Result<void>{};
+        });
+    if (!spawned) {
+      std::println(stderr, "orangutan: webhook connection worker spawn failed: {}", spawned.error());
+    }
   }
 }
 

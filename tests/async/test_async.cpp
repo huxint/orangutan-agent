@@ -309,6 +309,43 @@ TEST_CASE("TaskGroup accepts move-only child ownership", "[unit][async][task-gro
   });
 }
 
+TEST_CASE("TaskGroup bounds and drains completed outcome retention", "[unit][async][task-group]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    auto invalid =
+        async::TaskGroup::create(io.get_executor(), async::TaskGroupOptions{.max_tasks = 1, .max_completed = 0});
+    REQUIRE_FALSE(invalid.has_value());
+    CHECK(invalid.error().kind() == core::ErrorKind::invalid_argument);
+
+    auto created =
+        async::TaskGroup::create(io.get_executor(), async::TaskGroupOptions{.max_tasks = 3, .max_completed = 2});
+    REQUIRE(created.has_value());
+    auto group = std::move(*created);
+    for (const auto* name : {"first", "second", "third"}) {
+      REQUIRE(group.spawn(name, []() -> async::Awaitable<core::Result<void>> { co_return core::Result<void>{}; })
+                  .has_value());
+    }
+    while (group.active_tasks() != 0) {
+      co_await asio::post(io, asio::use_awaitable);
+    }
+
+    auto retained = group.drain_completed();
+    REQUIRE(retained.tasks.size() == 2);
+    CHECK(retained.tasks[0].name == "second");
+    CHECK(retained.tasks[1].name == "third");
+    CHECK(retained.outcomes_dropped == 1);
+    CHECK_FALSE(retained.all_succeeded());
+
+    auto drained = group.drain_completed();
+    CHECK(drained.tasks.empty());
+    CHECK(drained.outcomes_dropped == 0);
+
+    auto joined = co_await group.join();
+    REQUIRE(joined.has_value());
+    CHECK(joined->tasks.empty());
+    CHECK(joined->outcomes_dropped == 0);
+  });
+}
+
 TEST_CASE("Channel sends and receives FIFO values", "[unit][async][channel]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     async::Channel<int> channel{io.get_executor(), 2};

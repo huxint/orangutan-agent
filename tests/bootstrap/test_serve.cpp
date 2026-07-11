@@ -18,7 +18,6 @@
 #include <fstream>
 #include <memory>
 #include <optional>
-#include <print>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -245,10 +244,8 @@ post_webhook(asio::io_context& io, std::uint16_t port, std::string path, std::st
   using asio::ip::tcp;
   tcp::socket socket{io};
   asio::error_code ec;
-  std::println(stderr, "DBG client connect");
   co_await socket.async_connect(tcp::endpoint{asio::ip::make_address("127.0.0.1"), port},
                                 asio::redirect_error(asio::use_awaitable, ec));
-  std::println(stderr, "DBG client connected {}", ec.message());
   REQUIRE_FALSE(ec);
 
   auto request = std::format("POST {} HTTP/1.1\r\n"
@@ -262,12 +259,10 @@ post_webhook(asio::io_context& io, std::uint16_t port, std::string path, std::st
                              body.size(),
                              body);
   co_await asio::async_write(socket, asio::buffer(request), asio::redirect_error(asio::use_awaitable, ec));
-  std::println(stderr, "DBG client wrote {}", ec.message());
   REQUIRE_FALSE(ec);
 
   asio::streambuf response;
   co_await asio::async_read_until(socket, response, "\r\n\r\n", asio::redirect_error(asio::use_awaitable, ec));
-  std::println(stderr, "DBG client response {}", ec.message());
   REQUIRE_FALSE(ec);
 
   std::istream input{&response};
@@ -486,7 +481,7 @@ TEST_CASE("serve_webhooks accepts POST payloads and enqueues triggered work",
         REQUIRE(ran.has_value());
         REQUIRE(captured_payload == std::optional<std::string>{payload});
       },
-      10s);
+      3s);
 }
 
 TEST_CASE("serve_webhooks bounds concurrent incomplete connections",

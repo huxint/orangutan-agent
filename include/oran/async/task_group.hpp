@@ -19,6 +19,7 @@ namespace orangutan::async {
 
 struct TaskGroupOptions {
   std::size_t max_tasks{64};
+  std::size_t max_completed{1024};
 
   friend bool operator==(const TaskGroupOptions&, const TaskGroupOptions&) = default;
 };
@@ -39,6 +40,7 @@ struct TaskOutcome {
 
 struct TaskGroupReport {
   std::vector<TaskOutcome> tasks;
+  std::size_t outcomes_dropped{};
 
   [[nodiscard]] std::size_t succeeded() const noexcept;
   [[nodiscard]] std::size_t failed() const noexcept;
@@ -75,6 +77,11 @@ public:
   TaskGroup& operator=(TaskGroup&&) noexcept;
 
   [[nodiscard]] core::Result<void> spawn(std::string name, Task task);
+  /// Transfer currently completed outcomes out of the group's bounded
+  /// retention queue. Rows are returned in spawn order. `outcomes_dropped`
+  /// reports rows evicted since the previous drain because the queue reached
+  /// `TaskGroupOptions::max_completed`.
+  [[nodiscard]] TaskGroupReport drain_completed();
   void close() noexcept;
   void request_stop() noexcept;
   [[nodiscard]] Awaitable<core::Result<TaskGroupReport>> join();
