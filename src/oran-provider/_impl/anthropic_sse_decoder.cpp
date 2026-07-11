@@ -103,6 +103,11 @@ void AnthropicSseDecoder::consume(std::string_view event, std::string_view data)
   }
 
   if (event == "content_block_start") {
+    if (open_.kind != OpenBlock::Kind::none) {
+      fail(Error::parsing("anthropic content block started before the previous block stopped")
+               .with("protocol", protocol_name(target_)));
+      return;
+    }
     const auto* block = member(payload, "content_block");
     if (block == nullptr || !block->is_object()) {
       fail(Error::parsing("anthropic content_block_start is missing content_block")
@@ -131,6 +136,10 @@ void AnthropicSseDecoder::consume(std::string_view event, std::string_view data)
   }
 
   if (event == "content_block_delta") {
+    if (open_.kind == OpenBlock::Kind::none) {
+      fail(Error::parsing("anthropic content block delta has no open block").with("protocol", protocol_name(target_)));
+      return;
+    }
     const auto* delta = member(payload, "delta");
     if (delta == nullptr || !delta->is_object()) {
       fail(Error::parsing("anthropic content_block_delta is missing delta").with("protocol", protocol_name(target_)));
@@ -167,6 +176,10 @@ void AnthropicSseDecoder::consume(std::string_view event, std::string_view data)
   }
 
   if (event == "content_block_stop") {
+    if (open_.kind == OpenBlock::Kind::none) {
+      fail(Error::parsing("anthropic content block stop has no open block").with("protocol", protocol_name(target_)));
+      return;
+    }
     finalize_open_block();
     return;
   }
@@ -184,6 +197,11 @@ void AnthropicSseDecoder::consume(std::string_view event, std::string_view data)
   }
 
   if (event == "message_stop") {
+    if (open_.kind != OpenBlock::Kind::none) {
+      fail(Error::parsing("anthropic message stopped before the content block completed")
+               .with("protocol", protocol_name(target_)));
+      return;
+    }
     saw_message_stop_ = true;
     if (sink_ != nullptr) {
       sink_->on_done(stop_reason_);

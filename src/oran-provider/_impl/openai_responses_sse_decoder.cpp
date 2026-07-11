@@ -41,6 +41,19 @@ using orangutan::core::Error;
   return value != nullptr && value->is_object() ? value : nullptr;
 }
 
+[[nodiscard]] core::Error failed_response_error(const json& response, const ModelTarget& target) {
+  const auto* error = object_member(response, "error");
+  const auto code = error != nullptr ? string_or_empty(*error, "code") : std::string_view{};
+  const auto message = error != nullptr ? string_or_empty(*error, "message") : std::string_view{};
+
+  auto classified = code == "rate_limit_exceeded" ? Error::rate_limit("openai responses stream failed")
+                                                  : Error::upstream("openai responses stream failed");
+  return std::move(classified)
+      .with("protocol", protocol_name(target))
+      .with("error_code", std::string{code})
+      .with("error_message", std::string{message});
+}
+
 }  // namespace
 
 OpenAiResponsesSseDecoder::OpenAiResponsesSseDecoder(ModelTarget target, EventSink* sink)
@@ -137,6 +150,10 @@ void OpenAiResponsesSseDecoder::consume(std::string_view event, std::string_view
       fail(Error::parsing("openai responses terminal stream event is missing response")
                .with("protocol", protocol_name(target_))
                .with("event", std::string{event}));
+      return;
+    }
+    if (event == "response.failed") {
+      fail(failed_response_error(*response, target_));
       return;
     }
     final_response_json_ = response->dump();

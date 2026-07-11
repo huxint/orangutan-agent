@@ -224,6 +224,25 @@ TEST_CASE("openai responses sse decoder surfaces an error event as upstream", "[
   REQUIRE(sink.done == std::nullopt);
 }
 
+TEST_CASE("openai responses sse decoder surfaces response.failed as a retryable provider error",
+          "[unit][provider][sse]") {
+  RecordingSink sink;
+  Decoder decoder{target(), &sink};
+  feed(
+      decoder,
+      {
+          {"response.failed",
+           R"({"type":"response.failed","response":{"id":"resp_failed","object":"response","status":"failed","model":"gpt-test","output":[],"error":{"code":"server_error","message":"The provider failed while processing the request."},"usage":null},"sequence_number":1})"},
+      });
+
+  const auto streamed = decoder.result();
+
+  REQUIRE_FALSE(streamed.has_value());
+  REQUIRE(streamed.error().kind() == core::ErrorKind::upstream);
+  REQUIRE(streamed.error().retryable());
+  REQUIRE(sink.done == std::nullopt);
+}
+
 TEST_CASE("openai responses sse decoder rejects a stream that never completes", "[unit][provider][sse]") {
   RecordingSink sink;
   Decoder decoder{target(), &sink};

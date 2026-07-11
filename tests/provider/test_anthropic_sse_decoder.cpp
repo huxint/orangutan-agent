@@ -308,3 +308,24 @@ TEST_CASE("anthropic sse decoder rejects a stream that never completes", "[unit]
   REQUIRE(streamed.error().kind() == core::ErrorKind::parsing);
   REQUIRE(sink.done == std::nullopt);
 }
+
+TEST_CASE("anthropic sse decoder rejects message_stop with an unfinished content block", "[unit][provider][sse]") {
+  RecordingSink sink;
+  Decoder decoder{target(), &sink};
+  feed(decoder,
+       {
+           message_start(R"({"input_tokens":1,"output_tokens":1})"),
+           {"content_block_start",
+            R"({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})"},
+           {"content_block_delta",
+            R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}})"},
+           message_delta("end_turn", R"({"output_tokens":2})"),
+           kMessageStop,
+       });
+
+  const auto streamed = decoder.result();
+
+  REQUIRE_FALSE(streamed.has_value());
+  REQUIRE(streamed.error().kind() == core::ErrorKind::parsing);
+  REQUIRE(sink.done == std::nullopt);
+}
