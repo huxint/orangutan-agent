@@ -248,6 +248,13 @@ struct WalkTreeOptions {
   /// Hard bound on entries handed to the visitor. Exceeding it aborts the walk
   /// with `Error::io` (`reason=walk_entry_limit`). `0` disables the bound.
   std::size_t max_entries{0};
+  /// Mirror of `std::filesystem::directory_options::skip_permission_denied`
+  /// for callers that prefer pruning over failing: when true, a subdirectory
+  /// whose contents cannot be enumerated because of filesystem permissions is
+  /// skipped (its own entry was already offered to the visitor; its subtree is
+  /// not visited) instead of aborting the walk. The walk root itself still
+  /// surfaces `permission_denied`.
+  bool skip_permission_denied{false};
 };
 
 /// Walk the tree beneath a pinned root `DirectoryAuthority` depth-first,

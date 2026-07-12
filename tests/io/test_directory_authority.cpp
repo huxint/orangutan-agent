@@ -1059,3 +1059,53 @@ TEST_CASE("walk_directory_tree opens a matched file through the pinned parent au
   REQUIRE(walked.has_value());
   CHECK(opened_text == "anchored-content");
 }
+
+TEST_CASE("walk_directory_tree prunes unreadable subtrees only on opt-in", "[unit][io][authority][walk]") {
+  if (::geteuid() == 0) {
+    SKIP("permission bits do not bind the superuser");
+  }
+  TempDir temp{"oran-io-walk-perms"};
+  const auto workspace = temp.path() / "workspace";
+  std::filesystem::create_directories(workspace / "locked");
+  std::filesystem::create_directories(workspace / "open");
+  write_direct(workspace / "locked" / "hidden.txt", "hidden");
+  write_direct(workspace / "open" / "seen.txt", "seen");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+
+  std::filesystem::permissions(workspace / "locked",
+                               std::filesystem::perms::none,
+                               std::filesystem::perm_options::replace);
+  struct RestorePermissions {
+    std::filesystem::path locked;
+    ~RestorePermissions() {
+      std::error_code ec;
+      std::filesystem::permissions(locked,
+                                   std::filesystem::perms::owner_all,
+                                   std::filesystem::perm_options::replace,
+                                   ec);
+    }
+  } restore{workspace / "locked"};
+
+  std::vector<CollectedWalkEntry> strict_entries;
+  auto strict_visitor = collect_into(strict_entries);
+  auto strict = io::walk_directory_tree(*authority, io::WalkTreeOptions{}, [] { return false; }, strict_visitor);
+  REQUIRE_FALSE(strict.has_value());
+  CHECK(strict.error().kind() == core::ErrorKind::permission_denied);
+
+  std::vector<CollectedWalkEntry> pruned_entries;
+  auto pruned_visitor = collect_into(pruned_entries);
+  auto pruned = io::walk_directory_tree(
+      *authority,
+      io::WalkTreeOptions{.max_entries = 0, .skip_permission_denied = true},
+      [] { return false; },
+      pruned_visitor);
+  REQUIRE(pruned.has_value());
+
+  REQUIRE(pruned_entries.size() == 3);
+  CHECK(pruned_entries[0].relative_path == "locked");
+  CHECK(pruned_entries[0].kind == io::DirectoryEntryKind::directory);
+  CHECK(pruned_entries[1].relative_path == "open");
+  CHECK(pruned_entries[2].relative_path == "open/seen.txt");
+}

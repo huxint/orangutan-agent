@@ -76,7 +76,10 @@ performs the requested operation and returns `core::Result<T>`.
 > pathname is reopened mid-walk. Policy (ignore rules, hidden-name filters,
 > display labels) stays in the tool layer; the primitive enforces only the
 > `.`/`..` skip, an optional `max_entries` abort
-> (`Error::io`, `reason=walk_entry_limit`), and a per-entry cancel poll. The
+> (`Error::io`, `reason=walk_entry_limit`), an optional
+> `skip_permission_denied` posture (prune a subtree whose enumeration is
+> refused by permissions instead of failing the walk; the root always
+> surfaces `permission_denied`), and a per-entry cancel poll. The
 > walk is blocking by design — callers hop through `run_blocking` like the
 > other authority helpers.
 >

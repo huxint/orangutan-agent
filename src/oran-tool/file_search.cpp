@@ -634,7 +634,9 @@ walk_and_scan(const SearchOptions& opts, const SearchRoot& root, const asio::can
 
     auto walked = io::walk_directory_tree(
         *root.directory,
-        io::WalkTreeOptions{},
+        // Legacy parity with `std::filesystem::directory_options::
+        // skip_permission_denied`: an unreadable subtree is pruned, not fatal.
+        io::WalkTreeOptions{.max_entries = 0, .skip_permission_denied = true},
         [&cancellation] { return is_cancelled(cancellation); },
         visitor);
     if (!walked) {

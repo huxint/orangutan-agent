@@ -181,7 +181,16 @@ struct AnchoredLevelEntry {
 
   auto readable = UniqueFd{::openat(directory.native_handle(), ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)};
   if (readable.get() < 0) {
-    return std::unexpected(descriptor_error("failed to open authorized directory", directory, errno));
+    // EACCES keeps its own error kind so `WalkTreeOptions::skip_permission_denied`
+    // can distinguish an unreadable subtree from an I/O fault.
+    const int error_number = errno;
+    if (error_number == EACCES) {
+      return std::unexpected(core::Error::permission_denied("failed to open authorized directory")
+                                 .with("path", std::string{directory.display_root()})
+                                 .with("errno", std::to_string(error_number))
+                                 .with("detail", std::generic_category().message(error_number)));
+    }
+    return std::unexpected(descriptor_error("failed to open authorized directory", directory, error_number));
   }
   auto* raw_stream = ::fdopendir(readable.get());
   if (raw_stream == nullptr) {
@@ -234,6 +243,13 @@ struct WalkState {
 walk_level(WalkState& state, const DirectoryAuthority& directory, std::string_view prefix, std::size_t depth) {
   auto level = read_level(directory);
   if (!level) {
+    // `depth > 1` keeps the root strict: only subtree enumeration refusals
+    // are prunable, and only when the caller opted into the legacy
+    // `skip_permission_denied` posture.
+    if (depth > 1 && state.options.skip_permission_denied &&
+        level.error().kind() == core::ErrorKind::permission_denied) {
+      return WalkAction::proceed;
+    }
     return std::unexpected(std::move(level).error());
   }
 
