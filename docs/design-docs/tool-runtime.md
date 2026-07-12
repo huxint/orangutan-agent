@@ -683,10 +683,10 @@ Current surface and forward shape:
     approval; write/edit create their mutation after approval beneath the pinned
     directory authority. These mutation tools reject direct dispatch without a
     workspace authority. Non-recursive `DirectoryList` now opens and enumerates
-    the resolved directory authority after approval; `FileSearch` opens its
-    resolved root through the pinned authority and drives recursion with
-    `io::walk_directory_tree`, so only `DirectoryList`'s recursive walker
-    retains temporary pathname execution while its migration completes.
+    the resolved directory authority after approval; `FileSearch` and recursive
+    `DirectoryList` open their resolved roots through the pinned authority and
+    drive recursion with `io::walk_directory_tree`, so no filesystem built-in
+    reopens a pathname after resolution.
 - `FileWrite` and `FileEdit` begin a dirfd-backed mutation after approval.
   Mutation resolution always rejects symlink components and therefore accepts
   an authority-relative name rather than the read-side symlink-policy type. The
@@ -712,10 +712,12 @@ Current surface and forward shape:
   follow inside-workspace symlinks for `resolve_read` / `resolve_list`
   (rejecting `symlink_escape` when the target leaves the root), and refuse
   symlinks for `resolve_write` / `resolve_delete` (`symlink_target`).
-  Nested entries during a `FileSearch` walk are still never followed as
-  symlinks — a deliberately stricter form of the same rule, now enforced by
-  dirfd-anchored descent (a symlinked directory is classified but never
-  traversed; matched files open no-follow beneath their pinned parent).
+  Nested entries during recursive `FileSearch` / `DirectoryList` walks are
+  still never followed as symlinks — a deliberately stricter form of the same
+  rule, now enforced by dirfd-anchored descent (a symlinked directory is
+  classified but never traversed; `FileSearch` opens matched files no-follow
+  beneath their pinned parent, and recursive `DirectoryList` omits symlink
+  entries entirely).
 
 Full contract, override roots, audit fields, and acceptance criteria live in
 [`../product-specs/0013-workspace-and-path-policy.md`](../product-specs/0013-workspace-and-path-policy.md).

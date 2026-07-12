@@ -92,7 +92,7 @@ resolved once per call rather than up to three times.
 
 - [x] Slice A: primitive + test-io + io-runtime.md.
 - [x] Slice B: FileSearch migrated; spec 0013 status updated.
-- [ ] Slice C: DirectoryList migrated; spec 0013 status updated.
+- [x] Slice C: DirectoryList migrated; spec 0013 status updated.
 - [ ] Slice D: string-authority path retired; parent milestone-2 box checked;
       tracker + ROADMAP frontier updated; full test green.
 

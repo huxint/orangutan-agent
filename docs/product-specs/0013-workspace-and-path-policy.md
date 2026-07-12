@@ -30,27 +30,30 @@ Current seams and future work:
   `DispatchContext::workspace` through `Registry::dispatch` when supplied.
   `FileWrite`, `FileEdit`, and `FileDelete` require the resulting authority,
   including for direct registry dispatch. Non-recursive `DirectoryList` consumes
-  the authority-backed directory enumeration primitive, and `FileSearch`
-  (single-file and recursive) executes through pinned descriptors via
-  `io::walk_directory_tree`; recursive `DirectoryList` keeps a temporary
-  pathname walk while its migration continues.
-- The handle migration is active: `FileRead` and `FileSearch` execute through
-  a pinned `DirectoryAuthority`, while `FileWrite` and `FileEdit` use a
+  the authority-backed directory enumeration primitive, and `FileSearch` plus
+  recursive `DirectoryList` execute through pinned descriptors via
+  `io::walk_directory_tree` — no filesystem built-in walks a pathname after
+  resolution.
+- The handle migration now covers every built-in consumer: `FileRead`,
+  `FileSearch`, and `DirectoryList` (single-level and recursive) execute
+  through a pinned `DirectoryAuthority`, while `FileWrite` and `FileEdit` use a
   pinned-parent `FileMutation`. `FileDelete` materializes a pinned-parent,
   pinned-target `DeleteMutation` before approval. Approval and executor awaits
   cannot redirect these handlers through a replaced workspace pathname or newly
   introduced symlink; replacing the approved delete target produces `conflict`.
   Mutation commits revalidate the snapshotted target immediately before
   rename and surface a stale-fingerprint conflict on detected lost updates.
-  Recursive `DirectoryList` remains on the staged migration backlog.
+  The workspace resolver's now-unconsumed string-canonicalisation result and
+  the pathname-based ignore-file reads inside `WorkspaceWalkFilter` are the
+  remaining retirement backlog.
 - Root paths for `FileSearch` and `DirectoryList` use
   `Workspace::resolve_list` and therefore follow symlinks only when the
   canonical target remains in an allowed root. Nested symlinks during
-  recursive walks are never followed: `FileSearch` descends through the
+  recursive walks are never followed: both tools descend through the
   dirfd-anchored `io::walk_directory_tree` (a symlinked directory is
-  classified, never traversed; matched files open no-follow beneath their
-  pinned parent), while recursive `DirectoryList` still skips symlinks
-  wholesale in its pathname walk pending the same migration.
+  classified, never traversed). `FileSearch` opens matched files no-follow
+  beneath their pinned parent; recursive `DirectoryList` omits symlink
+  entries from the listing entirely.
 - Slice 266 moves recursive filesystem filtering into `WorkspaceWalkFilter`.
   `FileSearch` and `DirectoryList recursive=true` now share dotfile filtering,
   the built-in low-signal directory skip list, and `.gitignore` / `.ignore`

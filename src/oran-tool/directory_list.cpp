@@ -25,6 +25,14 @@
 // `WorkspaceWalkFilter`, so recursive listings now share `FileSearch`'s
 // hidden-name, built-in low-signal directory, and `.gitignore` / `.ignore`
 // decisions.
+//
+// Recursive enumeration now runs on `io::walk_directory_tree`: the listing
+// root is pinned once (workspace dispatch supplies the pre-resolved
+// authority; trusted mode pins its own after the legacy pathname
+// classification), descent goes through dirfd-relative no-follow opens, and
+// nested symlinks are classified but never followed nor listed. Unreadable
+// subtrees prune via the walk's `skip_permission_denied` opt-in, matching the
+// retired `std::filesystem::recursive_directory_iterator` posture.
 
 #include <oran/tool/builtins.hpp>
 
@@ -34,6 +42,7 @@
 #include <expected>
 #include <filesystem>
 #include <format>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <optional>
@@ -130,31 +139,6 @@ struct ParsedInput {
   return cancellation.cancelled() != asio::cancellation_type::none;
 }
 
-[[nodiscard]] io::DirectoryEntryKind classify(const std::filesystem::file_status& status) noexcept {
-  if (std::filesystem::is_symlink(status)) {
-    return io::DirectoryEntryKind::symlink;
-  }
-  if (std::filesystem::is_regular_file(status)) {
-    return io::DirectoryEntryKind::regular_file;
-  }
-  if (std::filesystem::is_directory(status)) {
-    return io::DirectoryEntryKind::directory;
-  }
-  return io::DirectoryEntryKind::other;
-}
-
-[[nodiscard]] std::optional<std::uintmax_t> regular_file_size(const std::filesystem::directory_entry& entry) {
-  std::error_code ec;
-  if (!entry.is_regular_file(ec) || ec) {
-    return std::nullopt;
-  }
-  const auto size = entry.file_size(ec);
-  if (ec) {
-    return std::nullopt;
-  }
-  return size;
-}
-
 [[nodiscard]] core::Error entry_limit_exceeded(const ParsedInput& parsed) {
   return core::Error::io("directory entry limit exceeded")
       .with("path", parsed.path)
@@ -168,11 +152,11 @@ struct ParsedInput {
   return static_cast<std::uint32_t>(entry_count + 1U);
 }
 
-[[nodiscard]] std::string display_path(const ParsedInput& parsed, const std::filesystem::path& path) {
+[[nodiscard]] std::string display_path(const ParsedInput& parsed, const std::string& absolute) {
   if (parsed.workspace == nullptr) {
-    return path.string();
+    return absolute;
   }
-  return parsed.workspace->display_path(path.string());
+  return parsed.workspace->display_path(absolute);
 }
 
 void apply_display_paths(std::string_view display_root, std::vector<io::DirectoryEntry>& entries) {
@@ -181,94 +165,99 @@ void apply_display_paths(std::string_view display_root, std::vector<io::Director
   }
 }
 
+/// Pin a trusted (workspace-less) recursive listing root. Classification keeps
+/// the legacy pathname error shapes; the walk itself never reopens the
+/// pathname after this pin.
+[[nodiscard]] core::Result<io::DirectoryAuthority> open_trusted_list_root(const std::string& path) {
+  const std::filesystem::path root{path};
+  std::error_code ec;
+  if (!std::filesystem::exists(root, ec)) {
+    if (ec) {
+      return std::unexpected(
+          core::Error::io("failed to stat directory").with("path", path).with("system_error", ec.message()));
+    }
+    return std::unexpected(core::Error::not_found("directory does not exist").with("path", path));
+  }
+  if (!std::filesystem::is_directory(root, ec)) {
+    if (ec) {
+      return std::unexpected(
+          core::Error::io("failed to inspect directory type").with("path", path).with("system_error", ec.message()));
+    }
+    return std::unexpected(core::Error::invalid_argument("path is not a directory").with("path", path));
+  }
+  return io::DirectoryAuthority::open_trusted(path);
+}
+
+/// Pin the recursive listing root. Workspace dispatch supplies the
+/// pre-resolved authority and the root opens beneath it; without a resolved
+/// path the (already resolve_list-confined or trusted) absolute path pins its
+/// own root.
+[[nodiscard]] core::Result<io::DirectoryAuthority> open_recursive_root(const ParsedInput& parsed,
+                                                                       const DispatchContext& ctx) {
+  if (ctx.resolved_path.has_value()) {
+    if (!ctx.resolved_path->authority.has_value()) {
+      return std::unexpected(core::Error::internal("DirectoryList requires a resolved workspace authority"));
+    }
+    return ctx.resolved_path->authority->open_directory(io::AnchoredPath{
+        .relative_path = ctx.resolved_path->authority_relative_path,
+        .symlink_policy = io::AnchoredSymlinkPolicy::allow_beneath,
+    });
+  }
+  return open_trusted_list_root(parsed.path);
+}
+
 [[nodiscard]] core::Result<std::vector<io::DirectoryEntry>>
-list_directory_recursive(const ParsedInput& parsed, const asio::cancellation_state& cancellation) {
-  if (parsed.max_entries == 0) {
-    return std::unexpected(
-        core::Error::invalid_argument("max_entries must be greater than zero").with("path", parsed.path));
+list_directory_recursive(const ParsedInput& parsed,
+                         const io::DirectoryAuthority& root,
+                         const asio::cancellation_state& cancellation) {
+  std::vector<io::DirectoryEntry> entries;
+  // Ignore/dotfile policy stays in the tool layer; the anchored walk only
+  // supplies pinned entries. The filter sees reconstructed absolute paths
+  // (`base / relative_path`) so rule scoping and display labels stay
+  // byte-identical to the pre-migration pathname walk.
+  auto walk_filter = WorkspaceWalkFilter::create(parsed.path,
+                                                 WorkspaceWalkOptions{
+                                                     .include_hidden = parsed.include_hidden,
+                                                     .respect_ignore = true,
+                                                 });
+  const std::filesystem::path base{parsed.path};
+  io::WalkVisitor visitor = [&](const io::DirectoryAuthority& /*parent*/,
+                                const io::WalkEntry& entry) -> core::Result<io::WalkAction> {
+    // Nested symlinks are classified by the walk and never followed; the
+    // legacy listing also omitted them from the rendered entries.
+    if (entry.kind == io::DirectoryEntryKind::symlink) {
+      return io::WalkAction::proceed;
+    }
+    const auto absolute = (base / entry.relative_path).string();
+    const bool is_directory = entry.kind == io::DirectoryEntryKind::directory;
+    if (walk_filter.should_skip(absolute, is_directory)) {
+      return is_directory ? io::WalkAction::skip_subtree : io::WalkAction::proceed;
+    }
+    if (entries.size() >= parsed.max_entries) {
+      return std::unexpected(entry_limit_exceeded(parsed));
+    }
+    entries.push_back(io::DirectoryEntry{
+        .name = entry.name,
+        .path = display_path(parsed, absolute),
+        .kind = entry.kind,
+        .size_bytes = entry.size_bytes,
+    });
+    return io::WalkAction::proceed;
+  };
+
+  auto walked = io::walk_directory_tree(
+      root,
+      // Legacy parity with `std::filesystem::directory_options::
+      // skip_permission_denied`: an unreadable subtree is pruned, not fatal.
+      io::WalkTreeOptions{.max_entries = 0, .skip_permission_denied = true},
+      [&cancellation] { return is_cancelled(cancellation); },
+      visitor);
+  if (!walked) {
+    return std::unexpected(std::move(walked).error());
   }
 
-  try {
-    const std::filesystem::path root{parsed.path};
-    std::error_code ec;
-    if (!std::filesystem::exists(root, ec)) {
-      if (ec) {
-        return std::unexpected(
-            core::Error::io("failed to stat directory").with("path", parsed.path).with("system_error", ec.message()));
-      }
-      return std::unexpected(core::Error::not_found("directory does not exist").with("path", parsed.path));
-    }
-    if (!std::filesystem::is_directory(root, ec)) {
-      if (ec) {
-        return std::unexpected(core::Error::io("failed to inspect directory type")
-                                   .with("path", parsed.path)
-                                   .with("system_error", ec.message()));
-      }
-      return std::unexpected(core::Error::invalid_argument("path is not a directory").with("path", parsed.path));
-    }
-
-    std::vector<io::DirectoryEntry> entries;
-    const auto walk_options = std::filesystem::directory_options::skip_permission_denied;
-    const std::filesystem::recursive_directory_iterator end{};
-    auto it = std::filesystem::recursive_directory_iterator{root, walk_options};
-    auto walk_filter = WorkspaceWalkFilter::create(root.string(),
-                                                   WorkspaceWalkOptions{
-                                                       .include_hidden = parsed.include_hidden,
-                                                       .respect_ignore = true,
-                                                   });
-    while (it != end) {
-      if (is_cancelled(cancellation)) {
-        return std::unexpected(core::Error::cancelled());
-      }
-
-      const auto& entry = *it;
-      const auto name = entry.path().filename().string();
-      std::error_code status_ec;
-      const auto status = entry.symlink_status(status_ec);
-      if (status_ec) {
-        return std::unexpected(core::Error::io("failed to inspect directory entry")
-                                   .with("path", entry.path().string())
-                                   .with("system_error", status_ec.message()));
-      }
-      const auto kind = classify(status);
-      const auto is_directory = kind == io::DirectoryEntryKind::directory;
-
-      if (kind == io::DirectoryEntryKind::symlink) {
-        it.disable_recursion_pending();
-        ++it;
-        continue;
-      }
-
-      if (walk_filter.should_skip(entry.path().string(), is_directory)) {
-        if (is_directory) {
-          it.disable_recursion_pending();
-        }
-        ++it;
-        continue;
-      }
-      if (entries.size() >= parsed.max_entries) {
-        return std::unexpected(entry_limit_exceeded(parsed));
-      }
-
-      entries.push_back(io::DirectoryEntry{
-          .name = name,
-          .path = display_path(parsed, entry.path()),
-          .kind = kind,
-          .size_bytes = kind == io::DirectoryEntryKind::regular_file ? regular_file_size(entry) : std::nullopt,
-      });
-      ++it;
-    }
-
-    std::ranges::sort(entries, {}, &io::DirectoryEntry::path);
-    return entries;
-  } catch (const std::filesystem::filesystem_error& e) {
-    return std::unexpected(core::Error::io("filesystem directory listing failed")
-                               .with("path", parsed.path)
-                               .with("system_error", e.code().message()));
-  } catch (const std::exception& e) {
-    return std::unexpected(
-        core::Error::io("directory listing failed").with("path", parsed.path).with("exception", e.what()));
-  }
+  std::ranges::sort(entries, {}, &io::DirectoryEntry::path);
+  return entries;
 }
 
 [[nodiscard]] std::string render(const std::vector<io::DirectoryEntry>& entries) {
@@ -345,6 +334,12 @@ format_data_json(std::string_view path, const ParsedInput& parsed, const std::ve
   const auto resolved_display_root = ctx.resolved_path.has_value() ? ctx.resolved_path->display_path : std::string{};
   core::Result<std::vector<io::DirectoryEntry>> entries;
   if (parsed->recursive) {
+    // Pin the walk root before the executor hop; the walk below never
+    // re-resolves the pathname.
+    auto root = open_recursive_root(*parsed, ctx);
+    if (!root) {
+      co_return std::unexpected(std::move(root).error());
+    }
     auto cancellation = co_await asio::this_coro::cancellation_state;
     if (is_cancelled(cancellation)) {
       co_return std::unexpected(core::Error::cancelled());
@@ -353,7 +348,7 @@ format_data_json(std::string_view path, const ParsedInput& parsed, const std::ve
     if (is_cancelled(cancellation)) {
       co_return std::unexpected(core::Error::cancelled());
     }
-    entries = list_directory_recursive(*parsed, cancellation);
+    entries = list_directory_recursive(*parsed, *root, cancellation);
   } else {
     io::ListDirectoryOptions options{
         .include_hidden = parsed->include_hidden,
