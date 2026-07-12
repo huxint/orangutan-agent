@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -207,6 +208,60 @@ list_directory(asio::any_io_executor executor, std::string path, ListDirectoryOp
 /// are classified without being followed.
 [[nodiscard]] async::Awaitable<core::Result<std::vector<DirectoryEntry>>>
 list_directory(asio::any_io_executor executor, DirectoryAuthority directory, ListDirectoryOptions options = {});
+
+/// One entry surfaced during an anchored tree walk. `relative_path` is the
+/// forward-slash path from the walk root (the root itself is never visited).
+/// `depth` is 1 for direct children of the root and increases by one per level.
+/// Directory entries are visited before their contents so a visitor can decide
+/// whether to descend; symlinks are classified here but never followed.
+struct WalkEntry {
+  std::string name;
+  std::string relative_path;
+  DirectoryEntryKind kind{DirectoryEntryKind::other};
+  std::optional<std::uintmax_t> size_bytes;
+  std::size_t depth{0};
+};
+
+/// A visitor's decision for one `WalkEntry`.
+enum class WalkAction : std::uint8_t {
+  /// Keep walking. For a directory entry this descends into it; for a
+  /// non-directory it simply continues to the next sibling.
+  proceed,
+  /// Do not descend into this directory (ignored for non-directories);
+  /// continue with the next sibling.
+  skip_subtree,
+  /// Stop the whole walk immediately and return successfully.
+  stop,
+};
+
+/// Per-entry visitor invoked on the blocking walk. The pinned parent authority
+/// for the entry is supplied so the visitor can open a matched file through an
+/// anchored `open_file` without reopening any pathname. The visitor returns a
+/// `WalkAction` to steer descent, or an error to abort the walk with that error.
+/// Policy (ignore rules, hidden-name filtering, entry caps) lives in the
+/// visitor; this primitive supplies only pinned entries and never applies a
+/// filter of its own beyond skipping `.`/`..`.
+using WalkVisitor =
+    std::move_only_function<core::Result<WalkAction>(const DirectoryAuthority& parent, const WalkEntry& entry)>;
+
+struct WalkTreeOptions {
+  /// Hard bound on entries handed to the visitor. Exceeding it aborts the walk
+  /// with `Error::io` (`reason=walk_entry_limit`). `0` disables the bound.
+  std::size_t max_entries{0};
+};
+
+/// Walk the tree beneath a pinned root `DirectoryAuthority` depth-first,
+/// invoking `visitor` for every entry. Descent goes exclusively through
+/// dirfd-relative `open_directory` (no-follow), so a symlinked directory is
+/// classified and offered to the visitor but never traversed, and no pathname
+/// is reopened mid-walk. `cancelled` is polled once per entry; a `true` result
+/// aborts with `Error::cancelled`. The walk is synchronous — callers hop the
+/// blocking executor themselves (e.g. via `run_blocking`) exactly as the other
+/// authority helpers do.
+[[nodiscard]] core::Result<void> walk_directory_tree(const DirectoryAuthority& root,
+                                                     WalkTreeOptions options,
+                                                     const std::function<bool()>& cancelled,
+                                                     WalkVisitor& visitor);
 
 /// Consume a pinned delete capability. Regular files delete directly;
 /// directories require `options.recursive=true` and are walked relative to

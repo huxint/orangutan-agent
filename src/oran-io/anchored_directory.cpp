@@ -5,9 +5,11 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <format>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -159,6 +161,156 @@ list_directory(asio::any_io_executor executor, DirectoryAuthority directory, Lis
           std::unexpected(core::Error::io("authorized directory listing failed"))};
     }
   });
+}
+
+namespace {
+
+/// One directory level read relative to a pinned authority. Names are collected
+/// with their no-follow kind/size so the walk can classify symlinks without
+/// following them and hand directory entries to the visitor before descending.
+struct AnchoredLevelEntry {
+  std::string name;
+  DirectoryEntryKind kind{DirectoryEntryKind::other};
+  std::optional<std::uintmax_t> size_bytes;
+};
+
+[[nodiscard]] core::Result<std::vector<AnchoredLevelEntry>> read_level(const DirectoryAuthority& directory) {
+  if (directory.native_handle() < 0) {
+    return std::unexpected(core::Error::internal("directory authority is empty"));
+  }
+
+  auto readable = UniqueFd{::openat(directory.native_handle(), ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)};
+  if (readable.get() < 0) {
+    return std::unexpected(descriptor_error("failed to open authorized directory", directory, errno));
+  }
+  auto* raw_stream = ::fdopendir(readable.get());
+  if (raw_stream == nullptr) {
+    return std::unexpected(descriptor_error("failed to enumerate authorized directory", directory, errno));
+  }
+  static_cast<void>(readable.release());
+  auto stream = UniqueDir{raw_stream};
+
+  std::vector<AnchoredLevelEntry> entries;
+  while (true) {
+    errno = 0;
+    const auto* entry = ::readdir(stream.get());
+    if (entry == nullptr) {
+      if (errno != 0) {
+        return std::unexpected(descriptor_error("failed while enumerating authorized directory", directory, errno));
+      }
+      break;
+    }
+    const auto name = std::string_view{entry->d_name};
+    if (name == "." || name == "..") {
+      continue;
+    }
+
+    struct stat status{};
+    if (::fstatat(directory.native_handle(), entry->d_name, &status, AT_SYMLINK_NOFOLLOW) != 0) {
+      return std::unexpected(descriptor_error("failed to inspect authorized directory entry", directory, errno));
+    }
+    const auto kind = classify(status.st_mode);
+    entries.push_back(AnchoredLevelEntry{
+        .name = std::string{name},
+        .kind = kind,
+        .size_bytes = kind == DirectoryEntryKind::regular_file
+                          ? std::optional<std::uintmax_t>{static_cast<std::uintmax_t>(status.st_size)}
+                          : std::nullopt,
+    });
+  }
+
+  std::ranges::sort(entries, {}, &AnchoredLevelEntry::name);
+  return entries;
+}
+
+struct WalkState {
+  WalkTreeOptions options;
+  const std::function<bool()>& cancelled;
+  WalkVisitor& visitor;
+  std::size_t visited{0};
+};
+
+[[nodiscard]] core::Result<WalkAction>
+walk_level(WalkState& state, const DirectoryAuthority& directory, std::string_view prefix, std::size_t depth) {
+  auto level = read_level(directory);
+  if (!level) {
+    return std::unexpected(std::move(level).error());
+  }
+
+  for (auto& child : *level) {
+    if (state.cancelled()) {
+      return std::unexpected(core::Error::cancelled());
+    }
+    if (state.options.max_entries != 0 && state.visited >= state.options.max_entries) {
+      return std::unexpected(core::Error::io("directory walk entry limit exceeded")
+                                 .with("reason", "walk_entry_limit")
+                                 .with("max_entries", std::to_string(state.options.max_entries)));
+    }
+    ++state.visited;
+
+    auto relative = prefix.empty() ? child.name : std::format("{}/{}", prefix, child.name);
+    auto entry = WalkEntry{
+        .name = std::move(child.name),
+        .relative_path = std::move(relative),
+        .kind = child.kind,
+        .size_bytes = child.size_bytes,
+        .depth = depth,
+    };
+
+    auto decision = state.visitor(directory, entry);
+    if (!decision) {
+      return std::unexpected(std::move(decision).error());
+    }
+    if (*decision == WalkAction::stop) {
+      return WalkAction::stop;
+    }
+    if (*decision == WalkAction::skip_subtree || entry.kind != DirectoryEntryKind::directory) {
+      continue;
+    }
+
+    // Descend only through the pinned no-follow child authority. A symlink was
+    // already classified above and never reaches this branch, so the walk
+    // cannot be redirected outside the root mid-traversal.
+    auto subdirectory = directory.open_directory(AnchoredPath{
+        .relative_path = entry.name,
+        .symlink_policy = AnchoredSymlinkPolicy::reject_all,
+    });
+    if (!subdirectory) {
+      return std::unexpected(std::move(subdirectory).error());
+    }
+    auto nested = walk_level(state, *subdirectory, entry.relative_path, depth + 1);
+    if (!nested) {
+      return std::unexpected(std::move(nested).error());
+    }
+    if (*nested == WalkAction::stop) {
+      return WalkAction::stop;
+    }
+  }
+  return WalkAction::proceed;
+}
+
+}  // namespace
+
+core::Result<void> walk_directory_tree(const DirectoryAuthority& root,
+                                       WalkTreeOptions options,
+                                       const std::function<bool()>& cancelled,
+                                       WalkVisitor& visitor) {
+  if (root.native_handle() < 0) {
+    return std::unexpected(core::Error::internal("directory authority is empty"));
+  }
+  if (!visitor) {
+    return std::unexpected(core::Error::invalid_argument("directory walk visitor must not be empty"));
+  }
+  if (!cancelled) {
+    return std::unexpected(core::Error::invalid_argument("directory walk cancel predicate must not be empty"));
+  }
+
+  auto state = WalkState{.options = options, .cancelled = cancelled, .visitor = visitor};
+  auto walked = walk_level(state, root, {}, 1);
+  if (!walked) {
+    return std::unexpected(std::move(walked).error());
+  }
+  return {};
 }
 
 }  // namespace orangutan::io

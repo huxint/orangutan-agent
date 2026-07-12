@@ -64,6 +64,21 @@ performs the requested operation and returns `core::Result<T>`.
 > root pathname replacement cannot redirect the listing and symlinks are
 > classified without being followed. The pathname overload remains temporarily
 > for callers not yet migrated.
+> Recursive consumers use the synchronous
+> `walk_directory_tree(root, options, cancelled, visitor)` driver: a
+> depth-first walk beneath a pinned root that descends exclusively through
+> dirfd-relative `open_directory` (`RESOLVE_BENEATH`, no-follow), hands the
+> visitor each `WalkEntry` (name, root-relative path, no-follow kind, size,
+> depth) together with the pinned parent `DirectoryAuthority`, and never
+> follows symlinks — a symlinked directory is classified and offered but not
+> traversed. The visitor steers descent (`proceed` / `skip_subtree` / `stop`)
+> and may open matched files through the supplied parent authority, so no
+> pathname is reopened mid-walk. Policy (ignore rules, hidden-name filters,
+> display labels) stays in the tool layer; the primitive enforces only the
+> `.`/`..` skip, an optional `max_entries` abort
+> (`Error::io`, `reason=walk_entry_limit`), and a per-entry cancel poll. The
+> walk is blocking by design — callers hop through `run_blocking` like the
+> other authority helpers.
 >
 > **Slice-43 status (2026-05-22):** `oran-io` adds the range-aware
 > `read_text_file_ranged(executor, path, options)` returning
@@ -262,6 +277,12 @@ async::Awaitable<core::Result<std::vector<DirectoryEntry>>>
 list_directory(asio::any_io_executor executor,
                DirectoryAuthority directory,
                ListDirectoryOptions = {});
+
+core::Result<void>
+walk_directory_tree(const DirectoryAuthority& root,
+                    WalkTreeOptions options,
+                    const std::function<bool()>& cancelled,
+                    WalkVisitor& visitor);
 
 async::Awaitable<core::Result<DeletePathResult>>
 delete_path(asio::any_io_executor executor, DeleteMutation mutation, DeletePathOptions = {});

@@ -1,11 +1,15 @@
 // tests/io/test_directory_authority.cpp — dirfd authority regressions.
 
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -836,4 +840,222 @@ TEST_CASE("FileMutation temp naming supports near-limit target names", "[unit][i
   });
 
   REQUIRE(std::filesystem::file_size(workspace / name) == 7U);
+}
+
+namespace {
+
+struct CollectedWalkEntry {
+  std::string relative_path;
+  io::DirectoryEntryKind kind{io::DirectoryEntryKind::other};
+  std::size_t depth{0};
+};
+
+[[nodiscard]] io::WalkVisitor collect_into(std::vector<CollectedWalkEntry>& sink) {
+  return [&sink](const io::DirectoryAuthority& /*parent*/, const io::WalkEntry& entry) -> core::Result<io::WalkAction> {
+    sink.push_back(CollectedWalkEntry{
+        .relative_path = entry.relative_path,
+        .kind = entry.kind,
+        .depth = entry.depth,
+    });
+    return io::WalkAction::proceed;
+  };
+}
+
+[[nodiscard]] std::string_view context_reason(const core::Error& error) {
+  const auto entries = error.context();
+  const auto found = std::ranges::find_if(entries, [](const auto& entry) { return entry.first == "reason"; });
+  return found == entries.end() ? std::string_view{} : std::string_view{found->second};
+}
+
+}  // namespace
+
+TEST_CASE("walk_directory_tree visits a nested tree depth-first in sorted order", "[unit][io][authority][walk]") {
+  TempDir temp{"oran-io-walk-nested"};
+  const auto workspace = temp.path() / "workspace";
+  std::filesystem::create_directories(workspace / "a" / "deep");
+  std::filesystem::create_directories(workspace / "b");
+  write_direct(workspace / "a" / "deep" / "leaf.txt", "leaf");
+  write_direct(workspace / "a" / "note.txt", "note");
+  write_direct(workspace / "b" / "b.txt", "bb");
+  write_direct(workspace / "root.txt", "root");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+
+  std::vector<CollectedWalkEntry> entries;
+  auto visitor = collect_into(entries);
+  auto walked = io::walk_directory_tree(*authority, io::WalkTreeOptions{}, [] { return false; }, visitor);
+  REQUIRE(walked.has_value());
+
+  REQUIRE(entries.size() == 7);
+  CHECK(entries[0].relative_path == "a");
+  CHECK(entries[0].kind == io::DirectoryEntryKind::directory);
+  CHECK(entries[0].depth == 1);
+  CHECK(entries[1].relative_path == "a/deep");
+  CHECK(entries[1].depth == 2);
+  CHECK(entries[2].relative_path == "a/deep/leaf.txt");
+  CHECK(entries[2].depth == 3);
+  CHECK(entries[3].relative_path == "a/note.txt");
+  CHECK(entries[4].relative_path == "b");
+  CHECK(entries[5].relative_path == "b/b.txt");
+  CHECK(entries[6].relative_path == "root.txt");
+}
+
+TEST_CASE("walk_directory_tree classifies but never follows a symlinked directory", "[unit][io][authority][walk]") {
+  TempDir temp{"oran-io-walk-symlink"};
+  const auto workspace = temp.path() / "workspace";
+  const auto outside = temp.path() / "outside";
+  std::filesystem::create_directories(workspace);
+  std::filesystem::create_directories(outside / "secret");
+  write_direct(outside / "secret" / "leak.txt", "leak");
+  std::filesystem::create_directory_symlink(outside, workspace / "escape");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+
+  std::vector<CollectedWalkEntry> entries;
+  auto visitor = collect_into(entries);
+  auto walked = io::walk_directory_tree(*authority, io::WalkTreeOptions{}, [] { return false; }, visitor);
+  REQUIRE(walked.has_value());
+
+  REQUIRE(entries.size() == 1);
+  CHECK(entries[0].relative_path == "escape");
+  CHECK(entries[0].kind == io::DirectoryEntryKind::symlink);
+}
+
+TEST_CASE("walk_directory_tree honors skip_subtree without descending", "[unit][io][authority][walk]") {
+  TempDir temp{"oran-io-walk-skip"};
+  const auto workspace = temp.path() / "workspace";
+  std::filesystem::create_directories(workspace / "skip" / "child");
+  std::filesystem::create_directories(workspace / "keep");
+  write_direct(workspace / "skip" / "child" / "hidden.txt", "x");
+  write_direct(workspace / "keep" / "seen.txt", "y");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+
+  std::vector<std::string> visited;
+  io::WalkVisitor visitor = [&visited](const io::DirectoryAuthority& /*parent*/,
+                                       const io::WalkEntry& entry) -> core::Result<io::WalkAction> {
+    visited.push_back(entry.relative_path);
+    if (entry.relative_path == "skip") {
+      return io::WalkAction::skip_subtree;
+    }
+    return io::WalkAction::proceed;
+  };
+  auto walked = io::walk_directory_tree(*authority, io::WalkTreeOptions{}, [] { return false; }, visitor);
+  REQUIRE(walked.has_value());
+
+  REQUIRE(visited.size() == 3);
+  CHECK(visited[0] == "keep");
+  CHECK(visited[1] == "keep/seen.txt");
+  CHECK(visited[2] == "skip");
+  CHECK(std::ranges::find(visited, std::string{"skip/child"}) == visited.end());
+}
+
+TEST_CASE("walk_directory_tree stops immediately on WalkAction::stop", "[unit][io][authority][walk]") {
+  TempDir temp{"oran-io-walk-stop"};
+  const auto workspace = temp.path() / "workspace";
+  std::filesystem::create_directories(workspace / "a");
+  write_direct(workspace / "a" / "first.txt", "1");
+  write_direct(workspace / "b.txt", "2");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+
+  std::size_t seen = 0;
+  io::WalkVisitor visitor = [&seen](const io::DirectoryAuthority& /*parent*/,
+                                    const io::WalkEntry& /*entry*/) -> core::Result<io::WalkAction> {
+    ++seen;
+    return io::WalkAction::stop;
+  };
+  auto walked = io::walk_directory_tree(*authority, io::WalkTreeOptions{}, [] { return false; }, visitor);
+  REQUIRE(walked.has_value());
+  CHECK(seen == 1);
+}
+
+TEST_CASE("walk_directory_tree enforces the entry limit", "[unit][io][authority][walk]") {
+  TempDir temp{"oran-io-walk-limit"};
+  const auto workspace = temp.path() / "workspace";
+  std::filesystem::create_directories(workspace);
+  for (int i = 0; i < 5; ++i) {
+    write_direct(workspace / std::format("f{}.txt", i), "x");
+  }
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+
+  std::vector<CollectedWalkEntry> entries;
+  auto visitor = collect_into(entries);
+  auto walked =
+      io::walk_directory_tree(*authority, io::WalkTreeOptions{.max_entries = 3}, [] { return false; }, visitor);
+  REQUIRE_FALSE(walked.has_value());
+  CHECK(walked.error().kind() == core::ErrorKind::io);
+  CHECK(context_reason(walked.error()) == "walk_entry_limit");
+}
+
+TEST_CASE("walk_directory_tree aborts when the cancel predicate fires", "[unit][io][authority][walk]") {
+  TempDir temp{"oran-io-walk-cancel"};
+  const auto workspace = temp.path() / "workspace";
+  std::filesystem::create_directories(workspace);
+  write_direct(workspace / "a.txt", "x");
+  write_direct(workspace / "b.txt", "y");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+
+  std::vector<CollectedWalkEntry> entries;
+  auto visitor = collect_into(entries);
+  auto walked = io::walk_directory_tree(*authority, io::WalkTreeOptions{}, [] { return true; }, visitor);
+  REQUIRE_FALSE(walked.has_value());
+  CHECK(walked.error().kind() == core::ErrorKind::cancelled);
+  CHECK(entries.empty());
+}
+
+TEST_CASE("walk_directory_tree surfaces a visitor error", "[unit][io][authority][walk]") {
+  TempDir temp{"oran-io-walk-visitor-error"};
+  const auto workspace = temp.path() / "workspace";
+  std::filesystem::create_directories(workspace);
+  write_direct(workspace / "a.txt", "x");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+
+  io::WalkVisitor visitor = [](const io::DirectoryAuthority& /*parent*/,
+                               const io::WalkEntry& /*entry*/) -> core::Result<io::WalkAction> {
+    return std::unexpected(core::Error::invalid_argument("visitor rejected entry"));
+  };
+  auto walked = io::walk_directory_tree(*authority, io::WalkTreeOptions{}, [] { return false; }, visitor);
+  REQUIRE_FALSE(walked.has_value());
+  CHECK(walked.error().kind() == core::ErrorKind::invalid_argument);
+}
+
+TEST_CASE("walk_directory_tree opens a matched file through the pinned parent authority",
+          "[unit][io][authority][walk]") {
+  TempDir temp{"oran-io-walk-open"};
+  const auto workspace = temp.path() / "workspace";
+  std::filesystem::create_directories(workspace / "sub");
+  write_direct(workspace / "sub" / "leaf.txt", "anchored-content");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+
+  std::string opened_text;
+  io::WalkVisitor visitor = [&opened_text](const io::DirectoryAuthority& parent,
+                                           const io::WalkEntry& entry) -> core::Result<io::WalkAction> {
+    if (entry.kind == io::DirectoryEntryKind::regular_file) {
+      auto file = parent.open_file(io::AnchoredPath{
+          .relative_path = entry.name,
+          .symlink_policy = io::AnchoredSymlinkPolicy::reject_all,
+      });
+      if (!file) {
+        return std::unexpected(std::move(file).error());
+      }
+      opened_text = read_handle(*file);
+    }
+    return io::WalkAction::proceed;
+  };
+  auto walked = io::walk_directory_tree(*authority, io::WalkTreeOptions{}, [] { return false; }, visitor);
+  REQUIRE(walked.has_value());
+  CHECK(opened_text == "anchored-content");
 }
