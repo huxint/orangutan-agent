@@ -43,9 +43,23 @@ Current seams and future work:
   introduced symlink; replacing the approved delete target produces `conflict`.
   Mutation commits revalidate the snapshotted target immediately before
   rename and surface a stale-fingerprint conflict on detected lost updates.
-  The workspace resolver's now-unconsumed string-canonicalisation result and
-  the pathname-based ignore-file reads inside `WorkspaceWalkFilter` are the
-  remaining retirement backlog.
+  The read resolver intentionally keeps a pathname canonicalisation pass in
+  front of the pinned authority: `RESOLVE_BENEATH` cannot follow an
+  absolute-target symlink even when the target stays inside the workspace, so
+  that pass is the symlink normaliser that turns symlink-ful spellings into
+  the symlink-free relative the authority then executes. It runs only while
+  the root pathname still names the pinned directory (`refers_to_path`);
+  otherwise resolution degrades to the stricter anchored-probe shape.
+- `WorkspaceWalkFilter` reads `.gitignore` / `.ignore` through the pinned
+  authority of the directory that owns them (the walk supplies each entry's
+  parent authority): opens are no-follow beneath that directory, so a
+  symlinked ignore file resolving outside its scope is skipped rather than
+  followed, while relative in-scope symlinks still load. No recursive-walk
+  code path opens a pathname after resolution.
+- The scheduler derives per-path lock keys via `Workspace::lock_key` — a
+  lexical join against the configured roots with no filesystem access — so a
+  batch call resolves its path once, at the registry boundary
+  (spec 0012 consumes this contract).
 - Root paths for `FileSearch` and `DirectoryList` use
   `Workspace::resolve_list` and therefore follow symlinks only when the
   canonical target remains in an allowed root. Nested symlinks during

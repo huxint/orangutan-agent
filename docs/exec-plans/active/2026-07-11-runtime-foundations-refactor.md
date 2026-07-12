@@ -104,7 +104,12 @@ external contract or a previously reproduced failure.
 - [x] Bounded named `async::TaskGroup` foundation landed; runtime owners are migrating.
 - [x] `Runtime::stop_and_join()` landed; start-mode serve/desktop owners now join
   Runtime workers before borrowed assembly/provider state can be destroyed.
-- [ ] Filesystem authority migration landed; old string-authority path removed.
+- [x] Filesystem authority migration landed: every filesystem built-in —
+  recursive walks and ignore-file reads included — executes through pinned
+  authorities, and the scheduler derives lock keys without re-resolving paths.
+  One deliberate survivor: the read resolver keeps a `refers_to_path`-gated
+  pathname pass as its symlink normaliser (see the 2026-07-12 decision below
+  and the recursive-walk sub-plan decision log).
 - [ ] Structured task ownership migrated across runtime surfaces.
 - [ ] Network/provider/UI correctness milestone landed.
 - [ ] Storage/conflict milestone landed.
@@ -130,6 +135,16 @@ external contract or a previously reproduced failure.
 - 2026-07-11: cancellation is a request, not ownership. An owner cannot release
   state while a laggard still borrows it; hard deadlines require process
   isolation rather than optimistic coroutine races.
+- 2026-07-12: amends the 2026-07-11 "absolute symlinks are no longer a
+  supported workspace traversal mechanism" line. Absolute-target symlinks
+  remain readable through the read/list resolvers' pathname normalisation
+  pass (spec 0013 AC2) while the root pathname still names the pinned
+  directory, because `RESOLVE_BENEATH` cannot follow them and the
+  normaliser's output is re-anchored beneath the pinned root before
+  execution — no confinement authority flows from the pathname. Anchored
+  execution itself still rejects absolute symlinks everywhere else: nested
+  walk entries, matched-file opens, ignore-file loads, mutations, and the
+  renamed-root read fallback.
 
 ## Linked Artifacts
 

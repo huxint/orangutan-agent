@@ -575,8 +575,10 @@ walk_and_scan(const SearchOptions& opts, const SearchRoot& root, const asio::can
     // supplies pinned entries. The filter is fed reconstructed absolute paths
     // (`base / relative_path`) so `.gitignore` scoping and built-in skip rules
     // stay byte-identical to the pre-migration `recursive_directory_iterator`
-    // walk.
-    auto walk_filter = WorkspaceWalkFilter::create(root.base_absolute,
+    // walk, while ignore files load through the pinned parent authorities the
+    // walk hands the visitor.
+    auto walk_filter = WorkspaceWalkFilter::create(*root.directory,
+                                                   root.base_absolute,
                                                    WorkspaceWalkOptions{
                                                        .include_hidden = opts.include_hidden,
                                                        .respect_ignore = opts.respect_ignore,
@@ -586,7 +588,7 @@ walk_and_scan(const SearchOptions& opts, const SearchRoot& root, const asio::can
                                   const io::WalkEntry& entry) -> core::Result<io::WalkAction> {
       const auto absolute = (base / entry.relative_path).string();
       const bool is_directory = entry.kind == io::DirectoryEntryKind::directory;
-      if (walk_filter.should_skip(absolute, is_directory)) {
+      if (walk_filter.should_skip(parent, absolute, is_directory)) {
         return is_directory ? io::WalkAction::skip_subtree : io::WalkAction::proceed;
       }
       // Symlinks and non-regular entries are classified by the walk and never

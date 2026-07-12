@@ -711,13 +711,20 @@ Current surface and forward shape:
 - Symlink policy is now uniform across the whole filesystem built-in set:
   follow inside-workspace symlinks for `resolve_read` / `resolve_list`
   (rejecting `symlink_escape` when the target leaves the root), and refuse
-  symlinks for `resolve_write` / `resolve_delete` (`symlink_target`).
-  Nested entries during recursive `FileSearch` / `DirectoryList` walks are
-  still never followed as symlinks — a deliberately stricter form of the same
-  rule, now enforced by dirfd-anchored descent (a symlinked directory is
-  classified but never traversed; `FileSearch` opens matched files no-follow
-  beneath their pinned parent, and recursive `DirectoryList` omits symlink
-  entries entirely).
+  symlinks for `resolve_write` / `resolve_delete` (`symlink_target`). The
+  read resolver keeps a pathname canonicalisation pass as its symlink
+  normaliser — `RESOLVE_BENEATH` cannot follow absolute-target symlinks even
+  when the target stays inside — gated by `refers_to_path` so a replaced
+  root pathname is never consulted; the pinned authority stays the sole
+  execution path. Nested entries during recursive `FileSearch` /
+  `DirectoryList` walks are still never followed as symlinks — a
+  deliberately stricter form of the same rule, now enforced by
+  dirfd-anchored descent (a symlinked directory is classified but never
+  traversed; `FileSearch` opens matched files no-follow beneath their pinned
+  parent, and recursive `DirectoryList` omits symlink entries entirely).
+  `.gitignore` / `.ignore` files load through each directory's pinned
+  authority, no-follow beneath that scope, so an ignore file symlinked
+  outside its directory is skipped rather than read.
 
 Full contract, override roots, audit fields, and acceptance criteria live in
 [`../product-specs/0013-workspace-and-path-policy.md`](../product-specs/0013-workspace-and-path-policy.md).
@@ -810,15 +817,16 @@ dispatch time.
 > `edit_file`, or `delete_path` take an exclusive lock; tools declaring
 > `read_file` or `list_directory` take a shared lock; tools without a
 > filesystem capability skip path locking entirely and run under the
-> existing bounded-parallelism slot only. The lock key is the
-> workspace-resolved absolute path the scheduler derives by extracting the
-> JSON `path` field from `ToolBatchCall::input_json` and passing it through
-> the prototype's `tool::Workspace` resolver (`resolve_read` / `resolve_list`
-> for shared, `resolve_write` / `resolve_delete` for exclusive); calls
-> without a workspace, without a `path` field, or whose path fails
-> workspace resolution fall through to bounded-parallelism only (the
-> registry's own pre-resolution path then surfaces the same resolution
-> failure with audit context intact). Per-entry state is FIFO: a queued
+> existing bounded-parallelism slot only. The lock key comes from
+> `tool::Workspace::lock_key`: the scheduler extracts the JSON `path` field
+> from `ToolBatchCall::input_json` and joins it lexically against the
+> workspace root plus the direction's extra roots (read roots for shared,
+> write roots for exclusive) — no filesystem access and no duplicate of the
+> registry's dispatch-time resolution. Calls without a workspace, without a
+> `path` field, or whose path falls outside every lockable root fall
+> through to bounded-parallelism only (the registry's own pre-resolution
+> path surfaces any policy error with audit context intact). Per-entry
+> state is FIFO: a queued
 > exclusive waiter blocks new shared acquirers from skipping the line, but
 > consecutive shared waiters fan out together when no writer is active.
 > Cancellation while waiting is reconciled by removing the cancelled

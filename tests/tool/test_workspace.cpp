@@ -28,6 +28,7 @@
 
 namespace async = orangutan::async;
 namespace core = orangutan::core;
+namespace io = orangutan::io;
 namespace permission = orangutan::permission;
 namespace tool = orangutan::tool;
 namespace test = orangutan::tests;
@@ -229,6 +230,9 @@ TEST_CASE("Workspace follows inside read symlinks and rejects symlink escapes", 
 
   auto inside = workspace.resolve_read("inside-link.txt");
   REQUIRE(inside.has_value());
+  // The pathname pass normalises the symlink-ful spelling (this fixture's
+  // link target is absolute, which `RESOLVE_BENEATH` alone cannot follow)
+  // to the canonical target that anchored execution then opens.
   REQUIRE(inside->absolute_path == (root.path() / "target.txt").string());
   REQUIRE(inside->symlink_followed);
 
@@ -236,6 +240,59 @@ TEST_CASE("Workspace follows inside read symlinks and rejects symlink escapes", 
   REQUIRE_FALSE(escaped.has_value());
   REQUIRE(escaped.error().kind() == core::ErrorKind::permission_denied);
   REQUIRE(context_has(escaped.error(), "reason", "symlink_escape"));
+}
+
+TEST_CASE("Workspace read resolution survives a replaced root pathname", "[unit][tool][workspace]") {
+  TempDir sandbox{"oran-workspace-read-root-replaced"};
+  const auto root = sandbox.path() / "workspace";
+  const auto moved_root = sandbox.path() / "workspace-moved";
+  const auto outside = sandbox.path() / "outside";
+  write_text(root / "note.txt", "inside-original");
+  write_text(outside / "note.txt", "outside-target");
+
+  auto workspace = make_workspace(root);
+
+  std::error_code ec;
+  std::filesystem::rename(root, moved_root, ec);
+  REQUIRE(ec.value() == 0);
+  create_symlink_or_skip(outside, root);
+
+  // Resolution goes through the pinned root descriptor, not the pathname:
+  // the swapped-in symlink at the original spelling never redirects the read.
+  auto resolved = workspace.resolve_read("note.txt");
+  REQUIRE(resolved.has_value());
+  REQUIRE(resolved->absolute_path == (root / "note.txt").string());
+  REQUIRE(resolved->relative_path == "note.txt");
+  REQUIRE_FALSE(resolved->symlink_followed);
+
+  auto missing = workspace.resolve_read("absent.txt");
+  REQUIRE_FALSE(missing.has_value());
+  REQUIRE(missing.error().kind() == core::ErrorKind::not_found);
+}
+
+TEST_CASE("Workspace lock_key derives deterministic keys without filesystem access", "[unit][tool][workspace]") {
+  TempDir root{"oran-workspace-lock-key"};
+  TempDir read_extra{"oran-workspace-lock-key-read"};
+  auto workspace = make_workspace(root.path(),
+                                  tool::WorkspaceOptions{
+                                      .extra_read_roots = {read_extra.path().string()},
+                                  });
+
+  // Pure string derivation: a missing file still keys, and relative,
+  // absolute, and dot-dot spellings of the same target agree.
+  const auto expected = (root.path() / "note.txt").string();
+  REQUIRE(workspace.lock_key("note.txt", tool::LockDirection::read) == expected);
+  REQUIRE(workspace.lock_key(expected, tool::LockDirection::write) == expected);
+  REQUIRE(workspace.lock_key("sub/../note.txt", tool::LockDirection::write) == expected);
+
+  REQUIRE_FALSE(workspace.lock_key("../outside.txt", tool::LockDirection::read).has_value());
+  REQUIRE_FALSE(workspace.lock_key("/etc/passwd", tool::LockDirection::write).has_value());
+  REQUIRE_FALSE(workspace.lock_key("", tool::LockDirection::read).has_value());
+
+  // Extra roots widen only their own direction.
+  const auto extra_target = (read_extra.path() / "log.txt").string();
+  REQUIRE(workspace.lock_key(extra_target, tool::LockDirection::read) == extra_target);
+  REQUIRE_FALSE(workspace.lock_key(extra_target, tool::LockDirection::write).has_value());
 }
 
 TEST_CASE("Workspace refuses mutating paths that traverse symlinks", "[unit][tool][workspace]") {
@@ -321,26 +378,55 @@ TEST_CASE("Workspace walk filter shares hidden, built-in, and ignore-file decisi
   write_text(root.path() / "src" / "local.txt", "ignored by nested rule");
   write_text(root.path() / "docs" / "secret.txt", "ignored by slash rule");
 
-  auto workspace = make_workspace(root.path());
-  auto filter = workspace.walk_filter(root.path().string());
+  auto root_authority = io::DirectoryAuthority::open_trusted(root.path().string());
+  REQUIRE(root_authority.has_value());
+  auto src_authority = io::DirectoryAuthority::open_trusted((root.path() / "src").string());
+  REQUIRE(src_authority.has_value());
+  auto docs_authority = io::DirectoryAuthority::open_trusted((root.path() / "docs").string());
+  REQUIRE(docs_authority.has_value());
 
-  REQUIRE(filter.should_skip((root.path() / ".hidden.txt").string(), false));
-  REQUIRE(filter.should_skip((root.path() / ".git").string(), true));
-  REQUIRE(filter.should_skip((root.path() / "build").string(), true));
-  REQUIRE(filter.should_skip((root.path() / "a.log").string(), false));
-  REQUIRE_FALSE(filter.should_skip((root.path() / "keep.log").string(), false));
-  REQUIRE(filter.should_skip((root.path() / "ignored").string(), true));
-  REQUIRE(filter.should_skip((root.path() / "src" / "local.txt").string(), false));
-  REQUIRE(filter.should_skip((root.path() / "docs" / "secret.txt").string(), false));
+  auto filter = tool::WorkspaceWalkFilter::create(*root_authority, root.path().string());
 
-  auto forensic_filter = workspace.walk_filter(root.path().string(),
-                                               tool::WorkspaceWalkOptions{
-                                                   .include_hidden = true,
-                                                   .respect_ignore = false,
-                                               });
-  REQUIRE_FALSE(forensic_filter.should_skip((root.path() / ".hidden.txt").string(), false));
-  REQUIRE_FALSE(forensic_filter.should_skip((root.path() / "build").string(), true));
-  REQUIRE_FALSE(forensic_filter.should_skip((root.path() / "a.log").string(), false));
+  REQUIRE(filter.should_skip(*root_authority, (root.path() / ".hidden.txt").string(), false));
+  REQUIRE(filter.should_skip(*root_authority, (root.path() / ".git").string(), true));
+  REQUIRE(filter.should_skip(*root_authority, (root.path() / "build").string(), true));
+  REQUIRE(filter.should_skip(*root_authority, (root.path() / "a.log").string(), false));
+  REQUIRE_FALSE(filter.should_skip(*root_authority, (root.path() / "keep.log").string(), false));
+  REQUIRE(filter.should_skip(*root_authority, (root.path() / "ignored").string(), true));
+  REQUIRE(filter.should_skip(*src_authority, (root.path() / "src" / "local.txt").string(), false));
+  REQUIRE(filter.should_skip(*docs_authority, (root.path() / "docs" / "secret.txt").string(), false));
+
+  auto forensic_filter = tool::WorkspaceWalkFilter::create(*root_authority,
+                                                           root.path().string(),
+                                                           tool::WorkspaceWalkOptions{
+                                                               .include_hidden = true,
+                                                               .respect_ignore = false,
+                                                           });
+  REQUIRE_FALSE(forensic_filter.should_skip(*root_authority, (root.path() / ".hidden.txt").string(), false));
+  REQUIRE_FALSE(forensic_filter.should_skip(*root_authority, (root.path() / "build").string(), true));
+  REQUIRE_FALSE(forensic_filter.should_skip(*root_authority, (root.path() / "a.log").string(), false));
+}
+
+TEST_CASE("Workspace walk filter reads ignore files beneath their pinned scope only", "[unit][tool][workspace]") {
+  TempDir root{"oran-workspace-walk-filter-anchored"};
+  TempDir outside{"oran-workspace-walk-filter-anchored-outside"};
+  write_text(outside.path() / "rules.gitignore", "skipme.txt\n");
+  write_text(root.path() / "skipme.txt", "kept: escaping ignore rules are not read");
+  write_text(root.path() / "real.rules", "alsoskip.txt\n");
+  write_text(root.path() / "alsoskip.txt", "skipped by the in-scope symlinked rules");
+
+  // An ignore file that is a symlink escaping its directory is skipped (the
+  // pathname ifstream it replaces would have followed it); a relative
+  // symlink staying beneath the same pinned scope is still honored.
+  create_symlink_or_skip(outside.path() / "rules.gitignore", root.path() / ".gitignore");
+  create_symlink_or_skip("real.rules", root.path() / ".ignore");
+
+  auto root_authority = io::DirectoryAuthority::open_trusted(root.path().string());
+  REQUIRE(root_authority.has_value());
+
+  auto filter = tool::WorkspaceWalkFilter::create(*root_authority, root.path().string());
+  REQUIRE_FALSE(filter.should_skip(*root_authority, (root.path() / "skipme.txt").string(), false));
+  REQUIRE(filter.should_skip(*root_authority, (root.path() / "alsoskip.txt").string(), false));
 }
 
 TEST_CASE("Workspace display_path renders stable root-relative labels", "[unit][tool][workspace]") {

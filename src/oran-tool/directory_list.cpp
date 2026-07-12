@@ -6,11 +6,13 @@
 // single-level through `oran-io::list_directory`; `recursive=true` takes the
 // project-list path in this TU so the registry/workspace boundary remains
 // unchanged while callers can inspect a whole tree. Slice 29 ships the
-// registrar alongside the slice-17 / 18 / 19 / 20 file-tool catalog. Slice 40
-// routes the input path through `tool::Workspace::resolve_list` when
-// `DispatchContext::workspace` is supplied so the listing cannot escape the
-// workspace via traversal or a root-side symlink; the underlying
-// `oran-io::list_directory` semantics are unchanged.
+// registrar alongside the slice-17 / 18 / 19 / 20 file-tool catalog. When
+// `DispatchContext::workspace` is supplied the registry pre-resolves the input
+// path through `tool::Workspace::resolve_list` and stores a pinned authority on
+// `DispatchContext::resolved_path`; this handler consumes that authority so the
+// listing cannot escape the workspace via traversal or a root-side symlink. A
+// workspace context without a resolved authority is a registry invariant
+// violation and returns an internal error rather than re-resolving by pathname.
 //
 // Slice 64 (2026-05-24) closes spec 0014's third built-in migration step
 // (after slice 62 `FileRead` and slice 63 `FileSearch`): successful calls
@@ -189,9 +191,8 @@ void apply_display_paths(std::string_view display_root, std::vector<io::Director
 }
 
 /// Pin the recursive listing root. Workspace dispatch supplies the
-/// pre-resolved authority and the root opens beneath it; without a resolved
-/// path the (already resolve_list-confined or trusted) absolute path pins its
-/// own root.
+/// pre-resolved authority and the root opens beneath it; without a workspace
+/// the trusted absolute path pins its own root.
 [[nodiscard]] core::Result<io::DirectoryAuthority> open_recursive_root(const ParsedInput& parsed,
                                                                        const DispatchContext& ctx) {
   if (ctx.resolved_path.has_value()) {
@@ -214,14 +215,16 @@ list_directory_recursive(const ParsedInput& parsed,
   // Ignore/dotfile policy stays in the tool layer; the anchored walk only
   // supplies pinned entries. The filter sees reconstructed absolute paths
   // (`base / relative_path`) so rule scoping and display labels stay
-  // byte-identical to the pre-migration pathname walk.
-  auto walk_filter = WorkspaceWalkFilter::create(parsed.path,
+  // byte-identical to the pre-migration pathname walk, while ignore files
+  // load through the pinned parent authorities the walk hands the visitor.
+  auto walk_filter = WorkspaceWalkFilter::create(root,
+                                                 parsed.path,
                                                  WorkspaceWalkOptions{
                                                      .include_hidden = parsed.include_hidden,
                                                      .respect_ignore = true,
                                                  });
   const std::filesystem::path base{parsed.path};
-  io::WalkVisitor visitor = [&](const io::DirectoryAuthority& /*parent*/,
+  io::WalkVisitor visitor = [&](const io::DirectoryAuthority& parent,
                                 const io::WalkEntry& entry) -> core::Result<io::WalkAction> {
     // Nested symlinks are classified by the walk and never followed; the
     // legacy listing also omitted them from the rendered entries.
@@ -230,7 +233,7 @@ list_directory_recursive(const ParsedInput& parsed,
     }
     const auto absolute = (base / entry.relative_path).string();
     const bool is_directory = entry.kind == io::DirectoryEntryKind::directory;
-    if (walk_filter.should_skip(absolute, is_directory)) {
+    if (walk_filter.should_skip(parent, absolute, is_directory)) {
       return is_directory ? io::WalkAction::skip_subtree : io::WalkAction::proceed;
     }
     if (entries.size() >= parsed.max_entries) {
@@ -323,11 +326,8 @@ format_data_json(std::string_view path, const ParsedInput& parsed, const std::ve
   if (ctx.resolved_path.has_value()) {
     parsed->path = ctx.resolved_path->absolute_path;
   } else if (ctx.workspace != nullptr) {
-    auto resolved = ctx.workspace->resolve_list(parsed->path);
-    if (!resolved) {
-      co_return std::unexpected(std::move(resolved).error());
-    }
-    parsed->path = std::move(resolved->absolute_path);
+    co_return std::unexpected(
+        core::Error::internal("DirectoryList: workspace dispatch did not provide a resolved authority"));
   }
 
   const auto resolved_path = parsed->path;

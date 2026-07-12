@@ -36,6 +36,14 @@ struct WriteIntent {
   bool create_parent_directories{false};
 };
 
+/// Which extra-root list widens a `Workspace::lock_key` match: read covers
+/// the read/list intents (shared locks), write covers the mutating intents
+/// (exclusive locks).
+enum class LockDirection {
+  read,
+  write,
+};
+
 struct WorkspaceWalkOptions {
   /// Dot-prefixed names are skipped unless callers opt in.
   bool include_hidden{false};
@@ -46,7 +54,12 @@ struct WorkspaceWalkOptions {
 
 class WorkspaceWalkFilter {
 public:
-  [[nodiscard]] static WorkspaceWalkFilter create(std::string_view root, WorkspaceWalkOptions options = {});
+  /// Create the shared recursive-walk predicate rooted at an already pinned
+  /// directory. `root_authority` is the walk root's authority; when ignore
+  /// rules apply, the root's `.gitignore` / `.ignore` are read through it at
+  /// creation so no pathname is reopened later.
+  [[nodiscard]] static WorkspaceWalkFilter
+  create(const io::DirectoryAuthority& root_authority, std::string_view root, WorkspaceWalkOptions options = {});
 
   WorkspaceWalkFilter(WorkspaceWalkFilter&&) noexcept;
   WorkspaceWalkFilter& operator=(WorkspaceWalkFilter&&) noexcept;
@@ -55,8 +68,13 @@ public:
   ~WorkspaceWalkFilter();
 
   /// Return true when a recursive filesystem consumer should skip `path`.
-  /// `path` is expected to be an absolute path under the filter root.
-  [[nodiscard]] bool should_skip(std::string_view path, bool is_directory);
+  /// `path` is expected to be an absolute path under the filter root and
+  /// `parent` the pinned authority of its containing directory — the pair a
+  /// `io::WalkVisitor` receives. Ignore files for a newly entered directory
+  /// are read through `parent` (no-follow beneath that directory), which
+  /// relies on the walk's pre-order visit sequence: every ancestor directory
+  /// was offered to this filter before its children.
+  [[nodiscard]] bool should_skip(const io::DirectoryAuthority& parent, std::string_view path, bool is_directory);
 
 private:
   struct Impl;
@@ -73,9 +91,12 @@ struct ResolvedPath {
   /// remains populated for per-call outside overrides even though the audit
   /// `relative_path` below is intentionally empty.
   std::string authority_relative_path;
-  /// Canonical absolute spelling retained for audit/display and for built-ins
-  /// that have not yet migrated to dirfd-relative execution. It is not the
-  /// execution authority for migrated callers.
+  /// Canonical absolute spelling retained for audit/display. Read intents
+  /// normalise symlink-ful spellings here (the pathname pass) so anchored
+  /// execution receives a symlink-free relative; when the root pathname no
+  /// longer names the pinned directory the spelling degrades to the
+  /// workspace-lexical candidate. It is not the execution authority —
+  /// callers execute through `authority` + `authority_relative_path`.
   std::string absolute_path;
   /// Path relative to the matching root, for audit/display metadata.
   /// Empty when a per-call read/list override resolves outside the permitted
@@ -118,10 +139,15 @@ public:
   [[nodiscard]] core::Result<ResolvedPath> resolve_write(std::string_view path, WriteIntent intent) const;
   [[nodiscard]] core::Result<ResolvedPath> resolve_delete(std::string_view path) const;
 
-  /// Create the shared recursive-walk filter rooted at an already resolved
-  /// directory. The filter owns only lightweight strings and lazy ignore-rule
-  /// state; it does not expose filesystem types in this public header.
-  [[nodiscard]] WorkspaceWalkFilter walk_filter(std::string_view root, WorkspaceWalkOptions options = {}) const;
+  /// Scheduler lock-key derivation: the lexically-normalised absolute
+  /// spelling of `path` joined against the workspace root, provided it falls
+  /// beneath the root or a configured extra root for the requested
+  /// direction. Pure string computation — no filesystem access — so the key
+  /// is a deterministic function of the input and configuration rather than
+  /// a racy resolution snapshot. `std::nullopt` means the path cannot name a
+  /// lockable workspace target; callers skip lock serialisation and the
+  /// dispatch-time resolver stays the sole access authority.
+  [[nodiscard]] std::optional<std::string> lock_key(std::string_view path, LockDirection direction) const;
 
   /// Render an absolute path as a stable workspace display name when possible,
   /// e.g. `<workspace>/src/main.cpp`. Paths outside known roots pass through.

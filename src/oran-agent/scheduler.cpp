@@ -2,7 +2,6 @@
 
 #include <oran/agent/scheduler.hpp>
 
-#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <deque>
@@ -114,17 +113,16 @@ classify_lock_mode(const std::vector<core::Capability>& capabilities) {
   return std::nullopt;
 }
 
-/// Resolve the lock key for a call by extracting `path` from the JSON input
-/// and routing it through the prototype workspace's intent-matching resolver.
-/// Returns `std::nullopt` for the cases where lock acquisition should be
-/// skipped (no workspace, no `path` field, resolution failure, malformed
-/// JSON). A skipped lock falls through to bounded-parallelism only; the
-/// underlying registry dispatch still re-runs full resolution and returns the
-/// same error the lock-keyed path would have surfaced.
-[[nodiscard]] std::optional<std::string> derive_lock_key(tool::Workspace* workspace,
-                                                         std::string_view input_json,
-                                                         detail::PathLockMode mode,
-                                                         const std::vector<core::Capability>& capabilities) {
+/// Derive the lock key for a call by extracting `path` from the JSON input
+/// and mapping it through `Workspace::lock_key` — a pure string computation
+/// against the configured roots, with no filesystem access and no duplicate
+/// of the registry's dispatch-time resolution. Returns `std::nullopt` for the
+/// cases where lock acquisition should be skipped (no workspace, no `path`
+/// field, malformed JSON, or a path outside every lockable root). A skipped
+/// lock falls through to bounded-parallelism only; the registry dispatch
+/// still runs full resolution and surfaces any policy error itself.
+[[nodiscard]] std::optional<std::string>
+derive_lock_key(tool::Workspace* workspace, std::string_view input_json, detail::PathLockMode mode) {
   if (workspace == nullptr) {
     return std::nullopt;
   }
@@ -146,28 +144,11 @@ classify_lock_mode(const std::vector<core::Capability>& capabilities) {
   }
   const auto raw_path = path_it->get<std::string>();
 
-  core::Result<tool::ResolvedPath> resolved =
-      std::unexpected(core::Error::internal("derive_lock_key: unreachable resolver path"));
-  if (mode == detail::PathLockMode::shared) {
-    // Shared lock covers both `FileRead` and the listing intents
-    // (`FileSearch`, `DirectoryList`). The workspace's resolve_list shape
-    // is permissive enough to accept both filenames and directory targets,
-    // so use it for the listing capability.
-    const bool list_intent = std::ranges::contains(capabilities, core::Capability::list_directory);
-    resolved = list_intent ? workspace->resolve_list(raw_path) : workspace->resolve_read(raw_path);
-  } else {
-    // Exclusive: delete vs. write/edit. delete_path implies `FileDelete`;
-    // otherwise resolve through `resolve_write` (covers `FileWrite` and
-    // `FileEdit`, both of which dispatch own re-resolution internally).
-    const bool delete_intent = std::ranges::contains(capabilities, core::Capability::delete_path);
-    resolved =
-        delete_intent ? workspace->resolve_delete(raw_path) : workspace->resolve_write(raw_path, tool::WriteIntent{});
-  }
-
-  if (!resolved.has_value()) {
-    return std::nullopt;
-  }
-  return std::move(resolved->absolute_path);
+  // Shared locks cover the read/list intents and match against the read
+  // roots; exclusive locks cover write/edit/delete and match against the
+  // write roots — the same root lists the corresponding resolvers use.
+  const auto direction = mode == detail::PathLockMode::shared ? tool::LockDirection::read : tool::LockDirection::write;
+  return workspace->lock_key(raw_path, direction);
 }
 
 struct BatchState {
@@ -356,19 +337,19 @@ private:
       co_return;
     }
 
-    // Per-canonical-path lock acquisition. Classification is from the tool
-    // def's required capabilities; the lock key is the workspace-resolved
-    // absolute path. Tools without a lock class, or calls without a resolvable
-    // path (no workspace, malformed input, or a path that fails workspace
-    // resolution), skip the lock — the registry dispatch path still re-runs
-    // resolution and produces the same end-state error as it would have
-    // without the scheduler.
+    // Per-path lock acquisition. Classification is from the tool def's
+    // required capabilities; the lock key is the workspace-lexical absolute
+    // spelling from `Workspace::lock_key` — deterministic, syscall-free, and
+    // not a duplicate of the registry's dispatch-time resolution. Tools
+    // without a lock class, or calls without a lockable path (no workspace,
+    // malformed input, or a path outside every lockable root), skip the
+    // lock — the registry dispatch still runs full resolution and produces
+    // the same end-state error it would have without the scheduler.
     detail::PathLockGuard lock_guard{};
     auto& prototype = prototype_ref.get();
     if (const core::ToolDef* def = shared->registry->find(call.name); def != nullptr) {
       if (auto mode = classify_lock_mode(def->required_capabilities); mode.has_value()) {
-        if (auto key = derive_lock_key(prototype.workspace, call.input_json, *mode, def->required_capabilities);
-            key.has_value()) {
+        if (auto key = derive_lock_key(prototype.workspace, call.input_json, *mode); key.has_value()) {
           auto acquired_lock =
               co_await shared->locks.acquire(state->executor, *std::move(key), *mode, core::time::now_utc());
           if (!acquired_lock) {

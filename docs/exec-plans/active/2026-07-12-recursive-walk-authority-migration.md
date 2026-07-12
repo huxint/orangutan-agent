@@ -93,8 +93,12 @@ resolved once per call rather than up to three times.
 - [x] Slice A: primitive + test-io + io-runtime.md.
 - [x] Slice B: FileSearch migrated; spec 0013 status updated.
 - [x] Slice C: DirectoryList migrated; spec 0013 status updated.
-- [ ] Slice D: string-authority path retired; parent milestone-2 box checked;
-      tracker + ROADMAP frontier updated; full test green.
+- [x] Slice D: DirectoryList's dead workspace re-resolve removed; scheduler
+      lock keys collapsed onto the syscall-free `Workspace::lock_key`;
+      ignore-file reads anchored beneath their pinned scopes; the read
+      resolver's pathname pass retained by design (see decision log);
+      parent milestone-2 box, tracker row, and ROADMAP frontier updated;
+      full `xmake test` green.
 
 ## Decision Log
 
@@ -110,6 +114,35 @@ resolved once per call rather than up to three times.
   opens migrate. Anchored ignore-file *reads* (the filter itself still opens
   `.gitignore`/`.ignore` by pathname) move to Slice D together with the
   string-authority retirement.
+- 2026-07-12 (Slice D, goal amendment): implementation falsified the "now-dead
+  string-authority resolution" premise. `openat2` `RESOLVE_BENEATH` rejects an
+  absolute-target symlink with `EXDEV` even when the target stays inside the
+  root (verified with a direct syscall probe; the resolver test that pins
+  spec 0013 AC2's "follow inside symlinks" fails on a pure anchored probe).
+  The pathname pass inside `resolve_read_through_authority` is therefore the
+  load-bearing symlink *normaliser* — it rewrites symlink-ful spellings to the
+  symlink-free canonical relative that the pinned authority executes — and
+  stays, gated by `refers_to_path` so a replaced root pathname is never
+  consulted. Retiring it would require an anchored canonicaliser in `oran-io`
+  (componentwise `readlinkat` resolution beneath pinned roots, with cross-root
+  hops); recorded as a candidate future slice, not this plan.
+- 2026-07-12 (Slice D): the scheduler no longer re-runs full workspace
+  resolution to derive lock keys. `Workspace::lock_key` is a lexical,
+  syscall-free join against the direction's roots, so keys are deterministic
+  rather than racy resolution snapshots, and a batch call's path is resolved
+  once — at the registry boundary. Accepted narrowing: a read addressed
+  through an in-workspace symlink spelling no longer shares a lock row with a
+  write to its canonical target (mutating resolution rejects symlink
+  spellings, so writes always key on the physical spelling; atomic
+  rename-based writes keep concurrent readers consistent either way).
+- 2026-07-12 (Slice D): `WorkspaceWalkFilter` loads `.gitignore` / `.ignore`
+  through pinned authorities — the walk root's at creation, each entry's
+  parent authority afterwards (pre-order visits guarantee at most one unseen
+  scope per entry). Stricter posture, allowed by the "reject more symlinks,
+  never weaken confinement" rule: an ignore file symlinked outside its own
+  directory is skipped where the retired pathname `ifstream` followed it;
+  relative in-scope symlinks still load. The unused `Workspace::walk_filter`
+  convenience accessor was deleted with the signature change.
 
 ## Linked Artifacts
 

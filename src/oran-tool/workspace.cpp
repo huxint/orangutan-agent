@@ -3,14 +3,14 @@
 #include <oran/tool/workspace.hpp>
 
 #include <fnmatch.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <expected>
 #include <filesystem>
 #include <format>
-#include <fstream>
-#include <iterator>
 #include <memory>
 #include <optional>
 #include <span>
@@ -285,20 +285,60 @@ filesystem_error(std::string message, const std::filesystem::path& path, const s
   };
 }
 
-[[nodiscard]] std::vector<IgnoreRule> load_ignore_rules(const std::filesystem::path& directory) {
+/// Read one ignore file through the pinned authority of the directory that
+/// owns it. Opens are no-follow beneath that directory, so a symlinked
+/// `.gitignore` resolving outside it is skipped rather than followed — the
+/// pathname `ifstream` this replaces followed such links. Missing or
+/// unreadable files contribute no rules, matching the previous silent-skip.
+[[nodiscard]] std::optional<std::string> read_ignore_file(const io::DirectoryAuthority& directory,
+                                                          std::string_view name) {
+  auto file = directory.open_file(io::AnchoredPath{
+      .relative_path = std::string{name},
+      .symlink_policy = io::AnchoredSymlinkPolicy::allow_beneath,
+  });
+  if (!file) {
+    return std::nullopt;
+  }
+
+  std::string contents;
+  std::array<char, 8192> buffer{};
+  while (true) {
+    errno = 0;
+    const auto count = ::read(file->native_handle(), buffer.data(), buffer.size());
+    if (count < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return std::nullopt;
+    }
+    if (count == 0) {
+      break;
+    }
+    contents.append(buffer.data(), static_cast<std::size_t>(count));
+  }
+  return contents;
+}
+
+[[nodiscard]] std::vector<IgnoreRule> load_ignore_rules(const io::DirectoryAuthority& directory,
+                                                        const std::filesystem::path& scope_directory) {
   constexpr std::array<std::string_view, 2> kIgnoreFiles{".gitignore", ".ignore"};
 
   std::vector<IgnoreRule> rules;
   for (const auto name : kIgnoreFiles) {
-    std::ifstream input{directory / name, std::ios::binary};
-    if (!input) {
+    auto contents = read_ignore_file(directory, name);
+    if (!contents.has_value()) {
       continue;
     }
-    std::string line;
-    while (std::getline(input, line)) {
-      if (auto rule = parse_ignore_line(line, directory); rule.has_value()) {
+    for (std::string_view rest{*contents}; !rest.empty();) {
+      const auto newline = rest.find('\n');
+      const auto line = newline == std::string_view::npos ? rest : rest.substr(0, newline);
+      if (auto rule = parse_ignore_line(line, scope_directory); rule.has_value()) {
         rules.push_back(std::move(*rule));
       }
+      if (newline == std::string_view::npos) {
+        break;
+      }
+      rest.remove_prefix(newline + 1U);
     }
   }
   return rules;
@@ -527,6 +567,16 @@ resolve_existing_readable_outside_workspace(std::string_view input, const std::s
   return build_resolved(canonical, *match, primary_authority, extra_authorities, false, created_parents);
 }
 
+/// Resolve a read intent as a two-pass pipeline. The pathname pass
+/// (`resolve_existing_readable`) is the symlink normaliser, not the
+/// authority: it rewrites symlink-ful spellings — including absolute-target
+/// symlinks, which `RESOLVE_BENEATH` cannot follow even when the target
+/// stays inside the workspace — into the symlink-free canonical relative
+/// that anchored execution then opens beneath the pinned root. The pinned
+/// `DirectoryAuthority` remains the sole execution authority; when the
+/// trusted root spelling no longer names the pinned directory, the pathname
+/// pass is skipped entirely and resolution degrades to the stricter
+/// anchored-probe shape (beneath-relative symlinks only).
 [[nodiscard]] Result<ResolvedPath>
 resolve_read_through_authority(std::string_view input,
                                const std::string& root,
@@ -550,9 +600,6 @@ resolve_read_through_authority(std::string_view input,
     return std::unexpected(std::move(root_still_named).error());
   }
 
-  // Preserve the existing canonical audit/display spelling while the trusted
-  // root pathname still names the held directory. If that name was replaced,
-  // skip pathname resolution entirely and continue through the pinned root.
   if (*root_still_named) {
     auto canonical = resolve_existing_readable(input, root, extra_roots, primary_authority, extra_authorities, "read");
     if (canonical) {
@@ -586,10 +633,20 @@ struct WorkspaceWalkFilter::Impl {
   WorkspaceWalkOptions options;
   std::vector<IgnoreScope> scopes;
 
-  explicit Impl(std::string_view raw_root, WorkspaceWalkOptions raw_options)
-      : root{std::filesystem::path{std::string{raw_root}}.lexically_normal()}, options{raw_options} {}
+  Impl(const io::DirectoryAuthority& root_authority, std::string_view raw_root, WorkspaceWalkOptions raw_options)
+      : root{std::filesystem::path{std::string{raw_root}}.lexically_normal()}, options{raw_options} {
+    // The root scope is the only one whose authority is not re-supplied by
+    // later `should_skip` calls, so its ignore files load here — through the
+    // pinned root, before any walk descent.
+    if (options.respect_ignore) {
+      scopes.push_back(IgnoreScope{
+          .directory = root,
+          .rules = load_ignore_rules(root_authority, root),
+      });
+    }
+  }
 
-  void sync_for_parent(const std::filesystem::path& parent) {
+  void sync_for_parent(const io::DirectoryAuthority& parent_authority, const std::filesystem::path& parent) {
     const auto directories = directories_to(root, parent);
     std::size_t common = 0;
     while (common < scopes.size() && common < directories.size() && scopes[common].directory == directories[common]) {
@@ -597,9 +654,16 @@ struct WorkspaceWalkFilter::Impl {
     }
     scopes.resize(common);
     for (std::size_t index = common; index < directories.size(); ++index) {
+      // Pre-order walks surface at most one unseen scope per entry — the
+      // entry's own parent, whose pinned authority the walk supplies. A
+      // deeper jump can only come from a caller violating the visit-order
+      // contract; those intermediate scopes contribute no rules rather than
+      // falling back to pathname reads.
+      auto rules = index + 1U == directories.size() ? load_ignore_rules(parent_authority, directories[index])
+                                                    : std::vector<IgnoreRule>{};
       scopes.push_back(IgnoreScope{
           .directory = directories[index],
-          .rules = load_ignore_rules(directories[index]),
+          .rules = std::move(rules),
       });
     }
   }
@@ -619,8 +683,10 @@ struct WorkspaceWalkFilter::Impl {
 
 WorkspaceWalkFilter::WorkspaceWalkFilter(std::unique_ptr<Impl> impl) : impl_{std::move(impl)} {}
 
-WorkspaceWalkFilter WorkspaceWalkFilter::create(std::string_view root, WorkspaceWalkOptions options) {
-  return WorkspaceWalkFilter{std::make_unique<Impl>(root, options)};
+WorkspaceWalkFilter WorkspaceWalkFilter::create(const io::DirectoryAuthority& root_authority,
+                                                std::string_view root,
+                                                WorkspaceWalkOptions options) {
+  return WorkspaceWalkFilter{std::make_unique<Impl>(root_authority, root, options)};
 }
 
 WorkspaceWalkFilter::WorkspaceWalkFilter(WorkspaceWalkFilter&&) noexcept = default;
@@ -629,7 +695,7 @@ WorkspaceWalkFilter& WorkspaceWalkFilter::operator=(WorkspaceWalkFilter&&) noexc
 
 WorkspaceWalkFilter::~WorkspaceWalkFilter() = default;
 
-bool WorkspaceWalkFilter::should_skip(std::string_view path, bool is_directory) {
+bool WorkspaceWalkFilter::should_skip(const io::DirectoryAuthority& parent, std::string_view path, bool is_directory) {
   const auto entry_path = std::filesystem::path{std::string{path}}.lexically_normal();
   if (!impl_->options.include_hidden && is_hidden_path(entry_path)) {
     return true;
@@ -640,7 +706,7 @@ bool WorkspaceWalkFilter::should_skip(std::string_view path, bool is_directory) 
   if (is_directory && is_builtin_ignored_directory(entry_path)) {
     return true;
   }
-  impl_->sync_for_parent(entry_path.parent_path());
+  impl_->sync_for_parent(parent, entry_path.parent_path());
   return impl_->ignore_files_match(entry_path, is_directory);
 }
 
@@ -721,8 +787,17 @@ core::Result<ResolvedPath> Workspace::resolve_delete(std::string_view path) cons
   return resolve_mutating(path, root_, extra_write_roots_, root_authority_, extra_write_authorities_, false, "delete");
 }
 
-WorkspaceWalkFilter Workspace::walk_filter(std::string_view root, WorkspaceWalkOptions options) const {
-  return WorkspaceWalkFilter::create(root, options);
+std::optional<std::string> Workspace::lock_key(std::string_view path, LockDirection direction) const {
+  if (path.empty()) {
+    return std::nullopt;
+  }
+  const auto workspace_root = std::filesystem::path{root_};
+  const auto candidate = join_input(workspace_root, path);
+  const auto& extra_roots = direction == LockDirection::read ? extra_read_roots_ : extra_write_roots_;
+  if (!find_matching_root(candidate, workspace_root, extra_roots).has_value()) {
+    return std::nullopt;
+  }
+  return candidate.string();
 }
 
 std::string Workspace::display_path(std::string_view absolute_path) const {

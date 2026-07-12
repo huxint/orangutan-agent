@@ -29,7 +29,10 @@ The canonical ranked backlog is
 [`exec-plans/tech-debt-tracker.md`](exec-plans/tech-debt-tracker.md), row
 `review/deep-2026-07-11`. The refactor addresses these groups in order:
 
-1. Handle-based workspace confinement across asynchronous operations.
+1. Handle-based workspace confinement across asynchronous operations —
+   complete: every filesystem built-in (recursive walks and ignore-file reads
+   included) executes through pinned authorities and the scheduler derives
+   lock keys without re-resolving paths (runtime-foundations milestone 2).
 2. Structured ownership, bounded channel workers, cancellation, and shutdown.
 3. HTTP/webhook connection bounds and protocol state-machine correctness.
 4. Storage migration/pool/write-conflict correctness.

@@ -89,7 +89,12 @@ observe — so the future agent loop can call them safely on day one.
   ```
 - **Per-path lock table** for mutating tools (`FileWrite`, `FileEdit`,
   `FileModify`, `FileDelete`):
-  - Lock key: canonical workspace-resolved path (spec 0013).
+  - Lock key: `Workspace::lock_key` — the lexically-normalised absolute
+    spelling joined against the workspace root and the direction's extra
+    roots (spec 0013). Pure string derivation, no filesystem access, no
+    duplicate of the registry's dispatch-time resolution; accepted mutating
+    paths never contain symlinks, so their lexical and canonical spellings
+    coincide.
   - Lock type: exclusive for write/edit/delete, shared for read.
   - Lock rows are bounded with an idle TTL (default 5 min) and reaped on
     a background tick. A cancelled mutation never leaves a dead row.
@@ -350,7 +355,9 @@ implicitly via the capability list.
   consumes the per-path lock for synchronous cache invalidation; consumes
   `BoundedCache` for the line-offset index and regex cache.
 - [`0013-workspace-and-path-policy.md`](0013-workspace-and-path-policy.md)
-  — lock keys are *resolved* canonical paths, not input strings.
+  — lock keys come from `Workspace::lock_key` (workspace-lexical, derived
+  without filesystem access), not raw input strings; the registry's
+  dispatch-time resolver remains the sole access authority.
 - [`0014-structured-tool-output.md`](0014-structured-tool-output.md) —
   slice 66 ships the shared `tool::apply_output_caps` primitive and direct
   `Registry::dispatch` applies it for pre-scheduler callers; the scheduler

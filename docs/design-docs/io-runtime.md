@@ -62,8 +62,8 @@ performs the requested operation and returns `core::Result<T>`.
 > `list_directory(executor, DirectoryAuthority, options)`. It opens `.` from
 > the pinned dirfd and uses `readdir` plus `fstatat(AT_SYMLINK_NOFOLLOW)`, so
 > root pathname replacement cannot redirect the listing and symlinks are
-> classified without being followed. The pathname overload remains temporarily
-> for callers not yet migrated.
+> classified without being followed. The pathname overload remains for
+> trusted workspace-less dispatch, which pins no authority by design.
 > Recursive consumers use the synchronous
 > `walk_directory_tree(root, options, cancelled, visitor)` driver: a
 > depth-first walk beneath a pinned root that descends exclusively through
