@@ -60,15 +60,14 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <format>
-#include <fstream>
 #include <functional>
-#include <ios>
 #include <iterator>
 #include <memory>
 #include <mutex>
@@ -78,6 +77,9 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <asio/cancellation_type.hpp>
 #include <asio/post.hpp>
@@ -92,6 +94,8 @@
 #include <oran/core/error.hpp>
 #include <oran/core/time.hpp>
 #include <oran/core/tool_def.hpp>
+#include <oran/io/directory_authority.hpp>
+#include <oran/io/file.hpp>
 #include <oran/permission/input_pattern.hpp>
 #include <oran/tool/registry.hpp>
 #include <oran/tool/workspace.hpp>
@@ -209,6 +213,16 @@ struct SearchOutcome {
   std::uint32_t files_scanned{0};
 };
 
+/// The resolved search target, opened through pinned descriptors. Exactly one
+/// of `file` / `directory` is populated. `base_absolute` is the absolute
+/// spelling used to reconstruct per-entry display paths and to root the
+/// ignore-file filter; directory descent never reopens it.
+struct SearchRoot {
+  std::optional<io::ReadOnlyFile> file;
+  std::optional<io::DirectoryAuthority> directory;
+  std::string base_absolute;
+};
+
 /// Per-call line matcher. Owns the compiled regex when the caller opted in
 /// (`regex=true`); otherwise it falls back to the literal `pattern` substring.
 /// Holding a shared pointer into the bounded regex cache lets `scan_text` stay
@@ -303,50 +317,43 @@ struct LineMatcher {
   return std::ranges::any_of(probe, [](char c) { return c == '\0'; });
 }
 
-[[nodiscard]] std::string display_path(const SearchOptions& opts, const std::filesystem::path& path) {
-  if (opts.workspace == nullptr) {
-    return path.string();
-  }
-  return opts.workspace->display_path(path.string());
-}
-
 [[nodiscard]] bool is_cancelled(const asio::cancellation_state& cancellation) noexcept {
   return cancellation.cancelled() != asio::cancellation_type::none;
 }
 
-/// Reads a regular file's contents into a string, capped at `kMaxFileBytes`.
-/// Returns an io error on open or read failure; an invalid_argument error
-/// when the file overshoots the cap (so the agent loop sees a clear "you
-/// asked to search something pathologically large" signal in the single-file
-/// case). Polls `cancellation` once per 8 KiB read chunk so a pathological
-/// multi-GB file aborts promptly when the agent loop is torn down.
-[[nodiscard]] core::Result<std::string> read_text_capped(const std::filesystem::path& path,
-                                                         const asio::cancellation_state& cancellation) {
-  errno = 0;
-  std::ifstream input{path, std::ios::binary};
-  if (!input) {
-    return std::unexpected(core::Error::io("FileSearch: failed to open file").with("path", path.string()));
-  }
+/// Read an already-authorized regular file through its pinned descriptor,
+/// capped at `kMaxFileBytes`. The file was opened via a no-follow `open_file`
+/// beneath the root authority, so this never reopens a pathname. `display` is
+/// used only for error context. Polls `cancellation` once per 8 KiB chunk so a
+/// pathological multi-GB file aborts promptly when the agent loop is torn down.
+[[nodiscard]] core::Result<std::string> read_handle_capped(const io::ReadOnlyFile& file,
+                                                           std::string_view display,
+                                                           const asio::cancellation_state& cancellation) {
   std::string contents;
   std::array<char, 8192> buffer{};
-  while (input) {
+  while (true) {
     if (is_cancelled(cancellation)) {
       return std::unexpected(core::Error::cancelled());
     }
-    input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-    const auto count = input.gcount();
-    if (count > 0) {
-      const auto next_size = static_cast<std::uintmax_t>(contents.size()) + static_cast<std::uintmax_t>(count);
-      if (next_size > kMaxFileBytes) {
-        return std::unexpected(core::Error::invalid_argument("FileSearch: file exceeds max bytes")
-                                   .with("path", path.string())
-                                   .with("max_bytes", std::to_string(kMaxFileBytes)));
+    errno = 0;
+    const auto count = ::read(file.native_handle(), buffer.data(), buffer.size());
+    if (count < 0) {
+      if (errno == EINTR) {
+        continue;
       }
-      contents.append(buffer.data(), static_cast<std::size_t>(count));
+      return std::unexpected(
+          core::Error::io("FileSearch: failed while reading file").with("path", std::string{display}));
     }
-  }
-  if (input.bad()) {
-    return std::unexpected(core::Error::io("FileSearch: failed while reading file").with("path", path.string()));
+    if (count == 0) {
+      break;
+    }
+    const auto next_size = static_cast<std::uintmax_t>(contents.size()) + static_cast<std::uintmax_t>(count);
+    if (next_size > kMaxFileBytes) {
+      return std::unexpected(core::Error::invalid_argument("FileSearch: file exceeds max bytes")
+                                 .with("path", std::string{display})
+                                 .with("max_bytes", std::to_string(kMaxFileBytes)));
+    }
+    contents.append(buffer.data(), static_cast<std::size_t>(count));
   }
   return contents;
 }
@@ -448,8 +455,87 @@ struct LineMatcher {
   return LineMatcher{.literal = {}, .regex = std::move(pattern)};
 }
 
-[[nodiscard]] core::Result<SearchOutcome> walk_and_scan(const SearchOptions& opts,
-                                                        const asio::cancellation_state& cancellation) {
+/// Open the search target beneath an already-pinned workspace authority. The
+/// anchored relative path may name the authority root itself (`"."`), a
+/// directory, or a regular file; classification happens through the pinned
+/// descriptors, never by re-stating the pathname.
+[[nodiscard]] core::Result<SearchRoot> open_resolved_root(const io::DirectoryAuthority& authority,
+                                                          const std::string& relative_path,
+                                                          std::string base_absolute) {
+  auto directory = authority.open_directory(io::AnchoredPath{
+      .relative_path = relative_path,
+      .symlink_policy = io::AnchoredSymlinkPolicy::allow_beneath,
+  });
+  if (directory) {
+    return SearchRoot{.file = std::nullopt,
+                      .directory = std::move(*directory),
+                      .base_absolute = std::move(base_absolute)};
+  }
+
+  auto file = authority.open_file(io::AnchoredPath{
+      .relative_path = relative_path,
+      .symlink_policy = io::AnchoredSymlinkPolicy::allow_beneath,
+  });
+  if (file) {
+    return SearchRoot{.file = std::move(*file), .directory = std::nullopt, .base_absolute = std::move(base_absolute)};
+  }
+  return std::unexpected(std::move(file).error());
+}
+
+/// Open a trusted (workspace-less) search target. Classification keeps the
+/// legacy error shapes; the directory walk still descends through a pinned
+/// authority so the tree cannot be redirected mid-walk, and a caller-named
+/// file is opened beneath its own parent directory. This mode is the direct
+/// registry-dispatch surface used by embedders and tests; workspace-confined
+/// dispatch never reaches it.
+[[nodiscard]] core::Result<SearchRoot> open_trusted_root(const std::string& path) {
+  std::error_code stat_ec;
+  const std::filesystem::path root{path};
+  if (!std::filesystem::exists(root, stat_ec)) {
+    if (stat_ec) {
+      return std::unexpected(core::Error::io("FileSearch: failed to stat path")
+                                 .with("path", path)
+                                 .with("system_error", stat_ec.message()));
+    }
+    return std::unexpected(core::Error::not_found("FileSearch: path does not exist").with("path", path));
+  }
+
+  if (std::filesystem::is_directory(root, stat_ec)) {
+    auto directory = io::DirectoryAuthority::open_trusted(path);
+    if (!directory) {
+      return std::unexpected(std::move(directory).error());
+    }
+    return SearchRoot{.file = std::nullopt, .directory = std::move(*directory), .base_absolute = path};
+  }
+  if (std::filesystem::is_regular_file(root, stat_ec)) {
+    // Resolve the caller-named file first (a trusted single-file search may
+    // name a symlink), then pin its parent and open the leaf without follow so
+    // the handle cannot be redirected after classification.
+    auto canonical = std::filesystem::weakly_canonical(root, stat_ec);
+    if (stat_ec) {
+      return std::unexpected(core::Error::io("FileSearch: failed to open file")
+                                 .with("path", path)
+                                 .with("system_error", stat_ec.message()));
+    }
+    auto parent = io::DirectoryAuthority::open_trusted(canonical.parent_path().string());
+    if (!parent) {
+      return std::unexpected(std::move(parent).error());
+    }
+    auto file = parent->open_file(io::AnchoredPath{
+        .relative_path = canonical.filename().string(),
+        .symlink_policy = io::AnchoredSymlinkPolicy::reject_all,
+    });
+    if (!file) {
+      return std::unexpected(std::move(file).error());
+    }
+    return SearchRoot{.file = std::move(*file), .directory = std::nullopt, .base_absolute = path};
+  }
+  return std::unexpected(
+      core::Error::invalid_argument("FileSearch: path is neither a regular file nor a directory").with("path", path));
+}
+
+[[nodiscard]] core::Result<SearchOutcome>
+walk_and_scan(const SearchOptions& opts, const SearchRoot& root, const asio::cancellation_state& cancellation) {
   auto matcher = build_matcher(opts);
   if (!matcher) {
     return std::unexpected(std::move(matcher).error());
@@ -459,30 +545,24 @@ struct LineMatcher {
   const std::size_t match_budget = opts.max_matches + 1U;
   std::size_t accumulated_bytes = 0;
 
-  std::error_code stat_ec;
-  const std::filesystem::path root{opts.path};
-  if (!std::filesystem::exists(root, stat_ec)) {
-    if (stat_ec) {
-      return std::unexpected(core::Error::io("FileSearch: failed to stat path")
-                                 .with("path", opts.path)
-                                 .with("system_error", stat_ec.message()));
-    }
-    return std::unexpected(core::Error::not_found("FileSearch: path does not exist").with("path", opts.path));
-  }
+  const auto display_for = [&](std::string_view absolute) {
+    return opts.workspace == nullptr ? std::string{absolute} : opts.workspace->display_path(absolute);
+  };
 
-  if (std::filesystem::is_regular_file(root, stat_ec)) {
-    auto contents = read_text_capped(root, cancellation);
-    if (!contents) {
-      return std::unexpected(std::move(contents).error());
-    }
+  if (root.file.has_value()) {
     // Single-file mode does NOT apply the binary heuristic — the caller named
     // this file explicitly, so we trust their intent. The heuristic only
     // filters during recursive directory walks.
+    const auto display = display_for(root.base_absolute);
+    auto contents = read_handle_capped(*root.file, display, cancellation);
+    if (!contents) {
+      return std::unexpected(std::move(contents).error());
+    }
     outcome.bytes_read += static_cast<std::uintmax_t>(contents->size());
     ++outcome.files_scanned;
     const auto reason = scan_text(*contents,
                                   *matcher,
-                                  display_path(opts, root),
+                                  display,
                                   outcome.matches,
                                   match_budget,
                                   opts.max_output_bytes,
@@ -490,73 +570,78 @@ struct LineMatcher {
     if (reason == TruncReason::bytes) {
       outcome.truncated = TruncReason::bytes;
     }
-  } else if (std::filesystem::is_directory(root, stat_ec)) {
-    try {
-      const auto walk_opts = std::filesystem::directory_options::skip_permission_denied;
-      const std::filesystem::recursive_directory_iterator end{};
-      auto it = std::filesystem::recursive_directory_iterator{root, walk_opts};
-      auto walk_filter = WorkspaceWalkFilter::create(root.string(),
-                                                     WorkspaceWalkOptions{
-                                                         .include_hidden = opts.include_hidden,
-                                                         .respect_ignore = opts.respect_ignore,
-                                                     });
-      while (it != end && outcome.matches.size() < match_budget && outcome.truncated != TruncReason::bytes) {
-        // Poll cancellation once per directory entry so a SIGINT mid-walk
-        // unwinds the recursion before the next stat / open syscall. The
-        // load is a relaxed atomic read — single-digit nanoseconds, lost in
-        // the directory-iterator cost.
-        if (is_cancelled(cancellation)) {
-          return std::unexpected(core::Error::cancelled());
-        }
-        const auto& entry = *it;
-        const auto& entry_path = entry.path();
-
-        std::error_code probe_ec;
-        const bool entry_is_directory = entry.is_directory(probe_ec);
-        if (walk_filter.should_skip(entry_path.string(), entry_is_directory)) {
-          if (entry_is_directory) {
-            it.disable_recursion_pending();
-          }
-          ++it;
-          continue;
-        }
-        if (entry.is_symlink(probe_ec)) {
-          ++it;
-          continue;
-        }
-        if (!entry.is_regular_file(probe_ec)) {
-          ++it;
-          continue;
-        }
-
-        if (auto file_contents = read_text_capped(entry_path, cancellation); file_contents) {
-          outcome.bytes_read += static_cast<std::uintmax_t>(file_contents->size());
-          if (!looks_binary(*file_contents)) {
-            ++outcome.files_scanned;
-            const auto reason = scan_text(*file_contents,
-                                          *matcher,
-                                          display_path(opts, entry_path),
-                                          outcome.matches,
-                                          match_budget,
-                                          opts.max_output_bytes,
-                                          accumulated_bytes);
-            if (reason == TruncReason::bytes) {
-              outcome.truncated = TruncReason::bytes;
-            }
-          }
-        } else if (file_contents.error().kind() == core::ErrorKind::cancelled) {
-          return std::unexpected(std::move(file_contents).error());
-        }  // other unreadable / oversized files are silently skipped during a walk
-        ++it;
+  } else if (root.directory.has_value()) {
+    // Ignore/dotfile policy stays in the tool layer; the anchored walk only
+    // supplies pinned entries. The filter is fed reconstructed absolute paths
+    // (`base / relative_path`) so `.gitignore` scoping and built-in skip rules
+    // stay byte-identical to the pre-migration `recursive_directory_iterator`
+    // walk.
+    auto walk_filter = WorkspaceWalkFilter::create(root.base_absolute,
+                                                   WorkspaceWalkOptions{
+                                                       .include_hidden = opts.include_hidden,
+                                                       .respect_ignore = opts.respect_ignore,
+                                                   });
+    const std::filesystem::path base{root.base_absolute};
+    io::WalkVisitor visitor = [&](const io::DirectoryAuthority& parent,
+                                  const io::WalkEntry& entry) -> core::Result<io::WalkAction> {
+      const auto absolute = (base / entry.relative_path).string();
+      const bool is_directory = entry.kind == io::DirectoryEntryKind::directory;
+      if (walk_filter.should_skip(absolute, is_directory)) {
+        return is_directory ? io::WalkAction::skip_subtree : io::WalkAction::proceed;
       }
-    } catch (const std::filesystem::filesystem_error& e) {
-      return std::unexpected(core::Error::io("FileSearch: failed to walk directory")
-                                 .with("path", opts.path)
-                                 .with("system_error", e.code().message()));
+      // Symlinks and non-regular entries are classified by the walk and never
+      // scanned; descent already refuses to follow a symlinked directory.
+      if (entry.kind != io::DirectoryEntryKind::regular_file) {
+        return io::WalkAction::proceed;
+      }
+
+      auto file = parent.open_file(io::AnchoredPath{
+          .relative_path = entry.name,
+          .symlink_policy = io::AnchoredSymlinkPolicy::reject_all,
+      });
+      if (!file) {
+        // Unreadable file during a walk: skip it (matches the legacy silent
+        // skip of files that cannot be opened mid-tree).
+        return io::WalkAction::proceed;
+      }
+      const auto display = display_for(absolute);
+      auto contents = read_handle_capped(*file, display, cancellation);
+      if (!contents) {
+        if (contents.error().kind() == core::ErrorKind::cancelled) {
+          return std::unexpected(std::move(contents).error());
+        }
+        return io::WalkAction::proceed;  // oversized / unreadable: silently skipped during a walk
+      }
+      outcome.bytes_read += static_cast<std::uintmax_t>(contents->size());
+      if (!looks_binary(*contents)) {
+        ++outcome.files_scanned;
+        const auto reason = scan_text(*contents,
+                                      *matcher,
+                                      display,
+                                      outcome.matches,
+                                      match_budget,
+                                      opts.max_output_bytes,
+                                      accumulated_bytes);
+        if (reason == TruncReason::bytes) {
+          outcome.truncated = TruncReason::bytes;
+        }
+      }
+      if (outcome.matches.size() >= match_budget || outcome.truncated == TruncReason::bytes) {
+        return io::WalkAction::stop;
+      }
+      return io::WalkAction::proceed;
+    };
+
+    auto walked = io::walk_directory_tree(
+        *root.directory,
+        io::WalkTreeOptions{},
+        [&cancellation] { return is_cancelled(cancellation); },
+        visitor);
+    if (!walked) {
+      return std::unexpected(std::move(walked).error());
     }
   } else {
-    return std::unexpected(core::Error::invalid_argument("FileSearch: path is neither a regular file nor a directory")
-                               .with("path", opts.path));
+    return std::unexpected(core::Error::internal("FileSearch: search root produced no target"));
   }
 
   if (outcome.matches.size() > opts.max_matches) {
@@ -650,14 +735,26 @@ struct LineMatcher {
   }
   opts->workspace = ctx.workspace;
 
+  // Open the pinned search root before the executor hop. Workspace dispatch
+  // supplies the pre-resolved authority; the trusted no-workspace mode pins a
+  // fresh root itself. The walk below never re-resolves the pathname.
+  core::Result<SearchRoot> root = std::unexpected(core::Error::internal("FileSearch: search root was not resolved"));
   if (ctx.resolved_path.has_value()) {
-    opts->path = ctx.resolved_path->absolute_path;
-  } else if (ctx.workspace != nullptr) {
-    auto resolved = ctx.workspace->resolve_list(opts->path);
-    if (!resolved) {
-      co_return std::unexpected(std::move(resolved).error());
+    if (!ctx.resolved_path->authority.has_value()) {
+      co_return std::unexpected(core::Error::internal("FileSearch: resolved workspace path is missing authority"));
     }
-    opts->path = std::move(resolved->absolute_path);
+    opts->path = ctx.resolved_path->absolute_path;
+    root = open_resolved_root(*ctx.resolved_path->authority,
+                              ctx.resolved_path->authority_relative_path,
+                              ctx.resolved_path->absolute_path);
+  } else if (ctx.workspace != nullptr) {
+    co_return std::unexpected(
+        core::Error::internal("FileSearch: workspace dispatch did not provide a resolved authority"));
+  } else {
+    root = open_trusted_root(opts->path);
+  }
+  if (!root) {
+    co_return std::unexpected(std::move(root).error());
   }
 
   // One executor hop so the blocking filesystem walk runs on the runtime's
@@ -672,7 +769,7 @@ struct LineMatcher {
     co_return std::unexpected(core::Error::cancelled());
   }
 
-  auto outcome = walk_and_scan(*opts, cancellation);
+  auto outcome = walk_and_scan(*opts, *root, cancellation);
   if (!outcome) {
     co_return std::unexpected(std::move(outcome).error());
   }

@@ -91,7 +91,7 @@ resolved once per call rather than up to three times.
 ## Progress Log
 
 - [x] Slice A: primitive + test-io + io-runtime.md.
-- [ ] Slice B: FileSearch migrated; spec 0013 status updated.
+- [x] Slice B: FileSearch migrated; spec 0013 status updated.
 - [ ] Slice C: DirectoryList migrated; spec 0013 status updated.
 - [ ] Slice D: string-authority path retired; parent milestone-2 box checked;
       tracker + ROADMAP frontier updated; full test green.
@@ -104,6 +104,12 @@ resolved once per call rather than up to three times.
 - 2026-07-12: policy (ignore rules, dotfiles, caps, labels) stays in
   `tool::WorkspaceWalkFilter`/the handlers; `oran-io` only supplies pinned entries.
   Matches `io-runtime.md` "the oran-io surface stays policy-free".
+- 2026-07-12 (Slice B): the anchored walk keeps feeding `WorkspaceWalkFilter`
+  with reconstructed absolute paths (`base / relative_path`) so ignore-rule and
+  display behavior stay byte-identical while only the entry source and file
+  opens migrate. Anchored ignore-file *reads* (the filter itself still opens
+  `.gitignore`/`.ignore` by pathname) move to Slice D together with the
+  string-authority retirement.
 
 ## Linked Artifacts
 
