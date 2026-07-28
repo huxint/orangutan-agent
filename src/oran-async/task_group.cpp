@@ -90,9 +90,32 @@ struct TaskGroup::Impl : std::enable_shared_from_this<TaskGroup::Impl> {
 
     auto self = shared_from_this();
     try {
-      asio::co_spawn(executor,
-                     run_child(std::move(self), child, std::move(task)),
-                     asio::bind_cancellation_slot(child->cancellation->slot(), asio::detached));
+      // asio keeps using the bound cancellation signal *after* the child's own
+      // coroutine frame is destroyed: `co_spawn`'s entry point emplaces this
+      // thread of execution's `cancellation_state` into the bound slot, and it
+      // still resets and clears that state once `co_await function()` returns.
+      // The child frame must therefore never be the signal's last owner —
+      // `finish()` drops the group's reference before the frame unwinds, so the
+      // completion handler holds the record (and the group state) until asio is
+      // done with both. Owning the record only from the frame frees the
+      // cancellation state under asio's feet, and the recycled block then
+      // corrupts whichever live coroutine's cancellation state reuses it.
+      asio::co_spawn(
+          executor,
+          run_child(self, child, std::move(task)),
+          asio::bind_cancellation_slot(
+              child->cancellation->slot(),
+              [state = self, record = child](std::exception_ptr error) {
+                if (!error) {
+                  return;
+                }
+                // `run_child` reports its own outcome and swallows
+                // child exceptions; reaching here means the frame
+                // itself failed, so the record would otherwise stay
+                // active forever and stall `join()`.
+                state->finish(record,
+                              failed_outcome(record->name, core::Error::internal("task group child frame terminated")));
+              }));
     } catch (const std::exception& error) {
       finish(child,
              failed_outcome(child->name,
