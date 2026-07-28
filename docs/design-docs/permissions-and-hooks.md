@@ -355,9 +355,10 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > `Result<void>` in subscription-ordered
 > `PublishOutcome::SinkResult` rows, and never aborts
 > the publish on a sink error (advisory contract). Parent
-> cancellation emits child cancellation signals and then drains
-> completions so the caller can safely destroy the borrowed sinks
-> after `publish_advisory` returns. The
+> cancellation requests stop on the publish-local bounded
+> `async::TaskGroup`, and the publish joins every accepted child so
+> the caller can safely destroy the borrowed sinks after
+> `publish_advisory` returns. The
 > `PublishOutcome` lets the caller surface sink failures
 > into logs or audit without coupling the publish to a
 > single error policy. `hook::Payload` is a `std::variant`

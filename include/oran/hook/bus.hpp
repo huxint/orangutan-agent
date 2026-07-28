@@ -96,7 +96,10 @@ public:
   /// Sinks are started as concurrent child coroutines; the returned
   /// outcome rows remain in subscription order. Sink failures are
   /// captured in the returned outcome but do not abort the publish for
-  /// sibling sinks (advisory semantics — see file header).
+  /// sibling sinks (advisory semantics — see file header). The publish
+  /// owns those children through a bounded task group and joins them
+  /// before returning, including after parent cancellation, so callers
+  /// may release the non-owning sink references once the await completes.
   [[nodiscard]] async::Awaitable<PublishOutcome> publish_advisory(Event event, Payload payload);
 
   /// Publish `event` + `payload` as a blocking call (spec 0015 v1).

@@ -286,8 +286,8 @@ struct ServeChannelOptions {
 /// every pump park on cancel-aware channel receives, so the shared signal
 /// unblocks the dispatcher. `stop_requested` is a cooperative early-out checked
 /// at the top of the dispatch loop. On either stop the concern marks the pumps
-/// stopping, calls `manager.stop_all()` to wake adapter-owned receives, emits
-/// each pump's cancellation, and drains them before returning, so no spawned
+/// stopping, calls `manager.stop_all()` to wake adapter-owned receives, and
+/// cancels/joins the pump `async::TaskGroup` before returning, so no spawned
 /// pump outlives this coroutine (each borrows `manager`). A null `runner` is
 /// rejected up front.
 ///

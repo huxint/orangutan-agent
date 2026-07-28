@@ -18,16 +18,12 @@
 #include <variant>
 #include <vector>
 
-#include <asio/bind_cancellation_slot.hpp>
-#include <asio/cancellation_signal.hpp>
-#include <asio/co_spawn.hpp>
-#include <asio/detached.hpp>
 #include <asio/experimental/awaitable_operators.hpp>
 #include <asio/this_coro.hpp>
 
 #include <oran/async/awaitable_fwd.hpp>
-#include <oran/async/channel.hpp>
 #include <oran/async/sleep.hpp>
+#include <oran/async/task_group.hpp>
 #include <oran/core/error.hpp>
 #include <oran/hook/decision.hpp>
 #include <oran/hook/event.hpp>
@@ -42,20 +38,6 @@ using namespace std::chrono_literals;
 struct SinkDecision {
   HookDecision decision;
   std::optional<std::chrono::milliseconds> elapsed{};
-};
-
-struct AdvisorySinkResult {
-  std::size_t index{};
-  PublishOutcome::SinkResult row;
-};
-
-struct AdvisoryFanoutState {
-  AdvisoryFanoutState(asio::any_io_executor executor, std::size_t sink_count)
-      : completion(std::move(executor), sink_count), child_cancels(sink_count), total_sinks(sink_count) {}
-
-  async::Channel<AdvisorySinkResult> completion;
-  std::vector<asio::cancellation_signal> child_cancels;
-  std::size_t total_sinks{};
 };
 
 [[nodiscard]] Payload redact_payload(Payload payload) {
@@ -177,32 +159,29 @@ struct SharedPayloads {
   }
 }
 
-[[nodiscard]] async::Awaitable<void> run_advisory_sink(std::shared_ptr<AdvisoryFanoutState> state,
-                                                       Sink* sink,
-                                                       Event event,
-                                                       PayloadPtr payload,
-                                                       std::size_t index) {
-  PublishOutcome::SinkResult row{.sink_id = std::string{sink->id()}, .error = std::nullopt};
+[[nodiscard]] async::Awaitable<core::Result<void>>
+run_advisory_sink(std::vector<std::optional<PublishOutcome::SinkResult>>& rows,
+                  Sink& sink,
+                  Event event,
+                  PayloadPtr payload,
+                  std::size_t index) {
+  PublishOutcome::SinkResult row{.sink_id = std::string{sink.id()}, .error = std::nullopt};
   // Advisory contract: a misbehaving sink must not abort the publish for
   // other sinks. Each fan-out child catches errors locally and reports one
   // ordered row back to the parent.
   try {
-    auto result = co_await sink->receive(event, std::move(payload));
+    auto result = co_await sink.receive(event, std::move(payload));
     if (!result) {
       row.error = std::move(result).error();
     }
   } catch (const std::exception& ex) {
-    row.error = core::Error::internal(ex.what()).with("sink", std::string{sink->id()});
+    row.error = core::Error::internal(ex.what()).with("sink", std::string{sink.id()});
   } catch (...) {
-    row.error = core::Error::internal("sink threw non-std exception").with("sink", std::string{sink->id()});
+    row.error = core::Error::internal("sink threw non-std exception").with("sink", std::string{sink.id()});
   }
 
-  // Parent cancellation is propagated through `child_cancels`; once this child
-  // has a row to report, its completion send must not be swallowed by that
-  // same cancellation slot.
-  co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
-  [[maybe_unused]] auto sent =
-      co_await state->completion.send(AdvisorySinkResult{.index = index, .row = std::move(row)});
+  rows[index] = std::move(row);
+  co_return core::Result<void>{};
 }
 
 [[nodiscard]] async::Awaitable<core::Result<void>> sleep_for_timeout(std::chrono::milliseconds timeout) {
@@ -276,43 +255,66 @@ async::Awaitable<PublishOutcome> Bus::publish_advisory(Event event, Payload payl
   }
 
   const auto& subscribers = it->second;
+  if (subscribers.empty()) {
+    co_return outcome;
+  }
+
   auto rows = std::vector<std::optional<PublishOutcome::SinkResult>>(subscribers.size());
   auto executor = co_await asio::this_coro::executor;
-  auto state = std::make_shared<AdvisoryFanoutState>(executor, subscribers.size());
+  auto tasks_result = async::TaskGroup::create(
+      executor,
+      async::TaskGroupOptions{.max_tasks = subscribers.size(), .max_completed = subscribers.size()});
+  if (!tasks_result) {
+    outcome.sinks.reserve(subscribers.size());
+    for (auto* sink : subscribers) {
+      outcome.sinks.push_back(
+          PublishOutcome::SinkResult{.sink_id = std::string{sink->id()}, .error = tasks_result.error()});
+    }
+    co_return outcome;
+  }
+  auto tasks = std::move(*tasks_result);
+  auto task_indices = std::vector<std::size_t>{};
+  task_indices.reserve(subscribers.size());
   const auto payloads = make_shared_payloads(std::span<Sink* const>{subscribers}, std::move(payload));
 
   for (std::size_t i = 0; i < subscribers.size(); ++i) {
     auto* sink = subscribers[i];
-    asio::co_spawn(executor,
-                   run_advisory_sink(state, sink, event, payload_for_sink(*sink, payloads), i),
-                   asio::bind_cancellation_slot(state->child_cancels[i].slot(), asio::detached));
-  }
-
-  if (auto cancel = co_await asio::this_coro::cancellation_state; cancel.cancelled() != asio::cancellation_type::none) {
-    for (auto& signal : state->child_cancels) {
-      signal.emit(asio::cancellation_type::all);
+    auto spawned = tasks.spawn("hook-advisory-" + std::to_string(i),
+                               [&rows, sink, event, payload = payload_for_sink(*sink, payloads), i]() mutable {
+                                 return run_advisory_sink(rows, *sink, event, std::move(payload), i);
+                               });
+    if (!spawned) {
+      rows[i] = PublishOutcome::SinkResult{.sink_id = std::string{sink->id()}, .error = std::move(spawned).error()};
+    } else {
+      task_indices.push_back(i);
     }
   }
 
-  std::size_t completed = 0;
-  while (completed < state->total_sinks) {
-    auto next = co_await state->completion.receive();
-    if (!next) {
-      for (auto& signal : state->child_cancels) {
-        signal.emit(asio::cancellation_type::all);
+  auto report = co_await tasks.join();
+  if (!report) {
+    for (std::size_t i = 0; i < subscribers.size(); ++i) {
+      if (!rows[i].has_value()) {
+        rows[i] = PublishOutcome::SinkResult{.sink_id = std::string{subscribers[i]->id()}, .error = report.error()};
       }
-      co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
-      continue;
     }
-    rows[next->index] = std::move(next->row);
-    ++completed;
+  } else {
+    for (std::size_t task = 0; task < report->tasks.size(); ++task) {
+      const auto i = task_indices[task];
+      if (!rows[i].has_value() && report->tasks[task].error.has_value()) {
+        rows[i] = PublishOutcome::SinkResult{.sink_id = std::string{subscribers[i]->id()},
+                                             .error = std::move(report->tasks[task].error)};
+      }
+    }
   }
 
   outcome.sinks.reserve(rows.size());
-  for (auto& row : rows) {
-    if (row.has_value()) {
-      outcome.sinks.push_back(std::move(*row));
+  for (std::size_t i = 0; i < rows.size(); ++i) {
+    if (!rows[i].has_value()) {
+      rows[i] =
+          PublishOutcome::SinkResult{.sink_id = std::string{subscribers[i]->id()},
+                                     .error = core::Error::internal("advisory hook task completed without an outcome")};
     }
+    outcome.sinks.push_back(std::move(*rows[i]));
   }
   co_return outcome;
 }

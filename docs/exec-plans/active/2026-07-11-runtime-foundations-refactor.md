@@ -104,6 +104,12 @@ external contract or a previously reproduced failure.
 - [x] Bounded named `async::TaskGroup` foundation landed; runtime owners are migrating.
 - [x] `Runtime::stop_and_join()` landed; start-mode serve/desktop owners now join
   Runtime workers before borrowed assembly/provider state can be destroyed.
+- [x] Advisory hook fan-out now owns subscribed sink coroutines through a
+  bounded `async::TaskGroup` and joins them after parent cancellation before
+  releasing borrowed sink references.
+- [x] `serve_channels` adapter pumps now live in a bounded `async::TaskGroup`
+  and are cancelled/joined on shutdown before the owner releases the borrowed
+  `ChannelManager`.
 - [x] Filesystem authority migration landed: every filesystem built-in —
   recursive walks and ignore-file reads included — executes through pinned
   authorities, and the scheduler derives lock keys without re-resolving paths.

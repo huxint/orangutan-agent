@@ -4,6 +4,7 @@
 #include <chrono>
 #include <concepts>
 #include <cstddef>
+#include <exception>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -14,6 +15,10 @@
 #include <variant>
 #include <vector>
 
+#include <asio/bind_cancellation_slot.hpp>
+#include <asio/cancellation_signal.hpp>
+#include <asio/cancellation_type.hpp>
+#include <asio/co_spawn.hpp>
 #include <asio/io_context.hpp>
 #include <asio/this_coro.hpp>
 
@@ -179,6 +184,35 @@ private:
   std::size_t* active_;
   std::size_t* peak_active_;
   std::vector<std::string>* completions_;
+};
+
+class CancellationAwareAdvisorySink final : public hook::Sink {
+public:
+  CancellationAwareAdvisorySink(bool& active, bool& finished, bool& cancellation_seen)
+      : active_(&active), finished_(&finished), cancellation_seen_(&cancellation_seen) {}
+
+  [[nodiscard]] std::string_view id() const noexcept override {
+    return "cancellation-aware";
+  }
+
+  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/,
+                                                             hook::PayloadPtr /*payload*/) override {
+    *active_ = true;
+    const auto executor = co_await asio::this_coro::executor;
+    auto slept = co_await async::sleep_for(executor, 5s);
+    *active_ = false;
+    *finished_ = true;
+    if (!slept) {
+      *cancellation_seen_ = slept.error().kind() == core::ErrorKind::cancelled;
+      co_return std::unexpected(std::move(slept).error());
+    }
+    co_return core::Result<void>{};
+  }
+
+private:
+  bool* active_;
+  bool* finished_;
+  bool* cancellation_seen_;
 };
 
 /// Sink that throws from its awaitable. Required to verify the advisory
@@ -531,6 +565,53 @@ TEST_CASE("publish_advisory fans out async sinks while preserving outcome order"
   REQUIRE(peak_active == 3);
   REQUIRE(completions.size() == 3);
   REQUIRE(completions.front() == "second");
+}
+
+TEST_CASE("publish_advisory joins cancelled sink tasks before returning", "[hook][bus][cancellation]") {
+  hook::Bus bus;
+  bool active = false;
+  bool finished = false;
+  bool cancellation_seen = false;
+  CancellationAwareAdvisorySink sink{active, finished, cancellation_seen};
+  bus.bind(sink, {hook::Event::tool_before});
+
+  test::run_async(
+      [&](asio::io_context& io) -> async::Awaitable<void> {
+        asio::cancellation_signal cancellation;
+        async::Channel<std::monostate> completed{io.get_executor(), 1};
+        std::optional<hook::PublishOutcome> published;
+        std::exception_ptr failure;
+        asio::co_spawn(io,
+                       bus.publish_advisory(hook::Event::tool_before, sample_before()),
+                       asio::bind_cancellation_slot(cancellation.slot(),
+                                                    [&](std::exception_ptr error, hook::PublishOutcome outcome) {
+                                                      failure = error;
+                                                      published = std::move(outcome);
+                                                      [[maybe_unused]] auto signaled =
+                                                          completed.try_send(std::monostate{});
+                                                    }));
+
+        while (!active) {
+          auto yielded = co_await async::sleep_for(io.get_executor(), 1ms);
+          REQUIRE(yielded.has_value());
+        }
+        cancellation.emit(asio::cancellation_type::all);
+
+        auto signaled = co_await completed.receive();
+        REQUIRE(signaled.has_value());
+        if (failure) {
+          std::rethrow_exception(failure);
+        }
+        REQUIRE(published.has_value());
+        REQUIRE_FALSE(active);
+        REQUIRE(finished);
+        REQUIRE(cancellation_seen);
+        REQUIRE(published->sinks.size() == 1);
+        REQUIRE(published->sinks.front().error.has_value());
+        REQUIRE(published->sinks.front().error->kind() == core::ErrorKind::cancelled);
+        co_return;
+      },
+      1s);
 }
 
 TEST_CASE("publish_advisory redacts tool_after data_json unless sink is trusted-local", "[hook][bus][redaction]") {

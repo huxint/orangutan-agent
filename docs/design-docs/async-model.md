@@ -106,6 +106,30 @@ surfaced by `stop_and_join()`. Start-mode owners call that boundary before
 destroying any state borrowed by runtime tasks; `stop()` alone only requests
 shutdown and does not establish a worker-lifetime join.
 
+## Structured Child Ownership
+
+`async::TaskGroup` is the default owner for sibling or background coroutines
+whose lifetime can extend beyond one direct `co_await`. A group has explicit
+`max_tasks` and bounded completed-outcome retention, accepts named
+`Awaitable<Result<void>>` factories through `spawn`, and exposes `close`,
+`request_stop`, `drain_completed`, and `join` boundaries. `join` closes the
+group and waits for every accepted child, returning success/error/cancellation
+outcomes in spawn order.
+
+Destroying the facade requests cancellation but cannot perform an asynchronous
+join. Each child retains the group implementation until it records its outcome,
+which protects group bookkeeping; it does not make borrowed application state
+safe. An owner whose tasks borrow sinks, services, providers, sockets, or other
+runtime objects must explicitly `co_await join()` before releasing those
+objects. Cancellation is cooperative, so `request_stop()` is not a substitute
+for this ownership boundary.
+
+The bounded webhook connection owner, advisory hook fan-out, and
+`serve_channels` adapter pumps use this primitive. Further runtime-foundations
+work is migrating the remaining hand-owned child sets (conversation workers,
+scheduler batches, desktop sessions) rather than adding subsystem-local
+cancellation vectors and completion channels.
+
 ## Awaitable Alias
 
 ```cpp
@@ -261,7 +285,11 @@ Never use `std::this_thread::sleep_for` — it blocks the executor thread.
 
 ## Detached Tasks
 
-Detached tasks are rare and require justification. Pattern when needed:
+Detached tasks are rare and require justification. A subsystem that needs to
+spawn multiple children, bound their count, collect failures, or release
+borrowed state on shutdown uses `TaskGroup`. Raw detached spawn is reserved for
+cases whose full lifetime is owned by a surrounding async operation or the
+process runtime itself. Pattern when it is genuinely needed:
 
 ```cpp
 asio::co_spawn(

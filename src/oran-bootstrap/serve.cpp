@@ -21,7 +21,6 @@
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <exception>
 #include <expected>
 #include <filesystem>
@@ -621,20 +620,6 @@ async::Awaitable<Result<void>> serve_channel_dispatch(channel::ChannelManager& m
 
         co_return co_await runner(std::move(request));
       }};
-}
-
-/// Spawn wrapper around `serve_channel_pump`: run it to completion, then — with
-/// cancellation disabled, so a parent cancellation that already fired cannot
-/// abandon this coroutine — signal completion so `serve_channels` can drain it
-/// before returning. `manager` and `done` are borrowed and must outlive it;
-/// `serve_channels` guarantees this by draining `done` before it returns.
-async::Awaitable<void> serve_channel_pump_tracked(channel::ChannelManager& manager,
-                                                  std::string channel_id,
-                                                  std::shared_ptr<std::atomic_bool> stopping,
-                                                  async::Channel<std::monostate>& done) {
-  [[maybe_unused]] auto pumped = co_await serve_channel_pump(manager, std::move(channel_id), std::move(stopping));
-  co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
-  [[maybe_unused]] auto sent = co_await done.send(std::monostate{});
 }
 
 [[nodiscard]] std::string trim_http_line_suffix(std::string line) {
@@ -1424,19 +1409,32 @@ async::Awaitable<Result<void>> serve_channels(asio::any_io_executor executor,
 
   // Own the background fan-in loop (design-docs/channel-abstraction.md): one
   // pump coroutine per adapter forwards `next_message()` into the shared fan-in
-  // while the dispatcher consumes it. Each pump gets its own cancellation signal
-  // because an asio cancellation slot targets a single coroutine; a completion
-  // channel (capacity == pump count) lets us drain every pump before returning,
-  // so no spawned pump outlives this frame (each borrows `manager`).
+  // while the dispatcher consumes it. Pumps live in a bounded TaskGroup so
+  // shutdown can cancel and join every child before this frame returns (each
+  // pump borrows `manager`).
   const std::size_t pump_count = channel_ids.size();
-  std::deque<asio::cancellation_signal> pump_cancels(pump_count);
-  async::Channel<std::monostate> pumps_done{executor, pump_count == 0 ? std::size_t{1} : pump_count};
   auto stopping = std::make_shared<std::atomic_bool>(false);
-
-  for (std::size_t i = 0; i < pump_count; ++i) {
-    asio::co_spawn(executor,
-                   serve_channel_pump_tracked(manager, std::move(channel_ids[i]), stopping, pumps_done),
-                   asio::bind_cancellation_slot(pump_cancels[i].slot(), asio::detached));
+  auto pumps_result =
+      async::TaskGroup::create(executor,
+                               async::TaskGroupOptions{.max_tasks = std::max(pump_count, std::size_t{1}),
+                                                       .max_completed = std::max(pump_count, std::size_t{1})});
+  if (!pumps_result) {
+    co_return std::unexpected(std::move(pumps_result).error());
+  }
+  auto pumps = std::move(*pumps_result);
+  for (auto& channel_id : channel_ids) {
+    auto task_name = "channel-pump-" + channel_id;
+    auto spawned = pumps.spawn(
+        std::move(task_name),
+        [&manager, channel_id = std::move(channel_id), stopping]() mutable -> async::Awaitable<Result<void>> {
+          co_return co_await serve_channel_pump(manager, std::move(channel_id), std::move(stopping));
+        });
+    if (!spawned) {
+      stopping->store(true, std::memory_order_release);
+      pumps.request_stop();
+      [[maybe_unused]] auto joined = co_await pumps.join();
+      co_return std::unexpected(std::move(spawned).error());
+    }
   }
 
   // The dispatcher is the awaited body. When the parent cancels this coroutine
@@ -1448,24 +1446,30 @@ async::Awaitable<Result<void>> serve_channels(asio::any_io_executor executor,
       serve_channel_dispatch(manager, dispatcher, dispatch_runner, std::move(stop_requested), options),
       asio::use_awaitable);
 
-  // Stop adapters and drain the pumps with cancellation disabled, so an
-  // already-fired parent cancellation cannot abandon the spawned coroutines
-  // mid-drain. `cancellation_signal` is not sticky; the explicit stopping flag
-  // covers the window where a pump has just finished one `next_message()` and
-  // has not yet installed the cancellation handler for the next one, while
-  // `stop_all()` wakes adapter-owned receives (QQ closes its gateway transport;
-  // MockChannel closes its bounded inbound queue).
+  // Stop adapters and join the pumps with cancellation disabled, so an
+  // already-fired parent cancellation cannot abandon the TaskGroup join
+  // mid-drain. The explicit stopping flag covers the window where a pump has
+  // just finished one `next_message()` and has not yet installed the
+  // cancellation handler for the next one, while `stop_all()` wakes
+  // adapter-owned receives (QQ closes its gateway transport; MockChannel
+  // closes its bounded inbound queue). `request_stop()` then cancels any pump
+  // still parked on a receive.
   co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
   stopping->store(true, std::memory_order_release);
   auto stopped = co_await manager.stop_all();
   if (!stopped) {
     std::println(stderr, "orangutan: channel adapters failed to stop cleanly: {}", stopped.error());
   }
-  for (auto& signal : pump_cancels) {
-    signal.emit(asio::cancellation_type::all);
-  }
-  for (std::size_t drained = 0; drained < pump_count; ++drained) {
-    [[maybe_unused]] auto received = co_await pumps_done.receive();
+  pumps.request_stop();
+  auto pump_report = co_await pumps.join();
+  if (!pump_report) {
+    std::println(stderr, "orangutan: channel pump join failed: {}", pump_report.error());
+  } else {
+    for (const auto& task : pump_report->tasks) {
+      if (task.error.has_value() && task.error->kind() != core::ErrorKind::cancelled) {
+        std::println(stderr, "orangutan: channel pump '{}' ended: {}", task.name, *task.error);
+      }
+    }
   }
 
   if (!dispatched) {

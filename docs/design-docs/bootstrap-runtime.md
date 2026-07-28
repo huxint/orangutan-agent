@@ -632,8 +632,8 @@ strand-owned `ChannelManager`, logs skipped disabled/unknown kinds, builds
 `make_routed_channel_prompt_runner(...)`, and passes registered channel ids into
 `serve_body`. The body calls `ChannelManager::start_all()` before racing the
 concern. Shutdown is explicit: `serve_channels` marks its pumps stopping, calls
-`ChannelManager::stop_all()` to wake adapter-owned receives, emits each pump's
-child cancellation signal, and drains the pump completion channel before returning.
+`ChannelManager::stop_all()` to wake adapter-owned receives, and cancels/joins
+the pump-owned `async::TaskGroup` before returning.
 The in-process `MockChannel::stop()` now closes its bounded inbound queue and
 `start()` reopens a fresh one, matching the QQ adapter's transport-close behavior
 for pending `next_message()` waits.
