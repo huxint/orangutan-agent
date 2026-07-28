@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <exception>
 #include <filesystem>
 #include <format>
@@ -1359,6 +1360,58 @@ TEST_CASE("serve_channels reports conversation worker metrics", "[unit][bootstra
     REQUIRE_FALSE(metric_lines.empty());
     CHECK(metric_lines.back() == bootstrap::format_serve_channel_worker_metrics(final));
     CHECK_FALSE(mock->started());
+  });
+}
+
+TEST_CASE("serve_channels retires a cascade of idle conversation workers",
+          "[unit][bootstrap][serve][channels][workers]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    channel::ChannelManager manager{io.get_executor()};
+    auto adapter =
+        std::make_unique<channel::MockChannel>(io.get_executor(),
+                                               channel::MockChannelOptions{.id = "mock-main", .kind = "mock"});
+    auto* mock = adapter.get();
+    REQUIRE(manager.register_adapter(std::move(adapter)).has_value());
+    REQUIRE((co_await manager.start_all()).has_value());
+
+    // More conversations than the dispatcher can retire in one commit pass.
+    // `progress` is a single-slot wake, so retirement requests and completion
+    // signals from a cascade of workers collide: the dispatcher must drive
+    // retirement from the request flags it re-checks, not from one wake per
+    // request, or the surplus workers never retire and the loop parks forever.
+    // Every worker must still be evicted and counted exactly once.
+    constexpr std::size_t kConversations = 6;
+    for (std::size_t i = 0; i < kConversations; ++i) {
+      REQUIRE(mock->push_inbound(text_inbound("hello", std::format("conv-{}", i))).has_value());
+    }
+
+    std::vector<bootstrap::ServeChannelWorkerMetrics> snapshots;
+    auto runner = channel::ChannelPromptRunner{[](channel::ChannelPromptRunRequest request)
+                                                   -> async::Awaitable<core::Result<channel::ChannelPromptRunResult>> {
+      co_return channel::ChannelPromptRunResult{.text = request.prompt + " reply"};
+    }};
+
+    auto outcome = co_await bootstrap::serve_channels(
+        io.get_executor(),
+        manager,
+        std::move(runner),
+        std::vector<std::string>{"mock-main"},
+        [&] { return !snapshots.empty() && snapshots.back().workers_evicted_idle >= kConversations; },
+        nullptr,
+        bootstrap::ServeChannelOptions{.conversation_idle_ttl = 20ms,
+                                       .metrics_observer = [&](const bootstrap::ServeChannelWorkerMetrics& snapshot) {
+                                         snapshots.push_back(snapshot);
+                                       }});
+
+    REQUIRE(outcome.has_value());
+    CHECK(mock->sent_messages().size() == kConversations);
+    REQUIRE_FALSE(snapshots.empty());
+    const auto final = snapshots.back();
+    CHECK(final.workers_created == kConversations);
+    CHECK(final.workers_completed == kConversations);
+    CHECK(final.workers_evicted_idle == kConversations);
+    CHECK(final.active_workers == 0);
+    CHECK(final.enqueue_failures == 0);
   });
 }
 

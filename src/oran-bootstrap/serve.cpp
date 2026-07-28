@@ -366,9 +366,25 @@ serve_channel_conversation_worker(channel::ChannelManager& manager,
 
 struct ChannelConversationWorker {
   std::shared_ptr<async::Channel<channel::InboundMessage>> inbox;
-  std::shared_ptr<asio::cancellation_signal> cancel;
   std::shared_ptr<ChannelConversationWorkerState> state;
 };
+
+[[nodiscard]] std::string conversation_worker_name(const ChannelConversationKey& key) {
+  return std::format("channel-conversation-{}:{}", key.channel_id, key.conversation_id);
+}
+
+void report_conversation_worker_outcomes(async::TaskGroupReport report) {
+  if (report.outcomes_dropped > 0) {
+    std::println(stderr,
+                 "orangutan: channel conversation outcome retention dropped {} completed rows",
+                 report.outcomes_dropped);
+  }
+  for (const auto& task : report.tasks) {
+    if (task.status == async::TaskOutcomeStatus::failed && task.error.has_value()) {
+      std::println(stderr, "orangutan: channel conversation worker '{}' failed: {}", task.name, *task.error);
+    }
+  }
+}
 
 /// The dispatch loop consumes the manager fan-in and assigns each message to a
 /// bounded per-channel+conversation worker queue. A single worker processes one
@@ -386,6 +402,20 @@ async::Awaitable<Result<void>> serve_channel_dispatch(channel::ChannelManager& m
   auto progress = std::make_shared<async::Channel<std::monostate>>(executor, 1);
   auto shared_metrics = std::make_shared<ChannelWorkerSharedMetrics>();
   auto metrics = ServeChannelWorkerMetrics{};
+
+  // Conversation workers borrow `manager` and `runner` from this frame, so they
+  // are owned by a bounded task group that is cancelled and joined before the
+  // dispatcher returns. The group's capacity is the same hard worker cap the
+  // dispatcher table enforces, which makes the bound structural rather than
+  // bookkeeping-only.
+  auto workers_result =
+      async::TaskGroup::create(executor,
+                               async::TaskGroupOptions{.max_tasks = options.max_active_conversations,
+                                                       .max_completed = options.max_active_conversations});
+  if (!workers_result) {
+    co_return std::unexpected(std::move(workers_result).error());
+  }
+  auto worker_tasks = std::move(*workers_result);
 
   auto snapshot_metrics = [&] {
     auto snapshot = metrics;
@@ -411,6 +441,11 @@ async::Awaitable<Result<void>> serve_channel_dispatch(channel::ChannelManager& m
   };
 
   auto erase_completed_workers = [&] {
+    // Reap the dispatcher table and the group's bounded outcome retention
+    // together: a worker frame that failed outright reports only through the
+    // group, and draining here keeps retention near-empty for a long-lived
+    // daemon instead of letting it saturate and drop rows.
+    report_conversation_worker_outcomes(worker_tasks.drain_completed());
     auto removed = false;
     std::erase_if(workers, [&](const auto& entry) {
       const auto completion = entry.second.state->completion;
@@ -477,25 +512,52 @@ async::Awaitable<Result<void>> serve_channel_dispatch(channel::ChannelManager& m
     auto worker_key = key;
     auto inbox =
         std::make_shared<async::Channel<channel::InboundMessage>>(executor, options.conversation_queue_capacity);
-    auto cancel = std::make_shared<asio::cancellation_signal>();
     auto state = std::make_shared<ChannelConversationWorkerState>();
+    // Spawn before publishing the worker into the table: a rejected spawn (the
+    // group is at capacity or already closed) must not leave an entry whose
+    // inbox nobody drains.
+    auto spawned =
+        worker_tasks.spawn(conversation_worker_name(worker_key),
+                           [&manager,
+                            executor,
+                            runner,
+                            inbox,
+                            worker_key,
+                            idle_ttl = options.conversation_idle_ttl,
+                            progress,
+                            state,
+                            shared_metrics,
+                            message_deadline = options.message_deadline]() mutable -> async::Awaitable<Result<void>> {
+                             co_await serve_channel_conversation_worker(manager,
+                                                                        executor,
+                                                                        std::move(runner),
+                                                                        std::move(inbox),
+                                                                        std::move(worker_key),
+                                                                        idle_ttl,
+                                                                        std::move(progress),
+                                                                        std::move(state),
+                                                                        std::move(shared_metrics),
+                                                                        message_deadline);
+                             co_return Result<void>{};
+                           });
+    if (!spawned) {
+      ++metrics.enqueue_failures;
+      ++metrics.conversation_overloads;
+      publish_metrics();
+      std::println(stderr,
+                   "orangutan: channel conversation worker spawn rejected: channel='{}' conversation='{}': {}",
+                   message.channel_id,
+                   message.conversation_id,
+                   spawned.error());
+      return nullptr;
+    }
+
     auto [inserted, _] =
-        workers.emplace(std::move(key), ChannelConversationWorker{.inbox = inbox, .cancel = cancel, .state = state});
+        workers.emplace(std::move(key),
+                        ChannelConversationWorker{.inbox = std::move(inbox), .state = std::move(state)});
     ++metrics.workers_created;
     metrics.max_active_workers = std::max(metrics.max_active_workers, workers.size());
     publish_metrics();
-    asio::co_spawn(executor,
-                   serve_channel_conversation_worker(manager,
-                                                     executor,
-                                                     runner,
-                                                     std::move(inbox),
-                                                     std::move(worker_key),
-                                                     options.conversation_idle_ttl,
-                                                     progress,
-                                                     std::move(state),
-                                                     shared_metrics,
-                                                     options.message_deadline),
-                   asio::bind_cancellation_slot(cancel->slot(), asio::detached));
     return &inserted->second;
   };
 
@@ -510,24 +572,33 @@ async::Awaitable<Result<void>> serve_channel_dispatch(channel::ChannelManager& m
       if (!seen_progress && seen_progress.error().kind() == core::ErrorKind::cancelled) {
         break;
       }
-      const bool retired = commit_requested_retirements();
-      if (retired) {
-        // A committed idle retirement has already closed the worker inbox, so
-        // completion requires no external work. Drain it before accepting the
-        // next inbound message: the hard worker cap then counts every spawned
-        // worker without rejecting a message merely because its predecessor is
-        // between close() and its final completion wake.
-        while (std::ranges::any_of(retiring_workers, [](const auto& worker) {
+      // A committed idle retirement has already closed the worker inbox, so
+      // completion requires no external work. Drain it before accepting the
+      // next inbound message: the hard worker cap then counts every spawned
+      // worker without rejecting a message merely because its predecessor is
+      // between close() and its final completion wake.
+      //
+      // Re-commit on every drain iteration. `progress` is a single-slot wake,
+      // so a retirement another worker requests *during* this drain has its
+      // wake consumed here and would never reach the loop head again; the
+      // request flag itself is what this branch acts on, and it is set before
+      // the wake is sent, so re-checking it here cannot miss one.
+      bool retired = false;
+      bool erased = false;
+      for (;;) {
+        retired = commit_requested_retirements() || retired;
+        erased = erase_completed_workers() || erased;
+        const bool draining = std::ranges::any_of(retiring_workers, [](const auto& worker) {
           return worker.state->completion == ChannelConversationWorkerCompletion::running;
-        })) {
-          auto completed = co_await progress->receive();
-          if (!completed) {
-            break;
-          }
-          static_cast<void>(erase_completed_workers());
+        });
+        if (!draining) {
+          break;
+        }
+        auto completed = co_await progress->receive();
+        if (!completed) {
+          break;
         }
       }
-      const bool erased = erase_completed_workers();
       if (retired || erased) {
         publish_metrics();
       }
@@ -561,26 +632,23 @@ async::Awaitable<Result<void>> serve_channel_dispatch(channel::ChannelManager& m
     }
   }
 
+  // Close every inbox first so a worker parked on a receive wakes with a closed
+  // channel rather than a cancellation, then cancel and join the group. The
+  // join is the ownership boundary: workers borrow `manager` and `runner` from
+  // this frame, so none may still be running when it returns.
   co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
   for (auto& [_, worker] : workers) {
     worker.inbox->close();
-    worker.cancel->emit(asio::cancellation_type::all);
   }
   for (auto& worker : retiring_workers) {
     worker.inbox->close();
-    worker.cancel->emit(asio::cancellation_type::all);
   }
-  const auto has_running_workers = [&] {
-    return std::ranges::any_of(workers,
-                               [](const auto& entry) {
-                                 return entry.second.state->completion == ChannelConversationWorkerCompletion::running;
-                               }) ||
-           std::ranges::any_of(retiring_workers, [](const auto& worker) {
-             return worker.state->completion == ChannelConversationWorkerCompletion::running;
-           });
-  };
-  while (has_running_workers()) {
-    [[maybe_unused]] auto received = co_await progress->receive();
+  worker_tasks.request_stop();
+  auto worker_report = co_await worker_tasks.join();
+  if (!worker_report) {
+    std::println(stderr, "orangutan: channel conversation worker join failed: {}", worker_report.error());
+  } else {
+    report_conversation_worker_outcomes(std::move(*worker_report));
   }
   if (erase_completed_workers()) {
     publish_metrics();

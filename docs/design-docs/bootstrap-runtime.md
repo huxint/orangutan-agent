@@ -633,7 +633,9 @@ strand-owned `ChannelManager`, logs skipped disabled/unknown kinds, builds
 `serve_body`. The body calls `ChannelManager::start_all()` before racing the
 concern. Shutdown is explicit: `serve_channels` marks its pumps stopping, calls
 `ChannelManager::stop_all()` to wake adapter-owned receives, and cancels/joins
-the pump-owned `async::TaskGroup` before returning.
+the pump-owned `async::TaskGroup` before returning. The dispatcher does the same
+for its conversation workers, so neither pumps nor workers outlive the borrowed
+`ChannelManager` and prompt runner.
 The in-process `MockChannel::stop()` now closes its bounded inbound queue and
 `start()` reopens a fresh one, matching the QQ adapter's transport-close behavior
 for pending `next_message()` waits.
@@ -642,11 +644,11 @@ Slice 259 hardens that concern's dispatch side. The dispatch loop now consumes m
 messages and assigns each one to a bounded worker queue keyed by
 `(channel_id, conversation_id)`. Each worker runs the same routed
 `ChannelPromptRunner` and sends replies sequentially for that one conversation,
-while unrelated conversations can await their agent runs concurrently. That
-slice used a total worker-completion counter plus a non-blocking progress signal
-rather than an awaited done send, so shutdown could close worker queues, emit
-child cancellation, and wait for workers without racing their cancellation slot
-cleanup.
+while unrelated conversations can await their agent runs concurrently. Workers
+are owned by a bounded `async::TaskGroup` whose capacity is
+`max_active_conversations`; a non-blocking progress signal carries worker wakes
+back to the dispatcher, and shutdown closes every worker inbox, requests stop on
+the group, and joins it before releasing the borrowed manager and runner.
 
 Slice 260 bounds that worker table for long-lived services. `ServeChannelOptions`
 adds a public C++ test/embedding knob for `conversation_queue_capacity` (default
@@ -657,10 +659,12 @@ the idle TTL. When the TTL wins and the inbox is still empty, the worker exits,
 sets a completion flag, and sends a non-blocking progress wake. The dispatcher
 erases completed workers on progress wakes and before enqueueing a new message,
 so a later message for the same `(channel_id, conversation_id)` gets a fresh
-worker instead of landing in an exited inbox. Shutdown waits on per-worker
-completion flags rather than a total completed count, so previously evicted
-workers cannot make active shutdown waits look complete. Deadlines remain
-downstream.
+worker instead of landing in an exited inbox. A worker never exits unilaterally
+while its table entry still accepts messages: it requests retirement and parks,
+and the dispatcher either revives it with a newly-arrived message or commits the
+retirement by closing the inbox. Because the progress wake is a single slot, the
+dispatcher drives retirement from the request flags it re-checks on every drain
+iteration rather than from one wake per request. Deadlines remain downstream.
 
 Slice 261 adds the first structured worker metrics boundary. `ServeChannelWorkerMetrics` snapshots report the
 current worker table size, max observed worker table size, created/completed

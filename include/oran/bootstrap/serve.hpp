@@ -238,7 +238,9 @@ struct ServeChannelOptions {
   /// conversation can backlog while preserving in-order dispatch.
   std::size_t conversation_queue_capacity{64};
   /// Maximum number of spawned conversation workers that have not completed,
-  /// including workers finishing an idle retirement. A message for a new
+  /// including workers finishing an idle retirement. It is also the capacity of
+  /// the task group that owns those workers, so the bound holds even if the
+  /// dispatcher's own table accounting were to drift. A message for a new
   /// conversation is rejected when this limit is reached; existing
   /// conversations continue normally and the rejection increments
   /// `conversation_overloads` plus `enqueue_failures`.
@@ -288,8 +290,11 @@ struct ServeChannelOptions {
 /// at the top of the dispatch loop. On either stop the concern marks the pumps
 /// stopping, calls `manager.stop_all()` to wake adapter-owned receives, and
 /// cancels/joins the pump `async::TaskGroup` before returning, so no spawned
-/// pump outlives this coroutine (each borrows `manager`). A null `runner` is
-/// rejected up front.
+/// pump outlives this coroutine (each borrows `manager`). The dispatcher does
+/// the same for its conversation-worker `async::TaskGroup`: it closes every
+/// worker inbox, requests stop, and joins before returning, so no worker
+/// outlives it either (each borrows `manager` and the runner). A null `runner`
+/// is rejected up front.
 ///
 /// Exposed (rather than file-local) so it can be driven from tests with a real
 /// `ChannelManager` + `MockChannel` and a fake `ChannelPromptRunner` — no

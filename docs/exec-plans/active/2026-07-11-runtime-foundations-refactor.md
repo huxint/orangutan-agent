@@ -110,6 +110,12 @@ external contract or a previously reproduced failure.
 - [x] `serve_channels` adapter pumps now live in a bounded `async::TaskGroup`
   and are cancelled/joined on shutdown before the owner releases the borrowed
   `ChannelManager`.
+- [x] Per-conversation channel workers moved into a bounded `async::TaskGroup`
+  sized by `max_active_conversations`, making the worker cap structural and the
+  shutdown join explicit. Fixed a lost-wake defect the new scheduling order
+  exposed: a retirement requested while the dispatcher drained an earlier one
+  had its single-slot progress wake consumed by that drain, so the dispatcher
+  parked forever with a worker stuck mid-retirement.
 - [x] Filesystem authority migration landed: every filesystem built-in —
   recursive walks and ignore-file reads included — executes through pinned
   authorities, and the scheduler derives lock keys without re-resolving paths.

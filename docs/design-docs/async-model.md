@@ -124,11 +124,11 @@ runtime objects must explicitly `co_await join()` before releasing those
 objects. Cancellation is cooperative, so `request_stop()` is not a substitute
 for this ownership boundary.
 
-The bounded webhook connection owner, advisory hook fan-out, and
-`serve_channels` adapter pumps use this primitive. Further runtime-foundations
-work is migrating the remaining hand-owned child sets (conversation workers,
-scheduler batches, desktop sessions) rather than adding subsystem-local
-cancellation vectors and completion channels.
+The bounded webhook connection owner, advisory hook fan-out, `serve_channels`
+adapter pumps, and the channel dispatcher's per-conversation workers use this
+primitive. Further runtime-foundations work is migrating the remaining
+hand-owned child sets (scheduler batches, desktop sessions) rather than adding
+subsystem-local cancellation vectors and completion channels.
 
 ## Awaitable Alias
 

@@ -248,8 +248,12 @@ the first background fan-in owner at the actual caller boundary:
 already-registered adapters, runs one pump per adapter, dispatches from the
 shared fan-in, can enqueue `channel:<channel_id>` triggered automation events
 when `--serve` also owns automation state, and owns cancellation/shutdown drain.
-Adapter pumps are owned by a bounded `async::TaskGroup` so shutdown can cancel
-and join every pump before releasing the borrowed `ChannelManager`.
+Adapter pumps and conversation workers are each owned by a bounded
+`async::TaskGroup` so shutdown can cancel and join every child before releasing
+the borrowed `ChannelManager` and prompt runner. The conversation group's
+capacity is `max_active_conversations`, so the worker cap is structural rather
+than bookkeeping-only: a rejected spawn takes the same overload path as a
+rejected dispatch-table admission.
 Slices 259-260 keep that ownership at the caller boundary and add the first
 per-conversation dispatch queues plus idle worker eviction there instead of
 moving policy into `ChannelManager`.
