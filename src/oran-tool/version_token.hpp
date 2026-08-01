@@ -12,10 +12,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <functional>
 #include <span>
 #include <string>
 #include <string_view>
 
+#include <oran/core/result.hpp>
 #include <oran/io/fingerprint.hpp>
 #include <oran/permission/approval.hpp>
 
@@ -43,6 +45,27 @@ namespace orangutan::tool::detail {
 [[nodiscard]] inline std::string version_token(std::string_view canonical_path, const io::FileFingerprint& fp) {
   const auto path_hash = permission::ApprovalAuthority::input_hash(canonical_path);
   return std::format("v1:{}:{}:{}", hex_lower(path_hash), fp.size_bytes, fp.mtime_ns);
+}
+
+/// Commit-time freshness verifier for atomic truncate writes. The io commit
+/// path invokes this with the current target's fingerprint in the same
+/// critical section as the rename, so a change between the pre-write token
+/// check and the commit aborts the replacement instead of clobbering the
+/// updated file.
+[[nodiscard]] inline std::move_only_function<core::Result<void>(const io::FileFingerprint&)>
+expected_version_verifier(std::string canonical_path, std::string expected) {
+  return [path = std::move(canonical_path),
+          expected = std::move(expected)](const io::FileFingerprint& fp) -> core::Result<void> {
+    const auto current_token = version_token(path, fp);
+    if (current_token == expected) {
+      return {};
+    }
+    return std::unexpected(core::Error{core::ErrorKind::conflict, "file changed during write"}
+                               .with("path", path)
+                               .with("reason", "stale_fingerprint")
+                               .with("expected", expected)
+                               .with("fingerprint", current_token));
+  };
 }
 
 }  // namespace orangutan::tool::detail

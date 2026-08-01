@@ -14,6 +14,7 @@
 
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/core/result.hpp>
+#include <oran/io/fingerprint.hpp>
 #include <oran/io/range.hpp>
 
 namespace orangutan::io {
@@ -127,6 +128,14 @@ struct WriteTextOptions {
   /// successful rename so the directory entry is durable. Non-default
   /// durability requires `atomic == true`.
   WriteTextDurability durability{WriteTextDurability::rename_only};
+  /// Optional commit-time freshness verifier for atomic truncate writes. When
+  /// set, the blocking commit path recomputes the current target's fingerprint
+  /// from the same `fstat(2)` used for identity validation and invokes this
+  /// callback immediately before the rename; returning `unexpected` aborts the
+  /// commit with the target untouched. The callback runs inside the commit
+  /// critical section, so it must be cheap and must not block. Requires
+  /// `mode == WriteMode::truncate` and `atomic == true`.
+  std::move_only_function<core::Result<void>(const FileFingerprint&)> verify_before_commit{};
 };
 
 enum class DirectoryEntryKind : std::uint8_t {

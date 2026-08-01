@@ -264,7 +264,13 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
   auto replaced = apply_replacements(*contents, old_string, new_string, target_positions);
   const auto replaced_bytes = replaced.size();
   io::WriteTextOptions write_opts{.mode = io::WriteMode::truncate, .atomic = true};
-  auto written = co_await io::write_text_file(ctx.executor, std::move(*mutation), std::move(replaced), write_opts);
+  if (expected_version) {
+    // Re-verify the token in the commit critical section so a file changed
+    // after the pre-edit check cannot be clobbered by the replacement.
+    write_opts.verify_before_commit = detail::expected_version_verifier(path, *expected_version);
+  }
+  auto written =
+      co_await io::write_text_file(ctx.executor, std::move(*mutation), std::move(replaced), std::move(write_opts));
   if (!written) {
     co_return std::unexpected(std::move(written).error());
   }

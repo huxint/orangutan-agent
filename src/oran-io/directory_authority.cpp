@@ -659,6 +659,12 @@ core::Result<void> FileMutation::write_text(std::string_view contents, WriteText
   if (!options.atomic && options.durability != WriteTextDurability::rename_only) {
     return std::unexpected(core::Error::invalid_argument("write durability requires atomic mode"));
   }
+  if (options.verify_before_commit && (options.mode != WriteMode::truncate || !options.atomic)) {
+    return std::unexpected(core::Error::invalid_argument("commit verification requires atomic truncate mode"));
+  }
+  if (options.verify_before_commit && !impl_->existed) {
+    return std::unexpected(core::Error::invalid_argument("commit verification requires an existing target"));
+  }
 
   if (options.mode == WriteMode::append) {
     const auto create_flags = impl_->existed ? 0 : O_CREAT | O_EXCL;
@@ -734,6 +740,12 @@ core::Result<void> FileMutation::write_text(std::string_view contents, WriteText
     }
     if (!same_identity(impl_->device, impl_->inode, impl_->size, impl_->mtime, impl_->ctime, current)) {
       return std::unexpected(stale_mutation_error("anchored mutation target changed before commit", impl_->display));
+    }
+    if (options.verify_before_commit) {
+      auto verified = options.verify_before_commit(fingerprint_from_stat(current));
+      if (!verified) {
+        return std::unexpected(std::move(verified).error());
+      }
     }
   } else if (current_fd.get() >= 0) {
     return std::unexpected(stale_mutation_error("anchored mutation target appeared before commit", impl_->display));

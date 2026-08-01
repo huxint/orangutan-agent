@@ -177,7 +177,13 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
   // the temp-then-rename atomic path. Append and fail_if_exists keep their
   // existing semantics because the atomic path is incompatible with both.
   options.atomic = options.mode == io::WriteMode::truncate;
-  auto written = co_await io::write_text_file(ctx.executor, std::move(*mutation), std::move(content), options);
+  if (options.atomic && expected_version) {
+    // Re-verify the token in the commit critical section so a file changed
+    // between the pre-write check and the rename cannot be clobbered.
+    options.verify_before_commit = detail::expected_version_verifier(path, *expected_version);
+  }
+  auto written =
+      co_await io::write_text_file(ctx.executor, std::move(*mutation), std::move(content), std::move(options));
   if (!written) {
     co_return std::unexpected(std::move(written).error());
   }

@@ -15,6 +15,8 @@
 
 #include <oran/core/result.hpp>
 
+struct stat;
+
 namespace orangutan::io {
 
 class ReadOnlyFile;
@@ -30,6 +32,11 @@ struct FileFingerprint {
 
   friend bool operator==(const FileFingerprint&, const FileFingerprint&) = default;
 };
+
+/// Build a `FileFingerprint` from an already-taken `fstat(2)` result without
+/// re-resolving a pathname. The anchored-mutation commit path uses this to run
+/// a freshness verifier in the same critical section as the rename.
+[[nodiscard]] FileFingerprint fingerprint_from_stat(const struct stat& status) noexcept;
 
 /// Read a file's metadata fingerprint. Returns:
 ///

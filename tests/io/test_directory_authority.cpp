@@ -794,6 +794,99 @@ TEST_CASE("FileMutation detects same-size rewrites with restored mtime", "[unit]
   REQUIRE(std::string{std::istreambuf_iterator<char>{current}, std::istreambuf_iterator<char>{}} == "external");
 }
 
+TEST_CASE("FileMutation commit verifier aborts the atomic replacement and cleans its temp",
+          "[unit][io][authority][mutation][atomic][conflict]") {
+  TempDir temp{"oran-io-mutation-verifier-abort"};
+  const auto workspace = temp.path() / "workspace";
+  const auto target = workspace / "note.txt";
+  std::filesystem::create_directories(workspace);
+  write_direct(target, "original");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+  auto mutation = authority->begin_file_mutation("note.txt");
+  REQUIRE(mutation.has_value());
+
+  test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
+    io::WriteTextOptions options{.atomic = true};
+    options.verify_before_commit = [](const io::FileFingerprint& fp) -> core::Result<void> {
+      REQUIRE(fp.size_bytes == 8);
+      REQUIRE(fp.mtime_ns > 0);
+      return std::unexpected(core::Error{core::ErrorKind::conflict, "verifier rejected the commit"});
+    };
+    auto written =
+        co_await io::write_text_file(context.get_executor(), std::move(*mutation), "agent-version", std::move(options));
+    REQUIRE_FALSE(written.has_value());
+    REQUIRE(written.error().kind() == core::ErrorKind::conflict);
+    REQUIRE(std::string_view{written.error().message()} == "verifier rejected the commit");
+  });
+
+  std::ifstream current{target, std::ios::binary};
+  REQUIRE(std::string{std::istreambuf_iterator<char>{current}, std::istreambuf_iterator<char>{}} == "original");
+  for (const auto& entry : std::filesystem::directory_iterator{workspace}) {
+    REQUIRE(entry.path().filename().string().find(".orangutan.tmp.") == std::string::npos);
+  }
+}
+
+TEST_CASE("FileMutation commit verifier observes the current target fingerprint",
+          "[unit][io][authority][mutation][atomic]") {
+  TempDir temp{"oran-io-mutation-verifier-ok"};
+  const auto workspace = temp.path() / "workspace";
+  const auto target = workspace / "note.txt";
+  std::filesystem::create_directories(workspace);
+  write_direct(target, "original");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+  auto mutation = authority->begin_file_mutation("note.txt");
+  REQUIRE(mutation.has_value());
+
+  std::optional<io::FileFingerprint> observed;
+  test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
+    io::WriteTextOptions options{.atomic = true};
+    options.verify_before_commit = [&observed](const io::FileFingerprint& fp) -> core::Result<void> {
+      observed = fp;
+      return {};
+    };
+    auto written =
+        co_await io::write_text_file(context.get_executor(), std::move(*mutation), "agent-version", std::move(options));
+    REQUIRE(written.has_value());
+  });
+
+  REQUIRE(observed.has_value());
+  REQUIRE(observed->size_bytes == 8);
+  REQUIRE(observed->mtime_ns > 0);
+  std::ifstream current{target, std::ios::binary};
+  REQUIRE(std::string{std::istreambuf_iterator<char>{current}, std::istreambuf_iterator<char>{}} == "agent-version");
+}
+
+TEST_CASE("FileMutation rejects commit verification outside atomic truncate mode",
+          "[unit][io][authority][mutation][atomic]") {
+  TempDir temp{"oran-io-mutation-verifier-mode"};
+  const auto workspace = temp.path() / "workspace";
+  std::filesystem::create_directories(workspace);
+  write_direct(workspace / "note.txt", "original");
+
+  auto authority = io::DirectoryAuthority::open_trusted(workspace.string());
+  REQUIRE(authority.has_value());
+  auto mutation = authority->begin_file_mutation("note.txt");
+  REQUIRE(mutation.has_value());
+
+  test::run_async([&](asio::io_context& context) -> orangutan::async::Awaitable<void> {
+    io::WriteTextOptions options{};
+    options.verify_before_commit = [](const io::FileFingerprint&) -> core::Result<void> {
+      return {};
+    };
+    auto written =
+        co_await io::write_text_file(context.get_executor(), std::move(*mutation), "agent-version", std::move(options));
+    REQUIRE_FALSE(written.has_value());
+    REQUIRE(written.error().kind() == core::ErrorKind::invalid_argument);
+  });
+
+  std::ifstream current{workspace / "note.txt", std::ios::binary};
+  REQUIRE(std::string{std::istreambuf_iterator<char>{current}, std::istreambuf_iterator<char>{}} == "original");
+}
+
 TEST_CASE("FileMutation can replace a writable target without read permission",
           "[unit][io][authority][mutation][permissions]") {
   TempDir temp{"oran-io-mutation-write-only"};

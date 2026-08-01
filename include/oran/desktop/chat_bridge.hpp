@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -162,14 +163,14 @@ public:
 
   /// Count of `UiUpdate`s handed to the delivery hook.
   [[nodiscard]] std::size_t updates_delivered() const noexcept {
-    return delivered_;
+    return delivered_.load(std::memory_order_relaxed);
   }
 
 private:
   void deliver(UiUpdate update);
 
   Delivery deliver_;
-  std::size_t delivered_{0};
+  std::atomic<std::size_t> delivered_{0};
 };
 
 /// Construction inputs for `ChatBridge`. `executor` is the shared
@@ -250,7 +251,7 @@ public:
 
   /// Count of updates dropped because the runtime→UI queue was full.
   [[nodiscard]] std::size_t updates_dropped() const noexcept {
-    return dropped_;
+    return dropped_.load(std::memory_order_relaxed);
   }
 
   /// Close the prompt (input) channel: any queued prompts drain, then
@@ -265,7 +266,7 @@ private:
   async::Channel<std::string> prompts_;
   async::Channel<UiUpdate> updates_;
   std::optional<asio::cancellation_signal> turn_cancel_;
-  std::size_t dropped_{0};
+  std::atomic<std::size_t> dropped_{0};
   DesktopEventSink sink_;
 };
 

@@ -107,6 +107,10 @@ Result<FileFingerprint> compute_file_fingerprint(const ReadOnlyFile& file) {
         Error::io("fingerprint target is not a regular file").with("path", std::string{file.display_path()}));
   }
 
+  return fingerprint_from_stat(status);
+}
+
+FileFingerprint fingerprint_from_stat(const struct stat& status) noexcept {
   return FileFingerprint{
       .size_bytes = static_cast<std::uintmax_t>(status.st_size),
       .mtime_ns = stat_mtime_nanoseconds(status),

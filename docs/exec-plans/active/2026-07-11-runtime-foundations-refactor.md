@@ -129,7 +129,14 @@ external contract or a previously reproduced failure.
   coroutine), and the tool scheduler's batch children are governed by spec 0012
   AC5's bounded-return grace window rather than an unconditional join.
 - [ ] Network/provider/UI correctness milestone landed.
-- [ ] Storage/conflict milestone landed.
+- [x] Storage/conflict milestone landed: concurrent migrations are serialized
+  through the pool's exclusive writer lease plus a per-migration `BEGIN
+  IMMEDIATE` re-read of `schema_versions`; pool waiter cancellation has no lost
+  window (cancel slots install under the pool mutex, with dedicated tests); and
+  tool `expected_version` is re-verified inside the atomic commit critical
+  section (`WriteTextOptions::verify_before_commit`, using the same `fstat` as
+  identity validation, immediately before the rename) so a change between the
+  pre-write token check and the commit aborts instead of clobbering.
 - [ ] Hosted quality gates active; redundant artifacts removed.
 - [ ] Full release/debug/sanitizer/analyzer verification complete.
 
