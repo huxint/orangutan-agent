@@ -59,6 +59,31 @@ TEST_CASE("SseParser accepts CRLF line endings", "[unit][http][sse]") {
   REQUIRE(events[0] == http::SseEvent{.event = "ping", .data = "{}"});
 }
 
+TEST_CASE("SseParser latches exceeded() for an over-long line", "[unit][http][sse]") {
+  http::detail::SseParser parser{
+      http::detail::SseParserOptions{.max_line_bytes = 12, .max_event_bytes = 16 * 1024 * 1024}};
+  const auto events = drain(parser, "data: hello");  // 11 bytes — under the cap.
+  REQUIRE(events.empty());
+  REQUIRE_FALSE(parser.exceeded());
+  const auto more = drain(parser, " world");  // Crosses 12 without a newline ever arriving.
+  REQUIRE(more.empty());
+  REQUIRE(parser.exceeded());
+  // A subsequent feed is a no-op; nothing more accumulates.
+  const auto tail = drain(parser, "data: later\n\n");
+  REQUIRE(tail.empty());
+  REQUIRE(parser.exceeded());
+}
+
+TEST_CASE("SseParser latches exceeded() for an oversized event and never dispatches it", "[unit][http][sse]") {
+  http::detail::SseParser parser{http::detail::SseParserOptions{.max_line_bytes = 64 * 1024, .max_event_bytes = 16}};
+  const auto events = drain(parser, "data: aaaaaaaaaaaaaaaaaa\n\n");
+  REQUIRE(events.empty());
+  REQUIRE(parser.exceeded());
+  // A following well-formed event is also dropped once latched.
+  const auto tail = drain(parser, "data: ok\n\n");
+  REQUIRE(tail.empty());
+}
+
 TEST_CASE("SseParser ignores comment, id, and retry lines", "[unit][http][sse]") {
   http::detail::SseParser parser;
   const auto events = drain(parser, ": keep-alive\nid: 42\nretry: 1000\ndata: ok\n\n");

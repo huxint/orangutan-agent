@@ -12,6 +12,9 @@
       "per_call_timeout_ms": 60000,
       "idle_lock_ttl_ms": 300000
     },
+    "stream": {
+      "max_bytes": 16777216
+    },
     "prompt": {
       "active_tools": "defaults"
     },

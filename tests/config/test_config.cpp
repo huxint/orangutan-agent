@@ -252,6 +252,23 @@ TEST_CASE("Config::parse reads per-profile thinking_budget and cache policy", "[
   }
 }
 
+TEST_CASE("Config::parse reads runtime.stream.max_bytes", "[unit][config]") {
+  SECTION("absent field keeps the 16 MiB default") {
+    auto result = config::Config::parse(R"json({})json");
+    REQUIRE(result.has_value());
+    REQUIRE(result->runtime().stream.max_bytes == 16 * 1024 * 1024);
+  }
+  SECTION("override parses") {
+    auto result = config::Config::parse(R"json({"runtime": {"stream": {"max_bytes": 4096}}})json");
+    REQUIRE(result.has_value());
+    REQUIRE(result->runtime().stream.max_bytes == 4096);
+  }
+  SECTION("non-positive values are rejected") {
+    auto result = config::Config::parse(R"json({"runtime": {"stream": {"max_bytes": 0}}})json");
+    REQUIRE_FALSE(result.has_value());
+  }
+}
+
 TEST_CASE("Config::parse handles the desktop block", "[unit][config]") {
   SECTION("absent desktop block yields defaults") {
     auto result = config::Config::parse(R"json({})json");

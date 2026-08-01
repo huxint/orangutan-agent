@@ -141,6 +141,18 @@ external contract or a previously reproduced failure.
   answer/thinking line before each `[tool: ...]` marker and terminates only
   still-open lines at `on_done`, so streamed text survives tool iterations
   without gluing to the marker or leaving a trailing blank line.
+- [x] Byte-cap provider stream consumption (deep-review P2, "cap config
+  reads while streaming"): `config.runtime.stream.max_bytes` (default
+  16 MiB) threads through `HttpProviderBackendOptions::max_stream_bytes`
+  into every `http::BodyRequest::max_bytes`; the curl write callback
+  aborts the transfer with an IO error naming `max_bytes` once a
+  response body — streaming or error payload — crosses the budget (a
+  slow trickle of valid chunks can no longer accumulate unbounded
+  memory), and the incremental SSE parser latches `exceeded()` on
+  over-long lines or oversized events so no partial event is
+  dispatched. Tests: config parse (default/override/rejection), parser
+  line/event caps, and a local-server streaming abort plus an oversized
+  error-body abort.
 - [x] Hard-bound cancellation-ignoring hook sinks (deep-review P2):
   `async::TaskGroup` gains `join_with_timeout`, a bounded join that
   returns at most the deadline after entry — including the

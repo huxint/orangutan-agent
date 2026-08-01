@@ -33,6 +33,11 @@ struct BodyRequest {
   std::vector<Header> headers;
   std::string body;
   std::chrono::milliseconds timeout{30000};
+  /// Maximum response-body bytes the client will accumulate (streaming,
+  /// non-streaming, and error bodies). Exceeding the budget aborts the
+  /// transfer and resolves with an IO error naming `max_bytes`, so a broken
+  /// or hostile server cannot hold unbounded memory.
+  std::uint64_t max_bytes{16 * 1024 * 1024};
 
   friend bool operator==(const BodyRequest&, const BodyRequest&) = default;
 };

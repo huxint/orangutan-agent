@@ -39,8 +39,9 @@ Current implementation status:
 - `orangutan::config::Config::parse(std::string_view, LoadOptions)` parses JSON text.
 - `Config::load_file(std::string_view, LoadOptions)` reads and parses a file.
 - Typed fields currently cover `strict_config`, `runtime` (including
-  `tool_output.max_text_bytes` / `max_data_bytes` and
-  `prompt.active_tools`), top-level `trace` policy
+  `tool_output.max_text_bytes` / `max_data_bytes`,
+  `prompt.active_tools`, and `stream.max_bytes` — the provider response
+  byte bound), top-level `trace` policy
   (`enabled`, `store_raw_bodies`, `retention_days`), top-level hook timeout
   policy (`hooks.timeout_ms`, default 2000), `profiles` (including optional
   per-profile `protocol`, `pricing`, `thinking_budget`, and

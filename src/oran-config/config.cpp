@@ -613,6 +613,27 @@ parse_non_empty_string_array(const json& value, std::string_view path, std::stri
   return prompt;
 }
 
+[[nodiscard]] Result<StreamRuntimeConfig> parse_stream_runtime(const json& runtime) {
+  auto config = StreamRuntimeConfig{};
+  const auto it = runtime.find("stream");
+  if (it == runtime.end()) {
+    return config;
+  }
+  auto object = require_object(*it, "$.runtime.stream");
+  if (!object) {
+    return std::unexpected(std::move(object.error()));
+  }
+
+  if (const auto max_bytes = it->find("max_bytes"); max_bytes != it->end()) {
+    auto parsed = positive_integer_value(*max_bytes, "$.runtime.stream.max_bytes");
+    if (!parsed) {
+      return std::unexpected(std::move(parsed.error()));
+    }
+    config.max_bytes = *parsed;
+  }
+  return config;
+}
+
 [[nodiscard]] Result<RuntimeConfig> parse_runtime(const json& root) {
   auto runtime = RuntimeConfig{};
   const auto it = root.find("runtime");
@@ -662,6 +683,12 @@ parse_non_empty_string_array(const json& value, std::string_view path, std::stri
     return std::unexpected(std::move(prompt.error()));
   } else {
     runtime.prompt = std::move(*prompt);
+  }
+
+  if (auto stream = parse_stream_runtime(*it); !stream) {
+    return std::unexpected(std::move(stream.error()));
+  } else {
+    runtime.stream = *stream;
   }
 
   if (const auto patterns = it->find("redaction_patterns"); patterns != it->end()) {

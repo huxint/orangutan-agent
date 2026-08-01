@@ -129,9 +129,18 @@ struct Response {
 > `oran-http` (`http::SseEvent`, `Client::send_streaming(BodyRequest,
 > SseEventCallback)`, an incremental `text/event-stream` parser, and the
 > blocking-executor→coroutine-executor event handoff so the decoder/sink never
-> run on the curl thread). Slice 247 serializes that event handoff through a
-> strand on the completion executor, preserving SSE callback order and preventing
-> multi-worker decoders or terminal sinks from racing each other. Slice 122 adds
+> run on the curl thread). Stream consumption is byte-bounded end to end:
+> `config.runtime.stream.max_bytes` (default 16 MiB) flows into every
+> `BodyRequest::max_bytes`, and the curl write callback aborts the transfer
+> with an IO error (never a success with truncated events) once a response
+> body — streaming or error payload — crosses the budget; the incremental
+> parser independently latches `exceeded()` on over-long lines or oversized
+> events so no partial event is dispatched. A slow trickle of valid chunks
+> therefore cannot accumulate unbounded memory even though the request
+> timeout only bounds wall-clock time. Slice 247 serializes that event
+> handoff through a strand on the completion executor, preserving SSE
+> callback order and preventing multi-worker decoders or terminal sinks from
+> racing each other. Slice 122 adds
 > the provider-side Anthropic streaming:
 > a stateful `AnthropicSseDecoder` (the incremental sibling of
 > `decode_protocol_response`), `ProtocolTransport::send_streaming(ProtocolHttpRequest,

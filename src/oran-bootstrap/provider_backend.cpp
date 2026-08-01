@@ -26,8 +26,8 @@ using ::orangutan::core::Result;
 
 class HttpProtocolTransport final : public provider::ProtocolTransport {
 public:
-  HttpProtocolTransport(http::Client& client, std::chrono::milliseconds request_timeout)
-      : client_{&client}, request_timeout_{request_timeout} {}
+  HttpProtocolTransport(http::Client& client, std::chrono::milliseconds request_timeout, std::uint64_t max_stream_bytes)
+      : client_{&client}, request_timeout_{request_timeout}, max_stream_bytes_{max_stream_bytes} {}
 
   [[nodiscard]] async::Awaitable<core::Result<provider::ProtocolHttpResponse>>
   send(provider::ProtocolHttpRequest request) const override {
@@ -67,6 +67,7 @@ private:
         .headers = std::move(headers),
         .body = std::move(request.body_json),
         .timeout = request_timeout_,
+        .max_bytes = max_stream_bytes_,
     };
   }
 
@@ -85,6 +86,7 @@ private:
 
   http::Client* client_;
   std::chrono::milliseconds request_timeout_;
+  std::uint64_t max_stream_bytes_;
 };
 
 }  // namespace
@@ -97,8 +99,12 @@ struct HttpProviderBackend::Impl {
   provider::ProtocolTransportAdapterFactory openai_factory;
   std::unique_ptr<provider::System> system;
 
-  Impl(provider::Route route_value, asio::any_io_executor blocking_executor, std::chrono::milliseconds request_timeout)
-      : route{std::move(route_value)}, client{std::move(blocking_executor)}, transport{client, request_timeout},
+  Impl(provider::Route route_value,
+       asio::any_io_executor blocking_executor,
+       std::chrono::milliseconds request_timeout,
+       std::uint64_t max_stream_bytes)
+      : route{std::move(route_value)}, client{std::move(blocking_executor)},
+        transport{client, request_timeout, max_stream_bytes},
         anthropic_factory{transport, provider::ProtocolKind::anthropic_messages},
         openai_factory{transport, provider::ProtocolKind::openai_responses} {}
 };
@@ -131,6 +137,9 @@ core::Result<HttpProviderBackend> HttpProviderBackend::build(const config::Confi
   if (options.request_timeout.count() <= 0) {
     return std::unexpected(option_error("HTTP provider backend request timeout must be positive"));
   }
+  if (options.max_stream_bytes == 0) {
+    return std::unexpected(option_error("HTTP provider backend max_stream_bytes must be positive"));
+  }
   if (options.route_name.empty()) {
     return std::unexpected(option_error("HTTP provider backend route name must be non-empty"));
   }
@@ -148,8 +157,10 @@ core::Result<HttpProviderBackend> HttpProviderBackend::build(const config::Confi
     return std::unexpected(std::move(credentials).error());
   }
 
-  auto impl =
-      std::make_unique<Impl>(credentials->route(), std::move(options.blocking_executor), options.request_timeout);
+  auto impl = std::make_unique<Impl>(credentials->route(),
+                                     std::move(options.blocking_executor),
+                                     options.request_timeout,
+                                     options.max_stream_bytes);
   const auto bindings = provider::protocol_transport_factory_bindings(impl->anthropic_factory, impl->openai_factory);
   auto system = provider::make_adapter_system(std::move(*credentials), bindings);
   if (!system) {

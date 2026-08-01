@@ -103,10 +103,22 @@ template <typename Handler>
   return value;
 }
 
+struct BodyState {
+  std::string body;
+  std::uint64_t max_bytes;
+  bool exceeded{false};
+};
+
 std::size_t write_body(char* data, std::size_t size, std::size_t count, void* userdata) {
-  auto* body = static_cast<std::string*>(userdata);
+  auto* state = static_cast<BodyState*>(userdata);
   const auto bytes = size * count;
-  body->append(data, bytes);
+  if (state->body.size() + bytes > state->max_bytes) {
+    // Returning fewer bytes than received aborts the transfer with
+    // CURLE_WRITE_ERROR, which the caller surfaces as an IO error.
+    state->exceeded = true;
+    return 0;
+  }
+  state->body.append(data, bytes);
   return bytes;
 }
 
@@ -165,11 +177,22 @@ struct StreamState {
   const std::vector<Header>* headers{nullptr};
   std::string* error_body{nullptr};
   std::optional<bool> is_stream{};
+  std::uint64_t fed_bytes{0};
+  std::uint64_t max_bytes;
+  bool exceeded{false};
 };
 
 std::size_t write_stream(char* data, std::size_t size, std::size_t count, void* userdata) {
   auto* state = static_cast<StreamState*>(userdata);
   const auto bytes = size * count;
+  // One total wire-byte budget bounds both the SSE stream and the error
+  // body: a slow trickle of valid chunks cannot accumulate unbounded
+  // memory even though the request timeout only bounds wall-clock time.
+  if (state->fed_bytes + bytes > state->max_bytes || state->parser.exceeded()) {
+    state->exceeded = true;
+    return 0;  // Short count -> curl aborts with CURLE_WRITE_ERROR.
+  }
+  state->fed_bytes += bytes;
   if (!state->is_stream.has_value()) {
     state->is_stream = response_is_event_stream(state->easy, *state->headers);
   }
@@ -203,6 +226,9 @@ std::size_t write_stream(char* data, std::size_t size, std::size_t count, void* 
   }
   if (request.timeout.count() > std::numeric_limits<long>::max()) {
     return std::unexpected(Error::invalid_argument("http request timeout is too large"));
+  }
+  if (request.max_bytes == 0) {
+    return std::unexpected(Error::invalid_argument("http request max_bytes must be positive"));
   }
   return {};
 }
@@ -336,11 +362,16 @@ struct Client::Impl {
 
     auto response = BodyResponse{};
     auto headers = CurlHeaders{};
-    if (auto configured = configure_easy(easy.get(), request, headers, &response.headers, write_body, &response.body);
+    auto body_state = BodyState{.body = {}, .max_bytes = request.max_bytes};
+    if (auto configured = configure_easy(easy.get(), request, headers, &response.headers, write_body, &body_state);
         !configured) {
       return std::unexpected(std::move(configured).error());
     }
     if (auto performed = run_multi(multi.get(), easy.get(), cancellation); !performed) {
+      if (body_state.exceeded) {
+        return std::unexpected(Error::network("http response body exceeded max_bytes")
+                                   .with("max_bytes", std::to_string(request.max_bytes)));
+      }
       return std::unexpected(std::move(performed).error());
     }
 
@@ -349,6 +380,7 @@ struct Client::Impl {
       return std::unexpected(std::move(status).error());
     }
     response.status_code = *status;
+    response.body = std::move(body_state.body);
     return response;
   }
 
@@ -378,19 +410,26 @@ struct Client::Impl {
     auto response = BodyResponse{};
     auto headers = CurlHeaders{};
     auto state = StreamState{
-        .parser = {},
+        .parser = detail::SseParser{},
         .on_event = std::move(on_event),
         .completion_executor = std::move(completion_executor),
         .easy = easy.get(),
         .headers = &response.headers,
         .error_body = &response.body,
         .is_stream = std::nullopt,
+        .fed_bytes = 0,
+        .max_bytes = request.max_bytes,
+        .exceeded = false,
     };
     if (auto configured = configure_easy(easy.get(), request, headers, &response.headers, write_stream, &state);
         !configured) {
       return std::unexpected(std::move(configured).error());
     }
     if (auto performed = run_multi(multi.get(), easy.get(), cancellation); !performed) {
+      if (state.exceeded) {
+        return std::unexpected(
+            Error::network("http response exceeded max_bytes").with("max_bytes", std::to_string(request.max_bytes)));
+      }
       return std::unexpected(std::move(performed).error());
     }
 

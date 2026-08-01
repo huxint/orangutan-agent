@@ -25,6 +25,10 @@ namespace orangutan::bootstrap {
 struct HttpProviderBackendOptions {
   asio::any_io_executor blocking_executor{};
   std::chrono::milliseconds request_timeout{600000};
+  /// Maximum response wire bytes per provider request (streaming and error
+  /// bodies alike), mirroring `config.runtime.stream.max_bytes`. Exceeding
+  /// the budget aborts the transfer with an IO error.
+  std::uint64_t max_stream_bytes{16 * 1024 * 1024};
   std::string route_name{"default"};
 };
 

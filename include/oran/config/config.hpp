@@ -73,12 +73,23 @@ struct ProviderPricingConfig {
   friend bool operator==(const ProviderPricingConfig&, const ProviderPricingConfig&) = default;
 };
 
+/// Byte bound for provider streaming responses. Mirrors the config loader's
+/// own `max_bytes` cap on the stream consumption path: a provider stream may
+/// hold at most this many wire bytes before the transfer is aborted with an
+/// IO error, bounding memory regardless of wall-clock timeout.
+struct StreamRuntimeConfig {
+  std::int64_t max_bytes{16 * 1024 * 1024};
+
+  friend bool operator==(const StreamRuntimeConfig&, const StreamRuntimeConfig&) = default;
+};
+
 struct RuntimeConfig {
   std::int64_t workers{4};
   std::int64_t request_timeout_ms{600000};
   ToolOutputRuntimeConfig tool_output{};
   ToolSchedulerRuntimeConfig tool_scheduler{};
   PromptRuntimeConfig prompt{};
+  StreamRuntimeConfig stream{};
   std::vector<std::string> redaction_patterns{};
 };
 

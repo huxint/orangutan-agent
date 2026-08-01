@@ -1322,6 +1322,7 @@ void print_provider_route_summary(const provider::AdapterConstructionPlan& route
                                    HttpProviderBackendOptions{
                                        .blocking_executor = runtime.cpu_executor(),
                                        .request_timeout = std::chrono::milliseconds{cfg.runtime().request_timeout_ms},
+                                       .max_stream_bytes = static_cast<std::uint64_t>(cfg.runtime().stream.max_bytes),
                                        .route_name = "default",
                                    });
     if (!backend) {
@@ -1605,6 +1606,7 @@ core::Result<int> run(BootstrapOptions options) {
       HttpProviderBackendOptions{
           .blocking_executor = runtime.cpu_executor(),
           .request_timeout = std::chrono::milliseconds{loaded->value.runtime().request_timeout_ms},
+          .max_stream_bytes = static_cast<std::uint64_t>(loaded->value.runtime().stream.max_bytes),
           .route_name = "default",
       });
   if (!provider_backend) {

@@ -297,6 +297,78 @@ TEST_CASE("Client streaming returns the body for a non-stream error response", "
   blocking.join();
 }
 
+TEST_CASE("Client streaming aborts a response that exceeds max_bytes", "[unit][http][streaming]") {
+  ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
+  ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
+  // A server that floods far more SSE bytes than the client budget allows.
+  constexpr std::size_t kStreamBytes = 256 * 1024;
+  std::string body;
+  body.reserve(kStreamBytes + 16);
+  for (std::size_t i = 0; i < kStreamBytes / 16; ++i) {
+    body.append("data: 0123456789abcdef\n\n");
+  }
+  SseTestServer server{"HTTP/1.1 200 OK\r\n"
+                       "Content-Type: text/event-stream\r\n"
+                       "Connection: close\r\n"
+                       "\r\n" +
+                       body};
+  asio::thread_pool blocking{1};
+  auto client = http::Client{blocking.get_executor()};
+
+  test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
+    auto request = http::BodyRequest{};
+    request.method = "POST";
+    request.url = server.url("/v1/messages");
+    request.body = "{}";
+    request.timeout = 2s;
+    request.max_bytes = 1024;
+
+    std::size_t events = 0;
+    auto response =
+        co_await client.send_streaming(std::move(request), [&](const http::SseEvent& /*event*/) { ++events; });
+
+    // The transfer is aborted at the budget, so the caller gets an error —
+    // never a success with a truncated event stream — and any events decoded
+    // before the abort were already delivered.
+    REQUIRE_FALSE(response.has_value());
+    REQUIRE(response.error().kind() == core::ErrorKind::network);
+    REQUIRE(response.error().message().contains("max_bytes"));
+  });
+
+  blocking.join();
+}
+
+TEST_CASE("Client streaming returns an error when the error body exceeds max_bytes", "[unit][http][streaming]") {
+  ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
+  ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
+  std::string error_body;
+  error_body.assign(64 * 1024, 'x');
+  SseTestServer server{"HTTP/1.1 500 Internal Server Error\r\n"
+                       "Content-Type: application/json\r\n"
+                       "Connection: close\r\n"
+                       "\r\n" +
+                       error_body};
+  asio::thread_pool blocking{1};
+  auto client = http::Client{blocking.get_executor()};
+
+  test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
+    auto request = http::BodyRequest{};
+    request.method = "POST";
+    request.url = server.url("/v1/messages");
+    request.body = "{}";
+    request.timeout = 2s;
+    request.max_bytes = 1024;
+
+    auto response = co_await client.send_streaming(std::move(request), [](const http::SseEvent& /*event*/) {});
+
+    REQUIRE_FALSE(response.has_value());
+    REQUIRE(response.error().kind() == core::ErrorKind::network);
+    REQUIRE(response.error().message().contains("max_bytes"));
+  });
+
+  blocking.join();
+}
+
 TEST_CASE("Client streaming observes mid-stream cancellation", "[unit][http][streaming]") {
   ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
   ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
