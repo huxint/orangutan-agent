@@ -16,7 +16,9 @@ successfully. The config file contains:
 
 ```jsonc
 {
+  "strict_config": false,  /* unknown-field policy: warn (loose) or error (strict) */
   "runtime":     { /* executor sizing, deadlines, redaction patterns */ },
+  "trace":       { /* turn-trace policy */ },
   "permissions": { /* default, allow, deny, ask */ },
   "profiles":    { /* LLM provider profiles */ },
   "routes":      { /* primary + fallbacks per logical route */ },

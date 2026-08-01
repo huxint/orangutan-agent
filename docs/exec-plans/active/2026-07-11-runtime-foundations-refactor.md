@@ -179,6 +179,17 @@ external contract or a previously reproduced failure.
   payloads and error trace rows (and hence usage rollups) attribute
   fallback-terminal errors to the served route instead of always the
   primary.
+- [x] Docs-sync enforcement checks active in `make ci`: the four stubbed
+  checks are implemented — public umbrella header inventory plus
+  resolvable backticked header references (symbol-level extraction
+  remains the documented deep half), `config.example.json` top-level
+  shape vs the documented config block, hook `Event` catalogue and
+  `EventTraits` blocking-set sync, and `Capability` enum plus doc
+  reference sync (the first clean run surfaced and fixed real drift:
+  a stale abbreviated capability block in tool-runtime.md, a spec-0008
+  reference to a `network` capability name that predated the final
+  enum, an undocumented-umbrella gap, and aspirational fwd-header
+  references in rules that had no corresponding files).
 - [ ] Hosted quality gates active; redundant artifacts removed.
 - [ ] Full release/debug/sanitizer/analyzer verification complete.
 

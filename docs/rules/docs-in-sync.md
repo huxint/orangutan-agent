@@ -38,12 +38,18 @@ manually copied test/assertion counts, release ledgers, or completed-plan archiv
 - rule/design/spec indexes cover their owned files;
 - documented scripts, Make targets, libraries, and dependency versions match the repo;
 - every library has its required test and benchmark bucket;
-- the runtime prompt preamble retains its cache-safety invariants.
+- the runtime prompt preamble retains its cache-safety invariants;
+- public umbrella headers are documented and every backticked header reference
+  in current-contract docs resolves to a real file;
+- `config.example.json` top-level keys match the documented config shape;
+- the hook `Event` enum matches its documented catalogue and the
+  `EventTraits` blocking specializations match the documented blocking set;
+- the `Capability` enum matches its documented block and every backticked
+  `Capability::` reference resolves to a real enumerator.
 
-Semantic parity for public headers, config schemas, hook events, and capability enums
-should become generated checks where practical. Until then, review the affected owner
-directly. CI must not require touching an unrelated timestamp, ledger, or narrative
-file merely to prove that work occurred.
+Symbol-level public-API extraction (check 9's deep half) remains a planned
+enhancement. CI must not require touching an unrelated timestamp, ledger, or
+narrative file merely to prove that work occurred.
 
 ## Historical Material
 

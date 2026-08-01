@@ -70,11 +70,16 @@ Public headers under `include/oran/<lib>/` must not `#include` any of:
 
 - `<nlohmann/json.hpp>` (use `<nlohmann/json_fwd.hpp>`)
 - `<asio.hpp>` (use `<oran/async/awaitable_fwd.hpp>`)
-- `<spdlog/spdlog.h>` (use `<oran/log/fwd.hpp>`)
-- `<httplib.h>` (use `<oran/http/server_fwd.hpp>`)
-- `<sqlite3.h>` (use `<oran/storage/handle_fwd.hpp>`)
+- `<spdlog/spdlog.h>` (hide; the logging surface is a library-local detail)
+- `<httplib.h>` (hide; `oran-http` exposes its own boundary types)
+- `<sqlite3.h>` (hide; `oran-storage` owns the handle)
 - `<curl/curl.h>` (hide entirely)
 - `<re2/re2.h>` (hide; expose `RuntimeRegex` opaque type)
+
+A library that needs to expose an opaque type whose implementation pulls a
+heavy include adds its own `<oran/<lib>/<name>_fwd.hpp>` header,
+`<oran/async/awaitable_fwd.hpp>` being the current exemplar; a new public
+header that cannot avoid a listed include must not be added.
 
 **Why:** see `docs/FAST_COMPILATION.md`.
 

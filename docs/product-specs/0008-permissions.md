@@ -105,13 +105,11 @@ human approval for high-risk operations.
    (authority verify + map find + decrement), broker_check_no_grant /
    broker_check_exhausted ~10.9 µs / ~11.0 µs (the two broker-only
    rejection paths).)**
-3. Capability mismatch is enforced — a tool that didn't declare `Capability::network`
+3. Capability mismatch is enforced — a tool that didn't declare the network
+   capability (`Capability::egress_http` / `egress_websocket`)
    cannot use it even if a rule otherwise allowed. **(Foundation landed
    2026-05-16: `Rule::capability` + capability-aware
-   `RuleSet::evaluate` shipped in `oran-permission`. Runtime
-   `Capability::network` does not exist yet; the spec text predates the
-   final enum — see `core::Capability::egress_http` /
-   `egress_websocket`.)**
+   `RuleSet::evaluate` shipped in `oran-permission`.)**
 4. `re2` patterns load from config; invalid patterns at load time are reported with
    line numbers. **(Closed 2026-05-17: `oran-config` parses
    `input_pattern` on each rule and validates it at load by

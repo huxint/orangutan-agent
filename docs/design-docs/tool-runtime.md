@@ -39,7 +39,7 @@ without an adapter-only alias layer.
 ```cpp
 enum class Capability {
   // file system
-  read_file, write_file, edit_file, delete_path,
+  read_file, write_file, edit_file, delete_path, list_directory,
   // network
   egress_http, egress_websocket,
   // process
@@ -51,8 +51,7 @@ enum class Capability {
   // automation
   schedule_job, modify_job, run_job_now,
   // skills
-  invoke_skill,
-  deactivate_skill,
+  invoke_skill, deactivate_skill,
   // misc
   external_mcp, runtime_loader,
 };

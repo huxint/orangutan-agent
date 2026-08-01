@@ -676,6 +676,26 @@ automation state.
 | `orangutan-server` | Daemon mode: channels + automation, no terminal UI.    |
 | `orangutan-bench`  | Standalone runner that executes the `bench/<lib>/...` buckets and emits JSON. |
 
+## Public Header Inventory
+
+Every library ships one umbrella header `<oran/<lib>.hpp>` that re-exports its
+public surface; consumers include the umbrella or the specific
+`<oran/<lib>/<file>.hpp>` headers they need. `check-docs-sync.sh` enforces that
+each umbrella below is documented here and that every backticked
+`include/oran/...` reference in current-contract docs resolves to a real header.
+
+```text
+<oran/agent.hpp>  <oran/async.hpp>  <oran/automation.hpp>  <oran/bootstrap.hpp>
+<oran/channel.hpp>  <oran/channel-qq.hpp>  <oran/cli.hpp>  <oran/config.hpp>
+<oran/hook.hpp>  <oran/http.hpp>
+<oran/io.hpp>  <oran/memory.hpp>  <oran/permission.hpp>  <oran/prompt.hpp>
+<oran/provider.hpp>  <oran/skill.hpp>  <oran/storage.hpp>  <oran/tool.hpp>
+```
+
+(`oran-core` and `oran-desktop` predate the umbrella convention and are
+consumed through their `<oran/core/...>` / `<oran/desktop/...>` headers; they
+are the two libraries without an umbrella.)
+
 ## Boundary Rules
 
 - **One-way dependencies.** Each library lists what it is *allowed* to depend on in the

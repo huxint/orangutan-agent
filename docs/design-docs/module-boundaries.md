@@ -150,7 +150,7 @@ Some third-party libraries provide minimal forward-decl headers. Use them.
 | nlohmann_json   | `<nlohmann/json_fwd.hpp>`                  |
 | spdlog          | wrap behind our own `oran-log` shim        |
 | asio            | provide our own `<oran/async/awaitable_fwd.hpp>` |
-| sqlite3         | wrap behind `<oran/storage/handle_fwd.hpp>` |
+| sqlite3         | hide; `oran-storage` owns the handle        |
 | Slint           | keep generated UI types inside `oran-desktop` (private) |
 | libcurl         | hide entirely; only `oran-http::client` knows about it |
 
