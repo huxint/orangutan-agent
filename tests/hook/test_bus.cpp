@@ -215,6 +215,36 @@ private:
   bool* cancellation_seen_;
 };
 
+/// Sink that disables cancellation and sleeps well past any test deadline.
+/// Exercises the advisory hard bound: `publish_advisory` must abandon it at
+/// `BusOptions::advisory_timeout` instead of waiting for it forever.
+class CancellationIgnoringAdvisorySink final : public hook::Sink {
+public:
+  CancellationIgnoringAdvisorySink(bool& active, bool& finished) : active_(&active), finished_(&finished) {}
+
+  [[nodiscard]] std::string_view id() const noexcept override {
+    return "cancellation-ignoring";
+  }
+
+  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/,
+                                                             hook::PayloadPtr /*payload*/) override {
+    *active_ = true;
+    const auto executor = co_await asio::this_coro::executor;
+    co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+    auto slept = co_await async::sleep_for(executor, 1s);
+    if (!slept) {
+      *finished_ = true;
+      co_return std::unexpected(std::move(slept).error());
+    }
+    *finished_ = true;
+    co_return core::Result<void>{};
+  }
+
+private:
+  bool* active_;
+  bool* finished_;
+};
+
 /// Sink that throws from its awaitable. Required to verify the advisory
 /// contract that one badly-behaved sink (one that propagates an exception
 /// rather than returning std::unexpected) does not abort the publish for
@@ -612,6 +642,65 @@ TEST_CASE("publish_advisory joins cancelled sink tasks before returning", "[hook
         co_return;
       },
       1s);
+}
+
+TEST_CASE("publish_advisory abandons a cancellation-ignoring sink at the advisory deadline",
+          "[hook][bus][cancellation]") {
+  hook::Bus bus{hook::BusOptions{.advisory_timeout = 100ms}};
+  bool active = false;
+  bool finished = false;
+  CancellationIgnoringAdvisorySink sink{active, finished};
+  bus.bind(sink, {hook::Event::tool_before});
+
+  test::run_async(
+      [&](asio::io_context& io) -> async::Awaitable<void> {
+        asio::cancellation_signal cancellation;
+        async::Channel<std::monostate> completed{io.get_executor(), 1};
+        std::optional<hook::PublishOutcome> published;
+        std::exception_ptr failure;
+        asio::co_spawn(io,
+                       bus.publish_advisory(hook::Event::tool_before, sample_before()),
+                       asio::bind_cancellation_slot(cancellation.slot(),
+                                                    [&](std::exception_ptr error, hook::PublishOutcome outcome) {
+                                                      failure = error;
+                                                      published = std::move(outcome);
+                                                      [[maybe_unused]] auto signaled =
+                                                          completed.try_send(std::monostate{});
+                                                    }));
+
+        while (!active) {
+          auto yielded = co_await async::sleep_for(io.get_executor(), 1ms);
+          REQUIRE(yielded.has_value());
+        }
+        cancellation.emit(asio::cancellation_type::all);
+
+        auto signaled = co_await completed.receive();
+        REQUIRE(signaled.has_value());
+        if (failure) {
+          std::rethrow_exception(failure);
+        }
+        REQUIRE(published.has_value());
+        // The sink ignored the cancellation; the publish still resumed within
+        // the 100ms advisory deadline while the sink's 1s sleep is in flight.
+        REQUIRE(active);
+        REQUIRE_FALSE(finished);
+        REQUIRE(published->sinks.size() == 1);
+        REQUIRE(published->sinks.front().sink_id == "cancellation-ignoring");
+        REQUIRE(published->sinks.front().error.has_value());
+        REQUIRE(published->sinks.front().error->kind() == core::ErrorKind::internal);
+        REQUIRE(published->sinks.front().error->message().contains("abandoned"));
+        // A second publish on the same bus must still return within the
+        // deadline after the timed-out join (the group is one-shot; the bus
+        // builds a fresh group per publish). The same sink ignores
+        // cancellation again, so it is abandoned a second time — the point
+        // is the bus is not poisoned by the first abandonment.
+        auto second = co_await bus.publish_advisory(hook::Event::tool_before, sample_before());
+        REQUIRE(second.sinks.size() == 1);
+        REQUIRE(second.sinks.front().error.has_value());
+        REQUIRE(second.sinks.front().error->message().contains("abandoned"));
+        co_return;
+      },
+      2s);
 }
 
 TEST_CASE("publish_advisory redacts tool_after data_json unless sink is trusted-local", "[hook][bus][redaction]") {

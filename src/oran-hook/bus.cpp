@@ -160,27 +160,23 @@ struct SharedPayloads {
 }
 
 [[nodiscard]] async::Awaitable<core::Result<void>>
-run_advisory_sink(std::vector<std::optional<PublishOutcome::SinkResult>>& rows,
-                  Sink& sink,
-                  Event event,
-                  PayloadPtr payload,
-                  std::size_t index) {
-  PublishOutcome::SinkResult row{.sink_id = std::string{sink.id()}, .error = std::nullopt};
+run_advisory_sink(std::optional<PublishOutcome::SinkResult>& row, Sink& sink, Event event, PayloadPtr payload) {
+  PublishOutcome::SinkResult result_row{.sink_id = std::string{sink.id()}, .error = std::nullopt};
   // Advisory contract: a misbehaving sink must not abort the publish for
   // other sinks. Each fan-out child catches errors locally and reports one
   // ordered row back to the parent.
   try {
     auto result = co_await sink.receive(event, std::move(payload));
     if (!result) {
-      row.error = std::move(result).error();
+      result_row.error = std::move(result).error();
     }
   } catch (const std::exception& ex) {
-    row.error = core::Error::internal(ex.what()).with("sink", std::string{sink.id()});
+    result_row.error = core::Error::internal(ex.what()).with("sink", std::string{sink.id()});
   } catch (...) {
-    row.error = core::Error::internal("sink threw non-std exception").with("sink", std::string{sink.id()});
+    result_row.error = core::Error::internal("sink threw non-std exception").with("sink", std::string{sink.id()});
   }
 
-  rows[index] = std::move(row);
+  row = std::move(result_row);
   co_return core::Result<void>{};
 }
 
@@ -259,7 +255,13 @@ async::Awaitable<PublishOutcome> Bus::publish_advisory(Event event, Payload payl
     co_return outcome;
   }
 
-  auto rows = std::vector<std::optional<PublishOutcome::SinkResult>>(subscribers.size());
+  // Per-child shared slots: an abandoned child (advisory deadline) finishes
+  // after the publish has returned and must not write into the caller's
+  // frame. The slot outlives both the publish and the child.
+  auto rows = std::vector<std::shared_ptr<std::optional<PublishOutcome::SinkResult>>>(subscribers.size());
+  for (auto& row : rows) {
+    row = std::make_shared<std::optional<PublishOutcome::SinkResult>>();
+  }
   auto executor = co_await asio::this_coro::executor;
   auto tasks_result = async::TaskGroup::create(
       executor,
@@ -280,41 +282,58 @@ async::Awaitable<PublishOutcome> Bus::publish_advisory(Event event, Payload payl
   for (std::size_t i = 0; i < subscribers.size(); ++i) {
     auto* sink = subscribers[i];
     auto spawned = tasks.spawn("hook-advisory-" + std::to_string(i),
-                               [&rows, sink, event, payload = payload_for_sink(*sink, payloads), i]() mutable {
-                                 return run_advisory_sink(rows, *sink, event, std::move(payload), i);
+                               [row = rows[i], sink, event, payload = payload_for_sink(*sink, payloads)]() mutable {
+                                 return run_advisory_sink(*row, *sink, event, std::move(payload));
                                });
     if (!spawned) {
-      rows[i] = PublishOutcome::SinkResult{.sink_id = std::string{sink->id()}, .error = std::move(spawned).error()};
+      *rows[i] = PublishOutcome::SinkResult{.sink_id = std::string{sink->id()}, .error = std::move(spawned).error()};
     } else {
       task_indices.push_back(i);
     }
   }
 
-  auto report = co_await tasks.join();
+  core::Result<async::TaskGroupReport> report;
+  if (options_.advisory_timeout.count() > 0) {
+    report = co_await tasks.join_with_timeout(options_.advisory_timeout);
+  } else {
+    report = co_await tasks.join();
+  }
   if (!report) {
     for (std::size_t i = 0; i < subscribers.size(); ++i) {
-      if (!rows[i].has_value()) {
-        rows[i] = PublishOutcome::SinkResult{.sink_id = std::string{subscribers[i]->id()}, .error = report.error()};
+      if (!rows[i]->has_value()) {
+        *rows[i] = PublishOutcome::SinkResult{.sink_id = std::string{subscribers[i]->id()}, .error = report.error()};
       }
     }
   } else {
     for (std::size_t task = 0; task < report->tasks.size(); ++task) {
       const auto i = task_indices[task];
-      if (!rows[i].has_value() && report->tasks[task].error.has_value()) {
-        rows[i] = PublishOutcome::SinkResult{.sink_id = std::string{subscribers[i]->id()},
-                                             .error = std::move(report->tasks[task].error)};
+      if (rows[i]->has_value()) {
+        continue;
+      }
+      if (report->tasks[task].status == async::TaskOutcomeStatus::lagging) {
+        // The sink ignored cancellation and was abandoned at the advisory
+        // deadline. Mirror the scheduler's `cancellation_lag` attribution.
+        *rows[i] = PublishOutcome::SinkResult{
+            .sink_id = std::string{subscribers[i]->id()},
+            .error = core::Error::internal("advisory sink ignored cancellation; abandoned after " +
+                                           std::to_string(options_.advisory_timeout.count()) + " ms")
+                         .with("sink", std::string{subscribers[i]->id()}),
+        };
+      } else if (report->tasks[task].error.has_value()) {
+        *rows[i] = PublishOutcome::SinkResult{.sink_id = std::string{subscribers[i]->id()},
+                                              .error = std::move(report->tasks[task].error)};
       }
     }
   }
 
   outcome.sinks.reserve(rows.size());
   for (std::size_t i = 0; i < rows.size(); ++i) {
-    if (!rows[i].has_value()) {
-      rows[i] =
+    if (!rows[i]->has_value()) {
+      *rows[i] =
           PublishOutcome::SinkResult{.sink_id = std::string{subscribers[i]->id()},
                                      .error = core::Error::internal("advisory hook task completed without an outcome")};
     }
-    outcome.sinks.push_back(std::move(*rows[i]));
+    outcome.sinks.push_back(std::move(**rows[i]));
   }
   co_return outcome;
 }

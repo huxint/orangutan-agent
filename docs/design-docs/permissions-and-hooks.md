@@ -358,7 +358,14 @@ Legacy used `ctre`. v2 uses **`re2`** (Google's library). Reasons:
 > cancellation requests stop on the publish-local bounded
 > `async::TaskGroup`, and the publish joins every accepted child so
 > the caller can safely destroy the borrowed sinks after
-> `publish_advisory` returns. The
+> `publish_advisory` returns. The join is hard-bounded by
+> `BusOptions::advisory_timeout` (default 2000 ms, sharing
+> `config.hooks.timeout_ms`): a sink that ignores cancellation is
+> abandoned at the deadline — its outcome row records a hook error
+> naming the sink, and the abandoned child may still be running
+> (it holds its outcome row and the payload by shared ownership),
+> so callers must not destroy such a sink until it winds down.
+> Production owners keep sinks for process lifetime. The
 > `PublishOutcome` lets the caller surface sink failures
 > into logs or audit without coupling the publish to a
 > single error policy. `hook::Payload` is a `std::variant`
@@ -774,6 +781,11 @@ Every blocking hook decision is recorded in `audit.db` with `event`, `sink_id`,
   sink id and `elapsed_ms`, and the agent receives a `tool.error`-style response.
 - A blocking sink that crashes (shell exit ≠ 0) → same as timeout.
 - An advisory sink failure → logged at WARN; otherwise ignored.
+- An advisory sink that ignores cancellation → abandoned at
+  `BusOptions::advisory_timeout`; the publish returns with an error row
+  naming the sink (mirroring the tool scheduler's `cancellation_lag`
+  attribution). The abandoned coroutine keeps running and must not have
+  its borrowed sink destroyed until it winds down.
 
 ## Per-Agent Wiring
 

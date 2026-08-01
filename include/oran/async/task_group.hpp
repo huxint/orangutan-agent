@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -28,6 +29,11 @@ enum class TaskOutcomeStatus : std::uint8_t {
   succeeded,
   failed,
   cancelled,
+  /// Reported by `join_with_timeout` for a child still active at the deadline
+  /// — the child was requested to stop but had not finished when the join
+  /// returned. The child continues running (abandoned, not force-destroyed);
+  /// owners that borrowed state the child may still touch must keep it alive.
+  lagging,
 };
 
 struct TaskOutcome {
@@ -45,6 +51,7 @@ struct TaskGroupReport {
   [[nodiscard]] std::size_t succeeded() const noexcept;
   [[nodiscard]] std::size_t failed() const noexcept;
   [[nodiscard]] std::size_t cancelled() const noexcept;
+  [[nodiscard]] std::size_t lagging() const noexcept;
   [[nodiscard]] bool all_succeeded() const noexcept;
 };
 
@@ -57,6 +64,15 @@ struct TaskGroupReport {
 /// emits cancellation to every active child. `join()` closes the group, waits
 /// for every spawned child, and returns one outcome in spawn order. Child
 /// failures are report rows rather than a failed `join()` result.
+///
+/// `join_with_timeout(timeout)` is the bounded variant: it returns at most
+/// `timeout` after entry even when children ignore cancellation, marking each
+/// still-active child with `TaskOutcomeStatus::lagging`. On expiry the group
+/// emits `request_stop()` (so cancel-aware children wind down) and abandons
+/// the rest — it does not force-destroy coroutine frames, and an abandoned
+/// child may still touch state it captured. Owners of laggards must keep
+/// borrowed application state alive until the child records its outcome; the
+/// group state itself is retained by every spawned child regardless.
 ///
 /// Destruction requests cancellation but cannot asynchronously join. Every
 /// spawned child retains the group state until it records its outcome, so no
@@ -85,6 +101,10 @@ public:
   void close() noexcept;
   void request_stop() noexcept;
   [[nodiscard]] Awaitable<core::Result<TaskGroupReport>> join();
+  /// Bounded `join()`: returns no later than `timeout` after entry, marking
+  /// still-active children `lagging` in the report (see `TaskOutcomeStatus`).
+  /// `timeout` must be positive.
+  [[nodiscard]] Awaitable<core::Result<TaskGroupReport>> join_with_timeout(std::chrono::milliseconds timeout);
 
   [[nodiscard]] std::size_t active_tasks() const noexcept;
   [[nodiscard]] TaskGroupOptions options() const noexcept;

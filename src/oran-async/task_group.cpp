@@ -3,6 +3,7 @@
 #include <oran/async/task_group.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <deque>
 #include <exception>
 #include <expected>
@@ -16,12 +17,14 @@
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/error.hpp>
+#include <asio/experimental/awaitable_operators.hpp>
 #include <asio/post.hpp>
 #include <asio/strand.hpp>
 #include <asio/system_error.hpp>
 #include <asio/this_coro.hpp>
 
 #include <oran/async/channel.hpp>
+#include <oran/async/sleep.hpp>
 #include <oran/core/error.hpp>
 
 namespace orangutan::async {
@@ -43,6 +46,16 @@ struct CompletedRecord {
   const auto status =
       error.kind() == core::ErrorKind::cancelled ? TaskOutcomeStatus::cancelled : TaskOutcomeStatus::failed;
   return TaskOutcome{.name = std::move(name), .status = status, .error = std::move(error)};
+}
+
+/// Cancel-aware sleep to an absolute deadline. Races against a completion
+/// receive inside `join_with_timeout`; a parent cancellation resolves the
+/// race on either operand, which the join handles identically.
+[[nodiscard]] async::Awaitable<core::Result<void>> sleep_until(std::chrono::steady_clock::time_point deadline) {
+  const auto executor = co_await asio::this_coro::executor;
+  const auto now = std::chrono::steady_clock::now();
+  const auto remaining = deadline > now ? deadline - now : std::chrono::steady_clock::duration::zero();
+  co_return co_await async::sleep_for(executor, std::chrono::duration_cast<std::chrono::milliseconds>(remaining));
 }
 
 }  // namespace
@@ -181,6 +194,35 @@ struct TaskGroup::Impl : std::enable_shared_from_this<TaskGroup::Impl> {
     return report;
   }
 
+  /// Full spawn-ordered report after a bounded join: completed outcomes merged
+  /// with `lagging` rows for children still active at the deadline. Drains the
+  /// completed queue like `drain_completed`; active children are NOT removed —
+  /// an abandoned child records its outcome later through `finish`, which is
+  /// safe because every spawned child retains the group state.
+  [[nodiscard]] TaskGroupReport timed_join_report() {
+    const std::scoped_lock lock{mutex};
+    auto report = TaskGroupReport{};
+    report.tasks.reserve(completed.size() + active.size());
+    std::ranges::sort(completed, {}, &CompletedRecord::sequence);
+    auto active_sorted = std::vector<std::shared_ptr<ChildRecord>>{active.begin(), active.end()};
+    std::ranges::sort(active_sorted, {}, &ChildRecord::sequence);
+    auto completed_it = completed.begin();
+    auto active_it = active_sorted.begin();
+    while (completed_it != completed.end() || active_it != active_sorted.end()) {
+      if (completed_it != completed.end() &&
+          (active_it == active_sorted.end() || completed_it->sequence < (*active_it)->sequence)) {
+        report.tasks.push_back(std::move(completed_it->outcome));
+        ++completed_it;
+      } else {
+        report.tasks.push_back(TaskOutcome{.name = (*active_it)->name, .status = TaskOutcomeStatus::lagging});
+        ++active_it;
+      }
+    }
+    completed.clear();
+    report.outcomes_dropped = std::exchange(completed_dropped, 0);
+    return report;
+  }
+
 private:
   void finish(const std::shared_ptr<ChildRecord>& child, TaskOutcome outcome) {
     {
@@ -240,8 +282,12 @@ std::size_t TaskGroupReport::cancelled() const noexcept {
   return static_cast<std::size_t>(std::ranges::count(tasks, TaskOutcomeStatus::cancelled, &TaskOutcome::status));
 }
 
+std::size_t TaskGroupReport::lagging() const noexcept {
+  return static_cast<std::size_t>(std::ranges::count(tasks, TaskOutcomeStatus::lagging, &TaskOutcome::status));
+}
+
 bool TaskGroupReport::all_succeeded() const noexcept {
-  return outcomes_dropped == 0 && failed() == 0 && cancelled() == 0;
+  return outcomes_dropped == 0 && failed() == 0 && cancelled() == 0 && lagging() == 0;
 }
 
 core::Result<TaskGroup> TaskGroup::create(asio::any_io_executor executor, TaskGroupOptions options) {
@@ -312,6 +358,60 @@ Awaitable<core::Result<TaskGroupReport>> TaskGroup::join() {
       impl_->request_stop();
       co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
     }
+  }
+  co_return impl_->drain_completed();
+}
+
+Awaitable<core::Result<TaskGroupReport>> TaskGroup::join_with_timeout(std::chrono::milliseconds timeout) {
+  co_await asio::this_coro::throw_if_cancelled(false);
+  if (!impl_) {
+    co_return std::unexpected(core::Error{core::ErrorKind::conflict, "task group has been moved from"});
+  }
+  if (timeout <= std::chrono::milliseconds::zero()) {
+    co_return std::unexpected(core::Error::invalid_argument("task group join timeout must be positive"));
+  }
+  if (auto begun = impl_->begin_join(); !begun) {
+    co_return std::unexpected(std::move(begun).error());
+  }
+
+  using namespace asio::experimental::awaitable_operators;
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+
+  while (impl_->active_tasks() != 0) {
+    if (std::chrono::steady_clock::now() >= deadline) {
+      break;
+    }
+    // One total deadline bounds the whole join, including the parent-cancelled
+    // path below. Each iteration re-races a fresh remaining-time sleep so the
+    // deadline stays absolute across wakeups.
+    auto raced = co_await (impl_->completion.receive() || sleep_until(deadline));
+    auto* completed = std::get_if<core::Result<std::monostate>>(&raced);
+    if (completed != nullptr) {
+      if (!*completed) {
+        // Parent cancelled: request stop and keep waiting for cancel-aware
+        // children to wind down — still bounded by the deadline.
+        impl_->request_stop();
+        co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+      }
+      continue;
+    }
+    auto timer_result = std::get<core::Result<void>>(std::move(raced));
+    if (!timer_result) {
+      // Parent cancelled while parked on the deadline sleep; same as a
+      // cancelled receive — keep waiting until the deadline.
+      impl_->request_stop();
+      co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+      continue;
+    }
+    break;
+  }
+
+  if (impl_->active_tasks() != 0) {
+    // Deadline expired with children still running. Emit cancellation so
+    // cancel-aware children wind down, then abandon the rest: the report
+    // marks them `lagging` and the caller resumes owning their lifetime.
+    impl_->request_stop();
+    co_return impl_->timed_join_report();
   }
   co_return impl_->drain_completed();
 }

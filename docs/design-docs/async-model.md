@@ -114,7 +114,16 @@ whose lifetime can extend beyond one direct `co_await`. A group has explicit
 `Awaitable<Result<void>>` factories through `spawn`, and exposes `close`,
 `request_stop`, `drain_completed`, and `join` boundaries. `join` closes the
 group and waits for every accepted child, returning success/error/cancellation
-outcomes in spawn order.
+outcomes in spawn order. `join_with_timeout(timeout)` is the bounded variant:
+it returns at most `timeout` after entry even when a child ignores
+cancellation, marking each still-active child `lagging` in the report and
+emitting `request_stop` so cancel-aware children wind down. The abandoned
+coroutine is not force-destroyed (destroying a `co_spawn`ed frame out from
+under asio is undefined), so an abandoned child may still touch state it
+captured — owners must either keep borrowed state alive or own it by shared
+ownership, as the advisory hook fan-out does with its per-child outcome
+slots. The tool scheduler's AC5 grace window (below) is the same
+abandon-with-shared-state shape for the scheduler's batch children.
 
 Destroying the facade requests cancellation but cannot perform an asynchronous
 join. Each child retains the group implementation until it records its outcome,

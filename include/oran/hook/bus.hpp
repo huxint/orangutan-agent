@@ -48,6 +48,10 @@ namespace orangutan::hook {
 /// `config.hooks.timeout_ms` in the operator config surface.
 struct BusOptions {
   std::chrono::milliseconds blocking_timeout{2000};
+  /// Deadline for the advisory fan-out join. A sink that ignores
+  /// cancellation is abandoned after this bound (its outcome row records a
+  /// hook error); zero disables the bound and joins unconditionally.
+  std::chrono::milliseconds advisory_timeout{2000};
 
   friend bool operator==(const BusOptions&, const BusOptions&) = default;
 };
@@ -100,6 +104,11 @@ public:
   /// owns those children through a bounded task group and joins them
   /// before returning, including after parent cancellation, so callers
   /// may release the non-owning sink references once the await completes.
+  /// With `BusOptions::advisory_timeout` set, a sink that ignores
+  /// cancellation is abandoned at the deadline: its outcome row carries a
+  /// hook error naming the sink, and the abandoned child may still be
+  /// running — callers must not destroy such a sink until it winds down
+  /// (production owners keep sinks for process lifetime).
   [[nodiscard]] async::Awaitable<PublishOutcome> publish_advisory(Event event, Payload payload);
 
   /// Publish `event` + `payload` as a blocking call (spec 0015 v1).

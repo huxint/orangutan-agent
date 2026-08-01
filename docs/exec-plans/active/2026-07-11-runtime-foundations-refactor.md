@@ -141,6 +141,19 @@ external contract or a previously reproduced failure.
   answer/thinking line before each `[tool: ...]` marker and terminates only
   still-open lines at `on_done`, so streamed text survives tool iterations
   without gluing to the marker or leaving a trailing blank line.
+- [x] Hard-bound cancellation-ignoring hook sinks (deep-review P2):
+  `async::TaskGroup` gains `join_with_timeout`, a bounded join that
+  returns at most the deadline after entry — including the
+  parent-cancelled path — and marks each still-active child
+  `TaskOutcomeStatus::lagging` in a spawn-ordered report (completed
+  rows merged with laggard rows). The advisory fan-out abandons a
+  sink that ignores cancellation at `BusOptions::advisory_timeout`
+  (default 2000 ms, sharing `config.hooks.timeout_ms`), records an
+  error row naming the sink, and keeps per-child outcome rows in
+  shared ownership so the abandoned coroutine never writes into the
+  publish's frame. Regression test: a sink that disables cancellation
+  and sleeps past the deadline — the publish still resumes within the
+  bound, names the sink, and a second publish on the same bus works.
 - [x] Fallback policy/attribution (deep-review P2): `profiles.<name>`
   now accepts optional `thinking_budget` and `cache: {enabled,
   min_prefix_bytes}`; route resolution populates the previously dead

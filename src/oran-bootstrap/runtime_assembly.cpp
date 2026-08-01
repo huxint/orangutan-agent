@@ -521,6 +521,7 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
   impl->approval_broker = std::make_unique<permission::ApprovalBroker>(std::move(*broker_result));
   impl->hook_bus = std::make_unique<hook::Bus>(hook::BusOptions{
       .blocking_timeout = options.hook_blocking_timeout,
+      .advisory_timeout = options.hook_blocking_timeout,
   });
   if (auto bound = bind_startup_hooks(*impl->hook_bus,
                                       std::span<const RuntimeStartupHookBinding>{options.startup_hook_bindings});
