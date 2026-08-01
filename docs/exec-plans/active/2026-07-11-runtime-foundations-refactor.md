@@ -122,7 +122,12 @@ external contract or a previously reproduced failure.
   One deliberate survivor: the read resolver keeps a `refers_to_path`-gated
   pathname pass as its symlink normaliser (see the 2026-07-12 decision below
   and the recursive-walk sub-plan decision log).
-- [ ] Structured task ownership migrated across runtime surfaces.
+- [x] Structured task ownership migrated across runtime surfaces. The remaining
+  hand-owned child sets are deliberate and documented in
+  `docs/design-docs/async-model.md`: the desktop session is a single child
+  joined through a `std::promise` (its owner is the synchronous UI shell, not a
+  coroutine), and the tool scheduler's batch children are governed by spec 0012
+  AC5's bounded-return grace window rather than an unconditional join.
 - [ ] Network/provider/UI correctness milestone landed.
 - [ ] Storage/conflict milestone landed.
 - [ ] Hosted quality gates active; redundant artifacts removed.

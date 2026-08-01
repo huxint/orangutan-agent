@@ -126,9 +126,10 @@ for this ownership boundary.
 
 The bounded webhook connection owner, advisory hook fan-out, `serve_channels`
 adapter pumps, and the channel dispatcher's per-conversation workers use this
-primitive. Further runtime-foundations work is migrating the remaining
-hand-owned child sets (scheduler batches, desktop sessions) rather than adding
-subsystem-local cancellation vectors and completion channels.
+primitive. Two owners deliberately do not: the desktop session is a single child
+joined through a `std::promise` because its owner is the synchronous UI shell
+rather than a coroutine, and the tool scheduler's batch children are governed by
+spec 0012 AC5's bounded-return grace window rather than an unconditional join.
 
 ## Awaitable Alias
 
