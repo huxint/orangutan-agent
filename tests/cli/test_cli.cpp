@@ -688,6 +688,37 @@ TEST_CASE("StreamingPromptSink announces tool calls on their own line", "[unit][
   REQUIRE(sink.text_deltas_rendered() == 0);
 }
 
+TEST_CASE("StreamingPromptSink preserves an open answer line across a tool iteration", "[unit][cli][streaming]") {
+  std::ostringstream out;
+  cli::StreamingPromptSink sink{cli::StreamingPromptSinkOptions{.out = &out}};
+
+  sink.on_text_delta("Let me look");
+  sink.on_tool_start("toolu_1", "FileRead");
+  sink.on_text_delta("Found it");
+  sink.on_done(core::StopReason::end_turn);
+
+  // The pre-tool text keeps its own line, the marker announces the iteration,
+  // and the final streamed text after the tool iteration survives on its own
+  // line instead of gluing to the marker or being duplicated.
+  REQUIRE(out.str() == "Let me look\n[tool: FileRead]\nFound it\n");
+  REQUIRE(sink.tool_starts_rendered() == 1);
+  REQUIRE(sink.text_deltas_rendered() == 2);
+}
+
+TEST_CASE("StreamingPromptSink leaves no blank line after a tool-terminated turn", "[unit][cli][streaming]") {
+  std::ostringstream out;
+  cli::StreamingPromptSink sink{cli::StreamingPromptSinkOptions{.out = &out}};
+
+  sink.on_text_delta("Let me look");
+  sink.on_tool_start("toolu_1", "FileRead");
+  sink.on_done(core::StopReason::tool_use);
+
+  // The tool marker self-terminates the line it opened, so the final `on_done`
+  // must not add a second newline after it.
+  REQUIRE(out.str() == "Let me look\n[tool: FileRead]\n");
+  REQUIRE(sink.rendered_answer_text());
+}
+
 TEST_CASE("StreamingPromptSink suppresses thinking deltas by default", "[unit][cli][streaming]") {
   std::ostringstream out;
   cli::StreamingPromptSink sink{cli::StreamingPromptSinkOptions{.out = &out}};

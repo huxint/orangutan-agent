@@ -16,6 +16,7 @@ std::ostream& StreamingPromptSink::stream() const noexcept {
 
 void StreamingPromptSink::on_text_delta(std::string_view delta) {
   stream() << delta << std::flush;
+  line_open_ = true;
   ++text_deltas_;
 }
 
@@ -24,19 +25,28 @@ void StreamingPromptSink::on_thinking_delta(std::string_view delta) {
     return;
   }
   stream() << delta << std::flush;
+  line_open_ = true;
   ++thinking_deltas_;
 }
 
 void StreamingPromptSink::on_tool_start(std::string_view /*id*/, std::string_view name) {
+  // Preserve a streamed answer/thinking line across the tool iteration: close
+  // an open line before the marker instead of gluing `[tool: ...]` to it.
+  if (line_open_) {
+    stream() << '\n' << std::flush;
+    line_open_ = false;
+  }
   stream() << "[tool: " << name << "]\n" << std::flush;
   ++tool_starts_;
 }
 
 void StreamingPromptSink::on_done(core::StopReason /*stop_reason*/) {
   // Terminate the streamed answer/thinking line. Tool markers self-terminate,
-  // so a turn that streamed only tool calls leaves no dangling line to close.
-  if (text_deltas_ > 0 || thinking_deltas_ > 0) {
+  // and a marker that already closed a previously open line leaves nothing
+  // dangling either; only an actually open line needs the newline.
+  if (line_open_) {
     stream() << '\n' << std::flush;
+    line_open_ = false;
   }
 }
 

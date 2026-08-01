@@ -26,8 +26,9 @@ struct StreamingPromptSinkOptions {
 /// `provider::EventSink` that renders streaming deltas to a terminal as they
 /// arrive: answer text and (optionally) thinking text are written and flushed
 /// per delta so the operator sees character-by-character output, a one-line
-/// `[tool: <name>]` marker announces each tool call, and `on_done` terminates
-/// the streamed answer line.
+/// `[tool: <name>]` marker announces each tool call (any open answer/thinking
+/// line is closed first so the marker never glues to streamed text), and
+/// `on_done` terminates the streamed answer line.
 ///
 /// The sink writes only what the provider streams. It reports
 /// `rendered_answer_text()` so the prompt runner can suppress the duplicate
@@ -63,6 +64,7 @@ private:
   [[nodiscard]] std::ostream& stream() const noexcept;
 
   StreamingPromptSinkOptions options_;
+  bool line_open_{false};
   std::size_t text_deltas_{0};
   std::size_t thinking_deltas_{0};
   std::size_t tool_starts_{0};

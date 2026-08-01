@@ -137,6 +137,10 @@ external contract or a previously reproduced failure.
   section (`WriteTextOptions::verify_before_commit`, using the same `fstat` as
   identity validation, immediately before the rename) so a change between the
   pre-write token check and the commit aborts instead of clobbering.
+- [x] CLI terminal semantics: `StreamingPromptSink` closes an open
+  answer/thinking line before each `[tool: ...]` marker and terminates only
+  still-open lines at `on_done`, so streamed text survives tool iterations
+  without gluing to the marker or leaving a trailing blank line.
 - [ ] Hosted quality gates active; redundant artifacts removed.
 - [ ] Full release/debug/sanitizer/analyzer verification complete.
 
