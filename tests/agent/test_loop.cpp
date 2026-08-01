@@ -744,6 +744,106 @@ TEST_CASE("Loop publishes provider error hooks", "[unit][agent][loop][hooks]") {
   });
 }
 
+TEST_CASE("Loop attributes terminal fallback errors to the failing fallback target", "[unit][agent][loop][hooks]") {
+  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    // Execution-layer runtime scripted with a primary retryable failure that
+    // exhausts its attempt budget, then a terminal fallback failure. The
+    // failing target's context must reach the provider_error hook payload.
+    class ScriptedBackend final : public provider::System {
+    public:
+      [[nodiscard]] async::Awaitable<core::Result<provider::Response>>
+      send(provider::Request request, provider::Route route, provider::EventSink* sink = nullptr) const override {
+        static_cast<void>(request);
+        static_cast<void>(sink);
+        static_cast<void>(route);
+        if (cursor_++ == 0) {
+          co_return std::unexpected(core::Error::network("primary transient failure"));
+        }
+        co_return std::unexpected(core::Error{core::ErrorKind::auth, "fallback key rejected"});
+      }
+
+    private:
+      mutable std::size_t cursor_{0};
+    };
+    ScriptedBackend backend;
+    provider::execution::Runtime runtime{backend};
+    agent::Loop loop{runtime, fallback_route()};
+    hook::Bus bus;
+    std::vector<ProviderHookCapture> captures;
+    auto sink = provider_capture_sink(captures);
+    bus.bind(sink, {hook::Event::provider_request, hook::Event::provider_error});
+
+    const auto catalog = loop_catalog();
+    const std::vector<core::Message> tail{core::Message::user_text("fail")};
+    auto inputs = base_inputs(catalog, tail);
+    inputs.bus = &bus;
+    inputs.scope_key = "scope-A";
+    inputs.agent_key = "coder";
+    inputs.identity = "operator-1";
+    inputs.origin = "cli";
+    auto result = co_await loop.run_turn(inputs);
+
+    REQUIRE_FALSE(result.has_value());
+    const auto* error = std::get_if<hook::ProviderErrorPayload>(&captures.back().payload);
+    REQUIRE(error != nullptr);
+    REQUIRE(error->route_profile == "fallback");
+    REQUIRE(error->route_model == "fallback-1");
+    REQUIRE(error->route_protocol == "openai_responses");
+    REQUIRE(error->error_kind == "auth");
+  });
+}
+
+TEST_CASE("Loop attributes terminal fallback errors to the fallback trace row", "[unit][agent][loop][trace]") {
+  TempDb db{"oran-agent-loop-fallback-error-trace"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_trace_pool(io, db);
+    storage::TraceRepository trace{pool};
+    auto migrated = co_await trace.migrate();
+    REQUIRE(migrated.has_value());
+
+    class ScriptedBackend final : public provider::System {
+    public:
+      [[nodiscard]] async::Awaitable<core::Result<provider::Response>>
+      send(provider::Request request, provider::Route route, provider::EventSink* sink = nullptr) const override {
+        static_cast<void>(request);
+        static_cast<void>(sink);
+        static_cast<void>(route);
+        if (cursor_++ == 0) {
+          co_return std::unexpected(core::Error::network("primary transient failure"));
+        }
+        co_return std::unexpected(core::Error{core::ErrorKind::auth, "fallback key rejected"});
+      }
+
+    private:
+      mutable std::size_t cursor_{0};
+    };
+    ScriptedBackend backend;
+    provider::execution::Runtime runtime{backend};
+    agent::Loop loop{runtime, fallback_route()};
+
+    const auto catalog = loop_catalog();
+    const std::vector<core::Message> tail{core::Message::user_text("fail")};
+    auto inputs = base_inputs(catalog, tail);
+    inputs.turn_id = turn_id_with(0x43);
+    inputs.trace = agent::TraceContext{
+        .repository = &trace,
+        .session_id = turn_id_with(0x80),
+        .agent_key = "coder",
+        .origin = "cli",
+    };
+    auto result = co_await loop.run_turn(inputs);
+
+    REQUIRE_FALSE(result.has_value());
+    auto row = co_await trace.get_turn(turn_id_with(0x43));
+    REQUIRE(row.has_value());
+    REQUIRE(row->has_value());
+    REQUIRE((*row)->route_profile == "fallback");
+    REQUIRE((*row)->route_model == "fallback-1");
+    REQUIRE((*row)->stop_reason == "error");
+    REQUIRE((*row)->iteration_count == 1);
+  });
+}
+
 TEST_CASE("Loop computes missing provider usage cost from route pricing", "[unit][agent][loop][trace]") {
   TempDb db{"oran-agent-loop-priced-trace"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {

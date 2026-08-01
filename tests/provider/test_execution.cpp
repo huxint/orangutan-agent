@@ -81,8 +81,8 @@ public:
 
   [[nodiscard]] async::Awaitable<core::Result<prov::Response>>
   send(prov::Request request, prov::Route route, prov::EventSink* sink = nullptr) const override {
-    static_cast<void>(request);
     static_cast<void>(sink);
+    requests_seen_.push_back(request);
     routes_seen_.push_back(route);
 
     const auto cursor = cursor_++;
@@ -101,9 +101,14 @@ public:
     return routes_seen_;
   }
 
+  [[nodiscard]] const std::vector<prov::Request>& requests_seen() const noexcept {
+    return requests_seen_;
+  }
+
 private:
   std::vector<core::Result<prov::Response>> plan_;
   mutable std::vector<prov::Route> routes_seen_;
+  mutable std::vector<prov::Request> requests_seen_;
   mutable std::size_t cursor_{0};
 };
 
@@ -331,6 +336,142 @@ TEST_CASE("execution runtime observes cancellation during retry backoff", "[unit
   REQUIRE(context_value(result->error(), "attempt") == std::optional<std::string_view>{"1"});
   REQUIRE(context_value(result->error(), "max_attempts") == std::optional<std::string_view>{"2"});
   REQUIRE(backend.routes_seen().size() == 1);
+}
+
+TEST_CASE("execution runtime attributes terminal fallback errors to the fallback target",
+          "[unit][provider][execution]") {
+  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    RecordingSystem backend{std::vector<core::Result<prov::Response>>{
+        std::unexpected(core::Error::network("first primary failure")),
+        std::unexpected(core::Error::upstream("second primary failure")),
+        std::unexpected(core::Error{core::ErrorKind::auth, "fallback key rejected"}),
+    }};
+    prov::execution::Runtime runtime{backend};
+
+    auto result = co_await runtime.send(request_with_retry(2), route_with_fallback(), nullptr);
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::auth);
+    REQUIRE(context_value(result.error(), "provider_profile") == std::optional<std::string_view>{"fallback-profile"});
+    REQUIRE(context_value(result.error(), "provider_model") == std::optional<std::string_view>{"fallback-model"});
+    REQUIRE(context_value(result.error(), "route_role") == std::optional<std::string_view>{"fallback"});
+    REQUIRE(backend.routes_seen().size() == 3);
+    REQUIRE(backend.routes_seen()[2].primary.profile == "fallback-profile");
+  });
+}
+
+TEST_CASE("execution runtime marks primary errors with route_role primary", "[unit][provider][execution]") {
+  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    RecordingSystem backend{std::vector<core::Result<prov::Response>>{
+        std::unexpected(core::Error{core::ErrorKind::auth, "bad key"}),
+    }};
+    prov::execution::Runtime runtime{backend};
+
+    auto result = co_await runtime.send(request_with_retry(1), route_with_fallback(), nullptr);
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(context_value(result.error(), "provider_profile") == std::optional<std::string_view>{"primary-profile"});
+    REQUIRE(context_value(result.error(), "route_role") == std::optional<std::string_view>{"primary"});
+  });
+}
+
+TEST_CASE("execution runtime applies per-target thinking policy to fallback attempts", "[unit][provider][execution]") {
+  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    SECTION("strips a budget a fallback protocol cannot carry") {
+      auto primary = target("primary-profile", "primary-model");
+      auto fallback = target("fallback-profile", "fallback-model");
+      fallback.protocol = prov::ProtocolKind::openai_responses;
+      auto route = prov::Route{.primary = primary, .fallbacks = {fallback}};
+
+      RecordingSystem backend{std::vector<core::Result<prov::Response>>{
+          std::unexpected(core::Error::network("primary failure")),
+          std::unexpected(core::Error::upstream("second primary failure")),
+          text_response("fallback ok"),
+      }};
+      prov::execution::Runtime runtime{backend};
+
+      auto request = request_with_retry(2);
+      request.thinking_budget = 1024;  // folded from the primary profile by the loop
+      auto result = co_await runtime.send(std::move(request), route, nullptr);
+
+      REQUIRE(result.has_value());
+      REQUIRE(backend.requests_seen().size() == 3);
+      REQUIRE(backend.requests_seen()[0].thinking_budget == std::optional<std::uint32_t>{1024});
+      REQUIRE(backend.requests_seen()[1].thinking_budget == std::optional<std::uint32_t>{1024});
+      // openai_responses rejects token-budget thinking controls; the fallback
+      // attempt must not carry the primary's budget.
+      REQUIRE_FALSE(backend.requests_seen()[2].thinking_budget.has_value());
+    }
+    SECTION("applies an explicit fallback profile budget") {
+      auto primary = target("primary-profile", "primary-model");
+      auto fallback = target("fallback-profile", "fallback-model");
+      fallback.thinking_budget = 512;
+      auto route = prov::Route{.primary = primary, .fallbacks = {fallback}};
+
+      RecordingSystem backend{std::vector<core::Result<prov::Response>>{
+          std::unexpected(core::Error::network("primary failure")),
+          std::unexpected(core::Error::upstream("second primary failure")),
+          text_response("fallback ok"),
+      }};
+      prov::execution::Runtime runtime{backend};
+
+      auto request = request_with_retry(2);
+      auto result = co_await runtime.send(std::move(request), route, nullptr);
+
+      REQUIRE(result.has_value());
+      REQUIRE(backend.requests_seen()[2].thinking_budget == std::optional<std::uint32_t>{512});
+    }
+    co_return;
+  });
+}
+
+TEST_CASE("execution runtime applies per-target cache policy to fallback attempts", "[unit][provider][execution]") {
+  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    SECTION("disabled target cache drops hints") {
+      auto primary = target("primary-profile", "primary-model");
+      auto fallback = target("fallback-profile", "fallback-model");
+      fallback.cache = prov::PromptCacheOptions{.enabled = false, .min_prefix_bytes = 0};
+      auto route = prov::Route{.primary = primary, .fallbacks = {fallback}};
+
+      RecordingSystem backend{std::vector<core::Result<prov::Response>>{
+          std::unexpected(core::Error::network("primary failure")),
+          std::unexpected(core::Error::upstream("second primary failure")),
+          text_response("fallback ok"),
+      }};
+      prov::execution::Runtime runtime{backend};
+
+      auto request = request_with_retry(2);
+      request.cache = prov::PromptCacheHints{.prefix_bytes = 4096};
+      auto result = co_await runtime.send(std::move(request), route, nullptr);
+
+      REQUIRE(result.has_value());
+      REQUIRE(backend.requests_seen()[0].cache.has_value());
+      REQUIRE(backend.requests_seen()[1].cache.has_value());
+      REQUIRE_FALSE(backend.requests_seen()[2].cache.has_value());
+    }
+    SECTION("hints below the target floor are dropped") {
+      auto primary = target("primary-profile", "primary-model");
+      auto fallback = target("fallback-profile", "fallback-model");
+      fallback.cache = prov::PromptCacheOptions{.enabled = true, .min_prefix_bytes = 1000};
+      auto route = prov::Route{.primary = primary, .fallbacks = {fallback}};
+
+      RecordingSystem backend{std::vector<core::Result<prov::Response>>{
+          std::unexpected(core::Error::network("primary failure")),
+          std::unexpected(core::Error::upstream("second primary failure")),
+          text_response("fallback ok"),
+      }};
+      prov::execution::Runtime runtime{backend};
+
+      auto request = request_with_retry(2);
+      request.cache = prov::PromptCacheHints{.prefix_bytes = 100};
+      auto result = co_await runtime.send(std::move(request), route, nullptr);
+
+      REQUIRE(result.has_value());
+      REQUIRE(backend.requests_seen()[0].cache.has_value());
+      REQUIRE_FALSE(backend.requests_seen()[2].cache.has_value());
+    }
+    co_return;
+  });
 }
 
 TEST_CASE("execution runtime fills route_profile_used from served target", "[unit][provider][execution]") {

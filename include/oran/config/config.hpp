@@ -82,11 +82,25 @@ struct RuntimeConfig {
   std::vector<std::string> redaction_patterns{};
 };
 
+/// Optional per-profile prompt-cache policy. Mirrors the provider-layer
+/// `PromptCacheOptions` shape so `oran-config` stays dependency-free.
+struct PromptCacheConfig {
+  bool enabled{true};
+  std::int64_t min_prefix_bytes{0};
+
+  friend bool operator==(const PromptCacheConfig&, const PromptCacheConfig&) = default;
+};
+
 /// One provider profile from `profiles.<name>`. `provider` remains the
 /// operator/vendor label used by future adapter factories and secret lookup;
 /// optional `protocol`, when set, is resolved by `oran-provider` as an exact
 /// `provider::ProtocolKind` spelling so self-hosted gateways can select their
 /// wire format without overloading the vendor label.
+///
+/// Optional `thinking_budget` and `cache` are per-profile policy applied by
+/// `provider::execution::Runtime` to fallback attempts: a fallback profile
+/// either carries its own budget/cache floor or has the primary's policy
+/// stripped when the wire protocol cannot honor it.
 struct ProfileConfig {
   std::string name;
   std::string provider;
@@ -95,6 +109,8 @@ struct ProfileConfig {
   std::string base_url;
   std::string api_key_env;
   ProviderPricingConfig pricing;
+  std::optional<std::uint32_t> thinking_budget{};
+  std::optional<PromptCacheConfig> cache{};
 };
 
 struct RouteConfig {

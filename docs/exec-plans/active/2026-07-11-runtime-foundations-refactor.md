@@ -141,6 +141,19 @@ external contract or a previously reproduced failure.
   answer/thinking line before each `[tool: ...]` marker and terminates only
   still-open lines at `on_done`, so streamed text survives tool iterations
   without gluing to the marker or leaving a trailing blank line.
+- [x] Fallback policy/attribution (deep-review P2): `profiles.<name>`
+  now accepts optional `thinking_budget` and `cache: {enabled,
+  min_prefix_bytes}`; route resolution populates the previously dead
+  `ModelTarget` slots; `provider::execution::Runtime` applies per-target
+  policy to fallback attempts (a fallback protocol that cannot carry
+  token-budget thinking controls has the primary's budget stripped instead
+  of failing `invalid_request`, and cache hints are dropped when the target
+  disables caching or sits below the target's prefix-byte floor); terminal
+  errors carry `route_role`, and the agent loop resolves the failing target
+  from the error's `provider_profile` context so `provider_error` hook
+  payloads and error trace rows (and hence usage rollups) attribute
+  fallback-terminal errors to the served route instead of always the
+  primary.
 - [ ] Hosted quality gates active; redundant artifacts removed.
 - [ ] Full release/debug/sanitizer/analyzer verification complete.
 

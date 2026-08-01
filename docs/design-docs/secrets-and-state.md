@@ -43,7 +43,8 @@ Current implementation status:
   `prompt.active_tools`), top-level `trace` policy
   (`enabled`, `store_raw_bodies`, `retention_days`), top-level hook timeout
   policy (`hooks.timeout_ms`, default 2000), `profiles` (including optional
-  per-profile `protocol` and `pricing`), `routes`, `session`, `desktop`,
+  per-profile `protocol`, `pricing`, `thinking_budget`, and
+  `cache: {enabled, min_prefix_bytes}`), `routes`, `session`, `desktop`,
   `permissions`, and `agents.<name>.permissions`, optional
   `agents.<name>.prompt_overlay` stable section-6 prompt text, optional
   `agents.<name>.skills_enabled` skill allowlists, and optional

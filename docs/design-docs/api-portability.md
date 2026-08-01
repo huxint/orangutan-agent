@@ -287,11 +287,19 @@ They currently
 serialize/decode Anthropic Messages and OpenAI Responses bodies, including
 text/thinking/tool-use blocks, usage counters, model ids, stop reasons, and
 text-only/structured tool-result request mapping, and reject unsupported
-protocol families as configuration errors. The current typed config does not yet
-carry route-level `thinking_budget`, prompt-cache options, or capability
-metadata, so those fields stay unset until their schema lands. The agent's
-`Loop` will resolve a `Route` once per turn (or once per `Loop` if static) and
-reuse it across iterations.
+protocol families as configuration errors. Per-profile `thinking_budget` and
+prompt-cache options are config-authored (`profiles.<name>.thinking_budget` /
+`profiles.<name>.cache`) and flow into each route target's `ModelTarget` slots
+(`provider::execution::Runtime` applies them per fallback attempt: a fallback
+profile either carries its own budget/cache floor or has the primary's policy
+stripped when the wire protocol cannot honor it — `openai_responses` rejects
+token-budget thinking controls as `invalid_request`). Terminal fallback errors
+carry the failing target's `provider_profile` / `provider_model` /
+`route_role` context, and the agent loop resolves that target so
+`provider_error` hook payloads and error trace rows (and hence usage rollups)
+name the served route instead of always the primary. Capability metadata is
+not yet config-authored. The agent's `Loop` will resolve a `Route` once per
+turn (or once per `Loop` if static) and reuse it across iterations.
 
 ### Protocol Adapters
 

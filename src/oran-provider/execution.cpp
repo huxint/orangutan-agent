@@ -3,6 +3,7 @@
 #include <oran/provider/execution.hpp>
 
 #include <chrono>
+#include <cstddef>
 #include <expected>
 #include <string>
 #include <string_view>
@@ -86,12 +87,37 @@ private:
 [[nodiscard]] core::Error with_target_context(core::Error error,
                                               const provider::ModelTarget& target,
                                               std::uint32_t attempt,
-                                              std::uint32_t max_attempts) {
+                                              std::uint32_t max_attempts,
+                                              std::string_view role) {
   return std::move(error)
       .with("provider_profile", target.profile)
       .with("provider_model", target.model)
+      .with("route_role", std::string{role})
       .with("attempt", std::to_string(attempt))
       .with("max_attempts", std::to_string(max_attempts));
+}
+
+// Per-target fallback policy: a fallback target either carries its own
+// thinking/cache policy or has the primary's stripped when the wire protocol
+// cannot honor it (only `anthropic_messages` consumes token-budget thinking
+// controls today; `openai_responses` rejects them as `invalid_request`).
+// The primary attempt keeps the request verbatim — the agent loop already
+// folded the primary profile's policy (and any explicit turn override) in.
+void apply_target_policy(provider::Request& request, const provider::ModelTarget& target) noexcept {
+  if (target.thinking_budget.has_value()) {
+    request.thinking_budget = target.thinking_budget;
+  } else if (target.protocol != provider::ProtocolKind::anthropic_messages) {
+    request.thinking_budget = std::nullopt;
+  }
+  if (target.cache.has_value()) {
+    if (!target.cache->enabled) {
+      request.cache = std::nullopt;
+    } else if (request.cache.has_value() && request.cache->prefix_bytes < target.cache->min_prefix_bytes) {
+      // Below the target's prefix-byte floor: conservative drop rather than
+      // sending hints computed against the primary's cache options.
+      request.cache = std::nullopt;
+    }
+  }
 }
 
 }  // namespace
@@ -108,9 +134,14 @@ Runtime::send(provider::Request request, provider::Route route, provider::EventS
   core::Error last_retryable_error = core::Error::internal("provider execution had no attempts");
   const auto max_attempts = request.retry.max_attempts;
 
-  for (const auto& target : targets) {
+  for (std::size_t target_index = 0; target_index < targets.size(); ++target_index) {
+    const auto& target = targets[target_index];
+    const auto role = target_index == 0 ? std::string_view{"primary"} : std::string_view{"fallback"};
     for (std::uint32_t attempt = 1; attempt <= max_attempts; ++attempt) {
       auto attempt_request = request;
+      if (target_index > 0) {
+        apply_target_policy(attempt_request, target);
+      }
       AttemptSink attempt_sink{sink};
       auto* effective_sink = sink == nullptr ? nullptr : &attempt_sink;
       auto result = co_await backend_->send(std::move(attempt_request), single_target_route(target), effective_sink);
@@ -124,7 +155,7 @@ Runtime::send(provider::Request request, provider::Route route, provider::EventS
         co_return result;
       }
 
-      auto error = with_target_context(std::move(result).error(), target, attempt, max_attempts);
+      auto error = with_target_context(std::move(result).error(), target, attempt, max_attempts, role);
       if (error.kind() == core::ErrorKind::cancelled || !error.retryable()) {
         co_return std::unexpected(std::move(error));
       }
@@ -144,7 +175,7 @@ Runtime::send(provider::Request request, provider::Route route, provider::EventS
         auto executor = co_await asio::this_coro::executor;
         auto slept = co_await async::sleep_for(executor, delay);
         if (!slept) {
-          co_return std::unexpected(with_target_context(std::move(slept).error(), target, attempt, max_attempts));
+          co_return std::unexpected(with_target_context(std::move(slept).error(), target, attempt, max_attempts, role));
         }
       }
     }

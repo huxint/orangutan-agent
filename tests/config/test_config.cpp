@@ -194,6 +194,64 @@ TEST_CASE("Config::parse returns typed config values", "[unit][config]") {
   REQUIRE(result->desktop().reduce_motion);
 }
 
+TEST_CASE("Config::parse reads per-profile thinking_budget and cache policy", "[unit][config]") {
+  SECTION("absent fields stay unset") {
+    auto result = config::Config::parse(
+        R"json({"profiles": {"default": {"provider": "anthropic", "model": "m", "base_url": "u", "api_key_env": "K"}}})json");
+    REQUIRE(result.has_value());
+    REQUIRE_FALSE(result->profiles()[0].thinking_budget.has_value());
+    REQUIRE_FALSE(result->profiles()[0].cache.has_value());
+  }
+  SECTION("present fields parse") {
+    auto result = config::Config::parse(R"json({
+      "profiles": {
+        "default": {
+          "provider": "anthropic",
+          "model": "m",
+          "base_url": "u",
+          "api_key_env": "K",
+          "thinking_budget": 4096,
+          "cache": {"enabled": false, "min_prefix_bytes": 1024}
+        }
+      }
+    })json");
+    REQUIRE(result.has_value());
+    REQUIRE(result->profiles()[0].thinking_budget == std::optional<std::uint32_t>{4096});
+    REQUIRE(result->profiles()[0].cache.has_value());
+    REQUIRE_FALSE(result->profiles()[0].cache->enabled);
+    REQUIRE(result->profiles()[0].cache->min_prefix_bytes == 1024);
+  }
+  SECTION("partial cache object uses defaults for absent keys") {
+    auto result = config::Config::parse(R"json({
+      "profiles": {"default": {"provider": "anthropic", "model": "m", "base_url": "u", "api_key_env": "K",
+                               "cache": {"min_prefix_bytes": 64}}}
+    })json");
+    REQUIRE(result.has_value());
+    REQUIRE(result->profiles()[0].cache->enabled);
+    REQUIRE(result->profiles()[0].cache->min_prefix_bytes == 64);
+  }
+  SECTION("zero min_prefix_bytes is accepted") {
+    auto result = config::Config::parse(R"json({
+      "profiles": {"default": {"provider": "anthropic", "model": "m", "base_url": "u", "api_key_env": "K",
+                               "cache": {"min_prefix_bytes": 0}}}
+    })json");
+    REQUIRE(result.has_value());
+    REQUIRE(result->profiles()[0].cache->min_prefix_bytes == 0);
+  }
+  SECTION("non-positive thinking_budget and negative floor are rejected") {
+    auto budget = config::Config::parse(R"json({
+      "profiles": {"default": {"provider": "anthropic", "model": "m", "base_url": "u", "api_key_env": "K",
+                               "thinking_budget": 0}}
+    })json");
+    REQUIRE_FALSE(budget.has_value());
+    auto floor = config::Config::parse(R"json({
+      "profiles": {"default": {"provider": "anthropic", "model": "m", "base_url": "u", "api_key_env": "K",
+                               "cache": {"min_prefix_bytes": -1}}}
+    })json");
+    REQUIRE_FALSE(floor.has_value());
+  }
+}
+
 TEST_CASE("Config::parse handles the desktop block", "[unit][config]") {
   SECTION("absent desktop block yields defaults") {
     auto result = config::Config::parse(R"json({})json");

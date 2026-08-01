@@ -166,13 +166,20 @@ constexpr auto kRecognizedChannelFields = std::array<std::string_view, 9>{
     "qq_gateway_url",
 };
 
-constexpr auto kRecognizedProfileFields = std::array<std::string_view, 6>{
+constexpr auto kRecognizedProfileFields = std::array<std::string_view, 8>{
     "provider",
     "protocol",
     "model",
     "base_url",
     "api_key_env",
     "pricing",
+    "thinking_budget",
+    "cache",
+};
+
+constexpr auto kRecognizedPromptCacheFields = std::array<std::string_view, 2>{
+    "enabled",
+    "min_prefix_bytes",
 };
 
 constexpr auto kRecognizedProviderPricingFields = std::array<std::string_view, 4>{
@@ -1595,6 +1602,49 @@ parse_optional_price(const json& object, std::string_view key, std::string_view 
   return {};
 }
 
+[[nodiscard]] Result<std::optional<PromptCacheConfig>> parse_profile_cache(const json& profile,
+                                                                           std::string_view profile_path,
+                                                                           bool strict,
+                                                                           std::vector<ConfigWarning>& warnings) {
+  auto cache = PromptCacheConfig{};
+  const auto it = profile.find("cache");
+  if (it == profile.end()) {
+    return std::optional<PromptCacheConfig>{};
+  }
+  auto object = require_object(*it, child_path(profile_path, "cache"));
+  if (!object) {
+    return std::unexpected(std::move(object.error()));
+  }
+
+  const auto cache_path = child_path(profile_path, "cache");
+  if (const auto enabled_it = it->find("enabled"); enabled_it != it->end()) {
+    if (!enabled_it->is_boolean()) {
+      return std::unexpected(config_error("expected boolean", child_path(cache_path, "enabled")));
+    }
+    cache.enabled = enabled_it->get<bool>();
+  }
+  if (const auto floor_it = it->find("min_prefix_bytes"); floor_it != it->end()) {
+    auto parsed = integer_value(*floor_it, child_path(cache_path, "min_prefix_bytes"));
+    if (!parsed) {
+      return std::unexpected(std::move(parsed.error()));
+    }
+    if (*parsed < 0) {
+      return std::unexpected(config_error("expected non-negative integer", child_path(cache_path, "min_prefix_bytes")));
+    }
+    cache.min_prefix_bytes = *parsed;
+  }
+  auto unknowns = collect_unknown_object_fields(*it,
+                                                cache_path,
+                                                kRecognizedPromptCacheFields,
+                                                "unknown provider cache field",
+                                                strict,
+                                                warnings);
+  if (!unknowns) {
+    return std::unexpected(std::move(unknowns.error()));
+  }
+  return cache;
+}
+
 [[nodiscard]] Result<ProviderPricingConfig> parse_profile_pricing(const json& profile,
                                                                   std::string_view profile_path,
                                                                   bool strict,
@@ -1692,6 +1742,19 @@ parse_profiles(const json& root, bool strict, std::vector<ConfigWarning>& warnin
     if (!pricing) {
       return std::unexpected(std::move(pricing.error()));
     }
+    auto thinking_budget = std::optional<std::uint32_t>{};
+    if (const auto budget_it = value.find("thinking_budget"); budget_it != value.end()) {
+      auto parsed = positive_integer_value(*budget_it, child_path(profile_path, "thinking_budget"));
+      if (!parsed) {
+        return std::unexpected(std::move(parsed.error()));
+      }
+      thinking_budget = static_cast<std::uint32_t>(*parsed);
+    }
+    auto cache = parse_profile_cache(value, profile_path, strict, warnings);
+    if (!cache) {
+      return std::unexpected(std::move(cache.error()));
+    }
+    auto parsed_cache = std::move(*cache);
     auto unknowns = collect_unknown_object_fields(value,
                                                   profile_path,
                                                   kRecognizedProfileFields,
@@ -1710,6 +1773,8 @@ parse_profiles(const json& root, bool strict, std::vector<ConfigWarning>& warnin
         .base_url = std::move(*base_url),
         .api_key_env = std::move(*api_key_env),
         .pricing = *pricing,
+        .thinking_budget = thinking_budget,
+        .cache = std::move(parsed_cache),
     });
   }
 

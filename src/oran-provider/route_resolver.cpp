@@ -125,14 +125,22 @@ resolve_protocol(const config::ProfileConfig& profile, std::string_view route_na
     return std::unexpected(std::move(protocol).error());
   }
 
+  std::optional<PromptCacheOptions> cache;
+  if (profile->cache.has_value()) {
+    cache = PromptCacheOptions{
+        .enabled = profile->cache->enabled,
+        .min_prefix_bytes = static_cast<std::size_t>(profile->cache->min_prefix_bytes),
+    };
+  }
+
   return ResolvedProfileTarget{
       .target =
           ModelTarget{
               .profile = profile->name,
               .model = profile->model,
               .protocol = *protocol,
-              .thinking_budget = std::nullopt,
-              .cache = std::nullopt,
+              .thinking_budget = profile->thinking_budget,
+              .cache = cache,
               .pricing = pricing_for(profile->pricing),
           },
       .provider = profile->provider,

@@ -284,6 +284,15 @@ void add_usage(provider::Usage& total, const provider::Usage& next) {
   return it == route.fallbacks.end() ? route.primary : *it;
 }
 
+[[nodiscard]] std::optional<std::string_view> error_context_value(const core::Error& error,
+                                                                  std::string_view key) noexcept {
+  const auto it = std::ranges::find_if(error.context(), [&](const auto& entry) { return entry.first == key; });
+  if (it == error.context().end()) {
+    return std::nullopt;
+  }
+  return it->second;
+}
+
 [[nodiscard]] double token_cost(std::uint64_t tokens, double per_million_usd) noexcept {
   return (static_cast<double>(tokens) * per_million_usd) / 1'000'000.0;
 }
@@ -331,7 +340,7 @@ void apply_profile_cost_if_missing(provider::Usage& usage, const provider::Model
 
 [[nodiscard]] hook::ProviderErrorPayload make_provider_error_payload(const RunTurnInputs& inputs,
                                                                      const core::Error& error,
-                                                                     const provider::ModelTarget& primary,
+                                                                     const provider::ModelTarget& failing_target,
                                                                      std::uint32_t iteration,
                                                                      core::Time started_at,
                                                                      core::Time finished_at) {
@@ -340,9 +349,9 @@ void apply_profile_cost_if_missing(provider::Usage& usage, const provider::Model
       .origin = std::string{inputs.origin},
       .turn_id = inputs.turn_id,
       .iteration = iteration,
-      .route_profile = primary.profile,
-      .route_model = primary.model,
-      .route_protocol = std::string{core::enum_name(primary.protocol)},
+      .route_profile = failing_target.profile,
+      .route_model = failing_target.model,
+      .route_protocol = std::string{core::enum_name(failing_target.protocol)},
       .error_kind = std::string{core::enum_name(error.kind())},
       .error_message = std::string{error.message()},
       .retryable = error.retryable(),
@@ -414,7 +423,7 @@ make_provider_fallback_payload(const RunTurnInputs& inputs,
 
 [[nodiscard]] async::Awaitable<void> publish_provider_error(const RunTurnInputs& inputs,
                                                             const core::Error& error,
-                                                            const provider::ModelTarget& primary,
+                                                            const provider::ModelTarget& failing_target,
                                                             std::uint32_t iteration,
                                                             core::Time started_at,
                                                             core::Time finished_at) {
@@ -423,7 +432,7 @@ make_provider_fallback_payload(const RunTurnInputs& inputs,
   }
   [[maybe_unused]] auto outcome = co_await inputs.bus->publish_advisory(
       hook::Event::provider_error,
-      make_provider_error_payload(inputs, error, primary, iteration, started_at, finished_at));
+      make_provider_error_payload(inputs, error, failing_target, iteration, started_at, finished_at));
 }
 
 [[nodiscard]] std::int64_t now_epoch_ns() noexcept {
@@ -741,9 +750,16 @@ public:
         if (error.kind() == core::ErrorKind::cancelled) {
           co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
         }
+        // The execution layer attributes terminal errors to the actually
+        // failing target via the `provider_profile` context key; resolve it so
+        // hook payloads and trace rows (and hence usage rollups) name the
+        // served route instead of always the primary. Fall back to the primary
+        // when the key is absent (FakeProvider / direct-backend errors).
+        const auto failing_profile = error_context_value(error, "provider_profile").value_or(route_.primary.profile);
+        const auto& failing_target = served_target_for(route_, failing_profile);
         co_await publish_provider_error(inputs,
                                         error,
-                                        route_.primary,
+                                        failing_target,
                                         iteration,
                                         provider_started_at,
                                         provider_finished_at);
@@ -754,8 +770,8 @@ public:
                                                   total_usage,
                                                   iteration,
                                                   started_at_ns,
-                                                  route_.primary.model,
-                                                  route_.primary.profile,
+                                                  failing_target.model,
+                                                  failing_target.profile,
                                                   core::StopReason::cancelled,
                                                   std::string{cancellation_phase});
           if (!traced) {
@@ -768,8 +784,8 @@ public:
                                                         total_usage,
                                                         iteration,
                                                         started_at_ns,
-                                                        route_.primary.model,
-                                                        route_.primary.profile);
+                                                        failing_target.model,
+                                                        failing_target.profile);
           if (!traced) {
             error = attach_trace_write_error(std::move(error), std::move(traced).error());
           }
