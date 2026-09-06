@@ -2,9 +2,7 @@
 //
 // A/B comparison: raw `std::unordered_map<int,int>` insert+lookup vs.
 // `core::BoundedCache<int,int>` insert+lookup with LRU bookkeeping.
-// The delta is what the cache pays for eviction ordering, TTL checks,
-// and stats accounting — useful when sizing per-call cache budgets in
-// later slices (regex cache, line-offset index, tool block cache).
+// The delta measures eviction ordering, TTL checks and counter updates.
 
 #include <nanobench.h>
 

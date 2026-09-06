@@ -1,24 +1,7 @@
-// include/oran/core/bounded_cache.hpp — generic LRU + TTL + byte-budget cache.
-//
-// `BoundedCache<Key, Value>` is the bounded-state primitive that spec 0011
-// v1.1 (file-view system) and spec 0012 (tool scheduler) both reach for.
-// Eviction order is documented in the type name, not hidden in a comment:
-// LRU on access, TTL on age, byte-budget on payload.
-//
-// The cache is **single-threaded by contract**. Callers running on the
-// agent strand (the dominant pattern in this codebase) need no extra
-// synchronisation. Multi-threaded consumers wrap the cache in an explicit
-// mutex; we did not add an internal lock because the first call sites all
-// live on a single strand and an internal mutex hides cost from a caller
-// that does not need it.
-//
-// Spec note: the spec sketch shows `get -> std::optional<Value>`. That
-// shape is move-incompatible (`std::optional<unique_ptr<re2::RE2>>` is
-// fine, but copying into the optional is required by `optional`'s ctor —
-// and `unique_ptr` is non-copyable). We return `Value*` instead so a
-// `BoundedCache<Pattern, unique_ptr<re2::RE2>>` works without forcing
-// `shared_ptr`. The pointer is owned by the cache; treat it as invalidated
-// after the next non-const operation.
+// LRU cache with entry/byte bounds and insert-age TTL. The owner serializes
+// access through a strand or an external mutex and supplies timestamps.
+// get() borrows a cached value, including move-only values; later mutations
+// may invalidate that pointer.
 
 #pragma once
 
@@ -73,10 +56,7 @@ public:
     std::uint64_t evictions_lru{0};
     std::uint64_t evictions_ttl{0};
     std::uint64_t evictions_bytes{0};
-    /// Items whose `ByteSizeOf{}(value)` exceeded `max_bytes` outright on
-    /// `put`. The spec is explicit: the cache "refuses to cache items
-    /// larger than its byte budget" rather than ejecting everything else
-    /// to make room.
+    /// Payloads rejected because their byte cost exceeds `max_bytes`.
     std::uint64_t rejected_oversize{0};
     std::size_t current_entries{0};
     std::size_t current_bytes{0};
@@ -122,9 +102,6 @@ public:
     if (options_.max_bytes != 0 && byte_size > options_.max_bytes) {
       ++stats_.rejected_oversize;
       if (auto existing = index_.find(key); existing != index_.end()) {
-        // Spec acceptance #7 (file-view cache safety) requires invalidation
-        // on mutation; honour the same invariant for oversize rejection
-        // without double-counting against the byte-pressure eviction tally.
         drop_locked(existing, EvictionReason::invalidated);
       }
       return;
@@ -183,8 +160,7 @@ public:
     return erased;
   }
 
-  /// Drop all entries; stats counters are preserved (they describe the
-  /// cache's lifetime, not its current snapshot — see the spec).
+  /// Drop all entries and retain lifetime counters.
   void clear() {
     entries_.clear();
     index_.clear();

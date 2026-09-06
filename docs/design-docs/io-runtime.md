@@ -7,7 +7,7 @@ this boundary. Diagnostic path strings are never authority.
 ## Authority
 
 `DirectoryAuthority` pins a root directory. Relative traversal rejects escapes
-and unintended symlinks. File read/list/write/edit/delete operations retain
+and unintended symlinks. File read/write/edit operations retain
 appropriate handles across asynchronous work. Mutation requests pin their target
 and compare identity/version before changing it, so approval does not authorize
 a replacement inode introduced while the caller waits.
@@ -20,21 +20,32 @@ approval and keep its selected authority throughout the operation.
 reads, writes mode-0600 files atomically with fsync, and provides exclusive locks.
 The application uses it for state ownership. It does not encrypt credentials.
 
-## Reads And Caches
+## File Reads
 
-Text reads validate UTF-8 and enforce byte/range bounds. File fingerprints and
-version tokens support conflict detection. Range caches are bounded and keyed by
-file identity/version and range; coalesced readers must observe the same result
-or error. Watcher support is a caller-owned cache invalidation primitive; the
-minimal executable does not run a background watcher.
+Text reads share one descriptor implementation. Workspace callers supply a
+`ReadOnlyFile` opened through their directory authority. The trusted-host path
+overload opens the file once on the supplied worker through
+`ReadOnlyFile::open_trusted`; it follows symlinks and requires a regular file.
+Both paths hold that descriptor through the complete read. A later pathname
+replacement cannot redirect an already-open read.
+
+Every invocation reads current file bytes. Reads enforce byte/range bounds and
+align truncated or byte-range results to UTF-8 code-point boundaries. The ranged
+API returns contents, fingerprint, line span, returned-byte count and truncation;
+`read_text_file` rejects truncation with `invalid_argument`.
+Line ranges scan from the start using a fixed-size buffer.
+
+File fingerprints and version tokens support conflict detection. Size or mtime
+drift during a read returns `conflict`; whole files smaller than 64 KiB retry
+once before returning that error. Fingerprints describe metadata, not a content
+hash. Separate calls observe rewrites even when size and mtime are unchanged.
 
 Blocking work runs on the supplied worker executor through `run_blocking`.
-Cancellation signals the operation and waits for safe resource cleanup before
-returning. A coroutine name alone does not make synchronous IO nonblocking.
+Queued cancellation stops the operation before execution. Work already in
+progress retains its captures until it returns; the caller resumes after safe
+resource cleanup. Each read owns its resources and cancellation independently.
 
 ## Verification
 
 Tests exercise symlink/path escape rejection, target replacement, private-file
-checks, UTF-8/range limits, cancellation and concurrent cache readers. Outstanding
-cross-executor singleflight coverage is tracked in
-[live debt](../exec-plans/tech-debt-tracker.md).
+checks, UTF-8/range limits, content freshness and independent caller cancellation.

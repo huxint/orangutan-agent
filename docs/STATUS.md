@@ -25,30 +25,38 @@ FileRead, FileWrite and FileEdit are the built-in filesystem tools. ToolSearch,
 memory tools and AgentRun provide the other runtime extensions. Stored capability
 names remain readable for compatibility.
 
+File IO shares one descriptor-based read implementation and the pinned file
+mutation boundary. Each read owns its resources and observes current file bytes;
+the [IO contract](design-docs/io-runtime.md) owns ranges, fingerprints and
+cancellation. State storage continues to use private directories.
+
 ## Verification
 
 The release build, all 14 test targets and `make ci` pass. Controlled HTTP
-integration covers the provider/tool loop and persisted continuation. Agent,
-bootstrap, tool, memory, permission and prompt tests pass with explicit ASan/UBSan
-compiler and linker instrumentation in an isolated debug copy.
+integration covers the provider/tool loop and persisted continuation. IO, tool
+and bootstrap tests pass with explicit ASan/UBSan compiler and linker
+instrumentation in an isolated debug copy.
 
 Isolated faults fail at their intended assertions for atomic rollback,
 serialization failure, message ordering, identity/scope isolation, policy
 intersection, approval limits, rewritten input, child admission/depth, cancellation
 joins, catalogue selection, cache versions and the filesystem-tool surface.
-Restoring the implementations returns the tested cases to green. Tool, prompt,
-agent, config and permission benchmarks build and run; these are local runs,
-not reference-hardware performance certification.
+IO regressions detect stale content, reopened authority handles and dropped
+queued cancellation. Restoring the implementations returns the tested cases to
+green. IO, tool, prompt, agent, config and permission benchmarks build and run;
+these are local runs, not reference-hardware performance certification.
 
 ## Handoff
 
-The completed plan has been absorbed into the owning contracts. Start further
-work from [live debt](exec-plans/tech-debt-tracker.md), preserving user databases.
-Shell execution is not registered. Its next slice needs an authorized subprocess
-boundary, bounded output, cancellation and authority constraints for children.
-Audit/trace SQL offloading, IO singleflight, default toolchain activation and
-hosted analyzer/compile-budget gates also remain open. Real-model execution still
-requires explicitly supplied credentials.
+Use production callers to scope the next complete reduction from the configured
+provider/tool/session loop. Its acceptance boundary is authorized tool execution,
+scoped memory recall, persisted continuation and bounded child collaboration.
+Keep resource ownership explicit and preserve user databases.
+
+[Live debt](exec-plans/tech-debt-tracker.md) records integration gates and extension
+prerequisites. Audit/trace SQL offloading, default toolchain activation and hosted
+analyzer/compile-budget gates remain open. Real-model execution requires
+explicitly supplied credentials.
 
 Use the normal release gate from the repository root:
 
@@ -59,7 +67,8 @@ xmake test -j4
 make ci
 ```
 
-Relevant regressions are in `tests/bootstrap/test-child-agents.cpp`,
+Relevant regressions are in `tests/io/test_file.cpp`,
+`tests/io/test_directory_authority.cpp`, `tests/bootstrap/test-child-agents.cpp`,
 `tests/tool/test-agent-run.cpp`, the permission intersection cases, and the
 storage/memory tests tagged `[atomic]`. Child lifetime checks include a concurrent
 independent session and a tool that delays cancellation cleanup.

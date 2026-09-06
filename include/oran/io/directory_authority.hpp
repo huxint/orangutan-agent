@@ -14,8 +14,6 @@
 namespace orangutan::io {
 
 struct WriteTextOptions;
-struct DeletePathOptions;
-struct DeletePathResult;
 
 /// Symlink policy applied while resolving every component beneath a directory
 /// authority. The permissive mode still forbids escapes from the authority;
@@ -37,6 +35,10 @@ struct AnchoredPath {
 /// borrowed and remains valid until this object is destroyed or moved from.
 class ReadOnlyFile {
 public:
+  /// Open a trusted host path, following symlinks and retaining the regular
+  /// file descriptor. Workspace callers resolve through DirectoryAuthority.
+  [[nodiscard]] static core::Result<ReadOnlyFile> open_trusted(std::string_view path);
+
   ReadOnlyFile(ReadOnlyFile&&) noexcept;
   ReadOnlyFile& operator=(ReadOnlyFile&&) noexcept;
   ReadOnlyFile(const ReadOnlyFile&) = delete;
@@ -79,31 +81,6 @@ private:
       write_text_file(asio::any_io_executor, FileMutation, std::string, WriteTextOptions);
 };
 
-/// Move-only delete capability that pins the target parent and existing inode.
-/// Keeping the inode descriptor open prevents inode-number reuse from making a
-/// replaced target look unchanged. Execution never reopens the diagnostic
-/// pathname; namespace identity is revalidated through the pinned parent.
-class DeleteMutation {
-public:
-  DeleteMutation(DeleteMutation&&) noexcept;
-  DeleteMutation& operator=(DeleteMutation&&) noexcept;
-  DeleteMutation(const DeleteMutation&) = delete;
-  DeleteMutation& operator=(const DeleteMutation&) = delete;
-  ~DeleteMutation();
-
-  [[nodiscard]] std::string_view display_path() const noexcept;
-
-private:
-  struct Impl;
-  explicit DeleteMutation(std::unique_ptr<Impl> impl);
-  [[nodiscard]] core::Result<DeletePathResult> delete_path(DeletePathOptions options);
-
-  std::unique_ptr<Impl> impl_;
-  friend class DirectoryAuthority;
-  friend async::Awaitable<core::Result<DeletePathResult>>
-      delete_path(asio::any_io_executor, DeleteMutation, DeletePathOptions);
-};
-
 /// A stable capability for one trusted directory. Operations are resolved
 /// relative to an owned directory descriptor, so replacing or renaming the
 /// original pathname does not redirect later access.
@@ -121,9 +98,6 @@ public:
   /// Open a regular file beneath this authority for reading.
   [[nodiscard]] core::Result<ReadOnlyFile> open_file(const AnchoredPath& path) const;
 
-  /// Open a child directory as another stable authority.
-  [[nodiscard]] core::Result<DirectoryAuthority> open_directory(const AnchoredPath& path) const;
-
   /// Pin the target's parent directory and snapshot its current regular-file
   /// identity (or absence) for a later anchored mutation. Mutation resolution
   /// always rejects symlink components, so this surface intentionally accepts
@@ -131,15 +105,8 @@ public:
   [[nodiscard]] core::Result<FileMutation> begin_file_mutation(std::string_view relative_path,
                                                                bool create_parent_directories = false) const;
 
-  /// Pin an existing regular file or directory for a later anchored delete.
-  /// Parent and target symlinks are rejected during capability creation.
-  [[nodiscard]] core::Result<DeleteMutation> begin_delete(std::string_view relative_path) const;
-
   /// Original trusted root spelling, retained for diagnostics only.
   [[nodiscard]] std::string_view display_root() const noexcept;
-
-  /// Borrow the pinned directory descriptor; ownership remains here.
-  [[nodiscard]] int native_handle() const noexcept;
 
   /// True when `path` still directly names the directory held by this authority.
   /// A missing/replaced pathname or final symlink returns false; descriptor

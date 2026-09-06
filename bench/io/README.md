@@ -2,20 +2,23 @@
 
 ## What this bucket benchmarks
 
-`oran-io` wraps blocking standard-library file work in the repository's coroutine
-surface. The first scenario measures wrapper overhead against a direct blocking
-read for a small text file.
+These scenarios measure the descriptor-based file boundary, metadata reads and
+bounded line ranges. Each coroutine read opens and reads the file; repeated calls
+include that work. Configure the [supported build](../../docs/BUILD_SYSTEM.md)
+before running this bucket from the repository root.
 
 ## Scenarios
 
 | File | A vs. B |
 | --- | --- |
 | [`scenarios/file_read.cpp`](scenarios/file_read.cpp) | Direct `std::ifstream` text read *vs.* `io::read_text_file` through an asio coroutine. |
+| [`scenarios/fingerprint.cpp`](scenarios/fingerprint.cpp) | Filesystem size/mtime queries *vs.* `io::compute_file_fingerprint`. |
+| [`scenarios/read_range.cpp`](scenarios/read_range.cpp) | Whole-file reading *vs.* an 80-line range from the same large file. |
 
 ## Running
 
 ```sh
-xmake build bench-io
+xmake build -j4 bench-io
 xmake run bench-io
 ```
 

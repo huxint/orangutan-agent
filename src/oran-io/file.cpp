@@ -3,1131 +3,304 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
-#include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <expected>
-#include <filesystem>
-#include <fstream>
-#include <functional>
 #include <limits>
-#include <memory>
-#include <mutex>
-#include <numeric>
-#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <unordered_map>
 #include <utility>
-#include <vector>
 
-#include <asio/cancellation_type.hpp>
-#include <asio/post.hpp>
-#include <asio/redirect_error.hpp>
-#include <asio/steady_timer.hpp>
-#include <asio/this_coro.hpp>
-#include <asio/use_awaitable.hpp>
-
-#if defined(__unix__) || defined(__APPLE__)
-#define ORAN_IO_HAS_POSIX_FD 1
-#include <fcntl.h>
 #include <sys/types.h>
 #include <unistd.h>
-#endif
 
-#if defined(__linux__)
-#include <asio/posix/stream_descriptor.hpp>
-#include <sys/inotify.h>
-#endif
-
-#include <oran/core/bounded_cache.hpp>
 #include <oran/core/error.hpp>
-#include <oran/core/time.hpp>
 #include <oran/io/blocking.hpp>
+#include <oran/io/directory_authority.hpp>
 #include <oran/io/fingerprint.hpp>
 
-#include "_impl/read_text_core.hpp"
-
 namespace orangutan::io {
-
 namespace {
 
-constexpr std::size_t kReadChunkSize = 8192;
 constexpr std::uintmax_t kMidReadRetryThresholdBytes = 64U * 1024U;
-constexpr std::uintmax_t kLineOffsetIndexThresholdBytes = 256U * 1024U;
-constexpr std::size_t kLineOffsetIndexMaxEntries = 32U;
-constexpr std::size_t kLineOffsetIndexMaxBytes = 8U * 1024U * 1024U;
-constexpr std::size_t kFileViewCacheMaxEntries = 64U;
-constexpr std::size_t kFileViewCacheMaxBytes = 16U * 1024U * 1024U;
-constexpr std::size_t kReadTextSingleflightMaxEntries = 64U;
 
-#if defined(__linux__)
-constexpr std::uint32_t kInotifyWatchMask = IN_CLOSE_WRITE | IN_MODIFY | IN_ATTRIB | IN_DELETE | IN_MOVED_FROM |
-                                            IN_MOVED_TO | IN_CREATE | IN_DELETE_SELF | IN_MOVE_SELF;
-constexpr std::size_t kInotifyBufferBytes = 16U * 1024U;
-#endif
-
-template <typename T>
-[[nodiscard]] std::size_t hash_combine(std::size_t seed, const T& value) noexcept {
-  const auto h = std::hash<T>{}(value);
-  return seed ^ (h + 0x9e3779b97f4a7c15ULL + (seed << 6U) + (seed >> 2U));
+[[nodiscard]] core::Error descriptor_error(std::string message, const ReadOnlyFile& file, int error_number) {
+  return core::Error::io(std::move(message))
+      .with("path", std::string{file.display_path()})
+      .with("errno", std::to_string(error_number))
+      .with("detail", std::generic_category().message(error_number));
 }
 
-struct LineOffsetIndexKey {
-  std::string canonical_path;
-  std::uintmax_t size_bytes{0};
-  std::uint64_t mtime_ns{0};
-
-  friend bool operator==(const LineOffsetIndexKey&, const LineOffsetIndexKey&) = default;
-};
-
-struct LineOffsetIndexKeyHash {
-  [[nodiscard]] std::size_t operator()(const LineOffsetIndexKey& key) const noexcept {
-    auto seed = std::hash<std::string>{}(key.canonical_path);
-    seed = hash_combine(seed, key.size_bytes);
-    return hash_combine(seed, key.mtime_ns);
-  }
-};
-
-struct LineOffsetIndex {
-  std::uintmax_t file_size{0};
-  std::vector<std::uintmax_t> line_starts;
-};
-
-struct LineOffsetIndexByteCost {
-  [[nodiscard]] std::size_t operator()(const std::shared_ptr<const LineOffsetIndex>& index) const noexcept {
-    return index == nullptr ? 0 : sizeof(LineOffsetIndex) + index->line_starts.size() * sizeof(std::uintmax_t);
-  }
-};
-
-using LineOffsetIndexCache = core::BoundedCache<LineOffsetIndexKey,
-                                                std::shared_ptr<const LineOffsetIndex>,
-                                                LineOffsetIndexByteCost,
-                                                LineOffsetIndexKeyHash>;
-
-enum class FileViewRangeKind : std::uint8_t {
-  whole,
-  lines,
-  bytes,
-};
-
-struct FileViewCacheKey {
-  std::string canonical_path;
-  std::uintmax_t size_bytes{0};
-  std::uint64_t mtime_ns{0};
-  std::uintmax_t max_bytes{0};
-  FileViewRangeKind range_kind{FileViewRangeKind::whole};
-  std::uintmax_t range_start{0};
-  std::uintmax_t range_length{0};
-
-  friend bool operator==(const FileViewCacheKey&, const FileViewCacheKey&) = default;
-};
-
-struct FileViewCacheKeyHash {
-  [[nodiscard]] std::size_t operator()(const FileViewCacheKey& key) const noexcept {
-    auto seed = std::hash<std::string>{}(key.canonical_path);
-    seed = hash_combine(seed, key.size_bytes);
-    seed = hash_combine(seed, key.mtime_ns);
-    seed = hash_combine(seed, key.max_bytes);
-    seed = hash_combine(seed, static_cast<std::uint8_t>(key.range_kind));
-    seed = hash_combine(seed, key.range_start);
-    return hash_combine(seed, key.range_length);
-  }
-};
-
-struct ReadTextResultByteCost {
-  [[nodiscard]] std::size_t operator()(const ReadTextResult& result) const noexcept {
-    return result.text.size();
-  }
-};
-
-using FileViewCache =
-    core::BoundedCache<FileViewCacheKey, ReadTextResult, ReadTextResultByteCost, FileViewCacheKeyHash>;
-
-template <typename Stats>
-[[nodiscard]] ReadTextBoundedCacheStats read_text_cache_stats_from(const Stats& stats) noexcept {
-  return ReadTextBoundedCacheStats{
-      .hits = stats.hits,
-      .misses = stats.misses,
-      .evictions_lru = stats.evictions_lru,
-      .evictions_ttl = stats.evictions_ttl,
-      .evictions_bytes = stats.evictions_bytes,
-      .rejected_oversize = stats.rejected_oversize,
-      .current_entries = stats.current_entries,
-      .current_bytes = stats.current_bytes,
-  };
-}
-
-struct PreparedReadTextFile {
-  std::optional<ReadTextResult> ready;
-  FileFingerprint fingerprint;
-  FileViewCacheKey cache_key;
-};
-
-struct ReadTextSingleflightEntry {
-  std::optional<core::Result<ReadTextResult>> result;
-  std::vector<std::shared_ptr<asio::steady_timer>> waiters;
-};
-
-struct ReadTextSingleflightJoin {
-  std::shared_ptr<ReadTextSingleflightEntry> entry;
-  std::shared_ptr<asio::steady_timer> waiter;
-  bool leader{false};
-  bool bypass{false};
-};
-
-using ReadTextSingleflightTable =
-    std::unordered_map<FileViewCacheKey, std::shared_ptr<ReadTextSingleflightEntry>, FileViewCacheKeyHash>;
-
-[[nodiscard]] LineOffsetIndexCache& line_offset_index_cache() {
-  static auto cache = LineOffsetIndexCache{
-      LineOffsetIndexCache::Options{
-          .max_entries = kLineOffsetIndexMaxEntries,
-          .max_bytes = kLineOffsetIndexMaxBytes,
-          .ttl = std::chrono::minutes{10},
-      },
-      LineOffsetIndexByteCost{},
-  };
-  return cache;
-}
-
-[[nodiscard]] FileViewCache& file_view_cache() {
-  static auto cache = FileViewCache{
-      FileViewCache::Options{
-          .max_entries = kFileViewCacheMaxEntries,
-          .max_bytes = kFileViewCacheMaxBytes,
-          .ttl = std::chrono::minutes{10},
-      },
-      ReadTextResultByteCost{},
-  };
-  return cache;
-}
-
-[[nodiscard]] ReadTextSingleflightTable& read_text_singleflight_table() {
-  static auto table = ReadTextSingleflightTable{};
-  return table;
-}
-
-[[nodiscard]] ReadTextSingleflightStats& read_text_singleflight_stats_mutable() {
-  static auto stats = ReadTextSingleflightStats{};
-  return stats;
-}
-
-[[nodiscard]] std::mutex& line_offset_index_mutex() {
-  static std::mutex mutex;
-  return mutex;
-}
-
-[[nodiscard]] std::mutex& file_view_cache_mutex() {
-  static std::mutex mutex;
-  return mutex;
-}
-
-[[nodiscard]] std::mutex& read_text_singleflight_mutex() {
-  static std::mutex mutex;
-  return mutex;
-}
-
-[[nodiscard]] bool is_cancelled(const asio::cancellation_state& cancellation) noexcept {
-  return cancellation.cancelled() != asio::cancellation_type::none;
-}
-
-[[nodiscard]] bool is_hidden(std::string_view name) noexcept {
-  return !name.empty() && name.front() == '.';
-}
-
-#if defined(ORAN_IO_HAS_POSIX_FD)
-class UniqueFd {
-public:
-  explicit UniqueFd(int fd = -1) noexcept : fd_{fd} {}
-
-  UniqueFd(const UniqueFd&) = delete;
-  UniqueFd& operator=(const UniqueFd&) = delete;
-
-  UniqueFd(UniqueFd&& other) noexcept : fd_{other.release()} {}
-
-  UniqueFd& operator=(UniqueFd&& other) noexcept {
-    if (this != &other) {
-      reset(other.release());
-    }
-    return *this;
+[[nodiscard]] core::Result<std::size_t>
+read_chunk(const ReadOnlyFile& file, std::uintmax_t offset, std::span<char> destination) {
+  if (offset > static_cast<std::uintmax_t>(std::numeric_limits<off_t>::max())) {
+    return std::unexpected(
+        core::Error::invalid_argument("file read offset is too large").with("path", std::string{file.display_path()}));
   }
 
-  ~UniqueFd() {
-    reset();
-  }
-
-  [[nodiscard]] int get() const noexcept {
-    return fd_;
-  }
-
-  [[nodiscard]] int release() noexcept {
-    const auto fd = fd_;
-    fd_ = -1;
-    return fd;
-  }
-
-  void reset(int next = -1) noexcept {
-    if (fd_ >= 0) {
-      static_cast<void>(::close(fd_));
-    }
-    fd_ = next;
-  }
-
-private:
-  int fd_{-1};
-};
-#endif
-
-#if defined(__linux__)
-struct InotifyWatchRegistry {
-  std::unordered_map<int, std::filesystem::path> directories;
-  ReadTextFileWatchStats stats;
-};
-
-struct InotifyDrainResult {
-  bool complete{false};
-};
-#endif
-
-[[nodiscard]] std::filesystem::path to_path(const std::string& path) {
-  return std::filesystem::path{path};
-}
-
-[[nodiscard]] std::string cache_key_path(const std::string& path) {
-  std::error_code ec;
-  auto canonical = std::filesystem::weakly_canonical(to_path(path), ec);
-  if (!ec) {
-    return canonical.generic_string();
-  }
-  canonical = std::filesystem::absolute(to_path(path), ec);
-  if (!ec) {
-    return canonical.lexically_normal().generic_string();
-  }
-  return to_path(path).lexically_normal().generic_string();
-}
-
-[[nodiscard]] LineOffsetIndexKey line_offset_index_key(const std::string& path, const FileFingerprint& fingerprint) {
-  return LineOffsetIndexKey{
-      .canonical_path = cache_key_path(path),
-      .size_bytes = fingerprint.size_bytes,
-      .mtime_ns = fingerprint.mtime_ns,
-  };
-}
-
-[[nodiscard]] FileViewCacheKey
-file_view_cache_key(const std::string& path, const FileFingerprint& fingerprint, const ReadTextOptions& options) {
-  FileViewCacheKey key{
-      .canonical_path = cache_key_path(path),
-      .size_bytes = fingerprint.size_bytes,
-      .mtime_ns = fingerprint.mtime_ns,
-      .max_bytes = options.max_bytes,
-  };
-  if (options.range && options.range->lines) {
-    key.range_kind = FileViewRangeKind::lines;
-    key.range_start = static_cast<std::uintmax_t>(options.range->lines->start_line);
-    key.range_length = static_cast<std::uintmax_t>(options.range->lines->line_count);
-  } else if (options.range && options.range->bytes) {
-    key.range_kind = FileViewRangeKind::bytes;
-    key.range_start = options.range->bytes->offset_bytes;
-    key.range_length = options.range->bytes->length_bytes;
-  }
-  return key;
-}
-
-void invalidate_line_offset_index_cache_path(std::string_view canonical_path) {
-  const std::scoped_lock lock{line_offset_index_mutex()};
-  line_offset_index_cache().erase_if(
-      [canonical_path](const LineOffsetIndexKey& key, const std::shared_ptr<const LineOffsetIndex>&) {
-        return key.canonical_path == canonical_path;
-      });
-}
-
-void invalidate_file_view_cache_path(std::string_view canonical_path) {
-  const std::scoped_lock lock{file_view_cache_mutex()};
-  file_view_cache().erase_if([canonical_path](const FileViewCacheKey& key, const ReadTextResult&) {
-    return key.canonical_path == canonical_path;
-  });
-}
-
-void invalidate_read_text_file_ranged_cache_blocking(std::string_view path) {
-  const auto canonical_path = cache_key_path(std::string{path});
-  invalidate_line_offset_index_cache_path(canonical_path);
-  invalidate_file_view_cache_path(canonical_path);
-}
-
-void invalidate_all_read_text_file_ranged_caches() {
-  {
-    const std::scoped_lock lock{line_offset_index_mutex()};
-    line_offset_index_cache().erase_if(
-        [](const LineOffsetIndexKey&, const std::shared_ptr<const LineOffsetIndex>&) { return true; });
-  }
-  {
-    const std::scoped_lock lock{file_view_cache_mutex()};
-    file_view_cache().erase_if([](const FileViewCacheKey&, const ReadTextResult&) { return true; });
-  }
-}
-
-[[nodiscard]] std::optional<ReadTextResult> get_cached_file_view(const FileViewCacheKey& key) {
-  const auto now = core::time::now_utc();
-  const std::scoped_lock lock{file_view_cache_mutex()};
-  if (auto* cached = file_view_cache().get(key, now); cached != nullptr) {
-    return *cached;
-  }
-  return std::nullopt;
-}
-
-void put_cached_file_view(FileViewCacheKey key, const ReadTextResult& result) {
-  const auto now = core::time::now_utc();
-  const std::scoped_lock lock{file_view_cache_mutex()};
-  file_view_cache().put(std::move(key), result, now);
-}
-
-[[nodiscard]] ReadTextSingleflightJoin join_read_text_singleflight(const FileViewCacheKey& key,
-                                                                   asio::any_io_executor executor) {
-  const std::scoped_lock lock{read_text_singleflight_mutex()};
-  auto& table = read_text_singleflight_table();
-  auto& stats = read_text_singleflight_stats_mutable();
-
-  if (auto existing = table.find(key); existing != table.end()) {
-    auto waiter = std::make_shared<asio::steady_timer>(std::move(executor));
-    waiter->expires_at(std::chrono::steady_clock::time_point::max());
-    existing->second->waiters.push_back(waiter);
-    ++stats.followers_joined;
-    return ReadTextSingleflightJoin{
-        .entry = existing->second,
-        .waiter = std::move(waiter),
-        .leader = false,
-        .bypass = false,
-    };
-  }
-
-  if (table.size() >= kReadTextSingleflightMaxEntries) {
-    ++stats.bypassed_capacity;
-    return ReadTextSingleflightJoin{
-        .entry = {},
-        .waiter = {},
-        .leader = false,
-        .bypass = true,
-    };
-  }
-
-  auto entry = std::make_shared<ReadTextSingleflightEntry>();
-  table.emplace(key, entry);
-  ++stats.leaders_started;
-  return ReadTextSingleflightJoin{
-      .entry = std::move(entry),
-      .waiter = {},
-      .leader = true,
-      .bypass = false,
-  };
-}
-
-void detach_read_text_singleflight_waiter(const std::shared_ptr<ReadTextSingleflightEntry>& entry,
-                                          const std::shared_ptr<asio::steady_timer>& waiter) {
-  const std::scoped_lock lock{read_text_singleflight_mutex()};
-  if (!entry->result) {
-    const auto removed = std::ranges::remove(entry->waiters, waiter);
-    entry->waiters.erase(removed.begin(), removed.end());
-  }
-}
-
-void complete_read_text_singleflight(const FileViewCacheKey& key,
-                                     const std::shared_ptr<ReadTextSingleflightEntry>& entry,
-                                     const core::Result<ReadTextResult>& result) {
-  std::vector<std::shared_ptr<asio::steady_timer>> waiters;
-  {
-    const std::scoped_lock lock{read_text_singleflight_mutex()};
-    if (entry->result) {
-      // Already completed (e.g. by a previous leader guard); preserve the
-      // first verdict and skip publishing a second time.
-      return;
-    }
-    entry->result = result;
-    auto& table = read_text_singleflight_table();
-    if (auto existing = table.find(key); existing != table.end() && existing->second == entry) {
-      table.erase(existing);
-    }
-
-    auto& stats = read_text_singleflight_stats_mutable();
-    ++stats.completions;
-    if (!result) {
-      ++stats.errors;
-    }
-    waiters.swap(entry->waiters);
-  }
-
-  // Wake each follower via its OWN executor. asio::basic_waitable_timer is
-  // documented as "shared objects: Unsafe", and each waiter's timer was
-  // constructed on the follower's executor in `join_read_text_singleflight`.
-  // Posting the expires_at call onto that executor keeps every mutation of
-  // the timer on its owning strand.
-  for (const auto& waiter : waiters) {
-    auto executor = waiter->get_executor();
-    asio::post(std::move(executor), [waiter] { waiter->expires_at(std::chrono::steady_clock::time_point::min()); });
-  }
-}
-
-[[nodiscard]] std::optional<core::Result<ReadTextResult>>
-read_text_singleflight_result(const std::shared_ptr<ReadTextSingleflightEntry>& entry) {
-  const std::scoped_lock lock{read_text_singleflight_mutex()};
-  return entry->result;
-}
-
-[[nodiscard]] core::Error io_error(std::string message, const std::string& path) {
-  return core::Error::io(std::move(message)).with("path", path);
-}
-
-[[nodiscard]] core::Error system_io_error(std::string message, const std::string& path, const std::error_code& ec) {
-  auto error = [&] {
-    if (ec == std::errc::file_exists) {
-      return core::Error{core::ErrorKind::conflict, std::move(message)};
-    }
-    if (ec == std::errc::permission_denied) {
-      return core::Error::permission_denied(std::move(message));
-    }
-    if (ec == std::errc::no_such_file_or_directory || ec == std::errc::not_a_directory) {
-      return core::Error::not_found(std::move(message));
-    }
-    return core::Error::io(std::move(message));
-  }();
-  return error.with("path", path).with("system_error", ec.message()).with("category", ec.category().name());
-}
-
-[[nodiscard]] core::Error errno_io_error(std::string message, const std::string& path) {
-  return system_io_error(std::move(message), path, std::error_code{errno, std::generic_category()});
-}
-
-[[nodiscard]] core::Error stream_open_error(std::string message, const std::string& path) {
-  if (errno != 0) {
-    return errno_io_error(std::move(message), path);
-  }
-  return io_error(std::move(message), path);
-}
-
-[[nodiscard]] core::Result<void> validate_path(std::string_view path) {
-  if (path.empty()) {
-    return std::unexpected(core::Error::invalid_argument("path must not be empty"));
-  }
-  return {};
-}
-
-[[nodiscard]] core::Result<std::filesystem::path> validate_directory_path(const std::string& path) {
-  if (auto valid = validate_path(path); !valid) {
-    return std::unexpected(valid.error());
-  }
-
-  const auto fs_path = to_path(path);
-  std::error_code ec;
-  if (!std::filesystem::exists(fs_path, ec)) {
-    if (ec) {
-      return std::unexpected(system_io_error("failed to stat directory", path, ec));
-    }
-    return std::unexpected(core::Error::not_found("directory does not exist").with("path", path));
-  }
-  if (!std::filesystem::is_directory(fs_path, ec)) {
-    if (ec) {
-      return std::unexpected(system_io_error("failed to inspect directory type", path, ec));
-    }
-    return std::unexpected(core::Error::invalid_argument("path is not a directory").with("path", path));
-  }
-
-  auto canonical = std::filesystem::weakly_canonical(fs_path, ec);
-  if (ec) {
-    return std::unexpected(system_io_error("failed to canonicalise directory", path, ec));
-  }
-  return canonical;
-}
-
-[[nodiscard]] core::Result<void> ensure_readable_regular_file(const std::string& path) {
-  auto fs_path = to_path(path);
-  std::error_code ec;
-  if (!std::filesystem::exists(fs_path, ec)) {
-    if (ec) {
-      return std::unexpected(system_io_error("failed to stat file", path, ec));
-    }
-    return std::unexpected(core::Error::not_found("file does not exist").with("path", path));
-  }
-
-  if (!std::filesystem::is_regular_file(fs_path, ec)) {
-    if (ec) {
-      return std::unexpected(system_io_error("failed to inspect file type", path, ec));
-    }
-    return std::unexpected(core::Error::invalid_argument("path is not a regular file").with("path", path));
-  }
-  return {};
-}
-
-#if defined(__linux__)
-[[nodiscard]] core::Result<void> add_inotify_directory_watch(int fd,
-                                                             const std::filesystem::path& directory,
-                                                             InotifyWatchRegistry& registry,
-                                                             bool required) {
-  errno = 0;
-  const auto wd = ::inotify_add_watch(fd, directory.c_str(), kInotifyWatchMask);
-  if (wd < 0) {
-    if (!required && (errno == EACCES || errno == ENOENT || errno == ENOTDIR)) {
-      return {};
-    }
-    return std::unexpected(errno_io_error("failed to add file watcher", directory.string()));
-  }
-
-  if (!registry.directories.contains(wd)) {
-    ++registry.stats.directories_watched;
-  }
-  registry.directories[wd] = directory;
-  return {};
-}
-
-[[nodiscard]] core::Result<void>
-register_inotify_watch_tree(int fd, const std::filesystem::path& root, bool recursive, InotifyWatchRegistry& registry) {
-  if (auto watched = add_inotify_directory_watch(fd, root, registry, true); !watched) {
-    return std::unexpected(std::move(watched).error());
-  }
-  if (!recursive) {
-    return {};
-  }
-
-  std::error_code ec;
-  auto entries =
-      std::filesystem::recursive_directory_iterator{root,
-                                                    std::filesystem::directory_options::skip_permission_denied,
-                                                    ec};
-  if (ec) {
-    return std::unexpected(system_io_error("failed to scan watch root", root.string(), ec));
-  }
-
-  const auto end = std::filesystem::recursive_directory_iterator{};
-  for (; entries != end; entries.increment(ec)) {
-    if (ec) {
-      ec.clear();
-      continue;
-    }
-
-    std::error_code status_ec;
-    const auto status = entries->symlink_status(status_ec);
-    if (status_ec || !std::filesystem::is_directory(status)) {
-      continue;
-    }
-    if (auto watched = add_inotify_directory_watch(fd, entries->path(), registry, false); !watched) {
-      return std::unexpected(std::move(watched).error());
-    }
-  }
-  return {};
-}
-
-[[nodiscard]] std::optional<std::filesystem::path> inotify_event_path(const InotifyWatchRegistry& registry,
-                                                                      const inotify_event& event) {
-  const auto found = registry.directories.find(event.wd);
-  if (found == registry.directories.end()) {
-    return std::nullopt;
-  }
-  if (event.len == 0 || event.name[0] == '\0') {
-    return found->second;
-  }
-  return found->second / std::string{event.name};
-}
-
-[[nodiscard]] core::Result<void> maybe_add_inotify_child_watch(int fd,
-                                                               const std::filesystem::path& path,
-                                                               const inotify_event& event,
-                                                               const ReadTextFileWatchOptions& options,
-                                                               InotifyWatchRegistry& registry) {
-  const auto created_directory = (event.mask & IN_ISDIR) != 0U && (event.mask & (IN_CREATE | IN_MOVED_TO)) != 0U;
-  if (!options.recursive || !created_directory) {
-    return {};
-  }
-  return add_inotify_directory_watch(fd, path, registry, false);
-}
-
-[[nodiscard]] core::Result<InotifyDrainResult>
-drain_inotify_events(int fd, const ReadTextFileWatchOptions& options, InotifyWatchRegistry& registry) {
-  alignas(inotify_event) std::array<char, kInotifyBufferBytes> buffer{};
-
-  for (;;) {
+  while (true) {
     errno = 0;
-    const auto bytes_read = ::read(fd, buffer.data(), buffer.size());
-    if (bytes_read < 0) {
-      if (errno == EAGAIN || errno == EWOULDBLOCK) {
-        return InotifyDrainResult{};
-      }
-      if (errno == EINTR) {
-        continue;
-      }
-      return std::unexpected(errno_io_error("failed to read file watcher events", {}));
+    const auto count =
+        ::pread(file.native_handle(), destination.data(), destination.size(), static_cast<off_t>(offset));
+    if (count >= 0) {
+      return static_cast<std::size_t>(count);
     }
-    if (bytes_read == 0) {
-      return InotifyDrainResult{};
-    }
-
-    std::size_t offset = 0;
-    const auto size = static_cast<std::size_t>(bytes_read);
-    while (offset + sizeof(inotify_event) <= size) {
-      const auto* event = reinterpret_cast<const inotify_event*>(buffer.data() + offset);
-      offset += sizeof(inotify_event) + event->len;
-
-      ++registry.stats.events_seen;
-      if ((event->mask & IN_Q_OVERFLOW) != 0U) {
-        invalidate_all_read_text_file_ranged_caches();
-        ++registry.stats.invalidations;
-        if (options.max_events > 0 && registry.stats.events_seen >= options.max_events) {
-          return InotifyDrainResult{.complete = true};
-        }
-        continue;
-      }
-
-      const auto event_path = inotify_event_path(registry, *event);
-      if (event_path) {
-        invalidate_read_text_file_ranged_cache_blocking(event_path->string());
-        ++registry.stats.invalidations;
-        if (auto watched = maybe_add_inotify_child_watch(fd, *event_path, *event, options, registry); !watched) {
-          return std::unexpected(std::move(watched).error());
-        }
-      }
-      if ((event->mask & IN_IGNORED) != 0U) {
-        registry.directories.erase(event->wd);
-      }
-
-      if (options.max_events > 0 && registry.stats.events_seen >= options.max_events) {
-        return InotifyDrainResult{.complete = true};
-      }
+    if (errno != EINTR) {
+      return std::unexpected(descriptor_error("failed while reading file", file, errno));
     }
   }
 }
-#endif
 
-class StreamRandomReader {
-public:
-  explicit StreamRandomReader(const std::string& path) : path_{path}, input_{to_path(path), std::ios::binary} {}
+constexpr std::size_t kChunkSize = 8192U;
 
-  [[nodiscard]] bool is_open() const noexcept {
-    return input_.is_open();
-  }
-
-  [[nodiscard]] core::Result<std::size_t> read(std::uintmax_t offset, std::span<char> destination) {
-    if (offset > static_cast<std::uintmax_t>(std::numeric_limits<std::streamoff>::max())) {
-      return std::unexpected(core::Error::invalid_argument("file read offset is too large").with("path", path_));
-    }
-    input_.clear();
-    input_.seekg(static_cast<std::streamoff>(offset));
-    if (!input_) {
-      return std::unexpected(io_error("failed to seek while reading file", path_));
-    }
-    input_.read(destination.data(), static_cast<std::streamsize>(destination.size()));
-    const auto count = input_.gcount();
-    if (input_.bad()) {
-      return std::unexpected(io_error("failed while reading file", path_));
-    }
-    return count <= 0 ? std::size_t{0} : static_cast<std::size_t>(count);
-  }
-
-private:
-  std::string path_;
-  std::ifstream input_;
-};
-
-[[nodiscard]] core::Result<std::shared_ptr<const LineOffsetIndex>>
-build_line_offset_index(const std::string& path, const FileFingerprint& fingerprint) {
-  errno = 0;
-  std::ifstream input{to_path(path), std::ios::binary};
-  if (!input) {
-    return std::unexpected(stream_open_error("failed to open file for line-offset indexing", path));
-  }
-
-  auto index = std::make_shared<LineOffsetIndex>();
-  index->file_size = fingerprint.size_bytes;
-  if (fingerprint.size_bytes > 0) {
-    index->line_starts.push_back(0);
-  }
-
-  std::uintmax_t absolute_offset = 0;
-  std::array<char, kReadChunkSize> buffer{};
-  while (input) {
-    input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-    const auto count = input.gcount();
-    if (count <= 0) {
+[[nodiscard]] std::pair<std::size_t, std::size_t> align_to_utf8_boundaries(std::string_view buffer) noexcept {
+  std::size_t head = 0;
+  while (head < buffer.size()) {
+    const auto byte = static_cast<std::uint8_t>(buffer[head]);
+    if ((byte & 0xC0U) != 0x80U) {
       break;
     }
-    for (std::streamsize i = 0; i < count; ++i) {
-      const auto next_offset = absolute_offset + 1U;
-      if (buffer[static_cast<std::size_t>(i)] == '\n' && next_offset < fingerprint.size_bytes) {
-        index->line_starts.push_back(next_offset);
-      }
-      absolute_offset = next_offset;
+    ++head;
+  }
+
+  std::size_t end = head;
+  std::size_t cursor = head;
+  while (cursor < buffer.size()) {
+    const auto byte = static_cast<std::uint8_t>(buffer[cursor]);
+    std::size_t length = 0;
+    if (byte < 0x80U) {
+      length = 1U;
+    } else if (byte < 0xC2U) {
+      break;
+    } else if (byte < 0xE0U) {
+      length = 2U;
+    } else if (byte < 0xF0U) {
+      length = 3U;
+    } else if (byte < 0xF5U) {
+      length = 4U;
+    } else {
+      break;
     }
+    if (cursor + length > buffer.size()) {
+      break;
+    }
+    cursor += length;
+    end = cursor;
   }
-  if (input.bad()) {
-    return std::unexpected(io_error("failed while building line-offset index", path));
-  }
-  return std::shared_ptr<const LineOffsetIndex>{std::move(index)};
+  return {head, end};
 }
 
-[[nodiscard]] core::Result<std::shared_ptr<const LineOffsetIndex>>
-get_line_offset_index(const std::string& path, const FileFingerprint& fingerprint) {
-  const auto key = line_offset_index_key(path, fingerprint);
-  const auto now = core::time::now_utc();
-  {
-    const std::scoped_lock lock{line_offset_index_mutex()};
-    if (auto* cached = line_offset_index_cache().get(key, now); cached != nullptr && *cached != nullptr) {
-      return *cached;
+[[nodiscard]] core::Result<void> validate_range(const FileRange& range) {
+  const bool has_lines = range.lines.has_value();
+  const bool has_bytes = range.bytes.has_value();
+  if (has_lines == has_bytes) {
+    return std::unexpected(core::Error::invalid_argument("FileRange must specify exactly one of lines or bytes"));
+  }
+  if (has_lines) {
+    if (range.lines->start_line == 0 || range.lines->line_count == 0) {
+      return std::unexpected(core::Error::invalid_argument("line range fields must be non-zero"));
     }
+    return {};
   }
+  if (range.bytes->offset_bytes == 0 || range.bytes->length_bytes == 0) {
+    return std::unexpected(core::Error::invalid_argument("byte range fields must be non-zero"));
+  }
+  return {};
+}
 
-  auto built = build_line_offset_index(path, fingerprint);
-  if (!built) {
-    return std::unexpected(std::move(built).error());
+[[nodiscard]] std::uint64_t count_line_span(std::string_view text) noexcept {
+  if (text.empty()) {
+    return 0;
   }
+  const auto newlines = static_cast<std::uint64_t>(std::ranges::count(text, '\n'));
+  return newlines + (text.back() == '\n' ? 0U : 1U);
+}
 
-  {
-    const std::scoped_lock lock{line_offset_index_mutex()};
-    line_offset_index_cache().put(key, *built, now);
+[[nodiscard]] core::Result<std::string>
+read_bytes(const ReadOnlyFile& file, std::uintmax_t offset, std::uintmax_t length) {
+  std::string text;
+  // Tool input can control `length`; cap eager allocation and let actual
+  // bytes read drive any later growth.
+  text.reserve(static_cast<std::size_t>(std::min<std::uintmax_t>(length, 64U * 1024U)));
+  std::array<char, kChunkSize> buffer{};
+  while (static_cast<std::uintmax_t>(text.size()) < length) {
+    const auto remaining = length - static_cast<std::uintmax_t>(text.size());
+    const auto requested = static_cast<std::size_t>(std::min<std::uintmax_t>(buffer.size(), remaining));
+    auto count =
+        read_chunk(file, offset + static_cast<std::uintmax_t>(text.size()), std::span<char>{buffer.data(), requested});
+    if (!count) {
+      return std::unexpected(std::move(count).error());
+    }
+    if (*count == 0U) {
+      break;
+    }
+    text.append(buffer.data(), *count);
   }
-  return *built;
+  return text;
 }
 
 [[nodiscard]] core::Result<ReadTextResult>
-read_whole_file_blocking(const std::string& path, std::uintmax_t file_size, std::uintmax_t max_bytes) {
-  errno = 0;
-  auto reader = StreamRandomReader{path};
-  if (!reader.is_open()) {
-    return std::unexpected(stream_open_error("failed to open file for reading", path));
+read_whole(const ReadOnlyFile& file, std::uintmax_t file_size, std::uintmax_t max_bytes) {
+  const auto requested = std::min(file_size, max_bytes);
+  auto text = read_bytes(file, 0U, requested);
+  if (!text) {
+    return std::unexpected(std::move(text).error());
   }
-  return detail::read_text::read_whole(reader, file_size, max_bytes);
-}
 
-[[nodiscard]] core::Result<ReadTextResult>
-read_line_range_blocking(const std::string& path, FileRange::LineSpan lines, std::uintmax_t max_bytes) {
-  errno = 0;
-  auto reader = StreamRandomReader{path};
-  if (!reader.is_open()) {
-    return std::unexpected(stream_open_error("failed to open file for reading", path));
-  }
-  return detail::read_text::read_lines(reader, lines, max_bytes);
-}
-
-[[nodiscard]] core::Result<ReadTextResult> read_line_range_with_index(const std::string& path,
-                                                                      FileRange::LineSpan lines,
-                                                                      std::uintmax_t max_bytes,
-                                                                      const LineOffsetIndex& index) {
   ReadTextResult result;
-  result.start_line = lines.start_line;
-  result.end_line = lines.start_line - 1;
-
-  const auto start_index = lines.start_line - 1U;
-  if (start_index >= index.line_starts.size()) {
-    return result;
-  }
-
-  const auto remaining_lines = static_cast<std::uint64_t>(index.line_starts.size()) - start_index;
-  const auto line_count = std::min(lines.line_count, remaining_lines);
-  const auto end_index = start_index + line_count;
-  const auto start_offset = index.line_starts[static_cast<std::size_t>(start_index)];
-  const auto end_offset =
-      end_index < index.line_starts.size() ? index.line_starts[static_cast<std::size_t>(end_index)] : index.file_size;
-  const auto requested_bytes = end_offset > start_offset ? end_offset - start_offset : std::uintmax_t{0};
-  const auto capped_bytes = std::min<std::uintmax_t>(requested_bytes, max_bytes);
-
-  errno = 0;
-  std::ifstream input{to_path(path), std::ios::binary};
-  if (!input) {
-    return std::unexpected(stream_open_error("failed to open file for indexed line-range read", path));
-  }
-  input.seekg(static_cast<std::streamoff>(start_offset));
-  if (!input) {
-    return std::unexpected(io_error("failed to seek indexed line range", path));
-  }
-
-  std::array<char, kReadChunkSize> buffer{};
-  while (input && static_cast<std::uintmax_t>(result.text.size()) < capped_bytes) {
-    const auto remaining = capped_bytes - static_cast<std::uintmax_t>(result.text.size());
-    const auto chunk = std::min<std::uintmax_t>(static_cast<std::uintmax_t>(buffer.size()), remaining);
-    input.read(buffer.data(), static_cast<std::streamsize>(chunk));
-    const auto count = input.gcount();
-    if (count <= 0) {
-      break;
-    }
-    result.text.append(buffer.data(), static_cast<std::size_t>(count));
-  }
-  if (input.bad()) {
-    return std::unexpected(io_error("failed while reading indexed line range", path));
-  }
-
-  if (max_bytes < requested_bytes && static_cast<std::uintmax_t>(result.text.size()) >= max_bytes) {
-    result.truncated = true;
-  }
+  result.text = std::move(*text);
+  result.truncated = file_size > max_bytes;
   if (result.truncated && !result.text.empty()) {
-    const auto [head, end] = detail::read_text::align_to_utf8_boundaries(result.text);
-    if (head > 0 || end < result.text.size()) {
-      result.text = result.text.substr(head, end - head);
-    }
+    const auto [head, end] = align_to_utf8_boundaries(result.text);
+    result.text = result.text.substr(head, end - head);
   }
-
   result.returned_bytes = static_cast<std::uintmax_t>(result.text.size());
-  const auto returned_lines = detail::read_text::count_line_span(result.text);
-  if (returned_lines > 0) {
-    result.end_line = lines.start_line + returned_lines - 1U;
-  }
+  result.start_line = 1;
+  result.end_line = count_line_span(result.text);
   return result;
 }
 
-[[nodiscard]] core::Result<ReadTextResult> read_line_range_dispatch(const std::string& path,
-                                                                    FileRange::LineSpan lines,
-                                                                    std::uintmax_t max_bytes,
-                                                                    const FileFingerprint& fingerprint) {
-  if (fingerprint.size_bytes <= kLineOffsetIndexThresholdBytes) {
-    return read_line_range_blocking(path, lines, max_bytes);
+[[nodiscard]] core::Result<ReadTextResult>
+read_lines(const ReadOnlyFile& file, FileRange::LineSpan lines, std::uintmax_t max_bytes) {
+  ReadTextResult result;
+  result.start_line = lines.start_line;
+  result.end_line = lines.start_line - 1U;
+
+  std::uint64_t current_line = 1;
+  std::uint64_t emitted_lines = 0;
+  std::uintmax_t offset = 0;
+  std::array<char, kChunkSize> buffer{};
+  while (emitted_lines < lines.line_count) {
+    auto count = read_chunk(file, offset, buffer);
+    if (!count) {
+      return std::unexpected(std::move(count).error());
+    }
+    if (*count == 0U) {
+      break;
+    }
+    offset += *count;
+
+    for (std::size_t index = 0; index < *count; ++index) {
+      const char ch = buffer[index];
+      const bool in_range = current_line >= lines.start_line && emitted_lines < lines.line_count;
+      if (in_range) {
+        if (static_cast<std::uintmax_t>(result.text.size()) >= max_bytes) {
+          result.truncated = true;
+          break;
+        }
+        result.text.push_back(ch);
+      }
+      if (ch == '\n') {
+        if (in_range) {
+          ++emitted_lines;
+          result.end_line = lines.start_line + emitted_lines - 1U;
+        }
+        ++current_line;
+      }
+    }
+    if (result.truncated) {
+      break;
+    }
   }
-  auto index = get_line_offset_index(path, fingerprint);
-  if (!index) {
-    return std::unexpected(std::move(index).error());
+
+  if (!result.text.empty() && result.text.back() != '\n' && emitted_lines < lines.line_count) {
+    ++emitted_lines;
+    result.end_line = lines.start_line + emitted_lines - 1U;
   }
-  return read_line_range_with_index(path, lines, max_bytes, **index);
+  if (result.truncated && !result.text.empty()) {
+    const auto [head, end] = align_to_utf8_boundaries(result.text);
+    result.text = result.text.substr(head, end - head);
+  }
+  result.returned_bytes = static_cast<std::uintmax_t>(result.text.size());
+  return result;
 }
 
 [[nodiscard]] core::Result<ReadTextResult>
-read_byte_range_blocking(const std::string& path, FileRange::ByteSpan bytes, std::uintmax_t max_bytes) {
-  errno = 0;
-  auto reader = StreamRandomReader{path};
-  if (!reader.is_open()) {
-    return std::unexpected(stream_open_error("failed to open file for reading", path));
+read_bytes_range(const ReadOnlyFile& file, FileRange::ByteSpan bytes, std::uintmax_t max_bytes) {
+  const auto requested = std::min(bytes.length_bytes, max_bytes);
+  auto text = read_bytes(file, bytes.offset_bytes, requested);
+  if (!text) {
+    return std::unexpected(std::move(text).error());
   }
-  return detail::read_text::read_bytes_range(reader, bytes, max_bytes);
+
+  ReadTextResult result;
+  result.text = std::move(*text);
+  result.truncated = max_bytes < bytes.length_bytes && result.text.size() >= max_bytes;
+  if (!result.text.empty()) {
+    const auto [head, end] = align_to_utf8_boundaries(result.text);
+    result.text = result.text.substr(head, end - head);
+  }
+  result.returned_bytes = static_cast<std::uintmax_t>(result.text.size());
+  return result;
 }
 
 [[nodiscard]] core::Result<ReadTextResult>
-dispatch_read(const std::string& path, const ReadTextOptions& options, const FileFingerprint& fingerprint) {
-  try {
-    if (!options.range) {
-      return read_whole_file_blocking(path, fingerprint.size_bytes, options.max_bytes);
-    }
-    if (options.range->lines) {
-      return read_line_range_dispatch(path, *options.range->lines, options.max_bytes, fingerprint);
-    }
-    return read_byte_range_blocking(path, *options.range->bytes, options.max_bytes);
-  } catch (const std::filesystem::filesystem_error& e) {
-    return std::unexpected(system_io_error("filesystem read failed", path, e.code()));
-  } catch (const std::exception& e) {
-    return std::unexpected(io_error("file read failed", path).with("exception", e.what()));
+dispatch_read(const ReadOnlyFile& file, const ReadTextOptions& options, const FileFingerprint& fingerprint) {
+  if (!options.range) {
+    return read_whole(file, fingerprint.size_bytes, options.max_bytes);
   }
+  if (options.range->lines) {
+    return read_lines(file, *options.range->lines, options.max_bytes);
+  }
+  return read_bytes_range(file, *options.range->bytes, options.max_bytes);
 }
 
-[[nodiscard]] core::Result<PreparedReadTextFile> prepare_read_text_file_blocking(const std::string& path,
-                                                                                 const ReadTextOptions& options) {
-  if (auto valid = validate_path(path); !valid) {
-    return std::unexpected(valid.error());
-  }
-  if (options.max_bytes == 0) {
-    return std::unexpected(core::Error::invalid_argument("max_bytes must be greater than zero").with("path", path));
+[[nodiscard]] core::Result<ReadTextResult> read_file(const ReadOnlyFile& file, const ReadTextOptions& options) {
+  if (options.max_bytes == 0U) {
+    return std::unexpected(core::Error::invalid_argument("max_bytes must be greater than zero")
+                               .with("path", std::string{file.display_path()}));
   }
   if (options.range) {
-    if (auto ok = detail::read_text::validate_range(*options.range); !ok) {
-      return std::unexpected(std::move(ok).error().with("path", path));
+    if (auto valid = validate_range(*options.range); !valid) {
+      return std::unexpected(std::move(valid).error().with("path", std::string{file.display_path()}));
     }
   }
-  if (auto regular = ensure_readable_regular_file(path); !regular) {
-    return std::unexpected(regular.error());
-  }
 
-  auto pre = compute_file_fingerprint(path);
+  auto pre = compute_file_fingerprint(file);
   if (!pre) {
     return std::unexpected(std::move(pre).error());
   }
 
-  auto cache_key = file_view_cache_key(path, *pre, options);
-  if (auto cached = get_cached_file_view(cache_key)) {
-    auto post = compute_file_fingerprint(path);
-    if (!post) {
-      return std::unexpected(std::move(post).error());
-    }
-    if (*pre == *post) {
-      cached->fingerprint = *post;
-      return PreparedReadTextFile{
-          .ready = *cached,
-          .fingerprint = *post,
-          .cache_key = std::move(cache_key),
-      };
-    }
-    pre = post;
-    cache_key = file_view_cache_key(path, *pre, options);
+  auto result = dispatch_read(file, options, *pre);
+  if (!result) {
+    return std::unexpected(std::move(result).error());
   }
-
-  return PreparedReadTextFile{
-      .ready = std::nullopt,
-      .fingerprint = *pre,
-      .cache_key = std::move(cache_key),
-  };
-}
-
-[[nodiscard]] core::Result<ReadTextResult> read_text_file_cold_blocking(const std::string& path,
-                                                                        const ReadTextOptions& options,
-                                                                        const FileFingerprint& fingerprint,
-                                                                        const FileViewCacheKey& cache_key) {
-  // Mid-read race detection: capture the fingerprint before and after the
-  // blocking read. Size or mtime drift either retries (small whole-file
-  // reads) or surfaces as `Error::conflict` (large or ranged reads).
-  auto pre = fingerprint;
-  auto first = dispatch_read(path, options, pre);
-  if (!first) {
-    return std::unexpected(std::move(first).error());
-  }
-
-  auto post = compute_file_fingerprint(path);
+  auto post = compute_file_fingerprint(file);
   if (!post) {
     return std::unexpected(std::move(post).error());
   }
 
-  if (pre != *post) {
+  if (*pre != *post) {
     const bool ranged = options.range.has_value();
-    const bool large = pre.size_bytes >= kMidReadRetryThresholdBytes;
+    const bool large = pre->size_bytes >= kMidReadRetryThresholdBytes;
     if (ranged || large) {
       return std::unexpected(core::Error{core::ErrorKind::conflict, "file changed during read"}
-                                 .with("path", path)
-                                 .with("size_before", std::to_string(pre.size_bytes))
+                                 .with("path", std::string{file.display_path()})
+                                 .with("size_before", std::to_string(pre->size_bytes))
                                  .with("size_after", std::to_string(post->size_bytes)));
     }
-    // Small whole-file read: retry once.
-    pre = *post;
-    first = dispatch_read(path, options, pre);
-    if (!first) {
-      return std::unexpected(std::move(first).error());
+
+    pre = post;
+    result = dispatch_read(file, options, *pre);
+    if (!result) {
+      return std::unexpected(std::move(result).error());
     }
-    post = compute_file_fingerprint(path);
+    post = compute_file_fingerprint(file);
     if (!post) {
       return std::unexpected(std::move(post).error());
     }
-    if (pre != *post) {
-      return std::unexpected(
-          core::Error{core::ErrorKind::conflict, "file changed during read (after retry)"}.with("path", path));
+    if (*pre != *post) {
+      return std::unexpected(core::Error{core::ErrorKind::conflict, "file changed during read (after retry)"}.with(
+          "path",
+          std::string{file.display_path()}));
     }
   }
 
-  first->fingerprint = *post;
-  const auto result_key = (*post == fingerprint) ? cache_key : file_view_cache_key(path, *post, options);
-  put_cached_file_view(result_key, *first);
-  return first;
-}
-
-[[nodiscard]] DirectoryEntryKind classify(const std::filesystem::file_status& status) noexcept {
-  if (std::filesystem::is_symlink(status)) {
-    return DirectoryEntryKind::symlink;
-  }
-  if (std::filesystem::is_regular_file(status)) {
-    return DirectoryEntryKind::regular_file;
-  }
-  if (std::filesystem::is_directory(status)) {
-    return DirectoryEntryKind::directory;
-  }
-  return DirectoryEntryKind::other;
-}
-
-[[nodiscard]] std::optional<std::uintmax_t> regular_file_size(const std::filesystem::directory_entry& entry) {
-  std::error_code ec;
-  if (!entry.is_regular_file(ec) || ec) {
-    return std::nullopt;
-  }
-  const auto size = entry.file_size(ec);
-  if (ec) {
-    return std::nullopt;
-  }
-  return size;
-}
-
-[[nodiscard]] core::Result<std::vector<DirectoryEntry>> list_directory_blocking(const std::string& path,
-                                                                                ListDirectoryOptions options) {
-  if (auto valid = validate_path(path); !valid) {
-    return std::unexpected(valid.error());
-  }
-  if (options.max_entries == 0) {
-    return std::unexpected(core::Error::invalid_argument("max_entries must be greater than zero").with("path", path));
-  }
-
-  try {
-    const auto fs_path = to_path(path);
-    std::error_code ec;
-    if (!std::filesystem::exists(fs_path, ec)) {
-      if (ec) {
-        return std::unexpected(system_io_error("failed to stat directory", path, ec));
-      }
-      return std::unexpected(core::Error::not_found("directory does not exist").with("path", path));
-    }
-    if (!std::filesystem::is_directory(fs_path, ec)) {
-      if (ec) {
-        return std::unexpected(system_io_error("failed to inspect directory type", path, ec));
-      }
-      return std::unexpected(core::Error::invalid_argument("path is not a directory").with("path", path));
-    }
-
-    std::vector<DirectoryEntry> entries;
-    auto it =
-        std::filesystem::directory_iterator{fs_path, std::filesystem::directory_options::skip_permission_denied, ec};
-    if (ec) {
-      return std::unexpected(system_io_error("failed to open directory", path, ec));
-    }
-
-    for (const auto& entry : it) {
-      const auto name = entry.path().filename().string();
-      if (!options.include_hidden && is_hidden(name)) {
-        continue;
-      }
-      if (entries.size() >= options.max_entries) {
-        return std::unexpected(core::Error::io("directory entry limit exceeded")
-                                   .with("path", path)
-                                   .with("max_entries", std::to_string(options.max_entries)));
-      }
-
-      std::error_code status_ec;
-      const auto status = entry.symlink_status(status_ec);
-      if (status_ec) {
-        return std::unexpected(system_io_error("failed to inspect directory entry", entry.path().string(), status_ec));
-      }
-      const auto kind = classify(status);
-      entries.push_back(DirectoryEntry{
-          .name = name,
-          .path = entry.path().string(),
-          .kind = kind,
-          .size_bytes = kind == DirectoryEntryKind::regular_file ? regular_file_size(entry) : std::nullopt,
-      });
-    }
-
-    std::ranges::sort(entries, {}, &DirectoryEntry::path);
-    return entries;
-  } catch (const std::filesystem::filesystem_error& e) {
-    return std::unexpected(system_io_error("filesystem directory listing failed", path, e.code()));
-  } catch (const std::exception& e) {
-    return std::unexpected(io_error("directory listing failed", path).with("exception", e.what()));
-  }
-}
-
-[[nodiscard]] async::Awaitable<core::Result<PreparedReadTextFile>>
-prepare_read_text_file_async(asio::any_io_executor executor, std::string path, ReadTextOptions options) {
-  co_return co_await run_blocking(std::move(executor), [path = std::move(path), options](std::stop_token) {
-    return prepare_read_text_file_blocking(path, options);
-  });
-}
-
-[[nodiscard]] async::Awaitable<core::Result<ReadTextResult>> read_text_file_cold_async(asio::any_io_executor executor,
-                                                                                       std::string path,
-                                                                                       ReadTextOptions options,
-                                                                                       FileFingerprint fingerprint,
-                                                                                       FileViewCacheKey cache_key) {
-  co_return co_await run_blocking(
-      std::move(executor),
-      [path = std::move(path), options, fingerprint = std::move(fingerprint), cache_key = std::move(cache_key)](
-          std::stop_token) { return read_text_file_cold_blocking(path, options, fingerprint, cache_key); });
-}
-
-[[nodiscard]] async::Awaitable<core::Result<ReadTextResult>>
-wait_for_read_text_singleflight(ReadTextSingleflightJoin join) {
-  asio::error_code ec;
-  co_await join.waiter->async_wait(asio::redirect_error(asio::use_awaitable, ec));
-
-  auto result = read_text_singleflight_result(join.entry);
-  if (!result) {
-    detach_read_text_singleflight_waiter(join.entry, join.waiter);
-    co_return std::unexpected(core::Error::cancelled());
-  }
-  co_return *std::move(result);
+  result->fingerprint = *post;
+  return result;
 }
 
 }  // namespace
@@ -1135,178 +308,52 @@ wait_for_read_text_singleflight(ReadTextSingleflightJoin join) {
 async::Awaitable<core::Result<std::string>>
 read_text_file(asio::any_io_executor executor, std::string path, ReadTextOptions options) {
   const auto original_path = path;
-  auto rich = co_await read_text_file_ranged(std::move(executor), std::move(path), options);
-  if (!rich) {
-    co_return std::unexpected(std::move(rich).error());
+  auto result = co_await read_text_file_ranged(std::move(executor), std::move(path), options);
+  if (!result) {
+    co_return std::unexpected(std::move(result).error());
   }
-  if (rich->truncated) {
+  if (result->truncated) {
     co_return std::unexpected(core::Error::invalid_argument("file exceeds max_bytes")
                                   .with("path", original_path)
                                   .with("max_bytes", std::to_string(options.max_bytes)));
   }
-  co_return std::move(rich->text);
+  co_return std::move(result->text);
 }
 
 async::Awaitable<core::Result<ReadTextResult>>
 read_text_file_ranged(asio::any_io_executor executor, std::string path, ReadTextOptions options) {
-  auto prepared = co_await prepare_read_text_file_async(executor, path, options);
-  if (!prepared) {
-    co_return std::unexpected(std::move(prepared).error());
-  }
-  if (prepared->ready) {
-    co_return std::move(*prepared->ready);
-  }
-
-  auto cache_key = prepared->cache_key;
-  auto fingerprint = prepared->fingerprint;
-  auto join = join_read_text_singleflight(cache_key, executor);
-  if (!join.leader && !join.bypass) {
-    co_return co_await wait_for_read_text_singleflight(std::move(join));
-  }
-
-  // Leader RAII guard: if the cold read is cancelled or throws before
-  // `complete_read_text_singleflight` runs, the entry would stay in the table
-  // and every follower's timer would wait forever. The guard publishes a
-  // cancelled error to followers on any unwind path so the table is never
-  // leaked. Bypass callers do not own an entry, so the guard short-circuits.
-  struct LeaderCompletionGuard {
-    bool armed{false};
-    FileViewCacheKey key{};
-    std::shared_ptr<ReadTextSingleflightEntry> entry{};
-
-    ~LeaderCompletionGuard() noexcept {
-      if (!armed || entry == nullptr) {
-        return;
-      }
-      try {
-        complete_read_text_singleflight(
-            key,
-            entry,
-            std::unexpected(core::Error::cancelled().with("reason", "singleflight_leader_unwound")));
-      } catch (...) {
-        // The destructor must remain noexcept; swallow any secondary failure
-        // here — completing late is better than leaking the entry, but a
-        // throw out of a destructor would terminate the process.
-      }
-    }
-  };
-  auto guard = LeaderCompletionGuard{};
-  if (join.leader) {
-    guard.armed = true;
-    guard.key = cache_key;
-    guard.entry = join.entry;
-  }
-
-  auto result = co_await read_text_file_cold_async(std::move(executor),
-                                                   std::move(path),
-                                                   options,
-                                                   std::move(fingerprint),
-                                                   cache_key);
-  if (join.leader) {
-    complete_read_text_singleflight(cache_key, join.entry, result);
-    guard.armed = false;
-  }
-  co_return result;
+  co_return co_await run_blocking(std::move(executor),
+                                  [path = std::move(path), options](std::stop_token) -> core::Result<ReadTextResult> {
+                                    auto file = ReadOnlyFile::open_trusted(path);
+                                    if (!file) {
+                                      return std::unexpected(std::move(file).error());
+                                    }
+                                    return read_file(*file, options);
+                                  });
 }
 
-void invalidate_read_text_file_ranged_cache(std::string_view path) {
-  invalidate_read_text_file_ranged_cache_blocking(path);
-}
-
-async::Awaitable<core::Result<ReadTextFileWatchStats>>
-watch_read_text_file_ranged_cache(asio::any_io_executor executor, std::string root, ReadTextFileWatchOptions options) {
-#if defined(__linux__)
-  auto cancellation = co_await asio::this_coro::cancellation_state;
-  if (is_cancelled(cancellation)) {
-    co_return std::unexpected(core::Error::cancelled());
-  }
-
-  auto root_path = validate_directory_path(root);
-  if (!root_path) {
-    co_return std::unexpected(std::move(root_path).error());
-  }
-
-  auto fd = UniqueFd{::inotify_init1(IN_NONBLOCK | IN_CLOEXEC)};
-  if (fd.get() < 0) {
-    co_return std::unexpected(errno_io_error("failed to create file watcher", root));
-  }
-
-  auto registry = InotifyWatchRegistry{};
-  if (auto registered = register_inotify_watch_tree(fd.get(), *root_path, options.recursive, registry); !registered) {
-    co_return std::unexpected(std::move(registered).error());
-  }
-
-  auto descriptor = asio::posix::stream_descriptor{executor};
-  asio::error_code assign_ec;
-  descriptor.assign(fd.get(), assign_ec);
-  if (assign_ec) {
-    co_return std::unexpected(system_io_error("failed to attach file watcher", root, assign_ec));
-  }
-  static_cast<void>(fd.release());
-
-  while (options.max_events == 0 || registry.stats.events_seen < options.max_events) {
-    if (is_cancelled(cancellation)) {
-      co_return std::unexpected(core::Error::cancelled());
-    }
-
-    asio::error_code wait_ec;
-    co_await descriptor.async_wait(asio::posix::descriptor_base::wait_read,
-                                   asio::redirect_error(asio::use_awaitable, wait_ec));
-    if (wait_ec) {
-      if (wait_ec == asio::error::operation_aborted || is_cancelled(cancellation)) {
-        co_return std::unexpected(core::Error::cancelled());
-      }
-      co_return std::unexpected(system_io_error("file watcher wait failed", root, wait_ec));
-    }
-
-    auto drained = drain_inotify_events(descriptor.native_handle(), options, registry);
-    if (!drained) {
-      co_return std::unexpected(std::move(drained).error());
-    }
-    if (drained->complete) {
-      break;
-    }
-  }
-
-  co_return registry.stats;
-#else
-  static_cast<void>(executor);
-  static_cast<void>(options);
-  co_return std::unexpected(
-      core::Error::io("file watcher unsupported on this platform").with("path", root).with("backend", "inotify"));
-#endif
-}
-
-ReadTextFileCacheStats read_text_file_ranged_cache_stats() {
-  auto stats = ReadTextFileCacheStats{};
-  {
-    const std::scoped_lock lock{line_offset_index_mutex()};
-    stats.line_offset_index = read_text_cache_stats_from(line_offset_index_cache().stats());
-  }
-  {
-    const std::scoped_lock lock{file_view_cache_mutex()};
-    stats.file_view = read_text_cache_stats_from(file_view_cache().stats());
-  }
-  return stats;
-}
-
-ReadTextSingleflightStats read_text_file_ranged_singleflight_stats() {
-  const std::scoped_lock lock{read_text_singleflight_mutex()};
-  auto stats = read_text_singleflight_stats_mutable();
-  const auto& table = read_text_singleflight_table();
-  stats.current_in_flight = table.size();
-  stats.current_waiters =
-      std::transform_reduce(table.begin(), table.end(), std::size_t{0}, std::plus<>{}, [](const auto& item) {
-        return item.second->waiters.size();
-      });
-  return stats;
-}
-
-async::Awaitable<core::Result<std::vector<DirectoryEntry>>>
-list_directory(asio::any_io_executor executor, std::string path, ListDirectoryOptions options) {
-  co_return co_await run_blocking(std::move(executor), [path = std::move(path), options](std::stop_token) {
-    return list_directory_blocking(path, options);
+async::Awaitable<core::Result<ReadTextResult>>
+read_text_file_ranged(asio::any_io_executor executor, ReadOnlyFile file, ReadTextOptions options) {
+  co_return co_await run_blocking(std::move(executor), [file = std::move(file), options](std::stop_token) {
+    return read_file(file, options);
   });
+}
+
+async::Awaitable<core::Result<void>>
+write_text_file(asio::any_io_executor executor, FileMutation mutation, std::string contents, WriteTextOptions options) {
+  co_return co_await run_blocking(
+      std::move(executor),
+      [mutation = std::move(mutation), contents = std::move(contents), options = std::move(options)](
+          std::stop_token) mutable {
+        try {
+          return mutation.write_text(contents, std::move(options));
+        } catch (const std::exception& error) {
+          return core::Result<void>{
+              std::unexpected(core::Error::io("anchored write failed").with("detail", error.what()))};
+        } catch (...) {
+          return core::Result<void>{std::unexpected(core::Error::io("anchored write failed"))};
+        }
+      });
 }
 
 }  // namespace orangutan::io
