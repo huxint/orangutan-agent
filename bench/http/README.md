@@ -1,8 +1,17 @@
 # `bench-http`
 
-HTTP benchmarks pin the body-client boundary cost before provider/bootstrap
-wire it into real adapter construction.
+HTTP benchmarks measure client construction and request validation through the
+blocking-executor bridge. With the [build prerequisites](../../docs/BUILD_SYSTEM.md)
+installed, run from the repository root:
+
+```sh
+xmake build -j4 bench-http
+xmake run bench-http
+```
 
 | Scenario | What it compares |
 | --- | --- |
-| [`scenarios/client.cpp`](scenarios/client.cpp) | `http.validate_body_request` measures local request validation, while `http.construct_client` is the construction baseline for the pimpl/curl-global boundary. |
+| [`scenarios/client.cpp`](scenarios/client.cpp) | `http.validate_body_request` rejects a TRACE request through the async boundary; `http.construct_client` measures construction of the client and its executor binding. |
+
+The scenario performs no network transfer. Controlled HTTP/SSE tests cover wire
+behavior, limits and cancellation.

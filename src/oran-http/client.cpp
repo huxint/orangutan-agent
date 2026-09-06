@@ -1,5 +1,3 @@
-// src/oran-http/client.cpp - libcurl-backed body HTTP client.
-
 #include <oran/http/client.hpp>
 
 #include <algorithm>
@@ -29,7 +27,6 @@
 
 #include <oran/core/error.hpp>
 
-#include "_impl/curl_common.hpp"
 #include "_impl/sse_parser.hpp"
 
 namespace orangutan::http {
@@ -37,13 +34,119 @@ namespace {
 
 using orangutan::core::Error;
 
-using detail::curl_error;
-using detail::curl_global;
-using detail::curl_multi_error;
-using detail::CurlEasy;
-using detail::CurlEasyRegistration;
-using detail::CurlHeaders;
-using detail::CurlMulti;
+[[nodiscard]] core::Error curl_error(CURLcode code, std::string_view action) {
+  const auto message = std::string{curl_easy_strerror(code)};
+  switch (code) {
+    case CURLE_OPERATION_TIMEDOUT:
+      return core::Error{core::ErrorKind::timeout, "http request timed out"}.with("curl_error", message);
+    case CURLE_COULDNT_RESOLVE_HOST:
+    case CURLE_COULDNT_CONNECT:
+    case CURLE_RECV_ERROR:
+    case CURLE_SEND_ERROR:
+    case CURLE_GOT_NOTHING:
+      return core::Error::network("http transport failed")
+          .with("curl_error", message)
+          .with("action", std::string{action});
+    case CURLE_SSL_CONNECT_ERROR:
+    case CURLE_PEER_FAILED_VERIFICATION:
+      return core::Error::network("http TLS verification failed")
+          .with("curl_error", message)
+          .with("action", std::string{action});
+    default:
+      return core::Error::upstream("http client failed")
+          .with("curl_error", message)
+          .with("action", std::string{action});
+  }
+}
+
+[[nodiscard]] core::Error curl_multi_error(CURLMcode code, std::string_view action) {
+  return core::Error::network("http multi transport failed")
+      .with("curl_multi_error", curl_multi_strerror(code))
+      .with("action", std::string{action});
+}
+
+class CurlGlobal {
+public:
+  CurlGlobal() : ok_{curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK} {}
+
+  ~CurlGlobal() {
+    if (ok_) {
+      curl_global_cleanup();
+    }
+  }
+
+  CurlGlobal(const CurlGlobal&) = delete;
+  CurlGlobal& operator=(const CurlGlobal&) = delete;
+
+  [[nodiscard]] bool ok() const noexcept {
+    return ok_;
+  }
+
+private:
+  bool ok_{false};
+};
+
+[[nodiscard]] CurlGlobal& curl_global() {
+  static CurlGlobal global;
+  return global;
+}
+
+using CurlEasy = std::unique_ptr<CURL, decltype(&curl_easy_cleanup)>;
+using CurlMulti = std::unique_ptr<CURLM, decltype(&curl_multi_cleanup)>;
+
+class CurlHeaders {
+public:
+  CurlHeaders() = default;
+
+  ~CurlHeaders() {
+    if (headers_ != nullptr) {
+      curl_slist_free_all(headers_);
+    }
+  }
+
+  CurlHeaders(const CurlHeaders&) = delete;
+  CurlHeaders& operator=(const CurlHeaders&) = delete;
+
+  [[nodiscard]] core::Result<void> append(std::string_view name, std::string_view value) {
+    if (name.empty()) {
+      return std::unexpected(core::Error::invalid_argument("http header name must be non-empty"));
+    }
+    const auto line = std::string{name} + ": " + std::string{value};
+    auto* next = curl_slist_append(headers_, line.c_str());
+    if (next == nullptr) {
+      return std::unexpected(core::Error::internal("failed to allocate curl header list"));
+    }
+    headers_ = next;
+    return {};
+  }
+
+  [[nodiscard]] curl_slist* get() const noexcept {
+    return headers_;
+  }
+
+private:
+  curl_slist* headers_{nullptr};
+};
+
+/// Unregisters the easy handle from the multi handle on scope exit.
+class CurlEasyRegistration {
+public:
+  CurlEasyRegistration(CURLM* multi, CURL* easy) : multi_{multi}, easy_{easy} {}
+
+  ~CurlEasyRegistration() {
+    if (multi_ != nullptr && easy_ != nullptr) {
+      curl_multi_remove_handle(multi_, easy_);
+    }
+  }
+
+  CurlEasyRegistration(const CurlEasyRegistration&) = delete;
+  CurlEasyRegistration& operator=(const CurlEasyRegistration&) = delete;
+
+private:
+  CURLM* multi_{nullptr};
+  CURL* easy_{nullptr};
+};
+
 constexpr long kPollTimeoutMs = 50;
 
 class CancellationFlag {
@@ -351,11 +454,11 @@ struct Client::Impl {
       return std::unexpected(Error::cancelled());
     }
 
-    auto easy = CurlEasy{};
+    auto easy = CurlEasy{curl_easy_init(), curl_easy_cleanup};
     if (easy.get() == nullptr) {
       return std::unexpected(Error::internal("failed to allocate curl easy handle"));
     }
-    auto multi = CurlMulti{};
+    auto multi = CurlMulti{curl_multi_init(), curl_multi_cleanup};
     if (multi.get() == nullptr) {
       return std::unexpected(Error::internal("failed to allocate curl multi handle"));
     }
@@ -398,11 +501,11 @@ struct Client::Impl {
       return std::unexpected(Error::cancelled());
     }
 
-    auto easy = CurlEasy{};
+    auto easy = CurlEasy{curl_easy_init(), curl_easy_cleanup};
     if (easy.get() == nullptr) {
       return std::unexpected(Error::internal("failed to allocate curl easy handle"));
     }
-    auto multi = CurlMulti{};
+    auto multi = CurlMulti{curl_multi_init(), curl_multi_cleanup};
     if (multi.get() == nullptr) {
       return std::unexpected(Error::internal("failed to allocate curl multi handle"));
     }
@@ -543,8 +646,9 @@ async::Awaitable<core::Result<BodyResponse>> Client::send(BodyRequest request) c
   }
 
   auto impl = impl_;
+  auto blocking_executor = impl->blocking_executor;
   co_return co_await async_send_on(std::move(completion_executor),
-                                   impl->blocking_executor,
+                                   std::move(blocking_executor),
                                    std::move(impl),
                                    std::move(request),
                                    initially_cancelled,

@@ -1,9 +1,3 @@
-// include/oran/http/client.hpp - body HTTP client boundary.
-//
-// Public request/response values stay stdlib-only. The constructor accepts an
-// executor for blocking transport work; libcurl handles and callbacks live in
-// src/oran-http/client.cpp.
-
 #pragma once
 
 #include <chrono>
@@ -33,10 +27,8 @@ struct BodyRequest {
   std::vector<Header> headers;
   std::string body;
   std::chrono::milliseconds timeout{30000};
-  /// Maximum response-body bytes the client will accumulate (streaming,
-  /// non-streaming, and error bodies). Exceeding the budget aborts the
-  /// transfer and resolves with an IO error naming `max_bytes`, so a broken
-  /// or hostile server cannot hold unbounded memory.
+  /// Response-body byte cap, including SSE and error bodies. Exceeding it
+  /// aborts the transfer with a network error carrying `max_bytes`.
   std::uint64_t max_bytes{16 * 1024 * 1024};
 
   friend bool operator==(const BodyRequest&, const BodyRequest&) = default;
@@ -67,7 +59,7 @@ using SseEventCallback = std::function<void(const SseEvent&)>;
 
 class Client {
 public:
-  /// The caller-owned executor is where libcurl's blocking body-response work
+  /// The caller-owned executor is where libcurl's blocking transport work
   /// runs. In production this should be `async::Runtime::cpu_executor()`.
   explicit Client(asio::any_io_executor blocking_executor);
   ~Client();
@@ -78,16 +70,14 @@ public:
   Client& operator=(Client&&) noexcept;
 
   /// Send one non-streaming request and collect the complete response body.
-  ///
-  /// This first slice is intentionally body-response only. Streaming/SSE will
-  /// use the same libcurl boundary but a different response contract.
   [[nodiscard]] async::Awaitable<core::Result<BodyResponse>> send(BodyRequest request) const;
 
   /// Send one request and stream the response. On a 2xx `text/event-stream`
   /// response, each decoded `SseEvent` is delivered to `on_event` and the
   /// resolved `BodyResponse` carries the status and headers with an empty body.
   /// On any other response, no events fire and the full body is returned for
-  /// the caller to decode (e.g. an error payload).
+  /// the caller to decode (e.g. an error payload). Event callbacks finish before
+  /// this operation returns.
   [[nodiscard]] async::Awaitable<core::Result<BodyResponse>> send_streaming(BodyRequest request,
                                                                             SseEventCallback on_event) const;
 

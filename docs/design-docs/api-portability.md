@@ -25,6 +25,13 @@ incomplete or inconsistent terminal events. Cancellation propagates through the
 blocking transport bridge to curl. Stream callbacks are observations of the
 current turn; a partial stream is not a completed persisted answer.
 
+`http::Client` owns HTTP/SSE request execution. Each request holds unique curl
+easy/multi handles and a header list on the blocking executor. The registration
+guard detaches the easy handle before either handle is released. Bounded multi
+polling observes cancellation. The pending operation retains its implementation,
+request values, cancellation flag and executor work until completion; SSE events
+run serially on the caller's executor and finish before the send returns.
+
 Fallback applies the selected profile's thinking and cache policy. A provider
 error must retain its category and attempt attribution. Credential lookup errors
 contain non-secret context only.

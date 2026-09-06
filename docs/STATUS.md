@@ -35,11 +35,15 @@ mutation boundary. Each read owns its resources and observes current file bytes;
 the [IO contract](design-docs/io-runtime.md) owns ranges, fingerprints and
 cancellation. State storage continues to use private directories.
 
+Provider transport uses HTTP/SSE requests with per-request curl handles. The
+[provider contract](design-docs/api-portability.md) owns cancellation polling,
+handle cleanup and delivery of stream callbacks before completion.
+
 ## Verification
 
 The release build, all 14 test targets and `make ci` pass. Controlled HTTP
 integration covers the provider/tool loop and persisted continuation. Storage,
-memory, hook and bootstrap tests pass with explicit ASan/UBSan compiler and linker
+memory, hook, HTTP and bootstrap tests pass with explicit ASan/UBSan compiler and linker
 instrumentation in an isolated debug copy.
 
 Isolated faults fail at their intended assertions for atomic rollback,
@@ -50,7 +54,7 @@ IO regressions detect stale content, reopened authority handles and dropped
 queued cancellation. Restoring the implementations returns the tested cases to
 green. Memory regressions detect missing query validation, scope filtering, read
 timestamps, prompt framing, score fields and preserved database content.
-IO, tool, memory, prompt, agent, config and permission benchmarks build and run;
+IO, HTTP, tool, memory, prompt, agent, config and permission benchmarks build and run;
 these are local runs, not reference-hardware performance certification.
 
 ## Handoff
