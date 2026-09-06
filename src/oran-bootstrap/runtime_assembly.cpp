@@ -1,5 +1,3 @@
-// src/oran-bootstrap/runtime_assembly.cpp — per-process runtime service assembly.
-
 #include <oran/bootstrap/runtime_assembly.hpp>
 
 #include <cstddef>
@@ -353,9 +351,6 @@ struct RuntimeAssembly::Impl {
   std::string longterm_memory_path;
   std::string longterm_vector_memory_path;
   std::optional<std::size_t> longterm_memory_startup_decay_shadowed_count{};
-  std::optional<automation::MemoryRetentionJob> longterm_memory_retention_job{};
-  std::vector<automation::UpsertCronJobRequest> cron_jobs{};
-  std::vector<automation::UpsertTriggeredJobRequest> triggered_jobs{};
   // The members below are non-default-constructible in their final
   // shape and capture pointers into each other (`AuditRepository`
   // refers to `audit_pool`, `audit_sink` refers to `audit_repository`).
@@ -464,18 +459,6 @@ std::optional<std::size_t> RuntimeAssembly::longterm_memory_startup_decay_shadow
   return impl_->longterm_memory_startup_decay_shadowed_count;
 }
 
-const std::optional<automation::MemoryRetentionJob>& RuntimeAssembly::longterm_memory_retention_job() const noexcept {
-  return impl_->longterm_memory_retention_job;
-}
-
-const std::vector<automation::UpsertCronJobRequest>& RuntimeAssembly::cron_jobs() const noexcept {
-  return impl_->cron_jobs;
-}
-
-const std::vector<automation::UpsertTriggeredJobRequest>& RuntimeAssembly::triggered_jobs() const noexcept {
-  return impl_->triggered_jobs;
-}
-
 bool RuntimeAssembly::longterm_vector_memory_enabled() const noexcept {
   return impl_->longterm_hybrid_runtime != nullptr;
 }
@@ -497,8 +480,6 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
 
   auto impl = std::make_unique<Impl>();
   impl->audit_enabled = options.audit_enabled;
-  impl->cron_jobs = std::move(options.cron_jobs);
-  impl->triggered_jobs = std::move(options.triggered_jobs);
 
   // Build the workspace resolver before audit/broker. `tool::Workspace::create`
   // validates the workspace root (must exist + be a directory) and
@@ -556,14 +537,12 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
     impl->session_store = std::make_unique<memory::session::Store>(*impl->session_repository);
   }
 
-  if (!options.longterm_memory_enabled &&
-      (options.longterm_memory_startup_decay.has_value() || options.longterm_memory_retention_job.has_value())) {
+  if (!options.longterm_memory_enabled && options.longterm_memory_startup_decay.has_value()) {
     return std::unexpected(Error::invalid_argument("long-term retention requires long-term memory")
                                .with("reason", "longterm_memory_disabled"));
   }
 
   if (options.longterm_memory_enabled) {
-    impl->longterm_memory_retention_job = std::move(options.longterm_memory_retention_job);
     impl->longterm_memory_path =
         resolve_database_path(workspace, options.longterm_memory_db_path, kMemoryDatabaseRelative);
     if (auto parent_ok = ensure_parent_directory(std::filesystem::path{impl->longterm_memory_path}, "memory");

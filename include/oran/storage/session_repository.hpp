@@ -1,5 +1,3 @@
-// include/oran/storage/session_repository.hpp — sessions domain repository.
-
 #pragma once
 
 #include <cstddef>
@@ -85,6 +83,10 @@ public:
   append_message(AppendSessionMessageRequest request);
 
   [[nodiscard]] async::Awaitable<core::Result<std::vector<SessionMessageRecord>>> load_messages(SessionKey key);
+  /// Latest rows in conversation order, bounded by encoded bytes and count.
+  /// Stops before a row that would exceed the byte budget; stored history is unchanged.
+  [[nodiscard]] async::Awaitable<core::Result<std::vector<SessionMessageRecord>>>
+  load_tail(SessionKey key, std::size_t max_messages = 128, std::size_t max_bytes = 512 * 1024);
 
   [[nodiscard]] async::Awaitable<core::Result<SessionSkillActivationRecord>>
   upsert_skill_activation(UpsertSessionSkillActivationRequest request);

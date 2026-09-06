@@ -1,24 +1,3 @@
-// tests/permission/test_approval.cpp — `ApprovalAuthority` sign + verify.
-//
-// Covers the second half of `docs/product-specs/0008-permissions.md`
-// criterion 5: tokens issued by one process must not verify under a
-// freshly-keyed authority. The tests pin five categories of failure
-// modes (`reason` context entries are also asserted so a future audit
-// slice can rely on them):
-//
-//   * cross-secret  — token signed by `A` rejected by `B`'s authority
-//                     (`reason=mac_mismatch`), the criterion-5 property.
-//   * cross-tool / cross-input / cross-identity replay attempts produce
-//     `tool_mismatch` / `input_mismatch` / `identity_mismatch`.
-//   * tamper — flipping any byte of the MAC array yields `mac_mismatch`.
-//   * expiry — `now == expires_at` already counts as expired.
-//   * round-trip — issue + verify with matching args succeeds.
-//
-// `core::Time` arithmetic uses `std::chrono::system_clock::time_point`
-// underneath, so the test creates a fixed base instant and shifts by
-// known durations rather than reading the wall clock — keeps the suite
-// deterministic.
-
 #include <chrono>
 #include <string>
 #include <string_view>

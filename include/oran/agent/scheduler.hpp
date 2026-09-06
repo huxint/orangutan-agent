@@ -1,48 +1,3 @@
-// include/oran/agent/scheduler.hpp — bounded-parallel tool dispatch.
-//
-// Slice 116 opens the `agent::ToolScheduler` surface defined in
-// `docs/product-specs/0012-tool-scheduler-and-state.md`. Spec 0012's call
-// graph is: the agent loop hands the provider's parallel `tool_use` blocks
-// to the scheduler; the scheduler dispatches them through
-// `tool::Registry::dispatch` under bounded parallelism, races each call
-// against a per-call timeout, propagates parent cancellation to every
-// in-flight call, and returns results in the original `tool_use` order.
-//
-// What this slice ships:
-//
-//   - Channel-as-semaphore bounded parallelism (AC1).
-//   - Per-call timeout via `asio::experimental::awaitable_operators::operator||`
-//     against `async::sleep_for` (AC6).
-//   - Parent-cancellation propagation: cancelling the awaiting coroutine
-//     emits on a per-batch cancellation signal that the scheduler binds onto
-//     each spawned dispatch, so children stop within a sleep tick (partial
-//     AC5; the full 100 ms guarantee plus `cancellation_lag` audit naming
-//     lands in slice 119).
-//   - Ordered results (AC2): completions fill an indexed slot; the outer
-//     coroutine waits for every slot, then returns them in input order.
-//   - Per-canonical-path read/write lock table (slice 117 / AC3, AC4, AC10).
-//     Tools declaring `Capability::read_file` or `list_directory` take a
-//     shared lock; tools declaring `write_file`, `edit_file`, or
-//     `delete_path` take an exclusive lock. The lock key is the
-//     workspace-resolved absolute path obtained via the prototype context's
-//     `tool::Workspace`. Idle entries reap on `reap_idle_locks(now)`.
-//
-// What this slice does NOT ship:
-//
-//   - Approval gating + same-row audit usage enrichment under parallelism
-//     (slice 118 / most of AC7).
-//   - `cancellation_lag` audit kind for tools that ignore the cancellation
-//     slot (slice 119 / full AC5).
-//   - Loop wiring in `agent::Loop` and `bench/agent/scheduler_overhead` (slice
-//     120 / AC7 fully, AC12).
-//
-// The header forward-declares `tool::Registry` and `tool::DispatchContext`
-// and depends only on stdlib + the existing `<oran/tool/output.hpp>` /
-// `<oran/core/result.hpp>` / `<oran/async/awaitable_fwd.hpp>` surfaces so
-// `loop.hpp` can include it without dragging the heavy
-// `asio/experimental/...` headers into every `oran-agent` TU. The asio
-// experimental operator lives in `scheduler.cpp` instead.
-
 #pragma once
 
 #include <chrono>
@@ -66,7 +21,7 @@ struct DispatchContext;
 
 namespace orangutan::agent {
 
-/// Runtime knobs documented in `docs/product-specs/0012-tool-scheduler-and-state.md`.
+/// Runtime knobs documented in `docs/design-docs/tool-runtime.md`.
 /// Defaults match the spec: 4 concurrent tools, 60 s per-call timeout, 5 min
 /// idle lock TTL. `idle_lock_ttl` is parsed and stored now so slice 117 can
 /// consume the same value without a config rev.
@@ -160,6 +115,11 @@ public:
   [[nodiscard]] async::Awaitable<core::Result<std::vector<ToolBatchResult>>>
   run_batch(std::vector<ToolBatchCall> batch, tool::DispatchContext& prototype);
 
+  /// Join dispatches that outlived a cancelled batch before releasing their
+  /// borrowed contexts and services. A context selects only its own calls;
+  /// null joins every call. Ignores cancellation while draining.
+  [[nodiscard]] async::Awaitable<core::Result<void>> wait_idle(const tool::DispatchContext* context = nullptr);
+
   [[nodiscard]] const ToolSchedulerOptions& options() const noexcept;
 
   /// Snapshot of the per-canonical-path lock table. Cheap to call; copies a
@@ -170,7 +130,7 @@ public:
   /// `ToolSchedulerOptions::idle_lock_ttl`. Returns the number of entries
   /// removed. Slice 117 ships this as an explicit caller-driven primitive; a
   /// future slice will own a periodic background tick that calls it
-  /// (`docs/product-specs/0012-tool-scheduler-and-state.md` AC10).
+  /// (`docs/design-docs/tool-runtime.md` AC10).
   std::size_t reap_idle_locks(core::Time now);
 
 private:

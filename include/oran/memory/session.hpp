@@ -1,5 +1,3 @@
-// include/oran/memory/session.hpp — typed session conversation memory.
-
 #pragma once
 
 #include <cstddef>
@@ -71,6 +69,11 @@ public:
 
   [[nodiscard]] async::Awaitable<core::Result<std::vector<core::Message>>> load(SessionId session_id,
                                                                                 AgentKey agent_key);
+  [[nodiscard]] async::Awaitable<core::Result<std::vector<core::Message>>> load_tail(SessionId session_id,
+                                                                                     AgentKey agent_key,
+                                                                                     std::size_t max_messages = 128,
+                                                                                     std::size_t max_bytes = 512 *
+                                                                                                             1024);
 
   [[nodiscard]] async::Awaitable<core::Result<void>>
   record_skill_activation(SessionId session_id, AgentKey agent_key, SkillActivationUpdate update);

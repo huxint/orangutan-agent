@@ -1,39 +1,47 @@
-// src/main.cpp — `orangutan` binary entry point.
-//
-// The binary delegates runtime setup to oran-bootstrap and only translates the
-// expected error boundary into a process exit code.
-
 #include <print>
-#include <span>
 #include <string_view>
-#include <vector>
 
-#include <oran/bootstrap.hpp>
-#include <oran/core/error.hpp>
+#include <oran/bootstrap/application.hpp>
 
-namespace {
-
-std::vector<std::string_view> args_from(int argc, char** argv) {
-  auto args = std::vector<std::string_view>{};
-  if (argc <= 1) {
-    return args;
-  }
-  args.reserve(static_cast<std::size_t>(argc - 1));
+int main(int argc, char* argv[]) {
+  orangutan::bootstrap::ApplicationOptions options;
   for (int i = 1; i < argc; ++i) {
-    args.emplace_back(argv[i]);
+    const std::string_view flag{argv[i]};
+    if (flag == "--")
+      continue;
+    if (flag == "--help" || flag == "-h") {
+      std::println(
+          "Usage: orangutan --config FILE --prompt TEXT [--workspace DIR] [--state DIR] [--session ID] [--agent NAME]");
+      return 0;
+    }
+    std::string* value = nullptr;
+    if (flag == "--config")
+      value = &options.config_path;
+    else if (flag == "--prompt")
+      value = &options.prompt;
+    else if (flag == "--workspace")
+      value = &options.workspace;
+    else if (flag == "--state")
+      value = &options.state_directory;
+    else if (flag == "--session")
+      value = &options.session_id;
+    else if (flag == "--agent")
+      value = &options.agent_key;
+    if (!value || ++i == argc) {
+      std::println(stderr, "orangutan: invalid argument {}; see --help", flag);
+      return 2;
+    }
+    *value = argv[i];
   }
-  return args;
-}
-
-}  // namespace
-
-int main(int argc, char** argv) {
-  const auto args = args_from(argc, argv);
-  auto r = orangutan::bootstrap::run(
-      orangutan::bootstrap::BootstrapOptions{.args = std::span<const std::string_view>{args}});
-  if (!r) {
-    std::println(stderr, "orangutan: {}", r.error());
+  if (options.config_path.empty() || options.prompt.empty()) {
+    std::println(stderr, "orangutan: --config and --prompt are required; see --help");
+    return 2;
+  }
+  auto result = orangutan::bootstrap::run_application(std::move(options));
+  if (!result) {
+    std::println(stderr, "orangutan: {}", result.error().message());
     return 1;
   }
-  return *r;
+  std::println("{}", result->text);
+  return 0;
 }

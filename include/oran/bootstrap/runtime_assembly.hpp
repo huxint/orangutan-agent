@@ -1,29 +1,3 @@
-// include/oran/bootstrap/runtime_assembly.hpp — per-process runtime services
-// assembled at boot.
-//
-// `RuntimeAssembly` is the long-lived bundle the agent loop inherits from
-// `oran-bootstrap`: a fresh `permission::ApprovalBroker` (per-process key
-// per `0008-permissions.md` criterion 5) plus the active
-// `permission::AuditSink` (storage-backed by default, `NullAuditSink`
-// when audit is disabled), the workspace resolver, hook bus, build-only startup
-// hook bindings for startup lifecycle producers, optional trace repository,
-// optional session-memory store, and optional long-term memory runtime.
-//
-// The assembly intentionally does *not* own the `async::Runtime`. The
-// caller (bootstrap today, the agent loop tomorrow) builds the
-// `async::Runtime` first, passes its executor here so the audit `Pool`
-// dispatches onto the same executor as the rest of the agent loop, then
-// drives `runtime.run()` whenever it is ready. Keeping the `Runtime` out
-// of the assembly means a test or a one-shot operator command can
-// substitute an `asio::io_context` executor without paying for a full
-// thread-pool boot.
-//
-// The audit migration that runs as part of `build()` uses a *temporary*
-// `asio::io_context` driven inline. The long-lived `Pool` is then opened
-// against the caller-supplied executor with the schema already in place
-// on disk. This mirrors `--audit-init` and keeps `build()` synchronous,
-// so callers do not have to be coroutines themselves.
-
 #pragma once
 
 #include <chrono>
@@ -37,7 +11,6 @@
 
 #include <asio/any_io_executor.hpp>
 
-#include <oran/automation.hpp>
 #include <oran/core/result.hpp>
 #include <oran/core/time.hpp>
 #include <oran/permission/approval_broker.hpp>
@@ -169,19 +142,6 @@ struct RuntimeAssemblyOptions {
   /// state. The pass runs after migration and before the long-lived pool is
   /// exposed; periodic automation remains a separate owner.
   std::optional<LongtermMemoryStartupDecayOptions> longterm_memory_startup_decay{};
-  /// Optional automation-owned periodic retention descriptor. RuntimeAssembly
-  /// stores it as startup diagnostics and as the future scheduler seed; build()
-  /// does not evaluate it, persist it, run a background loop, or publish
-  /// periodic `memory_decay`.
-  std::optional<automation::MemoryRetentionJob> longterm_memory_retention_job{};
-  /// Optional automation-owned cron schedule descriptors parsed from config.
-  /// RuntimeAssembly stores them as future repository seeds only; build() does
-  /// not open `automation.db`, upsert rows, start cron timers, or execute jobs.
-  std::vector<automation::UpsertCronJobRequest> cron_jobs{};
-  /// Optional automation-owned triggered descriptors parsed from config.
-  /// RuntimeAssembly stores them as future repository seeds only; build() does
-  /// not open `automation.db`, upsert rows, enqueue work, or execute jobs.
-  std::vector<automation::UpsertTriggeredJobRequest> triggered_jobs{};
   /// When `true`, the assembly also opens the optional sqlite-vec vector index
   /// over a separate DB and constructs a `memory::longterm::HybridRuntime`.
   /// Requires an xmake build configured with `--vector_memory=y`.
@@ -320,21 +280,6 @@ public:
   /// pass. `std::nullopt` means no startup pass was configured or run; `0`
   /// means the pass ran and found no matching records.
   [[nodiscard]] std::optional<std::size_t> longterm_memory_startup_decay_shadowed_count() const noexcept;
-
-  /// Automation-owned periodic retention descriptor supplied at build time.
-  /// Present only when bootstrap mapped configured long-term retention into a
-  /// future scheduler seed; the assembly does not run it.
-  [[nodiscard]] const std::optional<automation::MemoryRetentionJob>& longterm_memory_retention_job() const noexcept;
-
-  /// Automation-owned cron repository seeds supplied at build time.
-  /// These are stored only for diagnostics/future runtime owners; the assembly
-  /// does not persist or execute them.
-  [[nodiscard]] const std::vector<automation::UpsertCronJobRequest>& cron_jobs() const noexcept;
-
-  /// Automation-owned triggered repository seeds supplied at build time.
-  /// These are stored only for diagnostics/future runtime owners; the assembly
-  /// does not persist, enqueue, or execute them.
-  [[nodiscard]] const std::vector<automation::UpsertTriggeredJobRequest>& triggered_jobs() const noexcept;
 
   /// `true` iff the vector-memory DB pool/backend/hybrid runtime were
   /// constructed at build time.

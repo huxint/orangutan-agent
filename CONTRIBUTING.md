@@ -1,69 +1,12 @@
 # Contributing
 
-This repository is designed for **agent-first** development; the same rules apply to
-humans and bots. The shorter version lives in `AGENTS.md`; this file is the long
-form.
+Read [CLAUDE.md](CLAUDE.md) and the current [status](docs/STATUS.md). Work in a
+focused branch and keep each change a complete, reviewable slice. Large work
+uses an [execution plan](docs/PLANS_GUIDE.md).
 
-## Working Agreement
+Run affected C++ build/tests and `make ci` before committing. Keep current
+contracts, examples and the dependency inventory accurate. Delete replaced
+callers and stale documents; preserve user data and useful regression coverage.
 
-- Start from `AGENTS.md`, then read the linked docs that match the task.
-- Keep repository knowledge in versioned files, not only in chat or ticket comments.
-- Keep current public contracts accurate. If a change invalidates an architecture,
-  interface, configuration, build, or operator document, update that owner in the
-  same PR. Do not create narrative change ledgers; Git is the archive.
-- For large or risky work, create an execution plan under `docs/exec-plans/active/`
-  before writing code.
-- Follow `docs/rules/*.md`; if a rule blocks legitimate work, edit the rule in the
-  same PR.
-
-## Before Opening A Pull Request
-
-- Run `make ci`.
-- `xmake build` passes for the affected targets.
-- `xmake test` passes for the affected buckets.
-- `scripts/check-compile-budget.sh` green for the affected libraries (once the
-  build skeleton lands).
-- **Every doc that the change invalidates is updated** — see
-  [`docs/rules/docs-in-sync.md`](docs/rules/docs-in-sync.md) for the
-  change-type → docs-to-update map.
-- Verify examples and scripts still match the current behavior.
-- Re-read the rule files that apply to the area you touched.
-
-## Review Expectations
-
-- Prefer small, scoped pull requests (≤ ~600 lines / ~6 files).
-- Call out risks, migrations, and deferred follow-ups explicitly.
-- Link to the relevant plan, design doc, spec, or code when context is
-  important.
-- Reviewers cite repository paths, not chat context.
-- Style nits are deferred to formatters; review for correctness, architecture,
-  and rule compliance.
-
-## Setup
-
-```sh
-# Toolchain
-sudo apt install gcc-16 g++-16   # or your distro's equivalent
-curl -fsSL https://xmake.io/shget.text | bash
-
-# Pre-commit hook
-git config core.hooksPath .githooks
-
-# First configure
-xmake f -m release
-
-# Sanity check
-make ci
-```
-
-## Communication
-
-- GitHub Issues: bug reports, feature requests, security notices.
-- Pull Requests: code, doc, and scaffold changes.
-- Discussions: design questions before opening an exec plan (optional).
-
-## See Also
-
-- [`AGENTS.md`](AGENTS.md)
-- [`docs/REPO_COLLAB_GUIDE.md`](docs/REPO_COLLAB_GUIDE.md)
-- [`docs/rules/workflow.md`](docs/rules/workflow.md)
+[Collaboration](docs/REPO_COLLAB_GUIDE.md), [workflow](docs/rules/workflow.md) and
+[testing](docs/rules/testing-and-bench.md) own the detailed conventions.

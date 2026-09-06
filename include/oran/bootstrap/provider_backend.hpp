@@ -1,10 +1,3 @@
-// include/oran/bootstrap/provider_backend.hpp - bootstrap provider backend construction.
-//
-// This is the production construction seam between config-resolved provider
-// metadata and the adapter-neutral AgentPromptRunner. The implementation owns
-// the HTTP client and the ProtocolTransport adapter so provider::System never
-// borrows a temporary transport.
-
 #pragma once
 
 #include <chrono>
@@ -13,6 +6,7 @@
 
 #include <asio/any_io_executor.hpp>
 
+#include <oran/config/secrets.hpp>
 #include <oran/core/result.hpp>
 #include <oran/provider/system.hpp>
 
@@ -30,6 +24,7 @@ struct HttpProviderBackendOptions {
   /// the budget aborts the transfer with an IO error.
   std::uint64_t max_stream_bytes{16 * 1024 * 1024};
   std::string route_name{"default"};
+  config::SecretLookup secrets{};
 };
 
 class HttpProviderBackend {

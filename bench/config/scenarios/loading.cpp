@@ -1,7 +1,3 @@
-// bench/config/scenarios/loading.cpp
-//
-// A-vs-B comparison: in-memory JSON parse vs. checked-in file load.
-
 #include <nanobench.h>
 
 #include <array>
@@ -17,15 +13,17 @@ namespace config = orangutan::config;
 
 namespace {
 
-constexpr auto kConfigText = std::string_view{R"json(
-{
+constexpr auto kConfigText = std::string_view{R"json({
   "runtime": {
     "workers": 4,
     "request_timeout_ms": 600000,
     "prompt": {
-      "active_tools": ["FileRead", "FileSearch", "ToolSearch"]
-    },
-    "redaction_patterns": ["token=[^ ]+", "Bearer [A-Za-z0-9_.-]+"]
+      "active_tools": [
+        "FileRead",
+        "FileSearch",
+        "ToolSearch"
+      ]
+    }
   },
   "profiles": {
     "default": {
@@ -41,17 +39,12 @@ constexpr auto kConfigText = std::string_view{R"json(
       "fallbacks": []
     }
   },
-  "session": {
-    "auto_save": true,
-    "persistence": true
-  },
   "web": {
     "enabled": false,
     "bind": "127.0.0.1",
     "port": 8787
   }
-}
-)json"};
+})json"};
 
 std::string example_config_path() {
   constexpr auto candidates = std::array<std::string_view, 5>{
@@ -75,8 +68,7 @@ std::string example_config_path() {
   if (!parsed) {
     std::abort();
   }
-  return parsed->profiles().size() + parsed->routes().size() + parsed->runtime().redaction_patterns.size() +
-         parsed->runtime().prompt.active_tools.tool_names.size();
+  return parsed->profiles().size() + parsed->routes().size() + parsed->runtime().prompt.active_tools.tool_names.size();
 }
 
 [[gnu::noinline]] std::size_t load_example_file() {
@@ -85,8 +77,7 @@ std::string example_config_path() {
   if (!parsed) {
     std::abort();
   }
-  return parsed->profiles().size() + parsed->routes().size() + parsed->runtime().redaction_patterns.size() +
-         parsed->runtime().prompt.active_tools.tool_names.size();
+  return parsed->profiles().size() + parsed->routes().size() + parsed->runtime().prompt.active_tools.tool_names.size();
 }
 
 }  // namespace

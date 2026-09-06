@@ -1,15 +1,9 @@
-// include/oran/provider/credentials.hpp - provider API-key env resolution.
-//
-// This is the explicit secret-read step after offline adapter planning. It
-// resolves the `api_key_env` names from an `AdapterConstructionPlan` into
-// in-memory API-key strings for the future concrete adapter factory. Callers
-// decide when to cross this boundary; ordinary bootstrap preflight does not.
-
 #pragma once
 
 #include <string>
 #include <vector>
 
+#include <oran/config/secrets.hpp>
 #include <oran/core/result.hpp>
 #include <oran/provider/adapter_plan.hpp>
 #include <oran/provider/system.hpp>
@@ -38,6 +32,7 @@ struct AdapterCredentialBundle {
 /// Missing or empty environment variables return `ErrorKind::auth` with only
 /// non-secret context (`role`, `profile`, and `api_key_env`). Malformed plans
 /// whose `api_key_env` field is empty return `ErrorKind::config`.
-[[nodiscard]] core::Result<AdapterCredentialBundle> resolve_adapter_credentials(const AdapterConstructionPlan& plan);
+[[nodiscard]] core::Result<AdapterCredentialBundle> resolve_adapter_credentials(const AdapterConstructionPlan& plan,
+                                                                                config::SecretLookup secrets = {});
 
 }  // namespace orangutan::provider

@@ -1,5 +1,3 @@
-// src/oran-memory/session.cpp — typed session memory over SessionRepository.
-
 #include <oran/memory/session.hpp>
 
 #include <concepts>
@@ -335,6 +333,23 @@ async::Awaitable<core::Result<std::vector<core::Message>>> Store::load(SessionId
     out.push_back(std::move(*message));
   }
   co_return out;
+}
+
+async::Awaitable<core::Result<std::vector<core::Message>>>
+Store::load_tail(SessionId session_id, AgentKey agent_key, std::size_t max_messages, std::size_t max_bytes) {
+  auto rows =
+      co_await repository_->load_tail(key_from(std::move(session_id), std::move(agent_key)), max_messages, max_bytes);
+  if (!rows)
+    co_return std::unexpected(std::move(rows).error());
+  std::vector<core::Message> messages;
+  messages.reserve(rows->size());
+  for (const auto& row : *rows) {
+    auto message = message_from_json(row);
+    if (!message)
+      co_return std::unexpected(std::move(message).error());
+    messages.push_back(std::move(*message));
+  }
+  co_return messages;
 }
 
 async::Awaitable<core::Result<void>>

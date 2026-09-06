@@ -1,5 +1,3 @@
-// tests/bootstrap/test_runtime_assembly.cpp — per-process permission + audit assembly coverage.
-
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -25,7 +23,6 @@
 #include "../test-helpers/run_async.hpp"
 
 namespace async = orangutan::async;
-namespace automation = orangutan::automation;
 namespace bootstrap = orangutan::bootstrap;
 namespace core = orangutan::core;
 namespace hook = orangutan::hook;
@@ -353,26 +350,12 @@ TEST_CASE("RuntimeAssembly::build applies long-term startup decay before exposin
         .limit = 10,
         .decay_at = decay_at,
     };
-    options.longterm_memory_retention_job = automation::MemoryRetentionJob{
-        .scope_key = "cli",
-        .policy =
-            automation::LongtermMemoryRetentionPolicy{
-                .forget_after_unused = std::chrono::days{1},
-                .importance_floor = 0.5,
-                .max_records_per_scope = 10,
-                .decay_check_interval = std::chrono::hours{24},
-            },
-        .first_fire_at = core::Time{decay_at.to_system_time_point() + std::chrono::hours{24}},
-    };
+
     auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
     REQUIRE(built.has_value());
     REQUIRE(built->longterm_memory_startup_decay_shadowed_count().has_value());
     REQUIRE(*built->longterm_memory_startup_decay_shadowed_count() == 1);
-    REQUIRE(built->longterm_memory_retention_job().has_value());
-    REQUIRE(built->longterm_memory_retention_job()->scope_key == "cli");
-    REQUIRE(built->longterm_memory_retention_job()->policy.max_records_per_scope == 10);
-    REQUIRE(built->longterm_memory_retention_job()->first_fire_at ==
-            core::Time{decay_at.to_system_time_point() + std::chrono::hours{24}});
+
     REQUIRE(decay_payloads.size() == 1);
     REQUIRE(decay_payloads[0].source == "startup");
     REQUIRE(decay_payloads[0].who.scope_key == "cli");
@@ -418,185 +401,6 @@ TEST_CASE("RuntimeAssembly::build applies long-term startup decay before exposin
     REQUIRE(stale_hit != including_shadow->end());
     REQUIRE(stale_hit->record.shadow);
     REQUIRE(stale_hit->record.updated_at == decay_at);
-  });
-}
-
-TEST_CASE("RuntimeAssembly::build stores long-term retention jobs without running startup decay",
-          "[unit][bootstrap][runtime_assembly][memory]") {
-  TempDir temp{"oran-assembly-longterm-retention-job"};
-  asio::io_context io;
-
-  auto options = bootstrap::RuntimeAssemblyOptions{};
-  options.audit_enabled = false;
-  options.session_memory_enabled = false;
-  options.longterm_memory_enabled = true;
-  options.longterm_memory_retention_job = automation::MemoryRetentionJob{
-      .scope_key = "cli",
-      .policy =
-          automation::LongtermMemoryRetentionPolicy{
-              .forget_after_unused = std::chrono::days{7},
-              .importance_floor = 0.25,
-              .max_records_per_scope = 42,
-              .decay_check_interval = std::chrono::hours{12},
-          },
-      .first_fire_at = fixed_now(),
-  };
-
-  auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
-
-  REQUIRE(built.has_value());
-  REQUIRE(built->longterm_memory_enabled());
-  REQUIRE_FALSE(built->longterm_memory_startup_decay_shadowed_count().has_value());
-  REQUIRE(built->longterm_memory_retention_job().has_value());
-  REQUIRE(built->longterm_memory_retention_job()->scope_key == "cli");
-  REQUIRE(built->longterm_memory_retention_job()->policy.forget_after_unused == std::chrono::days{7});
-  REQUIRE(built->longterm_memory_retention_job()->policy.importance_floor == 0.25);
-  REQUIRE(built->longterm_memory_retention_job()->policy.max_records_per_scope == 42);
-  REQUIRE(built->longterm_memory_retention_job()->policy.decay_check_interval == std::chrono::hours{12});
-  REQUIRE(built->longterm_memory_retention_job()->first_fire_at == fixed_now());
-}
-
-TEST_CASE("RuntimeAssembly::build stores cron job seeds without opening automation state",
-          "[unit][bootstrap][runtime_assembly][automation]") {
-  TempDir temp{"oran-assembly-cron-job-seeds"};
-  asio::io_context io;
-
-  auto options = bootstrap::RuntimeAssemblyOptions{};
-  options.audit_enabled = false;
-  options.session_memory_enabled = false;
-  options.longterm_memory_enabled = false;
-  options.cron_jobs.push_back(automation::UpsertCronJobRequest{
-      .job_key = "daily-summary",
-      .agent_prompt = "Run scheduled automation job.",
-      .schedule =
-          automation::CronSchedule{
-              .expression = "0 9 * * *",
-              .first_fire_at = fixed_now(),
-          },
-      .state = {},
-  });
-
-  auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
-
-  REQUIRE(built.has_value());
-  REQUIRE_FALSE(built->longterm_memory_enabled());
-  REQUIRE(built->cron_jobs().size() == 1);
-  REQUIRE(built->cron_jobs()[0].job_key == "daily-summary");
-  REQUIRE(built->cron_jobs()[0].agent_key == "automation");
-  REQUIRE(built->cron_jobs()[0].agent_prompt == "Run scheduled automation job.");
-  REQUIRE(built->cron_jobs()[0].schedule.expression == "0 9 * * *");
-  REQUIRE(built->cron_jobs()[0].schedule.first_fire_at == fixed_now());
-  REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan" / "automation.db"));
-}
-
-TEST_CASE("RuntimeAssembly cron seeds persist only through caller-owned automation runtime",
-          "[unit][bootstrap][runtime_assembly][automation]") {
-  TempDir temp{"oran-assembly-cron-job-seed-apply"};
-  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
-    auto options = bootstrap::RuntimeAssemblyOptions{};
-    options.audit_enabled = false;
-    options.session_memory_enabled = false;
-    options.longterm_memory_enabled = false;
-    options.cron_jobs.push_back(automation::UpsertCronJobRequest{
-        .job_key = "daily-summary",
-        .agent_prompt = "Run scheduled automation job.",
-        .schedule =
-            automation::CronSchedule{
-                .expression = "0 9 * * *",
-                .first_fire_at = fixed_now(),
-            },
-    });
-
-    auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
-
-    REQUIRE(built.has_value());
-    REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan" / "automation.db"));
-
-    auto runtime = co_await automation::AutomationRuntime::open(
-        io.get_executor(),
-        automation::AutomationRuntimeOptions{
-            .database_path = (temp.path() / ".orangutan" / "automation.db").string(),
-        });
-    REQUIRE(runtime.has_value());
-
-    auto applied = co_await runtime->apply_cron_job_seeds(built->cron_jobs());
-
-    REQUIRE(applied.has_value());
-    REQUIRE(applied->requested_count == 1);
-    REQUIRE(applied->upserted_count == 1);
-    auto loaded = co_await runtime->repository().get_cron_job("daily-summary");
-    REQUIRE(loaded.has_value());
-    REQUIRE(loaded->has_value());
-    REQUIRE((*loaded)->agent_key == "automation");
-    REQUIRE((*loaded)->agent_prompt == "Run scheduled automation job.");
-    REQUIRE((*loaded)->schedule.expression == "0 9 * * *");
-  });
-}
-
-TEST_CASE("RuntimeAssembly stores triggered automation seeds without opening automation state",
-          "[unit][bootstrap][runtime_assembly][automation]") {
-  TempDir temp{"oran-assembly-triggered-job-seeds"};
-  asio::io_context io;
-
-  auto options = bootstrap::RuntimeAssemblyOptions{};
-  options.audit_enabled = false;
-  options.session_memory_enabled = false;
-  options.longterm_memory_enabled = false;
-  options.triggered_jobs.push_back(automation::UpsertTriggeredJobRequest{
-      .job_key = "triggered-ci",
-      .trigger_key = "webhook:ci",
-      .agent_prompt = "Handle triggered automation job.",
-  });
-
-  auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
-
-  REQUIRE(built.has_value());
-  REQUIRE_FALSE(built->longterm_memory_enabled());
-  REQUIRE(built->triggered_jobs().size() == 1);
-  REQUIRE(built->triggered_jobs()[0].job_key == "triggered-ci");
-  REQUIRE(built->triggered_jobs()[0].trigger_key == "webhook:ci");
-  REQUIRE(built->triggered_jobs()[0].agent_key == "automation");
-  REQUIRE(built->triggered_jobs()[0].agent_prompt == "Handle triggered automation job.");
-  REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan" / "automation.db"));
-}
-
-TEST_CASE("RuntimeAssembly triggered seeds persist only through caller-owned automation runtime",
-          "[unit][bootstrap][runtime_assembly][automation]") {
-  TempDir temp{"oran-assembly-triggered-job-seed-apply"};
-  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
-    auto options = bootstrap::RuntimeAssemblyOptions{};
-    options.audit_enabled = false;
-    options.session_memory_enabled = false;
-    options.longterm_memory_enabled = false;
-    options.triggered_jobs.push_back(automation::UpsertTriggeredJobRequest{
-        .job_key = "triggered-ci",
-        .trigger_key = "webhook:ci",
-        .agent_prompt = "Handle triggered automation job.",
-    });
-
-    auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
-
-    REQUIRE(built.has_value());
-    REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan" / "automation.db"));
-
-    auto runtime = co_await automation::AutomationRuntime::open(
-        io.get_executor(),
-        automation::AutomationRuntimeOptions{
-            .database_path = (temp.path() / ".orangutan" / "automation.db").string(),
-        });
-    REQUIRE(runtime.has_value());
-
-    auto applied = co_await runtime->apply_triggered_job_seeds(built->triggered_jobs());
-
-    REQUIRE(applied.has_value());
-    REQUIRE(applied->requested_count == 1);
-    REQUIRE(applied->upserted_count == 1);
-    auto loaded = co_await runtime->repository().get_triggered_job("triggered-ci");
-    REQUIRE(loaded.has_value());
-    REQUIRE(loaded->has_value());
-    REQUIRE((*loaded)->trigger_key == "webhook:ci");
-    REQUIRE((*loaded)->agent_key == "automation");
-    REQUIRE((*loaded)->agent_prompt == "Handle triggered automation job.");
   });
 }
 
@@ -647,36 +451,7 @@ TEST_CASE("RuntimeAssembly::build propagates invalid startup decay requests",
   REQUIRE(built.error().kind() == core::ErrorKind::invalid_argument);
 }
 
-TEST_CASE("RuntimeAssembly::build rejects long-term retention jobs when long-term memory is disabled",
-          "[unit][bootstrap][runtime_assembly][memory]") {
-  TempDir temp{"oran-assembly-longterm-retention-job-disabled"};
-  asio::io_context io;
-
-  auto options = bootstrap::RuntimeAssemblyOptions{};
-  options.audit_enabled = false;
-  options.session_memory_enabled = false;
-  options.longterm_memory_enabled = false;
-  options.longterm_memory_retention_job = automation::MemoryRetentionJob{
-      .scope_key = "cli",
-      .policy =
-          automation::LongtermMemoryRetentionPolicy{
-              .forget_after_unused = std::chrono::days{7},
-              .importance_floor = 0.25,
-              .max_records_per_scope = 42,
-              .decay_check_interval = std::chrono::hours{12},
-          },
-      .first_fire_at = fixed_now(),
-  };
-  auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
-
-  REQUIRE_FALSE(built.has_value());
-  REQUIRE(built.error().kind() == core::ErrorKind::invalid_argument);
-  REQUIRE(std::ranges::any_of(built.error().context(), [](const auto& entry) {
-    return entry.first == "reason" && entry.second == "longterm_memory_disabled";
-  }));
-}
-
-#if defined(ORAN_ENABLE_SQLITE_VEC)
+#ifdef ORAN_ENABLE_SQLITE_VEC
 TEST_CASE("RuntimeAssembly::build provisions vector memory at the workspace default path",
           "[unit][bootstrap][runtime_assembly][memory][sqlite-vec]") {
   TempDir temp{"oran-assembly-vector-memory-default"};

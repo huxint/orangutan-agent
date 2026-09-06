@@ -1,5 +1,3 @@
-// src/oran-async/runtime.cpp — Runtime implementation.
-
 #include <oran/async/runtime.hpp>
 
 #include <algorithm>
@@ -64,6 +62,13 @@ struct Runtime::Impl {
 
   [[nodiscard]] core::Result<void> start() {
     return spawn_workers();
+  }
+
+  [[nodiscard]] core::Result<void> join() {
+    if (state.load() == RunState::idle) {
+      return std::unexpected(core::Error{core::ErrorKind::conflict, "runtime has not started"});
+    }
+    return join_workers();
   }
 
   void stop() noexcept {
@@ -162,6 +167,10 @@ core::Result<void> Runtime::run() {
 
 core::Result<void> Runtime::start() {
   return impl_->start();
+}
+
+core::Result<void> Runtime::join() {
+  return impl_->join();
 }
 
 void Runtime::stop() noexcept {

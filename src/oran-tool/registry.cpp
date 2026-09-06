@@ -1,5 +1,3 @@
-// src/oran-tool/registry.cpp — registry implementation.
-
 #include <oran/tool/registry.hpp>
 
 #include <algorithm>
@@ -254,6 +252,7 @@ require_approval_decision(permission::Decision decision, const hook::HookDecisio
       .replay_max = decision.replay_max,
       .approval_ttl = decision.approval_ttl,
       .requested_at = ctx.now,
+      .turn_id = ctx.parent_turn_id,
   };
 }
 

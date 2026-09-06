@@ -1,31 +1,3 @@
-// include/oran/permission/approval_secret.hpp — per-process HMAC key for
-// approval signing.
-//
-// Closes the first half of `docs/product-specs/0008-permissions.md`
-// criterion 5: "Approval signing key is rotated when the runtime restarts;
-// prior approvals are invalidated." The signing scheme is HMAC-SHA-256
-// (see `docs/design-docs/permissions-and-hooks.md` and
-// `docs/design-docs/secrets-and-state.md`): a 32-byte symmetric key is
-// generated at process start from libsodium's CSPRNG, kept in memory for
-// the runtime's lifetime, and zeroed on destruction. Nothing persists the
-// key — the next process gets a fresh one, and any approval token signed
-// by the previous process fails MAC verification.
-//
-// `ApprovalSecret` is the primitive crypto wrapper only. It owns the key,
-// computes HMACs, and offers a constant-time MAC compare. The
-// approval-token shape, replay window, and ask-flow plumbing land in the
-// follow-up slice that builds on this primitive.
-//
-// Threat model. We rely on libsodium's randombytes_buf() to source 32
-// bytes of OS entropy and on the OS to keep that memory readable only by
-// the process. We are not protecting against a fully compromised host or
-// memory introspection by a privileged debugger — see
-// `docs/design-docs/secrets-and-state.md` "Threat Model" for the
-// project-wide stance.
-//
-// libsodium is hidden in the .cpp: this header has no `<sodium.h>`
-// include (rule C6) and no libsodium type in the public surface.
-
 #pragma once
 
 #include <array>

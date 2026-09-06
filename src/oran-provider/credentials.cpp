@@ -1,5 +1,3 @@
-// src/oran-provider/credentials.cpp - provider API-key env resolution.
-
 #include <oran/provider/credentials.hpp>
 
 #include <cstdlib>
@@ -30,11 +28,23 @@ credential_error(ErrorKind kind, std::string message, const AdapterConstructionT
 }
 
 [[nodiscard]] core::Result<AdapterCredentialTarget> resolve_target_credentials(AdapterConstructionTarget target,
-                                                                               std::string_view role) {
+                                                                               std::string_view role,
+                                                                               const config::SecretLookup& secrets) {
   if (target.profile.api_key_env.empty()) {
     return std::unexpected(
         credential_error(ErrorKind::config, "provider adapter target api_key_env must be non-empty", target, role)
             .with("field", "api_key_env"));
+  }
+
+  if (secrets) {
+    try {
+      auto key = secrets(target.profile.api_key_env);
+      if (!key || key->empty())
+        return std::unexpected(credential_error(ErrorKind::auth, "provider credential is unavailable", target, role));
+      return AdapterCredentialTarget{.target = std::move(target), .api_key = std::move(*key)};
+    } catch (...) {
+      return std::unexpected(credential_error(ErrorKind::auth, "provider credential lookup failed", target, role));
+    }
   }
 
   const auto* value = std::getenv(target.profile.api_key_env.c_str());
@@ -70,8 +80,9 @@ Route AdapterCredentialBundle::route() const {
   };
 }
 
-core::Result<AdapterCredentialBundle> resolve_adapter_credentials(const AdapterConstructionPlan& plan) {
-  auto primary = resolve_target_credentials(plan.primary, "primary");
+core::Result<AdapterCredentialBundle> resolve_adapter_credentials(const AdapterConstructionPlan& plan,
+                                                                  config::SecretLookup secrets) {
+  auto primary = resolve_target_credentials(plan.primary, "primary", secrets);
   if (!primary) {
     return std::unexpected(std::move(primary).error());
   }
@@ -79,7 +90,7 @@ core::Result<AdapterCredentialBundle> resolve_adapter_credentials(const AdapterC
   auto fallbacks = std::vector<AdapterCredentialTarget>{};
   fallbacks.reserve(plan.fallbacks.size());
   for (const auto& target : plan.fallbacks) {
-    auto fallback = resolve_target_credentials(target, "fallback");
+    auto fallback = resolve_target_credentials(target, "fallback", secrets);
     if (!fallback) {
       return std::unexpected(std::move(fallback).error());
     }

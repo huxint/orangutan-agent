@@ -1,5 +1,3 @@
-// include/oran/async/runtime.hpp — bootstrap-owned asio runtime.
-
 #pragma once
 
 #include <cstddef>
@@ -39,6 +37,9 @@ public:
   /// teardown with `stop_and_join()`. Returns a `conflict` error if already
   /// running or stopped.
   [[nodiscard]] core::Result<void> start();
+  /// Wait for a started runtime to be stopped by its work owner. Unlike
+  /// stop_and_join(), this preserves pending coroutine cleanup.
+  [[nodiscard]] core::Result<void> join();
 
   void stop() noexcept;
 

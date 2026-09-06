@@ -1,11 +1,8 @@
 # Execution Plans
 
-This directory holds long-lived plans for complex work.
+[Agent runtime core](active/2026-09-06-agent-runtime-core.md) is the active plan.
+[Live debt](tech-debt-tracker.md) tracks concrete unresolved defects and gates.
 
-- Put active work in `active/`.
-- Delete finished plans after durable decisions and open work have been absorbed;
-  Git keeps the archive.
-- Start from `templates/execution-plan.md` (or use `make new-plan SLUG=<slug>`).
-- Record deferred cleanup in `tech-debt-tracker.md`.
-
-See [`../PLANS_GUIDE.md`](../PLANS_GUIDE.md) for the convention.
+A plan describes a bounded change and its acceptance criteria. Move durable
+contracts into their owning documents, then delete the completed plan. Git owns
+history. See [PLANS_GUIDE](../PLANS_GUIDE.md).

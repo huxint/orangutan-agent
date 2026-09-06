@@ -1,34 +1,3 @@
-// bench/permission/scenarios/approval_secret.cpp
-//
-// A-vs-B coverage for the HMAC-SHA-256 primitive that backs approval
-// signing (`docs/product-specs/0008-permissions.md` criterion 5).
-//
-//   1. `permission.hmac_short_message`  : MAC over a 32-byte buffer.
-//                                          The realistic payload size
-//                                          for an approval token's
-//                                          canonical-bytes form
-//                                          (tool name + identity +
-//                                          input hash + expiry +
-//                                          nonce).
-//   2. `permission.hmac_long_message`   : MAC over a 1 KiB buffer.
-//                                          Documents how the per-byte
-//                                          hash cost dominates as the
-//                                          payload grows so future
-//                                          changes to the token shape
-//                                          can compare on the same
-//                                          axis.
-//   3. `permission.hmac_macs_equal_ok`  : constant-time equality on
-//                                          two matching 32-byte MACs.
-//                                          Pays libsodium's
-//                                          `sodium_memcmp` over the
-//                                          full buffer length.
-//   4. `permission.hmac_macs_equal_no`  : same shape, MACs differ in
-//                                          the last byte. Constant-time
-//                                          compare must walk the full
-//                                          buffer — the A/B documents
-//                                          that both paths cost the
-//                                          same.
-
 #include <array>
 #include <cstddef>
 #include <span>

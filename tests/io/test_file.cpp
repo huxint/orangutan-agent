@@ -1,5 +1,3 @@
-// tests/io/test_file.cpp — file and directory helper coverage.
-
 #include <chrono>
 #include <cstdint>
 #include <exception>
@@ -190,7 +188,7 @@ TEST_CASE("run_blocking returns the callable result", "[unit][io][blocking]") {
   test::run_async([](asio::io_context& context) -> async::Awaitable<void> {
     bool invoked = false;
 
-    auto result = co_await io::run_blocking(context.get_executor(), [&] {
+    auto result = co_await io::run_blocking(context.get_executor(), [&invoked](std::stop_token) {
       invoked = true;
       return core::Result<int>{42};
     });
@@ -211,7 +209,7 @@ TEST_CASE("run_blocking observes cancellation before invoking callable", "[unit]
   asio::co_spawn(
       context,
       [&]() -> async::Awaitable<core::Result<int>> {
-        co_return co_await io::run_blocking(context.get_executor(), [&] {
+        co_return co_await io::run_blocking(context.get_executor(), [&invoked](std::stop_token) {
           invoked = true;
           return core::Result<int>{42};
         });

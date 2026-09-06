@@ -1,5 +1,3 @@
-// src/oran-io/file.cpp — file and directory helper implementation.
-
 #include <oran/io/file.hpp>
 
 #include <algorithm>
@@ -1103,7 +1101,7 @@ dispatch_read(const std::string& path, const ReadTextOptions& options, const Fil
 
 [[nodiscard]] async::Awaitable<core::Result<PreparedReadTextFile>>
 prepare_read_text_file_async(asio::any_io_executor executor, std::string path, ReadTextOptions options) {
-  co_return co_await run_blocking(std::move(executor), [path = std::move(path), options] {
+  co_return co_await run_blocking(std::move(executor), [path = std::move(path), options](std::stop_token) {
     return prepare_read_text_file_blocking(path, options);
   });
 }
@@ -1115,9 +1113,8 @@ prepare_read_text_file_async(asio::any_io_executor executor, std::string path, R
                                                                                        FileViewCacheKey cache_key) {
   co_return co_await run_blocking(
       std::move(executor),
-      [path = std::move(path), options, fingerprint = std::move(fingerprint), cache_key = std::move(cache_key)] {
-        return read_text_file_cold_blocking(path, options, fingerprint, cache_key);
-      });
+      [path = std::move(path), options, fingerprint = std::move(fingerprint), cache_key = std::move(cache_key)](
+          std::stop_token) { return read_text_file_cold_blocking(path, options, fingerprint, cache_key); });
 }
 
 [[nodiscard]] async::Awaitable<core::Result<ReadTextResult>>
@@ -1307,8 +1304,9 @@ ReadTextSingleflightStats read_text_file_ranged_singleflight_stats() {
 
 async::Awaitable<core::Result<std::vector<DirectoryEntry>>>
 list_directory(asio::any_io_executor executor, std::string path, ListDirectoryOptions options) {
-  co_return co_await run_blocking(std::move(executor),
-                                  [path = std::move(path), options] { return list_directory_blocking(path, options); });
+  co_return co_await run_blocking(std::move(executor), [path = std::move(path), options](std::stop_token) {
+    return list_directory_blocking(path, options);
+  });
 }
 
 }  // namespace orangutan::io

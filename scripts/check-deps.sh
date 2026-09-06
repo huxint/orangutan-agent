@@ -40,7 +40,6 @@ declare -A LAYER=(
   [io]=1
   [storage]=1
   [config]=1
-  [log]=1
   # composition utilities
   [prompt]=2
   [tool]=2
@@ -51,15 +50,8 @@ declare -A LAYER=(
   [provider]=2
   # agent runtime
   [agent]=3
-  [orchestration]=3
-  [automation]=3
   # interface
-  [cli]=4
-  [web]=4
-  [desktop]=4
-  [channel]=4
   # Quoted: shfmt rewrites an unquoted dashed subscript as arithmetic.
-  ["channel-qq"]=4
   # composition root
   [bootstrap]=5
 )
@@ -89,7 +81,6 @@ declare -A LAYER_NAME=(
 #   tool   -> hook     : dispatch publishes tool_before / tool_dispatched / tool_error / tool_after.
 #   prompt -> tool     : prompt assembly delegates schema/catalog bytes to CatalogRenderer.
 #   provider-> prompt  : provider adapters consume RenderedPrompt cache hints; prompt never calls providers.
-#   channel-qq->channel: platform adapter implements the generic Channel trait.
 declare -A ALLOWED_SIBLING=(
   [http__async]=1
   [io__async]=1
@@ -99,7 +90,6 @@ declare -A ALLOWED_SIBLING=(
   [tool__hook]=1
   [prompt__tool]=1
   [provider__prompt]=1
-  ["channel-qq__channel"]=1
 )
 
 failed=0

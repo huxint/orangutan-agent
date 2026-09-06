@@ -1,5 +1,3 @@
-// src/oran-io/anchored_file.cpp — text reads from authorized file handles.
-
 #include <oran/io/file.hpp>
 
 #include <algorithm>
@@ -146,7 +144,7 @@ dispatch_read(DescriptorReader& reader, const ReadTextOptions& options, const Fi
 
 async::Awaitable<core::Result<ReadTextResult>>
 read_text_file_ranged(asio::any_io_executor executor, ReadOnlyFile file, ReadTextOptions options) {
-  co_return co_await run_blocking(std::move(executor), [file = std::move(file), options]() mutable {
+  co_return co_await run_blocking(std::move(executor), [file = std::move(file), options](std::stop_token) mutable {
     return read_authorized_file_blocking(file, options);
   });
 }

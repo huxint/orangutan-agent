@@ -1,61 +1,3 @@
-// src/oran-tool/file_search.cpp — `FileSearch` built-in.
-//
-// Slice 20 shipped literal-substring matching; slice 24 adds the
-// `"regex": true` opt-in tracked in `docs/exec-plans/tech-debt-tracker.md`.
-// Slice 63 (2026-05-24) closes spec 0014's "structured `data_json` migration
-// for `FileSearch`" item: successful calls keep the existing
-// `path:line:text` text rendering for current callers AND fill
-// `Output::data_json` with a serialized `{kind:"file_search", path, pattern,
-// regex, matches[], match_count, truncated, truncation_reason, files_scanned,
-// bytes_read}` payload. `Output::usage` is filled with `bytes_read`
-// (cumulative file bytes scanned across the walk), `files_touched`
-// (count of non-binary files actually run through the matcher),
-// `match_count` (post-truncation match count surfaced to the caller),
-// and `truncated` (true when either the match-count cap or the byte cap
-// fired).
-// Slice 39 resolves the input path through `tool::Workspace::resolve_list`
-// when `DispatchContext::workspace` is supplied so a directory search cannot
-// escape the workspace via traversal or a root-side symlink. Nested entries
-// continue to skip symlinks wholesale during the recursive walk — a stricter
-// form of the same "symlinks may only follow when they stay inside the
-// workspace" rule. Slice 47 closes spec 0011 v1.1's "Output cap on
-// `FileSearch`" item: an optional `max_output_bytes` field (default 1 MiB)
-// caps the *rendered* `path:line:text` payload so a handful of very long
-// lines cannot flood the prompt even when `max_matches` is generous. When
-// the byte cap fires first, the trailing summary line spells out
-// `(truncated; output capped at <N> bytes)`; the legacy `(truncated; matches
-// capped at <N>)` message still wins when the match-count cap dominates.
-// Scans a UTF-8 text file or (recursively) a directory for matches and
-// renders one `path:line:text` line per match. The recursive walk skips
-// files containing NUL bytes in their first 8 KiB (a ripgrep-style binary
-// heuristic) so the agent loop never gets a wall of non-text noise after
-// asking the tool to grep a tree. Dotfiles and dot-directories are skipped
-// by default; `include_hidden=true` opts in.
-//
-// Default match mode is literal substring (`pattern` is a no-escape direct
-// match). When `regex=true`, the pattern is compiled through
-// `permission::InputPattern` (which forward-declares `re2::RE2` so this TU
-// stays off `<re2/re2.h>` per rule C6) and each line is tested with
-// `RE2::PartialMatch`. Slice 51 keeps compiled patterns in a bounded
-// process-local `core::BoundedCache` (64 entries / 64 KiB / 10-minute TTL)
-// keyed by pattern + line-match mode, so repeated searches with the same
-// regex avoid paying the compile cost again. Invalid patterns surface as
-// `invalid_argument` with the re2 error message attached as `regex_error`,
-// matching the rule-side input-pattern compile-error shape.
-//
-// Slice 48 takes the first step on spec 0011 v1.1's "`FileSearch` ignore
-// predicate" item by adding a *built-in* skip list: the recursive directory
-// walk no longer descends into `build`, `node_modules`, `.git`, `.xmake`, or
-// `.orangutan` regardless of the `include_hidden` flag. Slice 49 completes
-// the source-controlled ignore-file half for recursive walks, and slice 266
-// moves those recursive-walk decisions into `WorkspaceWalkFilter` so
-// `DirectoryList` shares the same behavior. The shared implementation covers
-// the common Git-style subset agents need most: comments/blanks, escaped
-// leading `#` / `!` literals, `!` negation, trailing `/` directory-only rules,
-// anchored or relative slash patterns, basename patterns, and fnmatch-style
-// `*` / `?` / `[]` globs. Explicit single-file searches still honour the named
-// file directly.
-
 #include <oran/tool/builtins.hpp>
 
 #include <algorithm>
@@ -81,10 +23,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include <asio/cancellation_type.hpp>
 #include <asio/post.hpp>
 #include <asio/this_coro.hpp>
 #include <asio/use_awaitable.hpp>
+#include <oran/io/blocking.hpp>
+#include <stop_token>
 
 #include <nlohmann/json.hpp>
 
@@ -317,8 +260,8 @@ struct LineMatcher {
   return std::ranges::any_of(probe, [](char c) { return c == '\0'; });
 }
 
-[[nodiscard]] bool is_cancelled(const asio::cancellation_state& cancellation) noexcept {
-  return cancellation.cancelled() != asio::cancellation_type::none;
+[[nodiscard]] bool is_cancelled(std::stop_token cancellation) noexcept {
+  return cancellation.stop_requested();
 }
 
 /// Read an already-authorized regular file through its pinned descriptor,
@@ -326,9 +269,8 @@ struct LineMatcher {
 /// beneath the root authority, so this never reopens a pathname. `display` is
 /// used only for error context. Polls `cancellation` once per 8 KiB chunk so a
 /// pathological multi-GB file aborts promptly when the agent loop is torn down.
-[[nodiscard]] core::Result<std::string> read_handle_capped(const io::ReadOnlyFile& file,
-                                                           std::string_view display,
-                                                           const asio::cancellation_state& cancellation) {
+[[nodiscard]] core::Result<std::string>
+read_handle_capped(const io::ReadOnlyFile& file, std::string_view display, std::stop_token cancellation) {
   std::string contents;
   std::array<char, 8192> buffer{};
   while (true) {
@@ -535,7 +477,7 @@ struct LineMatcher {
 }
 
 [[nodiscard]] core::Result<SearchOutcome>
-walk_and_scan(const SearchOptions& opts, const SearchRoot& root, const asio::cancellation_state& cancellation) {
+walk_and_scan(const SearchOptions& opts, const SearchRoot& root, std::stop_token cancellation) {
   auto matcher = build_matcher(opts);
   if (!matcher) {
     return std::unexpected(std::move(matcher).error());
@@ -761,19 +703,10 @@ walk_and_scan(const SearchOptions& opts, const SearchRoot& root, const asio::can
     co_return std::unexpected(std::move(root).error());
   }
 
-  // One executor hop so the blocking filesystem walk runs on the runtime's
-  // thread pool rather than the calling strand — matches `io::read_text_file`'s
-  // discipline.
-  auto cancellation = co_await asio::this_coro::cancellation_state;
-  if (is_cancelled(cancellation)) {
-    co_return std::unexpected(core::Error::cancelled());
-  }
-  co_await asio::post(ctx.executor, asio::use_awaitable);
-  if (is_cancelled(cancellation)) {
-    co_return std::unexpected(core::Error::cancelled());
-  }
-
-  auto outcome = walk_and_scan(*opts, *root, cancellation);
+  auto operation = [options = *opts, root = std::move(*root)](std::stop_token stop) mutable {
+    return walk_and_scan(options, root, stop);
+  };
+  auto outcome = co_await io::run_blocking(ctx.executor, std::move(operation));
   if (!outcome) {
     co_return std::unexpected(std::move(outcome).error());
   }

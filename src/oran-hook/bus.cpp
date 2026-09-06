@@ -1,5 +1,3 @@
-// src/oran-hook/bus.cpp — `hook::Bus` implementation.
-
 #include <oran/hook/bus.hpp>
 
 #include <algorithm>
@@ -347,10 +345,12 @@ async::Awaitable<core::Result<HookDecision>> Bus::publish_blocking_impl(Event ev
   std::vector<HookDecisionTrace> trace;
   trace.reserve(it->second.size());
   for (auto* sink : it->second) {
-    auto sink_result = co_await call_blocking_sink_with_timeout(*sink,
-                                                                event,
-                                                                payload_for_sink(*sink, payloads),
-                                                                options_.blocking_timeout);
+    auto sink_result = co_await call_blocking_sink_with_timeout(
+        *sink,
+        event,
+        payload_for_sink(*sink, payloads),
+        event == Event::permission_ask_rendered ? options_.approval_timeout.value_or(options_.blocking_timeout)
+                                                : options_.blocking_timeout);
     if (!sink_result) {
       co_return std::unexpected(std::move(sink_result).error());
     }

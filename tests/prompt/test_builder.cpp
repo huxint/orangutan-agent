@@ -1,5 +1,3 @@
-// tests/prompt/test_builder.cpp — prompt builder coverage.
-
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -270,7 +268,7 @@ TEST_CASE("Builder cache versions invalidate the prefix hash without changing co
         tool_def("FileRead", "Read a file"),
     };
     auto options = prompt::BuilderOptions{};
-    options.versions.tool_catalog = 2;
+    options.versions.tool_catalog = 3;
 
     prompt::Builder v1;
     prompt::Builder v2{options};
@@ -281,8 +279,8 @@ TEST_CASE("Builder cache versions invalidate the prefix hash without changing co
     REQUIRE(second.has_value());
     REQUIRE(section(*first, "tool_catalog").content == section(*second, "tool_catalog").content);
     REQUIRE(section(*first, "tool_catalog").content_hash == section(*second, "tool_catalog").content_hash);
-    REQUIRE(section(*first, "tool_catalog").cache_version == 1);
-    REQUIRE(section(*second, "tool_catalog").cache_version == 2);
+    REQUIRE(section(*first, "tool_catalog").cache_version == 2);
+    REQUIRE(section(*second, "tool_catalog").cache_version == 3);
     REQUIRE(first->prefix_hash != second->prefix_hash);
   });
 }

@@ -1,8 +1,3 @@
-// include/oran/config/config.hpp — typed JSON configuration loader.
-//
-// The public surface stays third-party-free: nlohmann::json is confined to the
-// implementation file so config users do not inherit parser compile cost.
-
 #pragma once
 
 #include <cstdint>
@@ -33,7 +28,7 @@ struct ToolOutputRuntimeConfig {
 /// Tool-scheduler knobs (spec 0012). Defaults mirror `agent::ToolSchedulerOptions`:
 /// 4 concurrent tools, a 60 s per-call timeout, and a 5 min idle path-lock TTL.
 /// Bootstrap converts these into the typed `ToolSchedulerOptions` it threads
-/// into `AgentPromptRunner`.
+/// into `AgentSession`.
 struct ToolSchedulerRuntimeConfig {
   std::int64_t max_parallel_tools{4};
   std::int64_t per_call_timeout_ms{60000};
@@ -90,7 +85,6 @@ struct RuntimeConfig {
   ToolSchedulerRuntimeConfig tool_scheduler{};
   PromptRuntimeConfig prompt{};
   StreamRuntimeConfig stream{};
-  std::vector<std::string> redaction_patterns{};
 };
 
 /// Optional per-profile prompt-cache policy. Mirrors the provider-layer
@@ -130,21 +124,8 @@ struct RouteConfig {
   std::vector<std::string> fallback_profiles{};
 };
 
-struct SessionConfig {
-  bool auto_save{true};
-  bool persistence{true};
-};
-
-struct DesktopConfig {
-  bool enabled{false};
-  std::string theme{"system"};
-  bool reduce_motion{false};
-};
-
 struct TraceConfig {
   bool enabled{true};
-  bool store_raw_bodies{false};
-  std::int64_t retention_days{30};
 
   friend bool operator==(const TraceConfig&, const TraceConfig&) = default;
 };
@@ -169,33 +150,8 @@ struct LongtermMemoryRecallConfig {
   friend bool operator==(const LongtermMemoryRecallConfig&, const LongtermMemoryRecallConfig&) = default;
 };
 
-/// Config-side hybrid-search policy. This is parser/runtime-contract prework:
-/// bootstrap keeps using lexical recall until an embedding/vector backend owner
-/// lands, but the operator-facing knobs are validated here first.
-struct LongtermMemoryHybridSearchConfig {
-  bool enabled{false};
-  std::int64_t lexical_limit{10};
-  std::int64_t vector_limit{10};
-  std::int64_t result_limit{10};
-  double lexical_weight{1.0};
-  double vector_weight{1.0};
-
-  friend bool operator==(const LongtermMemoryHybridSearchConfig&, const LongtermMemoryHybridSearchConfig&) = default;
-};
-
-struct LongtermMemoryRetentionConfig {
-  std::int64_t forget_after_unused_days{180};
-  double importance_floor{0.0};
-  std::int64_t max_records_per_scope{10000};
-  std::int64_t decay_check_interval_hours{24};
-
-  friend bool operator==(const LongtermMemoryRetentionConfig&, const LongtermMemoryRetentionConfig&) = default;
-};
-
 struct LongtermMemoryConfig {
   LongtermMemoryRecallConfig recall{};
-  LongtermMemoryHybridSearchConfig hybrid_search{};
-  LongtermMemoryRetentionConfig retention{};
 
   friend bool operator==(const LongtermMemoryConfig&, const LongtermMemoryConfig&) = default;
 };
@@ -204,84 +160,6 @@ struct MemoryConfig {
   LongtermMemoryConfig longterm{};
 
   friend bool operator==(const MemoryConfig&, const MemoryConfig&) = default;
-};
-
-struct AutomationCronJobConfig {
-  std::string job_key;
-  std::string agent_key{"automation"};
-  std::string agent_prompt;
-  std::string expression;
-  core::Time first_fire_at{core::Time::epoch()};
-  std::optional<core::Time> last_fired_at{};
-
-  friend bool operator==(const AutomationCronJobConfig&, const AutomationCronJobConfig&) = default;
-};
-
-struct AutomationCronConfig {
-  std::vector<AutomationCronJobConfig> jobs{};
-
-  friend bool operator==(const AutomationCronConfig&, const AutomationCronConfig&) = default;
-};
-
-struct AutomationTriggeredJobConfig {
-  std::string job_key;
-  std::string trigger_key;
-  std::string agent_key{"automation"};
-  std::string agent_prompt;
-
-  friend bool operator==(const AutomationTriggeredJobConfig&, const AutomationTriggeredJobConfig&) = default;
-};
-
-struct AutomationTriggeredConfig {
-  std::vector<AutomationTriggeredJobConfig> jobs{};
-
-  friend bool operator==(const AutomationTriggeredConfig&, const AutomationTriggeredConfig&) = default;
-};
-
-struct AutomationWebhookListenerConfig {
-  bool enabled{false};
-  std::string bind_host{"127.0.0.1"};
-  std::uint16_t port{8787};
-  std::string path_prefix{"/automation/webhooks/"};
-  std::int64_t max_payload_bytes{256 * 1024};
-  std::int64_t job_limit{100};
-
-  friend bool operator==(const AutomationWebhookListenerConfig&, const AutomationWebhookListenerConfig&) = default;
-};
-
-struct AutomationWebhooksConfig {
-  AutomationWebhookListenerConfig listener{};
-
-  friend bool operator==(const AutomationWebhooksConfig&, const AutomationWebhooksConfig&) = default;
-};
-
-struct AutomationConfig {
-  AutomationCronConfig cron{};
-  AutomationTriggeredConfig triggered{};
-  AutomationWebhooksConfig webhooks{};
-
-  friend bool operator==(const AutomationConfig&, const AutomationConfig&) = default;
-};
-
-/// One config-authored channel adapter instance under `config.channels[]`.
-/// `kind` selects the adapter implementation. `agent_key` names the agent that
-/// answers messages arriving on this channel; bootstrap maps it through the
-/// channel prompt-runner bridge. `inbound_capacity` bounds the adapter's
-/// inbound queue. The `qq_*` fields are adapter-specific metadata consumed only
-/// when `kind == "qq"` and the optional QQ adapter is compiled in; they store
-/// environment-variable names and endpoint URLs, never secret values.
-struct ChannelConfig {
-  std::string id;
-  std::string kind;
-  std::string agent_key{"default"};
-  std::size_t inbound_capacity{64};
-  std::string qq_app_id_env;
-  std::string qq_client_secret_env;
-  std::string qq_token_url;
-  std::string qq_api_base_url;
-  std::string qq_gateway_url;
-
-  friend bool operator==(const ChannelConfig&, const ChannelConfig&) = default;
 };
 
 /// Verdict spelling that appears in `config.permissions.{allow,deny,ask}`.
@@ -303,7 +181,7 @@ enum class PermissionVerdict : std::uint8_t {
 /// pre-validates the regex (compiles + discards) so syntactically invalid
 /// patterns fail at config load with the offending JSON path, mirroring the
 /// criterion 4 "invalid patterns at load time are reported" guarantee in
-/// `docs/product-specs/0008-permissions.md`. The materializer recompiles
+/// `docs/design-docs/permissions-and-hooks.md`. The materializer recompiles
 /// the same pattern via `permission::InputPattern` when it assembles the
 /// runtime `Rule`s. `replay_max` and `approval_ttl_seconds` carry the
 /// per-rule approval-window policy (`docs/design-docs/permissions-and-hooks.md`
@@ -408,12 +286,6 @@ public:
   [[nodiscard]] std::span<const RouteConfig> routes() const noexcept {
     return std::span<const RouteConfig>{routes_};
   }
-  [[nodiscard]] const SessionConfig& session() const noexcept {
-    return session_;
-  }
-  [[nodiscard]] const DesktopConfig& desktop() const noexcept {
-    return desktop_;
-  }
   [[nodiscard]] const TraceConfig& trace() const noexcept {
     return trace_;
   }
@@ -422,12 +294,6 @@ public:
   }
   [[nodiscard]] const MemoryConfig& memory() const noexcept {
     return memory_;
-  }
-  [[nodiscard]] const AutomationConfig& automation() const noexcept {
-    return automation_;
-  }
-  [[nodiscard]] std::span<const ChannelConfig> channels() const noexcept {
-    return std::span<const ChannelConfig>{channels_};
   }
   [[nodiscard]] const PermissionsConfig& permissions() const noexcept {
     return permissions_;
@@ -444,13 +310,9 @@ private:
   RuntimeConfig runtime_{};
   std::vector<ProfileConfig> profiles_{};
   std::vector<RouteConfig> routes_{};
-  SessionConfig session_{};
-  DesktopConfig desktop_{};
   TraceConfig trace_{};
   HooksConfig hooks_{};
   MemoryConfig memory_{};
-  AutomationConfig automation_{};
-  std::vector<ChannelConfig> channels_{};
   PermissionsConfig permissions_{};
   std::vector<AgentConfig> agents_{};
   std::vector<ConfigWarning> warnings_{};

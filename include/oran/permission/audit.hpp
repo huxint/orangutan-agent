@@ -1,33 +1,3 @@
-// include/oran/permission/audit.hpp — permission decision audit pipeline.
-//
-// Closes the in-process half of `docs/product-specs/0008-permissions.md`
-// criterion 1 ("a tool call whose input matches a `deny` rule returns
-// `Error::permission_denied` and is recorded in audit"). The full
-// criterion lands when the agent loop wires this sink end-to-end; the
-// permission library on its own ships the value types and the sink
-// abstraction so any future runtime caller can record decisions
-// without coupling to a specific storage backend.
-//
-// Why an abstract sink rather than a hard-coded SQLite write. Three
-// foreseeable backends share the same vocabulary: the SQLite
-// `storage::AuditRepository` for ordinary runtimes, a fire-and-forget
-// `WebhookSink` for runtimes that ship events to an external SIEM,
-// and the in-memory `RecordingAuditSink` for tests and operator
-// inspection. Keeping the interface abstract means the agent loop
-// always calls `co_await sink.record(event)` and never has to branch
-// on the backend.
-//
-// Why the interface is async. The default storage backend writes via
-// `storage::AuditRepository::append_event`, which is itself
-// async-returning. Forcing a sync interface would either block the
-// agent loop on disk IO (bad) or hide errors behind fire-and-forget
-// (worse). Awaiting in line with the rest of the agent loop keeps the
-// error model uniform.
-//
-// Concurrency. Sinks are not thread-safe. The agent loop owns a
-// single sink per strand; an `asio::strand` wrapping a sink is the
-// right pattern if a future use case calls `record` concurrently.
-
 #pragma once
 
 #include <array>

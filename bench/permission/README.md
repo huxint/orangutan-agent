@@ -41,4 +41,4 @@ xmake run bench-permission
 ## See Also
 
 - [`docs/rules/testing-and-bench.md`](../../docs/rules/testing-and-bench.md)
-- [`docs/product-specs/0010-benchmark-harness.md`](../../docs/product-specs/0010-benchmark-harness.md)
+- [`docs/rules/testing-and-bench.md`](../../docs/rules/testing-and-bench.md)

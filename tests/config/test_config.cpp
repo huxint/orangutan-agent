@@ -1,5 +1,3 @@
-// tests/config/test_config.cpp — typed config loader coverage.
-
 #include <array>
 #include <cstdint>
 #include <cstdlib>
@@ -69,8 +67,7 @@ private:
   std::optional<std::string> old_value_;
 };
 
-constexpr auto kMinimalConfig = R"json(
-{
+constexpr auto kMinimalConfig = R"json({
   "runtime": {
     "workers": 2,
     "request_timeout_ms": 1500,
@@ -79,14 +76,14 @@ constexpr auto kMinimalConfig = R"json(
       "max_data_bytes": 8192
     },
     "prompt": {
-      "active_tools": ["FileRead", "ToolSearch"]
-    },
-    "redaction_patterns": ["token=[^ ]+"]
+      "active_tools": [
+        "FileRead",
+        "ToolSearch"
+      ]
+    }
   },
   "trace": {
-    "enabled": false,
-    "store_raw_bodies": true,
-    "retention_days": 14
+    "enabled": false
   },
   "hooks": {
     "timeout_ms": 1234
@@ -117,20 +114,12 @@ constexpr auto kMinimalConfig = R"json(
   "routes": {
     "default": {
       "primary": "default",
-      "fallbacks": ["local"]
+      "fallbacks": [
+        "local"
+      ]
     }
-  },
-  "session": {
-    "auto_save": false,
-    "persistence": true
-  },
-  "desktop": {
-    "enabled": true,
-    "theme": "dark",
-    "reduce_motion": true
   }
-}
-)json";
+})json";
 
 std::string example_config_path() {
   constexpr auto candidates = std::array<std::string_view, 5>{
@@ -162,10 +151,9 @@ TEST_CASE("Config::parse returns typed config values", "[unit][config]") {
   REQUIRE(result->runtime().tool_output.max_data_bytes == 8192);
   REQUIRE_FALSE(result->runtime().prompt.active_tools.use_defaults);
   REQUIRE(result->runtime().prompt.active_tools.tool_names == std::vector<std::string>{"FileRead", "ToolSearch"});
-  REQUIRE(result->runtime().redaction_patterns.size() == 1);
+
   REQUIRE_FALSE(result->trace().enabled);
-  REQUIRE(result->trace().store_raw_bodies);
-  REQUIRE(result->trace().retention_days == 14);
+
   REQUIRE(result->hooks().timeout_ms == 1234);
   REQUIRE(result->memory().longterm.recall.enabled);
   REQUIRE(result->memory().longterm.recall.limit == 3);
@@ -186,12 +174,6 @@ TEST_CASE("Config::parse returns typed config values", "[unit][config]") {
   REQUIRE(result->routes()[0].name == "default");
   REQUIRE(result->routes()[0].primary_profile == "default");
   REQUIRE(result->routes()[0].fallback_profiles == std::vector<std::string>{"local"});
-
-  REQUIRE_FALSE(result->session().auto_save);
-  REQUIRE(result->session().persistence);
-  REQUIRE(result->desktop().enabled);
-  REQUIRE(result->desktop().theme == "dark");
-  REQUIRE(result->desktop().reduce_motion);
 }
 
 TEST_CASE("Config::parse reads per-profile thinking_budget and cache policy", "[unit][config]") {
@@ -269,54 +251,12 @@ TEST_CASE("Config::parse reads runtime.stream.max_bytes", "[unit][config]") {
   }
 }
 
-TEST_CASE("Config::parse handles the desktop block", "[unit][config]") {
-  SECTION("absent desktop block yields defaults") {
-    auto result = config::Config::parse(R"json({})json");
-    REQUIRE(result.has_value());
-    REQUIRE_FALSE(result->desktop().enabled);
-    REQUIRE(result->desktop().theme == "system");
-    REQUIRE_FALSE(result->desktop().reduce_motion);
-  }
-
-  SECTION("explicit values parse") {
-    auto result =
-        config::Config::parse(R"json({"desktop": {"enabled": true, "theme": "light", "reduce_motion": true}})json");
-    REQUIRE(result.has_value());
-    REQUIRE(result->desktop().enabled);
-    REQUIRE(result->desktop().theme == "light");
-    REQUIRE(result->desktop().reduce_motion);
-  }
-
-  SECTION("unknown theme is rejected") {
-    auto result = config::Config::parse(R"json({"desktop": {"theme": "solarized"}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("non-boolean reduce_motion is rejected") {
-    auto result = config::Config::parse(R"json({"desktop": {"reduce_motion": "yes"}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("unknown desktop field warns in loose mode") {
-    auto result = config::Config::parse(R"json({"desktop": {"opacity": 0.5}})json");
-    REQUIRE(result.has_value());
-    REQUIRE(result->warnings().size() == 1);
-    REQUIRE(result->warnings()[0].path == "$.desktop.opacity");
-    REQUIRE(result->warnings()[0].message == "unknown desktop field");
-  }
-}
-
 TEST_CASE("Config::parse recursively substitutes environment variables", "[unit][config]") {
   ScopedEnv model{"ORAN_CONFIG_TEST_MODEL", "model-from-env"};
   ScopedUnsetEnv base{"ORAN_CONFIG_TEST_BASE"};
 
-  auto result = config::Config::parse(R"json(
-{
-  "runtime": {
-    "redaction_patterns": ["${ORAN_CONFIG_TEST_MODEL}"]
-  },
+  auto result = config::Config::parse(R"json({
+  "runtime": {},
   "profiles": {
     "default": {
       "provider": "local",
@@ -325,11 +265,10 @@ TEST_CASE("Config::parse recursively substitutes environment variables", "[unit]
       "api_key_env": "LOCAL_API_KEY"
     }
   }
-}
-)json");
+})json");
 
   REQUIRE(result.has_value());
-  REQUIRE(result->runtime().redaction_patterns == std::vector<std::string>{"model-from-env"});
+
   REQUIRE(result->profiles()[0].model == "model-from-env");
   REQUIRE(result->profiles()[0].base_url == "http://127.0.0.1:8080");
 }
@@ -360,7 +299,7 @@ TEST_CASE("Config::parse reports config errors without throwing", "[unit][config
   }
 
   SECTION("typed value mismatch") {
-    auto result = config::Config::parse(R"json({"desktop": {"enabled": "yes"}})json");
+    auto result = config::Config::parse(R"json({"trace": {"enabled": "yes"}})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }
@@ -486,56 +425,6 @@ TEST_CASE("Config::parse warns or fails on unknown nested provider and hook fiel
     REQUIRE(result->warnings()[0].message == "unknown long-term memory recall field");
   }
 
-  SECTION("unknown memory hybrid search field warns in loose mode") {
-    auto result = config::Config::parse(R"json({
-  "memory": {
-    "longterm": {
-      "hybrid_search": {
-        "enabled": true,
-        "ranking_strategy": "rrf"
-      }
-    }
-  }
-})json");
-
-    REQUIRE(result.has_value());
-    REQUIRE(result->warnings().size() == 1);
-    REQUIRE(result->warnings()[0].path == "$.memory.longterm.hybrid_search.ranking_strategy");
-    REQUIRE(result->warnings()[0].message == "unknown long-term memory hybrid search field");
-  }
-
-  SECTION("unknown memory retention field warns in loose mode") {
-    auto result = config::Config::parse(R"json({
-  "memory": {
-    "longterm": {
-      "retention": {
-        "forget_after_unused_days": 180,
-        "delete_after_unused_days": 365
-      }
-    }
-  }
-})json");
-
-    REQUIRE(result.has_value());
-    REQUIRE(result->warnings().size() == 1);
-    REQUIRE(result->warnings()[0].path == "$.memory.longterm.retention.delete_after_unused_days");
-    REQUIRE(result->warnings()[0].message == "unknown long-term memory retention field");
-  }
-
-  SECTION("reserved hook sink and binding fields stay accepted until typed models land") {
-    auto result = config::Config::parse(R"json({
-  "hooks": {
-    "timeout_ms": 75,
-    "sinks": [{"name": "local"}],
-    "bindings": [{"event": "tool_before"}]
-  }
-})json");
-
-    REQUIRE(result.has_value());
-    REQUIRE(result->warnings().empty());
-    REQUIRE(result->hooks().timeout_ms == 75);
-  }
-
   SECTION("unknown nested field fails under strict_config") {
     auto result = config::Config::parse(R"json({
   "strict_config": true,
@@ -587,23 +476,6 @@ TEST_CASE("Config::parse warns or fails on unknown nested provider and hook fiel
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }
 
-  SECTION("unknown memory hybrid search field fails under strict load option") {
-    auto result = config::Config::parse(R"json({
-  "memory": {
-    "longterm": {
-      "hybrid_search": {
-        "enabled": true,
-        "ranking_strategy": "rrf"
-      }
-    }
-  }
-})json",
-                                        config::LoadOptions{.strict_unknown_fields = true});
-
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
   SECTION("unknown memory retention field fails under strict load option") {
     auto result = config::Config::parse(R"json({
   "memory": {
@@ -637,9 +509,6 @@ TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][con
   REQUIRE(result->profiles()[0].pricing.cache_creation_per_million_usd == std::optional<double>{3.75});
   REQUIRE(result->profiles()[0].pricing.cache_read_per_million_usd == std::optional<double>{0.3});
   REQUIRE(result->routes().size() == 1);
-  REQUIRE_FALSE(result->desktop().enabled);
-  REQUIRE(result->desktop().theme == "system");
-  REQUIRE_FALSE(result->desktop().reduce_motion);
   REQUIRE(result->runtime().tool_output.max_text_bytes == 262144);
   REQUIRE(result->runtime().tool_output.max_data_bytes == 1048576);
   REQUIRE(result->runtime().tool_scheduler.max_parallel_tools == 4);
@@ -648,8 +517,7 @@ TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][con
   REQUIRE(result->runtime().prompt.active_tools.use_defaults);
   REQUIRE(result->runtime().prompt.active_tools.tool_names.empty());
   REQUIRE(result->trace().enabled);
-  REQUIRE_FALSE(result->trace().store_raw_bodies);
-  REQUIRE(result->trace().retention_days == 30);
+
   REQUIRE(result->hooks().timeout_ms == 2000);
   REQUIRE_FALSE(result->memory().longterm.recall.enabled);
   REQUIRE(result->memory().longterm.recall.limit == 5);
@@ -896,16 +764,12 @@ TEST_CASE("Config::parse rejects malformed runtime.prompt active tools", "[unit]
 TEST_CASE("Config::parse extracts trace policy", "[unit][config][trace]") {
   auto result = config::Config::parse(R"json({
   "trace": {
-    "enabled": false,
-    "store_raw_bodies": true,
-    "retention_days": 7
+    "enabled": false
   }
 })json");
 
   REQUIRE(result.has_value());
   REQUIRE_FALSE(result->trace().enabled);
-  REQUIRE(result->trace().store_raw_bodies);
-  REQUIRE(result->trace().retention_days == 7);
 }
 
 TEST_CASE("Config::parse rejects malformed trace policy", "[unit][config][trace]") {
@@ -917,18 +781,6 @@ TEST_CASE("Config::parse rejects malformed trace policy", "[unit][config][trace]
 
   SECTION("non-boolean enabled") {
     auto result = config::Config::parse(R"json({"trace": {"enabled": "yes"}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("non-boolean raw-body flag") {
-    auto result = config::Config::parse(R"json({"trace": {"store_raw_bodies": 1}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("zero retention") {
-    auto result = config::Config::parse(R"json({"trace": {"retention_days": 0}})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }
@@ -967,52 +819,6 @@ TEST_CASE("Config::parse extracts memory recall policy", "[unit][config][memory]
   REQUIRE(result->memory().longterm.recall.kinds == std::vector<std::string>{"project", "reference"});
 }
 
-TEST_CASE("Config::parse extracts memory hybrid search policy", "[unit][config][memory]") {
-  auto result = config::Config::parse(R"json({
-  "memory": {
-    "longterm": {
-      "hybrid_search": {
-        "enabled": true,
-        "lexical_limit": 8,
-        "vector_limit": 12,
-        "result_limit": 6,
-        "lexical_weight": 0.75,
-        "vector_weight": 1.25
-      }
-    }
-  }
-})json");
-
-  REQUIRE(result.has_value());
-  REQUIRE(result->memory().longterm.hybrid_search.enabled);
-  REQUIRE(result->memory().longterm.hybrid_search.lexical_limit == 8);
-  REQUIRE(result->memory().longterm.hybrid_search.vector_limit == 12);
-  REQUIRE(result->memory().longterm.hybrid_search.result_limit == 6);
-  REQUIRE(result->memory().longterm.hybrid_search.lexical_weight == 0.75);
-  REQUIRE(result->memory().longterm.hybrid_search.vector_weight == 1.25);
-}
-
-TEST_CASE("Config::parse extracts memory retention policy", "[unit][config][memory]") {
-  auto result = config::Config::parse(R"json({
-  "memory": {
-    "longterm": {
-      "retention": {
-        "forget_after_unused_days": 90,
-        "importance_floor": 0.25,
-        "max_records_per_scope": 2500,
-        "decay_check_interval_hours": 12
-      }
-    }
-  }
-})json");
-
-  REQUIRE(result.has_value());
-  REQUIRE(result->memory().longterm.retention.forget_after_unused_days == 90);
-  REQUIRE(result->memory().longterm.retention.importance_floor == 0.25);
-  REQUIRE(result->memory().longterm.retention.max_records_per_scope == 2500);
-  REQUIRE(result->memory().longterm.retention.decay_check_interval_hours == 12);
-}
-
 TEST_CASE("Config::parse defaults memory recall policy when absent", "[unit][config][memory]") {
   auto result = config::Config::parse(R"json({"memory": {}})json");
 
@@ -1021,616 +827,6 @@ TEST_CASE("Config::parse defaults memory recall policy when absent", "[unit][con
   REQUIRE(result->memory().longterm.recall.limit == 5);
   REQUIRE(result->memory().longterm.recall.query_strategy == config::LongtermMemoryRecallQueryStrategy::prompt_text);
   REQUIRE(result->memory().longterm.recall.kinds.empty());
-  REQUIRE_FALSE(result->memory().longterm.hybrid_search.enabled);
-  REQUIRE(result->memory().longterm.hybrid_search.lexical_limit == 10);
-  REQUIRE(result->memory().longterm.hybrid_search.vector_limit == 10);
-  REQUIRE(result->memory().longterm.hybrid_search.result_limit == 10);
-  REQUIRE(result->memory().longterm.hybrid_search.lexical_weight == 1.0);
-  REQUIRE(result->memory().longterm.hybrid_search.vector_weight == 1.0);
-  REQUIRE(result->memory().longterm.retention.forget_after_unused_days == 180);
-  REQUIRE(result->memory().longterm.retention.importance_floor == 0.0);
-  REQUIRE(result->memory().longterm.retention.max_records_per_scope == 10000);
-  REQUIRE(result->memory().longterm.retention.decay_check_interval_hours == 24);
-}
-
-TEST_CASE("Config::parse extracts automation cron jobs", "[unit][config][automation]") {
-  auto result = config::Config::parse(R"json({
-  "automation": {
-    "cron": {
-      "jobs": [
-        {
-          "job_key": "daily-summary",
-          "agent_key": "researcher",
-          "agent_prompt": "Summarize yesterday's repository activity.",
-          "expression": "0 9 * * *",
-          "first_fire_at": "2026-06-08T09:00:00Z"
-        },
-        {
-          "job_key": "hourly-ci",
-          "agent_prompt": "Check CI status and summarize failures.",
-          "expression": "15 * * * *",
-          "first_fire_at": "2026-06-08T00:15:00Z",
-          "last_fired_at": "2026-06-08T03:15:00.250Z"
-        }
-      ]
-    }
-  }
-})json");
-
-  REQUIRE(result.has_value());
-  REQUIRE(result->automation().cron.jobs.size() == 2);
-  REQUIRE(result->automation().cron.jobs[0].job_key == "daily-summary");
-  REQUIRE(result->automation().cron.jobs[0].agent_key == "researcher");
-  REQUIRE(result->automation().cron.jobs[0].agent_prompt == "Summarize yesterday's repository activity.");
-  REQUIRE(result->automation().cron.jobs[0].expression == "0 9 * * *");
-  REQUIRE(core::time::format_iso8601_utc(result->automation().cron.jobs[0].first_fire_at) ==
-          "2026-06-08T09:00:00.000Z");
-  REQUIRE_FALSE(result->automation().cron.jobs[0].last_fired_at.has_value());
-
-  REQUIRE(result->automation().cron.jobs[1].job_key == "hourly-ci");
-  REQUIRE(result->automation().cron.jobs[1].agent_key == "automation");
-  REQUIRE(result->automation().cron.jobs[1].agent_prompt == "Check CI status and summarize failures.");
-  REQUIRE(result->automation().cron.jobs[1].expression == "15 * * * *");
-  REQUIRE(core::time::format_iso8601_utc(result->automation().cron.jobs[1].first_fire_at) ==
-          "2026-06-08T00:15:00.000Z");
-  REQUIRE(result->automation().cron.jobs[1].last_fired_at.has_value());
-  REQUIRE(core::time::format_iso8601_utc(*result->automation().cron.jobs[1].last_fired_at) ==
-          "2026-06-08T03:15:00.250Z");
-}
-
-TEST_CASE("Config::parse extracts automation triggered jobs", "[unit][config][automation]") {
-  auto result = config::Config::parse(R"json({
-  "automation": {
-    "triggered": {
-      "jobs": [
-        {
-          "job_key": "triggered-ci",
-          "trigger_key": "webhook:ci",
-          "agent_key": "researcher",
-          "agent_prompt": "Investigate the incoming CI webhook."
-        },
-        {
-          "job_key": "triggered-alert",
-          "trigger_key": "channel:mock-main:ops",
-          "agent_prompt": "Handle the operator alert."
-        }
-      ]
-    }
-  }
-})json");
-
-  REQUIRE(result.has_value());
-  REQUIRE(result->automation().triggered.jobs.size() == 2);
-  REQUIRE(result->automation().triggered.jobs[0].job_key == "triggered-ci");
-  REQUIRE(result->automation().triggered.jobs[0].trigger_key == "webhook:ci");
-  REQUIRE(result->automation().triggered.jobs[0].agent_key == "researcher");
-  REQUIRE(result->automation().triggered.jobs[0].agent_prompt == "Investigate the incoming CI webhook.");
-
-  REQUIRE(result->automation().triggered.jobs[1].job_key == "triggered-alert");
-  REQUIRE(result->automation().triggered.jobs[1].trigger_key == "channel:mock-main:ops");
-  REQUIRE(result->automation().triggered.jobs[1].agent_key == "automation");
-  REQUIRE(result->automation().triggered.jobs[1].agent_prompt == "Handle the operator alert.");
-}
-
-TEST_CASE("Config::parse extracts automation webhook listener", "[unit][config][automation]") {
-  auto result = config::Config::parse(R"json({
-  "automation": {
-    "webhooks": {
-      "listener": {
-        "enabled": true,
-        "bind_host": "127.0.0.1",
-        "port": 9090,
-        "path_prefix": "/hooks/",
-        "max_payload_bytes": 4096,
-        "job_limit": 7
-      }
-    }
-  }
-})json");
-
-  REQUIRE(result.has_value());
-  const auto& listener = result->automation().webhooks.listener;
-  REQUIRE(listener.enabled);
-  REQUIRE(listener.bind_host == "127.0.0.1");
-  REQUIRE(listener.port == 9090);
-  REQUIRE(listener.path_prefix == "/hooks/");
-  REQUIRE(listener.max_payload_bytes == 4096);
-  REQUIRE(listener.job_limit == 7);
-}
-
-TEST_CASE("Config::parse defaults automation config when absent", "[unit][config][automation]") {
-  auto result = config::Config::parse(R"json({"automation": {}})json");
-
-  REQUIRE(result.has_value());
-  REQUIRE(result->automation().cron.jobs.empty());
-  REQUIRE(result->automation().triggered.jobs.empty());
-  REQUIRE_FALSE(result->automation().webhooks.listener.enabled);
-  REQUIRE(result->automation().webhooks.listener.bind_host == "127.0.0.1");
-  REQUIRE(result->automation().webhooks.listener.port == 8787);
-  REQUIRE(result->automation().webhooks.listener.path_prefix == "/automation/webhooks/");
-}
-
-TEST_CASE("Config::parse rejects malformed automation cron jobs", "[unit][config][automation]") {
-  SECTION("non-object automation block") {
-    auto result = config::Config::parse(R"json({"automation": []})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("non-object cron block") {
-    auto result = config::Config::parse(R"json({"automation": {"cron": []}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("non-array jobs") {
-    auto result = config::Config::parse(R"json({"automation": {"cron": {"jobs": {}}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("empty job key") {
-    auto result = config::Config::parse(R"json({
-  "automation": {
-    "cron": {
-      "jobs": [{
-        "job_key": "",
-        "agent_prompt": "Run daily automation.",
-        "expression": "* * * * *",
-        "first_fire_at": "2026-06-08T00:00:00Z"
-      }]
-    }
-  }
-})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("missing first fire") {
-    auto result = config::Config::parse(R"json({
-  "automation": {
-    "cron": {
-      "jobs": [{"job_key": "daily", "agent_prompt": "Run daily automation.", "expression": "* * * * *"}]
-    }
-  }
-})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("empty agent key") {
-    auto result = config::Config::parse(R"json({
-  "automation": {
-    "cron": {
-      "jobs": [{
-        "job_key": "daily",
-        "agent_key": "",
-        "agent_prompt": "Run daily automation.",
-        "expression": "* * * * *",
-        "first_fire_at": "2026-06-08T00:00:00Z"
-      }]
-    }
-  }
-})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("missing agent prompt") {
-    auto result = config::Config::parse(R"json({
-  "automation": {
-    "cron": {
-      "jobs": [{
-        "job_key": "daily",
-        "expression": "* * * * *",
-        "first_fire_at": "2026-06-08T00:00:00Z"
-      }]
-    }
-  }
-})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("empty agent prompt") {
-    auto result = config::Config::parse(R"json({
-  "automation": {
-    "cron": {
-      "jobs": [{
-        "job_key": "daily",
-        "agent_prompt": "",
-        "expression": "* * * * *",
-        "first_fire_at": "2026-06-08T00:00:00Z"
-      }]
-    }
-  }
-})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("invalid last fired timestamp") {
-    auto result = config::Config::parse(R"json({
-  "automation": {
-    "cron": {
-      "jobs": [{
-        "job_key": "daily",
-        "agent_prompt": "Run daily automation.",
-        "expression": "* * * * *",
-        "first_fire_at": "2026-06-08T00:00:00Z",
-        "last_fired_at": "not-a-time"
-      }]
-    }
-  }
-})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("duplicate job key") {
-    auto result = config::Config::parse(R"json({
-  "automation": {
-    "cron": {
-      "jobs": [
-        {
-          "job_key": "daily",
-          "agent_prompt": "Run daily automation.",
-          "expression": "* * * * *",
-          "first_fire_at": "2026-06-08T00:00:00Z"
-        },
-        {
-          "job_key": "daily",
-          "agent_prompt": "Run daily automation.",
-          "expression": "0 9 * * *",
-          "first_fire_at": "2026-06-08T09:00:00Z"
-        }
-      ]
-    }
-  }
-})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("unknown automation field fails under strict config") {
-    auto result = config::Config::parse(R"json({
-  "strict_config": true,
-  "automation": {
-    "cron": {
-      "jobs": [],
-      "timezone": "UTC"
-    }
-  }
-})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-}
-
-TEST_CASE("Config::parse rejects malformed automation triggered jobs", "[unit][config][automation]") {
-  SECTION("non-object triggered block") {
-    auto result = config::Config::parse(R"json({"automation": {"triggered": []}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("non-array jobs") {
-    auto result = config::Config::parse(R"json({"automation": {"triggered": {"jobs": {}}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("empty trigger key") {
-    auto result = config::Config::parse(R"json({
-  "automation": {
-    "triggered": {
-      "jobs": [{
-        "job_key": "triggered-ci",
-        "trigger_key": "",
-        "agent_prompt": "Handle triggered automation."
-      }]
-    }
-  }
-})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("empty agent key") {
-    auto result = config::Config::parse(R"json({
-  "automation": {
-    "triggered": {
-      "jobs": [{
-        "job_key": "triggered-ci",
-        "trigger_key": "webhook:ci",
-        "agent_key": "",
-        "agent_prompt": "Handle triggered automation."
-      }]
-    }
-  }
-})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("missing agent prompt") {
-    auto result = config::Config::parse(R"json({
-  "automation": {
-    "triggered": {
-      "jobs": [{"job_key": "triggered-ci", "trigger_key": "webhook:ci"}]
-    }
-  }
-})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("duplicate job key") {
-    auto result = config::Config::parse(R"json({
-  "automation": {
-    "triggered": {
-      "jobs": [
-        {
-          "job_key": "triggered-ci",
-          "trigger_key": "webhook:ci",
-          "agent_prompt": "Handle triggered automation."
-        },
-        {
-          "job_key": "triggered-ci",
-          "trigger_key": "webhook:deploy",
-          "agent_prompt": "Handle deploy automation."
-        }
-      ]
-    }
-  }
-})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("unknown triggered field fails under strict config") {
-    auto result = config::Config::parse(R"json({
-  "strict_config": true,
-  "automation": {
-    "triggered": {
-      "jobs": [],
-      "retry": true
-    }
-  }
-})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-}
-
-TEST_CASE("Config::parse rejects malformed automation webhook listener", "[unit][config][automation]") {
-  SECTION("non-object webhooks block") {
-    auto result = config::Config::parse(R"json({"automation": {"webhooks": []}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("non-object listener block") {
-    auto result = config::Config::parse(R"json({"automation": {"webhooks": {"listener": []}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("invalid port") {
-    auto result = config::Config::parse(R"json({"automation": {"webhooks": {"listener": {"port": 70000}}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("invalid path prefix") {
-    auto result =
-        config::Config::parse(R"json({"automation": {"webhooks": {"listener": {"path_prefix": "hooks/"}}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("unknown listener field fails under strict config") {
-    auto result = config::Config::parse(R"json({
-  "strict_config": true,
-  "automation": {
-    "webhooks": {
-      "listener": {
-        "enabled": true,
-        "extra": true
-      }
-    }
-  }
-})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-}
-
-TEST_CASE("Config::parse extracts channel adapters", "[unit][config][channel]") {
-  auto result = config::Config::parse(R"json({
-  "channels": [
-    {
-      "id": "mock-main",
-      "kind": "mock",
-      "agent_key": "concierge",
-      "inbound_capacity": 16
-    },
-    {
-      "id": "mock-side",
-      "kind": "mock"
-    }
-  ]
-})json");
-
-  REQUIRE(result.has_value());
-  REQUIRE(result->channels().size() == 2);
-  REQUIRE(result->channels()[0].id == "mock-main");
-  REQUIRE(result->channels()[0].kind == "mock");
-  REQUIRE(result->channels()[0].agent_key == "concierge");
-  REQUIRE(result->channels()[0].inbound_capacity == 16);
-
-  REQUIRE(result->channels()[1].id == "mock-side");
-  REQUIRE(result->channels()[1].kind == "mock");
-  REQUIRE(result->channels()[1].agent_key == "default");
-  REQUIRE(result->channels()[1].inbound_capacity == 64);
-}
-
-TEST_CASE("Config::parse extracts QQ channel metadata", "[unit][config][channel]") {
-  auto result = config::Config::parse(R"json({
-  "strict_config": true,
-  "channels": [
-    {
-      "id": "qq-main",
-      "kind": "qq",
-      "agent_key": "concierge",
-      "inbound_capacity": 8,
-      "qq_app_id_env": "ORAN_QQ_APP_ID",
-      "qq_client_secret_env": "ORAN_QQ_CLIENT_SECRET",
-      "qq_token_url": "https://bots.qq.com/app/getAppAccessToken",
-      "qq_api_base_url": "https://api.sgroup.qq.com",
-      "qq_gateway_url": "wss://api.sgroup.qq.com/websocket"
-    }
-  ]
-})json");
-
-  REQUIRE(result.has_value());
-  REQUIRE(result->warnings().empty());
-  REQUIRE(result->channels().size() == 1);
-  const auto& channel = result->channels()[0];
-  REQUIRE(channel.id == "qq-main");
-  REQUIRE(channel.kind == "qq");
-  REQUIRE(channel.agent_key == "concierge");
-  REQUIRE(channel.inbound_capacity == 8);
-  REQUIRE(channel.qq_app_id_env == "ORAN_QQ_APP_ID");
-  REQUIRE(channel.qq_client_secret_env == "ORAN_QQ_CLIENT_SECRET");
-  REQUIRE(channel.qq_token_url == "https://bots.qq.com/app/getAppAccessToken");
-  REQUIRE(channel.qq_api_base_url == "https://api.sgroup.qq.com");
-  REQUIRE(channel.qq_gateway_url == "wss://api.sgroup.qq.com/websocket");
-}
-
-TEST_CASE("Config::parse defaults channels when absent", "[unit][config][channel]") {
-  auto absent = config::Config::parse(R"json({})json");
-  REQUIRE(absent.has_value());
-  REQUIRE(absent->channels().empty());
-
-  auto empty = config::Config::parse(R"json({"channels": []})json");
-  REQUIRE(empty.has_value());
-  REQUIRE(empty->channels().empty());
-}
-
-TEST_CASE("Config::parse rejects malformed channels", "[unit][config][channel]") {
-  SECTION("non-array channels block") {
-    auto result = config::Config::parse(R"json({"channels": {}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("non-object channel entry") {
-    auto result = config::Config::parse(R"json({"channels": ["mock"]})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("empty id") {
-    auto result = config::Config::parse(R"json({"channels": [{"id": "", "kind": "mock"}]})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("missing kind") {
-    auto result = config::Config::parse(R"json({"channels": [{"id": "mock-main"}]})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("empty agent key") {
-    auto result =
-        config::Config::parse(R"json({"channels": [{"id": "mock-main", "kind": "mock", "agent_key": ""}]})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("non-positive inbound capacity") {
-    auto result =
-        config::Config::parse(R"json({"channels": [{"id": "mock-main", "kind": "mock", "inbound_capacity": 0}]})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("qq channel missing app id env") {
-    auto result = config::Config::parse(R"json({
-  "channels": [
-    {
-      "id": "qq-main",
-      "kind": "qq",
-      "qq_client_secret_env": "ORAN_QQ_CLIENT_SECRET",
-      "qq_gateway_url": "wss://api.sgroup.qq.com/websocket"
-    }
-  ]
-})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("qq channel empty client secret env") {
-    auto result = config::Config::parse(R"json({
-  "channels": [
-    {
-      "id": "qq-main",
-      "kind": "qq",
-      "qq_app_id_env": "ORAN_QQ_APP_ID",
-      "qq_client_secret_env": "",
-      "qq_gateway_url": "wss://api.sgroup.qq.com/websocket"
-    }
-  ]
-})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("qq channel missing gateway url") {
-    auto result = config::Config::parse(R"json({
-  "channels": [
-    {
-      "id": "qq-main",
-      "kind": "qq",
-      "qq_app_id_env": "ORAN_QQ_APP_ID",
-      "qq_client_secret_env": "ORAN_QQ_CLIENT_SECRET"
-    }
-  ]
-})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("duplicate id") {
-    auto result = config::Config::parse(R"json({
-  "channels": [
-    {"id": "mock-main", "kind": "mock"},
-    {"id": "mock-main", "kind": "mock"}
-  ]
-})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("unknown channel field fails under strict config") {
-    auto result = config::Config::parse(R"json({
-  "strict_config": true,
-  "channels": [{"id": "mock-main", "kind": "mock", "token": "secret"}]
-})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("unknown channel field warns without strict config") {
-    auto result = config::Config::parse(R"json({
-  "channels": [{"id": "mock-main", "kind": "mock", "token": "secret"}]
-})json");
-    REQUIRE(result.has_value());
-    REQUIRE(result->warnings().size() == 1);
-    REQUIRE(result->warnings()[0].path == "$.channels[0].token");
-  }
 }
 
 TEST_CASE("Config::parse rejects malformed memory recall policy", "[unit][config][memory]") {
@@ -1698,97 +894,6 @@ TEST_CASE("Config::parse rejects malformed memory recall policy", "[unit][config
   SECTION("duplicate kind name") {
     auto result =
         config::Config::parse(R"json({"memory": {"longterm": {"recall": {"kinds": ["project", "project"]}}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-}
-
-TEST_CASE("Config::parse rejects malformed memory hybrid search policy", "[unit][config][memory]") {
-  SECTION("non-object hybrid search block") {
-    auto result = config::Config::parse(R"json({"memory": {"longterm": {"hybrid_search": []}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("non-boolean enabled") {
-    auto result = config::Config::parse(R"json({"memory": {"longterm": {"hybrid_search": {"enabled": "yes"}}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("zero lexical limit") {
-    auto result = config::Config::parse(R"json({"memory": {"longterm": {"hybrid_search": {"lexical_limit": 0}}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("non-integer vector limit") {
-    auto result =
-        config::Config::parse(R"json({"memory": {"longterm": {"hybrid_search": {"vector_limit": 1.5}}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("negative lexical weight") {
-    auto result =
-        config::Config::parse(R"json({"memory": {"longterm": {"hybrid_search": {"lexical_weight": -0.1}}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("non-number vector weight") {
-    auto result =
-        config::Config::parse(R"json({"memory": {"longterm": {"hybrid_search": {"vector_weight": "high"}}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("both weights zero") {
-    auto result = config::Config::parse(
-        R"json({"memory": {"longterm": {"hybrid_search": {"lexical_weight": 0, "vector_weight": 0}}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-}
-
-TEST_CASE("Config::parse rejects malformed memory retention policy", "[unit][config][memory]") {
-  SECTION("non-object retention block") {
-    auto result = config::Config::parse(R"json({"memory": {"longterm": {"retention": []}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("zero unused-days window") {
-    auto result =
-        config::Config::parse(R"json({"memory": {"longterm": {"retention": {"forget_after_unused_days": 0}}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("importance floor above one") {
-    auto result =
-        config::Config::parse(R"json({"memory": {"longterm": {"retention": {"importance_floor": 1.1}}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("non-number importance floor") {
-    auto result =
-        config::Config::parse(R"json({"memory": {"longterm": {"retention": {"importance_floor": "low"}}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("zero max records") {
-    auto result =
-        config::Config::parse(R"json({"memory": {"longterm": {"retention": {"max_records_per_scope": 0}}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("non-integer check interval") {
-    auto result = config::Config::parse(
-        R"json({"memory": {"longterm": {"retention": {"decay_check_interval_hours": 1.5}}}})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }

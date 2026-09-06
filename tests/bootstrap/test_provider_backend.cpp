@@ -1,5 +1,3 @@
-// tests/bootstrap/test_provider_backend.cpp - bootstrap HTTP provider backend coverage.
-
 #include <array>
 #include <atomic>
 #include <charconv>
@@ -7,6 +5,8 @@
 #include <cstddef>
 #include <cstdlib>
 #include <expected>
+#include <filesystem>
+#include <fstream>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -20,11 +20,13 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/thread_pool.hpp>
 #include <asio/write.hpp>
+#include <nlohmann/json.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <oran/async.hpp>
 #include <oran/bootstrap.hpp>
+#include <oran/bootstrap/application.hpp>
 #include <oran/config.hpp>
 #include <oran/core/content.hpp>
 #include <oran/core/error.hpp>
@@ -208,7 +210,7 @@ std::optional<std::string_view> context_value(const core::Error& error, std::str
   return it->second;
 }
 
-config::Config parse_config(std::string base_url) {
+std::string config_text(std::string base_url) {
   auto text = std::string{R"json(
 {
   "profiles": {
@@ -231,7 +233,11 @@ config::Config parse_config(std::string base_url) {
 }
 )json");
 
-  auto parsed = config::Config::parse(text);
+  return text;
+}
+
+config::Config parse_config(std::string base_url) {
+  auto parsed = config::Config::parse(config_text(std::move(base_url)));
   REQUIRE(parsed.has_value());
   return std::move(*parsed);
 }
@@ -308,6 +314,56 @@ public:
 };
 
 }  // namespace
+
+TEST_CASE("application resumes persisted context through the real provider boundary",
+          "[integration][bootstrap][application]") {
+  ScopedEnv api_key{"ORAN_BOOTSTRAP_PROVIDER_BACKEND_KEY", "test-secret"};
+  ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
+  ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
+  struct Workspace {
+    std::filesystem::path path;
+    ~Workspace() {
+      std::error_code ignored;
+      std::filesystem::remove_all(path, ignored);
+    }
+  };
+  auto id = core::generate_turn_id();
+  REQUIRE(id);
+  Workspace workspace{std::filesystem::temp_directory_path() / ("oran-application-" + core::format_turn_id_hex(*id))};
+  REQUIRE(std::filesystem::create_directory(workspace.path));
+  const auto path = workspace.path / "config.json";
+
+  for (const auto* prompt : {"Remember the project name.", "Continue the previous turn."}) {
+    OneShotHttpServer server{anthropic_sse_response()};
+    {
+      std::ofstream config_file{path};
+      config_file << config_text(server.base_url());
+      REQUIRE(config_file.good());
+    }
+    auto result = bootstrap::run_application({.config_path = path.string(),
+                                              .workspace = workspace.path.string(),
+                                              .state_directory = {},
+                                              .session_id = core::format_turn_id_hex(*id),
+                                              .agent_key = "default",
+                                              .prompt = prompt});
+
+    INFO((result ? "" : result.error().message()));
+    REQUIRE(result);
+    CHECK(result->text == "backend ok");
+    REQUIRE(server.served());
+    const auto request = server.request_text();
+    const auto body = nlohmann::json::parse(request.substr(request.find("\r\n\r\n") + 4));
+    const auto& messages = body.at("messages");
+    if (std::string_view{prompt} == "Continue the previous turn.") {
+      REQUIRE(messages.size() == 3);
+      CHECK(messages[0]["role"] == "user");
+      CHECK(messages[0]["content"][0]["text"] == "Remember the project name.");
+      CHECK(messages[1]["role"] == "assistant");
+      CHECK(messages[1]["content"][0]["text"] == "backend ok");
+      CHECK(messages[2]["content"][0]["text"] == "Continue the previous turn.");
+    }
+  }
+}
 
 TEST_CASE("HttpProviderBackend constructs an HTTP-backed provider system", "[unit][bootstrap][provider_backend]") {
   ScopedEnv api_key{"ORAN_BOOTSTRAP_PROVIDER_BACKEND_KEY", "test-secret"};

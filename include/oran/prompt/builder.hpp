@@ -1,5 +1,3 @@
-// include/oran/prompt/builder.hpp — deterministic prompt section builder.
-
 #pragma once
 
 #include <cstddef>
@@ -19,9 +17,9 @@
 namespace orangutan::prompt {
 
 struct SectionVersions {
-  std::uint32_t system_preamble{1};
-  std::uint32_t tool_catalog{1};
-  std::uint32_t deferred_tools{1};
+  std::uint32_t system_preamble{2};
+  std::uint32_t tool_catalog{2};
+  std::uint32_t deferred_tools{2};
   std::uint32_t skills_catalog{1};
   std::uint32_t memory_framing{1};
   std::uint32_t per_agent_overlay{1};

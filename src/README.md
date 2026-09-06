@@ -1,38 +1,6 @@
-# `src/` — Library Implementations
+# Source
 
-One subdirectory per library: `src/oran-<lib>/`. Each library:
-
-- Compiles as a `static` xmake target named `oran-<lib>`.
-- Has its public headers under [`../include/oran/<lib>/`](../include).
-- Owns private headers under `src/oran-<lib>/_impl/`.
-- Has a `tests/<lib>/` and `bench/<lib>/` neighbour.
-
-## Conventions
-
-- Implementations may include heavy third-party headers (`nlohmann/json.hpp`,
-  `asio.hpp`, `sqlite3.h`, `spdlog/spdlog.h`).
-- File naming: `kebab-case.cpp` matching the primary class.
-- One primary class per file; helpers in anonymous namespace or `_impl/`.
-- For module-aware libraries (phase 1+), the module unit is `<lib>.cppm`.
-
-## Adding A New Library
-
-1. Open an execution plan: `make new-plan SLUG=add-<lib>`.
-2. Add the library to [`../xmake/targets.lua`](../xmake) with `add_deps()` matching
-   the allowed dependencies in
-   [`../docs/ARCHITECTURE.md#library-inventory`](../docs/ARCHITECTURE.md).
-3. Add `tests/<lib>/` and `bench/<lib>/` with at least a `placeholder.cpp`.
-4. Document the library in `../docs/design-docs/<lib>.md` if its API surface is
-   substantial.
-5. Update [`../docs/rules/libraries.md`](../docs/rules/libraries.md) if you pull in
-   new third-party deps.
-6. Write a history entry.
-
-## Status
-
-`src/oran-core/`, `src/oran-async/`, `src/oran-io/`, `src/oran-storage/`,
-`src/oran-config/`, `src/oran-permission/`, `src/oran-hook/`, `src/oran-tool/`,
-`src/oran-prompt/`, `src/oran-automation/`, `src/oran-cli/`, and
-`src/oran-bootstrap/` are live. See
-[`../docs/product-specs/index.md`](../docs/product-specs/index.md) for the planned
-libraries.
+`src/main.cpp` is the executable argument boundary. Each `src/oran-<lib>` owns one
+library with public headers under `include/oran/<lib>`. Private implementation
+headers stay under that library. [Architecture](../docs/ARCHITECTURE.md) owns
+responsibilities and dependency direction.

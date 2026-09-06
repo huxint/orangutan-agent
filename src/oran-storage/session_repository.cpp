@@ -1,7 +1,6 @@
-// src/oran-storage/session_repository.cpp — sessions domain repository.
-
 #include <oran/storage/session_repository.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -43,6 +42,14 @@ SELECT session_id, agent_key, sequence, role, content_json, metadata_json, creat
 FROM session_messages
 WHERE session_id = ? AND agent_key = ?
 ORDER BY sequence ASC
+)sql";
+
+constexpr std::string_view LOAD_TAIL_SQL = R"sql(
+SELECT session_id, agent_key, sequence, role, content_json, metadata_json, created_at,
+       length(CAST(content_json AS BLOB)) + length(CAST(metadata_json AS BLOB))
+FROM session_messages
+WHERE session_id = ? AND agent_key = ?
+ORDER BY sequence DESC LIMIT ?
 )sql";
 
 constexpr std::string_view kTouchSessionSql = R"sql(
@@ -443,6 +450,49 @@ async::Awaitable<core::Result<std::vector<SessionMessageRecord>>> SessionReposit
   }
 
   co_return messages;
+}
+
+async::Awaitable<core::Result<std::vector<SessionMessageRecord>>>
+SessionRepository::load_tail(SessionKey key, std::size_t max_messages, std::size_t max_bytes) {
+  if (auto valid = validate_key(key); !valid)
+    co_return std::unexpected(std::move(valid).error());
+  if (max_messages == 0 || max_messages > 4096 || max_bytes == 0 || max_bytes > 16 * 1024 * 1024) {
+    co_return std::unexpected(core::Error::invalid_argument("invalid conversation tail limit"));
+  }
+  auto reader = co_await pool_->acquire_reader();
+  if (!reader)
+    co_return std::unexpected(std::move(reader).error());
+  auto cached = reader->statement_cache().acquire(reader->connection(), LOAD_TAIL_SQL);
+  if (!cached)
+    co_return std::unexpected(std::move(cached).error());
+  auto& statement = cached->statement();
+  if (auto bound = statement.bind_text(1, key.session_id); !bound)
+    co_return std::unexpected(std::move(bound).error());
+  if (auto bound = statement.bind_text(2, key.agent_key); !bound)
+    co_return std::unexpected(std::move(bound).error());
+  if (auto bound = statement.bind_int64(3, static_cast<std::int64_t>(max_messages)); !bound)
+    co_return std::unexpected(std::move(bound).error());
+  std::size_t remaining = max_bytes;
+  std::vector<SessionMessageRecord> rows;
+  for (;;) {
+    auto step = statement.step();
+    if (!step)
+      co_return std::unexpected(std::move(step).error());
+    if (*step == StepResult::done)
+      break;
+    auto bytes = statement.column_int64(7);
+    if (!bytes)
+      co_return std::unexpected(std::move(bytes).error());
+    if (*bytes < 0 || static_cast<std::uint64_t>(*bytes) > remaining)
+      break;
+    remaining -= static_cast<std::size_t>(*bytes);
+    auto row = read_message_row(statement);
+    if (!row)
+      co_return std::unexpected(std::move(row).error());
+    rows.push_back(std::move(*row));
+  }
+  std::ranges::reverse(rows);
+  co_return rows;
 }
 
 async::Awaitable<core::Result<SessionSkillActivationRecord>>

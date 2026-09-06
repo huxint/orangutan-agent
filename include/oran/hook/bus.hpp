@@ -1,27 +1,3 @@
-// include/oran/hook/bus.hpp — in-process hook bus.
-//
-// The bus is the single point of fan-out for runtime lifecycle events. The
-// agent loop, the tool registry, and (eventually) the provider system and
-// memory tier all publish through one bus instance; sinks subscribe to the
-// events they care about. The bootstrap layer constructs the bus and binds
-// the configured sinks once per process.
-//
-// Slice 22 shipped advisory publish: every sink subscribed to an event
-// receives the (event, payload) pair, each sink's success/failure is
-// captured in the returned `PublishOutcome`, and no sink can veto that
-// advisory publish. Slice 156 changed advisory delivery from sequential
-// awaits to concurrent fan-out while preserving subscription-ordered
-// outcome rows. Slice 158 switched sink delivery to shared immutable payload
-// snapshots so multi-sink publishes reuse one raw and one redacted view
-// instead of cloning structured payload bytes per receiver. Slice 90 added
-// `publish_blocking<E>` for the spec-0015 whitelist, slice 91 made
-// `tool_before` the first dispatch consumer, and slice 92 added the
-// configured blocking timeout policy.
-//
-// Concurrency. The bus is not thread-safe; the runtime owns one per strand.
-// Subscribers (`Sink&`) are non-owning — the caller keeps them alive for the
-// bus's lifetime.
-
 #pragma once
 
 #include <chrono>
@@ -52,6 +28,9 @@ struct BusOptions {
   /// cancellation is abandoned after this bound (its outcome row records a
   /// hook error); zero disables the bound and joins unconditionally.
   std::chrono::milliseconds advisory_timeout{2000};
+  /// Human approval may take longer than an extension callback. When absent,
+  /// permission prompts use the ordinary blocking timeout.
+  std::optional<std::chrono::milliseconds> approval_timeout{};
 
   friend bool operator==(const BusOptions&, const BusOptions&) = default;
 };

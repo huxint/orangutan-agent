@@ -1,5 +1,3 @@
-// src/oran-io/anchored_directory.cpp — directory enumeration from authority.
-
 #include <oran/io/directory_authority.hpp>
 #include <oran/io/file.hpp>
 
@@ -150,17 +148,19 @@ list_authorized_directory_blocking(const DirectoryAuthority& directory, ListDire
 
 async::Awaitable<core::Result<std::vector<DirectoryEntry>>>
 list_directory(asio::any_io_executor executor, DirectoryAuthority directory, ListDirectoryOptions options) {
-  co_return co_await run_blocking(std::move(executor), [directory = std::move(directory), options]() mutable {
-    try {
-      return list_authorized_directory_blocking(directory, options);
-    } catch (const std::exception& error) {
-      return core::Result<std::vector<DirectoryEntry>>{
-          std::unexpected(core::Error::io("authorized directory listing failed").with("detail", error.what()))};
-    } catch (...) {
-      return core::Result<std::vector<DirectoryEntry>>{
-          std::unexpected(core::Error::io("authorized directory listing failed"))};
-    }
-  });
+  co_return co_await run_blocking(
+      std::move(executor),
+      [directory = std::move(directory), options](std::stop_token) mutable {
+        try {
+          return list_authorized_directory_blocking(directory, options);
+        } catch (const std::exception& error) {
+          return core::Result<std::vector<DirectoryEntry>>{
+              std::unexpected(core::Error::io("authorized directory listing failed").with("detail", error.what()))};
+        } catch (...) {
+          return core::Result<std::vector<DirectoryEntry>>{
+              std::unexpected(core::Error::io("authorized directory listing failed"))};
+        }
+      });
 }
 
 namespace {

@@ -1,11 +1,10 @@
-// include/oran/core/turn_id.hpp — turn correlation id.
-
 #pragma once
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <string>
+#include <string_view>
 
 #include <oran/core/result.hpp>
 
@@ -28,6 +27,7 @@ using TurnId = std::array<std::byte, 16>;
 /// `--trace-export`, session-store keys, and trace JSON all use this spelling;
 /// parsers accepting it must reject any other shape.
 [[nodiscard]] std::string format_turn_id_hex(const TurnId& id);
+[[nodiscard]] Result<TurnId> parse_turn_id_hex(std::string_view text);
 
 /// Generate a fresh non-zero id: UUIDv4-shaped (version/variant bits set)
 /// over `std::random_device` entropy mixed with a monotonic counter and the

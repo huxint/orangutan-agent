@@ -1,34 +1,3 @@
-// include/oran/permission/input_pattern.hpp — runtime regex pattern for
-// `Rule::input_pattern`.
-//
-// Closes criterion 4 of `docs/product-specs/0008-permissions.md` together
-// with the matching `oran-config` wiring slice. The legacy project used
-// compile-time `ctre`, which made it impossible to load operator-supplied
-// patterns from config. v2 uses google/re2 (see `docs/rules/libraries.md`)
-// — linear-time matching against adversarial input, with patterns loaded
-// at runtime from `config.permissions.{allow,deny,ask}[*].input_pattern`.
-//
-// re2 is intentionally hidden from this public header (rule C6,
-// `docs/rules/critical-rules.md`): only a forward declaration of
-// `re2::RE2` appears here, the full header `<re2/re2.h>` lives in
-// `input_pattern.cpp`. The owned `std::unique_ptr<re2::RE2>` is fine
-// against an incomplete type as long as the destructor is defined out
-// of line.
-//
-// Match semantics: `matches(input)` performs a **partial** match — true
-// iff the pattern matches a substring of `input`. Anchored regexes
-// (`^...$`) collapse to full-match semantics; that mirrors PCRE-style
-// operator intuition and keeps simple denylists short
-// (`rm ` denies anything containing "rm ", `^git push` denies only
-// commands that start with that prefix).
-//
-// `InputPattern` is move-only because `re2::RE2` itself is neither
-// copyable nor movable. Equality is defined on the **source pattern
-// string**, not on the compiled NFA — two patterns that happen to
-// recognize the same language are not considered equal here. That
-// keeps the `Rule` operator== honest (it round-trips through config
-// rule-for-rule) without ever calling into re2's internals.
-
 #pragma once
 
 #include <memory>

@@ -27,6 +27,45 @@ jobs:
             **/*.md
             !docs/generated/**
 
-  # Once the xmake skeleton lands, add a matrix job here that runs:
-  #   xmake f -m release && xmake -j$(nproc) && xmake test
-  # Plus scripts/check-compile-budget.sh.
+  cpp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container:
+      image: gcc:16@sha256:b98be39c2378222af9dcab6a5b1707d74b47d7c413c8569d5429a4cbfefbe981
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [release, debug]
+    env:
+      XMAKE_ROOT: 'y'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends pkg-config libcurl4-openssl-dev python3 unzip autoconf automake libtool
+
+      - uses: xmake-io/github-action-setup-xmake@3a1a5dddfc7fa625d9a698738334bf55655a861a
+        with:
+          xmake-version: '3.1.1'
+          package-cache: true
+          package-cache-key: gcc16-${{ matrix.mode }}
+
+      - name: Configure
+        env:
+          BUILD_MODE: ${{ matrix.mode }}
+        run: |
+          if [ "$BUILD_MODE" = debug ]; then
+            xmake f -y -m debug --sanitizers=y
+          else
+            xmake f -y -m release
+          fi
+
+      - name: Build
+        run: xmake build -j2
+
+      - name: Test
+        run: xmake test -j2

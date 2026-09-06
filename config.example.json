@@ -17,16 +17,10 @@
     },
     "prompt": {
       "active_tools": "defaults"
-    },
-    "redaction_patterns": [
-      "(?i)(api[_-]?key)[=:][^\\s]+",
-      "Bearer [A-Za-z0-9_.-]+"
-    ]
+    }
   },
   "trace": {
-    "enabled": true,
-    "store_raw_bodies": false,
-    "retention_days": 30
+    "enabled": true
   },
   "profiles": {
     "default": {
@@ -60,55 +54,67 @@
       "extra_write_roots": []
     },
     "allow": [
-      {"tool_pattern": "FileRead"},
-      {"tool_pattern": "FileSearch"},
-      {"tool_pattern": "*", "capability": "read_memory"}
+      {
+        "tool_pattern": "FileRead"
+      },
+      {
+        "tool_pattern": "FileSearch"
+      },
+      {
+        "tool_pattern": "*",
+        "capability": "read_memory"
+      }
     ],
     "deny": [
-      {"tool_pattern": "*", "capability": "runtime_loader"},
-      {"tool_pattern": "ShellExec", "input_pattern": "^rm -rf"},
-      {"tool_pattern": "ShellExec", "input_pattern": "^git push"}
+      {
+        "tool_pattern": "*",
+        "capability": "runtime_loader"
+      },
+      {
+        "tool_pattern": "ShellExec",
+        "input_pattern": "^rm -rf"
+      },
+      {
+        "tool_pattern": "ShellExec",
+        "input_pattern": "^git push"
+      }
     ],
     "ask": [
-      {"tool_pattern": "FileWrite"},
-      {"tool_pattern": "*", "capability": "spawn_subprocess"}
+      {
+        "tool_pattern": "FileWrite"
+      },
+      {
+        "tool_pattern": "*",
+        "capability": "spawn_subprocess"
+      }
     ]
   },
   "agents": {
     "researcher": {
       "prompt_overlay": "Prefer concise, source-backed answers and call out uncertain evidence.",
-      "skills_enabled": ["release-note", "review-pr"],
-      "skills_deactivated": ["review-pr"],
+      "skills_enabled": [
+        "release-note",
+        "review-pr"
+      ],
+      "skills_deactivated": [
+        "review-pr"
+      ],
       "skills_expirations": [
-        {"name": "release-note", "expires_at": "2026-12-31T23:59:59Z"}
+        {
+          "name": "release-note",
+          "expires_at": "2026-12-31T23:59:59Z"
+        }
       ],
       "permissions": {
         "allow": [
-          {"tool_pattern": "*", "capability": "egress_http"}
+          {
+            "tool_pattern": "*",
+            "capability": "egress_http"
+          }
         ]
       }
     }
   },
-  "teams": {},
-  "channels": [
-    {
-      "id": "mock-main",
-      "kind": "mock",
-      "agent_key": "default",
-      "inbound_capacity": 64
-    },
-    {
-      "id": "qq-main",
-      "kind": "qq",
-      "agent_key": "default",
-      "inbound_capacity": 64,
-      "qq_app_id_env": "QQ_APP_ID",
-      "qq_client_secret_env": "QQ_CLIENT_SECRET",
-      "qq_token_url": "https://bots.qq.com/app/getAppAccessToken",
-      "qq_api_base_url": "https://api.sgroup.qq.com",
-      "qq_gateway_url": "wss://example.invalid/qq-gateway"
-    }
-  ],
   "hooks": {
     "timeout_ms": 2000
   },
@@ -118,64 +124,14 @@
         "enabled": false,
         "limit": 5,
         "query_strategy": "prompt_text",
-        "kinds": ["user", "feedback", "project", "reference", "team"]
-      },
-      "hybrid_search": {
-        "enabled": false,
-        "lexical_limit": 10,
-        "vector_limit": 10,
-        "result_limit": 10,
-        "lexical_weight": 1.0,
-        "vector_weight": 1.0
-      },
-      "retention": {
-        "forget_after_unused_days": 180,
-        "importance_floor": 0.0,
-        "max_records_per_scope": 10000,
-        "decay_check_interval_hours": 24
+        "kinds": [
+          "user",
+          "feedback",
+          "project",
+          "reference",
+          "team"
+        ]
       }
     }
-  },
-  "automation": {
-    "cron": {
-      "jobs": [
-        {
-          "job_key": "daily-summary",
-          "agent_key": "researcher",
-          "agent_prompt": "Summarize yesterday's repository activity and open risks.",
-          "expression": "0 9 * * *",
-          "first_fire_at": "2026-06-08T09:00:00Z"
-        }
-      ]
-    },
-    "triggered": {
-      "jobs": [
-        {
-          "job_key": "mock-channel-message",
-          "trigger_key": "channel:mock-main",
-          "agent_key": "researcher",
-          "agent_prompt": "Review the latest mock channel message and summarize required action."
-        }
-      ]
-    },
-    "webhooks": {
-      "listener": {
-        "enabled": false,
-        "bind_host": "127.0.0.1",
-        "port": 8787,
-        "path_prefix": "/automation/webhooks/",
-        "max_payload_bytes": 262144,
-        "job_limit": 100
-      }
-    }
-  },
-  "desktop": {
-    "enabled": false,
-    "theme": "system",
-    "reduce_motion": false
-  },
-  "session": {
-    "auto_save": true,
-    "persistence": true
   }
 }

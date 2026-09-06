@@ -1,5 +1,3 @@
-// src/oran-core/turn_id.cpp — TurnId spelling + generation.
-
 #include <oran/core/turn_id.hpp>
 
 #include <atomic>
@@ -14,6 +12,23 @@
 #include <oran/core/error.hpp>
 
 namespace orangutan::core {
+
+Result<TurnId> parse_turn_id_hex(std::string_view text) {
+  TurnId id{};
+  if (text.size() != id.size() * 2) {
+    return std::unexpected(Error::invalid_argument("turn id must contain 32 lowercase hexadecimal characters"));
+  }
+  constexpr std::string_view DIGITS = "0123456789abcdef";
+  for (std::size_t i = 0; i < id.size(); ++i) {
+    const auto high = DIGITS.find(text[i * 2]);
+    const auto low = DIGITS.find(text[i * 2 + 1]);
+    if (high == std::string_view::npos || low == std::string_view::npos) {
+      return std::unexpected(Error::invalid_argument("turn id must contain 32 lowercase hexadecimal characters"));
+    }
+    id[i] = static_cast<std::byte>((high << 4) | low);
+  }
+  return id;
+}
 
 namespace {
 

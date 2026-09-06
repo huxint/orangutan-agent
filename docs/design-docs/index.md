@@ -1,63 +1,16 @@
-# Design Docs Index
+# Design Contracts
 
-This directory holds the **deep architectural designs** for Orangutan v2. Each file
-covers one design area; files cross-link rather than duplicate.
-
-If you are starting a non-trivial task, the rule is:
-
-1. Read the matching doc here.
-2. If reality has drifted from the doc, fix the doc in the same change.
-3. If you need a *new* design area, start a doc with a single paragraph stating the
-   problem, then write the design.
-
-## Catalogue
-
-### Foundational
-
-- [`core-beliefs.md`](core-beliefs.md) — non-negotiable operating principles for the
-  whole codebase.
-- [`module-boundaries.md`](module-boundaries.md) — what's allowed to depend on what;
-  how to keep TUs small; one-way dependency rule.
-- [`async-model.md`](async-model.md) — executor topology, coroutines, cancellation,
-  backpressure, why no `stdexec`.
-- [`io-runtime.md`](io-runtime.md) — policy-free file/directory helpers and the future
-  subprocess/signal boundary.
-- [`storage-runtime.md`](storage-runtime.md) — expected-only SQLite connection and
-  statement core, plus future pool/migration boundaries.
-- [`bootstrap-runtime.md`](bootstrap-runtime.md) — process entry, config discovery,
-  and future runtime assembly boundary.
-- [`cli-runtime.md`](cli-runtime.md) — CLI mode parsing, prompt-runner handoff,
-  scripted/interactive REPL boundaries, and REPL-owned slash commands.
-
-### Agent Runtime
-
-- [`agent-platform.md`](agent-platform.md) — the vision for the runtime: what kinds of
-  agents, what kinds of platforms, what kinds of integrations. Read before designing
-  new top-level features.
-- [`tool-runtime.md`](tool-runtime.md) — tool registry, dispatch, permission/hook
-  ordering, deferred-tool discovery.
-- [`memory-system.md`](memory-system.md) — working / session / long-term / shared
-  memory tiers, backends, retention.
-- [`automation-runtime.md`](automation-runtime.md) — deterministic automation cadence
-  planning, retention job request shaping, and future scheduler ownership.
-- [`api-portability.md`](api-portability.md) — provider abstraction, protocol adapters,
-  capability matrix.
-- [`team-collaboration.md`](team-collaboration.md) — multi-agent coordination strategies,
-  mailbox, shared scratchpad, conversation DAG.
-
-### Platform
-
-- [`channel-abstraction.md`](channel-abstraction.md) — the `Channel` trait + per-adapter
-  capability matrix.
-- [`permissions-and-hooks.md`](permissions-and-hooks.md) — runtime permission engine and
-  the hook bus across every subsystem.
-- [`secrets-and-state.md`](secrets-and-state.md) — secret encryption, database file
-  layout, migrations, retention.
-
-## Seed Documents (legacy continuity)
-
-These files distill what we keep from `orangutan/` and what we deliberately replace:
-
-- [`../references/orangutan-legacy-audit.md`](../references/orangutan-legacy-audit.md)
-- [`../references/harness-template-distill.md`](../references/harness-template-distill.md)
-- [`../references/third-party-libs.md`](../references/third-party-libs.md)
+| Contract | Owns |
+| --- | --- |
+| [`agent-platform.md`](agent-platform.md) | Agent turn and planned child composition |
+| [`api-portability.md`](api-portability.md) | Provider protocols, retry and caching |
+| [`async-model.md`](async-model.md) | Executors, cancellation and child ownership |
+| [`bootstrap-runtime.md`](bootstrap-runtime.md) | Application composition and session ownership |
+| [`core-beliefs.md`](core-beliefs.md) | Core design principles |
+| [`io-runtime.md`](io-runtime.md) | Filesystem authority and blocking IO |
+| [`memory-system.md`](memory-system.md) | Scoped memory and conversation history |
+| [`module-boundaries.md`](module-boundaries.md) | Public boundaries and dependency direction |
+| [`permissions-and-hooks.md`](permissions-and-hooks.md) | Policy decisions, approval and lifecycle hooks |
+| [`secrets-and-state.md`](secrets-and-state.md) | Configuration, credentials and data locations |
+| [`storage-runtime.md`](storage-runtime.md) | SQLite and repository contracts |
+| [`tool-runtime.md`](tool-runtime.md) | Tool dispatch, scheduling and outputs |

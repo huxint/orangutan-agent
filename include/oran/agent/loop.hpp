@@ -1,15 +1,3 @@
-// include/oran/agent/loop.hpp — first fake-provider-backed agent loop.
-//
-// This header opens the real `oran-agent` runtime surface without pulling the
-// tool scheduler, memory runtime, or full storage/session runtime into
-// the first loop increments. The intent is deliberate: spec 0017 says the loop must be
-// proven against `provider::FakeProvider` before any vendor adapter ships. This
-// class is that seam. It builds the cached prompt, maps it into a
-// `provider::Request`, sends provider iterations, and accepts terminal
-// text-style responses. When the caller supplies the existing registry dispatch
-// boundary, it can also run the first sequential tool-use iteration path and
-// re-enter the provider.
-
 #pragma once
 
 #include <cstdint>
@@ -134,7 +122,7 @@ struct RunTurnInputs {
   /// routes every tool batch — including N == 1 — through
   /// `ToolScheduler::run_batch`, so bounded parallelism, per-path locks,
   /// per-call timeout, and parent-cancellation propagation apply uniformly.
-  /// `bootstrap::AgentPromptRunner` owns one for the runner's lifetime. When
+  /// `bootstrap::AgentSession` owns one for the runner's lifetime. When
   /// null but `tools`/`dispatch_context` are present, the loop builds a
   /// per-turn scheduler with default options so embedders and tests still get
   /// the single batched dispatch path.

@@ -1,17 +1,3 @@
-// include/oran/hook/payload.hpp — typed payloads for hook events.
-//
-// Slices 22 + 25 ship typed shapes for the four tool-lifecycle events
-// (`tool_before`, `tool_dispatched`, `tool_after`, `tool_error`). Slice 94
-// adds the first permission ask-flow shape (`permission_ask_rendered`) so UI
-// sinks can render an approval prompt and return a blocking decision. Slice
-// 152 adds optional per-sink redacted input views for sensitive mutation
-// payloads. Slice 179 adds the first memory write/delete lifecycle payloads,
-// slice 180 adds read-after observability, slice 186 adds decay observability,
-// and slice 194 adds automation job lifecycle metadata. Events without a typed
-// shape yet carry `std::monostate` so sinks subscribed to them can observe
-// occurrence without payload content; typed shapes land with the producing
-// subsystem.
-
 #pragma once
 
 #include <chrono>
@@ -159,6 +145,7 @@ struct PermissionAskRenderedPayload {
   std::uint32_t replay_max{8};
   std::chrono::seconds approval_ttl{3600};
   core::Time requested_at{};
+  std::optional<core::TurnId> turn_id{};
 };
 
 /// Long-term memory record snapshot copied without making `oran-hook` depend

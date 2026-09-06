@@ -1,5 +1,3 @@
-// src/oran-agent/scheduler.cpp — bounded-parallel scheduler.
-
 #include <oran/agent/scheduler.hpp>
 
 #include <chrono>
@@ -7,6 +5,7 @@
 #include <deque>
 #include <exception>
 #include <expected>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -23,7 +22,10 @@
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/experimental/awaitable_operators.hpp>
+#include <asio/redirect_error.hpp>
+#include <asio/steady_timer.hpp>
 #include <asio/this_coro.hpp>
+#include <asio/use_awaitable.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -193,6 +195,9 @@ public:
     tool::Registry* registry;
     ToolSchedulerOptions options;
     detail::PathLockTable locks;
+    std::size_t active_calls{0};
+    std::map<const tool::DispatchContext*, std::size_t> active_contexts;
+    std::vector<std::weak_ptr<asio::steady_timer>> idle_waiters;
   };
 
   Impl(asio::any_io_executor executor, tool::Registry& registry, ToolSchedulerOptions options)
@@ -224,6 +229,19 @@ public:
     return run_batch_shared(state_, std::move(batch), prototype);
   }
 
+  async::Awaitable<core::Result<void>> wait_idle(const tool::DispatchContext* context) {
+    auto state = state_;
+    co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+    while (context ? state->active_contexts.contains(context) : state->active_calls != 0) {
+      auto waiter = std::make_shared<asio::steady_timer>(state->executor);
+      waiter->expires_at(asio::steady_timer::time_point::max());
+      state->idle_waiters.push_back(waiter);
+      std::error_code error;
+      co_await waiter->async_wait(asio::redirect_error(asio::use_awaitable, error));
+    }
+    co_return core::Result<void>{};
+  }
+
 private:
   [[nodiscard]] static async::Awaitable<core::Result<std::vector<ToolBatchResult>>>
   run_batch_shared(std::shared_ptr<SharedState> shared,
@@ -252,9 +270,31 @@ private:
     names.reserve(batch.size());
     for (std::size_t i = 0; i < batch.size(); ++i) {
       names.push_back(batch[i].name);
+      const auto call_id = batch[i].tool_use_id;
+      const auto call_name = batch[i].name;
+      ++shared->active_calls;
+      ++shared->active_contexts[&prototype];
       asio::co_spawn(shared->executor,
                      run_call(state, shared, std::move(batch[i]), i, std::ref(prototype)),
-                     asio::bind_cancellation_slot(state->child_cancels[i].slot(), asio::detached));
+                     asio::bind_cancellation_slot(
+                         state->child_cancels[i].slot(),
+                         [shared, state, i, context = &prototype, call_id, call_name](std::exception_ptr exception) {
+                           if (exception) {
+                             state->results[i] = ToolBatchResult{
+                                 .tool_use_id = call_id,
+                                 .name = call_name,
+                                 .output = std::unexpected(core::Error::internal("tool dispatch failed unexpectedly"))};
+                             static_cast<void>(state->completion.try_send(i));
+                           }
+                           --shared->active_calls;
+                           if (--shared->active_contexts[context] == 0)
+                             shared->active_contexts.erase(context);
+                           for (auto& weak : shared->idle_waiters) {
+                             if (auto waiter = weak.lock())
+                               waiter->cancel();
+                           }
+                           shared->idle_waiters.clear();
+                         }));
     }
 
     std::vector<bool> reported(state->total_calls, false);
@@ -468,6 +508,10 @@ ToolScheduler& ToolScheduler::operator=(ToolScheduler&&) noexcept = default;
 async::Awaitable<core::Result<std::vector<ToolBatchResult>>>
 ToolScheduler::run_batch(std::vector<ToolBatchCall> batch, tool::DispatchContext& prototype) {
   return impl_->run_batch(std::move(batch), prototype);
+}
+
+async::Awaitable<core::Result<void>> ToolScheduler::wait_idle(const tool::DispatchContext* context) {
+  return impl_->wait_idle(context);
 }
 
 const ToolSchedulerOptions& ToolScheduler::options() const noexcept {

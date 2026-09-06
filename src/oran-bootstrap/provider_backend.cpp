@@ -1,5 +1,3 @@
-// src/oran-bootstrap/provider_backend.cpp - bootstrap HTTP provider backend construction.
-
 #include <oran/bootstrap/provider_backend.hpp>
 
 #include <chrono>
@@ -152,7 +150,7 @@ core::Result<HttpProviderBackend> HttpProviderBackend::build(const config::Confi
   if (!plan) {
     return std::unexpected(std::move(plan).error());
   }
-  auto credentials = provider::resolve_adapter_credentials(*plan);
+  auto credentials = provider::resolve_adapter_credentials(*plan, options.secrets);
   if (!credentials) {
     return std::unexpected(std::move(credentials).error());
   }

@@ -1,438 +1,52 @@
-# Agent Platform — Vision
+# Agent Execution
 
-Orangutan v2 is **a runtime for agents**, not "a chatbot with tools". This document
-captures the platform vision that every other design doc must serve. It is intentionally
-slightly aspirational; nearer-term scope is captured in `docs/product-specs/`.
+An agent turn maps a prepared context to a response and transcript. The current
+`agent::Loop` coordinates provider calls and tool batches. `bootstrap::AgentSession`
+adds persisted context, memory recall and policy; the active refactor separates
+its state transformations from effects.
 
-## What an Agent Is, In This Codebase
+## Turn Contract
 
-An **agent** is a typed configuration of:
+1. Resolve the agent/session identity and permission policy before execution.
+2. Load bounded history, retain complete exchanges and recall scoped memory once.
+3. Build a deterministic prefix and append the user's message as dynamic context.
+4. Request a provider response. Tool-use responses dispatch through one scheduler
+   and registry; append their ordered results and request the next response.
+5. Return terminal text and typed content. Persist only the successful transcript
+   suffix. Provider/tool/cancellation failures are explicit errors.
 
-- A **base model** + protocol (Anthropic Messages, OpenAI Responses, etc.) with fallbacks.
-- An **identity scope** — keys that namespace memory and audit logs.
-- A **toolset** — subset of the global `oran-tool` registry, possibly with per-tool
-  permission overrides.
-- A **memory profile** — which tiers are visible (working always; session/long-term
-  optional per agent; team-shared if the agent is in a team).
-- A **skill set** — markdown skills under `<workspace>/.orangutan/skills/`.
-- A **hook bindings** map — which hook sinks subscribe to which lifecycle events for
-  this agent.
-- A **mailbox address** — `<team>/<agent-name>`.
+The iteration cap is 16 by default; the session supplies a 4096-token completion
+limit unless explicitly overridden. Tool concurrency and per-call timeout are
+bounded independently. Model-repairable tool errors re-enter the model as error
+results; infrastructure failures terminate the turn. Trace rows correlate the
+turn with its tool audits without storing raw prompt bodies.
 
-Agents are **plural**: a running process can host dozens of them. Each is driven by an
-`oran::agent::Loop` that owns a single ReAct loop. Multiple loops share the executor and
-the platform layer; they never share mutable state without a typed channel.
+## Context And State
 
-## Where Agents Come From
+`RunTurnInputs` contains borrowed prompt/context views and explicit service
+references. They remain valid until the turn and its tool work finish.
+`RunTurnResult` owns the answer, usage, typed assistant blocks and transcript.
+The session coordinator serializes turns using the same session identity.
 
-Three call sites instantiate an agent:
+Persisted history loads at most 128 rows and 512 KiB of encoded content/metadata.
+An incomplete leading exchange is removed before model submission. Stored rows
+remain intact. Deferred tool promotion affects the next prompt boundary.
 
-1. **Primary CLI** — `orangutan` started interactively or single-shot.
-2. **Orchestrated worker** — `oran-orchestration` spawns a worker under a leader's
-   coordination strategy.
-3. **Automation firing** — `oran-automation` fires a cron / periodic / triggered job
-   and constructs a fresh runtime for the firing.
+The next functional boundary will express prepared context and resulting session
+state as values, leaving provider/tool/storage coordination in a small runner.
+Do not add mutable application registries or cross-agent state to the loop.
 
-Each call site uses the same factory in `oran-bootstrap::RuntimeAssembler`. New call
-sites are added only by extending the assembler, never by re-implementing it.
+## Agent Collaboration
 
-## Interfaces — What Talks To Agents
+The first collaboration layer will own a bounded set of child turns. Each child
+gets independent session state and an explicit memory scope. Its effective
+permission policy must be no wider than its parent's. Results return as values;
+parent cancellation joins all children before releasing their services.
 
-| Interface | Direction       | Bound to                             |
-| --------- | --------------- | ------------------------------------ |
-| CLI       | bidirectional   | stdin/stdout (REPL) or one-shot      |
-| Desktop   | bidirectional   | `oran-desktop` (Slint, in-process)   |
-| Channel   | bidirectional   | `oran-channel` (QQ, Discord, Slack, …) |
-| Automation | inbound         | `oran-automation` scheduler          |
-| Heartbeat | inbound         | internal liveness pings              |
-| Orchestration mailbox | bidirectional | `oran-orchestration` teammate-to-teammate |
+This layer is not implemented. Its first acceptance is one parent and one child,
+including a refused child effect and cancellation. Team strategies follow only
+when this composition is usable.
 
-The runtime never assumes which interface a message came from. It does carry an
-`Origin` tag in the message envelope (`origin::cli`, `origin::channel::qq`,
-`origin::automation::heartbeat`, …) for observability and policy decisions only.
-
-## A Platform Is More Than An Agent Loop
-
-The lesson from `orangutan/` is that the *interesting* features live in the platform:
-
-- **Orchestration** turns one agent into a team.
-- **Automation** turns one prompt into a long-running process.
-- **Memory tiers** turn one conversation into accumulating expertise.
-- **Hooks** turn the runtime into a place users extend without forking.
-- **Permissions** turn "the agent might do anything" into "the agent does only what's
-  allowed".
-- **Channels** turn the runtime into a multi-platform presence.
-
-The v2 design promotes each of these from "feature" to "first-class subsystem with its
-own library, its own tests, its own bench, its own design doc."
-
-## Prompt Assembly
-
-> **Status (slice 101, 2026-05-25):** `oran-prompt` owns the first
-> deterministic `prompt::Builder` skeleton plus `prompt::PromotionState`,
-> `oran-agent` owns the narrow `agent::SessionState` surface that observes
-> successful `ToolSearch` output and promotes deferred matches into the
-> next prompt snapshot, and `oran-provider` owns the cache-hint mapper plus
-> the slice-74 abstract `provider::System` / `EventSink` / `Route` surface
-> with the first concrete `provider::FakeProvider` (scripted-turn plan,
-> delta-to-`Response` assembly, cancel-aware scripted latency) plus the
-> slice-97 `provider::execution::Runtime` decorator for per-target retry and
-> route fallback before real adapters land. Slice 101 adds bootstrap's
-> `AgentPromptRunner`, which borrows a caller-supplied backend, wraps it in
-> that execution runtime, binds the CLI approval sink, and runs `agent::Loop`
-> with runtime-assembly workspace/audit/broker/hook/trace services. Slices
-> 105-106 add the provider credential-resolution API and adapter-factory
-> dispatch seam for concrete factories; slices 107-108 add offline
-> Anthropic/OpenAI Responses request serialization and response decoding, slice
-> 107 preserves structured tool-result data through the provider-facing
-> transcript and maps it into each protocol's supported request shape, slice 109
-> adds injected Anthropic/OpenAI protocol
-> systems through `ProtocolTransportAdapterFactory`, slice 110 adds the platform
-> `oran-http` body client, and slice 111 adds the bootstrap-owned
-> `HttpProviderBackend` construction seam over that client.
-> Slice 112 switches configured-route `bootstrap::run` to that backend plus
-> `cli::run_async`, so ordinary `--prompt` runs now drive `agent::Loop` through
-> the HTTP-backed provider system. Built-in empty defaults still take the
-> deterministic no-runner shell and read no provider credentials.
-> Slices 76-77
-> extend `agent::Loop` over those pieces: it builds a
-> `prompt::RenderedPrompt`, maps cache hints, mirrors active/promoted tools
-> into name-sorted `provider::Request::tools`, sends requests through a
-> supplied `provider::System`, and, when supplied a `tool::Registry` plus
-> `tool::DispatchContext`, sequentially dispatches tool-use blocks, appends
-> ordered tool results, rebuilds the prompt, and re-enters the provider.
-> Parent cancellation during the provider await or direct tool dispatch now
-> returns `ErrorKind::cancelled` with `reason=parent_cancelled` and
-> `cancellation_phase=provider_initial|provider_stream|provider_complete|tools`;
-> slice 83 persists cancellation phases into `trace_turns` rows when trace is
-> configured, slice 244 refines the provider phase into those three streaming
-> milestones, slice 84 writes
-> `stop_reason=error` rows for non-cancelled provider and response-backed
-> loop-boundary failures, and slice 85 generates a turn id when trace is
-> configured and the caller leaves it unset. Slice 96 refreshes
-> `DispatchContext::now` around each direct tool dispatch and restores the
-> previous value afterward, which lets broker-backed `permission_ask_rendered`
-> approvals inside the fake-provider loop use a real request timestamp without
-> making reusable dispatch contexts stateful across calls. Slice 79 adds the first
-> trace/audit join
-> primitive: `RunTurnInputs::turn_id` can be copied into
-> `DispatchContext::parent_turn_id` for direct tool dispatches in that turn.
-> Slice 80 adds `RunTurnInputs::trace` as the interim trace context and writes
-> one body-free `trace_turns` row through `storage::TraceRepository` before
-> returning terminal-success responses; the row captures prompt/cache hashes,
-> aggregate usage, route labels, timestamps, and redacted context bytes.
-> Slice 82 adds the explicit disabled path: `TraceContext::enabled=false`
-> skips the trace row, forces direct dispatch audit rows to keep
-> `parent_turn_id = NULL`, and restores any reusable dispatch-context parent id
-> after the tool call.
-> Slices 116-120 add scheduler handoff, slices 121-124 add SSE streaming,
-> slice 126 adds provider lifecycle hooks, slice 129 adds profile-priced cost
-> estimates, slices 131-133 add session-memory persistence plus the section-5
-> memory-framing owner, and slice 134 adds the first section-1
-> `agent::SystemPreambleOwner` with a stable default preamble and static grep
-> gate.
-> The invariants — section order, byte-identical cached prefix, no clocks /
-> per-call state in sections (1)–(6) — remain canonical in
-> [`../rules/prompt-design.md`](../rules/prompt-design.md).
-
-The agent loop owns:
-
-- **System preamble / overlay inputs** — sections (1) and (6) of the
-  [`prompt-design.md` CacheSection order](../rules/prompt-design.md). Produces
-  `system_preamble` and `per_agent_overlay` sections whose bytes must depend only
-  on stable agent/model/config inputs — never on the wall clock or the current
-  iteration. Slice 134 adds `agent::SystemPreamble`,
-  `agent::SystemPreambleOwner`, and `agent::default_system_preamble()` in
-  `oran-agent`; `agent::Loop` uses that owned default when
-  `RunTurnInputs::system_preamble` is empty, while explicit caller text remains
-  an override for tests and embedders. The default section-1 bytes intentionally
-  exclude tool catalogs, memory framing, skills, and conversation status.
-- **Tool catalog renderer** — section (2). Will walk `tool::Registry::catalog()`,
-  filter the full-schema active set through `config::RuntimeConfig::prompt.active_tools`,
-  apply the session's sorted `prompt::PromotionState` snapshot, and render each
-  selected `core::ToolDef` to a deterministic block (name + one-line description
-  + JSON Schema) by delegating to `tool::CatalogRenderer`. Memoized per
-  `ToolDef`; see [`tool-runtime.md`](tool-runtime.md).
-- **Deferred-tool index renderer** — section (3). Compact name + one-line
-  description listing; full schema arrives via `ToolSearch`. See
-  [`tool-runtime.md`](tool-runtime.md) "Deferred Tools".
-- **Skills catalog renderer** — section (4). Compact listing only;
-  activated skill bodies shift this section, never section (1). Slice 135 adds
-  `oran-skill` with the first deterministic section-4 catalog renderer and a
-  section-4 owner in bootstrap. Slice 136 adds `skill::Loader` and has
-  configured-route bootstrap snapshot `<workspace>/.orangutan/skills/*.md` into
-  that catalog once before the first prompt while keeping skill bodies out of
-  the prompt. Slice 137 wires `SkillInvoke` through the ordinary tool
-  dispatch path, returning the matched snapshot body as conversation-tail tool
-  result text rather than changing the stable prompt prefix. Slice 138 replaces
-  the one-shot directory load with a prompt-boundary `skill::WorkspaceSkillSnapshot`
-  refresh so add/update/remove changes are visible before the next prompt while
-  the active turn still uses one coherent catalog/body snapshot. Slice 139 lets
-  bootstrap callers select an `agents.<name>.skills_enabled` allowlist so the
-  runner filters the workspace snapshot before rendering section 4 and before
-  serving `SkillInvoke`; slice 140 maps the configured-route binary
-  `--agent <name>` selector into that runner-owned agent selection. Slice 141
-  adds `agents.<name>.prompt_overlay` as the config-owned source for stable
-  section-6 overlay bytes when callers have not supplied exact section text.
-  Slice 142 adds `skill::ActiveSkill` markers and the versioned
-  `SkillInvoke` activation metadata path: the active turn still receives the
-  skill body only as conversation-tail tool-result text, while the next prompt
-  can render deterministic `Active Skill: <name>` rows in section 4 from
-  successful transcript tool results that are still present in the current
-  loaded/allowed snapshot. Slice 143 makes that current policy explicit as
-  `skill::ActivationPolicy` / `skill::resolve_active_skills(...)`, so future
-  expiration or deactivation rules extend the section-4 owner instead of
-  adding ad hoc transcript parsing in bootstrap. Slice 144 adds explicit
-  `ActivationPolicy::deactivated_skill_names` so caller-provided deactivation
-  events subtract from transcript-derived active markers at the same boundary,
-  and slice 145 adds explicit `SkillExpiration` rows plus caller-supplied
-  `ActivationPolicy::evaluation_time` so expiration is deterministic policy
-  input rather than a renderer-owned clock read. Slice 146 adds the first
-  runtime-owned source for those inputs: bootstrap reads
-  `agents.<name>.skills_deactivated` and `agents.<name>.skills_expirations`
-  from config and supplies the prompt-boundary `evaluation_time` from the
-  runner clock, so configured-route section 4 drops deactivated and expired
-  markers while the renderer stays clock-free.
-  Slice 147 adds the first event-driven source: the permissioned
-  `SkillDeactivate` built-in records a versioned `skill_deactivation`
-  transcript result, and `skill::active_skills_from_transcript` nets it against
-  prior `SkillInvoke` activations in transcript order (most recent event wins),
-  so the agent can drop an active skill mid-session without a config edit while
-  the section-4 owner stays clock-free.
-  Slice 149 exposes `skill::SkillActivationEvent` plus
-  `skill::skill_activation_events_from_transcript(...)`; bootstrap consumes that
-  shared event stream for session-store persistence, and future runtime entry
-  points can do the same instead of duplicating transcript parser logic.
-  The policy is resolved only at prompt boundaries: identical loaded/allowed
-  snapshots plus identical policy inputs render byte-identical section-4 bytes,
-  while changed activation, deactivation, or expiry state intentionally changes
-  section 4 for the next prompt and therefore breaks the cached prefix through
-  the section content hash. Skill bodies still arrive only as section-7
-  tool-result text; see
-  [`../product-specs/0009-skills.md`](../product-specs/0009-skills.md).
-- **Memory framing renderer** — section (5). Pure function of memory state;
-  no per-iteration mutation. Slice 133 adds `memory::FramingOwner` in
-  `oran-memory` and has `AgentPromptRunner` render it once before calling the
-  loop; the loop still receives stable `RunTurnInputs::memory_framing` bytes.
-  See [`memory-system.md`](memory-system.md).
-- **Conversation tail assembler** — section (7), the only intentionally
-  dynamic block. Cache breakpoint sits between (6) and (7).
-
-Slice 70 adopts the Piebald Claude Code prompt corpus' stable catalog shape:
-one deterministic full-schema block per active tool plus compact discovery rows
-for deferred tools. It rejects per-invocation status, timing, and inline
-conversation-progress bytes in sections (1)–(6). The minted section IDs are
-`system_preamble`, `tool_catalog`, `deferred_tools`, `skills_catalog`,
-`memory_framing`, `per_agent_overlay`, and `conversation_tail`; all start at
-`cache_version=1` through `prompt::SectionVersions`. Slice 71 adds the
-promotion snapshot path, and slice 72 adds the first `oran-agent` owner for
-that path: `agent::SessionState` consumes successful `ToolSearch`
-structured output, promotes deferred matches, and exposes the sorted snapshot
-for the next build. `bench-prompt` compares default, explicit, promoted, and
-promotion-state snapshot paths; `bench-agent` now pins no-promotion and
-after-promotion session snapshots against conversation-tail drift. Slice 73
-connects the cache boundary to `oran-provider` through
-`provider::make_prompt_cache_hints`, and slice 74 closes the provider
-prework by shipping `provider::System` / `EventSink` / `Route` plus the
-first concrete `provider::FakeProvider`. Slice 75 added the first
-text-only `agent::Loop` consumer for that chain, slice 76 adds the
-sequential direct-dispatch tool path: callers provide the existing registry
-and dispatch context, the loop appends ordered `tool_result` blocks and
-provider re-entry without changing the provider contract, and slice 77 tags
-provider/tool parent cancellations with a stable `cancellation_phase` error
-context without introducing trace storage yet. Slice 79 then threads a caller-
-supplied `RunTurnInputs::turn_id` through the direct dispatch context so tool
-audit rows can join to trace rows. Slice 80 adds the first terminal-success
-trace writer on top of the same turn id, slice 82 gates both the trace row and
-direct-dispatch parent id behind `TraceContext::enabled` for explicitly
-disabled turns, slice 83 writes cancelled trace rows for provider/tool parent
-cancellations, slice 84 writes ordinary provider/loop-boundary error rows, and
-slice 85 generates a missing turn id for trace-enabled turns before prompt
-render/dispatch. Slice 96 also refreshes `DispatchContext::now` for each direct
-dispatch, so the registry-owned blocking approval prompt path uses a real
-per-call timestamp and then restores the caller's reusable context. Slice 97
-adds the provider execution decorator for retry/fallback, and slice 101 hands
-that decorated `provider::System` to the loop through bootstrap's
-`AgentPromptRunner` when a caller supplies a backend. Slice 109 adds injected
-body-response Anthropic/OpenAI protocol systems, slice 110 adds the concrete
-`oran-http` body client, and slice 111 adds bootstrap's `HttpProviderBackend`
-construction seam over that client. Slice 112 switches configured-route
-`bootstrap::run` to that backend plus `cli::run_async`, so the ordinary binary
-can use the runner for provider-backed prompts. Slices 116-120 move all tool
-batches through `ToolScheduler` without changing the provider-facing
-request/response shape. Slice 134 consults the Piebald corpus again for the
-system-preamble surface: it adopts the stable multi-part prompt separation and
-tool-catalog-outside-section-1 pattern, but rejects copying Claude Code's large
-Claude-specific system prompt because Orangutan's section 1 is a minimal runtime
-contract and sections 2-7 own tools, memory, skills, overlays, and tail state.
-Slice 135 applies the same section-separation logic to skills: it adds a
-compact section-4 catalog renderer and keeps skill bodies out of the stable
-prompt surface entirely.
-
-## Cross-Cutting Concerns
-
-These six concerns appear in every subsystem and must be designed *uniformly*:
-
-### 1. Observability
-
-- Every action publishes a structured log event with `agent_id`, `runtime_id`,
-  `origin`, `cause_event_id`, `latency_ms`.
-- Causal IDs propagate across subsystems so a tool call triggered by a channel message
-  by an automation firing by a heartbeat tick can be traced end-to-end.
-
-### 2. Cancellation
-
-- Every coroutine takes an `asio::cancellation_slot` or is spawned on one.
-- Each subsystem documents what "cancel" means for it (drop in-flight HTTP? finish the
-  iteration then exit? abort hard?).
-- Tool-call cancellation propagation is the `agent::ToolScheduler`'s
-  responsibility, not each tool's. See
-  [`../product-specs/0012-tool-scheduler-and-state.md`](../product-specs/0012-tool-scheduler-and-state.md).
-
-### 3. Backpressure
-
-- Bounded queues are the default; unbounded queues require justification.
-- The orchestration mailbox is bounded and `try_send` returns a typed
-  `MailboxOverflowed` error.
-- **Every cache-like structure has an explicit TTL/LRU + byte budget + stats
-  accessor.** No silent unbounded growth. See
-  [`../product-specs/0012-tool-scheduler-and-state.md`](../product-specs/0012-tool-scheduler-and-state.md)
-  "BoundedCache" and the first bounded-state inventory.
-
-### 4. Identity
-
-- Every entity has a stable `agent_key` (config-defined) and a derived `runtime_key`
-  (per-process scope). Memory and audit logs are namespaced by `runtime_key`.
-
-### 5. Permissions
-
-- Every effectful action passes through the same `oran-permission` rule engine before
-  it runs. Tools, file IO, network egress, subprocess exec, and outbound channel
-  messages are gated.
-
-### 6. Hooks
-
-- Every lifecycle point is enumerated in
-  `docs/design-docs/permissions-and-hooks.md`. New points are added by editing that
-  doc, then wiring code to publish them.
-
-## Goals For The First 12 Months
-
-In rough priority order:
-
-1. **MVP runtime** — single agent, CLI REPL, Anthropic + OpenAI providers, file/shell
-   tools, session persistence, memory long-term tier, hook bus skeleton.
-   See [`../product-specs/0001-core-react-loop.md`](../product-specs/0001-core-react-loop.md);
-   **the v1 sequencing is fake-provider-first** per
-   [`../product-specs/0017-fake-provider-first-agent-loop.md`](../product-specs/0017-fake-provider-first-agent-loop.md)
-   — the loop ships against `provider::FakeProvider` and the ten
-   scripted scenarios before the first vendor adapter is wired.
-   Structured tool output
-   ([`../product-specs/0014-structured-tool-output.md`](../product-specs/0014-structured-tool-output.md)),
-   prompt + tool-catalog cache
-   ([`../product-specs/0016-prompt-and-tool-catalog-cache.md`](../product-specs/0016-prompt-and-tool-catalog-cache.md)),
-   blocking hook decisions
-   ([`../product-specs/0015-blocking-hook-decisions.md`](../product-specs/0015-blocking-hook-decisions.md)),
-   and per-turn observability
-   ([`../product-specs/0018-first-loop-observability.md`](../product-specs/0018-first-loop-observability.md))
-   ship as siblings of the loop, not as bolt-ons.
-2. **Channel abstraction + 2 adapters** — QQ (carried over) and Discord (new). Slack
-   and Telegram are stretch.
-3. **Team collaboration v1** — leader/worker strategy with mailbox, shared scratchpad
-   memory tier.
-4. **Hook sinks v1** — shell + in-process C++ sinks. Lua sink is stretch.
-5. **Permission engine v1** — runtime patterns, replay-signed approval prompts.
-6. **Automation engine v1** — cron + periodic + triggered jobs, per-agent leases.
-7. **Desktop app v1** — Slint chat, session list, admin panel, live token streaming.
-8. **Bench harness v1** — `bench/<lib>/` per library with comparison runner.
-9. **Skills v1** — markdown skill loader, skill catalog in the desktop app.
-10. **Provider portability v2** — Gemini adapter, custom OpenAI-compatible endpoint.
-
-Stretch (12–24 months):
-
-- **Lua hook sink** + sandboxed Wasm sink.
-- **Vector memory backend** for long-term tier.
-- **Approvals via channel** (e.g., bot pings a Slack channel for human approval).
-- **Multi-tenant runtime** (per-tenant identity, isolated memory + audit DBs).
-- **Federated agent network** — multiple runtimes coordinate via a typed RPC trait.
-
-## Beyond v2 — Sketches Worth Pursuing
-
-These are not commitments but candidates for `docs/exec-plans/` once core lands.
-
-### Programmable Coordination Strategies
-
-The legacy code's orchestration was hard-coded around `OrchestrationManager`. v2 makes
-coordination **a strategy object** — a small interface that picks the next agent to
-speak / act given the current conversation graph. Built-ins: leader-worker, pipeline,
-voting, free-form. New strategies are added as plugin-like classes registered with
-`oran-orchestration::StrategyRegistry`.
-
-### Conversation DAG As First-Class
-
-Multi-agent runs accumulate a directed graph of who spawned whom and who messaged whom.
-v2 stores this DAG (in `orchestration.db`) so post-hoc replay, auditing, and learning
-loops can ask structural questions ("what fraction of a research task's tool calls were
-from the worker vs. the leader?"). The DAG is also a debugging surface — the desktop app
-renders it.
-
-### Skill Hot-Reload
-
-Skills come from `<workspace>/.orangutan/skills/`. The runtime watches that directory
-(asio + inotify on Linux) and re-renders the catalog without restart. Slice 135
-landed the first deterministic section-4 catalog renderer and owner boundary;
-slice 136 adds the first one-shot loader snapshot consumed by configured-route
-prompts, and slice 137 uses that snapshot for one-shot `SkillInvoke` tool
-calls. Slice 138 lands the prompt-boundary hot-reload path: `oran-skill` owns a
-watcher/signature-backed workspace snapshot, and `AgentPromptRunner` refreshes it
-before each prompt so the next turn sees add/update/remove changes while the
-current turn's prompt and `SkillInvoke` body lookup stay consistent.
-
-### Provider Cost Awareness
-
-Each provider profile can declare USD cost-per-1M-token pricing for input,
-output, cache-creation, and cache-read tokens. Slice 126 gives the agent loop
-metadata-only provider request/response/error/fallback hooks, including
-identity, route, usage, and timing fields, without moving hook knowledge into
-`oran-provider`. Slice 129 carries profile pricing through route resolution and
-lets `agent::Loop` compute missing `Usage::cost_estimate` values before hooks
-and trace writes observe the response. A later cost subsystem can consume those
-events or the audit stream to accumulate spend per `agent_key` and emit threshold
-events. Built-in thresholds + budget-exhausted fallback to a cheaper model remain
-planned.
-
-### Tool Capability Discovery
-
-Tools declare not just "I exist" but "I require: network egress, subprocess exec, file
-write". The permission engine consumes that capability list when deciding rule
-applicability. New tools cannot accidentally smuggle in undeclared capabilities.
-
-### Channel Bidirectional Threading
-
-Some channels (Slack, Discord) support threads. A v2-native "thread" is a sub-session
-inside a `Channel` — the agent's session store can branch into thread sessions and
-re-merge.
-
-### Self-Reflective Reports
-
-After every long task an agent emits a `task-debrief.md` into `<workspace>/.orangutan/
-debriefs/`. The next task can read recent debriefs as part of working memory. This is
-the codebase's path to compounding expertise without retraining.
-
-## Anti-Goals
-
-- Not a framework for *any* AI workload — agent runtimes only.
-- Not a hosted service. The binary is meant to run on a developer machine, a single
-  VM, or a small fleet. Multi-tenant clustering is stretch.
-- Not an LLM router for production-scale traffic. Per-agent throughput is bounded by
-  upstream provider rate limits; the runtime does not aim to be a high-QPS proxy.
-- Not a substitute for `Claude Code` / `Codex` themselves — Orangutan v2 *uses* them as
-  development tools, and *is* the same kind of tool for its operators.
-
-## Where To Go Next
-
-- Concrete features: `docs/product-specs/`.
-- Runtime mechanics: `docs/design-docs/{async-model, tool-runtime, memory-system,
-  channel-abstraction, team-collaboration}.md`.
-- Build-time mechanics: `docs/BUILD_SYSTEM.md`, `docs/FAST_COMPILATION.md`.
-- Rule trail: `docs/rules/`.
+[Tools](tool-runtime.md), [memory](memory-system.md),
+[permissions](permissions-and-hooks.md), [providers](api-portability.md) and
+[async ownership](async-model.md) own their respective contracts.
