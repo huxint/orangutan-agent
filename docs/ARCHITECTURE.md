@@ -13,9 +13,11 @@ operate on explicit values. They do not discover configuration or start work.
 Provider, filesystem and SQLite operations are effect boundaries coordinated by
 Asio. RAII owns resources; cancellation requests are followed by a lifetime join.
 
-The current session coordinator still owns mutable conversation and prompt-cache
-state. The next slice separates state transitions from those effects. New
-abstractions must express a current domain boundary with a concrete caller.
+Conversation preparation returns an owned value and a persistence boundary.
+The session coordinator loads history, dispatches scoped recall, runs a turn and
+persists its completed suffix. Memory adapters borrow explicit storage services;
+tool promotion remains session-local state. New abstractions must express a
+current domain boundary with a concrete caller.
 
 ```mermaid
 flowchart TD
@@ -42,7 +44,6 @@ flowchart TD
 | `oran-permission` | Rules, decisions, bounded approval grants and audit sinks. |
 | `oran-hook` | Typed effect gates and advisory lifecycle observations. |
 | `oran-memory` | Session serialization, scoped records and lexical recall. |
-| `oran-skill` | Existing skill loader and catalogue; a session dependency being simplified. |
 | `oran-tool` | Tool definitions, input validation, authorization and handlers. |
 | `oran-prompt` | Deterministic cached sections and tool catalogue selection. |
 | `oran-provider` | Protocol mapping, credential boundary, retries and fallback. |
@@ -79,7 +80,7 @@ That composition is planned, not implemented.
 ```text
 <oran/agent.hpp> <oran/async.hpp> <oran/bootstrap.hpp> <oran/config.hpp>
 <oran/hook.hpp> <oran/http.hpp> <oran/io.hpp> <oran/memory.hpp>
-<oran/permission.hpp> <oran/prompt.hpp> <oran/provider.hpp> <oran/skill.hpp>
+<oran/permission.hpp> <oran/prompt.hpp> <oran/provider.hpp>
 <oran/storage.hpp> <oran/tool.hpp>
 ```
 

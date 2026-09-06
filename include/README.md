@@ -1,34 +1,10 @@
-# `include/` — Public Headers
+# Public Headers
 
-This tree holds **public** C++ headers for the project. Conventions:
+Each library exposes narrow headers under `oran/<lib>/` and an umbrella header
+at `oran/<lib>.hpp`. The [architecture](../docs/ARCHITECTURE.md#public-headers)
+lists the current interfaces.
 
-- One subdirectory per library: `include/oran/<lib>/*.hpp`.
-- One umbrella header per library: `include/oran/<lib>.hpp` (re-exports submodule
-  public symbols).
-- Project-wide PCH: `include/oran/_pch.hpp` (stdlib-stable headers + `core::Result`
-  + `core::Error`).
-- Forward-declaration shims: `include/oran/async/awaitable_fwd.hpp`,
-  `include/oran/storage/handle_fwd.hpp`, etc.
-
-## Rules
-
-Read [`docs/rules/critical-rules.md#C6`](../docs/rules/critical-rules.md), the
-[`docs/design-docs/module-boundaries.md`](../docs/design-docs/module-boundaries.md)
-file, and [`docs/FAST_COMPILATION.md`](../docs/FAST_COMPILATION.md) before adding a
-new header.
-
-In short:
-
-- No heavy includes (`nlohmann/json.hpp`, `asio.hpp`, `spdlog/spdlog.h`, `httplib.h`,
-  `sqlite3.h`, `curl/curl.h`, `re2/re2.h`).
-- Pimpl wherever you'd otherwise force a heavy include.
-- One public class per header.
-- Header guard via `#pragma once`.
-
-## Status
-
-`oran-core`, `oran-async`, `oran-http`, `oran-io`, `oran-storage`, `oran-config`,
-`oran-permission`, `oran-hook`, `oran-skill`, `oran-tool`, `oran-prompt`,
-`oran-provider`, `oran-agent`, `oran-automation`, `oran-cli`, and `oran-bootstrap`
-public headers are live.
-Additional library headers land with their owning slices.
+Use narrow includes when possible. Heavy dependencies stay in implementation
+files, as required by [critical rule C6](../docs/rules/critical-rules.md#c6-public-headers-contain-no-heavy-includes).
+The shared PCH is `oran/_pch.hpp`; [compile guidance](../docs/FAST_COMPILATION.md)
+explains how to measure changes.

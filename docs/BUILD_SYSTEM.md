@@ -35,7 +35,13 @@ Use the debug path when configured in debug mode.
 | `xmake/tests.lua`, `xmake/bench.lua` | Test and benchmark buckets. |
 
 `lto` defaults on in release. `hardened`, `analyze` and `sanitizers` are opt-in;
-ASan/UBSan applies only in debug mode. `vector_memory` enables the existing
+ASan/UBSan applies only in debug mode. These flags depend on the custom toolchain
+being active; the current default selection does not apply them. Explicit
+`oran-gcc` selection also needs assembler provisioning for package builds. Both
+are [tracked](exec-plans/tech-debt-tracker.md); verify actual compiler/linker
+arguments before claiming LTO or sanitizer coverage.
+
+`vector_memory` enables the existing
 sqlite-vec backend for library callers. `modules` is experimental; no module
 migration has been accepted. No GUI or messaging SDK is required.
 

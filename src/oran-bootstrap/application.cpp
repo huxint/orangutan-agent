@@ -77,17 +77,12 @@ core::Result<agent::PromptResult> run_application(ApplicationOptions options) {
     session_options.agent_key = options.agent_key;
     if (std::ranges::contains(config->agents(), options.agent_key, &config::AgentConfig::name)) {
       session_options.agent_config_name = options.agent_key;
-      session_options.permission_agent_name = options.agent_key;
     } else if (options.agent_key != "default") {
       return std::unexpected(core::Error::config("selected agent is not configured"));
     }
     session_options.longterm_recall.enabled = config->memory().longterm.recall.enabled;
     session_options.longterm_recall.limit = static_cast<std::size_t>(config->memory().longterm.recall.limit);
     session_options.longterm_recall.kinds = config->memory().longterm.recall.kinds;
-    session_options.longterm_recall.query_strategy =
-        config->memory().longterm.recall.query_strategy == config::LongtermMemoryRecallQueryStrategy::prompt_text
-            ? LongtermRecallQueryStrategy::prompt_text
-            : LongtermRecallQueryStrategy::last_user_message;
     auto session = AgentSession::create(std::move(session_options));
     if (!session)
       return std::unexpected(std::move(session).error());

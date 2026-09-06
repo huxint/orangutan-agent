@@ -187,27 +187,6 @@ TEST_CASE("RuntimeAssembly::build installs a hook bus with blocking timeout",
   REQUIRE(assembly->hook_bus().binding_count() == 0);
 }
 
-TEST_CASE("RuntimeAssembly::build rejects null startup hook bindings", "[unit][bootstrap][runtime_assembly][hook]") {
-  TempDir temp{"oran-assembly-hook-null-binding"};
-  asio::io_context io;
-
-  auto options = bootstrap::RuntimeAssemblyOptions{};
-  options.audit_enabled = false;
-  options.session_memory_enabled = false;
-  options.longterm_memory_enabled = false;
-  options.startup_hook_bindings.push_back(bootstrap::RuntimeStartupHookBinding{
-      .sink = nullptr,
-      .events = {hook::Event::memory_decay},
-  });
-  auto assembly = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
-
-  REQUIRE_FALSE(assembly.has_value());
-  REQUIRE(assembly.error().kind() == core::ErrorKind::invalid_argument);
-  REQUIRE(std::ranges::any_of(assembly.error().context(), [](const auto& entry) {
-    return entry.first == "reason" && entry.second == "null_sink";
-  }));
-}
-
 TEST_CASE("RuntimeAssembly::build provisions audit.db at the workspace default path",
           "[unit][bootstrap][runtime_assembly]") {
   TempDir temp{"oran-assembly-default-path"};
@@ -289,221 +268,6 @@ TEST_CASE("RuntimeAssembly::build provisions memory.db at the workspace default 
   });
 }
 
-TEST_CASE("RuntimeAssembly::build applies long-term startup decay before exposing memory",
-          "[unit][bootstrap][runtime_assembly][memory]") {
-  TempDir temp{"oran-assembly-longterm-startup-decay"};
-
-  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
-    {
-      auto options = bootstrap::RuntimeAssemblyOptions{};
-      options.audit_enabled = false;
-      options.session_memory_enabled = false;
-      options.longterm_memory_enabled = true;
-      auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
-      REQUIRE(built.has_value());
-
-      auto stale_low = make_longterm_record();
-      stale_low.key.id = "stale-low";
-      stale_low.title = "Stale low";
-      stale_low.body = "The stale papaya startup decay fixture should be hidden.";
-      stale_low.last_read_at = core::Time{core::Time::time_point{3s}};
-      stale_low.updated_at = core::Time{core::Time::time_point{4s}};
-      stale_low.importance = 0.1;
-
-      auto fresh_low = make_longterm_record();
-      fresh_low.key.id = "fresh-low";
-      fresh_low.title = "Fresh low";
-      fresh_low.body = "The fresh papaya startup decay fixture should stay visible.";
-      fresh_low.last_read_at = core::Time{core::Time::time_point{20s}};
-      fresh_low.updated_at = core::Time{core::Time::time_point{21s}};
-      fresh_low.importance = 0.1;
-
-      REQUIRE((co_await built->longterm_memory_backend()->upsert(memory::longterm::WriteRequest{.record = stale_low}))
-                  .has_value());
-      REQUIRE((co_await built->longterm_memory_backend()->upsert(memory::longterm::WriteRequest{.record = fresh_low}))
-                  .has_value());
-    }
-
-    const auto decay_at = core::Time{core::Time::time_point{30s}};
-    std::vector<hook::MemoryDecayPayload> decay_payloads;
-    hook::InProcessSink decay_sink{
-        "startup-decay-recorder",
-        [&decay_payloads](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
-          REQUIRE(event == hook::Event::memory_decay);
-          const auto* decay = std::get_if<hook::MemoryDecayPayload>(payload.get());
-          REQUIRE(decay != nullptr);
-          decay_payloads.push_back(*decay);
-          co_return core::Result<void>{};
-        }};
-    auto options = bootstrap::RuntimeAssemblyOptions{};
-    options.audit_enabled = false;
-    options.session_memory_enabled = false;
-    options.longterm_memory_enabled = true;
-    options.startup_hook_bindings.push_back(bootstrap::RuntimeStartupHookBinding{
-        .sink = &decay_sink,
-        .events = {hook::Event::memory_decay},
-    });
-    options.longterm_memory_startup_decay = bootstrap::LongtermMemoryStartupDecayOptions{
-        .scope_key = "cli",
-        .unused_before = core::Time{core::Time::time_point{10s}},
-        .importance_floor = 0.5,
-        .limit = 10,
-        .decay_at = decay_at,
-    };
-
-    auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
-    REQUIRE(built.has_value());
-    REQUIRE(built->longterm_memory_startup_decay_shadowed_count().has_value());
-    REQUIRE(*built->longterm_memory_startup_decay_shadowed_count() == 1);
-
-    REQUIRE(decay_payloads.size() == 1);
-    REQUIRE(decay_payloads[0].source == "startup");
-    REQUIRE(decay_payloads[0].who.scope_key == "cli");
-    REQUIRE(decay_payloads[0].who.agent_key == "bootstrap");
-    REQUIRE(decay_payloads[0].who.identity == "startup");
-    REQUIRE(decay_payloads[0].scope_key == "cli");
-    REQUIRE(decay_payloads[0].unused_before == core::Time{core::Time::time_point{10s}});
-    REQUIRE(decay_payloads[0].importance_floor == 0.5);
-    REQUIRE(decay_payloads[0].limit == 10);
-    REQUIRE(decay_payloads[0].decay_at == decay_at);
-    REQUIRE(decay_payloads[0].shadowed_count == 1);
-    REQUIRE(decay_payloads[0].finished_at.to_system_time_point() >=
-            decay_payloads[0].started_at.to_system_time_point());
-    REQUIRE(built->hook_bus().sink_count(hook::Event::memory_decay) == 0);
-
-    auto default_hits = co_await built->longterm_memory_backend()->search(
-        memory::longterm::Query{
-            .scope_key = "cli",
-            .text = "papaya",
-            .kinds = {},
-        },
-        10);
-    REQUIRE(default_hits.has_value());
-    REQUIRE(default_hits->size() == 1);
-    REQUIRE((*default_hits)[0].record.key.id == "fresh-low");
-    REQUIRE(std::ranges::none_of(*default_hits, [](const memory::longterm::SearchHit& hit) {
-      return hit.record.key.id == "stale-low";
-    }));
-
-    auto including_shadow = co_await built->longterm_memory_backend()->search(
-        memory::longterm::Query{
-            .scope_key = "cli",
-            .text = "papaya",
-            .kinds = {},
-            .include_shadow = true,
-        },
-        10);
-    REQUIRE(including_shadow.has_value());
-    REQUIRE(including_shadow->size() == 2);
-    const auto stale_hit = std::ranges::find_if(*including_shadow, [](const memory::longterm::SearchHit& hit) {
-      return hit.record.key.id == "stale-low";
-    });
-    REQUIRE(stale_hit != including_shadow->end());
-    REQUIRE(stale_hit->record.shadow);
-    REQUIRE(stale_hit->record.updated_at == decay_at);
-  });
-}
-
-TEST_CASE("RuntimeAssembly::build rejects long-term startup decay when long-term memory is disabled",
-          "[unit][bootstrap][runtime_assembly][memory]") {
-  TempDir temp{"oran-assembly-longterm-startup-decay-disabled"};
-  asio::io_context io;
-
-  auto options = bootstrap::RuntimeAssemblyOptions{};
-  options.audit_enabled = false;
-  options.session_memory_enabled = false;
-  options.longterm_memory_enabled = false;
-  options.longterm_memory_startup_decay = bootstrap::LongtermMemoryStartupDecayOptions{
-      .scope_key = "cli",
-      .unused_before = core::Time{core::Time::time_point{10s}},
-      .importance_floor = 0.5,
-      .limit = 10,
-      .decay_at = core::Time{core::Time::time_point{30s}},
-  };
-  auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
-
-  REQUIRE_FALSE(built.has_value());
-  REQUIRE(built.error().kind() == core::ErrorKind::invalid_argument);
-  REQUIRE(std::ranges::any_of(built.error().context(), [](const auto& entry) {
-    return entry.first == "reason" && entry.second == "longterm_memory_disabled";
-  }));
-}
-
-TEST_CASE("RuntimeAssembly::build propagates invalid startup decay requests",
-          "[unit][bootstrap][runtime_assembly][memory]") {
-  TempDir temp{"oran-assembly-longterm-startup-decay-invalid"};
-  asio::io_context io;
-
-  auto options = bootstrap::RuntimeAssemblyOptions{};
-  options.audit_enabled = false;
-  options.session_memory_enabled = false;
-  options.longterm_memory_enabled = true;
-  options.longterm_memory_startup_decay = bootstrap::LongtermMemoryStartupDecayOptions{
-      .scope_key = "cli",
-      .unused_before = core::Time{core::Time::time_point{10s}},
-      .importance_floor = 2.0,
-      .limit = 10,
-      .decay_at = core::Time{core::Time::time_point{30s}},
-  };
-  auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
-
-  REQUIRE_FALSE(built.has_value());
-  REQUIRE(built.error().kind() == core::ErrorKind::invalid_argument);
-}
-
-#ifdef ORAN_ENABLE_SQLITE_VEC
-TEST_CASE("RuntimeAssembly::build provisions vector memory at the workspace default path",
-          "[unit][bootstrap][runtime_assembly][memory][sqlite-vec]") {
-  TempDir temp{"oran-assembly-vector-memory-default"};
-
-  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
-    auto options = bootstrap::RuntimeAssemblyOptions{};
-    options.longterm_vector_memory_enabled = true;
-    auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
-    REQUIRE(built.has_value());
-    REQUIRE(built->longterm_memory_enabled());
-    REQUIRE(built->longterm_vector_memory_enabled());
-    REQUIRE(built->longterm_vector_backend() != nullptr);
-    REQUIRE(built->longterm_hybrid_runtime() != nullptr);
-    REQUIRE(built->longterm_vector_memory_path() == (temp.path() / ".orangutan" / "memory-vectors.db").string());
-
-    const auto vector_db = temp.path() / ".orangutan" / "memory-vectors.db";
-    REQUIRE(std::filesystem::exists(vector_db));
-    REQUIRE(table_exists(vector_db, "longterm_vectors"));
-
-    auto record = make_longterm_record();
-    record.body = "Vector assembly recall hydrates vector-only rows.";
-    auto upserted = co_await built->longterm_memory_backend()->upsert(memory::longterm::WriteRequest{.record = record});
-    REQUIRE(upserted.has_value());
-    auto embedding = memory::longterm::make_text_embedding("rareassemblyvector");
-    REQUIRE(embedding.has_value());
-    auto vector_upserted = co_await built->longterm_vector_backend()->upsert(memory::longterm::VectorUpsert{
-        .key = record.key,
-        .embedding = *embedding,
-    });
-    REQUIRE(vector_upserted.has_value());
-
-    auto recalled = co_await built->longterm_hybrid_runtime()->recall(memory::longterm::HybridSearchRequest{
-        .query =
-            memory::longterm::Query{
-                .scope_key = "cli",
-                .text = "rareassemblyvector",
-                .kinds = {},
-                .include_shadow = false,
-            },
-        .embedding = std::move(*embedding),
-        .lexical_limit = 5,
-        .vector_limit = 5,
-        .result_limit = 5,
-    });
-    REQUIRE(recalled.has_value());
-    REQUIRE(recalled->hits.size() == 1);
-    REQUIRE(recalled->hits[0].record.key.id == "lt-1");
-    REQUIRE(recalled->framing.section_text.contains("Vector assembly recall hydrates vector-only rows."));
-  });
-}
-#endif
-
 TEST_CASE("RuntimeAssembly::build honors an explicit audit DB path", "[unit][bootstrap][runtime_assembly]") {
   TempDir temp{"oran-assembly-explicit-path"};
   const auto explicit_path = (temp.path() / "nested" / "audit.db").string();
@@ -547,7 +311,6 @@ TEST_CASE("RuntimeAssembly::build honors an explicit long-term memory DB path",
   REQUIRE(built.has_value());
   REQUIRE(built->longterm_memory_enabled());
   REQUIRE(built->longterm_memory_path() == explicit_path);
-  REQUIRE_FALSE(built->longterm_memory_startup_decay_shadowed_count().has_value());
   REQUIRE(std::filesystem::exists(explicit_path));
   REQUIRE(table_exists(explicit_path, "longterm_records"));
 }
@@ -579,7 +342,6 @@ TEST_CASE("RuntimeAssembly::build can disable long-term memory", "[unit][bootstr
   REQUIRE_FALSE(built->longterm_memory_enabled());
   REQUIRE(built->longterm_memory_backend() == nullptr);
   REQUIRE(built->longterm_memory_runtime() == nullptr);
-  REQUIRE_FALSE(built->longterm_memory_startup_decay_shadowed_count().has_value());
   REQUIRE(built->longterm_memory_path().empty());
   REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan" / "memory.db"));
 }
@@ -791,42 +553,6 @@ TEST_CASE("RuntimeAssembly::build defaults to a live TraceRepository when audit 
     auto count = co_await built->trace_repository()->count_turns();
     REQUIRE(count.has_value());
     REQUIRE(*count == 1);
-  });
-}
-
-TEST_CASE("RuntimeAssembly::build applies trace retention before exposing the repository",
-          "[unit][bootstrap][runtime_assembly][trace]") {
-  TempDir temp{"oran-assembly-trace-retention"};
-  const auto audit_db = temp.path() / ".orangutan" / "audit.db";
-  std::filesystem::create_directories(audit_db.parent_path());
-
-  test::run_async([&temp, &audit_db](asio::io_context& io) -> async::Awaitable<void> {
-    {
-      auto pool = storage::Pool::open(
-          io.get_executor(),
-          storage::PoolOptions{.path = audit_db.string(), .reader_count = 1, .statement_cache_capacity = 4});
-      REQUIRE(pool.has_value());
-      storage::TraceRepository trace_repo{*pool};
-      auto migrated = co_await trace_repo.migrate();
-      REQUIRE(migrated.has_value());
-
-      const auto session = trace_id_with(0x80);
-      REQUIRE((co_await trace_repo.append_turn(make_trace_turn(trace_id_with(0x01), session, 100))).has_value());
-      REQUIRE((co_await trace_repo.append_turn(make_trace_turn(trace_id_with(0x02), session, 200))).has_value());
-      REQUIRE((co_await trace_repo.append_turn(make_trace_turn(trace_id_with(0x03), session, 300))).has_value());
-    }
-
-    auto options = bootstrap::RuntimeAssemblyOptions{};
-    options.trace_retention_started_before_ns = 200;
-    auto built = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
-    REQUIRE(built.has_value());
-    REQUIRE(built->trace_repository() != nullptr);
-
-    auto turns = co_await built->trace_repository()->list_turns(storage::ListTraceTurnsOptions{.limit = 10});
-    REQUIRE(turns.has_value());
-    REQUIRE(turns->size() == 2);
-    REQUIRE((*turns)[0].turn_id == trace_id_with(0x03));
-    REQUIRE((*turns)[1].turn_id == trace_id_with(0x02));
   });
 }
 

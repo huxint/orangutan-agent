@@ -36,11 +36,7 @@ The config file contains:
 | `permissions`, `agents.<name>.permissions` | Materialized global and selected-agent tool policy. |
 | `agents.<name>.prompt_overlay` | Stable agent instructions. |
 | `hooks.timeout_ms` | Blocking hook deadline. |
-| `memory.longterm.recall` | Enabled flag, result limit, query strategy and record-kind filter. |
-
-The existing library session still supports per-agent skill policy. Its reduction
-is part of the [core plan](../exec-plans/active/2026-09-06-agent-runtime-core.md).
-Application-specific and unconsumed session/retention settings have been removed.
+| `memory.longterm.recall` | Enabled flag, result limit (1–20) and record-kind filter. |
 
 ## Credentials
 

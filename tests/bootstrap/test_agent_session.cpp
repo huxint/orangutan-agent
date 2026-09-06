@@ -30,7 +30,6 @@
 #include <oran/memory.hpp>
 #include <oran/permission.hpp>
 #include <oran/provider.hpp>
-#include <oran/skill.hpp>
 #include <oran/storage.hpp>
 #include <oran/tool.hpp>
 
@@ -45,7 +44,6 @@ namespace hook = orangutan::hook;
 namespace memory = orangutan::memory;
 namespace permission = orangutan::permission;
 namespace provider = orangutan::provider;
-namespace skill = orangutan::skill;
 namespace storage = orangutan::storage;
 namespace test = orangutan::tests;
 namespace tool = orangutan::tool;
@@ -168,13 +166,11 @@ bootstrap::RuntimeAssembly build_assembly(const std::filesystem::path& workspace
                                           asio::any_io_executor executor,
                                           bool audit_enabled,
                                           bool session_memory_enabled = false,
-                                          bool longterm_memory_enabled = true,
-                                          bool longterm_vector_memory_enabled = false) {
+                                          bool longterm_memory_enabled = true) {
   auto options = bootstrap::RuntimeAssemblyOptions{};
   options.audit_enabled = audit_enabled;
   options.session_memory_enabled = session_memory_enabled;
   options.longterm_memory_enabled = longterm_memory_enabled;
-  options.longterm_vector_memory_enabled = longterm_vector_memory_enabled;
   auto assembly = bootstrap::RuntimeAssembly::build(workspace.string(), std::move(executor), std::move(options));
   REQUIRE(assembly.has_value());
   return std::move(*assembly);
@@ -184,14 +180,8 @@ bootstrap::RuntimeAssembly build_assembly(const std::filesystem::path& workspace
                                           asio::io_context& io,
                                           bool audit_enabled,
                                           bool session_memory_enabled = false,
-                                          bool longterm_memory_enabled = true,
-                                          bool longterm_vector_memory_enabled = false) {
-  return build_assembly(workspace,
-                        io.get_executor(),
-                        audit_enabled,
-                        session_memory_enabled,
-                        longterm_memory_enabled,
-                        longterm_vector_memory_enabled);
+                                          bool longterm_memory_enabled = true) {
+  return build_assembly(workspace, io.get_executor(), audit_enabled, session_memory_enabled, longterm_memory_enabled);
 }
 
 memory::longterm::Record make_longterm_record(std::string id, std::string body) {
@@ -225,7 +215,7 @@ bootstrap::AgentSessionOptions base_runner_options(asio::any_io_executor executo
   options.scope_key = "scope-A";
   options.agent_key = "coder";
   options.identity = "operator-1";
-  options.origin = "desktop";
+  options.origin = "test";
   return options;
 }
 
@@ -323,7 +313,7 @@ TEST_CASE("AgentSession rejects unknown permission overlays", "[unit][bootstrap]
     auto assembly = build_assembly(temp.path(), io, false);
     provider::FakeProvider fake{std::vector<provider::ScriptedTurn>{}};
     auto options = base_runner_options(io, assembly, cfg, fake);
-    options.permission_agent_name = "ghost";
+    options.agent_config_name = "ghost";
 
     auto runner = bootstrap::AgentSession::create(std::move(options));
 
@@ -371,7 +361,6 @@ TEST_CASE("AgentSession drives prompts through the agent loop and trace writer",
     auto result = co_await (*runner)->run_prompt(std::move(request));
 
     REQUIRE(result.has_value());
-    REQUIRE((*runner)->prompts_processed() == 1);
     REQUIRE(fake.turns_consumed() == 1);
     REQUIRE(assembly.trace_repository() != nullptr);
     auto count = co_await assembly.trace_repository()->count_turns();
@@ -580,7 +569,7 @@ TEST_CASE("AgentSession publishes provider hooks through RuntimeAssembly",
     REQUIRE(request->who.scope_key == "scope-A");
     REQUIRE(request->who.agent_key == "coder");
     REQUIRE(request->who.identity == "operator-1");
-    REQUIRE(request->origin == "desktop");
+    REQUIRE(request->origin == "test");
     REQUIRE(request->route_profile == "fake");
     REQUIRE(request->route_model == "fake-1");
     REQUIRE(request->fallback_count == 0);
@@ -644,7 +633,6 @@ TEST_CASE("AgentSession feeds ToolSearch results back into per-session state",
         REQUIRE(result.has_value());
         REQUIRE(result->text == "searched");
         REQUIRE(fake.turns_consumed() == 2);
-        REQUIRE((*runner)->tool_search_observations_recorded() == 1);
       },
       std::chrono::seconds{3});
 }
@@ -693,7 +681,6 @@ TEST_CASE("AgentSession renders memory framing once per prompt before loop itera
     REQUIRE(requests[0].system_prompt->contains("memory: stable"));
     REQUIRE(requests[1].system_prompt->contains("memory: stable"));
     REQUIRE(*requests[0].system_prompt == *requests[1].system_prompt);
-    REQUIRE((*runner)->memory_framing_renders() == 1);
   });
 }
 
@@ -719,12 +706,11 @@ TEST_CASE("AgentSession leaves long-term recall disabled by default", "[unit][bo
     REQUIRE(requests.size() == 1);
     REQUIRE(requests[0].system_prompt.has_value());
     REQUIRE_FALSE(requests[0].system_prompt->contains("Long-term memory:"));
-    REQUIRE((*runner)->memory_framing_renders() == 1);
   });
 }
 
 TEST_CASE("AgentSession recalls long-term memory once before loop iterations",
-          "[unit][bootstrap][prompt_runner][memory]") {
+          "[integration][bootstrap][prompt_runner][memory][core_boundary]") {
   TempDir temp{"oran-bootstrap-prompt-runner-longterm-recall"};
   test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
     auto cfg = config::Config{};
@@ -734,6 +720,10 @@ TEST_CASE("AgentSession recalls long-term memory once before loop iterations",
         .record = make_longterm_record("lt-recall-1", "Recall plumbing reaches the prompt boundary."),
     });
     REQUIRE(upserted.has_value());
+    auto foreign = make_longterm_record("foreign", "Recall plumbing belongs to another workspace.");
+    foreign.key.scope_key = "scope-B";
+    auto foreign_saved = co_await assembly.longterm_memory_backend()->upsert({.record = std::move(foreign)});
+    REQUIRE(foreign_saved.has_value());
     std::vector<MemoryHookCapture> hook_captures;
     MemoryCaptureSink sink{hook_captures};
     assembly.hook_bus().bind(sink, {hook::Event::memory_read_after});
@@ -769,9 +759,9 @@ TEST_CASE("AgentSession recalls long-term memory once before loop iterations",
     REQUIRE(requests[1].system_prompt.has_value());
     REQUIRE(requests[0].system_prompt->contains("Long-term memory:"));
     REQUIRE(requests[0].system_prompt->contains("Recall plumbing reaches the prompt boundary."));
+    REQUIRE_FALSE(requests[0].system_prompt->contains("another workspace"));
     REQUIRE(requests[0].system_prompt->contains("tags: recall"));
     REQUIRE(*requests[0].system_prompt == *requests[1].system_prompt);
-    REQUIRE((*runner)->memory_framing_renders() == 1);
 
     REQUIRE(hook_captures.size() == 1);
     REQUIRE(hook_captures[0].event == hook::Event::memory_read_after);
@@ -780,7 +770,7 @@ TEST_CASE("AgentSession recalls long-term memory once before loop iterations",
     REQUIRE(read->who.scope_key == "scope-A");
     REQUIRE(read->who.agent_key == "coder");
     REQUIRE(read->who.identity == "operator-1");
-    REQUIRE(read->source == "prompt_boundary");
+    REQUIRE(read->source == "MemoryRecall");
     REQUIRE(read->query == "recall plumbing");
     REQUIRE(read->redacted_query_bytes == std::string_view{"recall plumbing"}.size());
     REQUIRE(read->limit == 5);
@@ -797,53 +787,6 @@ TEST_CASE("AgentSession recalls long-term memory once before loop iterations",
     REQUIRE(read->finished_at >= read->started_at);
   });
 }
-
-#if defined(ORAN_ENABLE_SQLITE_VEC)
-TEST_CASE("AgentSession uses hybrid recall for prompt-boundary memory",
-          "[unit][bootstrap][prompt_runner][memory][sqlite-vec]") {
-  TempDir temp{"oran-bootstrap-prompt-runner-hybrid-recall"};
-  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
-    auto cfg = config::Config{};
-    auto assembly = build_assembly(temp.path(), io, false, false, true, true);
-    REQUIRE(assembly.longterm_memory_backend() != nullptr);
-    REQUIRE(assembly.longterm_vector_backend() != nullptr);
-
-    auto record = make_longterm_record("lt-hybrid-vector-only", "Hybrid prompt recall hydrates vector-only rows.");
-    auto upserted = co_await assembly.longterm_memory_backend()->upsert(memory::longterm::WriteRequest{
-        .record = record,
-    });
-    REQUIRE(upserted.has_value());
-    auto embedding = memory::longterm::make_text_embedding("rarehybridanchor");
-    REQUIRE(embedding.has_value());
-    auto vector_upserted = co_await assembly.longterm_vector_backend()->upsert(memory::longterm::VectorUpsert{
-        .key = record.key,
-        .embedding = std::move(*embedding),
-    });
-    REQUIRE(vector_upserted.has_value());
-
-    RecordingProvider recording{{text_response("done")}};
-    auto options = base_runner_options(io, assembly, cfg, recording);
-    options.longterm_recall = bootstrap::LongtermRecallOptions{.enabled = true, .limit = 5};
-    options.longterm_hybrid_search = bootstrap::LongtermHybridSearchOptions{
-        .enabled = true,
-        .lexical_limit = 5,
-        .vector_limit = 5,
-        .result_limit = 5,
-    };
-    auto runner = bootstrap::AgentSession::create(std::move(options));
-    REQUIRE(runner.has_value());
-
-    auto result = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "rarehybridanchor"});
-
-    REQUIRE(result.has_value());
-    const auto requests = recording.requests();
-    REQUIRE(requests.size() == 1);
-    REQUIRE(requests[0].system_prompt.has_value());
-    REQUIRE(requests[0].system_prompt->contains("Long-term memory:"));
-    REQUIRE(requests[0].system_prompt->contains("Hybrid prompt recall hydrates vector-only rows."));
-  });
-}
-#endif
 
 TEST_CASE("AgentSession dispatches MemoryRecall through long-term runtime",
           "[unit][bootstrap][prompt_runner][memory]") {
@@ -917,69 +860,6 @@ TEST_CASE("AgentSession dispatches MemoryRecall through long-term runtime",
     REQUIRE(read->finished_at >= read->started_at);
   });
 }
-
-#if defined(ORAN_ENABLE_SQLITE_VEC)
-TEST_CASE("AgentSession dispatches MemoryRecall through hybrid runtime",
-          "[unit][bootstrap][prompt_runner][memory][sqlite-vec]") {
-  TempDir temp{"oran-bootstrap-prompt-runner-memory-recall-hybrid-tool"};
-  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
-    auto cfg = config::Config{};
-    auto assembly = build_assembly(temp.path(), io, false, false, true, true);
-    REQUIRE(assembly.longterm_memory_backend() != nullptr);
-    REQUIRE(assembly.longterm_vector_backend() != nullptr);
-
-    auto record = make_longterm_record("lt-tool-hybrid-recall", "Hybrid tool recall hydrates vector-only rows.");
-    auto upserted = co_await assembly.longterm_memory_backend()->upsert(memory::longterm::WriteRequest{
-        .record = record,
-    });
-    REQUIRE(upserted.has_value());
-    auto embedding = memory::longterm::make_text_embedding("raretoolhybridanchor");
-    REQUIRE(embedding.has_value());
-    auto vector_upserted = co_await assembly.longterm_vector_backend()->upsert(memory::longterm::VectorUpsert{
-        .key = record.key,
-        .embedding = std::move(*embedding),
-    });
-    REQUIRE(vector_upserted.has_value());
-
-    RecordingProvider recording{{
-        provider::Response{
-            .blocks = {core::ToolUseContent{
-                .id = "memory-1",
-                .name = "MemoryRecall",
-                .input_json = R"({"query":"raretoolhybridanchor","limit":5,"kinds":["project"]})",
-            }},
-            .stop_reason = core::StopReason::tool_use,
-            .usage = {},
-            .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
-        },
-        text_response("done"),
-    }};
-
-    auto options = base_runner_options(io, assembly, cfg, recording);
-    options.longterm_hybrid_search = bootstrap::LongtermHybridSearchOptions{
-        .enabled = true,
-        .lexical_limit = 5,
-        .vector_limit = 5,
-        .result_limit = 5,
-    };
-    auto runner = bootstrap::AgentSession::create(std::move(options));
-    REQUIRE(runner.has_value());
-
-    auto result = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "use hybrid memory"});
-
-    REQUIRE(result.has_value());
-    const auto requests = recording.requests();
-    REQUIRE(requests.size() == 2);
-    const auto output = tool_result_output_in(requests[1], "memory-1");
-    REQUIRE(output.contains("MemoryRecall: 1 match"));
-    REQUIRE(output.contains("Hybrid tool recall hydrates vector-only rows."));
-    const auto data_json = tool_result_data_json_in(requests[1], "memory-1");
-    REQUIRE(data_json.has_value());
-    REQUIRE(data_json->contains(R"("vector_score")"));
-  });
-}
-#endif
 
 TEST_CASE("AgentSession dispatches MemoryRemember through long-term backend",
           "[unit][bootstrap][prompt_runner][memory]") {
@@ -1128,58 +1008,6 @@ TEST_CASE("AgentSession lets MemoryWrite.before veto MemoryRemember",
   });
 }
 
-#if defined(ORAN_ENABLE_SQLITE_VEC)
-TEST_CASE("AgentSession mirrors MemoryRemember writes into vector memory",
-          "[unit][bootstrap][prompt_runner][memory][sqlite-vec]") {
-  TempDir temp{"oran-bootstrap-prompt-runner-memory-remember-vector"};
-  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
-    auto cfg = config::Config{};
-    auto assembly = build_assembly(temp.path(), io, false, false, true, true);
-    REQUIRE(assembly.longterm_memory_backend() != nullptr);
-    REQUIRE(assembly.longterm_vector_backend() != nullptr);
-
-    RecordingProvider recording{{
-        provider::Response{
-            .blocks = {core::ToolUseContent{
-                .id = "memory-write-1",
-                .name = "MemoryRemember",
-                .input_json =
-                    R"({"id":"lt-tool-remember-vector","kind":"project","title":"Vector remembered note","body":"Memory remember mirrored rarevectorremember into sqlite-vec.","importance":0.75,"tags":["remember","vector"]})",
-            }},
-            .stop_reason = core::StopReason::tool_use,
-            .usage = {},
-            .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
-        },
-        text_response("done"),
-    }};
-
-    auto options = base_runner_options(io, assembly, cfg, recording);
-    options.mode = permission::Mode::permissive;
-    options.longterm_hybrid_search = bootstrap::LongtermHybridSearchOptions{.enabled = true};
-    auto runner = bootstrap::AgentSession::create(std::move(options));
-    REQUIRE(runner.has_value());
-
-    auto result = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "write vector memory"});
-    REQUIRE(result.has_value());
-
-    auto embedding = memory::longterm::make_text_embedding("rarevectorremember");
-    REQUIRE(embedding.has_value());
-    auto hits = co_await assembly.longterm_vector_backend()->search(
-        memory::longterm::VectorSearchQuery{
-            .scope_key = "scope-A",
-            .embedding = std::move(*embedding),
-            .kinds = {},
-            .include_shadow = false,
-        },
-        5);
-    REQUIRE(hits.has_value());
-    REQUIRE_FALSE(hits->empty());
-    REQUIRE((*hits)[0].key.id == "lt-tool-remember-vector");
-  });
-}
-#endif
-
 TEST_CASE("AgentSession dispatches MemoryForget through long-term backend",
           "[unit][bootstrap][prompt_runner][memory]") {
   TempDir temp{"oran-bootstrap-prompt-runner-memory-forget-tool"};
@@ -1249,110 +1077,6 @@ TEST_CASE("AgentSession dispatches MemoryForget through long-term backend",
   });
 }
 
-#if defined(ORAN_ENABLE_SQLITE_VEC)
-TEST_CASE("AgentSession mirrors MemoryForget deletes into vector memory",
-          "[unit][bootstrap][prompt_runner][memory][sqlite-vec]") {
-  TempDir temp{"oran-bootstrap-prompt-runner-memory-forget-vector"};
-  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
-    auto cfg = config::Config{};
-    auto assembly = build_assembly(temp.path(), io, false, false, true, true);
-    REQUIRE(assembly.longterm_memory_backend() != nullptr);
-    REQUIRE(assembly.longterm_vector_backend() != nullptr);
-
-    auto record = make_longterm_record("lt-tool-forget-vector", "Memory forget removes rarevectorforget.");
-    auto upserted = co_await assembly.longterm_memory_backend()->upsert(memory::longterm::WriteRequest{
-        .record = record,
-    });
-    REQUIRE(upserted.has_value());
-    auto embedding = memory::longterm::make_text_embedding("rarevectorforget");
-    REQUIRE(embedding.has_value());
-    auto vector_upserted = co_await assembly.longterm_vector_backend()->upsert(memory::longterm::VectorUpsert{
-        .key = record.key,
-        .embedding = *embedding,
-    });
-    REQUIRE(vector_upserted.has_value());
-
-    RecordingProvider recording{{
-        provider::Response{
-            .blocks = {core::ToolUseContent{
-                .id = "memory-forget-vector-1",
-                .name = "MemoryForget",
-                .input_json = R"({"id":"lt-tool-forget-vector"})",
-            }},
-            .stop_reason = core::StopReason::tool_use,
-            .usage = {},
-            .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
-        },
-        text_response("done"),
-    }};
-
-    auto options = base_runner_options(io, assembly, cfg, recording);
-    options.mode = permission::Mode::permissive;
-    options.longterm_hybrid_search = bootstrap::LongtermHybridSearchOptions{.enabled = true};
-    auto runner = bootstrap::AgentSession::create(std::move(options));
-    REQUIRE(runner.has_value());
-
-    auto result = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "forget vector memory"});
-    REQUIRE(result.has_value());
-
-    auto hits = co_await assembly.longterm_vector_backend()->search(
-        memory::longterm::VectorSearchQuery{
-            .scope_key = "scope-A",
-            .embedding = std::move(*embedding),
-            .kinds = {},
-            .include_shadow = false,
-        },
-        5);
-    REQUIRE(hits.has_value());
-    REQUIRE(hits->empty());
-  });
-}
-#endif
-
-TEST_CASE("AgentSession can derive recall query from the last user message",
-          "[unit][bootstrap][prompt_runner][memory]") {
-  TempDir temp{"oran-bootstrap-prompt-runner-longterm-last-user"};
-  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
-    auto cfg = config::Config{};
-    auto assembly = build_assembly(temp.path(), io, false);
-    REQUIRE(assembly.longterm_memory_backend() != nullptr);
-
-    RecordingProvider recording{{
-        text_response("first"),
-        text_response("second"),
-    }};
-
-    auto options = base_runner_options(io, assembly, cfg, recording);
-    options.longterm_recall = bootstrap::LongtermRecallOptions{
-        .enabled = true,
-        .limit = 5,
-        .query_strategy = bootstrap::LongtermRecallQueryStrategy::last_user_message,
-    };
-    auto runner = bootstrap::AgentSession::create(std::move(options));
-    REQUIRE(runner.has_value());
-
-    auto first = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "rareprioranchor"});
-    REQUIRE(first.has_value());
-
-    auto upserted = co_await assembly.longterm_memory_backend()->upsert(memory::longterm::WriteRequest{
-        .record = make_longterm_record("lt-last-user", "Last-user strategy found rareprioranchor."),
-    });
-    REQUIRE(upserted.has_value());
-
-    auto second = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "continue"});
-    REQUIRE(second.has_value());
-
-    const auto requests = recording.requests();
-    REQUIRE(requests.size() == 2);
-    REQUIRE(requests[0].system_prompt.has_value());
-    REQUIRE(requests[1].system_prompt.has_value());
-    REQUIRE_FALSE(requests[0].system_prompt->contains("Long-term memory:"));
-    REQUIRE(requests[1].system_prompt->contains("Long-term memory:"));
-    REQUIRE(requests[1].system_prompt->contains("Last-user strategy found rareprioranchor."));
-  });
-}
-
 TEST_CASE("AgentSession rejects long-term recall without assembly runtime",
           "[unit][bootstrap][prompt_runner][memory]") {
   TempDir temp{"oran-bootstrap-prompt-runner-longterm-no-runtime"};
@@ -1368,842 +1092,6 @@ TEST_CASE("AgentSession rejects long-term recall without assembly runtime",
   REQUIRE_FALSE(runner.has_value());
   REQUIRE(runner.error().kind() == core::ErrorKind::invalid_argument);
 }
-
-TEST_CASE("AgentSession renders skill catalog once per prompt before loop iterations",
-          "[unit][bootstrap][prompt_runner][skill]") {
-  TempDir temp{"oran-bootstrap-prompt-runner-skill-catalog"};
-  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
-    auto cfg = config::Config{};
-    auto assembly = build_assembly(temp.path(), io, false);
-    write_file(temp.path() / "note.txt", "skill catalog fixture\n");
-
-    RecordingProvider recording{{
-        provider::Response{
-            .blocks = {core::ToolUseContent{
-                .id = "read-1",
-                .name = "FileRead",
-                .input_json = R"({"path":"note.txt"})",
-            }},
-            .stop_reason = core::StopReason::tool_use,
-            .usage = {},
-            .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
-        },
-        text_response("done"),
-    }};
-
-    auto catalog = skill::render_catalog(std::vector<skill::CatalogEntry>{
-        skill::CatalogEntry{
-            .name = "release-note",
-            .description = "Draft release notes from completed changes.",
-            .triggers = {"release notes", "changelog"},
-            .model_hint = std::string{"keep output concise"},
-        },
-    });
-    REQUIRE(catalog.has_value());
-
-    auto options = base_runner_options(io, assembly, cfg, recording);
-    options.skills_catalog = std::move(catalog->section_text);
-    auto runner = bootstrap::AgentSession::create(std::move(options));
-    REQUIRE(runner.has_value());
-
-    auto result = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "read"});
-
-    REQUIRE(result.has_value());
-    REQUIRE(result->text == "done");
-
-    const auto requests = recording.requests();
-    REQUIRE(requests.size() == 2);
-    REQUIRE(requests[0].system_prompt.has_value());
-    REQUIRE(requests[1].system_prompt.has_value());
-    REQUIRE(requests[0].system_prompt->contains("Skill: release-note"));
-    REQUIRE(requests[0].system_prompt->contains("Triggers: release notes, changelog"));
-    REQUIRE_FALSE(requests[0].system_prompt->contains("Body:"));
-    REQUIRE(*requests[0].system_prompt == *requests[1].system_prompt);
-    REQUIRE((*runner)->skill_catalog_renders() == 1);
-  });
-}
-
-TEST_CASE("AgentSession loads skill catalog from the workspace skills directory once",
-          "[unit][bootstrap][prompt_runner][skill]") {
-  TempDir temp{"oran-bootstrap-prompt-runner-skill-loader"};
-  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
-    auto cfg = config::Config{};
-    auto assembly = build_assembly(temp.path(), io, false);
-    write_file(temp.path() / "note.txt", "skill loader fixture\n");
-    write_file(temp.path() / ".orangutan" / "skills" / "release-note.md",
-               "---\n"
-               "name: release-note\n"
-               "description: Draft release notes from completed changes.\n"
-               "triggers: release notes, changelog\n"
-               "model_hint: keep output concise\n"
-               "---\n"
-               "Body text that must stay out of the catalog.\n");
-
-    RecordingProvider recording{{
-        provider::Response{
-            .blocks = {core::ToolUseContent{
-                .id = "read-1",
-                .name = "FileRead",
-                .input_json = R"({"path":"note.txt"})",
-            }},
-            .stop_reason = core::StopReason::tool_use,
-            .usage = {},
-            .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
-        },
-        text_response("done"),
-    }};
-
-    auto options = base_runner_options(io, assembly, cfg, recording);
-    options.skills_directory = (temp.path() / ".orangutan" / "skills").string();
-    auto runner = bootstrap::AgentSession::create(std::move(options));
-    REQUIRE(runner.has_value());
-
-    auto result = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "read"});
-
-    REQUIRE(result.has_value());
-    REQUIRE(result->text == "done");
-
-    const auto requests = recording.requests();
-    REQUIRE(requests.size() == 2);
-    REQUIRE(requests[0].system_prompt.has_value());
-    REQUIRE(requests[0].system_prompt->contains("Skill: release-note"));
-    REQUIRE(requests[0].system_prompt->contains("Model Hint: keep output concise"));
-    REQUIRE_FALSE(requests[0].system_prompt->contains("Body text"));
-    REQUIRE(*requests[0].system_prompt == *requests[1].system_prompt);
-    REQUIRE((*runner)->skill_catalog_loads() == 1);
-    REQUIRE((*runner)->skill_catalog_renders() == 1);
-  });
-}
-
-TEST_CASE("AgentSession invokes loaded skill bodies through the tool path", "[unit][bootstrap][prompt_runner][skill]") {
-  TempDir temp{"oran-bootstrap-prompt-runner-skill-invoke"};
-  write_file(temp.path() / ".orangutan" / "skills" / "release-note.md",
-             "---\n"
-             "name: release-note\n"
-             "description: Draft release notes from completed changes.\n"
-             "triggers: release notes, changelog\n"
-             "---\n"
-             "Use concise bullets for the shipped changes.\n");
-  auto cfg = parse_config(R"json(
-{
-  "permissions": {
-    "allow": [
-      {"tool_pattern": "SkillInvoke"}
-    ]
-  }
-}
-)json");
-
-  test::run_async([&temp, &cfg](asio::io_context& io) -> async::Awaitable<void> {
-    auto assembly = build_assembly(temp.path(), io, false);
-    RecordingProvider recording{{
-        provider::Response{
-            .blocks = {core::ToolUseContent{
-                .id = "skill-1",
-                .name = "SkillInvoke",
-                .input_json = R"({"name":"release-note","inputs":{"since":"slice-136"}})",
-            }},
-            .stop_reason = core::StopReason::tool_use,
-            .usage = {},
-            .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
-        },
-        text_response("release note done"),
-    }};
-
-    auto options = base_runner_options(io, assembly, cfg, recording);
-    options.mode = permission::Mode::strict;
-    options.skills_directory = (temp.path() / ".orangutan" / "skills").string();
-    auto runner = bootstrap::AgentSession::create(std::move(options));
-    REQUIRE(runner.has_value());
-
-    auto result = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "draft notes"});
-
-    REQUIRE(result.has_value());
-    REQUIRE(result->text == "release note done");
-
-    const auto requests = recording.requests();
-    REQUIRE(requests.size() == 2);
-    REQUIRE(requests[0].system_prompt.has_value());
-    REQUIRE(requests[0].system_prompt->contains("Skill: release-note"));
-    REQUIRE_FALSE(requests[0].system_prompt->contains("Use concise bullets"));
-    const auto output = tool_result_output_in(requests[1], "skill-1");
-    REQUIRE(output.contains("SkillInvoke: release-note"));
-    REQUIRE(output.contains(R"("since":"slice-136")"));
-    REQUIRE(output.contains("Use concise bullets for the shipped changes."));
-    REQUIRE((*runner)->skill_catalog_loads() == 1);
-  });
-}
-
-TEST_CASE("AgentSession marks invoked skills active on the next prompt", "[unit][bootstrap][prompt_runner][skill]") {
-  TempDir temp{"oran-bootstrap-prompt-runner-active-skill"};
-  write_file(temp.path() / ".orangutan" / "skills" / "release-note.md",
-             "---\n"
-             "name: release-note\n"
-             "description: Draft release notes from completed changes.\n"
-             "triggers: release notes, changelog\n"
-             "---\n"
-             "Use concise bullets for the shipped changes.\n");
-  auto cfg = parse_config(R"json(
-{
-  "permissions": {
-    "allow": [
-      {"tool_pattern": "SkillInvoke"}
-    ]
-  }
-}
-)json");
-
-  test::run_async([&temp, &cfg](asio::io_context& io) -> async::Awaitable<void> {
-    auto assembly = build_assembly(temp.path(), io, false, true);
-    core::TurnId session_id{};
-    session_id.back() = std::byte{0x49};
-    RecordingProvider recording{{
-        provider::Response{
-            .blocks = {core::ToolUseContent{
-                .id = "skill-1",
-                .name = "SkillInvoke",
-                .input_json = R"({"name":"release-note","inputs":{"since":"slice-142"}})",
-            }},
-            .stop_reason = core::StopReason::tool_use,
-            .usage = {},
-            .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
-        },
-        text_response("first done"),
-        text_response("second done"),
-    }};
-
-    auto options = base_runner_options(io, assembly, cfg, recording);
-    options.mode = permission::Mode::strict;
-    options.session_id = session_id;
-    options.skills_directory = (temp.path() / ".orangutan" / "skills").string();
-    auto runner = bootstrap::AgentSession::create(std::move(options));
-    REQUIRE(runner.has_value());
-
-    auto first = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "draft notes"});
-    REQUIRE(first.has_value());
-    REQUIRE(first->text == "first done");
-
-    auto second = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "continue notes"});
-    REQUIRE(second.has_value());
-    REQUIRE(second->text == "second done");
-
-    const auto requests = recording.requests();
-    REQUIRE(requests.size() == 3);
-    REQUIRE(requests[0].system_prompt.has_value());
-    REQUIRE(requests[1].system_prompt.has_value());
-    REQUIRE(requests[2].system_prompt.has_value());
-    REQUIRE_FALSE(requests[0].system_prompt->contains("Active Skill: release-note"));
-    REQUIRE_FALSE(requests[1].system_prompt->contains("Active Skill: release-note"));
-    REQUIRE(requests[2].system_prompt->contains("Active Skill: release-note"));
-    REQUIRE(requests[2].system_prompt->contains("Status: active for this session"));
-    REQUIRE(requests[2].system_prompt->contains("Skill: release-note"));
-    const auto data_json = tool_result_data_json_in(requests[1], "skill-1");
-    REQUIRE(data_json.has_value());
-    REQUIRE(*data_json == R"({"kind":"skill_activation","version":1,"name":"release-note"})");
-    REQUIRE((*runner)->skill_catalog_renders() == 2);
-  });
-}
-
-TEST_CASE("AgentSession restores active skills from session records after transcript pruning",
-          "[unit][bootstrap][prompt_runner][skill][memory]") {
-  TempDir temp{"oran-bootstrap-prompt-runner-skill-session-record"};
-  write_file(temp.path() / ".orangutan" / "skills" / "release-note.md",
-             "---\n"
-             "name: release-note\n"
-             "description: Draft release notes from completed changes.\n"
-             "triggers: release notes, changelog\n"
-             "---\n"
-             "Use concise bullets for the shipped changes.\n");
-  auto cfg = parse_config(R"json(
-{
-  "permissions": {
-    "allow": [
-      {"tool_pattern": "SkillInvoke"}
-    ]
-  }
-}
-)json");
-
-  test::run_async([&temp, &cfg](asio::io_context& io) -> async::Awaitable<void> {
-    auto assembly = build_assembly(temp.path(), io, false, true);
-    core::TurnId session_id{};
-    session_id.back() = std::byte{0x48};
-
-    {
-      RecordingProvider recording{{
-          provider::Response{
-              .blocks = {core::ToolUseContent{
-                  .id = "skill-1",
-                  .name = "SkillInvoke",
-                  .input_json = R"({"name":"release-note","inputs":{"since":"slice-148"}})",
-              }},
-              .stop_reason = core::StopReason::tool_use,
-              .usage = {},
-              .model_used = std::string{"fake-1"},
-              .route_profile_used = std::nullopt,
-          },
-          text_response("first done"),
-      }};
-
-      auto options = base_runner_options(io, assembly, cfg, recording);
-      options.mode = permission::Mode::strict;
-      options.session_id = session_id;
-      options.skills_directory = (temp.path() / ".orangutan" / "skills").string();
-      auto runner = bootstrap::AgentSession::create(std::move(options));
-      REQUIRE(runner.has_value());
-
-      auto first = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "draft notes"});
-      REQUIRE(first.has_value());
-      REQUIRE(first->text == "first done");
-    }
-
-    auto connection = storage::Connection::open(storage::ConnectionOptions{
-        .path = (temp.path() / ".orangutan" / "sessions.db").string(),
-    });
-    REQUIRE(connection.has_value());
-    auto pruned = connection->execute("DELETE FROM session_messages");
-    REQUIRE(pruned.has_value());
-
-    RecordingProvider recording{{text_response("second done")}};
-    auto options = base_runner_options(io, assembly, cfg, recording);
-    options.mode = permission::Mode::strict;
-    options.session_id = session_id;
-    options.skills_directory = (temp.path() / ".orangutan" / "skills").string();
-    auto runner = bootstrap::AgentSession::create(std::move(options));
-    REQUIRE(runner.has_value());
-
-    auto second = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "continue notes"});
-    REQUIRE(second.has_value());
-    REQUIRE(second->text == "second done");
-
-    const auto requests = recording.requests();
-    REQUIRE(requests.size() == 1);
-    REQUIRE(requests[0].system_prompt.has_value());
-    REQUIRE(requests[0].system_prompt->contains("Active Skill: release-note"));
-    REQUIRE(requests[0].system_prompt->contains("Status: active for this session"));
-    REQUIRE(requests[0].system_prompt->contains("Skill: release-note"));
-    REQUIRE(requests[0].messages.size() == 1);
-    REQUIRE(requests[0].messages[0].blocks == core::Message::user_text("continue notes").blocks);
-  });
-}
-
-TEST_CASE("AgentSession clears active markers after SkillDeactivate", "[unit][bootstrap][prompt_runner][skill]") {
-  TempDir temp{"oran-bootstrap-prompt-runner-skill-deactivate"};
-  write_file(temp.path() / ".orangutan" / "skills" / "release-note.md",
-             "---\n"
-             "name: release-note\n"
-             "description: Draft release notes from completed changes.\n"
-             "triggers: release notes, changelog\n"
-             "---\n"
-             "Use concise bullets for the shipped changes.\n");
-  auto cfg = parse_config(R"json(
-{
-  "permissions": {
-    "allow": [
-      {"tool_pattern": "SkillInvoke"},
-      {"tool_pattern": "SkillDeactivate"}
-    ]
-  }
-}
-)json");
-
-  test::run_async([&temp, &cfg](asio::io_context& io) -> async::Awaitable<void> {
-    auto assembly = build_assembly(temp.path(), io, false, true);
-    core::TurnId session_id{};
-    session_id.back() = std::byte{0x49};
-    RecordingProvider recording{{
-        provider::Response{
-            .blocks = {core::ToolUseContent{
-                .id = "skill-1",
-                .name = "SkillInvoke",
-                .input_json = R"({"name":"release-note","inputs":{"since":"slice-147"}})",
-            }},
-            .stop_reason = core::StopReason::tool_use,
-            .usage = {},
-            .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
-        },
-        text_response("first done"),
-        provider::Response{
-            .blocks = {core::ToolUseContent{
-                .id = "skill-2",
-                .name = "SkillDeactivate",
-                .input_json = R"({"name":"release-note"})",
-            }},
-            .stop_reason = core::StopReason::tool_use,
-            .usage = {},
-            .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
-        },
-        text_response("second done"),
-        text_response("third done"),
-    }};
-
-    auto options = base_runner_options(io, assembly, cfg, recording);
-    options.mode = permission::Mode::strict;
-    options.session_id = session_id;
-    options.skills_directory = (temp.path() / ".orangutan" / "skills").string();
-    auto runner = bootstrap::AgentSession::create(std::move(options));
-    REQUIRE(runner.has_value());
-
-    auto first = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "draft notes"});
-    REQUIRE(first.has_value());
-    REQUIRE(first->text == "first done");
-
-    auto second = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "stop using that skill"});
-    REQUIRE(second.has_value());
-    REQUIRE(second->text == "second done");
-
-    auto persisted = co_await assembly.session_store()->load_skill_activations(
-        memory::session::SessionId{.value = "00000000000000000000000000000049"},
-        memory::session::AgentKey{.value = "coder"});
-    REQUIRE(persisted.has_value());
-    REQUIRE(persisted->size() == 1);
-    REQUIRE((*persisted)[0].name == "release-note");
-    REQUIRE_FALSE((*persisted)[0].active);
-
-    auto third = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "continue"});
-    REQUIRE(third.has_value());
-    REQUIRE(third->text == "third done");
-
-    const auto requests = recording.requests();
-    REQUIRE(requests.size() == 5);
-    // Prompt 1 renders before the invoke takes effect: not yet active.
-    REQUIRE(requests[0].system_prompt.has_value());
-    REQUIRE_FALSE(requests[0].system_prompt->contains("Active Skill: release-note"));
-    // Prompt 2 sees the transcript SkillInvoke -> active going in.
-    REQUIRE(requests[2].system_prompt.has_value());
-    REQUIRE(requests[2].system_prompt->contains("Active Skill: release-note"));
-    // The SkillDeactivate tool result carries the versioned deactivation record.
-    const auto data_json = tool_result_data_json_in(requests[3], "skill-2");
-    REQUIRE(data_json.has_value());
-    REQUIRE(*data_json == R"({"kind":"skill_deactivation","version":1,"name":"release-note"})");
-    REQUIRE(tool_result_output_in(requests[3], "skill-2").contains("SkillDeactivate: release-note"));
-    // Prompt 3 sees invoke then deactivate -> no longer active, but still catalogued.
-    REQUIRE(requests[4].system_prompt.has_value());
-    REQUIRE_FALSE(requests[4].system_prompt->contains("Active Skill: release-note"));
-    REQUIRE(requests[4].system_prompt->contains("Skill: release-note"));
-  });
-}
-
-TEST_CASE("AgentSession suppresses active markers for config-deactivated skills",
-          "[unit][bootstrap][prompt_runner][skill]") {
-  TempDir temp{"oran-bootstrap-prompt-runner-skill-deactivated"};
-  write_file(temp.path() / ".orangutan" / "skills" / "release-note.md",
-             "---\n"
-             "name: release-note\n"
-             "description: Draft release notes from completed changes.\n"
-             "triggers: release notes, changelog\n"
-             "---\n"
-             "Use concise bullets for the shipped changes.\n");
-  auto cfg = parse_config(R"json(
-{
-  "permissions": {
-    "allow": [
-      {"tool_pattern": "SkillInvoke"}
-    ]
-  },
-  "agents": {
-    "ephemeral": {
-      "skills_deactivated": ["release-note"]
-    }
-  }
-}
-)json");
-
-  test::run_async([&temp, &cfg](asio::io_context& io) -> async::Awaitable<void> {
-    auto assembly = build_assembly(temp.path(), io, false);
-    RecordingProvider recording{{
-        provider::Response{
-            .blocks = {core::ToolUseContent{
-                .id = "skill-1",
-                .name = "SkillInvoke",
-                .input_json = R"({"name":"release-note","inputs":{"since":"slice-146"}})",
-            }},
-            .stop_reason = core::StopReason::tool_use,
-            .usage = {},
-            .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
-        },
-        text_response("first done"),
-        text_response("second done"),
-    }};
-
-    auto options = base_runner_options(io, assembly, cfg, recording);
-    options.mode = permission::Mode::strict;
-    options.agent_config_name = "ephemeral";
-    options.skills_directory = (temp.path() / ".orangutan" / "skills").string();
-    auto runner = bootstrap::AgentSession::create(std::move(options));
-    REQUIRE(runner.has_value());
-
-    auto first = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "draft notes"});
-    REQUIRE(first.has_value());
-    auto second = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "continue notes"});
-    REQUIRE(second.has_value());
-
-    const auto requests = recording.requests();
-    REQUIRE(requests.size() == 3);
-    REQUIRE(requests[2].system_prompt.has_value());
-    REQUIRE(requests[2].system_prompt->contains("Skill: release-note"));
-    REQUIRE_FALSE(requests[2].system_prompt->contains("Active Skill: release-note"));
-  });
-}
-
-TEST_CASE("AgentSession drops active markers for expired config skills", "[unit][bootstrap][prompt_runner][skill]") {
-  TempDir temp{"oran-bootstrap-prompt-runner-skill-expired"};
-  write_file(temp.path() / ".orangutan" / "skills" / "release-note.md",
-             "---\n"
-             "name: release-note\n"
-             "description: Draft release notes from completed changes.\n"
-             "triggers: release notes, changelog\n"
-             "---\n"
-             "Use concise bullets for the shipped changes.\n");
-  auto cfg = parse_config(R"json(
-{
-  "permissions": {
-    "allow": [
-      {"tool_pattern": "SkillInvoke"}
-    ]
-  },
-  "agents": {
-    "ephemeral": {
-      "skills_expirations": [
-        {"name": "release-note", "expires_at": "2000-01-01T00:00:00Z"}
-      ]
-    }
-  }
-}
-)json");
-
-  test::run_async([&temp, &cfg](asio::io_context& io) -> async::Awaitable<void> {
-    auto assembly = build_assembly(temp.path(), io, false);
-    RecordingProvider recording{{
-        provider::Response{
-            .blocks = {core::ToolUseContent{
-                .id = "skill-1",
-                .name = "SkillInvoke",
-                .input_json = R"({"name":"release-note","inputs":{"since":"slice-146"}})",
-            }},
-            .stop_reason = core::StopReason::tool_use,
-            .usage = {},
-            .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
-        },
-        text_response("first done"),
-        text_response("second done"),
-    }};
-
-    auto options = base_runner_options(io, assembly, cfg, recording);
-    options.mode = permission::Mode::strict;
-    options.agent_config_name = "ephemeral";
-    options.skills_directory = (temp.path() / ".orangutan" / "skills").string();
-    auto runner = bootstrap::AgentSession::create(std::move(options));
-    REQUIRE(runner.has_value());
-
-    auto first = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "draft notes"});
-    REQUIRE(first.has_value());
-    auto second = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "continue notes"});
-    REQUIRE(second.has_value());
-
-    const auto requests = recording.requests();
-    REQUIRE(requests.size() == 3);
-    REQUIRE(requests[2].system_prompt.has_value());
-    REQUIRE(requests[2].system_prompt->contains("Skill: release-note"));
-    REQUIRE_FALSE(requests[2].system_prompt->contains("Active Skill: release-note"));
-  });
-}
-
-TEST_CASE("AgentSession keeps active markers for not-yet-expired config skills",
-          "[unit][bootstrap][prompt_runner][skill]") {
-  TempDir temp{"oran-bootstrap-prompt-runner-skill-unexpired"};
-  write_file(temp.path() / ".orangutan" / "skills" / "release-note.md",
-             "---\n"
-             "name: release-note\n"
-             "description: Draft release notes from completed changes.\n"
-             "triggers: release notes, changelog\n"
-             "---\n"
-             "Use concise bullets for the shipped changes.\n");
-  auto cfg = parse_config(R"json(
-{
-  "permissions": {
-    "allow": [
-      {"tool_pattern": "SkillInvoke"}
-    ]
-  },
-  "agents": {
-    "ephemeral": {
-      "skills_expirations": [
-        {"name": "release-note", "expires_at": "2100-01-01T00:00:00Z"}
-      ]
-    }
-  }
-}
-)json");
-
-  test::run_async([&temp, &cfg](asio::io_context& io) -> async::Awaitable<void> {
-    auto assembly = build_assembly(temp.path(), io, false);
-    RecordingProvider recording{{
-        provider::Response{
-            .blocks = {core::ToolUseContent{
-                .id = "skill-1",
-                .name = "SkillInvoke",
-                .input_json = R"({"name":"release-note","inputs":{"since":"slice-146"}})",
-            }},
-            .stop_reason = core::StopReason::tool_use,
-            .usage = {},
-            .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
-        },
-        text_response("first done"),
-        text_response("second done"),
-    }};
-
-    auto options = base_runner_options(io, assembly, cfg, recording);
-    options.mode = permission::Mode::strict;
-    options.agent_config_name = "ephemeral";
-    options.skills_directory = (temp.path() / ".orangutan" / "skills").string();
-    auto runner = bootstrap::AgentSession::create(std::move(options));
-    REQUIRE(runner.has_value());
-
-    auto first = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "draft notes"});
-    REQUIRE(first.has_value());
-    auto second = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "continue notes"});
-    REQUIRE(second.has_value());
-
-    const auto requests = recording.requests();
-    REQUIRE(requests.size() == 3);
-    REQUIRE(requests[2].system_prompt.has_value());
-    REQUIRE(requests[2].system_prompt->contains("Active Skill: release-note"));
-  });
-}
-
-TEST_CASE("AgentSession filters workspace skills by selected agent allowlist",
-          "[unit][bootstrap][prompt_runner][skill]") {
-  TempDir temp{"oran-bootstrap-prompt-runner-agent-skills"};
-  const auto skills_dir = temp.path() / ".orangutan" / "skills";
-  write_file(skills_dir / "release-note.md",
-             "---\n"
-             "name: release-note\n"
-             "description: Draft release notes from completed changes.\n"
-             "triggers: release notes\n"
-             "---\n"
-             "Release note body.\n");
-  write_file(skills_dir / "review-pr.md",
-             "---\n"
-             "name: review-pr\n"
-             "description: Review a pull request.\n"
-             "triggers: code review\n"
-             "---\n"
-             "Review body.\n");
-  auto cfg = parse_config(R"json(
-{
-  "permissions": {
-    "allow": [
-      {"tool_pattern": "SkillInvoke"}
-    ]
-  },
-  "agents": {
-    "writer": {
-      "skills_enabled": ["release-note"]
-    }
-  }
-}
-)json");
-
-  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
-    auto assembly = build_assembly(temp.path(), io, false);
-    RecordingProvider recording{{
-        provider::Response{
-            .blocks = {core::ToolUseContent{
-                .id = "skill-filtered",
-                .name = "SkillInvoke",
-                .input_json = R"({"name":"review-pr"})",
-            }},
-            .stop_reason = core::StopReason::tool_use,
-            .usage = {},
-            .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
-        },
-        text_response("filtered done"),
-    }};
-
-    auto options = base_runner_options(io, assembly, cfg, recording);
-    options.mode = permission::Mode::strict;
-    options.agent_config_name = "writer";
-    options.skills_directory = skills_dir.string();
-    auto runner = bootstrap::AgentSession::create(std::move(options));
-    REQUIRE(runner.has_value());
-
-    auto result = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "use skill"});
-    REQUIRE(result.has_value());
-    REQUIRE(result->text == "filtered done");
-
-    const auto requests = recording.requests();
-    REQUIRE(requests.size() == 2);
-    REQUIRE(requests[0].system_prompt.has_value());
-    REQUIRE(requests[0].system_prompt->contains("Skill: release-note"));
-    REQUIRE_FALSE(requests[0].system_prompt->contains("Skill: review-pr"));
-    const auto output = tool_result_output_in(requests[1], "skill-filtered");
-    REQUIRE(output.contains("tool error: SkillInvoke: skill is not loaded"));
-    REQUIRE(output.contains("skill: review-pr"));
-    REQUIRE(output.contains("reason: skill_not_loaded"));
-    REQUIRE((*runner)->skill_catalog_loads() == 1);
-  });
-}
-
-TEST_CASE("AgentSession treats an empty agent skill allowlist as no skills",
-          "[unit][bootstrap][prompt_runner][skill]") {
-  TempDir temp{"oran-bootstrap-prompt-runner-empty-agent-skills"};
-  const auto skills_dir = temp.path() / ".orangutan" / "skills";
-  write_file(skills_dir / "release-note.md",
-             "---\n"
-             "name: release-note\n"
-             "description: Draft release notes from completed changes.\n"
-             "triggers: release notes\n"
-             "---\n"
-             "Release note body.\n");
-  auto cfg = parse_config(R"json(
-{
-  "permissions": {
-    "allow": [
-      {"tool_pattern": "SkillInvoke"}
-    ]
-  },
-  "agents": {
-    "writer": {
-      "skills_enabled": []
-    }
-  }
-}
-)json");
-
-  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
-    auto assembly = build_assembly(temp.path(), io, false);
-    RecordingProvider recording{{
-        provider::Response{
-            .blocks = {core::ToolUseContent{
-                .id = "skill-empty-allowlist",
-                .name = "SkillInvoke",
-                .input_json = R"({"name":"release-note"})",
-            }},
-            .stop_reason = core::StopReason::tool_use,
-            .usage = {},
-            .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
-        },
-        text_response("empty allowlist done"),
-    }};
-
-    auto options = base_runner_options(io, assembly, cfg, recording);
-    options.mode = permission::Mode::strict;
-    options.permission_agent_name = "writer";
-    options.skills_directory = skills_dir.string();
-    auto runner = bootstrap::AgentSession::create(std::move(options));
-    REQUIRE(runner.has_value());
-
-    auto result = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "use skill"});
-    REQUIRE(result.has_value());
-    REQUIRE(result->text == "empty allowlist done");
-
-    const auto requests = recording.requests();
-    REQUIRE(requests.size() == 2);
-    REQUIRE(requests[0].system_prompt.has_value());
-    REQUIRE_FALSE(requests[0].system_prompt->contains("Skill: release-note"));
-    const auto output = tool_result_output_in(requests[1], "skill-empty-allowlist");
-    REQUIRE(output.contains("tool error: SkillInvoke: skill is not loaded"));
-    REQUIRE(output.contains("skill: release-note"));
-    REQUIRE(output.contains("reason: skill_not_loaded"));
-    REQUIRE((*runner)->skill_catalog_loads() == 1);
-  });
-}
-
-#if defined(__linux__)
-TEST_CASE("AgentSession refreshes workspace skill snapshots before the next prompt",
-          "[unit][bootstrap][prompt_runner][skill][watch]") {
-  TempDir temp{"oran-bootstrap-prompt-runner-skill-watch"};
-  const auto skills_dir = temp.path() / ".orangutan" / "skills";
-  write_file(skills_dir / "release-note.md",
-             "---\n"
-             "name: release-note\n"
-             "description: Draft initial release notes.\n"
-             "triggers: release notes\n"
-             "---\n"
-             "Initial skill body.\n");
-  auto cfg = parse_config(R"json(
-{
-  "permissions": {
-    "allow": [
-      {"tool_pattern": "SkillInvoke"}
-    ]
-  }
-}
-)json");
-
-  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
-    auto assembly = build_assembly(temp.path(), io, false);
-    RecordingProvider recording{{
-        text_response("first prompt"),
-        provider::Response{
-            .blocks = {core::ToolUseContent{
-                .id = "skill-2",
-                .name = "SkillInvoke",
-                .input_json = R"({"name":"release-note","inputs":{"since":"slice-138"}})",
-            }},
-            .stop_reason = core::StopReason::tool_use,
-            .usage = {},
-            .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
-        },
-        text_response("second prompt"),
-    }};
-
-    auto options = base_runner_options(io, assembly, cfg, recording);
-    options.mode = permission::Mode::strict;
-    options.skills_directory = skills_dir.string();
-    auto runner = bootstrap::AgentSession::create(std::move(options));
-    REQUIRE(runner.has_value());
-
-    auto first = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "first"});
-    REQUIRE(first.has_value());
-    REQUIRE(first->text == "first prompt");
-
-    write_file(skills_dir / "release-note.md",
-               "---\n"
-               "name: release-note\n"
-               "description: Draft updated release notes.\n"
-               "triggers: release notes\n"
-               "---\n"
-               "Updated skill body.\n");
-    auto waited = co_await async::sleep_for(io.get_executor(), std::chrono::milliseconds{10});
-    REQUIRE(waited.has_value());
-
-    auto second = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "second"});
-    REQUIRE(second.has_value());
-    REQUIRE(second->text == "second prompt");
-
-    const auto requests = recording.requests();
-    REQUIRE(requests.size() == 3);
-    REQUIRE(requests[0].system_prompt.has_value());
-    REQUIRE(requests[0].system_prompt->contains("Draft initial release notes."));
-    REQUIRE_FALSE(requests[0].system_prompt->contains("Updated skill body."));
-
-    REQUIRE(requests[1].system_prompt.has_value());
-    REQUIRE(requests[1].system_prompt->contains("Draft updated release notes."));
-    REQUIRE_FALSE(requests[1].system_prompt->contains("Updated skill body."));
-    REQUIRE(*requests[1].system_prompt == *requests[2].system_prompt);
-
-    const auto output = tool_result_output_in(requests[2], "skill-2");
-    REQUIRE(output.contains("Updated skill body."));
-    REQUIRE_FALSE(output.contains("Initial skill body."));
-    REQUIRE((*runner)->skill_catalog_loads() == 2);
-    REQUIRE((*runner)->skill_catalog_renders() == 2);
-  });
-}
-#endif
 
 TEST_CASE("AgentSession renders default system preamble once per prompt before loop iterations",
           "[unit][bootstrap][prompt_runner][prompt]") {
@@ -2245,7 +1133,6 @@ TEST_CASE("AgentSession renders default system preamble once per prompt before l
     REQUIRE(requests[0].system_prompt->contains("Operating principles:"));
     REQUIRE(requests[0].system_prompt->contains("Tool: FileRead"));
     REQUIRE(*requests[0].system_prompt == *requests[1].system_prompt);
-    REQUIRE((*runner)->system_preamble_renders() == 1);
   });
 }
 
@@ -2463,4 +1350,56 @@ TEST_CASE("AgentSession multi-tool batches complete on a multi-worker runtime",
   REQUIRE(result->has_value());
   REQUIRE((*result)->text == "multiworker done");
   REQUIRE(fake.turns_consumed() == kToolTurns + 1);
+}
+
+TEST_CASE("automatic recall refuses denied memory before calling the provider",
+          "[integration][bootstrap][memory][core_boundary]") {
+  TempDir temp{"oran-recall-policy"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = parse_config(R"({"permissions":{"deny":[{"tool_pattern":"MemoryRecall"}]}})");
+    auto assembly = build_assembly(temp.path(), io, false);
+    auto saved = co_await assembly.longterm_memory_backend()->upsert({
+        .record = make_longterm_record("private", "Private recall content"),
+    });
+    REQUIRE(saved.has_value());
+    std::vector<MemoryHookCapture> captures;
+    MemoryCaptureSink sink{captures};
+    assembly.hook_bus().bind(sink, {hook::Event::memory_read_after});
+    RecordingProvider recording{{text_response("unexpected")}};
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.longterm_recall.enabled = true;
+    auto session = bootstrap::AgentSession::create(std::move(options));
+    REQUIRE(session.has_value());
+
+    auto result = co_await (*session)->run_prompt({.prompt = "Private recall"});
+
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().kind() == core::ErrorKind::permission_denied);
+    CHECK(recording.requests().empty());
+    CHECK(captures.empty());
+  });
+}
+
+TEST_CASE("a session advertises memory tools only when memory is available",
+          "[integration][bootstrap][memory][core_boundary]") {
+  TempDir temp{"oran-tool-services"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false, false, false);
+    RecordingProvider recording{{text_response("done")}};
+    auto session = bootstrap::AgentSession::create(base_runner_options(io, assembly, cfg, recording));
+    REQUIRE(session.has_value());
+
+    auto result = co_await (*session)->run_prompt({.prompt = "Hello"});
+
+    REQUIRE(result.has_value());
+    CHECK(result->text == "done");
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 1);
+    REQUIRE(requests.front().system_prompt.has_value());
+    CHECK(requests.front().system_prompt->contains("FileRead"));
+    CHECK_FALSE(requests.front().system_prompt->contains("MemoryRecall"));
+    CHECK_FALSE(requests.front().system_prompt->contains("MemoryRemember"));
+    CHECK_FALSE(requests.front().system_prompt->contains("MemoryForget"));
+  });
 }

@@ -17,8 +17,11 @@ from model tool calls pass through `Registry::dispatch`.
    completion/error observations.
 
 `DispatchContext` carries identity, rules, audit, workspace, approval and injected
-memory/skill services. A tool receives these dependencies explicitly. Application
+memory services. A tool receives these dependencies explicitly. Application
 code supplies bindings once instead of registering alternate dispatch paths.
+`register_builtins` installs filesystem tools and catalogue discovery;
+`register_memory_tools` adds the three memory tools when the host supplies their
+services. A session advertises only its registered tools.
 
 ## Scheduler
 
@@ -51,8 +54,7 @@ and edit must not act on a target replaced after authorization. Exact filesystem
 semantics live in [io-runtime](io-runtime.md).
 
 MemoryRecall, MemoryRemember and MemoryForget receive a host-bound scope through
-injected handlers. They cannot select another scope in tool JSON. The existing
-skill handlers follow the same dispatch path. [memory-system](memory-system.md)
+injected handlers. They cannot select another scope in tool JSON. [memory-system](memory-system.md)
 owns record and prompt recall semantics.
 
 ## Capability Vocabulary

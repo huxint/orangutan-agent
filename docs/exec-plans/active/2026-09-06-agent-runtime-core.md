@@ -39,33 +39,21 @@ grant itself authority.
    with independent sessions and the intersection of parent and child authority.
    Establish result delivery and cancellation before adding team strategies.
 
-Application interfaces and scheduled delivery can be implemented after these
-contracts hold. Their current speculative implementation is removed from the
-active codebase. Git retains committed history; user databases are preserved.
+Application interfaces and scheduled delivery follow these core contracts.
+Preserve user databases while changing APIs and composition.
 
-## Current Slice
+## Next Slice
 
-Complete the functional permission and session boundaries in separate commits:
+Make completed-turn persistence one atomic storage operation. The session hands
+its transcript suffix to the typed store; serialization completes before the
+repository acquires its writer transaction. The repository appends the entire
+suffix or leaves the preceding conversation intact.
 
-1. Replace the mutable permission facade with explicit rule values and a pure
-   evaluator. Every required capability must be authorized; combine decisions
-   using deny, then ask, then allow and retain the narrowest approval limits.
-   Keep concrete validation, approval, hooks and audit at tool dispatch.
-2. Reduce session composition to bounded history, lexical recall, the tool loop
-   and persistence. Prepare conversation values independently of IO. Bind scoped
-   memory effects outside the session coordinator. Remove session skill policy,
-   hybrid recall, render counters and their unused configuration/callers.
-   Advertise only tools with a working runtime binding.
-
-The executable continues to accept explicit configuration, workspace, session
-and prompt. Preserve typed transcripts, stored databases, schema migrations,
-tool promotion, permission checks and joined cancellation. No new application
-surface or dependency is needed for this slice.
-
-Acceptance covers a composite-capability refusal before an effect, context
-preparation without services, scoped memory through the real tool path, and
-persisted continuation through the controlled provider boundary. Child-agent
-execution follows once this reusable session boundary is established.
+Preserve existing tables, migrations and message encoding. Acceptance must prove
+rollback after a later message fails, ordered continuation after success, and
+separation of session/agent keys. Keep individual memory-tool effects under their
+existing dispatch contract. Bounded child execution follows this persistence
+boundary, using independent state and the intersection of parent/child authority.
 
 ## Verification
 
@@ -82,5 +70,6 @@ Real-model acceptance requires explicitly supplied credentials.
 - [x] Peripheral code, configuration and document removal.
 - [x] Minimal executable and core integration gate.
 - [x] Pure permission values and complete capability checks.
-- [ ] Functional session and memory boundaries.
+- [x] Functional session and memory boundaries.
+- [ ] Atomic completed-turn persistence.
 - [ ] Bounded agent collaboration.

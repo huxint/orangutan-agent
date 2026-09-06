@@ -24,8 +24,9 @@ join variant may report lagging children; that report does not end their lifetim
 The tool scheduler returns cancellation after a 100 ms grace window, recording
 lagging tools. `wait_idle(context)` subsequently joins dispatches borrowing the
 selected context. The null-context form joins all dispatches. Session owners use
-the selected form before destroying a failed turn's context, so an unrelated
-session does not extend that lifetime boundary.
+the selected form before destroying any turn's context, including successful
+turns with timed-out tools. An unrelated session does not extend that lifetime
+boundary.
 
 Runtime shutdown follows coroutine cleanup. `stop()` alone does not join worker
 threads; start-mode owners use `join()` or `stop_and_join()` as appropriate.

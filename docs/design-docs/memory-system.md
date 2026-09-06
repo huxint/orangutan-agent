@@ -7,7 +7,8 @@ recall formatting. It does not choose an application identity or call a provider
 
 `session::Store` wraps `storage::SessionRepository`. Keys are explicit session
 and agent values; messages retain typed text, thinking, tool-use and tool-result
-blocks. Persisted activation records support the existing skill integration.
+blocks. Existing skill activation records remain readable for database
+compatibility; session execution does not load or update them.
 
 `load_tail` returns the newest messages in conversation order with row and encoded
 byte limits. Defaults are 128 rows and 512 KiB; valid limits are 1–4096 rows and
@@ -29,7 +30,9 @@ The default `Fts5Backend` stores records in `memory.db`, maintains its FTS index
 transactionally and filters shadowed records from ordinary recall. `Runtime`
 performs bounded lexical search and renders the selected records. Rendering is
 a pure function of those records; timestamps, request IDs and scores stay out
-of cached prompt text. Recall occurs once before the provider/tool loop.
+of cached prompt text. Automatic recall uses the current prompt as its query and
+runs once through `MemoryRecall` before the provider/tool loop. It obeys the same
+permissions, hooks, audit and output limits as an explicit tool call.
 
 `MemoryRecall`, `MemoryRemember` and `MemoryForget` enter through tool validation,
 permissions, hooks and audit. Their bindings receive the session's scope from
@@ -42,9 +45,9 @@ updates resume on the coordinating strand.
 ## Existing Optional Library Surface
 
 The library still contains a sqlite-vec backend and lexical/vector combination
-for embedders. The minimal executable uses lexical recall. Startup decay and
-skill policy are being reduced with the session coordinator; their presence in
-headers does not make them application features.
+for embedders. The executable uses lexical recall. Decay remains
+available at the backend boundary. These optional library operations are not
+part of session execution or runtime startup.
 
 User database contents and migration history are preserved during API reduction.
 [Storage](storage-runtime.md) owns persistence mechanics;

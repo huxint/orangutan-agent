@@ -24,18 +24,20 @@ configuration or credentials is an error before execution.
 
 ## Session Boundary
 
-`AgentSession` currently loads bounded persisted history and skill activation
-state, prepares prompt context, drives `agent::Loop`, and appends a successful
-transcript. Prompt-boundary recall runs once per turn. Tool results re-enter the
-same loop through the registered dispatch path.
+`AgentSession` loads bounded history, prepares an owned conversation through
+`agent::prepare_conversation`, drives `agent::Loop`, and appends the successful
+transcript suffix. The prepared value records the history boundary independently
+of storage. Prompt recall runs once through `MemoryRecall` before the loop;
+the returned text stays stable across model/tool iterations.
+
+Memory adapters borrow a runtime and backend and capture the host's scope. They
+do not capture session state or discover configuration. Filesystem and catalogue
+tools are registered together; the session adds memory tools when memory services
+exist. Every turn joins its borrowed tool context before returning or persisting.
 
 All callers use the same rules, broker, workspace, hook and audit services.
 Without an approval consumer, an `ask` decision fails closed. Embedders may bind
 an explicit approval sink through the hook bus.
-
-The public session coordinator still includes skill and optional hybrid-memory
-policy. The [active plan](../exec-plans/active/2026-09-06-agent-runtime-core.md)
-tracks its reduction into value-based context preparation and effectful execution.
 
 ## Invocation
 

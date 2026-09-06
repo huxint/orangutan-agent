@@ -35,22 +35,21 @@
 namespace orangutan::agent {
 namespace {
 
-constexpr auto kDefaultActiveTools = std::array<std::string_view, 8>{
+constexpr auto kDefaultActiveTools = std::array<std::string_view, 6>{
     "FileRead",
     "FileWrite",
     "FileEdit",
     "FileSearch",
     "DirectoryList",
     "ToolSearch",
-    "SkillInvoke",
-    "SkillDeactivate",
 };
 
-[[nodiscard]] std::string_view system_preamble_for(const RunTurnInputs& inputs, SystemPreambleOwner& default_preamble) {
+[[nodiscard]] std::string_view system_preamble_for(const RunTurnInputs& inputs,
+                                                   const SystemPreamble& default_preamble) {
   if (!inputs.system_preamble.empty()) {
     return inputs.system_preamble;
   }
-  return default_preamble.render_once();
+  return default_preamble.section_text;
 }
 
 [[nodiscard]] bool is_promoted_tool(std::span<const std::string> promoted_tools, std::string_view name) noexcept {
@@ -678,7 +677,7 @@ class Loop::Impl {
 public:
   Impl(provider::System& provider, provider::Route route, LoopOptions options)
       : provider_{provider}, route_{std::move(route)}, options_{std::move(options)}, builder_{options_.prompt_options},
-        default_preamble_{} {}
+        default_preamble_{default_system_preamble()} {}
 
   [[nodiscard]] async::Awaitable<core::Result<RunTurnResult>> run_turn(RunTurnInputs inputs,
                                                                        provider::EventSink* sink) {
@@ -1031,7 +1030,7 @@ private:
   provider::Route route_;
   LoopOptions options_;
   prompt::Builder builder_;
-  SystemPreambleOwner default_preamble_;
+  SystemPreamble default_preamble_;
 };
 
 Loop::Loop(provider::System& provider, provider::Route route, LoopOptions options)

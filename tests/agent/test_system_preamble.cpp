@@ -25,30 +25,3 @@ TEST_CASE("default system preamble is stable and scoped to section one", "[unit]
   REQUIRE_FALSE(first.section_text.contains("request id"));
   REQUIRE_FALSE(first.section_text.contains("trace id"));
 }
-
-TEST_CASE("system preamble owner renders stable bytes and counts calls", "[unit][agent][prompt]") {
-  auto owner = agent::SystemPreambleOwner{};
-
-  const auto first = std::string{owner.render_once()};
-  const auto second = std::string{owner.render_once()};
-
-  REQUIRE(first == second);
-  REQUIRE(first == agent::default_system_preamble().section_text);
-  REQUIRE(owner.stats().renders == 2);
-}
-
-TEST_CASE("system preamble owner accepts explicit override without resetting stats", "[unit][agent][prompt]") {
-  auto owner = agent::SystemPreambleOwner{};
-  REQUIRE(std::string{owner.render_once()}.contains("You are Orangutan"));
-
-  owner.replace(agent::SystemPreamble{.section_text = "system: test override"});
-
-  REQUIRE(std::string{owner.render_once()} == "system: test override");
-  REQUIRE(owner.preamble().section_text == "system: test override");
-  REQUIRE(owner.stats().renders == 2);
-
-  owner.clear();
-
-  REQUIRE(owner.render_once().empty());
-  REQUIRE(owner.stats().renders == 3);
-}

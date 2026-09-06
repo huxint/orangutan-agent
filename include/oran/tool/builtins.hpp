@@ -1,12 +1,3 @@
-// include/oran/tool/builtins.hpp — built-in tool registrars.
-//
-// Each `register_*` free function adds one tool to a `tool::Registry`,
-// returning the same `Result<void>` shape `Registry::add` does so callers
-// can early-return on the first failure. The aggregate `register_builtins`
-// wires every tool this repository currently ships in catalog order.
-//
-// This header is the one place callers learn what shipped.
-
 #pragma once
 
 #include <string_view>
@@ -36,12 +27,6 @@ inline constexpr std::string_view kFileDeleteName{"FileDelete"};
 
 /// Stable wire name for the catalog metadata lookup built-in.
 inline constexpr std::string_view kToolSearchName{"ToolSearch"};
-
-/// Stable wire name for the markdown skill invocation built-in.
-inline constexpr std::string_view kSkillInvokeName{"SkillInvoke"};
-
-/// Stable wire name for the markdown skill deactivation built-in.
-inline constexpr std::string_view kSkillDeactivateName{"SkillDeactivate"};
 
 /// Stable wire name for the long-term memory recall built-in.
 inline constexpr std::string_view kMemoryRecallName{"MemoryRecall"};
@@ -180,25 +165,6 @@ inline constexpr std::string_view kMemoryForgetName{"MemoryForget"};
 /// deferred flag, and category.
 [[nodiscard]] core::Result<void> register_tool_search(Registry& registry);
 
-/// Register the `SkillInvoke` tool. Runs a markdown skill from the runtime's
-/// current skill snapshot; capability `invoke_skill` is required. Input shape:
-/// `{"name": <string>, "inputs"?: <JSON value>}`. The concrete skill lookup
-/// lives behind `DispatchContext::skill_invoke`, so this built-in remains an
-/// ordinary permissioned/audited registry dispatch without making `oran-tool`
-/// depend on `oran-skill`.
-[[nodiscard]] core::Result<void> register_skill_invoke(Registry& registry);
-
-/// Register the `SkillDeactivate` tool. Clears a loaded skill's active marker
-/// from the next prompt's section 4 catalog; capability `deactivate_skill` is
-/// required. Input shape: `{"name": <string>}`. The concrete skill lookup lives
-/// behind `DispatchContext::skill_deactivate`, so this built-in stays an
-/// ordinary permissioned/audited registry dispatch without making `oran-tool`
-/// depend on `oran-skill`. A successful deactivation returns a short
-/// confirmation text plus a versioned `skill_deactivation` record in
-/// `Output::data_json`; the next prompt boundary nets it against any prior
-/// `SkillInvoke` activation so the skill stops appearing as active.
-[[nodiscard]] core::Result<void> register_skill_deactivate(Registry& registry);
-
 /// Register the `MemoryRecall` tool. Searches long-term memory through the
 /// runtime supplied on `DispatchContext::memory_recall`; capability
 /// `read_memory` is required. Input shape: `{"query": <string>,
@@ -232,12 +198,10 @@ inline constexpr std::string_view kMemoryForgetName{"MemoryForget"};
 /// structured `data_json` with the scoped removed key.
 [[nodiscard]] core::Result<void> register_memory_forget(Registry& registry);
 
-/// Register every built-in this repository ships. Currently wires `FileRead`,
-/// `FileWrite`, `FileEdit`, `FileSearch`, `DirectoryList`, then
-/// `FileDelete`, then `ToolSearch`, then `SkillInvoke`, then
-/// `SkillDeactivate`, then `MemoryRecall`, then `MemoryRemember`, then
-/// `MemoryForget`; future slices append additional tools so production callers
-/// can stay on this single entry point.
+/// Register filesystem tools and catalogue discovery.
 [[nodiscard]] core::Result<void> register_builtins(Registry& registry);
+
+/// Register the memory tools after the host has supplied memory services.
+[[nodiscard]] core::Result<void> register_memory_tools(Registry& registry);
 
 }  // namespace orangutan::tool

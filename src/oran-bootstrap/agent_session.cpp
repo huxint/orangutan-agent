@@ -2,23 +2,12 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <expected>
-#include <format>
-#include <iterator>
 #include <limits>
-#include <optional>
-#include <ranges>
 #include <span>
-#include <string>
-#include <string_view>
 #include <system_error>
 #include <unordered_map>
 #include <utility>
 #include <variant>
-#include <vector>
 
 #include <asio/co_spawn.hpp>
 #include <asio/error.hpp>
@@ -27,141 +16,29 @@
 #include <oran/agent.hpp>
 #include <oran/bootstrap/runtime_assembly.hpp>
 #include <oran/config.hpp>
-#include <oran/core/content.hpp>
-#include <oran/core/enum_names.hpp>
-#include <oran/core/error.hpp>
-#include <oran/core/message.hpp>
-#include <oran/core/time.hpp>
-#include <oran/hook.hpp>
-#include <oran/memory.hpp>
-#include <oran/permission.hpp>
+#include <oran/memory/session.hpp>
+#include <oran/permission/materialize.hpp>
 #include <oran/provider.hpp>
-#include <oran/skill.hpp>
-#include <oran/storage.hpp>
 #include <oran/tool.hpp>
+
+#include "memory_tools.hpp"
 
 namespace orangutan::bootstrap {
 namespace {
 
-using ::orangutan::core::Error;
-using ::orangutan::core::Result;
-
-[[nodiscard]] Error option_error(std::string message) {
-  return Error::invalid_argument(std::move(message));
-}
-
-[[nodiscard]] Result<std::vector<memory::longterm::RecordKind>>
-parse_longterm_recall_kinds(std::span<const std::string> names) {
-  auto kinds = std::vector<memory::longterm::RecordKind>{};
-  kinds.reserve(names.size());
-  for (const auto& name : names) {
-    auto parsed = core::parse_enum<memory::longterm::RecordKind>(name);
-    if (!parsed) {
-      return std::unexpected(option_error("agent prompt runner long-term recall kind is unknown").with("kind", name));
-    }
-    if (std::ranges::contains(kinds, *parsed)) {
-      return std::unexpected(
-          option_error("agent prompt runner long-term recall kind must be unique").with("kind", name));
-    }
-    kinds.push_back(*parsed);
-  }
-  return kinds;
-}
-
-[[nodiscard]] Result<std::vector<memory::longterm::RecordKind>>
-parse_memory_tool_recall_kinds(std::span<const std::string> names) {
-  auto kinds = std::vector<memory::longterm::RecordKind>{};
-  kinds.reserve(names.size());
-  for (const auto& name : names) {
-    auto parsed = core::parse_enum<memory::longterm::RecordKind>(name);
-    if (!parsed) {
-      return std::unexpected(Error::invalid_argument("MemoryRecall: unknown kind").with("kind", name));
-    }
-    if (std::ranges::contains(kinds, *parsed)) {
-      return std::unexpected(Error::invalid_argument("MemoryRecall: kind filters must be unique").with("kind", name));
-    }
-    kinds.push_back(*parsed);
-  }
-  return kinds;
-}
-
-[[nodiscard]] Result<memory::longterm::RecordKind> parse_memory_tool_remember_kind(std::string_view name) {
-  auto parsed = core::parse_enum<memory::longterm::RecordKind>(name);
-  if (!parsed) {
-    return std::unexpected(Error::invalid_argument("MemoryRemember: unknown kind").with("kind", std::string{name}));
-  }
-  return *parsed;
-}
-
-[[nodiscard]] std::string user_message_text_for_recall(const core::Message& message) {
-  if (message.role != core::Role::user) {
-    return {};
-  }
-
-  std::string text;
-  for (const auto& block : message.blocks) {
-    const auto* content = std::get_if<core::TextContent>(&block);
-    if (content == nullptr || content->text.empty()) {
-      continue;
-    }
-    if (!text.empty()) {
-      text.push_back('\n');
-    }
-    text.append(content->text);
-  }
-  return text;
-}
-
-[[nodiscard]] std::string last_user_message_text_for_recall(std::span<const core::Message> conversation_tail) {
-  for (std::size_t i = conversation_tail.size(); i > 0; --i) {
-    auto text = user_message_text_for_recall(conversation_tail[i - 1]);
-    if (!text.empty()) {
-      return text;
-    }
-  }
-  return {};
-}
-
-[[nodiscard]] std::string recall_query_text(LongtermRecallQueryStrategy strategy,
-                                            std::string_view prompt,
-                                            std::span<const core::Message> conversation_tail) {
-  switch (strategy) {
-    case LongtermRecallQueryStrategy::prompt_text:
-      return std::string{prompt};
-    case LongtermRecallQueryStrategy::last_user_message: {
-      auto text = last_user_message_text_for_recall(conversation_tail);
-      if (!text.empty()) {
-        return text;
-      }
-      return std::string{prompt};
-    }
-  }
-  return std::string{prompt};
-}
+using core::Error;
+using core::Result;
 
 [[nodiscard]] Result<std::size_t> checked_cap(std::int64_t value, std::string field) {
   if (value < 0) {
-    return std::unexpected(option_error("tool output cap must not be negative").with("field", std::move(field)));
+    return std::unexpected(
+        Error::invalid_argument("tool output cap must not be negative").with("field", std::move(field)));
   }
   if (static_cast<std::uint64_t>(value) > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
-    return std::unexpected(option_error("tool output cap exceeds platform size range").with("field", std::move(field)));
+    return std::unexpected(
+        Error::invalid_argument("tool output cap exceeds platform size range").with("field", std::move(field)));
   }
   return static_cast<std::size_t>(value);
-}
-
-[[nodiscard]] Result<permission::RuleSet>
-materialize_runner_rules(const config::Config& cfg, permission::Mode mode, std::string_view permission_agent_name) {
-  if (permission_agent_name.empty()) {
-    return permission::materialize(mode, cfg.permissions());
-  }
-
-  const auto agents = cfg.agents();
-  const auto match = std::ranges::find(agents, permission_agent_name, &config::AgentConfig::name);
-  if (match == agents.end()) {
-    return std::unexpected(Error::not_found("agent prompt runner permission overlay not found")
-                               .with("agent", std::string{permission_agent_name}));
-  }
-  return permission::materialize(mode, cfg.permissions(), match->permissions);
 }
 
 [[nodiscard]] Result<const config::AgentConfig*> selected_agent_config(const config::Config& cfg,
@@ -174,30 +51,9 @@ materialize_runner_rules(const config::Config& cfg, permission::Mode mode, std::
   const auto match = std::ranges::find(agents, agent_name, &config::AgentConfig::name);
   if (match == agents.end()) {
     return std::unexpected(
-        Error::not_found("agent prompt runner agent config not found").with("agent", std::string{agent_name}));
+        Error::not_found("agent session agent config not found").with("agent", std::string{agent_name}));
   }
   return &*match;
-}
-
-[[nodiscard]] bool skill_enabled_for_agent(const skill::SkillDocument& document,
-                                           const std::optional<std::vector<std::string>>& skills_enabled) {
-  if (!skills_enabled.has_value()) {
-    return true;
-  }
-  return std::ranges::contains(*skills_enabled, document.metadata.name);
-}
-
-[[nodiscard]] std::vector<skill::SkillDocument>
-filter_skill_documents(std::span<const skill::SkillDocument> documents,
-                       const std::optional<std::vector<std::string>>& skills_enabled) {
-  auto filtered = std::vector<skill::SkillDocument>{};
-  filtered.reserve(documents.size());
-  for (const auto& document : documents) {
-    if (skill_enabled_for_agent(document, skills_enabled)) {
-      filtered.push_back(document);
-    }
-  }
-  return filtered;
 }
 
 [[nodiscard]] Result<tool::OutputCapOptions> output_caps_from(const config::Config& cfg) {
@@ -215,311 +71,55 @@ filter_skill_documents(std::span<const skill::SkillDocument> documents,
   };
 }
 
-[[nodiscard]] agent::SystemPreamble make_system_preamble(std::string text) {
-  if (text.empty()) {
-    return agent::default_system_preamble();
-  }
-  return agent::SystemPreamble{.section_text = std::move(text)};
-}
-
-[[nodiscard]] std::string render_skill_invocation_text(const skill::SkillDocument& document,
-                                                       std::string_view inputs_json) {
-  std::string text;
-  text.reserve(document.metadata.name.size() + document.body.size() + inputs_json.size() + 64U);
-  text.append("SkillInvoke: ");
-  text.append(document.metadata.name);
-  text.append("\ninputs: ");
-  text.append(inputs_json);
-  text.append("\nbody:\n");
-  text.append(document.body);
-  return text;
-}
-
-[[nodiscard]] std::string render_skill_deactivation_text(std::string_view skill_name) {
-  std::string text;
-  text.reserve(skill_name.size() + 48U);
-  text.append("SkillDeactivate: ");
-  text.append(skill_name);
-  text.append("\nstatus: deactivated for this session");
-  return text;
-}
-
-[[nodiscard]] std::string render_memory_recall_tool_text(const memory::longterm::RecallResult& recalled) {
-  if (recalled.hits.empty()) {
-    return "MemoryRecall: no matches";
-  }
-
-  std::string text;
-  std::format_to(std::back_inserter(text),
-                 "MemoryRecall: {} match{}\n",
-                 recalled.hits.size(),
-                 recalled.hits.size() == 1 ? "" : "es");
-  text.append(recalled.framing.section_text);
-  return text;
-}
-
-[[nodiscard]] std::uintmax_t memory_record_payload_bytes(const memory::longterm::Record& record) noexcept {
-  auto bytes = static_cast<std::uintmax_t>(record.key.id.size() + record.title.size() + record.body.size());
-  for (const auto& tag : record.tags) {
-    bytes += static_cast<std::uintmax_t>(tag.size());
-  }
-  for (const auto& id : record.linked_record_ids) {
-    bytes += static_cast<std::uintmax_t>(id.size());
-  }
-  return bytes;
-}
-
-[[nodiscard]] std::chrono::nanoseconds duration_between(core::Time started_at, core::Time finished_at) noexcept {
-  return std::chrono::duration_cast<std::chrono::nanoseconds>(finished_at.to_system_time_point() -
-                                                              started_at.to_system_time_point());
-}
-
-[[nodiscard]] hook::Identity hook_identity(const tool::DispatchContext& ctx) {
-  return hook::Identity{
-      .scope_key = ctx.scope_key,
-      .agent_key = ctx.agent_key,
-      .identity = ctx.identity,
-  };
-}
-
-[[nodiscard]] hook::Identity
-hook_identity(std::string_view scope_key, std::string_view agent_key, std::string_view identity) {
-  return hook::Identity{
-      .scope_key = std::string{scope_key},
-      .agent_key = std::string{agent_key},
-      .identity = std::string{identity},
-  };
-}
-
-[[nodiscard]] hook::MemoryRecordPayload hook_memory_record(const memory::longterm::Record& record) {
-  return hook::MemoryRecordPayload{
-      .id = record.key.id,
-      .scope_key = record.key.scope_key,
-      .kind = std::string{core::enum_name(record.kind)},
-      .title = record.title,
-      .body = record.body,
-      .created_at = record.created_at,
-      .updated_at = record.updated_at,
-      .last_read_at = record.last_read_at,
-      .importance = record.importance,
-      .tags = record.tags,
-      .linked_record_ids = record.linked_record_ids,
-      .shadow = record.shadow,
-  };
-}
-
-[[nodiscard]] hook::RedactedMemoryRecordPayload redacted_hook_memory_record(const memory::longterm::Record& record) {
-  return hook::RedactedMemoryRecordPayload{
-      .id = record.key.id,
-      .scope_key = record.key.scope_key,
-      .kind = std::string{core::enum_name(record.kind)},
-      .title_bytes = record.title.size(),
-      .body_bytes = record.body.size(),
-      .tag_count = record.tags.size(),
-      .linked_record_count = record.linked_record_ids.size(),
-      .shadow = record.shadow,
-  };
-}
-
-[[nodiscard]] hook::MemoryReadHitPayload hook_memory_read_hit(const memory::longterm::SearchHit& hit) {
-  return hook::MemoryReadHitPayload{
-      .record = hook_memory_record(hit.record),
-      .score = hit.score,
-      .lexical_score = hit.lexical_score,
-      .vector_score = hit.vector_score,
-      .redacted_record = redacted_hook_memory_record(hit.record),
-  };
-}
-
-[[nodiscard]] std::vector<std::string> hook_memory_kinds(std::span<const memory::longterm::RecordKind> kinds) {
-  auto out = std::vector<std::string>{};
-  out.reserve(kinds.size());
-  for (const auto kind : kinds) {
-    out.push_back(std::string{core::enum_name(kind)});
-  }
-  return out;
-}
-
-[[nodiscard]] hook::MemoryWritePayload make_memory_write_payload(const memory::longterm::Record& record,
-                                                                 const tool::DispatchContext& ctx,
-                                                                 core::Time started_at,
-                                                                 core::Time finished_at) {
-  return hook::MemoryWritePayload{
-      .who = hook_identity(ctx),
-      .record = hook_memory_record(record),
-      .redacted_record = redacted_hook_memory_record(record),
-      .started_at = started_at,
-      .finished_at = finished_at,
-      .duration = duration_between(started_at, finished_at),
-  };
-}
-
-[[nodiscard]] hook::MemoryReadPayload make_memory_read_payload(hook::Identity who,
-                                                               std::string source,
-                                                               std::string query,
-                                                               std::size_t limit,
-                                                               std::span<const memory::longterm::RecordKind> kinds,
-                                                               std::span<const memory::longterm::SearchHit> hits,
-                                                               bool hybrid,
-                                                               core::Time started_at,
-                                                               core::Time finished_at) {
-  auto payload_hits = std::vector<hook::MemoryReadHitPayload>{};
-  payload_hits.reserve(hits.size());
-  for (const auto& hit : hits) {
-    payload_hits.push_back(hook_memory_read_hit(hit));
-  }
-  const auto query_bytes = query.size();
-  return hook::MemoryReadPayload{
-      .who = std::move(who),
-      .source = std::move(source),
-      .query = std::move(query),
-      .redacted_query_bytes = query_bytes,
-      .limit = limit,
-      .kinds = hook_memory_kinds(kinds),
-      .match_count = payload_hits.size(),
-      .hits = std::move(payload_hits),
-      .hybrid = hybrid,
-      .started_at = started_at,
-      .finished_at = finished_at,
-      .duration = duration_between(started_at, finished_at),
-  };
-}
-
-[[nodiscard]] hook::MemoryForgetPayload make_memory_forget_payload(const memory::longterm::RecordKey& key,
-                                                                   const tool::DispatchContext& ctx,
-                                                                   core::Time started_at,
-                                                                   core::Time finished_at) {
-  return hook::MemoryForgetPayload{
-      .who = hook_identity(ctx),
-      .id = key.id,
-      .scope_key = key.scope_key,
-      .started_at = started_at,
-      .finished_at = finished_at,
-      .duration = duration_between(started_at, finished_at),
-  };
-}
-
-[[nodiscard]] std::string hook_decision_reason(const hook::HookDecision& decision, std::string_view fallback) {
-  return decision.reason.empty() ? std::string{fallback} : decision.reason;
-}
-
-[[nodiscard]] Error memory_write_hook_blocked_error(const hook::HookDecision& decision, std::string_view fallback) {
-  return Error::permission_denied("memory write blocked by hook")
-      .with("event", "memory_write_before")
-      .with("reason", "blocked_by_hook")
-      .with("decision_kind", std::string{core::enum_name(decision.kind)})
-      .with("hook_reason", hook_decision_reason(decision, fallback));
-}
-
-[[nodiscard]] std::string render_memory_remember_tool_text(const memory::longterm::Record& record) {
-  std::string text;
-  std::format_to(std::back_inserter(text),
-                 "MemoryRemember: saved {} record {}\n",
-                 core::enum_name(record.kind),
-                 record.key.id);
-  std::format_to(std::back_inserter(text), "title: {}", record.title);
-  if (record.shadow) {
-    text.append("\nstatus: shadow");
-  }
-  return text;
-}
-
-[[nodiscard]] std::string render_memory_forget_tool_text(const memory::longterm::RecordKey& key) {
-  return std::format("MemoryForget: removed record {}", key.id);
-}
-
-[[nodiscard]] std::vector<skill::SessionSkillActivation>
-skill_policy_records_from(std::span<const memory::session::SkillActivationRecord> records) {
-  auto out = std::vector<skill::SessionSkillActivation>{};
-  out.reserve(records.size());
-  for (const auto& record : records) {
-    out.push_back(skill::SessionSkillActivation{.name = record.name, .active = record.active});
-  }
-  return out;
-}
-
-[[nodiscard]] std::vector<memory::session::SkillActivationUpdate>
-skill_activation_updates_from_events(std::span<const skill::SkillActivationEvent> events) {
-  auto updates = std::vector<memory::session::SkillActivationUpdate>{};
-  updates.reserve(events.size());
-  for (const auto& event : events) {
-    updates.push_back(memory::session::SkillActivationUpdate{.name = event.name, .active = event.active});
-  }
-  return updates;
-}
-
 [[nodiscard]] Result<void> validate_options(const AgentSessionOptions& options) {
   if (options.assembly == nullptr) {
-    return std::unexpected(option_error("agent prompt runner requires a runtime assembly"));
+    return std::unexpected(Error::invalid_argument("agent session requires a runtime assembly"));
   }
   if (options.config == nullptr) {
-    return std::unexpected(option_error("agent prompt runner requires a config"));
+    return std::unexpected(Error::invalid_argument("agent session requires a config"));
   }
   if (options.provider == nullptr) {
-    return std::unexpected(option_error("agent prompt runner requires a provider system"));
+    return std::unexpected(Error::invalid_argument("agent session requires a provider system"));
   }
   if (!options.executor || !options.blocking_executor) {
-    return std::unexpected(option_error("agent prompt runner requires an executor"));
+    return std::unexpected(Error::invalid_argument("agent session requires an executor"));
   }
   if ((options.registry == nullptr) != (options.scheduler == nullptr)) {
     return std::unexpected(
-        option_error("agent prompt runner registry and scheduler must be supplied together (both or neither)"));
+        Error::invalid_argument("agent session registry and scheduler must be supplied together (both or neither)"));
   }
   if (options.route.primary.profile.empty()) {
-    return std::unexpected(option_error("agent prompt runner route primary profile must not be empty"));
+    return std::unexpected(Error::invalid_argument("agent session route primary profile must not be empty"));
   }
   if (options.route.primary.model.empty()) {
-    return std::unexpected(option_error("agent prompt runner route primary model must not be empty"));
+    return std::unexpected(Error::invalid_argument("agent session route primary model must not be empty"));
   }
   if (options.scope_key.empty()) {
-    return std::unexpected(option_error("agent prompt runner scope key must not be empty"));
+    return std::unexpected(Error::invalid_argument("agent session scope key must not be empty"));
   }
   if (options.agent_key.empty()) {
-    return std::unexpected(option_error("agent prompt runner agent key must not be empty"));
+    return std::unexpected(Error::invalid_argument("agent session agent key must not be empty"));
   }
   if (options.identity.empty()) {
-    return std::unexpected(option_error("agent prompt runner identity must not be empty"));
+    return std::unexpected(Error::invalid_argument("agent session identity must not be empty"));
   }
   if (options.origin.empty()) {
-    return std::unexpected(option_error("agent prompt runner origin must not be empty"));
+    return std::unexpected(Error::invalid_argument("agent session origin must not be empty"));
   }
   if (options.trace_context_json.empty()) {
-    return std::unexpected(option_error("agent prompt runner trace context JSON must not be empty"));
+    return std::unexpected(Error::invalid_argument("agent session trace context JSON must not be empty"));
   }
   if (options.longterm_recall.enabled) {
-    if (options.longterm_recall.limit == 0) {
-      return std::unexpected(option_error("agent prompt runner long-term recall limit must be positive"));
+    if (options.longterm_recall.limit == 0 || options.longterm_recall.limit > 20) {
+      return std::unexpected(Error::invalid_argument("agent session long-term recall limit must be between 1 and 20"));
     }
     if (!options.memory_framing.empty()) {
       return std::unexpected(
-          option_error("agent prompt runner long-term recall cannot be combined with exact memory framing"));
+          Error::invalid_argument("agent session long-term recall cannot be combined with exact memory framing"));
     }
     if (options.assembly->longterm_memory_runtime() == nullptr) {
-      return std::unexpected(option_error("agent prompt runner long-term recall requires long-term memory runtime"));
-    }
-  }
-  if (options.longterm_hybrid_search.enabled) {
-    if (options.longterm_hybrid_search.lexical_limit == 0 || options.longterm_hybrid_search.vector_limit == 0 ||
-        options.longterm_hybrid_search.result_limit == 0) {
-      return std::unexpected(option_error("agent prompt runner hybrid long-term recall limits must be positive"));
-    }
-    if (!std::isfinite(options.longterm_hybrid_search.lexical_weight) ||
-        !std::isfinite(options.longterm_hybrid_search.vector_weight) ||
-        options.longterm_hybrid_search.lexical_weight < 0.0 || options.longterm_hybrid_search.vector_weight < 0.0) {
       return std::unexpected(
-          option_error("agent prompt runner hybrid long-term recall weights must be finite and non-negative"));
-    }
-    if (options.longterm_hybrid_search.lexical_weight == 0.0 && options.longterm_hybrid_search.vector_weight == 0.0) {
-      return std::unexpected(option_error("agent prompt runner hybrid long-term recall requires a non-zero weight"));
-    }
-    if (options.longterm_hybrid_search.embedding_model.empty() ||
-        options.longterm_hybrid_search.embedding_dimensions == 0) {
-      return std::unexpected(option_error("agent prompt runner hybrid long-term recall requires an embedding owner"));
-    }
-    if (options.assembly->longterm_hybrid_runtime() == nullptr ||
-        options.assembly->longterm_vector_backend() == nullptr) {
-      return std::unexpected(
-          option_error("agent prompt runner hybrid long-term recall requires long-term vector memory runtime"));
+          Error::invalid_argument("agent session long-term recall requires long-term memory runtime"));
     }
   }
   return {};
@@ -534,7 +134,7 @@ core::Result<agent::ToolSchedulerOptions> scheduler_options_from(const config::C
     return std::unexpected(std::move(max_parallel).error());
   }
   if (*max_parallel == 0) {
-    return std::unexpected(option_error("runtime.tool_scheduler.max_parallel_tools must be positive"));
+    return std::unexpected(Error::invalid_argument("runtime.tool_scheduler.max_parallel_tools must be positive"));
   }
   return agent::ToolSchedulerOptions{
       .max_parallel_tools = *max_parallel,
@@ -548,180 +148,104 @@ public:
   Impl(AgentSessionOptions options,
        std::optional<tool::Registry> owned_registry,
        permission::RuleSet rules,
-       config::PromptActiveToolsConfig active_tools,
        tool::OutputCapOptions output_caps,
-       agent::ToolSchedulerOptions scheduler_options,
-       std::optional<std::vector<std::string>> skills_enabled,
-       std::vector<std::string> skills_deactivated,
-       std::vector<skill::SkillExpiration> skills_expirations,
-       std::vector<memory::longterm::RecordKind> longterm_recall_kinds,
-       core::TurnId session_id)
-      : executor_{std::move(options.executor)}, blocking_executor_{std::move(options.blocking_executor)},
-        assembly_{options.assembly}, execution_runtime_{*options.provider},
-        loop_{execution_runtime_, std::move(options.route)}, owned_registry_{std::move(owned_registry)},
-        rules_{std::move(rules)}, active_tools_{std::move(active_tools)}, output_caps_{output_caps},
-        session_id_{session_id}, session_id_text_{core::format_turn_id_hex(session_id_)}, mode_{options.mode},
-        scope_key_{std::move(options.scope_key)}, agent_key_{std::move(options.agent_key)},
-        identity_{std::move(options.identity)}, origin_{std::move(options.origin)},
-        system_preamble_{make_system_preamble(std::move(options.system_preamble))},
-        skills_catalog_{skill::RenderedCatalog{.section_text = std::move(options.skills_catalog)}},
-        skills_enabled_{std::move(skills_enabled)}, skills_deactivated_{std::move(skills_deactivated)},
-        skills_expirations_{std::move(skills_expirations)}, longterm_recall_{options.longterm_recall},
-        longterm_hybrid_search_{std::move(options.longterm_hybrid_search)},
-        longterm_recall_kinds_{std::move(longterm_recall_kinds)},
-        memory_framing_{memory::Framing{.section_text = std::move(options.memory_framing)}},
-        per_agent_overlay_{std::move(options.per_agent_overlay)},
-        trace_context_json_{std::move(options.trace_context_json)}, tool_choice_{std::move(options.tool_choice)},
-        max_tokens_{options.max_tokens}, thinking_budget_{options.thinking_budget}, retry_{options.retry},
-        stream_{options.stream}, event_sink_{options.event_sink} {
-    // Borrow an externally-owned registry + scheduler when both were injected
-    // (the `--serve` shared-scheduler path); otherwise own them. `create`
-    // guarantees the both-or-neither invariant and builds `owned_registry_`
-    // exactly when self-owning, so the owned scheduler always has a registry.
-    if (options.scheduler != nullptr) {
-      registry_ = options.registry;
-      scheduler_ = options.scheduler;
+       agent::ToolSchedulerOptions scheduler_options)
+      : options_{std::move(options)}, execution_runtime_{*options_.provider}, loop_{execution_runtime_, options_.route},
+        owned_registry_{std::move(owned_registry)}, rules_{std::move(rules)}, output_caps_{output_caps},
+        active_tools_{options_.config->runtime().prompt.active_tools},
+        session_id_text_{core::format_turn_id_hex(options_.session_id)} {
+    if (options_.scheduler != nullptr) {
+      registry_ = options_.registry;
+      scheduler_ = options_.scheduler;
     } else {
-      registry_ = &owned_registry_.value();
-      owned_scheduler_.emplace(executor_, *registry_, scheduler_options);
-      scheduler_ = &owned_scheduler_.value();
-    }
-    if (!options.skills_directory.empty() && skills_catalog_.catalog().section_text.empty()) {
-      skill_snapshot_.emplace(blocking_executor_, std::move(options.skills_directory));
+      registry_ = &*owned_registry_;
+      owned_scheduler_.emplace(options_.executor, *registry_, scheduler_options);
+      scheduler_ = &*owned_scheduler_;
     }
   }
 
-  ~Impl() = default;
-
-  Impl(const Impl&) = delete;
-  Impl& operator=(const Impl&) = delete;
-  Impl(Impl&&) = delete;
-  Impl& operator=(Impl&&) = delete;
-
   [[nodiscard]] async::Awaitable<Result<agent::PromptResult>> run_prompt(agent::PromptRequest request) {
-    auto catalog = registry_->catalog();
-    auto conversation_tail = std::vector<core::Message>{};
-    auto session_skill_activations = std::vector<memory::session::SkillActivationRecord>{};
-    memory::session::Store* session_store = assembly_->session_store();
-    if (session_store != nullptr) {
-      auto loaded =
-          co_await asio::co_spawn(blocking_executor_,
-                                  session_store->load_tail(memory::session::SessionId{.value = session_id_text_},
-                                                           memory::session::AgentKey{.value = agent_key_}),
-                                  asio::use_awaitable);
+    auto history = std::vector<core::Message>{};
+    auto* store = options_.assembly->session_store();
+    if (store != nullptr) {
+      auto loaded = co_await asio::co_spawn(options_.blocking_executor,
+                                            store->load_tail(memory::session::SessionId{.value = session_id_text_},
+                                                             memory::session::AgentKey{.value = options_.agent_key}),
+                                            asio::use_awaitable);
       if (!loaded) {
         co_return std::unexpected(std::move(loaded).error());
       }
-      conversation_tail = std::move(*loaded);
-      const auto first_user = std::ranges::find_if(conversation_tail, [](const auto& message) {
-        return message.role == core::Role::user && std::ranges::any_of(message.blocks, [](const auto& block) {
-                 return std::holds_alternative<core::TextContent>(block);
-               });
-      });
-      conversation_tail.erase(conversation_tail.begin(), first_user);
-      auto loaded_skill_activations = co_await asio::co_spawn(
-          blocking_executor_,
-          session_store->load_skill_activations(memory::session::SessionId{.value = session_id_text_},
-                                                memory::session::AgentKey{.value = agent_key_}),
-          asio::use_awaitable);
-      if (!loaded_skill_activations) {
-        co_return std::unexpected(std::move(loaded_skill_activations).error());
-      }
-      session_skill_activations = std::move(*loaded_skill_activations);
+      history = std::move(*loaded);
     } else {
-      conversation_tail = transcript_;
+      history = transcript_;
     }
 
-    auto refreshed_catalog = co_await refresh_skill_catalog_snapshot(
-        std::span<const core::Message>{conversation_tail},
-        std::span<const memory::session::SkillActivationRecord>{session_skill_activations});
-    if (!refreshed_catalog) {
-      co_return std::unexpected(std::move(refreshed_catalog).error());
+    auto context = tool::DispatchContext::for_now(options_.blocking_executor,
+                                                  rules_,
+                                                  options_.assembly->audit_sink(),
+                                                  options_.scope_key,
+                                                  options_.agent_key,
+                                                  options_.identity);
+    context.mode = options_.mode;
+    context.approval_broker = &options_.assembly->approval_broker();
+    context.bus = &options_.assembly->hook_bus();
+    context.workspace = &options_.assembly->workspace();
+    context.output_caps = output_caps_;
+    if (auto* runtime = options_.assembly->longterm_memory_runtime(); runtime != nullptr) {
+      bind_memory_tools(context, *runtime, *options_.assembly->longterm_memory_backend(), options_.scope_key);
     }
 
-    const auto prev_transcript_size = conversation_tail.size();
-    auto prompt_text = std::move(request.prompt);
-    const auto system_preamble = std::string{system_preamble_.render_once()};
-    const auto skills_catalog = std::string{skills_catalog_.render_once()};
-    auto memory_framing =
-        co_await render_memory_framing_for_prompt(prompt_text, std::span<const core::Message>{conversation_tail});
-    if (!memory_framing) {
-      co_return std::unexpected(std::move(memory_framing).error());
+    auto memory_framing = options_.memory_framing;
+    if (options_.longterm_recall.enabled) {
+      auto recalled = co_await recall_prompt_memory(*registry_,
+                                                    context,
+                                                    tool::MemoryRecallRequest{.query = request.prompt,
+                                                                              .limit = options_.longterm_recall.limit,
+                                                                              .kinds = options_.longterm_recall.kinds});
+      if (!recalled) {
+        co_return std::unexpected(std::move(recalled).error());
+      }
+      memory_framing = std::move(*recalled);
     }
-    conversation_tail.push_back(core::Message::user_text(std::move(prompt_text)));
-
-    auto promotion_snapshot = session_state_.promotion_snapshot(core::time::now_utc());
-    auto dispatch_context = tool::DispatchContext::for_now(blocking_executor_,
-                                                           rules_,
-                                                           assembly_->audit_sink(),
-                                                           scope_key_,
-                                                           agent_key_,
-                                                           identity_);
-    dispatch_context.mode = mode_;
-    dispatch_context.approval_broker = &assembly_->approval_broker();
-    dispatch_context.bus = &assembly_->hook_bus();
-    dispatch_context.skill_invoke = [this](std::string_view skill_name,
-                                           std::string_view inputs_json,
-                                           tool::DispatchContext& ctx) -> async::Awaitable<Result<tool::Output>> {
-      co_return invoke_skill(skill_name, inputs_json, ctx);
-    };
-    dispatch_context.skill_deactivate = [this](std::string_view skill_name,
-                                               tool::DispatchContext& ctx) -> async::Awaitable<Result<tool::Output>> {
-      co_return deactivate_skill(skill_name, ctx);
-    };
-    dispatch_context.memory_recall = [this](tool::MemoryRecallRequest request,
-                                            tool::DispatchContext& ctx) -> async::Awaitable<Result<tool::Output>> {
-      co_return co_await recall_memory(std::move(request), ctx);
-    };
-    dispatch_context.memory_remember = [this](tool::MemoryRememberRequest request,
-                                              tool::DispatchContext& ctx) -> async::Awaitable<Result<tool::Output>> {
-      co_return co_await remember_memory(std::move(request), ctx);
-    };
-    dispatch_context.memory_forget = [this](tool::MemoryForgetRequest request,
-                                            tool::DispatchContext& ctx) -> async::Awaitable<Result<tool::Output>> {
-      co_return co_await forget_memory(std::move(request), ctx);
-    };
-    dispatch_context.workspace = &assembly_->workspace();
-    dispatch_context.output_caps = output_caps_;
-
+    auto conversation = agent::prepare_conversation(std::move(history), std::move(request.prompt));
+    const auto catalog = registry_->catalog();
+    const auto promotions = session_state_.promotion_snapshot(core::time::now_utc());
     auto inputs = agent::RunTurnInputs{
-        .system_preamble = system_preamble,
-        .tool_catalog = std::span<const core::ToolDef>{catalog},
+        .system_preamble = options_.system_preamble,
+        .tool_catalog = catalog,
         .active_tools = active_tools_,
-        .promoted_tools = std::span<const std::string>{promotion_snapshot.tool_names},
-        .skills_catalog = skills_catalog,
-        .memory_framing = *memory_framing,
-        .per_agent_overlay = per_agent_overlay_,
-        .conversation_tail = std::span<const core::Message>{conversation_tail},
-        .tool_choice = tool_choice_,
-        .max_tokens = max_tokens_,
-        .thinking_budget = thinking_budget_,
-        .retry = retry_,
-        .stream = stream_,
+        .promoted_tools = promotions.tool_names,
+        .memory_framing = memory_framing,
+        .per_agent_overlay = options_.per_agent_overlay,
+        .conversation_tail = conversation.messages,
+        .tool_choice = options_.tool_choice,
+        .max_tokens = options_.max_tokens,
+        .thinking_budget = options_.thinking_budget,
+        .retry = options_.retry,
+        .stream = options_.stream,
         .turn_id = request.turn_id,
-        .bus = &assembly_->hook_bus(),
-        .scope_key = scope_key_,
-        .agent_key = agent_key_,
-        .identity = identity_,
-        .origin = origin_,
+        .bus = context.bus,
+        .scope_key = options_.scope_key,
+        .agent_key = options_.agent_key,
+        .identity = options_.identity,
+        .origin = options_.origin,
         .tools = registry_,
-        .dispatch_context = &dispatch_context,
+        .dispatch_context = &context,
         .scheduler = scheduler_,
     };
-
-    if (auto* trace = assembly_->trace_repository(); trace != nullptr) {
+    if (auto* trace = options_.assembly->trace_repository(); trace != nullptr) {
       inputs.trace = agent::TraceContext{
           .repository = trace,
-          .session_id = session_id_,
-          .agent_key = agent_key_,
-          .origin = origin_,
-          .context_json = trace_context_json_,
+          .session_id = options_.session_id,
+          .agent_key = options_.agent_key,
+          .origin = options_.origin,
+          .context_json = options_.trace_context_json,
       };
     }
 
     Result<agent::RunTurnResult> result = std::unexpected(Error::internal("agent turn did not finish"));
     try {
-      result = co_await loop_.run_turn(std::move(inputs), event_sink_);
+      result = co_await loop_.run_turn(std::move(inputs), options_.event_sink);
     } catch (const std::system_error& error) {
       result = std::unexpected(error.code() == asio::error::operation_aborted
                                    ? Error::cancelled()
@@ -729,70 +253,28 @@ public:
     } catch (const std::exception&) {
       result = std::unexpected(Error::internal("agent turn failed unexpectedly"));
     }
+    // The turn frame owns the context borrowed by every scheduled dispatch.
+    auto drained = co_await scheduler_->wait_idle(&context);
+    if (!drained) {
+      co_return std::unexpected(std::move(drained).error());
+    }
     if (!result) {
-      // A cancelled batch may return before a tool observes cancellation.
-      // Its context still borrows this frame and the session's callbacks.
-      auto drained = co_await scheduler_->wait_idle(&dispatch_context);
-      if (!drained)
-        co_return std::unexpected(std::move(drained).error());
       co_return std::unexpected(std::move(result).error());
     }
-
-    observe_turn_results(result->transcript, prev_transcript_size);
-    const auto skill_activation_events =
-        skill::skill_activation_events_from_transcript(std::span<const core::Message>{result->transcript},
-                                                       prev_transcript_size);
-    auto skill_activation_updates =
-        skill_activation_updates_from_events(std::span<const skill::SkillActivationEvent>{skill_activation_events});
-
-    if (session_store != nullptr) {
+    if (store != nullptr) {
       auto persisted =
-          co_await asio::co_spawn(blocking_executor_,
-                                  append_transcript_suffix(*session_store, result->transcript, prev_transcript_size),
+          co_await asio::co_spawn(options_.blocking_executor,
+                                  append_transcript_suffix(*store, result->transcript, conversation.history_size),
                                   asio::use_awaitable);
       if (!persisted) {
         co_return std::unexpected(std::move(persisted).error());
       }
-      auto skill_activations = co_await asio::co_spawn(
-          blocking_executor_,
-          persist_skill_activation_updates(
-              *session_store,
-              std::span<const memory::session::SkillActivationUpdate>{skill_activation_updates}),
-          asio::use_awaitable);
-      if (!skill_activations) {
-        co_return std::unexpected(std::move(skill_activations).error());
-      }
     }
-
-    if (session_store == nullptr)
+    observe_turn_results(result->transcript, conversation.history_size);
+    if (store == nullptr) {
       transcript_ = std::move(result->transcript);
-    ++prompts_processed_;
-
+    }
     co_return agent::PromptResult{.text = std::move(result->text)};
-  }
-
-  [[nodiscard]] std::size_t prompts_processed() const noexcept {
-    return prompts_processed_;
-  }
-
-  [[nodiscard]] std::size_t tool_search_observations_recorded() const noexcept {
-    return tool_search_observations_;
-  }
-
-  [[nodiscard]] std::size_t memory_framing_renders() const noexcept {
-    return memory_framing_.stats().renders;
-  }
-
-  [[nodiscard]] std::size_t system_preamble_renders() const noexcept {
-    return system_preamble_.stats().renders;
-  }
-
-  [[nodiscard]] std::size_t skill_catalog_renders() const noexcept {
-    return skills_catalog_.stats().renders;
-  }
-
-  [[nodiscard]] std::size_t skill_catalog_loads() const noexcept {
-    return skill_catalog_loads_;
   }
 
   [[nodiscard]] const provider::Route& route() const noexcept {
@@ -800,476 +282,12 @@ public:
   }
 
 private:
-  [[nodiscard]] async::Awaitable<Result<std::string>>
-  render_memory_framing_for_prompt(std::string_view prompt, std::span<const core::Message> conversation_tail) {
-    if (!longterm_recall_.enabled) {
-      co_return std::string{memory_framing_.render_once()};
-    }
-    if (longterm_hybrid_search_.enabled) {
-      co_return co_await render_hybrid_memory_framing_for_prompt(prompt, conversation_tail);
-    }
-
-    auto* runtime = assembly_->longterm_memory_runtime();
-    if (runtime == nullptr) {
-      co_return std::unexpected(option_error("agent prompt runner long-term recall runtime is unavailable"));
-    }
-    auto query_text = recall_query_text(longterm_recall_.query_strategy, prompt, conversation_tail);
-    const auto started_at = core::time::now_utc();
-    auto recalled = co_await asio::co_spawn(blocking_executor_,
-                                            runtime->recall(memory::longterm::RecallRequest{
-                                                .query =
-                                                    memory::longterm::Query{
-                                                        .scope_key = scope_key_,
-                                                        .text = query_text,
-                                                        .kinds = longterm_recall_kinds_,
-                                                        .include_shadow = false,
-                                                    },
-                                                .limit = longterm_recall_.limit,
-                                            }),
-                                            asio::use_awaitable);
-    if (!recalled) {
-      co_return std::unexpected(std::move(recalled).error());
-    }
-    const auto finished_at = core::time::now_utc();
-    co_await publish_memory_read_after(assembly_->hook_bus(),
-                                       hook_identity(scope_key_, agent_key_, identity_),
-                                       "prompt_boundary",
-                                       std::move(query_text),
-                                       longterm_recall_.limit,
-                                       std::span<const memory::longterm::RecordKind>{longterm_recall_kinds_},
-                                       std::span<const memory::longterm::SearchHit>{recalled->hits},
-                                       false,
-                                       started_at,
-                                       finished_at);
-    memory_framing_.replace(std::move(recalled->framing));
-    co_return std::string{memory_framing_.render_once()};
-  }
-
-  [[nodiscard]] memory::longterm::TextEmbeddingOptions embedding_options() const {
-    return memory::longterm::TextEmbeddingOptions{
-        .model = longterm_hybrid_search_.embedding_model,
-        .dimensions = longterm_hybrid_search_.embedding_dimensions,
-    };
-  }
-
-  [[nodiscard]] async::Awaitable<void> publish_memory_read_after(hook::Bus& bus,
-                                                                 hook::Identity who,
-                                                                 std::string source,
-                                                                 std::string query,
-                                                                 std::size_t limit,
-                                                                 std::span<const memory::longterm::RecordKind> kinds,
-                                                                 std::span<const memory::longterm::SearchHit> hits,
-                                                                 bool hybrid,
-                                                                 core::Time started_at,
-                                                                 core::Time finished_at) const {
-    [[maybe_unused]] auto outcome = co_await bus.publish_advisory(hook::Event::memory_read_after,
-                                                                  make_memory_read_payload(std::move(who),
-                                                                                           std::move(source),
-                                                                                           std::move(query),
-                                                                                           limit,
-                                                                                           kinds,
-                                                                                           hits,
-                                                                                           hybrid,
-                                                                                           started_at,
-                                                                                           finished_at));
-    co_return;
-  }
-
-  [[nodiscard]] async::Awaitable<Result<std::string>>
-  render_hybrid_memory_framing_for_prompt(std::string_view prompt, std::span<const core::Message> conversation_tail) {
-    auto* runtime = assembly_->longterm_hybrid_runtime();
-    if (runtime == nullptr) {
-      co_return std::unexpected(option_error("agent prompt runner hybrid long-term recall runtime is unavailable"));
-    }
-    auto query_text = recall_query_text(longterm_recall_.query_strategy, prompt, conversation_tail);
-    auto embedding = memory::longterm::make_text_embedding(query_text, embedding_options());
-    if (!embedding) {
-      co_return std::unexpected(std::move(embedding).error());
-    }
-    const auto result_limit = std::min(longterm_recall_.limit, longterm_hybrid_search_.result_limit);
-    const auto started_at = core::time::now_utc();
-    auto recalled = co_await asio::co_spawn(blocking_executor_,
-                                            runtime->recall(memory::longterm::HybridSearchRequest{
-                                                .query =
-                                                    memory::longterm::Query{
-                                                        .scope_key = scope_key_,
-                                                        .text = query_text,
-                                                        .kinds = longterm_recall_kinds_,
-                                                        .include_shadow = false,
-                                                    },
-                                                .embedding = std::move(*embedding),
-                                                .lexical_limit = longterm_hybrid_search_.lexical_limit,
-                                                .vector_limit = longterm_hybrid_search_.vector_limit,
-                                                .result_limit = result_limit,
-                                                .lexical_weight = longterm_hybrid_search_.lexical_weight,
-                                                .vector_weight = longterm_hybrid_search_.vector_weight,
-                                            }),
-                                            asio::use_awaitable);
-    if (!recalled) {
-      co_return std::unexpected(std::move(recalled).error());
-    }
-    const auto finished_at = core::time::now_utc();
-    co_await publish_memory_read_after(assembly_->hook_bus(),
-                                       hook_identity(scope_key_, agent_key_, identity_),
-                                       "prompt_boundary",
-                                       std::move(query_text),
-                                       result_limit,
-                                       std::span<const memory::longterm::RecordKind>{longterm_recall_kinds_},
-                                       std::span<const memory::longterm::SearchHit>{recalled->hits},
-                                       true,
-                                       started_at,
-                                       finished_at);
-    memory_framing_.replace(std::move(recalled->framing));
-    co_return std::string{memory_framing_.render_once()};
-  }
-
-  [[nodiscard]] async::Awaitable<Result<void>>
-  refresh_skill_catalog_snapshot(std::span<const core::Message> conversation_tail,
-                                 std::span<const memory::session::SkillActivationRecord> session_skill_activations) {
-    if (!skill_snapshot_.has_value()) {
-      co_return Result<void>{};
-    }
-    auto refreshed = co_await skill_snapshot_->refresh();
-    if (!refreshed) {
-      co_return std::unexpected(std::move(refreshed).error());
-    }
-    skill_documents_ =
-        filter_skill_documents(std::span<const skill::SkillDocument>{skill_snapshot_->documents()}, skills_enabled_);
-    auto entries = skill::catalog_entries_from(std::span<const skill::SkillDocument>{skill_documents_});
-    auto policy = skill::ActivationPolicy{};
-    policy.session_skill_activations = skill_policy_records_from(session_skill_activations);
-    policy.deactivated_skill_names = skills_deactivated_;
-    policy.expirations = skills_expirations_;
-    if (!policy.expirations.empty()) {
-      policy.evaluation_time = core::time::now_utc();
-    }
-    auto active_skills = skill::resolve_active_skills(std::move(policy),
-                                                      conversation_tail,
-                                                      std::span<const skill::CatalogEntry>{entries});
-    if (!active_skills) {
-      co_return std::unexpected(std::move(active_skills).error());
-    }
-    auto catalog = skill::render_catalog(entries, *active_skills);
-    if (!catalog) {
-      co_return std::unexpected(std::move(catalog).error());
-    }
-    skills_catalog_.replace(std::move(*catalog));
-    skill_catalog_loads_ = static_cast<std::size_t>(skill_snapshot_->stats().loads);
-    co_return Result<void>{};
-  }
-
-  [[nodiscard]] Result<tool::Output>
-  invoke_skill(std::string_view skill_name, std::string_view inputs_json, tool::DispatchContext& ctx) const {
-    static_cast<void>(ctx);
-    const auto match = std::ranges::find_if(skill_documents_, [skill_name](const skill::SkillDocument& document) {
-      return document.metadata.name == skill_name;
-    });
-    if (match == skill_documents_.end()) {
-      return std::unexpected(Error::not_found("SkillInvoke: skill is not loaded")
-                                 .with("skill", std::string{skill_name})
-                                 .with("reason", "skill_not_loaded"));
-    }
-    auto data_json = skill::render_activation_data_json(match->metadata.name);
-    if (!data_json) {
-      return std::unexpected(std::move(data_json).error());
-    }
-    return tool::Output{
-        .text = render_skill_invocation_text(*match, inputs_json),
-        .data_json = std::move(*data_json),
-        .attachments = {},
-        .usage =
-            tool::ToolUsage{
-                .bytes_read = match->body.size(),
-            },
-        .is_error = false,
-    };
-  }
-
-  [[nodiscard]] Result<tool::Output> deactivate_skill(std::string_view skill_name, tool::DispatchContext& ctx) const {
-    static_cast<void>(ctx);
-    const auto match = std::ranges::find_if(skill_documents_, [skill_name](const skill::SkillDocument& document) {
-      return document.metadata.name == skill_name;
-    });
-    if (match == skill_documents_.end()) {
-      return std::unexpected(Error::not_found("SkillDeactivate: skill is not loaded")
-                                 .with("skill", std::string{skill_name})
-                                 .with("reason", "skill_not_loaded"));
-    }
-    auto data_json = skill::render_deactivation_data_json(match->metadata.name);
-    if (!data_json) {
-      return std::unexpected(std::move(data_json).error());
-    }
-    return tool::Output{
-        .text = render_skill_deactivation_text(match->metadata.name),
-        .data_json = std::move(*data_json),
-        .attachments = {},
-        .usage = {},
-        .is_error = false,
-    };
-  }
-
-  [[nodiscard]] async::Awaitable<Result<tool::Output>> recall_memory(tool::MemoryRecallRequest request,
-                                                                     tool::DispatchContext& ctx) const {
-    if (longterm_hybrid_search_.enabled) {
-      co_return co_await recall_memory_hybrid(std::move(request), ctx);
-    }
-
-    auto* runtime = assembly_->longterm_memory_runtime();
-    if (runtime == nullptr) {
-      co_return std::unexpected(Error::invalid_argument("MemoryRecall: runtime service is not available")
-                                    .with("reason", "memory_runtime_unavailable"));
-    }
-    auto kinds = parse_memory_tool_recall_kinds(std::span<const std::string>{request.kinds});
-    if (!kinds) {
-      co_return std::unexpected(std::move(kinds).error());
-    }
-    auto query_text = std::move(request.query);
-    const auto started_at = core::time::now_utc();
-    auto recalled = co_await asio::co_spawn(blocking_executor_,
-                                            runtime->recall(memory::longterm::RecallRequest{
-                                                .query =
-                                                    memory::longterm::Query{
-                                                        .scope_key = scope_key_,
-                                                        .text = query_text,
-                                                        .kinds = *kinds,
-                                                        .include_shadow = false,
-                                                    },
-                                                .limit = request.limit,
-                                            }),
-                                            asio::use_awaitable);
-    if (!recalled) {
-      co_return std::unexpected(std::move(recalled).error());
-    }
-    if (ctx.bus != nullptr) {
-      const auto finished_at = core::time::now_utc();
-      co_await publish_memory_read_after(*ctx.bus,
-                                         hook_identity(ctx),
-                                         "MemoryRecall",
-                                         std::move(query_text),
-                                         request.limit,
-                                         std::span<const memory::longterm::RecordKind>{*kinds},
-                                         std::span<const memory::longterm::SearchHit>{recalled->hits},
-                                         false,
-                                         started_at,
-                                         finished_at);
-    }
-    auto data_json =
-        memory::longterm::render_recall_data_json(std::span<const memory::longterm::SearchHit>{recalled->hits});
-    co_return tool::Output{
-        .text = render_memory_recall_tool_text(*recalled),
-        .data_json = std::move(data_json),
-        .attachments = {},
-        .usage =
-            tool::ToolUsage{
-                .match_count = static_cast<std::uint64_t>(recalled->hits.size()),
-            },
-        .is_error = false,
-    };
-  }
-
-  [[nodiscard]] async::Awaitable<Result<tool::Output>> recall_memory_hybrid(tool::MemoryRecallRequest request,
-                                                                            tool::DispatchContext& ctx) const {
-    auto* runtime = assembly_->longterm_hybrid_runtime();
-    if (runtime == nullptr) {
-      co_return std::unexpected(Error::invalid_argument("MemoryRecall: hybrid runtime service is not available")
-                                    .with("reason", "hybrid_memory_runtime_unavailable"));
-    }
-    auto kinds = parse_memory_tool_recall_kinds(std::span<const std::string>{request.kinds});
-    if (!kinds) {
-      co_return std::unexpected(std::move(kinds).error());
-    }
-    auto query_text = std::move(request.query);
-    auto embedding = memory::longterm::make_text_embedding(query_text, embedding_options());
-    if (!embedding) {
-      co_return std::unexpected(std::move(embedding).error());
-    }
-    const auto result_limit = std::min(request.limit, longterm_hybrid_search_.result_limit);
-    const auto started_at = core::time::now_utc();
-    auto recalled = co_await asio::co_spawn(blocking_executor_,
-                                            runtime->recall(memory::longterm::HybridSearchRequest{
-                                                .query =
-                                                    memory::longterm::Query{
-                                                        .scope_key = scope_key_,
-                                                        .text = query_text,
-                                                        .kinds = *kinds,
-                                                        .include_shadow = false,
-                                                    },
-                                                .embedding = std::move(*embedding),
-                                                .lexical_limit = longterm_hybrid_search_.lexical_limit,
-                                                .vector_limit = longterm_hybrid_search_.vector_limit,
-                                                .result_limit = result_limit,
-                                                .lexical_weight = longterm_hybrid_search_.lexical_weight,
-                                                .vector_weight = longterm_hybrid_search_.vector_weight,
-                                            }),
-                                            asio::use_awaitable);
-    if (!recalled) {
-      co_return std::unexpected(std::move(recalled).error());
-    }
-    if (ctx.bus != nullptr) {
-      const auto finished_at = core::time::now_utc();
-      co_await publish_memory_read_after(*ctx.bus,
-                                         hook_identity(ctx),
-                                         "MemoryRecall",
-                                         std::move(query_text),
-                                         result_limit,
-                                         std::span<const memory::longterm::RecordKind>{*kinds},
-                                         std::span<const memory::longterm::SearchHit>{recalled->hits},
-                                         true,
-                                         started_at,
-                                         finished_at);
-    }
-    auto data_json =
-        memory::longterm::render_recall_data_json(std::span<const memory::longterm::SearchHit>{recalled->hits});
-    co_return tool::Output{
-        .text = render_memory_recall_tool_text(*recalled),
-        .data_json = std::move(data_json),
-        .attachments = {},
-        .usage =
-            tool::ToolUsage{
-                .match_count = static_cast<std::uint64_t>(recalled->hits.size()),
-            },
-        .is_error = false,
-    };
-  }
-
-  [[nodiscard]] async::Awaitable<Result<tool::Output>> remember_memory(tool::MemoryRememberRequest request,
-                                                                       tool::DispatchContext& ctx) const {
-    auto* backend = assembly_->longterm_memory_backend();
-    if (backend == nullptr) {
-      co_return std::unexpected(Error::invalid_argument("MemoryRemember: runtime service is not available")
-                                    .with("reason", "memory_runtime_unavailable"));
-    }
-    auto kind = parse_memory_tool_remember_kind(request.kind);
-    if (!kind) {
-      co_return std::unexpected(std::move(kind).error());
-    }
-
-    auto record = memory::longterm::Record{
-        .key = memory::longterm::RecordKey{.id = std::move(request.id), .scope_key = scope_key_},
-        .kind = *kind,
-        .title = std::move(request.title),
-        .body = std::move(request.body),
-        .created_at = ctx.now,
-        .updated_at = ctx.now,
-        .last_read_at = ctx.now,
-        .importance = request.importance,
-        .tags = std::move(request.tags),
-        .linked_record_ids = std::move(request.linked_record_ids),
-        .shadow = request.shadow,
-    };
-
-    const auto started_at = core::time::now_utc();
-    if (ctx.bus != nullptr) {
-      auto before = co_await ctx.bus->publish_blocking<hook::Event::memory_write_before>(
-          make_memory_write_payload(record, ctx, started_at, started_at));
-      if (!before) {
-        auto error = std::move(before).error();
-        error.with("event", "memory_write_before");
-        co_return std::unexpected(std::move(error));
-      }
-      switch (before->kind) {
-        case hook::HookDecisionKind::proceed:
-          break;
-        case hook::HookDecisionKind::veto:
-          co_return std::unexpected(memory_write_hook_blocked_error(*before, "hook veto"));
-        case hook::HookDecisionKind::rewrite:
-          co_return std::unexpected(memory_write_hook_blocked_error(*before, "memory write rewrite unsupported"));
-        case hook::HookDecisionKind::require_approval:
-          co_return std::unexpected(
-              memory_write_hook_blocked_error(*before, "memory write require_approval unsupported"));
-      }
-    }
-
-    auto stored = co_await asio::co_spawn(blocking_executor_,
-                                          backend->upsert(memory::longterm::WriteRequest{
-                                              .record = std::move(record),
-                                          }),
-                                          asio::use_awaitable);
-    if (!stored) {
-      co_return std::unexpected(std::move(stored).error());
-    }
-    if (auto* vector_backend = assembly_->longterm_vector_backend(); vector_backend != nullptr) {
-      auto embedding = memory::longterm::make_record_embedding(*stored, embedding_options());
-      if (!embedding) {
-        co_return std::unexpected(std::move(embedding).error());
-      }
-      auto vector_upserted = co_await asio::co_spawn(blocking_executor_,
-                                                     vector_backend->upsert(memory::longterm::VectorUpsert{
-                                                         .key = stored->key,
-                                                         .embedding = std::move(*embedding),
-                                                     }),
-                                                     asio::use_awaitable);
-      if (!vector_upserted) {
-        co_return std::unexpected(std::move(vector_upserted).error());
-      }
-    }
-    if (ctx.bus != nullptr) {
-      const auto finished_at = core::time::now_utc();
-      [[maybe_unused]] auto after_outcome =
-          co_await ctx.bus->publish_advisory(hook::Event::memory_write_after,
-                                             make_memory_write_payload(*stored, ctx, started_at, finished_at));
-    }
-    auto data_json = memory::longterm::render_remember_data_json(*stored);
-    co_return tool::Output{
-        .text = render_memory_remember_tool_text(*stored),
-        .data_json = std::move(data_json),
-        .attachments = {},
-        .usage =
-            tool::ToolUsage{
-                .bytes_written = memory_record_payload_bytes(*stored),
-            },
-        .is_error = false,
-    };
-  }
-
-  [[nodiscard]] async::Awaitable<Result<tool::Output>> forget_memory(tool::MemoryForgetRequest request,
-                                                                     tool::DispatchContext& ctx) const {
-    auto* backend = assembly_->longterm_memory_backend();
-    if (backend == nullptr) {
-      co_return std::unexpected(Error::invalid_argument("MemoryForget: runtime service is not available")
-                                    .with("reason", "memory_runtime_unavailable"));
-    }
-
-    auto key = memory::longterm::RecordKey{.id = std::move(request.id), .scope_key = scope_key_};
-    const auto started_at = core::time::now_utc();
-    auto removed = co_await asio::co_spawn(blocking_executor_, backend->remove(key), asio::use_awaitable);
-    if (!removed) {
-      co_return std::unexpected(std::move(removed).error());
-    }
-    if (auto* vector_backend = assembly_->longterm_vector_backend(); vector_backend != nullptr) {
-      auto vector_removed =
-          co_await asio::co_spawn(blocking_executor_,
-                                  vector_backend->remove(memory::longterm::VectorRemoveRequest{.key = key}),
-                                  asio::use_awaitable);
-      if (!vector_removed) {
-        co_return std::unexpected(std::move(vector_removed).error());
-      }
-    }
-    if (ctx.bus != nullptr) {
-      const auto finished_at = core::time::now_utc();
-      [[maybe_unused]] auto forget_outcome =
-          co_await ctx.bus->publish_advisory(hook::Event::memory_forget,
-                                             make_memory_forget_payload(key, ctx, started_at, finished_at));
-    }
-    auto data_json = memory::longterm::render_forget_data_json(key);
-    co_return tool::Output{
-        .text = render_memory_forget_tool_text(key),
-        .data_json = std::move(data_json),
-        .attachments = {},
-        .usage =
-            tool::ToolUsage{
-                .bytes_written = 0,
-            },
-        .is_error = false,
-    };
-  }
-
   [[nodiscard]] async::Awaitable<Result<void>> append_transcript_suffix(memory::session::Store& store,
                                                                         const std::vector<core::Message>& transcript,
                                                                         std::size_t start_index) const {
     for (std::size_t i = start_index; i < transcript.size(); ++i) {
       auto appended = co_await store.append(memory::session::SessionId{.value = session_id_text_},
-                                            memory::session::AgentKey{.value = agent_key_},
+                                            memory::session::AgentKey{.value = options_.agent_key},
                                             transcript[i]);
       if (!appended) {
         co_return std::unexpected(std::move(appended).error());
@@ -1278,26 +296,6 @@ private:
     co_return Result<void>{};
   }
 
-  [[nodiscard]] async::Awaitable<Result<void>>
-  persist_skill_activation_updates(memory::session::Store& store,
-                                   std::span<const memory::session::SkillActivationUpdate> updates) const {
-    for (const auto& update : updates) {
-      auto recorded = co_await store.record_skill_activation(memory::session::SessionId{.value = session_id_text_},
-                                                             memory::session::AgentKey{.value = agent_key_},
-                                                             update);
-      if (!recorded) {
-        co_return std::unexpected(std::move(recorded).error());
-      }
-    }
-    co_return Result<void>{};
-  }
-
-  // After a successful turn, walk the new transcript suffix for
-  // (ToolUseContent, ToolResultContent) pairs and feed each result through
-  // `agent::SessionState::observe_tool_output`. The session state filters by
-  // tool name (only `ToolSearch` drives promotion), so the work is best-effort
-  // and observation errors do not abort the prompt response — the loop has
-  // already committed its audit/trace rows.
   void observe_turn_results(const std::vector<core::Message>& transcript, std::size_t start_index) {
     if (start_index > transcript.size()) {
       return;
@@ -1337,144 +335,79 @@ private:
             .usage = {},
             .is_error = result_block->is_error,
         };
-        auto report = session_state_.observe_tool_output(name_it->second, output, now);
-        if (report.has_value() && report->observed_tool_search) {
-          ++tool_search_observations_;
-        }
+        // Promotion is advisory; malformed search output cannot undo a saved turn.
+        [[maybe_unused]] auto report = session_state_.observe_tool_output(name_it->second, output, now);
       }
     }
   }
 
-  asio::any_io_executor executor_;
-  asio::any_io_executor blocking_executor_;
-  RuntimeAssembly* assembly_{};
+  AgentSessionOptions options_;
   provider::execution::Runtime execution_runtime_;
   agent::Loop loop_;
-  // Owned only when self-owning (the common CLI / channel / desktop path);
-  // empty when the caller injected a shared registry + scheduler. `registry_`
-  // and `scheduler_` point at whichever is live and are the only access path.
   std::optional<tool::Registry> owned_registry_;
   std::optional<agent::ToolScheduler> owned_scheduler_;
-  tool::Registry* registry_{nullptr};
-  agent::ToolScheduler* scheduler_{nullptr};
+  tool::Registry* registry_{};
+  agent::ToolScheduler* scheduler_{};
   permission::RuleSet rules_;
-  agent::SessionState session_state_;
+  tool::OutputCapOptions output_caps_;
   config::PromptActiveToolsConfig active_tools_;
-  tool::OutputCapOptions output_caps_{};
-  core::TurnId session_id_{};
   std::string session_id_text_;
-  permission::Mode mode_{permission::Mode::default_};
-  std::string scope_key_;
-  std::string agent_key_;
-  std::string identity_;
-  std::string origin_;
-  agent::SystemPreambleOwner system_preamble_;
-  skill::CatalogOwner skills_catalog_;
-  std::optional<std::vector<std::string>> skills_enabled_;
-  std::vector<std::string> skills_deactivated_;
-  std::vector<skill::SkillExpiration> skills_expirations_;
-  std::optional<skill::WorkspaceSkillSnapshot> skill_snapshot_;
-  std::vector<skill::SkillDocument> skill_documents_;
-  LongtermRecallOptions longterm_recall_{};
-  LongtermHybridSearchOptions longterm_hybrid_search_{};
-  std::vector<memory::longterm::RecordKind> longterm_recall_kinds_;
-  memory::FramingOwner memory_framing_;
-  std::string per_agent_overlay_;
-  std::string trace_context_json_;
-  std::optional<std::string> tool_choice_{};
-  std::optional<std::uint32_t> max_tokens_{};
-  std::optional<std::uint32_t> thinking_budget_{};
-  provider::RetryPolicy retry_{};
-  bool stream_{true};
-  provider::EventSink* event_sink_{nullptr};
+  agent::SessionState session_state_;
   std::vector<core::Message> transcript_;
-  std::size_t prompts_processed_{0};
-  std::size_t tool_search_observations_{0};
-  std::size_t skill_catalog_loads_{0};
 };
 
 core::Result<std::unique_ptr<AgentSession>> AgentSession::create(AgentSessionOptions options) {
   if (auto valid = validate_options(options); !valid) {
     return std::unexpected(std::move(valid).error());
   }
-  auto longterm_recall_kinds = parse_longterm_recall_kinds(options.longterm_recall.kinds);
-  if (!longterm_recall_kinds) {
-    return std::unexpected(std::move(longterm_recall_kinds.error()));
+  auto selected = selected_agent_config(*options.config, options.agent_config_name);
+  if (!selected) {
+    return std::unexpected(std::move(selected).error());
   }
-
-  // Self-owned path builds its own builtin registry; an injected scheduler
-  // brings its own (the same registry it dispatches through), so skip it.
-  auto owned_registry = std::optional<tool::Registry>{};
-  if (options.scheduler == nullptr) {
-    auto registry = tool::Registry{};
-    if (auto registered = tool::register_builtins(registry); !registered) {
-      return std::unexpected(std::move(registered).error());
-    }
-    owned_registry.emplace(std::move(registry));
-  }
-
-  auto rules = materialize_runner_rules(*options.config, options.mode, options.permission_agent_name);
+  const auto& agent_permissions = *selected ? (*selected)->permissions : config::PermissionsConfig{};
+  auto rules = permission::materialize(options.mode, options.config->permissions(), agent_permissions);
   if (!rules) {
     return std::unexpected(std::move(rules).error());
   }
-
+  if (*selected && options.per_agent_overlay.empty()) {
+    options.per_agent_overlay = (*selected)->prompt_overlay;
+  }
   auto output_caps = output_caps_from(*options.config);
   if (!output_caps) {
     return std::unexpected(std::move(output_caps).error());
   }
-
   auto scheduler_options = scheduler_options_from(*options.config);
   if (!scheduler_options) {
     return std::unexpected(std::move(scheduler_options).error());
   }
-  const auto skill_agent_name = options.agent_config_name.empty() ? std::string_view{options.permission_agent_name}
-                                                                  : std::string_view{options.agent_config_name};
-  auto agent_config = selected_agent_config(*options.config, skill_agent_name);
-  if (!agent_config) {
-    return std::unexpected(std::move(agent_config.error()));
-  }
-  auto skills_enabled = std::optional<std::vector<std::string>>{};
-  auto skills_deactivated = std::vector<std::string>{};
-  auto skills_expirations = std::vector<skill::SkillExpiration>{};
-  if (*agent_config != nullptr) {
-    skills_enabled = (*agent_config)->skills_enabled;
-    if (options.per_agent_overlay.empty()) {
-      options.per_agent_overlay = (*agent_config)->prompt_overlay;
+  auto registry = std::optional<tool::Registry>{};
+  if (options.scheduler == nullptr) {
+    registry.emplace();
+    if (auto added = tool::register_builtins(*registry); !added) {
+      return std::unexpected(std::move(added).error());
     }
-    skills_deactivated = (*agent_config)->skills_deactivated;
-    skills_expirations.reserve((*agent_config)->skills_expirations.size());
-    for (const auto& expiration : (*agent_config)->skills_expirations) {
-      skills_expirations.push_back(
-          skill::SkillExpiration{.name = expiration.name, .expires_at = expiration.expires_at});
+    if (options.assembly->longterm_memory_runtime() != nullptr) {
+      if (auto added = tool::register_memory_tools(*registry); !added) {
+        return std::unexpected(std::move(added).error());
+      }
     }
   }
-
-  auto session_id = options.session_id;
-  if (core::is_zero_turn_id(session_id)) {
+  if (core::is_zero_turn_id(options.session_id)) {
     auto generated = core::generate_turn_id();
     if (!generated) {
       return std::unexpected(std::move(generated).error());
     }
-    session_id = *generated;
+    options.session_id = *generated;
   }
-
-  auto active_tools = options.config->runtime().prompt.active_tools;
   auto impl = std::make_unique<Impl>(std::move(options),
-                                     std::move(owned_registry),
+                                     std::move(registry),
                                      std::move(*rules),
-                                     std::move(active_tools),
                                      *output_caps,
-                                     *scheduler_options,
-                                     std::move(skills_enabled),
-                                     std::move(skills_deactivated),
-                                     std::move(skills_expirations),
-                                     std::move(*longterm_recall_kinds),
-                                     session_id);
-  return std::make_unique<AgentSession>(std::move(impl), AgentSession::PrivateTag{});
+                                     *scheduler_options);
+  return std::make_unique<AgentSession>(std::move(impl), PrivateTag{});
 }
 
 AgentSession::AgentSession(std::unique_ptr<Impl> impl, PrivateTag) noexcept : impl_{std::move(impl)} {}
-
 AgentSession::~AgentSession() = default;
 
 async::Awaitable<core::Result<agent::PromptResult>> AgentSession::run_prompt(agent::PromptRequest request) {
@@ -1487,30 +420,6 @@ async::Awaitable<core::Result<agent::PromptResult>> AgentSession::run_prompt(age
   } catch (const std::exception&) {
     co_return std::unexpected(Error::internal("agent session failed unexpectedly"));
   }
-}
-
-std::size_t AgentSession::prompts_processed() const noexcept {
-  return impl_->prompts_processed();
-}
-
-std::size_t AgentSession::tool_search_observations_recorded() const noexcept {
-  return impl_->tool_search_observations_recorded();
-}
-
-std::size_t AgentSession::memory_framing_renders() const noexcept {
-  return impl_->memory_framing_renders();
-}
-
-std::size_t AgentSession::system_preamble_renders() const noexcept {
-  return impl_->system_preamble_renders();
-}
-
-std::size_t AgentSession::skill_catalog_renders() const noexcept {
-  return impl_->skill_catalog_renders();
-}
-
-std::size_t AgentSession::skill_catalog_loads() const noexcept {
-  return impl_->skill_catalog_loads();
 }
 
 const provider::Route& AgentSession::route() const noexcept {

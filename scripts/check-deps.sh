@@ -46,7 +46,6 @@ declare -A LAYER=(
   [memory]=2
   [permission]=2
   [hook]=2
-  [skill]=2
   [provider]=2
   # agent runtime
   [agent]=3

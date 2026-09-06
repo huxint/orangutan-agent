@@ -1,27 +1,32 @@
 # Current State
 
-Orangutan now builds as a single executable over the provider, tool, permission,
-session and memory libraries. The [core plan](exec-plans/active/2026-09-06-agent-runtime-core.md)
-owns the next functional refactoring steps.
+Orangutan runs one executable over the provider, tool, permission, session and
+memory libraries. It requires explicit model configuration and a prompt, saves
+completed history and resumes an explicit session ID.
 
-Peripheral application modules, their configuration and duplicate specifications
-have been removed. The executable requires an explicit model configuration and
-prompt, preserves completed history, and resumes an explicit session ID.
+Permission evaluation and conversation preparation operate on explicit values.
+The session coordinates bounded history, scoped lexical recall, the provider/tool
+loop and persistence. Automatic recall uses the same dispatch, permission, hook
+and audit path as model-requested memory tools. The
+[core plan](exec-plans/active/2026-09-06-agent-runtime-core.md) orders further work.
 
 ## Verification
 
-Release build and the complete test suite pass. The application integration test
-uses the real HTTP/protocol boundary with a controlled provider and verifies
-persisted continuation. Deliberate faults in isolated copies prove the history
-and queued-cancellation regressions fail at their intended assertions.
+The release build and complete test suite pass. Controlled HTTP integration
+verifies the provider/tool loop and persisted continuation. Deliberate faults
+prove the capability, context, recall scope, authorization, catalogue and recall
+limit tests fail at their intended assertions.
 
-`make ci`, Markdown lint, local document links and formatting checks pass. The
-bootstrap assembly benchmark runs. Debug/sanitizer, real-model credentials,
-hosted analyzer and reference-hardware measurements remain unverified.
+Agent, bootstrap, tool, memory and config tests pass with ASan/UBSan in an isolated
+copy using explicit compiler/linker instrumentation. Default toolchain activation
+remains [tracked debt](exec-plans/tech-debt-tracker.md).
+
+`make ci`, Markdown lint, local links and formatting checks pass. Agent and
+bootstrap benchmarks run. Real-model credentials, hosted analyzer and
+reference-hardware compile measurements remain unverified.
 
 ## Next Slice
 
-Separate session context and permission decisions into pure value transformations,
-with model, tool and storage effects explicitly composed around them. Keep the
-session and authority boundaries suitable for later bounded child-agent execution.
-[Live debt](exec-plans/tech-debt-tracker.md) records remaining concrete gaps.
+Commit a completed transcript suffix atomically through one storage operation.
+Then add bounded child-agent execution with independent sessions and constrained
+authority. [Live debt](exec-plans/tech-debt-tracker.md) records concrete gaps.

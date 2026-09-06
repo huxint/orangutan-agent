@@ -2,8 +2,7 @@
 
 An agent turn maps a prepared context to a response and transcript. The current
 `agent::Loop` coordinates provider calls and tool batches. `bootstrap::AgentSession`
-adds persisted context, memory recall and policy; the active refactor separates
-its state transformations from effects.
+composes persisted context, scoped memory recall and explicit permission policy.
 
 ## Turn Contract
 
@@ -32,9 +31,13 @@ Persisted history loads at most 128 rows and 512 KiB of encoded content/metadata
 An incomplete leading exchange is removed before model submission. Stored rows
 remain intact. Deferred tool promotion affects the next prompt boundary.
 
-The next functional boundary will express prepared context and resulting session
-state as values, leaving provider/tool/storage coordination in a small runner.
-Do not add mutable application registries or cross-agent state to the loop.
+[`prepare_conversation`](../../include/oran/agent/conversation.hpp) takes owned
+history and prompt values, removes the incomplete leading exchange and returns
+`PreparedConversation`. Its `history_size` marks the first message to persist after
+success. It requires no services or clock. Provider, tool and storage coordination
+stays in the session runner. Prompt recall uses the same authorized dispatch path
+as model-requested recall. Do not add mutable application registries or
+cross-agent state to the loop.
 
 ## Agent Collaboration
 

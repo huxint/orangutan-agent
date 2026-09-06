@@ -307,8 +307,6 @@ DispatchContext DispatchContext::for_now(const DispatchContext& prototype, bool 
       .now = core::time::now_utc(),
       .bus = prototype.bus,
       .registry = nullptr,
-      .skill_invoke = prototype.skill_invoke,
-      .skill_deactivate = prototype.skill_deactivate,
       .memory_recall = prototype.memory_recall,
       .memory_remember = prototype.memory_remember,
       .memory_forget = prototype.memory_forget,

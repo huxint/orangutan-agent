@@ -34,53 +34,12 @@ using ::orangutan::core::Result;
 constexpr std::string_view kAuditDatabaseRelative = ".orangutan/audit.db";
 constexpr std::string_view kSessionsDatabaseRelative = ".orangutan/sessions.db";
 constexpr std::string_view kMemoryDatabaseRelative = ".orangutan/memory.db";
-constexpr std::string_view kVectorMemoryDatabaseRelative = ".orangutan/memory-vectors.db";
-
-struct StartupDecayResult {
-  std::size_t shadowed_count{0};
-  core::Time started_at{};
-  core::Time finished_at{};
-  std::chrono::nanoseconds duration{0};
-};
-
 template <typename T>
 [[nodiscard]] Result<T>
 run_result_inline(asio::io_context& io, async::Awaitable<Result<T>> operation, std::string_view operation_name) {
   auto completed = std::optional<Result<T>>{};
   auto failure = std::exception_ptr{};
   asio::co_spawn(io, std::move(operation), [&](std::exception_ptr error, Result<T> result) {
-    failure = error;
-    if (error == nullptr) {
-      completed.emplace(std::move(result));
-    }
-  });
-  io.run();
-
-  if (failure != nullptr) {
-    try {
-      std::rethrow_exception(failure);
-    } catch (const std::exception& error) {
-      return std::unexpected(Error::internal("inline coroutine terminated by exception")
-                                 .with("operation", std::string{operation_name})
-                                 .with("detail", error.what()));
-    } catch (...) {
-      return std::unexpected(
-          Error::internal("inline coroutine terminated by exception").with("operation", std::string{operation_name}));
-    }
-  }
-  if (!completed.has_value()) {
-    return std::unexpected(
-        Error::internal("inline coroutine did not complete").with("operation", std::string{operation_name}));
-  }
-  return std::move(*completed);
-}
-
-template <typename T>
-[[nodiscard]] Result<T>
-run_value_inline(asio::io_context& io, async::Awaitable<T> operation, std::string_view operation_name) {
-  auto completed = std::optional<T>{};
-  auto failure = std::exception_ptr{};
-  asio::co_spawn(io, std::move(operation), [&](std::exception_ptr error, T result) {
     failure = error;
     if (error == nullptr) {
       completed.emplace(std::move(result));
@@ -131,10 +90,6 @@ resolve_database_path(std::string_view workspace, std::string_view override_path
   return {};
 }
 
-/// Drive the audit repository migration to completion on a one-shot
-/// `asio::io_context`. Mirrors `bootstrap::run_audit_init`'s pattern so the
-/// runtime assembly and the `--audit-init` operator command remain
-/// behaviourally identical at the schema-migration boundary.
 [[nodiscard]] Result<storage::MigrationReport> run_audit_migration_inline(const std::string& audit_path,
                                                                           std::size_t reader_count,
                                                                           std::size_t statement_cache_capacity) {
@@ -152,28 +107,6 @@ resolve_database_path(std::string_view workspace, std::string_view override_path
   storage::AuditRepository repo{temp_pool};
 
   return run_result_inline(io, repo.migrate(), "audit migration");
-}
-
-/// Run trace retention against the migrated audit DB before the long-lived pool
-/// starts serving runtime trace writes.
-[[nodiscard]] Result<std::int64_t> run_trace_retention_inline(const std::string& audit_path,
-                                                              std::size_t reader_count,
-                                                              std::size_t statement_cache_capacity,
-                                                              std::int64_t started_before_ns) {
-  asio::io_context io;
-  auto temp_pool_result = storage::Pool::open(io.get_executor(),
-                                              storage::PoolOptions{
-                                                  .path = audit_path,
-                                                  .reader_count = reader_count,
-                                                  .statement_cache_capacity = statement_cache_capacity,
-                                              });
-  if (!temp_pool_result) {
-    return std::unexpected(std::move(temp_pool_result).error());
-  }
-  auto temp_pool = std::move(*temp_pool_result);
-  storage::TraceRepository repo{temp_pool};
-
-  return run_result_inline(io, repo.purge_turns_started_before(started_before_ns), "trace retention");
 }
 
 /// Drive the session repository migration to completion before the long-lived
@@ -219,129 +152,6 @@ run_longterm_memory_migration_inline(const std::string& memory_path,
   return run_result_inline(io, backend.migrate(), "long-term memory migration");
 }
 
-/// Run one startup decay pass after long-term memory migration and before the
-/// long-lived pool starts serving prompt/tool reads.
-[[nodiscard]] std::chrono::nanoseconds duration_between(core::Time started_at, core::Time finished_at) {
-  return finished_at.to_system_time_point() - started_at.to_system_time_point();
-}
-
-[[nodiscard]] hook::MemoryDecayPayload
-make_startup_memory_decay_payload(const LongtermMemoryStartupDecayOptions& options, const StartupDecayResult& result) {
-  return hook::MemoryDecayPayload{
-      .who =
-          hook::Identity{
-              .scope_key = options.scope_key,
-              .agent_key = "bootstrap",
-              .identity = "startup",
-          },
-      .source = "startup",
-      .scope_key = options.scope_key,
-      .unused_before = options.unused_before,
-      .importance_floor = options.importance_floor,
-      .limit = options.limit,
-      .decay_at = options.decay_at,
-      .shadowed_count = result.shadowed_count,
-      .started_at = result.started_at,
-      .finished_at = result.finished_at,
-      .duration = result.duration,
-  };
-}
-
-[[nodiscard]] Result<void> bind_startup_hooks(hook::Bus& bus, std::span<const RuntimeStartupHookBinding> bindings) {
-  for (const auto& binding : bindings) {
-    if (binding.sink == nullptr) {
-      return std::unexpected(Error::invalid_argument("runtime hook binding sink is null").with("reason", "null_sink"));
-    }
-    if (!binding.events.empty()) {
-      bus.bind(*binding.sink, std::span<const hook::Event>{binding.events});
-    }
-  }
-  return {};
-}
-
-void unbind_startup_hooks(hook::Bus& bus, std::span<const RuntimeStartupHookBinding> bindings) noexcept {
-  for (const auto& binding : bindings) {
-    if (binding.sink != nullptr) {
-      static_cast<void>(bus.unbind(*binding.sink));
-    }
-  }
-}
-
-[[nodiscard]] Result<hook::PublishOutcome>
-publish_startup_memory_decay_inline(hook::Bus& bus,
-                                    const LongtermMemoryStartupDecayOptions& options,
-                                    const StartupDecayResult& result) {
-  asio::io_context io;
-  return run_value_inline(
-      io,
-      bus.publish_advisory(hook::Event::memory_decay, make_startup_memory_decay_payload(options, result)),
-      "startup memory decay hook");
-}
-
-[[nodiscard]] Result<StartupDecayResult>
-run_longterm_memory_startup_decay_inline(const std::string& memory_path,
-                                         std::size_t reader_count,
-                                         std::size_t statement_cache_capacity,
-                                         const LongtermMemoryStartupDecayOptions& options) {
-  asio::io_context io;
-  auto temp_pool_result = storage::Pool::open(io.get_executor(),
-                                              storage::PoolOptions{
-                                                  .path = memory_path,
-                                                  .reader_count = reader_count,
-                                                  .statement_cache_capacity = statement_cache_capacity,
-                                              });
-  if (!temp_pool_result) {
-    return std::unexpected(std::move(temp_pool_result).error());
-  }
-  auto temp_pool = std::move(*temp_pool_result);
-  memory::longterm::Fts5Backend backend{temp_pool};
-
-  auto result = StartupDecayResult{.started_at = core::time::now_utc()};
-  auto decayed = run_result_inline(io,
-                                   backend.decay(memory::longterm::DecayRequest{
-                                       .scope_key = options.scope_key,
-                                       .unused_before = options.unused_before,
-                                       .importance_floor = options.importance_floor,
-                                       .limit = options.limit,
-                                       .decay_at = options.decay_at,
-                                   }),
-                                   "startup memory decay");
-  if (!decayed) {
-    return std::unexpected(std::move(decayed).error());
-  }
-  result.finished_at = core::time::now_utc();
-  result.duration = duration_between(result.started_at, result.finished_at);
-  result.shadowed_count = decayed->shadowed_records.size();
-  return result;
-}
-
-/// Drive the optional vector-memory migration to completion before the
-/// long-lived vector pool is opened on the caller-supplied executor.
-[[nodiscard]] Result<void> run_longterm_vector_memory_migration_inline(const std::string& vector_path,
-                                                                       std::size_t reader_count,
-                                                                       std::size_t statement_cache_capacity,
-                                                                       std::size_t dimensions) {
-  asio::io_context io;
-  auto extensions = memory::longterm::SqliteVecBackend::auto_extensions();
-  auto temp_pool_result = storage::Pool::open(io.get_executor(),
-                                              storage::PoolOptions{
-                                                  .path = vector_path,
-                                                  .reader_count = reader_count,
-                                                  .statement_cache_capacity = statement_cache_capacity,
-                                              },
-                                              extensions);
-  if (!temp_pool_result) {
-    return std::unexpected(std::move(temp_pool_result).error());
-  }
-  auto temp_pool = std::move(*temp_pool_result);
-  memory::longterm::SqliteVecBackend backend{temp_pool,
-                                             memory::longterm::SqliteVecBackendOptions{
-                                                 .dimensions = dimensions,
-                                             }};
-
-  return run_result_inline(io, backend.migrate(), "long-term vector memory migration");
-}
-
 }  // namespace
 
 struct RuntimeAssembly::Impl {
@@ -349,14 +159,6 @@ struct RuntimeAssembly::Impl {
   std::string audit_path;
   std::string sessions_path;
   std::string longterm_memory_path;
-  std::string longterm_vector_memory_path;
-  std::optional<std::size_t> longterm_memory_startup_decay_shadowed_count{};
-  // The members below are non-default-constructible in their final
-  // shape and capture pointers into each other (`AuditRepository`
-  // refers to `audit_pool`, `audit_sink` refers to `audit_repository`).
-  // Heap-allocating each via `unique_ptr` keeps their addresses stable
-  // across `RuntimeAssembly` moves: the assembly's `impl_` pointer
-  // changes hands, but the Impl itself stays put on the heap.
   std::unique_ptr<storage::Pool> audit_pool;
   std::unique_ptr<storage::AuditRepository> audit_repository;
   std::unique_ptr<storage::TraceRepository> trace_repository;
@@ -366,9 +168,6 @@ struct RuntimeAssembly::Impl {
   std::unique_ptr<storage::Pool> longterm_memory_pool;
   std::unique_ptr<memory::longterm::Fts5Backend> longterm_memory_backend;
   std::unique_ptr<memory::longterm::Runtime> longterm_memory_runtime;
-  std::unique_ptr<storage::Pool> longterm_vector_memory_pool;
-  std::unique_ptr<memory::longterm::SqliteVecBackend> longterm_vector_backend;
-  std::unique_ptr<memory::longterm::HybridRuntime> longterm_hybrid_runtime;
   std::unique_ptr<permission::AuditSink> audit_sink;
   std::unique_ptr<permission::ApprovalBroker> approval_broker;
   std::unique_ptr<tool::Workspace> workspace;
@@ -443,32 +242,12 @@ memory::longterm::Runtime* RuntimeAssembly::longterm_memory_runtime() noexcept {
   return impl_->longterm_memory_runtime.get();
 }
 
-memory::longterm::VectorBackend* RuntimeAssembly::longterm_vector_backend() noexcept {
-  return impl_->longterm_vector_backend.get();
-}
-
-memory::longterm::HybridRuntime* RuntimeAssembly::longterm_hybrid_runtime() noexcept {
-  return impl_->longterm_hybrid_runtime.get();
-}
-
 bool RuntimeAssembly::longterm_memory_enabled() const noexcept {
   return impl_->longterm_memory_runtime != nullptr;
 }
 
-std::optional<std::size_t> RuntimeAssembly::longterm_memory_startup_decay_shadowed_count() const noexcept {
-  return impl_->longterm_memory_startup_decay_shadowed_count;
-}
-
-bool RuntimeAssembly::longterm_vector_memory_enabled() const noexcept {
-  return impl_->longterm_hybrid_runtime != nullptr;
-}
-
 std::string_view RuntimeAssembly::longterm_memory_path() const noexcept {
   return impl_->longterm_memory_path;
-}
-
-std::string_view RuntimeAssembly::longterm_vector_memory_path() const noexcept {
-  return impl_->longterm_vector_memory_path;
 }
 
 Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
@@ -481,20 +260,12 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
   auto impl = std::make_unique<Impl>();
   impl->audit_enabled = options.audit_enabled;
 
-  // Build the workspace resolver before audit/broker. `tool::Workspace::create`
-  // validates the workspace root (must exist + be a directory) and
-  // canonicalises every `extra_{read,write}_roots` entry, so a misconfigured
-  // override fails the boot rather than the first dispatched tool call.
   auto workspace_result = tool::Workspace::create(workspace, std::move(options.workspace_options));
   if (!workspace_result) {
     return std::unexpected(std::move(workspace_result).error());
   }
   impl->workspace = std::make_unique<tool::Workspace>(std::move(*workspace_result));
 
-  // ApprovalBroker is the same shape regardless of audit mode — the
-  // per-process secret rotation guarantee (criterion 5) applies to every
-  // runtime. Build it first so even the audit-disabled path can return a
-  // usable broker.
   auto broker_result = permission::ApprovalBroker::with_random_secret();
   if (!broker_result) {
     return std::unexpected(std::move(broker_result).error());
@@ -504,12 +275,6 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
       .blocking_timeout = options.hook_blocking_timeout,
       .advisory_timeout = options.hook_blocking_timeout,
   });
-  if (auto bound = bind_startup_hooks(*impl->hook_bus,
-                                      std::span<const RuntimeStartupHookBinding>{options.startup_hook_bindings});
-      !bound) {
-    return std::unexpected(std::move(bound).error());
-  }
-
   if (options.session_memory_enabled) {
     impl->sessions_path = resolve_database_path(workspace, options.sessions_db_path, kSessionsDatabaseRelative);
     if (auto parent_ok = ensure_parent_directory(std::filesystem::path{impl->sessions_path}, "sessions"); !parent_ok) {
@@ -537,11 +302,6 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
     impl->session_store = std::make_unique<memory::session::Store>(*impl->session_repository);
   }
 
-  if (!options.longterm_memory_enabled && options.longterm_memory_startup_decay.has_value()) {
-    return std::unexpected(Error::invalid_argument("long-term retention requires long-term memory")
-                               .with("reason", "longterm_memory_disabled"));
-  }
-
   if (options.longterm_memory_enabled) {
     impl->longterm_memory_path =
         resolve_database_path(workspace, options.longterm_memory_db_path, kMemoryDatabaseRelative);
@@ -555,22 +315,6 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
                                                                    options.longterm_memory_statement_cache_capacity);
     if (!longterm_migration) {
       return std::unexpected(std::move(longterm_migration).error());
-    }
-
-    if (options.longterm_memory_startup_decay.has_value()) {
-      auto decayed = run_longterm_memory_startup_decay_inline(impl->longterm_memory_path,
-                                                              options.longterm_memory_reader_count,
-                                                              options.longterm_memory_statement_cache_capacity,
-                                                              *options.longterm_memory_startup_decay);
-      if (!decayed) {
-        return std::unexpected(std::move(decayed).error());
-      }
-      impl->longterm_memory_startup_decay_shadowed_count = decayed->shadowed_count;
-      auto outcome =
-          publish_startup_memory_decay_inline(*impl->hook_bus, *options.longterm_memory_startup_decay, *decayed);
-      if (!outcome) {
-        return std::unexpected(std::move(outcome).error());
-      }
     }
 
     auto memory_pool =
@@ -588,53 +332,8 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
     impl->longterm_memory_runtime = std::make_unique<memory::longterm::Runtime>(*impl->longterm_memory_backend);
   }
 
-  if (options.longterm_vector_memory_enabled) {
-    if (impl->longterm_memory_backend == nullptr) {
-      return std::unexpected(Error::invalid_argument("long-term vector memory requires long-term lexical memory")
-                                 .with("reason", "longterm_memory_disabled"));
-    }
-    impl->longterm_vector_memory_path =
-        resolve_database_path(workspace, options.longterm_vector_memory_db_path, kVectorMemoryDatabaseRelative);
-    if (auto parent_ok =
-            ensure_parent_directory(std::filesystem::path{impl->longterm_vector_memory_path}, "vector-memory");
-        !parent_ok) {
-      return std::unexpected(std::move(parent_ok).error());
-    }
-
-    auto vector_migration =
-        run_longterm_vector_memory_migration_inline(impl->longterm_vector_memory_path,
-                                                    options.longterm_vector_memory_reader_count,
-                                                    options.longterm_vector_memory_statement_cache_capacity,
-                                                    options.longterm_vector_memory_dimensions);
-    if (!vector_migration) {
-      return std::unexpected(std::move(vector_migration).error());
-    }
-
-    auto extensions = memory::longterm::SqliteVecBackend::auto_extensions();
-    auto vector_pool =
-        storage::Pool::open(runtime_executor,
-                            storage::PoolOptions{
-                                .path = impl->longterm_vector_memory_path,
-                                .reader_count = options.longterm_vector_memory_reader_count,
-                                .statement_cache_capacity = options.longterm_vector_memory_statement_cache_capacity,
-                            },
-                            extensions);
-    if (!vector_pool) {
-      return std::unexpected(std::move(vector_pool).error());
-    }
-    impl->longterm_vector_memory_pool = std::make_unique<storage::Pool>(std::move(*vector_pool));
-    impl->longterm_vector_backend = std::make_unique<memory::longterm::SqliteVecBackend>(
-        *impl->longterm_vector_memory_pool,
-        memory::longterm::SqliteVecBackendOptions{
-            .dimensions = options.longterm_vector_memory_dimensions,
-        });
-    impl->longterm_hybrid_runtime = std::make_unique<memory::longterm::HybridRuntime>(*impl->longterm_memory_backend,
-                                                                                      *impl->longterm_vector_backend);
-  }
-
   if (!options.audit_enabled) {
     impl->audit_sink = std::make_unique<permission::NullAuditSink>();
-    unbind_startup_hooks(*impl->hook_bus, std::span<const RuntimeStartupHookBinding>{options.startup_hook_bindings});
     return RuntimeAssembly{std::move(impl)};
   }
 
@@ -648,16 +347,6 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
   if (!migration) {
     return std::unexpected(std::move(migration).error());
   }
-  if (options.trace_enabled && options.trace_retention_started_before_ns.has_value()) {
-    auto retained = run_trace_retention_inline(impl->audit_path,
-                                               options.audit_reader_count,
-                                               options.audit_statement_cache_capacity,
-                                               *options.trace_retention_started_before_ns);
-    if (!retained) {
-      return std::unexpected(std::move(retained).error());
-    }
-  }
-
   auto long_lived_pool = storage::Pool::open(std::move(runtime_executor),
                                              storage::PoolOptions{
                                                  .path = impl->audit_path,
@@ -671,16 +360,10 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
   impl->audit_repository = std::make_unique<storage::AuditRepository>(*impl->audit_pool);
   impl->audit_sink = std::make_unique<permission::StorageAuditSink>(*impl->audit_repository);
 
-  // The trace schema rides on the same audit DB migration stream (slice 78
-  // pinned `built_in_trace_migrations()` to the complete audit set), so the
-  // `trace_turns` table is already present at this point. Building the
-  // repository over the same `Pool` lets future agent-loop owners persist
-  // spec-0018 rows without owning a second DB handle.
   if (options.trace_enabled) {
     impl->trace_repository = std::make_unique<storage::TraceRepository>(*impl->audit_pool);
   }
 
-  unbind_startup_hooks(*impl->hook_bus, std::span<const RuntimeStartupHookBinding>{options.startup_hook_bindings});
   return RuntimeAssembly{std::move(impl)};
 }
 

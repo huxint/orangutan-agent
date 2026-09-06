@@ -9,7 +9,6 @@
 
 #include <oran/core/capability.hpp>
 #include <oran/core/result.hpp>
-#include <oran/core/time.hpp>
 
 namespace orangutan::config {
 
@@ -136,15 +135,9 @@ struct HooksConfig {
   friend bool operator==(const HooksConfig&, const HooksConfig&) = default;
 };
 
-enum class LongtermMemoryRecallQueryStrategy : std::uint8_t {
-  prompt_text,
-  last_user_message,
-};
-
 struct LongtermMemoryRecallConfig {
   bool enabled{false};
   std::int64_t limit{5};
-  LongtermMemoryRecallQueryStrategy query_strategy{LongtermMemoryRecallQueryStrategy::prompt_text};
   std::vector<std::string> kinds{};
 
   friend bool operator==(const LongtermMemoryRecallConfig&, const LongtermMemoryRecallConfig&) = default;
@@ -224,31 +217,10 @@ struct PermissionsConfig {
   friend bool operator==(const PermissionsConfig&, const PermissionsConfig&) = default;
 };
 
-/// A single skill-expiration entry inside `agents.<name>.skills_expirations`.
-/// `expires_at` is the absolute UTC instant at or after which the skill's
-/// section-4 active marker is dropped. The bootstrap runner supplies the
-/// evaluation time when it resolves the policy, so the section-4 renderer never
-/// reads a clock.
-struct SkillExpirationConfig {
-  std::string name;
-  core::Time expires_at{};
-
-  friend bool operator==(const SkillExpirationConfig&, const SkillExpirationConfig&) = default;
-};
-
-/// A single entry inside `agents.<name>`. The name field is the object key
-/// (set by the parser, not authored). Future slices add provider/model
-/// overrides, hook bindings, etc.; the typed surface now exposes per-agent
-/// permissions, stable prompt overlay bytes, an optional skill allowlist, and
-/// the explicit skill activation-policy inputs (deactivated names plus
-/// expiration rows) the prompt runner feeds to `skill::resolve_active_skills`.
 struct AgentConfig {
   std::string name;
   PermissionsConfig permissions;
   std::string prompt_overlay;
-  std::optional<std::vector<std::string>> skills_enabled;
-  std::vector<std::string> skills_deactivated;
-  std::vector<SkillExpirationConfig> skills_expirations;
 
   friend bool operator==(const AgentConfig&, const AgentConfig&) = default;
 };

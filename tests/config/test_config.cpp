@@ -804,7 +804,6 @@ TEST_CASE("Config::parse extracts memory recall policy", "[unit][config][memory]
       "recall": {
         "enabled": true,
         "limit": 7,
-        "query_strategy": "last_user_message",
         "kinds": ["project", "reference"]
       }
     }
@@ -814,8 +813,6 @@ TEST_CASE("Config::parse extracts memory recall policy", "[unit][config][memory]
   REQUIRE(result.has_value());
   REQUIRE(result->memory().longterm.recall.enabled);
   REQUIRE(result->memory().longterm.recall.limit == 7);
-  REQUIRE(result->memory().longterm.recall.query_strategy ==
-          config::LongtermMemoryRecallQueryStrategy::last_user_message);
   REQUIRE(result->memory().longterm.recall.kinds == std::vector<std::string>{"project", "reference"});
 }
 
@@ -825,7 +822,6 @@ TEST_CASE("Config::parse defaults memory recall policy when absent", "[unit][con
   REQUIRE(result.has_value());
   REQUIRE_FALSE(result->memory().longterm.recall.enabled);
   REQUIRE(result->memory().longterm.recall.limit == 5);
-  REQUIRE(result->memory().longterm.recall.query_strategy == config::LongtermMemoryRecallQueryStrategy::prompt_text);
   REQUIRE(result->memory().longterm.recall.kinds.empty());
 }
 
@@ -856,19 +852,6 @@ TEST_CASE("Config::parse rejects malformed memory recall policy", "[unit][config
 
   SECTION("zero limit") {
     auto result = config::Config::parse(R"json({"memory": {"longterm": {"recall": {"limit": 0}}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("non-string query strategy") {
-    auto result = config::Config::parse(R"json({"memory": {"longterm": {"recall": {"query_strategy": true}}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("unknown query strategy") {
-    auto result =
-        config::Config::parse(R"json({"memory": {"longterm": {"recall": {"query_strategy": "all_text"}}}})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }
@@ -930,18 +913,6 @@ TEST_CASE("PermissionVerdict round-trips through its stable spellings", "[unit][
   REQUIRE(parse_enum<config::PermissionVerdict>("ask") == config::PermissionVerdict::ask);
   REQUIRE_FALSE(parse_enum<config::PermissionVerdict>("approve").has_value());
   REQUIRE_FALSE(parse_enum<config::PermissionVerdict>("").has_value());
-}
-
-TEST_CASE("LongtermMemoryRecallQueryStrategy round-trips through stable spellings", "[unit][config][memory]") {
-  REQUIRE(core::enum_name(config::LongtermMemoryRecallQueryStrategy::prompt_text) == "prompt_text");
-  REQUIRE(core::enum_name(config::LongtermMemoryRecallQueryStrategy::last_user_message) == "last_user_message");
-
-  using core::parse_enum;
-  REQUIRE(parse_enum<config::LongtermMemoryRecallQueryStrategy>("prompt_text") ==
-          config::LongtermMemoryRecallQueryStrategy::prompt_text);
-  REQUIRE(parse_enum<config::LongtermMemoryRecallQueryStrategy>("last_user_message") ==
-          config::LongtermMemoryRecallQueryStrategy::last_user_message);
-  REQUIRE_FALSE(parse_enum<config::LongtermMemoryRecallQueryStrategy>("prompt").has_value());
 }
 
 TEST_CASE("Config::parse extracts a populated permissions block", "[unit][config][permissions]") {
@@ -1014,7 +985,6 @@ TEST_CASE("Config::parse extracts agents.<name>.permissions overlays", "[unit][c
   "agents": {
     "researcher": {
       "prompt_overlay": "Prefer concise, source-backed answers.",
-      "skills_enabled": ["release-note", "review-pr"],
       "permissions": {
         "allow": [{"tool_pattern": "*", "capability": "egress_http"}]
       }
@@ -1032,49 +1002,12 @@ TEST_CASE("Config::parse extracts agents.<name>.permissions overlays", "[unit][c
   REQUIRE(result->agents().size() == 2);
   REQUIRE(result->agents()[0].name == "researcher");
   REQUIRE(result->agents()[0].prompt_overlay == "Prefer concise, source-backed answers.");
-  REQUIRE(result->agents()[0].skills_enabled == std::vector<std::string>{"release-note", "review-pr"});
   REQUIRE(result->agents()[0].permissions.rules.size() == 1);
   REQUIRE(result->agents()[0].permissions.rules[0].capability == core::Capability::egress_http);
   REQUIRE(result->agents()[1].name == "auditor");
   REQUIRE(result->agents()[1].prompt_overlay.empty());
-  REQUIRE_FALSE(result->agents()[1].skills_enabled.has_value());
   REQUIRE(result->agents()[1].permissions.rules[0].verdict == config::PermissionVerdict::deny);
   REQUIRE(result->agents()[1].permissions.rules[0].capability == core::Capability::write_file);
-}
-
-TEST_CASE("Config::parse extracts agents.<name> skill deactivation and expiration inputs", "[unit][config][skill]") {
-  auto result = config::Config::parse(R"json(
-{
-  "agents": {
-    "ephemeral": {
-      "skills_deactivated": ["stale-skill"],
-      "skills_expirations": [
-        {"name": "release-note", "expires_at": "2026-07-01T00:00:00Z"},
-        {"name": "review-pr", "expires_at": "2026-08-15T12:30:00.250Z"}
-      ]
-    }
-  }
-}
-)json");
-
-  REQUIRE(result.has_value());
-  REQUIRE(result->agents().size() == 1);
-  const auto& agent = result->agents()[0];
-  REQUIRE(agent.name == "ephemeral");
-  REQUIRE(agent.skills_deactivated == std::vector<std::string>{"stale-skill"});
-  REQUIRE(agent.skills_expirations.size() == 2);
-  REQUIRE(agent.skills_expirations[0].name == "release-note");
-  REQUIRE(core::time::format_iso8601_utc(agent.skills_expirations[0].expires_at) == "2026-07-01T00:00:00.000Z");
-  REQUIRE(agent.skills_expirations[1].name == "review-pr");
-  REQUIRE(core::time::format_iso8601_utc(agent.skills_expirations[1].expires_at) == "2026-08-15T12:30:00.250Z");
-}
-
-TEST_CASE("Config::parse defaults agents.<name> skill policy inputs to empty", "[unit][config][skill]") {
-  auto result = config::Config::parse(R"json({"agents": {"plain": {"prompt_overlay": "x"}}})json");
-  REQUIRE(result.has_value());
-  REQUIRE(result->agents().size() == 1);
-  REQUIRE(result->agents()[0].skills_deactivated.empty());
-  REQUIRE(result->agents()[0].skills_expirations.empty());
 }
 
 TEST_CASE("Config::parse env-substitutes inside permission rules", "[unit][config][permissions]") {
@@ -1223,40 +1156,8 @@ TEST_CASE("Config::parse handles unknown verdict / rule / agent keys per mode", 
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }
 
-  SECTION("malformed agent skills_enabled fails") {
-    auto result = config::Config::parse(R"json({"agents": {"a": {"skills_enabled": ["release-note", ""]}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
   SECTION("malformed agent prompt_overlay fails") {
     auto result = config::Config::parse(R"json({"agents": {"a": {"prompt_overlay": ["not", "a string"]}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("malformed agent skills_deactivated fails") {
-    auto result = config::Config::parse(R"json({"agents": {"a": {"skills_deactivated": ["ok", ""]}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("agent skills_expirations with invalid timestamp fails") {
-    auto result = config::Config::parse(
-        R"json({"agents": {"a": {"skills_expirations": [{"name": "x", "expires_at": "not-a-time"}]}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("agent skills_expirations missing name fails") {
-    auto result = config::Config::parse(
-        R"json({"agents": {"a": {"skills_expirations": [{"expires_at": "2026-07-01T00:00:00Z"}]}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("agent skills_expirations that is not an array fails") {
-    auto result = config::Config::parse(R"json({"agents": {"a": {"skills_expirations": {}}}})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }
@@ -1434,4 +1335,11 @@ TEST_CASE("Config::parse threads workspace blocks through agent overlays", "[uni
   REQUIRE(result->permissions().workspace.extra_read_roots == std::vector<std::string>{"/srv/global"});
   REQUIRE(result->agents().size() == 1);
   REQUIRE(result->agents()[0].permissions.workspace.extra_read_roots == std::vector<std::string>{"/var/log/auditor"});
+}
+
+TEST_CASE("prompt recall rejects limits beyond the memory tool boundary", "[unit][config][memory][core_boundary]") {
+  const auto result = config::Config::parse(R"({"memory":{"longterm":{"recall":{"limit":21}}}})");
+
+  REQUIRE_FALSE(result.has_value());
+  CHECK(result.error().kind() == core::ErrorKind::config);
 }

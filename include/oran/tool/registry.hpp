@@ -30,22 +30,6 @@ class Registry;
 class Workspace;
 struct DispatchContext;
 
-/// Runtime callback consumed by the `SkillInvoke` built-in. The tool layer
-/// owns JSON parsing, permissions, audit, hooks, and output caps; bootstrap
-/// supplies the already-loaded skill snapshot through this callback so
-/// `oran-tool` does not depend on `oran-skill`.
-using SkillInvokeHandler = std::function<async::Awaitable<core::Result<Output>>(std::string_view skill_name,
-                                                                                std::string_view inputs_json,
-                                                                                DispatchContext& ctx)>;
-
-/// Runtime callback consumed by the `SkillDeactivate` built-in. Like
-/// `SkillInvokeHandler`, the tool layer owns JSON parsing, permissions, audit,
-/// hooks, and output caps; bootstrap supplies the already-loaded skill snapshot
-/// through this callback so `oran-tool` does not depend on `oran-skill`.
-/// Deactivation carries no `inputs`, so the signature is the skill name only.
-using SkillDeactivateHandler =
-    std::function<async::Awaitable<core::Result<Output>>(std::string_view skill_name, DispatchContext& ctx)>;
-
 struct MemoryRecallRequest {
   std::string query;
   std::size_t limit{5};
@@ -205,18 +189,6 @@ struct DispatchContext {
   /// live catalog without capturing a self-reference inside a movable
   /// `Registry`.
   const Registry* registry{nullptr};
-  /// Optional skill invocation service. When set, `SkillInvoke` calls it with
-  /// the requested skill name plus the raw `inputs` JSON value and returns the
-  /// produced tool output through the ordinary dispatch path. When unset,
-  /// `SkillInvoke` reports a model-repairable missing-runtime error.
-  SkillInvokeHandler skill_invoke{};
-  /// Optional skill deactivation service. When set, `SkillDeactivate` calls it
-  /// with the requested skill name and returns the produced tool output through
-  /// the ordinary dispatch path; the runner records a versioned deactivation
-  /// record in the result `data_json` so the next prompt boundary clears the
-  /// active marker. When unset, `SkillDeactivate` reports a model-repairable
-  /// missing-runtime error.
-  SkillDeactivateHandler skill_deactivate{};
   /// Optional long-term memory recall service. When set, `MemoryRecall` calls
   /// it with the parsed query, limit, and kind spellings, and returns the
   /// produced output through the ordinary dispatch path. When unset,

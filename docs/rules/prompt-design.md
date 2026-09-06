@@ -9,7 +9,7 @@ prompts emitted by Orangutan, not development-agent routing instructions.
 1. System preamble: identity, operating principles and response contract.
 2. Active tool catalogue: registered names, descriptions and JSON schemas.
 3. Deferred-tool index: compact names and descriptions.
-4. Existing skill catalogue.
+4. Optional caller-supplied skill catalogue.
 5. Memory framing selected once at the prompt boundary.
 6. Stable per-agent instructions.
 7. Conversation messages, including the current user and tool results.
@@ -22,7 +22,7 @@ when rendering rules change; avoid per-request version churn.
 Tool descriptions derive from `ToolDef`; catalogue rendering never grants a
 capability. Memory framing derives from selected records and excludes lookup
 scores and retrieval timestamps. Recall happens once before the loop, so later
-tool iterations reuse the same prefix. Skill bodies arrive as tool results.
+tool iterations reuse the same prefix.
 
 Provider adapters map the resulting sections into their protocol's cache hints.
 `bench-agent` compares stable-prefix behavior across changing conversation tails.

@@ -1,7 +1,6 @@
 #include <oran/agent/system_preamble.hpp>
 
 #include <string_view>
-#include <utility>
 
 namespace orangutan::agent {
 namespace {
@@ -29,31 +28,6 @@ Response contract:
 
 SystemPreamble default_system_preamble() {
   return SystemPreamble{.section_text = std::string{kDefaultSystemPreamble}};
-}
-
-SystemPreambleOwner::SystemPreambleOwner() : preamble_{default_system_preamble()} {}
-
-SystemPreambleOwner::SystemPreambleOwner(SystemPreamble preamble) : preamble_{std::move(preamble)} {}
-
-std::string_view SystemPreambleOwner::render_once() {
-  ++stats_.renders;
-  return preamble_.section_text;
-}
-
-const SystemPreamble& SystemPreambleOwner::preamble() const noexcept {
-  return preamble_;
-}
-
-SystemPreambleStats SystemPreambleOwner::stats() const noexcept {
-  return stats_;
-}
-
-void SystemPreambleOwner::replace(SystemPreamble preamble) {
-  preamble_ = std::move(preamble);
-}
-
-void SystemPreambleOwner::clear() {
-  preamble_.section_text.clear();
 }
 
 }  // namespace orangutan::agent

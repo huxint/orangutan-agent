@@ -45,7 +45,6 @@ required_files=(
   "docs/rules/workflow.md"
   "docs/rules/testing-and-bench.md"
   "docs/product-specs/index.md"
-  "docs/product-specs/0009-skills.md"
   "docs/exec-plans/README.md"
   "docs/exec-plans/templates/execution-plan.md"
   "docs/exec-plans/tech-debt-tracker.md"
