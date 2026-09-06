@@ -53,11 +53,9 @@ std::vector<core::ToolDef> make_catalog() {
       tool_def("FileRead", "Read a file"),
       tool_def("FileWrite", "Write a file"),
       tool_def("FileEdit", "Edit a file"),
-      tool_def("FileSearch", "Search files"),
-      tool_def("DirectoryList", "List a directory"),
       tool_def("ToolSearch", "Search tools"),
       tool_def("MemoryRecall", "Recall memory", true),
-      tool_def("AgentSpawn", "Spawn an agent", true),
+      tool_def("AgentRun", "Run a configured child agent"),
   };
 }
 

@@ -301,6 +301,7 @@ DispatchContext DispatchContext::for_now(const DispatchContext& prototype, bool 
       .mode = prototype.mode,
       .rules = prototype.rules,
       .audit = prototype.audit,
+      .parent_policy = prototype.parent_policy,
       .approval_broker = prototype.approval_broker,
       .approval_token = prototype.approval_token,
       .approval_token_output = thread_approval_token_output ? prototype.approval_token_output : nullptr,
@@ -310,6 +311,7 @@ DispatchContext DispatchContext::for_now(const DispatchContext& prototype, bool 
       .memory_recall = prototype.memory_recall,
       .memory_remember = prototype.memory_remember,
       .memory_forget = prototype.memory_forget,
+      .agent_run = prototype.agent_run,
       .workspace = prototype.workspace,
       .resolved_path = std::nullopt,
       .output_caps = prototype.output_caps,
@@ -465,6 +467,14 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
   } else {
     auto path_resolution = detail::pre_resolve_tool_path(name, effective_input, ctx);
     auto decision = permission::evaluate(ctx.rules, name, effective_input, entry.def.required_capabilities, ctx.mode);
+    if (ctx.parent_policy) {
+      auto parent = permission::evaluate(ctx.parent_policy->rules,
+                                         name,
+                                         effective_input,
+                                         entry.def.required_capabilities,
+                                         ctx.parent_policy->mode);
+      decision = permission::intersect(std::move(parent), std::move(decision));
+    }
     if (hook_requires_approval) {
       decision = require_approval_decision(std::move(decision), hook_decision, ctx.now);
     }

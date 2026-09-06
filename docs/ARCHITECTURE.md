@@ -3,8 +3,8 @@
 Orangutan is a C++26 agent runtime. Its first useful boundary is a completed turn:
 load scoped context, call a provider, execute authorized tools, return tool
 results to the provider, and persist the response. The
-[active plan](exec-plans/active/2026-09-06-agent-runtime-core.md) owns the next
-refactoring steps; [STATUS.md](STATUS.md) records verification.
+[agent contract](design-docs/agent-platform.md) also composes bounded child turns
+through that boundary; [STATUS.md](STATUS.md) records verification.
 
 ## Functional Core And Effects
 
@@ -28,6 +28,8 @@ flowchart TD
   loop --> scheduler[Bounded tool scheduler]
   scheduler --> dispatch[Validate, authorize and dispatch]
   dispatch --> effects[Filesystem and memory effects]
+  dispatch --> children[Bounded child sessions]
+  children --> session
   dispatch --> audit[Audit and hooks]
 ```
 
@@ -71,9 +73,11 @@ are bounded; persisted history remains intact. Session-memory SQLite calls run o
 executor. Hooks and coordinating state run on the session's strand. Audit/trace
 SQL offloading remains tracked integration work.
 
-Bounded agent collaboration will reuse the turn boundary with independent
-session state. Parent authority will constrain child authority at dispatch.
-That composition is planned, not implemented.
+`AgentRun` reuses the turn boundary with independent child sessions. Parent and
+child policy decisions intersect at dispatch. Children share the parent's
+workspace, memory scope, provider route and tool scheduler; fresh approval
+identities keep grants separate. Child counts and delegation depth are bounded,
+and parent cancellation joins borrowed child work.
 
 ## Public Headers
 

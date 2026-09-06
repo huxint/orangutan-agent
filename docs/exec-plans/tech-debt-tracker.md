@@ -1,13 +1,13 @@
 # Live Debt
 
-Implementation order belongs to the
-[core plan](active/2026-09-06-agent-runtime-core.md).
+[STATUS](../STATUS.md) records the verified core and handoff. Scope each remaining
+slice in an execution plan before implementation.
 
 | Area | Remaining obligation | Closure evidence |
 | --- | --- | --- |
 | Persistence | Back up databases before schema changes and define explicit import mappings. | Backup and import integrity tests. |
+| Shell execution | Add an explicitly authorized subprocess boundary with bounded output, cancellation and child authority constraints. | Controlled subprocess and denied-effect tests. |
 | Storage execution | Move audit and trace SQL off the coordinating strand. | Executor-boundary tests. |
-| Cancellation | Verify context-specific tool draining, including a concurrent independent session. | Deterministic lifetime regressions and sanitizers. |
 | IO singleflight | Verify cross-executor wake and leader cancellation. | IO regressions. |
 | Toolchain activation | Apply LTO/sanitizer flags through default target selection; supply the assembler when selecting `oran-gcc` for package builds. Current sanitizer verification uses explicit flags in an isolated copy. | Verbose compile/link commands contain the requested flags and ordinary configure/build succeeds. |
 | Hosted quality | Establish hosted C++ job evidence and a clang-tidy/analyzer baseline. | Successful job logs and covered translation units. |

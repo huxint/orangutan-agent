@@ -20,7 +20,10 @@ changed stable input deliberately changes the content hash. Bump section version
 when rendering rules change; avoid per-request version churn.
 
 Tool descriptions derive from `ToolDef`; catalogue rendering never grants a
-capability. Memory framing derives from selected records and excludes lookup
+capability. `prompt::is_default_active_tool` supplies the shared default selection
+for cached catalogues and provider-native tool declarations. `AgentRun` is active
+when registered; child sessions remove disabled delegation from their catalogue
+and explicit active-tool selection. Memory framing derives from selected records and excludes lookup
 scores and retrieval timestamps. Recall happens once before the loop, so later
 tool iterations reuse the same prefix.
 

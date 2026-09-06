@@ -151,7 +151,7 @@ TEST_CASE("Builder applies a promotion snapshot to the next active catalog", "[u
   test::run_async([](asio::io_context&) -> asio::awaitable<void> {
     const std::vector<core::ToolDef> catalog{
         tool_def("MemoryRecall", "Recall memory", true),
-        tool_def("AgentSpawn", "Spawn an agent", true),
+        tool_def("MemoryRemember", "Store memory", true),
         tool_def("FileRead", "Read a file"),
     };
 
@@ -167,8 +167,8 @@ TEST_CASE("Builder applies a promotion snapshot to the next active catalog", "[u
     REQUIRE(result.has_value());
     REQUIRE(section(*result, "tool_catalog").content.contains("Tool: MemoryRecall"));
     REQUIRE(section(*result, "tool_catalog").content.contains("Tool: FileRead"));
-    REQUIRE_FALSE(section(*result, "tool_catalog").content.contains("Tool: AgentSpawn"));
-    REQUIRE(section(*result, "deferred_tools").content == "AgentSpawn - Spawn an agent");
+    REQUIRE_FALSE(section(*result, "tool_catalog").content.contains("Tool: MemoryRemember"));
+    REQUIRE(section(*result, "deferred_tools").content == "MemoryRemember - Store memory");
   });
 }
 
@@ -268,7 +268,7 @@ TEST_CASE("Builder cache versions invalidate the prefix hash without changing co
         tool_def("FileRead", "Read a file"),
     };
     auto options = prompt::BuilderOptions{};
-    options.versions.tool_catalog = 3;
+    options.versions.tool_catalog = 4;
 
     prompt::Builder v1;
     prompt::Builder v2{options};
@@ -279,8 +279,8 @@ TEST_CASE("Builder cache versions invalidate the prefix hash without changing co
     REQUIRE(second.has_value());
     REQUIRE(section(*first, "tool_catalog").content == section(*second, "tool_catalog").content);
     REQUIRE(section(*first, "tool_catalog").content_hash == section(*second, "tool_catalog").content_hash);
-    REQUIRE(section(*first, "tool_catalog").cache_version == 2);
-    REQUIRE(section(*second, "tool_catalog").cache_version == 3);
+    REQUIRE(section(*first, "tool_catalog").cache_version == 3);
+    REQUIRE(section(*second, "tool_catalog").cache_version == 4);
     REQUIRE(first->prefix_hash != second->prefix_hash);
   });
 }

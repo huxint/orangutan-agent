@@ -23,8 +23,18 @@ effects and installs read-side allow rules. Permissive mode allows unmatched
 effects. Configured deny rules still apply. Materialization combines the selected
 baseline, global rules and agent overlay once before execution.
 
-A future parent/child policy must intersect authority rather than merge an allow
-list. That boundary is required before agent collaboration is implemented.
+A child dispatch carries an immutable borrowed `PolicyView` for its parent.
+Dispatch evaluates both policies independently against the concrete tool, final
+input and every required capability, then applies `permission::intersect`.
+Deny dominates ask, which dominates allow. When both decisions ask, the replay
+budget and approval lifetime use their respective minima. An allow in one policy
+cannot satisfy an unmatched or denied requirement in the other. Scheduler context
+snapshots retain this parent policy, so hook rewrites and automatic recall obey
+the same restriction.
+
+`AgentRun` itself requires `spawn_agent`. The host assigns a fresh child approval
+identity and does not forward parent grants; any child approval binds that child
+and the exact final input.
 
 ## Approvals
 

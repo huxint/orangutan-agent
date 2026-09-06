@@ -522,9 +522,7 @@ TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][con
   REQUIRE_FALSE(result->memory().longterm.recall.enabled);
   REQUIRE(result->memory().longterm.recall.limit == 5);
 
-  // The example config now carries a non-empty permissions block + one
-  // example agent overlay so the file documents the new schema.
-  REQUIRE(result->permissions().rules.size() == 8);
+  REQUIRE(result->permissions().rules.size() == 7);
   REQUIRE(result->agents().size() == 1);
   REQUIRE(result->agents()[0].name == "researcher");
   REQUIRE(result->agents()[0].permissions.rules.size() == 1);
@@ -703,7 +701,7 @@ TEST_CASE("Config::parse extracts runtime.prompt active tools", "[unit][config][
     auto result = config::Config::parse(R"json({
   "runtime": {
     "prompt": {
-      "active_tools": ["FileRead", "FileSearch", "ToolSearch"]
+      "active_tools": ["FileRead", "FileEdit", "ToolSearch"]
     }
   }
 })json");
@@ -711,7 +709,7 @@ TEST_CASE("Config::parse extracts runtime.prompt active tools", "[unit][config][
     REQUIRE(result.has_value());
     REQUIRE_FALSE(result->runtime().prompt.active_tools.use_defaults);
     REQUIRE(result->runtime().prompt.active_tools.tool_names ==
-            std::vector<std::string>{"FileRead", "FileSearch", "ToolSearch"});
+            std::vector<std::string>{"FileRead", "FileEdit", "ToolSearch"});
   }
 
   SECTION("empty explicit allowlist") {

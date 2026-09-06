@@ -1,5 +1,6 @@
 // tests/permission/test_rule_set.cpp — `RuleSet` evaluator + glob matcher.
 
+#include <array>
 #include <chrono>
 #include <optional>
 #include <string_view>
@@ -131,4 +132,44 @@ TEST_CASE("permission::evaluate falls back to Decision defaults on the mode-defa
   // No rule fired — Decision keeps the design-doc baseline (8 / 1h).
   REQUIRE(decision.replay_max == 8);
   REQUIRE(decision.approval_ttl == std::chrono::seconds{3600});
+}
+
+TEST_CASE("policy intersection preserves the more restrictive verdict", "[unit][permission][collaboration]") {
+  const auto cases = std::array{
+      std::array{Verdict::allow, Verdict::allow, Verdict::allow},
+      std::array{Verdict::allow, Verdict::ask, Verdict::ask},
+      std::array{Verdict::allow, Verdict::deny, Verdict::deny},
+      std::array{Verdict::ask, Verdict::allow, Verdict::ask},
+      std::array{Verdict::ask, Verdict::ask, Verdict::ask},
+      std::array{Verdict::ask, Verdict::deny, Verdict::deny},
+      std::array{Verdict::deny, Verdict::allow, Verdict::deny},
+      std::array{Verdict::deny, Verdict::ask, Verdict::deny},
+      std::array{Verdict::deny, Verdict::deny, Verdict::deny},
+  };
+  for (const auto& row : cases) {
+    CAPTURE(row[0], row[1]);
+    auto decision = perm::intersect(perm::Decision{.verdict = row[0], .reason = "parent"},
+                                    perm::Decision{.verdict = row[1], .reason = "child"});
+    REQUIRE(decision.verdict == row[2]);
+  }
+}
+
+TEST_CASE("policy intersection combines approval replay and expiry limits", "[unit][permission][collaboration]") {
+  const auto parent = perm::Decision{.verdict = Verdict::ask,
+                                     .reason = "parent",
+                                     .replay_max = 2,
+                                     .approval_ttl = std::chrono::seconds{90}};
+  const auto child = perm::Decision{.verdict = Verdict::ask,
+                                    .reason = "child",
+                                    .replay_max = 8,
+                                    .approval_ttl = std::chrono::seconds{20}};
+
+  const auto decision = perm::intersect(parent, child);
+  const auto reversed = perm::intersect(child, parent);
+
+  REQUIRE(decision.verdict == Verdict::ask);
+  REQUIRE(decision.replay_max == 2);
+  REQUIRE(decision.approval_ttl == std::chrono::seconds{20});
+  REQUIRE(reversed.replay_max == 2);
+  REQUIRE(reversed.approval_ttl == std::chrono::seconds{20});
 }

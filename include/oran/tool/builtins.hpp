@@ -16,15 +16,6 @@ inline constexpr std::string_view kFileWriteName{"FileWrite"};
 /// Stable wire name for the file-edit built-in.
 inline constexpr std::string_view kFileEditName{"FileEdit"};
 
-/// Stable wire name for the file-search built-in.
-inline constexpr std::string_view kFileSearchName{"FileSearch"};
-
-/// Stable wire name for the directory-list built-in.
-inline constexpr std::string_view kDirectoryListName{"DirectoryList"};
-
-/// Stable wire name for the file-delete built-in.
-inline constexpr std::string_view kFileDeleteName{"FileDelete"};
-
 /// Stable wire name for the catalog metadata lookup built-in.
 inline constexpr std::string_view kToolSearchName{"ToolSearch"};
 
@@ -36,6 +27,12 @@ inline constexpr std::string_view kMemoryRememberName{"MemoryRemember"};
 
 /// Stable wire name for the long-term memory delete built-in.
 inline constexpr std::string_view kMemoryForgetName{"MemoryForget"};
+
+inline constexpr std::string_view AGENT_RUN_NAME{"AgentRun"};
+
+/// Register a child-run tool limited to the configured names. The host supplies
+/// the runner on DispatchContext; each call requires spawn_agent authority.
+[[nodiscard]] core::Result<void> register_agent_run(Registry& registry, std::span<const std::string> agent_names);
 
 /// Register the `FileRead` tool. Reads UTF-8 content using `oran-io`'s
 /// coroutine helper; when `DispatchContext::workspace` is set, the input path
@@ -81,78 +78,6 @@ inline constexpr std::string_view kMemoryForgetName{"MemoryForget"};
 /// `Output::usage.bytes_read`, `bytes_written`, `files_touched`, and
 /// `match_count`.
 [[nodiscard]] core::Result<void> register_file_edit(Registry& registry);
-
-/// Register the `FileSearch` tool. Scans a UTF-8 text file or (recursively)
-/// a directory for literal substring matches; capability `read_file` is
-/// required. Input shape: `{"path": <string>, "pattern": <string>,
-/// "max_matches"?: uint (default 100), "include_hidden"?: bool (default
-/// false), "regex"?: bool (default false), "max_output_bytes"?: uint
-/// (default 1048576), "respect_ignore"?: bool (default true),
-/// "allow_outside_workspace"?: bool}`. `allow_outside_workspace=true` is a
-/// one-off read/list escape that must be approved at dispatch time.
-/// `regex=true` compiles through `permission::InputPattern` and reuses a
-/// bounded process-local compiled-pattern cache across dispatches.
-/// Returns one
-/// `path:line:text` line per match, with a trailing `(truncated; matches
-/// capped at <N>)` or `(truncated; output capped at <N> bytes)` summary
-/// when a cap is hit; returns the literal text `no matches` (non-error)
-/// when no match was found. Files containing NUL bytes in their first 8
-/// KiB are treated as binary and skipped during a directory walk. When
-/// `respect_ignore=true` (the default), the recursive walk skips `.git`,
-/// `.xmake`, `.orangutan`, `build`, and `node_modules` directories
-/// regardless of `include_hidden`, and honours `.gitignore` / `.ignore`
-/// files from the search root downward for comments, blanks, escaped
-/// leading `#` / `!` literals, `!` negation, trailing `/` directory rules,
-/// slash-relative patterns, basename patterns, and fnmatch-style globs.
-/// Successful calls also fill `Output::data_json` with `kind`, `path`,
-/// `pattern`, `regex`, `matches[]`, `match_count`, `truncated`,
-/// `truncation_reason`, `files_scanned`, and `bytes_read`, and fill
-/// `Output::usage` with `bytes_read` (cumulative scanned file bytes),
-/// `files_touched` (non-binary scanned file count), `match_count`
-/// (post-truncation), and the `truncated` cap flag. When a `Workspace` is
-/// supplied, output paths use stable display labels such as
-/// `<workspace>/src/main.cpp` instead of raw absolute paths.
-[[nodiscard]] core::Result<void> register_file_search(Registry& registry);
-
-/// Register the `DirectoryList` tool. Enumerates the immediate children of
-/// a directory through `oran-io::list_directory` by default, or walks the
-/// whole tree when `recursive=true`; capability `list_directory` is
-/// required. Input shape:
-/// `{"path": <string>, "include_hidden"?: bool (default false),
-/// "recursive"?: bool (default false), "max_entries"?: uint (default
-/// 256), "allow_outside_workspace"?: bool}`.
-/// `allow_outside_workspace=true` is a one-off read/list escape that must be
-/// approved at dispatch time. Recursive listings skip nested symlinks plus `.git`, `.xmake`,
-/// `.orangutan`, `build`, and `node_modules` directories, and honour
-/// `.gitignore` / `.ignore` files from the listing root downward. Returns one
-/// `<path>:<kind>:<size_bytes or '-'>` line per entry, sorted by path;
-/// the literal text `no entries` (non-error) when the directory is empty
-/// after the filters. `kind` is the `io::DirectoryEntryKind` wire spelling
-/// (`regular_file` | `directory` | `symlink` | `other`); `size_bytes` is a
-/// decimal integer for regular files and the literal `-` for every other
-/// kind. The call returns an `io` error when the directory has strictly
-/// more than `max_entries` entries — raise the cap and retry. Successful
-/// calls also fill `Output::data_json` with `kind`, `path`,
-/// `include_hidden`, `recursive`, `max_entries`, `entry_count`, and an
-/// `entries[]` array of `{name, path, kind, size_bytes}` (size_bytes is
-/// JSON null for non-regular files), and fill `Output::usage` with
-/// `files_touched=1` for single-level listings or root-plus-entry count
-/// for recursive listings, and `match_count` (the entry count). When a
-/// `Workspace` is supplied, output paths use stable display labels such as
-/// `<workspace>/src/main.cpp` instead of raw absolute paths.
-[[nodiscard]] core::Result<void> register_directory_list(Registry& registry);
-
-/// Register the `FileDelete` tool. Deletes a regular file, or a directory
-/// tree when `recursive=true`, through `oran-io::delete_path`; capability
-/// `delete_path` is required. Input shape:
-/// `{"path": <string>, "recursive"?: bool}`. The registry pins the target
-/// before approval. A directory without recursion intent returns
-/// `invalid_argument`; workspace symlink targets return `permission_denied`;
-/// a missing path returns `not_found`. Successful deletes return the literal
-/// text `deleted <path>` and fill
-/// `Output::usage.bytes_written=0` plus `files_touched` equal to the
-/// removed path count.
-[[nodiscard]] core::Result<void> register_file_delete(Registry& registry);
 
 /// Register the `ToolSearch` tool. Searches the current registry catalog by
 /// exact `name`, exact `category`, and/or declared `capability`; at least one

@@ -107,6 +107,24 @@ Decision evaluate(std::span<const Rule> rules, std::string_view tool_name, Mode 
   return evaluate(rules, tool_name, std::string_view{}, std::span<const core::Capability>{}, mode);
 }
 
+Decision intersect(Decision left, Decision right) {
+  if (left.verdict == Verdict::deny) {
+    return left;
+  }
+  if (right.verdict == Verdict::deny) {
+    return right;
+  }
+  if (right.verdict == Verdict::ask) {
+    if (left.verdict == Verdict::ask) {
+      left.replay_max = std::min(left.replay_max, right.replay_max);
+      left.approval_ttl = std::min(left.approval_ttl, right.approval_ttl);
+    } else {
+      return right;
+    }
+  }
+  return left;
+}
+
 Decision evaluate(std::span<const Rule> rules,
                   std::string_view tool_name,
                   std::span<const core::Capability> required_capabilities,
@@ -128,18 +146,7 @@ Decision evaluate(std::span<const Rule> rules,
     if (combined.verdict == Verdict::deny) {
       return combined;
     }
-    auto next = evaluate_requirement(rules, tool_name, input, capability, mode);
-    if (next.verdict == Verdict::deny) {
-      return next;
-    }
-    if (next.verdict == Verdict::ask) {
-      if (combined.verdict == Verdict::ask) {
-        combined.replay_max = std::min(combined.replay_max, next.replay_max);
-        combined.approval_ttl = std::min(combined.approval_ttl, next.approval_ttl);
-      } else {
-        combined = std::move(next);
-      }
-    }
+    combined = intersect(std::move(combined), evaluate_requirement(rules, tool_name, input, capability, mode));
   }
   return combined;
 }

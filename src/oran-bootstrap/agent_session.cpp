@@ -21,6 +21,7 @@
 #include <oran/provider.hpp>
 #include <oran/tool.hpp>
 
+#include "_impl/child-agents.hpp"
 #include "memory_tools.hpp"
 
 namespace orangutan::bootstrap {
@@ -162,6 +163,9 @@ public:
       owned_scheduler_.emplace(options_.executor, *registry_, scheduler_options);
       scheduler_ = &*owned_scheduler_;
     }
+    if (options_.parent_policy || options_.max_child_runs == 0) {
+      std::erase(active_tools_.tool_names, tool::AGENT_RUN_NAME);
+    }
   }
 
   [[nodiscard]] async::Awaitable<Result<agent::PromptResult>> run_prompt(agent::PromptRequest request) {
@@ -187,10 +191,13 @@ public:
                                                   options_.agent_key,
                                                   options_.identity);
     context.mode = options_.mode;
+    context.parent_policy = options_.parent_policy;
     context.approval_broker = &options_.assembly->approval_broker();
     context.bus = &options_.assembly->hook_bus();
     context.workspace = &options_.assembly->workspace();
     context.output_caps = output_caps_;
+    std::size_t child_runs = 0;
+    bind_child_agents(context, options_, *registry_, *scheduler_, child_runs);
     if (auto* runtime = options_.assembly->longterm_memory_runtime(); runtime != nullptr) {
       bind_memory_tools(context, *runtime, *options_.assembly->longterm_memory_backend(), options_.scope_key);
     }
@@ -208,7 +215,10 @@ public:
       memory_framing = std::move(*recalled);
     }
     auto conversation = agent::prepare_conversation(std::move(history), std::move(request.prompt));
-    const auto catalog = registry_->catalog();
+    auto catalog = registry_->catalog();
+    if (!context.agent_run) {
+      std::erase_if(catalog, [](const auto& definition) { return definition.name == tool::AGENT_RUN_NAME; });
+    }
     const auto promotions = session_state_.promotion_snapshot(core::time::now_utc());
     auto inputs = agent::RunTurnInputs{
         .system_preamble = options_.system_preamble,
@@ -237,6 +247,7 @@ public:
       inputs.trace = agent::TraceContext{
           .repository = trace,
           .session_id = options_.session_id,
+          .parent_turn_id = options_.parent_turn_id,
           .agent_key = options_.agent_key,
           .origin = options_.origin,
           .context_json = options_.trace_context_json,
@@ -376,6 +387,15 @@ core::Result<std::unique_ptr<AgentSession>> AgentSession::create(AgentSessionOpt
     }
     if (options.assembly->longterm_memory_runtime() != nullptr) {
       if (auto added = tool::register_memory_tools(*registry); !added) {
+        return std::unexpected(std::move(added).error());
+      }
+    }
+    if (!options.parent_policy && options.max_child_runs > 0 && !options.config->agents().empty()) {
+      auto agent_names = std::vector<std::string>{};
+      for (const auto& agent : options.config->agents()) {
+        agent_names.push_back(agent.name);
+      }
+      if (auto added = tool::register_agent_run(*registry, agent_names); !added) {
         return std::unexpected(std::move(added).error());
       }
     }

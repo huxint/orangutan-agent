@@ -1,8 +1,8 @@
 # Product Direction
 
 Orangutan provides a reusable agent runtime. The first milestone is a reliable
-single-agent turn using real tools and persistent memory. Multi-agent execution
-comes next through the same contracts.
+agent turn using real tools and persistent memory. Bounded child execution
+reuses the same contracts with constrained authority.
 
 Priorities, in order:
 
@@ -16,6 +16,5 @@ Keep one implementation per boundary. Delete replaced callers, unused settings,
 speculative extension layers and their documentation in the same change. Preserve
 user data and useful regression coverage. Git owns implementation history.
 
-Application surfaces follow a stable core. The
-[runtime plan](exec-plans/active/2026-09-06-agent-runtime-core.md) defines the
-current slice and acceptance criteria.
+Application surfaces build on the [agent contract](design-docs/agent-platform.md).
+[Live debt](exec-plans/tech-debt-tracker.md) records concrete reliability gaps.

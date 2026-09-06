@@ -41,14 +41,30 @@ cross-agent state to the loop.
 
 ## Agent Collaboration
 
-The first collaboration layer will own a bounded set of child turns. Each child
-gets independent session state and an explicit memory scope. Its effective
-permission policy must be no wider than its parent's. Results return as values;
-parent cancellation joins all children before releasing their services.
+`AgentRun` starts a configured agent with a self-contained task and returns its
+completed answer as a tool result. Its `agent` argument selects an entry from
+`config.agents`; the host supplies the provider route, workspace, memory scope,
+fresh session ID and approval identity. The child owns its conversation and tool
+promotion state. Each completed child transcript commits separately from the
+parent's transcript.
 
-This layer is not implemented. Its first acceptance is one parent and one child,
-including a refused child effect and cancellation. Team strategies follow only
-when this composition is usable.
+The host admits at most `AgentSessionOptions::max_child_runs` children per parent
+prompt, defaulting to four; zero disables delegation. Only one generation is
+permitted. A child cannot call `AgentRun`, including through an injected shared
+registry. Concurrent calls consume the same prompt-local admission count.
+
+Children reuse the parent's registry, scheduler and coordinating strand. This
+shares filesystem path locks while retaining separate dispatch contexts. The
+scheduler bounds concurrency per batch, so a parent awaiting a child does not
+consume that child's tool permits. Parent cancellation propagates through child
+provider and tool work; context-specific draining joins cleanup before either
+session releases borrowed services. An unrelated session does not extend that
+join.
+
+Parent and child rule decisions intersect at every tool dispatch, including
+rewritten inputs and automatic recall. The permission contract owns precedence
+and approval limits. The self-contained task and returned final-report shape
+follows the reference [Agent usage notes](https://github.com/Piebald-AI/claude-code-system-prompts/blob/main/system-prompts/tool-description-agent-simple-usage-notes.md).
 
 [Tools](tool-runtime.md), [memory](memory-system.md),
 [permissions](permissions-and-hooks.md), [providers](api-portability.md) and

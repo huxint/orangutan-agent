@@ -7,5 +7,6 @@
 | Memory and tool reliability | Scoped recall, persistence, authorization, bounded scheduling and joined cancellation. | A continued session uses saved context; refused actions have no effect. |
 | Agent collaboration | Bounded child execution with independent sessions and constrained authority. | A parent receives a child's result and cancels it safely; children cannot widen authority. |
 
-Work in this order. [STATUS.md](STATUS.md) records the current gate;
-[the active plan](exec-plans/active/2026-09-06-agent-runtime-core.md) scopes implementation.
+These contracts form the implemented core. [STATUS.md](STATUS.md) records the
+verification and handoff; [live debt](exec-plans/tech-debt-tracker.md) scopes
+remaining reliability work. Application surfaces build on these boundaries.

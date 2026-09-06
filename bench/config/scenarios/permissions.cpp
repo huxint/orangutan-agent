@@ -34,7 +34,7 @@ constexpr auto kTypedPermissionsConfig = std::string_view{R"json(
   "permissions": {
     "allow": [
       {"tool_pattern": "FileRead"},
-      {"tool_pattern": "FileSearch"},
+      {"tool_pattern": "ToolSearch"},
       {"tool_pattern": "*", "capability": "read_file"},
       {"tool_pattern": "*", "capability": "read_memory"},
       {"tool_pattern": "*", "capability": "egress_http"}
@@ -74,7 +74,7 @@ constexpr auto kInputPatternPermissionsConfig = std::string_view{R"json(
   "permissions": {
     "allow": [
       {"tool_pattern": "FileRead"},
-      {"tool_pattern": "FileSearch"},
+      {"tool_pattern": "ToolSearch"},
       {"tool_pattern": "*", "capability": "read_file"},
       {"tool_pattern": "*", "capability": "read_memory"},
       {"tool_pattern": "*", "capability": "egress_http"}

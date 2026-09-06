@@ -55,5 +55,4 @@ part of session execution or runtime startup.
 
 User database contents and migration history are preserved during API reduction.
 [Storage](storage-runtime.md) owns persistence mechanics;
-[the core plan](../exec-plans/active/2026-09-06-agent-runtime-core.md) owns the
-remaining composition work.
+[agent execution](agent-platform.md) owns parent/child session composition.

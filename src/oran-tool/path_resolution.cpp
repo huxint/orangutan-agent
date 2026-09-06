@@ -28,8 +28,6 @@ enum class PathIntent {
   read,
   write,
   edit,
-  delete_,
-  list,
 };
 
 struct PathRequest {
@@ -76,10 +74,6 @@ struct PathRequest {
   return it->get<bool>();
 }
 
-[[nodiscard]] bool outside_override_can_apply(PathIntent intent) noexcept {
-  return intent == PathIntent::read || intent == PathIntent::list;
-}
-
 [[nodiscard]] std::optional<PathRequest> path_request(std::string_view tool_name, const nlohmann::json& parsed) {
   auto path = string_field(parsed, "path");
   if (!path.has_value()) {
@@ -97,26 +91,6 @@ struct PathRequest {
         .path = std::move(*path),
         .allow_outside_workspace = *allow_outside_workspace,
     };
-  }
-  if (tool_name == kFileSearchName) {
-    return PathRequest{
-        .intent = PathIntent::list,
-        .path = std::move(*path),
-        .allow_outside_workspace = *allow_outside_workspace,
-    };
-  }
-  if (tool_name == kDirectoryListName) {
-    return PathRequest{
-        .intent = PathIntent::list,
-        .path = std::move(*path),
-        .allow_outside_workspace = *allow_outside_workspace,
-    };
-  }
-  if (tool_name == kFileDeleteName) {
-    if (auto it = parsed.find("recursive"); it != parsed.end() && !it->is_boolean()) {
-      return std::nullopt;
-    }
-    return PathRequest{.intent = PathIntent::delete_, .path = std::move(*path)};
   }
   if (tool_name == kFileEditName) {
     return PathRequest{
@@ -167,27 +141,8 @@ struct PathRequest {
     case PathIntent::write:
     case PathIntent::edit:
       return workspace.resolve_write(request.path, request.write_intent);
-    case PathIntent::delete_:
-      return workspace.resolve_delete(request.path);
-    case PathIntent::list:
-      return workspace.resolve_list(request.path);
   }
   return std::unexpected(core::Error::internal("unknown workspace path intent"));
-}
-
-[[nodiscard]] core::Result<ResolvedPath> resolve_outside_request(const Workspace& workspace,
-                                                                 const PathRequest& request) {
-  switch (request.intent) {
-    case PathIntent::read:
-      return workspace.resolve_read_outside_workspace(request.path);
-    case PathIntent::list:
-      return workspace.resolve_list_outside_workspace(request.path);
-    case PathIntent::write:
-    case PathIntent::edit:
-    case PathIntent::delete_:
-      break;
-  }
-  return std::unexpected(core::Error::internal("outside-workspace override is not valid for this path intent"));
 }
 
 [[nodiscard]] ResolvedToolPath
@@ -260,9 +215,9 @@ pre_resolve_tool_path(std::string_view tool_name, std::string_view input_json, D
   if (!resolved) {
     auto error = std::move(resolved).error();
     const auto reason = context_value(error, "reason");
-    if (request->allow_outside_workspace && outside_override_can_apply(request->intent) &&
+    if (request->allow_outside_workspace && request->intent == PathIntent::read &&
         (reason == "outside_workspace" || reason == "symlink_escape")) {
-      auto outside_resolved = resolve_outside_request(*ctx.workspace, *request);
+      auto outside_resolved = ctx.workspace->resolve_read_outside_workspace(request->path);
       if (outside_resolved) {
         resolved = std::move(outside_resolved);
         requires_approval = true;
@@ -283,22 +238,6 @@ pre_resolve_tool_path(std::string_view tool_name, std::string_view input_json, D
   }
 
   ctx.resolved_path = to_tool_path(*ctx.workspace, request->path, std::move(*resolved));
-  if (request->intent == PathIntent::delete_) {
-    if (!ctx.resolved_path->authority.has_value()) {
-      return PathResolutionReport{
-          .metadata_json = path_resolution_metadata_json(ctx.resolved_path),
-          .error = core::Error::internal("FileDelete path resolution did not produce an authority"),
-      };
-    }
-    auto mutation = ctx.resolved_path->authority->begin_delete(ctx.resolved_path->authority_relative_path);
-    if (!mutation) {
-      return PathResolutionReport{
-          .metadata_json = path_resolution_metadata_json(ctx.resolved_path),
-          .error = std::move(mutation).error(),
-      };
-    }
-    ctx.resolved_path->delete_mutation = std::move(*mutation);
-  }
   return PathResolutionReport{
       .metadata_json = path_resolution_metadata_json(ctx.resolved_path),
       .requires_approval = requires_approval,

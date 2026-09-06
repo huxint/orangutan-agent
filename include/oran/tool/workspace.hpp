@@ -37,51 +37,11 @@ struct WriteIntent {
 };
 
 /// Which extra-root list widens a `Workspace::lock_key` match: read covers
-/// the read/list intents (shared locks), write covers the mutating intents
+/// the read intents (shared locks), write covers the mutating intents
 /// (exclusive locks).
 enum class LockDirection {
   read,
   write,
-};
-
-struct WorkspaceWalkOptions {
-  /// Dot-prefixed names are skipped unless callers opt in.
-  bool include_hidden{false};
-  /// Built-in low-signal directories plus .gitignore/.ignore rules are applied
-  /// when this flag is true. Hidden filtering remains independent.
-  bool respect_ignore{true};
-};
-
-class WorkspaceWalkFilter {
-public:
-  /// Create the shared recursive-walk predicate rooted at an already pinned
-  /// directory. `root_authority` is the walk root's authority; when ignore
-  /// rules apply, the root's `.gitignore` / `.ignore` are read through it at
-  /// creation so no pathname is reopened later.
-  [[nodiscard]] static WorkspaceWalkFilter
-  create(const io::DirectoryAuthority& root_authority, std::string_view root, WorkspaceWalkOptions options = {});
-
-  WorkspaceWalkFilter(WorkspaceWalkFilter&&) noexcept;
-  WorkspaceWalkFilter& operator=(WorkspaceWalkFilter&&) noexcept;
-  WorkspaceWalkFilter(const WorkspaceWalkFilter&) = delete;
-  WorkspaceWalkFilter& operator=(const WorkspaceWalkFilter&) = delete;
-  ~WorkspaceWalkFilter();
-
-  /// Return true when a recursive filesystem consumer should skip `path`.
-  /// `path` is expected to be an absolute path under the filter root and
-  /// `parent` the pinned authority of its containing directory — the pair a
-  /// `io::WalkVisitor` receives. Ignore files for a newly entered directory
-  /// are read through `parent` (no-follow beneath that directory), which
-  /// relies on the walk's pre-order visit sequence: every ancestor directory
-  /// was offered to this filter before its children.
-  [[nodiscard]] bool should_skip(const io::DirectoryAuthority& parent, std::string_view path, bool is_directory);
-
-private:
-  struct Impl;
-
-  explicit WorkspaceWalkFilter(std::unique_ptr<Impl> impl);
-
-  std::unique_ptr<Impl> impl_;
 };
 
 struct ResolvedPath {
@@ -99,8 +59,8 @@ struct ResolvedPath {
   /// callers execute through `authority` + `authority_relative_path`.
   std::string absolute_path;
   /// Path relative to the matching root, for audit/display metadata.
-  /// Empty when a per-call read/list override resolves outside the permitted
-  /// read/list roots; audit uses the explicit display path for that case.
+  /// Empty when a per-call read override resolves outside the permitted
+  /// read roots; audit uses the explicit display path for that case.
   std::string relative_path;
   /// True when an existing symlink was encountered during resolution.
   bool symlink_followed{false};
@@ -108,9 +68,9 @@ struct ResolvedPath {
   /// explicitly allowed parent creation.
   bool created_parents{false};
   /// True when resolution used an explicit escape from the primary workspace
-  /// root: either a configured extra root or a per-call read/list override.
+  /// root: either a configured extra root or a per-call read override.
   bool outside_workspace_explicit_override{false};
-  /// True when a read/list call explicitly requested one-off outside-workspace
+  /// True when a read call explicitly requested one-off outside-workspace
   /// access. Mutating resolves never set this flag.
   bool per_call_outside_workspace_override{false};
   /// Zero-based index inside the matching extra-root list; `nullopt` for the
@@ -133,11 +93,8 @@ public:
   }
 
   [[nodiscard]] core::Result<ResolvedPath> resolve_read(std::string_view path) const;
-  [[nodiscard]] core::Result<ResolvedPath> resolve_list(std::string_view path) const;
   [[nodiscard]] core::Result<ResolvedPath> resolve_read_outside_workspace(std::string_view path) const;
-  [[nodiscard]] core::Result<ResolvedPath> resolve_list_outside_workspace(std::string_view path) const;
   [[nodiscard]] core::Result<ResolvedPath> resolve_write(std::string_view path, WriteIntent intent) const;
-  [[nodiscard]] core::Result<ResolvedPath> resolve_delete(std::string_view path) const;
 
   /// Scheduler lock-key derivation: the lexically-normalised absolute
   /// spelling of `path` joined against the workspace root, provided it falls

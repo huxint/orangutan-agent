@@ -27,13 +27,12 @@ namespace {
 constexpr std::uint64_t kFnvOffset = 14695981039346656037ull;
 constexpr std::uint64_t kFnvPrime = 1099511628211ull;
 constexpr std::string_view kHashSeparator = "\x1F";
-constexpr auto kDefaultActiveTools = std::array<std::string_view, 6>{
+constexpr auto kDefaultActiveTools = std::array<std::string_view, 5>{
     "FileRead",
     "FileWrite",
     "FileEdit",
-    "FileSearch",
-    "DirectoryList",
     "ToolSearch",
+    "AgentRun",
 };
 
 [[nodiscard]] std::uint64_t hash_append(std::uint64_t hash, std::string_view bytes) noexcept {
@@ -62,7 +61,7 @@ constexpr auto kDefaultActiveTools = std::array<std::string_view, 6>{
 
 [[nodiscard]] bool is_active_tool(const config::PromptActiveToolsConfig& active_tools, std::string_view name) noexcept {
   if (active_tools.use_defaults) {
-    return std::ranges::contains(kDefaultActiveTools, name);
+    return is_default_active_tool(name);
   }
   return std::ranges::contains(active_tools.tool_names, name);
 }
@@ -171,6 +170,10 @@ make_section(std::string id, std::string content, std::uint32_t cache_version, b
 }
 
 }  // namespace
+
+bool is_default_active_tool(std::string_view name) noexcept {
+  return std::ranges::contains(kDefaultActiveTools, name);
+}
 
 class Builder::Impl {
 public:

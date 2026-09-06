@@ -68,6 +68,15 @@ struct Decision {
 
 using RuleSet = std::vector<Rule>;
 
+/// Borrows immutable rules for the lifetime of an execution boundary.
+struct PolicyView {
+  std::span<const Rule> rules;
+  Mode mode{Mode::strict};
+};
+
+/// Intersect authority: deny dominates ask, and asks retain the smaller limits.
+[[nodiscard]] Decision intersect(Decision left, Decision right);
+
 /// Evaluate every required capability without effects. Deny outranks ask,
 /// which outranks allow across capabilities; ask limits intersect.
 [[nodiscard]] Decision evaluate(std::span<const Rule> rules, std::string_view tool_name, Mode mode);

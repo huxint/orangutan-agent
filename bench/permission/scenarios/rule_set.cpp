@@ -112,7 +112,7 @@ using permission::Verdict;
   rules.push_back(Rule{.verdict = Verdict::allow, .tool_pattern = "version", .capability = std::nullopt});
   rules.push_back(Rule{.verdict = Verdict::allow, .tool_pattern = "ClockNow", .capability = std::nullopt});
   rules.push_back(Rule{.verdict = Verdict::ask, .tool_pattern = "CustomAction", .capability = std::nullopt});
-  rules.push_back(Rule{.verdict = Verdict::ask, .tool_pattern = "AgentSpawn", .capability = std::nullopt});
+  rules.push_back(Rule{.verdict = Verdict::ask, .tool_pattern = "AgentRun", .capability = std::nullopt});
   rules.push_back(Rule{.verdict = Verdict::deny, .tool_pattern = "ShellRm", .capability = std::nullopt});
   rules.push_back(Rule{.verdict = Verdict::deny, .tool_pattern = "ShellForkBomb", .capability = std::nullopt});
   rules.push_back(Rule{.verdict = Verdict::deny, .tool_pattern = "Process*", .capability = std::nullopt});

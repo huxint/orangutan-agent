@@ -16,10 +16,13 @@
 
 namespace orangutan::prompt {
 
+/// Shared default selection for the rendered catalogue and provider-native tools.
+[[nodiscard]] bool is_default_active_tool(std::string_view name) noexcept;
+
 struct SectionVersions {
   std::uint32_t system_preamble{2};
-  std::uint32_t tool_catalog{2};
-  std::uint32_t deferred_tools{2};
+  std::uint32_t tool_catalog{3};
+  std::uint32_t deferred_tools{3};
   std::uint32_t skills_catalog{1};
   std::uint32_t memory_framing{1};
   std::uint32_t per_agent_overlay{1};

@@ -56,6 +56,13 @@ struct AgentSessionOptions {
   provider::RetryPolicy retry{};
   bool stream{true};
   core::TurnId session_id{};
+  /// Correlates a child turn with the parent's tool call in the trace repository.
+  std::optional<core::TurnId> parent_turn_id{};
+  /// Child sessions borrow the parent's immutable rules until run_prompt joins.
+  /// A session with an inherited policy cannot delegate further.
+  std::optional<permission::PolicyView> parent_policy{};
+  /// Maximum child sessions admitted per prompt; zero disables delegation.
+  std::size_t max_child_runs{4};
   provider::EventSink* event_sink{nullptr};
   /// Inject both to share a scheduler. Services outlive this session and all
   /// tools; executor must be the strand that owns the shared scheduler.

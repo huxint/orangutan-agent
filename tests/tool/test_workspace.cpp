@@ -66,11 +66,6 @@ void write_text(const std::filesystem::path& path, std::string_view contents) {
   out.write(contents.data(), static_cast<std::streamsize>(contents.size()));
 }
 
-[[nodiscard]] std::string read_text(const std::filesystem::path& path) {
-  std::ifstream input{path, std::ios::binary};
-  return std::string{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
-}
-
 [[nodiscard]] bool context_has(const core::Error& error, std::string_view key, std::string_view value) {
   return std::ranges::any_of(error.context(),
                              [&](const auto& entry) { return entry.first == key && entry.second == value; });
@@ -306,10 +301,6 @@ TEST_CASE("Workspace refuses mutating paths that traverse symlinks", "[unit][too
   REQUIRE(write.error().kind() == core::ErrorKind::permission_denied);
   REQUIRE(context_has(write.error(), "reason", "symlink_target"));
 
-  auto deleted = workspace.resolve_delete("link.txt");
-  REQUIRE_FALSE(deleted.has_value());
-  REQUIRE(deleted.error().kind() == core::ErrorKind::permission_denied);
-  REQUIRE(context_has(deleted.error(), "reason", "symlink_target"));
 }
 
 TEST_CASE("Workspace extra roots widen only the configured direction", "[unit][tool][workspace]") {
@@ -343,8 +334,7 @@ TEST_CASE("Workspace extra roots widen only the configured direction", "[unit][t
   REQUIRE(*write_to_write_root->override_root_index == 0U);
 }
 
-TEST_CASE("Workspace per-call outside read/list override resolves existing paths only for read-side intents",
-          "[unit][tool][workspace]") {
+TEST_CASE("Workspace outside read override does not grant write access", "[unit][tool][workspace]") {
   TempDir root{"oran-workspace-per-call-primary"};
   TempDir outside{"oran-workspace-per-call-outside"};
   write_text(outside.path() / "audit.log", "audit");
@@ -359,74 +349,10 @@ TEST_CASE("Workspace per-call outside read/list override resolves existing paths
   REQUIRE(read->per_call_outside_workspace_override);
   REQUIRE_FALSE(read->override_root_index.has_value());
 
-  auto list = workspace.resolve_list_outside_workspace(outside.path().string());
-  REQUIRE(list.has_value());
-  REQUIRE(list->absolute_path == outside.path().string());
-  REQUIRE(list->outside_workspace_explicit_override);
-  REQUIRE(list->per_call_outside_workspace_override);
-
   auto write = workspace.resolve_write((outside.path() / "created.txt").string(), tool::WriteIntent{});
   REQUIRE_FALSE(write.has_value());
   REQUIRE(write.error().kind() == core::ErrorKind::permission_denied);
   REQUIRE(context_has(write.error(), "reason", "outside_workspace"));
-}
-
-TEST_CASE("Workspace walk filter shares hidden, built-in, and ignore-file decisions", "[unit][tool][workspace]") {
-  TempDir root{"oran-workspace-walk-filter"};
-  write_text(root.path() / ".gitignore", "*.log\nignored/\ndocs/secret.txt\n!keep.log\n");
-  write_text(root.path() / "src" / ".ignore", "local.txt\n");
-  write_text(root.path() / "src" / "local.txt", "ignored by nested rule");
-  write_text(root.path() / "docs" / "secret.txt", "ignored by slash rule");
-
-  auto root_authority = io::DirectoryAuthority::open_trusted(root.path().string());
-  REQUIRE(root_authority.has_value());
-  auto src_authority = io::DirectoryAuthority::open_trusted((root.path() / "src").string());
-  REQUIRE(src_authority.has_value());
-  auto docs_authority = io::DirectoryAuthority::open_trusted((root.path() / "docs").string());
-  REQUIRE(docs_authority.has_value());
-
-  auto filter = tool::WorkspaceWalkFilter::create(*root_authority, root.path().string());
-
-  REQUIRE(filter.should_skip(*root_authority, (root.path() / ".hidden.txt").string(), false));
-  REQUIRE(filter.should_skip(*root_authority, (root.path() / ".git").string(), true));
-  REQUIRE(filter.should_skip(*root_authority, (root.path() / "build").string(), true));
-  REQUIRE(filter.should_skip(*root_authority, (root.path() / "a.log").string(), false));
-  REQUIRE_FALSE(filter.should_skip(*root_authority, (root.path() / "keep.log").string(), false));
-  REQUIRE(filter.should_skip(*root_authority, (root.path() / "ignored").string(), true));
-  REQUIRE(filter.should_skip(*src_authority, (root.path() / "src" / "local.txt").string(), false));
-  REQUIRE(filter.should_skip(*docs_authority, (root.path() / "docs" / "secret.txt").string(), false));
-
-  auto forensic_filter = tool::WorkspaceWalkFilter::create(*root_authority,
-                                                           root.path().string(),
-                                                           tool::WorkspaceWalkOptions{
-                                                               .include_hidden = true,
-                                                               .respect_ignore = false,
-                                                           });
-  REQUIRE_FALSE(forensic_filter.should_skip(*root_authority, (root.path() / ".hidden.txt").string(), false));
-  REQUIRE_FALSE(forensic_filter.should_skip(*root_authority, (root.path() / "build").string(), true));
-  REQUIRE_FALSE(forensic_filter.should_skip(*root_authority, (root.path() / "a.log").string(), false));
-}
-
-TEST_CASE("Workspace walk filter reads ignore files beneath their pinned scope only", "[unit][tool][workspace]") {
-  TempDir root{"oran-workspace-walk-filter-anchored"};
-  TempDir outside{"oran-workspace-walk-filter-anchored-outside"};
-  write_text(outside.path() / "rules.gitignore", "skipme.txt\n");
-  write_text(root.path() / "skipme.txt", "kept: escaping ignore rules are not read");
-  write_text(root.path() / "real.rules", "alsoskip.txt\n");
-  write_text(root.path() / "alsoskip.txt", "skipped by the in-scope symlinked rules");
-
-  // An ignore file that is a symlink escaping its directory is skipped (the
-  // pathname ifstream it replaces would have followed it); a relative
-  // symlink staying beneath the same pinned scope is still honored.
-  create_symlink_or_skip(outside.path() / "rules.gitignore", root.path() / ".gitignore");
-  create_symlink_or_skip("real.rules", root.path() / ".ignore");
-
-  auto root_authority = io::DirectoryAuthority::open_trusted(root.path().string());
-  REQUIRE(root_authority.has_value());
-
-  auto filter = tool::WorkspaceWalkFilter::create(*root_authority, root.path().string());
-  REQUIRE_FALSE(filter.should_skip(*root_authority, (root.path() / "skipme.txt").string(), false));
-  REQUIRE(filter.should_skip(*root_authority, (root.path() / "alsoskip.txt").string(), false));
 }
 
 TEST_CASE("Workspace display_path renders stable root-relative labels", "[unit][tool][workspace]") {
@@ -624,34 +550,20 @@ TEST_CASE("Read-side outside-workspace override forces approval and records expl
   });
 }
 
-TEST_CASE("Approved read-side outside-workspace override runs read search and list tools",
-          "[unit][tool][workspace][audit][approval]") {
+TEST_CASE("Approved outside-workspace reads retain their audit scope", "[unit][tool][workspace][audit][approval]") {
   TempDir root{"oran-workspace-readside-approved-primary"};
   TempDir outside{"oran-workspace-readside-approved-outside"};
   write_text(outside.path() / "secret.txt", "outside needle");
-  write_text(outside.path() / "tree" / "a.txt", "a");
 
   test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_file_read(registry).has_value());
-    REQUIRE(tool::register_file_search(registry).has_value());
-    REQUIRE(tool::register_directory_list(registry).has_value());
 
     permission::RuleSet rules;
     rules.push_back(permission::Rule{
         .verdict = permission::Verdict::allow,
         .tool_pattern = std::string{tool::kFileReadName},
         .capability = core::Capability::read_file,
-    });
-    rules.push_back(permission::Rule{
-        .verdict = permission::Verdict::allow,
-        .tool_pattern = std::string{tool::kFileSearchName},
-        .capability = core::Capability::read_file,
-    });
-    rules.push_back(permission::Rule{
-        .verdict = permission::Verdict::allow,
-        .tool_pattern = std::string{tool::kDirectoryListName},
-        .capability = core::Capability::list_directory,
     });
 
     auto workspace = make_workspace(root.path());
@@ -670,23 +582,7 @@ TEST_CASE("Approved read-side outside-workspace override runs read search and li
     REQUIRE(read.has_value());
     REQUIRE(read->text.contains("outside needle"));
 
-    const auto search_input = std::format(R"({{"path":"{}","pattern":"needle","allow_outside_workspace":true}})",
-                                          (outside.path() / "secret.txt").string());
-    auto search_token = grant(broker, tool::kFileSearchName, search_input, "operator-1", now);
-    ctx.approval_token = &search_token;
-    auto searched = co_await registry.dispatch(tool::kFileSearchName, search_input, ctx);
-    REQUIRE(searched.has_value());
-    REQUIRE(searched->text.contains("outside needle"));
-
-    const auto list_input =
-        std::format(R"({{"path":"{}","allow_outside_workspace":true}})", (outside.path() / "tree").string());
-    auto list_token = grant(broker, tool::kDirectoryListName, list_input, "operator-1", now);
-    ctx.approval_token = &list_token;
-    auto listed = co_await registry.dispatch(tool::kDirectoryListName, list_input, ctx);
-    REQUIRE(listed.has_value());
-    REQUIRE(listed->text.contains((outside.path() / "tree" / "a.txt").string()));
-
-    REQUIRE(sink.events().size() == 3);
+    REQUIRE(sink.events().size() == 1);
     for (const auto& event : sink.events()) {
       REQUIRE(event.verdict == permission::Verdict::ask);
       REQUIRE(event.outcome == permission::AuditOutcome::approved);
@@ -699,9 +595,7 @@ TEST_CASE("Approved read-side outside-workspace override runs read search and li
     }
     REQUIRE(path_resolution_metadata(sink.events()[0])["resolved_display_path"] ==
             (outside.path() / "secret.txt").string());
-    REQUIRE(path_resolution_metadata(sink.events()[1])["resolved_display_path"] ==
-            (outside.path() / "secret.txt").string());
-    REQUIRE(path_resolution_metadata(sink.events()[2])["resolved_display_path"] == (outside.path() / "tree").string());
+
   });
 }
 
@@ -1132,470 +1026,4 @@ TEST_CASE("FileEdit rejects workspace symlink mutation targets", "[unit][tool][w
 
   std::ifstream target{root.path() / "target.txt", std::ios::binary};
   REQUIRE(std::string{std::istreambuf_iterator<char>{target}, std::istreambuf_iterator<char>{}} == "alpha");
-}
-
-TEST_CASE("FileDelete uses DispatchContext workspace for relative deletes and traversal refusal",
-          "[unit][tool][workspace][file_delete]") {
-  TempDir root{"oran-workspace-file-delete"};
-  TempDir outside{"oran-workspace-file-delete-outside"};
-  write_text(root.path() / "doomed.txt", "remove");
-  write_text(root.path() / "tree" / "leaf.txt", "remove");
-  write_text(outside.path() / "secret.txt", "keep");
-
-  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
-    tool::Registry registry;
-    REQUIRE(tool::register_file_delete(registry).has_value());
-
-    auto workspace = make_workspace(root.path());
-    auto rules = allow_tool_rules(std::string{tool::kFileDeleteName}, core::Capability::delete_path);
-    permission::RecordingAuditSink sink;
-    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
-
-    auto deleted = co_await registry.dispatch(tool::kFileDeleteName, R"({"path":"doomed.txt"})", ctx);
-    REQUIRE(deleted.has_value());
-    REQUIRE_FALSE(std::filesystem::exists(root.path() / "doomed.txt"));
-
-    auto deleted_tree = co_await registry.dispatch(tool::kFileDeleteName, R"({"path":"tree","recursive":true})", ctx);
-    REQUIRE(deleted_tree.has_value());
-    REQUIRE_FALSE(std::filesystem::exists(root.path() / "tree"));
-
-    std::error_code ec;
-    const auto outside_relative_path = std::filesystem::relative(outside.path() / "secret.txt", root.path(), ec);
-    REQUIRE(ec.value() == 0);
-    const auto escaped_input = std::format(R"({{"path":"{}"}})", outside_relative_path.string());
-    auto escaped = co_await registry.dispatch(tool::kFileDeleteName, escaped_input, ctx);
-    REQUIRE_FALSE(escaped.has_value());
-    REQUIRE(escaped.error().kind() == core::ErrorKind::permission_denied);
-    REQUIRE(context_has(escaped.error(), "reason", "outside_workspace"));
-    REQUIRE(std::filesystem::exists(outside.path() / "secret.txt"));
-  });
-}
-
-TEST_CASE("FileDelete retains workspace authority across the approval window",
-          "[unit][tool][workspace][file_delete][approval][race]") {
-  TempDir sandbox{"oran-workspace-file-delete-approval-race"};
-  const auto root = sandbox.path() / "workspace";
-  const auto moved_root = sandbox.path() / "workspace-moved";
-  const auto outside = sandbox.path() / "outside";
-  write_text(root / "note.txt", "inside-target");
-  write_text(outside / "note.txt", "outside-target");
-
-  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
-    tool::Registry registry;
-    REQUIRE(tool::register_file_delete(registry).has_value());
-
-    auto workspace = make_workspace(root);
-    auto rules = ask_tool_rules(std::string{tool::kFileDeleteName}, core::Capability::delete_path);
-    permission::RecordingAuditSink sink;
-    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
-    auto broker = make_broker();
-    ctx.approval_broker = &broker;
-    ctx.now = fixed_now();
-
-    orangutan::hook::Bus bus;
-    orangutan::hook::InProcessSink prompt{
-        "delete-root-replacement-prompt",
-        [](orangutan::hook::Event, orangutan::hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
-          co_return core::Result<void>{};
-        }};
-    prompt.set_blocking_handler([&](orangutan::hook::Event, orangutan::hook::PayloadPtr)
-                                    -> async::Awaitable<core::Result<orangutan::hook::HookDecision>> {
-      std::error_code ec;
-      std::filesystem::rename(root, moved_root, ec);
-      if (ec) {
-        co_return std::unexpected(core::Error::io("test failed to rename workspace root").with("detail", ec.message()));
-      }
-      std::filesystem::create_directory_symlink(outside, root, ec);
-      if (ec) {
-        co_return std::unexpected(
-            core::Error::io("test failed to replace workspace root").with("detail", ec.message()));
-      }
-      co_return orangutan::hook::HookDecision{
-          .reason = "operator_approved:operator-1",
-          .rewritten_input_json = std::nullopt,
-          .approval_expires_at = std::nullopt,
-          .trace = {},
-      };
-    });
-    bus.bind(prompt, {orangutan::hook::Event::permission_ask_rendered});
-    ctx.bus = &bus;
-
-    auto deleted = co_await registry.dispatch(tool::kFileDeleteName, R"({"path":"note.txt"})", ctx);
-    REQUIRE(deleted.has_value());
-  });
-
-  REQUIRE_FALSE(std::filesystem::exists(moved_root / "note.txt"));
-  REQUIRE(std::filesystem::exists(outside / "note.txt"));
-}
-
-TEST_CASE("FileDelete rejects target replacement during the approval window",
-          "[unit][tool][workspace][file_delete][approval][race]") {
-  TempDir root{"oran-workspace-file-delete-target-race"};
-  write_text(root.path() / "note.txt", "approved-target");
-  write_text(root.path() / "replacement.txt", "replacement");
-
-  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
-    tool::Registry registry;
-    REQUIRE(tool::register_file_delete(registry).has_value());
-
-    auto workspace = make_workspace(root.path());
-    auto rules = ask_tool_rules(std::string{tool::kFileDeleteName}, core::Capability::delete_path);
-    permission::RecordingAuditSink sink;
-    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
-    auto broker = make_broker();
-    ctx.approval_broker = &broker;
-    ctx.now = fixed_now();
-
-    orangutan::hook::Bus bus;
-    orangutan::hook::InProcessSink prompt{
-        "delete-target-replacement-prompt",
-        [](orangutan::hook::Event, orangutan::hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
-          co_return core::Result<void>{};
-        }};
-    prompt.set_blocking_handler(
-        [&](orangutan::hook::Event,
-            orangutan::hook::PayloadPtr) -> async::Awaitable<core::Result<orangutan::hook::HookDecision>> {
-          std::filesystem::rename(root.path() / "replacement.txt", root.path() / "note.txt");
-          co_return orangutan::hook::HookDecision{
-              .reason = "operator_approved:operator-1",
-              .rewritten_input_json = std::nullopt,
-              .approval_expires_at = std::nullopt,
-              .trace = {},
-          };
-        });
-    bus.bind(prompt, {orangutan::hook::Event::permission_ask_rendered});
-    ctx.bus = &bus;
-
-    auto deleted = co_await registry.dispatch(tool::kFileDeleteName, R"({"path":"note.txt"})", ctx);
-    REQUIRE_FALSE(deleted.has_value());
-    REQUIRE(deleted.error().kind() == core::ErrorKind::conflict);
-  });
-
-  REQUIRE(read_text(root.path() / "note.txt") == "replacement");
-}
-
-TEST_CASE("FileDelete rejects workspace symlink mutation targets", "[unit][tool][workspace][file_delete]") {
-  TempDir root{"oran-workspace-file-delete-link"};
-  write_text(root.path() / "target.txt", "survives");
-  create_symlink_or_skip(root.path() / "target.txt", root.path() / "link.txt");
-
-  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
-    tool::Registry registry;
-    REQUIRE(tool::register_file_delete(registry).has_value());
-
-    auto workspace = make_workspace(root.path());
-    auto rules = allow_tool_rules(std::string{tool::kFileDeleteName}, core::Capability::delete_path);
-    permission::RecordingAuditSink sink;
-    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
-
-    auto deleted = co_await registry.dispatch(tool::kFileDeleteName, R"({"path":"link.txt"})", ctx);
-    REQUIRE_FALSE(deleted.has_value());
-    REQUIRE(deleted.error().kind() == core::ErrorKind::permission_denied);
-    REQUIRE(context_has(deleted.error(), "reason", "symlink_target"));
-    REQUIRE(std::filesystem::is_symlink(root.path() / "link.txt"));
-    REQUIRE(std::filesystem::exists(root.path() / "target.txt"));
-  });
-}
-
-TEST_CASE("FileSearch uses DispatchContext workspace for relative searches and traversal refusal",
-          "[unit][tool][workspace][file_search]") {
-  TempDir root{"oran-workspace-file-search"};
-  TempDir outside{"oran-workspace-file-search-outside"};
-  write_text(root.path() / "nested" / "note.txt", "alpha\nneedle here\nbeta");
-  write_text(outside.path() / "secret.txt", "needle outside");
-
-  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
-    tool::Registry registry;
-    REQUIRE(tool::register_file_search(registry).has_value());
-
-    auto workspace = make_workspace(root.path());
-    auto rules = allow_tool_rules(std::string{tool::kFileSearchName}, core::Capability::read_file);
-    permission::RecordingAuditSink sink;
-    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
-
-    auto found =
-        co_await registry.dispatch(tool::kFileSearchName, R"({"path":"nested/note.txt","pattern":"needle"})", ctx);
-    REQUIRE(found.has_value());
-    REQUIRE(found->text.contains("<workspace>/nested/note.txt:2:needle here"));
-    REQUIRE(found->data_json.has_value());
-    const auto found_data = nlohmann::json::parse(*found->data_json);
-    REQUIRE(found_data["path"] == "<workspace>/nested/note.txt");
-    REQUIRE(found_data["matches"][0]["path"] == "<workspace>/nested/note.txt");
-
-    std::error_code ec;
-    const auto outside_relative_path = std::filesystem::relative(outside.path() / "secret.txt", root.path(), ec);
-    REQUIRE(ec.value() == 0);
-    const auto escaped_input = std::format(R"({{"path":"{}","pattern":"needle"}})", outside_relative_path.string());
-    auto escaped = co_await registry.dispatch(tool::kFileSearchName, escaped_input, ctx);
-    REQUIRE_FALSE(escaped.has_value());
-    REQUIRE(escaped.error().kind() == core::ErrorKind::permission_denied);
-    REQUIRE(context_has(escaped.error(), "reason", "outside_workspace"));
-  });
-}
-
-TEST_CASE("FileSearch rejects symlink roots that escape the workspace", "[unit][tool][workspace][file_search]") {
-  TempDir root{"oran-workspace-file-search-symlink"};
-  TempDir outside{"oran-workspace-file-search-symlink-outside"};
-  write_text(outside.path() / "secret.txt", "needle outside");
-  create_symlink_or_skip(outside.path() / "secret.txt", root.path() / "outside-link.txt");
-
-  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
-    tool::Registry registry;
-    REQUIRE(tool::register_file_search(registry).has_value());
-
-    auto workspace = make_workspace(root.path());
-    auto rules = allow_tool_rules(std::string{tool::kFileSearchName}, core::Capability::read_file);
-    permission::RecordingAuditSink sink;
-    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
-
-    auto escaped =
-        co_await registry.dispatch(tool::kFileSearchName, R"({"path":"outside-link.txt","pattern":"needle"})", ctx);
-    REQUIRE_FALSE(escaped.has_value());
-    REQUIRE(escaped.error().kind() == core::ErrorKind::permission_denied);
-    REQUIRE(context_has(escaped.error(), "reason", "symlink_escape"));
-  });
-}
-
-TEST_CASE("FileSearch honors extra_read_roots through the workspace seam", "[unit][tool][workspace][file_search]") {
-  TempDir root{"oran-workspace-file-search-primary"};
-  TempDir readable{"oran-workspace-file-search-readable"};
-  write_text(readable.path() / "audit.log", "needle in the override root");
-
-  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
-    tool::Registry registry;
-    REQUIRE(tool::register_file_search(registry).has_value());
-
-    auto workspace = make_workspace(root.path(),
-                                    tool::WorkspaceOptions{
-                                        .extra_read_roots = {readable.path().string()},
-                                    });
-    auto rules = allow_tool_rules(std::string{tool::kFileSearchName}, core::Capability::read_file);
-    permission::RecordingAuditSink sink;
-    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
-
-    const auto override_input =
-        std::format(R"({{"path":"{}","pattern":"needle"}})", (readable.path() / "audit.log").string());
-    auto found = co_await registry.dispatch(tool::kFileSearchName, override_input, ctx);
-    REQUIRE(found.has_value());
-    REQUIRE(found->text.contains("needle in the override root"));
-  });
-}
-
-TEST_CASE("DirectoryList uses DispatchContext workspace for relative listings and traversal refusal",
-          "[unit][tool][workspace][directory_list]") {
-  TempDir root{"oran-workspace-directory-list"};
-  TempDir outside{"oran-workspace-directory-list-outside"};
-  write_text(root.path() / "nested" / "a.txt", "a");
-  write_text(root.path() / "nested" / "b.txt", "bb");
-  write_text(outside.path() / "secret.txt", "outside");
-
-  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
-    tool::Registry registry;
-    REQUIRE(tool::register_directory_list(registry).has_value());
-
-    auto workspace = make_workspace(root.path());
-    auto rules = allow_tool_rules(std::string{tool::kDirectoryListName}, core::Capability::list_directory);
-    permission::RecordingAuditSink sink;
-    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
-
-    auto listed = co_await registry.dispatch(tool::kDirectoryListName, R"({"path":"nested"})", ctx);
-    REQUIRE(listed.has_value());
-    REQUIRE(listed->text.contains("<workspace>/nested/a.txt:regular_file:1"));
-    REQUIRE(listed->text.contains("<workspace>/nested/b.txt:regular_file:2"));
-    REQUIRE(listed->data_json.has_value());
-    const auto listed_data = nlohmann::json::parse(*listed->data_json);
-    REQUIRE(listed_data["path"] == "<workspace>/nested");
-    REQUIRE(listed_data["entries"][0]["path"].get<std::string>().starts_with("<workspace>/nested/"));
-
-    std::error_code ec;
-    const auto outside_relative_path = std::filesystem::relative(outside.path(), root.path(), ec);
-    REQUIRE(ec.value() == 0);
-    const auto escaped_input = std::format(R"({{"path":"{}"}})", outside_relative_path.string());
-    auto escaped = co_await registry.dispatch(tool::kDirectoryListName, escaped_input, ctx);
-    REQUIRE_FALSE(escaped.has_value());
-    REQUIRE(escaped.error().kind() == core::ErrorKind::permission_denied);
-    REQUIRE(context_has(escaped.error(), "reason", "outside_workspace"));
-  });
-}
-
-TEST_CASE("DirectoryList retains workspace authority across the approval window",
-          "[unit][tool][workspace][directory_list][approval][race]") {
-  TempDir sandbox{"oran-workspace-directory-list-approval-race"};
-  const auto root = sandbox.path() / "workspace";
-  const auto moved_root = sandbox.path() / "workspace-moved";
-  const auto outside = sandbox.path() / "outside";
-  write_text(root / "inside.txt", "pinned");
-  write_text(outside / "outside.txt", "replacement");
-
-  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
-    tool::Registry registry;
-    REQUIRE(tool::register_directory_list(registry).has_value());
-
-    auto workspace = make_workspace(root);
-    auto rules = ask_tool_rules(std::string{tool::kDirectoryListName}, core::Capability::list_directory);
-    permission::RecordingAuditSink sink;
-    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
-    auto broker = make_broker();
-    ctx.approval_broker = &broker;
-    ctx.now = fixed_now();
-
-    orangutan::hook::Bus bus;
-    orangutan::hook::InProcessSink prompt{
-        "directory-list-root-replacement-prompt",
-        [](orangutan::hook::Event, orangutan::hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
-          co_return core::Result<void>{};
-        }};
-    prompt.set_blocking_handler([&](orangutan::hook::Event, orangutan::hook::PayloadPtr)
-                                    -> async::Awaitable<core::Result<orangutan::hook::HookDecision>> {
-      std::error_code ec;
-      std::filesystem::rename(root, moved_root, ec);
-      if (ec) {
-        co_return std::unexpected(core::Error::io("test failed to rename workspace root").with("detail", ec.message()));
-      }
-      std::filesystem::create_directory_symlink(outside, root, ec);
-      if (ec) {
-        co_return std::unexpected(
-            core::Error::io("test failed to replace workspace root").with("detail", ec.message()));
-      }
-      co_return orangutan::hook::HookDecision{
-          .reason = "operator_approved:operator-1",
-          .rewritten_input_json = std::nullopt,
-          .approval_expires_at = std::nullopt,
-          .trace = {},
-      };
-    });
-    bus.bind(prompt, {orangutan::hook::Event::permission_ask_rendered});
-    ctx.bus = &bus;
-
-    auto listed = co_await registry.dispatch(tool::kDirectoryListName, R"({"path":"."})", ctx);
-    REQUIRE(listed.has_value());
-    REQUIRE(listed->text.contains("inside.txt:regular_file:6"));
-    REQUIRE_FALSE(listed->text.contains("outside.txt"));
-    REQUIRE(listed->data_json.has_value());
-    const auto data = nlohmann::json::parse(*listed->data_json);
-    REQUIRE(data["entry_count"] == 1);
-    REQUIRE(data["entries"][0]["name"] == "inside.txt");
-    REQUIRE(data["entries"][0]["path"] == "<workspace>/inside.txt");
-  });
-
-  REQUIRE(std::filesystem::exists(moved_root / "inside.txt"));
-  REQUIRE(std::filesystem::exists(outside / "outside.txt"));
-}
-
-TEST_CASE("DirectoryList rejects symlink roots that escape the workspace", "[unit][tool][workspace][directory_list]") {
-  TempDir root{"oran-workspace-directory-list-symlink"};
-  TempDir outside{"oran-workspace-directory-list-symlink-outside"};
-  write_text(outside.path() / "secret.txt", "outside");
-  create_symlink_or_skip(outside.path(), root.path() / "outside-link");
-
-  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
-    tool::Registry registry;
-    REQUIRE(tool::register_directory_list(registry).has_value());
-
-    auto workspace = make_workspace(root.path());
-    auto rules = allow_tool_rules(std::string{tool::kDirectoryListName}, core::Capability::list_directory);
-    permission::RecordingAuditSink sink;
-    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
-
-    auto escaped = co_await registry.dispatch(tool::kDirectoryListName, R"({"path":"outside-link"})", ctx);
-    REQUIRE_FALSE(escaped.has_value());
-    REQUIRE(escaped.error().kind() == core::ErrorKind::permission_denied);
-    REQUIRE(context_has(escaped.error(), "reason", "symlink_escape"));
-  });
-}
-
-TEST_CASE("DirectoryList recursive walk stays anchored and skips nested symlinks",
-          "[unit][tool][workspace][directory_list][recursive]") {
-  TempDir root{"oran-workspace-directory-list-recursive"};
-  TempDir outside{"oran-workspace-directory-list-recursive-outside"};
-  write_text(root.path() / "nested" / "a.txt", "a");
-  write_text(root.path() / "nested" / "deep" / "b.txt", "bb");
-  write_text(outside.path() / "secret.txt", "outside");
-  create_symlink_or_skip(outside.path(), root.path() / "nested" / "escape");
-
-  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
-    tool::Registry registry;
-    REQUIRE(tool::register_directory_list(registry).has_value());
-
-    auto workspace = make_workspace(root.path());
-    auto rules = allow_tool_rules(std::string{tool::kDirectoryListName}, core::Capability::list_directory);
-    permission::RecordingAuditSink sink;
-    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
-
-    auto listed = co_await registry.dispatch(tool::kDirectoryListName, R"({"path":"nested","recursive":true})", ctx);
-    REQUIRE(listed.has_value());
-    REQUIRE(listed->text.contains("<workspace>/nested/a.txt:regular_file:1"));
-    REQUIRE(listed->text.contains("<workspace>/nested/deep:directory:-"));
-    REQUIRE(listed->text.contains("<workspace>/nested/deep/b.txt:regular_file:2"));
-    REQUIRE_FALSE(listed->text.contains("escape"));
-    REQUIRE_FALSE(listed->text.contains("secret.txt"));
-    REQUIRE(listed->data_json.has_value());
-    const auto data = nlohmann::json::parse(*listed->data_json);
-    REQUIRE(data["path"] == "<workspace>/nested");
-    REQUIRE(data["entry_count"] == 3);
-  });
-}
-
-TEST_CASE("DirectoryList recursive walk retains workspace authority across the approval window",
-          "[unit][tool][workspace][directory_list][recursive][approval][race]") {
-  TempDir sandbox{"oran-workspace-directory-list-recursive-race"};
-  const auto root = sandbox.path() / "workspace";
-  const auto moved_root = sandbox.path() / "workspace-moved";
-  const auto outside = sandbox.path() / "outside";
-  write_text(root / "nested" / "inside.txt", "pinned");
-  write_text(outside / "nested" / "outside.txt", "replacement");
-
-  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
-    tool::Registry registry;
-    REQUIRE(tool::register_directory_list(registry).has_value());
-
-    auto workspace = make_workspace(root);
-    auto rules = ask_tool_rules(std::string{tool::kDirectoryListName}, core::Capability::list_directory);
-    permission::RecordingAuditSink sink;
-    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
-    auto broker = make_broker();
-    ctx.approval_broker = &broker;
-    ctx.now = fixed_now();
-
-    orangutan::hook::Bus bus;
-    orangutan::hook::InProcessSink prompt{
-        "directory-list-recursive-root-replacement-prompt",
-        [](orangutan::hook::Event, orangutan::hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
-          co_return core::Result<void>{};
-        }};
-    prompt.set_blocking_handler([&](orangutan::hook::Event, orangutan::hook::PayloadPtr)
-                                    -> async::Awaitable<core::Result<orangutan::hook::HookDecision>> {
-      std::error_code ec;
-      std::filesystem::rename(root, moved_root, ec);
-      if (ec) {
-        co_return std::unexpected(core::Error::io("test failed to rename workspace root").with("detail", ec.message()));
-      }
-      std::filesystem::create_directory_symlink(outside, root, ec);
-      if (ec) {
-        co_return std::unexpected(
-            core::Error::io("test failed to replace workspace root").with("detail", ec.message()));
-      }
-      co_return orangutan::hook::HookDecision{
-          .reason = "operator_approved:operator-1",
-          .rewritten_input_json = std::nullopt,
-          .approval_expires_at = std::nullopt,
-          .trace = {},
-      };
-    });
-    bus.bind(prompt, {orangutan::hook::Event::permission_ask_rendered});
-    ctx.bus = &bus;
-
-    auto listed = co_await registry.dispatch(tool::kDirectoryListName, R"({"path":".","recursive":true})", ctx);
-    REQUIRE(listed.has_value());
-    REQUIRE(listed->text.contains("<workspace>/nested/inside.txt:regular_file:6"));
-    REQUIRE_FALSE(listed->text.contains("outside.txt"));
-    REQUIRE(listed->data_json.has_value());
-    const auto data = nlohmann::json::parse(*listed->data_json);
-    REQUIRE(data["entry_count"] == 2);
-    REQUIRE(data["entries"][0]["path"] == "<workspace>/nested");
-    REQUIRE(data["entries"][1]["path"] == "<workspace>/nested/inside.txt");
-  });
-
-  REQUIRE(std::filesystem::exists(moved_root / "nested" / "inside.txt"));
-  REQUIRE(std::filesystem::exists(outside / "nested" / "outside.txt"));
 }

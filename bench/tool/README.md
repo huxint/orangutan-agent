@@ -27,26 +27,6 @@ A-vs-B comparisons:
   measures whether the per-match substitution cost is material against
   the bulk read/write at typical edit sizes. The baseline a future
   rope or in-place rewrite would need to beat.
-- `file_search.single_file_one_match` vs.
-  `file_search.recursive_dir_many_matches`: full `FileSearch` dispatch
-  rooted at a single file (one match across ~14 lines) vs. rooted at a
-  4-file / 14-line directory tree (5 matches scattered across subfolders).
-  Both scenarios share the fixed dispatch costs (permission eval +
-  SHA-256 + audit + JSON parse + executor hop + read of the matched
-  bytes); the contrast measures the `recursive_directory_iterator` walk
-  + per-file open/read overhead the agent loop pays when a tool call
-  reaches for a tree rather than a single file. The baseline a future
-  memory-mapped scan or parallel walker would need to beat.
-- `file_search.literal_match_1kib` vs. `file_search.regex_match_1kib`:
-  full `FileSearch` dispatch over the same ~1 KiB seed file (32 lines
-  × 32 bytes, one match in the middle). The literal path uses
-  `std::string_view::contains`; the regex path routes the same pattern
-  through `permission::InputPattern` and each line through
-  `re2::RE2::PartialMatch`. Slice 51 adds a bounded compiled-regex
-  cache, so repeated benchmark iterations with the same pattern mostly
-  measure the steady-state cached regex path. The original slice-24
-  cold-compile delta remains useful historical context; a fresh
-  unique-pattern scenario is the right way to re-measure cold compile cost.
 - `dispatch_ask_short_circuit` vs. `dispatch_ask_approved` vs.
   `dispatch_ask_rejected`: three-way contrast of the `Verdict::ask`
   dispatch paths added in slice 21. The short-circuit case carries

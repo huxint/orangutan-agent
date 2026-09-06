@@ -21,7 +21,8 @@ memory services. A tool receives these dependencies explicitly. Application
 code supplies bindings once instead of registering alternate dispatch paths.
 `register_builtins` installs filesystem tools and catalogue discovery;
 `register_memory_tools` adds the three memory tools when the host supplies their
-services. A session advertises only its registered tools.
+services. `register_agent_run` adds a configured-name child runner supplied by
+the host. A session advertises tools available through its bindings.
 
 ## Scheduler
 
@@ -48,14 +49,29 @@ changes permission policy.
 
 ## File And Memory Tools
 
-FileRead, FileSearch and DirectoryList operate within read authority. FileWrite,
-FileEdit and FileDelete use write/mutation authority and conflict checks. Write
-and edit must not act on a target replaced after authorization. Exact filesystem
+FileRead, FileWrite and FileEdit are the built-in filesystem tools. Reads use read
+authority; writes and edits use mutation authority and conflict checks. Write and
+edit must not act on a target replaced after authorization. Exact filesystem
 semantics live in [io-runtime](io-runtime.md).
 
 MemoryRecall, MemoryRemember and MemoryForget receive a host-bound scope through
 injected handlers. They cannot select another scope in tool JSON. [memory-system](memory-system.md)
 owns record and prompt recall semantics.
+
+## Child Agent Tool
+
+`AgentRun` accepts `{"agent":"worker","prompt":"Inspect the change"}` and
+requires `spawn_agent`. The registered schema enumerates configured names;
+the handler rejects unknown names, extra fields and prompts outside 1–16384
+UTF-8 bytes before invoking the host binding. Identity, session, memory scope,
+provider route and policy come from the host.
+
+The result text is the child's completed answer. Structured output contains
+`kind=agent_run`, the configured agent name and its session ID. Output caps,
+permissions, approvals, hooks and audit use the ordinary dispatch path. Child
+admission exhaustion returns `mailbox_overflowed` with `reason=child_limit` as a
+model-visible tool error. Disabled delegation returns `permission_denied`.
+[Agent execution](agent-platform.md) owns the host's child-session behavior.
 
 ## Capability Vocabulary
 

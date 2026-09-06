@@ -3,7 +3,6 @@
 #include <oran/agent/loop.hpp>
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cstdint>
 #include <expected>
@@ -35,15 +34,6 @@
 namespace orangutan::agent {
 namespace {
 
-constexpr auto kDefaultActiveTools = std::array<std::string_view, 6>{
-    "FileRead",
-    "FileWrite",
-    "FileEdit",
-    "FileSearch",
-    "DirectoryList",
-    "ToolSearch",
-};
-
 [[nodiscard]] std::string_view system_preamble_for(const RunTurnInputs& inputs,
                                                    const SystemPreamble& default_preamble) {
   if (!inputs.system_preamble.empty()) {
@@ -54,10 +44,6 @@ constexpr auto kDefaultActiveTools = std::array<std::string_view, 6>{
 
 [[nodiscard]] bool is_promoted_tool(std::span<const std::string> promoted_tools, std::string_view name) noexcept {
   return std::ranges::contains(promoted_tools, name);
-}
-
-[[nodiscard]] bool is_default_active_tool(std::string_view name) noexcept {
-  return std::ranges::contains(kDefaultActiveTools, name);
 }
 
 [[nodiscard]] bool is_explicit_active_tool(const config::PromptActiveToolsConfig& active_tools,
@@ -79,7 +65,7 @@ constexpr auto kDefaultActiveTools = std::array<std::string_view, 6>{
   std::vector<core::ToolDef> selected;
   selected.reserve(catalog.size());
   for (const auto& def : catalog) {
-    if ((active_tools.use_defaults && is_default_active_tool(def.name)) ||
+    if ((active_tools.use_defaults && prompt::is_default_active_tool(def.name)) ||
         is_explicit_active_tool(active_tools, def.name) || is_promoted_tool(promoted_tools, def.name)) {
       selected.push_back(def);
     }

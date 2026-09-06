@@ -30,6 +30,15 @@ class Registry;
 class Workspace;
 struct DispatchContext;
 
+struct AgentRunRequest {
+  std::string agent;
+  std::string prompt;
+};
+
+/// The host owns child sessions; dispatch owns authorization and result delivery.
+using AgentRunHandler =
+    std::function<async::Awaitable<core::Result<Output>>(AgentRunRequest request, DispatchContext& ctx)>;
+
 struct MemoryRecallRequest {
   std::string query;
   std::size_t limit{5};
@@ -86,9 +95,6 @@ using MemoryForgetHandler =
 /// metadata until the remaining filesystem built-ins migrate.
 struct ResolvedToolPath {
   std::optional<io::DirectoryAuthority> authority{};
-  /// Effect capability materialized before permission approval for FileDelete.
-  /// This pins the approved target inode across the approval window.
-  std::optional<io::DeleteMutation> delete_mutation{};
   std::string authority_relative_path;
   std::string absolute_path;
   std::string relative_path;
@@ -111,8 +117,8 @@ struct ResolvedToolPath {
 /// to the long-lived permission infrastructure plus the per-call identity
 /// strings the audit pipeline needs.
 ///
-/// The struct is non-copyable / non-movable (it holds references); the caller
-/// brace-initialises one on the stack per `dispatch` invocation.
+/// The caller retains borrowed services until dispatch completes. Use `for_now`
+/// to create a fresh per-call snapshot of a reusable prototype.
 struct DispatchContext {
   /// Create a fresh context for the current wall clock. This is the
   /// production default for callers that do not need a pinned broker clock;
@@ -135,6 +141,9 @@ struct DispatchContext {
   permission::Mode mode{permission::Mode::default_};
   std::span<const permission::Rule> rules;
   permission::AuditSink& audit;
+  /// An inherited policy is evaluated separately on the final input. Its rules
+  /// remain alive until this context and every dispatch snapshot finish.
+  std::optional<permission::PolicyView> parent_policy{};
   /// Optional approval broker that gates the `Verdict::ask` flow. When
   /// non-null *and* `approval_token` is non-null, `dispatch` consults
   /// `broker.check(token, name, input, identity, now)` after rule
@@ -204,11 +213,13 @@ struct DispatchContext {
   /// ordinary dispatch path. When unset, `MemoryForget` reports a
   /// model-repairable missing-runtime error.
   MemoryForgetHandler memory_forget{};
+  /// A bounded child-session runner supplied by the host.
+  AgentRunHandler agent_run{};
   /// Optional workspace resolver for file built-ins. The pointer is
   /// non-owning; bootstrap/agent runtime owns the workspace value and keeps it
   /// alive for the dispatch. Dispatch pre-resolves current filesystem
   /// built-ins through this seam before permission evaluation and stores the
-  /// result in `resolved_path`. FileWrite, FileEdit, and FileDelete require
+  /// result in `resolved_path`. FileWrite and FileEdit require
   /// this authority; direct callers of those mutation tools must provide a
   /// workspace.
   Workspace* workspace{nullptr};

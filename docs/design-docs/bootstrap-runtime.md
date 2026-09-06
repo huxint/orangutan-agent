@@ -35,9 +35,28 @@ do not capture session state or discover configuration. Filesystem and catalogue
 tools are registered together; the session adds memory tools when memory services
 exist. Every turn joins its borrowed tool context before returning or persisting.
 
-All callers use the same rules, broker, workspace, hook and audit services.
-Without an approval consumer, an `ask` decision fails closed. Embedders may bind
+Sessions share the broker, workspace, hook and audit services. Each session owns
+its rule values and promotion state. Without an approval consumer, an `ask`
+decision fails closed. Embedders may bind
 an explicit approval sink through the hook bus.
+
+## Child Sessions
+
+A delegating session registers `AgentRun` when configured agents exist and its
+child budget is nonzero. The tool schema advertises those agent names. Its host
+binding creates a fresh `AgentSession`, selects the child's permission and prompt
+overlay, inherits the parent's mode and resource bindings, and attaches a borrowed
+parent-policy view. The parent remains alive until all child calls finish.
+
+Children share the parent's scheduler and strand, use a fresh approval identity,
+and return their text plus agent/session identifiers. Child trace rows carry the
+parent turn ID. Child token streams do not enter the parent's event sink; the
+completed answer returns through the tool result. The child catalogue and any
+explicit active-tool selection omit disabled delegation.
+
+To permit delegation, authorize `AgentRun` through the configured permission
+rules. The ordinary unmatched `ask` default still needs an approval consumer.
+[Agent execution](agent-platform.md) owns admission and lifetime bounds.
 
 ## Invocation
 

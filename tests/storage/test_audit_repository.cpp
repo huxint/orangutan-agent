@@ -574,7 +574,7 @@ TEST_CASE("AuditRepository::list_events_for_turn preserves dispatch order and ig
     auto second_row = co_await repo.append_event(std::move(second));
     REQUIRE(second_row.has_value());
 
-    auto third = make_request("scope-B", "DirectoryList", "allow");
+    auto third = make_request("scope-B", "FileEdit", "allow");
     third.parent_turn_id = turn_a;
     auto third_row = co_await repo.append_event(std::move(third));
     REQUIRE(third_row.has_value());
@@ -599,7 +599,7 @@ TEST_CASE("AuditRepository::list_events_for_turn preserves dispatch order and ig
     REQUIRE((*joined)[2].event_kind == "permission_decision");
     REQUIRE((*joined)[0].tool_name == "FileRead");
     REQUIRE((*joined)[1].tool_name == "FileWrite");
-    REQUIRE((*joined)[2].tool_name == "DirectoryList");
+    REQUIRE((*joined)[2].tool_name == "FileEdit");
     REQUIRE((*joined)[2].scope_key == "scope-B");
 
     auto limited = co_await repo.list_events_for_turn(turn_a, 2);
@@ -679,7 +679,7 @@ TEST_CASE("AuditRepository::list_tool_call_rollups aggregates per-turn tool deci
     auto write_blocked_row = co_await repo.append_event(std::move(write_blocked));
     REQUIRE(write_blocked_row.has_value());
 
-    auto list_denied = make_request("scope-B", "DirectoryList", "deny");
+    auto list_denied = make_request("scope-B", "FileEdit", "deny");
     list_denied.verdict = "deny";
     list_denied.parent_turn_id = turn_a;
     auto list_denied_row = co_await repo.append_event(std::move(list_denied));
@@ -698,7 +698,7 @@ TEST_CASE("AuditRepository::list_tool_call_rollups aggregates per-turn tool deci
     REQUIRE(rows->size() == 3);
 
     REQUIRE((*rows)[0].parent_turn_id == turn_a);
-    REQUIRE((*rows)[0].tool_name == "DirectoryList");
+    REQUIRE((*rows)[0].tool_name == "FileEdit");
     REQUIRE((*rows)[0].first_audit_event_id == list_denied_row->id);
     REQUIRE((*rows)[0].last_audit_event_id == list_denied_row->id);
     REQUIRE((*rows)[0].decision_count == 1);

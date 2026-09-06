@@ -58,9 +58,6 @@
         "tool_pattern": "FileRead"
       },
       {
-        "tool_pattern": "FileSearch"
-      },
-      {
         "tool_pattern": "*",
         "capability": "read_memory"
       }

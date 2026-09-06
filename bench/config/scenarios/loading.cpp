@@ -20,7 +20,7 @@ constexpr auto kConfigText = std::string_view{R"json({
     "prompt": {
       "active_tools": [
         "FileRead",
-        "FileSearch",
+        "FileEdit",
         "ToolSearch"
       ]
     }
@@ -38,11 +38,6 @@ constexpr auto kConfigText = std::string_view{R"json({
       "primary": "default",
       "fallbacks": []
     }
-  },
-  "web": {
-    "enabled": false,
-    "bind": "127.0.0.1",
-    "port": 8787
   }
 })json"};
 

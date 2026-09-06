@@ -41,11 +41,9 @@ std::vector<core::ToolDef> make_catalog() {
       tool_def("FileRead", "Read a file"),
       tool_def("FileWrite", "Write a file"),
       tool_def("FileEdit", "Edit a file"),
-      tool_def("FileSearch", "Search files"),
-      tool_def("DirectoryList", "List a directory"),
       tool_def("ToolSearch", "Search tools"),
       tool_def("MemoryRecall", "Recall memory", true),
-      tool_def("AgentSpawn", "Spawn an agent", true),
+      tool_def("AgentRun", "Run a configured child agent"),
   };
 }
 
@@ -88,7 +86,7 @@ void register_catalog_sections(ankerl::nanobench::Bench& bench) {
       .use_defaults = false,
       .tool_names = {"FileRead", "ToolSearch"},
   };
-  const std::vector<std::string> promoted_tools{"MemoryRecall", "AgentSpawn"};
+  const std::vector<std::string> promoted_tools{"MemoryRecall"};
 
   bench.run("prompt.build_default_active_set", [&] {
     auto rendered = build_once(default_builder, catalog);
