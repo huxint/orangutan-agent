@@ -82,21 +82,21 @@ TEST_CASE("Rule with input_pattern fires only when the pattern matches",
   REQUIRE(pat.has_value());
 
   RuleSet rs;
-  rs.add(Rule{
+  rs.push_back(Rule{
       .verdict = Verdict::deny,
       .tool_pattern = "ShellExec",
       .input_pattern = std::move(*pat),
   });
 
   // Matching input -> deny fires.
-  const auto blocked = rs.evaluate("ShellExec", "rm -rf /", {}, Mode::permissive);
+  const auto blocked = perm::evaluate(rs, "ShellExec", "rm -rf /", {}, Mode::permissive);
   REQUIRE(blocked.verdict == Verdict::deny);
   REQUIRE(blocked.reason.contains("rule #0"));
   REQUIRE(blocked.reason.contains("input=~"));
   REQUIRE(blocked.reason.contains("^rm "));
 
   // Non-matching input -> rule misses, mode default applies.
-  const auto allowed = rs.evaluate("ShellExec", "ls -la", {}, Mode::permissive);
+  const auto allowed = perm::evaluate(rs, "ShellExec", "ls -la", {}, Mode::permissive);
   REQUIRE(allowed.verdict == Verdict::allow);
   REQUIRE(allowed.reason.contains("default by mode=permissive"));
 }
@@ -109,13 +109,13 @@ TEST_CASE("No-input evaluate skips input-pattern rules unless the pattern accept
   REQUIRE(strict.has_value());
 
   RuleSet rs;
-  rs.add(Rule{
+  rs.push_back(Rule{
       .verdict = Verdict::deny,
       .tool_pattern = "ShellExec",
       .input_pattern = std::move(*strict),
   });
 
-  REQUIRE(rs.evaluate("ShellExec", Mode::permissive).verdict == Verdict::allow);
+  REQUIRE(perm::evaluate(rs, "ShellExec", Mode::permissive).verdict == Verdict::allow);
 
   // A pattern that accepts the empty string (re2 .* on "") DOES fire on the
   // no-input path — the semantics are honest about what "empty input" means.
@@ -123,13 +123,13 @@ TEST_CASE("No-input evaluate skips input-pattern rules unless the pattern accept
   REQUIRE(loose.has_value());
 
   RuleSet rs2;
-  rs2.add(Rule{
+  rs2.push_back(Rule{
       .verdict = Verdict::deny,
       .tool_pattern = "ShellExec",
       .input_pattern = std::move(*loose),
   });
 
-  REQUIRE(rs2.evaluate("ShellExec", Mode::permissive).verdict == Verdict::deny);
+  REQUIRE(perm::evaluate(rs2, "ShellExec", Mode::permissive).verdict == Verdict::deny);
 }
 
 TEST_CASE("Capability + input_pattern compose on a single rule", "[unit][permission][rule_set][input_pattern]") {
@@ -137,7 +137,7 @@ TEST_CASE("Capability + input_pattern compose on a single rule", "[unit][permiss
   REQUIRE(pat.has_value());
 
   RuleSet rs;
-  rs.add(Rule{
+  rs.push_back(Rule{
       .verdict = Verdict::deny,
       .tool_pattern = "*",
       .capability = orangutan::core::Capability::write_memory,
@@ -148,21 +148,26 @@ TEST_CASE("Capability + input_pattern compose on a single rule", "[unit][permiss
   const std::array caps_read{orangutan::core::Capability::read_memory};
 
   // Both axes match -> deny.
-  REQUIRE(rs.evaluate("MemoryExec",
-                      "UPDATE x; DROP TABLE y;",
-                      std::span<const orangutan::core::Capability>{caps_write},
-                      Mode::permissive)
+  REQUIRE(perm::evaluate(rs,
+                         "MemoryExec",
+                         "UPDATE x; DROP TABLE y;",
+                         std::span<const orangutan::core::Capability>{caps_write},
+                         Mode::permissive)
               .verdict == Verdict::deny);
 
   // Input doesn't match -> rule misses.
-  REQUIRE(
-      rs.evaluate("MemoryExec", "SELECT 1", std::span<const orangutan::core::Capability>{caps_write}, Mode::permissive)
-          .verdict == Verdict::allow);
+  REQUIRE(perm::evaluate(rs,
+                         "MemoryExec",
+                         "SELECT 1",
+                         std::span<const orangutan::core::Capability>{caps_write},
+                         Mode::permissive)
+              .verdict == Verdict::allow);
 
   // Capability doesn't match -> rule misses (input alone is not enough).
-  REQUIRE(rs.evaluate("MemoryExec",
-                      "UPDATE x; DROP TABLE y;",
-                      std::span<const orangutan::core::Capability>{caps_read},
-                      Mode::permissive)
+  REQUIRE(perm::evaluate(rs,
+                         "MemoryExec",
+                         "UPDATE x; DROP TABLE y;",
+                         std::span<const orangutan::core::Capability>{caps_read},
+                         Mode::permissive)
               .verdict == Verdict::allow);
 }

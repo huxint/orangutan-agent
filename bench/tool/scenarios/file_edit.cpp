@@ -116,7 +116,7 @@ void register_tool_file_edit(ankerl::nanobench::Bench& bench) {
   }
 
   permission::RuleSet rules;
-  rules.add(permission::Rule{
+  rules.push_back(permission::Rule{
       .verdict = permission::Verdict::allow,
       .tool_pattern = std::string{tool::kFileEditName},
       .capability = core::Capability::edit_file,

@@ -125,7 +125,7 @@ plus local/editor analysis.
 ## C10. Every effectful action is permissioned
 
 Any code path that touches the filesystem, network, subprocess, memory store,
-provider API, or another agent goes through `oran-permission::Evaluator` and
+provider API, or another agent goes through `permission::evaluate` and
 publishes a hook event. Bypassing this is a rule violation, not a shortcut.
 
 **Why:** the permission story is what makes the runtime safe to use as a coding

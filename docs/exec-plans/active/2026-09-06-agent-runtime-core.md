@@ -81,6 +81,6 @@ Real-model acceptance requires explicitly supplied credentials.
 - [x] Core-first scope and functional programming direction established.
 - [x] Peripheral code, configuration and document removal.
 - [x] Minimal executable and core integration gate.
-- [ ] Pure permission values and complete capability checks.
+- [x] Pure permission values and complete capability checks.
 - [ ] Functional session and memory boundaries.
 - [ ] Bounded agent collaboration.

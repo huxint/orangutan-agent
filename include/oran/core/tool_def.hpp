@@ -30,12 +30,8 @@ struct ToolDef {
   /// JSON Schema describing accepted inputs. Opaque at this layer; consumers
   /// in `oran-provider` / `oran-tool` parse and validate when they need to.
   std::string input_schema_json;
-  /// Capabilities the tool needs to run. The dispatcher passes this list to
-  /// `permission::RuleSet::evaluate` so capability-scoped rules (`Rule::capability`)
-  /// fire only when the invoked tool actually declared the capability. Spelled
-  /// `required_capabilities` because `requires` is a reserved C++20 keyword;
-  /// the design doc's verbatim `requires` field is realized here under this
-  /// name (see `docs/design-docs/tool-runtime.md`).
+  /// Every declared capability must be authorized at dispatch. This list
+  /// describes the tool's requirements; registration grants no authority.
   std::vector<Capability> required_capabilities;
   /// Prompt/catalog policy bit. Deferred tools stay callable through the
   /// registry but render as name+description in the deferred-tool index until

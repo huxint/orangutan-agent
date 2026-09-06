@@ -1,39 +1,3 @@
-// bench/permission/scenarios/rule_set.cpp
-//
-// A-vs-B coverage for the permission evaluator:
-//
-//   1. `permission.rule_set_evaluate`         : `RuleSet::evaluate(tool, mode)`
-//                                               walks the rules in three
-//                                               precedence passes
-//                                               (deny → allow → ask) over a
-//                                               16-rule fixture and produces
-//                                               a Decision with a formatted
-//                                               reason.
-//   2. `permission.linear_find_if`            : `std::ranges::find_if` over the
-//                                               same rules using a single pass
-//                                               that returns the *first* match
-//                                               (no precedence respected).
-//                                               Documents the cost of the
-//                                               precedence-respecting walk
-//                                               over the cheapest possible
-//                                               matcher.
-//   3. `permission.rule_set_capability_match` : capability-aware overload
-//                                               where the firing rule is
-//                                               scoped to a capability the
-//                                               call requires; documents the
-//                                               cost of the extra optional
-//                                               check on the success path.
-//   4. `permission.rule_set_capability_miss`  : capability-aware overload
-//                                               where every capability-bound
-//                                               rule's scope excludes the
-//                                               call, so the walk falls
-//                                               through to the mode default;
-//                                               documents the cost on the
-//                                               miss side (no allocation for
-//                                               a `rule #N` reason; the
-//                                               fallback `default by mode=`
-//                                               reason is shorter).
-
 #include <nanobench.h>
 
 #include <algorithm>
@@ -163,7 +127,7 @@ void register_rule_set_scenarios(ankerl::nanobench::Bench& bench) {
     RuleSet rs;
     auto rules = make_fixture();
     for (auto& rule : rules) {
-      rs.add(std::move(rule));
+      rs.push_back(std::move(rule));
     }
     return rs;
   }();
@@ -172,7 +136,7 @@ void register_rule_set_scenarios(ankerl::nanobench::Bench& bench) {
   static const std::string tool_name = "ShellRm";
 
   bench.run("permission.rule_set_evaluate", [&] {
-    auto decision = rule_set.evaluate(tool_name, permission::Mode::permissive);
+    auto decision = permission::evaluate(rule_set, tool_name, permission::Mode::permissive);
     ankerl::nanobench::doNotOptimizeAway(decision);
   });
   bench.run("permission.linear_find_if", [&] {
@@ -180,23 +144,16 @@ void register_rule_set_scenarios(ankerl::nanobench::Bench& bench) {
     ankerl::nanobench::doNotOptimizeAway(verdict);
   });
 
-  // Slice 2: capability-aware path. Same fixture size so the numbers are
-  // directly comparable against the precedence-walk baseline; the rule set
-  // has capability scopes the call's required-capability span either
-  // satisfies (match path) or not (miss path).
   static const RuleSet cap_rule_set = [] {
     RuleSet rs;
     auto rules = make_capability_fixture();
     for (auto& rule : rules) {
-      rs.add(std::move(rule));
+      rs.push_back(std::move(rule));
     }
     return rs;
   }();
 
-  static const std::array<Capability, 2> required_for_match{
-      Capability::spawn_subprocess,
-      Capability::read_file,
-  };
+  static const std::array required_for_match{Capability::spawn_subprocess};
   static const std::array<Capability, 2> required_for_miss{
       // Neither value appears on any capability-bound rule in the fixture, so
       // every capability-bound rule filters out and the call falls through to
@@ -208,15 +165,17 @@ void register_rule_set_scenarios(ankerl::nanobench::Bench& bench) {
   static const std::string capability_tool = "ShellExec";
 
   bench.run("permission.rule_set_capability_match", [&] {
-    auto decision = cap_rule_set.evaluate(capability_tool,
-                                          std::span<const Capability>{required_for_match},
-                                          permission::Mode::strict);
+    auto decision = permission::evaluate(cap_rule_set,
+                                         capability_tool,
+                                         std::span<const Capability>{required_for_match},
+                                         permission::Mode::strict);
     ankerl::nanobench::doNotOptimizeAway(decision);
   });
   bench.run("permission.rule_set_capability_miss", [&] {
-    auto decision = cap_rule_set.evaluate(capability_tool,
-                                          std::span<const Capability>{required_for_miss},
-                                          permission::Mode::strict);
+    auto decision = permission::evaluate(cap_rule_set,
+                                         capability_tool,
+                                         std::span<const Capability>{required_for_miss},
+                                         permission::Mode::strict);
     ankerl::nanobench::doNotOptimizeAway(decision);
   });
 }

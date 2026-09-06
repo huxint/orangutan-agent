@@ -1,4 +1,4 @@
-// src/oran-permission/defaults.cpp — `Defaults::for_mode` baseline factory.
+// src/oran-permission/defaults.cpp — `default_rules` baseline factory.
 
 #include <oran/permission/defaults.hpp>
 
@@ -36,44 +36,40 @@ namespace {
   };
 }
 
-[[nodiscard]] RuleSet strict_baseline() {
-  return RuleSet{};
-}
-
 [[nodiscard]] RuleSet default_baseline() {
   RuleSet rs;
-  rs.add(deny(core::Capability::runtime_loader));
-  rs.add(deny(core::Capability::delete_path));
-  rs.add(allow(core::Capability::read_file));
-  rs.add(allow(core::Capability::read_memory));
-  rs.add(ask(core::Capability::write_file));
-  rs.add(ask(core::Capability::edit_file));
-  rs.add(ask(core::Capability::write_memory));
-  rs.add(ask(core::Capability::spawn_subprocess));
-  rs.add(ask(core::Capability::egress_http));
+  rs.push_back(deny(core::Capability::runtime_loader));
+  rs.push_back(deny(core::Capability::delete_path));
+  rs.push_back(allow(core::Capability::read_file));
+  rs.push_back(allow(core::Capability::read_memory));
+  rs.push_back(ask(core::Capability::write_file));
+  rs.push_back(ask(core::Capability::edit_file));
+  rs.push_back(ask(core::Capability::write_memory));
+  rs.push_back(ask(core::Capability::spawn_subprocess));
+  rs.push_back(ask(core::Capability::egress_http));
   return rs;
 }
 
 [[nodiscard]] RuleSet permissive_baseline() {
   RuleSet rs;
-  rs.add(deny(core::Capability::runtime_loader));
-  rs.add(deny(core::Capability::delete_path));
+  rs.push_back(deny(core::Capability::runtime_loader));
+  rs.push_back(deny(core::Capability::delete_path));
   return rs;
 }
 
 [[nodiscard]] RuleSet sandboxed_baseline() {
   RuleSet rs;
-  rs.add(allow(core::Capability::read_file));
-  rs.add(allow(core::Capability::read_memory));
+  rs.push_back(allow(core::Capability::read_file));
+  rs.push_back(allow(core::Capability::read_memory));
   return rs;
 }
 
 }  // namespace
 
-RuleSet Defaults::for_mode(Mode mode) {
+RuleSet default_rules(Mode mode) {
   switch (mode) {
     case Mode::strict:
-      return strict_baseline();
+      return {};
     case Mode::default_:
       return default_baseline();
     case Mode::permissive:
@@ -81,9 +77,6 @@ RuleSet Defaults::for_mode(Mode mode) {
     case Mode::sandboxed:
       return sandboxed_baseline();
   }
-  // Unknown mode (e.g. cast-from-int): empty baseline. The mode's default
-  // verdict still applies; this matches the "missing case is safe" risk-
-  // mitigation note in the exec plan's Risks section.
   return RuleSet{};
 }
 

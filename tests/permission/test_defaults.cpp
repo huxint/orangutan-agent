@@ -1,4 +1,4 @@
-// tests/permission/test_defaults.cpp — `Defaults::for_mode` baseline.
+// tests/permission/test_defaults.cpp — `default_rules` baseline.
 
 #include <array>
 #include <span>
@@ -10,7 +10,7 @@
 
 namespace perm = orangutan::permission;
 using orangutan::core::Capability;
-using perm::Defaults;
+using perm::default_rules;
 using perm::Mode;
 using perm::RuleSet;
 using perm::Verdict;
@@ -22,20 +22,20 @@ namespace {
 // is irrelevant; only the capability matters.
 [[nodiscard]] Verdict evaluate_with(const RuleSet& rs, Capability cap, Mode mode) {
   const std::array<Capability, 1> required{cap};
-  return rs.evaluate("any.tool", std::span<const Capability>{required}, mode).verdict;
+  return perm::evaluate(rs, "any.tool", std::span<const Capability>{required}, mode).verdict;
 }
 
 }  // namespace
 
-TEST_CASE("Defaults::for_mode(strict) returns an empty baseline", "[unit][permission][defaults]") {
-  const auto rs = Defaults::for_mode(Mode::strict);
+TEST_CASE("default_rules(strict) returns an empty baseline", "[unit][permission][defaults]") {
+  const auto rs = default_rules(Mode::strict);
   REQUIRE(rs.size() == 0);
   // The mode's default verdict still applies on the empty set.
   REQUIRE(evaluate_with(rs, Capability::read_file, Mode::strict) == Verdict::deny);
 }
 
-TEST_CASE("Defaults::for_mode(default_) classifies common capabilities", "[unit][permission][defaults]") {
-  const auto rs = Defaults::for_mode(Mode::default_);
+TEST_CASE("default_rules(default_) classifies common capabilities", "[unit][permission][defaults]") {
+  const auto rs = default_rules(Mode::default_);
   REQUIRE(rs.size() == 9);
 
   // Allow set.
@@ -57,9 +57,8 @@ TEST_CASE("Defaults::for_mode(default_) classifies common capabilities", "[unit]
   REQUIRE(evaluate_with(rs, Capability::invoke_skill, Mode::default_) == Verdict::ask);
 }
 
-TEST_CASE("Defaults::for_mode(permissive) only denies the most dangerous capabilities",
-          "[unit][permission][defaults]") {
-  const auto rs = Defaults::for_mode(Mode::permissive);
+TEST_CASE("default_rules(permissive) only denies the most dangerous capabilities", "[unit][permission][defaults]") {
+  const auto rs = default_rules(Mode::permissive);
   REQUIRE(rs.size() == 2);
 
   REQUIRE(evaluate_with(rs, Capability::runtime_loader, Mode::permissive) == Verdict::deny);
@@ -71,8 +70,8 @@ TEST_CASE("Defaults::for_mode(permissive) only denies the most dangerous capabil
   REQUIRE(evaluate_with(rs, Capability::spawn_subprocess, Mode::permissive) == Verdict::allow);
 }
 
-TEST_CASE("Defaults::for_mode(sandboxed) allows read-side capabilities only", "[unit][permission][defaults]") {
-  const auto rs = Defaults::for_mode(Mode::sandboxed);
+TEST_CASE("default_rules(sandboxed) allows read-side capabilities only", "[unit][permission][defaults]") {
+  const auto rs = default_rules(Mode::sandboxed);
   REQUIRE(rs.size() == 2);
 
   REQUIRE(evaluate_with(rs, Capability::read_file, Mode::sandboxed) == Verdict::allow);
@@ -84,11 +83,11 @@ TEST_CASE("Defaults::for_mode(sandboxed) allows read-side capabilities only", "[
   REQUIRE(evaluate_with(rs, Capability::runtime_loader, Mode::sandboxed) == Verdict::deny);
 }
 
-TEST_CASE("Defaults::for_mode is referentially transparent", "[unit][permission][defaults]") {
+TEST_CASE("default_rules is referentially transparent", "[unit][permission][defaults]") {
   // Two calls produce equal-sized rule sets and classify a representative
   // call identically.
-  const auto a = Defaults::for_mode(Mode::default_);
-  const auto b = Defaults::for_mode(Mode::default_);
+  const auto a = default_rules(Mode::default_);
+  const auto b = default_rules(Mode::default_);
   REQUIRE(a.size() == b.size());
   REQUIRE(evaluate_with(a, Capability::read_file, Mode::default_) ==
           evaluate_with(b, Capability::read_file, Mode::default_));
@@ -96,24 +95,22 @@ TEST_CASE("Defaults::for_mode is referentially transparent", "[unit][permission]
           evaluate_with(b, Capability::runtime_loader, Mode::default_));
 }
 
-TEST_CASE("Defaults::for_mode(default_) capability-less call falls back to mode default",
-          "[unit][permission][defaults]") {
+TEST_CASE("default_rules(default_) capability-less call falls back to mode default", "[unit][permission][defaults]") {
   // The legacy `evaluate(tool_name, mode)` overload simulates a call that
-  // carries no capability information; all rules in `Defaults::for_mode(
+  // carries no capability information; all rules in `default_rules(
   // default_)` are capability-scoped, so none fire and we land on the
   // mode default (`ask`).
-  const auto rs = Defaults::for_mode(Mode::default_);
-  const auto decision = rs.evaluate("any.tool", Mode::default_);
+  const auto rs = default_rules(Mode::default_);
+  const auto decision = perm::evaluate(rs, "any.tool", Mode::default_);
   REQUIRE(decision.verdict == Verdict::ask);
   REQUIRE(decision.reason.contains("default by mode=default"));
 }
 
-TEST_CASE("Defaults::for_mode(strict) explicit deny is recorded with capability scope",
-          "[unit][permission][defaults]") {
+TEST_CASE("default_rules(strict) explicit deny is recorded with capability scope", "[unit][permission][defaults]") {
   // Smoke test the reason annotation flows through the factory builds.
-  const auto rs = Defaults::for_mode(Mode::default_);
+  const auto rs = default_rules(Mode::default_);
   const std::array<Capability, 1> required{Capability::runtime_loader};
-  const auto decision = rs.evaluate("any.tool", std::span<const Capability>{required}, Mode::default_);
+  const auto decision = perm::evaluate(rs, "any.tool", std::span<const Capability>{required}, Mode::default_);
   REQUIRE(decision.verdict == Verdict::deny);
   REQUIRE(decision.reason.contains("capability=runtime_loader"));
 }

@@ -71,7 +71,8 @@ void add_audited_tool(tool::Registry& registry) {
 
 permission::RuleSet allow_all_rules() {
   permission::RuleSet rules;
-  rules.add(permission::Rule{.verdict = permission::Verdict::allow, .tool_pattern = "*", .capability = std::nullopt});
+  rules.push_back(
+      permission::Rule{.verdict = permission::Verdict::allow, .tool_pattern = "*", .capability = std::nullopt});
   return rules;
 }
 

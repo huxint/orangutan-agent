@@ -279,7 +279,7 @@ require_approval_decision(permission::Decision decision, const hook::HookDecisio
 }  // namespace
 
 DispatchContext DispatchContext::for_now(asio::any_io_executor executor,
-                                         permission::RuleSet& rules,
+                                         std::span<const permission::Rule> rules,
                                          permission::AuditSink& audit,
                                          std::string scope_key,
                                          std::string agent_key,
@@ -466,7 +466,7 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
     }
   } else {
     auto path_resolution = detail::pre_resolve_tool_path(name, effective_input, ctx);
-    auto decision = ctx.rules.evaluate(name, effective_input, entry.def.required_capabilities, ctx.mode);
+    auto decision = permission::evaluate(ctx.rules, name, effective_input, entry.def.required_capabilities, ctx.mode);
     if (hook_requires_approval) {
       decision = require_approval_decision(std::move(decision), hook_decision, ctx.now);
     }

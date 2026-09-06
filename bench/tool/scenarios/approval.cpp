@@ -106,7 +106,7 @@ void register_tool_approval(ankerl::nanobench::Bench& bench) {
   }
 
   permission::RuleSet rules;
-  rules.add(permission::Rule{.verdict = permission::Verdict::ask, .tool_pattern = "noop"});
+  rules.push_back(permission::Rule{.verdict = permission::Verdict::ask, .tool_pattern = "noop"});
   permission::RecordingAuditSink sink;
 
   auto broker_ok_result = permission::ApprovalBroker::with_random_secret();

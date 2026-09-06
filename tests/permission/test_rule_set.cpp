@@ -39,83 +39,57 @@ TEST_CASE("glob_match handles literal and wildcard patterns", "[unit][permission
 TEST_CASE("empty RuleSet falls back to mode default", "[unit][permission][rule_set]") {
   RuleSet rs;
   REQUIRE(rs.size() == 0);
-  REQUIRE(rs.evaluate("FileRead", Mode::strict).verdict == Verdict::deny);
-  REQUIRE(rs.evaluate("FileRead", Mode::sandboxed).verdict == Verdict::deny);
-  REQUIRE(rs.evaluate("FileRead", Mode::default_).verdict == Verdict::ask);
-  REQUIRE(rs.evaluate("FileRead", Mode::permissive).verdict == Verdict::allow);
+  REQUIRE(perm::evaluate(rs, "FileRead", Mode::strict).verdict == Verdict::deny);
+  REQUIRE(perm::evaluate(rs, "FileRead", Mode::sandboxed).verdict == Verdict::deny);
+  REQUIRE(perm::evaluate(rs, "FileRead", Mode::default_).verdict == Verdict::ask);
+  REQUIRE(perm::evaluate(rs, "FileRead", Mode::permissive).verdict == Verdict::allow);
 }
 
 TEST_CASE("RuleSet allow rules match by exact name and glob", "[unit][permission][rule_set]") {
   RuleSet rs;
-  rs.add(Rule{.verdict = Verdict::allow, .tool_pattern = "FileRead", .capability = std::nullopt});
-  rs.add(Rule{.verdict = Verdict::allow, .tool_pattern = "Shell*", .capability = std::nullopt});
+  rs.push_back(Rule{.verdict = Verdict::allow, .tool_pattern = "FileRead", .capability = std::nullopt});
+  rs.push_back(Rule{.verdict = Verdict::allow, .tool_pattern = "Shell*", .capability = std::nullopt});
 
-  REQUIRE(rs.evaluate("FileRead", Mode::strict).verdict == Verdict::allow);
-  REQUIRE(rs.evaluate("ShellExec", Mode::strict).verdict == Verdict::allow);
-  REQUIRE(rs.evaluate("ShellLs", Mode::strict).verdict == Verdict::allow);
+  REQUIRE(perm::evaluate(rs, "FileRead", Mode::strict).verdict == Verdict::allow);
+  REQUIRE(perm::evaluate(rs, "ShellExec", Mode::strict).verdict == Verdict::allow);
+  REQUIRE(perm::evaluate(rs, "ShellLs", Mode::strict).verdict == Verdict::allow);
   // Unmatched in strict mode -> deny.
-  REQUIRE(rs.evaluate("NetworkFetch", Mode::strict).verdict == Verdict::deny);
+  REQUIRE(perm::evaluate(rs, "NetworkFetch", Mode::strict).verdict == Verdict::deny);
 }
 
 TEST_CASE("RuleSet deny wins over allow regardless of order", "[unit][permission][rule_set]") {
   RuleSet rs;
-  rs.add(Rule{.verdict = Verdict::allow, .tool_pattern = "Shell*", .capability = std::nullopt});
-  rs.add(Rule{.verdict = Verdict::deny, .tool_pattern = "ShellRm", .capability = std::nullopt});
+  rs.push_back(Rule{.verdict = Verdict::allow, .tool_pattern = "Shell*", .capability = std::nullopt});
+  rs.push_back(Rule{.verdict = Verdict::deny, .tool_pattern = "ShellRm", .capability = std::nullopt});
 
-  auto blocked = rs.evaluate("ShellRm", Mode::permissive);
+  auto blocked = perm::evaluate(rs, "ShellRm", Mode::permissive);
   REQUIRE(blocked.verdict == Verdict::deny);
   REQUIRE(blocked.reason.contains("deny"));
 
-  auto allowed = rs.evaluate("ShellLs", Mode::permissive);
+  auto allowed = perm::evaluate(rs, "ShellLs", Mode::permissive);
   REQUIRE(allowed.verdict == Verdict::allow);
   REQUIRE(allowed.reason.contains("allow"));
 }
 
 TEST_CASE("RuleSet ask fires when no allow/deny matches", "[unit][permission][rule_set]") {
   RuleSet rs;
-  rs.add(Rule{.verdict = Verdict::allow, .tool_pattern = "FileRead", .capability = std::nullopt});
-  rs.add(Rule{.verdict = Verdict::ask, .tool_pattern = "FileWrite", .capability = std::nullopt});
+  rs.push_back(Rule{.verdict = Verdict::allow, .tool_pattern = "FileRead", .capability = std::nullopt});
+  rs.push_back(Rule{.verdict = Verdict::ask, .tool_pattern = "FileWrite", .capability = std::nullopt});
 
-  auto write = rs.evaluate("FileWrite", Mode::strict);
+  auto write = perm::evaluate(rs, "FileWrite", Mode::strict);
   REQUIRE(write.verdict == Verdict::ask);
   REQUIRE(write.reason.contains("ask"));
 }
 
 TEST_CASE("RuleSet returns the index of the first matching rule in its reason", "[unit][permission][rule_set]") {
   RuleSet rs;
-  rs.add(Rule{.verdict = Verdict::allow, .tool_pattern = "x", .capability = std::nullopt});       // 0
-  rs.add(Rule{.verdict = Verdict::deny, .tool_pattern = "ShellRm", .capability = std::nullopt});  // 1
-  rs.add(Rule{.verdict = Verdict::deny, .tool_pattern = "Shell*", .capability = std::nullopt});   // 2
+  rs.push_back(Rule{.verdict = Verdict::allow, .tool_pattern = "x", .capability = std::nullopt});       // 0
+  rs.push_back(Rule{.verdict = Verdict::deny, .tool_pattern = "ShellRm", .capability = std::nullopt});  // 1
+  rs.push_back(Rule{.verdict = Verdict::deny, .tool_pattern = "Shell*", .capability = std::nullopt});   // 2
 
-  auto decision = rs.evaluate("ShellRm", Mode::permissive);
+  auto decision = perm::evaluate(rs, "ShellRm", Mode::permissive);
   REQUIRE(decision.verdict == Verdict::deny);
   REQUIRE(decision.reason.contains("rule #1"));
-}
-
-TEST_CASE("RuleSet::clear empties the set", "[unit][permission][rule_set]") {
-  RuleSet rs;
-  rs.add(Rule{.verdict = Verdict::allow, .tool_pattern = "x", .capability = std::nullopt});
-  REQUIRE(rs.size() == 1);
-  rs.clear();
-  REQUIRE(rs.size() == 0);
-  REQUIRE(rs.evaluate("x", Mode::strict).verdict == Verdict::deny);
-}
-
-TEST_CASE("RuleSet::rules exposes insertion-order rules for diagnostics", "[unit][permission][rule_set]") {
-  RuleSet rs;
-  rs.add(Rule{.verdict = Verdict::allow, .tool_pattern = "FileRead", .capability = std::nullopt});
-  rs.add(
-      Rule{.verdict = Verdict::deny, .tool_pattern = "*", .capability = orangutan::core::Capability::runtime_loader});
-  rs.add(Rule{.verdict = Verdict::ask, .tool_pattern = "FileWrite", .capability = std::nullopt});
-
-  const auto view = rs.rules();
-  REQUIRE(view.size() == 3);
-  REQUIRE(view[0].verdict == Verdict::allow);
-  REQUIRE(view[0].tool_pattern == "FileRead");
-  REQUIRE(view[1].verdict == Verdict::deny);
-  REQUIRE(view[1].capability == orangutan::core::Capability::runtime_loader);
-  REQUIRE(view[2].verdict == Verdict::ask);
-  REQUIRE(view[2].tool_pattern == "FileWrite");
 }
 
 TEST_CASE("Verdict and Mode have stable string mappings", "[unit][permission]") {
@@ -135,25 +109,25 @@ TEST_CASE("Rule defaults match the design-doc approval-policy baseline",
   REQUIRE(rule.approval_ttl == std::chrono::seconds{3600});
 }
 
-TEST_CASE("RuleSet::evaluate forwards rule replay_max / approval_ttl onto the Decision",
+TEST_CASE("permission::evaluate forwards rule replay_max / approval_ttl onto the Decision",
           "[unit][permission][rule_set][approval_policy]") {
   RuleSet rs;
-  rs.add(Rule{
+  rs.push_back(Rule{
       .verdict = Verdict::ask,
       .tool_pattern = "FileWrite",
       .replay_max = 2,
       .approval_ttl = std::chrono::seconds{60},
   });
-  const auto decision = rs.evaluate("FileWrite", Mode::strict);
+  const auto decision = perm::evaluate(rs, "FileWrite", Mode::strict);
   REQUIRE(decision.verdict == Verdict::ask);
   REQUIRE(decision.replay_max == 2);
   REQUIRE(decision.approval_ttl == std::chrono::seconds{60});
 }
 
-TEST_CASE("RuleSet::evaluate falls back to Decision defaults on the mode-default branch",
+TEST_CASE("permission::evaluate falls back to Decision defaults on the mode-default branch",
           "[unit][permission][rule_set][approval_policy]") {
   RuleSet rs;
-  const auto decision = rs.evaluate("FileWrite", Mode::default_);
+  const auto decision = perm::evaluate(rs, "FileWrite", Mode::default_);
   // No rule fired — Decision keeps the design-doc baseline (8 / 1h).
   REQUIRE(decision.replay_max == 8);
   REQUIRE(decision.approval_ttl == std::chrono::seconds{3600});

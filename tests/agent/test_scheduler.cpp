@@ -81,7 +81,7 @@ using namespace std::chrono_literals;
 
 [[nodiscard]] permission::RuleSet allow_all_rules() {
   permission::RuleSet rules;
-  rules.add(permission::Rule{
+  rules.push_back(permission::Rule{
       .verdict = permission::Verdict::allow,
       .tool_pattern = "*",
       .capability = std::nullopt,
@@ -1065,7 +1065,7 @@ TEST_CASE("ToolScheduler: ask calls resolve per call and a denied call is not hi
         tool::Registry registry;
         add_latency_tool(registry, "FakeAsk", 20ms);
         permission::RuleSet rules;
-        rules.add(permission::Rule{
+        rules.push_back(permission::Rule{
             .verdict = permission::Verdict::ask,
             .tool_pattern = "FakeAsk",
             .capability = std::nullopt,

@@ -58,7 +58,7 @@ struct AuditEvent {
   /// Operator/agent identity bound to the call (matches
   /// `ApprovalAuthority::verify`'s `identity` parameter).
   std::string identity;
-  /// Raw verdict from `RuleSet::evaluate`. Preserved separately from
+  /// Raw verdict from `permission::evaluate`. Preserved separately from
   /// `outcome` so a forensic query can tell whether an `approved`
   /// row came from an `ask` rule or from a no-rule mode-default.
   Verdict verdict{Verdict::deny};

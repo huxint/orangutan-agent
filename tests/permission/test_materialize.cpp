@@ -15,7 +15,7 @@
 namespace perm = orangutan::permission;
 namespace cfg = orangutan::config;
 using orangutan::core::Capability;
-using perm::Defaults;
+using perm::default_rules;
 using perm::Mode;
 using perm::RuleSet;
 using perm::Verdict;
@@ -55,18 +55,18 @@ require_materialized(Mode mode, const cfg::PermissionsConfig& global, const cfg:
 
 [[nodiscard]] perm::Verdict
 eval(const RuleSet& rs, std::string_view tool, std::span<const Capability> caps, Mode mode = Mode::default_) {
-  return rs.evaluate(tool, caps, mode).verdict;
+  return perm::evaluate(rs, tool, caps, mode).verdict;
 }
 
 [[nodiscard]] perm::Verdict eval_no_caps(const RuleSet& rs, std::string_view tool, Mode mode = Mode::default_) {
-  return rs.evaluate(tool, mode).verdict;
+  return perm::evaluate(rs, tool, mode).verdict;
 }
 
 }  // namespace
 
-TEST_CASE("materialize(empty, empty) equals Defaults::for_mode", "[unit][permission][materialize]") {
+TEST_CASE("materialize(empty, empty) equals default_rules", "[unit][permission][materialize]") {
   const auto rs = require_materialized(Mode::default_, cfg::PermissionsConfig{}, cfg::PermissionsConfig{});
-  REQUIRE(rs.size() == Defaults::for_mode(Mode::default_).size());
+  REQUIRE(rs.size() == default_rules(Mode::default_).size());
 
   // Spot-check representative classifications.
   const std::array<Capability, 1> read{Capability::read_file};
@@ -82,7 +82,7 @@ TEST_CASE("materialize appends global config rules after defaults", "[unit][perm
   global.rules.push_back(allow("CustomTool"));
 
   const auto rs = require_materialized(Mode::default_, global);
-  REQUIRE(rs.size() == Defaults::for_mode(Mode::default_).size() + 1);
+  REQUIRE(rs.size() == default_rules(Mode::default_).size() + 1);
 
   // The CustomTool literal is now allowed even without a capability scope.
   REQUIRE(eval_no_caps(rs, "CustomTool") == Verdict::allow);
@@ -100,7 +100,7 @@ TEST_CASE("materialize appends per-agent overlay after global", "[unit][permissi
   overlay.rules.push_back(allow("AgentOnly"));
 
   const auto rs = require_materialized(Mode::default_, global, overlay);
-  REQUIRE(rs.size() == Defaults::for_mode(Mode::default_).size() + 2);
+  REQUIRE(rs.size() == default_rules(Mode::default_).size() + 2);
   REQUIRE(eval_no_caps(rs, "GlobalOnly") == Verdict::allow);
   REQUIRE(eval_no_caps(rs, "AgentOnly") == Verdict::allow);
 }
@@ -136,7 +136,7 @@ TEST_CASE("materialize preserves capability scope on config-side rules", "[unit]
 }
 
 TEST_CASE("explicit deny in any layer outranks allow in any other layer", "[unit][permission][materialize]") {
-  // Defaults::for_mode(permissive) already denies runtime_loader; ship a
+  // default_rules(permissive) already denies runtime_loader; ship a
   // global allow for the same capability and confirm the deny wins.
   cfg::PermissionsConfig global;
   global.rules.push_back(allow("*", Capability::runtime_loader));
@@ -162,8 +162,8 @@ TEST_CASE("materialize preserves intra-layer rule order", "[unit][permission][ma
 
   // Reason text encodes the rule index; the first matching rule wins at the
   // same verdict, so the index distinguishes order.
-  const auto first = rs.evaluate("first", Mode::strict);
-  const auto second = rs.evaluate("second", Mode::strict);
+  const auto first = perm::evaluate(rs, "first", Mode::strict);
+  const auto second = perm::evaluate(rs, "second", Mode::strict);
   REQUIRE(first.verdict == Verdict::allow);
   REQUIRE(second.verdict == Verdict::allow);
   REQUIRE(first.reason.contains("first"));
@@ -191,13 +191,13 @@ TEST_CASE("materialize compiles config-side input_pattern into the runtime Rule"
 
   const auto rs = require_materialized(Mode::permissive, global);
   // Input matches the regex -> rule fires.
-  const auto blocked = rs.evaluate("ShellExec", "rm -rf /tmp", {}, Mode::permissive);
+  const auto blocked = perm::evaluate(rs, "ShellExec", "rm -rf /tmp", {}, Mode::permissive);
   REQUIRE(blocked.verdict == Verdict::deny);
   REQUIRE(blocked.reason.contains("input=~"));
   REQUIRE(blocked.reason.contains("^rm "));
 
   // Non-matching input -> falls through.
-  const auto allowed = rs.evaluate("ShellExec", "ls -la", {}, Mode::permissive);
+  const auto allowed = perm::evaluate(rs, "ShellExec", "ls -la", {}, Mode::permissive);
   REQUIRE(allowed.verdict == Verdict::allow);
 }
 
@@ -229,7 +229,7 @@ TEST_CASE("materialize forwards replay_max + approval_ttl_seconds from config in
   });
 
   const auto rs = require_materialized(Mode::strict, global);
-  const auto decision = rs.evaluate("FileWrite", Mode::strict);
+  const auto decision = perm::evaluate(rs, "FileWrite", Mode::strict);
   REQUIRE(decision.verdict == Verdict::ask);
   REQUIRE(decision.replay_max == 4);
   REQUIRE(decision.approval_ttl == std::chrono::seconds{120});
@@ -245,7 +245,7 @@ TEST_CASE("materialize keeps Rule defaults when config omits replay_max / approv
   });
 
   const auto rs = require_materialized(Mode::strict, global);
-  const auto decision = rs.evaluate("ShellExec", Mode::strict);
+  const auto decision = perm::evaluate(rs, "ShellExec", Mode::strict);
   REQUIRE(decision.verdict == Verdict::ask);
   REQUIRE(decision.replay_max == 8);
   REQUIRE(decision.approval_ttl == std::chrono::seconds{3600});

@@ -133,7 +133,7 @@ void register_tool_file_search(ankerl::nanobench::Bench& bench) {
   }
 
   permission::RuleSet rules;
-  rules.add(permission::Rule{
+  rules.push_back(permission::Rule{
       .verdict = permission::Verdict::allow,
       .tool_pattern = std::string{tool::kFileSearchName},
       .capability = core::Capability::read_file,

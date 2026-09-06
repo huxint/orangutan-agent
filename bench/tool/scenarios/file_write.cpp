@@ -99,7 +99,7 @@ void register_tool_file_write(ankerl::nanobench::Bench& bench) {
   }
 
   permission::RuleSet rules;
-  rules.add(permission::Rule{
+  rules.push_back(permission::Rule{
       .verdict = permission::Verdict::allow,
       .tool_pattern = std::string{tool::kFileWriteName},
       .capability = core::Capability::write_file,

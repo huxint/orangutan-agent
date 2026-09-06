@@ -45,7 +45,7 @@ namespace {
     if (rule.approval_ttl_seconds.has_value()) {
       runtime_rule.approval_ttl = std::chrono::seconds{*rule.approval_ttl_seconds};
     }
-    rs.add(std::move(runtime_rule));
+    rs.push_back(std::move(runtime_rule));
   }
   return {};
 }
@@ -54,7 +54,7 @@ namespace {
 
 core::Result<RuleSet>
 materialize(Mode mode, const config::PermissionsConfig& global, const config::PermissionsConfig& per_agent) {
-  auto rs = Defaults::for_mode(mode);
+  auto rs = default_rules(mode);
   if (auto r = append_layer(rs, global); !r) {
     return std::unexpected(std::move(r.error()));
   }

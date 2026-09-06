@@ -1,8 +1,7 @@
-// src/oran-permission/rule_set.cpp — permission engine implementation.
-
 #include <oran/permission/rule_set.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <format>
 #include <iterator>
@@ -32,10 +31,6 @@ namespace {
   return Verdict::deny;
 }
 
-[[nodiscard]] bool capability_in_set(core::Capability needle, std::span<const core::Capability> haystack) noexcept {
-  return std::ranges::contains(haystack, needle);
-}
-
 [[nodiscard]] std::string format_reason(std::size_t index, const Rule& rule) {
   const auto verdict_name = core::enum_name(rule.verdict);
   std::string out;
@@ -48,6 +43,32 @@ namespace {
   }
   out.push_back(')');
   return out;
+}
+
+[[nodiscard]] Decision evaluate_requirement(std::span<const Rule> rules,
+                                            std::string_view tool_name,
+                                            std::string_view input,
+                                            std::optional<core::Capability> capability,
+                                            Mode mode) {
+  for (const auto verdict : std::array{Verdict::deny, Verdict::allow, Verdict::ask}) {
+    const auto match = std::ranges::find_if(rules, [&](const Rule& rule) {
+      return rule.verdict == verdict && glob_match(rule.tool_pattern, tool_name) &&
+             (!rule.capability || rule.capability == capability) &&
+             (!rule.input_pattern || rule.input_pattern->matches(input));
+    });
+    if (match != rules.end()) {
+      return Decision{
+          .verdict = verdict,
+          .reason = format_reason(static_cast<std::size_t>(match - rules.begin()), *match),
+          .replay_max = match->replay_max,
+          .approval_ttl = match->approval_ttl,
+      };
+    }
+  }
+  return Decision{
+      .verdict = mode_default_verdict(mode),
+      .reason = std::format("default by mode={}", core::enum_name(mode)),
+  };
 }
 
 }  // namespace
@@ -82,84 +103,45 @@ bool glob_match(std::string_view pattern, std::string_view text) noexcept {
   return pi == pattern.size();
 }
 
-void RuleSet::add(Rule rule) {
-  rules_.push_back(std::move(rule));
+Decision evaluate(std::span<const Rule> rules, std::string_view tool_name, Mode mode) {
+  return evaluate(rules, tool_name, std::string_view{}, std::span<const core::Capability>{}, mode);
 }
 
-void RuleSet::clear() noexcept {
-  rules_.clear();
+Decision evaluate(std::span<const Rule> rules,
+                  std::string_view tool_name,
+                  std::span<const core::Capability> required_capabilities,
+                  Mode mode) {
+  return evaluate(rules, tool_name, std::string_view{}, required_capabilities, mode);
 }
 
-std::size_t RuleSet::size() const noexcept {
-  return rules_.size();
-}
+Decision evaluate(std::span<const Rule> rules,
+                  std::string_view tool_name,
+                  std::string_view input,
+                  std::span<const core::Capability> required_capabilities,
+                  Mode mode) {
+  if (required_capabilities.empty()) {
+    return evaluate_requirement(rules, tool_name, input, std::nullopt, mode);
+  }
 
-Decision RuleSet::evaluate(std::string_view tool_name, Mode mode) const {
-  return evaluate(tool_name, std::string_view{}, std::span<const core::Capability>{}, mode);
-}
-
-Decision RuleSet::evaluate(std::string_view tool_name,
-                           std::span<const core::Capability> required_capabilities,
-                           Mode mode) const {
-  return evaluate(tool_name, std::string_view{}, required_capabilities, mode);
-}
-
-Decision RuleSet::evaluate(std::string_view tool_name,
-                           std::string_view input,
-                           std::span<const core::Capability> required_capabilities,
-                           Mode mode) const {
-  const auto first_match = [&](Verdict want) -> std::size_t {
-    for (std::size_t i = 0; i < rules_.size(); ++i) {
-      const auto& rule = rules_[i];
-      if (rule.verdict != want) {
-        continue;
-      }
-      if (!glob_match(rule.tool_pattern, tool_name)) {
-        continue;
-      }
-      if (rule.capability.has_value() && !capability_in_set(*rule.capability, required_capabilities)) {
-        continue;
-      }
-      if (rule.input_pattern.has_value() && !rule.input_pattern->matches(input)) {
-        continue;
-      }
-      return i;
+  auto combined = evaluate_requirement(rules, tool_name, input, required_capabilities.front(), mode);
+  for (const auto capability : required_capabilities.subspan(1)) {
+    if (combined.verdict == Verdict::deny) {
+      return combined;
     }
-    return std::string_view::npos;
-  };
-
-  if (const auto idx = first_match(Verdict::deny); idx != std::string_view::npos) {
-    const auto& rule = rules_[idx];
-    return Decision{
-        .verdict = Verdict::deny,
-        .reason = format_reason(idx, rule),
-        .replay_max = rule.replay_max,
-        .approval_ttl = rule.approval_ttl,
-    };
+    auto next = evaluate_requirement(rules, tool_name, input, capability, mode);
+    if (next.verdict == Verdict::deny) {
+      return next;
+    }
+    if (next.verdict == Verdict::ask) {
+      if (combined.verdict == Verdict::ask) {
+        combined.replay_max = std::min(combined.replay_max, next.replay_max);
+        combined.approval_ttl = std::min(combined.approval_ttl, next.approval_ttl);
+      } else {
+        combined = std::move(next);
+      }
+    }
   }
-  if (const auto idx = first_match(Verdict::allow); idx != std::string_view::npos) {
-    const auto& rule = rules_[idx];
-    return Decision{
-        .verdict = Verdict::allow,
-        .reason = format_reason(idx, rule),
-        .replay_max = rule.replay_max,
-        .approval_ttl = rule.approval_ttl,
-    };
-  }
-  if (const auto idx = first_match(Verdict::ask); idx != std::string_view::npos) {
-    const auto& rule = rules_[idx];
-    return Decision{
-        .verdict = Verdict::ask,
-        .reason = format_reason(idx, rule),
-        .replay_max = rule.replay_max,
-        .approval_ttl = rule.approval_ttl,
-    };
-  }
-  const auto fallback = mode_default_verdict(mode);
-  return Decision{
-      .verdict = fallback,
-      .reason = std::format("default by mode={}", core::enum_name(mode)),
-  };
+  return combined;
 }
 
 }  // namespace orangutan::permission

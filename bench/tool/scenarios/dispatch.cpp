@@ -73,7 +73,7 @@ void register_tool_dispatch(ankerl::nanobench::Bench& bench) {
   }
 
   permission::RuleSet rules;
-  rules.add(permission::Rule{.verdict = permission::Verdict::allow, .tool_pattern = "noop"});
+  rules.push_back(permission::Rule{.verdict = permission::Verdict::allow, .tool_pattern = "noop"});
   permission::RecordingAuditSink sink;
 
   asio::io_context io;

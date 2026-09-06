@@ -6,10 +6,17 @@ those effects after the decision.
 
 ## Decisions
 
-`RuleSet::evaluate` is read-only. Matching uses a tool-name glob, optional
-capability membership and optional RE2 input expression. Precedence is explicit
-deny, then allow, then ask; the mode supplies the unmatched default. Within a
-verdict, the first matching rule supplies its reason and approval policy.
+`RuleSet` is an owned sequence of rule values; dispatch borrows a const span.
+`permission::evaluate` is read-only. Matching uses a tool-name glob, optional
+capability scope and optional RE2 input expression. For each required capability,
+precedence is explicit deny, then allow, then ask; the mode supplies the unmatched
+default. Within a verdict, the first matching rule supplies its reason and
+approval policy. An unscoped rule applies to the whole tool.
+
+Every required capability must be authorized. Combine capability decisions as
+deny, then ask, then allow; a read grant cannot authorize a tool's write effect.
+Combined asks use the smallest replay budget and shortest lifetime. A tool with
+no declared capabilities still requires an unscoped rule or the mode default.
 
 Strict and sandboxed modes deny unmatched effects. Default mode asks for unmatched
 effects and installs read-side allow rules. Permissive mode allows unmatched

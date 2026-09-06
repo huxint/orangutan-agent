@@ -94,7 +94,7 @@ void register_tool_hooks(ankerl::nanobench::Bench& bench) {
   }
 
   permission::RuleSet rules;
-  rules.add(permission::Rule{.verdict = permission::Verdict::allow, .tool_pattern = "noop"});
+  rules.push_back(permission::Rule{.verdict = permission::Verdict::allow, .tool_pattern = "noop"});
   permission::RecordingAuditSink sink;
 
   const std::string_view input{R"({"path":"/tmp/x"})"};

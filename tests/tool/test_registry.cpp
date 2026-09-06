@@ -115,7 +115,7 @@ tool::Handler make_echo_handler() {
 
 permission::RuleSet single_rule(permission::Rule rule) {
   permission::RuleSet rs;
-  rs.add(std::move(rule));
+  rs.push_back(std::move(rule));
   return rs;
 }
 
@@ -1794,12 +1794,12 @@ namespace {
 
 permission::RuleSet read_and_write_rule_set() {
   permission::RuleSet rs;
-  rs.add(permission::Rule{
+  rs.push_back(permission::Rule{
       .verdict = permission::Verdict::allow,
       .tool_pattern = std::string{tool::kFileReadName},
       .capability = core::Capability::read_file,
   });
-  rs.add(permission::Rule{
+  rs.push_back(permission::Rule{
       .verdict = permission::Verdict::allow,
       .tool_pattern = std::string{tool::kFileWriteName},
       .capability = core::Capability::write_file,
@@ -1809,12 +1809,12 @@ permission::RuleSet read_and_write_rule_set() {
 
 permission::RuleSet read_and_edit_rule_set() {
   permission::RuleSet rs;
-  rs.add(permission::Rule{
+  rs.push_back(permission::Rule{
       .verdict = permission::Verdict::allow,
       .tool_pattern = std::string{tool::kFileReadName},
       .capability = core::Capability::read_file,
   });
-  rs.add(permission::Rule{
+  rs.push_back(permission::Rule{
       .verdict = permission::Verdict::allow,
       .tool_pattern = std::string{tool::kFileEditName},
       .capability = core::Capability::edit_file,
@@ -4061,12 +4061,12 @@ TEST_CASE("blocking tool_before rewrite feeds permission, handler, audit, and ho
     auto denied_original = permission::InputPattern::compile("danger");
     REQUIRE(denied_original.has_value());
     permission::RuleSet rules;
-    rules.add(permission::Rule{
+    rules.push_back(permission::Rule{
         .verdict = permission::Verdict::deny,
         .tool_pattern = "noop",
         .input_pattern = std::move(*denied_original),
     });
-    rules.add(permission::Rule{.verdict = permission::Verdict::allow, .tool_pattern = "noop"});
+    rules.push_back(permission::Rule{.verdict = permission::Verdict::allow, .tool_pattern = "noop"});
     permission::RecordingAuditSink audit;
 
     const std::string original_input = R"({"mode":"danger"})";
@@ -6051,7 +6051,7 @@ TEST_CASE("FileDelete deny verdict short-circuits and does not unlink the file",
     tool::Registry registry;
     REQUIRE(tool::register_file_delete(registry).has_value());
     permission::RuleSet rules;
-    rules.add(permission::Rule{
+    rules.push_back(permission::Rule{
         .verdict = permission::Verdict::deny,
         .tool_pattern = std::string{tool::kFileDeleteName},
         .capability = core::Capability::delete_path,

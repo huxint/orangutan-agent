@@ -208,7 +208,7 @@ std::string tool_result_output_in(const provider::Request& request, std::string_
 
 permission::RuleSet allow_all_rules() {
   permission::RuleSet rules;
-  rules.add(permission::Rule{
+  rules.push_back(permission::Rule{
       .verdict = permission::Verdict::allow,
       .tool_pattern = "*",
       .capability = std::nullopt,
@@ -218,7 +218,7 @@ permission::RuleSet allow_all_rules() {
 
 permission::RuleSet ask_file_read_rules() {
   permission::RuleSet rules;
-  rules.add(permission::Rule{
+  rules.push_back(permission::Rule{
       .verdict = permission::Verdict::ask,
       .tool_pattern = "FileRead",
       .replay_max = 2,
@@ -570,7 +570,7 @@ TEST_CASE("Loop uses the stable default system preamble when no override is supp
     add_canned_tool(registry, canned_tool_def("FileRead"), "read ok");
     permission::NullAuditSink audit;
     permission::RuleSet rules;
-    rules.add(permission::Rule{.verdict = permission::Verdict::allow, .tool_pattern = "File*"});
+    rules.push_back(permission::Rule{.verdict = permission::Verdict::allow, .tool_pattern = "File*"});
     auto context = tool::DispatchContext{
         .executor = co_await asio::this_coro::executor,
         .mode = permission::Mode::strict,

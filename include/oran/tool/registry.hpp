@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -134,7 +135,7 @@ struct DispatchContext {
   /// tests that need deterministic approval TTL behavior can still aggregate
   /// initialise the struct and set `now` explicitly.
   [[nodiscard]] static DispatchContext for_now(asio::any_io_executor executor,
-                                               permission::RuleSet& rules,
+                                               std::span<const permission::Rule> rules,
                                                permission::AuditSink& audit,
                                                std::string scope_key = {},
                                                std::string agent_key = {},
@@ -148,7 +149,7 @@ struct DispatchContext {
 
   asio::any_io_executor executor;
   permission::Mode mode{permission::Mode::default_};
-  permission::RuleSet& rules;
+  std::span<const permission::Rule> rules;
   permission::AuditSink& audit;
   /// Optional approval broker that gates the `Verdict::ask` flow. When
   /// non-null *and* `approval_token` is non-null, `dispatch` consults

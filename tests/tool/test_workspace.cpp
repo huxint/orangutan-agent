@@ -106,13 +106,13 @@ void create_symlink_or_skip(const std::filesystem::path& target, const std::file
 
 [[nodiscard]] permission::RuleSet allow_file_read_rules() {
   permission::RuleSet rules;
-  rules.add(permission::Rule{.verdict = permission::Verdict::allow, .tool_pattern = "FileRead"});
+  rules.push_back(permission::Rule{.verdict = permission::Verdict::allow, .tool_pattern = "FileRead"});
   return rules;
 }
 
 [[nodiscard]] permission::RuleSet allow_tool_rules(std::string tool_name, core::Capability capability) {
   permission::RuleSet rules;
-  rules.add(permission::Rule{
+  rules.push_back(permission::Rule{
       .verdict = permission::Verdict::allow,
       .tool_pattern = std::move(tool_name),
       .capability = capability,
@@ -122,7 +122,7 @@ void create_symlink_or_skip(const std::filesystem::path& target, const std::file
 
 [[nodiscard]] permission::RuleSet ask_tool_rules(std::string tool_name, core::Capability capability) {
   permission::RuleSet rules;
-  rules.add(permission::Rule{
+  rules.push_back(permission::Rule{
       .verdict = permission::Verdict::ask,
       .tool_pattern = std::move(tool_name),
       .capability = capability,
@@ -473,7 +473,7 @@ TEST_CASE("Registry pre-resolves workspace paths before permission evaluation an
     REQUIRE(tool::register_file_read(registry).has_value());
 
     permission::RuleSet rules;
-    rules.add(permission::Rule{
+    rules.push_back(permission::Rule{
         .verdict = permission::Verdict::deny,
         .tool_pattern = std::string{tool::kFileReadName},
         .capability = core::Capability::read_file,
@@ -638,17 +638,17 @@ TEST_CASE("Approved read-side outside-workspace override runs read search and li
     REQUIRE(tool::register_directory_list(registry).has_value());
 
     permission::RuleSet rules;
-    rules.add(permission::Rule{
+    rules.push_back(permission::Rule{
         .verdict = permission::Verdict::allow,
         .tool_pattern = std::string{tool::kFileReadName},
         .capability = core::Capability::read_file,
     });
-    rules.add(permission::Rule{
+    rules.push_back(permission::Rule{
         .verdict = permission::Verdict::allow,
         .tool_pattern = std::string{tool::kFileSearchName},
         .capability = core::Capability::read_file,
     });
-    rules.add(permission::Rule{
+    rules.push_back(permission::Rule{
         .verdict = permission::Verdict::allow,
         .tool_pattern = std::string{tool::kDirectoryListName},
         .capability = core::Capability::list_directory,
