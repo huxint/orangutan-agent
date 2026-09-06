@@ -39,12 +39,16 @@ Provider transport uses HTTP/SSE requests with per-request curl handles. The
 [provider contract](design-docs/api-portability.md) owns cancellation polling,
 handle cleanup and delivery of stream callbacks before completion.
 
+Hooks expose the provider, tool, memory and approval events emitted by the
+runtime. `EventTraits` defines blocking admission; the
+[hook contract](design-docs/permissions-and-hooks.md) owns decisions and payloads.
+
 ## Verification
 
 The release build, all 14 test targets and `make ci` pass. Controlled HTTP
 integration covers the provider/tool loop and persisted continuation. Storage,
-memory, hook, HTTP and bootstrap tests pass with explicit ASan/UBSan compiler and linker
-instrumentation in an isolated debug copy.
+memory, hook, tool, HTTP and bootstrap tests pass with explicit ASan/UBSan
+compiler and linker instrumentation in an isolated debug copy.
 
 Isolated faults fail at their intended assertions for atomic rollback,
 serialization failure, message ordering, identity/scope isolation, policy
@@ -53,8 +57,10 @@ joins, catalogue selection, cache versions and the filesystem-tool surface.
 IO regressions detect stale content, reopened authority handles and dropped
 queued cancellation. Restoring the implementations returns the tested cases to
 green. Memory regressions detect missing query validation, scope filtering, read
-timestamps, prompt framing, score fields and preserved database content.
-IO, HTTP, tool, memory, prompt, agent, config and permission benchmarks build and run;
+timestamps, prompt framing, score fields and preserved database content. Hook
+regressions reject unintended blocking admission and detect changed payloads or
+dropped approval decisions.
+IO, HTTP, tool, memory, hook, prompt, agent, config and permission benchmarks build and run;
 these are local runs, not reference-hardware performance certification.
 
 ## Handoff
@@ -83,6 +89,8 @@ Relevant regressions are in `tests/io/test_file.cpp`,
 `tests/tool/test-agent-run.cpp`, the permission intersection cases, and the
 storage/memory tests tagged `[atomic]`. Child lifetime checks include a concurrent
 independent session and a tool that delays cancellation cleanup.
+Scoped recall and hook gates are covered by `tests/memory/test_longterm.cpp` and
+`tests/hook/test_publish_blocking.cpp`; HTTP/SSE coverage lives in `tests/http`.
 
 Local validation copies, fault scripts and logs live under `build/validation`;
 they are generated artifacts, not required source. For a nested isolated copy,

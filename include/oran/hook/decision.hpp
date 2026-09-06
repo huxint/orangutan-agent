@@ -1,16 +1,3 @@
-// include/oran/hook/decision.hpp — blocking-hook decision value types.
-//
-// Slice 90 opened the spec-0015 v1 surface. `HookDecision` is what a blocking
-// sink returns from `Sink::handle_blocking`; the bus collects the first
-// non-`proceed` decision from the subscribed sinks and forwards it to the
-// dispatch pipeline. Slice 91 adds the in-memory `trace` entries that let
-// `Registry::dispatch` serialize every consulted sink decision into audit
-// metadata.
-//
-// The rewritten input is serialized JSON bytes so the public header stays
-// `nlohmann`-free per `docs/rules/critical-rules.md` C6; consumers that
-// need a structured form parse the bytes inside their own TU.
-
 #pragma once
 
 #include <chrono>
@@ -23,7 +10,7 @@
 
 namespace orangutan::hook {
 
-/// Decision a blocking sink returns. See spec 0015 for semantics.
+/// Decision a blocking sink returns to the producer's effect gate.
 enum class HookDecisionKind : std::uint8_t {
   /// Default. Allow the dispatch pipeline to continue with the original
   /// input. Sinks that observe-only should leave their decision in this

@@ -66,61 +66,28 @@ Tool hooks surround registry execution. Provider hooks report request, response,
 error and fallback metadata. Memory hooks report accepted recalls/writes/deletes;
 the pre-write hook consumes proceed/veto and rejects unsupported decisions.
 
-The enum remains the current bus vocabulary. Names without a producer are not
-implemented lifecycle promises; the runtime reduction is removing such reserves.
+The event vocabulary follows the production publishers: the agent loop owns
+provider observations, registry dispatch owns tool observations, memory bindings
+own record observations, and approval resolution owns the prompt gate.
+`EventTraits` is the blocking-admission contract used by `publish_blocking<E>`;
+all other events use advisory publication. Payloads carry the corresponding tool,
+memory, provider or approval values.
 
 ```cpp
 enum class Event {
-  // agent lifecycle
-  agent_start,
-  agent_stop,
-  iteration_start,
-  iteration_end,
-  final_response,
-  // provider lifecycle
   provider_request,
   provider_response,
   provider_error,
   provider_fallback,
-  // tool dispatch lifecycle
   tool_before,
   tool_dispatched,
   tool_after,
   tool_error,
-  // memory tier events
-  memory_read_before,
   memory_read_after,
   memory_write_before,
   memory_write_after,
   memory_forget,
-  // channel adapters
-  channel_start,
-  channel_stop,
-  channel_inbound,
-  channel_outbound_pre,
-  channel_outbound_post,
-  channel_delivery_error,
-  // orchestration / teams
-  team_created,
-  worker_spawned,
-  worker_stopped,
-  team_message,
-  team_broadcast,
-  conversation_completed,
-  conversation_aborted,
-  // automation jobs
-  job_scheduled,
-  job_started,
-  job_finished,
-  job_failed,
-  job_dropped,
-  // session boundary
-  session_start,
-  session_end,
-  // permission ask flow
   permission_ask_rendered,
-  permission_ask_resolved,
-  permission_denied,
 };
 ```
 

@@ -79,7 +79,7 @@ public:
   /// Sinks are started as concurrent child coroutines; the returned
   /// outcome rows remain in subscription order. Sink failures are
   /// captured in the returned outcome but do not abort the publish for
-  /// sibling sinks (advisory semantics — see file header). The publish
+  /// sibling sinks. The publish
   /// owns those children through a bounded task group and joins them
   /// before returning, including after parent cancellation, so callers
   /// may release the non-owning sink references once the await completes.
@@ -90,7 +90,7 @@ public:
   /// (production owners keep sinks for process lifetime).
   [[nodiscard]] async::Awaitable<PublishOutcome> publish_advisory(Event event, Payload payload);
 
-  /// Publish `event` + `payload` as a blocking call (spec 0015 v1).
+  /// Publish `event` + `payload` as a blocking call.
   /// Walks subscribed sinks in subscription order, calling each one's
   /// `Sink::handle_blocking`. The first non-`proceed` decision short-
   /// circuits the walk and is returned. With no sinks subscribed, or
@@ -116,8 +116,7 @@ public:
   /// Number of sinks subscribed to `event`.
   [[nodiscard]] std::size_t sink_count(Event event) const noexcept;
 
-  /// Current dispatch policy. Exposed for bootstrap/tests; mutation goes
-  /// through `set_options` so future invariants stay centralized.
+  /// Current dispatch deadlines.
   [[nodiscard]] const BusOptions& options() const noexcept {
     return options_;
   }

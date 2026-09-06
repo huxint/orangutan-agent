@@ -58,5 +58,5 @@ selected agent key. Long-term memory scope is the canonical workspace path.
 Changing the workspace deliberately changes that scope.
 
 No automatic import or unrelated-history merging occurs. Preserve database
-files and migration records through refactors. Atomic turn commits and
-backup/import tooling remain explicit work in [live debt](../exec-plans/tech-debt-tracker.md).
+files and migration records through refactors. Backup/import tooling remains
+explicit work in [live debt](../exec-plans/tech-debt-tracker.md).

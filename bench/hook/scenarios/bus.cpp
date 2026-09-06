@@ -1,29 +1,3 @@
-// bench/hook/scenarios/bus.cpp
-//
-// Slice 22 — `hook::Bus::publish_advisory` overhead at varying fan-out.
-// Slice 156 — advisory publishes start subscribed sinks as sibling
-// coroutines, so the no-op scenarios now measure fan-out/gather overhead
-// rather than a sequential await loop.
-// Slice 91 — matching `publish_blocking<Event::tool_before>` overhead so
-// spec 0015 can compare the blocking path against the advisory baseline.
-// Slice 158 — large redacted `tool_after` scenarios pin the shared immutable
-// payload snapshots that keep multi-sink fan-out from cloning structured bytes
-// once per subscribed default sink.
-//
-// A/B/C scenarios:
-//
-//   A. `publish_no_sinks` — bus has no sinks subscribed to `tool_before`. The
-//      publish should be near-free (one map lookup + early return).
-//   B. `publish_one_sink` — bus has one InProcessSink subscribed. The sink's
-//      callback is a noop (assigns a side-effect counter to defeat dead-code
-//      elimination). Measures the per-sink dispatch overhead.
-//   C. `publish_three_sinks` — three sinks subscribed. Measures whether the
-//      per-sink overhead is roughly linear in subscriber count.
-//
-// The contrast (B - A) is the per-sink dispatch cost the bus pays; (C - A) is
-// the cost of three sinks. The baseline a future "batch publish" or "lock-free
-// sink list" optimisation would need to beat.
-
 #include <nanobench.h>
 
 #include <cstddef>

@@ -1,13 +1,3 @@
-// tests/hook/test_publish_blocking.cpp — `hook::Bus::publish_blocking<E>`
-// coverage for spec 0015 v1.
-//
-// The test matrix follows the v1 acceptance criteria sequence: the API
-// surface (no-sink default proceed, single-sink each decision kind,
-// multi-sink resolution order) plus the failure classification (sink
-// returns error -> veto, sink throws -> veto). The dispatch-pipeline
-// consumer (`Registry::dispatch` consumption) lands in a follow-up
-// slice, so this bucket only exercises the bus-side contract.
-
 #include <chrono>
 #include <stdexcept>
 #include <string>
@@ -295,7 +285,13 @@ TEST_CASE("publish_blocking returns single sink's require_approval decision", "[
   bus.bind(sink, {hook::Event::permission_ask_rendered});
 
   test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    auto result = co_await bus.publish_blocking<hook::Event::permission_ask_rendered>(std::monostate{});
+    auto result = co_await bus.publish_blocking<hook::Event::permission_ask_rendered>(
+        hook::PermissionAskRenderedPayload{
+            .tool_name = "FileWrite",
+            .input_json = R"({"path":"notes.txt","content":"notes"})",
+            .who = hook::Identity{.scope_key = "scope", .agent_key = "agent", .identity = "operator"},
+            .decision_reason = "operator_review",
+        });
     REQUIRE(result.has_value());
     REQUIRE(result->kind == hook::HookDecisionKind::require_approval);
     REQUIRE(result->reason == "operator_review");
@@ -586,12 +582,11 @@ TEST_CASE("publish_blocking redacts memory write records for default sinks",
   REQUIRE(trusted_payload.record.linked_record_ids == std::vector<std::string>{"linked-1"});
 }
 
-TEST_CASE("EventTraits encodes the v1 blocking whitelist", "[hook][event][blocking]") {
+TEST_CASE("EventTraits restricts blocking publication to effect gates", "[hook][event][blocking]") {
   STATIC_REQUIRE(hook::HasBlockingDecision<hook::Event::tool_before>);
   STATIC_REQUIRE(hook::HasBlockingDecision<hook::Event::permission_ask_rendered>);
   STATIC_REQUIRE(hook::HasBlockingDecision<hook::Event::memory_write_before>);
   STATIC_REQUIRE_FALSE(hook::HasBlockingDecision<hook::Event::tool_after>);
-  STATIC_REQUIRE_FALSE(hook::HasBlockingDecision<hook::Event::iteration_start>);
-  STATIC_REQUIRE_FALSE(hook::HasBlockingDecision<hook::Event::memory_read_before>);
-  STATIC_REQUIRE_FALSE(hook::HasBlockingDecision<hook::Event::permission_denied>);
+  STATIC_REQUIRE_FALSE(hook::HasBlockingDecision<hook::Event::memory_read_after>);
+  STATIC_REQUIRE_FALSE(hook::HasBlockingDecision<hook::Event::provider_response>);
 }

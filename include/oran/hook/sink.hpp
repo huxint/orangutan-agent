@@ -31,8 +31,7 @@ enum class SinkKind : std::uint8_t {
   trusted_local,
 };
 
-/// Abstract sink. Concrete sinks: `InProcessSink` (slice 22, std::function
-/// callback) and the planned `ShellSink` / `WebhookSink` / `LuaSink`.
+/// Event consumer borrowed by Bus. InProcessSink binds host callbacks.
 class Sink {
 public:
   Sink() = default;
@@ -43,10 +42,7 @@ public:
   Sink(Sink&&) = delete;
   Sink& operator=(Sink&&) = delete;
 
-  /// Stable identifier for audit + filtering. The bus uses it to populate
-  /// `PublishOutcome::SinkResult::sink_id`; the planned audit row stamps
-  /// it on `hook_audit.sink_id`. Identifiers should be short and stable
-  /// (e.g. `"shell-pre-tool"`, `"audit-webhook"`).
+  /// Stable sink identifier included in publish outcomes and decision traces.
   [[nodiscard]] virtual std::string_view id() const noexcept = 0;
 
   /// Redaction policy for payload delivery. The default is conservative:
@@ -65,7 +61,7 @@ public:
   [[nodiscard]] virtual async::Awaitable<core::Result<void>> receive(Event event, PayloadPtr payload) = 0;
 
   /// Decide how to handle a blocking event (`tool_before`,
-  /// `permission_ask_rendered`, `memory_write_before` per spec 0015 v1).
+  /// `permission_ask_rendered`, `memory_write_before`).
   /// The bus calls this through `publish_blocking<E>` once per subscribed
   /// sink in subscription order and stops at the first non-`proceed`
   /// decision. The default implementation returns `HookDecision{}`
@@ -75,9 +71,7 @@ public:
   ///
   /// Returning an error is treated as a veto by `publish_blocking`
   /// (`reason = hook_error`); a thrown exception is captured the same
-  /// way. `tool::Registry::dispatch` is the first consumer for
-  /// `tool_before`; `cli::OperatorPromptSink` is the first concrete
-  /// terminal consumer for `permission_ask_rendered`.
+  /// way.
   [[nodiscard]] virtual async::Awaitable<core::Result<HookDecision>> handle_blocking(Event event, PayloadPtr payload);
 };
 

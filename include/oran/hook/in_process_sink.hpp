@@ -1,13 +1,3 @@
-// include/oran/hook/in_process_sink.hpp — std::function-backed sink.
-//
-// The simplest sink: forwards every event to a `std::function` the caller
-// supplies. Useful for tests, the agent loop's in-process subscribers, and
-// any audit-style consumer that lives inside the binary.
-//
-// An optional second callback handles spec-0015 blocking publishes; when
-// it is unset the sink falls back to `Sink::handle_blocking`'s
-// `proceed` default.
-
 #pragma once
 
 #include <functional>

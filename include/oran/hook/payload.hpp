@@ -238,48 +238,6 @@ struct MemoryForgetPayload {
   std::chrono::nanoseconds duration{0};
 };
 
-/// Advisory automation job lifecycle metadata. Published by runtime owners that
-/// actually start automation work. It carries routing, policy, timing, and
-/// outcome metadata only; job-specific record contents stay outside the hook
-/// payload.
-struct JobLifecyclePayload {
-  Identity who;
-  /// Producer label such as `periodic`.
-  std::string source;
-  /// Durable automation job identity.
-  std::string job_key;
-  /// Stable job category.
-  std::string job_type;
-  /// Domain scope the job is acting on, when applicable.
-  std::string scope_key;
-  core::Time scheduled_at{};
-  core::Time started_at{};
-  std::optional<core::Time> finished_at{};
-  std::optional<std::chrono::nanoseconds> duration{};
-  bool succeeded{false};
-  /// `core::Error::kind` wire spelling on failure; empty on success/start.
-  std::string error_kind;
-  std::string error_message;
-};
-
-/// Advisory automation job drop metadata. Published by explicit queue owners
-/// when bounded backpressure policy drops queued work before execution starts.
-/// The payload is metadata-only: it identifies the job and queue policy outcome
-/// without carrying channel payloads, trigger bodies, or agent prompt content.
-struct JobDroppedPayload {
-  Identity who;
-  std::string source;
-  std::string job_key;
-  std::string job_type;
-  std::string scope_key;
-  std::string trigger_key;
-  std::string reason;
-  core::Time scheduled_at{};
-  core::Time dropped_at{};
-  std::size_t queue_capacity{0};
-  std::size_t queue_size{0};
-};
-
 /// Provider token/cost counters copied without making `oran-hook` depend on
 /// `oran-provider`.
 struct ProviderUsage {
@@ -369,12 +327,7 @@ struct ProviderFallbackPayload {
   std::chrono::nanoseconds duration{0};
 };
 
-/// `std::monostate` is the placeholder for events whose typed payload has
-/// not landed yet — channel, orchestration, and session events. Sinks
-/// subscribed to those events receive the variant in its monostate alternative;
-/// they can still react to the occurrence and the event kind.
-using Payload = std::variant<std::monostate,
-                             ToolBeforePayload,
+using Payload = std::variant<ToolBeforePayload,
                              ToolDispatchedPayload,
                              ToolAfterPayload,
                              ToolErrorPayload,
@@ -382,8 +335,6 @@ using Payload = std::variant<std::monostate,
                              MemoryReadPayload,
                              MemoryWritePayload,
                              MemoryForgetPayload,
-                             JobLifecyclePayload,
-                             JobDroppedPayload,
                              ProviderRequestPayload,
                              ProviderResponsePayload,
                              ProviderErrorPayload,

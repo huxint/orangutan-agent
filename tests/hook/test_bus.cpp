@@ -44,7 +44,7 @@ using namespace std::chrono_literals;
 /// `payload_kind` is a stable string the test can match against.
 struct Capture {
   hook::Event event;
-  std::string payload_kind;  // "before", "dispatched", "after", "error", "ask", memory*, job*, provider*, "monostate"
+  std::string payload_kind;
   std::string input_json;
   std::optional<std::string> data_json;
 };
@@ -53,9 +53,7 @@ struct Capture {
   return std::visit(
       [](const auto& alt) -> std::string {
         using T = std::decay_t<decltype(alt)>;
-        if constexpr (std::same_as<T, std::monostate>) {
-          return "monostate";
-        } else if constexpr (std::same_as<T, hook::ToolBeforePayload>) {
+        if constexpr (std::same_as<T, hook::ToolBeforePayload>) {
           return "before";
         } else if constexpr (std::same_as<T, hook::ToolDispatchedPayload>) {
           return "dispatched";
@@ -71,10 +69,6 @@ struct Capture {
           return "memory_write";
         } else if constexpr (std::same_as<T, hook::MemoryForgetPayload>) {
           return "memory_forget";
-        } else if constexpr (std::same_as<T, hook::JobLifecyclePayload>) {
-          return "job_lifecycle";
-        } else if constexpr (std::same_as<T, hook::JobDroppedPayload>) {
-          return "job_dropped";
         } else if constexpr (std::same_as<T, hook::ProviderRequestPayload>) {
           return "provider_request";
         } else if constexpr (std::same_as<T, hook::ProviderResponsePayload>) {
@@ -387,22 +381,6 @@ hook::MemoryReadPayload sample_memory_read() {
   };
 }
 
-hook::JobDroppedPayload sample_job_dropped() {
-  return hook::JobDroppedPayload{
-      .who = hook::Identity{.scope_key = "", .agent_key = "researcher", .identity = "trigger-loop"},
-      .source = "triggered-queue",
-      .job_key = "triggered:webhook-ci",
-      .job_type = "triggered",
-      .scope_key = "",
-      .trigger_key = "webhook:ci",
-      .reason = "queue_full",
-      .scheduled_at = core::Time{core::Time::time_point{120s}},
-      .dropped_at = core::Time{core::Time::time_point{120s}},
-      .queue_capacity = 1,
-      .queue_size = 1,
-  };
-}
-
 }  // namespace
 
 TEST_CASE("Bus is empty by default", "[hook][bus]") {
@@ -421,37 +399,6 @@ TEST_CASE("publish_advisory on empty bus succeeds with empty outcome", "[hook][b
     REQUIRE(outcome.failure_count() == 0);
     co_return;
   });
-}
-
-TEST_CASE("publish_advisory delivers job dropped metadata", "[hook][bus][automation]") {
-  hook::Bus bus;
-  hook::JobDroppedPayload captured;
-  hook::InProcessSink sink{"job-drop-recorder",
-                           [&](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
-                             REQUIRE(event == hook::Event::job_dropped);
-                             const auto* dropped = std::get_if<hook::JobDroppedPayload>(payload.get());
-                             REQUIRE(dropped != nullptr);
-                             captured = *dropped;
-                             co_return core::Result<void>{};
-                           }};
-  bus.bind(sink, {hook::Event::job_dropped});
-
-  test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    auto outcome = co_await bus.publish_advisory(hook::Event::job_dropped, sample_job_dropped());
-    REQUIRE(outcome.sinks.size() == 1);
-    REQUIRE(outcome.sinks[0].sink_id == "job-drop-recorder");
-    REQUIRE(outcome.all_succeeded());
-    co_return;
-  });
-
-  REQUIRE(captured.source == "triggered-queue");
-  REQUIRE(captured.who.agent_key == "researcher");
-  REQUIRE(captured.job_key == "triggered:webhook-ci");
-  REQUIRE(captured.job_type == "triggered");
-  REQUIRE(captured.trigger_key == "webhook:ci");
-  REQUIRE(captured.reason == "queue_full");
-  REQUIRE(captured.queue_capacity == 1);
-  REQUIRE(captured.queue_size == 1);
 }
 
 TEST_CASE("bind connects sink to event, publish_advisory drives it", "[hook][bus]") {
@@ -485,8 +432,10 @@ TEST_CASE("bind to multiple events delivers each separately", "[hook][bus]") {
   REQUIRE(bus.binding_count() == 2);
 
   test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    (void)co_await bus.publish_advisory(hook::Event::tool_before, sample_before());
-    (void)co_await bus.publish_advisory(hook::Event::tool_after, std::monostate{});
+    auto before = co_await bus.publish_advisory(hook::Event::tool_before, sample_before());
+    REQUIRE(before.all_succeeded());
+    auto after = co_await bus.publish_advisory(hook::Event::tool_after, sample_after_with_data());
+    REQUIRE(after.all_succeeded());
     co_return;
   });
 
@@ -494,7 +443,7 @@ TEST_CASE("bind to multiple events delivers each separately", "[hook][bus]") {
   REQUIRE(sink.captures()[0].event == hook::Event::tool_before);
   REQUIRE(sink.captures()[0].payload_kind == "before");
   REQUIRE(sink.captures()[1].event == hook::Event::tool_after);
-  REQUIRE(sink.captures()[1].payload_kind == "monostate");
+  REQUIRE(sink.captures()[1].payload_kind == "after");
 }
 
 TEST_CASE("multiple sinks subscribed to same event run in subscription order", "[hook][bus]") {
@@ -891,22 +840,6 @@ TEST_CASE("throwing sink does not abort publish — exception captured as Error:
     co_return;
   });
 
-  // The middle sink ran even though both neighbours threw — the advisory
-  // contract demands it. Before slice 31, the first throw would have
-  // escaped publish_advisory entirely and crashed tool dispatch.
+  // One sink failure must not prevent delivery to other subscribers.
   REQUIRE(second.captures().size() == 1);
-}
-
-TEST_CASE("default_mode reports blocking for known pre-action events", "[hook][event]") {
-  REQUIRE(hook::default_mode(hook::Event::tool_before) == hook::Mode::blocking);
-  REQUIRE(hook::default_mode(hook::Event::memory_write_before) == hook::Mode::blocking);
-  REQUIRE(hook::default_mode(hook::Event::memory_read_before) == hook::Mode::blocking);
-  REQUIRE(hook::default_mode(hook::Event::permission_ask_rendered) == hook::Mode::blocking);
-
-  // Advisory events:
-  REQUIRE(hook::default_mode(hook::Event::tool_after) == hook::Mode::advisory);
-  REQUIRE(hook::default_mode(hook::Event::tool_error) == hook::Mode::advisory);
-  REQUIRE(hook::default_mode(hook::Event::iteration_start) == hook::Mode::advisory);
-  REQUIRE(hook::default_mode(hook::Event::provider_request) == hook::Mode::advisory);
-  REQUIRE(hook::default_mode(hook::Event::permission_denied) == hook::Mode::advisory);
 }
