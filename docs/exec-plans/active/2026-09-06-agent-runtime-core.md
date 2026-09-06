@@ -59,6 +59,16 @@ independent persisted histories, refused spawning and child effects, rewritten
 input, bounded admission and cancellation while another session is active.
 Verify lifetime cases with explicit synchronization and ASan/UBSan.
 
+## Tool Surface
+
+Keep `FileRead`, `FileWrite` and `FileEdit` as the built-in filesystem tools,
+alongside tool discovery, memory and bounded child execution. Remove
+`FileSearch`, `DirectoryList` and `FileDelete` registrations, handlers and their
+exclusive path/walk utilities. Remove obsolete tool fixtures and benchmarks while
+retaining shared authorization and IO regressions. Existing stored capability
+names and user records remain readable. Track Shell execution as a separate
+runtime slice.
+
 ## Verification
 
 Each implementation commit builds affected targets and passes their tests plus
@@ -77,3 +87,4 @@ Real-model acceptance requires explicitly supplied credentials.
 - [x] Functional session and memory boundaries.
 - [x] Atomic completed-turn persistence.
 - [ ] Bounded agent collaboration.
+- [ ] Core filesystem tool surface.
