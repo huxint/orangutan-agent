@@ -34,7 +34,12 @@ import/backup tooling is tracked in [live debt](../exec-plans/tech-debt-tracker.
 
 - `SessionRepository` keys sessions by session ID and agent key. Appends allocate
   monotonically increasing sequence numbers; reads preserve conversation order.
-  Skill activation rows store the latest active/inactive decision separately.
+  `append_messages` accepts one key and an owned sequence of encoded messages.
+  It validates the complete input, acquires one writer lease and commits all
+  inserts and session-row updates in one transaction. Any later insert or commit
+  failure rolls back the suffix; an empty suffix does not create a session.
+  Single-message append delegates to this transaction boundary. Skill activation
+  rows store the latest active/inactive decision separately.
 - `load_tail` reads a contiguous newest suffix bounded by row count and UTF-8
   encoded content/metadata bytes, then returns ascending sequence order. Defaults
   are 128 rows/512 KiB. The API never prunes stored messages.
@@ -45,6 +50,6 @@ import/backup tooling is tracked in [live debt](../exec-plans/tech-debt-tracker.
   Raw provider bodies and secret values do not belong in trace rows.
 
 Empty required keys, invalid limits and malformed rows return explicit errors.
-Transactions that do not commit roll back. The current session coordinator
-appends each transcript message separately; atomic turn persistence is the next
-storage integration step.
+Transactions that do not commit roll back. Session serialization finishes before
+the writer transaction starts; the repository retains the existing schema and
+allocates each suffix's sequence numbers while holding that transaction.

@@ -28,6 +28,12 @@ struct AppendSessionMessageRequest {
   std::string metadata_json{"{}"};
 };
 
+struct SessionMessageInput {
+  core::Role role{core::Role::user};
+  std::string content_json;
+  std::string metadata_json{"{}"};
+};
+
 struct SessionMessageRecord {
   std::string session_id;
   std::string agent_key;
@@ -81,6 +87,10 @@ public:
 
   [[nodiscard]] async::Awaitable<core::Result<SessionMessageRecord>>
   append_message(AppendSessionMessageRequest request);
+
+  /// Appends an ordered suffix in one transaction. An empty suffix has no effect.
+  [[nodiscard]] async::Awaitable<core::Result<std::vector<SessionMessageRecord>>>
+  append_messages(SessionKey key, std::vector<SessionMessageInput> messages);
 
   [[nodiscard]] async::Awaitable<core::Result<std::vector<SessionMessageRecord>>> load_messages(SessionKey key);
   /// Latest rows in conversation order, bounded by encoded bytes and count.

@@ -264,7 +264,9 @@ public:
     if (store != nullptr) {
       auto persisted =
           co_await asio::co_spawn(options_.blocking_executor,
-                                  append_transcript_suffix(*store, result->transcript, conversation.history_size),
+                                  store->append_all(memory::session::SessionId{.value = session_id_text_},
+                                                    memory::session::AgentKey{.value = options_.agent_key},
+                                                    std::span{result->transcript}.subspan(conversation.history_size)),
                                   asio::use_awaitable);
       if (!persisted) {
         co_return std::unexpected(std::move(persisted).error());
@@ -282,20 +284,6 @@ public:
   }
 
 private:
-  [[nodiscard]] async::Awaitable<Result<void>> append_transcript_suffix(memory::session::Store& store,
-                                                                        const std::vector<core::Message>& transcript,
-                                                                        std::size_t start_index) const {
-    for (std::size_t i = start_index; i < transcript.size(); ++i) {
-      auto appended = co_await store.append(memory::session::SessionId{.value = session_id_text_},
-                                            memory::session::AgentKey{.value = options_.agent_key},
-                                            transcript[i]);
-      if (!appended) {
-        co_return std::unexpected(std::move(appended).error());
-      }
-    }
-    co_return Result<void>{};
-  }
-
   void observe_turn_results(const std::vector<core::Message>& transcript, std::size_t start_index) {
     if (start_index > transcript.size()) {
       return;

@@ -1,5 +1,6 @@
 // tests/storage/test_session_repository.cpp — sessions domain repository coverage.
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -448,5 +449,169 @@ TEST_CASE("SessionRepository validates required fields", "[unit][storage][sessio
     auto list_limit = co_await repo.list_sessions(storage::ListSessionsOptions{.agent_key = "coder", .limit = 0});
     REQUIRE_FALSE(list_limit.has_value());
     REQUIRE(list_limit.error().kind() == core::ErrorKind::invalid_argument);
+  });
+}
+
+TEST_CASE("SessionRepository appends complete suffixes in order", "[unit][storage][session_repository][atomic]") {
+  TempDb db{"oran-session-suffix-order"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::SessionRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+    const auto key = storage::SessionKey{.session_id = "s-1", .agent_key = "coder"};
+    auto messages = std::vector<storage::SessionMessageInput>{
+        {.role = core::Role::user, .content_json = R"({"text":"question"})"},
+        {.role = core::Role::assistant,
+         .content_json = R"({"text":"answer"})",
+         .metadata_json = R"({"source":"model"})"},
+    };
+
+    auto appended = co_await repo.append_messages(key, std::move(messages));
+    REQUIRE(appended.has_value());
+    REQUIRE(appended->size() == 2);
+    REQUIRE((*appended)[0].sequence == 1);
+    REQUIRE((*appended)[1].sequence == 2);
+    auto next =
+        co_await repo.append_message(storage::AppendSessionMessageRequest{.session_id = "s-1",
+                                                                          .agent_key = "coder",
+                                                                          .content_json = R"({"text":"next"})"});
+    REQUIRE(next.has_value());
+    REQUIRE(next->sequence == 3);
+
+    auto loaded = co_await repo.load_messages(key);
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->size() == 3);
+    REQUIRE((*loaded)[0].content_json == R"({"text":"question"})");
+    REQUIRE((*loaded)[0].role == core::Role::user);
+    REQUIRE((*loaded)[1].content_json == R"({"text":"answer"})");
+    REQUIRE((*loaded)[1].role == core::Role::assistant);
+    REQUIRE((*loaded)[1].metadata_json == R"({"source":"model"})");
+    REQUIRE((*loaded)[2].content_json == R"({"text":"next"})");
+    auto session = co_await repo.get_session(key);
+    REQUIRE(session.has_value());
+    REQUIRE(session->has_value());
+    REQUIRE((*session)->message_count == 3);
+  });
+}
+
+TEST_CASE("SessionRepository rolls back the suffix and session row on a later insert failure",
+          "[unit][storage][session_repository][atomic]") {
+  bool existing_session = false;
+  SECTION("a new session") {}
+  SECTION("an existing conversation") {
+    existing_session = true;
+  }
+  TempDb db{"oran-session-suffix-rollback"};
+  test::run_async([&db, existing_session](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::SessionRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+    const auto key = storage::SessionKey{.session_id = "s-1", .agent_key = "coder"};
+    if (existing_session) {
+      auto prior =
+          co_await repo.append_message(storage::AppendSessionMessageRequest{.session_id = "s-1",
+                                                                            .agent_key = "coder",
+                                                                            .content_json = R"({"text":"saved"})"});
+      REQUIRE(prior.has_value());
+    }
+    {
+      auto writer = co_await pool.acquire_writer();
+      REQUIRE(writer.has_value());
+      auto setup = writer->connection().execute(R"sql(
+        UPDATE sessions SET updated_at = '2000-01-01T00:00:00Z';
+        CREATE TRIGGER reject_suffix BEFORE INSERT ON session_messages
+        WHEN NEW.content_json = 'reject'
+        BEGIN SELECT RAISE(ABORT, 'reject later message'); END;
+      )sql");
+      REQUIRE(setup.has_value());
+    }
+    auto messages = std::vector<storage::SessionMessageInput>{
+        {.content_json = R"({"text":"pending"})"},
+        {.role = core::Role::assistant, .content_json = "reject"},
+    };
+
+    auto appended = co_await repo.append_messages(key, std::move(messages));
+
+    REQUIRE_FALSE(appended.has_value());
+    REQUIRE(appended.error().kind() == core::ErrorKind::storage);
+    REQUIRE(std::ranges::contains(appended.error().context(),
+                                  core::Error::ContextEntry{"sqlite_message", "reject later message"}));
+    auto loaded = co_await repo.load_messages(key);
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->size() == (existing_session ? 1 : 0));
+    auto session = co_await repo.get_session(key);
+    REQUIRE(session.has_value());
+    REQUIRE(session->has_value() == existing_session);
+    if (existing_session) {
+      REQUIRE((*loaded)[0].content_json == R"({"text":"saved"})");
+      REQUIRE((*session)->updated_at == "2000-01-01T00:00:00Z");
+    }
+    auto retry =
+        co_await repo.append_message(storage::AppendSessionMessageRequest{.session_id = "s-1",
+                                                                          .agent_key = "coder",
+                                                                          .content_json = R"({"text":"retry"})"});
+    REQUIRE(retry.has_value());
+    REQUIRE(retry->sequence == (existing_session ? 2 : 1));
+  });
+}
+
+TEST_CASE("SessionRepository isolates suffixes by both session and agent",
+          "[unit][storage][session_repository][atomic]") {
+  TempDb db{"oran-session-suffix-scope"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::SessionRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+    const auto keys = std::array{
+        storage::SessionKey{.session_id = "s-1", .agent_key = "coder"},
+        storage::SessionKey{.session_id = "s-1", .agent_key = "researcher"},
+        storage::SessionKey{.session_id = "s-2", .agent_key = "coder"},
+    };
+    for (const auto& key : keys) {
+      auto messages =
+          std::vector<storage::SessionMessageInput>{{.content_json = key.session_id}, {.content_json = key.agent_key}};
+      auto appended = co_await repo.append_messages(key, std::move(messages));
+      REQUIRE(appended.has_value());
+    }
+
+    for (const auto& key : keys) {
+      auto loaded = co_await repo.load_messages(key);
+      REQUIRE(loaded.has_value());
+      REQUIRE(loaded->size() == 2);
+      REQUIRE((*loaded)[0].sequence == 1);
+      REQUIRE((*loaded)[0].content_json == key.session_id);
+      REQUIRE((*loaded)[1].sequence == 2);
+      REQUIRE((*loaded)[1].content_json == key.agent_key);
+    }
+  });
+}
+
+TEST_CASE("SessionRepository leaves storage untouched for empty or invalid suffixes",
+          "[unit][storage][session_repository][atomic]") {
+  TempDb db{"oran-session-suffix-validation"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::SessionRepository repo{pool};
+    const auto key = storage::SessionKey{.session_id = "s-1", .agent_key = "coder"};
+    SECTION("empty suffix needs no schema") {
+      auto appended = co_await repo.append_messages(key, {});
+      REQUIRE(appended.has_value());
+      REQUIRE(appended->empty());
+    }
+    SECTION("invalid later message fails before accessing the schema") {
+      auto messages = std::vector<storage::SessionMessageInput>{{.content_json = "{}"}, {.content_json = ""}};
+      auto appended = co_await repo.append_messages(key, std::move(messages));
+      REQUIRE_FALSE(appended.has_value());
+      REQUIRE(appended.error().kind() == core::ErrorKind::invalid_argument);
+      REQUIRE(std::ranges::contains(appended.error().context(), core::Error::ContextEntry{"index", "1"}));
+    }
+    SECTION("empty keys are invalid even for an empty suffix") {
+      auto appended = co_await repo.append_messages(storage::SessionKey{}, {});
+      REQUIRE_FALSE(appended.has_value());
+      REQUIRE(appended.error().kind() == core::ErrorKind::invalid_argument);
+    }
   });
 }

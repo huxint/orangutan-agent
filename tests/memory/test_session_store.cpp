@@ -1,5 +1,6 @@
 // tests/memory/test_session_store.cpp — typed session memory coverage.
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <string>
@@ -284,5 +285,62 @@ TEST_CASE("session::Store validates required ids", "[unit][memory][session]") {
                                                         });
     REQUIRE_FALSE(skill.has_value());
     REQUIRE(skill.error().kind() == core::ErrorKind::invalid_argument);
+  });
+}
+
+TEST_CASE("session::Store appends a typed suffix after saved history", "[unit][memory][session][atomic]") {
+  TempDb db{"oran-memory-suffix-roundtrip"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::SessionRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+    memory::session::Store store{repo};
+    const auto session = memory::session::SessionId{.value = "s-1"};
+    const auto agent = memory::session::AgentKey{.value = "coder"};
+    auto prior = co_await store.append(session, agent, core::Message::user_text("saved"));
+    REQUIRE(prior.has_value());
+    const auto suffix = std::vector{full_message(core::Role::assistant), core::Message::user_text("continue")};
+
+    auto appended = co_await store.append_all(session, agent, suffix);
+
+    REQUIRE(appended.has_value());
+    auto loaded = co_await store.load(session, agent);
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->size() == 3);
+    REQUIRE((*loaded)[0].blocks == core::Message::user_text("saved").blocks);
+    for (std::size_t i = 0; i < suffix.size(); ++i) {
+      REQUIRE((*loaded)[i + 1].role == suffix[i].role);
+      REQUIRE((*loaded)[i + 1].blocks == suffix[i].blocks);
+      REQUIRE((*loaded)[i + 1].created_at.has_value());
+    }
+  });
+}
+
+TEST_CASE("session::Store rejects a later serialization error without appending the prefix",
+          "[unit][memory][session][atomic]") {
+  TempDb db{"oran-memory-suffix-encoding"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::SessionRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+    memory::session::Store store{repo};
+    const auto session = memory::session::SessionId{.value = "s-1"};
+    const auto agent = memory::session::AgentKey{.value = "coder"};
+    auto prior = co_await store.append(session, agent, core::Message::user_text("saved"));
+    REQUIRE(prior.has_value());
+    const auto suffix = std::vector{core::Message::user_text("pending"),
+                                    core::Message::assistant_text(std::string(1, static_cast<char>(0xff)))};
+
+    auto appended = co_await store.append_all(session, agent, suffix);
+
+    REQUIRE_FALSE(appended.has_value());
+    REQUIRE(appended.error().kind() == core::ErrorKind::parsing);
+    REQUIRE(std::ranges::contains(appended.error().context(), core::Error::ContextEntry{"index", "1"}));
+    auto loaded = co_await store.load(session, agent);
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->size() == 1);
+    REQUIRE((*loaded)[0].blocks == core::Message::user_text("saved").blocks);
   });
 }

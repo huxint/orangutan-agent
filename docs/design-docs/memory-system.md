@@ -16,9 +16,13 @@ byte limits. Defaults are 128 rows and 512 KiB; valid limits are 1–4096 rows a
 that does not fit, preserving a contiguous suffix. The full history remains in
 SQLite. The agent removes an incomplete leading exchange before prompt assembly.
 
-A successful turn appends its new transcript suffix. Atomic multi-message commit
-and explicit import mapping remain tracked persistence work. A failed turn does
-not claim to have committed its response.
+`Store::append_all` serializes an entire transcript suffix before the repository
+acquires its writer. Serialization or storage failure leaves the preceding
+conversation intact; success appends every message in order. Single-message
+`append` uses the same path. An empty suffix has no effect. Message encoding and
+existing tables are preserved. Individual memory-tool effects commit under their
+own dispatch contract and are not rolled back with a failed transcript commit.
+Explicit import mapping remains tracked persistence work.
 
 ## Long-Term Records
 

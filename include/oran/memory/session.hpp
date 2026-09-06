@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -66,6 +67,11 @@ public:
 
   [[nodiscard]] async::Awaitable<core::Result<void>>
   append(SessionId session_id, AgentKey agent_key, core::Message message);
+
+  /// Serializes the whole suffix before writing it atomically. The caller retains
+  /// the messages until completion; an empty suffix has no effect.
+  [[nodiscard]] async::Awaitable<core::Result<void>>
+  append_all(SessionId session_id, AgentKey agent_key, std::span<const core::Message> messages);
 
   [[nodiscard]] async::Awaitable<core::Result<std::vector<core::Message>>> load(SessionId session_id,
                                                                                 AgentKey agent_key);

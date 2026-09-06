@@ -26,8 +26,8 @@ configuration or credentials is an error before execution.
 
 `AgentSession` loads bounded history, prepares an owned conversation through
 `agent::prepare_conversation`, drives `agent::Loop`, and appends the successful
-transcript suffix. The prepared value records the history boundary independently
-of storage. Prompt recall runs once through `MemoryRecall` before the loop;
+transcript suffix atomically through `Store::append_all`. The prepared value
+records the history boundary independently of storage. Prompt recall runs once through `MemoryRecall` before the loop;
 the returned text stays stable across model/tool iterations.
 
 Memory adapters borrow a runtime and backend and capture the host's scope. They

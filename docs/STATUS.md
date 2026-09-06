@@ -27,6 +27,6 @@ reference-hardware compile measurements remain unverified.
 
 ## Next Slice
 
-Commit a completed transcript suffix atomically through one storage operation.
-Then add bounded child-agent execution with independent sessions and constrained
+Completed transcript suffixes now commit atomically through one storage operation.
+Add bounded child-agent execution with independent sessions and constrained
 authority. [Live debt](exec-plans/tech-debt-tracker.md) records concrete gaps.

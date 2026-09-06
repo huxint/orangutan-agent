@@ -120,19 +120,6 @@ LIMIT ?
   return {};
 }
 
-[[nodiscard]] core::Result<void> validate_append_request(const AppendSessionMessageRequest& request) {
-  if (auto valid = validate_key(SessionKey{.session_id = request.session_id, .agent_key = request.agent_key}); !valid) {
-    return std::unexpected(valid.error());
-  }
-  if (request.content_json.empty()) {
-    return std::unexpected(invalid_field("content_json"));
-  }
-  if (request.metadata_json.empty()) {
-    return std::unexpected(invalid_field("metadata_json"));
-  }
-  return {};
-}
-
 [[nodiscard]] core::Result<void> validate_skill_activation_request(const UpsertSessionSkillActivationRequest& request) {
   if (auto valid = validate_key(SessionKey{.session_id = request.session_id, .agent_key = request.agent_key}); !valid) {
     return std::unexpected(valid.error());
@@ -315,6 +302,89 @@ LIMIT ?
   };
 }
 
+class TransactionRollback {
+public:
+  explicit TransactionRollback(Connection& connection) noexcept : connection_{&connection} {}
+
+  ~TransactionRollback() {
+    if (connection_ != nullptr) {
+      [[maybe_unused]] auto rolled_back = connection_->execute("ROLLBACK");
+    }
+  }
+
+  void release() noexcept {
+    connection_ = nullptr;
+  }
+
+  [[nodiscard]] core::Error rollback(core::Error error) {
+    auto rolled_back = connection_->execute("ROLLBACK");
+    if (!rolled_back) {
+      error.with("rollback_error", std::string{rolled_back.error().message()});
+    } else {
+      release();
+    }
+    return error;
+  }
+
+private:
+  Connection* connection_;
+};
+
+[[nodiscard]] core::Result<SessionMessageRecord>
+insert_message(Statement& statement, const SessionKey& key, SessionMessageInput message) {
+  if (auto bound = statement.bind_text(1, key.session_id); !bound) {
+    return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(2, key.agent_key); !bound) {
+    return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(3, key.session_id); !bound) {
+    return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(4, key.agent_key); !bound) {
+    return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(5, core::enum_name(message.role)); !bound) {
+    return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(6, message.content_json); !bound) {
+    return std::unexpected(bound.error());
+  }
+  if (auto bound = statement.bind_text(7, message.metadata_json); !bound) {
+    return std::unexpected(bound.error());
+  }
+
+  auto step = statement.step();
+  if (!step) {
+    return std::unexpected(step.error());
+  }
+  if (*step != StepResult::row) {
+    return std::unexpected(core::Error::storage("session message insert returned no row"));
+  }
+
+  auto sequence = statement.column_int64(0);
+  if (!sequence) {
+    return std::unexpected(sequence.error().with("field", "sequence"));
+  }
+  auto created_at = required_text(statement, 1, "created_at");
+  if (!created_at) {
+    return std::unexpected(created_at.error());
+  }
+  if (auto done = expect_done(statement, "append_message"); !done) {
+    return std::unexpected(done.error());
+  }
+
+  return SessionMessageRecord{
+      .session_id = key.session_id,
+      .agent_key = key.agent_key,
+      .sequence = *sequence,
+      .role = message.role,
+      .content_json = std::move(message.content_json),
+      .metadata_json = std::move(message.metadata_json),
+      .created_at = std::move(*created_at),
+  };
+}
+
 }  // namespace
 
 SessionRepository::SessionRepository(Pool& pool, SessionRepositoryOptions options) noexcept
@@ -343,72 +413,70 @@ async::Awaitable<core::Result<MigrationReport>> SessionRepository::migrate() {
 
 async::Awaitable<core::Result<SessionMessageRecord>>
 SessionRepository::append_message(AppendSessionMessageRequest request) {
-  if (auto valid = validate_append_request(request); !valid) {
-    co_return std::unexpected(valid.error());
+  auto messages = std::vector<SessionMessageInput>{};
+  messages.push_back(SessionMessageInput{.role = request.role,
+                                         .content_json = std::move(request.content_json),
+                                         .metadata_json = std::move(request.metadata_json)});
+  auto appended = co_await append_messages(
+      SessionKey{.session_id = std::move(request.session_id), .agent_key = std::move(request.agent_key)},
+      std::move(messages));
+  if (!appended) {
+    co_return std::unexpected(std::move(appended).error());
+  }
+  co_return std::move(appended->front());
+}
+
+async::Awaitable<core::Result<std::vector<SessionMessageRecord>>>
+SessionRepository::append_messages(SessionKey key, std::vector<SessionMessageInput> messages) {
+  if (auto valid = validate_key(key); !valid) {
+    co_return std::unexpected(std::move(valid).error());
+  }
+  for (std::size_t i = 0; i < messages.size(); ++i) {
+    if (messages[i].content_json.empty()) {
+      co_return std::unexpected(invalid_field("content_json").with("index", std::to_string(i)));
+    }
+    if (messages[i].metadata_json.empty()) {
+      co_return std::unexpected(invalid_field("metadata_json").with("index", std::to_string(i)));
+    }
   }
 
+  auto records = std::vector<SessionMessageRecord>{};
+  if (messages.empty()) {
+    co_return records;
+  }
+  records.reserve(messages.size());
   auto writer = co_await pool_->acquire_writer();
   if (!writer) {
-    co_return std::unexpected(writer.error());
+    co_return std::unexpected(std::move(writer).error());
   }
 
-  auto cached = writer->statement_cache().acquire(writer->connection(), kAppendMessageSql);
-  if (!cached) {
-    co_return std::unexpected(cached.error());
+  auto& connection = writer->connection();
+  if (auto begun = connection.execute("BEGIN IMMEDIATE"); !begun) {
+    co_return std::unexpected(std::move(begun).error());
   }
-  auto& statement = cached->statement();
-
-  if (auto bound = statement.bind_text(1, request.session_id); !bound) {
-    co_return std::unexpected(bound.error());
+  auto transaction = TransactionRollback{connection};
+  {
+    auto cached = writer->statement_cache().acquire(connection, kAppendMessageSql);
+    if (!cached) {
+      co_return std::unexpected(transaction.rollback(std::move(cached).error()));
+    }
+    auto& statement = cached->statement();
+    for (auto& message : messages) {
+      auto inserted = insert_message(statement, key, std::move(message));
+      if (!inserted) {
+        co_return std::unexpected(transaction.rollback(std::move(inserted).error()));
+      }
+      records.push_back(std::move(*inserted));
+      if (auto reset = statement.reset(); !reset) {
+        co_return std::unexpected(transaction.rollback(std::move(reset).error()));
+      }
+    }
   }
-  if (auto bound = statement.bind_text(2, request.agent_key); !bound) {
-    co_return std::unexpected(bound.error());
+  if (auto committed = connection.execute("COMMIT"); !committed) {
+    co_return std::unexpected(transaction.rollback(std::move(committed).error()));
   }
-  if (auto bound = statement.bind_text(3, request.session_id); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(4, request.agent_key); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(5, core::enum_name(request.role)); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(6, request.content_json); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(7, request.metadata_json); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-
-  auto step = statement.step();
-  if (!step) {
-    co_return std::unexpected(step.error());
-  }
-  if (*step != StepResult::row) {
-    co_return std::unexpected(core::Error::storage("session message insert returned no row"));
-  }
-
-  auto sequence = statement.column_int64(0);
-  if (!sequence) {
-    co_return std::unexpected(sequence.error().with("field", "sequence"));
-  }
-  auto created_at = required_text(statement, 1, "created_at");
-  if (!created_at) {
-    co_return std::unexpected(created_at.error());
-  }
-  if (auto done = expect_done(statement, "append_message"); !done) {
-    co_return std::unexpected(done.error());
-  }
-
-  co_return SessionMessageRecord{
-      .session_id = std::move(request.session_id),
-      .agent_key = std::move(request.agent_key),
-      .sequence = *sequence,
-      .role = request.role,
-      .content_json = std::move(request.content_json),
-      .metadata_json = std::move(request.metadata_json),
-      .created_at = std::move(*created_at),
-  };
+  transaction.release();
+  co_return records;
 }
 
 async::Awaitable<core::Result<std::vector<SessionMessageRecord>>> SessionRepository::load_messages(SessionKey key) {

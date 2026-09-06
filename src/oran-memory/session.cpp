@@ -297,16 +297,28 @@ optional_string(const json& object, std::string_view key, std::string_view conte
 Store::Store(storage::SessionRepository& repository) noexcept : repository_{&repository} {}
 
 async::Awaitable<core::Result<void>> Store::append(SessionId session_id, AgentKey agent_key, core::Message message) {
+  co_return co_await append_all(std::move(session_id), std::move(agent_key), std::span{&message, 1});
+}
+
+async::Awaitable<core::Result<void>>
+Store::append_all(SessionId session_id, AgentKey agent_key, std::span<const core::Message> messages) {
   if (auto valid = validate_key(session_id.value, agent_key.value); !valid) {
     co_return std::unexpected(std::move(valid).error());
   }
 
-  auto appended = co_await repository_->append_message(storage::AppendSessionMessageRequest{
-      .session_id = std::move(session_id.value),
-      .agent_key = std::move(agent_key.value),
-      .role = message.role,
-      .content_json = message_to_json(message),
-  });
+  auto encoded = std::vector<storage::SessionMessageInput>{};
+  encoded.reserve(messages.size());
+  try {
+    for (const auto& message : messages) {
+      encoded.push_back(storage::SessionMessageInput{.role = message.role, .content_json = message_to_json(message)});
+    }
+  } catch (const json::exception&) {
+    co_return std::unexpected(core::Error::parsing("memory session message cannot be serialized")
+                                  .with("index", std::to_string(encoded.size())));
+  }
+
+  auto appended =
+      co_await repository_->append_messages(key_from(std::move(session_id), std::move(agent_key)), std::move(encoded));
   if (!appended) {
     co_return std::unexpected(std::move(appended).error());
   }

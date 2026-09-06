@@ -44,16 +44,20 @@ Preserve user databases while changing APIs and composition.
 
 ## Next Slice
 
-Make completed-turn persistence one atomic storage operation. The session hands
-its transcript suffix to the typed store; serialization completes before the
-repository acquires its writer transaction. The repository appends the entire
-suffix or leaves the preceding conversation intact.
+Expose `AgentRun` through ordinary tool dispatch with the `spawn_agent`
+capability. The host selects a configured child agent, assigns a fresh session
+and approval identity, and binds the parent's workspace and memory scope. Each
+child uses `AgentSession` and the same turn loop with independent conversation
+and promotion state. Parent and child policies are evaluated separately against
+the final operation; deny dominates ask, and approval limits intersect.
 
-Preserve existing tables, migrations and message encoding. Acceptance must prove
-rollback after a later message fails, ordered continuation after success, and
-separation of session/agent keys. Keep individual memory-tool effects under their
-existing dispatch contract. Bounded child execution follows this persistence
-boundary, using independent state and the intersection of parent/child authority.
+Bound child admissions per parent prompt and permit one generation. A child
+returns its completed result through the tool response. The existing scheduler
+owns these calls; cancellation must drain the child session and its tools before
+the parent releases borrowed services. Acceptance covers result delivery,
+independent persisted histories, refused spawning and child effects, rewritten
+input, bounded admission and cancellation while another session is active.
+Verify lifetime cases with explicit synchronization and ASan/UBSan.
 
 ## Verification
 
@@ -71,5 +75,5 @@ Real-model acceptance requires explicitly supplied credentials.
 - [x] Minimal executable and core integration gate.
 - [x] Pure permission values and complete capability checks.
 - [x] Functional session and memory boundaries.
-- [ ] Atomic completed-turn persistence.
+- [x] Atomic completed-turn persistence.
 - [ ] Bounded agent collaboration.

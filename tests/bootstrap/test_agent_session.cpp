@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <chrono>
 #include <deque>
 #include <filesystem>
@@ -1401,5 +1402,73 @@ TEST_CASE("a session advertises memory tools only when memory is available",
     CHECK_FALSE(requests.front().system_prompt->contains("MemoryRecall"));
     CHECK_FALSE(requests.front().system_prompt->contains("MemoryRemember"));
     CHECK_FALSE(requests.front().system_prompt->contains("MemoryForget"));
+  });
+}
+
+TEST_CASE("AgentSession resumes completed history after a failed transcript commit",
+          "[integration][bootstrap][memory][atomic]") {
+  TempDir temp{"oran-session-atomic-turn"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false, true);
+    auto database =
+        storage::Connection::open(storage::ConnectionOptions{.path = std::string{assembly.sessions_path()}});
+    REQUIRE(database.has_value());
+    auto trigger = database->execute(R"sql(
+      CREATE TRIGGER reject_turn BEFORE INSERT ON session_messages
+      WHEN instr(NEW.content_json, 'reject-turn') > 0
+      BEGIN SELECT RAISE(ABORT, 'reject completed turn'); END;
+    )sql");
+    REQUIRE(trigger.has_value());
+    RecordingProvider recording{{
+        text_response("saved answer"),
+        provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "remember-1",
+                .name = "MemoryRemember",
+                .input_json = R"({"id":"accepted-note","kind":"project","title":"Note","body":"accepted effect"})"}},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        },
+        text_response("reject-turn"),
+        text_response("continued answer"),
+    }};
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.mode = permission::Mode::permissive;
+    options.session_id.back() = std::byte{0x42};
+    auto runner = bootstrap::AgentSession::create(std::move(options));
+    REQUIRE(runner.has_value());
+    auto first = co_await (*runner)->run_prompt(agent::PromptRequest{.prompt = "saved prompt"});
+    REQUIRE(first.has_value());
+
+    auto failed = co_await (*runner)->run_prompt(agent::PromptRequest{.prompt = "write a note"});
+
+    REQUIRE_FALSE(failed.has_value());
+    REQUIRE(failed.error().kind() == core::ErrorKind::storage);
+    REQUIRE(std::ranges::contains(failed.error().context(),
+                                  core::Error::ContextEntry{"sqlite_message", "reject completed turn"}));
+    auto loaded =
+        co_await assembly.session_store()->load(memory::session::SessionId{.value = "00000000000000000000000000000042"},
+                                                memory::session::AgentKey{.value = "coder"});
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->size() == 2);
+    REQUIRE((*loaded)[0].blocks == core::Message::user_text("saved prompt").blocks);
+    REQUIRE((*loaded)[1].blocks == core::Message::assistant_text("saved answer").blocks);
+    auto note = co_await assembly.longterm_memory_backend()->get(
+        memory::longterm::RecordKey{.id = "accepted-note", .scope_key = "scope-A"});
+    REQUIRE(note.has_value());
+    REQUIRE(note->body == "accepted effect");
+
+    auto continued = co_await (*runner)->run_prompt(agent::PromptRequest{.prompt = "continue"});
+    REQUIRE(continued.has_value());
+    REQUIRE(continued->text == "continued answer");
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 4);
+    REQUIRE(requests.back().messages.size() == 3);
+    REQUIRE(requests.back().messages[0].blocks == core::Message::user_text("saved prompt").blocks);
+    REQUIRE(requests.back().messages[1].blocks == core::Message::assistant_text("saved answer").blocks);
+    REQUIRE(requests.back().messages[2].blocks == core::Message::user_text("continue").blocks);
   });
 }
