@@ -43,13 +43,29 @@ Application interfaces and scheduled delivery can be implemented after these
 contracts hold. Their current speculative implementation is removed from the
 active codebase. Git retains committed history; user databases are preserved.
 
-## First Slice
+## Current Slice
 
-Remove desktop, local IPC, messaging adapters, automation and their bootstrap
-bridges. Retain provider protocols, tool dispatch, filesystem authority, session
-storage, lexical memory and the existing cancellation infrastructure. The
-executable accepts an explicit configuration, workspace, session and prompt.
-It exercises the runtime without becoming another application framework.
+Complete the functional permission and session boundaries in separate commits:
+
+1. Replace the mutable permission facade with explicit rule values and a pure
+   evaluator. Every required capability must be authorized; combine decisions
+   using deny, then ask, then allow and retain the narrowest approval limits.
+   Keep concrete validation, approval, hooks and audit at tool dispatch.
+2. Reduce session composition to bounded history, lexical recall, the tool loop
+   and persistence. Prepare conversation values independently of IO. Bind scoped
+   memory effects outside the session coordinator. Remove session skill policy,
+   hybrid recall, render counters and their unused configuration/callers.
+   Advertise only tools with a working runtime binding.
+
+The executable continues to accept explicit configuration, workspace, session
+and prompt. Preserve typed transcripts, stored databases, schema migrations,
+tool promotion, permission checks and joined cancellation. No new application
+surface or dependency is needed for this slice.
+
+Acceptance covers a composite-capability refusal before an effect, context
+preparation without services, scoped memory through the real tool path, and
+persisted continuation through the controlled provider boundary. Child-agent
+execution follows once this reusable session boundary is established.
 
 ## Verification
 
@@ -65,5 +81,6 @@ Real-model acceptance requires explicitly supplied credentials.
 - [x] Core-first scope and functional programming direction established.
 - [x] Peripheral code, configuration and document removal.
 - [x] Minimal executable and core integration gate.
+- [ ] Pure permission values and complete capability checks.
 - [ ] Functional session and memory boundaries.
 - [ ] Bounded agent collaboration.
