@@ -1,18 +1,3 @@
-// include/oran/hook/event.hpp — enumerated hook events.
-//
-// Slice 22 introduces `oran-hook` as the lifecycle observability surface for
-// the runtime. Every cross-cutting integration point that wants to react to a
-// runtime decision (audit, render an operator prompt, dispatch a shell sink,
-// publish a webhook) does it by subscribing to one of these events on the
-// `hook::Bus`.
-//
-// The enum lists every event the design contemplates so subscribers, sinks,
-// and the meta-tool `hook.events` can iterate the universe without library
-// bumps. The events without typed payloads in `payload.hpp` carry
-// `std::monostate` for now — the typed shape lands with the producing
-// subsystem (provider lifecycle payloads now ship with the agent/provider path;
-// memory read/write/delete/decay payloads ship with their producers, and so on).
-
 #pragma once
 
 #include <cstdint>
@@ -45,7 +30,6 @@ enum class Event : std::uint8_t {
   memory_write_before,
   memory_write_after,
   memory_forget,
-  memory_decay,
   // channel adapters
   channel_start,
   channel_stop,

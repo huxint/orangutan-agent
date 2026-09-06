@@ -194,8 +194,8 @@ struct MemoryWritePayload {
   std::chrono::nanoseconds duration{0};
 };
 
-/// One recalled long-term memory hit. Scores are copied from the memory
-/// runtime without making `oran-hook` depend on `oran-memory`.
+/// Recall results are copied at publication to keep hook types independent
+/// of `oran-memory`.
 struct MemoryReadHitPayload {
   MemoryRecordPayload record;
   double score{0.0};
@@ -222,7 +222,6 @@ struct MemoryReadPayload {
   std::vector<std::string> kinds;
   std::size_t match_count{0};
   std::vector<MemoryReadHitPayload> hits;
-  bool hybrid{false};
   core::Time started_at{};
   core::Time finished_at{};
   std::chrono::nanoseconds duration{0};
@@ -239,25 +238,6 @@ struct MemoryForgetPayload {
   std::chrono::nanoseconds duration{0};
 };
 
-/// Advisory long-term memory decay payload. Published after a retention pass
-/// succeeds. It carries policy/timing/count metadata only; decayed record
-/// content stays out of the hook payload so default and trusted-local sinks see
-/// the same non-sensitive shape.
-struct MemoryDecayPayload {
-  Identity who;
-  /// Producer label such as `startup` or `periodic`.
-  std::string source;
-  std::string scope_key;
-  core::Time unused_before{};
-  double importance_floor{0.0};
-  std::size_t limit{0};
-  core::Time decay_at{};
-  std::size_t shadowed_count{0};
-  core::Time started_at{};
-  core::Time finished_at{};
-  std::chrono::nanoseconds duration{0};
-};
-
 /// Advisory automation job lifecycle metadata. Published by runtime owners that
 /// actually start automation work. It carries routing, policy, timing, and
 /// outcome metadata only; job-specific record contents stay outside the hook
@@ -268,7 +248,7 @@ struct JobLifecyclePayload {
   std::string source;
   /// Durable automation job identity.
   std::string job_key;
-  /// Stable job category such as `memory_retention`.
+  /// Stable job category.
   std::string job_type;
   /// Domain scope the job is acting on, when applicable.
   std::string scope_key;
@@ -277,7 +257,6 @@ struct JobLifecyclePayload {
   std::optional<core::Time> finished_at{};
   std::optional<std::chrono::nanoseconds> duration{};
   bool succeeded{false};
-  std::optional<std::size_t> shadowed_count{};
   /// `core::Error::kind` wire spelling on failure; empty on success/start.
   std::string error_kind;
   std::string error_message;
@@ -403,7 +382,6 @@ using Payload = std::variant<std::monostate,
                              MemoryReadPayload,
                              MemoryWritePayload,
                              MemoryForgetPayload,
-                             MemoryDecayPayload,
                              JobLifecyclePayload,
                              JobDroppedPayload,
                              ProviderRequestPayload,

@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
-#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -25,9 +24,6 @@ class Pool;
 namespace orangutan::memory::longterm {
 
 /// Stable record kind for persistent memory rows.
-///
-/// Wire spelling comes from `core::enum_name(value)`; the future storage
-/// repository and sqlite-vec adapter must not maintain a second string table.
 enum class RecordKind : std::uint8_t {
   user,
   feedback,
@@ -71,8 +67,6 @@ struct Query {
 struct SearchHit {
   Record record;
   double score{0.0};
-  std::optional<double> lexical_score;
-  std::optional<double> vector_score;
 
   friend bool operator==(const SearchHit&, const SearchHit&) = default;
 };
@@ -90,22 +84,6 @@ struct TouchRequest {
   friend bool operator==(const TouchRequest&, const TouchRequest&) = default;
 };
 
-struct DecayRequest {
-  std::string scope_key;
-  core::Time unused_before{core::Time::epoch()};
-  double importance_floor{0.0};
-  std::size_t limit{0};
-  core::Time decay_at{core::Time::epoch()};
-
-  friend bool operator==(const DecayRequest&, const DecayRequest&) = default;
-};
-
-struct DecayResult {
-  std::vector<Record> shadowed_records;
-
-  friend bool operator==(const DecayResult&, const DecayResult&) = default;
-};
-
 struct RecallRequest {
   Query query;
   std::size_t limit{0};
@@ -120,61 +98,7 @@ struct RecallResult {
   friend bool operator==(const RecallResult&, const RecallResult&) = default;
 };
 
-struct VectorEmbedding {
-  std::string model;
-  std::vector<float> values;
-
-  friend bool operator==(const VectorEmbedding&, const VectorEmbedding&) = default;
-};
-
-struct TextEmbeddingOptions {
-  std::string model{"oran-local-text-v1"};
-  std::size_t dimensions{64};
-
-  friend bool operator==(const TextEmbeddingOptions&, const TextEmbeddingOptions&) = default;
-};
-
-struct VectorUpsert {
-  RecordKey key;
-  VectorEmbedding embedding;
-
-  friend bool operator==(const VectorUpsert&, const VectorUpsert&) = default;
-};
-
-struct VectorSearchQuery {
-  std::string scope_key;
-  VectorEmbedding embedding;
-  std::vector<RecordKind> kinds;
-  bool include_shadow{false};
-
-  friend bool operator==(const VectorSearchQuery&, const VectorSearchQuery&) = default;
-};
-
-struct VectorHit {
-  RecordKey key;
-  double score{0.0};
-
-  friend bool operator==(const VectorHit&, const VectorHit&) = default;
-};
-
-struct VectorRemoveRequest {
-  RecordKey key;
-
-  friend bool operator==(const VectorRemoveRequest&, const VectorRemoveRequest&) = default;
-};
-
-struct HybridSearchRequest {
-  Query query;
-  VectorEmbedding embedding;
-  std::size_t lexical_limit{0};
-  std::size_t vector_limit{0};
-  std::size_t result_limit{0};
-  double lexical_weight{1.0};
-  double vector_weight{1.0};
-
-  friend bool operator==(const HybridSearchRequest&, const HybridSearchRequest&) = default;
-};
-
+/// Scoped storage effects; implementations validate inputs before accessing storage.
 class Backend {
 public:
   Backend() = default;
@@ -190,24 +114,7 @@ public:
                                                                                       std::size_t limit) = 0;
   [[nodiscard]] virtual async::Awaitable<core::Result<Record>> upsert(WriteRequest request) = 0;
   [[nodiscard]] virtual async::Awaitable<core::Result<Record>> touch(TouchRequest request) = 0;
-  [[nodiscard]] virtual async::Awaitable<core::Result<DecayResult>> decay(DecayRequest request) = 0;
   [[nodiscard]] virtual async::Awaitable<core::Result<void>> remove(RecordKey key) = 0;
-};
-
-class VectorBackend {
-public:
-  VectorBackend() = default;
-  virtual ~VectorBackend() = default;
-
-  VectorBackend(const VectorBackend&) = delete;
-  VectorBackend& operator=(const VectorBackend&) = delete;
-  VectorBackend(VectorBackend&&) = delete;
-  VectorBackend& operator=(VectorBackend&&) = delete;
-
-  [[nodiscard]] virtual async::Awaitable<core::Result<void>> upsert(VectorUpsert request) = 0;
-  [[nodiscard]] virtual async::Awaitable<core::Result<std::vector<VectorHit>>> search(VectorSearchQuery query,
-                                                                                      std::size_t limit) = 0;
-  [[nodiscard]] virtual async::Awaitable<core::Result<void>> remove(VectorRemoveRequest request) = 0;
 };
 
 struct Fts5BackendOptions {
@@ -216,18 +123,7 @@ struct Fts5BackendOptions {
   friend bool operator==(const Fts5BackendOptions&, const Fts5BackendOptions&) = default;
 };
 
-struct SqliteVecBackendOptions {
-  std::size_t dimensions{0};
-
-  friend bool operator==(const SqliteVecBackendOptions&, const SqliteVecBackendOptions&) = default;
-};
-
-/// Default lexical long-term memory backend.
-///
-/// `Fts5Backend` owns the built-in SQLite FTS5 schema for `memory.db` and
-/// implements the lexical `Backend` contract. It remains intentionally separate
-/// from `VectorBackend`; future sqlite-vec or external-vector adapters combine
-/// with this backend at a runtime/search-composition layer.
+/// Scoped lexical records and their transactional FTS5 index. The pool is borrowed.
 class Fts5Backend final : public Backend {
 public:
   explicit Fts5Backend(storage::Pool& pool, Fts5BackendOptions options = {}) noexcept;
@@ -238,7 +134,6 @@ public:
   [[nodiscard]] async::Awaitable<core::Result<std::vector<SearchHit>>> search(Query query, std::size_t limit) override;
   [[nodiscard]] async::Awaitable<core::Result<Record>> upsert(WriteRequest request) override;
   [[nodiscard]] async::Awaitable<core::Result<Record>> touch(TouchRequest request) override;
-  [[nodiscard]] async::Awaitable<core::Result<DecayResult>> decay(DecayRequest request) override;
   [[nodiscard]] async::Awaitable<core::Result<void>> remove(RecordKey key) override;
 
 private:
@@ -246,86 +141,19 @@ private:
   Fts5BackendOptions options_;
 };
 
-/// Optional sqlite-vec long-term vector backend.
-///
-/// `SqliteVecBackend` is compiled only when xmake configures
-/// `--vector_memory=y`; default builds still expose the public type but return a
-/// config error from migration and vector operations. The backend stores one
-/// scoped vector row per `RecordKey` and satisfies the same `VectorBackend`
-/// contract consumed by `HybridRuntime`.
-class SqliteVecBackend final : public VectorBackend {
-public:
-  explicit SqliteVecBackend(storage::Pool& pool, SqliteVecBackendOptions options) noexcept;
-
-  [[nodiscard]] static std::vector<void (*)()> auto_extensions();
-  [[nodiscard]] async::Awaitable<core::Result<void>> migrate();
-
-  [[nodiscard]] async::Awaitable<core::Result<void>> upsert(VectorUpsert request) override;
-  [[nodiscard]] async::Awaitable<core::Result<std::vector<VectorHit>>> search(VectorSearchQuery query,
-                                                                              std::size_t limit) override;
-  [[nodiscard]] async::Awaitable<core::Result<void>> remove(VectorRemoveRequest request) override;
-
-private:
-  storage::Pool* pool_{};
-  SqliteVecBackendOptions options_;
-};
-
-/// Prompt-boundary long-term memory runtime.
-///
-/// `Runtime` composes a lexical `Backend` into search and recall operations. It
-/// does not own storage and does not query inside `agent::Loop`; callers render
-/// recall once before the prompt builder consumes section-5 memory framing.
-class Runtime {
-public:
-  explicit Runtime(Backend& backend) noexcept;
-
-  [[nodiscard]] async::Awaitable<core::Result<std::vector<SearchHit>>> search(Query query, std::size_t limit);
-  [[nodiscard]] async::Awaitable<core::Result<RecallResult>> recall(RecallRequest request);
-
-private:
-  Backend* backend_{};
-};
-
-/// Long-term memory hybrid search composition.
-///
-/// `HybridRuntime` is the first runtime contract for combining the default
-/// lexical record store with an optional vector index. It does not own either
-/// backend: vector-only hits are hydrated through the lexical `Backend::get`
-/// path, stale vector rows with no record are ignored, and returned
-/// `SearchHit::score` is the deterministic weighted sum of present lexical and
-/// vector scores.
-class HybridRuntime {
-public:
-  HybridRuntime(Backend& lexical_backend, VectorBackend& vector_backend) noexcept;
-
-  [[nodiscard]] async::Awaitable<core::Result<std::vector<SearchHit>>> search(HybridSearchRequest request);
-  [[nodiscard]] async::Awaitable<core::Result<RecallResult>> recall(HybridSearchRequest request);
-
-private:
-  Backend* lexical_backend_{};
-  VectorBackend* vector_backend_{};
-};
+/// Search, update read timestamps and render owned prompt framing.
+/// The backend must outlive the awaited operation.
+[[nodiscard]] async::Awaitable<core::Result<RecallResult>> recall(Backend& backend, RecallRequest request);
 
 [[nodiscard]] Framing render_recall_framing(std::span<const SearchHit> hits);
 [[nodiscard]] std::string render_recall_data_json(std::span<const SearchHit> hits);
 [[nodiscard]] std::string render_remember_data_json(const Record& record);
 [[nodiscard]] std::string render_forget_data_json(const RecordKey& key);
-[[nodiscard]] core::Result<VectorEmbedding> make_text_embedding(std::string_view text,
-                                                                TextEmbeddingOptions options = {});
-[[nodiscard]] core::Result<VectorEmbedding> make_record_embedding(const Record& record,
-                                                                  TextEmbeddingOptions options = {});
-
 [[nodiscard]] core::Result<void> validate_key(const RecordKey& key);
 [[nodiscard]] core::Result<void> validate_record(const Record& record);
 [[nodiscard]] core::Result<void> validate_query(const Query& query, std::size_t limit);
 [[nodiscard]] core::Result<void> validate_write_request(const WriteRequest& request);
 [[nodiscard]] core::Result<void> validate_touch_request(const TouchRequest& request);
-[[nodiscard]] core::Result<void> validate_decay_request(const DecayRequest& request);
-[[nodiscard]] core::Result<void> validate_embedding(const VectorEmbedding& embedding);
-[[nodiscard]] core::Result<void> validate_vector_upsert(const VectorUpsert& request);
-[[nodiscard]] core::Result<void> validate_vector_search_query(const VectorSearchQuery& query, std::size_t limit);
-[[nodiscard]] core::Result<void> validate_vector_remove(const VectorRemoveRequest& request);
-[[nodiscard]] core::Result<void> validate_hybrid_search_request(const HybridSearchRequest& request);
 
 }  // namespace orangutan::memory::longterm
 

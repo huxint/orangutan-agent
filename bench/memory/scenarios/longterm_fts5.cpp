@@ -1,8 +1,3 @@
-// bench/memory/scenarios/longterm_fts5.cpp
-//
-// Measure the default long-term memory lexical search path on the 10k-record
-// corpus called out by spec 0005 before sqlite-vec/hybrid work lands.
-
 #include <nanobench.h>
 
 #include <chrono>
@@ -120,12 +115,12 @@ void seed_corpus(asio::io_context& io, memory::longterm::Fts5Backend& backend) {
   }
 }
 
-[[gnu::noinline]] std::size_t run_fts5_search(asio::io_context& io, memory::longterm::Runtime& runtime) {
+[[gnu::noinline]] std::size_t run_fts5_search(asio::io_context& io, memory::longterm::Backend& backend) {
   std::size_t rows = 0;
   asio::co_spawn(
       io,
       [&]() -> async::Awaitable<void> {
-        auto hits = co_await runtime.search(
+        auto hits = co_await backend.search(
             memory::longterm::Query{
                 .scope_key = std::string{kScopeKey},
                 .text = "react agent loop",
@@ -161,11 +156,10 @@ void register_longterm_fts5(ankerl::nanobench::Bench& bench) {
   }
   memory::longterm::Fts5Backend backend{*pool};
   seed_corpus(io, backend);
-  memory::longterm::Runtime runtime{backend};
 
   bench.epochs(5).minEpochIterations(20).warmup(2);
   bench.run("memory.longterm_fts5_search_10k_limit10", [&] {
-    const auto rows = run_fts5_search(io, runtime);
+    const auto rows = run_fts5_search(io, backend);
     ankerl::nanobench::doNotOptimizeAway(rows);
   });
 }

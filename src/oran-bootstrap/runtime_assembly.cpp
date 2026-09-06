@@ -167,7 +167,6 @@ struct RuntimeAssembly::Impl {
   std::unique_ptr<memory::session::Store> session_store;
   std::unique_ptr<storage::Pool> longterm_memory_pool;
   std::unique_ptr<memory::longterm::Fts5Backend> longterm_memory_backend;
-  std::unique_ptr<memory::longterm::Runtime> longterm_memory_runtime;
   std::unique_ptr<permission::AuditSink> audit_sink;
   std::unique_ptr<permission::ApprovalBroker> approval_broker;
   std::unique_ptr<tool::Workspace> workspace;
@@ -238,12 +237,8 @@ memory::longterm::Backend* RuntimeAssembly::longterm_memory_backend() noexcept {
   return impl_->longterm_memory_backend.get();
 }
 
-memory::longterm::Runtime* RuntimeAssembly::longterm_memory_runtime() noexcept {
-  return impl_->longterm_memory_runtime.get();
-}
-
 bool RuntimeAssembly::longterm_memory_enabled() const noexcept {
-  return impl_->longterm_memory_runtime != nullptr;
+  return impl_->longterm_memory_backend != nullptr;
 }
 
 std::string_view RuntimeAssembly::longterm_memory_path() const noexcept {
@@ -329,7 +324,6 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
     }
     impl->longterm_memory_pool = std::make_unique<storage::Pool>(std::move(*memory_pool));
     impl->longterm_memory_backend = std::make_unique<memory::longterm::Fts5Backend>(*impl->longterm_memory_pool);
-    impl->longterm_memory_runtime = std::make_unique<memory::longterm::Runtime>(*impl->longterm_memory_backend);
   }
 
   if (!options.audit_enabled) {

@@ -117,8 +117,7 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
   return hook::MemoryReadHitPayload{
       .record = hook_memory_record(hit.record),
       .score = hit.score,
-      .lexical_score = hit.lexical_score,
-      .vector_score = hit.vector_score,
+      .lexical_score = hit.score,
       .redacted_record = redacted_hook_memory_record(hit.record),
   };
 }
@@ -156,7 +155,6 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
       .kinds = request.kinds,
       .match_count = payload_hits.size(),
       .hits = std::move(payload_hits),
-      .hybrid = false,
       .started_at = started_at,
       .finished_at = finished_at,
       .duration = duration_between(started_at, finished_at),
@@ -206,7 +204,7 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
   return std::format("MemoryForget: removed record {}", key.id);
 }
 
-[[nodiscard]] async::Awaitable<Result<tool::Output>> recall_memory(memory::longterm::Runtime& runtime,
+[[nodiscard]] async::Awaitable<Result<tool::Output>> recall_memory(memory::longterm::Backend& backend,
                                                                    std::string scope_key,
                                                                    tool::MemoryRecallRequest request,
                                                                    tool::DispatchContext& ctx) {
@@ -216,7 +214,7 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
   }
   const auto started_at = core::time::now_utc();
   auto recalled = co_await asio::co_spawn(ctx.executor,
-                                          runtime.recall(memory::longterm::RecallRequest{
+                                          memory::longterm::recall(backend, memory::longterm::RecallRequest{
                                               .query =
                                                   memory::longterm::Query{
                                                       .scope_key = scope_key,
@@ -354,11 +352,10 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
 }  // namespace
 
 void bind_memory_tools(tool::DispatchContext& context,
-                       memory::longterm::Runtime& runtime,
                        memory::longterm::Backend& backend,
                        std::string scope_key) {
-  context.memory_recall = [&runtime, scope_key](tool::MemoryRecallRequest request, tool::DispatchContext& ctx) {
-    return recall_memory(runtime, scope_key, std::move(request), ctx);
+  context.memory_recall = [&backend, scope_key](tool::MemoryRecallRequest request, tool::DispatchContext& ctx) {
+    return recall_memory(backend, scope_key, std::move(request), ctx);
   };
   context.memory_remember = [&backend, scope_key](tool::MemoryRememberRequest request, tool::DispatchContext& ctx) {
     return remember_memory(backend, scope_key, std::move(request), ctx);

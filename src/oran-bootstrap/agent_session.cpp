@@ -118,9 +118,9 @@ using core::Result;
       return std::unexpected(
           Error::invalid_argument("agent session long-term recall cannot be combined with exact memory framing"));
     }
-    if (options.assembly->longterm_memory_runtime() == nullptr) {
+    if (options.assembly->longterm_memory_backend() == nullptr) {
       return std::unexpected(
-          Error::invalid_argument("agent session long-term recall requires long-term memory runtime"));
+          Error::invalid_argument("agent session long-term recall requires long-term memory backend"));
     }
   }
   return {};
@@ -198,8 +198,8 @@ public:
     context.output_caps = output_caps_;
     std::size_t child_runs = 0;
     bind_child_agents(context, options_, *registry_, *scheduler_, child_runs);
-    if (auto* runtime = options_.assembly->longterm_memory_runtime(); runtime != nullptr) {
-      bind_memory_tools(context, *runtime, *options_.assembly->longterm_memory_backend(), options_.scope_key);
+    if (auto* backend = options_.assembly->longterm_memory_backend(); backend != nullptr) {
+      bind_memory_tools(context, *backend, options_.scope_key);
     }
 
     auto memory_framing = options_.memory_framing;
@@ -385,7 +385,7 @@ core::Result<std::unique_ptr<AgentSession>> AgentSession::create(AgentSessionOpt
     if (auto added = tool::register_builtins(*registry); !added) {
       return std::unexpected(std::move(added).error());
     }
-    if (options.assembly->longterm_memory_runtime() != nullptr) {
+    if (options.assembly->longterm_memory_backend() != nullptr) {
       if (auto added = tool::register_memory_tools(*registry); !added) {
         return std::unexpected(std::move(added).error());
       }

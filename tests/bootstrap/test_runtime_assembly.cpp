@@ -100,29 +100,6 @@ permission::AuditEvent make_event(std::string scope, std::string tool, permissio
   return core::Time{sys_days{year{2026} / January / day{1}}};
 }
 
-storage::TraceId trace_id_with(unsigned char seed) {
-  storage::TraceId id{};
-  for (std::size_t i = 0; i < id.size(); ++i) {
-    id[i] = static_cast<std::byte>(seed + i);
-  }
-  return id;
-}
-
-storage::AppendTraceTurnRequest
-make_trace_turn(storage::TraceId turn_id, storage::TraceId session_id, std::int64_t started_at_ns) {
-  return storage::AppendTraceTurnRequest{
-      .turn_id = turn_id,
-      .session_id = session_id,
-      .agent_key = "coder",
-      .origin = "bootstrap",
-      .route_profile = "fake-main",
-      .route_model = "fake-model",
-      .started_at_ns = started_at_ns,
-      .finished_at_ns = started_at_ns + 25,
-      .stop_reason = "end_turn",
-  };
-}
-
 memory::longterm::Record make_longterm_record() {
   const auto created = core::Time{core::Time::time_point{1s}};
   const auto updated = core::Time{core::Time::time_point{2s}};
@@ -240,7 +217,6 @@ TEST_CASE("RuntimeAssembly::build provisions memory.db at the workspace default 
     REQUIRE(built.has_value());
     REQUIRE(built->longterm_memory_enabled());
     REQUIRE(built->longterm_memory_backend() != nullptr);
-    REQUIRE(built->longterm_memory_runtime() != nullptr);
     REQUIRE(built->longterm_memory_path() == (temp.path() / ".orangutan" / "memory.db").string());
 
     const auto memory_db = temp.path() / ".orangutan" / "memory.db";
@@ -252,7 +228,7 @@ TEST_CASE("RuntimeAssembly::build provisions memory.db at the workspace default 
     auto upserted = co_await built->longterm_memory_backend()->upsert(memory::longterm::WriteRequest{.record = record});
     REQUIRE(upserted.has_value());
 
-    auto recalled = co_await built->longterm_memory_runtime()->recall(memory::longterm::RecallRequest{
+    auto recalled = co_await memory::longterm::recall(*built->longterm_memory_backend(), memory::longterm::RecallRequest{
         .query =
             memory::longterm::Query{
                 .scope_key = "cli",
@@ -341,7 +317,6 @@ TEST_CASE("RuntimeAssembly::build can disable long-term memory", "[unit][bootstr
   REQUIRE(built.has_value());
   REQUIRE_FALSE(built->longterm_memory_enabled());
   REQUIRE(built->longterm_memory_backend() == nullptr);
-  REQUIRE(built->longterm_memory_runtime() == nullptr);
   REQUIRE(built->longterm_memory_path().empty());
   REQUIRE_FALSE(std::filesystem::exists(temp.path() / ".orangutan" / "memory.db"));
 }

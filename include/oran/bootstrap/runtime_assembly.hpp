@@ -21,7 +21,6 @@ class Store;
 }
 namespace orangutan::memory::longterm {
 class Backend;
-class Runtime;
 }  // namespace orangutan::memory::longterm
 namespace orangutan::storage {
 class TraceRepository;
@@ -78,7 +77,6 @@ public:
   [[nodiscard]] bool session_memory_enabled() const noexcept;
   [[nodiscard]] std::string_view sessions_path() const noexcept;
   [[nodiscard]] memory::longterm::Backend* longterm_memory_backend() noexcept;
-  [[nodiscard]] memory::longterm::Runtime* longterm_memory_runtime() noexcept;
   [[nodiscard]] bool longterm_memory_enabled() const noexcept;
   [[nodiscard]] std::string_view longterm_memory_path() const noexcept;
 

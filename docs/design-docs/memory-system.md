@@ -30,13 +30,21 @@ A `RecordKey` is `(scope_key, id)`. Every read, write and removal supplies that
 scope. Record kinds are user, feedback, project, reference and team. These are
 stored classifications, not evidence of a running team subsystem.
 
-The default `Fts5Backend` stores records in `memory.db`, maintains its FTS index
-transactionally and filters shadowed records from ordinary recall. `Runtime`
-performs bounded lexical search and renders the selected records. Rendering is
-a pure function of those records; timestamps, request IDs and scores stay out
-of cached prompt text. Automatic recall uses the current prompt as its query and
-runs once through `MemoryRecall` before the provider/tool loop. It obeys the same
-permissions, hooks, audit and output limits as an explicit tool call.
+`Fts5Backend` stores records in `memory.db`, maintains its FTS index transactionally
+and filters shadowed records from ordinary recall. The `Backend` boundary
+validates scoped queries before storage access. `recall(Backend&, RecallRequest)`
+searches with the requested limit, updates the selected records' read timestamps
+and returns owned hits and framing. The host owns the backend and its pool.
+
+Rendering is a pure function of the selected records; timestamps, request IDs
+and scores stay out of cached prompt text. Automatic recall uses the current
+prompt as its query and runs once through `MemoryRecall` before the provider/tool
+loop. It obeys the same permissions, hooks, audit and output limits as an explicit
+tool call.
+
+Retrieval values carry one lexical score. Tool-result JSON and memory-read hook
+payloads retain `score`, `lexical_score` and a null `vector_score` for compatibility
+with recorded results and hook consumers.
 
 `MemoryRecall`, `MemoryRemember` and `MemoryForget` enter through tool validation,
 permissions, hooks and audit. Their bindings receive the session's scope from
@@ -46,13 +54,9 @@ gate; accepted writes, recalls and deletions publish advisory observations.
 SQLite operations use the blocking executor. Hook publication and session-state
 updates resume on the coordinating strand.
 
-## Existing Optional Library Surface
-
-The library still contains a sqlite-vec backend and lexical/vector combination
-for embedders. The executable uses lexical recall. Decay remains
-available at the backend boundary. These optional library operations are not
-part of session execution or runtime startup.
-
 User database contents and migration history are preserved during API reduction.
+Existing optional index tables, including sqlite-vec data, are left intact when
+opening the lexical store. Record metadata, shadow flags and stored kinds retain
+their existing encoding.
 [Storage](storage-runtime.md) owns persistence mechanics;
 [agent execution](agent-platform.md) owns parent/child session composition.

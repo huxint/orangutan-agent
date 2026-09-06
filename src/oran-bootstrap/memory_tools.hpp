@@ -6,7 +6,6 @@
 #include <oran/core/result.hpp>
 
 namespace orangutan::memory::longterm {
-class Runtime;
 class Backend;
 }  // namespace orangutan::memory::longterm
 
@@ -21,7 +20,6 @@ namespace orangutan::bootstrap {
 // Services outlive the dispatch context and every tool borrowing it. Scope is
 // captured from the host; tool inputs cannot select a different memory owner.
 void bind_memory_tools(tool::DispatchContext& context,
-                       memory::longterm::Runtime& runtime,
                        memory::longterm::Backend& backend,
                        std::string scope_key);
 

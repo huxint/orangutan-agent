@@ -784,7 +784,6 @@ TEST_CASE("AgentSession recalls long-term memory once before loop iterations",
     REQUIRE(read->hits[0].redacted_record.has_value());
     REQUIRE(read->hits[0].redacted_record->body_bytes ==
             std::string_view{"Recall plumbing reaches the prompt boundary."}.size());
-    REQUIRE_FALSE(read->hybrid);
     REQUIRE(read->finished_at >= read->started_at);
   });
 }
@@ -857,7 +856,6 @@ TEST_CASE("AgentSession dispatches MemoryRecall through long-term runtime",
     REQUIRE(read->hits[0].redacted_record.has_value());
     REQUIRE(read->hits[0].redacted_record->body_bytes ==
             std::string_view{"Memory tool found toolrecallanchor in the project."}.size());
-    REQUIRE_FALSE(read->hybrid);
     REQUIRE(read->finished_at >= read->started_at);
   });
 }

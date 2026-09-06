@@ -424,8 +424,7 @@ Pool::Pool(Pool&&) noexcept = default;
 
 Pool& Pool::operator=(Pool&&) noexcept = default;
 
-core::Result<Pool>
-Pool::open(asio::any_io_executor executor, PoolOptions options, std::span<const SqliteExtensionInit> auto_extensions) {
+core::Result<Pool> Pool::open(asio::any_io_executor executor, PoolOptions options) {
   if (options.path.empty()) {
     return std::unexpected(core::Error::invalid_argument("pool path must not be empty"));
   }
@@ -445,8 +444,7 @@ Pool::open(asio::any_io_executor executor, PoolOptions options, std::span<const 
           .busy_timeout_ms = options.busy_timeout_ms,
           .enable_wal = options.enable_wal,
           .enforce_foreign_keys = options.enforce_foreign_keys,
-      },
-      auto_extensions);
+      });
   if (!writer) {
     return std::unexpected(std::move(writer.error()).with("pool_role", "writer"));
   }
@@ -468,8 +466,7 @@ Pool::open(asio::any_io_executor executor, PoolOptions options, std::span<const 
             .busy_timeout_ms = options.busy_timeout_ms,
             .enable_wal = false,
             .enforce_foreign_keys = options.enforce_foreign_keys,
-        },
-        auto_extensions);
+        });
     if (!reader) {
       return std::unexpected(
           std::move(reader.error()).with("pool_role", "reader").with("pool_slot", std::to_string(i)));

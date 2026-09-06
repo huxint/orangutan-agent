@@ -41,9 +41,8 @@ being active; the current default selection does not apply them. Explicit
 are [tracked](exec-plans/tech-debt-tracker.md); verify actual compiler/linker
 arguments before claiming LTO or sanitizer coverage.
 
-`vector_memory` enables the existing
-sqlite-vec backend for library callers. `modules` is experimental; no module
-migration has been accepted. No GUI or messaging SDK is required.
+`modules` is experimental; no module migration has been accepted. No GUI or
+messaging SDK is required.
 
 System libcurl development headers and pkg-config must be installed before
 configuration. Xmake supplies Asio, Catch2, libsodium, nanobench, nlohmann_json,

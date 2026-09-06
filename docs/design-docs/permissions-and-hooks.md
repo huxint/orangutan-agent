@@ -93,7 +93,6 @@ enum class Event {
   memory_write_before,
   memory_write_after,
   memory_forget,
-  memory_decay,
   // channel adapters
   channel_start,
   channel_stop,

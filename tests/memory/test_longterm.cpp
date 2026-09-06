@@ -1,8 +1,7 @@
 // tests/memory/test_longterm.cpp — long-term memory contract coverage.
 
-#include <algorithm>
+#include <array>
 #include <chrono>
-#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <limits>
@@ -98,186 +97,6 @@ memory::longterm::Record make_record(std::string id,
   return record;
 }
 
-memory::longterm::VectorEmbedding make_embedding() {
-  return memory::longterm::VectorEmbedding{
-      .model = "test-embedding-v1",
-      .values = {0.25F, -0.5F, 0.75F},
-  };
-}
-
-[[nodiscard]] bool same_key(const memory::longterm::RecordKey& lhs, const memory::longterm::RecordKey& rhs) noexcept {
-  return lhs.id == rhs.id && lhs.scope_key == rhs.scope_key;
-}
-
-class FakeBackend final : public memory::longterm::Backend {
-public:
-  explicit FakeBackend(memory::longterm::Record record)
-      : FakeBackend{std::vector<memory::longterm::SearchHit>{memory::longterm::SearchHit{
-            .record = record,
-            .score = 0.9,
-            .lexical_score = 0.8,
-            .vector_score = 0.7,
-        }}} {}
-
-  explicit FakeBackend(std::vector<memory::longterm::SearchHit> hits) : FakeBackend{std::move(hits), {}} {}
-
-  FakeBackend(std::vector<memory::longterm::SearchHit> hits, std::vector<memory::longterm::Record> records)
-      : hits_{std::move(hits)}, records_{std::move(records)} {
-    for (const auto& hit : hits_) {
-      auto existing = std::ranges::find_if(records_, [&hit](const memory::longterm::Record& record) {
-        return same_key(record.key, hit.record.key);
-      });
-      if (existing == records_.end()) {
-        records_.push_back(hit.record);
-      }
-    }
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<memory::longterm::Record>> get(memory::longterm::RecordKey key) override {
-    ++get_calls;
-    last_key = std::move(key);
-    auto record = std::ranges::find_if(records_, [this](const memory::longterm::Record& candidate) {
-      return same_key(candidate.key, last_key);
-    });
-    if (record == records_.end()) {
-      co_return std::unexpected(core::Error::not_found("record not found"));
-    }
-    co_return *record;
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<std::vector<memory::longterm::SearchHit>>>
-  search(memory::longterm::Query query, std::size_t limit) override {
-    ++search_calls;
-    last_query = std::move(query);
-    last_limit = limit;
-    co_return hits_;
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<memory::longterm::Record>>
-  upsert(memory::longterm::WriteRequest request) override {
-    auto record = request.record;
-    auto existing = std::ranges::find_if(records_, [&record](const memory::longterm::Record& candidate) {
-      return same_key(candidate.key, record.key);
-    });
-    if (existing == records_.end()) {
-      records_.push_back(record);
-    } else {
-      *existing = record;
-    }
-    hits_ = {memory::longterm::SearchHit{
-        .record = record,
-        .score = 0.9,
-        .lexical_score = 0.8,
-        .vector_score = std::nullopt,
-    }};
-    co_return record;
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<memory::longterm::Record>>
-  touch(memory::longterm::TouchRequest request) override {
-    ++touch_calls;
-    last_touch = request;
-    last_key = request.key;
-    auto record = std::ranges::find_if(records_, [this](const memory::longterm::Record& candidate) {
-      return same_key(candidate.key, last_key);
-    });
-    if (record == records_.end()) {
-      co_return std::unexpected(core::Error::not_found("record not found"));
-    }
-    if (record->last_read_at < request.read_at) {
-      record->last_read_at = request.read_at;
-    }
-    for (auto& hit : hits_) {
-      if (same_key(hit.record.key, record->key)) {
-        hit.record = *record;
-      }
-    }
-    co_return *record;
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<memory::longterm::DecayResult>>
-  decay(memory::longterm::DecayRequest request) override {
-    ++decay_calls;
-    last_decay = request;
-    auto result = memory::longterm::DecayResult{};
-    for (auto& record : records_) {
-      if (record.key.scope_key != request.scope_key || record.shadow || record.last_read_at >= request.unused_before ||
-          record.importance > request.importance_floor || result.shadowed_records.size() >= request.limit) {
-        continue;
-      }
-      record.shadow = true;
-      if (record.updated_at < request.decay_at) {
-        record.updated_at = request.decay_at;
-      }
-      result.shadowed_records.push_back(record);
-      for (auto& hit : hits_) {
-        if (same_key(hit.record.key, record.key)) {
-          hit.record = record;
-        }
-      }
-    }
-    co_return result;
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<void>> remove(memory::longterm::RecordKey key) override {
-    last_key = std::move(key);
-    co_return core::Result<void>{};
-  }
-
-  memory::longterm::RecordKey last_key;
-  memory::longterm::Query last_query;
-  memory::longterm::TouchRequest last_touch;
-  memory::longterm::DecayRequest last_decay;
-  std::size_t last_limit{};
-  std::size_t search_calls{};
-  std::size_t get_calls{};
-  std::size_t touch_calls{};
-  std::size_t decay_calls{};
-
-private:
-  std::vector<memory::longterm::SearchHit> hits_;
-  std::vector<memory::longterm::Record> records_;
-};
-
-class FakeVectorBackend final : public memory::longterm::VectorBackend {
-public:
-  FakeVectorBackend()
-      : hits_{memory::longterm::VectorHit{
-            .key = memory::longterm::RecordKey{.id = "rec-1", .scope_key = "agent:coder"},
-            .score = 0.95,
-        }} {}
-
-  explicit FakeVectorBackend(std::vector<memory::longterm::VectorHit> hits) : hits_{std::move(hits)} {}
-
-  [[nodiscard]] async::Awaitable<core::Result<void>> upsert(memory::longterm::VectorUpsert request) override {
-    last_key = std::move(request.key);
-    co_return core::Result<void>{};
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<std::vector<memory::longterm::VectorHit>>>
-  search(memory::longterm::VectorSearchQuery query, std::size_t limit) override {
-    ++search_calls;
-    last_query = query;
-    last_scope_key = std::move(query.scope_key);
-    last_limit = limit;
-    co_return hits_;
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<void>> remove(memory::longterm::VectorRemoveRequest request) override {
-    last_key = std::move(request.key);
-    co_return core::Result<void>{};
-  }
-
-  memory::longterm::RecordKey last_key;
-  memory::longterm::VectorSearchQuery last_query;
-  std::string last_scope_key;
-  std::size_t last_limit{};
-  std::size_t search_calls{};
-
-private:
-  std::vector<memory::longterm::VectorHit> hits_;
-};
-
 }  // namespace
 
 TEST_CASE("longterm::RecordKind uses reflection-backed wire spelling", "[unit][memory][longterm]") {
@@ -297,15 +116,6 @@ TEST_CASE("longterm validation accepts well-shaped record and query contracts", 
   REQUIRE(memory::longterm::validate_record(record).has_value());
   REQUIRE(memory::longterm::validate_write_request(memory::longterm::WriteRequest{.record = record}).has_value());
   REQUIRE(memory::longterm::validate_touch_request(memory::longterm::TouchRequest{.key = record.key}).has_value());
-  REQUIRE(memory::longterm::validate_decay_request(memory::longterm::DecayRequest{
-                                                       .scope_key = "agent:coder",
-                                                       .unused_before = core::Time{core::Time::time_point{10s}},
-                                                       .importance_floor = 0.5,
-                                                       .limit = 3,
-                                                       .decay_at = core::Time{core::Time::time_point{20s}},
-                                                   })
-              .has_value());
-
   auto query = memory::longterm::Query{
       .scope_key = "agent:coder",
       .text = "scoped slices",
@@ -367,214 +177,86 @@ TEST_CASE("longterm validation rejects malformed search contracts", "[unit][memo
   REQUIRE_FALSE(zero_limit.has_value());
   REQUIRE(zero_limit.error().kind() == core::ErrorKind::invalid_argument);
 
-  auto bad_decay = memory::longterm::validate_decay_request(memory::longterm::DecayRequest{
-      .scope_key = "agent:coder",
-      .unused_before = core::Time{core::Time::time_point{10s}},
-      .importance_floor = 1.5,
-      .limit = 1,
-      .decay_at = core::Time{core::Time::time_point{20s}},
-  });
-  REQUIRE_FALSE(bad_decay.has_value());
-  REQUIRE(bad_decay.error().kind() == core::ErrorKind::invalid_argument);
-
-  bad_decay = memory::longterm::validate_decay_request(memory::longterm::DecayRequest{
-      .scope_key = "agent:coder",
-      .unused_before = core::Time{core::Time::time_point{10s}},
-      .importance_floor = 0.5,
-      .limit = 0,
-      .decay_at = core::Time{core::Time::time_point{20s}},
-  });
-  REQUIRE_FALSE(bad_decay.has_value());
-  REQUIRE(bad_decay.error().kind() == core::ErrorKind::invalid_argument);
 }
 
-TEST_CASE("longterm vector validation pins sqlite-vec adapter inputs", "[unit][memory][longterm]") {
-  auto embedding = make_embedding();
-  REQUIRE(memory::longterm::validate_embedding(embedding).has_value());
-  REQUIRE(memory::longterm::validate_vector_upsert(
-              memory::longterm::VectorUpsert{
-                  .key = memory::longterm::RecordKey{.id = "rec-1", .scope_key = "agent:coder"},
-                  .embedding = embedding,
-              })
-              .has_value());
-  REQUIRE(memory::longterm::validate_vector_search_query(
-              memory::longterm::VectorSearchQuery{
-                  .scope_key = "agent:coder",
-                  .embedding = embedding,
-                  .kinds = {memory::longterm::RecordKind::project},
-              },
-              10)
-              .has_value());
+TEST_CASE("longterm recall rejects invalid queries before storage access", "[unit][memory][longterm][recall]") {
+  TempDb db{"oran-memory-invalid-recall"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    memory::longterm::Fts5Backend backend{pool};
 
-  embedding.values.push_back(std::numeric_limits<float>::infinity());
-  auto invalid = memory::longterm::validate_embedding(embedding);
-  REQUIRE_FALSE(invalid.has_value());
-  REQUIRE(invalid.error().kind() == core::ErrorKind::invalid_argument);
-}
-
-TEST_CASE("longterm backend interfaces compose through async contracts", "[unit][memory][longterm]") {
-  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
-    FakeBackend backend{make_record()};
-
-    auto fetched = co_await backend.get(memory::longterm::RecordKey{.id = "rec-1", .scope_key = "agent:coder"});
-    REQUIRE(fetched.has_value());
-    REQUIRE(fetched->key.id == "rec-1");
-
-    auto hits = co_await backend.search(
-        memory::longterm::Query{
-            .scope_key = "agent:coder",
-            .text = "workflow",
-            .kinds = {},
-        },
-        5);
-    REQUIRE(hits.has_value());
-    REQUIRE(hits->size() == 1);
-    REQUIRE((*hits)[0].score == 0.9);
-    REQUIRE(backend.last_limit == 5);
-
-    auto upserted = co_await backend.upsert(memory::longterm::WriteRequest{.record = make_record()});
-    REQUIRE(upserted.has_value());
-
-    auto decayed = co_await backend.decay(memory::longterm::DecayRequest{
-        .scope_key = "agent:coder",
-        .unused_before = core::Time{core::Time::time_point{10s}},
-        .importance_floor = 1.0,
-        .limit = 5,
-        .decay_at = core::Time{core::Time::time_point{11s}},
-    });
-    REQUIRE(decayed.has_value());
-    REQUIRE(decayed->shadowed_records.size() == 1);
-    REQUIRE(decayed->shadowed_records[0].shadow);
-    REQUIRE(backend.decay_calls == 1);
-
-    auto removed = co_await backend.remove(memory::longterm::RecordKey{.id = "rec-1", .scope_key = "agent:coder"});
-    REQUIRE(removed.has_value());
-  });
-}
-
-TEST_CASE("longterm::Runtime validates and delegates backend search", "[unit][memory][longterm][runtime]") {
-  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
-    FakeBackend backend{make_record()};
-    memory::longterm::Runtime runtime{backend};
-    auto query = memory::longterm::Query{
-        .scope_key = "agent:coder",
-        .text = "workflow",
-        .kinds = {memory::longterm::RecordKind::project},
-    };
-
-    auto hits = co_await runtime.search(query, 4);
-    REQUIRE(hits.has_value());
-    REQUIRE(hits->size() == 1);
-    REQUIRE(backend.search_calls == 1);
-    REQUIRE(backend.touch_calls == 0);
-    REQUIRE(backend.last_query == query);
-    REQUIRE(backend.last_limit == 4);
-  });
-}
-
-TEST_CASE("longterm::Runtime rejects invalid recall before backend dispatch", "[unit][memory][longterm][runtime]") {
-  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
-    FakeBackend backend{make_record()};
-    memory::longterm::Runtime runtime{backend};
-
-    auto result = co_await runtime.recall(memory::longterm::RecallRequest{
-        .query =
-            memory::longterm::Query{
-                .scope_key = "agent:coder",
-                .text = "",
-                .kinds = {},
-            },
+    auto result = co_await memory::longterm::recall(backend, memory::longterm::RecallRequest{
+        .query = memory::longterm::Query{.scope_key = "agent:coder", .text = "", .kinds = {}},
         .limit = 5,
     });
 
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
-    REQUIRE(backend.search_calls == 0);
   });
 }
 
-TEST_CASE("longterm::Runtime renders deterministic recall framing", "[unit][memory][longterm][runtime]") {
-  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
-    auto record = make_record();
-    record.body = "The repository prefers scoped slices.\nDocs move with code.";
-    FakeBackend backend{record};
-    memory::longterm::Runtime runtime{backend};
+TEST_CASE("longterm recall framing follows record content", "[unit][memory][longterm][recall]") {
+  const auto hits = std::array{memory::longterm::SearchHit{.record = make_record(), .score = 0.9}};
 
-    auto result = co_await runtime.recall(memory::longterm::RecallRequest{
-        .query =
-            memory::longterm::Query{
-                .scope_key = "agent:coder",
-                .text = "workflow",
-                .kinds = {},
-            },
+  const auto framing = memory::longterm::render_recall_framing(hits);
+
+  REQUIRE(framing.section_text == "Long-term memory:\n"
+                                   "- [project] Build notes (id: rec-1)\n"
+                                   "  The repository prefers scoped slices. Docs move with code.\n"
+                                   "  tags: repo, workflow\n"
+                                   "  linked: rec-0\n");
+}
+
+TEST_CASE("longterm recall persists read timestamps within the query scope", "[unit][memory][longterm][recall]") {
+  TempDb db{"oran-memory-recall-touch"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    memory::longterm::Fts5Backend backend{pool};
+    auto migrated = co_await backend.migrate();
+    REQUIRE(migrated.has_value());
+    const auto record = make_record();
+    auto other = record;
+    other.key.scope_key = "agent:researcher";
+    auto saved = co_await backend.upsert({.record = record});
+    REQUIRE(saved.has_value());
+    auto saved_other = co_await backend.upsert({.record = other});
+    REQUIRE(saved_other.has_value());
+
+    auto result = co_await memory::longterm::recall(backend, memory::longterm::RecallRequest{
+        .query = memory::longterm::Query{.scope_key = "agent:coder", .text = "workflow", .kinds = {}},
         .limit = 5,
     });
 
     REQUIRE(result.has_value());
     REQUIRE(result->hits.size() == 1);
-    REQUIRE(result->framing.section_text == "Long-term memory:\n"
-                                            "- [project] Build notes (id: rec-1)\n"
-                                            "  The repository prefers scoped slices. Docs move with code.\n"
-                                            "  tags: repo, workflow\n"
-                                            "  linked: rec-0\n");
+    REQUIRE(result->hits[0].record.key == record.key);
+    REQUIRE(result->hits[0].record.last_read_at > record.last_read_at);
+    auto fetched = co_await backend.get(record.key);
+    REQUIRE(fetched.has_value());
+    REQUIRE(fetched->last_read_at == result->hits[0].record.last_read_at);
+    REQUIRE(fetched->updated_at == record.updated_at);
+    auto untouched = co_await backend.get(other.key);
+    REQUIRE(untouched.has_value());
+    REQUIRE(*untouched == other);
   });
 }
 
-TEST_CASE("longterm::Runtime touches recalled hits before returning", "[unit][memory][longterm][runtime]") {
-  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
-    auto record = make_record();
-    const auto previous_read_at = record.last_read_at;
-    FakeBackend backend{record};
-    memory::longterm::Runtime runtime{backend};
+TEST_CASE("longterm recall data_json preserves record and score fields", "[unit][memory][longterm][recall]") {
+  const auto hits = std::array{memory::longterm::SearchHit{.record = make_record(), .score = 0.9}};
 
-    auto result = co_await runtime.recall(memory::longterm::RecallRequest{
-        .query =
-            memory::longterm::Query{
-                .scope_key = "agent:coder",
-                .text = "workflow",
-                .kinds = {},
-            },
-        .limit = 5,
-    });
+  const auto data_json = memory::longterm::render_recall_data_json(hits);
 
-    REQUIRE(result.has_value());
-    REQUIRE(result->hits.size() == 1);
-    REQUIRE(backend.touch_calls == 1);
-    REQUIRE(backend.last_touch.key == record.key);
-    REQUIRE(backend.last_touch.read_at > previous_read_at);
-    REQUIRE(result->hits[0].record.last_read_at == backend.last_touch.read_at);
-  });
+  REQUIRE(data_json.contains(R"("kind":"memory_recall")"));
+  REQUIRE(data_json.contains(R"("match_count":1)"));
+  REQUIRE(data_json.contains(R"("id":"rec-1")"));
+  REQUIRE(data_json.contains(R"("scope_key":"agent:coder")"));
+  REQUIRE(data_json.contains(R"("created_at":"1970-01-01T00:00:01.000Z")"));
+  REQUIRE(data_json.contains(R"("score":0.9)"));
+  REQUIRE(data_json.contains(R"("lexical_score":0.9)"));
+  REQUIRE(data_json.contains(R"("vector_score":null)"));
 }
 
-TEST_CASE("longterm recall data_json carries recalled record metadata", "[unit][memory][longterm][runtime]") {
-  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
-    FakeBackend backend{make_record()};
-    memory::longterm::Runtime runtime{backend};
-
-    auto result = co_await runtime.recall(memory::longterm::RecallRequest{
-        .query =
-            memory::longterm::Query{
-                .scope_key = "agent:coder",
-                .text = "workflow",
-                .kinds = {},
-            },
-        .limit = 5,
-    });
-
-    REQUIRE(result.has_value());
-    auto data_json =
-        memory::longterm::render_recall_data_json(std::span<const memory::longterm::SearchHit>{result->hits});
-    REQUIRE(data_json.contains(R"("kind":"memory_recall")"));
-    REQUIRE(data_json.contains(R"("match_count":1)"));
-    REQUIRE(data_json.contains(R"("id":"rec-1")"));
-    REQUIRE(data_json.contains(R"("scope_key":"agent:coder")"));
-    REQUIRE(data_json.contains(R"("created_at":"1970-01-01T00:00:01.000Z")"));
-    REQUIRE(data_json.contains(R"("lexical_score":0.8)"));
-    REQUIRE(data_json.contains(R"("vector_score":0.7)"));
-  });
-}
-
-TEST_CASE("longterm remember data_json carries saved record metadata", "[unit][memory][longterm][runtime]") {
+TEST_CASE("longterm remember data_json carries saved record metadata", "[unit][memory][longterm][recall]") {
   auto record = make_record();
   record.shadow = true;
 
@@ -590,7 +272,7 @@ TEST_CASE("longterm remember data_json carries saved record metadata", "[unit][m
   REQUIRE_FALSE(data_json.contains(R"("score")"));
 }
 
-TEST_CASE("longterm forget data_json carries scoped removed key", "[unit][memory][longterm][runtime]") {
+TEST_CASE("longterm forget data_json carries scoped removed key", "[unit][memory][longterm][recall]") {
   const auto key = memory::longterm::RecordKey{.id = "rec-1", .scope_key = "agent:coder"};
 
   const auto data_json = memory::longterm::render_forget_data_json(key);
@@ -600,18 +282,16 @@ TEST_CASE("longterm forget data_json carries scoped removed key", "[unit][memory
   REQUIRE_FALSE(data_json.contains(R"("title")"));
 }
 
-TEST_CASE("longterm::Runtime returns empty framing for empty recall", "[unit][memory][longterm][runtime]") {
-  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
-    FakeBackend backend{std::vector<memory::longterm::SearchHit>{}};
-    memory::longterm::Runtime runtime{backend};
+TEST_CASE("longterm recall returns empty framing for no matches", "[unit][memory][longterm][recall]") {
+  TempDb db{"oran-memory-empty-recall"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    memory::longterm::Fts5Backend backend{pool};
+    auto migrated = co_await backend.migrate();
+    REQUIRE(migrated.has_value());
 
-    auto result = co_await runtime.recall(memory::longterm::RecallRequest{
-        .query =
-            memory::longterm::Query{
-                .scope_key = "agent:coder",
-                .text = "workflow",
-                .kinds = {},
-            },
+    auto result = co_await memory::longterm::recall(backend, memory::longterm::RecallRequest{
+        .query = memory::longterm::Query{.scope_key = "agent:coder", .text = "workflow", .kinds = {}},
         .limit = 5,
     });
 
@@ -619,346 +299,6 @@ TEST_CASE("longterm::Runtime returns empty framing for empty recall", "[unit][me
     REQUIRE(result->hits.empty());
     REQUIRE(result->framing.section_text.empty());
   });
-}
-
-TEST_CASE("longterm vector backend interface composes through async contracts", "[unit][memory][longterm]") {
-  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
-    FakeVectorBackend backend;
-
-    auto upserted = co_await backend.upsert(memory::longterm::VectorUpsert{
-        .key = memory::longterm::RecordKey{.id = "rec-1", .scope_key = "agent:coder"},
-        .embedding = make_embedding(),
-    });
-    REQUIRE(upserted.has_value());
-
-    auto hits = co_await backend.search(
-        memory::longterm::VectorSearchQuery{
-            .scope_key = "agent:coder",
-            .embedding = make_embedding(),
-            .kinds = {},
-        },
-        3);
-    REQUIRE(hits.has_value());
-    REQUIRE(hits->size() == 1);
-    REQUIRE((*hits)[0].key.scope_key == "agent:coder");
-    REQUIRE(backend.last_limit == 3);
-
-    auto removed = co_await backend.remove(memory::longterm::VectorRemoveRequest{
-        .key = memory::longterm::RecordKey{.id = "rec-1", .scope_key = "agent:coder"},
-    });
-    REQUIRE(removed.has_value());
-  });
-}
-
-TEST_CASE("longterm::SqliteVecBackend reports disabled vector builds", "[unit][memory][longterm][sqlite-vec]") {
-  TempDb db{"oran-memory-sqlite-vec-disabled"};
-  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
-#if defined(ORAN_ENABLE_SQLITE_VEC)
-    auto extensions = memory::longterm::SqliteVecBackend::auto_extensions();
-    auto enabled_pool = storage::Pool::open(
-        io.get_executor(),
-        storage::PoolOptions{.path = db.string(), .reader_count = 2, .statement_cache_capacity = 16},
-        extensions);
-    REQUIRE(enabled_pool.has_value());
-    auto& pool = *enabled_pool;
-#else
-    auto pool = open_pool(io, db);
-#endif
-    memory::longterm::SqliteVecBackend backend{pool, memory::longterm::SqliteVecBackendOptions{.dimensions = 3}};
-
-    auto migrated = co_await backend.migrate();
-#if defined(ORAN_ENABLE_SQLITE_VEC)
-    REQUIRE(migrated.has_value());
-#else
-    REQUIRE_FALSE(migrated.has_value());
-    REQUIRE(migrated.error().kind() == core::ErrorKind::config);
-#endif
-  });
-}
-
-#if defined(ORAN_ENABLE_SQLITE_VEC)
-TEST_CASE("longterm::SqliteVecBackend upserts, searches, and removes scoped vectors",
-          "[unit][memory][longterm][sqlite-vec]") {
-  TempDb db{"oran-memory-sqlite-vec"};
-  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
-    auto pool = storage::Pool::open(io.get_executor(),
-                                    storage::PoolOptions{
-                                        .path = db.string(),
-                                        .reader_count = 2,
-                                        .statement_cache_capacity = 16,
-                                    },
-                                    memory::longterm::SqliteVecBackend::auto_extensions());
-    REQUIRE(pool.has_value());
-    memory::longterm::SqliteVecBackend backend{*pool, memory::longterm::SqliteVecBackendOptions{.dimensions = 3}};
-
-    auto migrated = co_await backend.migrate();
-    REQUIRE(migrated.has_value());
-
-    REQUIRE(
-        (co_await backend.upsert(memory::longterm::VectorUpsert{
-             .key = memory::longterm::RecordKey{.id = "rec-a", .scope_key = "agent:coder"},
-             .embedding = memory::longterm::VectorEmbedding{.model = "test-embedding-v1", .values = {1.0F, 0.0F, 0.0F}},
-         }))
-            .has_value());
-    REQUIRE(
-        (co_await backend.upsert(memory::longterm::VectorUpsert{
-             .key = memory::longterm::RecordKey{.id = "rec-b", .scope_key = "agent:coder"},
-             .embedding = memory::longterm::VectorEmbedding{.model = "test-embedding-v1", .values = {0.0F, 1.0F, 0.0F}},
-         }))
-            .has_value());
-    REQUIRE(
-        (co_await backend.upsert(memory::longterm::VectorUpsert{
-             .key = memory::longterm::RecordKey{.id = "rec-other", .scope_key = "agent:researcher"},
-             .embedding = memory::longterm::VectorEmbedding{.model = "test-embedding-v1", .values = {1.0F, 0.0F, 0.0F}},
-         }))
-            .has_value());
-
-    auto hits = co_await backend.search(
-        memory::longterm::VectorSearchQuery{
-            .scope_key = "agent:coder",
-            .embedding = memory::longterm::VectorEmbedding{.model = "test-embedding-v1", .values = {1.0F, 0.0F, 0.0F}},
-            .kinds = {},
-        },
-        10);
-    REQUIRE(hits.has_value());
-    REQUIRE(hits->size() == 2);
-    REQUIRE((*hits)[0].key.id == "rec-a");
-    REQUIRE((*hits)[0].key.scope_key == "agent:coder");
-    REQUIRE((*hits)[0].score > (*hits)[1].score);
-    REQUIRE((*hits)[1].key.id == "rec-b");
-
-    REQUIRE((co_await backend.remove(memory::longterm::VectorRemoveRequest{
-                 .key = memory::longterm::RecordKey{.id = "rec-a", .scope_key = "agent:coder"},
-             }))
-                .has_value());
-    auto after_remove = co_await backend.search(
-        memory::longterm::VectorSearchQuery{
-            .scope_key = "agent:coder",
-            .embedding = memory::longterm::VectorEmbedding{.model = "test-embedding-v1", .values = {1.0F, 0.0F, 0.0F}},
-            .kinds = {},
-        },
-        10);
-    REQUIRE(after_remove.has_value());
-    REQUIRE(after_remove->size() == 1);
-    REQUIRE((*after_remove)[0].key.id == "rec-b");
-  });
-}
-
-TEST_CASE("longterm::SqliteVecBackend rejects mismatched existing vector dimensions",
-          "[unit][memory][longterm][sqlite-vec]") {
-  TempDb db{"oran-memory-sqlite-vec-dimensions"};
-  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
-    auto pool = storage::Pool::open(io.get_executor(),
-                                    storage::PoolOptions{
-                                        .path = db.string(),
-                                        .reader_count = 2,
-                                        .statement_cache_capacity = 16,
-                                    },
-                                    memory::longterm::SqliteVecBackend::auto_extensions());
-    REQUIRE(pool.has_value());
-    memory::longterm::SqliteVecBackend backend{*pool, memory::longterm::SqliteVecBackendOptions{.dimensions = 3}};
-    REQUIRE((co_await backend.migrate()).has_value());
-
-    memory::longterm::SqliteVecBackend changed{*pool, memory::longterm::SqliteVecBackendOptions{.dimensions = 4}};
-    auto migrated = co_await changed.migrate();
-    REQUIRE_FALSE(migrated.has_value());
-    REQUIRE(migrated.error().kind() == core::ErrorKind::storage);
-  });
-}
-#endif
-
-TEST_CASE("longterm::HybridRuntime merges lexical and vector hits deterministically",
-          "[unit][memory][longterm][runtime]") {
-  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
-    auto lexical_record = make_record("rec-lexical",
-                                      "agent:coder",
-                                      memory::longterm::RecordKind::project,
-                                      "Lexical plan",
-                                      "The lexical backend matched the project plan.");
-    auto vector_record = make_record("rec-vector",
-                                     "agent:coder",
-                                     memory::longterm::RecordKind::project,
-                                     "Vector plan",
-                                     "The vector backend found a semantically close plan.");
-    auto stale_record = memory::longterm::RecordKey{.id = "rec-stale", .scope_key = "agent:coder"};
-
-    FakeBackend lexical{
-        std::vector<memory::longterm::SearchHit>{memory::longterm::SearchHit{
-            .record = lexical_record,
-            .score = 0.5,
-            .lexical_score = 0.5,
-            .vector_score = std::nullopt,
-        }},
-        std::vector<memory::longterm::Record>{vector_record},
-    };
-    FakeVectorBackend vector{
-        std::vector<memory::longterm::VectorHit>{
-            memory::longterm::VectorHit{.key = lexical_record.key, .score = 0.75},
-            memory::longterm::VectorHit{.key = vector_record.key, .score = 0.875},
-            memory::longterm::VectorHit{.key = stale_record, .score = 1.0},
-        },
-    };
-    memory::longterm::HybridRuntime runtime{lexical, vector};
-
-    auto hits = co_await runtime.search(memory::longterm::HybridSearchRequest{
-        .query =
-            memory::longterm::Query{
-                .scope_key = "agent:coder",
-                .text = "project plan",
-                .kinds = {memory::longterm::RecordKind::project},
-            },
-        .embedding = make_embedding(),
-        .lexical_limit = 2,
-        .vector_limit = 3,
-        .result_limit = 2,
-        .lexical_weight = 1.0,
-        .vector_weight = 2.0,
-    });
-
-    REQUIRE(hits.has_value());
-    REQUIRE(hits->size() == 2);
-    REQUIRE((*hits)[0].record.key.id == "rec-lexical");
-    REQUIRE((*hits)[0].lexical_score == 0.5);
-    REQUIRE((*hits)[0].vector_score == 0.75);
-    REQUIRE((*hits)[0].score == 2.0);
-    REQUIRE((*hits)[1].record.key.id == "rec-vector");
-    REQUIRE_FALSE((*hits)[1].lexical_score.has_value());
-    REQUIRE((*hits)[1].vector_score == 0.875);
-    REQUIRE((*hits)[1].score == 1.75);
-    REQUIRE(lexical.search_calls == 1);
-    REQUIRE(lexical.get_calls == 2);
-    REQUIRE(vector.search_calls == 1);
-    REQUIRE(vector.last_query.scope_key == "agent:coder");
-    REQUIRE(vector.last_query.kinds ==
-            std::vector<memory::longterm::RecordKind>{memory::longterm::RecordKind::project});
-    REQUIRE(vector.last_limit == 3);
-  });
-}
-
-TEST_CASE("longterm::HybridRuntime recalls with merged hybrid hits", "[unit][memory][longterm][runtime]") {
-  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
-    auto record = make_record("rec-vector",
-                              "agent:coder",
-                              memory::longterm::RecordKind::reference,
-                              "Hybrid recall",
-                              "Hybrid recall can render a vector-only record.");
-    FakeBackend lexical{std::vector<memory::longterm::SearchHit>{}, std::vector<memory::longterm::Record>{record}};
-    FakeVectorBackend vector{std::vector<memory::longterm::VectorHit>{
-        memory::longterm::VectorHit{.key = record.key, .score = 0.95},
-    }};
-    memory::longterm::HybridRuntime runtime{lexical, vector};
-
-    auto recalled = co_await runtime.recall(memory::longterm::HybridSearchRequest{
-        .query =
-            memory::longterm::Query{
-                .scope_key = "agent:coder",
-                .text = "semantic recall",
-                .kinds = {memory::longterm::RecordKind::reference},
-            },
-        .embedding = make_embedding(),
-        .lexical_limit = 1,
-        .vector_limit = 1,
-        .result_limit = 1,
-    });
-
-    REQUIRE(recalled.has_value());
-    REQUIRE(recalled->hits.size() == 1);
-    REQUIRE(recalled->hits[0].record.key.id == "rec-vector");
-    REQUIRE(lexical.touch_calls == 1);
-    REQUIRE(lexical.last_touch.key == record.key);
-    REQUIRE(recalled->hits[0].record.last_read_at == lexical.last_touch.read_at);
-    REQUIRE(recalled->framing.section_text.contains("Hybrid recall"));
-  });
-}
-
-TEST_CASE("longterm::HybridRuntime rejects invalid requests before backend dispatch",
-          "[unit][memory][longterm][runtime]") {
-  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
-    FakeBackend lexical{make_record()};
-    FakeVectorBackend vector;
-    memory::longterm::HybridRuntime runtime{lexical, vector};
-
-    auto result = co_await runtime.search(memory::longterm::HybridSearchRequest{
-        .query =
-            memory::longterm::Query{
-                .scope_key = "agent:coder",
-                .text = "",
-                .kinds = {},
-            },
-        .embedding = make_embedding(),
-        .lexical_limit = 1,
-        .vector_limit = 1,
-        .result_limit = 1,
-    });
-
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
-    REQUIRE(lexical.search_calls == 0);
-    REQUIRE(vector.search_calls == 0);
-
-    auto bad_weight = memory::longterm::validate_hybrid_search_request(memory::longterm::HybridSearchRequest{
-        .query =
-            memory::longterm::Query{
-                .scope_key = "agent:coder",
-                .text = "project plan",
-                .kinds = {},
-            },
-        .embedding = make_embedding(),
-        .lexical_limit = 1,
-        .vector_limit = 1,
-        .result_limit = 1,
-        .lexical_weight = 0.0,
-        .vector_weight = 0.0,
-    });
-    REQUIRE_FALSE(bad_weight.has_value());
-    REQUIRE(bad_weight.error().kind() == core::ErrorKind::invalid_argument);
-  });
-}
-
-TEST_CASE("longterm text embeddings are deterministic and normalized", "[unit][memory][longterm][embedding]") {
-  auto first = memory::longterm::make_text_embedding("Hybrid recall uses local text features.",
-                                                     memory::longterm::TextEmbeddingOptions{
-                                                         .model = "test-local",
-                                                         .dimensions = 8,
-                                                     });
-  auto second = memory::longterm::make_text_embedding("hybrid RECALL uses local text features",
-                                                      memory::longterm::TextEmbeddingOptions{
-                                                          .model = "test-local",
-                                                          .dimensions = 8,
-                                                      });
-  REQUIRE(first.has_value());
-  REQUIRE(second.has_value());
-  REQUIRE(first->model == "test-local");
-  REQUIRE(first->values.size() == 8);
-  REQUIRE(first->values == second->values);
-
-  auto squared_norm = 0.0F;
-  for (const auto value : first->values) {
-    squared_norm += value * value;
-  }
-  REQUIRE(std::abs(std::sqrt(squared_norm) - 1.0F) < 0.0001F);
-
-  auto blank = memory::longterm::make_text_embedding("   ", memory::longterm::TextEmbeddingOptions{.dimensions = 8});
-  REQUIRE_FALSE(blank.has_value());
-  REQUIRE(blank.error().kind() == core::ErrorKind::invalid_argument);
-}
-
-TEST_CASE("longterm record embeddings include record metadata", "[unit][memory][longterm][embedding]") {
-  auto record = make_record("rec-embed",
-                            "agent:coder",
-                            memory::longterm::RecordKind::project,
-                            "Hybrid note",
-                            "Record embeddings include title, body, and tags.");
-  record.tags = {"vector", "recall"};
-  auto embedded = memory::longterm::make_record_embedding(record,
-                                                          memory::longterm::TextEmbeddingOptions{
-                                                              .model = "test-local",
-                                                              .dimensions = 12,
-                                                          });
-
-  REQUIRE(embedded.has_value());
-  REQUIRE(embedded->model == "test-local");
-  REQUIRE(embedded->values.size() == 12);
 }
 
 TEST_CASE("longterm::Fts5Backend migrates the lexical memory schema", "[unit][memory][longterm][fts5]") {
@@ -978,6 +318,58 @@ TEST_CASE("longterm::Fts5Backend migrates the lexical memory schema", "[unit][me
     REQUIRE(second->previous_version == 1);
     REQUIRE(second->current_version == 1);
     REQUIRE(second->applied_versions.empty());
+  });
+}
+
+TEST_CASE("longterm reopening preserves records and unrelated database content", "[unit][memory][longterm][fts5]") {
+  TempDb db{"oran-memory-reopen"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto record = make_record();
+    record.kind = memory::longterm::RecordKind::team;
+    record.shadow = true;
+    std::vector<storage::ColumnValue> migration_row;
+    {
+      auto pool = open_pool(io, db);
+      memory::longterm::Fts5Backend backend{pool};
+      auto migrated = co_await backend.migrate();
+      REQUIRE(migrated.has_value());
+      auto saved = co_await backend.upsert({.record = record});
+      REQUIRE(saved.has_value());
+      auto writer = co_await pool.acquire_writer();
+      REQUIRE(writer.has_value());
+      auto& connection = writer->connection();
+      auto created = connection.execute("CREATE TABLE host_metadata(key TEXT PRIMARY KEY, value BLOB)");
+      REQUIRE(created.has_value());
+      auto inserted = connection.execute("INSERT INTO host_metadata VALUES ('keep', X'0001FF')");
+      REQUIRE(inserted.has_value());
+      auto versions = connection.query("SELECT version, name, applied_at FROM schema_versions ORDER BY version");
+      REQUIRE(versions.has_value());
+      REQUIRE(versions->rows.size() == 1);
+      migration_row = versions->rows.front().values;
+    }
+
+    auto pool = open_pool(io, db);
+    memory::longterm::Fts5Backend backend{pool};
+    auto reopened = co_await backend.migrate();
+
+    REQUIRE(reopened.has_value());
+    REQUIRE(reopened->previous_version == 1);
+    REQUIRE(reopened->current_version == 1);
+    REQUIRE(reopened->applied_versions.empty());
+    auto fetched = co_await backend.get(record.key);
+    REQUIRE(fetched.has_value());
+    REQUIRE(*fetched == record);
+    auto reader = co_await pool.acquire_reader();
+    REQUIRE(reader.has_value());
+    auto& connection = reader->connection();
+    auto metadata = connection.query("SELECT key, hex(value) FROM host_metadata");
+    REQUIRE(metadata.has_value());
+    REQUIRE(metadata->rows.size() == 1);
+    REQUIRE(metadata->rows.front().values == std::vector<storage::ColumnValue>{"keep", "0001FF"});
+    auto versions = connection.query("SELECT version, name, applied_at FROM schema_versions ORDER BY version");
+    REQUIRE(versions.has_value());
+    REQUIRE(versions->rows.size() == 1);
+    REQUIRE(versions->rows.front().values == migration_row);
   });
 }
 
@@ -1023,8 +415,6 @@ TEST_CASE("longterm::Fts5Backend upserts, gets, and searches scoped records", "[
     REQUIRE(hits.has_value());
     REQUIRE(hits->size() == 1);
     REQUIRE((*hits)[0].record.key.id == "rec-coder");
-    REQUIRE((*hits)[0].lexical_score.has_value());
-    REQUIRE_FALSE((*hits)[0].vector_score.has_value());
 
     auto other_scope = co_await backend.search(
         memory::longterm::Query{
@@ -1205,187 +595,23 @@ TEST_CASE("longterm::Fts5Backend touches last_read_at without rebuilding indexed
   });
 }
 
-TEST_CASE("longterm::Fts5Backend decays stale low-importance records to shadow", "[unit][memory][longterm][fts5]") {
-  TempDb db{"oran-memory-longterm-decay"};
+TEST_CASE("longterm recall returns indexed records and prompt framing", "[unit][memory][longterm][recall][fts5]") {
+  TempDb db{"oran-memory-recall-fts5"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
     auto pool = open_pool(io, db);
     memory::longterm::Fts5Backend backend{pool};
     auto migrated = co_await backend.migrate();
     REQUIRE(migrated.has_value());
 
-    auto stale_low = make_record("stale-low",
-                                 "agent:coder",
-                                 memory::longterm::RecordKind::reference,
-                                 "Stale low",
-                                 "The stale visible papaya note should decay.");
-    stale_low.importance = 0.2;
-    stale_low.last_read_at = core::Time{core::Time::time_point{3s}};
-    stale_low.updated_at = core::Time{core::Time::time_point{4s}};
-
-    auto stale_high = make_record("stale-high",
-                                  "agent:coder",
-                                  memory::longterm::RecordKind::reference,
-                                  "Stale high",
-                                  "The high-importance papaya note should stay visible.");
-    stale_high.importance = 0.9;
-    stale_high.last_read_at = core::Time{core::Time::time_point{2s}};
-    stale_high.updated_at = core::Time{core::Time::time_point{5s}};
-
-    auto fresh_low = make_record("fresh-low",
-                                 "agent:coder",
-                                 memory::longterm::RecordKind::reference,
-                                 "Fresh low",
-                                 "The fresh papaya note should stay visible.");
-    fresh_low.importance = 0.1;
-    fresh_low.last_read_at = core::Time{core::Time::time_point{20s}};
-    fresh_low.updated_at = core::Time{core::Time::time_point{21s}};
-
-    auto other_scope = make_record("stale-other",
-                                   "agent:researcher",
-                                   memory::longterm::RecordKind::reference,
-                                   "Other scope",
-                                   "The other-scope papaya note should stay visible.");
-    other_scope.importance = 0.1;
-    other_scope.last_read_at = core::Time{core::Time::time_point{1s}};
-
-    auto already_shadow = make_record("already-shadow",
-                                      "agent:coder",
-                                      memory::longterm::RecordKind::reference,
-                                      "Already shadow",
-                                      "The already-shadow papaya note should not be reported again.");
-    already_shadow.importance = 0.1;
-    already_shadow.last_read_at = core::Time{core::Time::time_point{1s}};
-    already_shadow.shadow = true;
-
-    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = stale_low})).has_value());
-    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = stale_high})).has_value());
-    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = fresh_low})).has_value());
-    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = other_scope})).has_value());
-    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = already_shadow})).has_value());
-
-    const auto decay_at = core::Time{core::Time::time_point{30s}};
-    auto decayed = co_await backend.decay(memory::longterm::DecayRequest{
-        .scope_key = "agent:coder",
-        .unused_before = core::Time{core::Time::time_point{10s}},
-        .importance_floor = 0.5,
-        .limit = 10,
-        .decay_at = decay_at,
-    });
-    REQUIRE(decayed.has_value());
-    REQUIRE(decayed->shadowed_records.size() == 1);
-    REQUIRE(decayed->shadowed_records[0].key.id == "stale-low");
-    REQUIRE(decayed->shadowed_records[0].shadow);
-    REQUIRE(decayed->shadowed_records[0].updated_at == decay_at);
-    REQUIRE(decayed->shadowed_records[0].last_read_at == stale_low.last_read_at);
-
-    auto default_hits = co_await backend.search(
-        memory::longterm::Query{
-            .scope_key = "agent:coder",
-            .text = "papaya",
-            .kinds = {},
-        },
-        10);
-    REQUIRE(default_hits.has_value());
-    REQUIRE(default_hits->size() == 2);
-    REQUIRE(std::ranges::none_of(*default_hits, [](const memory::longterm::SearchHit& hit) {
-      return hit.record.key.id == "stale-low";
-    }));
-
-    auto including_shadow = co_await backend.search(
-        memory::longterm::Query{
-            .scope_key = "agent:coder",
-            .text = "papaya",
-            .kinds = {},
-            .include_shadow = true,
-        },
-        10);
-    REQUIRE(including_shadow.has_value());
-    REQUIRE(including_shadow->size() == 4);
-    auto stale_hit = std::ranges::find_if(*including_shadow, [](const memory::longterm::SearchHit& hit) {
-      return hit.record.key.id == "stale-low";
-    });
-    REQUIRE(stale_hit != including_shadow->end());
-    REQUIRE(stale_hit->record.shadow);
-
-    auto repeated = co_await backend.decay(memory::longterm::DecayRequest{
-        .scope_key = "agent:coder",
-        .unused_before = core::Time{core::Time::time_point{10s}},
-        .importance_floor = 0.5,
-        .limit = 10,
-        .decay_at = core::Time{core::Time::time_point{40s}},
-    });
-    REQUIRE(repeated.has_value());
-    REQUIRE(repeated->shadowed_records.empty());
-  });
-}
-
-TEST_CASE("longterm::Fts5Backend decay respects batch limits", "[unit][memory][longterm][fts5]") {
-  TempDb db{"oran-memory-longterm-decay-limit"};
-  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
-    auto pool = open_pool(io, db);
-    memory::longterm::Fts5Backend backend{pool};
-    REQUIRE((co_await backend.migrate()).has_value());
-
-    auto first = make_record("first",
-                             "agent:coder",
-                             memory::longterm::RecordKind::reference,
-                             "First",
-                             "The first guava record is oldest.");
-    first.last_read_at = core::Time{core::Time::time_point{1s}};
-    first.importance = 0.1;
-    auto second = make_record("second",
+    auto record = make_record("recall-rec",
                               "agent:coder",
                               memory::longterm::RecordKind::reference,
-                              "Second",
-                              "The second guava record is also stale.");
-    second.last_read_at = core::Time{core::Time::time_point{2s}};
-    second.importance = 0.1;
-
-    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = first})).has_value());
-    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = second})).has_value());
-
-    auto decayed = co_await backend.decay(memory::longterm::DecayRequest{
-        .scope_key = "agent:coder",
-        .unused_before = core::Time{core::Time::time_point{10s}},
-        .importance_floor = 0.5,
-        .limit = 1,
-        .decay_at = core::Time{core::Time::time_point{20s}},
-    });
-    REQUIRE(decayed.has_value());
-    REQUIRE(decayed->shadowed_records.size() == 1);
-    REQUIRE(decayed->shadowed_records[0].key.id == "first");
-
-    auto default_hits = co_await backend.search(
-        memory::longterm::Query{
-            .scope_key = "agent:coder",
-            .text = "guava",
-            .kinds = {},
-        },
-        10);
-    REQUIRE(default_hits.has_value());
-    REQUIRE(default_hits->size() == 1);
-    REQUIRE((*default_hits)[0].record.key.id == "second");
-  });
-}
-
-TEST_CASE("longterm::Runtime recalls through Fts5Backend", "[unit][memory][longterm][runtime][fts5]") {
-  TempDb db{"oran-memory-longterm-runtime-fts5"};
-  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
-    auto pool = open_pool(io, db);
-    memory::longterm::Fts5Backend backend{pool};
-    auto migrated = co_await backend.migrate();
-    REQUIRE(migrated.has_value());
-    memory::longterm::Runtime runtime{backend};
-
-    auto record = make_record("runtime-rec",
-                              "agent:coder",
-                              memory::longterm::RecordKind::reference,
-                              "Runtime recall",
-                              "Runtime recall composes over the FTS5 backend.");
-    record.tags = {"runtime", "fts5"};
+                              "Scoped recall",
+                              "Scoped recall composes over the FTS5 backend.");
+    record.tags = {"recall", "fts5"};
     REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = record})).has_value());
 
-    auto result = co_await runtime.recall(memory::longterm::RecallRequest{
+    auto result = co_await memory::longterm::recall(backend, memory::longterm::RecallRequest{
         .query =
             memory::longterm::Query{
                 .scope_key = "agent:coder",
@@ -1397,8 +623,8 @@ TEST_CASE("longterm::Runtime recalls through Fts5Backend", "[unit][memory][longt
 
     REQUIRE(result.has_value());
     REQUIRE(result->hits.size() == 1);
-    REQUIRE(result->hits[0].record.key.id == "runtime-rec");
-    REQUIRE(result->framing.section_text.contains("Runtime recall"));
-    REQUIRE(result->framing.section_text.contains("tags: runtime, fts5"));
+    REQUIRE(result->hits[0].record.key.id == "recall-rec");
+    REQUIRE(result->framing.section_text.contains("Scoped recall"));
+    REQUIRE(result->framing.section_text.contains("tags: recall, fts5"));
   });
 }

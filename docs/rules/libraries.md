@@ -14,7 +14,6 @@ and measured or estimated compile cost here before adding it to the build.
 | `libsodium` | 1.0.21 | Approval authentication and random keys | ISC | Private to `oran-permission`; low cost. |
 | `catch2` | 3.7.1 | Behavioral tests | BSL-1.0 | Test targets only; moderate cost. |
 | `nanobench` | 4.3.11 | Benchmarks | MIT | Benchmark targets only; low cost. |
-| `sqlite-vec` | 0.1.9 | Existing optional vector backend | Apache-2.0 | Private to `oran-memory`, `vector_memory=y`; moderate cost. |
 
 Use one library per infrastructure responsibility. Keep optional packages out of
 default builds. Version changes update this table and receive the same boundary

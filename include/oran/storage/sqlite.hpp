@@ -15,8 +15,6 @@
 
 namespace orangutan::storage {
 
-using SqliteExtensionInit = void (*)();
-
 enum class OpenMode : std::uint8_t {
   read_only,
   read_write,
@@ -96,8 +94,7 @@ public:
   Connection(Connection&&) noexcept;
   Connection& operator=(Connection&&) noexcept;
 
-  [[nodiscard]] static core::Result<Connection> open(ConnectionOptions options,
-                                                     std::span<const SqliteExtensionInit> auto_extensions = {});
+  [[nodiscard]] static core::Result<Connection> open(ConnectionOptions options);
 
   [[nodiscard]] bool is_open() const noexcept;
   void close() noexcept;

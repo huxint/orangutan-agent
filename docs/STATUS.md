@@ -13,6 +13,11 @@ commit in one transaction through `Store::append_all` and
 leaves the preceding conversation intact. Existing schemas, message encoding and
 stored user data are preserved. Authorized memory-tool effects commit separately.
 
+Long-term memory tools borrow one scoped FTS5 backend. `longterm::recall` returns
+owned hits and prompt framing; the [memory contract](design-docs/memory-system.md)
+owns read timestamps, output compatibility and preservation of existing index
+tables. SQLite connections configure their own handles from explicit options.
+
 `AgentRun` selects a configured child, assigns a fresh session ID and approval
 identity, and uses the child's prompt overlay and promotion state. Parent and child rules
 intersect at dispatch, including rewritten input and approval limits. The child
@@ -33,8 +38,8 @@ cancellation. State storage continues to use private directories.
 ## Verification
 
 The release build, all 14 test targets and `make ci` pass. Controlled HTTP
-integration covers the provider/tool loop and persisted continuation. IO, tool
-and bootstrap tests pass with explicit ASan/UBSan compiler and linker
+integration covers the provider/tool loop and persisted continuation. Storage,
+memory, hook and bootstrap tests pass with explicit ASan/UBSan compiler and linker
 instrumentation in an isolated debug copy.
 
 Isolated faults fail at their intended assertions for atomic rollback,
@@ -43,7 +48,9 @@ intersection, approval limits, rewritten input, child admission/depth, cancellat
 joins, catalogue selection, cache versions and the filesystem-tool surface.
 IO regressions detect stale content, reopened authority handles and dropped
 queued cancellation. Restoring the implementations returns the tested cases to
-green. IO, tool, prompt, agent, config and permission benchmarks build and run;
+green. Memory regressions detect missing query validation, scope filtering, read
+timestamps, prompt framing, score fields and preserved database content.
+IO, tool, memory, prompt, agent, config and permission benchmarks build and run;
 these are local runs, not reference-hardware performance certification.
 
 ## Handoff

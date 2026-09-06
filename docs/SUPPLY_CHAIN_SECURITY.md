@@ -2,8 +2,7 @@
 
 Third-party versions and boundaries live in [libraries](rules/libraries.md), with
 build requirements in `xmake/packages.lua`. Public headers keep JSON, SQLite and
-curl implementation types private. Optional sqlite-vec is resolved only when
-its build option is enabled.
+curl implementation types private.
 
 GitHub Actions and the GCC container are pinned in `.github/workflows/ci.yml`.
 `scripts/check-action-pinning.sh` validates action pins. System libcurl and its

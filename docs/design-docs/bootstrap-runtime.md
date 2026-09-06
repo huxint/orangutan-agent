@@ -30,7 +30,7 @@ transcript suffix atomically through `Store::append_all`. The prepared value
 records the history boundary independently of storage. Prompt recall runs once through `MemoryRecall` before the loop;
 the returned text stays stable across model/tool iterations.
 
-Memory adapters borrow a runtime and backend and capture the host's scope. They
+Memory adapters borrow one backend and capture the host's scope. They
 do not capture session state or discover configuration. Filesystem and catalogue
 tools are registered together; the session adds memory tools when memory services
 exist. Every turn joins its borrowed tool context before returning or persisting.
