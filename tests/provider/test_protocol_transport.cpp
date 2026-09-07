@@ -1,14 +1,18 @@
-// tests/provider/test_protocol_transport.cpp - provider protocol transport seam.
-
 #include <oran/provider.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <expected>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#include <asio/bind_cancellation_slot.hpp>
+#include <asio/cancellation_signal.hpp>
+#include <asio/co_spawn.hpp>
+#include <asio/this_coro.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
@@ -28,59 +32,31 @@ namespace core = orangutan::core;
 namespace provider = orangutan::provider;
 namespace test = orangutan::tests;
 
-provider::ResolvedProfileTarget profile_target(std::string profile,
-                                               std::string model,
-                                               provider::ProtocolKind protocol,
-                                               std::string provider_label,
-                                               std::string base_url,
-                                               std::string api_key_env) {
-  return provider::ResolvedProfileTarget{
-      .target =
-          provider::ModelTarget{
-              .profile = std::move(profile),
-              .model = std::move(model),
-              .protocol = protocol,
-              .thinking_budget = std::nullopt,
-              .cache = std::nullopt,
+provider::RouteProfileResolution route_profiles(provider::ProtocolKind protocol) {
+  const bool anthropic = protocol == provider::ProtocolKind::anthropic_messages;
+  return provider::RouteProfileResolution{
+      .primary =
+          {
+              .target = {.profile = anthropic ? "anthropic-main" : "openai-main",
+                         .model = anthropic ? "claude-sonnet" : "gpt-main",
+                         .protocol = protocol,
+                         .thinking_budget = std::nullopt,
+                         .cache = std::nullopt},
+              .base_url = anthropic ? "https://api.anthropic.com" : "https://api.openai.com/v1/",
+              .api_key_env = anthropic ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY",
           },
-      .provider = std::move(provider_label),
-      .base_url = std::move(base_url),
-      .api_key_env = std::move(api_key_env),
-  };
-}
-
-provider::AdapterCredentialTarget credential_target(provider::ProtocolKind protocol) {
-  const auto profile = protocol == provider::ProtocolKind::anthropic_messages
-                           ? profile_target("anthropic-main",
-                                            "claude-sonnet",
-                                            protocol,
-                                            "anthropic",
-                                            "https://api.anthropic.com",
-                                            "ANTHROPIC_API_KEY")
-                           : profile_target("openai-main",
-                                            "gpt-main",
-                                            protocol,
-                                            "openai",
-                                            "https://api.openai.com/v1/",
-                                            "OPENAI_API_KEY");
-  auto plan = provider::make_adapter_construction_plan(provider::RouteProfileResolution{
-      .primary = profile,
       .fallbacks = {},
-  });
-  REQUIRE(plan.has_value());
-  return provider::AdapterCredentialTarget{
-      .target = plan->primary,
-      .api_key = protocol == provider::ProtocolKind::anthropic_messages ? "anthropic-secret" : "openai-secret",
   };
 }
 
-provider::AdapterCredentialBundle credential_bundle() {
-  auto anthropic = credential_target(provider::ProtocolKind::anthropic_messages);
-  auto openai = credential_target(provider::ProtocolKind::openai_responses);
-  return provider::AdapterCredentialBundle{
-      .primary = std::move(anthropic),
-      .fallbacks = {std::move(openai)},
-  };
+core::Result<std::string> test_secret(std::string_view name) {
+  if (name == "ANTHROPIC_API_KEY") {
+    return "anthropic-secret";
+  }
+  if (name == "OPENAI_API_KEY") {
+    return "openai-secret";
+  }
+  return std::unexpected(core::Error{core::ErrorKind::auth, "unknown test credential"});
 }
 
 provider::Request request() {
@@ -272,18 +248,59 @@ std::vector<SseEvent> openai_text_turn_events() {
   };
 }
 
+class PausingTransport final : public provider::ProtocolTransport {
+public:
+  explicit PausingTransport(asio::any_io_executor executor)
+      : started{executor, 2}, primary_release{executor, 1}, fallback_release{executor, 1}, cleanup_started{executor, 1},
+        cleanup_release{executor, 1} {}
+
+  bool supports_streaming() const noexcept override {
+    return true;
+  }
+
+  async::Awaitable<core::Result<provider::ProtocolHttpResponse>> send(provider::ProtocolHttpRequest) const override {
+    co_return std::unexpected(core::Error::internal("expected streaming transport"));
+  }
+
+  async::Awaitable<core::Result<provider::ProtocolHttpResponse>>
+  send_streaming(provider::ProtocolHttpRequest request, provider::ProtocolSseCallback on_event) const override {
+    co_await asio::this_coro::throw_if_cancelled(false);
+    const bool primary = request.url.ends_with("/messages");
+    const auto events = primary ? text_turn_events() : openai_text_turn_events();
+    for (const auto& [event, data] : std::span{events}.first(3)) {
+      on_event(event, data);
+    }
+    REQUIRE(started.try_send(std::move(request)).has_value());
+    auto released = co_await (primary ? primary_release : fallback_release).receive();
+    if (!released) {
+      co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+      REQUIRE(cleanup_started.try_send(0).has_value());
+      auto cleanup = co_await cleanup_release.receive();
+      REQUIRE(cleanup.has_value());
+      cleanup_finished = true;
+      co_return std::unexpected(core::Error::cancelled());
+    }
+    for (const auto& [event, data] : std::span{events}.subspan(3)) {
+      on_event(event, data);
+    }
+    co_return provider::ProtocolHttpResponse{.status_code = 200, .headers = {}, .body_json = {}};
+  }
+
+  mutable async::Channel<provider::ProtocolHttpRequest> started;
+  mutable async::Channel<int> primary_release;
+  mutable async::Channel<int> fallback_release;
+  mutable async::Channel<int> cleanup_started;
+  mutable async::Channel<int> cleanup_release;
+  mutable bool cleanup_finished{false};
+};
+
 }  // namespace
 
-TEST_CASE("protocol transport factory sends Anthropic Messages bodies", "[unit][provider][protocol]") {
+TEST_CASE("protocol system sends Anthropic Messages bodies", "[unit][provider][protocol]") {
   RecordingTransport transport{{anthropic_response()}};
-  provider::ProtocolTransportAdapterFactory factory{
-      transport,
-      provider::ProtocolKind::anthropic_messages,
-      provider::ProtocolTransportAdapterFactoryOptions{.anthropic_version = "2023-06-01"},
-  };
-  auto credentials = credential_target(provider::ProtocolKind::anthropic_messages);
-  auto route = provider::Route{.primary = credentials.target.profile.target, .fallbacks = {}};
-  auto system = factory.create(std::move(credentials));
+  auto profiles = route_profiles(provider::ProtocolKind::anthropic_messages);
+  auto route = profiles.route();
+  auto system = provider::make_protocol_system(transport, std::move(profiles), test_secret);
   REQUIRE(system.has_value());
 
   test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
@@ -306,12 +323,11 @@ TEST_CASE("protocol transport factory sends Anthropic Messages bodies", "[unit][
   REQUIRE(body.at("stream") == false);
 }
 
-TEST_CASE("protocol transport factory sends OpenAI Responses bodies", "[unit][provider][protocol]") {
+TEST_CASE("protocol system sends OpenAI Responses bodies", "[unit][provider][protocol]") {
   RecordingTransport transport{{openai_response()}};
-  provider::ProtocolTransportAdapterFactory factory{transport, provider::ProtocolKind::openai_responses};
-  auto credentials = credential_target(provider::ProtocolKind::openai_responses);
-  auto route = provider::Route{.primary = credentials.target.profile.target, .fallbacks = {}};
-  auto system = factory.create(std::move(credentials));
+  auto profiles = route_profiles(provider::ProtocolKind::openai_responses);
+  auto route = profiles.route();
+  auto system = provider::make_protocol_system(transport, std::move(profiles), test_secret);
   REQUIRE(system.has_value());
 
   test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
@@ -332,22 +348,18 @@ TEST_CASE("protocol transport factory sends OpenAI Responses bodies", "[unit][pr
   REQUIRE(body.at("stream") == false);
 }
 
-TEST_CASE("protocol transport factories work through profile-routed adapter system", "[unit][provider][protocol]") {
+TEST_CASE("protocol system selects endpoint credentials for each route profile", "[unit][provider][protocol]") {
   RecordingTransport transport{{anthropic_response(), openai_response()}};
-  provider::ProtocolTransportAdapterFactory anthropic{transport, provider::ProtocolKind::anthropic_messages};
-  provider::ProtocolTransportAdapterFactory openai{transport, provider::ProtocolKind::openai_responses};
-  auto credentials = credential_bundle();
-  const auto route = credentials.route();
-  const auto bindings = provider::protocol_transport_factory_bindings(anthropic, openai);
-  auto system = provider::make_adapter_system(std::move(credentials), bindings);
+  auto profiles = route_profiles(provider::ProtocolKind::anthropic_messages);
+  profiles.fallbacks.push_back(route_profiles(provider::ProtocolKind::openai_responses).primary);
+  const auto route = profiles.route();
+  auto system = provider::make_protocol_system(transport, std::move(profiles), test_secret);
   REQUIRE(system.has_value());
 
   test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
-    auto primary =
-        co_await (*system)->send(request(), provider::Route{.primary = route.primary, .fallbacks = {}}, nullptr);
-    auto fallback = co_await (*system)->send(request(),
-                                             provider::Route{.primary = route.fallbacks.front(), .fallbacks = {}},
-                                             nullptr);
+    auto primary = co_await (*system)->send(request(), provider::Route{.primary = route.primary, .fallbacks = {}});
+    auto fallback =
+        co_await (*system)->send(request(), provider::Route{.primary = route.fallbacks.front(), .fallbacks = {}});
 
     REQUIRE(primary.has_value());
     REQUIRE(fallback.has_value());
@@ -356,16 +368,20 @@ TEST_CASE("protocol transport factories work through profile-routed adapter syst
   });
 
   REQUIRE(transport.requests.size() == 2);
+  REQUIRE(transport.requests[0].url == "https://api.anthropic.com/v1/messages");
+  REQUIRE(header_value(transport.requests[0], "x-api-key") == "anthropic-secret");
+  REQUIRE(transport.requests[1].url == "https://api.openai.com/v1/responses");
+  REQUIRE(header_value(transport.requests[1], "authorization") == "Bearer openai-secret");
+  REQUIRE(json::parse(transport.requests[1].body_json).at("model") == "gpt-main");
 }
 
 TEST_CASE("protocol transport maps HTTP status errors without response bodies", "[unit][provider][protocol]") {
   SECTION("auth") {
     RecordingTransport transport{
         {provider::ProtocolHttpResponse{.status_code = 401, .headers = {}, .body_json = "{}"}}};
-    provider::ProtocolTransportAdapterFactory factory{transport, provider::ProtocolKind::openai_responses};
-    auto credentials = credential_target(provider::ProtocolKind::openai_responses);
-    auto route = provider::Route{.primary = credentials.target.profile.target, .fallbacks = {}};
-    auto system = factory.create(std::move(credentials));
+    auto profiles = route_profiles(provider::ProtocolKind::openai_responses);
+    auto route = profiles.route();
+    auto system = provider::make_protocol_system(transport, std::move(profiles), test_secret);
     REQUIRE(system.has_value());
 
     test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
@@ -380,10 +396,9 @@ TEST_CASE("protocol transport maps HTTP status errors without response bodies", 
   SECTION("rate limited") {
     RecordingTransport transport{
         {provider::ProtocolHttpResponse{.status_code = 429, .headers = {}, .body_json = "{}"}}};
-    provider::ProtocolTransportAdapterFactory factory{transport, provider::ProtocolKind::openai_responses};
-    auto credentials = credential_target(provider::ProtocolKind::openai_responses);
-    auto route = provider::Route{.primary = credentials.target.profile.target, .fallbacks = {}};
-    auto system = factory.create(std::move(credentials));
+    auto profiles = route_profiles(provider::ProtocolKind::openai_responses);
+    auto route = profiles.route();
+    auto system = provider::make_protocol_system(transport, std::move(profiles), test_secret);
     REQUIRE(system.has_value());
 
     test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
@@ -398,10 +413,9 @@ TEST_CASE("protocol transport maps HTTP status errors without response bodies", 
   SECTION("upstream") {
     RecordingTransport transport{
         {provider::ProtocolHttpResponse{.status_code = 503, .headers = {}, .body_json = "{}"}}};
-    provider::ProtocolTransportAdapterFactory factory{transport, provider::ProtocolKind::openai_responses};
-    auto credentials = credential_target(provider::ProtocolKind::openai_responses);
-    auto route = provider::Route{.primary = credentials.target.profile.target, .fallbacks = {}};
-    auto system = factory.create(std::move(credentials));
+    auto profiles = route_profiles(provider::ProtocolKind::openai_responses);
+    auto route = profiles.route();
+    auto system = provider::make_protocol_system(transport, std::move(profiles), test_secret);
     REQUIRE(system.has_value());
 
     test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
@@ -414,44 +428,33 @@ TEST_CASE("protocol transport maps HTTP status errors without response bodies", 
   }
 }
 
-TEST_CASE("protocol transport factory rejects mismatched target protocols", "[unit][provider][protocol]") {
-  SECTION("target protocol mismatch") {
-    RecordingTransport transport{{anthropic_response()}};
-    provider::ProtocolTransportAdapterFactory factory{transport, provider::ProtocolKind::anthropic_messages};
-    auto credentials = credential_target(provider::ProtocolKind::openai_responses);
-
-    auto system = factory.create(std::move(credentials));
-
-    REQUIRE_FALSE(system.has_value());
-    REQUIRE(system.error().kind() == core::ErrorKind::config);
-    REQUIRE(context_value(system.error(), "factory_protocol") == std::optional<std::string_view>{"anthropic_messages"});
-    REQUIRE(transport.requests.empty());
-  }
-
-  SECTION("unsupported factory protocol") {
-    RecordingTransport transport{{anthropic_response()}};
-    provider::ProtocolTransportAdapterFactory factory{transport, provider::ProtocolKind::openai_chat_completions};
-    auto credentials = credential_target(provider::ProtocolKind::anthropic_messages);
-    credentials.target.profile.target.protocol = provider::ProtocolKind::openai_chat_completions;
-    credentials.target.adapter_name = "openai_chat_completions";
-
-    auto system = factory.create(std::move(credentials));
-
-    REQUIRE_FALSE(system.has_value());
-    REQUIRE(system.error().kind() == core::ErrorKind::config);
-    REQUIRE(context_value(system.error(), "factory_protocol") ==
-            std::optional<std::string_view>{"openai_chat_completions"});
-    REQUIRE(transport.requests.empty());
-  }
-}
-
-TEST_CASE("protocol transport system rejects mismatched selected route models", "[unit][provider][protocol]") {
+TEST_CASE("protocol system rejects route identity changes before transport", "[unit][provider][protocol]") {
   RecordingTransport transport{{anthropic_response()}};
-  provider::ProtocolTransportAdapterFactory factory{transport, provider::ProtocolKind::anthropic_messages};
-  auto credentials = credential_target(provider::ProtocolKind::anthropic_messages);
-  auto route = provider::Route{.primary = credentials.target.profile.target, .fallbacks = {}};
-  route.primary.model = "other-model";
-  auto system = factory.create(std::move(credentials));
+  auto profiles = route_profiles(provider::ProtocolKind::anthropic_messages);
+  auto route = profiles.route();
+  std::string_view field;
+  std::string_view expected;
+  SECTION("unknown profile") {
+    route.primary.profile = "missing";
+    field = "profile";
+    expected = "missing";
+  }
+  SECTION("model mismatch") {
+    route.primary.model = "other-model";
+    field = "route_model";
+    expected = "other-model";
+  }
+  SECTION("protocol mismatch") {
+    route.primary.protocol = provider::ProtocolKind::openai_responses;
+    field = "route_protocol";
+    expected = "openai_responses";
+  }
+  SECTION("multiple targets") {
+    route.fallbacks.push_back(route.primary);
+    field = "fallbacks";
+    expected = "1";
+  }
+  auto system = provider::make_protocol_system(transport, std::move(profiles), test_secret);
   REQUIRE(system.has_value());
 
   test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
@@ -459,19 +462,55 @@ TEST_CASE("protocol transport system rejects mismatched selected route models", 
 
     REQUIRE_FALSE(response.has_value());
     REQUIRE(response.error().kind() == core::ErrorKind::config);
-    REQUIRE(context_value(response.error(), "route_model") == std::optional<std::string_view>{"other-model"});
+    REQUIRE(context_value(response.error(), field) == expected);
   });
 
   REQUIRE(transport.requests.empty());
 }
 
+TEST_CASE("protocol system retries primary before selecting fallback credentials and policy",
+          "[unit][provider][protocol]") {
+  const auto unavailable = provider::ProtocolHttpResponse{.status_code = 503, .headers = {}, .body_json = "{}"};
+  RecordingTransport transport{{unavailable, unavailable, openai_response()}};
+  auto profiles = route_profiles(provider::ProtocolKind::anthropic_messages);
+  profiles.fallbacks.push_back(route_profiles(provider::ProtocolKind::openai_responses).primary);
+  const auto route = profiles.route();
+  auto system = provider::make_protocol_system(transport, std::move(profiles), test_secret);
+  REQUIRE(system.has_value());
+  provider::execution::Runtime execution{**system};
+
+  test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
+    auto req = request();
+    req.retry.max_attempts = 2;
+    req.retry.initial_backoff = std::chrono::milliseconds{0};
+    req.thinking_budget = 1024;
+    req.max_tokens = 4096;
+    auto response = co_await execution.send(std::move(req), route);
+
+    REQUIRE(response.has_value());
+    REQUIRE(std::get<core::TextContent>(response->blocks.front()).text == "openai ok");
+    REQUIRE(response->model_used == "gpt-main");
+    REQUIRE(response->route_profile_used == "openai-main");
+  });
+
+  REQUIRE(transport.requests.size() == 3);
+  REQUIRE(transport.requests[0].url == "https://api.anthropic.com/v1/messages");
+  REQUIRE(transport.requests[1].url == transport.requests[0].url);
+  REQUIRE(header_value(transport.requests[1], "x-api-key") == "anthropic-secret");
+  REQUIRE(json::parse(transport.requests[1].body_json).at("thinking").at("budget_tokens") == 1024);
+  REQUIRE(transport.requests[2].url == "https://api.openai.com/v1/responses");
+  REQUIRE(header_value(transport.requests[2], "authorization") == "Bearer openai-secret");
+  const auto fallback_body = json::parse(transport.requests[2].body_json);
+  REQUIRE(fallback_body.at("model") == "gpt-main");
+  REQUIRE_FALSE(fallback_body.contains("thinking"));
+}
+
 TEST_CASE("protocol transport system streams Anthropic deltas through the decoder", "[unit][provider][protocol][sse]") {
   StreamingTransport transport;
   transport.events = text_turn_events();
-  provider::ProtocolTransportAdapterFactory factory{transport, provider::ProtocolKind::anthropic_messages};
-  auto credentials = credential_target(provider::ProtocolKind::anthropic_messages);
-  auto route = provider::Route{.primary = credentials.target.profile.target, .fallbacks = {}};
-  auto system = factory.create(std::move(credentials));
+  auto profiles = route_profiles(provider::ProtocolKind::anthropic_messages);
+  auto route = profiles.route();
+  auto system = provider::make_protocol_system(transport, std::move(profiles), test_secret);
   REQUIRE(system.has_value());
 
   CapturingSink sink;
@@ -495,10 +534,9 @@ TEST_CASE("protocol transport system streams Anthropic deltas through the decode
 TEST_CASE("protocol transport system assembles a streamed tool_use turn", "[unit][provider][protocol][sse]") {
   StreamingTransport transport;
   transport.events = tool_turn_events();
-  provider::ProtocolTransportAdapterFactory factory{transport, provider::ProtocolKind::anthropic_messages};
-  auto credentials = credential_target(provider::ProtocolKind::anthropic_messages);
-  auto route = provider::Route{.primary = credentials.target.profile.target, .fallbacks = {}};
-  auto system = factory.create(std::move(credentials));
+  auto profiles = route_profiles(provider::ProtocolKind::anthropic_messages);
+  auto route = profiles.route();
+  auto system = provider::make_protocol_system(transport, std::move(profiles), test_secret);
   REQUIRE(system.has_value());
 
   CapturingSink sink;
@@ -524,10 +562,9 @@ TEST_CASE("protocol transport system assembles a streamed tool_use turn", "[unit
 TEST_CASE("protocol transport system keeps the body path when the transport cannot stream",
           "[unit][provider][protocol][sse]") {
   RecordingTransport transport{{anthropic_response()}};  // supports_streaming() defaults to false.
-  provider::ProtocolTransportAdapterFactory factory{transport, provider::ProtocolKind::anthropic_messages};
-  auto credentials = credential_target(provider::ProtocolKind::anthropic_messages);
-  auto route = provider::Route{.primary = credentials.target.profile.target, .fallbacks = {}};
-  auto system = factory.create(std::move(credentials));
+  auto profiles = route_profiles(provider::ProtocolKind::anthropic_messages);
+  auto route = profiles.route();
+  auto system = provider::make_protocol_system(transport, std::move(profiles), test_secret);
   REQUIRE(system.has_value());
 
   CapturingSink sink;
@@ -548,10 +585,9 @@ TEST_CASE("protocol transport system streams OpenAI Responses deltas when stream
           "[unit][provider][protocol][sse]") {
   StreamingTransport transport;
   transport.events = openai_text_turn_events();
-  provider::ProtocolTransportAdapterFactory factory{transport, provider::ProtocolKind::openai_responses};
-  auto credentials = credential_target(provider::ProtocolKind::openai_responses);
-  auto route = provider::Route{.primary = credentials.target.profile.target, .fallbacks = {}};
-  auto system = factory.create(std::move(credentials));
+  auto profiles = route_profiles(provider::ProtocolKind::openai_responses);
+  auto route = profiles.route();
+  auto system = provider::make_protocol_system(transport, std::move(profiles), test_secret);
   REQUIRE(system.has_value());
 
   CapturingSink sink;
@@ -573,10 +609,9 @@ TEST_CASE("protocol transport system maps a streaming HTTP error", "[unit][provi
   StreamingTransport transport;
   transport.stream_status = 503;
   transport.stream_body = "{}";
-  provider::ProtocolTransportAdapterFactory factory{transport, provider::ProtocolKind::anthropic_messages};
-  auto credentials = credential_target(provider::ProtocolKind::anthropic_messages);
-  auto route = provider::Route{.primary = credentials.target.profile.target, .fallbacks = {}};
-  auto system = factory.create(std::move(credentials));
+  auto profiles = route_profiles(provider::ProtocolKind::anthropic_messages);
+  auto route = profiles.route();
+  auto system = provider::make_protocol_system(transport, std::move(profiles), test_secret);
   REQUIRE(system.has_value());
 
   CapturingSink sink;
@@ -598,10 +633,9 @@ TEST_CASE("protocol transport system surfaces a streamed error event", "[unit][p
        R"({"type":"message_start","message":{"id":"msg_3","type":"message","role":"assistant","model":"claude-sonnet","content":[],"stop_reason":null,"usage":{"input_tokens":4,"output_tokens":1}}})"},
       {"error", R"({"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}})"},
   };
-  provider::ProtocolTransportAdapterFactory factory{transport, provider::ProtocolKind::anthropic_messages};
-  auto credentials = credential_target(provider::ProtocolKind::anthropic_messages);
-  auto route = provider::Route{.primary = credentials.target.profile.target, .fallbacks = {}};
-  auto system = factory.create(std::move(credentials));
+  auto profiles = route_profiles(provider::ProtocolKind::anthropic_messages);
+  auto route = profiles.route();
+  auto system = provider::make_protocol_system(transport, std::move(profiles), test_secret);
   REQUIRE(system.has_value());
 
   CapturingSink sink;
@@ -613,4 +647,84 @@ TEST_CASE("protocol transport system surfaces a streamed error event", "[unit][p
   });
 
   REQUIRE(sink.done == std::nullopt);
+}
+
+TEST_CASE("protocol system joins cancelled transport while another profile completes",
+          "[unit][provider][protocol][sse][lifetime]") {
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    PausingTransport transport{io.get_executor()};
+    auto profiles = route_profiles(provider::ProtocolKind::anthropic_messages);
+    profiles.fallbacks.push_back(route_profiles(provider::ProtocolKind::openai_responses).primary);
+    const auto route = profiles.route();
+    auto system = provider::make_protocol_system(transport, std::move(profiles), test_secret);
+    REQUIRE(system.has_value());
+
+    CapturingSink primary_sink;
+    CapturingSink fallback_sink;
+    asio::cancellation_signal cancellation;
+    async::Channel<int> completed{io.get_executor(), 2};
+    std::optional<core::Result<provider::Response>> primary;
+    std::optional<core::Result<provider::Response>> fallback;
+    std::exception_ptr primary_failure;
+    std::exception_ptr fallback_failure;
+    asio::co_spawn(
+        io,
+        (*system)->send(request(), provider::Route{.primary = route.primary, .fallbacks = {}}, &primary_sink),
+        asio::bind_cancellation_slot(cancellation.slot(),
+                                     [&](std::exception_ptr failure, core::Result<provider::Response> result) {
+                                       primary_failure = failure;
+                                       primary = std::move(result);
+                                       REQUIRE(completed.try_send(0).has_value());
+                                     }));
+    asio::co_spawn(io,
+                   (*system)->send(request(),
+                                   provider::Route{.primary = route.fallbacks.front(), .fallbacks = {}},
+                                   &fallback_sink),
+                   [&](std::exception_ptr failure, core::Result<provider::Response> result) {
+                     fallback_failure = failure;
+                     fallback = std::move(result);
+                     REQUIRE(completed.try_send(1).has_value());
+                   });
+
+    auto first = co_await transport.started.receive();
+    auto second = co_await transport.started.receive();
+    REQUIRE(first.has_value());
+    REQUIRE(second.has_value());
+    for (const auto* sent : {&*first, &*second}) {
+      if (sent->url.ends_with("/messages")) {
+        REQUIRE(header_value(*sent, "x-api-key") == "anthropic-secret");
+      } else {
+        REQUIRE(sent->url == "https://api.openai.com/v1/responses");
+        REQUIRE(header_value(*sent, "authorization") == "Bearer openai-secret");
+      }
+    }
+
+    cancellation.emit(asio::cancellation_type::terminal);
+    auto cleaning = co_await transport.cleanup_started.receive();
+    REQUIRE(cleaning.has_value());
+    REQUIRE_FALSE(primary.has_value());
+    REQUIRE_FALSE(fallback.has_value());
+    REQUIRE(transport.fallback_release.try_send(0).has_value());
+    auto fallback_done = co_await completed.receive();
+    REQUIRE(fallback_done == 1);
+    REQUIRE(fallback_failure == nullptr);
+    REQUIRE(fallback.has_value());
+    REQUIRE(fallback->has_value());
+    REQUIRE(std::get<core::TextContent>((**fallback).blocks.front()).text == "openai ok");
+    REQUIRE(fallback_sink.log == std::vector<std::string>{"text:openai", "text: ok", "done"});
+    REQUIRE_FALSE(primary.has_value());
+    REQUIRE_FALSE(transport.cleanup_finished);
+
+    REQUIRE(transport.cleanup_release.try_send(0).has_value());
+    auto primary_done = co_await completed.receive();
+    REQUIRE(primary_done == 0);
+    REQUIRE(primary_failure == nullptr);
+    REQUIRE(primary.has_value());
+    REQUIRE_FALSE(primary->has_value());
+    REQUIRE(primary->error().kind() == core::ErrorKind::cancelled);
+    REQUIRE(context_value(primary->error(), "provider_profile") == "anthropic-main");
+    REQUIRE(primary_sink.log == std::vector<std::string>{"text:anthropic"});
+    REQUIRE(transport.cleanup_finished);
+    system->reset();
+  });
 }

@@ -1,5 +1,3 @@
-// src/oran-provider/route_resolver.cpp — resolve config routes to provider routes.
-
 #include <oran/provider/route_resolver.hpp>
 
 #include <algorithm>
@@ -143,7 +141,6 @@ resolve_protocol(const config::ProfileConfig& profile, std::string_view route_na
               .cache = cache,
               .pricing = pricing_for(profile->pricing),
           },
-      .provider = profile->provider,
       .base_url = profile->base_url,
       .api_key_env = profile->api_key_env,
   };
@@ -193,14 +190,6 @@ core::Result<RouteProfileResolution> resolve_route_profiles(const config::Config
       .primary = std::move(*primary),
       .fallbacks = std::move(fallbacks),
   };
-}
-
-core::Result<Route> resolve_route(const config::Config& config, std::string_view route_name) {
-  auto resolution = resolve_route_profiles(config, route_name);
-  if (!resolution) {
-    return std::unexpected(std::move(resolution).error());
-  }
-  return resolution->route();
 }
 
 }  // namespace orangutan::provider

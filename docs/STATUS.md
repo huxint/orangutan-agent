@@ -46,9 +46,12 @@ mutation boundary. Each read owns its resources and observes current file bytes;
 the [IO contract](design-docs/io-runtime.md) owns ranges, fingerprints and
 cancellation. `PrivateDirectory` provides private state ownership for hosts.
 
-Provider transport uses HTTP/SSE requests with per-request curl handles. The
-[provider contract](design-docs/api-portability.md) owns cancellation polling,
-handle cleanup and delivery of stream callbacks before completion.
+Provider construction maps configuration to owned profile values, then builds one
+system over an injected transport. Complete route validation precedes credential
+lookup. Endpoint credentials stay inside the system; dispatch checks the selected
+profile, model and protocol before sending. The
+[provider contract](design-docs/api-portability.md) owns this boundary, HTTP/SSE
+request lifetimes and delivery of stream callbacks before completion.
 
 Hooks expose the provider, tool, memory and approval events emitted by the
 runtime. `EventTraits` defines blocking admission; the
@@ -78,15 +81,23 @@ session rows; restored implementations pass both sets of checks.
 Executor-boundary regressions detect misplaced SQL, missing worker bindings,
 swallowed audit errors, unjoined writes and lost cancellation. These cases and
 pool lease tests pass with explicit ASan/UBSan instrumentation.
+Provider construction regressions detect premature credential lookup, invalid
+endpoints, duplicate profiles, credential disclosure and mismatched routes.
+Endpoint selection, model-policy projection, host lookup injection and cancelled
+stream results have isolated red/green evidence. Provider and bootstrap tests pass
+with explicit ASan/UBSan instrumentation, including concurrent profile streams,
+joined transport cancellation and HTTP-backed persisted continuation.
 IO, HTTP, storage, tool, memory, hook, prompt, agent, config and permission
 benchmarks build and run; these are local runs, not reference-hardware performance
 certification.
 
 ## Handoff
 
-The next complete slice is default toolchain activation: make ordinary build
-selection apply the configured LTO and sanitizer flags, with verbose-command
-evidence. The library provider/tool/session loop remains the acceptance boundary:
+The next core slice is scheduler path-lock ownership. Idle-entry reclamation is
+exposed through `reap_idle_locks`, but the session runtime has no caller. Bind
+reclamation to the scheduler's actual lifetime and narrow unused controls while
+preserving shared path exclusion and context-specific cancellation joins.
+The library provider/tool/session loop remains the acceptance boundary:
 authorized tool execution, scoped memory recall, persisted continuation and
 bounded child collaboration. The controlled HTTP continuation test composes
 `HttpProviderBackend`, `RuntimeAssembly` and `AgentSession` directly.

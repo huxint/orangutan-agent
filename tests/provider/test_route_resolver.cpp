@@ -25,6 +25,8 @@ constexpr auto kRoutingConfig = R"json(
       "model": "claude-sonnet",
       "base_url": "https://api.anthropic.com",
       "api_key_env": "ANTHROPIC_API_KEY",
+      "thinking_budget": 1024,
+      "cache": {"enabled": true, "min_prefix_bytes": 2048},
       "pricing": {
         "input_per_million_usd": 3.0,
         "output_per_million_usd": 15.0,
@@ -85,34 +87,7 @@ std::optional<std::string_view> context_value(const core::Error& error, std::str
 
 }  // namespace
 
-TEST_CASE("resolve_route maps configured primary and fallback profiles", "[unit][provider][route]") {
-  auto parsed = config::Config::parse(kRoutingConfig);
-  REQUIRE(parsed.has_value());
-
-  auto route = provider::resolve_route(*parsed, "default");
-
-  REQUIRE(route.has_value());
-  REQUIRE(route->primary.profile == "anthropic-main");
-  REQUIRE(route->primary.model == "claude-sonnet");
-  REQUIRE(route->primary.protocol == provider::ProtocolKind::anthropic_messages);
-  REQUIRE_FALSE(route->primary.thinking_budget.has_value());
-  REQUIRE_FALSE(route->primary.cache.has_value());
-  REQUIRE(route->primary.pricing.input_per_million_usd == std::optional<double>{3.0});
-  REQUIRE(route->primary.pricing.output_per_million_usd == std::optional<double>{15.0});
-  REQUIRE(route->primary.pricing.cache_creation_per_million_usd == std::optional<double>{3.75});
-  REQUIRE(route->primary.pricing.cache_read_per_million_usd == std::optional<double>{0.3});
-
-  REQUIRE(route->fallbacks.size() == 2);
-  REQUIRE(route->fallbacks[0].profile == "openai-main");
-  REQUIRE(route->fallbacks[0].model == "gpt-main");
-  REQUIRE(route->fallbacks[0].protocol == provider::ProtocolKind::openai_chat_completions);
-  REQUIRE(route->fallbacks[0].pricing.empty());
-  REQUIRE(route->fallbacks[1].profile == "local-main");
-  REQUIRE(route->fallbacks[1].model == "deepseek-coder");
-  REQUIRE(route->fallbacks[1].protocol == provider::ProtocolKind::custom_openai_compatible);
-}
-
-TEST_CASE("resolve_route_profiles preserves endpoint metadata for adapter factories", "[unit][provider][route]") {
+TEST_CASE("resolve_route_profiles preserves endpoint metadata and model policy", "[unit][provider][route]") {
   auto parsed = config::Config::parse(kRoutingConfig);
   REQUIRE(parsed.has_value());
 
@@ -122,7 +97,8 @@ TEST_CASE("resolve_route_profiles preserves endpoint metadata for adapter factor
   REQUIRE(resolution->primary.target.profile == "anthropic-main");
   REQUIRE(resolution->primary.target.model == "claude-sonnet");
   REQUIRE(resolution->primary.target.protocol == provider::ProtocolKind::anthropic_messages);
-  REQUIRE(resolution->primary.provider == "anthropic");
+  REQUIRE(resolution->primary.target.thinking_budget == 1024);
+  REQUIRE(resolution->primary.target.cache == provider::PromptCacheOptions{true, 2048});
   REQUIRE(resolution->primary.base_url == "https://api.anthropic.com");
   REQUIRE(resolution->primary.api_key_env == "ANTHROPIC_API_KEY");
   REQUIRE(resolution->primary.target.pricing.input_per_million_usd == std::optional<double>{3.0});
@@ -132,11 +108,10 @@ TEST_CASE("resolve_route_profiles preserves endpoint metadata for adapter factor
 
   REQUIRE(resolution->fallbacks.size() == 2);
   REQUIRE(resolution->fallbacks[0].target.profile == "openai-main");
-  REQUIRE(resolution->fallbacks[0].provider == "openai");
+  REQUIRE(resolution->fallbacks[0].target.pricing.empty());
   REQUIRE(resolution->fallbacks[0].base_url == "https://api.openai.com/v1");
   REQUIRE(resolution->fallbacks[0].api_key_env == "OPENAI_API_KEY");
   REQUIRE(resolution->fallbacks[1].target.profile == "local-main");
-  REQUIRE(resolution->fallbacks[1].provider == "deepseek");
   REQUIRE(resolution->fallbacks[1].base_url == "http://127.0.0.1:11434/v1");
   REQUIRE(resolution->fallbacks[1].api_key_env == "LOCAL_API_KEY");
 }
@@ -153,6 +128,10 @@ TEST_CASE("RouteProfileResolution derives the loop-facing route shape", "[unit][
   REQUIRE(route.primary.profile == "anthropic-main");
   REQUIRE(route.primary.model == "claude-sonnet");
   REQUIRE(route.primary.protocol == provider::ProtocolKind::anthropic_messages);
+  REQUIRE(route.primary.thinking_budget == 1024);
+  REQUIRE(route.primary.cache == provider::PromptCacheOptions{true, 2048});
+  REQUIRE(route.primary.pricing.input_per_million_usd == 3.0);
+  REQUIRE(route.primary.pricing.output_per_million_usd == 15.0);
   REQUIRE(route.fallbacks.size() == 2);
   REQUIRE(route.fallbacks[0].profile == "openai-main");
   REQUIRE(route.fallbacks[0].model == "gpt-main");
@@ -162,42 +141,42 @@ TEST_CASE("RouteProfileResolution derives the loop-facing route shape", "[unit][
   REQUIRE(route.fallbacks[1].protocol == provider::ProtocolKind::custom_openai_compatible);
 }
 
-TEST_CASE("resolve_route accepts exact protocol spellings in profile provider", "[unit][provider][route]") {
+TEST_CASE("resolve_route_profiles accepts exact protocol spellings in profile provider", "[unit][provider][route]") {
   auto parsed = config::Config::parse(kRoutingConfig);
   REQUIRE(parsed.has_value());
 
-  auto route = provider::resolve_route(*parsed, "responses");
+  auto route = provider::resolve_route_profiles(*parsed, "responses");
 
   REQUIRE(route.has_value());
-  REQUIRE(route->primary.profile == "responses-main");
-  REQUIRE(route->primary.protocol == provider::ProtocolKind::openai_responses);
+  REQUIRE(route->primary.target.profile == "responses-main");
+  REQUIRE(route->primary.target.protocol == provider::ProtocolKind::openai_responses);
   REQUIRE(route->fallbacks.empty());
 }
 
-TEST_CASE("resolve_route prefers explicit profile protocol over provider label", "[unit][provider][route]") {
+TEST_CASE("resolve_route_profiles prefers explicit profile protocol over provider label", "[unit][provider][route]") {
   auto parsed = config::Config::parse(kRoutingConfig);
   REQUIRE(parsed.has_value());
 
-  auto route = provider::resolve_route(*parsed, "proxied");
+  auto route = provider::resolve_route_profiles(*parsed, "proxied");
 
   REQUIRE(route.has_value());
-  REQUIRE(route->primary.profile == "proxied-responses");
-  REQUIRE(route->primary.model == "gpt-proxy");
-  REQUIRE(route->primary.protocol == provider::ProtocolKind::openai_responses);
+  REQUIRE(route->primary.target.profile == "proxied-responses");
+  REQUIRE(route->primary.target.model == "gpt-proxy");
+  REQUIRE(route->primary.target.protocol == provider::ProtocolKind::openai_responses);
 }
 
-TEST_CASE("resolve_route rejects missing route names", "[unit][provider][route]") {
+TEST_CASE("resolve_route_profiles rejects missing route names", "[unit][provider][route]") {
   auto parsed = config::Config::parse(kRoutingConfig);
   REQUIRE(parsed.has_value());
 
-  auto route = provider::resolve_route(*parsed, "missing");
+  auto route = provider::resolve_route_profiles(*parsed, "missing");
 
   REQUIRE_FALSE(route.has_value());
   REQUIRE(route.error().kind() == core::ErrorKind::config);
   REQUIRE(context_value(route.error(), "route") == std::optional<std::string_view>{"missing"});
 }
 
-TEST_CASE("resolve_route rejects routes that reference unknown profiles", "[unit][provider][route]") {
+TEST_CASE("resolve_route_profiles rejects routes that reference unknown profiles", "[unit][provider][route]") {
   auto parsed = config::Config::parse(R"json(
 {
   "profiles": {
@@ -218,7 +197,7 @@ TEST_CASE("resolve_route rejects routes that reference unknown profiles", "[unit
 )json");
   REQUIRE(parsed.has_value());
 
-  auto route = provider::resolve_route(*parsed);
+  auto route = provider::resolve_route_profiles(*parsed);
 
   REQUIRE_FALSE(route.has_value());
   REQUIRE(route.error().kind() == core::ErrorKind::config);
@@ -227,7 +206,7 @@ TEST_CASE("resolve_route rejects routes that reference unknown profiles", "[unit
   REQUIRE(context_value(route.error(), "role") == std::optional<std::string_view>{"fallback"});
 }
 
-TEST_CASE("resolve_route rejects unknown provider spellings", "[unit][provider][route]") {
+TEST_CASE("resolve_route_profiles rejects unknown provider spellings", "[unit][provider][route]") {
   auto parsed = config::Config::parse(R"json(
 {
   "profiles": {
@@ -247,7 +226,7 @@ TEST_CASE("resolve_route rejects unknown provider spellings", "[unit][provider][
 )json");
   REQUIRE(parsed.has_value());
 
-  auto route = provider::resolve_route(*parsed);
+  auto route = provider::resolve_route_profiles(*parsed);
 
   REQUIRE_FALSE(route.has_value());
   REQUIRE(route.error().kind() == core::ErrorKind::config);
@@ -256,7 +235,7 @@ TEST_CASE("resolve_route rejects unknown provider spellings", "[unit][provider][
   REQUIRE(context_value(route.error(), "provider") == std::optional<std::string_view>{"telepathy"});
 }
 
-TEST_CASE("resolve_route rejects unknown explicit protocols", "[unit][provider][route]") {
+TEST_CASE("resolve_route_profiles rejects unknown explicit protocols", "[unit][provider][route]") {
   auto parsed = config::Config::parse(R"json(
 {
   "profiles": {
@@ -277,7 +256,7 @@ TEST_CASE("resolve_route rejects unknown explicit protocols", "[unit][provider][
 )json");
   REQUIRE(parsed.has_value());
 
-  auto route = provider::resolve_route(*parsed);
+  auto route = provider::resolve_route_profiles(*parsed);
 
   REQUIRE_FALSE(route.has_value());
   REQUIRE(route.error().kind() == core::ErrorKind::config);
@@ -286,11 +265,11 @@ TEST_CASE("resolve_route rejects unknown explicit protocols", "[unit][provider][
   REQUIRE(context_value(route.error(), "protocol") == std::optional<std::string_view>{"responses-ish"});
 }
 
-TEST_CASE("resolve_route rejects empty route names", "[unit][provider][route]") {
+TEST_CASE("resolve_route_profiles rejects empty route names", "[unit][provider][route]") {
   auto parsed = config::Config::parse(kRoutingConfig);
   REQUIRE(parsed.has_value());
 
-  auto route = provider::resolve_route(*parsed, "");
+  auto route = provider::resolve_route_profiles(*parsed, "");
 
   REQUIRE_FALSE(route.has_value());
   REQUIRE(route.error().kind() == core::ErrorKind::invalid_argument);

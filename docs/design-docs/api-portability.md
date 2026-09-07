@@ -4,13 +4,29 @@
 and a route, and returns a typed response. The agent loop does not branch on a
 vendor name. HTTP transport is injected through the protocol adapter boundary.
 
+## Construction
+
+`resolve_route_profiles` converts configured names, aliases and model policy into
+owned endpoint values. `make_protocol_system` validates the complete route before
+reading any credential: endpoint fields are nonempty, URLs use HTTP/S, protocols
+are implemented and profile names are unique. An invalid fallback therefore
+fails before primary credential lookup. Secret lookup failures expose only
+profile, role and credential-reference context.
+
+The returned `System` owns immutable model/endpoint credentials for every profile
+and borrows one `ProtocolTransport`. Each send selects a profile and checks its
+model and protocol before transport work. The caller supplies a single selected
+target; `execution::Runtime` owns retry and fallback selection. Concurrent sends
+keep their request and stream-decoder state separate. The transport, system and
+event sink remain alive until their awaited sends, callbacks and cancellation
+cleanup complete.
+
 ## Protocols
 
 Implemented protocols are `anthropic_messages` and `openai_responses`. A profile
-selects protocol, model, endpoint and credential reference. Route validation
-precedes credential lookup. `HttpProviderBackend` owns the resulting factories,
-HTTP transport and provider system; callers may inject a controlled provider
-for tests.
+selects protocol, model, endpoint and credential reference. `HttpProviderBackend`
+owns the HTTP transport and constructed provider system; callers may inject a
+controlled provider for tests.
 
 Adapters translate roles, content, tool calls/results, stop reasons and usage.
 They validate malformed responses and expose provider errors explicitly. Retry

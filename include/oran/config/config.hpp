@@ -95,9 +95,8 @@ struct PromptCacheConfig {
   friend bool operator==(const PromptCacheConfig&, const PromptCacheConfig&) = default;
 };
 
-/// One provider profile from `profiles.<name>`. `provider` remains the
-/// operator/vendor label used by future adapter factories and secret lookup;
-/// optional `protocol`, when set, is resolved by `oran-provider` as an exact
+/// One provider profile from `profiles.<name>`. `provider` is the operator/vendor
+/// label used for protocol aliases; optional `protocol` resolves as an exact
 /// `provider::ProtocolKind` spelling so self-hosted gateways can select their
 /// wire format without overloading the vendor label.
 ///

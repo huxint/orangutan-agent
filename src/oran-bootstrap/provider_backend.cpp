@@ -93,8 +93,6 @@ struct HttpProviderBackend::Impl {
   provider::Route route;
   http::Client client;
   HttpProtocolTransport transport;
-  provider::ProtocolTransportAdapterFactory anthropic_factory;
-  provider::ProtocolTransportAdapterFactory openai_factory;
   std::unique_ptr<provider::System> system;
 
   Impl(provider::Route route_value,
@@ -102,9 +100,7 @@ struct HttpProviderBackend::Impl {
        std::chrono::milliseconds request_timeout,
        std::uint64_t max_stream_bytes)
       : route{std::move(route_value)}, client{std::move(blocking_executor)},
-        transport{client, request_timeout, max_stream_bytes},
-        anthropic_factory{transport, provider::ProtocolKind::anthropic_messages},
-        openai_factory{transport, provider::ProtocolKind::openai_responses} {}
+        transport{client, request_timeout, max_stream_bytes} {}
 };
 
 HttpProviderBackend::HttpProviderBackend(std::unique_ptr<Impl> impl) noexcept : impl_{std::move(impl)} {}
@@ -146,21 +142,11 @@ core::Result<HttpProviderBackend> HttpProviderBackend::build(const config::Confi
   if (!resolution) {
     return std::unexpected(std::move(resolution).error());
   }
-  auto plan = provider::make_adapter_construction_plan(*resolution);
-  if (!plan) {
-    return std::unexpected(std::move(plan).error());
-  }
-  auto credentials = provider::resolve_adapter_credentials(*plan, options.secrets);
-  if (!credentials) {
-    return std::unexpected(std::move(credentials).error());
-  }
-
-  auto impl = std::make_unique<Impl>(credentials->route(),
+  auto impl = std::make_unique<Impl>(resolution->route(),
                                      std::move(options.blocking_executor),
                                      options.request_timeout,
                                      options.max_stream_bytes);
-  const auto bindings = provider::protocol_transport_factory_bindings(impl->anthropic_factory, impl->openai_factory);
-  auto system = provider::make_adapter_system(std::move(*credentials), bindings);
+  auto system = provider::make_protocol_system(impl->transport, std::move(*resolution), std::move(options.secrets));
   if (!system) {
     return std::unexpected(std::move(system).error());
   }

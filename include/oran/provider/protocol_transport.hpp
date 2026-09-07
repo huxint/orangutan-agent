@@ -1,24 +1,16 @@
-// include/oran/provider/protocol_transport.hpp - provider protocol transport seam.
-//
-// This is the protocol-factory boundary between provider JSON mappers and any
-// concrete HTTP client. It composes the offline request/response mappers with
-// an injected HTTP-shaped transport while keeping curl/asio implementation
-// types out of provider public headers.
-
 #pragma once
 
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include <oran/async/awaitable_fwd.hpp>
+#include <oran/config/secrets.hpp>
 #include <oran/core/result.hpp>
-#include <oran/provider/adapter_factory.hpp>
-#include <oran/provider/protocol_request.hpp>
+#include <oran/provider/route_resolver.hpp>
 #include <oran/provider/system.hpp>
 
 namespace orangutan::provider {
@@ -90,32 +82,15 @@ public:
   send_streaming(ProtocolHttpRequest request, ProtocolSseCallback on_event) const;
 };
 
-struct ProtocolTransportAdapterFactoryOptions {
-  std::string anthropic_version{"2023-06-01"};
-};
-
-/// ProtocolAdapterFactory backed by an injected HTTP-shaped transport.
+/// Validate every endpoint and unique profile before reading credentials from
+/// the supplied lookup or named environment variables. The returned system owns
+/// its credentials; transport must outlive the system and every awaited send.
 ///
-/// The factory uses the body path by default and switches to `send_streaming`
-/// for protocols with a streaming decoder when `Request::stream` is set and
-/// the transport advertises `supports_streaming()`.
-class ProtocolTransportAdapterFactory final : public ProtocolAdapterFactory {
-public:
-  ProtocolTransportAdapterFactory(ProtocolTransport& transport,
-                                  ProtocolKind protocol,
-                                  ProtocolTransportAdapterFactoryOptions options = {});
-
-  [[nodiscard]] core::Result<std::unique_ptr<System>> create(AdapterCredentialTarget target) const override;
-
-private:
-  ProtocolTransport* transport_;
-  ProtocolKind protocol_;
-  ProtocolTransportAdapterFactoryOptions options_;
-};
-
-/// Convenience helper for the built-in Anthropic/OpenAI body-transport factories.
-[[nodiscard]] std::vector<ProtocolAdapterFactoryBinding>
-protocol_transport_factory_bindings(const ProtocolTransportAdapterFactory& anthropic,
-                                    const ProtocolTransportAdapterFactory& openai);
+/// Each send accepts one selected profile/model/protocol. `execution::Runtime`
+/// owns retry/fallback selection. Streaming requires both `Request::stream` and
+/// transport support. Credential values never enter error diagnostics.
+[[nodiscard]] core::Result<std::unique_ptr<System>> make_protocol_system(ProtocolTransport& transport,
+                                                                         RouteProfileResolution resolution,
+                                                                         config::SecretLookup secrets = {});
 
 }  // namespace orangutan::provider

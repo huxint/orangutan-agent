@@ -1,20 +1,3 @@
-// include/oran/provider/system.hpp — provider system surface.
-//
-// `System` is the runtime's single point of contact with whatever produces a
-// `provider::Response` (a vendor adapter, a replay shim, the test fake). The
-// agent loop builds a `Request`, picks a `Route`, optionally hands an
-// `EventSink` for streaming deltas, and awaits the terminal `Response`.
-//
-// Spec 0017 freezes the v1 contract: exactly one `Request` per call, exactly
-// one `Response` (or error) back. Stream deltas are advisory; if the caller
-// passes `nullptr` the provider must still synthesise the full `Response`.
-//
-// The first concrete `System` is `provider::FakeProvider`
-// (`<oran/provider/fake.hpp>`). Protocol-backed systems are constructed
-// through adapter factories such as `ProtocolTransportAdapterFactory`; bootstrap
-// owns the first `http::Client`-backed construction seam, and streaming-capable
-// transports surface SSE through the same protocol seam.
-
 #pragma once
 
 #include <cstdint>
@@ -62,11 +45,8 @@ struct ProviderPricing {
   friend bool operator==(const ProviderPricing&, const ProviderPricing&) = default;
 };
 
-/// A single (profile, model, protocol) tuple. Profiles live in config and name
-/// the credential + base URL; the model is the vendor identifier; the protocol
-/// is the wire family. The `oran-provider` library carries only enough of this
-/// shape to let the loop pick between primary and fallback targets — heavier
-/// fields (`Capabilities`, headers) land with the first real adapter slice.
+/// One configured model and its per-attempt policy. Profiles select endpoint
+/// credentials; protocol determines wire conversion.
 struct ModelTarget {
   std::string profile;
   std::string model;
@@ -78,8 +58,7 @@ struct ModelTarget {
   friend bool operator==(const ModelTarget&, const ModelTarget&) = default;
 };
 
-/// Resolved primary + fallback chain for one turn. Routes are resolved once
-/// per turn by the agent loop and reused across iterations within that turn.
+/// Resolved primary and fallback chain, reused across a session's turns.
 struct Route {
   ModelTarget primary;
   std::vector<ModelTarget> fallbacks;
@@ -139,9 +118,8 @@ public:
   }
 };
 
-/// Abstract entry point for one provider call. Implementations are the
-/// adapter set (Anthropic, OpenAI, …) plus `FakeProvider` for tests; the
-/// runtime owns one instance per active `Route`.
+/// Entry point for one provider call. `make_protocol_system` composes protocol
+/// mapping with an injected transport; `FakeProvider` supplies controlled turns.
 ///
 /// The method is `const` by design: providers may be shared across concurrent
 /// turns from different agents on the same process. Any internal mutable
@@ -157,9 +135,7 @@ public:
   System(System&&) = delete;
   System& operator=(System&&) = delete;
 
-  /// Drive one turn end-to-end. Returns the assembled `Response` on success,
-  /// or an `Error` carrying the protocol-classified category from
-  /// `docs/design-docs/api-portability.md` "Error Categories".
+  /// Return an assembled response or a classified provider error.
   ///
   /// `sink` is optional: if non-null the provider calls into it with stream
   /// deltas before returning. If null the provider still synthesises and

@@ -384,23 +384,30 @@ TEST_CASE("AgentSession resumes persisted context through the HTTP provider boun
 }
 
 TEST_CASE("HttpProviderBackend constructs an HTTP-backed provider system", "[unit][bootstrap][provider_backend]") {
-  ScopedEnv api_key{"ORAN_BOOTSTRAP_PROVIDER_BACKEND_KEY", "test-secret"};
+  ScopedUnsetEnv api_key{"ORAN_BOOTSTRAP_PROVIDER_BACKEND_KEY"};
   ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
   ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
   OneShotHttpServer server{anthropic_response()};
   auto cfg = parse_config(server.base_url());
   asio::thread_pool blocking{1};
+  std::vector<std::string> lookups;
 
-  auto backend = bootstrap::HttpProviderBackend::build(cfg,
-                                                       bootstrap::HttpProviderBackendOptions{
-                                                           .blocking_executor = blocking.get_executor(),
-                                                           .request_timeout = 2s,
-                                                           .route_name = "default",
-                                                       });
+  auto backend =
+      bootstrap::HttpProviderBackend::build(cfg,
+                                            bootstrap::HttpProviderBackendOptions{
+                                                .blocking_executor = blocking.get_executor(),
+                                                .request_timeout = 2s,
+                                                .route_name = "default",
+                                                .secrets = [&](std::string_view key) -> core::Result<std::string> {
+                                                  lookups.emplace_back(key);
+                                                  return "test-secret";
+                                                },
+                                            });
 
   REQUIRE(backend.has_value());
   REQUIRE(backend->route().primary.profile == "default");
   REQUIRE(backend->route().primary.model == "claude-test");
+  REQUIRE(lookups == std::vector<std::string>{"ORAN_BOOTSTRAP_PROVIDER_BACKEND_KEY"});
 
   test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
     // A non-streaming request stays on the body path even though the transport

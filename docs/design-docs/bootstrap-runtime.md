@@ -19,9 +19,10 @@ host select `audit.db`, `sessions.db` and `memory.db`; defaults are under
 using `io::PrivateDirectory` and its lock when sharing persistent state. Existing
 databases use versioned migrations.
 
-`HttpProviderBackend` owns HTTP transport, protocol factories and the resolved
-provider route. Credentials are resolved only after route validation. Missing
-configuration or credentials is an error before execution.
+`HttpProviderBackend` owns HTTP transport, one provider system and the resolved
+route. It passes owned profile values and an explicit credential lookup to
+`provider::make_protocol_system`. The [provider contract](api-portability.md)
+owns construction validation and per-profile dispatch.
 
 ## Session Boundary
 
