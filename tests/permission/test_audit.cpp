@@ -222,7 +222,7 @@ TEST_CASE("StorageAuditSink persists events into the audit repository with corre
     auto migrated = co_await repo.migrate();
     REQUIRE(migrated.has_value());
 
-    permission::StorageAuditSink sink{repo};
+    permission::StorageAuditSink sink{repo, io.get_executor()};
 
     auto event = make_audit_event("scope-A", "FileRead", permission::AuditOutcome::allow);
     event.input_hash = std::array<std::byte, 32>{};
@@ -267,7 +267,7 @@ TEST_CASE("StorageAuditSink updates persisted metadata", "[unit][permission][aud
     auto migrated = co_await repo.migrate();
     REQUIRE(migrated.has_value());
 
-    permission::StorageAuditSink sink{repo};
+    permission::StorageAuditSink sink{repo, io.get_executor()};
     auto event = make_audit_event("scope-A", "FileRead", permission::AuditOutcome::allow);
     event.parent_turn_id = turn_id_with(0x30);
     event.metadata_json = R"json({"dispatch":{"sequence":4}})json";
@@ -306,7 +306,7 @@ TEST_CASE("StorageAuditSink records a NULL input_hash when the event omits it", 
     auto migrated = co_await repo.migrate();
     REQUIRE(migrated.has_value());
 
-    permission::StorageAuditSink sink{repo};
+    permission::StorageAuditSink sink{repo, io.get_executor()};
 
     auto event = make_audit_event("scope-A", "FileRead", permission::AuditOutcome::deny);
     event.verdict = permission::Verdict::deny;
@@ -334,7 +334,7 @@ TEST_CASE("StorageAuditSink writes each AuditOutcome wire spelling", "[unit][per
     auto migrated = co_await repo.migrate();
     REQUIRE(migrated.has_value());
 
-    permission::StorageAuditSink sink{repo};
+    permission::StorageAuditSink sink{repo, io.get_executor()};
 
     using O = permission::AuditOutcome;
     constexpr auto outcomes = core::enum_values<O>();
@@ -368,9 +368,23 @@ TEST_CASE("StorageAuditSink propagates repository errors", "[unit][permission][a
     // audit_events table does not exist. The sink must surface that
     // error rather than swallow it.
 
-    permission::StorageAuditSink sink{repo};
+    permission::StorageAuditSink sink{repo, io.get_executor()};
     auto recorded = co_await sink.record(make_audit_event("scope-A", "FileRead", permission::AuditOutcome::allow));
     REQUIRE_FALSE(recorded.has_value());
     REQUIRE(recorded.error().kind() == core::ErrorKind::storage);
+  });
+}
+
+TEST_CASE("StorageAuditSink requires an explicit worker executor", "[unit][permission][audit][execution]") {
+  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    storage::Pool pool;
+    storage::AuditRepository repository{pool};
+    permission::StorageAuditSink sink{repository, {}};
+
+    auto result = co_await sink.record(make_audit_event("scope-A", "FileRead", permission::AuditOutcome::allow));
+
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().kind() == core::ErrorKind::invalid_argument);
+    CHECK(result.error().message() == "audit blocking executor is not configured");
   });
 }

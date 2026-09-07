@@ -69,9 +69,9 @@ operation. Filesystem handlers receive pinned authority handles after path
 resolution. Approval binds the identity, tool and exact approved input.
 
 Session history and personal records are separate stores. Prompt history reads
-are bounded; persisted history remains intact. Session-memory SQLite calls run on the blocking
-executor. Hooks and coordinating state run on the session's strand. Audit/trace
-SQL offloading remains tracked integration work.
+are bounded; persisted history remains intact. Session, memory, audit and trace
+SQLite calls run on the blocking executor. Hooks and coordinating state run on
+the session's strand. Awaited writes finish before borrowed services are released.
 
 `AgentRun` reuses the turn boundary with independent child sessions. Parent and
 child policy decisions intersect at dispatch. Children share the parent's

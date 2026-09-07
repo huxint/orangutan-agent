@@ -18,6 +18,12 @@ record readback for sessions, audits and traces. Existing session metadata, skil
 rows and audit views survive database reopening and subsequent appends. The
 [storage contract](design-docs/storage-runtime.md) owns these compatibility bounds.
 
+Audit decisions, metadata enrichment and terminal traces run on explicit worker
+executors and return to the coordinating strand. Pool lease completions preserve
+the requesting executor. Dispatch awaits the durable decision before tool effects.
+Cancelled audit and trace writes finish before borrowed services are released and
+return an explicit cancellation result.
+
 Long-term memory tools borrow one scoped FTS5 backend. `longterm::recall` returns
 owned hits and prompt framing; the [memory contract](design-docs/memory-system.md)
 owns read timestamps, output compatibility and preservation of existing index
@@ -68,17 +74,20 @@ dropped approval decisions.
 Storage preservation regressions detect lost skill, audit and trace rows and a
 dropped reporting view. Child persistence checks detect missing or unexpected
 session rows; restored implementations pass both sets of checks.
+Executor-boundary regressions detect misplaced SQL, missing worker bindings,
+swallowed audit errors, unjoined writes and lost cancellation. These cases and
+pool lease tests pass with explicit ASan/UBSan instrumentation.
 IO, HTTP, storage, tool, memory, hook, prompt, agent, config and permission
 benchmarks build and run; these are local runs, not reference-hardware performance
 certification.
 
 ## Handoff
 
-The next complete slice is audit/trace SQL execution on the blocking executor.
-Keep permission decisions durable before tool effects and await writes before
-releasing borrowed services. The configured provider/tool/session loop remains
-the acceptance boundary: authorized tool execution, scoped memory recall,
-persisted continuation and bounded child collaboration.
+The [active library plan](exec-plans/active/2026-09-07-runtime-library.md) removes
+process hosting and moves the configured HTTP continuation check onto the library
+composition interfaces. The provider/tool/session loop remains the acceptance
+boundary: authorized tool execution, scoped memory recall, persisted continuation
+and bounded child collaboration.
 
 [Live debt](exec-plans/tech-debt-tracker.md) records integration gates and extension
 prerequisites. Default toolchain activation and hosted analyzer/compile-budget

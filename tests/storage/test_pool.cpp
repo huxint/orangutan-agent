@@ -14,6 +14,7 @@
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 #include <asio/post.hpp>
+#include <asio/strand.hpp>
 #include <asio/use_awaitable.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -88,6 +89,29 @@ TEST_CASE("Pool::open creates writer and N readers", "[unit][storage][pool]") {
   REQUIRE(pool->reader_count() == 3);
   REQUIRE(pool->readers_available() == 3);
   REQUIRE_FALSE(pool->writer_busy());
+}
+
+TEST_CASE("Pool leases resume on the requesting strand", "[unit][storage][pool][execution]") {
+  TempDb db{"oran-pool-caller-strand"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = storage::Pool::open(io.get_executor(), storage::PoolOptions{.path = db.string()});
+    REQUIRE(pool.has_value());
+    auto caller = asio::make_strand(io);
+
+    co_await asio::co_spawn(
+        caller,
+        [&]() -> async::Awaitable<void> {
+          auto writer = co_await pool->acquire_writer();
+          REQUIRE(writer.has_value());
+          CHECK(caller.running_in_this_thread());
+          writer->release();
+
+          auto reader = co_await pool->acquire_reader();
+          REQUIRE(reader.has_value());
+          CHECK(caller.running_in_this_thread());
+        },
+        asio::use_awaitable);
+  });
 }
 
 TEST_CASE("Pool writer acquire is exclusive and serializes migrations", "[unit][storage][pool]") {

@@ -1,11 +1,3 @@
-// tests/agent/test_loop.cpp — first fake-provider-backed Loop coverage.
-//
-// These tests intentionally stay inside spec 0017's fake-provider-first loop
-// envelope: prompt/request construction, direct sequential tool dispatch,
-// model-visible repair errors, terminal-success / error / cancellation trace
-// rows, and loop boundary errors. Provider retry/fallback and the scheduler
-// remain later slices.
-
 #include <oran/agent.hpp>
 
 #include <algorithm>
@@ -827,6 +819,7 @@ TEST_CASE("Loop attributes terminal fallback errors to the fallback trace row", 
     inputs.turn_id = turn_id_with(0x43);
     inputs.trace = agent::TraceContext{
         .repository = &trace,
+        .blocking_executor = io.get_executor(),
         .session_id = turn_id_with(0x80),
         .agent_key = "coder",
         .origin = "cli",
@@ -884,6 +877,7 @@ TEST_CASE("Loop computes missing provider usage cost from route pricing", "[unit
     inputs.turn_id = turn_id_with(0x51);
     inputs.trace = agent::TraceContext{
         .repository = &trace,
+        .blocking_executor = io.get_executor(),
         .session_id = turn_id_with(0x80),
         .agent_key = "coder",
         .origin = "cli",
@@ -1029,6 +1023,7 @@ TEST_CASE("Loop persists provider error trace rows", "[unit][agent][loop][trace]
     inputs.turn_id = turn_id_with(0x43);
     inputs.trace = agent::TraceContext{
         .repository = &trace,
+        .blocking_executor = io.get_executor(),
         .session_id = turn_id_with(0x80),
         .agent_key = "coder",
         .origin = "cli",
@@ -1080,6 +1075,7 @@ TEST_CASE("Loop preserves the original error when trace-row write fails", "[unit
     inputs.turn_id = turn_id_with(0x44);
     inputs.trace = agent::TraceContext{
         .repository = &trace,
+        .blocking_executor = io.get_executor(),
         .session_id = core::TurnId{},
         .agent_key = "coder",
         .origin = "cli",
@@ -1165,6 +1161,7 @@ TEST_CASE("Loop classifies provider streaming cancellation phases", "[unit][agen
       inputs.turn_id = turn_id;
       inputs.trace = agent::TraceContext{
           .repository = &trace,
+          .blocking_executor = io.get_executor(),
           .session_id = turn_id_with(0x80),
           .agent_key = "coder",
           .origin = "cli",
@@ -1282,6 +1279,7 @@ TEST_CASE("Loop persists loop-boundary error trace rows", "[unit][agent][loop][t
     inputs.turn_id = turn_id_with(0x44);
     inputs.trace = agent::TraceContext{
         .repository = &trace,
+        .blocking_executor = io.get_executor(),
         .session_id = turn_id_with(0x80),
         .agent_key = "coder",
         .origin = "cli",
@@ -1584,6 +1582,35 @@ TEST_CASE("Loop routes tool dispatch through a caller-supplied scheduler", "[uni
       3s);
 }
 
+TEST_CASE("Loop rejects a missing trace executor before calling the provider",
+          "[unit][agent][loop][trace][execution]") {
+  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    storage::Pool pool;
+    storage::TraceRepository trace{pool};
+    RecordingProvider provider{provider::Response{.blocks = {core::TextContent{.text = "done"}},
+                                                  .stop_reason = core::StopReason::end_turn,
+                                                  .model_used = std::nullopt,
+                                                  .route_profile_used = std::nullopt}};
+    agent::Loop loop{provider, default_route()};
+    const auto catalog = loop_catalog();
+    const std::vector<core::Message> tail{core::Message::user_text("hello")};
+    auto inputs = base_inputs(catalog, tail);
+    inputs.trace = agent::TraceContext{
+        .repository = &trace,
+        .session_id = turn_id_with(0x80),
+        .agent_key = "coder",
+        .origin = "cli",
+    };
+
+    auto result = co_await loop.run_turn(inputs);
+
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().kind() == core::ErrorKind::invalid_argument);
+    CHECK(result.error().message() == "trace blocking executor is not configured");
+    CHECK(provider.calls() == 0);
+  });
+}
+
 TEST_CASE("Loop persists one terminal trace row for a text turn", "[unit][agent][loop][trace]") {
   TempDb db{"oran-agent-loop-trace-text"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
@@ -1619,6 +1646,7 @@ TEST_CASE("Loop persists one terminal trace row for a text turn", "[unit][agent]
     inputs.turn_id = turn_id_with(0x31);
     inputs.trace = agent::TraceContext{
         .repository = &trace,
+        .blocking_executor = io.get_executor(),
         .session_id = turn_id_with(0x80),
         .parent_turn_id = turn_id_with(0x22),
         .agent_key = "coder",
@@ -1696,7 +1724,7 @@ TEST_CASE("Loop persists a terminal trace row and correlates storage audit rows"
     tool::Registry registry;
     add_canned_tool(registry, canned_tool_def("FileRead"), "read-ok");
     auto rules = allow_all_rules();
-    permission::StorageAuditSink audit{audit_repo};
+    permission::StorageAuditSink audit{audit_repo, io.get_executor()};
     auto ctx = dispatch_context(io, rules, audit);
 
     const auto catalog = registry.catalog();
@@ -1705,6 +1733,7 @@ TEST_CASE("Loop persists a terminal trace row and correlates storage audit rows"
     inputs.turn_id = turn_id_with(0x31);
     inputs.trace = agent::TraceContext{
         .repository = &trace,
+        .blocking_executor = io.get_executor(),
         .session_id = turn_id_with(0x80),
         .parent_turn_id = turn_id_with(0x22),
         .agent_key = "coder",
@@ -1792,7 +1821,7 @@ TEST_CASE("Loop generates trace turn ids and correlates storage audit rows", "[u
     tool::Registry registry;
     add_canned_tool(registry, canned_tool_def("FileRead"), "read-ok");
     auto rules = allow_all_rules();
-    permission::StorageAuditSink audit{audit_repo};
+    permission::StorageAuditSink audit{audit_repo, io.get_executor()};
     auto ctx = dispatch_context(io, rules, audit);
 
     const auto catalog = registry.catalog();
@@ -1800,6 +1829,7 @@ TEST_CASE("Loop generates trace turn ids and correlates storage audit rows", "[u
     auto inputs = base_inputs(catalog, tail);
     inputs.trace = agent::TraceContext{
         .repository = &trace,
+        .blocking_executor = io.get_executor(),
         .session_id = turn_id_with(0x80),
         .agent_key = "coder",
         .origin = "cli",
@@ -1862,7 +1892,7 @@ TEST_CASE("Loop disables trace rows and audit parent ids when trace is off", "[u
     tool::Registry registry;
     add_canned_tool(registry, canned_tool_def("FileRead"), "read-ok");
     auto rules = allow_all_rules();
-    permission::StorageAuditSink audit{audit_repo};
+    permission::StorageAuditSink audit{audit_repo, io.get_executor()};
     auto ctx = dispatch_context(io, rules, audit);
     ctx.parent_turn_id = turn_id_with(0x70);
 
@@ -1873,6 +1903,7 @@ TEST_CASE("Loop disables trace rows and audit parent ids when trace is off", "[u
     inputs.trace = agent::TraceContext{
         .enabled = false,
         .repository = &trace,
+        .blocking_executor = io.get_executor(),
         .session_id = turn_id_with(0x80),
         .agent_key = "coder",
         .origin = "cli",
@@ -1930,6 +1961,7 @@ TEST_CASE("Loop persists provider cancellation trace rows", "[unit][agent][loop]
     inputs.turn_id = turn_id_with(0x41);
     inputs.trace = agent::TraceContext{
         .repository = &trace,
+        .blocking_executor = io.get_executor(),
         .session_id = turn_id_with(0x80),
         .agent_key = "coder",
         .origin = "cli",
@@ -2016,6 +2048,7 @@ TEST_CASE("Loop persists tool cancellation trace rows", "[unit][agent][loop][tra
     inputs.turn_id = turn_id_with(0x42);
     inputs.trace = agent::TraceContext{
         .repository = &trace,
+        .blocking_executor = io.get_executor(),
         .session_id = turn_id_with(0x80),
         .agent_key = "coder",
         .origin = "cli",
@@ -2347,6 +2380,7 @@ TEST_CASE("Loop persists iteration-cap trace rows", "[unit][agent][loop][trace]"
     inputs.turn_id = turn_id_with(0x55);
     inputs.trace = agent::TraceContext{
         .repository = &trace,
+        .blocking_executor = io.get_executor(),
         .session_id = turn_id_with(0x90),
         .agent_key = "coder",
         .origin = "cli",

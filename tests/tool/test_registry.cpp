@@ -2873,7 +2873,7 @@ TEST_CASE("blocking tool_before writes a joinable hook_publish row for traced di
     storage::AuditRepository repo{pool};
     auto migrated = co_await repo.migrate();
     REQUIRE(migrated.has_value());
-    permission::StorageAuditSink audit{repo};
+    permission::StorageAuditSink audit{repo, io.get_executor()};
 
     auto rules = allow_rule_set();
     orangutan::hook::HookDecision veto{};

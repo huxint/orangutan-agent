@@ -9,8 +9,9 @@ session ID and agent selector are explicit options.
 
 The host creates the Asio runtime, provider transport, runtime assembly and
 session in that order. The session runs on a strand. Blocking filesystem, HTTP
-and memory operations use the runtime's worker executor. The host awaits the
-turn, including tool cleanup, before destroying borrowed services.
+and SQLite operations use the runtime's worker executor. The host awaits the
+turn, including audit/trace writes and tool cleanup, before destroying borrowed
+services.
 
 `RuntimeAssembly` owns the workspace resolver, approval broker, hook bus, audit
 sink and optional session/long-term repositories. Storage paths supplied by the

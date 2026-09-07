@@ -7,9 +7,10 @@ pool. Library callers receive executor handles instead of constructing runtimes.
 ## Execution
 
 Coordinating state and hooks run on a strand. Synchronous filesystem, SQLite and
-HTTP work runs on the blocking executor. Awaiting a pool lease does not migrate
-the caller's coroutine: start the storage operation with `asio::co_spawn` on its
-worker executor and await the result back on the caller's strand.
+HTTP work runs on the blocking executor. Pool lease completions preserve the
+requesting coroutine's executor: start the storage operation with `asio::co_spawn`
+on its worker executor and await the result back on the caller's strand. Audit
+and trace writers use this boundary, including terminal traces after cancellation.
 
 Pure functions receive values and clocks explicitly. Effectful functions own or
 borrow their resources for a documented lifetime. References passed through a

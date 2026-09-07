@@ -8,6 +8,8 @@
 #include <string_view>
 #include <vector>
 
+#include <asio/any_io_executor.hpp>
+
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/config/config.hpp>
 #include <oran/core/content.hpp>
@@ -39,9 +41,6 @@ namespace orangutan::agent {
 class ToolScheduler;
 
 struct LoopOptions {
-  /// Spec 0017 makes the iteration cap a runtime invariant. The current loop
-  /// consumes repeated provider turns sequentially; the future scheduler keeps
-  /// the same cap at the agent boundary.
   std::uint32_t max_iterations{16};
   prompt::BuilderOptions prompt_options{};
 
@@ -49,16 +48,12 @@ struct LoopOptions {
 };
 
 struct TraceContext {
-  /// Operator trace switch after the caller maps `config::TraceConfig` into
-  /// turn inputs. `false` preserves trace-disabled bytes: no `trace_turns` row
-  /// is written and direct tool audit rows keep `parent_turn_id = NULL`.
+  /// Disabling tracing also clears turn correlation on tool audit rows.
   bool enabled{true};
-  /// Optional storage writer for spec-0018 per-turn trace rows. When null, the
-  /// loop preserves the pre-trace behavior and only caller-supplied `turn_id`
-  /// audit stamping can occur if `enabled` is true. When non-null, the loop
-  /// generates `RunTurnInputs::turn_id` if absent; `session_id`, `agent_key`,
-  /// and `origin` must still be set.
+  /// Borrowed until the turn's terminal write completes, including cancellation.
+  /// A configured repository requires a blocking executor and session identity.
   storage::TraceRepository* repository{nullptr};
+  asio::any_io_executor blocking_executor{};
   core::TurnId session_id{};
   std::optional<core::TurnId> parent_turn_id{};
   std::string_view agent_key{};
@@ -71,10 +66,8 @@ struct RunTurnInputs {
   /// Supplying text is an explicit override for tests or embedders that already
   /// own a repository-versioned preamble.
   std::string_view system_preamble{};
-  /// Catalog snapshot from `tool::Registry::catalog()`. `Loop` forwards it to
-  /// `prompt::Builder` and also mirrors the active subset, sorted by tool name,
-  /// into `provider::Request::tools` so future adapters do not have to parse
-  /// prompt text to discover native tool definitions.
+  /// Registry catalogue used for prompt rendering and native provider tool
+  /// definitions. The active subset is sorted by tool name.
   std::span<const core::ToolDef> tool_catalog{};
   config::PromptActiveToolsConfig active_tools{};
   /// Sorted promotion snapshot from `SessionState::promotion_snapshot(now)`.
@@ -91,17 +84,9 @@ struct RunTurnInputs {
   std::optional<std::uint32_t> thinking_budget{};
   provider::RetryPolicy retry{};
   bool stream{true};
-  /// Optional trace/audit correlation id for this turn. When set and
-  /// `trace.enabled` is true, the loop threads it into every direct tool
-  /// dispatch as `DispatchContext::parent_turn_id`. When unset but a trace
-  /// writer is configured, the loop generates one before the first prompt
-  /// render; trace-disabled and pre-trace callers still keep
-  /// `parent_turn_id = NULL`.
+  /// Threads through tool audits when tracing is enabled. A configured trace
+  /// writer generates this id before rendering if the caller omits it.
   std::optional<core::TurnId> turn_id{};
-  /// Optional per-turn trace writer context. The loop records redacted
-  /// `trace_turns` rows when a caller supplies `trace.repository`, generating
-  /// a turn id if the caller did not provide one. Operator config and CLI
-  /// inspection remain downstream.
   TraceContext trace{};
   /// Optional process hook bus. When supplied, the loop publishes advisory
   /// provider lifecycle events around every provider await: request, response,
@@ -112,13 +97,10 @@ struct RunTurnInputs {
   std::string_view agent_key{};
   std::string_view identity{};
   std::string_view origin{};
-  /// Optional direct-dispatch bridge for spec 0017 scenarios #2/#3. Both
-  /// pointers must be non-null to execute tool_use blocks; otherwise the loop
-  /// still fails loudly on tool_use so callers do not accidentally run a
-  /// partial ReAct loop without permission/audit infrastructure.
+  /// Both are required to execute tool-use responses through authorized dispatch.
   tool::Registry* tools{nullptr};
   tool::DispatchContext* dispatch_context{nullptr};
-  /// Optional parallel tool-call scheduler (spec 0012). When set, the loop
+  /// Optional parallel tool-call scheduler. When set, the loop
   /// routes every tool batch — including N == 1 — through
   /// `ToolScheduler::run_batch`, so bounded parallelism, per-path locks,
   /// per-call timeout, and parent-cancellation propagation apply uniformly.
@@ -130,9 +112,7 @@ struct RunTurnInputs {
 };
 
 struct RunTurnResult {
-  /// Text assembled from every `TextContent` block in the terminal assistant
-  /// response. `assistant_blocks` preserves the typed response for future
-  /// storage / UI consumers that should not re-parse this fallback string.
+  /// Terminal assistant text; `assistant_blocks` retains the typed response.
   std::string text;
   std::vector<core::Content> assistant_blocks;
   core::StopReason stop_reason{core::StopReason::end_turn};
@@ -141,9 +121,8 @@ struct RunTurnResult {
   prompt::RenderedPrompt rendered_prompt{};
   std::optional<provider::PromptCacheHints> cache_hints{};
   std::uint32_t iterations{0};
-  /// Complete transcript tail after the turn, including the terminal assistant
-  /// response. Tool-loop callers can persist this value as the turn's
-  /// working-memory delta until the real session repository owner lands.
+  /// Complete transcript tail, including the terminal assistant response.
+  /// The session persists the suffix after its prepared history boundary.
   std::vector<core::Message> transcript;
 };
 
@@ -157,17 +136,9 @@ public:
   Loop(Loop&&) noexcept;
   Loop& operator=(Loop&&) noexcept;
 
-  /// Run one user turn through the current MVP loop. This is intentionally
-  /// narrower than the final ReAct loop: it sends requests sequentially,
-  /// accepts terminal text-style stop reasons, and only dispatches tool_use
-  /// blocks when `RunTurnInputs::tools` and `dispatch_context` are supplied.
-  /// The supplied dispatch context still owns permissions, audit, approvals,
-  /// hooks, workspace, and output-cap services; the loop refreshes its per-call
-  /// wall-clock time and trace parent id around every direct dispatch, then
-  /// restores the caller's reusable context values. Parallel scheduling,
-  /// session persistence, execution-runtime wiring, and binary CLI handoff
-  /// remain later slices. Parent cancellation during
-  /// the provider await or direct tool dispatch is surfaced as
+  /// Run a provider/tool turn through the supplied dispatch services and bounded
+  /// scheduler. Borrowed context and trace services must outlive the turn and
+  /// its tool cleanup. Cancellation during provider or tool work is surfaced as
   /// `ErrorKind::cancelled` with `reason=parent_cancelled` plus
   /// `cancellation_phase=provider_initial|provider_stream|provider_complete|tools`;
   /// when a trace context is configured, the same phase is persisted before
@@ -175,7 +146,7 @@ public:
   /// When `LoopOptions::max_iterations` is exhausted by repeated tool_use
   /// responses and a trace context is configured, an `error` row is written
   /// with the final iteration's rendered prompt and the cumulative usage
-  /// before the existing `Error::internal` (reason=`iteration_cap`) returns.
+  /// before `Error::internal` (reason=`iteration_cap`) returns.
   [[nodiscard]] async::Awaitable<core::Result<RunTurnResult>> run_turn(RunTurnInputs inputs,
                                                                        provider::EventSink* sink = nullptr);
 

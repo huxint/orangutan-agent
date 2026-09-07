@@ -13,10 +13,17 @@ alive. Connection setup configures the opened handle from explicit options.
 Per-connection statement caches are bounded and returned statements reset before
 reuse.
 
-Acquiring a lease is asynchronous and cancellation-aware. SQL after acquisition
-still runs on the caller's executor. Runtime callers must start storage work on
-the blocking executor; a pool handle alone does not move synchronous SQLite off
-the coordinating strand.
+Acquiring a lease is asynchronous and cancellation-aware. Available, queued and
+cancelled lease completions resume on the requesting coroutine's executor. SQL
+after acquisition runs there too; the pool's executor only drives availability.
+
+Runtime session, audit and trace operations start on the blocking executor and
+await completion back on the coordinating strand. `StorageAuditSink` binds its
+worker at construction; `agent::TraceContext` supplies one for terminal trace
+writes. Missing worker bindings return an explicit error. Requests own their
+values across suspension, and repository owners await all writes before releasing
+borrowed services. Audit and trace writers report cancellation after joining the
+pending operation; an already committed row remains durable.
 
 ## Migrations
 
@@ -51,7 +58,9 @@ metadata, skill rows, audit decisions and traces. Migration history is retained.
   are 128 rows/512 KiB. The API never prunes stored messages.
 - `AuditRepository` records permission/tool outcomes, enriches the matching
   decision's metadata and reads records by scope or parent turn.
-  `StorageAuditSink` adapts this repository to dispatch.
+  `StorageAuditSink` adapts this repository to dispatch. Decision writes must
+  complete before the handler can run; metadata enrichment is awaited after the
+  result. Storage failure or cancellation cannot grant an effect.
 - `TraceRepository` records redacted turn metadata: IDs, origin, model/route,
   prompt hashes/byte counts, usage, timing and stop/cancellation classification.
   Records can be read by turn ID or listed with session/agent filters and a

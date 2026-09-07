@@ -15,10 +15,13 @@
 #include <vector>
 
 #include <asio/any_io_executor.hpp>
+#include <asio/append.hpp>
 #include <asio/associated_cancellation_slot.hpp>
+#include <asio/associated_executor.hpp>
 #include <asio/async_result.hpp>
 #include <asio/cancellation_state.hpp>
 #include <asio/cancellation_type.hpp>
+#include <asio/dispatch.hpp>
 #include <asio/post.hpp>
 #include <asio/this_coro.hpp>
 #include <asio/use_awaitable.hpp>
@@ -191,6 +194,10 @@ struct Pool::State : std::enable_shared_from_this<Pool::State> {
   template <typename Handler>
   void async_acquire_writer(asio::cancellation_state cancellation, Handler&& handler) {
     auto cancel_slot = asio::get_associated_cancellation_slot(handler);
+    auto caller = asio::get_associated_executor(handler, executor);
+    auto complete = [caller, handler = std::forward<Handler>(handler)](core::Result<WriterLease> result) mutable {
+      asio::dispatch(caller, asio::append(std::move(handler), std::move(result)));
+    };
 
     DeferredAction action;
     {
@@ -198,12 +205,12 @@ struct Pool::State : std::enable_shared_from_this<Pool::State> {
       if (!writer_busy) {
         writer_busy = true;
         auto lease = make_writer_lease();
-        action = [handler = std::forward<Handler>(handler), lease = std::move(lease)]() mutable {
-          std::move(handler)(core::Result<WriterLease>{std::move(lease)});
+        action = [complete = std::move(complete), lease = std::move(lease)]() mutable {
+          complete(core::Result<WriterLease>{std::move(lease)});
         };
       } else {
         auto waiter = std::make_shared<WriterWaiter>(WriterWaiter{
-            .complete = WriterCompletion{std::forward<Handler>(handler)},
+            .complete = WriterCompletion{std::move(complete)},
         });
         writer_waiters.push_back(waiter);
         // Install the cancel handler after the waiter is in the queue, under
@@ -242,6 +249,10 @@ struct Pool::State : std::enable_shared_from_this<Pool::State> {
   template <typename Handler>
   void async_acquire_reader(asio::cancellation_state cancellation, Handler&& handler) {
     auto cancel_slot = asio::get_associated_cancellation_slot(handler);
+    auto caller = asio::get_associated_executor(handler, executor);
+    auto complete = [caller, handler = std::forward<Handler>(handler)](core::Result<ReaderLease> result) mutable {
+      asio::dispatch(caller, asio::append(std::move(handler), std::move(result)));
+    };
 
     DeferredAction action;
     {
@@ -250,12 +261,12 @@ struct Pool::State : std::enable_shared_from_this<Pool::State> {
         const auto slot = free_readers.front();
         free_readers.pop_front();
         auto lease = make_reader_lease(slot);
-        action = [handler = std::forward<Handler>(handler), lease = std::move(lease)]() mutable {
-          std::move(handler)(core::Result<ReaderLease>{std::move(lease)});
+        action = [complete = std::move(complete), lease = std::move(lease)]() mutable {
+          complete(core::Result<ReaderLease>{std::move(lease)});
         };
       } else {
         auto waiter = std::make_shared<ReaderWaiter>(ReaderWaiter{
-            .complete = ReaderCompletion{std::forward<Handler>(handler)},
+            .complete = ReaderCompletion{std::move(complete)},
         });
         reader_waiters.push_back(waiter);
         if (cancel_slot.is_connected()) {

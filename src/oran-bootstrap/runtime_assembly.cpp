@@ -246,7 +246,7 @@ std::string_view RuntimeAssembly::longterm_memory_path() const noexcept {
 }
 
 Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
-                                               asio::any_io_executor runtime_executor,
+                                               asio::any_io_executor blocking_executor,
                                                RuntimeAssemblyOptions options) {
   if (workspace.empty()) {
     return std::unexpected(Error::invalid_argument("workspace path is empty"));
@@ -283,7 +283,7 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
       return std::unexpected(std::move(session_migration).error());
     }
 
-    auto sessions_pool = storage::Pool::open(runtime_executor,
+    auto sessions_pool = storage::Pool::open(blocking_executor,
                                              storage::PoolOptions{
                                                  .path = impl->sessions_path,
                                                  .reader_count = options.session_reader_count,
@@ -313,7 +313,7 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
     }
 
     auto memory_pool =
-        storage::Pool::open(runtime_executor,
+        storage::Pool::open(blocking_executor,
                             storage::PoolOptions{
                                 .path = impl->longterm_memory_path,
                                 .reader_count = options.longterm_memory_reader_count,
@@ -341,7 +341,7 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
   if (!migration) {
     return std::unexpected(std::move(migration).error());
   }
-  auto long_lived_pool = storage::Pool::open(std::move(runtime_executor),
+  auto long_lived_pool = storage::Pool::open(blocking_executor,
                                              storage::PoolOptions{
                                                  .path = impl->audit_path,
                                                  .reader_count = options.audit_reader_count,
@@ -352,7 +352,8 @@ Result<RuntimeAssembly> RuntimeAssembly::build(std::string_view workspace,
   }
   impl->audit_pool = std::make_unique<storage::Pool>(std::move(*long_lived_pool));
   impl->audit_repository = std::make_unique<storage::AuditRepository>(*impl->audit_pool);
-  impl->audit_sink = std::make_unique<permission::StorageAuditSink>(*impl->audit_repository);
+  impl->audit_sink =
+      std::make_unique<permission::StorageAuditSink>(*impl->audit_repository, std::move(blocking_executor));
 
   if (options.trace_enabled) {
     impl->trace_repository = std::make_unique<storage::TraceRepository>(*impl->audit_pool);

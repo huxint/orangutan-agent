@@ -1,10 +1,9 @@
-// src/oran-agent/loop.cpp — first `agent::Loop` provider drive.
-
 #include <oran/agent/loop.hpp>
 
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <expected>
 #include <limits>
 #include <memory>
@@ -12,12 +11,15 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <variant>
 #include <vector>
 
 #include <asio/cancellation_state.hpp>
+#include <asio/co_spawn.hpp>
 #include <asio/this_coro.hpp>
+#include <asio/use_awaitable.hpp>
 
 #include <oran/agent/scheduler.hpp>
 #include <oran/agent/system_preamble.hpp>
@@ -556,11 +558,26 @@ write_trace_turn(const RunTurnInputs& inputs,
   if (!request) {
     co_return std::unexpected(std::move(request).error());
   }
-  auto appended = co_await inputs.trace.repository->append_turn(std::move(*request));
-  if (!appended) {
-    co_return std::unexpected(std::move(appended).error());
+  try {
+    auto appended = co_await asio::co_spawn(inputs.trace.blocking_executor,
+                                            inputs.trace.repository->append_turn(std::move(*request)),
+                                            asio::use_awaitable);
+    if (!appended) {
+      co_return std::unexpected(std::move(appended).error());
+    }
+    const auto cancellation = co_await asio::this_coro::cancellation_state;
+    if (cancellation.cancelled() != asio::cancellation_type::none) {
+      co_return std::unexpected(core::Error::cancelled());
+    }
+    co_return core::Result<void>{};
+  } catch (const std::system_error& error) {
+    if (error.code() == asio::error::operation_aborted) {
+      co_return std::unexpected(core::Error::cancelled());
+    }
+    co_return std::unexpected(core::Error::storage("trace write failed").with("cause", error.what()));
+  } catch (const std::exception& error) {
+    co_return std::unexpected(core::Error::storage("trace write failed").with("cause", error.what()));
   }
-  co_return core::Result<void>{};
 }
 
 [[nodiscard]] async::Awaitable<core::Result<void>> write_error_trace_turn(const RunTurnInputs& inputs,
@@ -667,6 +684,9 @@ public:
 
   [[nodiscard]] async::Awaitable<core::Result<RunTurnResult>> run_turn(RunTurnInputs inputs,
                                                                        provider::EventSink* sink) {
+    if (trace_writer_configured(inputs) && !inputs.trace.blocking_executor) {
+      co_return std::unexpected(core::Error::invalid_argument("trace blocking executor is not configured"));
+    }
     if (trace_writer_configured(inputs) && !inputs.turn_id.has_value()) {
       auto generated = core::generate_turn_id();
       if (!generated) {

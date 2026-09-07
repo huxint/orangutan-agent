@@ -1,29 +1,5 @@
-// bench/permission/scenarios/audit.cpp
-//
-// A-vs-B coverage for the audit sink hierarchy. We measure three
-// flavors of `AuditSink::record`:
-//
-//   1. `permission.audit_null_sink`        : `NullAuditSink::record`,
-//                                            the no-op floor. Lets the
-//                                            other scenarios separate
-//                                            coroutine-glue cost from
-//                                            real sink cost.
-//   2. `permission.audit_recording_sink`   : `RecordingAuditSink::record`,
-//                                            a single `vector::push_back`
-//                                            plus the move-cost of the
-//                                            event. Useful for tests
-//                                            that need to assert "no
-//                                            disk involved."
-//   3. `permission.audit_storage_sink`     : `StorageAuditSink::record`,
-//                                            which goes all the way to
-//                                            SQLite. The pool + statement
-//                                            cache make this the steady-
-//                                            state cost the agent loop
-//                                            actually pays.
-//
-// We also benchmark `permission::to_hex` separately so callers know
-// the hex encoding cost (the storage adapter pays this on every event
-// that carries an input_hash).
+// Compare null, recording and SQLite audit sinks on one executor.
+// The storage case includes coroutine dispatch and a WAL commit.
 
 #include <nanobench.h>
 
@@ -155,7 +131,7 @@ void register_audit_scenarios(ankerl::nanobench::Bench& bench) {
       std::abort();
     }
   }
-  permission::StorageAuditSink storage_sink{repo};
+  permission::StorageAuditSink storage_sink{repo, io.get_executor()};
 
   std::size_t i = 0;
   bench.run("permission.audit_null_sink", [&] {

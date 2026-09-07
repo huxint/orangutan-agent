@@ -13,8 +13,9 @@ from model tool calls pass through `Registry::dispatch`.
    or an earlier path check cannot authorize a later filesystem effect.
 4. Evaluate rules for the concrete tool, input, declared capabilities and caller.
    Denial stops execution. An ask decision requires a valid approval.
-5. Record the decision, invoke the handler, enforce output limits and publish
-   completion/error observations.
+5. Await the durable decision before invoking the handler. Storage failure or
+   cancellation stops execution. Enforce output limits, await any audit metadata
+   enrichment and publish completion/error observations.
 
 `DispatchContext` carries identity, rules, audit, workspace, approval and injected
 memory services. A tool receives these dependencies explicitly. Application

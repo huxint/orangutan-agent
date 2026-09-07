@@ -91,6 +91,8 @@ public:
   Pool(Pool&&) noexcept;
   Pool& operator=(Pool&&) noexcept;
 
+  /// The executor drives lease availability; each completion resumes on the
+  /// requesting coroutine's executor. SQL runs wherever that coroutine runs.
   [[nodiscard]] static core::Result<Pool> open(asio::any_io_executor executor, PoolOptions options);
 
   [[nodiscard]] bool valid() const noexcept;

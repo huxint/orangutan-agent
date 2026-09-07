@@ -246,6 +246,7 @@ public:
     if (auto* trace = options_.assembly->trace_repository(); trace != nullptr) {
       inputs.trace = agent::TraceContext{
           .repository = trace,
+          .blocking_executor = options_.blocking_executor,
           .session_id = options_.session_id,
           .parent_turn_id = options_.parent_turn_id,
           .agent_key = options_.agent_key,

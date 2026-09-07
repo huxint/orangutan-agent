@@ -1,21 +1,5 @@
-// bench/agent/scenarios/scheduler_audit_fanout.cpp
-//
-// Spec 0012 risk: N parallel calls in a batch each record a permission-decision
-// row, so the audit sink sees a burst of concurrent writes. This A-vs-B pair
-// shows whether the real `StorageAuditSink` (SQLite through the `Pool` writer
-// strand) starves under an 8-call batch versus the no-op floor:
-//
-//   A = `agent.scheduler_audit_fanout_null`    : 8-call batch, `NullAuditSink`.
-//   B = `agent.scheduler_audit_fanout_storage` : 8-call batch, `StorageAuditSink`
-//       over a shared in-memory `Pool`. Each call records one decision row, so
-//       B measures the writer-strand coordination cost of fanning eight
-//       concurrent `record` calls through one SQLite connection.
-//
-// The fake tool declares no capabilities, so the batch runs at full
-// `max_parallel_tools` (no per-path lock serialisation) and the ratio isolates
-// audit-writer coordination from lock contention. An in-memory database keeps
-// the measurement free of disk-fsync latency, which would otherwise dominate
-// and obscure whether the writer itself is the bottleneck.
+// Compare eight concurrent audit writes with a no-op sink. An in-memory
+// database isolates writer-lease and SQL cost from disk latency.
 
 #include <nanobench.h>
 
@@ -161,7 +145,7 @@ void register_scheduler_audit_fanout(ankerl::nanobench::Bench& bench) {
     if (!migrated) {
       std::abort();
     }
-    permission::StorageAuditSink audit{repo};
+    permission::StorageAuditSink audit{repo, io.get_executor()};
     agent::ToolScheduler scheduler{io.get_executor(), registry, agent::ToolSchedulerOptions{}};
     bench.run("agent.scheduler_audit_fanout_storage", [&] { run_batch_once(io, scheduler, rules, audit); });
   }

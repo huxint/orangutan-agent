@@ -53,7 +53,7 @@ class RuntimeAssembly {
 public:
   /// Validate the workspace and migrate databases before exposing services.
   [[nodiscard]] static core::Result<RuntimeAssembly>
-  build(std::string_view workspace, asio::any_io_executor runtime_executor, RuntimeAssemblyOptions options = {});
+  build(std::string_view workspace, asio::any_io_executor blocking_executor, RuntimeAssemblyOptions options = {});
 
   ~RuntimeAssembly();
   RuntimeAssembly(const RuntimeAssembly&) = delete;
