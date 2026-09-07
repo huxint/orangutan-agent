@@ -89,7 +89,7 @@ struct Route {
 
 /// Streaming observer. Adapters call into the sink as deltas arrive on the
 /// wire; the sink converts them into whatever surface the caller cares about
-/// (CLI character render, SSE forwarder, no-op for batch callers).
+/// (text rendering, SSE forwarding, or batch consumption).
 ///
 /// All methods default to no-ops so callers override only the deltas they
 /// care about. The contract: deltas for one block arrive in order; blocks may

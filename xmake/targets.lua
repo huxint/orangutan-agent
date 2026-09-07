@@ -1,8 +1,4 @@
--- xmake/targets.lua — production targets.
---
--- One xmake target per shipped library declared in docs/ARCHITECTURE.md, plus
--- the public binaries listed there. Future slices add libraries one at a time
--- per docs/exec-plans/.
+-- Production library targets follow docs/ARCHITECTURE.md.
 
 local root = os.projectdir()
 
@@ -44,11 +40,3 @@ oran_lib("provider", { "oran-core", "oran-async", "oran-config", "oran-prompt" }
 oran_lib("agent", { "oran-core", "oran-async", "oran-storage", "oran-prompt", "oran-tool", "oran-provider", "oran-hook" }, { "nlohmann_json" })
 
 oran_lib("bootstrap", { "oran-core", "oran-async", "oran-http", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-memory", "oran-tool", "oran-provider", "oran-agent" }, { "nlohmann_json" })
-
-target("orangutan")
-    set_kind("binary")
-    set_group("oran-bins")
-    add_deps("oran-bootstrap")
-    add_files(path.join(root, "src/main.cpp"))
-    set_rundir(root)
-target_end()

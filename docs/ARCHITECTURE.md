@@ -52,9 +52,10 @@ flowchart TD
 | `oran-agent` | Provider/tool turn execution, bounded scheduling and promotion state. |
 | `oran-bootstrap` | Construct resources and drive one session from the application. |
 
-`orangutan` is the single executable. It accepts an explicit configuration and
-prompt. Its argument parser is a thin host for the runtime. Libraries do not
-depend on executable flags or terminal output. See [BUILD_SYSTEM.md](BUILD_SYSTEM.md).
+Applications link the runtime libraries and supply configuration, executors and
+session identities through `oran-bootstrap`. The host owns process lifetime and
+presentation. Tests and benchmarks exercise these interfaces through their own
+runners. See [BUILD_SYSTEM.md](BUILD_SYSTEM.md).
 
 Dependencies flow toward domain values and platform primitives. Intentional
 same-layer edges are HTTP/IO/storage → async, config → storage, tool →

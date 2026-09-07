@@ -18,7 +18,7 @@ approval and keep its selected authority throughout the operation.
 
 `PrivateDirectory` creates/opens an owned private directory, rejects unsafe file
 reads, writes mode-0600 files atomically with fsync, and provides exclusive locks.
-The application uses it for state ownership. It does not encrypt credentials.
+Hosts can use it for state ownership. It does not encrypt credentials.
 
 ## File Reads
 

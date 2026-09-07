@@ -14,7 +14,7 @@ for sanity.
 
 | Library category                  | Median   | p95     | Hard cap |
 | --------------------------------- | -------- | ------- | -------- |
-| `oran-core`, `oran-log`, `oran-io` | 0.8 s   | 1.5 s   | 2.0 s    |
+| `oran-core`, `oran-io` | 0.8 s   | 1.5 s   | 2.0 s    |
 | `oran-async`, `oran-http`          | 1.0 s   | 2.0 s   | 2.5 s    |
 | `oran-storage`, `oran-config`      | 1.0 s   | 2.0 s   | 2.5 s    |
 | `oran-permission`    | 1.0 s   | 2.0 s   | 2.5 s    |
@@ -31,8 +31,6 @@ A TU exceeding hard cap **fails CI**. Median / p95 regressions trigger a warning
 | ---------------------------------------------- | --------- | -------- |
 | Configure (`xmake f`)                           | 5 s       | 20 s     |
 | Build all libs (`xmake build oran-*`)           | 25 s      | 45 s     |
-| Build all binaries (`xmake build orangutan*`)    | 30 s      | 55 s     |
-| Link `orangutan` binary                          | 5 s       | 10 s     |
 | Total clean build (`xmake -j$(nproc)`)          | 30 s      | 60 s     |
 | Incremental rebuild after one `.cpp` edit       | 3 s       | 10 s     |
 | Incremental rebuild after one public header edit | 8 s       | 20 s     |

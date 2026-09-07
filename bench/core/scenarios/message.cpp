@@ -1,21 +1,5 @@
-// bench/core/scenarios/message.cpp
-//
-// A-vs-B coverage for the `core::Content` variant traversal:
-//
-//   1. `core.content_visit_overloaded` : `std::visit(Overloaded{...}, c)` —
-//                                        the project-preferred visitor style
-//                                        from `docs/rules/code-style.md`.
-//   2. `core.content_get_if_text`      : `std::get_if<TextContent>(&c)` —
-//                                        the single-alternative fast path.
-//   3. `core.message_walk_blocks`      : walks a 32-block mixed-alternative
-//                                        message and accumulates total text
-//                                        length. Reflects the "render this
-//                                        turn" hot path used by the CLI and
-//                                        future memory tier.
-//
-// Both A and B walk the same 32-block message; the comparison documents the
-// cost of preferring `std::visit` over a single-alternative shortcut so
-// future hot paths can pick with eyes open.
+// Compare variant visitation and direct text access over a mixed 32-block
+// message. Both paths use the same input; the block walk measures text totals.
 
 #include <nanobench.h>
 

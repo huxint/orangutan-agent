@@ -1265,11 +1265,8 @@ TEST_CASE("AgentSession::create rejects a registry/scheduler supplied without it
   });
 }
 
-// Regression for the 2026-06-20 scheduler-executor race: the CLI/desktop
-// wiring now hosts the agent loop and its runner-owned `ToolScheduler` on one
-// `Runtime::make_strand()` while the runtime itself keeps several io workers.
-// Multi-tool batches must complete correctly there — under `--sanitizers=y`
-// this case is also the thread-safety probe for the strand contract.
+// The session and scheduler share a strand while multiple IO workers drive
+// the runtime. Concurrent tool calls must preserve that coordinating boundary.
 TEST_CASE("AgentSession multi-tool batches complete on a multi-worker runtime",
           "[unit][bootstrap][prompt_runner][scheduler][concurrency]") {
   TempDir temp{"oran-bootstrap-prompt-runner-multiworker"};

@@ -21,7 +21,7 @@ effect boundaries. Preserve user data; delete replaced code and stale documents.
 | Work | Read |
 | --- | --- |
 | Agent execution and context | [agent-platform](docs/design-docs/agent-platform.md) |
-| Runtime composition and executable | [bootstrap-runtime](docs/design-docs/bootstrap-runtime.md) |
+| Runtime composition and session hosting | [bootstrap-runtime](docs/design-docs/bootstrap-runtime.md) |
 | Tool dispatch and filesystem policy | [tool-runtime](docs/design-docs/tool-runtime.md) |
 | Permission decisions and approvals | [permissions-and-hooks](docs/design-docs/permissions-and-hooks.md) |
 | Session and long-term memory | [memory-system](docs/design-docs/memory-system.md) |

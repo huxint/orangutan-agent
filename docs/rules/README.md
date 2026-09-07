@@ -29,7 +29,7 @@ Do not silently break it.
 | [`deep-review.md`](deep-review.md) | Naming, version stamp, absorption pipeline, and delete-on-close for deep-review artifacts. |
 | [`static-analysis.md`](static-analysis.md) | GCC 16.1 `-fanalyzer` wiring, suppression rules. |
 | [`testing-and-bench.md`](testing-and-bench.md) | Tests + benches expected per change. |
-| [`workflow.md`](workflow.md) | Git, CLI tools, branch naming. |
+| [`workflow.md`](workflow.md) | Git branches, commits and validation. |
 
 ## When To Update Rules
 

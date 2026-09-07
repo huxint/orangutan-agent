@@ -2,7 +2,7 @@ PROJECT ?=
 SLUG    ?=
 LIB     ?=
 
-.PHONY: init check-docs check-repo ci new-plan bench-compare release-package help
+.PHONY: init check-docs check-repo ci new-plan bench-compare help
 
 help:
 	@echo "Available targets:"
@@ -12,7 +12,6 @@ help:
 	@echo "  make check-repo                full repo hygiene check"
 	@echo "  make new-plan SLUG=...         scaffold an execution plan"
 	@echo "  make bench-compare LIB=...     run a library's benchmarks and compare to baseline"
-	@echo "  make release-package           run the release packaging script (stub until v1)"
 
 init:
 	@if [ -z "$(PROJECT)" ]; then echo "usage: make init PROJECT=my-project"; exit 1; fi
@@ -35,6 +34,3 @@ new-plan:
 bench-compare:
 	@if [ -z "$(LIB)" ]; then echo "usage: make bench-compare LIB=memory"; exit 1; fi
 	./scripts/bench-compare.sh "$(LIB)"
-
-release-package:
-	./scripts/release-package.sh

@@ -1,9 +1,9 @@
 # Configuration And State
 
-The executable requires `--config FILE` and loads it strictly. Configuration is
-parsed before credentials or provider operations. Unknown root, runtime, trace,
-hook, provider, memory, permission and agent fields are errors under this mode.
-Library callers may choose warnings instead through `LoadOptions`.
+The host supplies parsed configuration through `Config::parse` or
+`Config::load_file`. Strict loading rejects unknown root, runtime, trace, hook,
+provider, memory, permission and agent fields. `LoadOptions` selects strict
+errors or warnings. Parse configuration before constructing provider services.
 
 The config file contains:
 
@@ -21,22 +21,21 @@ The config file contains:
 }
 ```
 
-## Consumed Settings
+## Settings And Ownership
 
-| Section | Runtime meaning |
+| Section | Consumer |
 | --- | --- |
-| `runtime.workers` | Blocking worker count; coordination uses one IO worker and a strand. |
-| `runtime.request_timeout_ms`, `runtime.stream.max_bytes` | Provider request deadline and response byte cap. |
-| `runtime.tool_output` | Model-visible text and structured output byte limits. |
-| `runtime.tool_scheduler` | Parallel tool count, per-call timeout and idle path-lock TTL. |
-| `runtime.prompt.active_tools` | Default or explicit active catalogue selection. |
-| `trace.enabled` | Persist redacted turn metadata alongside audit. |
-| `profiles` | Model, protocol, endpoint, credential reference and per-profile cache/thinking/pricing policy. |
-| `routes` | Primary and fallback profile names; the executable uses `default`. |
-| `permissions`, `agents.<name>.permissions` | Materialized global and selected-agent tool policy. |
-| `agents.<name>.prompt_overlay` | Stable agent instructions. |
-| `hooks.timeout_ms` | Blocking hook deadline. |
-| `memory.longterm.recall` | Enabled flag, result limit (1–20) and record-kind filter. |
+| `runtime.workers` | Host maps the blocking worker count to `async::RuntimeConfig`. |
+| `runtime.request_timeout_ms`, `runtime.stream.max_bytes` | Host maps transport bounds to `HttpProviderBackendOptions`. |
+| `runtime.tool_output` | `AgentSession` applies model-visible text and structured output byte limits. |
+| `runtime.tool_scheduler` | `AgentSession` applies parallelism, timeout and idle path-lock limits. |
+| `runtime.prompt.active_tools` | `AgentSession` selects the active catalogue. |
+| `trace.enabled` | Host maps the trace switch to `RuntimeAssemblyOptions`. |
+| `profiles`, `routes` | `HttpProviderBackend` selects model, protocol, endpoint, credentials and model policy; `route_name` defaults to `default`. |
+| `permissions`, `agents.<name>.permissions` | `AgentSession` materializes global and selected-agent rules. Host maps workspace roots to `WorkspaceOptions`. |
+| `agents.<name>.prompt_overlay` | `AgentSession` selects stable agent instructions. |
+| `hooks.timeout_ms` | Host maps the hook deadline to `RuntimeAssemblyOptions`. |
+| `memory.longterm.recall` | Host maps recall enablement, limit and kinds to `AgentSessionOptions`. |
 
 ## Credentials
 
@@ -48,14 +47,14 @@ embedding credentials in JSON. No credential encryption/store is implemented.
 
 ## State
 
-The default workspace is the current directory, canonicalized before execution.
-The default state directory is `<workspace>/.orangutan`; `--state` selects an
-explicit location. It contains `sessions.db`, `memory.db`, `audit.db` and the
-runtime ownership lock. The host requires a private, owned directory.
+The host selects the workspace and database paths. `RuntimeAssembly` defaults to
+`sessions.db`, `memory.db` and `audit.db` under `<workspace>/.orangutan`. The host
+owns directory privacy and exclusion; `io::PrivateDirectory` provides private
+files and a directory lock.
 
-A generated session ID is printed to stderr. `--session` resumes that ID with the
-selected agent key. Long-term memory scope is the canonical workspace path.
-Changing the workspace deliberately changes that scope.
+`AgentSessionOptions` carries the session ID, agent key, approval identity and
+memory scope. Reusing a session ID and agent key resumes the stored conversation.
+Long-term recall uses the supplied scope; workspace-to-scope mapping is host policy.
 
 No automatic import or unrelated-history merging occurs. Preserve database
 files and migration records through refactors. Backup/import tooling remains

@@ -163,7 +163,7 @@ do **not** include `<iostream>` in production code.
 #include <print>
 std::println("loaded {} routes in {}", routes.size(), elapsed);
 
-// FORBIDDEN (in src/oran-*/ and src/main.cpp)
+// FORBIDDEN (in runtime libraries)
 #include <iostream>
 std::cout << "loaded " << routes.size() << " routes\n";
 ```

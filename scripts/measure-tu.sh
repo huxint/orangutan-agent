@@ -38,8 +38,8 @@
 #   - RSS per TU is NOT measured. GNU `time` (the binary) is not present on
 #     every CI image. The memory-budget table in `compile-budget.md` is a
 #     separate concern; revisit once a TU lands that pressures it.
-#   - Tests / benches / `src/main.cpp` are excluded; the per-TU budget
-#     applies to library TUs only.
+#   - The per-TU budget applies to library TUs; test and benchmark runners
+#     are excluded.
 #
 # Exit codes:
 #   0 — every measured TU compiled successfully.
@@ -78,7 +78,7 @@ if [[ ! -f "${cc_json}" ]]; then
   exit 2
 fi
 
-# Library TUs only: drop tests/, bench/, src/main.cpp. Emit TSV
+# Library TUs only: drop tests/ and bench/. Emit TSV
 # `<library>\t<file>` sorted by library then file so the output is stable
 # across runs.
 mapfile -t lib_files < <(

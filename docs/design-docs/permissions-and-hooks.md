@@ -40,8 +40,8 @@ and the exact final input.
 
 An ask decision requires an explicit trusted consumer or previously issued grant.
 With no consumer, dispatch returns `permission_denied` with `approval_required`.
-The minimal executable has no interactive approval consumer. Embedders can bind
-the blocking `permission_ask_rendered` hook.
+The host supplies an approval consumer through the blocking
+`permission_ask_rendered` hook.
 
 The broker authenticates grants with a process-owned key. A grant binds tool,
 identity, input hash, expiry and replay budget; default rule policy is eight

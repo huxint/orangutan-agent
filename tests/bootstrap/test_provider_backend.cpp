@@ -6,7 +6,6 @@
 #include <cstdlib>
 #include <expected>
 #include <filesystem>
-#include <fstream>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -16,9 +15,12 @@
 #include <utility>
 #include <vector>
 
+#include <asio/co_spawn.hpp>
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/strand.hpp>
 #include <asio/thread_pool.hpp>
+#include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 #include <nlohmann/json.hpp>
 
@@ -26,7 +28,6 @@
 
 #include <oran/async.hpp>
 #include <oran/bootstrap.hpp>
-#include <oran/bootstrap/application.hpp>
 #include <oran/config.hpp>
 #include <oran/core/content.hpp>
 #include <oran/core/error.hpp>
@@ -315,8 +316,8 @@ public:
 
 }  // namespace
 
-TEST_CASE("application resumes persisted context through the real provider boundary",
-          "[integration][bootstrap][application]") {
+TEST_CASE("AgentSession resumes persisted context through the HTTP provider boundary",
+          "[integration][bootstrap][continuation]") {
   ScopedEnv api_key{"ORAN_BOOTSTRAP_PROVIDER_BACKEND_KEY", "test-secret"};
   ScopedEnv no_proxy{"NO_PROXY", "127.0.0.1,localhost"};
   ScopedEnv lowercase_no_proxy{"no_proxy", "127.0.0.1,localhost"};
@@ -329,27 +330,44 @@ TEST_CASE("application resumes persisted context through the real provider bound
   };
   auto id = core::generate_turn_id();
   REQUIRE(id);
-  Workspace workspace{std::filesystem::temp_directory_path() / ("oran-application-" + core::format_turn_id_hex(*id))};
+  Workspace workspace{std::filesystem::temp_directory_path() / ("oran-session-http-" + core::format_turn_id_hex(*id))};
   REQUIRE(std::filesystem::create_directory(workspace.path));
-  const auto path = workspace.path / "config.json";
 
   for (const auto* prompt : {"Remember the project name.", "Continue the previous turn."}) {
     OneShotHttpServer server{anthropic_sse_response()};
-    {
-      std::ofstream config_file{path};
-      config_file << config_text(server.base_url());
-      REQUIRE(config_file.good());
-    }
-    auto result = bootstrap::run_application({.config_path = path.string(),
-                                              .workspace = workspace.path.string(),
-                                              .state_directory = {},
-                                              .session_id = core::format_turn_id_hex(*id),
-                                              .agent_key = "default",
-                                              .prompt = prompt});
+    auto cfg = parse_config(server.base_url());
+    asio::thread_pool blocking{1};
+    auto backend =
+        bootstrap::HttpProviderBackend::build(cfg,
+                                              {.blocking_executor = blocking.get_executor(), .request_timeout = 2s});
+    REQUIRE(backend.has_value());
+    auto assembly = bootstrap::RuntimeAssembly::build(workspace.path.string(), blocking.get_executor());
+    REQUIRE(assembly.has_value());
 
-    INFO((result ? "" : result.error().message()));
-    REQUIRE(result);
-    CHECK(result->text == "backend ok");
+    test::run_async(
+        [&](asio::io_context& io) -> async::Awaitable<void> {
+          auto caller = asio::make_strand(io);
+          auto session = bootstrap::AgentSession::create({
+              .executor = caller,
+              .blocking_executor = blocking.get_executor(),
+              .assembly = &*assembly,
+              .config = &cfg,
+              .provider = &backend->system(),
+              .route = backend->route(),
+              .scope_key = workspace.path.string(),
+              .session_id = *id,
+          });
+          REQUIRE(session.has_value());
+
+          auto result =
+              co_await asio::co_spawn(caller, (*session)->run_prompt({.prompt = prompt}), asio::use_awaitable);
+
+          INFO((result ? "" : result.error().message()));
+          REQUIRE(result.has_value());
+          CHECK(result->text == "backend ok");
+        },
+        5s);
+
     REQUIRE(server.served());
     const auto request = server.request_text();
     const auto body = nlohmann::json::parse(request.substr(request.find("\r\n\r\n") + 4));

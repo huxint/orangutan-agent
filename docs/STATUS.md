@@ -1,9 +1,9 @@
 # Current State
 
 Orangutan runs a C++26 provider/tool/session loop with explicit configuration,
-scoped memory and persisted continuation. The runtime core and filesystem-tool
-reduction are complete. [Architecture](ARCHITECTURE.md) and the owning design
-contracts describe the implementation.
+scoped memory and persisted continuation through library composition. The runtime
+core and filesystem-tool reduction are complete. [Architecture](ARCHITECTURE.md)
+and the owning design contracts describe the implementation.
 
 ## Delivered Contracts
 
@@ -44,7 +44,7 @@ names remain readable for compatibility.
 File IO shares one descriptor-based read implementation and the pinned file
 mutation boundary. Each read owns its resources and observes current file bytes;
 the [IO contract](design-docs/io-runtime.md) owns ranges, fingerprints and
-cancellation. State storage continues to use private directories.
+cancellation. `PrivateDirectory` provides private state ownership for hosts.
 
 Provider transport uses HTTP/SSE requests with per-request curl handles. The
 [provider contract](design-docs/api-portability.md) owns cancellation polling,
@@ -56,8 +56,9 @@ runtime. `EventTraits` defines blocking admission; the
 
 ## Verification
 
-The release build, all 14 test targets and `make ci` pass. Controlled HTTP
-integration covers the provider/tool loop and persisted continuation. Core
+The release library build, all 14 test targets and `make ci` pass. Controlled HTTP
+integration covers provider calls and persisted continuation through the library
+composition APIs. Core
 storage, memory, hook, tool, HTTP and bootstrap ownership cases have passed with
 explicit ASan/UBSan compiler and linker instrumentation in an isolated debug copy.
 
@@ -83,11 +84,12 @@ certification.
 
 ## Handoff
 
-The [active library plan](exec-plans/active/2026-09-07-runtime-library.md) removes
-process hosting and moves the configured HTTP continuation check onto the library
-composition interfaces. The provider/tool/session loop remains the acceptance
-boundary: authorized tool execution, scoped memory recall, persisted continuation
-and bounded child collaboration.
+The next complete slice is default toolchain activation: make ordinary build
+selection apply the configured LTO and sanitizer flags, with verbose-command
+evidence. The library provider/tool/session loop remains the acceptance boundary:
+authorized tool execution, scoped memory recall, persisted continuation and
+bounded child collaboration. The controlled HTTP continuation test composes
+`HttpProviderBackend`, `RuntimeAssembly` and `AgentSession` directly.
 
 [Live debt](exec-plans/tech-debt-tracker.md) records integration gates and extension
 prerequisites. Default toolchain activation and hosted analyzer/compile-budget

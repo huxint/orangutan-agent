@@ -18,7 +18,8 @@ xmake build -j4
 xmake test -j4
 ```
 
-Tests and benchmarks are separate targets: `test-<lib>` and `bench-<lib>`.
+The default build produces the runtime libraries. Tests and benchmarks are
+separate targets: `test-<lib>` and `bench-<lib>`.
 `xmake test` builds test targets before running them. For a single Catch2 case,
 invoke `build/linux/x86_64/release/test-<lib> "case name"` after building it.
 Use the debug path when configured in debug mode.
@@ -28,7 +29,7 @@ Use the debug path when configured in debug mode.
 | File | Owns |
 | --- | --- |
 | `xmake.lua` | Language, common warnings and included build definitions. |
-| `xmake/targets.lua` | Library graph and the `orangutan` executable. |
+| `xmake/targets.lua` | Runtime library graph. |
 | `xmake/packages.lua` | Pinned fetched packages and required system libraries. |
 | `xmake/toolchain.lua` | Compiler flags, release LTO and debug sanitizers. |
 | `xmake/options.lua` | Supported configure options. |

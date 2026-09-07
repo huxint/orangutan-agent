@@ -29,9 +29,7 @@ fi
 
 # Layering, lowest (foundation) → highest (composition root). Matches the
 # diagram in docs/design-docs/module-boundaries.md "Dependency Direction".
-# `bootstrap` is the composition root — it sits above the interface layer
-# because it wires the entire process together and is the only target the
-# binary entry point reaches into.
+# `bootstrap` composes the platform and agent libraries for their host.
 declare -A LAYER=(
   [core]=0
   # platform
@@ -49,10 +47,8 @@ declare -A LAYER=(
   [provider]=2
   # agent runtime
   [agent]=3
-  # interface
-  # Quoted: shfmt rewrites an unquoted dashed subscript as arithmetic.
   # composition root
-  [bootstrap]=5
+  [bootstrap]=4
 )
 
 # Human-readable layer names for the failure messages.
@@ -61,8 +57,7 @@ declare -A LAYER_NAME=(
   [1]="platform"
   [2]="composition"
   [3]="agent-runtime"
-  [4]="interface"
-  [5]="composition-root"
+  [4]="composition-root"
 )
 
 # Explicit sibling-dep allowlist. Same-layer deps are forbidden by

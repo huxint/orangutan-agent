@@ -1,13 +1,12 @@
 # Reliability
 
-The executable runs a bounded agent turn and exits after its owned work completes.
+`AgentSession::run_prompt` runs a bounded agent turn and joins its borrowed work.
 Provider, tool, permission and storage failures remain explicit results. Partial
-streaming text is not a successful answer. SIGINT/SIGTERM requests cancellation;
-borrowed contexts remain alive until tool dispatches finish.
+streaming text is not a successful answer. Host cancellation propagates through
+the awaiting coroutine; borrowed contexts remain alive until dispatches finish.
 
 Trace and audit metadata is stored in the selected state directory. Correlate
-turn IDs with tool outcomes through the SQLite repositories. There is no trace
-export command or metrics server in the minimal executable.
+turn IDs with tool outcomes through the SQLite repositories.
 
 ## Required Environment
 
