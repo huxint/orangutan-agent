@@ -7,8 +7,8 @@ recall formatting. It does not choose an application identity or call a provider
 
 `session::Store` wraps `storage::SessionRepository`. Keys are explicit session
 and agent values; messages retain typed text, thinking, tool-use and tool-result
-blocks. Existing skill activation records remain readable for database
-compatibility; session execution does not load or update them.
+blocks. Its API appends and reads conversations, with serialization owned by
+memory and transactions owned by storage.
 
 `load_tail` returns the newest messages in conversation order with row and encoded
 byte limits. Defaults are 128 rows and 512 KiB; valid limits are 1–4096 rows and

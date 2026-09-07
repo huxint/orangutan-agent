@@ -13,6 +13,11 @@ commit in one transaction through `Store::append_all` and
 leaves the preceding conversation intact. Existing schemas, message encoding and
 stored user data are preserved. Authorized memory-tool effects commit separately.
 
+Session memory owns conversation serialization; storage owns atomic writes and
+record readback for sessions, audits and traces. Existing session metadata, skill
+rows and audit views survive database reopening and subsequent appends. The
+[storage contract](design-docs/storage-runtime.md) owns these compatibility bounds.
+
 Long-term memory tools borrow one scoped FTS5 backend. `longterm::recall` returns
 owned hits and prompt framing; the [memory contract](design-docs/memory-system.md)
 owns read timestamps, output compatibility and preservation of existing index
@@ -46,9 +51,9 @@ runtime. `EventTraits` defines blocking admission; the
 ## Verification
 
 The release build, all 14 test targets and `make ci` pass. Controlled HTTP
-integration covers the provider/tool loop and persisted continuation. Storage,
-memory, hook, tool, HTTP and bootstrap tests pass with explicit ASan/UBSan
-compiler and linker instrumentation in an isolated debug copy.
+integration covers the provider/tool loop and persisted continuation. Core
+storage, memory, hook, tool, HTTP and bootstrap ownership cases have passed with
+explicit ASan/UBSan compiler and linker instrumentation in an isolated debug copy.
 
 Isolated faults fail at their intended assertions for atomic rollback,
 serialization failure, message ordering, identity/scope isolation, policy
@@ -60,20 +65,24 @@ green. Memory regressions detect missing query validation, scope filtering, read
 timestamps, prompt framing, score fields and preserved database content. Hook
 regressions reject unintended blocking admission and detect changed payloads or
 dropped approval decisions.
-IO, HTTP, tool, memory, hook, prompt, agent, config and permission benchmarks build and run;
-these are local runs, not reference-hardware performance certification.
+Storage preservation regressions detect lost skill, audit and trace rows and a
+dropped reporting view. Child persistence checks detect missing or unexpected
+session rows; restored implementations pass both sets of checks.
+IO, HTTP, storage, tool, memory, hook, prompt, agent, config and permission
+benchmarks build and run; these are local runs, not reference-hardware performance
+certification.
 
 ## Handoff
 
-Use production callers to scope the next complete reduction from the configured
-provider/tool/session loop. Its acceptance boundary is authorized tool execution,
-scoped memory recall, persisted continuation and bounded child collaboration.
-Keep resource ownership explicit and preserve user databases.
+The next complete slice is audit/trace SQL execution on the blocking executor.
+Keep permission decisions durable before tool effects and await writes before
+releasing borrowed services. The configured provider/tool/session loop remains
+the acceptance boundary: authorized tool execution, scoped memory recall,
+persisted continuation and bounded child collaboration.
 
 [Live debt](exec-plans/tech-debt-tracker.md) records integration gates and extension
-prerequisites. Audit/trace SQL offloading, default toolchain activation and hosted
-analyzer/compile-budget gates remain open. Real-model execution requires
-explicitly supplied credentials.
+prerequisites. Default toolchain activation and hosted analyzer/compile-budget
+gates remain open. Real-model execution requires explicitly supplied credentials.
 
 Use the normal release gate from the repository root:
 
@@ -89,6 +98,7 @@ Relevant regressions are in `tests/io/test_file.cpp`,
 `tests/tool/test-agent-run.cpp`, the permission intersection cases, and the
 storage/memory tests tagged `[atomic]`. Child lifetime checks include a concurrent
 independent session and a tool that delays cancellation cleanup.
+Repository reopen checks are tagged `[preservation]` in the storage tests.
 Scoped recall and hook gates are covered by `tests/memory/test_longterm.cpp` and
 `tests/hook/test_publish_blocking.cpp`; HTTP/SSE coverage lives in `tests/http`.
 

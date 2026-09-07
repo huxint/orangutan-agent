@@ -44,22 +44,6 @@ struct SessionMessageRecord {
   std::string created_at;
 };
 
-struct UpsertSessionSkillActivationRequest {
-  std::string session_id;
-  std::string agent_key;
-  std::string skill_name;
-  bool active{true};
-};
-
-struct SessionSkillActivationRecord {
-  std::string session_id;
-  std::string agent_key;
-  std::string skill_name;
-  bool active{true};
-  std::string created_at;
-  std::string updated_at;
-};
-
 struct SessionRecord {
   std::string session_id;
   std::string agent_key;
@@ -68,11 +52,6 @@ struct SessionRecord {
   std::string created_at;
   std::string updated_at;
   std::int64_t message_count{};
-};
-
-struct ListSessionsOptions {
-  std::string agent_key;
-  std::size_t limit{50};
 };
 
 struct SessionRepositoryOptions {
@@ -98,15 +77,7 @@ public:
   [[nodiscard]] async::Awaitable<core::Result<std::vector<SessionMessageRecord>>>
   load_tail(SessionKey key, std::size_t max_messages = 128, std::size_t max_bytes = 512 * 1024);
 
-  [[nodiscard]] async::Awaitable<core::Result<SessionSkillActivationRecord>>
-  upsert_skill_activation(UpsertSessionSkillActivationRequest request);
-
-  [[nodiscard]] async::Awaitable<core::Result<std::vector<SessionSkillActivationRecord>>>
-  load_skill_activations(SessionKey key);
-
   [[nodiscard]] async::Awaitable<core::Result<std::optional<SessionRecord>>> get_session(SessionKey key);
-
-  [[nodiscard]] async::Awaitable<core::Result<std::vector<SessionRecord>>> list_sessions(ListSessionsOptions options);
 
 private:
   Pool* pool_{};

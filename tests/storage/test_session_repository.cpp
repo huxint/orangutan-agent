@@ -148,6 +148,72 @@ TEST_CASE("SessionRepository::migrate accepts an explicit migration directory", 
   });
 }
 
+TEST_CASE("SessionRepository reopening preserves saved session data while appending",
+          "[unit][storage][session_repository][preservation]") {
+  TempDb db{"oran-session-repo-preservation"};
+  {
+    auto connection = storage::Connection::open({.path = db.string()});
+    REQUIRE(connection.has_value());
+    auto migrated = storage::run_migrations(*connection, storage::built_in_session_migrations());
+    REQUIRE(migrated.has_value());
+    auto seeded = connection->execute(R"sql(
+      INSERT INTO session_messages VALUES
+        ('s-kept', 'coder', 1, 'user', '{"text":"saved"}', '{"source":"archive"}', '2000-01-01T00:00:00Z');
+      UPDATE sessions SET title = 'Saved session', metadata_json = '{"pinned":true}';
+      INSERT INTO session_skill_activations VALUES
+        ('s-kept', 'coder', 'release-note', 0, '2000-01-01T00:00:00Z', '2001-01-01T00:00:00Z'),
+        ('s-other', 'researcher', 'review-pr', 1, '2000-01-01T00:00:00Z', '2000-01-01T00:00:00Z');
+    )sql");
+    REQUIRE(seeded.has_value());
+  }
+
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::SessionRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated.has_value());
+    REQUIRE(migrated->previous_version == 2);
+    REQUIRE(migrated->current_version == 2);
+    REQUIRE(migrated->applied_versions.empty());
+    const auto key = storage::SessionKey{.session_id = "s-kept", .agent_key = "coder"};
+    auto suffix = std::vector<storage::SessionMessageInput>{
+        {.role = core::Role::assistant, .content_json = R"({"text":"continued"})"}};
+
+    auto appended = co_await repo.append_messages(key, std::move(suffix));
+
+    REQUIRE(appended.has_value());
+    REQUIRE(appended->size() == 1);
+    REQUIRE(appended->front().sequence == 2);
+    auto tail = co_await repo.load_tail(key);
+    REQUIRE(tail.has_value());
+    REQUIRE(tail->size() == 2);
+    REQUIRE((*tail)[0].content_json == R"({"text":"saved"})");
+    REQUIRE((*tail)[0].metadata_json == R"({"source":"archive"})");
+    REQUIRE((*tail)[0].created_at == "2000-01-01T00:00:00Z");
+    REQUIRE((*tail)[1].content_json == R"({"text":"continued"})");
+    auto session = co_await repo.get_session(key);
+    REQUIRE(session.has_value());
+    REQUIRE(session->has_value());
+    REQUIRE((*session)->title == "Saved session");
+    REQUIRE((*session)->metadata_json == R"({"pinned":true})");
+    REQUIRE((*session)->created_at == "2000-01-01T00:00:00Z");
+    REQUIRE((*session)->updated_at == appended->front().created_at);
+    REQUIRE((*session)->message_count == 2);
+
+    auto reader = co_await pool.acquire_reader();
+    REQUIRE(reader.has_value());
+    auto skills = reader->connection().query(
+        "SELECT session_id, agent_key, skill_name, active, created_at, updated_at "
+        "FROM session_skill_activations ORDER BY session_id");
+    REQUIRE(skills.has_value());
+    REQUIRE(skills->rows.size() == 2);
+    REQUIRE(skills->rows[0].values == std::vector<storage::ColumnValue>{
+        "s-kept", "coder", "release-note", "0", "2000-01-01T00:00:00Z", "2001-01-01T00:00:00Z"});
+    REQUIRE(skills->rows[1].values == std::vector<storage::ColumnValue>{
+        "s-other", "researcher", "review-pr", "1", "2000-01-01T00:00:00Z", "2000-01-01T00:00:00Z"});
+  });
+}
+
 TEST_CASE("SessionRepository append_message and load_messages round-trip ordered rows",
           "[unit][storage][session_repository]") {
   TempDb db{"oran-session-repo-roundtrip"};
@@ -194,153 +260,6 @@ TEST_CASE("SessionRepository append_message and load_messages round-trip ordered
     REQUIRE((*session)->agent_key == "coder");
     REQUIRE((*session)->message_count == 2);
     REQUIRE((*session)->metadata_json == "{}");
-  });
-}
-
-TEST_CASE("SessionRepository upserts and loads durable skill activation state", "[unit][storage][session_repository]") {
-  TempDb db{"oran-session-repo-skill-activation"};
-  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
-    auto pool = open_pool(io, db);
-    storage::SessionRepository repo{pool};
-    auto migrated = co_await repo.migrate();
-    REQUIRE(migrated.has_value());
-
-    auto activated = co_await repo.upsert_skill_activation(storage::UpsertSessionSkillActivationRequest{
-        .session_id = "s-1",
-        .agent_key = "coder",
-        .skill_name = "release-note",
-        .active = true,
-    });
-    REQUIRE(activated.has_value());
-    REQUIRE(activated->session_id == "s-1");
-    REQUIRE(activated->agent_key == "coder");
-    REQUIRE(activated->skill_name == "release-note");
-    REQUIRE(activated->active);
-    REQUIRE_FALSE(activated->created_at.empty());
-    REQUIRE_FALSE(activated->updated_at.empty());
-
-    auto deactivated = co_await repo.upsert_skill_activation(storage::UpsertSessionSkillActivationRequest{
-        .session_id = "s-1",
-        .agent_key = "coder",
-        .skill_name = "release-note",
-        .active = false,
-    });
-    REQUIRE(deactivated.has_value());
-    REQUIRE_FALSE(deactivated->active);
-    REQUIRE(deactivated->created_at == activated->created_at);
-
-    auto review = co_await repo.upsert_skill_activation(storage::UpsertSessionSkillActivationRequest{
-        .session_id = "s-1",
-        .agent_key = "coder",
-        .skill_name = "review-pr",
-        .active = true,
-    });
-    REQUIRE(review.has_value());
-    auto researcher = co_await repo.upsert_skill_activation(storage::UpsertSessionSkillActivationRequest{
-        .session_id = "s-1",
-        .agent_key = "researcher",
-        .skill_name = "release-note",
-        .active = true,
-    });
-    REQUIRE(researcher.has_value());
-
-    auto loaded = co_await repo.load_skill_activations(storage::SessionKey{.session_id = "s-1", .agent_key = "coder"});
-    REQUIRE(loaded.has_value());
-    REQUIRE(loaded->size() == 2);
-    REQUIRE((*loaded)[0].skill_name == "release-note");
-    REQUIRE_FALSE((*loaded)[0].active);
-    REQUIRE((*loaded)[1].skill_name == "review-pr");
-    REQUIRE((*loaded)[1].active);
-
-    auto session = co_await repo.get_session(storage::SessionKey{.session_id = "s-1", .agent_key = "coder"});
-    REQUIRE(session.has_value());
-    REQUIRE(session->has_value());
-    REQUIRE((*session)->message_count == 0);
-  });
-}
-
-TEST_CASE("SessionRepository validates skill activation fields", "[unit][storage][session_repository]") {
-  TempDb db{"oran-session-repo-skill-activation-invalid"};
-  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
-    auto pool = open_pool(io, db);
-    storage::SessionRepository repo{pool};
-
-    auto missing_session = co_await repo.upsert_skill_activation(storage::UpsertSessionSkillActivationRequest{
-        .session_id = "",
-        .agent_key = "coder",
-        .skill_name = "release-note",
-        .active = true,
-    });
-    REQUIRE_FALSE(missing_session.has_value());
-    REQUIRE(missing_session.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto missing_skill = co_await repo.upsert_skill_activation(storage::UpsertSessionSkillActivationRequest{
-        .session_id = "s-1",
-        .agent_key = "coder",
-        .skill_name = "",
-        .active = true,
-    });
-    REQUIRE_FALSE(missing_skill.has_value());
-    REQUIRE(missing_skill.error().kind() == core::ErrorKind::invalid_argument);
-  });
-}
-
-TEST_CASE("SessionRepository list_sessions is scoped by agent and honors limits",
-          "[unit][storage][session_repository]") {
-  TempDb db{"oran-session-repo-list"};
-  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
-    auto pool = open_pool(io, db);
-    storage::SessionRepository repo{pool};
-    auto migrated = co_await repo.migrate();
-    REQUIRE(migrated.has_value());
-
-    auto coder_a_append = co_await repo.append_message(storage::AppendSessionMessageRequest{
-        .session_id = "s-a",
-        .agent_key = "coder",
-        .role = core::Role::user,
-        .content_json = R"json({"text":"a"})json",
-    });
-    REQUIRE(coder_a_append.has_value());
-    auto coder_b_append = co_await repo.append_message(storage::AppendSessionMessageRequest{
-        .session_id = "s-b",
-        .agent_key = "coder",
-        .role = core::Role::assistant,
-        .content_json = R"json({"text":"b"})json",
-    });
-    REQUIRE(coder_b_append.has_value());
-    auto researcher_append = co_await repo.append_message(storage::AppendSessionMessageRequest{
-        .session_id = "s-a",
-        .agent_key = "researcher",
-        .role = core::Role::user,
-        .content_json = R"json({"text":"other"})json",
-    });
-    REQUIRE(researcher_append.has_value());
-
-    auto coder_a = co_await repo.load_messages(storage::SessionKey{.session_id = "s-a", .agent_key = "coder"});
-    REQUIRE(coder_a.has_value());
-    REQUIRE(coder_a->size() == 1);
-    auto researcher_a =
-        co_await repo.load_messages(storage::SessionKey{.session_id = "s-a", .agent_key = "researcher"});
-    REQUIRE(researcher_a.has_value());
-    REQUIRE(researcher_a->size() == 1);
-
-    auto coder = co_await repo.list_sessions(storage::ListSessionsOptions{.agent_key = "coder", .limit = 10});
-    REQUIRE(coder.has_value());
-    REQUIRE(coder->size() == 2);
-    for (const auto& session : *coder) {
-      REQUIRE(session.agent_key == "coder");
-      REQUIRE(session.message_count == 1);
-    }
-
-    auto limited = co_await repo.list_sessions(storage::ListSessionsOptions{.agent_key = "coder", .limit = 1});
-    REQUIRE(limited.has_value());
-    REQUIRE(limited->size() == 1);
-
-    auto researcher = co_await repo.list_sessions(storage::ListSessionsOptions{.agent_key = "researcher", .limit = 10});
-    REQUIRE(researcher.has_value());
-    REQUIRE(researcher->size() == 1);
-    REQUIRE((*researcher)[0].session_id == "s-a");
-    REQUIRE((*researcher)[0].agent_key == "researcher");
   });
 }
 
@@ -441,14 +360,6 @@ TEST_CASE("SessionRepository validates required fields", "[unit][storage][sessio
     auto load = co_await repo.load_messages(storage::SessionKey{.session_id = "s-1", .agent_key = ""});
     REQUIRE_FALSE(load.has_value());
     REQUIRE(load.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto list_agent = co_await repo.list_sessions(storage::ListSessionsOptions{.agent_key = "", .limit = 10});
-    REQUIRE_FALSE(list_agent.has_value());
-    REQUIRE(list_agent.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto list_limit = co_await repo.list_sessions(storage::ListSessionsOptions{.agent_key = "coder", .limit = 0});
-    REQUIRE_FALSE(list_limit.has_value());
-    REQUIRE(list_limit.error().kind() == core::ErrorKind::invalid_argument);
   });
 }
 

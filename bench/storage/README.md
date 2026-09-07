@@ -2,11 +2,10 @@
 
 ## What this bucket benchmarks
 
-`oran-storage` is the expected-only SQLite core used by sessions, memory, automation,
-audit, and trace repositories. The scenarios measure insert-path tradeoffs,
-compiled and SQL-file migration startup cost, statement-cache reuse, the
-per-query overhead of the async writer/reader pool, and the first domain
-repository wrappers.
+Storage benchmarks measure SQLite insert paths, compiled and SQL-file migration
+startup, statement-cache reuse, pool leases and session/audit/trace persistence.
+Install the [build prerequisites](../../docs/BUILD_SYSTEM.md) before running them
+from the repository root.
 
 ## Scenarios
 
@@ -20,14 +19,13 @@ repository wrappers.
 | [`scenarios/session_repository.cpp`](scenarios/session_repository.cpp) | Raw pool + cache SQL append/load *vs.* `SessionRepository` append/load. |
 | [`scenarios/audit_repository.cpp`](scenarios/audit_repository.cpp) | Raw pool + cache SQL append/count *vs.* `AuditRepository` append/list for a 64-event batch. |
 | [`scenarios/trace_repository.cpp`](scenarios/trace_repository.cpp) | Raw pool + cache SQL trace insert *vs.* `TraceRepository` insert for a 32-turn batch. |
-| [`scenarios/trace_turn_insert.cpp`](scenarios/trace_turn_insert.cpp) | Raw pool + cache SQL trace insert *vs.* `TraceRepository::append_turn` for a single insert. Spec 0018 AC12 (≤ 50 µs / insert). |
+| [`scenarios/trace_turn_insert.cpp`](scenarios/trace_turn_insert.cpp) | Raw pool + cache SQL trace insert *vs.* `TraceRepository::append_turn` for a single insert. |
 
 ## Running
 
 ```sh
-xmake build bench-storage
+xmake build -j4 bench-storage
 xmake run bench-storage
 ```
 
-Output is nanobench's markdown shape on stdout. Stable baseline JSON is still a
-future benchmark-harness task.
+Output is nanobench's Markdown tables on stdout.

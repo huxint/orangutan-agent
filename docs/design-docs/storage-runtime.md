@@ -31,6 +31,11 @@ required before a data-format migration is introduced. The current runtime
 reduction leaves schema versions and persisted user rows intact. Complete
 import/backup tooling is tracked in [live debt](../exec-plans/tech-debt-tracker.md).
 
+The session skill table (`session_skill_activations`) and audit reporting view
+(`audit_tool_call_rollups`) remain accessible through SQLite for compatibility.
+Reopening a database and appending runtime records preserves saved session
+metadata, skill rows, audit decisions and traces. Migration history is retained.
+
 ## Repositories
 
 - `SessionRepository` keys sessions by session ID and agent key. Appends allocate
@@ -39,16 +44,18 @@ import/backup tooling is tracked in [live debt](../exec-plans/tech-debt-tracker.
   It validates the complete input, acquires one writer lease and commits all
   inserts and session-row updates in one transaction. Any later insert or commit
   failure rolls back the suffix; an empty suffix does not create a session.
-  Single-message append delegates to this transaction boundary. Skill activation
-  rows store the latest active/inactive decision separately.
+  Single-message append delegates to this transaction boundary. `get_session`
+  reads one session's metadata and message count by the same composite key.
 - `load_tail` reads a contiguous newest suffix bounded by row count and UTF-8
   encoded content/metadata bytes, then returns ascending sequence order. Defaults
   are 128 rows/512 KiB. The API never prunes stored messages.
-- `AuditRepository` records permission/tool outcomes and supports correlated
-  queries. `StorageAuditSink` adapts this repository to dispatch.
+- `AuditRepository` records permission/tool outcomes, enriches the matching
+  decision's metadata and reads records by scope or parent turn.
+  `StorageAuditSink` adapts this repository to dispatch.
 - `TraceRepository` records redacted turn metadata: IDs, origin, model/route,
   prompt hashes/byte counts, usage, timing and stop/cancellation classification.
-  Raw provider bodies and secret values do not belong in trace rows.
+  Records can be read by turn ID or listed with session/agent filters and a
+  limit. Raw provider bodies and secret values do not belong in trace rows.
 
 Empty required keys, invalid limits and malformed rows return explicit errors.
 Transactions that do not commit roll back. Session serialization finishes before

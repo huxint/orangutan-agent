@@ -1,11 +1,3 @@
-// include/oran/storage/trace_repository.hpp — per-turn trace rows.
-//
-// `TraceRepository` is the storage-owned foundation for product spec 0018.
-// It persists one redacted row per agent turn in `trace_turns`. The agent
-// loop now has the first terminal-success writer for this repository; the
-// database-facing contract stays narrow: 16-byte BLOB identifiers, prompt/cache
-// hashes, token rollups, and an opaque context blob.
-
 #pragma once
 
 #include <cstddef>
@@ -83,26 +75,6 @@ struct ListTraceTurnsOptions {
   std::size_t limit{50};
 };
 
-struct ProviderUsageRollup {
-  std::string day_utc;
-  std::string agent_key;
-  std::string route_profile;
-  std::string route_model;
-  std::int64_t turn_count{};
-  std::int64_t cache_creation_tokens{};
-  std::int64_t cache_read_tokens{};
-  std::int64_t input_tokens{};
-  std::int64_t output_tokens{};
-  double cost_estimate_usd{};
-};
-
-struct ListProviderUsageRollupsOptions {
-  std::string agent_key{};
-  std::string route_profile{};
-  std::string route_model{};
-  std::size_t limit{50};
-};
-
 struct TraceRepositoryOptions {
   std::string migrations_directory;
 };
@@ -118,11 +90,6 @@ public:
   [[nodiscard]] async::Awaitable<core::Result<std::optional<TraceTurnRecord>>> get_turn(TraceId turn_id);
 
   [[nodiscard]] async::Awaitable<core::Result<std::vector<TraceTurnRecord>>> list_turns(ListTraceTurnsOptions options);
-
-  [[nodiscard]] async::Awaitable<core::Result<std::vector<ProviderUsageRollup>>>
-  list_provider_usage_rollups(ListProviderUsageRollupsOptions options);
-
-  [[nodiscard]] async::Awaitable<core::Result<std::int64_t>> purge_turns_started_before(std::int64_t started_before_ns);
 
   [[nodiscard]] async::Awaitable<core::Result<std::int64_t>> count_turns();
 

@@ -2,10 +2,8 @@
 
 #include <concepts>
 #include <cstddef>
-#include <cstdint>
 #include <expected>
 #include <format>
-#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -40,51 +38,8 @@ using json = nlohmann::ordered_json;
   return {};
 }
 
-[[nodiscard]] bool is_blank(std::string_view value) noexcept {
-  for (const auto ch : value) {
-    if (ch != ' ' && ch != '\t' && ch != '\n' && ch != '\r') {
-      return false;
-    }
-  }
-  return true;
-}
-
-[[nodiscard]] bool contains_control_char(std::string_view value) noexcept {
-  for (const auto ch : value) {
-    if (static_cast<unsigned char>(ch) < 0x20U) {
-      return true;
-    }
-  }
-  return false;
-}
-
-[[nodiscard]] core::Result<void> validate_skill_activation_update(const SkillActivationUpdate& update) {
-  if (is_blank(update.name)) {
-    return std::unexpected(invalid_field("skill_name"));
-  }
-  if (contains_control_char(update.name)) {
-    return std::unexpected(
-        core::Error::invalid_argument("memory session skill activation name must not contain control characters")
-            .with("skill", update.name));
-  }
-  return {};
-}
-
 [[nodiscard]] core::Error message_parse_error(std::string reason) {
   return core::Error::parsing("memory session message JSON is malformed").with("reason", std::move(reason));
-}
-
-[[nodiscard]] core::Result<std::size_t> checked_size(std::int64_t value, std::string field) {
-  if (value < 0) {
-    return std::unexpected(core::Error::storage("memory session repository returned negative count")
-                               .with("field", std::move(field))
-                               .with("value", std::to_string(value)));
-  }
-  if (static_cast<std::uint64_t>(value) > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
-    return std::unexpected(core::Error::storage("memory session repository count exceeds platform size range")
-                               .with("field", std::move(field)));
-  }
-  return static_cast<std::size_t>(value);
 }
 
 void put_if_present(json& object, std::string_view key, const std::optional<std::string>& value) {
@@ -362,82 +317,6 @@ Store::load_tail(SessionId session_id, AgentKey agent_key, std::size_t max_messa
     messages.push_back(std::move(*message));
   }
   co_return messages;
-}
-
-async::Awaitable<core::Result<void>>
-Store::record_skill_activation(SessionId session_id, AgentKey agent_key, SkillActivationUpdate update) {
-  if (auto valid = validate_key(session_id.value, agent_key.value); !valid) {
-    co_return std::unexpected(std::move(valid).error());
-  }
-  if (auto valid = validate_skill_activation_update(update); !valid) {
-    co_return std::unexpected(std::move(valid).error());
-  }
-
-  auto recorded = co_await repository_->upsert_skill_activation(storage::UpsertSessionSkillActivationRequest{
-      .session_id = std::move(session_id.value),
-      .agent_key = std::move(agent_key.value),
-      .skill_name = std::move(update.name),
-      .active = update.active,
-  });
-  if (!recorded) {
-    co_return std::unexpected(std::move(recorded).error());
-  }
-  co_return core::Result<void>{};
-}
-
-async::Awaitable<core::Result<std::vector<SkillActivationRecord>>> Store::load_skill_activations(SessionId session_id,
-                                                                                                 AgentKey agent_key) {
-  if (auto valid = validate_key(session_id.value, agent_key.value); !valid) {
-    co_return std::unexpected(std::move(valid).error());
-  }
-
-  auto rows = co_await repository_->load_skill_activations(key_from(std::move(session_id), std::move(agent_key)));
-  if (!rows) {
-    co_return std::unexpected(std::move(rows).error());
-  }
-
-  auto out = std::vector<SkillActivationRecord>{};
-  out.reserve(rows->size());
-  for (auto& row : *rows) {
-    out.push_back(SkillActivationRecord{
-        .name = std::move(row.skill_name),
-        .active = row.active,
-        .created_at = std::move(row.created_at),
-        .updated_at = std::move(row.updated_at),
-    });
-  }
-  co_return out;
-}
-
-async::Awaitable<core::Result<std::vector<SessionSummary>>> Store::list(ListSessionsOptions options) {
-  if (options.agent_key.value.empty()) {
-    co_return std::unexpected(invalid_field("agent_key"));
-  }
-
-  auto rows = co_await repository_->list_sessions(storage::ListSessionsOptions{
-      .agent_key = std::move(options.agent_key.value),
-      .limit = options.limit,
-  });
-  if (!rows) {
-    co_return std::unexpected(std::move(rows).error());
-  }
-
-  auto out = std::vector<SessionSummary>{};
-  out.reserve(rows->size());
-  for (auto& row : *rows) {
-    auto count = checked_size(row.message_count, "message_count");
-    if (!count) {
-      co_return std::unexpected(std::move(count).error());
-    }
-    out.push_back(SessionSummary{
-        .session_id = SessionId{.value = std::move(row.session_id)},
-        .agent_key = AgentKey{.value = std::move(row.agent_key)},
-        .message_count = *count,
-        .created_at = std::move(row.created_at),
-        .updated_at = std::move(row.updated_at),
-    });
-  }
-  co_return out;
 }
 
 }  // namespace orangutan::memory::session

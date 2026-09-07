@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
-#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -52,28 +51,6 @@ WHERE session_id = ? AND agent_key = ?
 ORDER BY sequence DESC LIMIT ?
 )sql";
 
-constexpr std::string_view kTouchSessionSql = R"sql(
-INSERT INTO sessions(session_id, agent_key, created_at, updated_at)
-VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-ON CONFLICT(session_id, agent_key) DO UPDATE SET updated_at = excluded.updated_at
-)sql";
-
-constexpr std::string_view kUpsertSkillActivationSql = R"sql(
-INSERT INTO session_skill_activations(session_id, agent_key, skill_name, active, created_at, updated_at)
-VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-ON CONFLICT(session_id, agent_key, skill_name) DO UPDATE SET
-  active = excluded.active,
-  updated_at = excluded.updated_at
-RETURNING session_id, agent_key, skill_name, active, created_at, updated_at
-)sql";
-
-constexpr std::string_view kLoadSkillActivationsSql = R"sql(
-SELECT session_id, agent_key, skill_name, active, created_at, updated_at
-FROM session_skill_activations
-WHERE session_id = ? AND agent_key = ?
-ORDER BY skill_name ASC
-)sql";
-
 constexpr std::string_view kGetSessionSql = R"sql(
 SELECT s.session_id,
        s.agent_key,
@@ -89,23 +66,6 @@ WHERE s.session_id = ? AND s.agent_key = ?
 GROUP BY s.session_id, s.agent_key, s.title, s.metadata_json, s.created_at, s.updated_at
 )sql";
 
-constexpr std::string_view kListSessionsSql = R"sql(
-SELECT s.session_id,
-       s.agent_key,
-       s.title,
-       s.metadata_json,
-       s.created_at,
-       s.updated_at,
-       COUNT(m.sequence) AS message_count
-FROM sessions AS s
-LEFT JOIN session_messages AS m
-  ON m.session_id = s.session_id AND m.agent_key = s.agent_key
-WHERE s.agent_key = ?
-GROUP BY s.session_id, s.agent_key, s.title, s.metadata_json, s.created_at, s.updated_at
-ORDER BY s.updated_at DESC, s.session_id ASC
-LIMIT ?
-)sql";
-
 [[nodiscard]] core::Error invalid_field(std::string field) {
   return core::Error::invalid_argument("session repository field must not be empty").with("field", std::move(field));
 }
@@ -118,26 +78,6 @@ LIMIT ?
     return std::unexpected(invalid_field("agent_key"));
   }
   return {};
-}
-
-[[nodiscard]] core::Result<void> validate_skill_activation_request(const UpsertSessionSkillActivationRequest& request) {
-  if (auto valid = validate_key(SessionKey{.session_id = request.session_id, .agent_key = request.agent_key}); !valid) {
-    return std::unexpected(valid.error());
-  }
-  if (request.skill_name.empty()) {
-    return std::unexpected(invalid_field("skill_name"));
-  }
-  return {};
-}
-
-[[nodiscard]] core::Result<std::int64_t> checked_limit(std::size_t limit) {
-  if (limit == 0) {
-    return std::unexpected(core::Error::invalid_argument("session list limit must be greater than zero"));
-  }
-  if (limit > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
-    return std::unexpected(core::Error::invalid_argument("session list limit is too large"));
-  }
-  return static_cast<std::int64_t>(limit);
 }
 
 [[nodiscard]] core::Result<std::string> required_text(Statement& statement, int index, std::string_view field) {
@@ -218,46 +158,6 @@ LIMIT ?
       .content_json = std::move(*content_json),
       .metadata_json = std::move(*metadata_json),
       .created_at = std::move(*created_at),
-  };
-}
-
-[[nodiscard]] core::Result<SessionSkillActivationRecord> read_skill_activation_row(Statement& statement) {
-  auto session_id = required_text(statement, 0, "session_id");
-  if (!session_id) {
-    return std::unexpected(session_id.error());
-  }
-  auto agent_key = required_text(statement, 1, "agent_key");
-  if (!agent_key) {
-    return std::unexpected(agent_key.error());
-  }
-  auto skill_name = required_text(statement, 2, "skill_name");
-  if (!skill_name) {
-    return std::unexpected(skill_name.error());
-  }
-  auto active = statement.column_int64(3);
-  if (!active) {
-    return std::unexpected(active.error().with("field", "active"));
-  }
-  if (*active != 0 && *active != 1) {
-    return std::unexpected(core::Error::storage("session skill activation row has invalid active value")
-                               .with("active", std::to_string(*active)));
-  }
-  auto created_at = required_text(statement, 4, "created_at");
-  if (!created_at) {
-    return std::unexpected(created_at.error());
-  }
-  auto updated_at = required_text(statement, 5, "updated_at");
-  if (!updated_at) {
-    return std::unexpected(updated_at.error());
-  }
-
-  return SessionSkillActivationRecord{
-      .session_id = std::move(*session_id),
-      .agent_key = std::move(*agent_key),
-      .skill_name = std::move(*skill_name),
-      .active = *active == 1,
-      .created_at = std::move(*created_at),
-      .updated_at = std::move(*updated_at),
   };
 }
 
@@ -563,112 +463,6 @@ SessionRepository::load_tail(SessionKey key, std::size_t max_messages, std::size
   co_return rows;
 }
 
-async::Awaitable<core::Result<SessionSkillActivationRecord>>
-SessionRepository::upsert_skill_activation(UpsertSessionSkillActivationRequest request) {
-  if (auto valid = validate_skill_activation_request(request); !valid) {
-    co_return std::unexpected(valid.error());
-  }
-
-  auto writer = co_await pool_->acquire_writer();
-  if (!writer) {
-    co_return std::unexpected(writer.error());
-  }
-
-  {
-    auto cached = writer->statement_cache().acquire(writer->connection(), kTouchSessionSql);
-    if (!cached) {
-      co_return std::unexpected(cached.error());
-    }
-    auto& statement = cached->statement();
-    if (auto bound = statement.bind_text(1, request.session_id); !bound) {
-      co_return std::unexpected(bound.error());
-    }
-    if (auto bound = statement.bind_text(2, request.agent_key); !bound) {
-      co_return std::unexpected(bound.error());
-    }
-    if (auto done = expect_done(statement, "touch_session_for_skill_activation"); !done) {
-      co_return std::unexpected(done.error());
-    }
-  }
-
-  auto cached = writer->statement_cache().acquire(writer->connection(), kUpsertSkillActivationSql);
-  if (!cached) {
-    co_return std::unexpected(cached.error());
-  }
-  auto& statement = cached->statement();
-  if (auto bound = statement.bind_text(1, request.session_id); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(2, request.agent_key); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(3, request.skill_name); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_int64(4, request.active ? 1 : 0); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-
-  auto step = statement.step();
-  if (!step) {
-    co_return std::unexpected(step.error());
-  }
-  if (*step != StepResult::row) {
-    co_return std::unexpected(core::Error::storage("session skill activation upsert returned no row"));
-  }
-
-  auto record = read_skill_activation_row(statement);
-  if (!record) {
-    co_return std::unexpected(record.error());
-  }
-  if (auto done = expect_done(statement, "upsert_skill_activation"); !done) {
-    co_return std::unexpected(done.error());
-  }
-  co_return std::move(*record);
-}
-
-async::Awaitable<core::Result<std::vector<SessionSkillActivationRecord>>>
-SessionRepository::load_skill_activations(SessionKey key) {
-  if (auto valid = validate_key(key); !valid) {
-    co_return std::unexpected(valid.error());
-  }
-
-  auto reader = co_await pool_->acquire_reader();
-  if (!reader) {
-    co_return std::unexpected(reader.error());
-  }
-
-  auto cached = reader->statement_cache().acquire(reader->connection(), kLoadSkillActivationsSql);
-  if (!cached) {
-    co_return std::unexpected(cached.error());
-  }
-  auto& statement = cached->statement();
-  if (auto bound = statement.bind_text(1, key.session_id); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(2, key.agent_key); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-
-  std::vector<SessionSkillActivationRecord> records;
-  while (true) {
-    auto step = statement.step();
-    if (!step) {
-      co_return std::unexpected(step.error());
-    }
-    if (*step == StepResult::done) {
-      break;
-    }
-    auto record = read_skill_activation_row(statement);
-    if (!record) {
-      co_return std::unexpected(record.error());
-    }
-    records.push_back(std::move(*record));
-  }
-
-  co_return records;
-}
-
 async::Awaitable<core::Result<std::optional<SessionRecord>>> SessionRepository::get_session(SessionKey key) {
   if (auto valid = validate_key(key); !valid) {
     co_return std::unexpected(valid.error());
@@ -707,52 +501,6 @@ async::Awaitable<core::Result<std::optional<SessionRecord>>> SessionRepository::
     co_return std::unexpected(done.error());
   }
   co_return std::optional<SessionRecord>{std::move(*session)};
-}
-
-async::Awaitable<core::Result<std::vector<SessionRecord>>>
-SessionRepository::list_sessions(ListSessionsOptions options) {
-  if (options.agent_key.empty()) {
-    co_return std::unexpected(invalid_field("agent_key"));
-  }
-  auto limit = checked_limit(options.limit);
-  if (!limit) {
-    co_return std::unexpected(limit.error());
-  }
-
-  auto reader = co_await pool_->acquire_reader();
-  if (!reader) {
-    co_return std::unexpected(reader.error());
-  }
-
-  auto cached = reader->statement_cache().acquire(reader->connection(), kListSessionsSql);
-  if (!cached) {
-    co_return std::unexpected(cached.error());
-  }
-  auto& statement = cached->statement();
-  if (auto bound = statement.bind_text(1, options.agent_key); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_int64(2, *limit); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-
-  std::vector<SessionRecord> sessions;
-  while (true) {
-    auto step = statement.step();
-    if (!step) {
-      co_return std::unexpected(step.error());
-    }
-    if (*step == StepResult::done) {
-      break;
-    }
-    auto session = read_session_row(statement);
-    if (!session) {
-      co_return std::unexpected(session.error());
-    }
-    sessions.push_back(std::move(*session));
-  }
-
-  co_return sessions;
 }
 
 }  // namespace orangutan::storage

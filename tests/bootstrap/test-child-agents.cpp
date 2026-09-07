@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -139,6 +140,20 @@ struct SessionFixture {
     return options;
   }
 
+  std::int64_t worker_session_count() const {
+    auto connection = storage::Connection::open({.path = std::string{assembly.sessions_path()},
+                                                 .mode = storage::OpenMode::read_only});
+    REQUIRE(connection.has_value());
+    auto statement = connection->prepare("SELECT COUNT(*) FROM sessions WHERE agent_key = 'worker'");
+    REQUIRE(statement.has_value());
+    auto row = statement->step();
+    REQUIRE(row.has_value());
+    REQUIRE(*row == storage::StepResult::row);
+    auto count = statement->column_int64(0);
+    REQUIRE(count.has_value());
+    return *count;
+  }
+
   asio::any_io_executor executor;
   Workspace workspace;
   config::Config config;
@@ -231,12 +246,10 @@ TEST_CASE("AgentRun delivers a scoped child result with independent persisted hi
     REQUIRE(returned.output == "child found the note");
     REQUIRE(returned.data_json.has_value());
     const auto metadata = nlohmann::json::parse(*returned.data_json);
-    auto children = co_await fixture.assembly.session_store()->list({.agent_key = {.value = "worker"}});
-    REQUIRE(children.has_value());
-    REQUIRE(children->size() == 1);
-    REQUIRE(children->front().session_id.value == metadata["session_id"].get<std::string>());
-    REQUIRE(children->front().session_id.value != "00000000000000000000000000000042");
-    auto history = co_await fixture.assembly.session_store()->load(children->front().session_id, {.value = "worker"});
+    const auto child_session_id = metadata["session_id"].get<std::string>();
+    REQUIRE(fixture.worker_session_count() == 1);
+    REQUIRE(child_session_id != "00000000000000000000000000000042");
+    auto history = co_await fixture.assembly.session_store()->load({.value = child_session_id}, {.value = "worker"});
     REQUIRE(history.has_value());
     REQUIRE(history->size() == 4);
     REQUIRE(history->front().blocks == core::Message::user_text("inspect").blocks);
@@ -317,9 +330,7 @@ TEST_CASE("AgentRun refuses spawning without the parent's capability", "[integra
     REQUIRE(provider.requests.size() == 2);
     REQUIRE(result.has_value());
     REQUIRE(result_in(provider.requests[1], "child-1").is_error);
-    auto children = co_await fixture.assembly.session_store()->list({.agent_key = {.value = "worker"}});
-    REQUIRE(children.has_value());
-    REQUIRE(children->empty());
+    REQUIRE(fixture.worker_session_count() == 0);
   });
 }
 
@@ -383,9 +394,7 @@ TEST_CASE("AgentRun admits a bounded number of children in each prompt", "[integ
     for (std::size_t prompt = 1; prompt <= 2; ++prompt) {
       auto result = co_await (*session)->run_prompt({.prompt = "delegate twice"});
 
-      auto children = co_await fixture.assembly.session_store()->list({.agent_key = {.value = "worker"}});
-      REQUIRE(children.has_value());
-      REQUIRE(children->size() == prompt);
+      REQUIRE(fixture.worker_session_count() == static_cast<std::int64_t>(prompt));
       REQUIRE(result.has_value());
       REQUIRE(provider.requests.size() == prompt * 3);
       const auto& results = provider.requests.back().messages.back().blocks;
@@ -415,9 +424,7 @@ TEST_CASE("AgentRun children cannot delegate another generation", "[integration]
     const auto& refused = result_in(provider.requests[2], "child-1");
     REQUIRE(refused.is_error);
     REQUIRE(refused.output.contains("delegation_disabled"));
-    auto children = co_await fixture.assembly.session_store()->list({.agent_key = {.value = "worker"}});
-    REQUIRE(children.has_value());
-    REQUIRE(children->size() == 1);
+    REQUIRE(fixture.worker_session_count() == 1);
   });
 }
 
@@ -540,9 +547,7 @@ TEST_CASE("AgentRun cancellation joins its child without waiting for another ses
         REQUIRE(independent_result.has_value());
         REQUIRE(independent_result->has_value());
         REQUIRE((*independent_result)->text == "independent done");
-        auto children = co_await fixture.assembly.session_store()->list({.agent_key = {.value = "worker"}});
-        REQUIRE(children.has_value());
-        REQUIRE(children->empty());
+        REQUIRE(fixture.worker_session_count() == 0);
       },
       5s);
 }
