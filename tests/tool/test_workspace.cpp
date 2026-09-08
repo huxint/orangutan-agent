@@ -599,37 +599,6 @@ TEST_CASE("Approved outside-workspace reads retain their audit scope", "[unit][t
   });
 }
 
-TEST_CASE("Registry leaves malformed write options to the handler instead of pre-resolving the path",
-          "[unit][tool][workspace][audit]") {
-  TempDir root{"oran-workspace-malformed-write"};
-  TempDir outside{"oran-workspace-malformed-write-outside"};
-
-  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
-    tool::Registry registry;
-    REQUIRE(tool::register_file_write(registry).has_value());
-
-    auto workspace = make_workspace(root.path());
-    auto rules = allow_tool_rules(std::string{tool::kFileWriteName}, core::Capability::write_file);
-    permission::RecordingAuditSink sink;
-    auto ctx = make_workspace_ctx(io, rules, sink, workspace);
-
-    std::error_code ec;
-    const auto outside_relative_path = std::filesystem::relative(outside.path() / "blocked.txt", root.path(), ec);
-    REQUIRE(ec.value() == 0);
-    const auto input =
-        std::format(R"({{"path":"{}","content":"escape","create_parents":"yes"}})", outside_relative_path.string());
-
-    auto rejected = co_await registry.dispatch(tool::kFileWriteName, input, ctx);
-    REQUIRE_FALSE(rejected.has_value());
-    REQUIRE(rejected.error().kind() == core::ErrorKind::invalid_argument);
-    REQUIRE_FALSE(context_has(rejected.error(), "reason", "outside_workspace"));
-    REQUIRE_FALSE(std::filesystem::exists(outside.path() / "blocked.txt"));
-
-    REQUIRE(sink.events().size() == 1);
-    REQUIRE(sink.events()[0].metadata_json == "{}");
-  });
-}
-
 TEST_CASE("FileRead uses DispatchContext workspace when supplied", "[unit][tool][workspace][file_read]") {
   TempDir root{"oran-workspace-file-read"};
   TempDir outside{"oran-workspace-file-read-outside"};

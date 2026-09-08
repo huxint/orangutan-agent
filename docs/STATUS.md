@@ -41,11 +41,13 @@ FileRead, FileWrite and FileEdit are the built-in filesystem tools. ToolSearch,
 memory tools and AgentRun provide the other runtime extensions. Stored capability
 names remain readable for compatibility.
 
-Registry dispatch derives path admission and pinned authority from the same
-finalized hook input. The scheduler retains shared lock resources without
-interpreting arguments. Path entries follow live holders and waiters; the final
-participant releases the entry synchronously. Shared session exclusion and
-context-specific cleanup joins use the same scheduler. The
+Filesystem tools prepare owned, validated calls from final hook input before
+path admission and approval. Path intent and execution use that same request;
+registry dispatch no longer selects filesystem behavior by tool name. Invalid
+arguments audit a denial without consuming approval. The scheduler retains shared
+lock resources without interpreting arguments. Path entries follow live holders
+and waiters; the final participant releases the entry synchronously. Shared
+session exclusion and context-specific cleanup joins use the same scheduler. The
 [tool contract](design-docs/tool-runtime.md) owns ordering and lifetime.
 
 File IO shares one descriptor-based read implementation and the pinned file
@@ -67,59 +69,34 @@ runtime. `EventTraits` defines blocking admission; the
 ## Verification
 
 The release library build, all 14 test targets and `make ci` pass. Controlled HTTP
-integration covers provider calls and persisted continuation through the library
-composition APIs. Core
-storage, memory, hook, tool, HTTP and bootstrap ownership cases have passed with
-explicit ASan/UBSan compiler and linker instrumentation in an isolated debug copy.
+integration composes `HttpProviderBackend`, `RuntimeAssembly` and `AgentSession`
+to cover provider calls and persisted continuation. Tests also exercise scoped
+recall, permission intersection, bounded child sessions and cancellation joins.
 
-Isolated faults fail at their intended assertions for atomic rollback,
-serialization failure, message ordering, identity/scope isolation, policy
-intersection, approval limits, rewritten input, child admission/depth, cancellation
-joins, catalogue selection, cache versions and the filesystem-tool surface.
-IO regressions detect stale content, reopened authority handles and dropped
-queued cancellation. Restoring the implementations returns the tested cases to
-green. Memory regressions detect missing query validation, scope filtering, read
-timestamps, prompt framing, score fields and preserved database content. Hook
-regressions reject unintended blocking admission and detect changed payloads or
-dropped approval decisions.
-Storage preservation regressions detect lost skill, audit and trace rows and a
-dropped reporting view. Child persistence checks detect missing or unexpected
-session rows; restored implementations pass both sets of checks.
-Executor-boundary regressions detect misplaced SQL, missing worker bindings,
-swallowed audit errors, unjoined writes and lost cancellation. These cases and
-pool lease tests pass with explicit ASan/UBSan instrumentation.
-Provider construction regressions detect premature credential lookup, invalid
-endpoints, duplicate profiles, credential disclosure and mismatched routes.
-Endpoint selection, model-policy projection, host lookup injection and cancelled
-stream results have isolated red/green evidence. Provider and bootstrap tests pass
-with explicit ASan/UBSan instrumentation, including concurrent profile streams,
-joined transport cancellation and HTTP-backed persisted continuation.
-Scheduler regressions detect retained or prematurely removed path entries, broken
-FIFO handoff, missing reader/writer reservations and lost cancellation cleanup.
-Shared-session exclusion and existing scheduler configuration have isolated
-red/green evidence. Agent and bootstrap tests pass with explicit ASan/UBSan
-instrumentation.
-Final-input admission regressions detect wrong path keys, early authority
-resolution, blocked veto/cancellation, extended approval expiry and dropped
-audit or lock bindings. Restored tool and agent suites pass; tool, agent and
-bootstrap suites also pass with explicit ASan/UBSan instrumentation.
-IO, HTTP, storage, tool, memory, hook, prompt, agent, config and permission
-benchmarks build and run; these are local runs, not reference-hardware performance
-certification.
+Public-boundary regressions cover atomic storage preservation, provider routing,
+final-input path admission, pinned authority, approval expiry and audit ordering.
+Prepared-call regressions cover invalid arguments before approval, rewritten
+requests, declared custom targets and retained ordinary-handler state. Isolated
+faults and explicit ASan/UBSan instrumentation verify the affected behavior and
+ownership boundaries; generated evidence lives under `build/validation`.
+
+Local verification is not reference-hardware compile/performance certification.
+The toolchain and hosted quality gaps remain in [live debt](exec-plans/tech-debt-tracker.md).
 
 ## Handoff
 
-The next core slice is filesystem tool input preparation. Path admission parses
-options separately from the FileRead/FileWrite/FileEdit handlers, and concrete
-argument validation still occurs after approval. Give each built-in one prepared
-request for validation, path intent and execution; remove duplicated parsing and
-name-based path routing. Keep the public dispatch boundary, pinned authority and
-audit ordering. Invalid arguments should fail without spending approval before
-extending the tool surface.
+The next core slice is preparation for the host-bound memory and child tools.
+MemoryRecall, MemoryRemember, MemoryForget and AgentRun still validate their
+concrete arguments inside handlers after approval. Move these parsers onto the
+same prepared-call boundary and delete their handler-side JSON preludes. Keep
+scope, child identity, policy intersection and services host-bound; tool JSON
+must not supply them. ToolSearch can use the same preparation contract for its
+catalogue selectors. This completes input preparation before extending the tool
+surface.
+
 The library provider/tool/session loop remains the acceptance boundary:
 authorized tool execution, scoped memory recall, persisted continuation and
-bounded child collaboration. The controlled HTTP continuation test composes
-`HttpProviderBackend`, `RuntimeAssembly` and `AgentSession` directly.
+bounded child collaboration.
 
 [Live debt](exec-plans/tech-debt-tracker.md) records integration gates and extension
 prerequisites. Default toolchain activation and hosted analyzer/compile-budget

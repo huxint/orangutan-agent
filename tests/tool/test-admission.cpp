@@ -16,9 +16,11 @@
 #include <asio/co_spawn.hpp>
 #include <asio/io_context.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <nlohmann/json.hpp>
 
 #include <oran/async/channel.hpp>
 #include <oran/hook.hpp>
+#include <oran/io/file.hpp>
 #include <oran/permission.hpp>
 #include <oran/tool.hpp>
 
@@ -54,15 +56,21 @@ public:
     workspace = std::move(*created);
     REQUIRE(tool::register_file_read(registry).has_value());
     REQUIRE(tool::register_file_write(registry).has_value());
+    REQUIRE(tool::register_file_edit(registry).has_value());
     sink.set_blocking_handler(
-        [this](hook::Event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
+        [this](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
+          if (event == hook::Event::permission_ask_rendered) {
+            ++approval_requests;
+            co_return hook::HookDecision{.reason = "test operator"};
+          }
           const auto& before = std::get<hook::ToolBeforePayload>(*payload);
           if (auto it = decisions.find(before.who.identity); it != decisions.end()) {
             co_return it->second;
           }
           co_return hook::HookDecision{};
         });
-    bus.bind(sink, {hook::Event::tool_before, hook::Event::tool_dispatched, hook::Event::tool_after});
+    bus.bind(sink, {hook::Event::tool_before, hook::Event::tool_dispatched, hook::Event::tool_after,
+                   hook::Event::tool_error, hook::Event::permission_ask_rendered});
   }
 
   ~Admission() {
@@ -129,6 +137,8 @@ public:
   std::map<std::string, hook::HookDecision> decisions;
   std::vector<hook::ToolDispatchedPayload> dispatched;
   std::vector<hook::ToolAfterPayload> completed;
+  std::vector<hook::ToolErrorPayload> errors;
+  std::size_t approval_requests{0};
   hook::InProcessSink sink{"admission",
                            [this](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
                              if (event == hook::Event::tool_dispatched) {
@@ -142,6 +152,8 @@ public:
                                }
                              } else if (event == hook::Event::tool_after) {
                                completed.push_back(std::get<hook::ToolAfterPayload>(*payload));
+                             } else if (event == hook::Event::tool_error) {
+                               errors.push_back(std::get<hook::ToolErrorPayload>(*payload));
                              }
                              co_return core::Result<void>{};
                            },
@@ -161,6 +173,18 @@ public:
     co_return std::unexpected(core::Error::internal("audit unavailable"));
   }
 };
+
+async::Awaitable<core::Result<tool::Output>> read_prepared(std::unique_ptr<std::string> prefix,
+                                                        tool::DispatchContext& ctx) {
+  REQUIRE(ctx.resolved_path.has_value());
+  REQUIRE(ctx.resolved_path->authority.has_value());
+  auto file = ctx.resolved_path->authority->open_file(
+      {.relative_path = ctx.resolved_path->authority_relative_path});
+  REQUIRE(file.has_value());
+  auto read = co_await orangutan::io::read_text_file_ranged(ctx.executor, std::move(*file));
+  REQUIRE(read.has_value());
+  co_return tool::Output{.text = *prefix + read->text};
+}
 
 }  // namespace
 
@@ -380,4 +404,236 @@ TEST_CASE("Tool admission does not extend approval expiry while waiting for a pa
                               [](const auto& entry) { return entry.first == "reason" && entry.second == "expired"; }));
   REQUIRE(fixture.contents("shared.txt") == "holder");
   REQUIRE(fixture.dispatched.size() == 1);
+}
+
+TEST_CASE("File preparation rejects invalid input before approval or authority",
+          "[integration][tool][preparation][approval]") {
+  Admission fixture;
+  auto broker = permission::ApprovalBroker::with_random_secret();
+  REQUIRE(broker.has_value());
+  bool replay = false;
+  bool workspace = true;
+  SECTION("approval consumer") {}
+  SECTION("existing replay grant") {
+    replay = true;
+  }
+  SECTION("no workspace") {
+    workspace = false;
+  }
+  std::ofstream{fixture.root / "shared.txt"} << "original";
+
+  for (const auto name : {"FileRead", "FileWrite", "FileEdit"}) {
+    auto base = nlohmann::json{{"path", "shared.txt"}};
+    if (name == std::string_view{"FileWrite"}) {
+      base["content"] = "changed";
+    } else if (name == std::string_view{"FileEdit"}) {
+      base["old_string"] = "original";
+      base["new_string"] = "changed";
+    }
+    std::vector<std::string> invalid{"{not-json", "[]", "{}"};
+    auto missing = base;
+    missing.erase("path");
+    invalid.push_back(missing.dump());
+    auto changes = std::vector<nlohmann::json>{
+        {{"path", 42}}, {{"path", ""}}, {{"path", std::string{"bad\0path", 8}}},
+        {{"max_bytes", 0}}, {{"max_bytes", -1}}, {{"max_bytes", 1.5}}, {{"max_bytes", "4"}},
+        {{"max_bytes", 16777217}}, {{"max_bytes", 18446744073709551615ULL}}, {{"unexpected", true}}};
+    if (name == std::string_view{"FileRead"}) {
+      for (auto change : std::vector<nlohmann::json>{
+               {{"start_line", 1}}, {{"length_bytes", 2}}, {{"offset_bytes", 1}},
+               {{"line_count", 1}, {"length_bytes", 1}}, {{"line_count", 0}}, {{"line_count", -1}},
+               {{"line_count", "1"}}, {{"if_version", 7}}, {{"allow_outside_workspace", "yes"}}}) {
+        changes.push_back(std::move(change));
+      }
+    } else if (name == std::string_view{"FileWrite"}) {
+      missing = base;
+      missing.erase("content");
+      invalid.push_back(missing.dump());
+      for (auto change : std::vector<nlohmann::json>{
+               {{"content", 1}}, {{"mode", 1}}, {{"mode", "unknown"}}, {{"create_parents", "yes"}},
+               {{"max_bytes", 1}}, {{"expected_version", false}}, {{"allow_outside_workspace", true}},
+               {{"path", "nested/new.txt"}, {"create_parents", true}, {"content", false}}}) {
+        changes.push_back(std::move(change));
+      }
+    } else {
+      for (const auto field : {"old_string", "new_string"}) {
+        missing = base;
+        missing.erase(field);
+        invalid.push_back(missing.dump());
+      }
+      for (auto change : std::vector<nlohmann::json>{
+               {{"old_string", false}}, {{"new_string", false}}, {{"old_string", ""}},
+               {{"new_string", "original"}}, {{"replace_all", "yes"}}, {{"expected_version", 3}},
+               {{"allow_outside_workspace", true}}}) {
+        changes.push_back(std::move(change));
+      }
+    }
+    for (const auto& change : changes) {
+      auto input = base;
+      input.update(change);
+      invalid.push_back(input.dump());
+    }
+
+    for (const auto& input : invalid) {
+      CAPTURE(name, input);
+      auto token = broker->approve(permission::ApprovalGrant{.tool_name = name,
+                                                             .input = input,
+                                                             .identity = "invalid",
+                                                             .ttl = 60s,
+                                                             .replay_max = 1},
+                                   core::time::now_utc());
+      const auto previous = fixture.audit.events().size();
+      auto call = fixture.start(name, input, "invalid");
+      call->context.rules = {};
+      call->context.approval_broker = &*broker;
+      call->context.approval_token = replay ? &token : nullptr;
+      call->context.workspace = workspace ? &*fixture.workspace : nullptr;
+      fixture.poll();
+
+      REQUIRE_FALSE(call->failure);
+      REQUIRE(call->result.has_value());
+      REQUIRE_FALSE(call->result->has_value());
+      REQUIRE(call->result->error().kind() == core::ErrorKind::invalid_argument);
+      REQUIRE_FALSE(call->context.resolved_path.has_value());
+      REQUIRE(fixture.approval_requests == 0);
+      REQUIRE(fixture.dispatched.empty());
+      REQUIRE(fixture.audit.events().size() == previous + 1);
+      const auto& event = fixture.audit.events().back();
+      REQUIRE(event.outcome == permission::AuditOutcome::deny);
+      REQUIRE(event.reason == "invalid_tool_input");
+      REQUIRE(event.input_hash == permission::ApprovalAuthority::input_hash(input));
+      REQUIRE(fixture.errors.size() == previous + 1);
+      REQUIRE(fixture.completed.size() == previous + 1);
+      REQUIRE(fixture.errors.back().error_kind == "invalid_argument");
+      REQUIRE_FALSE(fixture.completed.back().succeeded);
+      auto unused = broker->check(token, name, input, "invalid", call->context.now);
+      REQUIRE(unused.has_value());
+    }
+  }
+  REQUIRE(fixture.contents("shared.txt") == "original");
+  REQUIRE_FALSE(std::filesystem::exists(fixture.root / "nested"));
+  auto valid = fixture.start("FileRead", R"({"path":"shared.txt"})", "valid");
+  valid->context.rules = {};
+  valid->context.approval_broker = &*broker;
+  fixture.poll();
+  require_success(valid);
+  REQUIRE(fixture.approval_requests == 1);
+}
+
+TEST_CASE("File preparation rejects rewritten invalid input without waiting for a path",
+          "[integration][tool][preparation][lock][hook]") {
+  Admission fixture;
+  auto holder = fixture.start("FileWrite", R"({"path":"shared.txt","content":"holder"})", "holder");
+  fixture.poll();
+  const std::string invalid = R"({"path":"shared.txt","content":false})";
+  fixture.rewrite("invalid", invalid);
+  auto call = fixture.start("FileWrite", R"({"path":"shared.txt","content":"unused"})", "invalid");
+  fixture.poll();
+  const bool finished_while_held = call->result.has_value();
+  fixture.finish_holder();
+
+  require_success(holder);
+  REQUIRE(finished_while_held);
+  REQUIRE_FALSE(call->failure);
+  REQUIRE_FALSE(call->result->has_value());
+  REQUIRE(call->result->error().kind() == core::ErrorKind::invalid_argument);
+  REQUIRE_FALSE(call->context.resolved_path.has_value());
+  REQUIRE(fixture.audit.events().back().input_hash == permission::ApprovalAuthority::input_hash(invalid));
+  REQUIRE(fixture.dispatched.size() == 1);
+  REQUIRE(fixture.contents("shared.txt") == "holder");
+}
+
+TEST_CASE("File preparation executes repaired hook input and options",
+          "[integration][tool][preparation][hook]") {
+  Admission fixture;
+  std::ofstream{fixture.root / "shared.txt"} << "first\nsecond\nfirst\n";
+  std::string name;
+  std::string input;
+  std::string expected;
+  SECTION("read range") {
+    name = "FileRead";
+    input = R"({"path":"shared.txt","start_line":2,"line_count":1})";
+    expected = "second\n";
+  }
+  SECTION("append") {
+    name = "FileWrite";
+    input = R"({"path":"shared.txt","content":"last","mode":"append"})";
+    expected = "first\nsecond\nfirst\nlast";
+  }
+  SECTION("parent creation") {
+    name = "FileWrite";
+    input = R"({"path":"nested/new.txt","content":"created","mode":"fail_if_exists","create_parents":true})";
+    expected = "created";
+  }
+  SECTION("edit every match") {
+    name = "FileEdit";
+    input = R"({"path":"shared.txt","old_string":"first","new_string":"changed","replace_all":true})";
+    expected = "changed\nsecond\nchanged\n";
+  }
+  fixture.rewrite("repaired", input);
+  auto call = fixture.start(name, "{invalid", "repaired");
+  fixture.poll();
+  require_success(call);
+  if (name == "FileRead") {
+    REQUIRE(nlohmann::json::parse(*call->result->value().data_json)["text"] == expected);
+  } else {
+    REQUIRE(fixture.contents(input.contains("nested") ? "nested/new.txt" : "shared.txt") == expected);
+  }
+  REQUIRE(fixture.dispatched.size() == 1);
+  REQUIRE(fixture.dispatched.front().input_json == input);
+  REQUIRE(fixture.audit.events().front().input_hash == permission::ApprovalAuthority::input_hash(input));
+}
+
+TEST_CASE("Prepared custom calls retain arguments while waiting and resolve their declared target",
+          "[integration][tool][preparation][lock][ownership]") {
+  Admission fixture;
+  std::size_t preparations = 0;
+  const std::string input = R"({"target":"shared.txt","prefix":"prepared: "})";
+  REQUIRE(fixture.registry.add_prepared(
+      {.name = "PreparedRead", .description = "Read an explicitly prepared target",
+       .input_schema_json = "{}", .required_capabilities = {core::Capability::read_file}},
+      [&preparations](std::string_view bytes) -> core::Result<tool::PreparedCall> {
+        ++preparations;
+        const auto parsed = nlohmann::json::parse(bytes);
+        return tool::PreparedCall{
+            .path = tool::PathRequest{.path = parsed.at("target").get<std::string>(), .intent = tool::PathIntent::read},
+            .execute = [prefix = std::make_unique<std::string>(parsed.at("prefix").get<std::string>())](
+                           tool::DispatchContext& ctx) mutable { return read_prepared(std::move(prefix), ctx); },
+        };
+      }).has_value());
+  auto holder = fixture.start("FileWrite", R"({"path":"shared.txt","content":"holder"})", "holder");
+  fixture.poll();
+  fixture.rewrite("prepared", input);
+  auto call = fixture.start("PreparedRead", "{invalid", "prepared");
+  fixture.poll();
+  const bool waited_without_authority = !call->result && !call->context.resolved_path;
+  const auto prepared_before_release = preparations;
+  fixture.finish_holder();
+
+  require_success(holder);
+  require_success(call);
+  REQUIRE(waited_without_authority);
+  REQUIRE(prepared_before_release == 1);
+  REQUIRE(preparations == 1);
+  REQUIRE(call->result->value().text == "prepared: holder");
+  REQUIRE(fixture.audit.events().size() == 2);
+}
+
+TEST_CASE("Ordinary handlers retain state and do not acquire authority from a built-in name",
+          "[integration][tool][preparation]") {
+  Admission fixture;
+  REQUIRE(fixture.registry.remove("FileRead").has_value());
+  REQUIRE(fixture.registry.add(
+      {.name = "FileRead", .description = "Ordinary stateful handler",
+       .input_schema_json = "{}", .required_capabilities = {core::Capability::read_file}},
+      [calls = 0](std::string_view, tool::DispatchContext&) mutable -> async::Awaitable<core::Result<tool::Output>> {
+        co_return tool::Output{.text = std::to_string(++calls)};
+      }).has_value());
+  for (int i = 1; i <= 2; ++i) {
+    auto call = fixture.start("FileRead", R"({"path":"../outside.txt"})", "ordinary");
+    fixture.poll();
+    require_success(call);
+    REQUIRE(call->result->value().text == std::to_string(i));
+    REQUIRE_FALSE(call->context.resolved_path.has_value());
+  }
 }

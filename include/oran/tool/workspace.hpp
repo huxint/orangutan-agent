@@ -25,14 +25,7 @@ struct WorkspaceOptions {
   std::vector<std::string> extra_write_roots{};
 };
 
-enum class WriteDisposition {
-  truncate,
-  append,
-  fail_if_exists,
-};
-
 struct WriteIntent {
-  WriteDisposition disposition{WriteDisposition::truncate};
   bool create_parent_directories{false};
 };
 

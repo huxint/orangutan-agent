@@ -13,21 +13,6 @@
 
 namespace orangutan::tool::detail {
 
-enum class PathIntent {
-  none,
-  read,
-  write,
-};
-
-/// Parsed once from final hook input; contains no filesystem authority.
-struct PathRequest {
-  std::string path;
-  std::optional<LockDirection> lock_direction;
-  PathIntent intent{PathIntent::none};
-  WriteIntent write_intent{};
-  bool allow_outside_workspace{false};
-};
-
 struct PathResolutionReport {
   std::optional<ResolvedToolPath> path{};
   std::string metadata_json{"{}"};
@@ -35,10 +20,12 @@ struct PathResolutionReport {
   bool requires_approval{false};
 };
 
-[[nodiscard]] std::optional<PathRequest> prepare_tool_path(const core::ToolDef& def, std::string_view input_json);
+[[nodiscard]] std::optional<LockDirection> path_lock_direction(std::span<const core::Capability> capabilities);
 
-/// Resolve pinned authority only after admission. Custom tools retain their
-/// capability-based lock request without acquiring built-in path authority.
+/// Compatibility admission for ordinary handlers; never selects built-in authority.
+[[nodiscard]] std::optional<PathRequest> prepare_lock_path(std::string_view tool_name, std::string_view input_json);
+
+/// Resolve declared authority after admission. Lock-only requests acquire none.
 [[nodiscard]] PathResolutionReport resolve_tool_path(const Workspace& workspace, const PathRequest& request);
 
 }  // namespace orangutan::tool::detail

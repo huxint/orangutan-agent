@@ -53,6 +53,10 @@ grant expiry; a cancelled wait does not consume replay budget.
 Workspace authorization is independent of a tool-name allow. Resolve the target
 before approval and carry the pinned filesystem authority through the effect.
 Audit records the final decision and result; raw secrets do not belong there.
+Filesystem argument preparation precedes both authority resolution and approval.
+Invalid arguments audit a denial with `reason=invalid_tool_input`; they neither
+publish an approval request nor consume an existing grant. Validation uses the
+final hook input, so a hook may repair an initially malformed request.
 
 ## Hook Contracts
 

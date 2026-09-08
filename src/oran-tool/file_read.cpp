@@ -1,20 +1,6 @@
-// src/oran-tool/file_read.cpp — `FileRead` built-in (spec 0011 v1).
-//
-// v2 input shape: `{"path": <string>, "start_line"?, "line_count"?,
-// "offset_bytes"?, "length_bytes"?, "max_bytes"?, "if_version"?,
-// "allow_outside_workspace"?}`. The line/byte range pair is mutually
-// exclusive (caught both at schema validation in `Registry::add` and at
-// handler time by `io::FileRange` itself). The response wraps the returned
-// text in a single header line carrying the version token, the covered span,
-// the returned byte count, and the truncated flag. Since slice 62, the same
-// facts also ride in `Output::data_json` so downstream adapters and UIs do not
-// have to re-parse the header line.
-// `if_version` short-circuits to `Error::not_modified` (carrying the
-// current token in context) when the supplied token matches the current
-// fingerprint, so a cached caller does not re-pay the body bytes.
-
 #include <oran/tool/builtins.hpp>
 
+#include <array>
 #include <cstdint>
 #include <expected>
 #include <format>
@@ -50,45 +36,20 @@ constexpr std::string_view kFileReadSchema =
     R"("if_version":{"type":"string"},"allow_outside_workspace":{"type":"boolean"}},)"
     R"("required":["path"],"additionalProperties":false})";
 
-constexpr std::uintmax_t kMaxReadBytes = 16U * 1024U * 1024U;
-
-[[nodiscard]] core::Result<std::uintmax_t> parse_positive_unsigned(const nlohmann::json& raw, std::string_view field) {
-  if (!raw.is_number_integer() || raw.is_number_float()) {
-    return std::unexpected(
-        core::Error::invalid_argument(std::format("FileRead: `{}` must be a positive integer", field)));
-  }
-  std::uint64_t value = 0U;
-  if (raw.is_number_unsigned()) {
-    value = raw.get<std::uint64_t>();
-  } else {
-    const auto signed_value = raw.get<std::int64_t>();
-    if (signed_value <= 0) {
-      return std::unexpected(core::Error::invalid_argument(std::format("FileRead: `{}` must be positive", field))
-                                 .with("value", std::to_string(signed_value)));
-    }
-    value = static_cast<std::uint64_t>(signed_value);
-  }
-  if (value == 0U) {
-    return std::unexpected(core::Error::invalid_argument(std::format("FileRead: `{}` must be positive", field)));
-  }
-  return static_cast<std::uintmax_t>(value);
-}
+struct FileReadRequest {
+  std::string path;
+  io::ReadTextOptions options;
+  std::optional<std::string> if_version;
+};
 
 [[nodiscard]] core::Result<io::ReadTextOptions> parse_options(const nlohmann::json& parsed) {
   io::ReadTextOptions options{};
 
-  if (parsed.contains("max_bytes")) {
-    auto mb = parse_positive_unsigned(parsed["max_bytes"], "max_bytes");
-    if (!mb) {
-      return std::unexpected(std::move(mb).error());
-    }
-    if (*mb > kMaxReadBytes) {
-      return std::unexpected(core::Error::invalid_argument("FileRead: `max_bytes` must be <= 16777216")
-                                 .with("value", std::to_string(*mb))
-                                 .with("max_bytes", std::to_string(kMaxReadBytes)));
-    }
-    options.max_bytes = *mb;
+  auto max_bytes = detail::parse_file_max_bytes(parsed, kFileReadName);
+  if (!max_bytes) {
+    return std::unexpected(std::move(max_bytes).error());
   }
+  options.max_bytes = *max_bytes;
 
   const bool has_line = parsed.contains("start_line") || parsed.contains("line_count");
   const bool has_byte = parsed.contains("offset_bytes") || parsed.contains("length_bytes");
@@ -100,7 +61,7 @@ constexpr std::uintmax_t kMaxReadBytes = 16U * 1024U * 1024U;
   if (has_line) {
     io::FileRange::LineSpan span{};
     if (parsed.contains("start_line")) {
-      auto v = parse_positive_unsigned(parsed["start_line"], "start_line");
+      auto v = detail::parse_positive_unsigned(parsed["start_line"], kFileReadName, "start_line");
       if (!v) {
         return std::unexpected(std::move(v).error());
       }
@@ -109,7 +70,7 @@ constexpr std::uintmax_t kMaxReadBytes = 16U * 1024U * 1024U;
       span.start_line = 1U;
     }
     if (parsed.contains("line_count")) {
-      auto v = parse_positive_unsigned(parsed["line_count"], "line_count");
+      auto v = detail::parse_positive_unsigned(parsed["line_count"], kFileReadName, "line_count");
       if (!v) {
         return std::unexpected(std::move(v).error());
       }
@@ -122,7 +83,7 @@ constexpr std::uintmax_t kMaxReadBytes = 16U * 1024U * 1024U;
   } else if (has_byte) {
     io::FileRange::ByteSpan span{};
     if (parsed.contains("offset_bytes")) {
-      auto v = parse_positive_unsigned(parsed["offset_bytes"], "offset_bytes");
+      auto v = detail::parse_positive_unsigned(parsed["offset_bytes"], kFileReadName, "offset_bytes");
       if (!v) {
         return std::unexpected(std::move(v).error());
       }
@@ -132,7 +93,7 @@ constexpr std::uintmax_t kMaxReadBytes = 16U * 1024U * 1024U;
           core::Error::invalid_argument("FileRead: `offset_bytes` is required when `length_bytes` is supplied"));
     }
     if (parsed.contains("length_bytes")) {
-      auto v = parse_positive_unsigned(parsed["length_bytes"], "length_bytes");
+      auto v = detail::parse_positive_unsigned(parsed["length_bytes"], kFileReadName, "length_bytes");
       if (!v) {
         return std::unexpected(std::move(v).error());
       }
@@ -181,35 +142,9 @@ format_header(std::string_view path, const io::ReadTextResult& result, const std
       .dump();
 }
 
-[[nodiscard]] async::Awaitable<core::Result<Output>> file_read_handler(std::string_view input_json,
-                                                                       DispatchContext& ctx) {
-  auto parsed = detail::parse_input_object(input_json, kFileReadName);
-  if (!parsed) {
-    co_return std::unexpected(std::move(parsed).error());
-  }
-
-  auto path_field = detail::require_string_field(*parsed, kFileReadName, "path");
-  if (!path_field) {
-    co_return std::unexpected(std::move(path_field).error());
-  }
-
-  auto options = parse_options(*parsed);
-  if (!options) {
-    co_return std::unexpected(std::move(options).error());
-  }
-
-  std::optional<std::string> if_version;
-  if (parsed->contains("if_version")) {
-    if (!(*parsed)["if_version"].is_string()) {
-      co_return std::unexpected(core::Error::invalid_argument("FileRead: `if_version` must be a string"));
-    }
-    if_version = (*parsed)["if_version"].get<std::string>();
-  }
-  if (parsed->contains("allow_outside_workspace") && !(*parsed)["allow_outside_workspace"].is_boolean()) {
-    co_return std::unexpected(core::Error::invalid_argument("FileRead: `allow_outside_workspace` must be a boolean"));
-  }
-
-  auto path = *std::move(path_field);
+[[nodiscard]] async::Awaitable<core::Result<Output>> file_read_handler(FileReadRequest request,
+                                                                      DispatchContext& ctx) {
+  auto& [path, options, if_version] = request;
   std::optional<io::ReadOnlyFile> authorized_file;
   if (ctx.resolved_path.has_value()) {
     if (!ctx.resolved_path->authority.has_value()) {
@@ -248,8 +183,8 @@ format_header(std::string_view path, const io::ReadTextResult& result, const std
   }
 
   auto result = authorized_file.has_value()
-                    ? co_await io::read_text_file_ranged(ctx.executor, std::move(*authorized_file), *options)
-                    : co_await io::read_text_file_ranged(ctx.executor, path, *options);
+                    ? co_await io::read_text_file_ranged(ctx.executor, std::move(*authorized_file), options)
+                    : co_await io::read_text_file_ranged(ctx.executor, path, options);
   if (!result) {
     co_return std::unexpected(std::move(result).error());
   }
@@ -270,6 +205,45 @@ format_header(std::string_view path, const io::ReadTextResult& result, const std
               .files_touched = 1,
               .truncated = result->truncated,
           },
+  };
+}
+
+[[nodiscard]] core::Result<PreparedCall> prepare_file_read(std::string_view input_json) {
+  constexpr auto fields = std::to_array<std::string_view>({
+      "path", "start_line", "line_count", "offset_bytes", "length_bytes", "max_bytes", "if_version",
+      "allow_outside_workspace"});
+  auto parsed = detail::parse_input_object(input_json, kFileReadName, fields);
+  if (!parsed) {
+    return std::unexpected(std::move(parsed).error());
+  }
+
+  auto path_field = detail::require_path_field(*parsed, kFileReadName);
+  if (!path_field) {
+    return std::unexpected(std::move(path_field).error());
+  }
+
+  auto options = parse_options(*parsed);
+  if (!options) {
+    return std::unexpected(std::move(options).error());
+  }
+
+  std::optional<std::string> if_version;
+  if (parsed->contains("if_version")) {
+    if (!(*parsed)["if_version"].is_string()) {
+      return std::unexpected(core::Error::invalid_argument("FileRead: `if_version` must be a string"));
+    }
+    if_version = (*parsed)["if_version"].get<std::string>();
+  }
+  if (parsed->contains("allow_outside_workspace") && !(*parsed)["allow_outside_workspace"].is_boolean()) {
+    return std::unexpected(core::Error::invalid_argument("FileRead: `allow_outside_workspace` must be a boolean"));
+  }
+
+  return PreparedCall{
+      .path = PathRequest{.path = *path_field,
+                          .intent = PathIntent::read,
+                          .allow_outside_workspace = parsed->value("allow_outside_workspace", false)},
+      .execute = [request = FileReadRequest{std::move(*path_field), *options, std::move(if_version)}](
+                     DispatchContext& ctx) mutable { return file_read_handler(std::move(request), ctx); },
   };
 }
 
@@ -296,7 +270,7 @@ core::Result<void> register_file_read(Registry& registry) {
       .deferred = false,
       .category = "file",
   };
-  return registry.add(std::move(def), &file_read_handler);
+  return registry.add_prepared(std::move(def), &prepare_file_read);
 }
 
 }  // namespace orangutan::tool

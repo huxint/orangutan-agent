@@ -1120,39 +1120,6 @@ TEST_CASE("FileRead returns text fallback and structured metadata", "[unit][tool
   });
 }
 
-TEST_CASE("FileRead rejects malformed input as invalid_argument", "[unit][tool][file_read]") {
-  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
-    tool::Registry registry;
-    REQUIRE(tool::register_file_read(registry).has_value());
-    auto rules = single_rule(permission::Rule{
-        .verdict = permission::Verdict::allow,
-        .tool_pattern = std::string{tool::kFileReadName},
-        .capability = core::Capability::read_file,
-    });
-    permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
-
-    auto bad_json = co_await registry.dispatch(tool::kFileReadName, "{not-json}", ctx);
-    REQUIRE_FALSE(bad_json.has_value());
-    REQUIRE(bad_json.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto missing_path = co_await registry.dispatch(tool::kFileReadName, R"({"target":"x"})", ctx);
-    REQUIRE_FALSE(missing_path.has_value());
-    REQUIRE(missing_path.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto non_string = co_await registry.dispatch(tool::kFileReadName, R"({"path":42})", ctx);
-    REQUIRE_FALSE(non_string.has_value());
-    REQUIRE(non_string.error().kind() == core::ErrorKind::invalid_argument);
-
-    // All three calls were `allow`-verdict permission decisions — audit
-    // recorded one row each.
-    REQUIRE(sink.events().size() == 3);
-    for (const auto& event : sink.events()) {
-      REQUIRE(event.outcome == permission::AuditOutcome::allow);
-    }
-  });
-}
-
 TEST_CASE("FileRead returns not_found when the path does not exist", "[unit][tool][file_read]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
@@ -1571,75 +1538,10 @@ TEST_CASE("FileWrite enforces max_bytes and leaves existing content untouched", 
     REQUIRE(context_has(result.error(), "max_bytes", "4"));
     REQUIRE(sink.events().size() == 2);
     REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
-    REQUIRE(sink.events()[1].outcome == permission::AuditOutcome::allow);
+    REQUIRE(sink.events()[1].outcome == permission::AuditOutcome::deny);
   });
 
   REQUIRE(slurp(file.string()) == "1234");
-}
-
-TEST_CASE("FileWrite rejects malformed input as invalid_argument", "[unit][tool][file_write]") {
-  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
-    tool::Registry registry;
-    REQUIRE(tool::register_file_write(registry).has_value());
-    auto rules = write_rule_set();
-    permission::RecordingAuditSink sink;
-    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
-
-    auto bad_json = co_await registry.dispatch(tool::kFileWriteName, "{not-json}", ctx);
-    REQUIRE_FALSE(bad_json.has_value());
-    REQUIRE(bad_json.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto missing_path = co_await registry.dispatch(tool::kFileWriteName, R"({"content":"x"})", ctx);
-    REQUIRE_FALSE(missing_path.has_value());
-    REQUIRE(missing_path.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto missing_content = co_await registry.dispatch(tool::kFileWriteName, R"({"path":"/tmp/x"})", ctx);
-    REQUIRE_FALSE(missing_content.has_value());
-    REQUIRE(missing_content.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto wrong_path = co_await registry.dispatch(tool::kFileWriteName, R"({"path":42,"content":"x"})", ctx);
-    REQUIRE_FALSE(wrong_path.has_value());
-    REQUIRE(wrong_path.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto wrong_content = co_await registry.dispatch(tool::kFileWriteName, R"({"path":"/tmp/x","content":3})", ctx);
-    REQUIRE_FALSE(wrong_content.has_value());
-    REQUIRE(wrong_content.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto wrong_mode_type =
-        co_await registry.dispatch(tool::kFileWriteName, R"({"path":"/tmp/x","content":"y","mode":3})", ctx);
-    REQUIRE_FALSE(wrong_mode_type.has_value());
-    REQUIRE(wrong_mode_type.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto unknown_mode =
-        co_await registry.dispatch(tool::kFileWriteName, R"({"path":"/tmp/x","content":"y","mode":"bogus"})", ctx);
-    REQUIRE_FALSE(unknown_mode.has_value());
-    REQUIRE(unknown_mode.error().kind() == core::ErrorKind::invalid_argument);
-    REQUIRE(context_has(unknown_mode.error(), "value", "bogus"));
-
-    auto wrong_create_parents = co_await registry.dispatch(tool::kFileWriteName,
-                                                           R"({"path":"/tmp/x","content":"y","create_parents":"yes"})",
-                                                           ctx);
-    REQUIRE_FALSE(wrong_create_parents.has_value());
-    REQUIRE(wrong_create_parents.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto wrong_max_bytes =
-        co_await registry.dispatch(tool::kFileWriteName, R"({"path":"/tmp/x","content":"y","max_bytes":"4"})", ctx);
-    REQUIRE_FALSE(wrong_max_bytes.has_value());
-    REQUIRE(wrong_max_bytes.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto over_hard_cap = co_await registry.dispatch(tool::kFileWriteName,
-                                                    R"({"path":"/tmp/x","content":"y","max_bytes":16777217})",
-                                                    ctx);
-    REQUIRE_FALSE(over_hard_cap.has_value());
-    REQUIRE(over_hard_cap.error().kind() == core::ErrorKind::invalid_argument);
-
-    // Every rejected call passed the permission gate, so audit recorded one
-    // `allow` row per attempt (10 calls).
-    REQUIRE(sink.events().size() == 10);
-    for (const auto& event : sink.events()) {
-      REQUIRE(event.outcome == permission::AuditOutcome::allow);
-    }
-  });
 }
 
 namespace {
@@ -2002,75 +1904,6 @@ TEST_CASE("FileEdit expected_version returns conflict when the token is stale", 
     REQUIRE(std::string_view{fp->second}.starts_with("v1:"));
     // File untouched.
     REQUIRE(slurp(file.string()) == "alpha-beta-gamma");
-  });
-}
-
-TEST_CASE("FileEdit rejects malformed input as invalid_argument", "[unit][tool][file_edit]") {
-  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
-    tool::Registry registry;
-    REQUIRE(tool::register_file_edit(registry).has_value());
-    auto rules = edit_rule_set();
-    permission::RecordingAuditSink sink;
-    auto ctx = make_temp_workspace_ctx(io, rules, sink, permission::Mode::strict);
-
-    auto bad_json = co_await registry.dispatch(tool::kFileEditName, "{not-json}", ctx);
-    REQUIRE_FALSE(bad_json.has_value());
-    REQUIRE(bad_json.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto missing_path = co_await registry.dispatch(tool::kFileEditName, R"({"old_string":"a","new_string":"b"})", ctx);
-    REQUIRE_FALSE(missing_path.has_value());
-    REQUIRE(missing_path.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto missing_old = co_await registry.dispatch(tool::kFileEditName, R"({"path":"/tmp/x","new_string":"b"})", ctx);
-    REQUIRE_FALSE(missing_old.has_value());
-    REQUIRE(missing_old.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto missing_new = co_await registry.dispatch(tool::kFileEditName, R"({"path":"/tmp/x","old_string":"a"})", ctx);
-    REQUIRE_FALSE(missing_new.has_value());
-    REQUIRE(missing_new.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto wrong_path =
-        co_await registry.dispatch(tool::kFileEditName, R"({"path":1,"old_string":"a","new_string":"b"})", ctx);
-    REQUIRE_FALSE(wrong_path.has_value());
-    REQUIRE(wrong_path.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto wrong_replace_all =
-        co_await registry.dispatch(tool::kFileEditName,
-                                   R"({"path":"/tmp/x","old_string":"a","new_string":"b","replace_all":"yes"})",
-                                   ctx);
-    REQUIRE_FALSE(wrong_replace_all.has_value());
-    REQUIRE(wrong_replace_all.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto empty_old =
-        co_await registry.dispatch(tool::kFileEditName, R"({"path":"/tmp/x","old_string":"","new_string":"b"})", ctx);
-    REQUIRE_FALSE(empty_old.has_value());
-    REQUIRE(empty_old.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto identical =
-        co_await registry.dispatch(tool::kFileEditName, R"({"path":"/tmp/x","old_string":"a","new_string":"a"})", ctx);
-    REQUIRE_FALSE(identical.has_value());
-    REQUIRE(identical.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto wrong_max_bytes =
-        co_await registry.dispatch(tool::kFileEditName,
-                                   R"({"path":"/tmp/x","old_string":"a","new_string":"b","max_bytes":"4"})",
-                                   ctx);
-    REQUIRE_FALSE(wrong_max_bytes.has_value());
-    REQUIRE(wrong_max_bytes.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto zero_max_bytes =
-        co_await registry.dispatch(tool::kFileEditName,
-                                   R"({"path":"/tmp/x","old_string":"a","new_string":"b","max_bytes":0})",
-                                   ctx);
-    REQUIRE_FALSE(zero_max_bytes.has_value());
-    REQUIRE(zero_max_bytes.error().kind() == core::ErrorKind::invalid_argument);
-
-    // Every rejected call passed the permission gate, so audit recorded one
-    // `allow` row per attempt (10 calls).
-    REQUIRE(sink.events().size() == 10);
-    for (const auto& event : sink.events()) {
-      REQUIRE(event.outcome == permission::AuditOutcome::allow);
-    }
   });
 }
 

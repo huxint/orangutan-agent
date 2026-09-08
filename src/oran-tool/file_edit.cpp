@@ -1,7 +1,6 @@
-// src/oran-tool/file_edit.cpp — `FileEdit` built-in.
-
 #include <oran/tool/builtins.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -39,10 +38,14 @@ constexpr std::string_view kFileEditSchema =
     R"("expected_version":{"type":"string"}},)"
     R"("required":["path","old_string","new_string"],"additionalProperties":false})";
 
-/// Hard ceiling for text mutation payloads. Mirrors the current
-/// `io::ReadTextOptions::max_bytes` default so `FileEdit` cannot write a file
-/// larger than a follow-up `FileRead` can ingest.
-constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
+struct FileEditRequest {
+  std::string path;
+  std::string old_string;
+  std::string new_string;
+  bool replace_all;
+  std::uintmax_t max_bytes;
+  std::optional<std::string> expected_version;
+};
 
 /// Indexes of every non-overlapping occurrence of `needle` in `haystack`, in
 /// order. Non-overlapping is the natural fit for "replace": chained matches in
@@ -55,36 +58,6 @@ constexpr std::uintmax_t kMaxWriteBytes = 16U * 1024U * 1024U;
     positions.push_back(pos);
   }
   return positions;
-}
-
-[[nodiscard]] core::Result<std::uintmax_t> parse_max_bytes(const nlohmann::json& parsed) {
-  if (!parsed.contains("max_bytes")) {
-    return kMaxWriteBytes;
-  }
-
-  const auto& raw = parsed["max_bytes"];
-  if (!raw.is_number_integer() || raw.is_number_float()) {
-    return std::unexpected(core::Error::invalid_argument("FileEdit: `max_bytes` must be a positive integer"));
-  }
-
-  std::uint64_t value = 0U;
-  if (raw.is_number_unsigned()) {
-    value = raw.get<std::uint64_t>();
-  } else {
-    const auto signed_value = raw.get<std::int64_t>();
-    if (signed_value <= 0) {
-      return std::unexpected(core::Error::invalid_argument("FileEdit: `max_bytes` must be between 1 and 16777216")
-                                 .with("value", std::to_string(signed_value)));
-    }
-    value = static_cast<std::uint64_t>(signed_value);
-  }
-
-  if (value == 0U || value > kMaxWriteBytes) {
-    return std::unexpected(core::Error::invalid_argument("FileEdit: `max_bytes` must be between 1 and 16777216")
-                               .with("value", std::to_string(value))
-                               .with("max_bytes", std::to_string(kMaxWriteBytes)));
-  }
-  return static_cast<std::uintmax_t>(value);
 }
 
 [[nodiscard]] core::Result<std::size_t>
@@ -123,63 +96,13 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
   return out;
 }
 
-[[nodiscard]] async::Awaitable<core::Result<Output>> file_edit_handler(std::string_view input_json,
-                                                                       DispatchContext& ctx) {
-  auto parsed = detail::parse_input_object(input_json, kFileEditName);
-  if (!parsed) {
-    co_return std::unexpected(std::move(parsed).error());
-  }
-
-  auto path_field = detail::require_string_field(*parsed, kFileEditName, "path");
-  if (!path_field) {
-    co_return std::unexpected(std::move(path_field).error());
-  }
-  auto old_string_field = detail::require_string_field(*parsed, kFileEditName, "old_string");
-  if (!old_string_field) {
-    co_return std::unexpected(std::move(old_string_field).error());
-  }
-  auto new_string_field = detail::require_string_field(*parsed, kFileEditName, "new_string");
-  if (!new_string_field) {
-    co_return std::unexpected(std::move(new_string_field).error());
-  }
-
-  bool replace_all = false;
-  if (parsed->contains("replace_all")) {
-    if (!(*parsed)["replace_all"].is_boolean()) {
-      co_return std::unexpected(core::Error::invalid_argument("FileEdit: `replace_all` must be a boolean"));
-    }
-    replace_all = (*parsed)["replace_all"].get<bool>();
-  }
-
-  std::optional<std::string> expected_version;
-  if (parsed->contains("expected_version")) {
-    if (!(*parsed)["expected_version"].is_string()) {
-      co_return std::unexpected(core::Error::invalid_argument("FileEdit: `expected_version` must be a string"));
-    }
-    expected_version = (*parsed)["expected_version"].get<std::string>();
-  }
-
-  auto max_bytes = parse_max_bytes(*parsed);
-  if (!max_bytes) {
-    co_return std::unexpected(std::move(max_bytes).error());
-  }
-
-  const auto input_path = *std::move(path_field);
-  auto path = input_path;
-  auto old_string = *std::move(old_string_field);
-  auto new_string = *std::move(new_string_field);
-
-  if (old_string.empty()) {
-    co_return std::unexpected(core::Error::invalid_argument("FileEdit: `old_string` must be non-empty"));
-  }
-  if (old_string == new_string) {
-    co_return std::unexpected(core::Error::invalid_argument("FileEdit: `old_string` and `new_string` are identical"));
-  }
-
+[[nodiscard]] async::Awaitable<core::Result<Output>> file_edit_handler(FileEditRequest request,
+                                                                      DispatchContext& ctx) {
+  auto& [input_path, old_string, new_string, replace_all, max_bytes, expected_version] = request;
   if (!ctx.resolved_path.has_value() || !ctx.resolved_path->authority.has_value()) {
     co_return std::unexpected(core::Error::internal("FileEdit requires a resolved workspace authority"));
   }
-  path = ctx.resolved_path->absolute_path;
+  const auto& path = ctx.resolved_path->absolute_path;
   auto mutation = ctx.resolved_path->authority->begin_file_mutation(ctx.resolved_path->authority_relative_path);
   if (!mutation) {
     co_return std::unexpected(std::move(mutation).error());
@@ -215,11 +138,11 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
   core::Result<std::string> contents;
   auto read = co_await io::read_text_file_ranged(ctx.executor,
                                                  std::move(*authorized_file),
-                                                 io::ReadTextOptions{.max_bytes = *max_bytes});
+                                                 io::ReadTextOptions{.max_bytes = max_bytes});
   if (read && read->truncated) {
     contents = std::unexpected(core::Error::invalid_argument("file exceeds max_bytes")
                                    .with("path", path)
-                                   .with("max_bytes", std::to_string(*max_bytes)));
+                                   .with("max_bytes", std::to_string(max_bytes)));
   } else if (read) {
     contents = std::move(read->text);
   } else {
@@ -242,26 +165,19 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
             .with("match_count", std::to_string(positions.size())));
   }
 
-  const std::size_t applied = replace_all ? positions.size() : 1U;
-  std::vector<std::size_t> target_positions;
-  if (replace_all) {
-    target_positions = positions;
-  } else {
-    target_positions = {positions.front()};
-  }
-
-  auto output_size = replacement_size(contents->size(), old_string.size(), new_string.size(), target_positions.size());
+  const auto applied = positions.size();
+  auto output_size = replacement_size(contents->size(), old_string.size(), new_string.size(), positions.size());
   if (!output_size) {
     co_return std::unexpected(std::move(output_size).error().with("path", path));
   }
-  if (static_cast<std::uintmax_t>(*output_size) > *max_bytes) {
+  if (static_cast<std::uintmax_t>(*output_size) > max_bytes) {
     co_return std::unexpected(core::Error::invalid_argument("FileEdit: output exceeds max_bytes")
                                   .with("path", path)
                                   .with("output_bytes", std::to_string(*output_size))
-                                  .with("max_bytes", std::to_string(*max_bytes)));
+                                  .with("max_bytes", std::to_string(max_bytes)));
   }
 
-  auto replaced = apply_replacements(*contents, old_string, new_string, target_positions);
+  auto replaced = apply_replacements(*contents, old_string, new_string, positions);
   const auto replaced_bytes = replaced.size();
   io::WriteTextOptions write_opts{.mode = io::WriteMode::truncate, .atomic = true};
   if (expected_version) {
@@ -287,6 +203,66 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
   };
 }
 
+[[nodiscard]] core::Result<PreparedCall> prepare_file_edit(std::string_view input_json) {
+  constexpr auto fields = std::to_array<std::string_view>({
+      "path", "old_string", "new_string", "replace_all", "max_bytes", "expected_version"});
+  auto parsed = detail::parse_input_object(input_json, kFileEditName, fields);
+  if (!parsed) {
+    return std::unexpected(std::move(parsed).error());
+  }
+
+  auto path_field = detail::require_path_field(*parsed, kFileEditName);
+  if (!path_field) {
+    return std::unexpected(std::move(path_field).error());
+  }
+  auto old_string_field = detail::require_string_field(*parsed, kFileEditName, "old_string");
+  if (!old_string_field) {
+    return std::unexpected(std::move(old_string_field).error());
+  }
+  auto new_string_field = detail::require_string_field(*parsed, kFileEditName, "new_string");
+  if (!new_string_field) {
+    return std::unexpected(std::move(new_string_field).error());
+  }
+
+  bool replace_all = false;
+  if (parsed->contains("replace_all")) {
+    if (!(*parsed)["replace_all"].is_boolean()) {
+      return std::unexpected(core::Error::invalid_argument("FileEdit: `replace_all` must be a boolean"));
+    }
+    replace_all = (*parsed)["replace_all"].get<bool>();
+  }
+
+  std::optional<std::string> expected_version;
+  if (parsed->contains("expected_version")) {
+    if (!(*parsed)["expected_version"].is_string()) {
+      return std::unexpected(core::Error::invalid_argument("FileEdit: `expected_version` must be a string"));
+    }
+    expected_version = (*parsed)["expected_version"].get<std::string>();
+  }
+
+  auto max_bytes = detail::parse_file_max_bytes(*parsed, kFileEditName);
+  if (!max_bytes) {
+    return std::unexpected(std::move(max_bytes).error());
+  }
+
+  auto old_string = *std::move(old_string_field);
+  auto new_string = *std::move(new_string_field);
+
+  if (old_string.empty()) {
+    return std::unexpected(core::Error::invalid_argument("FileEdit: `old_string` must be non-empty"));
+  }
+  if (old_string == new_string) {
+    return std::unexpected(core::Error::invalid_argument("FileEdit: `old_string` and `new_string` are identical"));
+  }
+
+  return PreparedCall{
+      .path = PathRequest{.path = *path_field, .intent = PathIntent::write},
+      .execute = [request = FileEditRequest{std::move(*path_field), std::move(old_string), std::move(new_string),
+                                          replace_all, *max_bytes, std::move(expected_version)}](
+                     DispatchContext& ctx) mutable { return file_edit_handler(std::move(request), ctx); },
+  };
+}
+
 }  // namespace
 
 core::Result<void> register_file_edit(Registry& registry) {
@@ -308,7 +284,7 @@ core::Result<void> register_file_edit(Registry& registry) {
       .deferred = false,
       .category = "file",
   };
-  return registry.add(std::move(def), &file_edit_handler);
+  return registry.add_prepared(std::move(def), &prepare_file_edit);
 }
 
 }  // namespace orangutan::tool

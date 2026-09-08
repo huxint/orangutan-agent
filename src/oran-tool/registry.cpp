@@ -328,11 +328,28 @@ DispatchContext DispatchContext::for_now(const DispatchContext& prototype, bool 
 }
 
 core::Result<void> Registry::add(core::ToolDef def, Handler handler) {
+  if (!handler) {
+    return std::unexpected(core::Error::invalid_argument("tool handler must not be empty").with("tool", def.name));
+  }
+  auto prepare = [handler = std::move(handler),
+                  name = def.name,
+                  lockable = detail::path_lock_direction(def.required_capabilities).has_value()](
+                     std::string_view input) -> core::Result<PreparedCall> {
+    return PreparedCall{
+        .path = lockable ? detail::prepare_lock_path(name, input) : std::nullopt,
+        // Dispatch retains both the registered handler and final input bytes.
+        .execute = [&handler, input](DispatchContext& ctx) { return handler(input, ctx); },
+    };
+  };
+  return add_prepared(std::move(def), std::move(prepare));
+}
+
+core::Result<void> Registry::add_prepared(core::ToolDef def, Preparer prepare) {
   if (def.name.empty()) {
     return std::unexpected(core::Error::invalid_argument("tool definition must have a non-empty name"));
   }
-  if (!handler) {
-    return std::unexpected(core::Error::invalid_argument("tool handler must not be empty").with("tool", def.name));
+  if (!prepare) {
+    return std::unexpected(core::Error::invalid_argument("tool preparer must not be empty").with("tool", def.name));
   }
   if (auto valid_schema = detail::validate_input_schema(def.name, def.input_schema_json); !valid_schema) {
     return std::unexpected(std::move(valid_schema).error());
@@ -342,7 +359,7 @@ core::Result<void> Registry::add(core::ToolDef def, Handler handler) {
     return std::unexpected(core::Error{core::ErrorKind::conflict, "tool is already registered"}.with("tool", def.name));
   }
   it->second.def = std::move(def);
-  it->second.handler = std::move(handler);
+  it->second.prepare = std::move(prepare);
   it->second.insertion_index = next_index_++;
   return {};
 }
@@ -447,14 +464,20 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
     }
   }
 
-  std::optional<detail::PathRequest> path_request;
+  core::Result<PreparedCall> prepared;
+  if (!blocking_publish_error && !hook_blocked) {
+    prepared = entry.prepare(effective_input);
+    if (prepared && !prepared->execute) {
+      prepared = std::unexpected(core::Error::internal("tool preparation returned no executor"));
+    }
+  }
+
   core::Result<detail::PathLockGuard> path_lock;
-  if (!blocking_publish_error && !hook_blocked && ctx.workspace != nullptr) {
-    path_request = detail::prepare_tool_path(entry.def, effective_input);
-    if (path_request && path_request->lock_direction && ctx.path_locks != nullptr) {
-      if (auto key = ctx.workspace->lock_key(path_request->path, *path_request->lock_direction)) {
-        const auto mode = *path_request->lock_direction == LockDirection::read ? detail::PathLockMode::shared
-                                                                               : detail::PathLockMode::exclusive;
+  if (prepared && prepared->path && ctx.workspace != nullptr && ctx.path_locks != nullptr) {
+    if (auto direction = detail::path_lock_direction(entry.def.required_capabilities)) {
+      if (auto key = ctx.workspace->lock_key(prepared->path->path, *direction)) {
+        const auto mode = *direction == LockDirection::read ? detail::PathLockMode::shared
+                                                            : detail::PathLockMode::exclusive;
         const auto wait_started = std::chrono::steady_clock::now();
         path_lock = co_await ctx.path_locks->table_->acquire(ctx.executor, std::move(*key), mode);
         ctx.now = core::Time{ctx.now.to_system_time_point() + std::chrono::duration_cast<core::Time::clock::duration>(
@@ -463,11 +486,6 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
     }
   }
 
-  // Compute the dispatch result inside an inner scope so the
-  // `tool_after` publish below sees the final result regardless of which
-  // branch in the verdict switch fired. `result` is rebound in every
-  // branch — the initial placeholder catches the unreachable "fell off
-  // the bottom" case so static analysis sees no uninitialised path.
   core::Result<Output> result = std::unexpected(core::Error::internal("dispatch did not produce a result"));
   std::optional<permission::AuditMetadataUpdate> audit_metadata_update;
   if (!path_lock) {
@@ -490,9 +508,29 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
           std::unexpected(hook_decision.kind == hook::HookDecisionKind::rewrite ? hook_rewrite_error(name, hook_reason)
                                                                                 : hook_veto_error(name, hook_reason));
     }
+  } else if (!prepared) {
+    std::string metadata{"{}"};
+    if (hook_rewrote) {
+      metadata = detail::with_hook_decision_metadata(
+          metadata, hook_decision.trace, input_hash_hex(input_json), input_hash_hex(effective_input));
+    } else if (!hook_decision.trace.empty()) {
+      metadata = detail::with_hook_decision_metadata(metadata, hook_decision.trace);
+    }
+    auto event = build_event(
+        name, effective_input,
+        permission::Decision{.verdict = permission::Verdict::deny,
+                             .reason = prepared.error().kind() == core::ErrorKind::invalid_argument
+                                           ? "invalid_tool_input" : "tool_preparation_failed"},
+        ctx, std::move(metadata));
+    if (auto recorded = co_await ctx.audit.record(std::move(event)); !recorded) {
+      result = std::unexpected(std::move(recorded).error());
+    } else {
+      result = std::unexpected(std::move(prepared).error().with("tool", std::string{name}));
+    }
   } else {
-    auto path_resolution =
-        path_request ? detail::resolve_tool_path(*ctx.workspace, *path_request) : detail::PathResolutionReport{};
+    auto path_resolution = prepared->path && ctx.workspace != nullptr
+                               ? detail::resolve_tool_path(*ctx.workspace, *prepared->path)
+                               : detail::PathResolutionReport{};
     ctx.resolved_path = std::move(path_resolution.path);
     auto decision = permission::evaluate(ctx.rules, name, effective_input, entry.def.required_capabilities, ctx.mode);
     if (ctx.parent_policy) {
@@ -525,11 +563,7 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
       event.outcome = permission::AuditOutcome::rewritten;
     }
 
-    // Slice 21 + 94: when the verdict is `ask`, resolve approval BEFORE
-    // recording so the audit row carries the final outcome (approved or
-    // rejected) rather than the pre-approval `ask`. A caller-supplied token
-    // is the replay path; otherwise a subscribed `permission_ask_rendered`
-    // blocking sink can approve/deny this dispatch in-place.
+    // Resolve approval before recording its durable outcome.
     auto approval = detail::ApprovalResolution{};
     const bool approval_possible = !path_resolution.error.has_value() && decision.verdict == permission::Verdict::ask &&
                                    ctx.approval_broker != nullptr;
@@ -575,44 +609,27 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
     } else if (path_resolution.error.has_value()) {
       result = std::unexpected(std::move(*path_resolution.error).with("tool", std::string{name}));
     } else {
-      // Slice 25: publish `tool_dispatched` only when the handler is
-      // about to run — i.e. on `allow`, or on `ask` that the broker
-      // promoted to `approved`. Sinks subscribed to this event see
-      // only the calls whose handlers will actually execute.
       if (handler_about_to_run && ctx.bus != nullptr) {
         [[maybe_unused]] auto dispatched_outcome = co_await ctx.bus->publish_advisory(
             hook::Event::tool_dispatched,
             build_dispatched_payload(name, effective_input, ctx, started_at, decision.verdict));
       }
 
-      switch (decision.verdict) {
-        case permission::Verdict::deny:
-          result = std::unexpected(core::Error::permission_denied("tool denied by permission rules")
-                                       .with("tool", std::string{name})
-                                       .with("reason", decision.reason));
-          break;
-        case permission::Verdict::ask:
-          switch (approval.state) {
-            case detail::ApprovalState::approved:
-              result = co_await entry.handler(effective_input, ctx);
-              break;
-            case detail::ApprovalState::rejected:
-              result = std::unexpected(std::move(*approval.rejection).with("tool", std::string{name}));
-              break;
-            case detail::ApprovalState::pending:
-              result =
-                  std::unexpected(core::Error::permission_denied("tool requires approval")
-                                      .with("tool", std::string{name})
-                                      .with("reason", "approval_required")
-                                      .with("decision_reason", decision.reason)
-                                      .with("replay_max", std::to_string(decision.replay_max))
-                                      .with("approval_ttl_seconds", std::to_string(decision.approval_ttl.count())));
-              break;
-          }
-          break;
-        case permission::Verdict::allow:
-          result = co_await entry.handler(effective_input, ctx);
-          break;
+      if (handler_about_to_run) {
+        result = co_await prepared->execute(ctx);
+      } else if (decision.verdict == permission::Verdict::deny) {
+        result = std::unexpected(core::Error::permission_denied("tool denied by permission rules")
+                                     .with("tool", std::string{name})
+                                     .with("reason", decision.reason));
+      } else if (approval.state == detail::ApprovalState::rejected) {
+        result = std::unexpected(std::move(*approval.rejection).with("tool", std::string{name}));
+      } else {
+        result = std::unexpected(core::Error::permission_denied("tool requires approval")
+                                     .with("tool", std::string{name})
+                                     .with("reason", "approval_required")
+                                     .with("decision_reason", decision.reason)
+                                     .with("replay_max", std::to_string(decision.replay_max))
+                                     .with("approval_ttl_seconds", std::to_string(decision.approval_ttl.count())));
       }
     }
   }
@@ -628,11 +645,6 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
     }
   }
 
-  // Slice 22 + 25: publish `tool_error` (failure-only narrow channel) when
-  // the dispatch produced an error, then `tool_after` with the dispatch
-  // outcome (always). Both share the same `finished_at` so sinks can
-  // correlate. Publishes are advisory so their outcome cannot change the
-  // returned result.
   if (ctx.bus != nullptr) {
     const auto finished_at = core::time::now_utc();
     if (!result) {

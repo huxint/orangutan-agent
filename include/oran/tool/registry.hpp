@@ -23,11 +23,11 @@
 #include <oran/permission/audit.hpp>
 #include <oran/permission/rule_set.hpp>
 #include <oran/tool/output.hpp>
+#include <oran/tool/workspace.hpp>
 
 namespace orangutan::tool {
 
 class Registry;
-class Workspace;
 class PathLocks;
 struct DispatchContext;
 
@@ -88,7 +88,7 @@ using MemoryRememberHandler =
 using MemoryForgetHandler =
     std::function<async::Awaitable<core::Result<Output>>(MemoryForgetRequest request, DispatchContext& ctx)>;
 
-/// Pinned filesystem target for a built-in call. Handlers execute through
+/// Pinned filesystem target for a prepared call. Executors use
 /// `authority` and `authority_relative_path`; display paths are metadata.
 struct ResolvedToolPath {
   std::optional<io::DirectoryAuthority> authority{};
@@ -141,25 +141,8 @@ struct DispatchContext {
   /// An inherited policy is evaluated separately on the final input. Its rules
   /// remain alive until this context and every dispatch snapshot finish.
   std::optional<permission::PolicyView> parent_policy{};
-  /// Optional approval broker that gates the `Verdict::ask` flow. When
-  /// non-null *and* `approval_token` is non-null, `dispatch` consults
-  /// `broker.check(token, name, input, identity, now)` after rule
-  /// evaluation: success promotes the audit outcome to `approved` and
-  /// the handler runs; failure demotes the outcome to `rejected` and
-  /// the broker's error (with its `reason` context entry —
-  /// `expired` / `tool_mismatch` / `identity_mismatch` /
-  /// `input_mismatch` / `mac_mismatch` / `no_grant` /
-  /// `replay_exhausted`) is forwarded to the caller. When either
-  /// field is null, dispatch may publish blocking
-  /// `hook::Event::permission_ask_rendered` when `bus` is also present.
-  /// A subscribed sink returning `proceed` issues a fresh broker token and
-  /// can copy it to `approval_token_output`; a `veto` returns
-  /// `permission_denied` with `reason=operator_denied`. With no subscribed
-  /// ask sink, the legacy short-circuit applies — the audit outcome stays
-  /// `ask` and the call returns `permission_denied` with
-  /// `reason=approval_required`. The pointer is non-owning; the caller
-  /// (typically the agent loop) keeps the broker alive across dispatch
-  /// invocations.
+  /// Broker for exact-input, identity-bound grants and the blocking approval
+  /// hook. Borrowed through dispatch; no consumer or valid grant means refusal.
   permission::ApprovalBroker* approval_broker{nullptr};
   /// Optional approval token. See `approval_broker` above for how
   /// `dispatch` consumes the pair. The pointer is non-owning; the
@@ -208,22 +191,14 @@ struct DispatchContext {
   MemoryForgetHandler memory_forget{};
   /// A bounded child-session runner supplied by the host.
   AgentRunHandler agent_run{};
-  /// Optional workspace resolver for file built-ins. The pointer is
-  /// non-owning; bootstrap/agent runtime owns the workspace value and keeps it
-  /// alive for the dispatch. Dispatch pre-resolves current filesystem
-  /// built-ins through this seam before permission evaluation and stores the
-  /// result in `resolved_path`. FileWrite and FileEdit require
-  /// this authority; direct callers of those mutation tools must provide a
-  /// workspace.
+  /// Workspace used to resolve prepared path intent. Borrowed through dispatch;
+  /// FileWrite and FileEdit require this authority even for direct callers.
   Workspace* workspace{nullptr};
   /// Shared path exclusion borrowed through dispatch completion. The scheduler
   /// supplies its owned resource; direct callers may share one on their strand.
   PathLocks* path_locks{nullptr};
-  /// Resolved path for the currently executing filesystem built-in. Set by
-  /// `Registry::dispatch` after `tool_before` and before permission
-  /// evaluation when `workspace` is supplied and the target tool is a known
-  /// filesystem built-in. Cleared on every dispatch entry so callers can
-  /// reuse a context object safely.
+  /// Pinned path selected by the prepared call after path admission and before
+  /// permission evaluation. Cleared on entry so callers can reuse the context.
   std::optional<ResolvedToolPath> resolved_path{};
   /// Output byte caps applied before successful results leave dispatch.
   OutputCapOptions output_caps{};
@@ -242,14 +217,35 @@ struct DispatchContext {
   std::string identity;
 };
 
-/// Handler signature. Handlers take the finalized JSON input after hooks
-/// and the per-call context, then return either a populated
-/// `Output` or an `Error`. The JSON is intentionally passed as
-/// `std::string_view` rather than a parsed `nlohmann::json` so this header
-/// stays free of the nlohmann include — handlers parse with `nlohmann::json`
-/// in their own TU.
+/// Ordinary handlers receive final hook input and validate their own arguments.
+/// Use a preparer when validation or path intent must precede admission.
 using Handler =
     std::function<async::Awaitable<core::Result<Output>>(std::string_view input_json, DispatchContext& ctx)>;
+
+enum class PathIntent {
+  none,
+  read,
+  write,
+};
+
+/// Path intent contains no authority. `none` requests only capability-based
+/// exclusion for an ordinary handler that owns its filesystem authorization.
+struct PathRequest {
+  std::string path;
+  PathIntent intent{PathIntent::none};
+  WriteIntent write_intent{};
+  bool allow_outside_workspace{false};
+};
+
+/// One validated call. Capture owned arguments in `execute`; dispatch retains
+/// this value through execution and cleanup, and invokes it at most once.
+struct PreparedCall {
+  std::optional<PathRequest> path;
+  std::move_only_function<async::Awaitable<core::Result<Output>>(DispatchContext&)> execute;
+};
+
+/// Pure preparation from final hook input; no filesystem access or other effects.
+using Preparer = std::function<core::Result<PreparedCall>(std::string_view input_json)>;
 
 class Registry {
 public:
@@ -266,6 +262,10 @@ public:
   /// either piece is malformed (empty name, invalid `input_schema_json`, or
   /// null handler).
   [[nodiscard]] core::Result<void> add(core::ToolDef def, Handler handler);
+
+  /// Register argument preparation before admission and approval. The prepared
+  /// executor uses the same permission, audit and output boundary as `add`.
+  [[nodiscard]] core::Result<void> add_prepared(core::ToolDef def, Preparer prepare);
 
   /// Remove the tool named `name`. Returns `Error::not_found` if no such
   /// tool was registered.
@@ -285,8 +285,8 @@ public:
   [[nodiscard]] std::vector<core::ToolDef> catalog() const;
 
   /// Run one tool through hooks, path admission, authorization and execution.
-  /// `tool_before` finalizes input once. Dispatch acquires any shared path lock
-  /// before resolving pinned filesystem authority, evaluating both policies
+  /// `tool_before` finalizes input once. Preparation validates arguments before
+  /// acquiring any path lock, resolving pinned authority, evaluating both policies
   /// and checking exact-input approval. A durable audit decision precedes the
   /// handler; veto, failed admission, denial or audit failure prevents effects.
   /// Output caps and completion observations finish before the lock is released.
@@ -311,7 +311,7 @@ private:
 
   struct Entry {
     core::ToolDef def;
-    Handler handler;
+    Preparer prepare;
     std::size_t insertion_index{0};
   };
 

@@ -26,7 +26,7 @@ flowchart TD
   session --> memory[Scoped memory and history]
   loop --> provider[Provider protocol and retry]
   loop --> scheduler[Bounded tool scheduler]
-  scheduler --> dispatch[Finalize input, lock, authorize and dispatch]
+  scheduler --> dispatch[Prepare final input, lock, authorize and dispatch]
   dispatch --> effects[Filesystem and memory effects]
   dispatch --> children[Bounded child sessions]
   children --> session
@@ -46,7 +46,7 @@ flowchart TD
 | `oran-permission` | Rules, decisions, bounded approval grants and audit sinks. |
 | `oran-hook` | Typed effect gates and advisory lifecycle observations. |
 | `oran-memory` | Session serialization, scoped records and lexical recall. |
-| `oran-tool` | Tool definitions, input validation, path admission, authorization and handlers. |
+| `oran-tool` | Tool definitions, prepared calls, path admission, authorization and execution. |
 | `oran-prompt` | Deterministic cached sections and tool catalogue selection. |
 | `oran-provider` | Protocol mapping, credential boundary, retries and fallback. |
 | `oran-agent` | Provider/tool turn execution, bounded scheduling and promotion state. |

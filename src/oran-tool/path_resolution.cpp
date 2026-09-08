@@ -18,7 +18,6 @@
 #include <oran/core/error.hpp>
 #include <oran/permission/approval.hpp>
 #include <oran/permission/audit.hpp>
-#include <oran/tool/builtins.hpp>
 #include <oran/tool/workspace.hpp>
 
 #include "_impl/parse_input.hpp"
@@ -29,104 +28,6 @@ namespace {
 
 [[nodiscard]] std::string hash_text(std::string_view text) {
   return permission::to_hex(permission::ApprovalAuthority::input_hash(text));
-}
-
-[[nodiscard]] std::optional<bool> bool_field(const nlohmann::json& parsed, std::string_view field) {
-  const auto it = parsed.find(std::string{field});
-  if (it == parsed.end()) {
-    return false;
-  }
-  if (!it->is_boolean()) {
-    return std::nullopt;
-  }
-  return it->get<bool>();
-}
-
-[[nodiscard]] std::optional<LockDirection> lock_direction(std::span<const core::Capability> capabilities) {
-  if (std::ranges::any_of(capabilities, [](auto cap) {
-        return cap == core::Capability::write_file || cap == core::Capability::edit_file ||
-               cap == core::Capability::delete_path;
-      })) {
-    return LockDirection::write;
-  }
-  if (std::ranges::any_of(capabilities, [](auto cap) {
-        return cap == core::Capability::read_file || cap == core::Capability::list_directory;
-      })) {
-    return LockDirection::read;
-  }
-  return std::nullopt;
-}
-
-[[nodiscard]] bool is_filesystem_builtin(std::string_view name) {
-  return name == kFileReadName || name == kFileWriteName || name == kFileEditName;
-}
-
-[[nodiscard]] std::optional<PathRequest>
-path_request(std::string_view tool_name, const nlohmann::json& parsed, std::optional<LockDirection> direction) {
-  auto path = require_string_field(parsed, tool_name, "path");
-  if (!path.has_value()) {
-    return std::nullopt;
-  }
-
-  if (!is_filesystem_builtin(tool_name)) {
-    return PathRequest{.path = std::move(*path), .lock_direction = direction};
-  }
-
-  auto allow_outside_workspace = bool_field(parsed, "allow_outside_workspace");
-  if (!allow_outside_workspace.has_value()) {
-    return std::nullopt;
-  }
-
-  if (tool_name == kFileReadName) {
-    return PathRequest{
-        .path = std::move(*path),
-        .lock_direction = direction,
-        .intent = PathIntent::read,
-        .allow_outside_workspace = *allow_outside_workspace,
-    };
-  }
-  if (tool_name == kFileEditName) {
-    return PathRequest{
-        .path = std::move(*path),
-        .lock_direction = direction,
-        .intent = PathIntent::write,
-        .write_intent = WriteIntent{.disposition = WriteDisposition::truncate},
-    };
-  }
-  if (tool_name == kFileWriteName) {
-    WriteDisposition disposition = WriteDisposition::truncate;
-    if (auto it = parsed.find("mode"); it != parsed.end()) {
-      if (!it->is_string()) {
-        return std::nullopt;
-      }
-      auto parsed_mode = core::parse_enum<WriteDisposition>(it->get<std::string>());
-      if (!parsed_mode.has_value()) {
-        return std::nullopt;
-      }
-      disposition = *parsed_mode;
-    }
-
-    bool create_parents = false;
-    if (auto it = parsed.find("create_parents"); it != parsed.end()) {
-      if (!it->is_boolean()) {
-        return std::nullopt;
-      }
-      create_parents = it->get<bool>();
-    }
-
-    return PathRequest{
-        .path = std::move(*path),
-        .lock_direction = direction,
-        .intent = PathIntent::write,
-        .write_intent =
-            WriteIntent{
-                .disposition = disposition,
-                .create_parent_directories = create_parents,
-            },
-    };
-  }
-
-  return std::nullopt;
 }
 
 [[nodiscard]] core::Result<ResolvedPath> resolve_request(const Workspace& workspace, const PathRequest& request) {
@@ -212,16 +113,31 @@ path_resolution_error_metadata_json(const Workspace& workspace, std::string_view
 
 }  // namespace
 
-std::optional<PathRequest> prepare_tool_path(const core::ToolDef& def, std::string_view input_json) {
-  const auto direction = lock_direction(def.required_capabilities);
-  if (!direction && !is_filesystem_builtin(def.name)) {
-    return std::nullopt;
+std::optional<LockDirection> path_lock_direction(std::span<const core::Capability> capabilities) {
+  if (std::ranges::any_of(capabilities, [](auto cap) {
+        return cap == core::Capability::write_file || cap == core::Capability::edit_file ||
+               cap == core::Capability::delete_path;
+      })) {
+    return LockDirection::write;
   }
-  auto parsed = parse_input_object(input_json, def.name);
+  if (std::ranges::any_of(capabilities, [](auto cap) {
+        return cap == core::Capability::read_file || cap == core::Capability::list_directory;
+      })) {
+    return LockDirection::read;
+  }
+  return std::nullopt;
+}
+
+std::optional<PathRequest> prepare_lock_path(std::string_view tool_name, std::string_view input_json) {
+  auto parsed = parse_input_object(input_json, tool_name);
   if (!parsed) {
     return std::nullopt;
   }
-  return path_request(def.name, *parsed, direction);
+  auto path = require_string_field(*parsed, tool_name, "path");
+  if (!path) {
+    return std::nullopt;
+  }
+  return PathRequest{.path = std::move(*path)};
 }
 
 PathResolutionReport resolve_tool_path(const Workspace& workspace, const PathRequest& request) {
