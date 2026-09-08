@@ -140,7 +140,6 @@ core::Result<agent::ToolSchedulerOptions> scheduler_options_from(const config::C
   return agent::ToolSchedulerOptions{
       .max_parallel_tools = *max_parallel,
       .per_call_timeout = std::chrono::milliseconds{sched.per_call_timeout_ms},
-      .idle_lock_ttl = std::chrono::milliseconds{sched.idle_lock_ttl_ms},
   };
 }
 

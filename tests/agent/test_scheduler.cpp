@@ -1,13 +1,3 @@
-// tests/agent/test_scheduler.cpp — ToolScheduler coverage (slices 116-117).
-//
-// Slice 116 ships bounded parallelism (AC1), ordered results (AC2), per-call
-// timeout (AC6), and the first parent-cancellation surface (partial AC5).
-// Slice 117 adds the per-canonical-path read/write lock table behind
-// `agent::ToolScheduler` (AC3, AC4, AC10).
-// Approval gating, audit fan-out, the full 100 ms cancel guarantee, and
-// `cancellation_lag` audit naming move in later slices and get their own
-// tests there.
-
 #include <oran/agent.hpp>
 
 #include <algorithm>
@@ -44,7 +34,6 @@
 #include <oran/permission.hpp>
 #include <oran/tool.hpp>
 
-#include "../../src/oran-agent/_impl/path_lock_table.hpp"
 #include "../test-helpers/run_async.hpp"
 
 namespace agent = orangutan::agent;
@@ -626,13 +615,6 @@ TEST_CASE("ToolScheduler: two writes to the same canonical path serialize (AC3)"
         REQUIRE(intervals.size() == 2);
         REQUIRE_FALSE(overlaps(intervals[0], intervals[1]));
         REQUIRE(tracker->peak.load() == 1);
-
-        // Both calls were exclusive acquires; the second one waited.
-        const auto stats = scheduler.lock_stats();
-        REQUIRE(stats.exclusive_acquires == 2);
-        REQUIRE(stats.shared_acquires == 0);
-        REQUIRE(stats.contended_acquires >= 1);
-        REQUIRE(stats.peak_entries >= 1);
       },
       5s);
 }
@@ -673,10 +655,6 @@ TEST_CASE("ToolScheduler: concurrent read and write on the same path obey the re
         REQUIRE(intervals.size() == 2);
         REQUIRE_FALSE(overlaps(intervals[0], intervals[1]));
         REQUIRE(tracker->peak.load() == 1);
-
-        const auto stats = scheduler.lock_stats();
-        REQUIRE(stats.shared_acquires == 1);
-        REQUIRE(stats.exclusive_acquires == 1);
       },
       5s);
 }
@@ -710,11 +688,6 @@ TEST_CASE("ToolScheduler: two reads to the same path run concurrently under the 
         REQUIRE(result.has_value());
         REQUIRE(result->size() == 2);
         REQUIRE(tracker->peak.load() == 2);
-
-        const auto stats = scheduler.lock_stats();
-        REQUIRE(stats.shared_acquires == 2);
-        REQUIRE(stats.exclusive_acquires == 0);
-        REQUIRE(stats.contended_acquires == 0);
       },
       5s);
 }
@@ -747,11 +720,6 @@ TEST_CASE("ToolScheduler: writes to different paths run concurrently", "[unit][a
         REQUIRE(result.has_value());
         REQUIRE(result->size() == 2);
         REQUIRE(tracker->peak.load() == 2);
-
-        const auto stats = scheduler.lock_stats();
-        REQUIRE(stats.exclusive_acquires == 2);
-        REQUIRE(stats.contended_acquires == 0);
-        REQUIRE(stats.current_entries == 2);
       },
       5s);
 }
@@ -783,165 +751,9 @@ TEST_CASE("ToolScheduler: capability-free tools skip the path lock", "[unit][age
         auto result = co_await scheduler.run_batch(std::move(batch), prototype);
         REQUIRE(result.has_value());
         REQUIRE(tracker->peak.load() == 2);
-
-        const auto stats = scheduler.lock_stats();
-        REQUIRE(stats.shared_acquires == 0);
-        REQUIRE(stats.exclusive_acquires == 0);
-        REQUIRE(stats.current_entries == 0);
       },
       5s);
 }
-
-TEST_CASE("ToolScheduler: reap_idle_locks drops idle entries past the TTL", "[unit][agent][scheduler][lock][reap]") {
-  test::run_async(
-      [](asio::io_context& io) -> async::Awaitable<void> {
-        TempDir root{"oran-sched-reap"};
-        touch_file(root.path() / "d.txt");
-
-        auto tracker = std::make_shared<LockTracker>();
-        tool::Registry registry;
-        add_tracked_tool(registry, "FakeLockWrite", {core::Capability::write_file}, 5ms, tracker);
-
-        auto workspace = make_workspace(root.path());
-        auto rules = allow_all_rules();
-        permission::NullAuditSink audit;
-        auto prototype = make_prototype_with_workspace(io, rules, audit, workspace);
-
-        agent::ToolScheduler scheduler{
-            io.get_executor(),
-            registry,
-            agent::ToolSchedulerOptions{.max_parallel_tools = 4, .per_call_timeout = 5s, .idle_lock_ttl = 100ms}};
-
-        std::vector<agent::ToolBatchCall> batch;
-        batch.push_back(call(0, "FakeLockWrite", write_call_input("d.txt")));
-
-        auto result = co_await scheduler.run_batch(std::move(batch), prototype);
-        REQUIRE(result.has_value());
-
-        const auto pre_reap = scheduler.lock_stats();
-        REQUIRE(pre_reap.current_entries == 1);
-
-        // Reap with a now far in the past relative to the entry's idle stamp:
-        // nothing should be evicted.
-        REQUIRE(scheduler.reap_idle_locks(core::Time::epoch()) == 0);
-        REQUIRE(scheduler.lock_stats().current_entries == 1);
-
-        // Reap with a future-enough time: the lone entry is evicted.
-        const auto future = core::Time{std::chrono::system_clock::now() + std::chrono::seconds{10}};
-        const auto evicted = scheduler.reap_idle_locks(future);
-        REQUIRE(evicted == 1);
-        const auto post_reap = scheduler.lock_stats();
-        REQUIRE(post_reap.current_entries == 0);
-        REQUIRE(post_reap.reaped_entries == 1);
-      },
-      5s);
-}
-
-TEST_CASE("PathLockTable: 10 000 distinct paths reap to empty after the idle TTL (AC10)",
-          "[unit][agent][scheduler][lock][reap]") {
-  test::run_async(
-      [](asio::io_context& io) -> async::Awaitable<void> {
-        constexpr std::size_t kPaths = 10'000;
-        const auto idle_ttl = std::chrono::milliseconds{200};
-        agent::detail::PathLockTable table{agent::detail::PathLockTableOptions{.idle_ttl = idle_ttl}};
-
-        // The lock guard's destructor reads `core::time::now_utc()` to stamp
-        // `idle_since`, so use wall-clock time on both sides. The reap
-        // deadline below is far enough in the future that every entry — even
-        // ones released later in the loop — falls past the TTL.
-        for (std::size_t i = 0; i < kPaths; ++i) {
-          auto guard = co_await table.acquire(io.get_executor(),
-                                              "/synthetic/lock/" + std::to_string(i),
-                                              agent::detail::PathLockMode::exclusive,
-                                              core::time::now_utc());
-          REQUIRE(guard.has_value());
-          // Guard drops at scope exit → release runs synchronously and stamps
-          // `idle_since` with the real wall clock.
-        }
-
-        REQUIRE(table.stats().current_entries == kPaths);
-
-        const auto reap_at = core::Time{std::chrono::system_clock::now() + idle_ttl + std::chrono::seconds{1}};
-        const auto evicted = table.reap(reap_at);
-        REQUIRE(evicted == kPaths);
-        REQUIRE(table.stats().current_entries == 0);
-        REQUIRE(table.stats().reaped_entries == kPaths);
-      },
-      30s);
-}
-
-TEST_CASE("PathLockTable: cancellation during a contended wait does not orphan the lock",
-          "[unit][agent][scheduler][lock][cancellation]") {
-  asio::io_context io;
-  agent::detail::PathLockTable table{agent::detail::PathLockTableOptions{.idle_ttl = 1s}};
-  const auto now = core::Time{std::chrono::system_clock::now()};
-
-  std::optional<agent::detail::PathLockGuard> holder;
-  asio::co_spawn(
-      io,
-      [&]() -> async::Awaitable<void> {
-        auto result =
-            co_await table.acquire(io.get_executor(), "/contended/path", agent::detail::PathLockMode::exclusive, now);
-        REQUIRE(result.has_value());
-        holder = std::move(*result);
-      },
-      asio::detached);
-  io.run();
-  REQUIRE(holder.has_value());
-
-  // Spawn a waiter that contends on the held lock, then cancel it.
-  asio::cancellation_signal waiter_signal;
-  io.restart();
-  std::optional<core::Result<agent::detail::PathLockGuard>> waiter_result;
-  asio::co_spawn(
-      io,
-      [&]() -> async::Awaitable<core::Result<agent::detail::PathLockGuard>> {
-        co_return co_await table.acquire(io.get_executor(),
-                                         "/contended/path",
-                                         agent::detail::PathLockMode::exclusive,
-                                         now);
-      },
-      asio::bind_cancellation_slot(
-          waiter_signal.slot(),
-          [&](std::exception_ptr, core::Result<agent::detail::PathLockGuard> r) { waiter_result = std::move(r); }));
-
-  // Pump the io_context once so the waiter actually enters its wait state.
-  asio::post(io, [&] { waiter_signal.emit(asio::cancellation_type::terminal); });
-  io.run();
-  REQUIRE(waiter_result.has_value());
-  REQUIRE_FALSE(waiter_result->has_value());
-  REQUIRE(waiter_result->error().kind() == core::ErrorKind::cancelled);
-
-  // Release the original holder: a fresh acquire on the same key must succeed
-  // because the cancelled waiter did not leave an orphaned permit.
-  holder.reset();
-  io.restart();
-  std::optional<core::Result<agent::detail::PathLockGuard>> recovered;
-  asio::co_spawn(
-      io,
-      [&]() -> async::Awaitable<core::Result<agent::detail::PathLockGuard>> {
-        co_return co_await table.acquire(io.get_executor(),
-                                         "/contended/path",
-                                         agent::detail::PathLockMode::exclusive,
-                                         now);
-      },
-      [&](std::exception_ptr, core::Result<agent::detail::PathLockGuard> r) { recovered = std::move(r); });
-  io.run();
-  REQUIRE(recovered.has_value());
-  REQUIRE(recovered->has_value());
-
-  const auto stats = table.stats();
-  REQUIRE(stats.cancelled_acquires >= 1);
-}
-
-// ---------------------------------------------------------------------------
-// Slice 118 — approval gating + audit/hook fan-out correctness under
-// parallelism (most of AC7). The scheduler must preserve every per-call
-// invariant `tool::Registry::dispatch` guarantees for a single call when it
-// fans a batch out concurrently: exactly N audit rows, exactly N `tool_after`
-// publishes (failures included), per-call approval resolution, and slice-67
-// same-row usage enrichment with no cross-talk between identical calls.
-// ---------------------------------------------------------------------------
 
 TEST_CASE("ToolScheduler: a batch records exactly N audit rows and N tool_after publishes (AC7)",
           "[unit][agent][scheduler][audit]") {

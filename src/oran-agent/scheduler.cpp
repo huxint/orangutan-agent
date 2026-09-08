@@ -5,6 +5,7 @@
 #include <deque>
 #include <exception>
 #include <expected>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -20,7 +21,6 @@
 #include <asio/cancellation_state.hpp>
 #include <asio/cancellation_type.hpp>
 #include <asio/co_spawn.hpp>
-#include <asio/detached.hpp>
 #include <asio/experimental/awaitable_operators.hpp>
 #include <asio/redirect_error.hpp>
 #include <asio/steady_timer.hpp>
@@ -35,7 +35,6 @@
 #include <oran/core/capability.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/result.hpp>
-#include <oran/core/time.hpp>
 #include <oran/core/tool_def.hpp>
 #include <oran/permission/audit.hpp>
 #include <oran/tool/output.hpp>
@@ -60,16 +59,9 @@ namespace {
       .with("per_call_timeout_ms", std::to_string(per_call_timeout.count()));
 }
 
-/// AC5 cancellation budget: once the parent token is cancelled, `run_batch`
-/// waits at most this long for in-flight calls to wind down before returning
-/// `parent_cancelled`. Cancel-aware tools observe the emitted cancellation and
-/// resolve well inside this window; a tool that never polls its cancellation
-/// slot misses it and is named in a `cancellation_lag` audit row.
+// A bounded batch return still requires a context join before services are released.
 constexpr std::chrono::milliseconds kCancellationGrace{100};
 
-/// Audit `metadata_json` for a `cancellation_lag` row. `error_kind` is the
-/// spec-0012 AC5 marker; `cancellation_grace_ms` records the window the tool
-/// missed and `per_call_timeout_ms` the bound that still backstops it.
 [[nodiscard]] std::string cancellation_lag_metadata_json(std::chrono::milliseconds per_call_timeout) {
   nlohmann::json metadata;
   metadata["error_kind"] = "cancellation_lag";
@@ -78,15 +70,7 @@ constexpr std::chrono::milliseconds kCancellationGrace{100};
   return metadata.dump();
 }
 
-/// Classify a tool's lock requirement from its declared capabilities. The
-/// classification is deterministic per `core::ToolDef`: a tool that touches
-/// the filesystem via `Capability::write_file` / `edit_file` / `delete_path`
-/// takes an exclusive per-path lock, a tool that reads via
-/// `Capability::read_file` / `list_directory` takes a shared per-path lock,
-/// and everything else (e.g., `ToolSearch`, memory tools, future shell /
-/// agent.spawn workloads) skips path locking. The spec calls out
-/// `ShellExec` / `agent.spawn` / `tool.runtime_loader` as globally
-/// serialised in a future revision — they keep no v1 lock until that ships.
+// Capability declarations select shared reads or exclusive mutations.
 [[nodiscard]] std::optional<detail::PathLockMode>
 classify_lock_mode(const std::vector<core::Capability>& capabilities) {
   bool wants_write = false;
@@ -188,8 +172,7 @@ class ToolScheduler::Impl {
 public:
   struct SharedState {
     SharedState(asio::any_io_executor executor, tool::Registry& registry, ToolSchedulerOptions options)
-        : executor{std::move(executor)}, registry{&registry}, options{options},
-          locks{detail::PathLockTableOptions{.idle_ttl = options.idle_lock_ttl}} {}
+        : executor{std::move(executor)}, registry{&registry}, options{options} {}
 
     asio::any_io_executor executor;
     tool::Registry* registry;
@@ -202,27 +185,6 @@ public:
 
   Impl(asio::any_io_executor executor, tool::Registry& registry, ToolSchedulerOptions options)
       : state_{std::make_shared<SharedState>(std::move(executor), registry, options)} {}
-
-  [[nodiscard]] const ToolSchedulerOptions& options() const noexcept {
-    return state_->options;
-  }
-
-  [[nodiscard]] ToolSchedulerLockStats lock_stats() const noexcept {
-    const auto inner = state_->locks.stats();
-    return ToolSchedulerLockStats{
-        .shared_acquires = inner.shared_acquires,
-        .exclusive_acquires = inner.exclusive_acquires,
-        .contended_acquires = inner.contended_acquires,
-        .cancelled_acquires = inner.cancelled_acquires,
-        .reaped_entries = inner.reaped_entries,
-        .current_entries = inner.current_entries,
-        .peak_entries = inner.peak_entries,
-    };
-  }
-
-  std::size_t reap_idle_locks(core::Time now) {
-    return state_->locks.reap(now);
-  }
 
   [[nodiscard]] async::Awaitable<core::Result<std::vector<ToolBatchResult>>>
   run_batch(std::vector<ToolBatchCall> batch, tool::DispatchContext& prototype) {
@@ -330,7 +292,7 @@ private:
     }
     co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
 
-    // Wait out the AC5 grace window for the remaining calls. A cancel-aware
+    // Wait out the cancellation grace window for the remaining calls. A cancel-aware
     // tool resolves almost at once; a tool that ignores its cancellation slot
     // keeps `run_call` suspended in its `dispatch || timeout` race — that race
     // cannot resolve until the handler returns, because asio cancellation is
@@ -390,8 +352,7 @@ private:
     if (const core::ToolDef* def = shared->registry->find(call.name); def != nullptr) {
       if (auto mode = classify_lock_mode(def->required_capabilities); mode.has_value()) {
         if (auto key = derive_lock_key(prototype.workspace, call.input_json, *mode); key.has_value()) {
-          auto acquired_lock =
-              co_await shared->locks.acquire(state->executor, *std::move(key), *mode, core::time::now_utc());
+          auto acquired_lock = co_await shared->locks.acquire(state->executor, *std::move(key), *mode);
           if (!acquired_lock) {
             state->results[index] = ToolBatchResult{
                 .tool_use_id = std::move(call.tool_use_id),
@@ -469,12 +430,7 @@ private:
     }
   }
 
-  /// Record one `cancellation_lag` audit row naming a tool that did not wind
-  /// down within `kCancellationGrace` after a parent cancellation. The row
-  /// reuses the prototype's scope / agent / identity / parent-turn correlation
-  /// so `--explain-rules`-style and `--trace` consumers see it beside the
-  /// call's permission-decision row. Best-effort: a failed record is discarded
-  /// by the caller and never masks the `parent_cancelled` result.
+  // Best-effort diagnostics must not replace the parent cancellation result.
   [[nodiscard]] static async::Awaitable<core::Result<void>>
   record_cancellation_lag(tool::DispatchContext& prototype,
                           std::string_view tool_name,
@@ -512,18 +468,6 @@ ToolScheduler::run_batch(std::vector<ToolBatchCall> batch, tool::DispatchContext
 
 async::Awaitable<core::Result<void>> ToolScheduler::wait_idle(const tool::DispatchContext* context) {
   return impl_->wait_idle(context);
-}
-
-const ToolSchedulerOptions& ToolScheduler::options() const noexcept {
-  return impl_->options();
-}
-
-ToolSchedulerLockStats ToolScheduler::lock_stats() const noexcept {
-  return impl_->lock_stats();
-}
-
-std::size_t ToolScheduler::reap_idle_locks(core::Time now) {
-  return impl_->reap_idle_locks(now);
 }
 
 }  // namespace orangutan::agent

@@ -41,6 +41,11 @@ FileRead, FileWrite and FileEdit are the built-in filesystem tools. ToolSearch,
 memory tools and AgentRun provide the other runtime extensions. Stored capability
 names remain readable for compatibility.
 
+Scheduler path entries follow live holders and waiters. The final participant
+releases the entry synchronously; no host cleanup or idle TTL remains. Shared
+session exclusion and context-specific cleanup joins use the same scheduler.
+The [tool contract](design-docs/tool-runtime.md) owns this lifetime boundary.
+
 File IO shares one descriptor-based read implementation and the pinned file
 mutation boundary. Each read owns its resources and observes current file bytes;
 the [IO contract](design-docs/io-runtime.md) owns ranges, fingerprints and
@@ -87,16 +92,24 @@ Endpoint selection, model-policy projection, host lookup injection and cancelled
 stream results have isolated red/green evidence. Provider and bootstrap tests pass
 with explicit ASan/UBSan instrumentation, including concurrent profile streams,
 joined transport cancellation and HTTP-backed persisted continuation.
+Scheduler regressions detect retained or prematurely removed path entries, broken
+FIFO handoff, missing reader/writer reservations and lost cancellation cleanup.
+Shared-session exclusion and existing scheduler configuration have isolated
+red/green evidence. Agent and bootstrap tests pass with explicit ASan/UBSan
+instrumentation.
 IO, HTTP, storage, tool, memory, hook, prompt, agent, config and permission
 benchmarks build and run; these are local runs, not reference-hardware performance
 certification.
 
 ## Handoff
 
-The next core slice is scheduler path-lock ownership. Idle-entry reclamation is
-exposed through `reap_idle_locks`, but the session runtime has no caller. Bind
-reclamation to the scheduler's actual lifetime and narrow unused controls while
-preserving shared path exclusion and context-specific cancellation joins.
+The next core slice is tool-call admission. The scheduler derives a path key from
+the original JSON, while `Registry::dispatch` can rewrite that input through
+`tool_before` before path resolution and permission evaluation. Converge finalized
+input, path exclusion and authorized dispatch behind one boundary. Preserve
+pinned filesystem authority, approval binding, audit-before-effect ordering and
+context-specific cancellation joins. Verify two calls rewritten to the same path
+exclude each other before extending the tool surface.
 The library provider/tool/session loop remains the acceptance boundary:
 authorized tool execution, scoped memory recall, persisted continuation and
 bounded child collaboration. The controlled HTTP continuation test composes
@@ -116,7 +129,8 @@ make ci
 ```
 
 Relevant regressions are in `tests/io/test_file.cpp`,
-`tests/io/test_directory_authority.cpp`, `tests/bootstrap/test-child-agents.cpp`,
+`tests/io/test_directory_authority.cpp`, `tests/agent/test-path-locks.cpp`,
+`tests/bootstrap/test-child-agents.cpp`,
 `tests/tool/test-agent-run.cpp`, the permission intersection cases, and the
 storage/memory tests tagged `[atomic]`. Child lifetime checks include a concurrent
 independent session and a tool that delays cancellation cleanup.

@@ -29,12 +29,25 @@ the host. A session advertises tools available through its bindings.
 
 `agent::ToolScheduler` provides bounded parallel calls, ordered results, per-call
 timeouts and path locks. Read-only calls may share a path lock; mutations exclude
-other accesses to the same canonical path. Lock entries are reaped by idle TTL.
+other accesses to the same workspace lock key. Batches and sessions using the same
+scheduler share this exclusion and run on its coordinating strand.
+
+Key derivation currently uses the original call input before `tool_before`.
+Aligning the key with finalized rewritten input is the next
+[admission slice](../exec-plans/tech-debt-tracker.md).
+
+The lock table retains only live holders, queued waiters and granted handoffs.
+The final participant releases the entry synchronously. FIFO handoff reserves a
+permit before posting the waiter's completion; a queued writer prevents later
+readers from bypassing it. Cancellation returns any reserved permit and advances
+the remaining waiters. There is no idle TTL or host-driven cleanup.
 
 Cancellation has a 100 ms batch grace window. A lagging operation is recorded and
 may still be alive after the batch returns. An owner must await
 `wait_idle(context)` before releasing that context; `wait_idle()` joins all calls.
 This lifetime obligation also applies to borrowed audit, workspace and handlers.
+Calls retain the scheduler's lock state through their cleanup, including after a
+cancelled batch returns.
 
 ## Results And Prompt Catalogue
 

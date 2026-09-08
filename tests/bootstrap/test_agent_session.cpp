@@ -11,11 +11,13 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <asio/any_io_executor.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
+#include <asio/experimental/awaitable_operators.hpp>
 #include <asio/io_context.hpp>
 #include <asio/steady_timer.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -24,6 +26,7 @@
 #include <oran/async.hpp>
 #include <oran/bootstrap.hpp>
 #include <oran/config.hpp>
+#include <oran/core/capability.hpp>
 #include <oran/core/content.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/stop_reason.hpp>
@@ -1186,54 +1189,96 @@ TEST_CASE("AgentSession renders selected agent prompt overlay in the stable pref
   });
 }
 
-TEST_CASE("AgentSession dispatches through an injected shared scheduler",
+TEST_CASE("AgentSession shares path exclusion through an injected scheduler",
           "[unit][bootstrap][prompt_runner][scheduler]") {
   TempDir temp{"oran-bootstrap-prompt-runner-injected-scheduler"};
-  write_file(temp.path() / "note.txt", "injected scheduler fixture\n");
   test::run_async(
       [&temp](asio::io_context& io) -> async::Awaitable<void> {
-        auto cfg = config::Config{};
-        auto assembly = build_assembly(temp.path(), io, false);
-
-        // One registry + scheduler owned by the test and injected into the
-        // runner — exactly how `--serve` shares them across per-job runners.
+        using namespace asio::experimental::awaitable_operators;
+        auto cfg = parse_config(R"({
+          "runtime": {"prompt": {"active_tools": ["PathProbe"]}},
+          "permissions": {"allow": [{"tool_pattern": "PathProbe"}]}
+        })");
+        auto assembly = build_assembly(temp.path(), io, false, false, false);
+        async::Channel<int> first_entered{io.get_executor(), 1};
+        async::Channel<int> second_entered{io.get_executor(), 1};
+        async::Channel<int> release_first{io.get_executor(), 1};
+        bool first_active = false;
+        bool overlap = false;
         tool::Registry registry;
-        REQUIRE(tool::register_builtins(registry).has_value());
+        auto definition = core::ToolDef{
+            .name = "PathProbe",
+            .description = "Hold a path across sessions",
+            .input_schema_json = R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})",
+            .required_capabilities = {core::Capability::write_file},
+        };
+        REQUIRE(registry.add(std::move(definition),
+                             [&first_entered, &second_entered, &release_first, &first_active, &overlap](
+                                 std::string_view,
+                                 tool::DispatchContext& context) -> async::Awaitable<core::Result<tool::Output>> {
+                               const bool first = context.agent_key == "first";
+                               overlap = overlap || (!first && first_active);
+                               if (first)
+                                 first_active = true;
+                               auto entered = (first ? first_entered : second_entered).try_send(0);
+                               if (!entered)
+                                 co_return std::unexpected(std::move(entered).error());
+                               if (first) {
+                                 auto released = co_await release_first.receive();
+                                 first_active = false;
+                                 if (!released)
+                                   co_return std::unexpected(std::move(released).error());
+                               }
+                               co_return tool::Output::text_only("path released");
+                             }));
         agent::ToolScheduler scheduler{io.get_executor(), registry};
-
-        RecordingProvider recording{{
-            provider::Response{
-                .blocks = {core::ToolUseContent{
-                    .id = "read-1",
-                    .name = "FileRead",
-                    .input_json = R"({"path":"note.txt"})",
-                }},
-                .stop_reason = core::StopReason::tool_use,
-                .usage = provider::Usage{.input_tokens = 1,
-                                         .output_tokens = 1,
-                                         .cache_creation_tokens = 0,
-                                         .cache_read_tokens = 0,
-                                         .cost_estimate = std::nullopt},
-                .model_used = std::string{"fake-1"},
-                .route_profile_used = std::nullopt,
-            },
-            text_response("read"),
-        }};
-
-        auto options = base_runner_options(io, assembly, cfg, recording);
+        const auto call = provider::Response{
+            .blocks = {core::ToolUseContent{
+                .id = "write-1",
+                .name = "PathProbe",
+                .input_json = R"({"path":"note.txt"})",
+            }},
+            .stop_reason = core::StopReason::tool_use,
+            .model_used = std::string{"fake-1"},
+            .route_profile_used = std::nullopt,
+        };
+        RecordingProvider first_provider{{call, text_response("first done")}};
+        RecordingProvider second_provider{{call, text_response("second done")}};
+        auto options = base_runner_options(io, assembly, cfg, first_provider);
+        options.agent_key = "first";
         options.registry = &registry;
         options.scheduler = &scheduler;
-        auto runner = bootstrap::AgentSession::create(std::move(options));
-        REQUIRE(runner.has_value());
+        auto first = bootstrap::AgentSession::create(options);
+        REQUIRE(first.has_value());
+        options.agent_key = "second";
+        options.provider = &second_provider;
+        auto second = bootstrap::AgentSession::create(std::move(options));
+        REQUIRE(second.has_value());
 
-        auto result = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "read"});
-        REQUIRE(result.has_value());
-        REQUIRE(result->text == "read");
-
-        // The FileRead ran through the *injected* scheduler, so its shared
-        // (read) lock acquire is visible on the scheduler the test owns —
-        // proof the runner borrowed it instead of building its own.
-        REQUIRE(scheduler.lock_stats().shared_acquires >= 1);
+        bool entered_before_release = false;
+        bool released = false;
+        auto observe_then_release =
+            [&second_entered, &io, &entered_before_release, &released, &release_first]() -> async::Awaitable<void> {
+          auto early = co_await (second_entered.receive() ||
+                                 async::sleep_for(io.get_executor(), std::chrono::milliseconds{100}));
+          entered_before_release = std::holds_alternative<core::Result<int>>(early);
+          released = release_first.try_send(0).has_value();
+        };
+        auto run_second =
+            [&first_entered, &second, &observe_then_release]() -> async::Awaitable<core::Result<agent::PromptResult>> {
+          auto entered = co_await first_entered.receive();
+          if (!entered)
+            co_return std::unexpected(std::move(entered).error());
+          co_return co_await ((*second)->run_prompt({.prompt = "write"}) && observe_then_release());
+        };
+        auto [first_result, second_result] = co_await ((*first)->run_prompt({.prompt = "write"}) && run_second());
+        REQUIRE(first_result.has_value());
+        REQUIRE(second_result.has_value());
+        REQUIRE(first_result->text == "first done");
+        REQUIRE(second_result->text == "second done");
+        REQUIRE(released);
+        REQUIRE_FALSE(entered_before_release);
+        REQUIRE_FALSE(overlap);
       },
       std::chrono::seconds{3});
 }

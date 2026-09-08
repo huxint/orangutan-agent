@@ -513,7 +513,6 @@ TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][con
   REQUIRE(result->runtime().tool_output.max_data_bytes == 1048576);
   REQUIRE(result->runtime().tool_scheduler.max_parallel_tools == 4);
   REQUIRE(result->runtime().tool_scheduler.per_call_timeout_ms == 60000);
-  REQUIRE(result->runtime().tool_scheduler.idle_lock_ttl_ms == 300000);
   REQUIRE(result->runtime().prompt.active_tools.use_defaults);
   REQUIRE(result->runtime().prompt.active_tools.tool_names.empty());
   REQUIRE(result->trace().enabled);
@@ -642,8 +641,7 @@ TEST_CASE("Config::parse extracts runtime.tool_scheduler knobs", "[unit][config]
   "runtime": {
     "tool_scheduler": {
       "max_parallel_tools": 8,
-      "per_call_timeout_ms": 1500,
-      "idle_lock_ttl_ms": 90000
+      "per_call_timeout_ms": 1500
     }
   }
 })json");
@@ -651,7 +649,6 @@ TEST_CASE("Config::parse extracts runtime.tool_scheduler knobs", "[unit][config]
   REQUIRE(result.has_value());
   REQUIRE(result->runtime().tool_scheduler.max_parallel_tools == 8);
   REQUIRE(result->runtime().tool_scheduler.per_call_timeout_ms == 1500);
-  REQUIRE(result->runtime().tool_scheduler.idle_lock_ttl_ms == 90000);
 }
 
 TEST_CASE("Config::parse defaults runtime.tool_scheduler when the block is absent", "[unit][config][runtime]") {
@@ -659,7 +656,18 @@ TEST_CASE("Config::parse defaults runtime.tool_scheduler when the block is absen
   REQUIRE(result.has_value());
   REQUIRE(result->runtime().tool_scheduler.max_parallel_tools == 4);
   REQUIRE(result->runtime().tool_scheduler.per_call_timeout_ms == 60000);
-  REQUIRE(result->runtime().tool_scheduler.idle_lock_ttl_ms == 300000);
+}
+
+TEST_CASE("Config::parse keeps existing scheduler configuration readable", "[unit][config][runtime]") {
+  auto result = config::Config::parse(R"({
+    "strict_config": true,
+    "runtime": {"tool_scheduler": {
+      "max_parallel_tools": 2, "per_call_timeout_ms": 750, "idle_lock_ttl_ms": 300000
+    }}
+  })");
+  REQUIRE(result.has_value());
+  REQUIRE(result->runtime().tool_scheduler.max_parallel_tools == 2);
+  REQUIRE(result->runtime().tool_scheduler.per_call_timeout_ms == 750);
 }
 
 TEST_CASE("Config::parse rejects malformed runtime.tool_scheduler knobs", "[unit][config][runtime]") {

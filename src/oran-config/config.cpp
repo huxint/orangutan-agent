@@ -377,14 +377,6 @@ template <std::size_t N>
     config.per_call_timeout_ms = *parsed;
   }
 
-  if (const auto idle_ttl = it->find("idle_lock_ttl_ms"); idle_ttl != it->end()) {
-    auto parsed = positive_integer_value(*idle_ttl, "$.runtime.tool_scheduler.idle_lock_ttl_ms");
-    if (!parsed) {
-      return std::unexpected(std::move(parsed.error()));
-    }
-    config.idle_lock_ttl_ms = *parsed;
-  }
-
   return config;
 }
 

@@ -28,7 +28,7 @@ The config file contains:
 | `runtime.workers` | Host maps the blocking worker count to `async::RuntimeConfig`. |
 | `runtime.request_timeout_ms`, `runtime.stream.max_bytes` | Host maps transport bounds to `HttpProviderBackendOptions`. |
 | `runtime.tool_output` | `AgentSession` applies model-visible text and structured output byte limits. |
-| `runtime.tool_scheduler` | `AgentSession` applies parallelism, timeout and idle path-lock limits. |
+| `runtime.tool_scheduler` | `AgentSession` applies parallelism and per-call dispatch timeouts. |
 | `runtime.prompt.active_tools` | `AgentSession` selects the active catalogue. |
 | `trace.enabled` | Host maps the trace switch to `RuntimeAssemblyOptions`. |
 | `profiles`, `routes` | `HttpProviderBackend` selects model, protocol, endpoint, credentials and model policy; `route_name` defaults to `default`. |
@@ -36,6 +36,9 @@ The config file contains:
 | `agents.<name>.prompt_overlay` | `AgentSession` selects stable agent instructions. |
 | `hooks.timeout_ms` | Host maps the hook deadline to `RuntimeAssemblyOptions`. |
 | `memory.longterm.recall` | Host maps recall enablement, limit and kinds to `AgentSessionOptions`. |
+
+Path locks follow active work. The retired `runtime.tool_scheduler.idle_lock_ttl_ms`
+field is ignored when reading existing configuration.
 
 ## Credentials
 
