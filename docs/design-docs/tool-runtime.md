@@ -6,16 +6,23 @@ from model tool calls pass through `Registry::dispatch`.
 
 ## Dispatch
 
-1. Resolve the registered definition and validate its input.
-2. Apply the blocking `tool_before` hook. Veto stops the operation; rewritten
-   input must pass validation, path resolution and permission evaluation again.
-3. Resolve filesystem inputs into pinned authority handles. A displayed path
-   or an earlier path check cannot authorize a later filesystem effect.
-4. Evaluate rules for the concrete tool, input, declared capabilities and caller.
+1. Resolve the registered definition. Registration validates its schema;
+   handlers validate concrete arguments before their effects.
+2. Apply the blocking `tool_before` hook once. Veto stops the operation;
+   rewritten input becomes the input for every following stage.
+3. Prepare one typed path request from that final input. When `path_locks` is
+   supplied, acquire shared read or exclusive mutation access using the declared
+   capabilities and the workspace's lexical lock key. Vetoed calls never wait
+   for path resources. Cancelled waits finish observations without resolving
+   authority, consuming approval or running a handler.
+4. Resolve filesystem inputs into pinned authority handles after acquiring the
+   lock, so a queued call observes the preceding operation's completed state.
+   A displayed path or an earlier path check cannot authorize a later effect.
+5. Evaluate rules for the concrete tool, input, declared capabilities and caller.
    Denial stops execution. An ask decision requires a valid approval.
-5. Await the durable decision before invoking the handler. Storage failure or
+6. Await the durable decision before invoking the handler. Storage failure or
    cancellation stops execution. Enforce output limits, await any audit metadata
-   enrichment and publish completion/error observations.
+   enrichment and publish completion/error observations before releasing the lock.
 
 `DispatchContext` carries identity, rules, audit, workspace, approval and injected
 memory services. A tool receives these dependencies explicitly. Application
@@ -27,14 +34,24 @@ the host. A session advertises tools available through its bindings.
 
 ## Scheduler
 
-`agent::ToolScheduler` provides bounded parallel calls, ordered results, per-call
-timeouts and path locks. Read-only calls may share a path lock; mutations exclude
-other accesses to the same workspace lock key. Batches and sessions using the same
-scheduler share this exclusion and run on its coordinating strand.
+`agent::ToolScheduler` provides bounded parallel calls, ordered results and
+per-call timeouts. It owns an opaque `tool::PathLocks` resource and binds it to
+each dispatch; it does not parse input or classify filesystem capabilities.
+Batches and sessions using the same scheduler share exclusion on its coordinating
+strand. Direct registry callers can supply a shared resource on their strand.
+The owner retains it until all borrowing dispatches finish.
 
-Key derivation currently uses the original call input before `tool_before`.
-Aligning the key with finalized rewritten input is the next
-[admission slice](../exec-plans/tech-debt-tracker.md).
+Read-only calls may share a path lock; mutations exclude other accesses to the
+same workspace lock key. Keys normalize final input lexically against configured
+roots without filesystem access; they are not inode or symlink-alias locks.
+Custom filesystem tools share capability-based exclusion but own their argument
+validation and authority handling. Calls without a lockable path still pass
+through ordinary permission, resolution and handler validation.
+
+Per-call timeout starts after the batch semaphore admits the call and includes
+hooks, path waiting, authorization and execution. Path waiting counts toward
+approval expiry; dispatch advances the caller's clock sample by the monotonic
+wait duration before checking the grant.
 
 The lock table retains only live holders, queued waiters and granted handoffs.
 The final participant releases the entry synchronously. FIFO handoff reserves a

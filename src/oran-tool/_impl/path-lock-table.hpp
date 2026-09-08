@@ -16,7 +16,7 @@
 #include <oran/async/channel.hpp>
 #include <oran/core/result.hpp>
 
-namespace orangutan::agent::detail {
+namespace orangutan::tool::detail {
 
 enum class PathLockMode : std::uint8_t {
   shared,
@@ -26,9 +26,8 @@ enum class PathLockMode : std::uint8_t {
 class PathLockTable;
 
 /// Move-only RAII handle that releases its lock on destruction. The guard does
-/// not extend the lifetime of the owning `PathLockTable`; each spawned
-/// scheduler child retains the shared scheduler state that owns the table until
-/// its guard has been released.
+/// not extend the lifetime of the owning `PathLocks`; dispatch callers retain
+/// that resource until their guards have been released.
 class PathLockGuard {
 public:
   PathLockGuard() noexcept = default;
@@ -100,4 +99,4 @@ private:
   Entries entries_;
 };
 
-}  // namespace orangutan::agent::detail
+}  // namespace orangutan::tool::detail

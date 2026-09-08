@@ -47,7 +47,8 @@ The broker authenticates grants with a process-owned key. A grant binds tool,
 identity, input hash, expiry and replay budget; default rule policy is eight
 replays within one hour. Expired, mismatched, tampered or exhausted grants are
 rejected. Restart invalidates process grants. A hook rewrite triggers a fresh
-check of the final operation.
+check of the final operation. Time spent waiting for a path lock counts toward
+grant expiry; a cancelled wait does not consume replay budget.
 
 Workspace authorization is independent of a tool-name allow. Resolve the target
 before approval and carry the pinned filesystem authority through the effect.

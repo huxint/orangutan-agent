@@ -28,6 +28,7 @@ namespace orangutan::tool {
 
 class Registry;
 class Workspace;
+class PathLocks;
 struct DispatchContext;
 
 struct AgentRunRequest {
@@ -87,12 +88,8 @@ using MemoryRememberHandler =
 using MemoryForgetHandler =
     std::function<async::Awaitable<core::Result<Output>>(MemoryForgetRequest request, DispatchContext& ctx)>;
 
-/// Registry-pre-resolved filesystem target for a built-in tool call. The
-/// `authority` plus `relative_path` is the executable capability for migrated
-/// handlers. It is optional only during the staged migration so legacy direct
-/// registry callers remain representable; migrated handlers must reject a
-/// missing authority. `absolute_path` remains non-authoritative compatibility
-/// metadata until the remaining filesystem built-ins migrate.
+/// Pinned filesystem target for a built-in call. Handlers execute through
+/// `authority` and `authority_relative_path`; display paths are metadata.
 struct ResolvedToolPath {
   std::optional<io::DirectoryAuthority> authority{};
   std::string authority_relative_path;
@@ -175,13 +172,9 @@ struct DispatchContext {
   /// caller may keep the token for identical-input replay until the broker
   /// exhausts or expires the grant.
   permission::ApprovalToken* approval_token_output{nullptr};
-  /// Wall-clock instant the broker uses to evaluate `expires_at`.
-  /// The agent loop sets this from `core::time::now_utc()` per
-  /// dispatch; tests pin it to a fixed time so the broker's TTL
-  /// branches are deterministic. Default-constructed value (the
-  /// UNIX epoch) is intentionally far in the past so that an
-  /// uninitialised value cannot accidentally satisfy a real TTL
-  /// — every realistic call site supplies a fresh value.
+  /// Caller-supplied clock sample for approval expiry. `for_now` samples wall
+  /// time; a path-lock wait advances this sample by its monotonic elapsed time
+  /// before permission evaluation. Direct callers may pin the initial sample.
   core::Time now{};
   /// Optional hook bus. When non-null, `dispatch` publishes blocking
   /// `hook::Event::tool_before` after the registry resolves the tool def
@@ -223,16 +216,16 @@ struct DispatchContext {
   /// this authority; direct callers of those mutation tools must provide a
   /// workspace.
   Workspace* workspace{nullptr};
+  /// Shared path exclusion borrowed through dispatch completion. The scheduler
+  /// supplies its owned resource; direct callers may share one on their strand.
+  PathLocks* path_locks{nullptr};
   /// Resolved path for the currently executing filesystem built-in. Set by
   /// `Registry::dispatch` after `tool_before` and before permission
   /// evaluation when `workspace` is supplied and the target tool is a known
   /// filesystem built-in. Cleared on every dispatch entry so callers can
   /// reuse a context object safely.
   std::optional<ResolvedToolPath> resolved_path{};
-  /// Output byte caps applied after a successful handler return and before
-  /// hook/provider-facing output leaves the dispatch boundary. The future
-  /// scheduler owns these options for batched calls; direct registry callers
-  /// get the spec-0014 defaults.
+  /// Output byte caps applied before successful results leave dispatch.
   OutputCapOptions output_caps{};
   /// Optional parent turn id supplied by `agent::Loop` when trace correlation
   /// is enabled. `Registry::dispatch` copies it into `permission::AuditEvent`
@@ -249,8 +242,8 @@ struct DispatchContext {
   std::string identity;
 };
 
-/// Handler signature. Handlers are coroutines that take the raw JSON input
-/// the LLM produced and the per-call context, then return either a populated
+/// Handler signature. Handlers take the finalized JSON input after hooks
+/// and the per-call context, then return either a populated
 /// `Output` or an `Error`. The JSON is intentionally passed as
 /// `std::string_view` rather than a parsed `nlohmann::json` so this header
 /// stays free of the nlohmann include — handlers parse with `nlohmann::json`
@@ -291,79 +284,15 @@ public:
   /// agent-loop's "advertise this catalog to the provider" step.
   [[nodiscard]] std::vector<core::ToolDef> catalog() const;
 
-  /// Run one tool. The flow is:
-  ///
-  ///   1. lookup `name`; `Error::not_found` on miss. No hook event
-  ///      is published for an unknown tool name — the dispatch
-  ///      never started.
-  ///   2. if `ctx.bus` is non-null, publish blocking
-  ///      `hook::Event::tool_before` with `ToolBeforePayload{name,
-  ///      input_json, identity, scope_key, agent_key, started_at}`.
-  ///      A veto records `outcome=blocked_by_hook`, skips the handler,
-  ///      publishes the advisory failure events, and returns
-  ///      `Error::permission_denied`. A rewrite substitutes the effective
-  ///      input before workspace resolution, permission evaluation, broker
-  ///      checks, audit, handler execution, and later hook payloads. A
-  ///      require_approval decision promotes an otherwise-allow verdict into
-  ///      the existing broker path.
-  ///   3. if `ctx.workspace` is supplied and `name` is one of the built-in
-  ///      filesystem tools, pre-resolve its `path` field through the
-  ///      intent-specific `Workspace` method, stash the absolute path in
-  ///      `ctx.resolved_path`, and carry redacted resolver metadata for audit.
-  ///      A resolver failure is kept as the pending dispatch result.
-  ///   4. evaluate `(name, effective_input, def.required_capabilities, ctx.mode)`
-  ///      against `ctx.rules` so audit still records the permission context
-  ///      for known filesystem attempts that fail path policy.
-  ///   5. if the verdict is `ask` and no path-resolution failure is pending:
-  ///      - if both `ctx.approval_broker` and `ctx.approval_token` are set,
-  ///        consult `broker.check(*token, name, effective_input, identity,
-  ///        now)` and remap the audit outcome to `approved` (broker
-  ///        accepted) or `rejected` (broker rejected — the broker's `reason`
-  ///        context entry replaces the rule reason in the audit row);
-  ///      - else if `ctx.approval_broker` and `ctx.bus` are set, publish
-  ///        blocking `hook::Event::permission_ask_rendered`. A subscribed
-  ///        sink returning `proceed` issues a broker token, optionally stores
-  ///        it in `approval_token_output`, checks it immediately, and runs the
-  ///        handler on success. A `veto` records `outcome=rejected` and
-  ///        returns `permission_denied` with `reason=operator_denied`.
-  ///        With no subscribed ask sink, the legacy `approval_required`
-  ///        short-circuit below is preserved.
-  ///   6. record one `permission::AuditEvent` carrying the final
-  ///      verdict, the (possibly remapped) outcome,
-  ///      `input_hash = SHA-256(effective_input)`, the identity columns from
-  ///      `ctx`, and any resolver / blocking-hook metadata under
-  ///      `metadata_json` (`hook_decisions`, `original_input_hash`,
-  ///      `rewritten_input_hash` when applicable).
-  ///   7. branch:
-  ///        - resolver failure -> return the resolver error; the handler is
-  ///                              not run and approval replay is not spent.
-  ///        - `allow`           -> co_await `handler`, return its `Result`.
-  ///        - `deny`            -> return `Error::permission_denied`
-  ///                               with `reason=<rule_reason>`.
-  ///        - `ask` (approved)  -> co_await `handler`, return its `Result`.
-  ///        - `ask` (rejected)  -> return the broker's error verbatim
-  ///                               (its `reason` context entry already
-  ///                               classifies the failure).
-  ///        - `ask` (no broker
-  ///           or no token)     -> return `Error::permission_denied`
-  ///                               with `reason=approval_required`,
-  ///                               `decision_reason=<rule_reason>`,
-  ///                               `replay_max=<decimal>`, and
-  ///                               `approval_ttl_seconds=<decimal>`
-  ///                               copied from the matched rule so
-  ///                               the agent loop can hand them
-  ///                               straight to
-  ///                               `ApprovalBroker::approve`.
-  ///   8. if `ctx.bus` is non-null, publish `hook::Event::tool_error`
-  ///      on failures, then always publish `hook::Event::tool_after` with
-  ///      `ToolAfterPayload{name, effective_input, identity, succeeded,
-  ///      output_text, error_kind, error_message, started_at, finished_at,
-  ///      duration}` regardless of which branch in step 6 fired.
-  ///
-  /// Audit-sink errors are propagated verbatim so a flaky storage backend
-  /// does not silently lose decisions. Advisory hook publish errors are not
-  /// propagated to the caller; blocking `tool_before` sink errors are
-  /// converted by the bus into a hook veto.
+  /// Run one tool through hooks, path admission, authorization and execution.
+  /// `tool_before` finalizes input once. Dispatch acquires any shared path lock
+  /// before resolving pinned filesystem authority, evaluating both policies
+  /// and checking exact-input approval. A durable audit decision precedes the
+  /// handler; veto, failed admission, denial or audit failure prevents effects.
+  /// Output caps and completion observations finish before the lock is released.
+  /// Unknown names return `not_found` without publishing hooks. Callers retain
+  /// the context and its borrowed services until dispatch completes.
+  /// See docs/design-docs/tool-runtime.md for ordering and failure contracts.
   [[nodiscard]] async::Awaitable<core::Result<Output>>
   dispatch(std::string_view name, std::string_view input_json, DispatchContext& ctx) const;
 

@@ -9,23 +9,36 @@
 #include <oran/core/error.hpp>
 #include <oran/core/result.hpp>
 #include <oran/tool/registry.hpp>
+#include <oran/tool/workspace.hpp>
 
 namespace orangutan::tool::detail {
 
+enum class PathIntent {
+  none,
+  read,
+  write,
+};
+
+/// Parsed once from final hook input; contains no filesystem authority.
+struct PathRequest {
+  std::string path;
+  std::optional<LockDirection> lock_direction;
+  PathIntent intent{PathIntent::none};
+  WriteIntent write_intent{};
+  bool allow_outside_workspace{false};
+};
+
 struct PathResolutionReport {
+  std::optional<ResolvedToolPath> path{};
   std::string metadata_json{"{}"};
   std::optional<core::Error> error{};
   bool requires_approval{false};
 };
 
-/// Resolve the current call's path at the registry boundary when the call is a
-/// built-in filesystem tool and `ctx.workspace` is supplied. Non-filesystem
-/// tools and workspace-less calls are no-ops.
-[[nodiscard]] PathResolutionReport
-pre_resolve_tool_path(std::string_view tool_name, std::string_view input_json, DispatchContext& ctx);
+[[nodiscard]] std::optional<PathRequest> prepare_tool_path(const core::ToolDef& def, std::string_view input_json);
 
-/// Render the resolved-path audit extension. Returns "{}" when no path was
-/// pre-resolved for the call.
-[[nodiscard]] std::string path_resolution_metadata_json(const std::optional<ResolvedToolPath>& resolved_path);
+/// Resolve pinned authority only after admission. Custom tools retain their
+/// capability-based lock request without acquiring built-in path authority.
+[[nodiscard]] PathResolutionReport resolve_tool_path(const Workspace& workspace, const PathRequest& request);
 
 }  // namespace orangutan::tool::detail

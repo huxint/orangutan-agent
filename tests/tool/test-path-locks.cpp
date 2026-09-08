@@ -14,15 +14,15 @@
 
 #include <oran/core/error.hpp>
 
-#include "../../src/oran-agent/_impl/path_lock_table.hpp"
+#include "../../src/oran-tool/_impl/path-lock-table.hpp"
 #include "../test-helpers/run_async.hpp"
 
 namespace async = orangutan::async;
 namespace core = orangutan::core;
 namespace test = orangutan::tests;
-using orangutan::agent::detail::PathLockGuard;
-using orangutan::agent::detail::PathLockMode;
-using orangutan::agent::detail::PathLockTable;
+using orangutan::tool::detail::PathLockGuard;
+using orangutan::tool::detail::PathLockMode;
+using orangutan::tool::detail::PathLockTable;
 
 namespace {
 
@@ -52,7 +52,7 @@ void run_ready(asio::io_context& io) {
 
 }  // namespace
 
-TEST_CASE("PathLockTable retains only live paths during churn", "[unit][agent][scheduler][lock][ownership]") {
+TEST_CASE("PathLockTable retains only live paths during churn", "[unit][tool][lock][ownership]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     PathLockTable table;
     auto held = co_await table.acquire(io.get_executor(), "/held/path", PathLockMode::exclusive);
@@ -71,8 +71,7 @@ TEST_CASE("PathLockTable retains only live paths during churn", "[unit][agent][s
   });
 }
 
-TEST_CASE("PathLockTable hands a path from shared holders through FIFO waiters",
-          "[unit][agent][scheduler][lock][ownership]") {
+TEST_CASE("PathLockTable hands a path from shared holders through FIFO waiters", "[unit][tool][lock][ownership]") {
   PathLockTable table;
   asio::io_context io;
   auto first = request(table, io, PathLockMode::shared);
@@ -124,7 +123,7 @@ TEST_CASE("PathLockTable hands a path from shared holders through FIFO waiters",
 }
 
 TEST_CASE("PathLockTable cancelling a queued writer admits readers beside a live reader",
-          "[unit][agent][scheduler][lock][cancellation]") {
+          "[unit][tool][lock][cancellation]") {
   PathLockTable table;
   asio::io_context io;
   auto holder = request(table, io, PathLockMode::shared);
@@ -152,9 +151,10 @@ TEST_CASE("PathLockTable cancelling a queued writer admits readers beside a live
 }
 
 TEST_CASE("PathLockTable cancellation releases queued and reserved ownership",
-          "[unit][agent][scheduler][lock][cancellation][ownership]") {
+          "[unit][tool][lock][cancellation][ownership]") {
   const auto mode = GENERATE(PathLockMode::shared, PathLockMode::exclusive);
   const auto grant_before_resume = GENERATE(false, true);
+  const auto cancel_before_grant = GENERATE(false, true);
   PathLockTable table;
   asio::io_context io;
   auto holder = request(table, io, PathLockMode::exclusive);
@@ -165,10 +165,15 @@ TEST_CASE("PathLockTable cancellation releases queued and reserved ownership",
   run_ready(io);
   REQUIRE_FALSE(cancelled->result.has_value());
 
-  cancelled->cancellation.emit(asio::cancellation_type::all);
+  if (cancel_before_grant) {
+    cancelled->cancellation.emit(asio::cancellation_type::all);
+  }
   if (grant_before_resume) {
     // Grant while the cancelled receive's completion is still queued.
     holder->result.reset();
+  }
+  if (!cancel_before_grant) {
+    cancelled->cancellation.emit(asio::cancellation_type::all);
   }
   REQUIRE(table.size() == 1);
   run_ready(io);
@@ -187,8 +192,7 @@ TEST_CASE("PathLockTable cancellation releases queued and reserved ownership",
   REQUIRE(table.size() == 0);
 }
 
-TEST_CASE("PathLockTable returns a cancelled grant to the next waiter",
-          "[unit][agent][scheduler][lock][cancellation][ownership]") {
+TEST_CASE("PathLockTable returns a cancelled grant to the next waiter", "[unit][tool][lock][cancellation][ownership]") {
   const auto mode = GENERATE(PathLockMode::shared, PathLockMode::exclusive);
   PathLockTable table;
   asio::io_context io;

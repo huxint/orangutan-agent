@@ -96,7 +96,7 @@ public:
   [[nodiscard]] core::Result<ResolvedPath> resolve_read_outside_workspace(std::string_view path) const;
   [[nodiscard]] core::Result<ResolvedPath> resolve_write(std::string_view path, WriteIntent intent) const;
 
-  /// Scheduler lock-key derivation: the lexically-normalised absolute
+  /// Dispatch lock-key derivation: the lexically-normalised absolute
   /// spelling of `path` joined against the workspace root, provided it falls
   /// beneath the root or a configured extra root for the requested
   /// direction. Pure string computation — no filesystem access — so the key

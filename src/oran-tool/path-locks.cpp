@@ -1,4 +1,4 @@
-#include "_impl/path_lock_table.hpp"
+#include <oran/tool/path-locks.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -10,13 +10,22 @@
 #include <variant>
 
 #include <asio/any_io_executor.hpp>
+#include <asio/this_coro.hpp>
 
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/async/channel.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/result.hpp>
 
-namespace orangutan::agent::detail {
+#include "_impl/path-lock-table.hpp"
+
+namespace orangutan::tool {
+
+PathLocks::PathLocks() : table_{std::make_unique<detail::PathLockTable>()} {}
+
+PathLocks::~PathLocks() = default;
+
+namespace detail {
 
 PathLockGuard::PathLockGuard(PathLockTable& table, std::string path, PathLockMode mode) noexcept
     : table_{&table}, path_{std::move(path)}, mode_{mode} {}
@@ -47,6 +56,10 @@ void PathLockGuard::reset() noexcept {
 
 async::Awaitable<core::Result<PathLockGuard>>
 PathLockTable::acquire(asio::any_io_executor exec, std::string path, PathLockMode mode) {
+  const auto cancellation = co_await asio::this_coro::cancellation_state;
+  if (cancellation.cancelled() != asio::cancellation_type::none) {
+    co_return std::unexpected(core::Error::cancelled());
+  }
   std::shared_ptr<async::Channel<std::monostate>> wake;
 
   {
@@ -68,6 +81,9 @@ PathLockTable::acquire(asio::any_io_executor exec, std::string path, PathLockMod
   }
 
   auto receive_result = co_await wake->receive();
+  if (cancellation.cancelled() != asio::cancellation_type::none) {
+    receive_result = std::unexpected(core::Error::cancelled());
+  }
 
   // Inserts during suspension can invalidate iterators. A queued waiter or
   // its reserved reader/writer permit keeps this entry alive until we resume.
@@ -146,4 +162,5 @@ void PathLockTable::advance(Entries::iterator it) {
   }
 }
 
-}  // namespace orangutan::agent::detail
+}  // namespace detail
+}  // namespace orangutan::tool

@@ -11,6 +11,8 @@
 #include <utility>
 #include <vector>
 
+#include <asio/this_coro.hpp>
+
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
@@ -22,10 +24,12 @@
 #include <oran/permission/approval_broker.hpp>
 #include <oran/permission/audit.hpp>
 #include <oran/permission/rule_set.hpp>
+#include <oran/tool/path-locks.hpp>
 
 #include "_impl/approval_resolution.hpp"
 #include "_impl/audit_metadata.hpp"
 #include "_impl/input_redaction.hpp"
+#include "_impl/path-lock-table.hpp"
 #include "_impl/path_resolution.hpp"
 #include "_impl/schema_validation.hpp"
 
@@ -313,6 +317,7 @@ DispatchContext DispatchContext::for_now(const DispatchContext& prototype, bool 
       .memory_forget = prototype.memory_forget,
       .agent_run = prototype.agent_run,
       .workspace = prototype.workspace,
+      .path_locks = prototype.path_locks,
       .resolved_path = std::nullopt,
       .output_caps = prototype.output_caps,
       .parent_turn_id = prototype.parent_turn_id,
@@ -442,6 +447,22 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
     }
   }
 
+  std::optional<detail::PathRequest> path_request;
+  core::Result<detail::PathLockGuard> path_lock;
+  if (!blocking_publish_error && !hook_blocked && ctx.workspace != nullptr) {
+    path_request = detail::prepare_tool_path(entry.def, effective_input);
+    if (path_request && path_request->lock_direction && ctx.path_locks != nullptr) {
+      if (auto key = ctx.workspace->lock_key(path_request->path, *path_request->lock_direction)) {
+        const auto mode = *path_request->lock_direction == LockDirection::read ? detail::PathLockMode::shared
+                                                                               : detail::PathLockMode::exclusive;
+        const auto wait_started = std::chrono::steady_clock::now();
+        path_lock = co_await ctx.path_locks->table_->acquire(ctx.executor, std::move(*key), mode);
+        ctx.now = core::Time{ctx.now.to_system_time_point() + std::chrono::duration_cast<core::Time::clock::duration>(
+                                                                  std::chrono::steady_clock::now() - wait_started)};
+      }
+    }
+  }
+
   // Compute the dispatch result inside an inner scope so the
   // `tool_after` publish below sees the final result regardless of which
   // branch in the verdict switch fired. `result` is rebound in every
@@ -449,7 +470,12 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
   // the bottom" case so static analysis sees no uninitialised path.
   core::Result<Output> result = std::unexpected(core::Error::internal("dispatch did not produce a result"));
   std::optional<permission::AuditMetadataUpdate> audit_metadata_update;
-  if (blocking_publish_error.has_value()) {
+  if (!path_lock) {
+    result = std::unexpected(std::move(path_lock).error().with("tool", std::string{name}));
+    // A cancelled lock wait has no authority or approval to release. Finish
+    // only its observations before returning to the scheduler's cleanup join.
+    co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+  } else if (blocking_publish_error.has_value()) {
     result = std::unexpected(std::move(*blocking_publish_error).with("tool", std::string{name}));
   } else if (hook_blocked) {
     const auto metadata_json =
@@ -465,7 +491,9 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
                                                                                 : hook_veto_error(name, hook_reason));
     }
   } else {
-    auto path_resolution = detail::pre_resolve_tool_path(name, effective_input, ctx);
+    auto path_resolution =
+        path_request ? detail::resolve_tool_path(*ctx.workspace, *path_request) : detail::PathResolutionReport{};
+    ctx.resolved_path = std::move(path_resolution.path);
     auto decision = permission::evaluate(ctx.rules, name, effective_input, entry.def.required_capabilities, ctx.mode);
     if (ctx.parent_policy) {
       auto parent = permission::evaluate(ctx.parent_policy->rules,

@@ -5,6 +5,7 @@
 #include <deque>
 #include <exception>
 #include <expected>
+#include <format>
 #include <functional>
 #include <map>
 #include <memory>
@@ -27,21 +28,15 @@
 #include <asio/this_coro.hpp>
 #include <asio/use_awaitable.hpp>
 
-#include <nlohmann/json.hpp>
-
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/async/channel.hpp>
 #include <oran/async/sleep.hpp>
-#include <oran/core/capability.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/result.hpp>
-#include <oran/core/tool_def.hpp>
 #include <oran/permission/audit.hpp>
 #include <oran/tool/output.hpp>
+#include <oran/tool/path-locks.hpp>
 #include <oran/tool/registry.hpp>
-#include <oran/tool/workspace.hpp>
-
-#include "_impl/path_lock_table.hpp"
 
 namespace orangutan::agent {
 
@@ -63,78 +58,9 @@ namespace {
 constexpr std::chrono::milliseconds kCancellationGrace{100};
 
 [[nodiscard]] std::string cancellation_lag_metadata_json(std::chrono::milliseconds per_call_timeout) {
-  nlohmann::json metadata;
-  metadata["error_kind"] = "cancellation_lag";
-  metadata["cancellation_grace_ms"] = kCancellationGrace.count();
-  metadata["per_call_timeout_ms"] = per_call_timeout.count();
-  return metadata.dump();
-}
-
-// Capability declarations select shared reads or exclusive mutations.
-[[nodiscard]] std::optional<detail::PathLockMode>
-classify_lock_mode(const std::vector<core::Capability>& capabilities) {
-  bool wants_write = false;
-  bool wants_read = false;
-  for (auto cap : capabilities) {
-    switch (cap) {
-      case core::Capability::write_file:
-      case core::Capability::edit_file:
-      case core::Capability::delete_path:
-        wants_write = true;
-        break;
-      case core::Capability::read_file:
-      case core::Capability::list_directory:
-        wants_read = true;
-        break;
-      default:
-        break;
-    }
-  }
-  if (wants_write) {
-    return detail::PathLockMode::exclusive;
-  }
-  if (wants_read) {
-    return detail::PathLockMode::shared;
-  }
-  return std::nullopt;
-}
-
-/// Derive the lock key for a call by extracting `path` from the JSON input
-/// and mapping it through `Workspace::lock_key` — a pure string computation
-/// against the configured roots, with no filesystem access and no duplicate
-/// of the registry's dispatch-time resolution. Returns `std::nullopt` for the
-/// cases where lock acquisition should be skipped (no workspace, no `path`
-/// field, malformed JSON, or a path outside every lockable root). A skipped
-/// lock falls through to bounded-parallelism only; the registry dispatch
-/// still runs full resolution and surfaces any policy error itself.
-[[nodiscard]] std::optional<std::string>
-derive_lock_key(tool::Workspace* workspace, std::string_view input_json, detail::PathLockMode mode) {
-  if (workspace == nullptr) {
-    return std::nullopt;
-  }
-
-  nlohmann::json parsed;
-  try {
-    parsed = nlohmann::json::parse(input_json);
-  } catch (const nlohmann::json::parse_error&) {
-    return std::nullopt;
-  } catch (const std::exception&) {
-    return std::nullopt;
-  }
-  if (!parsed.is_object()) {
-    return std::nullopt;
-  }
-  auto path_it = parsed.find("path");
-  if (path_it == parsed.end() || !path_it->is_string()) {
-    return std::nullopt;
-  }
-  const auto raw_path = path_it->get<std::string>();
-
-  // Shared locks cover the read/list intents and match against the read
-  // roots; exclusive locks cover write/edit/delete and match against the
-  // write roots — the same root lists the corresponding resolvers use.
-  const auto direction = mode == detail::PathLockMode::shared ? tool::LockDirection::read : tool::LockDirection::write;
-  return workspace->lock_key(raw_path, direction);
+  return std::format(R"({{"error_kind":"cancellation_lag","cancellation_grace_ms":{},"per_call_timeout_ms":{}}})",
+                     kCancellationGrace.count(),
+                     per_call_timeout.count());
 }
 
 struct BatchState {
@@ -177,7 +103,7 @@ public:
     asio::any_io_executor executor;
     tool::Registry* registry;
     ToolSchedulerOptions options;
-    detail::PathLockTable locks;
+    tool::PathLocks locks;
     std::size_t active_calls{0};
     std::map<const tool::DispatchContext*, std::size_t> active_contexts;
     std::vector<std::weak_ptr<asio::steady_timer>> idle_waiters;
@@ -339,37 +265,8 @@ private:
       co_return;
     }
 
-    // Per-path lock acquisition. Classification is from the tool def's
-    // required capabilities; the lock key is the workspace-lexical absolute
-    // spelling from `Workspace::lock_key` — deterministic, syscall-free, and
-    // not a duplicate of the registry's dispatch-time resolution. Tools
-    // without a lock class, or calls without a lockable path (no workspace,
-    // malformed input, or a path outside every lockable root), skip the
-    // lock — the registry dispatch still runs full resolution and produces
-    // the same end-state error it would have without the scheduler.
-    detail::PathLockGuard lock_guard{};
-    auto& prototype = prototype_ref.get();
-    if (const core::ToolDef* def = shared->registry->find(call.name); def != nullptr) {
-      if (auto mode = classify_lock_mode(def->required_capabilities); mode.has_value()) {
-        if (auto key = derive_lock_key(prototype.workspace, call.input_json, *mode); key.has_value()) {
-          auto acquired_lock = co_await shared->locks.acquire(state->executor, *std::move(key), *mode);
-          if (!acquired_lock) {
-            state->results[index] = ToolBatchResult{
-                .tool_use_id = std::move(call.tool_use_id),
-                .name = std::move(call.name),
-                .output = std::unexpected(parent_cancelled_error()),
-            };
-            [[maybe_unused]] auto release = state->semaphore.try_send(std::monostate{});
-            co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
-            [[maybe_unused]] auto sent = co_await state->completion.send(index);
-            co_return;
-          }
-          lock_guard = std::move(*acquired_lock);
-        }
-      }
-    }
-
-    auto per_call_ctx = tool::DispatchContext::for_now(prototype, state->thread_approval_token_output);
+    auto per_call_ctx = tool::DispatchContext::for_now(prototype_ref.get(), state->thread_approval_token_output);
+    per_call_ctx.path_locks = &shared->locks;
 
     core::Result<tool::Output> output =
         std::unexpected(core::Error::internal("scheduler: race did not produce a result"));
@@ -389,11 +286,6 @@ private:
         }
       }
     }
-
-    // Release the path lock before signalling completion so subsequent calls
-    // see the lock state we leave behind. The guard's destructor would catch
-    // this too, but doing it explicitly clarifies the release order.
-    lock_guard = detail::PathLockGuard{};
 
     // Release the semaphore slot. Capacity == max_parallel_tools and we hold
     // exactly one permit, so `try_send` always succeeds here.

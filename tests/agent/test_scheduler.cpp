@@ -1221,3 +1221,106 @@ TEST_CASE("ToolScheduler: a queued call cancelled before it runs is not mis-name
   });
   REQUIRE(lag_rows == 0);
 }
+
+TEST_CASE("ToolScheduler: timeout includes final-path admission and joins only the waiting context",
+          "[integration][agent][scheduler][admission][cancellation]") {
+  asio::io_context io;
+  TempDir root{"oran-sched-admission-timeout"};
+  auto workspace = make_workspace(root.path());
+  auto rules = allow_all_rules();
+  permission::RecordingAuditSink audit;
+  auto holder_context = make_prototype_with_workspace(io, rules, audit, workspace);
+  auto waiter_context = make_prototype_with_workspace(io, rules, audit, workspace);
+  auto release = std::make_shared<async::Channel<bool>>(io.get_executor(), 1);
+  auto started = std::make_shared<std::atomic<bool>>(false);
+  auto finished = std::make_shared<std::atomic<bool>>(false);
+  tool::Registry registry;
+  add_gated_uncancellable_write_tool(registry, "HoldPath", release, started, finished);
+  REQUIRE(tool::register_file_write(registry).has_value());
+
+  std::vector<hook::ToolAfterPayload> observations;
+  hook::Bus bus;
+  hook::InProcessSink sink{
+      "rewrite-waiter",
+      [&observations](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
+        if (event == hook::Event::tool_after) {
+          observations.push_back(std::get<hook::ToolAfterPayload>(*payload));
+        }
+        co_return core::Result<void>{};
+      },
+      hook::SinkKind::trusted_local};
+  sink.set_blocking_handler([](hook::Event, hook::PayloadPtr) -> async::Awaitable<core::Result<hook::HookDecision>> {
+    hook::HookDecision decision;
+    decision.kind = hook::HookDecisionKind::rewrite;
+    decision.rewritten_input_json = R"({"path":"held.txt","content":"recovered"})";
+    co_return decision;
+  });
+  bus.bind(sink, {hook::Event::tool_before, hook::Event::tool_after});
+  waiter_context.bus = &bus;
+
+  agent::ToolScheduler scheduler{io.get_executor(), registry, {.max_parallel_tools = 1, .per_call_timeout = 40ms}};
+  using BatchResult = core::Result<std::vector<agent::ToolBatchResult>>;
+  std::optional<BatchResult> holder;
+  std::optional<BatchResult> waiter;
+  std::optional<BatchResult> recovered;
+  std::exception_ptr failure;
+  auto completion = [&failure](std::optional<BatchResult>& result) {
+    return [&failure, &result](std::exception_ptr error, BatchResult value) {
+      if (error)
+        failure = error;
+      result = std::move(value);
+    };
+  };
+  auto poll = [&io] {
+    io.restart();
+    io.poll();
+  };
+
+  asio::co_spawn(io,
+                 scheduler.run_batch({call(0, "HoldPath", write_call_input("held.txt"))}, holder_context),
+                 completion(holder));
+  poll();
+  asio::co_spawn(
+      io,
+      scheduler.run_batch({call(1, "FileWrite", R"({"path":"original.txt","content":"unused"})")}, waiter_context),
+      completion(waiter));
+  io.restart();
+  io.run_for(80ms);
+  const bool timed_out_while_held = waiter.has_value() && !holder.has_value();
+  const bool no_effect = !std::filesystem::exists(root.path() / "held.txt");
+  const auto observed_while_held = observations.size();
+
+  bool waiter_joined = false;
+  asio::co_spawn(io,
+                 scheduler.wait_idle(&waiter_context),
+                 [&waiter_joined](std::exception_ptr error, core::Result<void> result) {
+                   waiter_joined = !error && result.has_value();
+                 });
+  poll();
+  const bool joined_before_holder = waiter_joined;
+  REQUIRE(release->try_send(true).has_value());
+  poll();
+  asio::co_spawn(
+      io,
+      scheduler.run_batch({call(2, "FileWrite", R"({"path":"original.txt","content":"unused"})")}, waiter_context),
+      completion(recovered));
+  poll();
+
+  REQUIRE_FALSE(failure);
+  REQUIRE(started->load());
+  REQUIRE(finished->load());
+  REQUIRE(timed_out_while_held);
+  REQUIRE(no_effect);
+  REQUIRE(observed_while_held == 1);
+  REQUIRE(joined_before_holder);
+  REQUIRE(waiter->has_value());
+  REQUIRE_FALSE(waiter->value()[0].output.has_value());
+  REQUIRE(error_has_context(waiter->value()[0].output.error(), "reason", "timeout"));
+  REQUIRE(recovered.has_value());
+  REQUIRE(recovered->has_value());
+  REQUIRE(recovered->value()[0].output.has_value());
+  REQUIRE(std::filesystem::exists(root.path() / "held.txt"));
+  REQUIRE_FALSE(std::filesystem::exists(root.path() / "original.txt"));
+  REQUIRE_FALSE(observations[0].succeeded);
+  REQUIRE(observations[0].error_kind == "cancelled");
+}

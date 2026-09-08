@@ -41,10 +41,12 @@ FileRead, FileWrite and FileEdit are the built-in filesystem tools. ToolSearch,
 memory tools and AgentRun provide the other runtime extensions. Stored capability
 names remain readable for compatibility.
 
-Scheduler path entries follow live holders and waiters. The final participant
-releases the entry synchronously; no host cleanup or idle TTL remains. Shared
-session exclusion and context-specific cleanup joins use the same scheduler.
-The [tool contract](design-docs/tool-runtime.md) owns this lifetime boundary.
+Registry dispatch derives path admission and pinned authority from the same
+finalized hook input. The scheduler retains shared lock resources without
+interpreting arguments. Path entries follow live holders and waiters; the final
+participant releases the entry synchronously. Shared session exclusion and
+context-specific cleanup joins use the same scheduler. The
+[tool contract](design-docs/tool-runtime.md) owns ordering and lifetime.
 
 File IO shares one descriptor-based read implementation and the pinned file
 mutation boundary. Each read owns its resources and observes current file bytes;
@@ -97,19 +99,23 @@ FIFO handoff, missing reader/writer reservations and lost cancellation cleanup.
 Shared-session exclusion and existing scheduler configuration have isolated
 red/green evidence. Agent and bootstrap tests pass with explicit ASan/UBSan
 instrumentation.
+Final-input admission regressions detect wrong path keys, early authority
+resolution, blocked veto/cancellation, extended approval expiry and dropped
+audit or lock bindings. Restored tool and agent suites pass; tool, agent and
+bootstrap suites also pass with explicit ASan/UBSan instrumentation.
 IO, HTTP, storage, tool, memory, hook, prompt, agent, config and permission
 benchmarks build and run; these are local runs, not reference-hardware performance
 certification.
 
 ## Handoff
 
-The next core slice is tool-call admission. The scheduler derives a path key from
-the original JSON, while `Registry::dispatch` can rewrite that input through
-`tool_before` before path resolution and permission evaluation. Converge finalized
-input, path exclusion and authorized dispatch behind one boundary. Preserve
-pinned filesystem authority, approval binding, audit-before-effect ordering and
-context-specific cancellation joins. Verify two calls rewritten to the same path
-exclude each other before extending the tool surface.
+The next core slice is filesystem tool input preparation. Path admission parses
+options separately from the FileRead/FileWrite/FileEdit handlers, and concrete
+argument validation still occurs after approval. Give each built-in one prepared
+request for validation, path intent and execution; remove duplicated parsing and
+name-based path routing. Keep the public dispatch boundary, pinned authority and
+audit ordering. Invalid arguments should fail without spending approval before
+extending the tool surface.
 The library provider/tool/session loop remains the acceptance boundary:
 authorized tool execution, scoped memory recall, persisted continuation and
 bounded child collaboration. The controlled HTTP continuation test composes
@@ -129,7 +135,8 @@ make ci
 ```
 
 Relevant regressions are in `tests/io/test_file.cpp`,
-`tests/io/test_directory_authority.cpp`, `tests/agent/test-path-locks.cpp`,
+`tests/io/test_directory_authority.cpp`, `tests/tool/test-path-locks.cpp`,
+`tests/tool/test-admission.cpp`, `tests/agent/test_scheduler.cpp`,
 `tests/bootstrap/test-child-agents.cpp`,
 `tests/tool/test-agent-run.cpp`, the permission intersection cases, and the
 storage/memory tests tagged `[atomic]`. Child lifetime checks include a concurrent
