@@ -259,8 +259,9 @@ Concretely:
 left it stuck with hand-rolled equivalents of `std::expected` and friends. We use
 what the toolchain ships.
 
-**Enforcement:** `xmake.lua` pins `c++26` and enables reflection. Source review
-enforces the facility choices and the `<iostream>` restriction.
+**Enforcement:** `xmake.lua` pins `c++26`; the shared `oran.build` rule enables
+reflection. Source review enforces the facility choices and the `<iostream>`
+restriction.
 
 ## C18. Static analysis is on the menu, not the autopilot
 

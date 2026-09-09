@@ -33,25 +33,37 @@ and environment as described in [testing-and-bench](rules/testing-and-bench.md).
 
 | File | Owns |
 | --- | --- |
-| `xmake.lua` | Language, common warnings and included build definitions. |
+| `xmake.lua` | Language, common warnings, default toolchain and shared policy selection. |
 | `xmake/targets.lua` | Runtime library graph. |
 | `xmake/packages.lua` | Pinned fetched packages and required system libraries. |
-| `xmake/toolchain.lua` | Compiler flags, release LTO and debug sanitizers. |
+| `xmake/toolchain.lua` | Compiler, assembler, linker and binutils discovery. |
+| `xmake/build-policy.lua` | Shared project flags, reflection, LTO, sanitizers and analysis. |
 | `xmake/options.lua` | Supported configure options. |
 | `xmake/tests.lua`, `xmake/bench.lua` | Test and benchmark buckets. |
 
-`lto` defaults on in release. `hardened`, `analyze` and `sanitizers` are opt-in;
-ASan/UBSan applies only in debug mode. These flags depend on the custom toolchain
-being active; the current default selection does not apply them. Explicit
-`oran-gcc` selection also needs assembler provisioning for package builds. Both
-are [tracked](exec-plans/tech-debt-tracker.md); verify actual compiler/linker
-arguments before claiming LTO or sanitizer coverage.
+The root selects `oran-gcc` and the `oran.build` rule for every runtime library,
+test and benchmark. Tool discovery prefers `gcc-16`/`g++-16`, then `gcc`/`g++`;
+the selected compiler must meet the supported baseline. Assembly uses the C
+compiler driver for preprocessed dependency sources. The archiver prefers GCC's
+LTO wrapper with the GNU ar interface required by xmake's Autoconf adapter.
 
-With the current activation limit, sanitizer runs need explicit compiler flags
-`-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all`
-and linker flags `-fsanitize=address,undefined`. `--sanitizers=y` alone does not
-establish coverage. LeakSanitizer needs an environment that permits its runtime
-checks.
+| Option | Default | Effect on project targets |
+| --- | --- | --- |
+| `lto` | On | Link-time optimization in release mode. |
+| `sanitizers` | Off | ASan/UBSan in debug mode, with frame pointers and recovery disabled. |
+| `hardened` | Off | Fortify, stack protection, control-flow protection and stack-clash protection. |
+| `analyze` | Off | GCC analyzer with the required warnings promoted to errors. |
+
+LTO and sanitizers use xmake's policies to configure both compilation and final
+linking. The shared rule applies the remaining project flags to sources and PCHs.
+Dependency builds reuse tool discovery and retain their own package options;
+project reflection, analysis and sanitizer flags stay in the project rule.
+Fortify requires an optimized build. LeakSanitizer needs an environment that
+permits its runtime checks.
+
+Use ordinary configure/build/test targets for verification. When changing build
+policy, inspect compiler and linker arguments with `xmake build -v` as well as
+running tests; the configured option alone is not evidence of instrumentation.
 
 The build uses headers and static libraries. No GUI or messaging SDK is required.
 

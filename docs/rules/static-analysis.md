@@ -37,7 +37,7 @@ The analyzer escalates these to errors via `-Werror=` when `--analyze=y` is on:
 - `-Wanalyzer-fd-leak`
 - `-Wanalyzer-fd-use-without-check`
 
-The full set is in `xmake/toolchain.lua`'s `oran-gcc.on_load`. Add a warning to the
+The full set is in `xmake/build-policy.lua`'s `oran.build` rule. Add a warning to the
 list only with rationale in the PR (and in `docs/exec-plans/tech-debt-tracker.md` if
 the addition would be retroactively painful).
 
@@ -93,8 +93,9 @@ disable the analyzer.
 
 ## Enforcement
 
-- A build with active analyzer flags fails if any required warning fires.
-  [BUILD_SYSTEM](../BUILD_SYSTEM.md) records current flag activation limits.
+- Configure with `xmake f --analyze=y`, then run the affected build targets.
+  Compilation fails if any required warning fires. The shared project policy
+  applies the flags; [BUILD_SYSTEM](../BUILD_SYSTEM.md) owns option behavior.
 - The TU coverage inventory and hosted analyzer job remain tracked debt.
 
 ## See Also

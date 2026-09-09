@@ -5,11 +5,6 @@ set_version("2.0.0")
 set_languages("c++26")
 set_warnings("all", "extra")
 
--- C++26 reflection (P2996) is required by the in-repo `oran-core/enum_names.hpp`
--- helper for enum wire names.
--- GCC 16.1 gates reflection behind an opt-in flag.
-add_cxxflags("-freflection", { force = true })
-
 add_rules("mode.debug", "mode.release", "mode.releasedbg")
 add_rules("plugin.compile_commands.autoupdate", { outputdir = ".", lsp = "clangd" })
 
@@ -18,6 +13,12 @@ set_policy("build.warning", true)
 
 includes("xmake/options.lua")
 includes("xmake/toolchain.lua")
+includes("xmake/build-policy.lua")
+
+-- Root selection and policy apply to every included project target.
+set_toolchains("oran-gcc")
+add_rules("oran.build")
+
 includes("xmake/packages.lua")
 includes("xmake/targets.lua")
 includes("xmake/tests.lua")

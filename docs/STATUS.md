@@ -74,10 +74,11 @@ runtime. `EventTraits` defines blocking admission; the
 
 ## Verification
 
-The release library build, all 14 test targets and `make ci` pass. Controlled HTTP
-integration composes `HttpProviderBackend`, `RuntimeAssembly` and `AgentSession`
-to cover provider calls and persisted continuation. Tests also exercise scoped
-recall, permission intersection, bounded child sessions and cancellation joins.
+Release with LTO and debug with ASan/UBSan both build and pass all 14 test targets.
+`make ci` also passes. Controlled HTTP integration composes `HttpProviderBackend`,
+`RuntimeAssembly` and `AgentSession` to cover provider calls and persisted
+continuation. Tests also exercise scoped recall, permission intersection, bounded
+child sessions and cancellation joins.
 
 Public-boundary regressions cover atomic storage preservation, provider routing,
 final-input path admission, pinned authority, approval expiry and audit ordering.
@@ -94,10 +95,10 @@ empty selections, unknown names, child restrictions and denied effects. Both
 supported protocol payloads contain each selected schema once. Tool definitions
 stay fixed across iterations, host changes appear at the next prompt, and native
 schema changes invalidate cache identity without adding system text.
-Affected benchmark targets also compile successfully.
+All release benchmark targets also compile successfully.
 
 Local verification is not reference-hardware compile/performance certification.
-The toolchain and hosted quality gaps remain in [live debt](exec-plans/tech-debt-tracker.md).
+Hosted quality and compile-budget gaps remain in [live debt](exec-plans/tech-debt-tracker.md).
 
 ## Handoff
 
@@ -122,7 +123,10 @@ visibility still grants no write authority.
 
 Development commands expose implemented repository checks and ordinary xmake
 targets. Public include hygiene runs in `make ci`; review-only rules state their
-enforcement limits. [BUILD_SYSTEM](BUILD_SYSTEM.md) owns the supported commands.
+enforcement limits. Compiler discovery is separate from the shared project policy
+used by libraries, tests and benchmarks. Default release LTO and opt-in debug
+sanitizers reach both compilation and linking; mode changes clear inactive flags.
+[BUILD_SYSTEM](BUILD_SYSTEM.md) owns the supported commands and options.
 
 Recommended next slices, not yet implemented:
 
@@ -130,10 +134,7 @@ Recommended next slices, not yet implemented:
    work and pending work alongside recent conversation. Address backup/import
    obligations before persistence changes; evaluate spontaneous memory use with
    the deployment model separately from controlled-provider tests.
-2. **Build configuration:** make LTO/sanitizer options reliably affect compilation
-   and linking, and consolidate flag setup to eliminate manual overrides. Use
-   ordinary build/test targets for verification.
-3. **Provider cache controls:** internal cache hints are validated and retained,
+2. **Provider cache controls:** internal cache hints are validated and retained,
    but current protocol encoders do not send explicit cache directives. Implement
    protocol controls at the provider boundary and test enabled, disabled and
    fallback requests without coupling prompt rendering to vendor behavior.
@@ -146,8 +147,9 @@ authorized tool execution, scoped memory recall, persisted continuation and
 bounded child collaboration.
 
 [Live debt](exec-plans/tech-debt-tracker.md) records integration gates and extension
-prerequisites. Default toolchain activation and hosted analyzer/compile-budget
-gates remain open. Real-model execution requires explicitly supplied credentials.
+prerequisites. Hosted C++ job evidence, analyzer coverage and reference-hardware
+compile-budget gates remain open. Real-model execution requires explicitly
+supplied credentials.
 
 Use the normal release gate from the repository root:
 

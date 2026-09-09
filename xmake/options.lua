@@ -4,7 +4,7 @@
 
 option("lto")
     set_default(true)
-    set_description("Enable -flto=auto in release builds.")
+    set_description("Enable link-time optimization in release builds.")
 option_end()
 
 option("hardened")
