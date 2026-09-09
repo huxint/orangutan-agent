@@ -70,14 +70,12 @@ declare -A LAYER_NAME=(
 #   http   -> async    : HTTP callers supply executor-owned blocking transport work.
 #   io     -> async    : every io call hops onto the executor.
 #   storage-> async    : Pool/Repository acquire writer/reader slots via the executor.
-#   config -> storage  : typed permissions block reuses storage's migration shape.
 #   tool   -> permission: dispatch consults RuleSet + AuditSink directly.
 #   tool   -> hook     : dispatch publishes tool_before / tool_dispatched / tool_error / tool_after.
 declare -A ALLOWED_SIBLING=(
   [http__async]=1
   [io__async]=1
   [storage__async]=1
-  [config__storage]=1
   [tool__permission]=1
   [tool__hook]=1
 )
@@ -109,6 +107,14 @@ while IFS= read -r line; do
         echo "check-deps: oran-${name} declares dep on unknown library oran-${dep_name}" >&2
         failed=1
         continue
+      fi
+      if [[ "${name}" == "config" && "${dep_name}" != "core" ]]; then
+        echo "check-deps: config may depend only on core values, not oran-${dep_name}" >&2
+        failed=1
+      fi
+      if [[ "${dep_name}" == "config" && "${name}" != "bootstrap" ]]; then
+        echo "check-deps: oran-${name} may not depend on config; bootstrap owns configuration adapters" >&2
+        failed=1
       fi
       dep_layer="${LAYER[${dep_name}]}"
       dep_layer_name="${LAYER_NAME[${dep_layer}]}"

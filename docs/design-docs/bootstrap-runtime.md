@@ -24,6 +24,36 @@ route. It passes owned profile values and an explicit credential lookup to
 `provider::make_protocol_system`. The [provider contract](api-portability.md)
 owns construction validation and per-profile dispatch.
 
+## Configuration Adapters
+
+Bootstrap converts parsed configuration into owned runtime values before
+execution. `materialize_permissions` accepts spans of global and optional agent
+rules, prepends the mode's baseline and compiles input patterns. Workspace
+settings are resolved separately. The returned RuleSet owns its strings and
+patterns; materialization retains no rule views. Invalid patterns return an error without
+exposing a partial policy. AgentSession passes the selected agent's rule view
+directly without copying the surrounding permissions configuration.
+
+`resolve_route_profiles` resolves configured route/profile names, protocol
+aliases and model policy into `provider::RouteProfileResolution`. Explicit
+protocols take precedence over vendor aliases. This conversion performs no
+credential lookup or transport work. Provider construction then validates the
+complete route before reading credentials.
+
+These adapters are available through `<oran/bootstrap.hpp>` or their narrow
+headers. The old configuration adapters in runtime libraries are removed:
+
+| Previous API | Current API |
+| --- | --- |
+| `permission::materialize(mode, global, agent)` | `bootstrap::materialize_permissions(mode, global.rules, agent.rules)` in `<oran/bootstrap/permissions.hpp>`; agent rules may be omitted. |
+| `provider::resolve_route_profiles(config, route)` | `bootstrap::resolve_route_profiles(config, route)` in `<oran/bootstrap/provider-profiles.hpp>`. |
+| `config::SecretLookup` | `provider::SecretLookup` in `<oran/provider/protocol_transport.hpp>`. |
+
+Endpoint construction values also live in `protocol_transport.hpp`; the old
+provider route-resolver and config secrets headers have no forwarding shims.
+Configuration syntax, permission decisions and credential error redaction keep
+their existing contracts.
+
 ## Session Boundary
 
 `AgentSession` loads bounded history, prepares an owned conversation through

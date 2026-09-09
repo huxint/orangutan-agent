@@ -82,8 +82,8 @@ struct RuntimeConfig {
   StreamRuntimeConfig stream{};
 };
 
-/// Optional per-profile prompt-cache policy. Mirrors the provider-layer
-/// `PromptCacheOptions` shape so `oran-config` stays dependency-free.
+/// Optional per-profile prompt-cache policy, mapped by bootstrap into provider
+/// values without importing the provider library into configuration parsing.
 struct PromptCacheConfig {
   bool enabled{true};
   std::int64_t min_prefix_bytes{0};
@@ -96,10 +96,8 @@ struct PromptCacheConfig {
 /// `provider::ProtocolKind` spelling so self-hosted gateways can select their
 /// wire format without overloading the vendor label.
 ///
-/// Optional `thinking_budget` and `cache` are per-profile policy applied by
-/// `provider::execution::Runtime` to fallback attempts: a fallback profile
-/// either carries its own budget/cache floor or has the primary's policy
-/// stripped when the wire protocol cannot honor it.
+/// Bootstrap maps profile policy into owned provider values. Provider execution
+/// selects thinking policy, and each protocol target applies its cache policy.
 struct ProfileConfig {
   std::string name;
   std::string provider;
@@ -153,7 +151,7 @@ struct MemoryConfig {
 /// Verdict spelling that appears in `config.permissions.{allow,deny,ask}`.
 /// Mirrors `permission::Verdict` but stays inside `oran-config` because the
 /// dependency direction (config below permission) forbids importing the
-/// permission header here. The runtime materializer in `oran-permission`
+/// permission header here. The configuration adapter in `oran-bootstrap`
 /// maps `PermissionVerdict` to `permission::Verdict` one-to-one.
 enum class PermissionVerdict : std::uint8_t {
   allow,
@@ -169,7 +167,7 @@ enum class PermissionVerdict : std::uint8_t {
 /// pre-validates the regex (compiles + discards) so syntactically invalid
 /// patterns fail at config load with the offending JSON path, mirroring the
 /// criterion 4 "invalid patterns at load time are reported" guarantee in
-/// `docs/design-docs/permissions-and-hooks.md`. The materializer recompiles
+/// `docs/design-docs/permissions-and-hooks.md`. Bootstrap recompiles
 /// the same pattern via `permission::InputPattern` when it assembles the
 /// runtime `Rule`s. `replay_max` and `approval_ttl_seconds` carry the
 /// per-rule approval-window policy (`docs/design-docs/permissions-and-hooks.md`

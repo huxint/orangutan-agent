@@ -6,6 +6,7 @@
 #include <expected>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -63,7 +64,7 @@ struct Endpoint {
 }
 
 [[nodiscard]] core::Result<std::string> resolve_api_key(const ResolvedProfileTarget& profile,
-                                                        const config::SecretLookup& secrets) {
+                                                        const SecretLookup& secrets) {
   auto failure = [&](std::string message) {
     return Error{core::ErrorKind::auth, std::move(message)}
         .with("profile", profile.target.profile)
@@ -285,6 +286,14 @@ private:
 
 }  // namespace
 
+Route RouteProfileResolution::route() const {
+  return {
+      .primary = primary.target,
+      .fallbacks = fallbacks | std::views::transform(&ResolvedProfileTarget::target) |
+                   std::ranges::to<std::vector<ModelTarget>>(),
+  };
+}
+
 async::Awaitable<core::Result<ProtocolHttpResponse>>
 ProtocolTransport::send_streaming(ProtocolHttpRequest request, ProtocolSseCallback on_event) const {
   static_cast<void>(request);
@@ -293,7 +302,7 @@ ProtocolTransport::send_streaming(ProtocolHttpRequest request, ProtocolSseCallba
 }
 
 core::Result<std::unique_ptr<System>>
-make_protocol_system(ProtocolTransport& transport, RouteProfileResolution resolution, config::SecretLookup secrets) {
+make_protocol_system(ProtocolTransport& transport, RouteProfileResolution resolution, SecretLookup secrets) {
   auto profiles = std::move(resolution.fallbacks);
   profiles.insert(profiles.begin(), std::move(resolution.primary));
 

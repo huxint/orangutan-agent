@@ -70,6 +70,12 @@ Provider no longer depends on prompt rendering. The
 [provider contract](design-docs/api-portability.md) owns this boundary, HTTP/SSE
 request lifetimes and delivery of stream callbacks before completion.
 
+Bootstrap owns configuration-to-rule and profile conversion. Config depends only
+on core values; permission, provider and agent libraries have no configuration
+dependency. Permission conversion borrows only rule lists and returns an owned
+policy. The [composition contract](design-docs/bootstrap-runtime.md) owns adapter
+APIs and migration from their former runtime-library locations.
+
 Hooks expose the provider, tool, memory and approval events emitted by the
 runtime. `EventTraits` defines blocking admission; the
 [hook contract](design-docs/permissions-and-hooks.md) owns decisions and payloads.
@@ -142,6 +148,14 @@ wire fields. The old section-copying mapper, duplicate loop cache result and
 provider-to-prompt dependency are removed. The
 [provider contract](design-docs/api-portability.md) owns protocol behavior,
 automatic-caching limits and migration from the removed mapping API.
+
+Configuration adapter reduction is complete. Provider route resolution and
+permission materialization live in bootstrap; provider owns endpoint values and
+credential lookup types. Config's unused storage dependency and the runtime
+libraries' config dependencies are removed. The dependency gate prevents those
+edges from returning. Configuration-adapter tests and benchmarks follow their
+bootstrap owner; permission evaluation and protocol transport remain covered in
+their own libraries. Configuration syntax and stored data are preserved.
 
 The next recommended slice is **session working memory**: persist goals,
 constraints, decisions, completed work and pending work alongside recent

@@ -1019,11 +1019,8 @@ parse_routes(const json& root, bool strict, std::vector<ConfigWarning>& warnings
     if (pattern.empty()) {
       return std::unexpected(config_error("input_pattern must be non-empty", child_path(path, "input_pattern")));
     }
-    // Validate the pattern by compiling re2 once with logging disabled.
-    // The compiled regex is intentionally discarded; the matching slice in
-    // `oran-permission::materialize` recompiles the source string when
-    // assembling the runtime `Rule` (the re-compile cost is microseconds,
-    // and keeping config copyable matters more than saving one compile).
+    // Keep configuration copyable by retaining only the validated source;
+    // bootstrap compiles the owned runtime pattern during rule assembly.
     re2::RE2::Options options{re2::RE2::DefaultOptions};
     options.set_log_errors(false);
     const auto compiled = re2::RE2{pattern, options};

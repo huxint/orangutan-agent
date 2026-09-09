@@ -6,9 +6,8 @@
 
 #include <asio/any_io_executor.hpp>
 
-#include <oran/config/secrets.hpp>
 #include <oran/core/result.hpp>
-#include <oran/provider/system.hpp>
+#include <oran/provider/protocol_transport.hpp>
 
 namespace orangutan::config {
 class Config;
@@ -24,7 +23,7 @@ struct HttpProviderBackendOptions {
   /// the budget aborts the transfer with an IO error.
   std::uint64_t max_stream_bytes{16 * 1024 * 1024};
   std::string route_name{"default"};
-  config::SecretLookup secrets{};
+  provider::SecretLookup secrets{};
 };
 
 class HttpProviderBackend {

@@ -38,6 +38,11 @@ The config file contains:
 | `hooks.timeout_ms` | Host maps the hook deadline to `RuntimeAssemblyOptions`. |
 | `memory.longterm.recall` | `AgentSession` resolves automatic index enablement, limit and kinds; an explicit optional `longterm_recall` overrides it. |
 
+Parsed settings stay at the composition boundary. Bootstrap maps them into owned
+permission rules and provider profiles through the
+[configuration adapters](bootstrap-runtime.md#configuration-adapters). Permission
+and provider execution consume those values without retaining configuration views.
+
 `runtime.prompt.active_tools` accepts `"defaults"` or an array of registered tool
 names. Defaults expose every registered tool, including host extensions. An
 explicit array selects only those names; `[]` exposes none. Unknown names fail
@@ -59,7 +64,8 @@ index budgeting and correction semantics.
 ## Credentials
 
 Profiles store an `api_key_env` name. Credential resolution reads the named
-variable or an explicitly injected lookup at the provider construction boundary.
+variable or an explicitly injected `provider::SecretLookup` at the provider
+construction boundary.
 Values are excluded from diagnostics. The parser supports `${NAME}` and
 `${NAME:-fallback}` for configuration substitution; prefer references over
 embedding credentials in JSON. No credential encryption/store is implemented.

@@ -20,8 +20,11 @@ no declared capabilities still requires an unscoped rule or the mode default.
 
 Strict and sandboxed modes deny unmatched effects. Default mode asks for unmatched
 effects and installs read-side allow rules. Permissive mode allows unmatched
-effects. Configured deny rules still apply. Materialization combines the selected
-baseline, global rules and agent overlay once before execution.
+effects. Configured deny rules still apply. Bootstrap's
+`materialize_permissions` compiles the selected baseline, global rule values and
+agent overlay once before execution. The permission library consumes the owned
+`RuleSet` without importing configuration. Workspace settings remain outside rule
+compilation. [Runtime composition](bootstrap-runtime.md) owns the adapter API.
 
 A child dispatch carries an immutable borrowed `PolicyView` for its parent.
 Dispatch evaluates both policies independently against the concrete tool, final

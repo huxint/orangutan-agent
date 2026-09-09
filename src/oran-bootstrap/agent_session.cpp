@@ -12,10 +12,10 @@
 #include <asio/use_awaitable.hpp>
 
 #include <oran/agent.hpp>
+#include <oran/bootstrap/permissions.hpp>
 #include <oran/bootstrap/runtime_assembly.hpp>
 #include <oran/config.hpp>
 #include <oran/memory/session.hpp>
-#include <oran/permission/materialize.hpp>
 #include <oran/provider.hpp>
 #include <oran/tool.hpp>
 
@@ -325,8 +325,9 @@ core::Result<std::unique_ptr<AgentSession>> AgentSession::create(AgentSessionOpt
   if (!selected) {
     return std::unexpected(std::move(selected).error());
   }
-  const auto& agent_permissions = *selected ? (*selected)->permissions : config::PermissionsConfig{};
-  auto rules = permission::materialize(options.mode, options.config->permissions(), agent_permissions);
+  const auto agent_rules =
+      *selected ? std::span{(*selected)->permissions.rules} : std::span<const config::PermissionRuleConfig>{};
+  auto rules = materialize_permissions(options.mode, options.config->permissions().rules, agent_rules);
   if (!rules) {
     return std::unexpected(std::move(rules).error());
   }

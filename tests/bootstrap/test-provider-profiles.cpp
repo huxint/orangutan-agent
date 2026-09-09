@@ -1,6 +1,4 @@
-// tests/provider/test_route_resolver.cpp — config profile/route resolution.
-
-#include <oran/provider.hpp>
+#include <oran/bootstrap/provider-profiles.hpp>
 
 #include <algorithm>
 #include <optional>
@@ -14,6 +12,7 @@
 namespace config = orangutan::config;
 namespace core = orangutan::core;
 namespace provider = orangutan::provider;
+namespace bootstrap = orangutan::bootstrap;
 
 namespace {
 
@@ -87,11 +86,11 @@ std::optional<std::string_view> context_value(const core::Error& error, std::str
 
 }  // namespace
 
-TEST_CASE("resolve_route_profiles preserves endpoint metadata and model policy", "[unit][provider][route]") {
+TEST_CASE("resolve_route_profiles preserves endpoint metadata and model policy", "[unit][bootstrap][route]") {
   auto parsed = config::Config::parse(kRoutingConfig);
   REQUIRE(parsed.has_value());
 
-  auto resolution = provider::resolve_route_profiles(*parsed, "default");
+  auto resolution = bootstrap::resolve_route_profiles(*parsed, "default");
 
   REQUIRE(resolution.has_value());
   REQUIRE(resolution->primary.target.profile == "anthropic-main");
@@ -116,11 +115,11 @@ TEST_CASE("resolve_route_profiles preserves endpoint metadata and model policy",
   REQUIRE(resolution->fallbacks[1].api_key_env == "LOCAL_API_KEY");
 }
 
-TEST_CASE("RouteProfileResolution derives the loop-facing route shape", "[unit][provider][route]") {
+TEST_CASE("RouteProfileResolution derives the loop-facing route shape", "[unit][bootstrap][route]") {
   auto parsed = config::Config::parse(kRoutingConfig);
   REQUIRE(parsed.has_value());
 
-  auto resolution = provider::resolve_route_profiles(*parsed, "default");
+  auto resolution = bootstrap::resolve_route_profiles(*parsed, "default");
   REQUIRE(resolution.has_value());
 
   auto route = resolution->route();
@@ -141,11 +140,11 @@ TEST_CASE("RouteProfileResolution derives the loop-facing route shape", "[unit][
   REQUIRE(route.fallbacks[1].protocol == provider::ProtocolKind::custom_openai_compatible);
 }
 
-TEST_CASE("resolve_route_profiles accepts exact protocol spellings in profile provider", "[unit][provider][route]") {
+TEST_CASE("resolve_route_profiles accepts exact protocol spellings in profile provider", "[unit][bootstrap][route]") {
   auto parsed = config::Config::parse(kRoutingConfig);
   REQUIRE(parsed.has_value());
 
-  auto route = provider::resolve_route_profiles(*parsed, "responses");
+  auto route = bootstrap::resolve_route_profiles(*parsed, "responses");
 
   REQUIRE(route.has_value());
   REQUIRE(route->primary.target.profile == "responses-main");
@@ -153,11 +152,11 @@ TEST_CASE("resolve_route_profiles accepts exact protocol spellings in profile pr
   REQUIRE(route->fallbacks.empty());
 }
 
-TEST_CASE("resolve_route_profiles prefers explicit profile protocol over provider label", "[unit][provider][route]") {
+TEST_CASE("resolve_route_profiles prefers explicit profile protocol over provider label", "[unit][bootstrap][route]") {
   auto parsed = config::Config::parse(kRoutingConfig);
   REQUIRE(parsed.has_value());
 
-  auto route = provider::resolve_route_profiles(*parsed, "proxied");
+  auto route = bootstrap::resolve_route_profiles(*parsed, "proxied");
 
   REQUIRE(route.has_value());
   REQUIRE(route->primary.target.profile == "proxied-responses");
@@ -165,18 +164,18 @@ TEST_CASE("resolve_route_profiles prefers explicit profile protocol over provide
   REQUIRE(route->primary.target.protocol == provider::ProtocolKind::openai_responses);
 }
 
-TEST_CASE("resolve_route_profiles rejects missing route names", "[unit][provider][route]") {
+TEST_CASE("resolve_route_profiles rejects missing route names", "[unit][bootstrap][route]") {
   auto parsed = config::Config::parse(kRoutingConfig);
   REQUIRE(parsed.has_value());
 
-  auto route = provider::resolve_route_profiles(*parsed, "missing");
+  auto route = bootstrap::resolve_route_profiles(*parsed, "missing");
 
   REQUIRE_FALSE(route.has_value());
   REQUIRE(route.error().kind() == core::ErrorKind::config);
   REQUIRE(context_value(route.error(), "route") == std::optional<std::string_view>{"missing"});
 }
 
-TEST_CASE("resolve_route_profiles rejects routes that reference unknown profiles", "[unit][provider][route]") {
+TEST_CASE("resolve_route_profiles rejects routes that reference unknown profiles", "[unit][bootstrap][route]") {
   auto parsed = config::Config::parse(R"json(
 {
   "profiles": {
@@ -197,7 +196,7 @@ TEST_CASE("resolve_route_profiles rejects routes that reference unknown profiles
 )json");
   REQUIRE(parsed.has_value());
 
-  auto route = provider::resolve_route_profiles(*parsed);
+  auto route = bootstrap::resolve_route_profiles(*parsed);
 
   REQUIRE_FALSE(route.has_value());
   REQUIRE(route.error().kind() == core::ErrorKind::config);
@@ -206,7 +205,7 @@ TEST_CASE("resolve_route_profiles rejects routes that reference unknown profiles
   REQUIRE(context_value(route.error(), "role") == std::optional<std::string_view>{"fallback"});
 }
 
-TEST_CASE("resolve_route_profiles rejects unknown provider spellings", "[unit][provider][route]") {
+TEST_CASE("resolve_route_profiles rejects unknown provider spellings", "[unit][bootstrap][route]") {
   auto parsed = config::Config::parse(R"json(
 {
   "profiles": {
@@ -226,7 +225,7 @@ TEST_CASE("resolve_route_profiles rejects unknown provider spellings", "[unit][p
 )json");
   REQUIRE(parsed.has_value());
 
-  auto route = provider::resolve_route_profiles(*parsed);
+  auto route = bootstrap::resolve_route_profiles(*parsed);
 
   REQUIRE_FALSE(route.has_value());
   REQUIRE(route.error().kind() == core::ErrorKind::config);
@@ -235,7 +234,7 @@ TEST_CASE("resolve_route_profiles rejects unknown provider spellings", "[unit][p
   REQUIRE(context_value(route.error(), "provider") == std::optional<std::string_view>{"telepathy"});
 }
 
-TEST_CASE("resolve_route_profiles rejects unknown explicit protocols", "[unit][provider][route]") {
+TEST_CASE("resolve_route_profiles rejects unknown explicit protocols", "[unit][bootstrap][route]") {
   auto parsed = config::Config::parse(R"json(
 {
   "profiles": {
@@ -256,7 +255,7 @@ TEST_CASE("resolve_route_profiles rejects unknown explicit protocols", "[unit][p
 )json");
   REQUIRE(parsed.has_value());
 
-  auto route = provider::resolve_route_profiles(*parsed);
+  auto route = bootstrap::resolve_route_profiles(*parsed);
 
   REQUIRE_FALSE(route.has_value());
   REQUIRE(route.error().kind() == core::ErrorKind::config);
@@ -265,11 +264,11 @@ TEST_CASE("resolve_route_profiles rejects unknown explicit protocols", "[unit][p
   REQUIRE(context_value(route.error(), "protocol") == std::optional<std::string_view>{"responses-ish"});
 }
 
-TEST_CASE("resolve_route_profiles rejects empty route names", "[unit][provider][route]") {
+TEST_CASE("resolve_route_profiles rejects empty route names", "[unit][bootstrap][route]") {
   auto parsed = config::Config::parse(kRoutingConfig);
   REQUIRE(parsed.has_value());
 
-  auto route = provider::resolve_route_profiles(*parsed, "");
+  auto route = bootstrap::resolve_route_profiles(*parsed, "");
 
   REQUIRE_FALSE(route.has_value());
   REQUIRE(route.error().kind() == core::ErrorKind::invalid_argument);

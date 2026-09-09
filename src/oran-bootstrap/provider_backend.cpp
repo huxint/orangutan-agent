@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include <oran/bootstrap/provider-profiles.hpp>
 #include <oran/config.hpp>
 #include <oran/core/error.hpp>
 #include <oran/http.hpp>
@@ -138,7 +139,7 @@ core::Result<HttpProviderBackend> HttpProviderBackend::build(const config::Confi
     return std::unexpected(option_error("HTTP provider backend route name must be non-empty"));
   }
 
-  auto resolution = provider::resolve_route_profiles(config, options.route_name);
+  auto resolution = resolve_route_profiles(config, options.route_name);
   if (!resolution) {
     return std::unexpected(std::move(resolution).error());
   }

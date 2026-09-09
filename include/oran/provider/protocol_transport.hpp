@@ -8,12 +8,31 @@
 #include <vector>
 
 #include <oran/async/awaitable_fwd.hpp>
-#include <oran/config/secrets.hpp>
 #include <oran/core/result.hpp>
-#include <oran/provider/route_resolver.hpp>
 #include <oran/provider/system.hpp>
 
 namespace orangutan::provider {
+
+using SecretLookup = std::function<core::Result<std::string>(std::string_view)>;
+
+/// Model policy and endpoint metadata supplied by the host. `api_key_env` names
+/// a credential; it contains no secret value.
+struct ResolvedProfileTarget {
+  ModelTarget target;
+  std::string base_url;
+  std::string api_key_env;
+
+  friend bool operator==(const ResolvedProfileTarget&, const ResolvedProfileTarget&) = default;
+};
+
+struct RouteProfileResolution {
+  ResolvedProfileTarget primary;
+  std::vector<ResolvedProfileTarget> fallbacks;
+
+  [[nodiscard]] Route route() const;
+
+  friend bool operator==(const RouteProfileResolution&, const RouteProfileResolution&) = default;
+};
 
 struct ProtocolHttpHeader {
   std::string name;
@@ -91,6 +110,6 @@ public:
 /// transport support. Credential values never enter error diagnostics.
 [[nodiscard]] core::Result<std::unique_ptr<System>> make_protocol_system(ProtocolTransport& transport,
                                                                          RouteProfileResolution resolution,
-                                                                         config::SecretLookup secrets = {});
+                                                                         SecretLookup secrets = {});
 
 }  // namespace orangutan::provider

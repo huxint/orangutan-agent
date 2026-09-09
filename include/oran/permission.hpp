@@ -8,6 +8,5 @@
 #include <oran/permission/audit.hpp>
 #include <oran/permission/defaults.hpp>
 #include <oran/permission/input_pattern.hpp>
-#include <oran/permission/materialize.hpp>
 #include <oran/permission/rule_set.hpp>
 #include <oran/permission/storage_audit_sink.hpp>

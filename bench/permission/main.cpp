@@ -8,7 +8,6 @@
 namespace orangutan::bench {
 void register_rule_set_scenarios(ankerl::nanobench::Bench&);
 void register_defaults_scenarios(ankerl::nanobench::Bench&);
-void register_materialize_scenarios(ankerl::nanobench::Bench&);
 void register_input_pattern_scenarios(ankerl::nanobench::Bench&);
 void register_approval_secret_scenarios(ankerl::nanobench::Bench&);
 void register_approval_scenarios(ankerl::nanobench::Bench&);
@@ -35,16 +34,6 @@ int main() {
     b.warmup(1'000);
 
     orangutan::bench::register_defaults_scenarios(b);
-  }
-
-  {
-    ankerl::nanobench::Bench b;
-    b.title("bench-permission/materialize");
-    b.unit("RuleSet");
-    b.minEpochIterations(30'000);
-    b.warmup(1'000);
-
-    orangutan::bench::register_materialize_scenarios(b);
   }
 
   {

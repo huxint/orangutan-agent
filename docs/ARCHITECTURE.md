@@ -59,11 +59,14 @@ presentation. Tests and benchmarks exercise these interfaces through their own
 runners. See [BUILD_SYSTEM.md](BUILD_SYSTEM.md).
 
 Dependencies flow toward domain values and platform primitives. Intentional
-same-layer edges are HTTP/IO/storage → async, config → storage, tool →
-permission/hook. Prompt depends only on core; it has no configuration,
-tool-runtime or executor dependency. Provider consumes its own stable-prefix
-values and has no prompt dependency; the loop connects those value boundaries.
-The graph is checked by `scripts/check-deps.sh`. The composition root joins
+same-layer edges are HTTP/IO/storage → async and tool → permission/hook.
+Config depends only on core values; bootstrap is its only runtime-library
+consumer and maps configuration into owned rules and provider profiles.
+Permission, provider and agent execution have no configuration dependency.
+Prompt depends only on core; it has no tool-runtime or executor dependency.
+Provider consumes its own stable-prefix values and has no prompt dependency;
+the loop connects those value boundaries. `scripts/check-deps.sh` checks the
+graph and enforces the configuration boundary. The composition root joins
 runtime, memory and transport.
 
 ## Authority And State

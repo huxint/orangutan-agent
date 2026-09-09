@@ -6,9 +6,13 @@ vendor name. HTTP transport is injected through the protocol adapter boundary.
 
 ## Construction
 
-`resolve_route_profiles` converts configured names, aliases and model policy into
-owned endpoint values. `make_protocol_system` validates the complete route before
-reading any credential: endpoint fields are nonempty, URLs use HTTP/S, protocols
+Bootstrap's `resolve_route_profiles` converts configured names, aliases and model
+policy into owned endpoint values. The provider library accepts
+`RouteProfileResolution` and `SecretLookup` from `protocol_transport.hpp`; it does
+not import configuration. [Runtime composition](bootstrap-runtime.md) owns the
+configuration adapter API and its migration. `make_protocol_system` validates
+the complete route before reading any credential: endpoint fields are nonempty,
+URLs use HTTP/S, protocols
 are implemented and profile names are unique. An invalid fallback therefore
 fails before primary credential lookup. Secret lookup failures expose only
 profile, role and credential-reference context.

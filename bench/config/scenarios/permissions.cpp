@@ -1,13 +1,5 @@
-// bench/config/scenarios/permissions.cpp
-//
-// A-vs-B comparison: parse an empty permissions block vs. a populated
-// 16-rule block with one agent overlay vs. the same 16-rule block where
-// four `deny` rules carry an `input_pattern` re2 pattern. The populated
-// path is the cost the future `oran-permission::materialize` consumer
-// pays at startup; the empty path documents the parse-side surface lift
-// (a no-op permissions block should not cost meaningfully more than a
-// config without one); the input_pattern path documents the additional
-// re2 compile cost per pattern that the load-time validator pays.
+// Compare empty and populated permission blocks, including input-pattern
+// validation. Bootstrap separately compiles the parsed values into runtime rules.
 
 #include <nanobench.h>
 

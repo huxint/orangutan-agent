@@ -1,11 +1,10 @@
-#include <oran/provider/route_resolver.hpp>
+#include <oran/bootstrap/provider-profiles.hpp>
 
 #include <algorithm>
 #include <array>
 #include <expected>
 #include <memory>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -15,10 +14,15 @@
 #include <oran/core/enum_names.hpp>
 #include <oran/core/error.hpp>
 
-namespace orangutan::provider {
+namespace orangutan::bootstrap {
 namespace {
 
 using orangutan::core::Error;
+using provider::ModelTarget;
+using provider::PromptCacheOptions;
+using provider::ProtocolKind;
+using provider::ProviderPricing;
+using provider::ResolvedProfileTarget;
 
 constexpr auto kAnthropicAliases = std::array<std::string_view, 2>{"anthropic", "claude"};
 constexpr auto kOpenAiChatAliases = std::array<std::string_view, 3>{"openai", "openai_chat", "openai_chat_completions"};
@@ -30,31 +34,23 @@ constexpr auto kOpenAiCompatibleAliases = std::array<std::string_view, 5>{"custo
                                                                           "deepseek_chat",
                                                                           "local"};
 
-[[nodiscard]] Error config_error(std::string message) {
-  return Error::config(std::move(message));
-}
-
-[[nodiscard]] bool matches_alias(std::span<const std::string_view> aliases, std::string_view value) noexcept {
-  return std::ranges::contains(aliases, value);
-}
-
 [[nodiscard]] std::optional<ProtocolKind> protocol_for_provider(std::string_view provider) noexcept {
   if (auto parsed = core::parse_enum<ProtocolKind>(provider)) {
     return parsed;
   }
-  if (matches_alias(kAnthropicAliases, provider)) {
+  if (std::ranges::contains(kAnthropicAliases, provider)) {
     return ProtocolKind::anthropic_messages;
   }
-  if (matches_alias(kOpenAiChatAliases, provider)) {
+  if (std::ranges::contains(kOpenAiChatAliases, provider)) {
     return ProtocolKind::openai_chat_completions;
   }
-  if (matches_alias(kOpenAiResponsesAliases, provider)) {
+  if (std::ranges::contains(kOpenAiResponsesAliases, provider)) {
     return ProtocolKind::openai_responses;
   }
-  if (matches_alias(kGeminiAliases, provider)) {
+  if (std::ranges::contains(kGeminiAliases, provider)) {
     return ProtocolKind::gemini_generate_content;
   }
-  if (matches_alias(kOpenAiCompatibleAliases, provider)) {
+  if (std::ranges::contains(kOpenAiCompatibleAliases, provider)) {
     return ProtocolKind::custom_openai_compatible;
   }
   return std::nullopt;
@@ -65,7 +61,7 @@ resolve_protocol(const config::ProfileConfig& profile, std::string_view route_na
   if (profile.protocol.has_value()) {
     auto parsed = core::parse_enum<ProtocolKind>(*profile.protocol);
     if (!parsed) {
-      return std::unexpected(config_error("unknown provider protocol")
+      return std::unexpected(Error::config("unknown provider protocol")
                                  .with("route", std::string{route_name})
                                  .with("profile", profile.name)
                                  .with("role", std::string{role})
@@ -76,7 +72,7 @@ resolve_protocol(const config::ProfileConfig& profile, std::string_view route_na
 
   auto protocol = protocol_for_provider(profile.provider);
   if (!protocol) {
-    return std::unexpected(config_error("unknown provider protocol")
+    return std::unexpected(Error::config("unknown provider protocol")
                                .with("route", std::string{route_name})
                                .with("profile", profile.name)
                                .with("role", std::string{role})
@@ -112,7 +108,7 @@ resolve_protocol(const config::ProfileConfig& profile, std::string_view route_na
                                                                      std::string_view role) {
   const auto* profile = find_profile(config, profile_name);
   if (profile == nullptr) {
-    return std::unexpected(config_error("route references an unknown provider profile")
+    return std::unexpected(Error::config("route references an unknown provider profile")
                                .with("route", std::string{route_name})
                                .with("profile", std::string{profile_name})
                                .with("role", std::string{role}));
@@ -148,27 +144,15 @@ resolve_protocol(const config::ProfileConfig& profile, std::string_view route_na
 
 }  // namespace
 
-Route RouteProfileResolution::route() const {
-  auto route_fallbacks = std::vector<ModelTarget>{};
-  route_fallbacks.reserve(fallbacks.size());
-  for (const auto& fallback : fallbacks) {
-    route_fallbacks.push_back(fallback.target);
-  }
-
-  return Route{
-      .primary = primary.target,
-      .fallbacks = std::move(route_fallbacks),
-  };
-}
-
-core::Result<RouteProfileResolution> resolve_route_profiles(const config::Config& config, std::string_view route_name) {
+core::Result<provider::RouteProfileResolution>
+resolve_route_profiles(const config::Config& config, std::string_view route_name) {
   if (route_name.empty()) {
     return std::unexpected(Error::invalid_argument("route name must be non-empty"));
   }
 
   const auto* route = find_route(config, route_name);
   if (route == nullptr) {
-    return std::unexpected(config_error("provider route not found").with("route", std::string{route_name}));
+    return std::unexpected(Error::config("provider route not found").with("route", std::string{route_name}));
   }
 
   auto primary = target_for_profile(config, route->primary_profile, route->name, "primary");
@@ -186,10 +170,10 @@ core::Result<RouteProfileResolution> resolve_route_profiles(const config::Config
     fallbacks.push_back(std::move(*fallback));
   }
 
-  return RouteProfileResolution{
+  return provider::RouteProfileResolution{
       .primary = std::move(*primary),
       .fallbacks = std::move(fallbacks),
   };
 }
 
-}  // namespace orangutan::provider
+}  // namespace orangutan::bootstrap
