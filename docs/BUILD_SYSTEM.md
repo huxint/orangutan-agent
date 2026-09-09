@@ -42,6 +42,12 @@ being active; the current default selection does not apply them. Explicit
 are [tracked](exec-plans/tech-debt-tracker.md); verify actual compiler/linker
 arguments before claiming LTO or sanitizer coverage.
 
+With the current activation limit, sanitizer runs need explicit compiler flags
+`-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all`
+and linker flags `-fsanitize=address,undefined`. `--sanitizers=y` alone does not
+establish coverage. LeakSanitizer needs an environment that permits its runtime
+checks.
+
 `modules` is experimental; no module migration has been accepted. No GUI or
 messaging SDK is required.
 

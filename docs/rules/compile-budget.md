@@ -55,18 +55,15 @@ made the legacy project unbuildable on 16 GB; we will not regress.
 
 ### Mechanical Checks
 
-`scripts/check-compile-budget.sh` (implemented locally; hosted-CI wiring remains
-tracked debt):
+For an explicit compile-cost investigation, `scripts/check-compile-budget.sh`
+drives the existing measurement and comparison tools. Hosted-CI wiring remains
+tracked debt. This is a diagnostic tool, not a mandatory local step for every
+change:
 
 ```sh
-xmake clean
 xmake f -m release
-TIMEFORMAT='%R'
-{ time xmake -j$(nproc); } 2>build.time
-xmake compile_commands ;# regenerates compile_commands.json
-
-scripts/measure-tu.sh --json > tu-times.json
-python3 scripts/check-tu-budget.py tu-times.json compile_budget.json
+xmake build -j4
+scripts/check-compile-budget.sh
 ```
 
 `compile_budget.json` is a versioned baseline. Entries:
@@ -103,17 +100,12 @@ When a planned change legitimately raises the budget (e.g., adding a new library
 2. PR includes the `compile_budget.json` bump alongside the code change.
 3. Reviewer signs off on both code and budget.
 
-## Per-PR Self-Check
+## Local Verification
 
-```sh
-# Before opening a PR:
-make ci                          # docs + hygiene
-xmake f -m release && xmake      # build
-xmake test                       # all tests
-scripts/check-compile-budget.sh  # the budget
-```
-
-The PR template's "Validation" section includes a checkbox for budget compliance.
+Follow [testing-and-bench](testing-and-bench.md) for normal build and test gates.
+Routine changes do not require separate compile measurements or a budget report.
+Use profiling when investigating a build slowdown, explicitly optimizing compile
+cost, or changing the budget itself.
 
 ## When You Hit The Budget
 
@@ -128,8 +120,10 @@ Order of attack:
 5. **Reach for modules.** When the surface is stable, convert to a module unit.
 6. **Unity build only as a last resort** — and only for cold libraries.
 
-Always measure with `scripts/measure-tu.sh` *before* and *after*. Record the delta in
-the PR description.
+When investigating compile cost, use `scripts/measure-tu.sh` to compare the
+relevant TUs under the same compiler, hardware and build configuration. Summarize
+the relevant result in the change description; no separate evidence bundle is
+required.
 
 ## Anti-Patterns
 

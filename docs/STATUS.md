@@ -78,16 +78,12 @@ recall, permission intersection, bounded child sessions and cancellation joins.
 Public-boundary regressions cover atomic storage preservation, provider routing,
 final-input path admission, pinned authority, approval expiry and audit ordering.
 Prepared-call regressions cover invalid arguments before approval, rewritten
-requests, declared custom targets and retained ordinary-handler state. Isolated
-faults and explicit ASan/UBSan instrumentation verify the affected behavior and
-ownership boundaries; generated evidence lives under `build/validation`.
+requests, declared custom targets and retained ordinary-handler state.
 
 Memory regressions cover unhinted prompt inputs, scoped index discovery, exact
 reads, same-ID correction, reopened sessions, budgets and unavailable memory.
-Four deliberate faults detect disabled orientation, scope escape, unbounded
-index projection and lost creation/read history. Controlled providers supply the
-tool decisions; real-model consultation and learning quality remain a separate
-gate in the memory contract.
+Controlled providers supply the tool decisions; real-model consultation and
+learning quality remain a separate gate in the memory contract.
 
 Local verification is not reference-hardware compile/performance certification.
 The toolchain and hosted quality gaps remain in [live debt](exec-plans/tech-debt-tracker.md).
@@ -137,12 +133,5 @@ Repository reopen checks are tagged `[preservation]` in the storage tests.
 Scoped recall and hook gates are covered by `tests/memory/test_longterm.cpp` and
 `tests/hook/test_publish_blocking.cpp`; HTTP/SSE coverage lives in `tests/http`.
 
-Local validation copies, fault scripts and logs live under `build/validation`;
-they are generated artifacts, not required source. For a nested isolated copy,
-run xmake from inside that copy and pass `-P .` to configure, build and run.
-Sanitizer verification requires explicit
-`-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all`
-compiler flags and `-fsanitize=address,undefined` linker flags. Confirm the actual
-commands; `--sanitizers=y` alone does not establish coverage. LeakSanitizer needs
-to run outside a ptrace-restricted sandbox. [BUILD_SYSTEM](BUILD_SYSTEM.md) owns
-the supported toolchain and current activation limits.
+[BUILD_SYSTEM](BUILD_SYSTEM.md) owns the supported toolchain and current activation
+limits; [testing-and-bench](rules/testing-and-bench.md) owns verification workflow.

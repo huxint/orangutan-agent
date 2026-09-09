@@ -8,9 +8,8 @@ and execution plan when applicable.
 - [ ] Affected build and tests pass.
 - [ ] `make ci` passes.
 - [ ] Runtime changes pass the full release suite.
-- [ ] Lifetime changes include ASan/UBSan evidence.
+- [ ] Lifetime changes pass ASan/UBSan checks.
 - [ ] New or rewritten tests detect their intended failure.
-- [ ] Compile-budget evidence and remaining gates are stated.
 
 ## Contracts
 

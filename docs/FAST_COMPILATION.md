@@ -8,10 +8,11 @@ translation unit by responsibility when measurement identifies a hotspot.
 the stable PCH. GUI, messaging and scheduling dependencies are absent from the
 core build. The existing vector backend remains optional.
 
-Run affected builds while iterating. For a compile-cost change, measure before
-and after with `scripts/measure-tu.sh` and compare the same compiler, hardware,
-mode and job count. `scripts/check-compile-budget.sh` drives the broader budget
-check. Thresholds and reference hardware live in
+Run affected builds while iterating. Use `scripts/measure-tu.sh` or
+`scripts/check-compile-budget.sh` when investigating a build slowdown or explicitly
+optimizing compilation. Compare the same compiler, hardware, mode and job count.
+Routine changes do not require before/after measurements. Thresholds and reference
+hardware live in
 [compile-budget](rules/compile-budget.md).
 
 Hosted functional C++ jobs are separate from reference-hardware performance
